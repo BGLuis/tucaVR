@@ -10,3 +10,6 @@ ndk-sys = "0.6"
 crossbeam-channel = "0.5"
 tokio = { version = "1.0", features = ["full"] }
 audio = { path = "../audio" }
+# T6.3/T7.2: Demuxer::new despacha smb://, https:// (custom I/O) e local/http://
+# (nativo do libavformat) para esta crate — ver demuxer.rs.
+protocols = { path = "../protocols" }

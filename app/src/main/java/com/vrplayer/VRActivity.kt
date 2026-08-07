@@ -23,6 +23,10 @@ class VRActivity : NativeActivity() {
     private var controlsVirtualDisplay: android.hardware.display.VirtualDisplay? = null
     private var controlsPresentation: VRControlsPresentation? = null
 
+    // T6.4/T7.3: painel de rede (servidores SMB + input de URL)
+    private var networkVirtualDisplay: android.hardware.display.VirtualDisplay? = null
+    private var networkPresentation: NetworkPresentation? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
@@ -179,6 +183,62 @@ class VRActivity : NativeActivity() {
                 activity.controlsPresentation?.updateProgress(currentSec, totalSec)
             }
         }
+
+        // --- T6.4/T7.3: painel de rede (mesmo padrao VirtualDisplay+Presentation
+        // dos paineis acima) ---
+        @JvmStatic
+        fun setupNetworkVirtualDisplay(activity: VRActivity, surface: Surface, width: Int, height: Int) {
+            activity.runOnUiThread {
+                val displayManager = activity.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+                activity.networkVirtualDisplay = displayManager.createVirtualDisplay(
+                    "VR_Network_Display",
+                    width, height, 160,
+                    surface,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+                )
+
+                activity.networkVirtualDisplay?.display?.let { display ->
+                    activity.networkPresentation = NetworkPresentation(activity, display, activity)
+                    activity.networkPresentation?.show()
+                }
+            }
+        }
+
+        private var lastNetworkDownTime: Long = 0
+
+        @JvmStatic
+        fun dispatchNetworkVRTouch(activity: VRActivity, x: Float, y: Float, action: Int) {
+            activity.runOnUiThread {
+                val now = android.os.SystemClock.uptimeMillis()
+                if (action == android.view.MotionEvent.ACTION_DOWN) {
+                    lastNetworkDownTime = now
+                }
+
+                val downTime = if (lastNetworkDownTime == 0L) now else lastNetworkDownTime
+                val event = android.view.MotionEvent.obtain(
+                    downTime,
+                    now,
+                    action,
+                    x * 1024f,
+                    y * 1024f,
+                    0
+                )
+
+                event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+
+                if (action == 7) { // ACTION_HOVER_MOVE
+                    activity.networkPresentation?.dispatchGenericMotionEvent(event)
+                } else {
+                    activity.networkPresentation?.dispatchTouchEvent(event)
+                }
+
+                event.recycle()
+
+                if (action == android.view.MotionEvent.ACTION_UP) {
+                    lastNetworkDownTime = 0L
+                }
+            }
+        }
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -192,6 +252,19 @@ class VRActivity : NativeActivity() {
 
     fun playFile(filePath: String) {
         nativePlayVideo(filePath)
+    }
+
+    // T7: URL HTTP(S) reusa o mesmo entry point que arquivo local — o
+    // Demuxer (Rust) despacha por esquema (ver rust/core/src/demuxer.rs).
+    fun playUrl(url: String) {
+        nativePlayVideo(url)
+    }
+
+    // T6.4: playback SMB tem entry point JNI dedicado porque as credenciais
+    // vao como parametros separados, nunca uma URI unica com senha embutida
+    // cruzando a fronteira JNI (ver nota em rust/bridge/src/lib.rs).
+    fun playSmb(server: com.vrplayer.network.SmbServer, path: String) {
+        nativePlaySmb(server.host, server.port, server.share, path, server.username, server.password, server.domain)
     }
 
     private fun processVideoUri(uri: Uri) {
@@ -213,4 +286,33 @@ class VRActivity : NativeActivity() {
     external fun nativeSetVolume(volume: Float)
     external fun nativeSetSpeed(speed: Float)
     external fun nativeCycleAudioTrack()
+
+    // T6.4: playback SMB (credenciais como parametros separados, ver playSmb()).
+    external fun nativePlaySmb(
+        host: String,
+        port: Int,
+        share: String,
+        path: String,
+        username: String,
+        password: String,
+        domain: String
+    )
+
+    // T6.1/T6.4: listagem SMB (bloqueante — SEMPRE chamar de uma coroutine em
+    // Dispatchers.IO, nunca da UI thread). Retorno: linhas separadas por \n,
+    // ou "ERROR:<mensagem>" (ver rust/bridge/src/lib.rs).
+    external fun nativeSmbListShares(host: String, port: Int, username: String, password: String, domain: String): String
+    external fun nativeSmbListDirectory(
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        domain: String,
+        share: String,
+        path: String
+    ): String
+
+    // T7.1: probe HEAD-based de URL HTTP(S) (bloqueante, mesma ressalva acima).
+    // Retorno: "OK\t{seekable 0|1}\t{content_length ou -1}" ou "ERROR:<mensagem>".
+    external fun nativeProbeHttpUrl(url: String): String
 }

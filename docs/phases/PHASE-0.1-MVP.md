@@ -395,10 +395,25 @@ UI flutuante minimalista que aparece quando o usuário aponta o controller para 
 
 ### Tarefas
 
-- [ ] **T4.1** — Implementar sistema de **raycasting** a partir do controller:
+- [x] **T4.1** — Implementar sistema de **raycasting** a partir do controller:
   - Ray do controller → interseção com UI panels
   - Feedback visual: laser + ponto de interseção
   - Haptics no controller ao hovering sobre botão
+  > A interseção ray↔UI panel e o feedback visual (beam vermelho via `ovrBeamRenderer`,
+  > ponto de interseção usado para computar as UVs do toque) já existiam em
+  > `vr_player_app.cpp` desde antes desta sessão. Adicionado nesta rodada: (1)
+  > **smoothing** da direção do ray (média móvel exponencial por frame, `m_smoothedRayDir`)
+  > para reduzir o tremor natural do controller sem introduzir lag perceptível — cobre o
+  > cuidado explícito da seção; (2) **haptics** de verdade via OpenXR: uma action
+  > `XR_ACTION_TYPE_VIBRATION_OUTPUT` é criada e vinculada a `/user/hand/{left,right}/output/haptic`
+  > sobrescrevendo `GetSuggestedBindings()`, disparando um pulso leve
+  > (`FireHaptic(RightHandPath, 0.25f, XR_MIN_HAPTIC_DURATION)`) na transição hover-enter
+  > (mudança de painel sob o cursor) e um pulso mais forte (amplitude 0.6, 20ms) no
+  > trigger-down. Faltando explicitamente da lista original: histerese nos botões
+  > individuais dentro de cada painel (o painel é HTML/Android View renderizado numa
+  > textura — a histerese "não desovar ao sair X pixels" teria que ser implementada do
+  > lado do `VRControlsPresentation.kt`, fora do escopo desta sessão). Compilado com
+  > sucesso (`ninja vrplayer_native` completo, 87/87); não validado em headset real.
 - [x] **T4.2** — Implementar **painel de controles**:
   - Play/Pause (botão central grande)
   - Seek bar (slider com preview de tempo)
@@ -425,20 +440,64 @@ UI flutuante minimalista que aparece quando o usuário aponta o controller para 
   > (legendas são escopo de v0.2+); fullscreen/resize já é coberto pelo
   > thumbstick/grip da tela virtual (T3.6), não duplicado aqui como
   > botão.
-- [ ] **T4.3** — Implementar **auto-hide**:
+- [x] **T4.3** — Implementar **auto-hide**:
   - Controles aparecem ao apontar controller para a tela
   - Desaparecem após 5s de inatividade
   - Animação fade in/out suave
-- [ ] **T4.4** — Implementar controles via **botões físicos** do controller:
+  > Implementado com alpha blending real (não um "esconde/mostra" abrupto): o shader
+  > compartilhado dos quads de UI ganhou um uniform `uAlpha`, e os `ovrSurfaceDef` do
+  > painel de controles e do file browser tiveram `GpuState.blendEnable = BLEND_ENABLE`
+  > (`SRC_ALPHA`/`ONE_MINUS_SRC_ALPHA`) — a tela de vídeo continua opaca
+  > (`m_videoAlpha` fixo em 1.0, blend desativado), então o fade não afeta o vídeo em si.
+  > Cada painel tem seu próprio timer de inatividade: o painel de controles reseta o
+  > timer quando o ray aponta para ele OU para a tela de vídeo (apontar pra tela =
+  > "quero ver os controles"); o file browser só reseta quando apontado diretamente.
+  > Após 5s (`kUiAutoHideSeconds`) sem isso, o alpha interpola suavemente até 0 em
+  > ~0.35s (`kUiFadeDuration`, via `MoveTowards`). Painéis com alpha ≤0.5 param de
+  > receber despacho de toque/hover (evita clique num painel praticamente invisível),
+  > mas a detecção geométrica do raycast continua sempre ativa — senão um painel
+  > escondido nunca teria como "acordar" de novo. Surfaces com alpha ≤0.01 nem entram
+  > em `out.Surfaces` (economiza GPU quando 100% escondido). Não validado em headset
+  > real (o timing de 5s/0.35s foi escolhido por bom senso, não testado com usuário).
+- [x] **T4.4** — Implementar controles via **botões físicos** do controller:
   - Trigger: Select / Confirm
   - A/X: Play/Pause
   - B/Y: Menu/Back
   - Thumbstick: Seek (esquerda/direita), Volume (cima/baixo)
   - Grip: Segurar + mover para reposicionar tela
-- [ ] **T4.5** — Renderizar UI como **quad overlay** no espaço 3D:
+  > Trigger como select/confirm sobre os painéis já existia. Adicionado: **A ou X**
+  > alternam play/pause (antes só A funcionava); **B ou Y** = Menu/Back, mapeado para
+  > alternar a visibilidade do painel do File Browser instantaneamente (antes só
+  > logava "Opening file picker", sem efeito real). **Thumbstick esquerdo** (livre, não
+  > usado antes) mapeado para Seek (eixo X, saltos de ±10s) e Volume (eixo Y, contínuo).
+  > Volume é uma escrita atômica barata então é aplicado a cada frame que o stick está
+  > fora da deadzone; Seek é **debounced** com cooldown de 0.5s entre saltos — chamar
+  > `seek_video_playback` a cada frame seria caro (recria as 3 threads de playback,
+  > ver nota de T2.6) e não faria sentido segurando o stick. **Grip** continua com a
+  > semântica de T3.6 (segurar grip + stick redimensiona a tela; sem grip, stick move a
+  > tela) em vez do "segurar+mover para reposicionar" descrito aqui — T3.6 já estava
+  > implementado e documentado como concluído antes desta sessão, então não foi
+  > alterado para não quebrar esse comportamento já validado.
+- [x] **T4.5** — Renderizar UI como **quad overlay** no espaço 3D:
   - Posicionar abaixo da tela virtual
   - Sempre virado para o usuário (billboard)
   - Renderizar com alpha blending sobre o ambiente
+  > Posicionamento abaixo da tela já existia. Alpha blending real implementado nesta
+  > sessão (ver T4.3 — uniform `uAlpha` + `GpuState.blendEnable`). Billboard só foi
+  > implementado **de verdade para o painel do File Browser**: a cada frame ele calcula
+  > o yaw (rotação em Y) que aponta seu normal para a cabeça do usuário
+  > (`atan2f` sobre a projeção XZ de `HeadPose.Translation - painelPos`), então ele
+  > sempre encara quem está olhando, de qualquer ângulo. O painel de controles
+  > **manteve a inclinação fixa** (`RotationX(-0.3)`) em vez de billboard dinâmico —
+  > decisão consciente: ele fica logo abaixo da tela principal, onde o usuário já está
+  > olhando de frente na grande maioria do tempo, e a matemática de billboard
+  > combinando yaw dinâmico com a inclinação fixa em X não pôde ser validada num
+  > headset real nesta sessão; preferiu-se manter o comportamento já testado
+  > visualmente a arriscar uma rotação combinada incorreta sem forma de verificar.
+  > Os transforms de UI/controles passaram a ser calculados uma única vez por frame
+  > (`m_uiTransform`/`m_controlsTransform`, membros da classe) e reusados tanto no
+  > raycast quanto no render — antes eram duas expressões de matriz idênticas
+  > copiadas em `Update()` e `Render()`, com risco de divergirem silenciosamente.
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -462,15 +521,42 @@ UI flutuante minimalista que aparece quando o usuário aponta o controller para 
 
 Navegador de arquivos para o armazenamento interno do Quest 3.
 
+> [!NOTE]
+> **Lógica interna** (`app/src/main/java/com/vrplayer/filebrowser/`): `MediaEntry`/`MediaType`
+> (T5.3, sem I/O no construtor), `DirectoryLister.listMedia()` (T5.1/T5.2 — suspend fun
+> em `Dispatchers.IO`, lista só um nível por vez, filtra por extensão de vídeo/áudio/imagem),
+> `DirectoryNavigator` (T5.5 — back-stack simples com `enter()`/`goBack()`),
+> `MediaSorter`/`SortBy` (T5.6 — nome/data/tamanho/tipo, diretórios sempre antes de
+> arquivos) e `ThumbnailGenerator.getThumbnail()` (T5.4 — `MediaMetadataRetriever` em
+> `Dispatchers.IO`, cache em disco por hash de path+tamanho+data de modificação checado
+> antes de decodificar, retriever liberado em `finally`, retorna `null` em vez de crashar
+> em arquivo corrompido). Dependência `kotlinx-coroutines-android` adicionada ao
+> `app/build.gradle.kts`.
+>
+> **Interface (T5.7)**: `VRPresentation.kt` — que já existia como o painel 3D do file
+> browser, renderizado via `VirtualDisplay`/`Surface` e projetado como quad OES em
+> `vr_player_app.cpp` (ver T4.1/T4.5) — foi reescrito para consumir a camada de lógica
+> acima em vez da implementação ad-hoc anterior (que fazia `File.listFiles()` síncrono
+> na UI thread, sem thumbnails, com navegação "para cima" via um `File("..")` mock).
+> Agora usa `DirectoryNavigator` para a pilha de diretórios, `DirectoryLister` (numa
+> coroutine, fora da UI thread) filtrando para Diretório+Vídeo (áudio/imagem já são
+> listados pela lógica interna mas ainda não têm player — ficam de fora da UI por
+> enquanto para não sugerir uma feature que não existe), `sortMediaEntries` para a
+> ordenação, e `ThumbnailGenerator` carregado de forma preguiçosa por item do
+> `RecyclerView` (uma coroutine por `ViewHolder`, cancelada e re-checada por posição no
+> rebind para não aplicar uma thumbnail desatualizada num item reciclado). Validado via
+> `:app:compileDebugKotlin` (sucesso); não testado em headset real (não há como
+> verificar visualmente sem hardware Quest 3 nesta sessão).
+
 ### Tarefas
 
-- [ ] **T5.1** — Implementar listagem de diretórios (Kotlin, permissão `READ_EXTERNAL_STORAGE` / Scoped Storage)
-- [ ] **T5.2** — Filtrar por extensões de mídia (vídeo, áudio, imagem)
-- [ ] **T5.3** — Exibir informações: nome, tamanho, data de modificação, ícone por tipo
-- [ ] **T5.4** — Gerar thumbnails de vídeo (via MediaMetadataRetriever ou FFmpeg)
-- [ ] **T5.5** — Navegação hierárquica (entrar/sair de pastas)
-- [ ] **T5.6** — Ordenação: nome, data, tamanho, tipo
-- [ ] **T5.7** — Renderizar o browser como painel 3D no ambiente VR
+- [x] **T5.1** — Implementar listagem de diretórios (Kotlin, permissão `READ_EXTERNAL_STORAGE` / Scoped Storage)
+- [x] **T5.2** — Filtrar por extensões de mídia (vídeo, áudio, imagem)
+- [x] **T5.3** — Exibir informações: nome, tamanho, data de modificação, ícone por tipo
+- [x] **T5.4** — Gerar thumbnails de vídeo (via MediaMetadataRetriever ou FFmpeg)
+- [x] **T5.5** — Navegação hierárquica (entrar/sair de pastas)
+- [x] **T5.6** — Ordenação: nome, data, tamanho, tipo
+- [x] **T5.7** — Renderizar o browser como painel 3D no ambiente VR
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -490,22 +576,142 @@ Conectar a compartilhamentos de rede Windows / NAS via SMB para navegar e reprod
 
 ### Tarefas
 
-- [ ] **T6.1** — Implementar cliente SMB no Rust:
+- [x] **T6.1** — Implementar cliente SMB no Rust:
   - Autenticação (user/password + guest/anonymous)
   - Listar shares de um servidor
   - Navegar diretórios dentro de um share
   - Ler arquivos (streaming read, não download completo)
+  > Implementado em `rust/protocols/src/smb/` sobre a crate `smb2` (`0.18`,
+  > crates.io) — pura Rust, sem `libsmbclient`/dependência C nenhuma (o
+  > `libavformat.so` empacotado aqui nem tem `CONFIG_LIBSMBCLIENT`
+  > habilitado, então custom I/O era inevitável de qualquer forma; ver T6.3).
+  > A crate fala SMB 2.x/3.x com autenticação NTLMv2, guest/anônimo
+  > (`username` vazio — `ClientConfig.username`), assinatura de mensagens e
+  > *auto-reconnect* embutido (`ClientConfig.auto_reconnect`), o que cobre de
+  > graça o aviso do doc sobre timeout/reconexão em Wi-Fi instável sem eu
+  > precisar reimplementar isso na mão. `protocols::smb::list_shares` e
+  > `list_directory` cobrem autenticação/listagem; `SmbFileSource` (que
+  > implementa o trait `RangeSource` de `prefetch.rs`) cobre leitura
+  > streaming por offset via `FileReader::read_at` — não há download
+  > completo em memória em nenhum ponto. **Não implementado**: escrita,
+  > SMB1 (a própria crate só fala SMB2/3, o que é correto — SMB1 é
+  > obsoleto/inseguro), Kerberos (só NTLM). **Cuidado real e não resolvido**:
+  > nunca testei isto contra um servidor SMB de verdade — não há NAS nem
+  > Samba disponível neste ambiente sandboxed. A validação que consegui
+  > fazer foi (a) ler a implementação/exemplos da crate `smb2` com atenção,
+  > (b) `cargo check`/`cargo test` no host, e (c) cross-compile real via
+  > `cargo ndk` para `aarch64-linux-android` (ver nota de T6.3 sobre o build
+  > completo). Autenticação, assinatura e o handshake NTLMv2 em si nunca
+  > rodaram contra um servidor real nesta sessão.
 - [ ] **T6.2** — Implementar **descoberta automática** de servidores SMB:
   - NetBIOS name resolution
   - mDNS/DNS-SD (`.local`)
   - Fallback: IP manual
-- [ ] **T6.3** — Integrar SMB com o Demuxer:
+  > **Não implementado** — decisão consciente de escopo (a própria tarefa
+  > orienta isso como a prioridade mais baixa das quatro). Só existe o
+  > fallback manual (campo "Host / IP" no formulário de adicionar servidor,
+  > T6.4). Nem NetBIOS name resolution nem mDNS/DNS-SD foram sequer
+  > esboçados — ficam documentados aqui como trabalho futuro genuíno, não
+  > como algo "quase pronto".
+- [x] **T6.3** — Integrar SMB com o Demuxer:
   - Implementar custom I/O callback para FFmpeg que lê do SMB
   - Buffer de leitura: 2-8MB ahead (prefetch)
-- [ ] **T6.4** — UI para gerenciar conexões:
+  > **Achado que mudou a abordagem planejada**: em vez de FFI crua com
+  > `ffmpeg-sys-next` (`avio_alloc_context` na mão), a versão do
+  > `ffmpeg-next` já usada neste projeto (`9.0.0`) tem suporte nativo de
+  > primeira classe a custom I/O — `format::context::StreamIo::from_read_seek`
+  > (aceita qualquer `Read + Seek + Send + 'static`) e
+  > `format::input_from_stream`. Isso eliminou a necessidade de `unsafe`
+  > FFI manual para este trabalho: `Demuxer::new` (`rust/core/src/demuxer.rs`)
+  > detecta o esquema `smb://` (URI interna, ver T6.4 sobre por que não é
+  > uma URI de verdade), abre um `SmbFileSource`, envolve num
+  > `protocols::prefetch::PrefetchReader` (`rust/protocols/src/prefetch.rs`)
+  > e entrega pro FFmpeg via `StreamIo::from_read_seek` +
+  > `format::input_from_stream`. Buffer de prefetch: 4MB por bloco (dentro
+  > da faixa 2-8MB pedida). **Ressalva honesta sobre o "prefetch"**: é um
+  > cache "pull" em blocos grandes (só busca o próximo bloco quando o atual
+  > acaba ou há um seek pra fora dele) — NÃO é um read-ahead assíncrono em
+  > background buscando o PRÓXIMO bloco enquanto o atual ainda está sendo
+  > consumido. Isso já reduz bastante o número de round-trips de rede pra
+  > leitura sequencial (o caso comum fora dos seeks pontuais em cues de
+  > MKV), mas não esconde a latência de rede por completo como um
+  > double-buffer de verdade esconderia. Documentado assim em vez de
+  > inflado como "prefetch completo". Testado com fonte fake em memória
+  > (`cargo test -p protocols`, 2 testes: leitura sequencial hits 1 bloco,
+  > seek+read) — nunca testado com uma fonte SMB real (mesma ressalva de
+  > T6.1). **Build**: `cargo check`/`cargo ndk ... build --release` para
+  > `aarch64-linux-android` passam de verdade — não só type-check, um `.so`
+  > real foi gerado e as novas funções aparecem via `nm -D` (ver T6.4).
+  > `scripts/build.sh` completo (`cargo ndk` + `./gradlew assembleDebug`)
+  > rodou com sucesso e gerou `app/build/outputs/apk/debug/app-debug.apk`.
+- [x] **T6.4** — UI para gerenciar conexões:
   - Adicionar servidor (host, share, user, password)
   - Lista de servidores salvos
   - Status de conexão
+  > **Rust/bridge**: novas funções C ABI em `rust/bridge/src/lib.rs` —
+  > `start_smb_playback` (credenciais como parâmetros SEPARADOS, nunca uma
+  > URI única cruzando o JNI — ver a próxima nota sobre credenciais),
+  > `smb_list_shares`/`smb_list_directory` (bloqueantes, retornam string
+  > delimitada por `\n`/`\t` ou `"ERROR:<msg>"`, liberada via
+  > `free_rust_string`). **C++**: `native/src/vr_player_app.cpp` ganhou um
+  > TERCEIRO painel de UI (`m_networkImageReader`/`m_networkTransform`/
+  > `m_networkAlpha`/...), seguindo exatamente o mesmo padrão
+  > VirtualDisplay+Presentation+quad OES dos painéis existentes (T4.1/T4.5)
+  > — raycast, auto-hide (5s) e billboard espelhado do File Browser (fica
+  > do lado direito). Alternado pelo botão **Menu** do controller esquerdo
+  > (antes livre) em vez de inventar mais um botão físico. **Kotlin**:
+  > `NetworkPresentation.kt` (painel único com abas "🔗 URL"/"🗄 SMB", pra não
+  > duplicar toda a integração C++ com um segundo painel — ver T7.3),
+  > `network/SmbCredentialStore.kt` e `network/UrlHistoryStore.kt`.
+  >
+  > **Credenciais**: senha SMB guardada via `EncryptedSharedPreferences`
+  > (`androidx.security:security-crypto:1.1.0`, adicionada ao
+  > `app/build.gradle.kts`) — nunca texto plano em disco, como o doc exige
+  > explicitamente. O fluxo "Testar e salvar" só persiste a credencial se
+  > `smb_list_shares` (conexão + autenticação real) tiver sucesso primeiro.
+  > **Restrição rígida do enunciado, verificada linha a linha**: uma URI
+  > `smb://user:senha@host/...` em texto plano NUNCA cruza a fronteira JNI
+  > nem é logada por inteiro. `nativePlaySmb` recebe host/porta/share/
+  > caminho/usuário/senha/domínio como parâmetros JNI separados; só DEPOIS
+  > disso, inteiramente dentro do processo Rust, `start_smb_playback` monta
+  > uma representação interna (`protocols::smb::uri::SmbTarget::to_internal`)
+  > usada como `current_path` do `PlaybackController` — necessário porque
+  > `seek()` já reabre a stream do zero a partir de `current_path` (T2.6,
+  > arquitetura pré-existente, não alterada). Essa representação interna
+  > **não é uma URI de verdade**: usa `NUL` (`'\0'`) como separador em vez
+  > de percent-encoding (mais simples, e NUL nunca aparece em host/share/
+  > caminho/usuário/senha reais), só existe na memória do processo, nunca é
+  > persistida nem devolvida ao Kotlin. Logs usam `protocols::smb::redact()`,
+  > que mostra host/porta/share/caminho e NUNCA usuário/senha/domínio
+  > (testado em `smb/uri.rs::tests::redact_hides_credentials`).
+  >
+  > **"Status de conexão"**: implementado como o resultado (✓/✗ + mensagem)
+  > do teste de conexão feito no momento de salvar um servidor — NÃO é um
+  > indicador "conectado agora" contínuo por servidor salvo (as conexões
+  > SMB não ficam abertas entre uma navegação e outra; cada listagem/
+  > navegação abre e fecha sua própria conexão). Isso é uma interpretação
+  > mais simples do que "status de conexão" poderia sugerir; documentado
+  > honestamente em vez de fingir um indicador live que não existe.
+  >
+  > **Teclado virtual (campos de texto)**: os campos de host/porta/share/
+  > usuário/senha/domínio e o campo de URL (T7.3) são `EditText` normais —
+  > o Android deveria acionar o IME padrão ao focar/tocar neles, inclusive
+  > numa `Presentation` sobre `VirtualDisplay` (suporte a IME em virtual
+  > displays existe desde Android 12L/13). **Isto é a maior incerteza não
+  > resolvida desta rodada**: não há headset físico neste ambiente pra
+  > confirmar que o teclado aparece e recebe toque corretamente através do
+  > pipeline de raycast→`dispatchNetworkVRTouch`→`MotionEvent` sintético
+  > usado aqui (diferente de um toque de tela real). Se não funcionar em
+  > hardware real, a UI de adicionar servidor fica inutilizável sem um
+  > teclado físico Bluetooth — risco real, não só uma formalidade.
+  >
+  > **Build**: `nm -D` no `.so` real (cross-compilado via `cargo ndk`)
+  > confirma os símbolos `start_smb_playback`/`smb_list_shares`/
+  > `smb_list_directory`/`probe_http_url`/`free_rust_string` exportados.
+  > `./gradlew :app:externalNativeBuildDebug` e `:app:compileDebugKotlin`
+  > passam; `scripts/build.sh` completo (Rust cross-compile real + C++ +
+  > Kotlin) gera `app-debug.apk` com sucesso. **Nada disto foi validado em
+  > headset real** nem contra um servidor SMB real (ver T6.1).
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -524,6 +730,9 @@ Conectar a compartilhamentos de rede Windows / NAS via SMB para navegar e reprod
 > [!NOTE]
 > **Performance SMB**: Para vídeos 4K (~60 Mbps), a latência de SMB sobre Wi-Fi 6 do Quest 3 é geralmente aceitável. Para 8K (~150 Mbps), pode precisar de buffer mais agressivo ou Wi-Fi 6E.
 
+> [!NOTE]
+> **Custo de seek em SMB/HTTPS remoto (achado desta sessão)**: `PlaybackController::seek()` já era, mesmo antes desta sessão, "parar tudo e recarregar do zero na posição alvo" (ver nota de T2.6 — não é um seek in-place). Para SMB e HTTPS isso significa que CADA seek abre uma conexão/sessão SMB nova (handshake + NTLMv2 + tree connect) ou refaz o probe HEAD do HTTPS, não só reaproveita uma conexão já aberta. Isto não foi otimizado nesta sessão — arrastar a seek bar num vídeo remoto deve ser perceptivelmente mais lento que num vídeo local. Documentado como limitação conhecida, não como bug escondido.
+
 ---
 
 ## 7. HTTP URL Playback
@@ -534,26 +743,93 @@ Reproduzir vídeo a partir de URLs HTTP/HTTPS diretas.
 
 ### Tarefas
 
-- [ ] **T7.1** — Implementar HTTP client no Rust (`reqwest` + `tokio`):
+- [x] **T7.1** — Implementar HTTP client no Rust (`reqwest` + `tokio`):
   - GET com range requests (byte-range para seek)
   - Suporte a HTTPS com validação TLS
   - Follow redirects
   - Custom headers (User-Agent, Referer)
-- [ ] **T7.2** — Integrar com FFmpeg via custom I/O:
+  > **Achado crítico verificado nesta sessão, e ele muda o que "suporte a
+  > HTTPS" significa aqui**: o `libavformat.so` empacotado neste projeto
+  > (`ffmpeg-android-maker`) foi compilado **sem nenhum backend TLS**.
+  > Confirmado direto no binário/config, não assumido: `config.h` tem
+  > `CONFIG_MBEDTLS 0` / `CONFIG_GNUTLS 0` / `CONFIG_OPENSSL 0`;
+  > `ffbuild/config.mak` marca `CONFIG_HTTPS_PROTOCOL` e `CONFIG_TLS_PROTOCOL`
+  > com o prefixo `!` (desabilitado); e o mais definitivo — o array
+  > `url_protocols[]` gerado em `libavformat/protocol_list.c` **não contém**
+  > `&ff_https_protocol` nem `&ff_tls_protocol`, só `&ff_http_protocol`. Ou
+  > seja: **`https://` simplesmente não abre** via `ffmpeg::format::input()`
+  > nesta build, não importa o que o Rust faça — não é uma limitação de TLS
+  > "degradada", é ausência total do protocolo. Isso é o oposto do que a
+  > tarefa original especulava. `http://` puro (sem TLS) funciona nativamente
+  > (protocolo `http` registrado, com range requests tratados pelo próprio
+  > libavformat) — para esse caso nenhum código novo foi necessário.
+  >
+  > Para HTTPS, implementei o cliente em `rust/protocols/src/http.rs` com
+  > `reqwest` (`0.12`, `rustls-tls` — evita depender de uma lib TLS nativa
+  > cross-compilada pra Android; TLS inteiramente do lado Rust, sem
+  > depender de nenhum suporte do FFmpeg): `probe()` faz HEAD (com fallback
+  > pra GET `Range: bytes=0-0` se o servidor não aceitar HEAD) pra descobrir
+  > `Accept-Ranges`/tamanho ANTES de tocar; `HttpsRangeSource` faz leituras
+  > posicionais via GET com header `Range` por leitura (amortizado em
+  > blocos de 4MB pelo `PrefetchReader`, T7.2). Redirects: seguidos
+  > automaticamente (comportamento padrão do `reqwest::blocking::Client`,
+  > não desabilitado). Custom headers: a API aceita (`User-Agent` fixo
+  > `"VRMultimediaPlayer/0.1"` já setado por padrão), mas não há UI pra
+  > usuário customizar `User-Agent`/`Referer` — fora do orçamento desta
+  > sessão. **Se o servidor não suporta range requests, `HttpsRangeSource::new`
+  > falha cedo com um erro claro** — download progressivo sem seek (o
+  > fallback que o aviso desta seção pede) não foi implementado para
+  > HTTPS; só o probe (T7.1 propriamente dito) avisa a UI antes de tentar.
+  > Nunca testado contra um servidor HTTPS real nesta sessão (mesma
+  > ressalva de rede do T6.1) — só `cargo test`/`cargo ndk check`.
+- [x] **T7.2** — Integrar com FFmpeg via custom I/O:
   - `avio_alloc_context` com callbacks de read/seek para HTTP
   - Buffer de 4MB para smoothing
-- [ ] **T7.3** — UI para input de URL:
+  > Diferente do que a tarefa original cogitava ("só se o protocolo nativo
+  > for insuficiente"), para HTTPS o custom I/O é a ÚNICA forma de
+  > funcionar nesta build (ver T7.1) — não uma opção de performance. Mesmo
+  > mecanismo genérico do T6.3 (`StreamIo::from_read_seek` do
+  > `ffmpeg-next` 9.0, sem FFI crua com `avio_alloc_context`/
+  > `ffmpeg-sys-next`): `Demuxer::new` detecta `https://` e roteia pro
+  > `HttpsRangeSource` envolto num `PrefetchReader` de 4MB (a mesma
+  > implementação de buffer usada pelo SMB, `rust/protocols/src/prefetch.rs` —
+  > reuso deliberado, não duplicação). `http://` puro continua indo direto
+  > pelo `ffmpeg::format::input()` nativo, sem custom I/O (não haveria
+  > ganho nenhum, o protocolo nativo já lida com isso).
+- [x] **T7.3** — UI para input de URL:
   - Campo de texto (teclado virtual)
   - Histórico de URLs recentes
   - Colar da clipboard
+  > Implementado dentro do mesmo painel de rede do T6.4
+  > (`NetworkPresentation.kt`, aba "🔗 URL") em vez de um painel 3D
+  > separado — evita duplicar toda a integração VirtualDisplay+Presentation+
+  > quad OES em `vr_player_app.cpp` por uma segunda vez. Campo de texto
+  > (`EditText`, teclado virtual — mesma ressalva de incerteza do T6.4:
+  > nunca validado em headset real), botão "📋 Colar" (lê
+  > `ClipboardManager.primaryClip`), botão "▶ Tocar" que chama
+  > `activity.playUrl()` (reusa `nativePlayVideo` — o Demuxer já despacha
+  > por esquema, não precisou de um entry point JNI novo pra isso, diferente
+  > do SMB) e dispara o probe HTTP (T7.1) em paralelo pra mostrar
+  > "✓ suporta seek" / "⚠ não suporta seek" sem bloquear o play. Histórico:
+  > `network/UrlHistoryStore.kt`, até 10 URLs mais recentes, deduplicado,
+  > mais recente primeiro — clicar numa entrada do histórico preenche o
+  > campo e toca de novo. **Sem criptografia** (`SharedPreferences` comuns,
+  > diferente das credenciais SMB do T6.4) — se uma URL colada tiver um
+  > token de autenticação na query string, fica em texto plano; o doc só
+  > exige criptografia explicitamente pra credenciais SMB, então isto é uma
+  > lacuna conhecida e aceita, não um requisito quebrado.
 
 ### ⚠️ Cuidados e Armadilhas
 
 > [!WARNING]
 > **Nem todo servidor suporta range requests**: Sem range requests, seek é impossível. Detecte via header `Accept-Ranges: bytes` na resposta. Se não suportado, faça download progressivo e avise o usuário que seek não está disponível.
+>
+> **Nesta implementação**: o probe (`protocols::http::probe`, T7.1) detecta e avisa a UI (mensagem "⚠ Servidor NAO suporta seek"), mas o download progressivo sem seek como fallback só existe de fato para `http://` puro (o protocolo nativo do libavformat já se vira sozinho mesmo sem range). Para `https://` sem range requests, `HttpsRangeSource::new` falha e o vídeo simplesmente não carrega — não há fallback de download progressivo implementado nesse caso (ver nota de T7.1).
 
 > [!IMPORTANT]
 > **Buffering adaptativo**: Monitore a velocidade de download vs. bitrate do vídeo. Se `download_speed < 1.5 * bitrate`, comece a mostrar indicador de buffering ANTES de esgotar o buffer.
+>
+> **Não implementado nesta sessão** — nem para SMB nem para HTTP(S). O `PrefetchReader` (T6.3/T7.2) reduz round-trips mas não mede taxa de download vs. bitrate nem aciona nenhum indicador de "buffering" na UI. Fica como trabalho futuro genuíno.
 
 ---
 
@@ -665,7 +941,7 @@ Salvar progresso de reprodução para retomar de onde parou.
 
 - [x] App instala e inicia no Quest 3 sem crash
 - [x] Ambiente void renderiza em ≥72 FPS
-- [ ] Consegue navegar pelo file browser local
+- [x] Consegue navegar pelo file browser local (implementado e compila; pendente validação em headset real)
 - [x] Consegue reproduzir vídeo MP4/MKV (H.264/H.265) local
 - [x] Controles de play/pause/seek funcionam via controller (bug de threads "zumbis" corrigido — ver T2.6 — e bug de travamento do app inteiro ao trocar de vídeo corrigido, ver nota abaixo; pendente validação em headset real)
 
@@ -673,8 +949,8 @@ Salvar progresso de reprodução para retomar de onde parou.
 > **Regressão corrigida (pós-fix do T2.6)**: fazer `stop()` esperar (`join()`) as threads da sessão anterior de verdade — a correção original do T2.6 — abriu um novo risco: se qualquer uma das 3 threads travasse internamente (ex: `HwDecoder::decode_packet` tem um loop de retry no MediaCodec sem limite quando o buffer de entrada nunca libera espaço, ou um `send()` bloqueante em canal cheio), quem chamasse `stop()`/`seek()` — a UI thread do Android, via JNI, ao trocar de vídeo pelo file browser — travava junto, travando o app inteiro (ANR). Corrigido em 3 frentes: (1) `HwDecoder::decode_packet` agora recebe um `should_continue` checado a cada retry, permitindo abortar; (2) os `send()` de pacote/amostra entre threads agora usam `send_timeout` com re-checagem de `is_running` em vez de bloquear indefinidamente; (3) como rede de segurança adicional, `start_video_playback`/`seek_video_playback`/`cycle_audio_track` (as três chamadas JNI que podem envolver `stop()+load()`) agora despacham o trabalho para uma thread separada em vez de rodar direto na thread chamadora — a UI thread nunca mais fica bloqueada por essas chamadas, não importa quanto tempo o trabalho leve.
 - [x] Volume ajustável (botões 🔉/🔊 na UI de controles; pendente validação em headset real)
 - [x] Tela virtual pode ser movida e redimensionada (via thumbstick/grip; pendente validação em headset real)
-- [ ] Consegue conectar a um share SMB e reproduzir vídeo remoto
-- [ ] Consegue reproduzir vídeo de URL HTTP
+- [ ] Consegue conectar a um share SMB e reproduzir vídeo remoto (código implementado e cross-compilado de verdade — ver T6.1/T6.3/T6.4 — mas NUNCA executado contra um servidor SMB real: não há NAS/Samba disponível neste ambiente sandboxed. Deixado sem marcar de propósito, diferente de outros itens desta lista que só faltam validação em headset — aqui falta validação do protocolo de rede em si, um risco maior)
+- [ ] Consegue reproduzir vídeo de URL HTTP (mesma ressalva: `http://` puro tem boa chance de funcionar de primeira, já que é o protocolo nativo do libavformat sem nenhum código novo no caminho crítico; `https://` depende inteiramente do custom I/O novo em `protocols::http`, T7.1/T7.2, nunca testado contra um servidor real)
 - [ ] Strings estão externalizadas em PT-BR e EN
 - [ ] Histórico de reprodução funciona
 - [ ] Nenhum crash em sessão de 30 minutos

@@ -1,5 +1,6 @@
 use ffmpeg_next as ffmpeg;
-use ffmpeg::{format::context::Input, Error};
+use ffmpeg::format::context::{Input, StreamIo};
+use protocols::prefetch::PrefetchReader;
 
 pub struct Demuxer {
     pub input_context: Input,
@@ -15,10 +16,38 @@ pub struct Demuxer {
 }
 
 impl Demuxer {
-    pub fn new(path: &str) -> Result<Self, Error> {
-        ffmpeg::init()?;
+    /// `path` pode ser um caminho local (ou `/proc/self/fd/N`, usado pelo
+    /// content:// picker), uma URI interna `smb://` (T6.3, ver
+    /// `protocols::smb::uri`), ou uma URL `http://`/`https://` (T7).
+    ///
+    /// Roteamento por esquema (achado verificado nesta sessao, ver
+    /// `protocols::http` para os detalhes de como foi confirmado):
+    /// - `smb://...`  -> custom I/O via `protocols::smb::SmbFileSource` (o
+    ///   libavformat empacotado aqui nao tem `libsmbclient`).
+    /// - `https://...` -> custom I/O via `protocols::http::HttpsRangeSource`
+    ///   (o libavformat empacotado aqui foi compilado SEM nenhum backend TLS
+    ///   — `https://` nativo simplesmente nao funciona neste `.so`).
+    /// - Qualquer outra coisa (local, `/proc/self/fd/N`, `http://` puro) ->
+    ///   `ffmpeg::format::input` direto, sem custom I/O: o protocolo `http`
+    ///   (sem `s`) ESTA habilitado nesta build e ja lida com range requests
+    ///   internamente, entao nao ha necessidade de reinventar isso para
+    ///   HTTP sem TLS.
+    pub fn new(path: &str) -> Result<Self, String> {
+        ffmpeg::init().map_err(|e| e.to_string())?;
 
-        let ictx = ffmpeg::format::input(&path)?;
+        let ictx = if let Some(target) = protocols::smb::SmbTarget::from_internal(path) {
+            let source = protocols::smb::SmbFileSource::open(&target)?;
+            let reader = PrefetchReader::new(source);
+            let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
+            ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?
+        } else if path.starts_with("https://") {
+            let source = protocols::http::HttpsRangeSource::new(path)?;
+            let reader = PrefetchReader::new(source);
+            let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
+            ffmpeg::format::input_from_stream(stream_io, Some(path), None).map_err(|e| e.to_string())?
+        } else {
+            ffmpeg::format::input(&path).map_err(|e| e.to_string())?
+        };
 
         let mut video_streams = Vec::new();
         let mut audio_streams = Vec::new();

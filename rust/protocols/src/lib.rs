@@ -1,14 +1,8 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Crate de protocolos de rede (T6/T7): SMB2/3 e HTTP(S), usados pelo
+//! `Demuxer` (`core::demuxer`) para tocar midia remota. Ate esta sessao isto
+//! era um esqueleto (`pub fn add(left, right) -> u64`); substituido pela
+//! implementacao real.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod http;
+pub mod prefetch;
+pub mod smb;

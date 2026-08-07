@@ -4,3 +4,16 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+# Cliente SMB2/3 puro-Rust (sem libsmbclient/C), com auto-reconnect embutido
+# (ClientConfig::auto_reconnect) — cobre o aviso do doc (secao 6) sobre
+# timeout/reconexao em Wi-Fi instavel do Quest. Async/tokio por baixo; ver
+# smb/mod.rs sobre como isso e ponte para o mundo sincrono que o FFmpeg
+# custom I/O exige.
+smb2 = "0.18"
+tokio = { version = "1", features = ["rt", "net", "time", "macros"] }
+# Cliente HTTPS para o fallback de custom I/O (T7.2) — usado apenas quando o
+# libavformat bundled neste projeto nao tem suporte nativo a TLS (ver nota em
+# demuxer.rs). rustls em vez de openssl/native-tls: evita depender de uma lib
+# TLS nativa cross-compilada para Android.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+log = "0.4"

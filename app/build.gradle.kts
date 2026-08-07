@@ -62,6 +62,10 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("com.google.android.material:material:1.11.0")
     implementation("org.khronos.openxr:openxr_loader_for_android:1.0.34")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    // T6.4: EncryptedSharedPreferences para credenciais de servidores SMB —
+    // NUNCA armazenar senha em texto plano (doc, secao 6, aviso "Credenciais").
+    implementation("androidx.security:security-crypto:1.1.0")
 }
 
 // Placeholder for Rust integration (via Mozilla plugin or custom task)
