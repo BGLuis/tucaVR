@@ -1,0 +1,8 @@
+[package]
+name = "audio"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+oboe = { version = "0.6", features = ["java-interface"] }
+crossbeam-channel = "0.5"

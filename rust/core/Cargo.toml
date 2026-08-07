@@ -1,0 +1,12 @@
+[package]
+name = "core"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ffmpeg-next = "9.0"
+ndk = { version = "0.9", features = ["media", "api-level-26", "nativewindow"] }
+ndk-sys = "0.6"
+crossbeam-channel = "0.5"
+tokio = { version = "1.0", features = ["full"] }
+audio = { path = "../audio" }

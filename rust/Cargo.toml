@@ -1,0 +1,8 @@
+[workspace]
+members = [
+    "core",
+    "protocols",
+    "bridge",
+    "audio"
+]
+resolver = "2"

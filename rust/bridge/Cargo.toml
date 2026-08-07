@@ -1,0 +1,14 @@
+[package]
+name = "bridge"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "staticlib", "lib"]
+
+[dependencies]
+core = { path = "../core" }
+protocols = { path = "../protocols" }
+audio = { path = "../audio" }
+once_cell = "1.19"
+ndk-sys = "0.6.0"
