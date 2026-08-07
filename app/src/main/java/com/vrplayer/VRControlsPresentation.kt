@@ -12,176 +12,207 @@ import android.widget.SeekBar
 import android.widget.TextView
 
 class VRControlsPresentation(
-    outerContext: Context, 
-    display: Display, 
+    outerContext: Context,
+    display: Display,
+    // `Presentation.context` (herdado de Dialog) NAO e o `outerContext` que
+    // passamos aqui embaixo — o Android cria por baixo dos panos um
+    // ContextThemeWrapper em volta de um display-context derivado dele.
+    // Um cast `context as? VRActivity` sempre falha (vira null) e todo
+    // `?.nativeX(...)` correspondente vira um no-op silencioso. Por isso
+    // guardamos a Activity de verdade explicitamente aqui, em vez de
+    // depender de `context`.
+    private val activity: VRActivity,
     private val onPlayPause: () -> Unit
 ) : Presentation(outerContext, display) {
 
     private lateinit var seekBar: SeekBar
+    private lateinit var timeLabel: TextView
+    private lateinit var volumeBar: SeekBar
+    private lateinit var speedBar: SeekBar
     private var isDragging = false
     private var totalDuration = 0f
-    private var volume = 1.0f
-    private var speed = 1.0f
 
     fun updateProgress(currentSec: Float, totalSec: Float) {
         totalDuration = totalSec
         if (!isDragging && totalSec > 0) {
             seekBar.progress = ((currentSec / totalSec) * 100).toInt()
         }
+        timeLabel.text = "${formatTime(currentSec)} / ${formatTime(totalSec)}"
     }
+
+    private fun formatTime(seconds: Float): String {
+        val total = seconds.toInt().coerceAtLeast(0)
+        return String.format("%02d:%02d", total / 60, total % 60)
+    }
+
+    private fun speedFromProgress(progress: Int): Float = 0.5f + (progress / 100f) * 1.5f
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
-        val layout = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setBackgroundColor(Color.parseColor("#88000000")) // Semi-transparent black
-            gravity = Gravity.CENTER
-            setPadding(32, 32, 32, 32)
-        }
-        
-        val btnRewind = Button(context).apply {
-            text = "<<"
-            textSize = 36f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#444444"))
-            setPadding(32, 32, 32, 32)
-            setOnClickListener {
-                if (context is VRActivity) {
-                    val currentProgress = (seekBar.progress / 100f) * totalDuration
-                    val newTarget = kotlin.math.max(0f, currentProgress - 10f)
-                    (context as VRActivity).nativeSeekVideo(newTarget)
-                }
-            }
-        }
-        layout.addView(btnRewind)
 
-        val btnPlayPause = Button(context).apply {
-            text = "Play / Pause"
-            textSize = 36f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#444444"))
-            setPadding(48, 32, 48, 32)
-            setOnClickListener {
-                onPlayPause()
-            }
+        val root = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Color.parseColor("#88000000")) // Semi-transparent black
+            setPadding(24, 16, 24, 16)
         }
-        
+
         val marginParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply {
-            setMargins(32, 0, 32, 0)
+            setMargins(24, 0, 24, 0)
         }
-        layout.addView(btnPlayPause, marginParams)
+
+        // --- Linha 1: transporte (rewind / play-pause / forward) + seek + tempo ---
+        val row1 = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        val btnRewind = Button(context).apply {
+            text = "<<"
+            textSize = 30f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.parseColor("#444444"))
+            setPadding(28, 20, 28, 20)
+            setOnClickListener {
+                val currentProgress = (seekBar.progress / 100f) * totalDuration
+                val newTarget = kotlin.math.max(0f, currentProgress - 10f)
+                activity.nativeSeekVideo(newTarget)
+            }
+        }
+        row1.addView(btnRewind)
+
+        val btnPlayPause = Button(context).apply {
+            text = "Play / Pause"
+            textSize = 30f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.parseColor("#444444"))
+            setPadding(40, 20, 40, 20)
+            setOnClickListener { onPlayPause() }
+        }
+        row1.addView(btnPlayPause, marginParams)
 
         val btnForward = Button(context).apply {
             text = ">>"
-            textSize = 36f
+            textSize = 30f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#444444"))
-            setPadding(32, 32, 32, 32)
+            setPadding(28, 20, 28, 20)
             setOnClickListener {
-                if (context is VRActivity) {
-                    val currentProgress = (seekBar.progress / 100f) * totalDuration
-                    val newTarget = kotlin.math.min(totalDuration, currentProgress + 10f)
-                    (context as VRActivity).nativeSeekVideo(newTarget)
-                }
+                val currentProgress = (seekBar.progress / 100f) * totalDuration
+                val newTarget = kotlin.math.min(totalDuration, currentProgress + 10f)
+                activity.nativeSeekVideo(newTarget)
             }
         }
-        layout.addView(btnForward)
+        row1.addView(btnForward)
 
         seekBar = SeekBar(context).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                0, // width = 0
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                1.0f // weight = 1
-            ).apply {
-                setMargins(64, 0, 32, 0)
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f).apply {
+                setMargins(48, 0, 24, 0)
             }
             max = 100
             progress = 0
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(p0: SeekBar?, p1: Int, fromUser: Boolean) {
-                }
+                override fun onProgressChanged(p0: SeekBar?, p1: Int, fromUser: Boolean) {}
                 override fun onStartTrackingTouch(p0: SeekBar?) {
                     isDragging = true
                 }
                 override fun onStopTrackingTouch(p0: SeekBar?) {
                     isDragging = false
-                    if (context is VRActivity && totalDuration > 0) {
-                        val newTarget = (progress / 100f) * totalDuration
-                        (context as VRActivity).nativeSeekVideo(newTarget)
+                    if (totalDuration > 0) {
+                        activity.nativeSeekVideo((progress / 100f) * totalDuration)
                     }
                 }
             })
         }
-        layout.addView(seekBar)
+        row1.addView(seekBar)
 
-        val btnVolDown = Button(context).apply {
-            text = "🔉-"
-            textSize = 32f
+        timeLabel = TextView(context).apply {
+            text = "00:00 / 00:00"
+            textSize = 22f
             setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#444444"))
-            setPadding(24, 32, 24, 32)
-            setOnClickListener {
-                volume = kotlin.math.max(0f, volume - 0.1f)
-                (context as? VRActivity)?.nativeSetVolume(volume)
-            }
+            setPadding(16, 0, 0, 0)
         }
-        layout.addView(btnVolDown, marginParams)
+        row1.addView(timeLabel)
 
-        val btnVolUp = Button(context).apply {
-            text = "🔊+"
-            textSize = 32f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#444444"))
-            setPadding(24, 32, 24, 32)
-            setOnClickListener {
-                volume = kotlin.math.min(1f, volume + 0.1f)
-                (context as? VRActivity)?.nativeSetVolume(volume)
-            }
-        }
-        layout.addView(btnVolUp, marginParams)
+        root.addView(row1)
 
-        val btnSpeedDown = Button(context).apply {
-            text = "🐢"
-            textSize = 32f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#444444"))
-            setPadding(24, 32, 24, 32)
-            setOnClickListener {
-                speed = kotlin.math.max(0.5f, speed - 0.25f)
-                (context as? VRActivity)?.nativeSetSpeed(speed)
-            }
+        // --- Linha 2: volume, velocidade (sliders, nao botoes de incremento) e trilha de audio ---
+        val row2 = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 16, 0, 0)
         }
-        layout.addView(btnSpeedDown, marginParams)
 
-        val btnSpeedUp = Button(context).apply {
-            text = "🐇"
-            textSize = 32f
+        val volumeLabel = TextView(context).apply {
+            text = "🔊 100%"
+            textSize = 22f
             setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#444444"))
-            setPadding(24, 32, 24, 32)
-            setOnClickListener {
-                speed = kotlin.math.min(2.0f, speed + 0.25f)
-                (context as? VRActivity)?.nativeSetSpeed(speed)
-            }
         }
-        layout.addView(btnSpeedUp, marginParams)
+        row2.addView(volumeLabel)
+
+        volumeBar = SeekBar(context).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f).apply {
+                setMargins(16, 0, 40, 0)
+            }
+            max = 100
+            progress = 100
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(p0: SeekBar?, progress: Int, fromUser: Boolean) {
+                    volumeLabel.text = "🔊 $progress%"
+                    if (fromUser) {
+                        activity.nativeSetVolume(progress / 100f)
+                    }
+                }
+                override fun onStartTrackingTouch(p0: SeekBar?) {}
+                override fun onStopTrackingTouch(p0: SeekBar?) {}
+            })
+        }
+        row2.addView(volumeBar)
+
+        val speedLabel = TextView(context).apply {
+            text = "⏱ 1.00x"
+            textSize = 22f
+            setTextColor(Color.WHITE)
+        }
+        row2.addView(speedLabel)
+
+        speedBar = SeekBar(context).apply {
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f).apply {
+                setMargins(16, 0, 40, 0)
+            }
+            max = 100
+            // speedFromProgress(33) ~= 1.0x — valor inicial neutro
+            progress = 33
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(p0: SeekBar?, progress: Int, fromUser: Boolean) {
+                    val speed = speedFromProgress(progress)
+                    speedLabel.text = String.format("⏱ %.2fx", speed)
+                    if (fromUser) {
+                        activity.nativeSetSpeed(speed)
+                    }
+                }
+                override fun onStartTrackingTouch(p0: SeekBar?) {}
+                override fun onStopTrackingTouch(p0: SeekBar?) {}
+            })
+        }
+        row2.addView(speedBar)
 
         val btnAudioTrack = Button(context).apply {
             text = "🎵"
-            textSize = 32f
+            textSize = 26f
             setTextColor(Color.WHITE)
             setBackgroundColor(Color.parseColor("#444444"))
-            setPadding(24, 32, 24, 32)
+            setPadding(24, 16, 24, 16)
             setOnClickListener {
-                (context as? VRActivity)?.nativeCycleAudioTrack()
+                activity.nativeCycleAudioTrack()
             }
         }
-        layout.addView(btnAudioTrack, marginParams)
+        row2.addView(btnAudioTrack)
 
-        setContentView(layout)
+        root.addView(row2)
+
+        setContentView(root)
     }
 }

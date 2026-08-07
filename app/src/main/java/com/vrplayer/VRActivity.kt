@@ -131,7 +131,7 @@ class VRActivity : NativeActivity() {
                 )
                 
                 activity.controlsVirtualDisplay?.display?.let { display ->
-                    activity.controlsPresentation = VRControlsPresentation(activity, display) {
+                    activity.controlsPresentation = VRControlsPresentation(activity, display, activity) {
                         activity.nativeTogglePlayPause()
                     }
                     activity.controlsPresentation?.show()
