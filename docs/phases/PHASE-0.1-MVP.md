@@ -189,7 +189,32 @@ Arquivo/Stream → Demuxer (FFmpeg) → Packets → Decoder (MediaCodec HW) → 
   > áudio, o fallback de wall-clock do `SyncManager` também escala pela
   > velocidade, então funciona nos dois casos. Efeito em tempo real, sem
   > precisar recarregar o vídeo. Exposto via `set_playback_speed`/`get_playback_speed`
-  > (FFI), `nativeSetSpeed` (JNI) e botões 🐢/🐇 na UI.
+  > (FFI), `nativeSetSpeed` (JNI) e um slider dedicado na UI (ver T4.2).
+  >
+  > **Bug corrigido: chiado ao acelerar/desacelerar**. Trocar o botão de
+  > velocidade por um slider (T4.2) fez o `onProgressChanged` disparar
+  > `nativeSetSpeed` dezenas de vezes por segundo durante o arrasto —
+  > cada chamada que de fato mudava a velocidade reconstruía o resampler
+  > (`AudioDecoder::set_speed`), o que descarta o histórico interno do
+  > filtro FIR e gera um pequeno estalo a cada reconstrução. Muitos
+  > estalos em sequência soavam como chiado/estática. Corrigido com um
+  > debounce na thread de áudio: a reconstrução do resampler agora só
+  > acontece no máximo a cada 200ms (e só se a mudança de velocidade for
+  > >0.01), aplicando sempre o valor mais recente pedido. **Esse debounce
+  > reduziu mas não eliminou o chiado** — a causa raiz de verdade era
+  > outra, num bug pré-existente em `audio_decoder.rs` (não introduzido
+  > nesta sessão, só exposto por ela): `ffmpeg_next::frame::Audio::data(0)`
+  > retorna um slice do tamanho do **buffer alocado** (`linesize`, que o
+  > FFmpeg arredonda/alinha pra cima), não da quantidade real de amostras
+  > válidas (`nb_samples`). O código extraía `data.len()` bytes direto,
+  > incluindo bytes de padding/lixo no final de cada chunk reamostrado,
+  > reinterpretados como `f32` (podem virar valores arbitrariamente
+  > grandes/estranhos). Isso sempre existiu, mas piora
+  > proporcionalmente quanto menor o chunk reamostrado — exatamente o
+  > que acontece ao acelerar (target_rate menor → menos amostras válidas
+  > por pacote → mais lixo proporcional no final do buffer). Corrigido
+  > usando `resampled.samples() * resampled.channels()` para calcular o
+  > tamanho válido em vez de confiar em `data.len()`.
   >
   > **Seleção de track**: corrigido um bug real encontrado durante a
   > implementação — `AudioDecoder` escolhia a "melhor" trilha de áudio
@@ -374,7 +399,7 @@ UI flutuante minimalista que aparece quando o usuário aponta o controller para 
   - Ray do controller → interseção com UI panels
   - Feedback visual: laser + ponto de interseção
   - Haptics no controller ao hovering sobre botão
-- [ ] **T4.2** — Implementar **painel de controles**:
+- [x] **T4.2** — Implementar **painel de controles**:
   - Play/Pause (botão central grande)
   - Seek bar (slider com preview de tempo)
   - Tempo atual / Tempo total
@@ -382,6 +407,24 @@ UI flutuante minimalista que aparece quando o usuário aponta o controller para 
   - Botão de seleção de áudio track
   - Botão de seleção de legenda track
   - Botão fullscreen / resize
+  > **Bug crítico encontrado e corrigido**: `VRControlsPresentation.kt` usava
+  > `(context as? VRActivity)?.nativeX(...)` em todos os botões/sliders
+  > (rewind, forward, seek bar, volume, velocidade, trilha de áudio) —
+  > exceto o play/pause, que usa uma closure. `Presentation.context`
+  > (herdado de `Dialog`) **não é** o `outerContext`/`VRActivity` passado
+  > no construtor: o Android cria por baixo dos panos um
+  > `ContextThemeWrapper` em volta de um display-context derivado dele.
+  > O cast sempre falhava silenciosamente (virava `null`), então nenhum
+  > desses controles jamais chamava o Rust — só o play/pause (via
+  > closure) funcionava. Corrigido passando a `VRActivity` real
+  > explicitamente para `VRControlsPresentation` e usando essa
+  > referência em vez de `context` em todos os call sites. De quebra,
+  > troquei os botões de incremento (+/-, 🐢/🐇) de volume e velocidade
+  > por sliders (`SeekBar`) de verdade, e adicionei o label de tempo
+  > atual/total que faltava. Seleção de legenda não se aplica ainda
+  > (legendas são escopo de v0.2+); fullscreen/resize já é coberto pelo
+  > thumbstick/grip da tela virtual (T3.6), não duplicado aqui como
+  > botão.
 - [ ] **T4.3** — Implementar **auto-hide**:
   - Controles aparecem ao apontar controller para a tela
   - Desaparecem após 5s de inatividade
@@ -624,7 +667,10 @@ Salvar progresso de reprodução para retomar de onde parou.
 - [x] Ambiente void renderiza em ≥72 FPS
 - [ ] Consegue navegar pelo file browser local
 - [x] Consegue reproduzir vídeo MP4/MKV (H.264/H.265) local
-- [x] Controles de play/pause/seek funcionam via controller (bug de threads "zumbis" corrigido — ver T2.6; pendente validação em headset real)
+- [x] Controles de play/pause/seek funcionam via controller (bug de threads "zumbis" corrigido — ver T2.6 — e bug de travamento do app inteiro ao trocar de vídeo corrigido, ver nota abaixo; pendente validação em headset real)
+
+> [!IMPORTANT]
+> **Regressão corrigida (pós-fix do T2.6)**: fazer `stop()` esperar (`join()`) as threads da sessão anterior de verdade — a correção original do T2.6 — abriu um novo risco: se qualquer uma das 3 threads travasse internamente (ex: `HwDecoder::decode_packet` tem um loop de retry no MediaCodec sem limite quando o buffer de entrada nunca libera espaço, ou um `send()` bloqueante em canal cheio), quem chamasse `stop()`/`seek()` — a UI thread do Android, via JNI, ao trocar de vídeo pelo file browser — travava junto, travando o app inteiro (ANR). Corrigido em 3 frentes: (1) `HwDecoder::decode_packet` agora recebe um `should_continue` checado a cada retry, permitindo abortar; (2) os `send()` de pacote/amostra entre threads agora usam `send_timeout` com re-checagem de `is_running` em vez de bloquear indefinidamente; (3) como rede de segurança adicional, `start_video_playback`/`seek_video_playback`/`cycle_audio_track` (as três chamadas JNI que podem envolver `stop()+load()`) agora despacham o trabalho para uma thread separada em vez de rodar direto na thread chamadora — a UI thread nunca mais fica bloqueada por essas chamadas, não importa quanto tempo o trabalho leve.
 - [x] Volume ajustável (botões 🔉/🔊 na UI de controles; pendente validação em headset real)
 - [x] Tela virtual pode ser movida e redimensionada (via thumbstick/grip; pendente validação em headset real)
 - [ ] Consegue conectar a um share SMB e reproduzir vídeo remoto
