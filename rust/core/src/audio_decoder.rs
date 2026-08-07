@@ -77,10 +77,20 @@ impl AudioDecoder {
         while self.decoder.receive_frame(&mut decoded).is_ok() {
             let mut resampled = ffmpeg::frame::Audio::empty();
             self.resampler.run(&decoded, &mut resampled)?;
-            
+
+            // `Audio::data(0)` retorna um slice do tamanho do buffer
+            // ALOCADO (linesize, que o FFmpeg arredonda/alinha pra cima),
+            // nao da quantidade de amostras VALIDAS (`resampled.samples()`).
+            // Usar `data.len()` direto inclui bytes de padding/lixo no
+            // final do buffer, reinterpretados como f32 — causa chiado,
+            // pior quanto menor o chunk reamostrado (ex: velocidade >1x,
+            // onde target_rate menor produz menos amostras validas por
+            // pacote, aumentando a proporcao de lixo incluido).
+            let valid_len = resampled.samples() * resampled.channels() as usize;
             let data = resampled.data(0);
             let ptr = data.as_ptr() as *const f32;
-            let len = data.len() / 4;
+            let available = data.len() / 4;
+            let len = valid_len.min(available);
             let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
             samples.extend_from_slice(slice);
         }
