@@ -9,6 +9,30 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+/// Envia `item` no canal com timeout, checando `is_running` entre
+/// tentativas — evita bloquear para sempre se o consumidor parou de
+/// drenar o canal (ex: durante shutdown) sem ter sido explicitamente
+/// desconectado ainda. Retorna `false` se abortou (is_running virou
+/// false, ou o receiver foi derrubado).
+fn try_send_until_stopped<T>(
+    sender: &crossbeam_channel::Sender<T>,
+    mut item: T,
+    is_running: &Mutex<bool>,
+) -> bool {
+    loop {
+        match sender.send_timeout(item, std::time::Duration::from_millis(100)) {
+            Ok(()) => return true,
+            Err(crossbeam_channel::SendTimeoutError::Timeout(returned)) => {
+                item = returned;
+                if !*is_running.lock().unwrap() {
+                    return false;
+                }
+            }
+            Err(crossbeam_channel::SendTimeoutError::Disconnected(_)) => return false,
+        }
+    }
+}
+
 /// Estado e threads de uma unica "geracao" de playback (um load_at()).
 /// Cada load_at() cria uma sessao nova com suas proprias flags
 /// is_running/is_playing, em vez de reaproveitar as flags da sessao
@@ -250,9 +274,9 @@ impl PlaybackController {
 
                 if let Some((idx, packet)) = demuxer.read_packet() {
                     if idx == video_idx {
-                        if video_tx.send(packet).is_err() { break; }
+                        if !try_send_until_stopped(&video_tx, packet, &is_running_d) { break; }
                     } else if demuxer.audio_stream_index == Some(idx) {
-                        if audio_tx.send(packet).is_err() { break; }
+                        if !try_send_until_stopped(&audio_tx, packet, &is_running_d) { break; }
                     }
                 } else {
                     let _ = demuxer.input_context.seek(0, 0..1);
@@ -265,7 +289,7 @@ impl PlaybackController {
         let sync_v = sync_manager.clone();
         let video_thread = thread::spawn(move || {
             if let Some(sps) = sps_pps {
-                let _ = video_decoder.decode_packet(&sps, 0, 2, |_| {}, || {});
+                let _ = video_decoder.decode_packet(&sps, 0, 2, |_| {}, || {}, || true);
             }
 
             loop {
@@ -297,7 +321,8 @@ impl PlaybackController {
                                 if let Ok(mut tex) = texture_output_clone.lock() {
                                     let _ = tex.acquire_latest_buffer();
                                 }
-                            }
+                            },
+                            || *is_running_v.lock().unwrap()
                         );
                     }
                 }
@@ -317,6 +342,17 @@ impl PlaybackController {
 
         let audio_thread = thread::spawn(move || {
             let mut applied_speed = 1.0f32;
+            // Reconstruir o resampler descarta o historico interno do filtro
+            // FIR, o que gera um pequeno estalo/transiente a cada troca. O
+            // slider de velocidade dispara onProgressChanged (e portanto
+            // set_speed) dezenas de vezes por segundo enquanto o usuario
+            // arrasta — sem essa espera minima entre reconstrucoes, isso
+            // vira uma sequencia de estalos que soa como chiado/estatica.
+            let mut last_speed_change = std::time::Instant::now()
+                .checked_sub(std::time::Duration::from_secs(1))
+                .unwrap_or_else(std::time::Instant::now);
+            const MIN_SPEED_CHANGE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+
             loop {
                 if !*is_running_a.lock().unwrap() { break; }
 
@@ -328,9 +364,12 @@ impl PlaybackController {
                 if let Ok(packet) = audio_rx.recv_timeout(std::time::Duration::from_millis(50)) {
                     if let Some(ref mut ad) = audio_decoder {
                         let desired_speed = f32::from_bits(speed_bits_a.load(Ordering::Relaxed));
-                        if (desired_speed - applied_speed).abs() > 0.001 {
+                        if (desired_speed - applied_speed).abs() > 0.01
+                            && last_speed_change.elapsed() >= MIN_SPEED_CHANGE_INTERVAL
+                        {
                             if ad.set_speed(desired_speed).is_ok() {
                                 applied_speed = desired_speed;
+                                last_speed_change = std::time::Instant::now();
                             }
                         }
 
@@ -342,7 +381,9 @@ impl PlaybackController {
 
                                 if let Some(sender) = &audio_sender {
                                     for &sample in &samples {
-                                        let _ = sender.send(sample);
+                                        if !try_send_until_stopped(sender, sample, &is_running_a) {
+                                            break;
+                                        }
                                     }
                                 }
                             }

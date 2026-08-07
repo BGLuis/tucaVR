@@ -45,15 +45,26 @@ impl HwDecoder {
         }
     }
 
-    pub fn decode_packet<F, A>(&self, data: &[u8], pts: i64, flags: u32, mut sync_callback: F, mut after_release: A) -> Result<bool, String> 
-    where 
+    /// `should_continue` e checado a cada volta do loop de retry (quando o
+    /// MediaCodec esta com o buffer de entrada cheio). Sem isso, se o
+    /// codec nunca liberar espaco (decoder travado, app fechando, etc.),
+    /// este loop rodaria para sempre — e como quem chama isso e uma
+    /// thread que agora pode ser esperada via `join()` (ver
+    /// PlaybackSession::stop_and_join), um travamento aqui trava quem
+    /// estiver esperando essa thread tambem.
+    pub fn decode_packet<F, A, S>(&self, data: &[u8], pts: i64, flags: u32, mut sync_callback: F, mut after_release: A, should_continue: S) -> Result<bool, String>
+    where
         F: FnMut(i64),
         A: FnMut(),
+        S: Fn() -> bool,
     {
         let codec = self.codec.as_ref().ok_or("Codec not initialized")?;
         let mut released_any = false;
-        
+
         loop {
+            if !should_continue() {
+                return Ok(released_any);
+            }
             match codec.dequeue_input_buffer(Duration::from_millis(5)) {
                 Ok(DequeuedInputBufferResult::Buffer(mut buf)) => {
                     let slice = buf.buffer_mut();
