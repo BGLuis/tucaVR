@@ -68,8 +68,8 @@ vr-multimedia/
 
 ### Tarefas
 
-- [ ] **T1.1** — Inicializar repositório Git com `.gitignore` (Android + Rust + C++)
-  > `.gitignore` está completo e correto (Android+Rust+C++, incluindo as exclusões recentes de `sdk/meta-openxr-sdk/`, `sdk/*.zip` e `ffmpeg-android-maker/`), mas o repositório **não tem nenhum commit** (`git log` confirma "no commits yet"; todo o conteúdo aparece como `untracked` em `git status`). Falta o commit inicial.
+- [x] **T1.1** — Inicializar repositório Git com `.gitignore` (Android + Rust + C++)
+  > `.gitignore` estava completo e correto (Android+Rust+C++). Repositório inicializado com 6 commits logicamente agrupados: (1) scaffold monorepo + build system, (2) Rust video pipeline, (3) OpenXR native layer, (4) Android app, (5) docs & scripts, (6) Rust Cargo config. Working tree limpo.
 - [ ] **T1.2** — Configurar Gradle root com AGP + plugin Rust (`mozilla.rust-android-gradle` ou custom task)
   > AGP + Kotlin Android plugin configurados em `build.gradle.kts` raiz. Não há plugin Rust real integrado ao Gradle — a task `buildRust` em `app/build.gradle.kts` é um placeholder que só faz `println`, não compila nada. A compilação Rust acontece fora do Gradle, via `scripts/build.sh`.
 - [x] **T1.3** — Configurar Cargo workspace com crates: `core`, `protocols`, `bridge`, `audio`
