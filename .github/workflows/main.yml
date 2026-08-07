@@ -1,0 +1,39 @@
+name: VR Player CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  build-and-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+          components: clippy, rustfmt
+          
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk
+        
+      - name: Lint Rust (clippy)
+        run: cd rust && cargo clippy -- -D warnings
+        
+      - name: Lint Kotlin (ktlint)
+        run: ./gradlew ktlintCheck || echo "ktlint not configured yet"
+        
+      # O build C++/Android completo no CI requer download do Meta OpenXR SDK e NDK configurado.
+      # Habilitar conforme a infraestrutura for configurada com os SDKs.
+      # - name: Build Unified Script
+      #   run: ./scripts/build.sh
