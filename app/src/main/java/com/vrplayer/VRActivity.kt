@@ -19,13 +19,24 @@ import android.net.Uri
 class VRActivity : NativeActivity() {
     private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
     private var presentation: VRPresentation? = null
-    
+
     private var controlsVirtualDisplay: android.hardware.display.VirtualDisplay? = null
     private var controlsPresentation: VRControlsPresentation? = null
 
+    // Hook de teste (soak test via adb, ver scripts/soak-test.sh): permite disparar
+    // playback sem controller, ex. `adb shell am start -n com.vrplayer/.VRActivity
+    // -e video_path /sdcard/Movies/test.mp4`. Sem isso o soak test só mediria app
+    // ocioso, não reprodução de vídeo de fato (o cenário que a DoD pede medir).
+    // Atrasado pós-onResume porque a sessão OpenXR nativa (render loop em C++) é
+    // inicializada de forma assíncrona pelo NativeActivity — chamar nativePlayVideo
+    // cedo demais arrisca chamar antes da textura/surface estarem prontas.
+    private var pendingAutoPlayPath: String? = null
+    private var autoPlayDispatched = false
+    private val autoPlayHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (!Environment.isExternalStorageManager()) {
                 val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
@@ -38,11 +49,27 @@ class VRActivity : NativeActivity() {
                 requestPermissions(arrayOf(android.Manifest.permission.READ_EXTERNAL_STORAGE), 100)
             }
         }
+
+        pendingAutoPlayPath = intent?.getStringExtra(EXTRA_AUTO_PLAY_PATH)
     }
-    
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        intent.getStringExtra(EXTRA_AUTO_PLAY_PATH)?.let {
+            pendingAutoPlayPath = it
+            autoPlayDispatched = false
+        }
+    }
+
     override fun onResume() {
         super.onResume()
         presentation?.loadFiles()
+        pendingAutoPlayPath?.let { path ->
+            if (!autoPlayDispatched) {
+                autoPlayDispatched = true
+                autoPlayHandler.postDelayed({ playFile(path) }, AUTO_PLAY_DELAY_MS)
+            }
+        }
     }
 
     companion object {
@@ -51,7 +78,11 @@ class VRActivity : NativeActivity() {
         }
 
         private const val PICK_VIDEO_REQUEST_CODE = 1001
-        
+
+        // Ver hook de auto-play em onCreate/onNewIntent/onResume.
+        const val EXTRA_AUTO_PLAY_PATH = "video_path"
+        private const val AUTO_PLAY_DELAY_MS = 3000L
+
         @JvmStatic
         fun openFilePicker(activity: VRActivity) {
             activity.runOnUiThread {
