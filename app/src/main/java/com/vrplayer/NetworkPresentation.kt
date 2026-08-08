@@ -3,19 +3,23 @@ package com.vrplayer
 import android.app.Presentation
 import android.content.ClipboardManager
 import android.content.Context
-import android.graphics.Color
 import android.os.Bundle
 import android.text.InputType
 import android.view.Display
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
-import android.widget.TextView
+import com.vrplayer.designsystem.VoidButton
+import com.vrplayer.designsystem.VoidButtonStyle
+import com.vrplayer.designsystem.VoidListRow
+import com.vrplayer.designsystem.VoidPanelChrome
+import com.vrplayer.designsystem.VoidTabRow
+import com.vrplayer.designsystem.VoidText
+import com.vrplayer.designsystem.VoidTheme
 import com.vrplayer.network.SmbCredentialStore
 import com.vrplayer.network.SmbServer
 import com.vrplayer.network.UrlHistoryStore
@@ -37,6 +41,13 @@ import kotlinx.coroutines.withContext
  * `activity` e a `VRActivity` de verdade (NAO `context`, que e um
  * ContextThemeWrapper do Android em cima de um display-context derivado —
  * mesma armadilha ja documentada em `VRControlsPresentation.kt`).
+ *
+ * Fase 1 do redesign "Void": reskin visual (paleta/tipografia/componentes
+ * `Void*`) — NAO muda posicao/quantidade de quads nem a logica de
+ * navegacao/estado abaixo. Este painel continua seu proprio
+ * quad/VirtualDisplay, aberto pelo botao Menu do controller esquerdo (ver
+ * TODO em `VRPresentation.renderNetworkPlaceholder()` sobre por que a fusao
+ * com o painel Home fica pra Fase 2).
  */
 class NetworkPresentation(
     outerContext: Context,
@@ -50,7 +61,7 @@ class NetworkPresentation(
 
     // --- Views da aba URL (T7.3) ---
     private lateinit var urlInput: EditText
-    private lateinit var urlStatus: TextView
+    private lateinit var urlStatus: android.widget.TextView
     private lateinit var recentContainer: LinearLayout
 
     // --- Views da aba SMB (T6.4) ---
@@ -63,9 +74,9 @@ class NetworkPresentation(
     private lateinit var formPass: EditText
     private lateinit var formDomain: EditText
     private lateinit var formGuest: CheckBox
-    private lateinit var formStatus: TextView
+    private lateinit var formStatus: android.widget.TextView
     private lateinit var browseArea: LinearLayout
-    private lateinit var breadcrumbLabel: TextView
+    private lateinit var breadcrumbLabel: android.widget.TextView
     private lateinit var entriesContainer: LinearLayout
 
     private lateinit var urlPage: View
@@ -82,38 +93,10 @@ class NetworkPresentation(
         credentialStore = SmbCredentialStore(activity)
         urlHistory = UrlHistoryStore(activity)
 
-        val root = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#121212"))
-            setPadding(24, 24, 24, 24)
-        }
-
-        val title = TextView(context).apply {
-            text = "🌐 Rede"
-            textSize = 32f
-            setTextColor(Color.WHITE)
-            setPadding(8, 0, 8, 16)
-        }
-        root.addView(title)
+        val root = VoidPanelChrome.newRoot(context)
+        root.addView(VoidPanelChrome.buildHeader(context, title = "Rede"))
 
         // --- Tabs ---
-        val tabRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 0, 0, 16)
-        }
-        val tabButtonParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f)
-        val btnTabUrl = Button(context).apply {
-            text = "🔗 URL"
-            textSize = 24f
-        }
-        val btnTabSmb = Button(context).apply {
-            text = "🗄 SMB"
-            textSize = 24f
-        }
-        tabRow.addView(btnTabUrl, tabButtonParams)
-        tabRow.addView(btnTabSmb, tabButtonParams)
-        root.addView(tabRow)
-
         val pageContainer = FrameLayout(context).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         }
@@ -121,15 +104,17 @@ class NetworkPresentation(
         smbPage = buildSmbPage()
         pageContainer.addView(urlPage)
         pageContainer.addView(smbPage)
-        root.addView(pageContainer)
 
-        fun showTab(showUrl: Boolean) {
+        val tabRow = VoidTabRow(context, listOf("🔗 URL", "🗄 SMB")) { index ->
+            val showUrl = index == 0
             urlPage.visibility = if (showUrl) View.VISIBLE else View.GONE
             smbPage.visibility = if (showUrl) View.GONE else View.VISIBLE
         }
-        btnTabUrl.setOnClickListener { showTab(true) }
-        btnTabSmb.setOnClickListener { showTab(false) }
-        showTab(true)
+        tabRow.layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = VoidTheme.dpToPx(context, 16f) }
+        root.addView(tabRow)
+        root.addView(pageContainer)
 
         setContentView(root)
         refreshRecentUrls()
@@ -149,11 +134,7 @@ class NetworkPresentation(
             layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         }
 
-        urlInput = EditText(context).apply {
-            hint = "http:// ou https://..."
-            setHintTextColor(Color.GRAY)
-            setTextColor(Color.WHITE)
-            textSize = 22f
+        urlInput = buildVoidEditText("http:// ou https://...").apply {
             inputType = InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_CLASS_TEXT
             setSingleLine(true)
         }
@@ -161,11 +142,11 @@ class NetworkPresentation(
 
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 16, 0, 8)
+            setPadding(0, VoidTheme.dpToPx(context, 16f), 0, VoidTheme.dpToPx(context, 8f))
         }
-        val btnPaste = Button(context).apply {
+        val btnPaste = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
             text = "📋 Colar"
-            textSize = 20f
+            textSize = 18f
             setOnClickListener {
                 val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 val clip = clipboard.primaryClip
@@ -176,28 +157,25 @@ class NetworkPresentation(
                 }
             }
         }
-        val btnPlay = Button(context).apply {
+        val btnPlay = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
             text = "▶ Tocar"
-            textSize = 20f
+            textSize = 18f
             setOnClickListener { playUrl(urlInput.text.toString().trim()) }
         }
-        row.addView(btnPaste)
+        val btnMargin = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { marginEnd = VoidTheme.dpToPx(context, 12f) }
+        row.addView(btnPaste, btnMargin)
         row.addView(btnPlay)
         page.addView(row)
 
-        urlStatus = TextView(context).apply {
-            text = ""
-            textSize = 18f
-            setTextColor(Color.YELLOW)
-            setPadding(0, 0, 0, 16)
+        urlStatus = VoidText.body(context, "", sizeSp = 16f, secondary = true).apply {
+            setPadding(0, 0, 0, VoidTheme.dpToPx(context, 16f))
         }
         page.addView(urlStatus)
 
-        val recentHeader = TextView(context).apply {
-            text = "Recentes"
-            textSize = 22f
-            setTextColor(Color.LTGRAY)
-            setPadding(0, 8, 0, 8)
+        val recentHeader = VoidText.title(context, "Recentes", sizeSp = 20f).apply {
+            setPadding(0, VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 8f))
         }
         page.addView(recentHeader)
 
@@ -240,24 +218,23 @@ class NetworkPresentation(
         recentContainer.removeAllViews()
         val entries = urlHistory.list()
         if (entries.isEmpty()) {
-            recentContainer.addView(TextView(context).apply {
-                text = "(nenhuma URL tocada ainda)"
-                textSize = 18f
-                setTextColor(Color.GRAY)
-            })
+            recentContainer.addView(VoidText.body(context, "(nenhuma URL tocada ainda)", sizeSp = 16f, secondary = true))
             return
         }
         entries.forEach { url ->
-            recentContainer.addView(TextView(context).apply {
-                text = "🕓 $url"
-                textSize = 18f
-                setTextColor(Color.WHITE)
-                setPadding(8, 12, 8, 12)
+            val row = VoidListRow(context).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).also { it.bottomMargin = VoidTheme.dpToPx(context, 8f) }
+                bind("🕓 $url", showThumbnailSlot = false)
+                titleView.typeface = VoidTheme.typefaceMono
+                titleView.textSize = 15f
                 setOnClickListener {
                     urlInput.setText(url)
                     playUrl(url)
                 }
-            })
+            }
+            recentContainer.addView(row)
         }
     }
 
@@ -270,23 +247,22 @@ class NetworkPresentation(
             visibility = View.GONE
         }
 
-        val header = TextView(context).apply {
-            text = "Servidores salvos"
-            textSize = 22f
-            setTextColor(Color.LTGRAY)
-            setPadding(0, 0, 0, 8)
+        val header = VoidText.title(context, "Servidores salvos", sizeSp = 20f).apply {
+            setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
         }
         page.addView(header)
 
         serversContainer = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         page.addView(serversContainer)
 
-        val btnAddServer = Button(context).apply {
+        val btnAddServer = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
             text = "+ Adicionar servidor"
-            textSize = 20f
+            textSize = 18f
             setOnClickListener { addForm.visibility = if (addForm.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
         }
-        page.addView(btnAddServer)
+        page.addView(btnAddServer, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = VoidTheme.dpToPx(context, 8f) })
 
         addForm = buildAddServerForm()
         addForm.visibility = View.GONE
@@ -302,56 +278,46 @@ class NetworkPresentation(
     private fun buildAddServerForm(): LinearLayout {
         val form = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#1E1E1E"))
-            setPadding(16, 16, 16, 16)
+            setBackgroundColor(VoidTheme.colorSurface)
+            val pad = VoidTheme.dpToPx(context, 16f)
+            setPadding(pad, pad, pad, pad)
         }
 
         fun addLabeled(text: String, field: EditText) {
-            form.addView(TextView(context).apply {
-                this.text = text
-                textSize = 16f
-                setTextColor(Color.GRAY)
-                setPadding(0, 8, 0, 0)
+            form.addView(VoidText.mono(context, text, sizeSp = 13f).apply {
+                setPadding(0, VoidTheme.dpToPx(context, 8f), 0, 0)
             })
             form.addView(field)
         }
 
-        formHost = EditText(context).apply { hint = "192.168.1.10"; textSize = 20f; setTextColor(Color.WHITE); setSingleLine(true) }
+        formHost = buildVoidEditText("192.168.1.10")
         addLabeled("Host / IP", formHost)
 
-        formPort = EditText(context).apply {
-            hint = "445"
+        formPort = buildVoidEditText("445").apply {
             setText("445")
-            textSize = 20f
-            setTextColor(Color.WHITE)
-            setSingleLine(true)
             inputType = InputType.TYPE_CLASS_NUMBER
         }
         addLabeled("Porta", formPort)
 
-        formShare = EditText(context).apply { hint = "Videos"; textSize = 20f; setTextColor(Color.WHITE); setSingleLine(true) }
+        formShare = buildVoidEditText("Videos")
         addLabeled("Share", formShare)
 
         formGuest = CheckBox(context).apply {
             text = "Convidado / anonimo (sem usuario/senha)"
-            textSize = 18f
-            setTextColor(Color.WHITE)
+            textSize = 16f
+            setTextColor(VoidTheme.colorText)
         }
         form.addView(formGuest)
 
-        formUser = EditText(context).apply { hint = "usuario"; textSize = 20f; setTextColor(Color.WHITE); setSingleLine(true) }
+        formUser = buildVoidEditText("usuario")
         addLabeled("Usuario", formUser)
 
-        formPass = EditText(context).apply {
-            hint = "senha"
-            textSize = 20f
-            setTextColor(Color.WHITE)
-            setSingleLine(true)
+        formPass = buildVoidEditText("senha").apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
         addLabeled("Senha", formPass)
 
-        formDomain = EditText(context).apply { hint = "(opcional)"; textSize = 20f; setTextColor(Color.WHITE); setSingleLine(true) }
+        formDomain = buildVoidEditText("(opcional)")
         addLabeled("Dominio", formDomain)
 
         formGuest.setOnCheckedChangeListener { _, checked ->
@@ -363,17 +329,14 @@ class NetworkPresentation(
             }
         }
 
-        formStatus = TextView(context).apply {
-            text = ""
-            textSize = 16f
-            setTextColor(Color.YELLOW)
-            setPadding(0, 12, 0, 8)
+        formStatus = VoidText.body(context, "", sizeSp = 14f, secondary = true).apply {
+            setPadding(0, VoidTheme.dpToPx(context, 12f), 0, VoidTheme.dpToPx(context, 8f))
         }
         form.addView(formStatus)
 
-        val btnTestSave = Button(context).apply {
+        val btnTestSave = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
             text = "Testar e salvar"
-            textSize = 20f
+            textSize = 18f
             setOnClickListener { testAndSaveServer() }
         }
         form.addView(btnTestSave)
@@ -434,36 +397,39 @@ class NetworkPresentation(
         serversContainer.removeAllViews()
         val servers = credentialStore.list()
         if (servers.isEmpty()) {
-            serversContainer.addView(TextView(context).apply {
-                text = "(nenhum servidor salvo)"
-                textSize = 18f
-                setTextColor(Color.GRAY)
-            })
+            serversContainer.addView(VoidText.body(context, "(nenhum servidor salvo)", sizeSp = 16f, secondary = true))
             return
         }
         servers.forEach { server ->
             val row = LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                setPadding(8, 12, 8, 12)
+                setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f))
             }
-            val label = TextView(context).apply {
-                text = "🖥 ${server.name}  (${if (server.isGuest) "guest" else server.username})"
-                textSize = 20f
-                setTextColor(Color.WHITE)
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f)
+            val label = VoidListRow(context).apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                bind(
+                    "🖥 ${server.name}",
+                    meta = if (server.isGuest) "guest" else server.username,
+                    showThumbnailSlot = false
+                )
                 setOnClickListener { startBrowse(server) }
             }
-            val btnRemove = Button(context).apply {
+            val btnRemove = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
                 text = "✕"
-                textSize = 18f
+                textSize = 16f
+                minHeight = 0
+                val pad = VoidTheme.dpToPx(context, 12f)
+                setPadding(pad, pad, pad, pad)
                 setOnClickListener {
                     credentialStore.remove(server.id)
                     refreshServerList()
                 }
             }
             row.addView(label)
-            row.addView(btnRemove)
+            row.addView(btnRemove, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { marginStart = VoidTheme.dpToPx(context, 8f) })
             serversContainer.addView(row)
         }
     }
@@ -473,24 +439,25 @@ class NetworkPresentation(
     private fun buildBrowseArea(): LinearLayout {
         val area = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#1E1E1E"))
-            setPadding(16, 16, 16, 16)
+            setBackgroundColor(VoidTheme.colorSurface)
+            val pad = VoidTheme.dpToPx(context, 16f)
+            setPadding(pad, pad, pad, pad)
         }
 
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val btnBack = Button(context).apply {
+        val btnBack = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
             text = "◀"
-            textSize = 20f
+            textSize = 16f
+            minHeight = 0
+            val pad = VoidTheme.dpToPx(context, 10f)
+            setPadding(pad, pad, pad, pad)
             setOnClickListener { browseUp() }
         }
-        breadcrumbLabel = TextView(context).apply {
-            text = ""
-            textSize = 18f
-            setTextColor(Color.LTGRAY)
-            setPadding(16, 0, 0, 0)
+        breadcrumbLabel = VoidText.mono(context, "", sizeSp = 14f).apply {
+            setPadding(VoidTheme.dpToPx(context, 16f), 0, 0, 0)
         }
         row.addView(btnBack)
         row.addView(breadcrumbLabel)
@@ -525,11 +492,7 @@ class NetworkPresentation(
         val server = browsingServer ?: return
         breadcrumbLabel.text = "${server.share}/$browsePath"
         entriesContainer.removeAllViews()
-        entriesContainer.addView(TextView(context).apply {
-            text = "Carregando..."
-            textSize = 18f
-            setTextColor(Color.GRAY)
-        })
+        entriesContainer.addView(VoidText.body(context, "Carregando...", sizeSp = 16f, secondary = true))
 
         scope.launch {
             val result = withContext(Dispatchers.IO) {
@@ -541,21 +504,13 @@ class NetworkPresentation(
             entriesContainer.removeAllViews()
 
             if (result.startsWith("ERROR:")) {
-                entriesContainer.addView(TextView(context).apply {
-                    text = "⚠ ${result.removePrefix("ERROR:")}"
-                    textSize = 18f
-                    setTextColor(Color.YELLOW)
-                })
+                entriesContainer.addView(VoidText.body(context, "⚠ ${result.removePrefix("ERROR:")}", sizeSp = 16f))
                 return@launch
             }
 
             val lines = result.split("\n").filter { it.isNotBlank() }
             if (lines.isEmpty()) {
-                entriesContainer.addView(TextView(context).apply {
-                    text = "(vazio)"
-                    textSize = 18f
-                    setTextColor(Color.GRAY)
-                })
+                entriesContainer.addView(VoidText.body(context, "(vazio)", sizeSp = 16f, secondary = true))
                 return@launch
             }
 
@@ -563,11 +518,11 @@ class NetworkPresentation(
                 val parts = line.split("\t")
                 val name = parts.getOrElse(0) { return@forEach }
                 val isDir = parts.getOrNull(1) == "1"
-                val row = TextView(context).apply {
-                    text = if (isDir) "📁 $name" else "🎬 $name"
-                    textSize = 20f
-                    setTextColor(Color.WHITE)
-                    setPadding(8, 12, 8, 12)
+                val row = VoidListRow(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).also { it.bottomMargin = VoidTheme.dpToPx(context, 8f) }
+                    bind(if (isDir) "📁 $name" else "🎬 $name", showThumbnailSlot = false)
                     setOnClickListener {
                         val childPath = if (browsePath.isEmpty()) name else "$browsePath/$name"
                         if (isDir) {
@@ -581,5 +536,21 @@ class NetworkPresentation(
                 entriesContainer.addView(row)
             }
         }
+    }
+
+    private fun buildVoidEditText(hint: String): EditText = EditText(context).apply {
+        this.hint = hint
+        setHintTextColor(VoidTheme.colorTextSecondary)
+        setTextColor(VoidTheme.colorText)
+        typeface = VoidTheme.typefaceBody
+        textSize = 18f
+        background = android.graphics.drawable.GradientDrawable().apply {
+            setColor(VoidTheme.colorSurface)
+            cornerRadius = VoidTheme.dp(context, VoidTheme.cornerRadiusDp)
+            setStroke(VoidTheme.dpToPx(context, VoidTheme.borderWidthDp), VoidTheme.colorBorder)
+        }
+        val padH = VoidTheme.dpToPx(context, 16f)
+        val padV = VoidTheme.dpToPx(context, 12f)
+        setPadding(padH, padV, padH, padV)
     }
 }

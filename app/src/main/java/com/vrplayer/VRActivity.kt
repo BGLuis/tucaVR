@@ -79,9 +79,7 @@ class VRActivity : NativeActivity() {
                 )
                 
                 activity.virtualDisplay?.display?.let { display ->
-                    activity.presentation = VRPresentation(activity, display) { filePath ->
-                        activity.playFile(filePath)
-                    }
+                    activity.presentation = VRPresentation(activity, display, activity)
                     activity.presentation?.show()
                 }
             }

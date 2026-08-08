@@ -4,12 +4,14 @@ import android.app.Presentation
 import android.content.Context
 import android.os.Bundle
 import android.view.Display
-import android.widget.Button
 import android.widget.LinearLayout
 import android.graphics.Color
 import android.view.Gravity
 import android.widget.SeekBar
 import android.widget.TextView
+import com.vrplayer.designsystem.VoidButton
+import com.vrplayer.designsystem.VoidButtonStyle
+import com.vrplayer.designsystem.VoidTheme
 
 class VRControlsPresentation(
     outerContext: Context,
@@ -52,15 +54,20 @@ class VRControlsPresentation(
 
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.parseColor("#88000000")) // Semi-transparent black
-            setPadding(24, 16, 24, 16)
+            // Fundo "Void" semi-transparente (em vez do cinza-escuro
+            // generico anterior) — flutua sobre a tela de video sem quebrar
+            // a identidade visual do resto do app.
+            setBackgroundColor(Color.argb(215, Color.red(VoidTheme.colorBackground), Color.green(VoidTheme.colorBackground), Color.blue(VoidTheme.colorBackground)))
+            val padH = VoidTheme.dpToPx(context, 24f)
+            val padV = VoidTheme.dpToPx(context, 16f)
+            setPadding(padH, padV, padH, padV)
         }
 
         val marginParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply {
-            setMargins(24, 0, 24, 0)
+            setMargins(VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 8f), 0)
         }
 
         // --- Linha 1: transporte (rewind / play-pause / forward) + seek + tempo ---
@@ -69,12 +76,9 @@ class VRControlsPresentation(
             gravity = Gravity.CENTER_VERTICAL
         }
 
-        val btnRewind = Button(context).apply {
+        val btnRewind = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
             text = "<<"
-            textSize = 30f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#444444"))
-            setPadding(28, 20, 28, 20)
+            textSize = 24f
             setOnClickListener {
                 val currentProgress = (seekBar.progress / 100f) * totalDuration
                 val newTarget = kotlin.math.max(0f, currentProgress - 10f)
@@ -83,22 +87,16 @@ class VRControlsPresentation(
         }
         row1.addView(btnRewind)
 
-        val btnPlayPause = Button(context).apply {
+        val btnPlayPause = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
             text = "Play / Pause"
-            textSize = 30f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#444444"))
-            setPadding(40, 20, 40, 20)
+            textSize = 22f
             setOnClickListener { onPlayPause() }
         }
         row1.addView(btnPlayPause, marginParams)
 
-        val btnForward = Button(context).apply {
+        val btnForward = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
             text = ">>"
-            textSize = 30f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#444444"))
-            setPadding(28, 20, 28, 20)
+            textSize = 24f
             setOnClickListener {
                 val currentProgress = (seekBar.progress / 100f) * totalDuration
                 val newTarget = kotlin.math.min(totalDuration, currentProgress + 10f)
@@ -109,8 +107,10 @@ class VRControlsPresentation(
 
         seekBar = SeekBar(context).apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f).apply {
-                setMargins(48, 0, 24, 0)
+                setMargins(VoidTheme.dpToPx(context, 16f), 0, VoidTheme.dpToPx(context, 8f), 0)
             }
+            progressTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
+            thumbTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
             max = 100
             progress = 0
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -130,9 +130,10 @@ class VRControlsPresentation(
 
         timeLabel = TextView(context).apply {
             text = "00:00 / 00:00"
-            textSize = 22f
-            setTextColor(Color.WHITE)
-            setPadding(16, 0, 0, 0)
+            typeface = VoidTheme.typefaceMono
+            textSize = 16f
+            setTextColor(VoidTheme.colorText)
+            setPadding(VoidTheme.dpToPx(context, 8f), 0, 0, 0)
         }
         row1.addView(timeLabel)
 
@@ -142,20 +143,23 @@ class VRControlsPresentation(
         val row2 = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 16, 0, 0)
+            setPadding(0, VoidTheme.dpToPx(context, 16f), 0, 0)
         }
 
         val volumeLabel = TextView(context).apply {
             text = "🔊 100%"
-            textSize = 22f
-            setTextColor(Color.WHITE)
+            typeface = VoidTheme.typefaceBody
+            textSize = 16f
+            setTextColor(VoidTheme.colorText)
         }
         row2.addView(volumeLabel)
 
         volumeBar = SeekBar(context).apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f).apply {
-                setMargins(16, 0, 40, 0)
+                setMargins(VoidTheme.dpToPx(context, 12f), 0, VoidTheme.dpToPx(context, 28f), 0)
             }
+            progressTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
+            thumbTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
             max = 100
             progress = 100
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
@@ -173,15 +177,18 @@ class VRControlsPresentation(
 
         val speedLabel = TextView(context).apply {
             text = "⏱ 1.00x"
-            textSize = 22f
-            setTextColor(Color.WHITE)
+            typeface = VoidTheme.typefaceBody
+            textSize = 16f
+            setTextColor(VoidTheme.colorText)
         }
         row2.addView(speedLabel)
 
         speedBar = SeekBar(context).apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f).apply {
-                setMargins(16, 0, 40, 0)
+                setMargins(VoidTheme.dpToPx(context, 12f), 0, VoidTheme.dpToPx(context, 28f), 0)
             }
+            progressTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
+            thumbTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
             max = 100
             // speedFromProgress(33) ~= 1.0x — valor inicial neutro
             progress = 33
@@ -199,12 +206,9 @@ class VRControlsPresentation(
         }
         row2.addView(speedBar)
 
-        val btnAudioTrack = Button(context).apply {
+        val btnAudioTrack = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
             text = "🎵"
-            textSize = 26f
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#444444"))
-            setPadding(24, 16, 24, 16)
+            textSize = 20f
             setOnClickListener {
                 activity.nativeCycleAudioTrack()
             }
