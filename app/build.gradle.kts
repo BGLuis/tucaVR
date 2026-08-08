@@ -66,6 +66,14 @@ dependencies {
     // T6.4: EncryptedSharedPreferences para credenciais de servidores SMB —
     // NUNCA armazenar senha em texto plano (doc, secao 6, aviso "Credenciais").
     implementation("androidx.security:security-crypto:1.1.0")
+
+    // JVM unit tests (app/src/test) — logica pura do file browser
+    // (MediaSorter, DirectoryNavigator, DirectoryLister, cache-key do
+    // ThumbnailGenerator) roda direto na JVM, sem emulador/Robolectric,
+    // porque nenhuma dessas classes toca em APIs Android reais nos
+    // caminhos testados. Ver docs/TESTING-PLAN.md.
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
 }
 
 // Placeholder for Rust integration (via Mozilla plugin or custom task)

@@ -13,3 +13,7 @@ audio = { path = "../audio" }
 # T6.3/T7.2: Demuxer::new despacha smb://, https:// (custom I/O) e local/http://
 # (nativo do libavformat) para esta crate — ver demuxer.rs.
 protocols = { path = "../protocols" }
+# Logica pura (sem deps Android) extraida para ser testavel via `cargo test`
+# no host — ver rust/media-logic/src/lib.rs. sync.rs e parte de
+# audio_decoder.rs delegam para ca em vez de reimplementar a mesma logica.
+media-logic = { path = "../media-logic" }

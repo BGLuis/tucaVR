@@ -51,6 +51,28 @@ fn parse_content_range_total(headers: &reqwest::header::HeaderMap) -> Option<u64
     v.rsplit('/').next()?.parse::<u64>().ok()
 }
 
+/// Le o header `Content-Length` diretamente, em vez de usar
+/// `reqwest::Response::content_length()`.
+///
+/// **Bug real encontrado ao escrever os testes desta funcao com um servidor
+/// mock** (nunca teria aparecido so lendo o codigo ou testando manualmente
+/// sem prestar atencao ao valor retornado): a doc do proprio reqwest diz
+/// explicitamente que `content_length()` reflete o tamanho do *corpo da
+/// resposta transferido*, nao o header — e uma resposta a HEAD nunca tem
+/// corpo. Na pratica isso fazia o branch de HEAD do `probe()` (abaixo)
+/// reportar `content_length: Some(0)` para QUALQUER servidor, mesmo um que
+/// respondesse corretamente `Content-Length: 123456` no HEAD — o que por
+/// sua vez fazia `HttpsRangeSource::read_range` achar que qualquer offset
+/// estava "alem do fim do arquivo" e devolver 0 bytes silenciosamente.
+fn parse_content_length_header(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+    headers
+        .get(reqwest::header::CONTENT_LENGTH)?
+        .to_str()
+        .ok()?
+        .parse::<u64>()
+        .ok()
+}
+
 /// Probe HEAD-based (T7.1): descobre se o servidor suporta range requests e
 /// o tamanho do arquivo ANTES de comecar a tocar, para a UI poder avisar
 /// que seek nao vai funcionar. Alguns servidores nao aceitam HEAD
@@ -72,7 +94,7 @@ pub fn probe(url: &str) -> HttpCapabilities {
                 .get(reqwest::header::ACCEPT_RANGES)
                 .map(|v| v.to_str().unwrap_or("").eq_ignore_ascii_case("bytes"))
                 .unwrap_or(false);
-            let content_length = resp.content_length();
+            let content_length = parse_content_length_header(resp.headers());
             return HttpCapabilities { reachable: true, status: resp.status().as_u16(), seekable, content_length, error: None };
         }
     }
@@ -81,7 +103,9 @@ pub fn probe(url: &str) -> HttpCapabilities {
         Ok(resp) => {
             let status = resp.status().as_u16();
             let seekable = status == 206;
-            let content_length = parse_content_range_total(resp.headers()).or_else(|| resp.content_length());
+            let content_length = parse_content_range_total(resp.headers())
+                .or_else(|| parse_content_length_header(resp.headers()))
+                .or_else(|| resp.content_length());
             let reachable = resp.status().is_success() || status == 206;
             HttpCapabilities { reachable, status, seekable, content_length, error: None }
         }
@@ -148,5 +172,144 @@ impl RangeSource for HttpsRangeSource {
 
     fn len(&self) -> Option<u64> {
         Some(self.len)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use httpmock::prelude::*;
+
+    /// Servidor que responde HEAD normalmente e anuncia suporte a range
+    /// requests via `Accept-Ranges: bytes` — o caminho feliz mais comum
+    /// (ex: Nginx/Apache/S3 servindo um arquivo estatico).
+    #[test]
+    fn probe_detects_seekable_via_head() {
+        let server = MockServer::start();
+        let mock = server.mock(|when, then| {
+            when.method("HEAD").path("/video.mp4");
+            then.status(200)
+                .header("Accept-Ranges", "bytes")
+                .header("Content-Length", "123456");
+        });
+
+        let caps = probe(&server.url("/video.mp4"));
+
+        mock.assert();
+        assert!(caps.reachable);
+        assert!(caps.seekable);
+        assert_eq!(caps.content_length, Some(123456));
+        assert_eq!(caps.status, 200);
+    }
+
+    /// Servidor que responde 200 no HEAD mas sem `Accept-Ranges` — deve ser
+    /// reportado como nao-seekable (a UI avisa o usuario, T7.1).
+    #[test]
+    fn probe_detects_non_seekable_when_no_accept_ranges_header() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method("HEAD").path("/video.mp4");
+            then.status(200).header("Content-Length", "999");
+        });
+
+        let caps = probe(&server.url("/video.mp4"));
+
+        assert!(caps.reachable);
+        assert!(!caps.seekable);
+    }
+
+    /// Alguns servidores nao aceitam HEAD (405/501) — o probe deve cair
+    /// para GET com `Range: bytes=0-0` e usar o status 206 como sinal de
+    /// que ranges sao suportados (ver doc do `probe`).
+    #[test]
+    fn probe_falls_back_to_range_get_when_head_not_allowed() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method("HEAD").path("/video.mp4");
+            then.status(405);
+        });
+        server.mock(|when, then| {
+            when.method("GET")
+                .path("/video.mp4")
+                .header("Range", "bytes=0-0");
+            then.status(206)
+                .header("Content-Range", "bytes 0-0/5000");
+        });
+
+        let caps = probe(&server.url("/video.mp4"));
+
+        assert!(caps.reachable);
+        assert!(caps.seekable);
+        assert_eq!(caps.content_length, Some(5000));
+        assert_eq!(caps.status, 206);
+    }
+
+    /// Servidor inalcancavel (porta fechada) — probe nao deve entrar em
+    /// pânico, so reportar `reachable: false`.
+    #[test]
+    fn probe_reports_unreachable_server() {
+        // Porta improvavel de estar escutando algo neste host de CI/dev.
+        let caps = probe("http://127.0.0.1:1/video.mp4");
+
+        assert!(!caps.reachable);
+        assert!(!caps.seekable);
+    }
+
+    #[test]
+    fn https_range_source_fails_fast_when_server_lacks_range_support() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method("HEAD").path("/video.mp4");
+            then.status(200).header("Content-Length", "1000");
+            // Sem Accept-Ranges: bytes.
+        });
+
+        let result = HttpsRangeSource::new(&server.url("/video.mp4"));
+
+        match result {
+            Err(msg) => assert!(msg.contains("range"), "unexpected error message: {msg}"),
+            Ok(_) => panic!("expected HttpsRangeSource::new to fail without range support"),
+        }
+    }
+
+    #[test]
+    fn https_range_source_reads_requested_byte_range() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method("HEAD").path("/video.mp4");
+            then.status(200)
+                .header("Accept-Ranges", "bytes")
+                .header("Content-Length", "10");
+        });
+        server.mock(|when, then| {
+            when.method("GET")
+                .path("/video.mp4")
+                .header("Range", "bytes=2-5");
+            then.status(206).body(b"CDEF".to_vec());
+        });
+
+        let mut source = HttpsRangeSource::new(&server.url("/video.mp4")).unwrap();
+        let mut buf = [0u8; 4];
+        let n = source.read_range(2, &mut buf).unwrap();
+
+        assert_eq!(n, 4);
+        assert_eq!(&buf, b"CDEF");
+    }
+
+    #[test]
+    fn https_range_source_read_past_end_returns_zero() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method("HEAD").path("/video.mp4");
+            then.status(200)
+                .header("Accept-Ranges", "bytes")
+                .header("Content-Length", "10");
+        });
+
+        let mut source = HttpsRangeSource::new(&server.url("/video.mp4")).unwrap();
+        let mut buf = [0u8; 4];
+        let n = source.read_range(10, &mut buf).unwrap();
+
+        assert_eq!(n, 0);
     }
 }

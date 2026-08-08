@@ -1,0 +1,15 @@
+[package]
+name = "media-logic"
+version = "0.1.0"
+edition = "2021"
+
+# Deliberately zero Android/hardware dependencies (no `ndk`, `ndk-sys`,
+# `oboe`, `ffmpeg-next`). This crate exists specifically to hold pure,
+# host-testable logic extracted out of `core` — see rust/core/src/sync.rs
+# and rust/core/src/audio_decoder.rs, which now delegate here instead of
+# reimplementing this math. `core` itself cannot compile on a normal dev
+# machine (it pulls in `audio` -> `oboe-sys`, which shells out to a C++
+# compiler expecting the Android NDK toolchain), so anything that needs to
+# run under plain `cargo test` on a laptop has to live in a crate that
+# doesn't depend on `core` or `audio`.
+[dependencies]

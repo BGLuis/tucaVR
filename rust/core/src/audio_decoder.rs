@@ -49,9 +49,7 @@ impl AudioDecoder {
     /// rapido (e mais agudo) — nao preserva o pitch (isso exigiria
     /// time-stretching tipo WSOLA/SoundTouch, fora do escopo do MVP).
     pub fn set_speed(&mut self, speed: f32) -> Result<(), ffmpeg::Error> {
-        let target_rate = ((OUTPUT_SAMPLE_RATE as f64) / (speed as f64))
-            .round()
-            .clamp(8000.0, 192000.0) as u32;
+        let target_rate = media_logic::audio_resample::target_sample_rate(OUTPUT_SAMPLE_RATE, speed);
 
         self.resampler = Resampler::get(
             self.decoder.format(),
@@ -86,11 +84,14 @@ impl AudioDecoder {
             // pior quanto menor o chunk reamostrado (ex: velocidade >1x,
             // onde target_rate menor produz menos amostras validas por
             // pacote, aumentando a proporcao de lixo incluido).
-            let valid_len = resampled.samples() * resampled.channels() as usize;
             let data = resampled.data(0);
             let ptr = data.as_ptr() as *const f32;
             let available = data.len() / 4;
-            let len = valid_len.min(available);
+            let len = media_logic::audio_resample::valid_sample_count(
+                resampled.samples(),
+                resampled.channels() as usize,
+                available,
+            );
             let slice = unsafe { std::slice::from_raw_parts(ptr, len) };
             samples.extend_from_slice(slice);
         }

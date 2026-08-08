@@ -70,11 +70,19 @@ object ThumbnailGenerator {
 
     private fun cacheFileFor(context: Context, entry: MediaEntry): File {
         val cacheDir = File(context.cacheDir, CACHE_DIR_NAME)
+        return File(cacheDir, "${cacheKeyFor(entry)}.jpg")
+    }
+
+    // Extracted as a pure, Context-free function so the cache-key logic (the part that
+    // actually matters for correctness: same file -> same key, changed file -> different
+    // key, no collisions between unrelated files) can be unit-tested on the JVM without
+    // Robolectric or a real Android cacheDir. Everything that touches real I/O
+    // (MediaMetadataRetriever, disk reads/writes) stays out of this function on purpose.
+    internal fun cacheKeyFor(entry: MediaEntry): String {
         // size + lastModified are included so a file replaced/edited at the same path
         // doesn't reuse a stale thumbnail, while a plain rename does not collide with
         // an unrelated file's cache entry.
-        val key = sha256("${entry.path}|${entry.sizeBytes}|${entry.lastModified}")
-        return File(cacheDir, "$key.jpg")
+        return sha256("${entry.path}|${entry.sizeBytes}|${entry.lastModified}")
     }
 
     private fun sha256(input: String): String {

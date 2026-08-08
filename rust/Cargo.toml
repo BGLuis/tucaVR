@@ -3,6 +3,7 @@ members = [
     "core",
     "protocols",
     "bridge",
-    "audio"
+    "audio",
+    "media-logic"
 ]
 resolver = "2"

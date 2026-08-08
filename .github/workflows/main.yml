@@ -29,10 +29,27 @@ jobs:
         
       - name: Lint Rust (clippy)
         run: cd rust && cargo clippy -- -D warnings
-        
+
+      # `core`, `audio` e `bridge` dependem de ndk/ndk-sys/oboe (Android-only) e nao
+      # rodam (nem compilam de forma confiavel) num host generico com `cargo test` —
+      # ver docs/TESTING-PLAN.md, secao "O que roda no host vs. so no Android". A logica
+      # pura que antes vivia dentro de `core` (SyncManager, matematica de resample de
+      # audio, clamps de velocidade/volume, contrato de "geracao" de playback) foi
+      # extraida para a crate `media-logic`, que tem zero dependencias Android e roda
+      # aqui normalmente. `protocols` (SMB URI/redact, prefetch, HTTP probe/range) ja
+      # era host-testable.
+      - name: Run Rust unit tests (host-testable crates)
+        run: cd rust && cargo test -p protocols -p media-logic
+
       - name: Lint Kotlin (ktlint)
         run: ./gradlew ktlintCheck || echo "ktlint not configured yet"
-        
+
+      # Testes JVM puros do Kotlin (app/src/test) — file browser (MediaSorter,
+      # DirectoryNavigator, DirectoryLister, cache-key do ThumbnailGenerator). Rodam
+      # sem emulador/dispositivo, ver docs/TESTING-PLAN.md.
+      - name: Run Kotlin unit tests (JVM)
+        run: ./gradlew testDebugUnitTest
+
       # O build C++/Android completo no CI requer download do Meta OpenXR SDK e NDK configurado.
       # Habilitar conforme a infraestrutura for configurada com os SDKs.
       # - name: Build Unified Script

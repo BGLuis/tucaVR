@@ -42,8 +42,11 @@ fn try_send_until_stopped<T>(
 /// de gerações diferentes fiquem escrevendo ao mesmo tempo na mesma
 /// textura/saida de audio compartilhadas.
 struct PlaybackSession {
-    is_playing: Arc<Mutex<bool>>,
-    is_running: Arc<Mutex<bool>>,
+    // Flags is_playing/is_running independentes desta geracao — ver
+    // `media_logic::session::Generation` para o contrato testado
+    // (rust/media-logic/src/session.rs) que este struct agora usa em vez de
+    // reimplementar a mesma bookkeeping na mao.
+    generation: media_logic::session::Generation,
     demux_thread: Option<thread::JoinHandle<()>>,
     video_thread: Option<thread::JoinHandle<()>>,
     audio_thread: Option<thread::JoinHandle<()>>,
@@ -51,11 +54,11 @@ struct PlaybackSession {
 
 impl PlaybackSession {
     fn is_playing(&self) -> bool {
-        *self.is_playing.lock().unwrap()
+        self.generation.is_playing()
     }
 
     fn set_playing(&self, playing: bool) {
-        *self.is_playing.lock().unwrap() = playing;
+        self.generation.set_playing(playing);
     }
 
     /// Sinaliza todas as threads da sessao para pararem e espera
@@ -63,20 +66,19 @@ impl PlaybackSession {
     /// substitui o antigo `sleep(150ms)` "no chute" por uma garantia
     /// real de que nenhuma thread da geracao antiga segue viva.
     fn stop_and_join(mut self) {
-        *self.is_running.lock().unwrap() = false;
-        // Acorda qualquer thread parada no sleep(50ms) do ramo "pausado"
-        // um pouco mais rapido.
-        *self.is_playing.lock().unwrap() = true;
+        let handles: Vec<_> = [
+            self.demux_thread.take(),
+            self.video_thread.take(),
+            self.audio_thread.take(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
 
-        if let Some(h) = self.demux_thread.take() {
-            let _ = h.join();
-        }
-        if let Some(h) = self.video_thread.take() {
-            let _ = h.join();
-        }
-        if let Some(h) = self.audio_thread.take() {
-            let _ = h.join();
-        }
+        // Generation::stop_and_join sinaliza is_running=false, is_playing=true
+        // (acorda threads paradas no sleep(50ms) do ramo "pausado") e so
+        // entao faz join() de cada handle.
+        self.generation.stop_and_join(handles);
     }
 }
 
@@ -249,9 +251,11 @@ impl PlaybackController {
         let (audio_tx, audio_rx) = crossbeam_channel::bounded::<ffmpeg_next::Packet>(100);
 
         // Flags desta geracao: nao sao compartilhadas com nenhuma
-        // sessao anterior ou futura.
-        let is_playing = Arc::new(Mutex::new(true));
-        let is_running = Arc::new(Mutex::new(true));
+        // sessao anterior ou futura (ver media_logic::session::Generation e
+        // seus testes em rust/media-logic/src/session.rs).
+        let generation = media_logic::session::Generation::new();
+        let is_playing = generation.is_playing_handle();
+        let is_running = generation.is_running_handle();
 
         let is_playing_v = is_playing.clone();
         let is_playing_a = is_playing.clone();
@@ -394,8 +398,7 @@ impl PlaybackController {
         });
 
         self.session = Some(PlaybackSession {
-            is_playing,
-            is_running,
+            generation,
             demux_thread: Some(demux_thread),
             video_thread: Some(video_thread),
             audio_thread: Some(audio_thread),
@@ -437,7 +440,7 @@ impl PlaybackController {
     /// Volume vai de 0.0 (mudo) a 1.0 (100%); valores fora do range sao
     /// truncados. Persiste entre trocas de video (ver campo `volume`).
     pub fn set_volume(&mut self, volume: f32) {
-        self.volume = volume.clamp(0.0, 1.0);
+        self.volume = media_logic::playback_params::clamp_volume(volume);
         if let Ok(ao) = self.audio_output.lock() {
             if let Some(audio) = ao.as_ref() {
                 audio.set_volume(self.volume);
@@ -457,7 +460,7 @@ impl PlaybackController {
     /// audio, o SyncManager usa a mesma velocidade no fallback de
     /// wall-clock, entao o video tambem acompanha corretamente.
     pub fn set_speed(&mut self, speed: f32) {
-        let clamped = speed.clamp(0.5, 2.0);
+        let clamped = media_logic::playback_params::clamp_speed(speed);
         self.speed_bits.store(clamped.to_bits(), Ordering::Relaxed);
     }
 
