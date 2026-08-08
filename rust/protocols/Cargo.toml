@@ -20,3 +20,11 @@ log = "0.4"
 
 [dev-dependencies]
 httpmock = "0.8.3"
+sha2 = "0.10"
+
+[features]
+# Habilitada apenas por scripts/test-network-protocols.sh, nunca no build Android
+# (ver comentario em src/http.rs::base_client). Faz o cliente HTTPS confiar num CA
+# de teste (VRPLAYER_TEST_CA_CERT) para os testes em tests/https_integration.rs
+# poderem falar com o container https-test (TLS auto-assinado).
+integration-tests = []

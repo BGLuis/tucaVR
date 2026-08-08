@@ -35,14 +35,31 @@ pub struct HttpCapabilities {
 }
 
 fn base_client() -> Result<reqwest::blocking::Client, String> {
-    reqwest::blocking::Client::builder()
+    #[allow(unused_mut)] // "mut" so e usado com a feature "integration-tests" habilitada
+    let mut builder = reqwest::blocking::Client::builder()
         // T7.1 "custom headers": User-Agent fixo por enquanto — a API aqui
         // aceita headers arbitrarios (ver `HttpsRangeSource::new`), mas nao
         // ha UI para o usuario customizar User-Agent/Referer nesta sessao.
         .user_agent("VRMultimediaPlayer/0.1")
-        .timeout(Duration::from_secs(10))
-        .build()
-        .map_err(|e| e.to_string())
+        .timeout(Duration::from_secs(10));
+
+    // Feature de cargo, nunca habilitada no build de producao (app/build.gradle.kts
+    // nao ativa "integration-tests" em nenhum profile): permite que os testes de
+    // integracao em `tests/https_integration.rs` confiem no certificado
+    // auto-assinado do container `https-test` (ver docker/network-tests/), para
+    // exercitar este mesmo `base_client()` — o codigo de producao de verdade —
+    // contra um servidor HTTPS real em vez de so mocks in-process. Fora dessa
+    // feature, este bloco nem compila; nao ha superficie de risco em producao.
+    #[cfg(feature = "integration-tests")]
+    {
+        if let Ok(ca_path) = std::env::var("VRPLAYER_TEST_CA_CERT") {
+            let pem = std::fs::read(&ca_path).map_err(|e| format!("falha ao ler VRPLAYER_TEST_CA_CERT ({ca_path}): {e}"))?;
+            let cert = reqwest::Certificate::from_pem(&pem).map_err(|e| e.to_string())?;
+            builder = builder.add_root_certificate(cert);
+        }
+    }
+
+    builder.build().map_err(|e| e.to_string())
 }
 
 fn parse_content_range_total(headers: &reqwest::header::HeaderMap) -> Option<u64> {

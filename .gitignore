@@ -36,5 +36,9 @@ app/src/main/jniLibs/
 /sdk/*.zip
 /ffmpeg-android-maker/
 
+# Fixtures/certificados gerados por scripts/test-network-protocols.sh (T6/T7 integration tests)
+/docker/network-tests/fixtures/
+/docker/network-tests/https-test/certs/
+
 # Resultados de soak test (scripts/soak-test.sh)
 /soak-test-results/

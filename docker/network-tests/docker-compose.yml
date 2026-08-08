@@ -1,0 +1,49 @@
+# Ambiente de teste de protocolos de rede para o Fase 0.1 (T6/T7,
+# docs/phases/PHASE-0.1-MVP.md). Sobe um servidor real para cada protocolo
+# que o Demuxer (Rust) fala (rust/protocols/src): SMB2/3, HTTP puro e HTTPS
+# com TLS auto-assinado — para exercitar o codigo de producao
+# (protocols::smb, protocols::http) contra servidores de verdade em vez de
+# so mocks in-process. Nenhum destes servicos e exposto fora do host: as
+# portas mapeadas sao so para o teste local via scripts/test-network-protocols.sh.
+#
+# Uso: ver scripts/test-network-protocols.sh (orquestra fixture + up + testes + down).
+
+services:
+  smb-test:
+    image: dperson/samba:latest
+    container_name: vrplayer-smb-test
+    # Duas shares: uma guest (sem senha, exercita o caminho "anonimo" de
+    # protocols::smb::SmbTarget com username vazio) e uma autenticada
+    # (exercita NTLMv2 user/senha). Ver README.md deste diretorio para as
+    # credenciais de teste.
+    command: >
+      -p
+      -u "vruser;vrpass123"
+      -s "guestshare;/share/guest;yes;yes;yes"
+      -s "authshare;/share/auth;yes;no;no;vruser"
+      -n
+    volumes:
+      - ./fixtures:/share/guest:ro
+      - ./fixtures:/share/auth:ro
+    ports:
+      - "14450:445"
+    tmpfs:
+      - /tmp
+
+  http-test:
+    image: nginx:1.27-alpine
+    container_name: vrplayer-http-test
+    volumes:
+      - ./fixtures:/usr/share/nginx/html:ro
+      - ./http-test/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "18080:80"
+
+  https-test:
+    build: ./https-test
+    container_name: vrplayer-https-test
+    volumes:
+      - ./fixtures:/usr/share/nginx/html:ro
+      - ./https-test/certs:/etc/nginx/tls
+    ports:
+      - "18443:443"
