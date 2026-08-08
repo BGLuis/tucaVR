@@ -100,4 +100,15 @@
     <string name="player_controls_volume_format">🔊 %1$d%%</string>
     <string name="player_controls_speed_format">⏱ %1$.2fx</string>
 
+    <!-- Historico de reproducao (T9.3 prompt "Retomar?" / T9.4 "Continue Watching") -->
+    <string name="history_resume_prompt_title">Continue where you left off?</string>
+    <string name="history_resume_prompt_watched_format">Watched %1$s of %2$s (%3$d%%)</string>
+    <string name="history_resume_prompt_btn_resume_format">▶ Resume from %1$s</string>
+    <string name="history_resume_prompt_btn_restart">Start over</string>
+    <string name="history_continue_watching_title">Continue Watching</string>
+    <string name="history_empty">(no history yet)</string>
+    <string name="history_row_http_format">🌐 %1$s</string>
+    <string name="history_row_meta_format">%1$s / %2$s · %3$d%%</string>
+    <string name="history_btn_remove">✕</string>
+
 </resources>

@@ -949,7 +949,7 @@ Salvar progresso de reprodução para retomar de onde parou.
 
 ### Tarefas
 
-- [ ] **T9.1** — Criar banco Room com tabela `PlaybackHistory`:
+- [x] **T9.1** — Criar banco Room com tabela `PlaybackHistory`:
   ```kotlin
   @Entity
   data class PlaybackHistory(
@@ -963,14 +963,171 @@ Salvar progresso de reprodução para retomar de onde parou.
       val serverInfo: String?            // JSON com dados do servidor
   )
   ```
-- [ ] **T9.2** — Salvar posição automaticamente a cada 10 segundos durante reprodução
-- [ ] **T9.3** — Ao abrir um arquivo com histórico, perguntar "Retomar de XX:XX?" ou auto-retomar
-- [ ] **T9.4** — Tela "Continuar assistindo" no menu principal
+  > Implementado em `app/src/main/java/com/vrplayer/history/` (Room 2.6.1,
+  > compilador via **KSP** — plugin `com.google.devtools.ksp` versão
+  > `1.9.0-1.0.13`, confirmada existente no Maven Central e casada com o
+  > Kotlin 1.9.0 já usado no projeto; adicionado em `build.gradle.kts` raiz
+  > e `app/build.gradle.kts`, ver deps `androidx.room:room-runtime`/
+  > `room-ktx`/`room-compiler`). Duas diferenças deliberadas em relação ao
+  > exemplo do doc:
+  >
+  > 1. **`mediaUri: String` (chave primária do exemplo) virou
+  >    `historyKey: String`**, com um campo NOVO `mediaPath: String`
+  >    guardando o "endereço tocável" de verdade (path local, URL http(s),
+  >    ou path relativo dentro do share SMB). Motivo: o próprio aviso desta
+  >    seção ("URI estabilidade") pede uma chave composta em vez de uma URI
+  >    crua — usar essa chave composta como a ÚNICA coisa persistida
+  >    significaria perder a capacidade de re-tocar a mídia a partir dela.
+  >    `historyKey` (ver `PlaybackHistoryMapping.kt::historyKey()`) é
+  >    `local|<path>|<sizeBytes>` (local), `http|<url>` (HTTP) ou
+  >    `smb|<server.name>|<share>|<path>|<sizeBytes>` (SMB) — para SMB,
+  >    **deliberadamente NÃO inclui `host`/porta** (exatamente o que pode
+  >    mudar), só `server.name` (o rótulo escolhido pelo usuário ao salvar
+  >    o servidor, T6.4); testado em
+  >    `PlaybackHistoryMappingTest.smb key does NOT depend on host or port`.
+  >    `path` já inclui o nome do arquivo como último segmento, então não há
+  >    um campo `filename` redundante.
+  > 2. **`lastPlayedAt: Instant` (doc) virou `lastPlayedAt: Long` (epoch
+  >    millis)**. Decisão documentada em `PlaybackHistory.kt`: o
+  >    `minSdk = 26` do projeto já suporta `java.time.Instant` nativamente
+  >    sem desugaring, então seria tecnicamente viável — mas exigiria um
+  >    `TypeConverter` sem ganho prático nenhum aqui (o único uso é ordenar
+  >    "mais recente primeiro" e formatar um timestamp legível, ambos
+  >    triviais com `Long`). `Long` também deixa a lógica de throttle
+  >    (`PlaybackProgressThrottle`) pura e testável na JVM sem lidar com
+  >    fuso horário.
+  >
+  > `sourceType: SourceType` do exemplo virou `HistorySourceType` — um enum
+  > que só existe como formato de armazenamento da coluna Room, SEMPRE
+  > derivado de um `PlaybackSource` (o sealed class que já modelava "de onde
+  > vem a mídia" em toda a navegação/UI, `com.vrplayer.navigation.
+  > Destination.kt`) através de UMA única função
+  > (`PlaybackSource.historySourceType()`), nunca construído manualmente em
+  > outro lugar — reusa `PlaybackSource` em vez de duplicar um enum de
+  > domínio paralelo, como pedido. `PlaybackSource.LocalFile`/`.Smb` ganharam
+  > um campo novo `sizeBytes: Long = 0L` (default compatível com todo o
+  > código pré-existente) para poder compor a chave estável sem precisar de
+  > um canal separado. Room suporta enum nativamente desde 2.1 (conversor
+  > `String` automático), sem `TypeConverter` manual.
+  >
+  > `serverInfo` (SMB apenas): JSON com `serverId`/`name`/`host`/`port`/
+  > `share`/`domain` — **NUNCA `username`/`password`**; a credencial
+  > continua vivendo só em `SmbCredentialStore`
+  > (`EncryptedSharedPreferences`, T6.4) e é resolvida de novo pelo
+  > `serverId` na hora de retomar (`VRPresentation.resolveSmbServerFromHistory`).
+  >
+  > Validado via `:app:compileDebugKotlin` — o processamento KSP roda sem
+  > erro e gera o DAO/banco (`kspDebugKotlin` executa com sucesso, sem
+  > falhas de anotação). **Não validado**: nenhum INSERT/SELECT real rodou
+  > contra um banco Room de verdade (isso exige um dispositivo/emulador
+  > Android real ou Robolectric, nenhum dos dois disponível nesta sessão) —
+  > só a geração de código e a lógica pura ao redor (chave/mapeamento) foram
+  > exercitadas, via testes JVM puros (ver T9.2/T9.3 abaixo).
+- [x] **T9.2** — Salvar posição automaticamente a cada 10 segundos durante reprodução
+  > Confirmado no C++ (`native/src/vr_player_app.cpp`, `Update()`) que
+  > `updateMediaProgress` já era chamado pelo JNI **~10x por segundo**
+  > (`frameCount % 6 == 0` a 60fps), não uma vez a cada 10s — sem throttle,
+  > isso viraria ~10 escritas Room/segundo pelo tempo inteiro de reprodução.
+  > Implementado `PlaybackProgressThrottle` (Kotlin puro, relógio injetável,
+  > `app/src/main/java/com/vrplayer/history/PlaybackProgressThrottle.kt`) e
+  > `PlaybackHistoryTracker` (orquestra DAO + throttle,
+  > `PlaybackHistoryTracker.kt`), instanciado uma vez por `VRActivity`
+  > (`historyTracker`, `by lazy`). Os 3 entry points de playback
+  > (`VRActivity.playFile`/`playUrl`/`playSmb`) chamam
+  > `historyTracker.startTracking(source, title)` ANTES de
+  > `nativePlayVideo`/`nativePlaySmb` (reseta o throttle — nova mídia = nova
+  > janela de 10s); `VRActivity.updateMediaProgress` (companion, chamado
+  > pelo JNI) chama `historyTracker.onProgress(currentSec, totalSec)` dentro
+  > do mesmo `runOnUiThread` que já existia para a UI de controles — mantém
+  > a mutação do estado interno do tracker single-threaded sem precisar de
+  > sincronização extra. O save em si (`dao.upsert`) roda numa coroutine
+  > `Dispatchers.IO` própria do tracker (Room bloqueia query em main thread
+  > por padrão). Testado em `PlaybackProgressThrottleTest` (JVM pura, relógio
+  > falso injetado) — inclui um teste simulando 60s de chamadas na frequência
+  > real do JNI (600 chamadas a 100ms de intervalo) e checando que o número
+  > de saves liberados fica entre 5 e 7 (≈1 a cada 10s), não 600.
+- [x] **T9.3** — Ao abrir um arquivo com histórico, perguntar "Retomar de XX:XX?" ou auto-retomar
+  > Implementado como pergunta (não auto-retomar) — `VRPresentation.
+  > promptResumeOrPlay()`, chamado nos 3 pontos de clique (arquivo local em
+  > `playLocalVideo`, URL em `playUrl`, arquivo SMB em `loadNetworkDirectory`).
+  > Consulta `historyTracker.findExisting(source)` (Room via `Dispatchers.IO`)
+  > pela mesma chave composta de T9.1; se existir e for "retomável"
+  > (`PlaybackHistory.isResumable()`: posição ≥ 5s E < 97% da duração —
+  > evita perguntar em vídeos mal começados ou já terminados; testado em
+  > `PlaybackHistoryMappingTest`), mostra uma tela "Continuar de onde
+  > parou?" no mesmo estilo Void do resto do app (`VoidPanelChrome`/
+  > `VoidButton`/`VoidText` — navegável via raycast/controller como
+  > qualquer outra tela, sem componente novo), com botões "▶ Retomar de
+  > XX:XX" / "Começar do zero" / "‹ Voltar" (cancela sem tocar nada). Essa
+  > tela é desenhada com `showScreen()` direto, sem passar pelo
+  > `AppNavigator` — é uma decisão pontual, não um novo nível de navegação;
+  > o back-stack continua exatamente onde estava.
+  >
+  > Retomar de fato: `VRActivity.playFile/playUrl/playSmb` ganharam um
+  > parâmetro opcional `resumeAtMs`, que agenda `nativeSeekVideo` via um
+  > `Handler.postDelayed` de 1.5s (`scheduleResumeSeek`) após iniciar o
+  > playback. **Ressalva honesta, não testada em headset real**: não há
+  > nenhum callback do Rust/C++ avisando "pronto para receber seek" — é um
+  > delay heurístico fixo, não uma sincronização de verdade. Se o
+  > carregamento demorar mais que 1.5s (rede lenta em SMB/HTTP, por
+  > exemplo), o seek pode disparar cedo demais e ser ignorado/ficar
+  > incorreto. Documentado explicitamente no código
+  > (`VRActivity.scheduleResumeSeek`) em vez de vendido como resolvido.
+  > Formatação "XX:XX"/"H:MM:SS" via `formatDurationMs` (testada em
+  > `PlaybackHistoryFormatTest`).
+- [x] **T9.4** — Tela "Continuar assistindo" no menu principal
+  > O botão "▶ Continuar assistindo" em `renderHome()` (`VRPresentation.kt`)
+  > — que já existia como placeholder `VoidButtonStyle.DISABLED` antes desta
+  > sessão — foi habilitado de verdade (`PRIMARY`, com `onClick` navegando
+  > para o novo `Destination.ContinueWatching`). Tela nova
+  > (`renderContinueWatching()`): `RecyclerView` + `HistoryAdapter` (classe
+  > interna nova, mesmo padrão do `FileAdapter` já usado pelo file browser
+  > local, T5.7, mas sem geração de thumbnail — `thumbnailPath` fica sempre
+  > `null` nesta implementação, campo existe no Room para uso futuro),
+  > listando `historyTracker.listRecent()` (Room `ORDER BY lastPlayedAt
+  > DESC`) com ícone por `sourceType` (🎬 local / 🖥 SMB / 🌐 HTTP), título,
+  > e meta "posição / duração · %" (`formatDurationMs`/`watchedPercent`,
+  > testados em `PlaybackHistoryFormatTest`). Cada linha tem um botão "✕"
+  > de remover (`historyTracker.delete`, mesmo padrão visual da lista de
+  > servidores SMB salvos em `buildNetworkSmbPage`). Lista vazia mostra
+  > "(nenhum histórico ainda)" em vez de uma tela em branco. Clicar numa
+  > entrada (`resumeFromHistory`) toca DIRETO na posição salva (sem
+  > perguntar de novo — a intenção já é explícita ao clicar em "continuar
+  > assistindo"); para SMB, resolve o `SmbServer` salvo a partir do
+  > `serverId` gravado em `serverInfo` (`resolveSmbServerFromHistory`) — se
+  > o servidor foi removido/renomeado desde então, falha silenciosamente
+  > (não navega) em vez de crashar.
+  >
+  > **Limitações honestas desta seção inteira (T9.1-T9.4)**: nenhum
+  > INSERT/SELECT real rodou contra um banco Room de verdade nem em
+  > dispositivo/emulador Android real, nem a UI foi vista num headset Quest
+  > 3 físico — mesma ressalva de toda UI Kotlin/VR já documentada em outras
+  > seções deste arquivo (T5, T6.4, T7.3). O que FOI validado nesta sessão:
+  > (a) `./gradlew :app:compileDebugKotlin` — compila com sucesso, incluindo
+  > o processamento KSP/Room (`kspDebugKotlin` sem erro); (b) `./gradlew
+  > :app:testDebugUnitTest` — toda a lógica pura extraível (chave estável,
+  > throttle de 10s, `isResumable`, formatação de tempo/percentual) tem
+  > testes JVM puros novos em `app/src/test/java/com/vrplayer/history/`
+  > (`PlaybackHistoryMappingTest`, `PlaybackProgressThrottleTest`,
+  > `PlaybackHistoryFormatTest` — 24 testes novos, 0 falhas; suíte completa
+  > do módulo em 54 testcases, 0 falhas/erros). **Nota de ambiente**: rodar
+  > `testDebugUnitTest` nesta sandbox especificamente exigiu uma JDK 17
+  > completa (com `jlink`) — o `java-17-openjdk` do sistema aqui é só o
+  > pacote JRE (`jre17-openjdk`, sem `jlink`/`javac`), e a JDK 21 disponível
+  > (`jdk21-openjdk`) tem um bug conhecido de incompatibilidade entre AGP
+  > 8.1.1 e o `jlink` mais novo ao transformar
+  > `core-for-system-modules.jar` (`ModuleTarget is malformed`). Contornado
+  > baixando um Temurin 17 completo à parte só para rodar a validação; não é
+  > uma mudança permanente no projeto (o CI, em `.github/workflows/main.yml`,
+  > já usa `actions/setup-java` com Temurin 17 completo, então não deveria
+  > sofrer desse problema).
 
 ### ⚠️ Cuidados e Armadilhas
 
 > [!WARNING]
 > **URI estabilidade**: URIs de SMB podem mudar se o IP do servidor mudar. Use um identificador composto: `server_name + share + path + filename + file_size` como chave, não apenas o URI.
+>
+> **Nesta implementação**: seguido à risca, com uma adaptação — a chave usa `server.name` (o rótulo local que o usuário escolheu ao salvar o servidor em `SmbCredentialStore`, T6.4) em vez de tentar derivar um "nome do servidor" de outra fonte, já que não há descoberta automática de servidor (T6.2, não implementada) nem nenhum outro identificador estável de servidor no projeto. Ver `PlaybackSource.historyKey()` em `app/src/main/java/com/vrplayer/history/PlaybackHistoryMapping.kt` e o teste `PlaybackHistoryMappingTest.smb key does NOT depend on host or port`, que existe especificamente para não deixar essa garantia regredir silenciosamente.
 
 ---
 
@@ -1035,8 +1192,8 @@ Salvar progresso de reprodução para retomar de onde parou.
 - [x] Tela virtual pode ser movida e redimensionada (via thumbstick/grip; pendente validação em headset real)
 - [ ] Consegue conectar a um share SMB e reproduzir vídeo remoto (código implementado e cross-compilado de verdade — ver T6.1/T6.3/T6.4 — mas NUNCA executado contra um servidor SMB real: não há NAS/Samba disponível neste ambiente sandboxed. Deixado sem marcar de propósito, diferente de outros itens desta lista que só faltam validação em headset — aqui falta validação do protocolo de rede em si, um risco maior)
 - [ ] Consegue reproduzir vídeo de URL HTTP (mesma ressalva: `http://` puro tem boa chance de funcionar de primeira, já que é o protocolo nativo do libavformat sem nenhum código novo no caminho crítico; `https://` depende inteiramente do custom I/O novo em `protocols::http`, T7.1/T7.2, nunca testado contra um servidor real)
-- [ ] Strings estão externalizadas em PT-BR e EN
-- [ ] Histórico de reprodução funciona
+- [x] Strings estão externalizadas em PT-BR e EN (ver T8.1-T8.5; implementado e mergeado com a Seção 9 nesta sessão — ver nota de merge abaixo. `compileDebugKotlin`/`testDebugUnitTest` passam; troca de idioma via `Locale`/`Configuration` do sistema nunca foi verificada num Quest 3 físico)
+- [x] Histórico de reprodução funciona (ver T9.1-T9.4; implementado e mergeado com a Seção 8 nesta sessão — ver nota de merge abaixo. `compileDebugKotlin`/`testDebugUnitTest` passam, incluindo os 24 testes JVM puros novos do módulo `history`; nunca validado com Room rodando de fato num device nem em headset real)
 - [x] Nenhum crash em sessão de 30 minutos
 - [x] Memória < 2.5GB durante reprodução de vídeo 4K
 
@@ -1050,6 +1207,9 @@ Salvar progresso de reprodução para retomar de onde parou.
 > **Ressalva honesta sobre os 273MB**: é o PSS do processo `com.vrplayer` reportado por `dumpsys meminfo` — a mesma métrica que esta seção define ("Seu app DEVE usar menos de 2.5GB"). Boa parte dos buffers de decode de hardware (DPB, frames UBWC do Codec2/Venus da Qualcomm) fica alocada via ION/dma-buf no processo do HAL de mídia, não contabilizada no PSS por-processo do app — comportamento padrão do Android, não uma limitação da medição. Ou seja: o *orçamento de memória do app* está validado com folga; o pico *total* de pressão de memória do sistema durante decode 4K (via `dumpsys gpumem`/dma-buf) não foi medido nesta sessão.
 >
 > **Achado lateral**: o primeiro `adb shell am start` de cada bateria de testes falhava com um falso-positivo de "crash" no `soak-test.sh` — na verdade o Quest bloqueia `am start` de apps VR com um diálogo de sistema (`LaunchCheckControllerRequiredDialogActivity`) quando os controllers estão hibernados; não é bug do app. Corrigido também um bug real no próprio script: parsing de `dumpsys thermalservice` esperava o formato antigo `mStatus=PALAVRA`, mas o Android 14 do Quest 3 reporta `Thermal Status: N` (numérico).
+
+> [!NOTE]
+> **Seções 8 e 9 implementadas em paralelo, por dois agentes em worktrees isolados** (i18n e histórico de reprodução tocam áreas parecidas — `VRPresentation.kt`, `renderHome()` — então rodar em worktrees separados evitou os dois escreverem no mesmo arquivo ao mesmo tempo). Ao mergear os dois branches em `main`, houve um conflito real (esperado) em `VRPresentation.kt` no botão "Continuar assistindo" (um lado o desabilitava com um comentário `T9 (roadmap)`, o outro o habilitava de verdade) — resolvido mantendo a versão habilitada (T9.4) com a string vinda de recurso (T8.1). Por instrução explícita, o agente da Seção 9 escreveu suas strings novas (tela "Continuar de onde parou?", "Continuar assistindo", etc.) como literais em português direto no Kotlin, para não competir com o agente de i18n mexendo no mesmo `strings.xml` ao mesmo tempo — depois do merge, foi feito um passe manual de limpeza externalizando essas ~9 strings novas (`history_*` em `values/strings.xml` e `values-pt-rBR/strings.xml`), reaproveitando chaves já existentes onde fazia sentido (`common_row_video_format` para o ícone 🎬 de itens locais no histórico, `network_smb_row_label_format` para o ícone 🖥 de itens SMB) em vez de duplicar. `compileDebugKotlin` e a suíte completa de testes JVM (54 casos, 0 falhas) validados após o merge + limpeza.
 
 ---
 

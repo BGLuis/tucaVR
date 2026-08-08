@@ -9,7 +9,7 @@ import com.vrplayer.network.SmbServer
  * `native/src/vr_player_app.cpp`) num unico fluxo de navegacao logico, todo
  * hospedado no mesmo quad (`VRPresentation`):
  *
- *   Home -> (LocalFiles | NetworkHome -> NetworkFiles) -> Player
+ *   Home -> (LocalFiles | NetworkHome -> NetworkFiles | ContinueWatching) -> Player
  *
  * O painel de Controles (`VRControlsPresentation`) continua sendo seu proprio
  * quad — ele e contextual (aparece ao apontar pra tela de video durante a
@@ -31,8 +31,11 @@ import com.vrplayer.network.SmbServer
  */
 sealed class Destination {
 
-    /** Tela inicial: "Arquivos locais" | "Rede" | (futuro) "Continuar assistindo". */
+    /** Tela inicial: "Arquivos locais" | "Rede" | "Continuar assistindo". */
     object Home : Destination()
+
+    /** T9.4: lista do historico de reproducao (`PlaybackHistory`, mais recentes primeiro). */
+    object ContinueWatching : Destination()
 
     /** Listagem de arquivos locais na pasta [path] (path absoluto). */
     data class LocalFiles(val path: String) : Destination()
@@ -52,9 +55,21 @@ sealed class Destination {
     data class Player(val source: PlaybackSource) : Destination()
 }
 
-/** De onde vem a midia que esta tocando — usado por [Destination.Player]. */
+/**
+ * De onde vem a midia que esta tocando — usado por [Destination.Player].
+ *
+ * [LocalFile.sizeBytes]/[Smb.sizeBytes] (T9, ver `com.vrplayer.history`):
+ * tamanho do arquivo em bytes, `0L` quando desconhecido no ponto de
+ * chamada (default, compativel com todo o codigo pre-existente que
+ * construia estas classes sem esse argumento). Usado para compor a chave
+ * estavel do historico de reproducao — ver aviso do doc, secao 9
+ * ("URIs de SMB podem mudar se o IP do servidor mudar"): a chave NAO usa
+ * host/porta (que podem mudar), so `server.name` (rotulo escolhido pelo
+ * usuario) + `share` + `path` (que ja inclui o nome do arquivo, ultimo
+ * segmento) + `sizeBytes`.
+ */
 sealed class PlaybackSource {
-    data class LocalFile(val path: String) : PlaybackSource()
+    data class LocalFile(val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
     data class Http(val url: String) : PlaybackSource()
-    data class Smb(val server: SmbServer, val path: String) : PlaybackSource()
+    data class Smb(val server: SmbServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
 }

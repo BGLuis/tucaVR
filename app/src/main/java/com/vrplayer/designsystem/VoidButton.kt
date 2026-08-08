@@ -10,9 +10,11 @@ import android.widget.Button
  *    acento (a "luz do projetor") pra chamar atencao mesmo sem estar focado.
  *  - [SECONDARY]: acao auxiliar (voltar, colar, testar) — borda neutra.
  *  - [ACTIVE]: estado selecionado/foco explicito — fundo acento.
- *  - [DISABLED]: placeholder inativo (ex.: "Continuar assistindo" antes de
- *    existir historico de reproducao, T9 do roadmap) — visivel porem apagado,
- *    em vez de escondido, pra sinalizar que a funcionalidade existe/vira.
+ *  - [DISABLED]: placeholder inativo para uma funcionalidade que ainda nao
+ *    existe (ex.: era usado por "Continuar assistindo" antes do T9 — ver
+ *    `com.vrplayer.history` — implementar o historico; hoje esse botao ja
+ *    usa PRIMARY) — visivel porem apagado, em vez de escondido, pra
+ *    sinalizar que a funcionalidade existe/vira.
  */
 enum class VoidButtonStyle { PRIMARY, SECONDARY, ACTIVE, DISABLED }
 
