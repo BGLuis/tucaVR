@@ -120,9 +120,22 @@ get_pss_kb() {
 }
 
 get_thermal_status() {
-    "${ADB[@]}" shell dumpsys thermalservice 2>/dev/null \
-        | grep -m1 -oE "mStatus=[A-Za-z_]+" \
-        | cut -d= -f2 || echo "unknown"
+    # "Thermal Status: N" (PowerManager.THERMAL_STATUS_*: 0=NONE 1=LIGHT
+    # 2=MODERATE 3=SEVERE 4=CRITICAL 5=EMERGENCY 6=SHUTDOWN). Formato
+    # numerico confirmado em dumpsys thermalservice real no Quest 3 (Android
+    # 14) — nao "mStatus=WORD" como versoes antigas do AOSP.
+    local code
+    code=$("${ADB[@]}" shell dumpsys thermalservice 2>/dev/null | grep -m1 -oE "Thermal Status: [0-9]+" | grep -oE "[0-9]+")
+    case "$code" in
+        0) echo "NONE" ;;
+        1) echo "LIGHT" ;;
+        2) echo "MODERATE" ;;
+        3) echo "SEVERE" ;;
+        4) echo "CRITICAL" ;;
+        5) echo "EMERGENCY" ;;
+        6) echo "SHUTDOWN" ;;
+        *) echo "unknown" ;;
+    esac
 }
 
 echo "Monitorando por $DURATION_MIN min (amostra a cada ${INTERVAL_SEC}s). Ctrl-C interrompe com relatorio parcial."
