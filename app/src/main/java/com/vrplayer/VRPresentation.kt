@@ -184,21 +184,21 @@ class VRPresentation(
 
     private fun renderHome() {
         val root = VoidPanelChrome.newRoot(context)
-        root.addView(VoidPanelChrome.buildHeader(context, title = "VR Player"))
+        root.addView(VoidPanelChrome.buildHeader(context, title = context.getString(R.string.home_title)))
 
         val bigButtonParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { topMargin = VoidTheme.dpToPx(context, 20f) }
 
         val btnLocal = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = "📁  Arquivos locais"
+            text = context.getString(R.string.home_btn_local_files)
             textSize = 24f
             setOnClickListener {
                 navigateTo(Destination.LocalFiles(dirNavigator.currentPath.absolutePath))
             }
         }
         val btnNetwork = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = "🌐  Rede"
+            text = context.getString(R.string.home_btn_network)
             textSize = 24f
             setOnClickListener { navigateTo(Destination.NetworkHome) }
         }
@@ -208,7 +208,7 @@ class VRPresentation(
         // a funcionalidade existe/esta a caminho, em vez de sumir sem
         // explicacao.
         val btnContinueWatching = VoidButton(context, VoidButtonStyle.DISABLED).apply {
-            text = "▶  Continuar assistindo"
+            text = context.getString(R.string.home_btn_continue_watching)
             textSize = 20f
         }
 
@@ -226,7 +226,7 @@ class VRPresentation(
         root.addView(
             VoidPanelChrome.buildHeader(
                 context,
-                title = "Arquivos locais",
+                title = context.getString(R.string.browser_title_local_files),
                 subtitle = dirNavigator.currentPath.absolutePath,
                 onBack = { handleBack() }
             )
@@ -283,7 +283,7 @@ class VRPresentation(
     private fun renderNetworkHome() {
         val root = VoidPanelChrome.newRoot(context)
         root.addView(
-            VoidPanelChrome.buildHeader(context, title = "Rede", onBack = { handleBack() })
+            VoidPanelChrome.buildHeader(context, title = context.getString(R.string.network_title), onBack = { handleBack() })
         )
 
         val pageContainer = FrameLayout(context).apply {
@@ -298,7 +298,10 @@ class VRPresentation(
         pageContainer.addView(urlPage)
         pageContainer.addView(smbPage)
 
-        val tabRow = VoidTabRow(context, listOf("🔗 URL", "🗄 SMB")) { index ->
+        val tabRow = VoidTabRow(
+            context,
+            listOf(context.getString(R.string.network_tab_url), context.getString(R.string.network_tab_smb))
+        ) { index ->
             networkActiveTabIndex = index
             val showUrl = index == 0
             urlPage.visibility = if (showUrl) View.VISIBLE else View.GONE
@@ -323,7 +326,7 @@ class VRPresentation(
             layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         }
 
-        val urlInput = buildVoidEditText("http:// ou https://...").apply {
+        val urlInput = buildVoidEditText(context.getString(R.string.network_url_hint)).apply {
             inputType = InputType.TYPE_TEXT_VARIATION_URI or InputType.TYPE_CLASS_TEXT
             setSingleLine(true)
         }
@@ -338,7 +341,7 @@ class VRPresentation(
             setPadding(0, 0, 0, VoidTheme.dpToPx(context, 16f))
         }
 
-        val recentHeader = VoidText.title(context, "Recentes", sizeSp = 20f).apply {
+        val recentHeader = VoidText.title(context, context.getString(R.string.network_url_recent_header), sizeSp = 20f).apply {
             setPadding(0, VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 8f))
         }
 
@@ -348,7 +351,9 @@ class VRPresentation(
             recentContainer.removeAllViews()
             val entries = urlHistory.list()
             if (entries.isEmpty()) {
-                recentContainer.addView(VoidText.body(context, "(nenhuma URL tocada ainda)", sizeSp = 16f, secondary = true))
+                recentContainer.addView(
+                    VoidText.body(context, context.getString(R.string.network_url_recent_empty), sizeSp = 16f, secondary = true)
+                )
                 return
             }
             entries.forEach { url ->
@@ -356,7 +361,7 @@ class VRPresentation(
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                     ).also { it.bottomMargin = VoidTheme.dpToPx(context, 8f) }
-                    bind("🕓 $url", showThumbnailSlot = false)
+                    bind(context.getString(R.string.network_url_recent_row_format, url), showThumbnailSlot = false)
                     titleView.typeface = VoidTheme.typefaceMono
                     titleView.textSize = 15f
                 }
@@ -369,7 +374,7 @@ class VRPresentation(
         }
 
         val btnPaste = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-            text = "📋 Colar"
+            text = context.getString(R.string.network_url_btn_paste)
             textSize = 18f
             setOnClickListener {
                 val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
@@ -382,7 +387,7 @@ class VRPresentation(
             }
         }
         val btnPlay = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = "▶ Tocar"
+            text = context.getString(R.string.network_url_btn_play)
             textSize = 18f
             setOnClickListener {
                 playUrl(urlInput.text.toString().trim(), urlStatus) { refreshRecentUrls() }
@@ -406,10 +411,10 @@ class VRPresentation(
     private fun playUrl(url: String, statusView: android.widget.TextView, onHistoryChanged: () -> Unit) {
         if (url.isEmpty()) return
         if (!url.startsWith("http://") && !url.startsWith("https://")) {
-            statusView.text = "⚠ URL precisa comecar com http:// ou https://"
+            statusView.text = context.getString(R.string.network_url_status_invalid)
             return
         }
-        statusView.text = "Verificando servidor..."
+        statusView.text = context.getString(R.string.network_url_status_checking)
         urlHistory.add(url)
         onHistoryChanged()
 
@@ -426,11 +431,15 @@ class VRPresentation(
 
     private fun describeProbe(result: String): String {
         if (result.startsWith("ERROR:")) {
-            return "⚠ ${result.removePrefix("ERROR:")}"
+            return context.getString(R.string.common_warning_format, result.removePrefix("ERROR:"))
         }
         val parts = result.split("\t")
         val seekable = parts.getOrNull(1) == "1"
-        return if (seekable) "✓ Servidor suporta seek" else "⚠ Servidor NAO suporta seek (Accept-Ranges ausente)"
+        return if (seekable) {
+            context.getString(R.string.network_url_status_seekable)
+        } else {
+            context.getString(R.string.network_url_status_not_seekable)
+        }
     }
 
     // ---------- Aba SMB: servidores salvos (ex-T6.4, movida de NetworkPresentation) ----------
@@ -441,7 +450,7 @@ class VRPresentation(
             layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         }
 
-        val header = VoidText.title(context, "Servidores salvos", sizeSp = 20f).apply {
+        val header = VoidText.title(context, context.getString(R.string.network_smb_saved_servers_header), sizeSp = 20f).apply {
             setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
         }
         page.addView(header)
@@ -453,7 +462,9 @@ class VRPresentation(
             serversContainer.removeAllViews()
             val servers = credentialStore.list()
             if (servers.isEmpty()) {
-                serversContainer.addView(VoidText.body(context, "(nenhum servidor salvo)", sizeSp = 16f, secondary = true))
+                serversContainer.addView(
+                    VoidText.body(context, context.getString(R.string.network_smb_empty), sizeSp = 16f, secondary = true)
+                )
                 return
             }
             servers.forEach { server ->
@@ -465,8 +476,8 @@ class VRPresentation(
                 val label = VoidListRow(context).apply {
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                     bind(
-                        "🖥 ${server.name}",
-                        meta = if (server.isGuest) "guest" else server.username,
+                        context.getString(R.string.network_smb_row_label_format, server.name),
+                        meta = if (server.isGuest) context.getString(R.string.network_smb_guest_label) else server.username,
                         showThumbnailSlot = false
                     )
                     setOnClickListener {
@@ -498,7 +509,7 @@ class VRPresentation(
         addForm.visibility = View.GONE
 
         val btnAddServer = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-            text = "+ Adicionar servidor"
+            text = context.getString(R.string.network_smb_btn_add_server)
             textSize = 18f
             setOnClickListener { addForm.visibility = if (addForm.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
         }
@@ -532,34 +543,34 @@ class VRPresentation(
         }
 
         val formHost = buildVoidEditText("192.168.1.10")
-        addLabeled("Host / IP", formHost)
+        addLabeled(context.getString(R.string.network_smb_form_host_label), formHost)
 
         val formPort = buildVoidEditText("445").apply {
             setText("445")
             inputType = InputType.TYPE_CLASS_NUMBER
         }
-        addLabeled("Porta", formPort)
+        addLabeled(context.getString(R.string.network_smb_form_port_label), formPort)
 
-        val formShare = buildVoidEditText("Videos")
-        addLabeled("Share", formShare)
+        val formShare = buildVoidEditText(context.getString(R.string.network_smb_form_share_hint))
+        addLabeled(context.getString(R.string.network_smb_form_share_label), formShare)
 
         val formGuest = CheckBox(context).apply {
-            text = "Convidado / anonimo (sem usuario/senha)"
+            text = context.getString(R.string.network_smb_form_guest_checkbox)
             textSize = 16f
             setTextColor(VoidTheme.colorText)
         }
         form.addView(formGuest)
 
-        val formUser = buildVoidEditText("usuario")
-        addLabeled("Usuario", formUser)
+        val formUser = buildVoidEditText(context.getString(R.string.network_smb_form_user_hint))
+        addLabeled(context.getString(R.string.network_smb_form_user_label), formUser)
 
-        val formPass = buildVoidEditText("senha").apply {
+        val formPass = buildVoidEditText(context.getString(R.string.network_smb_form_pass_hint)).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
         }
-        addLabeled("Senha", formPass)
+        addLabeled(context.getString(R.string.network_smb_form_pass_label), formPass)
 
-        val formDomain = buildVoidEditText("(opcional)")
-        addLabeled("Dominio", formDomain)
+        val formDomain = buildVoidEditText(context.getString(R.string.network_smb_form_domain_hint))
+        addLabeled(context.getString(R.string.network_smb_form_domain_label), formDomain)
 
         formGuest.setOnCheckedChangeListener { _, checked ->
             formUser.isEnabled = !checked
@@ -576,7 +587,7 @@ class VRPresentation(
         form.addView(formStatus)
 
         val btnTestSave = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = "Testar e salvar"
+            text = context.getString(R.string.network_smb_btn_test_save)
             textSize = 18f
             setOnClickListener {
                 testAndSaveServer(
@@ -621,22 +632,28 @@ class VRPresentation(
         val effectivePassword = if (guest) "" else password
 
         if (host.isEmpty()) {
-            statusView.text = "⚠ Host obrigatorio"
+            statusView.text = context.getString(R.string.network_smb_form_status_host_required)
             return
         }
 
-        statusView.text = "Conectando..."
+        statusView.text = context.getString(R.string.network_smb_form_status_connecting)
         scope.launch {
             val result = withContext(Dispatchers.IO) {
                 activity.nativeSmbListShares(host, port, effectiveUsername, effectivePassword, domain)
             }
             if (result.startsWith("ERROR:")) {
-                statusView.text = "✗ Falha: ${result.removePrefix("ERROR:")}"
+                statusView.text = context.getString(
+                    R.string.network_smb_form_status_error_format, result.removePrefix("ERROR:")
+                )
                 return@launch
             }
 
             val shares = result.split("\n").filter { it.isNotBlank() }
-            statusView.text = "✓ Conectado (${shares.size} share(s) encontrado(s))"
+            // T8.5 / cuidados do doc: uso real de <plurals> (nao forcado) —
+            // "N share(s) encontrado(s))" varia genuinamente em contagem.
+            statusView.text = context.resources.getQuantityString(
+                R.plurals.network_smb_form_status_connected, shares.size, shares.size
+            )
 
             val server = SmbServer(
                 id = credentialStore.newId(),
@@ -682,7 +699,9 @@ class VRPresentation(
 
     private fun loadNetworkDirectory(server: SmbServer, entriesContainer: LinearLayout) {
         entriesContainer.removeAllViews()
-        entriesContainer.addView(VoidText.body(context, "Carregando...", sizeSp = 16f, secondary = true))
+        entriesContainer.addView(
+            VoidText.body(context, context.getString(R.string.network_files_loading), sizeSp = 16f, secondary = true)
+        )
 
         val requestedPath = networkBrowsePath
         scope.launch {
@@ -700,13 +719,21 @@ class VRPresentation(
             entriesContainer.removeAllViews()
 
             if (result.startsWith("ERROR:")) {
-                entriesContainer.addView(VoidText.body(context, "⚠ ${result.removePrefix("ERROR:")}", sizeSp = 16f))
+                entriesContainer.addView(
+                    VoidText.body(
+                        context,
+                        context.getString(R.string.common_warning_format, result.removePrefix("ERROR:")),
+                        sizeSp = 16f
+                    )
+                )
                 return@launch
             }
 
             val lines = result.split("\n").filter { it.isNotBlank() }
             if (lines.isEmpty()) {
-                entriesContainer.addView(VoidText.body(context, "(vazio)", sizeSp = 16f, secondary = true))
+                entriesContainer.addView(
+                    VoidText.body(context, context.getString(R.string.network_files_empty), sizeSp = 16f, secondary = true)
+                )
                 return@launch
             }
 
@@ -718,7 +745,14 @@ class VRPresentation(
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                     ).also { it.bottomMargin = VoidTheme.dpToPx(context, 8f) }
-                    bind(if (isDir) "📁 $name" else "🎬 $name", showThumbnailSlot = false)
+                    bind(
+                        if (isDir) {
+                            context.getString(R.string.common_row_dir_format, name)
+                        } else {
+                            context.getString(R.string.common_row_video_format, name)
+                        },
+                        showThumbnailSlot = false
+                    )
                     setOnClickListener {
                         val childPath = if (requestedPath.isEmpty()) name else "$requestedPath/$name"
                         if (isDir) {
@@ -758,19 +792,24 @@ class VRPresentation(
         root.addView(
             VoidPanelChrome.buildHeader(
                 context,
-                title = "Reproduzindo",
+                title = context.getString(R.string.player_title),
                 onBack = { handleBack() }
             )
         )
         val label = when (source) {
             is PlaybackSource.LocalFile -> source.path
             is PlaybackSource.Http -> source.url
-            is PlaybackSource.Smb -> "${source.server.name}/${source.path}"
+            // Interpolacao com 2 argumentos posicionais (T8.5): permite
+            // reordenar "servidor/caminho" em idiomas onde isso fizesse
+            // sentido, embora nem PT-BR nem EN precisem reordenar aqui.
+            is PlaybackSource.Smb -> context.getString(
+                R.string.player_label_smb_source_format, source.server.name, source.path
+            )
         }
         root.addView(VoidText.mono(context, label, sizeSp = 16f))
         root.addView(VoidText.body(
             context,
-            "Os controles de reproducao (play/pause/seek/volume) aparecem ao apontar para a tela de video.",
+            context.getString(R.string.player_label_controls_hint),
             sizeSp = 16f,
             secondary = true
         ).apply {
@@ -824,14 +863,18 @@ class VRPresentation(
 
             when (val row = rows[position]) {
                 is Row.Up -> {
-                    holder.row.bind("⬆ Subir um nivel", showThumbnailSlot = false)
+                    holder.row.bind(context.getString(R.string.browser_row_up), showThumbnailSlot = false)
                     holder.itemView.setOnClickListener { onUpClick() }
                 }
                 is Row.Item -> {
                     val entry = row.entry
-                    val icon = if (entry.type == MediaType.DIRECTORY) "📁" else "🎬"
+                    val label = if (entry.type == MediaType.DIRECTORY) {
+                        context.getString(R.string.common_row_dir_format, entry.name)
+                    } else {
+                        context.getString(R.string.common_row_video_format, entry.name)
+                    }
                     val meta = if (entry.type == MediaType.VIDEO) formatSize(entry.sizeBytes) else null
-                    holder.row.bind("$icon ${entry.name}", meta = meta, showThumbnailSlot = entry.type == MediaType.VIDEO)
+                    holder.row.bind(label, meta = meta, showThumbnailSlot = entry.type == MediaType.VIDEO)
                     holder.itemView.setOnClickListener {
                         if (entry.type == MediaType.DIRECTORY) {
                             onDirectoryClick(File(entry.path))
@@ -856,7 +899,11 @@ class VRPresentation(
 
         private fun formatSize(bytes: Long): String {
             val mb = bytes / (1024.0 * 1024.0)
-            return if (mb >= 1024) String.format("%.2f GB", mb / 1024.0) else String.format("%.1f MB", mb)
+            return if (mb >= 1024) {
+                context.getString(R.string.browser_label_size_gb_format, mb / 1024.0)
+            } else {
+                context.getString(R.string.browser_label_size_mb_format, mb)
+            }
         }
     }
 }

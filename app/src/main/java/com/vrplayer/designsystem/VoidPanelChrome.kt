@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.Gravity
 import android.view.ViewGroup
 import android.widget.LinearLayout
+import com.vrplayer.R
 
 /**
  * Casca comum de tela (root + cabecalho) reaproveitada pelas telas Home /
@@ -43,7 +44,7 @@ object VoidPanelChrome {
 
         if (onBack != null) {
             val backButton = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-                text = "‹ Voltar"
+                text = context.getString(R.string.common_btn_back)
                 textSize = 18f
                 minHeight = 0
                 val padH = VoidTheme.dpToPx(context, 18f)
