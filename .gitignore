@@ -42,3 +42,6 @@ app/src/main/jniLibs/
 
 # Resultados de soak test (scripts/soak-test.sh)
 /soak-test-results/
+
+# Clipe 4K sintetico gerado por scripts/generate-4k-test-clip.sh
+/testdata/
