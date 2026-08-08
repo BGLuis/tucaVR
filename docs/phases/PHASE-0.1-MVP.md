@@ -953,8 +953,19 @@ Salvar progresso de reprodução para retomar de onde parou.
 - [ ] Consegue reproduzir vídeo de URL HTTP (mesma ressalva: `http://` puro tem boa chance de funcionar de primeira, já que é o protocolo nativo do libavformat sem nenhum código novo no caminho crítico; `https://` depende inteiramente do custom I/O novo em `protocols::http`, T7.1/T7.2, nunca testado contra um servidor real)
 - [ ] Strings estão externalizadas em PT-BR e EN
 - [ ] Histórico de reprodução funciona
-- [ ] Nenhum crash em sessão de 30 minutos
-- [ ] Memória < 2.5GB durante reprodução de vídeo 4K
+- [x] Nenhum crash em sessão de 30 minutos
+- [x] Memória < 2.5GB durante reprodução de vídeo 4K
+
+> [!IMPORTANT]
+> **Validado em Quest 3 físico** (device `eureka`, Android 14, serial `2G97C5ZH9201LH`) — os dois únicos itens desta lista que exigem uma sessão real e prolongada de playback, não só compilar/abrir o app. Automatizado via `scripts/soak-test.sh` (crash/memória por adb) e `scripts/test-4k-memory.sh` (gera um clipe 4K sintético e dispara playback sozinho via `adb shell am start -e video_path ...`, ver hook `EXTRA_AUTO_PLAY_PATH` em `VRActivity.kt`).
+>
+> Clipe de teste: H.264 High@5.2, 3840x2160, ~25Mbps, 150s (`scripts/generate-4k-test-clip.sh`, testsrc2+sine via ffmpeg — determinístico, sem depender de nenhuma mídia externa). O player reinicia o vídeo sozinho ao chegar no fim (loop automático, não documentado antes — achado desta sessão), então os 150s cobriram os 30 minutos inteiros em ~10 repetições sem precisar gerar um arquivo de 30min.
+>
+> **Resultado**: 30min corridos, mesmo PID do início ao fim (sem restart), sem `FATAL EXCEPTION`/ANR/`has died` no logcat. PSS máximo observado: 273MB (279.747 KB) — bem abaixo do limite de 2.5GB. Thermal status `NONE` a sessão inteira (sem throttling).
+>
+> **Ressalva honesta sobre os 273MB**: é o PSS do processo `com.vrplayer` reportado por `dumpsys meminfo` — a mesma métrica que esta seção define ("Seu app DEVE usar menos de 2.5GB"). Boa parte dos buffers de decode de hardware (DPB, frames UBWC do Codec2/Venus da Qualcomm) fica alocada via ION/dma-buf no processo do HAL de mídia, não contabilizada no PSS por-processo do app — comportamento padrão do Android, não uma limitação da medição. Ou seja: o *orçamento de memória do app* está validado com folga; o pico *total* de pressão de memória do sistema durante decode 4K (via `dumpsys gpumem`/dma-buf) não foi medido nesta sessão.
+>
+> **Achado lateral**: o primeiro `adb shell am start` de cada bateria de testes falhava com um falso-positivo de "crash" no `soak-test.sh` — na verdade o Quest bloqueia `am start` de apps VR com um diálogo de sistema (`LaunchCheckControllerRequiredDialogActivity`) quando os controllers estão hibernados; não é bug do app. Corrigido também um bug real no próprio script: parsing de `dumpsys thermalservice` esperava o formato antigo `mStatus=PALAVRA`, mas o Android 14 do Quest 3 reporta `Thermal Status: N` (numérico).
 
 ---
 
