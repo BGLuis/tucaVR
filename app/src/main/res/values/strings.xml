@@ -1,0 +1,103 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  T8.1 (docs/phases/PHASE-0.1-MVP.md, secao 8): strings em ingles (default /
+  fallback do Android resource system). O PT-BR original do app (a lingua em
+  que a UI foi escrita primeiro) vive em values-pt-rBR/strings.xml, traduzido
+  aqui para ingles natural.
+
+  Convencao de naming (T8.3): `screen_element_action`, ex. `player_btn_play`,
+  `browser_label_size`. Prefixo `common_` para elementos reusados por mais de
+  uma tela (botao "Voltar" do VoidPanelChrome, formatos de linha de
+  arquivo/pasta reusados pelo file browser local E pelo browser SMB). Sufixo
+  `_format` para strings com `String.format`/`getString(res, arg...)`
+  posicional (T8.5) — sempre com placeholders posicionais (%1$s, %2$d, ...)
+  em vez de %s/%d simples, para permitir reordenar argumentos em outros
+  idiomas.
+-->
+<resources>
+
+    <!-- App -->
+    <string name="app_name">VR Player</string>
+
+    <!-- Comum / reusado entre telas (VoidPanelChrome, listagens de arquivo) -->
+    <string name="common_btn_back">‹ Back</string>
+    <string name="common_warning_format">⚠ %1$s</string>
+    <string name="common_row_dir_format">📁 %1$s</string>
+    <string name="common_row_video_format">🎬 %1$s</string>
+
+    <!-- Home (VRPresentation.renderHome) -->
+    <string name="home_title">VR Player</string>
+    <string name="home_btn_local_files">📁  Local Files</string>
+    <string name="home_btn_network">🌐  Network</string>
+    <string name="home_btn_continue_watching">▶  Continue Watching</string>
+
+    <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
+    <string name="browser_title_local_files">Local Files</string>
+    <string name="browser_row_up">⬆ Go up one level</string>
+    <string name="browser_label_size_mb_format">%1$.1f MB</string>
+    <string name="browser_label_size_gb_format">%1$.2f GB</string>
+
+    <!-- Rede: landing com abas URL / SMB (VRPresentation.renderNetworkHome) -->
+    <string name="network_title">Network</string>
+    <string name="network_tab_url">🔗 URL</string>
+    <string name="network_tab_smb">🗄 SMB</string>
+
+    <!-- Rede: aba URL (VRPresentation.buildNetworkUrlPage) -->
+    <string name="network_url_hint">http:// or https://...</string>
+    <string name="network_url_recent_header">Recent</string>
+    <string name="network_url_recent_empty">(no URL played yet)</string>
+    <string name="network_url_recent_row_format">🕓 %1$s</string>
+    <string name="network_url_btn_paste">📋 Paste</string>
+    <string name="network_url_btn_play">▶ Play</string>
+    <string name="network_url_status_invalid">⚠ URL must start with http:// or https://</string>
+    <string name="network_url_status_checking">Checking server…</string>
+    <string name="network_url_status_seekable">✓ Server supports seek</string>
+    <string name="network_url_status_not_seekable">⚠ Server does NOT support seek (Accept-Ranges missing)</string>
+
+    <!-- Rede: aba SMB — lista de servidores salvos (VRPresentation.buildNetworkSmbPage) -->
+    <string name="network_smb_saved_servers_header">Saved servers</string>
+    <string name="network_smb_empty">(no server saved)</string>
+    <string name="network_smb_guest_label">guest</string>
+    <string name="network_smb_row_label_format">🖥 %1$s</string>
+    <string name="network_smb_btn_add_server">+ Add server</string>
+
+    <!-- Rede: aba SMB — formulario de adicionar servidor (VRPresentation.buildAddServerForm) -->
+    <string name="network_smb_form_host_label">Host / IP</string>
+    <string name="network_smb_form_port_label">Port</string>
+    <string name="network_smb_form_share_label">Share</string>
+    <string name="network_smb_form_share_hint">Videos</string>
+    <string name="network_smb_form_guest_checkbox">Guest / anonymous (no username/password)</string>
+    <string name="network_smb_form_user_label">Username</string>
+    <string name="network_smb_form_user_hint">username</string>
+    <string name="network_smb_form_pass_label">Password</string>
+    <string name="network_smb_form_pass_hint">password</string>
+    <string name="network_smb_form_domain_label">Domain</string>
+    <string name="network_smb_form_domain_hint">(optional)</string>
+    <string name="network_smb_btn_test_save">Test and save</string>
+    <string name="network_smb_form_status_host_required">⚠ Host required</string>
+    <string name="network_smb_form_status_connecting">Connecting…</string>
+    <string name="network_smb_form_status_error_format">✗ Failed: %1$s</string>
+
+    <!-- Plural: T8.5 / nota do doc — resultado de smb_list_shares ao testar um
+         servidor ("N share(s) encontrado(s)"). -->
+    <plurals name="network_smb_form_status_connected">
+        <item quantity="one">✓ Connected (%1$d share found)</item>
+        <item quantity="other">✓ Connected (%1$d shares found)</item>
+    </plurals>
+
+    <!-- Rede: navegacao de diretorio SMB (VRPresentation.renderNetworkFiles / loadNetworkDirectory) -->
+    <string name="network_files_loading">Loading…</string>
+    <string name="network_files_empty">(empty)</string>
+
+    <!-- Player: tela apos selecionar midia (VRPresentation.renderPlayer) -->
+    <string name="player_title">Playing</string>
+    <string name="player_label_controls_hint">Playback controls (play/pause/seek/volume) appear when you point at the video screen.</string>
+    <string name="player_label_smb_source_format">%1$s/%2$s</string>
+
+    <!-- Painel de controles de reproducao (VRControlsPresentation) -->
+    <string name="player_btn_play_pause">Play / Pause</string>
+    <string name="player_controls_time_format">%1$s / %2$s</string>
+    <string name="player_controls_volume_format">🔊 %1$d%%</string>
+    <string name="player_controls_speed_format">⏱ %1$.2fx</string>
+
+</resources>

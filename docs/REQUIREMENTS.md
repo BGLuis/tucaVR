@@ -172,6 +172,17 @@ graph TB
 | RF-I18N-004 | Espanhol | 🟡 Médio | v0.3 |
 | RF-I18N-005 | Sistema de contribuição de traduções (community) | 🟢 Baixo | v1.0 |
 
+> RF-I18N-001/002/003 implementados na v0.1 (ver `docs/phases/PHASE-0.1-MVP.md`,
+> secao 8, T8.1-T8.5) — processo completo (convenção de naming, como adicionar
+> um idioma novo, achado sobre a camada C++) documentado em `docs/i18n.md`.
+> Nota sobre RF-I18N-002 ("Português BR como idioma padrão"): a pasta
+> `res/values/` (default/fallback do Android resource system) contém o
+> **inglês**, com `res/values-pt-rBR/` como override específico — é a
+> convenção padrão do Android (fallback universal + override regional) e é o
+> que T8.1/T8.2 pedem explicitamente; "idioma padrão" aqui foi interpretado
+> como "idioma em que o produto foi concebido/testado primeiro", não como
+> "conteúdo da pasta sem qualifier".
+
 ---
 
 ## 4. Requisitos Não-Funcionais

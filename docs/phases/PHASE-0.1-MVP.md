@@ -841,19 +841,103 @@ Configurar sistema de tradução desde o início com Português (BR) e Inglês.
 
 ### Tarefas
 
-- [ ] **T8.1** — Configurar `res/values/strings.xml` (Inglês — default)
-- [ ] **T8.2** — Criar `res/values-pt-rBR/strings.xml` (Português BR)
-- [ ] **T8.3** — Definir convenção de naming: `screen_element_action` (ex: `player_btn_play`, `browser_label_size`)
-- [ ] **T8.4** — Strings na camada C++ (OpenXR UI): usar IDs numéricos mapeados para strings carregadas do Kotlin via JNI
-- [ ] **T8.5** — Documentar processo de adição de novos idiomas
+- [x] **T8.1** — Configurar `res/values/strings.xml` (Inglês — default)
+  > Criado do zero — não existia `app/src/main/res/` no projeto antes desta
+  > sessão. `app/src/main/res/values/strings.xml` contém a tradução em inglês
+  > de todas as ~50 strings visíveis ao usuário que estavam hardcoded em
+  > Kotlin (levantadas por grep sistemático em todo `app/src/main/java/`, não
+  > só nos arquivos óbvios). Detalhe completo em `docs/i18n.md`.
+- [x] **T8.2** — Criar `res/values-pt-rBR/strings.xml` (Português BR)
+  > `app/src/main/res/values-pt-rBR/strings.xml` preserva o texto em
+  > português que já existia hardcoded em `VRPresentation.kt` e
+  > `VRControlsPresentation.kt` (a língua em que a UI foi originalmente
+  > escrita) como base — não é uma tradução reversa a partir do inglês, é o
+  > texto original movido para resource. Chaves e ordem espelham
+  > `values/strings.xml` para revisão lado a lado. Literais hardcoded
+  > substituídos por `context.getString(R.string.xxx[, arg...])` em
+  > `VRPresentation.kt`, `VRControlsPresentation.kt` e
+  > `VoidPanelChrome.kt` (botão "Voltar" compartilhado por todos os headers
+  > de tela); `AndroidManifest.xml` passou a referenciar `@string/app_name`
+  > em vez do literal `"VR Player"`. Strings com interpolação (ex.
+  > `"${server.name}/${source.path}"` em `VRPresentation.renderPlayer`)
+  > viraram `getString(res, arg1, arg2)` com placeholders posicionais
+  > (`%1$s`/`%2$s`), cobrindo o pedido explícito de T8.5/cuidados. Um caso
+  > real (não forçado) de `<plurals>`: contagem de shares SMB encontrados ao
+  > testar/salvar um servidor (`network_smb_form_status_connected`) — os
+  > demais textos do app não têm nenhuma contagem real hoje, então não foram
+  > forçados em plural. Arquivos varridos e confirmados **sem** strings de UI
+  > (por grep, não por suposição): `VRActivity.kt` (só strings internas —
+  > extras de Intent, esquemas de URI, nenhuma renderizada ao usuário),
+  > `filebrowser/*.kt` (lógica pura, sem texto — quem desenha é
+  > `VRPresentation`), `network/SmbCredentialStore.kt`/`UrlHistoryStore.kt`
+  > (só chaves internas de `SharedPreferences`/JSON). Validado via
+  > `./gradlew :app:compileDebugKotlin` e `:app:testDebugUnitTest` (ambos
+  > `BUILD SUCCESSFUL`); `:app:assembleDebug` falha neste ambiente, mas por
+  > motivo anterior e não relacionado — falta o Meta OpenXR SDK em
+  > `sdk/meta-openxr-sdk/` para a etapa de build nativo (ver T1.6), a etapa
+  > Kotlin/resources builda normalmente antes disso. **Não validado em
+  > headset Quest 3 real**: a troca de idioma via `Locale`/`Configuration` do
+  > sistema Android é automática e não depende de código customizado deste
+  > app (mecanismo padrão de resource resolution da plataforma), mas o
+  > comportamento exato dentro de uma `Presentation` sobre `VirtualDisplay`
+  > nunca foi confirmado visualmente em hardware real nesta sessão — mesma
+  > categoria de incerteza já registrada para o teclado virtual em T6.4/T7.3.
+- [x] **T8.3** — Definir convenção de naming: `screen_element_action` (ex: `player_btn_play`, `browser_label_size`)
+  > Convenção documentada em detalhe em `docs/i18n.md` (seção 3) e aplicada
+  > consistentemente em todas as chaves criadas: prefixo de tela
+  > (`home_`/`browser_`/`network_`/`player_`), prefixo `common_` para
+  > elementos reusados por mais de uma tela (botão "Voltar" do
+  > `VoidPanelChrome`; formatos de linha `📁 %1$s`/`🎬 %1$s` reusados pelo
+  > browser local E pela navegação de diretório SMB), sufixo `_format`
+  > reservado para strings com placeholders posicionais usadas via
+  > `getString(res, arg...)`.
+- [x] **T8.4** — Strings na camada C++ (OpenXR UI): usar IDs numéricos mapeados para strings carregadas do Kotlin via JNI
+  > **Achado arquitetural que muda a premissa da tarefa**: grep completo em
+  > `native/src/*.cpp` confirma que não há nenhum texto de UI renderizado
+  > pelo C++ nesta arquitetura — todo texto visível ao usuário é desenhado
+  > por Views Android (`TextView`/`EditText`/`Button`/`SeekBar`) dentro das
+  > classes `Presentation` do Kotlin, renderizadas para um `VirtualDisplay` e
+  > só DEPOIS capturadas como textura OES projetada num quad 3D pelo C++
+  > (`vr_player_app.cpp`). O C++ só faz raycasting contra a geometria dos
+  > quads e composição/blend das texturas resultantes — nunca enfileira,
+  > desenha ou tem conhecimento de glifos/strings individuais. Não existe
+  > "OpenXR UI" que desenhe texto diretamente, então a premissa do T8.4/aviso
+  > da seção 8 ("a UI de controles é renderizada em C++/OpenXR") não
+  > corresponde à arquitetura real deste projeto. **Decisão**: marcado como
+  > concluído com esta nota, em vez de construir uma ponte JNI de strings
+  > (Kotlin → IDs numéricos → C++) sem nenhum consumidor real — seria
+  > scaffolding morto, mesmo padrão já identificado e evitado em T1.7 (UniFFI
+  > removido por não ter caminho de chamada real). Recomendação registrada em
+  > `docs/i18n.md` (seção 4) para se/quando uma UI nativa em C++/OpenXR vier
+  > a existir no futuro: reusar o mesmo `res/values*/strings.xml` do Kotlin
+  > via JNI, nunca duplicar strings dentro do C++ — formaliza o aviso original
+  > do doc mesmo sem haver, hoje, C++ que precise de texto próprio.
+- [x] **T8.5** — Documentar processo de adição de novos idiomas
+  > `docs/i18n.md` criado (não uma seção do REQUIREMENTS.md — decisão de
+  > manter um documento dedicado, com um link cruzado adicionado à seção 3.7
+  > do REQUIREMENTS.md). Cobre: qualifier BCP-47/Android correto por locale
+  > (`values-<lang>` vs `values-<lang>-r<REGION>`), processo passo a passo
+  > pra criar uma pasta nova a partir de `values/strings.xml` (não de
+  > `values-pt-rBR`, pra não herdar tradução errada), regras de `<plurals>`
+  > por idioma (nem todo idioma tem só `one`/`other` — russo/árabe/polonês
+  > têm categorias adicionais, com link para a doc oficial do Android e a
+  > tabela do CLDR), onde NÃO duplicar strings (decisão consciente
+  > documentada mesmo o C++ não precisando disso hoje — ver T8.4), e a
+  > confirmação de que nenhuma mudança de código Kotlin é necessária só por
+  > adicionar um idioma (troca de `Locale`/`Configuration` é automática,
+  > comportamento padrão da plataforma Android).
 
 ### ⚠️ Cuidados e Armadilhas
 
 > [!WARNING]
 > **Strings na camada C++**: A UI de controles é renderizada em C++/OpenXR, mas as strings de tradução estão em Android resources (Kotlin). Passe as strings traduzidas do Kotlin → C++ na inicialização ou via callback. NÃO duplique strings no C++.
+>
+> **Nesta implementação**: premissa não se aplica — ver nota de T8.4 acima. Não há texto renderizado em C++ nesta arquitetura (tudo é Android View capturada como textura), então não há strings para passar do Kotlin para o C++ nem risco de duplicação hoje. Decisão e recomendação para o futuro documentadas em `docs/i18n.md`, seção 4.
 
 > [!NOTE]
 > **Plurais e formatação**: Use Android `plurals` resource para contagens. Use `String.format()` com posicionais (`%1$s`) para permitir reordenação em idiomas diferentes.
+>
+> **Nesta implementação**: aplicado em `network_smb_form_status_connected` (`<plurals>`, contagem real de shares SMB encontrados) e em todas as strings com interpolação (`getString(res, arg1, arg2)` com `%1$s`/`%2$s`/`%1$d`/`%1$.2f` posicionais) — ver T8.2.
 
 ---
 

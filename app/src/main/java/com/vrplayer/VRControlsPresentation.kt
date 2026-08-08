@@ -39,11 +39,15 @@ class VRControlsPresentation(
         if (!isDragging && totalSec > 0) {
             seekBar.progress = ((currentSec / totalSec) * 100).toInt()
         }
-        timeLabel.text = "${formatTime(currentSec)} / ${formatTime(totalSec)}"
+        timeLabel.text = context.getString(
+            R.string.player_controls_time_format, formatTime(currentSec), formatTime(totalSec)
+        )
     }
 
     private fun formatTime(seconds: Float): String {
         val total = seconds.toInt().coerceAtLeast(0)
+        // Formato numerico puro (MM:SS) -- nao depende de idioma, mantido via
+        // String.format direto (nao e uma string de UI traduzivel).
         return String.format("%02d:%02d", total / 60, total % 60)
     }
 
@@ -88,7 +92,7 @@ class VRControlsPresentation(
         row1.addView(btnRewind)
 
         val btnPlayPause = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = "Play / Pause"
+            text = context.getString(R.string.player_btn_play_pause)
             textSize = 22f
             setOnClickListener { onPlayPause() }
         }
@@ -129,7 +133,7 @@ class VRControlsPresentation(
         row1.addView(seekBar)
 
         timeLabel = TextView(context).apply {
-            text = "00:00 / 00:00"
+            text = context.getString(R.string.player_controls_time_format, "00:00", "00:00")
             typeface = VoidTheme.typefaceMono
             textSize = 16f
             setTextColor(VoidTheme.colorText)
@@ -147,7 +151,7 @@ class VRControlsPresentation(
         }
 
         val volumeLabel = TextView(context).apply {
-            text = "🔊 100%"
+            text = context.getString(R.string.player_controls_volume_format, 100)
             typeface = VoidTheme.typefaceBody
             textSize = 16f
             setTextColor(VoidTheme.colorText)
@@ -164,7 +168,7 @@ class VRControlsPresentation(
             progress = 100
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(p0: SeekBar?, progress: Int, fromUser: Boolean) {
-                    volumeLabel.text = "🔊 $progress%"
+                    volumeLabel.text = context.getString(R.string.player_controls_volume_format, progress)
                     if (fromUser) {
                         activity.nativeSetVolume(progress / 100f)
                     }
@@ -176,7 +180,7 @@ class VRControlsPresentation(
         row2.addView(volumeBar)
 
         val speedLabel = TextView(context).apply {
-            text = "⏱ 1.00x"
+            text = context.getString(R.string.player_controls_speed_format, speedFromProgress(33))
             typeface = VoidTheme.typefaceBody
             textSize = 16f
             setTextColor(VoidTheme.colorText)
@@ -195,7 +199,7 @@ class VRControlsPresentation(
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(p0: SeekBar?, progress: Int, fromUser: Boolean) {
                     val speed = speedFromProgress(progress)
-                    speedLabel.text = String.format("⏱ %.2fx", speed)
+                    speedLabel.text = context.getString(R.string.player_controls_speed_format, speed)
                     if (fromUser) {
                         activity.nativeSetSpeed(speed)
                     }
