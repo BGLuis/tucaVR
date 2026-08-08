@@ -1,6 +1,8 @@
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
+    // T9.1: Room usa KSP em vez de kapt (ver justificativa no build.gradle.kts raiz).
+    id("com.google.devtools.ksp")
 }
 
 android {
@@ -66,6 +68,15 @@ dependencies {
     // T6.4: EncryptedSharedPreferences para credenciais de servidores SMB —
     // NUNCA armazenar senha em texto plano (doc, secao 6, aviso "Credenciais").
     implementation("androidx.security:security-crypto:1.1.0")
+
+    // T9.1: Room para o historico de reproducao (ver app/src/main/java/com/vrplayer/history/).
+    // 2.6.1 e a ultima release estavel da linha 2.6.x compativel com Kotlin
+    // 1.9.0 / KSP 1.9.0-1.0.13 (ver build.gradle.kts raiz) — nao usamos a
+    // linha 2.8.x (mais nova) de proposito, para nao arriscar exigir um AGP/
+    // Kotlin mais recente do que o resto do projeto ja usa.
+    implementation("androidx.room:room-runtime:2.6.1")
+    implementation("androidx.room:room-ktx:2.6.1")
+    ksp("androidx.room:room-compiler:2.6.1")
 
     // JVM unit tests (app/src/test) — logica pura do file browser
     // (MediaSorter, DirectoryNavigator, DirectoryLister, cache-key do

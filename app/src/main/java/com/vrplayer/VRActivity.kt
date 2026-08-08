@@ -15,6 +15,8 @@ import android.os.Environment
 import android.provider.Settings
 import android.content.Intent
 import android.net.Uri
+import com.vrplayer.history.PlaybackHistoryTracker
+import com.vrplayer.navigation.PlaybackSource
 
 class VRActivity : NativeActivity() {
     private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
@@ -33,6 +35,12 @@ class VRActivity : NativeActivity() {
     private var pendingAutoPlayPath: String? = null
     private var autoPlayDispatched = false
     private val autoPlayHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    // T9.1-T9.3: unico dono do historico de reproducao neste processo (mesmo
+    // ciclo de vida da Activity). `by lazy` porque so e usado depois que a
+    // Activity ja existe (primeiro uso real e dentro de playFile/playUrl/
+    // playSmb, chamados via VRPresentation apos onCreate).
+    val historyTracker: PlaybackHistoryTracker by lazy { PlaybackHistoryTracker(this) }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -82,6 +90,9 @@ class VRActivity : NativeActivity() {
         // Ver hook de auto-play em onCreate/onNewIntent/onResume.
         const val EXTRA_AUTO_PLAY_PATH = "video_path"
         private const val AUTO_PLAY_DELAY_MS = 3000L
+
+        // T9.3: ver ressalva completa em `scheduleResumeSeek`.
+        private const val RESUME_SEEK_DELAY_MS = 1500L
 
         @JvmStatic
         fun openFilePicker(activity: VRActivity) {
@@ -206,6 +217,17 @@ class VRActivity : NativeActivity() {
         fun updateMediaProgress(activity: VRActivity, currentSec: Float, totalSec: Float) {
             activity.runOnUiThread {
                 activity.controlsPresentation?.updateProgress(currentSec, totalSec)
+                // T9.2: mesmo hook que ja existia para a UI de controles —
+                // chamado pelo C++ via JNI ~10x/segundo (ver
+                // native/src/vr_player_app.cpp, `frameCount % 6 == 0` a
+                // 60fps). O throttle de ~10s vive dentro do proprio
+                // PlaybackHistoryTracker (PlaybackProgressThrottle) — aqui
+                // so repassamos toda chamada, sem decidir throttle nesta
+                // camada. Rodar dentro do mesmo runOnUiThread (em vez de
+                // direto na thread JNI) mantem a mutacao do estado interno
+                // do tracker (throttle/`current`) single-threaded, evitando
+                // uma corrida de dados sem precisar de sincronizacao extra.
+                activity.historyTracker.onProgress(currentSec, totalSec)
             }
         }
     }
@@ -219,21 +241,56 @@ class VRActivity : NativeActivity() {
         }
     }
 
-    fun playFile(filePath: String) {
+    // T9.1-T9.3: os 3 entry points de playback (playFile/playUrl/playSmb) sao
+    // exatamente onde path/titulo/fonte estao disponiveis para popular o
+    // historico — chamam `historyTracker.startTracking` ANTES de iniciar a
+    // reproducao nativa. `resumeAtMs` (T9.3, opcional): quando informado
+    // pelo prompt "Retomar de XX:XX?" (ver VRPresentation.renderResumePrompt),
+    // agenda um seek para essa posicao pouco depois de iniciar o playback.
+
+    fun playFile(filePath: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
+        val resolvedSize = if (sizeBytes > 0L) sizeBytes else runCatching { File(filePath).length() }.getOrDefault(0L)
+        val source = PlaybackSource.LocalFile(filePath, resolvedSize)
+        historyTracker.startTracking(source, title = File(filePath).name)
         nativePlayVideo(filePath)
+        resumeAtMs?.let { scheduleResumeSeek(it) }
     }
 
     // T7: URL HTTP(S) reusa o mesmo entry point que arquivo local — o
     // Demuxer (Rust) despacha por esquema (ver rust/core/src/demuxer.rs).
-    fun playUrl(url: String) {
+    fun playUrl(url: String, resumeAtMs: Long? = null) {
+        historyTracker.startTracking(PlaybackSource.Http(url), title = url)
         nativePlayVideo(url)
+        resumeAtMs?.let { scheduleResumeSeek(it) }
     }
 
     // T6.4: playback SMB tem entry point JNI dedicado porque as credenciais
     // vao como parametros separados, nunca uma URI unica com senha embutida
     // cruzando a fronteira JNI (ver nota em rust/bridge/src/lib.rs).
-    fun playSmb(server: com.vrplayer.network.SmbServer, path: String) {
+    fun playSmb(server: com.vrplayer.network.SmbServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
+        val source = PlaybackSource.Smb(server, path, sizeBytes)
+        historyTracker.startTracking(source, title = path.substringAfterLast('/'))
         nativePlaySmb(server.host, server.port, server.share, path, server.username, server.password, server.domain)
+        resumeAtMs?.let { scheduleResumeSeek(it) }
+    }
+
+    /**
+     * T9.3, ressalva honesta: nao ha nenhum callback do Rust/C++ avisando
+     * "playback pronto para receber seek" (o unico sinal de progresso que
+     * existe, `updateMediaProgress`, so comeca a chegar DEPOIS que o
+     * playback ja carregou — ver T2.6 sobre `load_at`/threads assincronas).
+     * Isto e um delay heuristico fixo, no mesmo espirito do
+     * `AUTO_PLAY_DELAY_MS` ja usado pelo hook de soak-test acima, so que bem
+     * mais curto (retomar uma midia ja tocando e mais leve que o cold-start
+     * inteiro do app). NUNCA validado em headset real — se o playback
+     * demorar mais que isso pra carregar (rede lenta em SMB/HTTP, por
+     * exemplo), o seek pode disparar cedo demais e ser ignorado/incorreto.
+     * Ver nota em T9.3 no PHASE-0.1-MVP.md.
+     */
+    private fun scheduleResumeSeek(resumeAtMs: Long) {
+        autoPlayHandler.postDelayed({
+            nativeSeekVideo(resumeAtMs / 1000f)
+        }, RESUME_SEEK_DELAY_MS)
     }
 
     private fun processVideoUri(uri: Uri) {

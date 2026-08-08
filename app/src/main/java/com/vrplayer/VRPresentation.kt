@@ -30,6 +30,11 @@ import com.vrplayer.filebrowser.MediaType
 import com.vrplayer.filebrowser.SortBy
 import com.vrplayer.filebrowser.ThumbnailGenerator
 import com.vrplayer.filebrowser.sortMediaEntries
+import com.vrplayer.history.HistorySourceType
+import com.vrplayer.history.PlaybackHistory
+import com.vrplayer.history.formatDurationMs
+import com.vrplayer.history.isResumable
+import com.vrplayer.history.watchedPercent
 import com.vrplayer.navigation.AppNavigator
 import com.vrplayer.navigation.Destination
 import com.vrplayer.navigation.PlaybackSource
@@ -43,6 +48,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.json.JSONObject
 
 /**
  * Fase 2 do redesign "Void" (ver `com.vrplayer.navigation.Destination` pro
@@ -137,6 +143,7 @@ class VRPresentation(
             is Destination.LocalFiles -> renderLocalFiles()
             is Destination.NetworkHome -> renderNetworkHome()
             is Destination.NetworkFiles -> renderNetworkFiles(destination.server)
+            is Destination.ContinueWatching -> renderContinueWatching()
             is Destination.Player -> renderPlayer(destination.source)
         }
     }
@@ -202,14 +209,15 @@ class VRPresentation(
             textSize = 24f
             setOnClickListener { navigateTo(Destination.NetworkHome) }
         }
-        // T9 (roadmap, ver docs/phases): "Continuar assistindo" depende de um
-        // historico de reproducao que ainda nao existe. Placeholder
-        // DESABILITADO (nao escondido) de proposito: sinaliza pro usuario que
-        // a funcionalidade existe/esta a caminho, em vez de sumir sem
-        // explicacao.
-        val btnContinueWatching = VoidButton(context, VoidButtonStyle.DISABLED).apply {
+        // T9.4: historico de reproducao implementado (com.vrplayer.history) —
+        // botao habilitado de verdade agora. A tela em si (renderContinueWatching)
+        // lida com a lista vazia mostrando uma mensagem, entao nao ha
+        // necessidade de consultar o Room aqui so para decidir se o botao
+        // deve estar habilitado.
+        val btnContinueWatching = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
             text = "▶  Continuar assistindo"
             textSize = 20f
+            setOnClickListener { navigateTo(Destination.ContinueWatching) }
         }
 
         root.addView(btnLocal, bigButtonParams)
@@ -269,8 +277,11 @@ class VRPresentation(
     }
 
     private fun playLocalVideo(entry: MediaEntry) {
-        activity.playFile(entry.path)
-        navigateTo(Destination.Player(PlaybackSource.LocalFile(entry.path)))
+        val source = PlaybackSource.LocalFile(entry.path, entry.sizeBytes)
+        promptResumeOrPlay(source) { resumeAtMs ->
+            activity.playFile(entry.path, entry.sizeBytes, resumeAtMs)
+            navigateTo(Destination.Player(source))
+        }
     }
 
     // ==================== REDE: LANDING (abas URL / SMB) ====================
@@ -420,8 +431,12 @@ class VRPresentation(
             val probeResult = withContext(Dispatchers.IO) { activity.nativeProbeHttpUrl(url) }
             statusView.text = describeProbe(probeResult)
         }
-        activity.playUrl(url)
-        navigateTo(Destination.Player(PlaybackSource.Http(url)))
+
+        val source = PlaybackSource.Http(url)
+        promptResumeOrPlay(source) { resumeAtMs ->
+            activity.playUrl(url, resumeAtMs)
+            navigateTo(Destination.Player(source))
+        }
     }
 
     private fun describeProbe(result: String): String {
@@ -711,9 +726,15 @@ class VRPresentation(
             }
 
             lines.forEach { line ->
+                // T9: 3o campo (tamanho, sempre presente na resposta real do
+                // Rust — ver `rust/bridge/src/lib.rs::smb_list_directory`,
+                // formato "nome\t{0|1}\ttamanho") era ignorado ate agora;
+                // agora usado para compor a chave estavel do historico (ver
+                // aviso do doc, secao 9, "URI estabilidade").
                 val parts = line.split("\t")
                 val name = parts.getOrElse(0) { return@forEach }
                 val isDir = parts.getOrNull(1) == "1"
+                val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
                 val row = VoidListRow(context).apply {
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -725,8 +746,11 @@ class VRPresentation(
                             networkBrowsePath = childPath
                             renderNetworkFiles(server)
                         } else {
-                            activity.playSmb(server, childPath)
-                            navigateTo(Destination.Player(PlaybackSource.Smb(server, childPath)))
+                            val source = PlaybackSource.Smb(server, childPath, sizeBytes)
+                            promptResumeOrPlay(source) { resumeAtMs ->
+                                activity.playSmb(server, childPath, sizeBytes, resumeAtMs)
+                                navigateTo(Destination.Player(source))
+                            }
                         }
                     }
                 }
@@ -749,6 +773,238 @@ class VRPresentation(
         val padH = VoidTheme.dpToPx(context, 16f)
         val padV = VoidTheme.dpToPx(context, 12f)
         setPadding(padH, padV, padH, padV)
+    }
+
+    // ==================== HISTORICO DE REPRODUCAO (T9) ====================
+
+    /**
+     * T9.3: consulta `historyTracker.findExisting` (Room, `Dispatchers.IO`
+     * por baixo) e, se houver uma entrada retomavel para [source], mostra o
+     * prompt "Retomar de XX:XX?" ANTES de tocar; senão toca direto do zero.
+     * [onDecided] recebe `resumeAtMs` (posicao salva) ou `null` (comecar do
+     * zero) e e responsavel por de fato chamar `activity.playX(...)` e
+     * navegar para [Destination.Player] — cada um dos 3 call sites (arquivo
+     * local, URL, SMB) sabe como tocar sua propria fonte, entao essa funcao
+     * so decide "perguntar ou nao", nunca toca midia ela mesma.
+     */
+    private fun promptResumeOrPlay(source: PlaybackSource, onDecided: (resumeAtMs: Long?) -> Unit) {
+        scope.launch {
+            val existing = activity.historyTracker.findExisting(source)
+            if (existing != null && existing.isResumable()) {
+                showResumePrompt(
+                    entry = existing,
+                    onResume = { onDecided(existing.positionMs) },
+                    onRestart = { onDecided(null) }
+                )
+            } else {
+                onDecided(null)
+            }
+        }
+    }
+
+    /**
+     * Tela transitoria "Retomar de XX:XX?" (T9.3) — desenhada com
+     * `showScreen()` direto (NAO `navigateTo`/`AppNavigator`) de proposito:
+     * e uma decisao pontual, nao um novo nivel de navegacao "de verdade". O
+     * back-stack do [AppNavigator] continua exatamente onde estava (ex.:
+     * ainda em `LocalFiles`), entao "Voltar" aqui so re-renderiza a tela de
+     * onde o usuario veio (`render()`), e depois de escolher Retomar/
+     * Comecar do zero o fluxo normal de `navigateTo(Destination.Player(...))`
+     * empilha a partir dessa mesma tela — como se o prompt nunca tivesse
+     * existido no historico de navegacao.
+     */
+    private fun showResumePrompt(entry: PlaybackHistory, onResume: () -> Unit, onRestart: () -> Unit) {
+        val root = VoidPanelChrome.newRoot(context)
+        root.addView(
+            VoidPanelChrome.buildHeader(context, title = "Continuar de onde parou?", onBack = { render() })
+        )
+        root.addView(VoidText.body(context, entry.title, sizeSp = 20f).apply {
+            setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
+        })
+        root.addView(VoidText.mono(
+            context,
+            "Assistido ${formatDurationMs(entry.positionMs)} de ${formatDurationMs(entry.durationMs)} (${watchedPercent(entry)}%)",
+            sizeSp = 16f
+        ).apply {
+            setPadding(0, 0, 0, VoidTheme.dpToPx(context, 24f))
+        })
+
+        val btnParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = VoidTheme.dpToPx(context, 12f) }
+
+        val btnResume = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+            text = "▶ Retomar de ${formatDurationMs(entry.positionMs)}"
+            textSize = 20f
+            setOnClickListener { onResume() }
+        }
+        val btnRestart = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+            text = "Comecar do zero"
+            textSize = 18f
+            setOnClickListener { onRestart() }
+        }
+        root.addView(btnResume, btnParams)
+        root.addView(btnRestart, btnParams)
+
+        showScreen(root)
+    }
+
+    // ---------- T9.4: tela "Continuar assistindo" ----------
+
+    private fun renderContinueWatching() {
+        val root = VoidPanelChrome.newRoot(context)
+        root.addView(
+            VoidPanelChrome.buildHeader(context, title = "Continuar assistindo", onBack = { handleBack() })
+        )
+
+        val recycler = RecyclerView(context).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            layoutManager = LinearLayoutManager(context)
+        }
+        val emptyText = VoidText.body(context, "(nenhum historico ainda)", sizeSp = 16f, secondary = true).apply {
+            visibility = View.GONE
+        }
+
+        lateinit var adapter: HistoryAdapter
+
+        fun refresh() {
+            scope.launch {
+                val items = activity.historyTracker.listRecent()
+                adapter.submit(items)
+                recycler.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
+                emptyText.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
+            }
+        }
+
+        adapter = HistoryAdapter(
+            onItemClick = { entry -> resumeFromHistory(entry) },
+            onRemoveClick = { entry ->
+                scope.launch {
+                    activity.historyTracker.delete(entry.historyKey)
+                    refresh()
+                }
+            }
+        )
+        recycler.adapter = adapter
+
+        root.addView(recycler)
+        root.addView(emptyText)
+        showScreen(root)
+        refresh()
+    }
+
+    /**
+     * Retoma direto da tela "Continuar assistindo" — diferente do prompt de
+     * T9.3 (que pergunta), aqui a intencao do usuario ja e explicita
+     * (clicou numa entrada de "continuar assistindo"), entao toca direto na
+     * posicao salva, sem perguntar de novo.
+     */
+    private fun resumeFromHistory(entry: PlaybackHistory) {
+        when (entry.sourceType) {
+            HistorySourceType.LOCAL -> {
+                val source = PlaybackSource.LocalFile(entry.mediaPath)
+                activity.playFile(entry.mediaPath, resumeAtMs = entry.positionMs)
+                navigateTo(Destination.Player(source))
+            }
+            HistorySourceType.HTTP -> {
+                val source = PlaybackSource.Http(entry.mediaPath)
+                activity.playUrl(entry.mediaPath, resumeAtMs = entry.positionMs)
+                navigateTo(Destination.Player(source))
+            }
+            HistorySourceType.SMB -> {
+                val server = resolveSmbServerFromHistory(entry.serverInfo)
+                if (server == null) {
+                    // Servidor foi removido/renomeado desde a ultima vez —
+                    // nao ha credencial pra reconectar. Falha silenciosa e
+                    // segura (nao navega pra lugar nenhum) em vez de crash;
+                    // "não precisa ser sofisticado" (escopo do T9.3/T9.4).
+                    return
+                }
+                val source = PlaybackSource.Smb(server, entry.mediaPath)
+                activity.playSmb(server, entry.mediaPath, resumeAtMs = entry.positionMs)
+                navigateTo(Destination.Player(source))
+            }
+        }
+    }
+
+    /** Resolve o [SmbServer] salvo (com credenciais) a partir do `serverId`
+     * gravado em [PlaybackHistory.serverInfo] — a credencial em si NUNCA foi
+     * duplicada no historico (ver `PlaybackHistoryMapping.serverInfoJson`),
+     * so a referencia pro servidor salvo em `SmbCredentialStore` (T6.4). */
+    private fun resolveSmbServerFromHistory(serverInfoJson: String?): SmbServer? {
+        if (serverInfoJson == null) return null
+        return try {
+            val serverId = JSONObject(serverInfoJson).getString("serverId")
+            credentialStore.list().find { it.id == serverId }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Linha de lista para T9.4: reusa [VoidListRow] (mesmo componente do
+     * File Browser/listagem SMB, T5/T6) + um botao "✕" de remover, no mesmo
+     * padrao ja usado pela lista de servidores SMB salvos
+     * (`buildNetworkSmbPage`). Sem thumbnails (T9 nao gera/salva
+     * `thumbnailPath` nesta implementacao — campo existe no Room para uso
+     * futuro, mas fica `null` por enquanto).
+     */
+    private inner class HistoryAdapter(
+        private val onItemClick: (PlaybackHistory) -> Unit,
+        private val onRemoveClick: (PlaybackHistory) -> Unit
+    ) : RecyclerView.Adapter<HistoryAdapter.ViewHolder>() {
+
+        private var items: List<PlaybackHistory> = emptyList()
+
+        fun submit(newItems: List<PlaybackHistory>) {
+            items = newItems
+            notifyDataSetChanged()
+        }
+
+        inner class ViewHolder(row: LinearLayout, val listRow: VoidListRow) : RecyclerView.ViewHolder(row)
+
+        override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
+            val listRow = VoidListRow(parent.context).apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            val btnRemove = VoidButton(parent.context, VoidButtonStyle.SECONDARY).apply {
+                text = "✕"
+                textSize = 16f
+                minHeight = 0
+                val pad = VoidTheme.dpToPx(parent.context, 12f)
+                setPadding(pad, pad, pad, pad)
+            }
+            val row = LinearLayout(parent.context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).also { it.bottomMargin = VoidTheme.dpToPx(parent.context, 8f) }
+                addView(listRow)
+                addView(btnRemove, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).also { it.marginStart = VoidTheme.dpToPx(parent.context, 8f) })
+            }
+            val holder = ViewHolder(row, listRow)
+            btnRemove.setOnClickListener {
+                items.getOrNull(holder.adapterPosition)?.let(onRemoveClick)
+            }
+            return holder
+        }
+
+        override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+            val entry = items[position]
+            val icon = when (entry.sourceType) {
+                HistorySourceType.LOCAL -> "🎬"
+                HistorySourceType.SMB -> "🖥"
+                HistorySourceType.HTTP -> "🌐"
+            }
+            val meta = "${formatDurationMs(entry.positionMs)} / ${formatDurationMs(entry.durationMs)} · ${watchedPercent(entry)}%"
+            holder.listRow.bind("$icon ${entry.title}", meta = meta, showThumbnailSlot = false)
+            holder.listRow.setOnClickListener { onItemClick(entry) }
+        }
+
+        override fun getItemCount() = items.size
     }
 
     // ==================== PLAYER (estado apos selecionar midia) ====================
