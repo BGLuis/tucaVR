@@ -35,3 +35,6 @@ app/src/main/jniLibs/
 /sdk/meta-openxr-sdk/
 /sdk/*.zip
 /ffmpeg-android-maker/
+
+# Resultados de soak test (scripts/soak-test.sh)
+/soak-test-results/
