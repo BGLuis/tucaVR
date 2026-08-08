@@ -181,8 +181,7 @@ class VRPlayerApp : public OVRFW::XrApp {
 public:
     VRPlayerApp() : OVRFW::XrApp(), m_textureId(0), m_eglImage(EGL_NO_IMAGE_KHR), m_lastBuffer(nullptr),
                     m_uiImageReader(nullptr), m_uiTextureId(0), m_uiEglImage(EGL_NO_IMAGE_KHR),
-                    m_controlsImageReader(nullptr), m_controlsTextureId(0), m_controlsEglImage(EGL_NO_IMAGE_KHR),
-                    m_networkImageReader(nullptr), m_networkTextureId(0), m_networkEglImage(EGL_NO_IMAGE_KHR) {
+                    m_controlsImageReader(nullptr), m_controlsTextureId(0), m_controlsEglImage(EGL_NO_IMAGE_KHR) {
         // Ambiente "void": fundo totalmente preto, sem geometria de ambiente (T3.3)
         BackgroundColor = OVR::Vector4f(0.0f, 0.0f, 0.0f, 1.0f);
     }
@@ -390,48 +389,6 @@ public:
             }
         }
 
-        // ------------------ INITIALIZE NETWORK UI (T6.4/T7.3) ------------------
-        // Painel de gerenciamento de servidores SMB + input de URL HTTP(S),
-        // seguindo o mesmo padrao VirtualDisplay+Presentation+quad OES dos
-        // paineis acima (nao inventa mecanismo novo de UI).
-        m_networkSurfaceDef.geo = OVRFW::BuildTesselatedQuad(1, 1, false);
-        m_networkSurfaceDef.graphicsCommand.Program = m_program;
-        m_networkSurfaceDef.graphicsCommand.UniformData[1].Data = &m_networkAlpha;
-        m_networkSurfaceDef.graphicsCommand.GpuState.blendEnable = OVRFW::ovrGpuState::BLEND_ENABLE;
-        m_networkSurfaceDef.graphicsCommand.GpuState.blendSrc = OVRFW::ovrGpuState::kGL_SRC_ALPHA;
-        m_networkSurfaceDef.graphicsCommand.GpuState.blendDst = OVRFW::ovrGpuState::kGL_ONE_MINUS_SRC_ALPHA;
-        m_networkSurfaceDef.graphicsCommand.GpuState.blendSrcAlpha = OVRFW::ovrGpuState::kGL_SRC_ALPHA;
-        m_networkSurfaceDef.graphicsCommand.GpuState.blendDstAlpha = OVRFW::ovrGpuState::kGL_ONE_MINUS_SRC_ALPHA;
-        m_networkSurfaceDef.graphicsCommand.GpuState.depthMaskEnable = false;
-
-        media_status_t networkStatus = AImageReader_newWithUsage(
-            1024, 1024, AIMAGE_FORMAT_RGBA_8888,
-            AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,
-            2, &m_networkImageReader);
-
-        if (networkStatus == AMEDIA_OK && m_networkImageReader) {
-            LOGI("VRPlayerApp: Network ImageReader created successfully!");
-            ANativeWindow* window = nullptr;
-            AImageReader_getWindow(m_networkImageReader, &window);
-            if (window) {
-                const xrJava* java = GetContext();
-                JNIEnv* env = nullptr;
-                if (java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
-                    jobject surfaceObj = ANativeWindow_toSurface(env, window);
-                    jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
-                    jmethodID setupMethod = env->GetStaticMethodID(vrActivityClass, "setupNetworkVirtualDisplay", "(Lcom/vrplayer/VRActivity;Landroid/view/Surface;II)V");
-                    if (setupMethod) {
-                        env->CallStaticVoidMethod(vrActivityClass, setupMethod, java->ActivityObject, surfaceObj, 1024, 1024);
-                        LOGI("VRPlayerApp: setupNetworkVirtualDisplay called successfully!");
-                    } else {
-                        LOGI("VRPlayerApp: setupNetworkVirtualDisplay NOT FOUND!");
-                    }
-                    env->DeleteLocalRef(surfaceObj);
-                    env->DeleteLocalRef(vrActivityClass);
-                }
-            }
-        }
-
         // INICIAR VÍDEO DE TESTE AUTOMATICAMENTE
         LOGI("VRPlayerApp: Iniciando vídeo de teste automaticamente!");
         start_video_playback("/sdcard/Android/data/com.vrplayer/files/test.mp4");
@@ -483,17 +440,6 @@ public:
         OVR::Vector3f cPlaneCenter = m_controlsTransform.GetTranslation();
         OVR::Vector3f cPlaneNormal = OVR::Matrix4f::RotationX(-0.3f).Transform(OVR::Vector3f(0, 0, 1));
 
-        // Painel de rede (T6.4/T7.3): billboard, espelhado do File Browser
-        // (fica do lado direito em vez do esquerdo) — mesma logica de T4.5.
-        OVR::Vector3f networkPos(2.2f, 1.5f, -1.5f);
-        OVR::Vector3f networkToHead = in.HeadPose.Translation - networkPos;
-        networkToHead.y = 0.0f;
-        float networkToHeadLen = sqrtf(networkToHead.x * networkToHead.x + networkToHead.z * networkToHead.z);
-        float networkYaw = (networkToHeadLen > 1e-4f) ? atan2f(networkToHead.x / networkToHeadLen, networkToHead.z / networkToHeadLen) : -0.7f;
-        m_networkTransform = OVR::Matrix4f::Translation(networkPos) * OVR::Matrix4f::RotationY(networkYaw);
-        OVR::Vector3f networkPlaneCenter = networkPos;
-        OVR::Vector3f networkPlaneNormal = OVR::Matrix4f::RotationY(networkYaw).Transform(OVR::Vector3f(0, 0, 1));
-
         // Tela de video (usada apenas para detectar "apontando para a tela" -> mostra controles)
         OVR::Matrix4f screenTransform = OVR::Matrix4f::Translation(m_screenPosition) * OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
 
@@ -501,7 +447,7 @@ public:
 
         static float lastUvX = 0.0f;
         static float lastUvY = 0.0f;
-        static int activePanel = 0; // 0=None, 1=FileBrowser, 2=Controls, 3=Network
+        static int activePanel = 0; // 0=None, 1=FileBrowser (Home/Arquivos/Rede/Player), 2=Controls
         static bool isTouchDown = false;
 
         // Intersecao raio-quad generica: retorna t (>0) se acertou dentro dos limites do
@@ -552,25 +498,17 @@ public:
             lastUvY = v;
         }
 
-        float tNetwork = rayHitsQuad(m_networkTransform, networkPlaneNormal, networkPlaneCenter, u, v);
-        if (tNetwork > 0.0f && tNetwork < minT) {
-            currentHitPanel = 3;
-            minT = tNetwork;
-            pointerEnd = rayOrigin + rayDir * tNetwork;
-            lastUvX = u;
-            lastUvY = v;
-        }
-
         float screenU = 0.0f, screenV = 0.0f;
         bool hitScreen = rayHitsQuad(screenTransform, OVR::Vector3f(0, 0, 1), m_screenPosition, screenU, screenV) > 0.0f;
 
         // --- T4.3: auto-hide dos paineis ---
-        // Aponta pro File Browser -> mantem ele visivel. Aponta pra tela ou pros
-        // controles -> mantem os controles visiveis. Aponta pro painel de rede ->
-        // mantem ele visivel. Sem atividade por 5s -> fade out. O painel de rede NAO
-        // usa o mesmo gatilho "aponta pra tela" dos controles (nao faz sentido
-        // reaparecer sozinho so porque o usuario esta olhando o video) — so
-        // aparece apontando pra ele mesmo ou via botao Menu (ver T4.4 abaixo).
+        // Aponta pro File Browser (Home/Arquivos/Rede/Player, tudo no mesmo quad
+        // desde a Fase 2) -> mantem ele visivel. Aponta pra tela ou pros
+        // controles -> mantem os controles visiveis. Sem atividade por 5s -> fade
+        // out. Com a fusao dos paineis Local/Rede num so quad, so sobram estes 2
+        // paineis de UI (fora a tela de video) — o timing de auto-hide abaixo
+        // (kUiAutoHideSeconds/kUiFadeDuration) nao mudou, mas vale re-validar em
+        // headset fisico agora que ha um painel a menos disputando atencao.
         if (currentHitPanel == 1) {
             m_uiIdleTime = 0.0f;
         } else {
@@ -581,32 +519,22 @@ public:
         } else {
             m_controlsIdleTime += in.DeltaSeconds;
         }
-        if (currentHitPanel == 3) {
-            m_networkIdleTime = 0.0f;
-        } else {
-            m_networkIdleTime += in.DeltaSeconds;
-        }
         float uiTargetAlpha = (m_uiIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
         float controlsTargetAlpha = (m_controlsIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
-        float networkTargetAlpha = (m_networkIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
         float fadeStep = in.DeltaSeconds / kUiFadeDuration;
         m_uiAlpha = MoveTowards(m_uiAlpha, uiTargetAlpha, fadeStep);
         m_controlsAlpha = MoveTowards(m_controlsAlpha, controlsTargetAlpha, fadeStep);
-        m_networkAlpha = MoveTowards(m_networkAlpha, networkTargetAlpha, fadeStep);
 
         // So despacha toque/hover para um painel que esteja de fato visivel (evita
         // "clique invisivel" em um painel escondido pelo auto-hide); a deteccao
         // geometrica acima continua sempre ativa para poder trazer o painel de volta.
         bool uiVisible = m_uiAlpha > 0.5f;
         bool controlsVisible = m_controlsAlpha > 0.5f;
-        bool networkVisible = m_networkAlpha > 0.5f;
         int dispatchHitPanel = 0;
         if (currentHitPanel == 1 && uiVisible) {
             dispatchHitPanel = 1;
         } else if (currentHitPanel == 2 && controlsVisible) {
             dispatchHitPanel = 2;
-        } else if (currentHitPanel == 3 && networkVisible) {
-            dispatchHitPanel = 3;
         }
 
         int action = -1;
@@ -629,8 +557,11 @@ public:
             JNIEnv* env = nullptr;
             if (java && java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
                 jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
-                const char* methodName = (activePanel == 1) ? "dispatchVRTouch"
-                    : (activePanel == 3) ? "dispatchNetworkVRTouch" : "dispatchControlsVRTouch";
+                // Fase 2: o painel de rede nao tem mais quad/dispatch proprio —
+                // sua UI agora mora dentro do mesmo quad do Home/File Browser
+                // (activePanel == 1), entao todo toque nesse painel (incluindo
+                // as telas de Rede) roteia por "dispatchVRTouch", igual antes.
+                const char* methodName = (activePanel == 1) ? "dispatchVRTouch" : "dispatchControlsVRTouch";
                 jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/vrplayer/VRActivity;FFI)V");
                 if (touchMethod) {
                     env->CallStaticVoidMethod(vrActivityClass, touchMethod, java->ActivityObject, lastUvX, lastUvY, action);
@@ -676,13 +607,20 @@ public:
         prevB = currB;
         prevY = currY;
 
-        // T6.4/T7.3: botao Menu (esquerdo) alterna a visibilidade do painel de
-        // rede (SMB + URL), mesmo padrao instantaneo do B/Y para o file browser.
+        // Fase 2: o botao Menu (esquerdo) antes abria/fechava o quad de rede
+        // dedicado (removido — Rede agora mora dentro do quad do Home). Decisao
+        // de produto (ver relatorio da Fase 2): em vez de deixar Menu sem
+        // binding, ele passa a fazer a MESMA coisa que B/Y (alterna a
+        // visibilidade do quad unico do Home). E redundante com B/Y, mas
+        // inofensivo — e evita "quebrar" um botao que usuarios podem ja ter o
+        // habito de apertar para abrir alguma UI. Se isso se provar confuso em
+        // uso real (headset fisico), a alternativa e nao dar bind nenhum a
+        // Menu; ver TODO acima do dono do produto revisar.
         static bool prevMenu = false;
         bool currMenu = (in.AllButtons & OVRFW::ovrApplFrameIn::kButtonMenu) != 0;
         if (currMenu && !prevMenu) {
-            bool isCurrentlyVisible = m_networkIdleTime < kUiAutoHideSeconds;
-            m_networkIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
+            bool isCurrentlyVisible = m_uiIdleTime < kUiAutoHideSeconds;
+            m_uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
         }
         prevMenu = currMenu;
 
@@ -899,44 +837,6 @@ public:
             }
         }
 
-        // --- PROCESS NETWORK UI TEXTURE UPDATE (T6.4/T7.3) ---
-        if (m_networkImageReader) {
-            AImage* image = nullptr;
-            if (AImageReader_acquireLatestImage(m_networkImageReader, &image) == AMEDIA_OK && image) {
-                AHardwareBuffer* buffer = nullptr;
-                AImage_getHardwareBuffer(image, &buffer);
-                if (buffer) {
-                    static PFNEGLGETNATIVECLIENTBUFFERANDROIDPROC eglGetNativeClientBufferANDROID = (PFNEGLGETNATIVECLIENTBUFFERANDROIDPROC)eglGetProcAddress("eglGetNativeClientBufferANDROID");
-                    if (m_networkEglImage != EGL_NO_IMAGE_KHR) {
-                        static PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
-                        if (eglDestroyImageKHR) eglDestroyImageKHR(eglGetCurrentDisplay(), m_networkEglImage);
-                        m_networkEglImage = EGL_NO_IMAGE_KHR;
-                    }
-                    EGLClientBuffer clientBuffer = eglGetNativeClientBufferANDROID(buffer);
-                    EGLint eglImageAttributes[] = { EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE };
-                    static PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
-                    if (eglCreateImageKHR) {
-                        m_networkEglImage = eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, clientBuffer, eglImageAttributes);
-                        if (m_networkEglImage != EGL_NO_IMAGE_KHR) {
-                            if (m_networkTextureId == 0) {
-                                glGenTextures(1, &m_networkTextureId);
-                                glBindTexture(GL_TEXTURE_EXTERNAL_OES, m_networkTextureId);
-                                glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-                                glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-                                glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-                                glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-                            }
-                            glBindTexture(GL_TEXTURE_EXTERNAL_OES, m_networkTextureId);
-                            static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
-                            if (glEGLImageTargetTexture2DOES) glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES, m_networkEglImage);
-                            glBindTexture(GL_TEXTURE_EXTERNAL_OES, 0);
-                        }
-                    }
-                }
-                AImage_delete(image);
-            }
-        }
-
         // Posicao/escala ajustaveis pelo usuario via thumbstick (T3.6)
         OVR::Matrix4f transform = OVR::Matrix4f::Translation(m_screenPosition) *
             OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
@@ -958,15 +858,6 @@ public:
             m_controlsSurfaceDef.graphicsCommand.Textures[0].target = GL_TEXTURE_EXTERNAL_OES;
             m_controlsSurfaceDef.graphicsCommand.BindUniformTextures();
             out.Surfaces.push_back(OVRFW::ovrDrawSurface(m_controlsTransform, &m_controlsSurfaceDef));
-        }
-
-        // Painel de rede (T6.4/T7.3): billboard + fade por auto-hide, espelhado
-        // do File Browser (ver Update()).
-        if (m_networkTextureId != 0 && m_networkAlpha > 0.01f) {
-            m_networkSurfaceDef.graphicsCommand.Textures[0].texture = m_networkTextureId;
-            m_networkSurfaceDef.graphicsCommand.Textures[0].target = GL_TEXTURE_EXTERNAL_OES;
-            m_networkSurfaceDef.graphicsCommand.BindUniformTextures();
-            out.Surfaces.push_back(OVRFW::ovrDrawSurface(m_networkTransform, &m_networkSurfaceDef));
         }
 
         m_beamRenderer.Frame(in, out.FrameMatrices.CenterView);
@@ -1006,13 +897,10 @@ private:
     float m_videoAlpha = 1.0f;
     float m_uiAlpha = 1.0f;
     float m_controlsAlpha = 1.0f;
-    float m_networkAlpha = 1.0f;
     float m_uiIdleTime = 0.0f;
     float m_controlsIdleTime = 0.0f;
-    float m_networkIdleTime = 0.0f;
     OVR::Matrix4f m_uiTransform;
     OVR::Matrix4f m_controlsTransform;
-    OVR::Matrix4f m_networkTransform;
 
     // Raycast: smoothing de direcao + haptics de hover/click (T4.1)
     OVR::Vector3f m_smoothedRayDir = OVR::Vector3f(0.0f, 0.0f, -1.0f);
@@ -1043,12 +931,6 @@ private:
     GLuint m_controlsTextureId;
     EGLImageKHR m_controlsEglImage;
     OVRFW::ovrSurfaceDef m_controlsSurfaceDef;
-
-    // Network UI System (T6.4/T7.3): SMB server manager + URL input
-    AImageReader* m_networkImageReader;
-    GLuint m_networkTextureId;
-    EGLImageKHR m_networkEglImage;
-    OVRFW::ovrSurfaceDef m_networkSurfaceDef;
 
     OVRFW::ovrBeamRenderer m_beamRenderer;
     OVRFW::ovrBeamRenderer::handle_t m_beamHandle{OVRFW::ovrBeamRenderer::INVALID_BEAM_HANDLE};

@@ -23,10 +23,6 @@ class VRActivity : NativeActivity() {
     private var controlsVirtualDisplay: android.hardware.display.VirtualDisplay? = null
     private var controlsPresentation: VRControlsPresentation? = null
 
-    // T6.4/T7.3: painel de rede (servidores SMB + input de URL)
-    private var networkVirtualDisplay: android.hardware.display.VirtualDisplay? = null
-    private var networkPresentation: NetworkPresentation? = null
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
@@ -179,62 +175,6 @@ class VRActivity : NativeActivity() {
         fun updateMediaProgress(activity: VRActivity, currentSec: Float, totalSec: Float) {
             activity.runOnUiThread {
                 activity.controlsPresentation?.updateProgress(currentSec, totalSec)
-            }
-        }
-
-        // --- T6.4/T7.3: painel de rede (mesmo padrao VirtualDisplay+Presentation
-        // dos paineis acima) ---
-        @JvmStatic
-        fun setupNetworkVirtualDisplay(activity: VRActivity, surface: Surface, width: Int, height: Int) {
-            activity.runOnUiThread {
-                val displayManager = activity.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-                activity.networkVirtualDisplay = displayManager.createVirtualDisplay(
-                    "VR_Network_Display",
-                    width, height, 160,
-                    surface,
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
-                )
-
-                activity.networkVirtualDisplay?.display?.let { display ->
-                    activity.networkPresentation = NetworkPresentation(activity, display, activity)
-                    activity.networkPresentation?.show()
-                }
-            }
-        }
-
-        private var lastNetworkDownTime: Long = 0
-
-        @JvmStatic
-        fun dispatchNetworkVRTouch(activity: VRActivity, x: Float, y: Float, action: Int) {
-            activity.runOnUiThread {
-                val now = android.os.SystemClock.uptimeMillis()
-                if (action == android.view.MotionEvent.ACTION_DOWN) {
-                    lastNetworkDownTime = now
-                }
-
-                val downTime = if (lastNetworkDownTime == 0L) now else lastNetworkDownTime
-                val event = android.view.MotionEvent.obtain(
-                    downTime,
-                    now,
-                    action,
-                    x * 1024f,
-                    y * 1024f,
-                    0
-                )
-
-                event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
-
-                if (action == 7) { // ACTION_HOVER_MOVE
-                    activity.networkPresentation?.dispatchGenericMotionEvent(event)
-                } else {
-                    activity.networkPresentation?.dispatchTouchEvent(event)
-                }
-
-                event.recycle()
-
-                if (action == android.view.MotionEvent.ACTION_UP) {
-                    lastNetworkDownTime = 0L
-                }
             }
         }
     }

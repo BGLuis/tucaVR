@@ -3,12 +3,18 @@ package com.vrplayer.navigation
 import com.vrplayer.network.SmbServer
 
 /**
- * Fase 1 do redesign "Void" (ver docs/phases): consolida o que hoje sao 3
- * paineis 3D desconectados (VRPresentation / NetworkPresentation /
+ * Fase 1+2 do redesign "Void" (ver docs/phases): consolida o que originalmente
+ * eram 3 paineis 3D desconectados (VRPresentation / NetworkPresentation /
  * VRControlsPresentation, cada um seu proprio quad OES em
- * `native/src/vr_player_app.cpp`) num unico fluxo de navegacao logico:
+ * `native/src/vr_player_app.cpp`) num unico fluxo de navegacao logico, todo
+ * hospedado no mesmo quad (`VRPresentation`):
  *
  *   Home -> (LocalFiles | NetworkHome -> NetworkFiles) -> Player
+ *
+ * O painel de Controles (`VRControlsPresentation`) continua sendo seu proprio
+ * quad — ele e contextual (aparece ao apontar pra tela de video durante a
+ * reproducao) e nao fazia parte da duplicacao Local/Rede que motivou esta
+ * consolidacao.
  *
  * Este arquivo e [AppNavigator] sao Kotlin puro (sem `Context`/`View`/nenhum
  * import `android.*`) de proposito: precisam ser exercitaveis com JUnit puro
@@ -16,11 +22,12 @@ import com.vrplayer.network.SmbServer
  * "de fora" e [SmbServer], que e um data class puro (sem framework Android
  * em si — so a classe que o persiste, `SmbCredentialStore`, usa Android).
  *
- * Fase 2 (fora de escopo aqui, exige teste em headset fisico) vai consolidar
- * os 3 quads nativos em 1 e remapear os botoes fisicos B/Y para chamar
- * `AppNavigator.back()`/`backToHome()` diretamente. Por enquanto, quem
- * conduz esta maquina de estados e a UI Void dentro de `VRPresentation`
- * (botao "Voltar" apontado/clicado, nao o botao fisico).
+ * O botao fisico Menu (esquerdo), que antes abria/fechava o quad de rede
+ * dedicado, agora tambem alterna a visibilidade deste quad unico (mesmo
+ * efeito que B/Y) — ver decisao documentada em `vr_player_app.cpp`
+ * (`Update()`, tratamento de `kButtonMenu`). Quem efetivamente conduz esta
+ * maquina de estados (Home/Rede/Arquivos/Player) e a UI Void dentro de
+ * `VRPresentation` (botao "Voltar" apontado/clicado), nao os botoes fisicos.
  */
 sealed class Destination {
 
@@ -31,10 +38,10 @@ sealed class Destination {
     data class LocalFiles(val path: String) : Destination()
 
     /**
-     * Landing da secao "Rede" (abas URL / SMB). Nesta fase a UI real de
-     * rede continua vivendo em `NetworkPresentation` (seu proprio quad,
-     * aberto pelo botao Menu) — ver TODO em `VRPresentation.renderNetworkHome()`
-     * para a justificativa de nao duplicar aquela logica aqui ainda.
+     * Landing da secao "Rede" (abas URL / SMB), renderizada dentro do mesmo
+     * quad do Home (ver `VRPresentation.renderNetworkHome()`). Reaproveita a
+     * logica de estado que antes vivia em `NetworkPresentation` (removida):
+     * `SmbCredentialStore`, `UrlHistoryStore`, probe HTTP, etc.
      */
     object NetworkHome : Destination()
 
