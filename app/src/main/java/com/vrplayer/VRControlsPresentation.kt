@@ -31,8 +31,33 @@ class VRControlsPresentation(
     private lateinit var timeLabel: TextView
     private lateinit var volumeBar: SeekBar
     private lateinit var speedBar: SeekBar
+    private lateinit var btn3DMode: VoidButton
     private var isDragging = false
     private var totalDuration = 0f
+
+    // T1.4/T2.4/T2.5: indices DEVEM casar com ScreenMode em
+    // native/src/vr_player_app.cpp e a codificacao numerica em
+    // rust/bridge/src/lib.rs (cycle_3d_mode) — 10 modos agora que a
+    // separacao real de olho (SBS/OU flat e esferico) esta implementada.
+    private val modeLabelResIds = intArrayOf(
+        R.string.player_mode_2d,
+        R.string.player_mode_sbs,
+        R.string.player_mode_sbs_half,
+        R.string.player_mode_ou,
+        R.string.player_mode_ou_half,
+        R.string.player_mode_360,
+        R.string.player_mode_180,
+        R.string.player_mode_360_sbs,
+        R.string.player_mode_360_ou,
+        R.string.player_mode_180_sbs,
+    )
+
+    private fun modeLabel(mode: Int): String {
+        val resId = modeLabelResIds.getOrElse(mode) { R.string.player_mode_2d }
+        return context.getString(R.string.player_btn_3d_mode_format, context.getString(resId))
+    }
+
+    private var lastKnownMode = 0
 
     fun updateProgress(currentSec: Float, totalSec: Float) {
         totalDuration = totalSec
@@ -42,6 +67,18 @@ class VRControlsPresentation(
         timeLabel.text = context.getString(
             R.string.player_controls_time_format, formatTime(currentSec), formatTime(totalSec)
         )
+
+        // T9: cada novo playback (playFile/playSmb) reseta o modo 3D no lado
+        // Rust (ver reset_3d_mode em rust/bridge/src/lib.rs) pra nao vazar o
+        // modo do video anterior — resincroniza o texto do botao aqui, que
+        // ja e chamado ~10x/s durante playback (ver frameCount%6 em
+        // vr_player_app.cpp), em vez de adicionar um callback JNI dedicado
+        // so pra isto.
+        val mode = activity.nativeGet3DMode()
+        if (mode != lastKnownMode) {
+            lastKnownMode = mode
+            btn3DMode.text = modeLabel(mode)
+        }
     }
 
     private fun formatTime(seconds: Float): String {
@@ -220,6 +257,38 @@ class VRControlsPresentation(
         row2.addView(btnAudioTrack)
 
         root.addView(row2)
+
+        // --- Linha 3: modo de exibicao 3D (T1.4) + swap eyes (T1.5) ---
+        // So relevante pra conteudo 3D/360/180; fica sempre visivel (nao ha
+        // sinal ainda de "este arquivo e realmente 3D" chegando ate aqui —
+        // auto-deteccao, T3.4, ainda nao esta ligada a UI) em vez de
+        // esconder condicionalmente e arriscar o usuario nao achar o botao
+        // pra um arquivo que a deteccao errou.
+        val row3 = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, VoidTheme.dpToPx(context, 16f), 0, 0)
+        }
+
+        btn3DMode = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+            text = modeLabel(0)
+            textSize = 16f
+            setOnClickListener {
+                text = modeLabel(activity.nativeCycle3DMode())
+            }
+        }
+        row3.addView(btn3DMode, marginParams)
+
+        val btnSwapEyes = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+            text = context.getString(R.string.player_btn_swap_eyes)
+            textSize = 16f
+            setOnClickListener {
+                activity.nativeToggleSwapEyes()
+            }
+        }
+        row3.addView(btnSwapEyes, marginParams)
+
+        root.addView(row3)
 
         setContentView(root)
     }

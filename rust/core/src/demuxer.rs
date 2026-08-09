@@ -24,6 +24,12 @@ impl Demuxer {
     /// `protocols::http` para os detalhes de como foi confirmado):
     /// - `smb://...`  -> custom I/O via `protocols::smb::SmbFileSource` (o
     ///   libavformat empacotado aqui nao tem `libsmbclient`).
+    /// - `ftp://...` (formato interno, ver `protocols::ftp::uri`) -> custom
+    ///   I/O via `protocols::ftp::FtpFileSource` (T6.3) — mesmo motivo do
+    ///   SMB: nem o libavformat empacotado tem suporte nativo a FTP com o
+    ///   tipo de seek que o demuxer precisa aqui.
+    /// - `sftp://...` (formato interno, ver `protocols::sftp::uri`) -> custom
+    ///   I/O via `protocols::sftp::SftpFileSource` (T6.3), mesmo motivo.
     /// - `https://...` -> custom I/O via `protocols::http::HttpsRangeSource`
     ///   (o libavformat empacotado aqui foi compilado SEM nenhum backend TLS
     ///   — `https://` nativo simplesmente nao funciona neste `.so`).
@@ -37,6 +43,16 @@ impl Demuxer {
 
         let ictx = if let Some(target) = protocols::smb::SmbTarget::from_internal(path) {
             let source = protocols::smb::SmbFileSource::open(&target)?;
+            let reader = PrefetchReader::new(source);
+            let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
+            ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?
+        } else if let Some(target) = protocols::ftp::FtpTarget::from_internal(path) {
+            let source = protocols::ftp::FtpFileSource::open(&target)?;
+            let reader = PrefetchReader::new(source);
+            let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
+            ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?
+        } else if let Some(target) = protocols::sftp::SftpTarget::from_internal(path) {
+            let source = protocols::sftp::SftpFileSource::open(&target)?;
             let reader = PrefetchReader::new(source);
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?

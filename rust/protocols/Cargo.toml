@@ -17,6 +17,21 @@ tokio = { version = "1", features = ["rt", "net", "time", "macros"] }
 # TLS nativa cross-compilada para Android.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 log = "0.4"
+# Cliente FTP (T6.1) — puro Rust, API bloqueante nativa (nao precisa de
+# tokio::block_on como SMB/SFTP). Sem feature de TLS: FTP em si e sempre
+# texto claro (ver aviso do doc, secao 6); FTPS fica fora do escopo do MVP.
+suppaftp = { version = "6", default-features = false }
+# Cliente SFTP (T6.2) — russh + russh-sftp sao puro Rust (nenhuma dependencia
+# em libssh2/openssl nativos), evitando o cross-compile C descrito como
+# armadilha no doc (secao 6, aviso "libssh2 cross-compile"). Async/tokio por
+# baixo, igual ao cliente SMB (ver smb/mod.rs) — ponte pro FFmpeg custom I/O
+# sincrono via block_on por chamada, mesmo padrao.
+russh = "0.45"
+russh-sftp = "2"
+# Exigido para implementar `russh::client::Handler` (trait `async fn` via
+# `#[async_trait]`) — russh usa a mesma crate internamente, mas o atributo
+# precisa estar disponivel para quem implementa o trait tambem.
+async-trait = "0.1"
 
 [dev-dependencies]
 httpmock = "0.8.3"

@@ -1,9 +1,10 @@
 #!/bin/bash
-# Orquestra os testes de integracao de rede (T6/T7, docs/phases/PHASE-0.1-MVP.md):
-# sobe servidores reais de SMB2/3, HTTP e HTTPS via Docker (docker/network-tests/),
-# roda os testes Rust marcados #[ignore] em rust/protocols/tests/*_integration.rs
-# contra eles, e derruba tudo no final. Substitui a validacao manual que faltava
-# em T6.1/T6.3/T7.1 ("nunca testado contra um servidor real").
+# Orquestra os testes de integracao de rede (T6/T7, docs/phases/PHASE-0.1-MVP.md
+# e PHASE-0.2-3D-NETWORK.md): sobe servidores reais de SMB2/3, HTTP, HTTPS e FTP
+# via Docker (docker/network-tests/), roda os testes Rust marcados #[ignore] em
+# rust/protocols/tests/*_integration.rs contra eles, e derruba tudo no final.
+# Substitui a validacao manual que faltava em T6.1/T6.3/T7.1 ("nunca testado
+# contra um servidor real").
 #
 # Uso:
 #   ./scripts/test-network-protocols.sh            # roda tudo e derruba os containers
@@ -41,7 +42,7 @@ head -c 262144 /dev/urandom > "$FIXTURE"
 SHA256=$(sha256sum "$FIXTURE" | cut -d' ' -f1)
 echo "testfile.bin: $((262144 / 1024))KB, sha256=$SHA256"
 
-echo "== Subindo containers (smb-test, http-test, https-test) =="
+echo "== Subindo containers (smb-test, http-test, https-test, ftp-test, sftp-test) =="
 "${DC[@]}" up -d --build
 
 echo "== Aguardando HTTP (nginx) =="
@@ -89,6 +90,44 @@ fi
 # sequencia) — da uma folga curta antes de bater com o client de verdade.
 sleep 2
 
+echo "== Aguardando FTP (vsftpd) =="
+FTP_UP=0
+for _ in $(seq 1 30); do
+    if (exec 3<>/dev/tcp/127.0.0.1/12121) 2>/dev/null; then
+        exec 3>&- 3<&-
+        FTP_UP=1
+        break
+    fi
+    sleep 1
+done
+if [[ "$FTP_UP" -eq 0 ]]; then
+    echo "ftp-test nao respondeu a tempo"
+    "${DC[@]}" logs ftp-test
+    exit 1
+fi
+# Mesma folga do smb-test acima: a porta de controle (21) abre antes do
+# vsftpd terminar de processar USERS/ADDRESS/MIN_PORT/MAX_PORT.
+sleep 2
+
+echo "== Aguardando SFTP (atmoz/sftp) =="
+SFTP_UP=0
+for _ in $(seq 1 30); do
+    if (exec 3<>/dev/tcp/127.0.0.1/12222) 2>/dev/null; then
+        exec 3>&- 3<&-
+        SFTP_UP=1
+        break
+    fi
+    sleep 1
+done
+if [[ "$SFTP_UP" -eq 0 ]]; then
+    echo "sftp-test nao respondeu a tempo"
+    "${DC[@]}" logs sftp-test
+    exit 1
+fi
+# Mesma folga do smb-test/ftp-test acima: a porta abre antes do sshd
+# terminar de gerar host keys + processar create-sftp-user.
+sleep 2
+
 echo "== Rodando testes de integracao Rust =="
 export VRPLAYER_TEST_HTTP_URL="http://127.0.0.1:18080/testfile.bin"
 export VRPLAYER_TEST_HTTPS_URL="https://127.0.0.1:18443/testfile.bin"
@@ -101,6 +140,17 @@ export VRPLAYER_TEST_SMB_PASS="vrpass123"
 export VRPLAYER_TEST_SMB_SHARE_AUTH="authshare"
 export VRPLAYER_TEST_SMB_SHARE_GUEST="guestshare"
 export VRPLAYER_TEST_SMB_FILE="testfile.bin"
+export VRPLAYER_TEST_FTP_HOST="127.0.0.1"
+export VRPLAYER_TEST_FTP_PORT="12121"
+export VRPLAYER_TEST_FTP_USER="vruser"
+export VRPLAYER_TEST_FTP_PASS="vrpass123"
+export VRPLAYER_TEST_FTP_FILE="testfile.bin"
+export VRPLAYER_TEST_SFTP_HOST="127.0.0.1"
+export VRPLAYER_TEST_SFTP_PORT="12222"
+export VRPLAYER_TEST_SFTP_USER="vruser"
+export VRPLAYER_TEST_SFTP_PASS="vrpass123"
+export VRPLAYER_TEST_SFTP_FILE="testfile.bin"
+export VRPLAYER_TEST_SFTP_KEY_PATH="$COMPOSE_DIR/ssh-keys/vrplayer_test_key"
 
 set +e
 (cd "$REPO_ROOT/rust" && cargo test -p protocols --features integration-tests -- --ignored --nocapture --test-threads=1)

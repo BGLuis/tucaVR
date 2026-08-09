@@ -44,6 +44,10 @@ fun PlaybackSource.historyKey(): String = when (this) {
     is PlaybackSource.LocalFile -> "local|$path|$sizeBytes"
     is PlaybackSource.Http -> "http|$url"
     is PlaybackSource.Smb -> "smb|${server.name}|${server.share}|$path|$sizeBytes"
+    // Mesmo raciocinio do SMB acima (aviso do doc, secao 9): so `server.name`
+    // (rotulo escolhido pelo usuario), nunca host/porta (que podem mudar).
+    is PlaybackSource.Ftp -> "ftp|${server.name}|$path|$sizeBytes"
+    is PlaybackSource.Sftp -> "sftp|${server.name}|$path|$sizeBytes"
 }
 
 /** Ver [PlaybackHistory.mediaPath]. */
@@ -51,12 +55,16 @@ fun PlaybackSource.mediaPath(): String = when (this) {
     is PlaybackSource.LocalFile -> path
     is PlaybackSource.Http -> url
     is PlaybackSource.Smb -> path
+    is PlaybackSource.Ftp -> path
+    is PlaybackSource.Sftp -> path
 }
 
 fun PlaybackSource.historySourceType(): HistorySourceType = when (this) {
     is PlaybackSource.LocalFile -> HistorySourceType.LOCAL
     is PlaybackSource.Http -> HistorySourceType.HTTP
     is PlaybackSource.Smb -> HistorySourceType.SMB
+    is PlaybackSource.Ftp -> HistorySourceType.FTP
+    is PlaybackSource.Sftp -> HistorySourceType.SFTP
 }
 
 /** Titulo padrao (usado quando quem chama nao tem um titulo melhor a mao). */
@@ -64,15 +72,19 @@ fun PlaybackSource.defaultHistoryTitle(): String = when (this) {
     is PlaybackSource.LocalFile -> path.substringAfterLast('/')
     is PlaybackSource.Http -> url
     is PlaybackSource.Smb -> path.substringAfterLast('/')
+    is PlaybackSource.Ftp -> path.substringAfterLast('/')
+    is PlaybackSource.Sftp -> path.substringAfterLast('/')
 }
 
 /**
- * JSON com dados do servidor SMB para [PlaybackHistory.serverInfo] — `null`
- * para fontes que nao sao SMB. NUNCA inclui `username`/`password` (ver
- * aviso "Credenciais" na secao 6 do doc, aplicado aqui por extensao mesmo
- * nao sendo o alvo original daquele aviso): a credencial continua vivendo
- * SOMENTE em `SmbCredentialStore` (`EncryptedSharedPreferences`); `serverId`
- * e guardado para poder buscar a credencial de novo la na hora de retomar.
+ * JSON com dados do servidor SMB/FTP/SFTP para [PlaybackHistory.serverInfo]
+ * — `null` para fontes que nao vem de um servidor salvo (local/HTTP). NUNCA
+ * inclui `username`/`password`/`privateKey` (ver aviso "Credenciais" na
+ * secao 6 do doc, aplicado aqui por extensao mesmo nao sendo o alvo
+ * original daquele aviso): a credencial continua vivendo SOMENTE em
+ * `SmbCredentialStore`/`FtpCredentialStore`/`SftpCredentialStore`
+ * (`EncryptedSharedPreferences`); `serverId` e guardado para poder buscar a
+ * credencial de novo la na hora de retomar.
  */
 fun PlaybackSource.serverInfoJson(): String? = when (this) {
     is PlaybackSource.Smb -> JSONObject().apply {
@@ -82,6 +94,18 @@ fun PlaybackSource.serverInfoJson(): String? = when (this) {
         put("port", server.port)
         put("share", server.share)
         put("domain", server.domain)
+    }.toString()
+    is PlaybackSource.Ftp -> JSONObject().apply {
+        put("serverId", server.id)
+        put("name", server.name)
+        put("host", server.host)
+        put("port", server.port)
+    }.toString()
+    is PlaybackSource.Sftp -> JSONObject().apply {
+        put("serverId", server.id)
+        put("name", server.name)
+        put("host", server.host)
+        put("port", server.port)
     }.toString()
     else -> null
 }

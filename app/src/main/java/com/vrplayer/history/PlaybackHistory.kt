@@ -16,7 +16,7 @@ import androidx.room.PrimaryKey
  * casando manualmente com um branch de `PlaybackSource`, entao os dois nunca
  * podem divergir silenciosamente.
  */
-enum class HistorySourceType { LOCAL, SMB, HTTP }
+enum class HistorySourceType { LOCAL, SMB, HTTP, FTP, SFTP }
 
 /**
  * T9.1: registro de progresso de reproducao (Room). Segue o exemplo do doc
@@ -62,12 +62,13 @@ data class PlaybackHistory(
     val thumbnailPath: String?,
     val sourceType: HistorySourceType,
     /**
-     * JSON com dados do servidor SMB para poder re-navegar/reconectar
-     * (host/port/share/name/serverId) — SOMENTE para [HistorySourceType.SMB].
-     * NUNCA contem username/password: essas credenciais continuam vivendo
-     * exclusivamente em `SmbCredentialStore` (`EncryptedSharedPreferences`,
-     * ver T6.4) e sao recuperadas de novo pelo `serverId` na hora de
-     * retomar, nunca duplicadas aqui em texto plano.
+     * JSON com dados do servidor SMB/FTP para poder re-navegar/reconectar
+     * (host/port/share/name/serverId) — SOMENTE para [HistorySourceType.SMB]
+     * ou [HistorySourceType.FTP]. NUNCA contem username/password: essas
+     * credenciais continuam vivendo exclusivamente em `SmbCredentialStore`/
+     * `FtpCredentialStore` (`EncryptedSharedPreferences`, ver T6.4) e sao
+     * recuperadas de novo pelo `serverId` na hora de retomar, nunca
+     * duplicadas aqui em texto plano.
      */
     val serverInfo: String?
 )

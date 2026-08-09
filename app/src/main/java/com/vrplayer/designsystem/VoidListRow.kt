@@ -25,9 +25,13 @@ class VoidListRow(context: Context) : LinearLayout(context) {
     init {
         orientation = HORIZONTAL
         gravity = Gravity.CENTER_VERTICAL
+        // Alvo de toque generoso (mesma razao do VoidButton — VR precisa de
+        // hitbox bem maior que touch mobile por causa do tremor natural ao
+        // apontar a distancia; feedback de usuario em validacao real).
         val padH = VoidTheme.dpToPx(context, 20f)
-        val padV = VoidTheme.dpToPx(context, 16f)
+        val padV = VoidTheme.dpToPx(context, 22f)
         setPadding(padH, padV, padH, padV)
+        minimumHeight = VoidTheme.dpToPx(context, 76f)
         background = GradientDrawable().apply {
             setColor(VoidTheme.colorSurface)
             cornerRadius = VoidTheme.dp(context, 10f)

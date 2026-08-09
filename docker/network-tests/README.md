@@ -15,6 +15,8 @@ gera as fixtures, sobe os containers, roda os testes Rust e derruba tudo.
 | `smb-test` | SMB2/3 (`dperson/samba`) | 14450 (mapeada de 445) | `authshare`: user `vruser` / senha `vrpass123`. `guestshare`: sem autenticação. |
 | `http-test` | HTTP puro (nginx) | 18080 | — |
 | `https-test` | HTTPS com TLS auto-assinado (nginx) | 18443 | Certificado gerado em runtime, ver abaixo |
+| `ftp-test` | FTP (`delfer/alpine-ftp-server`, vsftpd) | 12121 (mapeada de 21) + 12100-12110 (passivo) | user `vruser` / senha `vrpass123`, home `/ftp/vruser` |
+| `sftp-test` | SFTP (`atmoz/sftp`, OpenSSH) | 12222 (mapeada de 22) | user `vruser` / senha `vrpass123` **ou** chave `ssh-keys/vrplayer_test_key` (as duas funcionam simultaneamente), home `/home/vruser`, fixture em `fixtures/` dentro do home |
 
 Todos servem o conteúdo de `fixtures/` (gerado pelo script de setup — um arquivo
 binário aleatório, `testfile.bin`, com o `sha256` salvo ao lado).
@@ -33,9 +35,63 @@ ver `rust/protocols/src/http.rs`).
 ## Validado manualmente nesta sessão
 
 Antes de escrever os testes automatizados, cada serviço foi testado manualmente
-(`smbclient`, `curl --cacert`) para confirmar que a sintaxe do `dperson/samba` e a
-config de TLS/range requests do nginx estavam corretas — os três bateram sha256
-idêntico ao arquivo original via leitura completa e via range reads parciais.
+(`smbclient`, `curl --cacert`, e para o FTP um cliente Rust ad-hoc via `suppaftp`)
+para confirmar que a sintaxe do `dperson/samba`, a config de TLS/range requests do
+nginx e o modo passivo do `delfer/alpine-ftp-server` estavam corretos — os quatro
+bateram sha256 idêntico ao arquivo original via leitura completa (FTP também via
+range reads parciais simulando os seeks de cue do MKV, ver
+`rust/protocols/tests/ftp_integration.rs`).
+
+Para o `sftp-test`: validado manualmente com os clientes `ssh`/`sftp` reais do
+sistema — `ssh -i ssh-keys/vrplayer_test_key -p 12222 vruser@127.0.0.1 -s sftp`
+(autenticação por chave, sem senha) e uma sessão `sftp` interativa listando
+`fixtures/` e lendo `testfile.bin` — antes de rodar a suite Rust
+(`rust/protocols/tests/sftp_integration.rs`, 6 testes incluindo dois dedicados a
+autenticação por chave), que também bateu sha256 idêntico via leitura completa,
+blocos pequenos forçando múltiplos seeks reais no handle SFTP, e salto para trás
+depois de leitura sequencial.
+
+## Gotcha: modo passivo do FTP dentro do Docker
+
+Como o doc (`PHASE-0.2-3D-NETWORK.md`, seção 6) avisa, modo ativo nunca funciona
+atrás de NAT — mas modo passivo *dentro do Docker* tem sua própria armadilha: o
+servidor FTP, ao responder a um `PASV`, anuncia o endereço IP em que o cliente deve
+abrir a conexão de dados. Por padrão o `vsftpd` anunciaria o IP interno do container
+(algo como `172.17.0.x`), que o cliente rodando no host não alcança — a conexão de
+dados trava/expira mesmo com a porta de controle funcionando perfeitamente.
+Resolvido fixando `ADDRESS=127.0.0.1` nas envs do `ftp-test`: como os testes deste
+projeto *sempre* rodam no mesmo host que o Docker (nunca de outra máquina),
+anunciar `127.0.0.1` funciona — o `docker-proxy` do Docker encaminha as portas
+passivas mapeadas (`MIN_PORT`/`MAX_PORT` = 12100-12110) de volta para o mesmo
+`127.0.0.1` que o cliente já usa para a porta de controle. Se algum dia isto
+precisar rodar contra Docker remoto (CI em outra máquina, por exemplo), `ADDRESS`
+teria que virar o IP realmente alcançável pelo cliente, não mais `127.0.0.1`.
+
+## Gotcha: chroot e chave pública do `atmoz/sftp`
+
+Duas armadilhas de permissão específicas dessa imagem (OpenSSH real, que é
+bem mais rígido que `vsftpd`/`smbd` sobre isso):
+
+1. **Chroot exige owner root no home.** OpenSSH recusa `ChrootDirectory` (o
+   `atmoz/sftp` usa `%h`, i.e. `/home/vruser`) se esse diretório — ou
+   qualquer um dos seus pais — não for dono `root:root` e não-gravável por
+   grupo/outros ("bad ownership or modes for chroot directory", conexão cai
+   silenciosamente do lado do cliente). O entrypoint da imagem já faz
+   `chown root:root`/`chmod 755` em `/home/vruser` a cada subida, então a
+   fixture **não pode** ser montada por cima do home em si — só um
+   subdiretório dentro dele. Por isso `docker-compose.yml` monta
+   `./fixtures:/home/vruser/fixtures:ro` (não `:/home/vruser:ro`), e os
+   testes Rust listam/abrem arquivos dentro de `fixtures/...`, não na raiz —
+   diferente de SMB/FTP, onde a fixture *é* a raiz.
+2. **Convenção de chave pública:** `atmoz/sftp` não lê `authorized_keys`
+   diretamente de um mount — ele concatena qualquer arquivo dentro de
+   `~usuario/.ssh/keys/` num `authorized_keys` novo a cada subida (script
+   `create-sftp-user` da própria imagem), com o `chown`/`chmod 600`
+   corretos automaticamente. Por isso o mount é
+   `./ssh-keys/vrplayer_test_key.pub:/home/vruser/.ssh/keys/vrplayer_test_key.pub:ro`
+   (o nome do arquivo dentro de `keys/` não importa). A chave de teste
+   (`ssh-keys/vrplayer_test_key{,.pub}`, ed25519, sem senha) é descartável,
+   gerada só para este ambiente — nunca reaproveite uma chave real aqui.
 
 ## Troubleshooting
 

@@ -29,6 +29,7 @@ import com.vrplayer.filebrowser.MediaEntry
 import com.vrplayer.filebrowser.MediaType
 import com.vrplayer.filebrowser.SortBy
 import com.vrplayer.filebrowser.ThumbnailGenerator
+import com.vrplayer.filebrowser.mediaTypeForExtension
 import com.vrplayer.filebrowser.sortMediaEntries
 import com.vrplayer.history.HistorySourceType
 import com.vrplayer.history.PlaybackHistory
@@ -38,6 +39,10 @@ import com.vrplayer.history.watchedPercent
 import com.vrplayer.navigation.AppNavigator
 import com.vrplayer.navigation.Destination
 import com.vrplayer.navigation.PlaybackSource
+import com.vrplayer.network.FtpCredentialStore
+import com.vrplayer.network.FtpServer
+import com.vrplayer.network.SftpCredentialStore
+import com.vrplayer.network.SftpServer
 import com.vrplayer.network.SmbCredentialStore
 import com.vrplayer.network.SmbServer
 import com.vrplayer.network.UrlHistoryStore
@@ -97,12 +102,25 @@ class VRPresentation(
     private var networkBrowsingServer: SmbServer? = null
     private var networkBrowsePath: String = ""
 
-    // Qual aba (URL=0 / SMB=1) estava ativa da ultima vez que o usuario
-    // esteve em Destination.NetworkHome — preservado entre navegacoes
-    // (Home -> Rede -> Arquivos -> Voltar -> Rede continua na mesma aba).
+    // T6.4: mesmo padrao acima, estado equivalente para navegacao de
+    // diretorio FTP (drill-down por subpasta nao empilha um novo
+    // [Destination.NetworkFtpFiles], so muda esse estado local).
+    private var networkBrowsingFtpServer: FtpServer? = null
+    private var networkBrowseFtpPath: String = ""
+
+    // Mesmo padrao acima, para navegacao de diretorio SFTP.
+    private var networkBrowsingSftpServer: SftpServer? = null
+    private var networkBrowseSftpPath: String = ""
+
+    // Qual aba (URL=0 / SMB=1 / FTP=2 / SFTP=3) estava ativa da ultima vez
+    // que o usuario esteve em Destination.NetworkHome — preservado entre
+    // navegacoes (Home -> Rede -> Arquivos -> Voltar -> Rede continua na
+    // mesma aba).
     private var networkActiveTabIndex = 0
 
     private lateinit var credentialStore: SmbCredentialStore
+    private lateinit var ftpCredentialStore: FtpCredentialStore
+    private lateinit var sftpCredentialStore: SftpCredentialStore
     private lateinit var urlHistory: UrlHistoryStore
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
@@ -110,9 +128,19 @@ class VRPresentation(
     private lateinit var screenHost: FrameLayout
     private var localFileAdapter: FileAdapter? = null
 
+    // ==================== Teclado (ver secao "TECLADO NATIVO" apos buildVoidEditText) ====================
+    // So precisa rastrear qual EditText esta com foco pra saber quando
+    // esconder o teclado real ao trocar de tela (`showScreen`) — o teclado em
+    // si (real, do sistema/Meta Quest) e inteiramente gerenciado por
+    // `activity.showNativeKeyboardFor`/`hideNativeKeyboard` (VRActivity.kt),
+    // que vive FORA desta Presentation (ver essa secao para o porque).
+    private var keyboardTarget: EditText? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         credentialStore = SmbCredentialStore(activity)
+        ftpCredentialStore = FtpCredentialStore(activity)
+        sftpCredentialStore = SftpCredentialStore(activity)
         urlHistory = UrlHistoryStore(activity)
         screenHost = FrameLayout(context).apply {
             setBackgroundColor(VoidTheme.colorBackground)
@@ -143,6 +171,8 @@ class VRPresentation(
             is Destination.LocalFiles -> renderLocalFiles()
             is Destination.NetworkHome -> renderNetworkHome()
             is Destination.NetworkFiles -> renderNetworkFiles(destination.server)
+            is Destination.NetworkFtpFiles -> renderNetworkFtpFiles(destination.server)
+            is Destination.NetworkSftpFiles -> renderNetworkSftpFiles(destination.server)
             is Destination.ContinueWatching -> renderContinueWatching()
             is Destination.Player -> renderPlayer(destination.source)
         }
@@ -175,12 +205,29 @@ class VRPresentation(
             renderNetworkFiles(currentNetworkFiles.server)
             return
         }
+        val currentNetworkFtpFiles = appNav.current as? Destination.NetworkFtpFiles
+        if (currentNetworkFtpFiles != null && networkBrowseFtpPath.isNotEmpty()) {
+            networkBrowseFtpPath = networkBrowseFtpPath.substringBeforeLast('/', missingDelimiterValue = "")
+            renderNetworkFtpFiles(currentNetworkFtpFiles.server)
+            return
+        }
+        val currentNetworkSftpFiles = appNav.current as? Destination.NetworkSftpFiles
+        if (currentNetworkSftpFiles != null && networkBrowseSftpPath.isNotEmpty()) {
+            networkBrowseSftpPath = networkBrowseSftpPath.substringBeforeLast('/', missingDelimiterValue = "")
+            renderNetworkSftpFiles(currentNetworkSftpFiles.server)
+            return
+        }
         if (appNav.back()) {
             render()
         }
     }
 
     private fun showScreen(view: View) {
+        // O EditText focado (se algum) vive dentro da tela que esta prestes a
+        // ser destruida por `removeAllViews()` — sem isto o teclado real
+        // ficaria aberto apontando pra um campo ja desanexado.
+        keyboardTarget = null
+        activity.hideNativeKeyboard()
         screenHost.removeAllViews()
         screenHost.addView(view, FrameLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
@@ -304,19 +351,25 @@ class VRPresentation(
         }
         val urlPage = buildNetworkUrlPage()
         val smbPage = buildNetworkSmbPage()
-        urlPage.visibility = if (networkActiveTabIndex == 0) View.VISIBLE else View.GONE
-        smbPage.visibility = if (networkActiveTabIndex == 0) View.GONE else View.VISIBLE
-        pageContainer.addView(urlPage)
-        pageContainer.addView(smbPage)
+        val ftpPage = buildNetworkFtpPage()
+        val sftpPage = buildNetworkSftpPage()
+        val pages = listOf(urlPage, smbPage, ftpPage, sftpPage)
+        pages.forEachIndexed { index, page ->
+            page.visibility = if (index == networkActiveTabIndex) View.VISIBLE else View.GONE
+            pageContainer.addView(page)
+        }
 
         val tabRow = VoidTabRow(
             context,
-            listOf(context.getString(R.string.network_tab_url), context.getString(R.string.network_tab_smb))
+            listOf(
+                context.getString(R.string.network_tab_url),
+                context.getString(R.string.network_tab_smb),
+                context.getString(R.string.network_tab_ftp),
+                context.getString(R.string.network_tab_sftp)
+            )
         ) { index ->
             networkActiveTabIndex = index
-            val showUrl = index == 0
-            urlPage.visibility = if (showUrl) View.VISIBLE else View.GONE
-            smbPage.visibility = if (showUrl) View.GONE else View.VISIBLE
+            pages.forEachIndexed { i, page -> page.visibility = if (i == index) View.VISIBLE else View.GONE }
         }
         tabRow.setActiveIndex(networkActiveTabIndex, notify = false)
         tabRow.layoutParams = LinearLayout.LayoutParams(
@@ -712,6 +765,13 @@ class VRPresentation(
         loadNetworkDirectory(server, entriesContainer)
     }
 
+    // So diretorios e arquivos de video aparecem na navegacao de rede — o
+    // usuario nao consegue abrir aqui nada alem de video, entao listar o
+    // resto so polui a tela (mesmo criterio do DirectoryLister local).
+    private fun isVisibleNetworkEntry(name: String, isDir: Boolean): Boolean {
+        return isDir || mediaTypeForExtension(name.substringAfterLast('.', "")) == MediaType.VIDEO
+    }
+
     private fun loadNetworkDirectory(server: SmbServer, entriesContainer: LinearLayout) {
         entriesContainer.removeAllViews()
         entriesContainer.addView(
@@ -744,7 +804,13 @@ class VRPresentation(
                 return@launch
             }
 
-            val lines = result.split("\n").filter { it.isNotBlank() }
+            val lines = result.split("\n")
+                .filter { it.isNotBlank() }
+                .filter { line ->
+                    val parts = line.split("\t")
+                    val name = parts.getOrNull(0) ?: return@filter false
+                    isVisibleNetworkEntry(name, isDir = parts.getOrNull(1) == "1")
+                }
             if (lines.isEmpty()) {
                 entriesContainer.addView(
                     VoidText.body(context, context.getString(R.string.network_files_empty), sizeSp = 16f, secondary = true)
@@ -793,6 +859,679 @@ class VRPresentation(
         }
     }
 
+    // ---------- Aba FTP: servidores salvos (T6.4) ----------
+    // Espelha buildNetworkSmbPage/buildAddServerForm/testAndSaveServer acima,
+    // com os campos que FTP realmente tem (sem share/dominio; "anonimo" no
+    // lugar de "guest").
+
+    private fun buildNetworkFtpPage(): View {
+        val page = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        }
+
+        val header = VoidText.title(context, context.getString(R.string.network_ftp_saved_servers_header), sizeSp = 20f).apply {
+            setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
+        }
+        page.addView(header)
+
+        val serversContainer = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        page.addView(serversContainer)
+
+        fun refreshServerList() {
+            serversContainer.removeAllViews()
+            val servers = ftpCredentialStore.list()
+            if (servers.isEmpty()) {
+                serversContainer.addView(
+                    VoidText.body(context, context.getString(R.string.network_ftp_empty), sizeSp = 16f, secondary = true)
+                )
+                return
+            }
+            servers.forEach { server ->
+                val row = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f))
+                }
+                val label = VoidListRow(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    bind(
+                        context.getString(R.string.network_ftp_row_label_format, server.name),
+                        meta = if (server.isAnonymous) context.getString(R.string.network_ftp_anonymous_label) else server.username,
+                        showThumbnailSlot = false
+                    )
+                    setOnClickListener {
+                        networkBrowsingFtpServer = server
+                        networkBrowseFtpPath = ""
+                        navigateTo(Destination.NetworkFtpFiles(server, ""))
+                    }
+                }
+                val btnRemove = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                    text = "✕"
+                    textSize = 16f
+                    minHeight = 0
+                    val pad = VoidTheme.dpToPx(context, 12f)
+                    setPadding(pad, pad, pad, pad)
+                    setOnClickListener {
+                        ftpCredentialStore.remove(server.id)
+                        refreshServerList()
+                    }
+                }
+                row.addView(label)
+                row.addView(btnRemove, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { marginStart = VoidTheme.dpToPx(context, 8f) })
+                serversContainer.addView(row)
+            }
+        }
+
+        val addForm = buildAddFtpServerForm { refreshServerList() }
+        addForm.visibility = View.GONE
+
+        val btnAddServer = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+            text = context.getString(R.string.network_ftp_btn_add_server)
+            textSize = 18f
+            setOnClickListener { addForm.visibility = if (addForm.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
+        }
+        page.addView(btnAddServer, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = VoidTheme.dpToPx(context, 8f) })
+
+        page.addView(addForm)
+
+        refreshServerList()
+        return page
+    }
+
+    private fun buildAddFtpServerForm(onSaved: () -> Unit): LinearLayout {
+        val form = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(VoidTheme.colorSurface)
+            val pad = VoidTheme.dpToPx(context, 16f)
+            setPadding(pad, pad, pad, pad)
+        }
+
+        fun addLabeled(text: String, field: EditText) {
+            form.addView(VoidText.mono(context, text, sizeSp = 13f).apply {
+                setPadding(0, VoidTheme.dpToPx(context, 8f), 0, 0)
+            })
+            form.addView(field)
+        }
+
+        val formHost = buildVoidEditText("192.168.1.10")
+        addLabeled(context.getString(R.string.network_ftp_form_host_label), formHost)
+
+        val formPort = buildVoidEditText("21").apply {
+            setText("21")
+            inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        addLabeled(context.getString(R.string.network_ftp_form_port_label), formPort)
+
+        val formAnonymous = CheckBox(context).apply {
+            text = context.getString(R.string.network_ftp_form_anonymous_checkbox)
+            textSize = 16f
+            setTextColor(VoidTheme.colorText)
+        }
+        form.addView(formAnonymous)
+
+        val formUser = buildVoidEditText(context.getString(R.string.network_ftp_form_user_hint))
+        addLabeled(context.getString(R.string.network_ftp_form_user_label), formUser)
+
+        val formPass = buildVoidEditText(context.getString(R.string.network_ftp_form_pass_hint)).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        addLabeled(context.getString(R.string.network_ftp_form_pass_label), formPass)
+
+        formAnonymous.setOnCheckedChangeListener { _, checked ->
+            formUser.isEnabled = !checked
+            formPass.isEnabled = !checked
+            if (checked) {
+                formUser.setText("")
+                formPass.setText("")
+            }
+        }
+
+        val formStatus = VoidText.body(context, "", sizeSp = 14f, secondary = true).apply {
+            setPadding(0, VoidTheme.dpToPx(context, 12f), 0, VoidTheme.dpToPx(context, 8f))
+        }
+        form.addView(formStatus)
+
+        val btnTestSave = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+            text = context.getString(R.string.network_ftp_btn_test_save)
+            textSize = 18f
+            setOnClickListener {
+                testAndSaveFtpServer(
+                    host = formHost.text.toString().trim(),
+                    port = formPort.text.toString().toIntOrNull() ?: 21,
+                    anonymous = formAnonymous.isChecked,
+                    username = formUser.text.toString(),
+                    password = formPass.text.toString(),
+                    statusView = formStatus,
+                    onSaved = {
+                        onSaved()
+                        form.visibility = View.GONE
+                    }
+                )
+            }
+        }
+        form.addView(btnTestSave)
+
+        return form
+    }
+
+    /**
+     * Conecta de verdade (via `ftp_list_directory`, T6.1) antes de salvar —
+     * mesmo raciocinio de `testAndSaveServer` (SMB): so persiste a
+     * credencial se autenticacao/listagem funcionarem.
+     */
+    private fun testAndSaveFtpServer(
+        host: String,
+        port: Int,
+        anonymous: Boolean,
+        username: String,
+        password: String,
+        statusView: android.widget.TextView,
+        onSaved: () -> Unit
+    ) {
+        val effectiveUsername = if (anonymous) "" else username
+        val effectivePassword = if (anonymous) "" else password
+
+        if (host.isEmpty()) {
+            statusView.text = context.getString(R.string.network_ftp_form_status_host_required)
+            return
+        }
+
+        statusView.text = context.getString(R.string.network_ftp_form_status_connecting)
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                activity.nativeFtpListDirectory(host, port, effectiveUsername, effectivePassword, "")
+            }
+            if (result.startsWith("ERROR:")) {
+                statusView.text = context.getString(
+                    R.string.network_ftp_form_status_error_format, result.removePrefix("ERROR:")
+                )
+                return@launch
+            }
+
+            statusView.text = context.getString(R.string.network_ftp_form_status_connected)
+
+            val server = FtpServer(
+                id = ftpCredentialStore.newId(),
+                name = host,
+                host = host,
+                port = port,
+                username = effectiveUsername,
+                password = effectivePassword
+            )
+            ftpCredentialStore.save(server)
+            onSaved()
+        }
+    }
+
+    // ==================== REDE: NAVEGACAO DE DIRETORIO FTP ====================
+
+    private fun renderNetworkFtpFiles(server: FtpServer) {
+        networkBrowsingFtpServer = server
+        val root = VoidPanelChrome.newRoot(context)
+        root.addView(
+            VoidPanelChrome.buildHeader(
+                context,
+                title = server.name,
+                subtitle = "/$networkBrowseFtpPath",
+                onBack = { handleBack() }
+            )
+        )
+
+        val entriesContainer = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        val scroller = ScrollView(context).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            addView(entriesContainer, ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
+        root.addView(scroller)
+
+        showScreen(root)
+        loadNetworkFtpDirectory(server, entriesContainer)
+    }
+
+    private fun loadNetworkFtpDirectory(server: FtpServer, entriesContainer: LinearLayout) {
+        entriesContainer.removeAllViews()
+        entriesContainer.addView(
+            VoidText.body(context, context.getString(R.string.network_files_loading), sizeSp = 16f, secondary = true)
+        )
+
+        val requestedPath = networkBrowseFtpPath
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                activity.nativeFtpListDirectory(server.host, server.port, server.username, server.password, requestedPath)
+            }
+            if (networkBrowsingFtpServer != server || networkBrowseFtpPath != requestedPath) {
+                return@launch
+            }
+            entriesContainer.removeAllViews()
+
+            if (result.startsWith("ERROR:")) {
+                entriesContainer.addView(
+                    VoidText.body(
+                        context,
+                        context.getString(R.string.common_warning_format, result.removePrefix("ERROR:")),
+                        sizeSp = 16f
+                    )
+                )
+                return@launch
+            }
+
+            val lines = result.split("\n")
+                .filter { it.isNotBlank() }
+                .filter { line ->
+                    val parts = line.split("\t")
+                    val name = parts.getOrNull(0) ?: return@filter false
+                    isVisibleNetworkEntry(name, isDir = parts.getOrNull(1) == "1")
+                }
+            if (lines.isEmpty()) {
+                entriesContainer.addView(
+                    VoidText.body(context, context.getString(R.string.network_files_empty), sizeSp = 16f, secondary = true)
+                )
+                return@launch
+            }
+
+            lines.forEach { line ->
+                val parts = line.split("\t")
+                val name = parts.getOrElse(0) { return@forEach }
+                val isDir = parts.getOrNull(1) == "1"
+                val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
+                val row = VoidListRow(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).also { it.bottomMargin = VoidTheme.dpToPx(context, 8f) }
+                    bind(
+                        if (isDir) {
+                            context.getString(R.string.common_row_dir_format, name)
+                        } else {
+                            context.getString(R.string.common_row_video_format, name)
+                        },
+                        showThumbnailSlot = false
+                    )
+                    setOnClickListener {
+                        val childPath = if (requestedPath.isEmpty()) name else "$requestedPath/$name"
+                        if (isDir) {
+                            networkBrowseFtpPath = childPath
+                            renderNetworkFtpFiles(server)
+                        } else {
+                            val source = PlaybackSource.Ftp(server, childPath, sizeBytes)
+                            promptResumeOrPlay(source) { resumeAtMs ->
+                                activity.playFtp(server, childPath, sizeBytes, resumeAtMs)
+                                navigateTo(Destination.Player(source))
+                            }
+                        }
+                    }
+                }
+                entriesContainer.addView(row)
+            }
+        }
+    }
+
+    // ---------- Aba SFTP: servidores salvos (T6.4/T6.2) ----------
+    // Espelha a aba FTP acima, com autenticacao por chave privada (T6.2) no
+    // lugar de "anonimo" (SFTP nao tem essa convencao — ver validate() em
+    // rust/protocols/src/sftp/uri.rs).
+
+    private fun buildNetworkSftpPage(): View {
+        val page = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        }
+
+        val header = VoidText.title(context, context.getString(R.string.network_sftp_saved_servers_header), sizeSp = 20f).apply {
+            setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
+        }
+        page.addView(header)
+
+        val serversContainer = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        page.addView(serversContainer)
+
+        fun refreshServerList() {
+            serversContainer.removeAllViews()
+            val servers = sftpCredentialStore.list()
+            if (servers.isEmpty()) {
+                serversContainer.addView(
+                    VoidText.body(context, context.getString(R.string.network_sftp_empty), sizeSp = 16f, secondary = true)
+                )
+                return
+            }
+            servers.forEach { server ->
+                val row = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f))
+                }
+                val label = VoidListRow(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    bind(
+                        context.getString(R.string.network_sftp_row_label_format, server.name),
+                        meta = if (server.usesKeyAuth) context.getString(R.string.network_sftp_key_auth_label) else server.username,
+                        showThumbnailSlot = false
+                    )
+                    setOnClickListener {
+                        networkBrowsingSftpServer = server
+                        networkBrowseSftpPath = ""
+                        navigateTo(Destination.NetworkSftpFiles(server, ""))
+                    }
+                }
+                val btnRemove = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                    text = "✕"
+                    textSize = 16f
+                    minHeight = 0
+                    val pad = VoidTheme.dpToPx(context, 12f)
+                    setPadding(pad, pad, pad, pad)
+                    setOnClickListener {
+                        sftpCredentialStore.remove(server.id)
+                        refreshServerList()
+                    }
+                }
+                row.addView(label)
+                row.addView(btnRemove, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { marginStart = VoidTheme.dpToPx(context, 8f) })
+                serversContainer.addView(row)
+            }
+        }
+
+        val addForm = buildAddSftpServerForm { refreshServerList() }
+        addForm.visibility = View.GONE
+
+        val btnAddServer = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+            text = context.getString(R.string.network_sftp_btn_add_server)
+            textSize = 18f
+            setOnClickListener { addForm.visibility = if (addForm.visibility == View.VISIBLE) View.GONE else View.VISIBLE }
+        }
+        page.addView(btnAddServer, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = VoidTheme.dpToPx(context, 8f) })
+
+        page.addView(addForm)
+
+        refreshServerList()
+        return page
+    }
+
+    private fun buildAddSftpServerForm(onSaved: () -> Unit): LinearLayout {
+        val form = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(VoidTheme.colorSurface)
+            val pad = VoidTheme.dpToPx(context, 16f)
+            setPadding(pad, pad, pad, pad)
+        }
+
+        fun addLabeled(text: String, field: View) {
+            form.addView(VoidText.mono(context, text, sizeSp = 13f).apply {
+                setPadding(0, VoidTheme.dpToPx(context, 8f), 0, 0)
+            })
+            form.addView(field)
+        }
+
+        val formHost = buildVoidEditText("192.168.1.10")
+        addLabeled(context.getString(R.string.network_sftp_form_host_label), formHost)
+
+        val formPort = buildVoidEditText("22").apply {
+            setText("22")
+            inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        addLabeled(context.getString(R.string.network_sftp_form_port_label), formPort)
+
+        val formUser = buildVoidEditText(context.getString(R.string.network_sftp_form_user_hint))
+        addLabeled(context.getString(R.string.network_sftp_form_user_label), formUser)
+
+        val formPass = buildVoidEditText(context.getString(R.string.network_sftp_form_pass_hint)).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+        val passLabel = VoidText.mono(context, context.getString(R.string.network_sftp_form_pass_label), sizeSp = 13f).apply {
+            setPadding(0, VoidTheme.dpToPx(context, 8f), 0, 0)
+        }
+        form.addView(passLabel)
+        form.addView(formPass)
+
+        // T6.2: chave privada — colada como texto PEM (nao ha seletor de
+        // arquivo aqui; "avancado" per o doc, T6.4). Multi-linha pra caber
+        // um PEM real; botao de colar reusa o mesmo padrao da aba URL
+        // (buildNetworkUrlPage/btnPaste).
+        val keyLabel = VoidText.mono(context, context.getString(R.string.network_sftp_form_key_label), sizeSp = 13f).apply {
+            setPadding(0, VoidTheme.dpToPx(context, 8f), 0, 0)
+            visibility = View.GONE
+        }
+        val formKey = buildVoidEditText(context.getString(R.string.network_sftp_form_key_hint)).apply {
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+            minLines = 3
+            maxLines = 6
+            typeface = VoidTheme.typefaceMono
+            visibility = View.GONE
+        }
+        val btnPasteKey = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+            text = context.getString(R.string.network_sftp_form_btn_paste_key)
+            textSize = 16f
+            visibility = View.GONE
+            setOnClickListener {
+                val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val clip = clipboard.primaryClip
+                if (clip != null && clip.itemCount > 0) {
+                    formKey.setText(clip.getItemAt(0).coerceToText(activity).toString())
+                }
+            }
+        }
+        form.addView(keyLabel)
+        form.addView(formKey)
+        form.addView(btnPasteKey, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = VoidTheme.dpToPx(context, 4f) })
+
+        val formUseKey = CheckBox(context).apply {
+            text = context.getString(R.string.network_sftp_form_use_key_checkbox)
+            textSize = 16f
+            setTextColor(VoidTheme.colorText)
+        }
+        form.addView(formUseKey, form.indexOfChild(passLabel))
+        formUseKey.setOnCheckedChangeListener { _, useKey ->
+            passLabel.visibility = if (useKey) View.GONE else View.VISIBLE
+            formPass.visibility = if (useKey) View.GONE else View.VISIBLE
+            keyLabel.visibility = if (useKey) View.VISIBLE else View.GONE
+            formKey.visibility = if (useKey) View.VISIBLE else View.GONE
+            btnPasteKey.visibility = if (useKey) View.VISIBLE else View.GONE
+        }
+
+        val formStatus = VoidText.body(context, "", sizeSp = 14f, secondary = true).apply {
+            setPadding(0, VoidTheme.dpToPx(context, 12f), 0, VoidTheme.dpToPx(context, 8f))
+        }
+        form.addView(formStatus)
+
+        val btnTestSave = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+            text = context.getString(R.string.network_sftp_btn_test_save)
+            textSize = 18f
+            setOnClickListener {
+                testAndSaveSftpServer(
+                    host = formHost.text.toString().trim(),
+                    port = formPort.text.toString().toIntOrNull() ?: 22,
+                    username = formUser.text.toString(),
+                    password = if (formUseKey.isChecked) "" else formPass.text.toString(),
+                    privateKey = if (formUseKey.isChecked) formKey.text.toString().trim() else null,
+                    statusView = formStatus,
+                    onSaved = {
+                        onSaved()
+                        form.visibility = View.GONE
+                    }
+                )
+            }
+        }
+        form.addView(btnTestSave)
+
+        return form
+    }
+
+    /**
+     * Conecta de verdade (via `sftp_list_directory`, T6.2) antes de salvar —
+     * mesmo raciocinio de `testAndSaveFtpServer`.
+     */
+    private fun testAndSaveSftpServer(
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        privateKey: String?,
+        statusView: android.widget.TextView,
+        onSaved: () -> Unit
+    ) {
+        if (host.isEmpty()) {
+            statusView.text = context.getString(R.string.network_sftp_form_status_host_required)
+            return
+        }
+        if (password.isEmpty() && privateKey.isNullOrEmpty()) {
+            statusView.text = context.getString(R.string.network_sftp_form_status_auth_required)
+            return
+        }
+
+        statusView.text = context.getString(R.string.network_sftp_form_status_connecting)
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                activity.nativeSftpListDirectory(host, port, username, password, privateKey ?: "", "")
+            }
+            if (result.startsWith("ERROR:")) {
+                statusView.text = context.getString(
+                    R.string.network_sftp_form_status_error_format, result.removePrefix("ERROR:")
+                )
+                return@launch
+            }
+
+            statusView.text = context.getString(R.string.network_sftp_form_status_connected)
+
+            val server = SftpServer(
+                id = sftpCredentialStore.newId(),
+                name = host,
+                host = host,
+                port = port,
+                username = username,
+                password = password,
+                privateKey = privateKey
+            )
+            sftpCredentialStore.save(server)
+            onSaved()
+        }
+    }
+
+    // ==================== REDE: NAVEGACAO DE DIRETORIO SFTP ====================
+
+    private fun renderNetworkSftpFiles(server: SftpServer) {
+        networkBrowsingSftpServer = server
+        val root = VoidPanelChrome.newRoot(context)
+        root.addView(
+            VoidPanelChrome.buildHeader(
+                context,
+                title = server.name,
+                subtitle = "/$networkBrowseSftpPath",
+                onBack = { handleBack() }
+            )
+        )
+
+        val entriesContainer = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        val scroller = ScrollView(context).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            addView(entriesContainer, ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ))
+        }
+        root.addView(scroller)
+
+        showScreen(root)
+        loadNetworkSftpDirectory(server, entriesContainer)
+    }
+
+    private fun loadNetworkSftpDirectory(server: SftpServer, entriesContainer: LinearLayout) {
+        entriesContainer.removeAllViews()
+        entriesContainer.addView(
+            VoidText.body(context, context.getString(R.string.network_files_loading), sizeSp = 16f, secondary = true)
+        )
+
+        val requestedPath = networkBrowseSftpPath
+        scope.launch {
+            val result = withContext(Dispatchers.IO) {
+                activity.nativeSftpListDirectory(
+                    server.host, server.port, server.username, server.password,
+                    server.privateKey ?: "", requestedPath
+                )
+            }
+            if (networkBrowsingSftpServer != server || networkBrowseSftpPath != requestedPath) {
+                return@launch
+            }
+            entriesContainer.removeAllViews()
+
+            if (result.startsWith("ERROR:")) {
+                entriesContainer.addView(
+                    VoidText.body(
+                        context,
+                        context.getString(R.string.common_warning_format, result.removePrefix("ERROR:")),
+                        sizeSp = 16f
+                    )
+                )
+                return@launch
+            }
+
+            val lines = result.split("\n")
+                .filter { it.isNotBlank() }
+                .filter { line ->
+                    val parts = line.split("\t")
+                    val name = parts.getOrNull(0) ?: return@filter false
+                    isVisibleNetworkEntry(name, isDir = parts.getOrNull(1) == "1")
+                }
+            if (lines.isEmpty()) {
+                entriesContainer.addView(
+                    VoidText.body(context, context.getString(R.string.network_files_empty), sizeSp = 16f, secondary = true)
+                )
+                return@launch
+            }
+
+            lines.forEach { line ->
+                val parts = line.split("\t")
+                val name = parts.getOrElse(0) { return@forEach }
+                val isDir = parts.getOrNull(1) == "1"
+                val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
+                val row = VoidListRow(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                    ).also { it.bottomMargin = VoidTheme.dpToPx(context, 8f) }
+                    bind(
+                        if (isDir) {
+                            context.getString(R.string.common_row_dir_format, name)
+                        } else {
+                            context.getString(R.string.common_row_video_format, name)
+                        },
+                        showThumbnailSlot = false
+                    )
+                    setOnClickListener {
+                        val childPath = if (requestedPath.isEmpty()) name else "$requestedPath/$name"
+                        if (isDir) {
+                            networkBrowseSftpPath = childPath
+                            renderNetworkSftpFiles(server)
+                        } else {
+                            val source = PlaybackSource.Sftp(server, childPath, sizeBytes)
+                            promptResumeOrPlay(source) { resumeAtMs ->
+                                activity.playSftp(server, childPath, sizeBytes, resumeAtMs)
+                                navigateTo(Destination.Player(source))
+                            }
+                        }
+                    }
+                }
+                entriesContainer.addView(row)
+            }
+        }
+    }
+
+    /**
+     * Unico ponto de construcao de EditText no painel inteiro (arquivos
+     * locais nao tem busca por texto ainda; URL, SMB, FTP e SFTP passam todos
+     * por aqui) — por isso e o unico lugar que precisa amarrar o teclado
+     * nativo (ver secao "TECLADO NATIVO" abaixo). `isFocusableInTouchMode` e
+     * `isFocusable` sao `true` por padrao pra EditText, entao nao precisam
+     * ser forcados aqui.
+     */
     private fun buildVoidEditText(hint: String): EditText = EditText(context).apply {
         this.hint = hint
         setHintTextColor(VoidTheme.colorTextSecondary)
@@ -804,10 +1543,64 @@ class VRPresentation(
             cornerRadius = VoidTheme.dp(context, VoidTheme.cornerRadiusDp)
             setStroke(VoidTheme.dpToPx(context, VoidTheme.borderWidthDp), VoidTheme.colorBorder)
         }
+        // Alvo de toque generoso (mesma razao do VoidButton — feedback de
+        // usuario em validacao real: hitbox pequena demais em VR).
         val padH = VoidTheme.dpToPx(context, 16f)
-        val padV = VoidTheme.dpToPx(context, 12f)
+        val padV = VoidTheme.dpToPx(context, 20f)
         setPadding(padH, padV, padH, padV)
+        minimumHeight = VoidTheme.dpToPx(context, 76f)
+
+        // Bug reportado: toque sintetico (raycast do controller -> UV ->
+        // dispatchVRTouch, ver VRActivity.kt) chega como MotionEvent real e
+        // ja aciona `requestFocusFromTouch()`/foco normalmente (o cursor
+        // pisca) — o que faltava era o teclado aparecer, porque este campo
+        // vive numa VirtualDisplay (ver secao "TECLADO NATIVO" abaixo pro
+        // raciocinio completo). `showNativeKeyboardFor`/`hideNativeKeyboard`
+        // (VRActivity.kt) resolvem isso abrindo o teclado REAL do sistema
+        // (com suporte a digitacao por toque de dedo via hand tracking, nao
+        // so raycast do controller — pedido explicito do usuario).
+        setOnFocusChangeListener { view, hasFocus ->
+            val editText = view as EditText
+            if (hasFocus) {
+                keyboardTarget = editText
+                activity.showNativeKeyboardFor(editText)
+            } else if (keyboardTarget === editText) {
+                keyboardTarget = null
+                activity.hideNativeKeyboard()
+            }
+        }
     }
+
+    // ==================== TECLADO NATIVO (bug: sem IME em VirtualDisplay) ====================
+    //
+    // Causa raiz confirmada por leitura da documentacao AOSP (nao apenas
+    // suposicao): "the system won't show an IME on virtual displays that
+    // aren't owned by the system" — restricao de seguranca deliberada (evita
+    // que um app malicioso crie uma virtual display forjada pra capturar
+    // previsoes de digitacao/senhas de outro app), nao um bug de configuracao.
+    // Ver https://source.android.com/docs/core/display/multi_display/ime-support.
+    // `VRPresentation` roda inteira sobre uma `VirtualDisplay` criada pelo
+    // proprio app (`DisplayManager.createVirtualDisplay`, ver
+    // `VRActivity.setupVirtualDisplay`) — exatamente o caso "nao owned pelo
+    // sistema" — entao um `EditText` DAQUI nunca vai receber o IME real,
+    // nao importa a combinacao de flags/`requestFocus`/`showSoftInput`.
+    //
+    // Solucao (pedido explicito do usuario: quer o teclado NATIVO do Meta
+    // Quest, nao um customizado — digitar com os dedos via hand tracking e
+    // mais pratico que so raycast): a amostra oficial da Meta
+    // (`sdk/meta-openxr-sdk/Samples/XrSamples/XrOverlayKeyboard`) mostra que
+    // o teclado overlay do sistema NAO e uma extensao OpenXR que o app
+    // precisa renderizar — e o IME normal do Android, mostrado como overlay
+    // 3D pelo proprio Horizon OS, desde que o `EditText` focado esteja numa
+    // janela REAL da Activity (nao numa VirtualDisplay) e o manifest declare
+    // `oculus.software.overlay_keyboard` (ver AndroidManifest.xml). Por isso
+    // a implementacao real fica em `VRActivity` (dona da janela de verdade),
+    // nao aqui: `activity.showNativeKeyboardFor(editText)` foca um `EditText`
+    // PROXY real, oculto da cena 3D (apps `vr_only` nao compositam Views 2D
+    // extras da Activity no headset — so a superficie OpenXR e mostrada),
+    // espelhando o texto digitado de volta pro campo focado deste painel via
+    // `TextWatcher`. Ver VRActivity.kt para a implementacao e a ressalva
+    // "nunca validado em headset real" completa.
 
     // ==================== HISTORICO DE REPRODUCAO (T9) ====================
 
@@ -963,6 +1756,27 @@ class VRPresentation(
                 activity.playSmb(server, entry.mediaPath, resumeAtMs = entry.positionMs)
                 navigateTo(Destination.Player(source))
             }
+            HistorySourceType.FTP -> {
+                val server = resolveFtpServerFromHistory(entry.serverInfo)
+                if (server == null) {
+                    // Mesmo raciocinio do branch SMB acima: servidor
+                    // removido/renomeado desde a ultima vez, falha silenciosa.
+                    return
+                }
+                val source = PlaybackSource.Ftp(server, entry.mediaPath)
+                activity.playFtp(server, entry.mediaPath, resumeAtMs = entry.positionMs)
+                navigateTo(Destination.Player(source))
+            }
+            HistorySourceType.SFTP -> {
+                val server = resolveSftpServerFromHistory(entry.serverInfo)
+                if (server == null) {
+                    // Mesmo raciocinio dos branches acima.
+                    return
+                }
+                val source = PlaybackSource.Sftp(server, entry.mediaPath)
+                activity.playSftp(server, entry.mediaPath, resumeAtMs = entry.positionMs)
+                navigateTo(Destination.Player(source))
+            }
         }
     }
 
@@ -975,6 +1789,28 @@ class VRPresentation(
         return try {
             val serverId = JSONObject(serverInfoJson).getString("serverId")
             credentialStore.list().find { it.id == serverId }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Ver [resolveSmbServerFromHistory] — mesma logica para [FtpServer]. */
+    private fun resolveFtpServerFromHistory(serverInfoJson: String?): FtpServer? {
+        if (serverInfoJson == null) return null
+        return try {
+            val serverId = JSONObject(serverInfoJson).getString("serverId")
+            ftpCredentialStore.list().find { it.id == serverId }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** Ver [resolveSmbServerFromHistory] — mesma logica para [SftpServer]. */
+    private fun resolveSftpServerFromHistory(serverInfoJson: String?): SftpServer? {
+        if (serverInfoJson == null) return null
+        return try {
+            val serverId = JSONObject(serverInfoJson).getString("serverId")
+            sftpCredentialStore.list().find { it.id == serverId }
         } catch (e: Exception) {
             null
         }
@@ -1037,6 +1873,8 @@ class VRPresentation(
                 HistorySourceType.LOCAL -> context.getString(R.string.common_row_video_format, entry.title)
                 HistorySourceType.SMB -> context.getString(R.string.network_smb_row_label_format, entry.title)
                 HistorySourceType.HTTP -> context.getString(R.string.history_row_http_format, entry.title)
+                HistorySourceType.FTP -> context.getString(R.string.history_row_ftp_format, entry.title)
+                HistorySourceType.SFTP -> context.getString(R.string.history_row_sftp_format, entry.title)
             }
             val meta = context.getString(
                 R.string.history_row_meta_format,
@@ -1070,6 +1908,12 @@ class VRPresentation(
             // sentido, embora nem PT-BR nem EN precisem reordenar aqui.
             is PlaybackSource.Smb -> context.getString(
                 R.string.player_label_smb_source_format, source.server.name, source.path
+            )
+            is PlaybackSource.Ftp -> context.getString(
+                R.string.player_label_ftp_source_format, source.server.name, source.path
+            )
+            is PlaybackSource.Sftp -> context.getString(
+                R.string.player_label_sftp_source_format, source.server.name, source.path
             )
         }
         root.addView(VoidText.mono(context, label, sizeSp = 16f))

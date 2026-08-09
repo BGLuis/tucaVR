@@ -47,3 +47,63 @@ services:
       - ./https-test/certs:/etc/nginx/tls
     ports:
       - "18443:443"
+
+  ftp-test:
+    # `delfer/alpine-ftp-server` (vsftpd sobre Alpine) em vez de outras opcoes
+    # populares (ex: `stilliard/pure-ftpd`): imagem minuscula, configuracao
+    # inteira via env vars (sem precisar de arquivo de config custom como o
+    # https-test precisa pro TLS), e o `ADDRESS`/`MIN_PORT`/`MAX_PORT`
+    # cobrem exatamente o que T6.1 exige (modo passivo funcionando atraves
+    # do NAT do Docker — ver "Gotcha: modo passivo" no README.md deste
+    # diretorio).
+    image: delfer/alpine-ftp-server
+    container_name: vrplayer-ftp-test
+    environment:
+      # Formato `user|senha|home-dir-dentro-do-container`. `/ftp/vruser` (em
+      # vez do `/home/vruser` default da imagem) evita colisao com o
+      # diretorio home real do usuario `vruser` que o entrypoint da imagem
+      # cria em `/home` — o volume abaixo so pode ser montado read-only
+      # depois que o diretorio ja existe, e montar por cima do home default
+      # antes do `adduser` interno rodar causa erro de permissao.
+      - USERS=vruser|vrpass123|/ftp/vruser
+      # PASV_ADDRESS anunciado ao cliente no reply do comando PASV — tem que
+      # ser um endereco que o CLIENTE consiga alcancar. Como o teste sempre
+      # roda no mesmo host que o Docker (nunca de outra maquina), `127.0.0.1`
+      # funciona: o Rust de teste conecta em `127.0.0.1:12121` e o
+      # `docker-proxy` do Docker encaminha as portas passivas mapeadas
+      # (12100-12110) de volta pro mesmo `127.0.0.1`.
+      - ADDRESS=127.0.0.1
+      - MIN_PORT=12100
+      - MAX_PORT=12110
+    volumes:
+      - ./fixtures:/ftp/vruser:ro
+    ports:
+      - "12121:21"
+      - "12100-12110:12100-12110"
+
+  sftp-test:
+    # `atmoz/sftp` (OpenSSH real dentro de um container minimo) — cobre T6.2
+    # dos dois jeitos que a tarefa pede: senha (`command: vruser:vrpass123:...`)
+    # E chave publica (mount em `.ssh/keys/`, ver `README.md` deste diretorio,
+    # secao "Gotcha: chave publica do atmoz/sftp"). Mesmo usuario `vruser`
+    # aceita os dois metodos simultaneamente — o servidor OpenSSH nao exige
+    # exclusividade entre eles.
+    image: atmoz/sftp:latest
+    container_name: vrplayer-sftp-test
+    # Formato `usuario:senha:uid`. UID fixo (1001) so pra ficar previsivel
+    # nos logs/debug — nao ha nenhum outro significado.
+    command: vruser:vrpass123:1001
+    volumes:
+      # Subdiretorio dentro do home, NUNCA o home em si (`/home/vruser`) —
+      # ver README.md, "Gotcha: chroot exige owner root no home". O
+      # entrypoint da imagem faz `chown root:root`/`chmod 755` no home a
+      # cada subida, entao montar a fixture DENTRO dele (nao por cima dele)
+      # e o que evita o container recusar autenticacao por "bad ownership or
+      # modes for chroot directory".
+      - ./fixtures:/home/vruser/fixtures:ro
+      # Convencao documentada do atmoz/sftp: qualquer arquivo aqui dentro
+      # vira uma linha em ~vruser/.ssh/authorized_keys na subida (script
+      # `create-sftp-user` do proprio image, ver README.md).
+      - ./ssh-keys/vrplayer_test_key.pub:/home/vruser/.ssh/keys/vrplayer_test_key.pub:ro
+    ports:
+      - "12222:22"

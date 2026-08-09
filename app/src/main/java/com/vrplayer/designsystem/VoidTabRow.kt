@@ -37,14 +37,18 @@ class VoidTabRow(
     }
 
     private fun buildTab(label: String, index: Int): LinearLayout {
+        // Alvo de toque generoso (mesma razao do VoidButton/VoidListRow —
+        // feedback de usuario em validacao real: hitbox pequena demais pra
+        // apontar com precisao via raycast em VR).
         val column = LinearLayout(context).apply {
             orientation = VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
+            minimumHeight = VoidTheme.dpToPx(context, 76f)
         }
 
         val text = VoidText.body(context, label, sizeSp = 20f).apply {
             gravity = Gravity.CENTER
-            val padV = VoidTheme.dpToPx(context, 12f)
+            val padV = VoidTheme.dpToPx(context, 24f)
             setPadding(0, padV, 0, padV)
         }
         tabLabels.add(text)

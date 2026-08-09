@@ -37,10 +37,19 @@ class VoidButton @JvmOverloads constructor(
     init {
         isAllCaps = false
         typeface = VoidTheme.typefaceBody
-        val paddingH = VoidTheme.dpToPx(context, 24f)
-        val paddingV = VoidTheme.dpToPx(context, 16f)
+        // Alvo de toque generoso de proposito (feedback de usuario em
+        // validacao real: hitbox pequena demais pra apontar com precisao via
+        // raycast — o tremor natural da mao a distancia torna mirar em algo
+        // pequeno bem mais dificil em VR do que em touch mobile/desktop, ver
+        // tambem o cursor/reticle em vr_player_app.cpp). O hit-test do
+        // toque sintetico (dispatchVRTouch -> MotionEvent -> Android touch
+        // dispatch) usa os bounds REAIS da View, entao aumentar
+        // padding/minHeight aqui aumenta o alvo clicavel junto com o visual,
+        // sem precisar de nenhum mecanismo separado de "hitbox".
+        val paddingH = VoidTheme.dpToPx(context, 28f)
+        val paddingV = VoidTheme.dpToPx(context, 22f)
         setPadding(paddingH, paddingV, paddingH, paddingV)
-        minHeight = VoidTheme.dpToPx(context, 56f)
+        minHeight = VoidTheme.dpToPx(context, 76f)
         applyStyle()
     }
 

@@ -51,6 +51,36 @@ extern "C" {
                                      const char* share, const char* path);
     extern char* probe_http_url(const char* url);
     extern void free_rust_string(char* ptr);
+
+    // T6.4: FTP — mesmo padrao de start_smb_playback/smb_list_directory
+    // (credenciais como parametros separados, nunca uma URI unica cruzando
+    // o JNI). Ver rust/bridge/src/lib.rs.
+    extern void start_ftp_playback(const char* host, int32_t port, const char* path,
+                                    const char* username, const char* password);
+    extern char* ftp_list_directory(const char* host, int32_t port, const char* username,
+                                     const char* password, const char* path);
+
+    // T6.4: SFTP — mesmo padrao, com `private_key` (conteudo PEM, nao um
+    // caminho de arquivo — ver rust/protocols/src/sftp/uri.rs) a mais.
+    extern void start_sftp_playback(const char* host, int32_t port, const char* path,
+                                     const char* username, const char* password,
+                                     const char* private_key);
+    extern char* sftp_list_directory(const char* host, int32_t port, const char* username,
+                                      const char* password, const char* private_key, const char* path);
+
+    // T1.4/T1.5/T2: modo de exibicao 3D (2D/SBS/OU/360/180) e swap-eyes —
+    // estado de apresentacao puro, vive como atomics no bridge Rust (ver
+    // rust/bridge/src/lib.rs para a codificacao numerica exata, que
+    // `enum class ScreenMode` abaixo espelha 1:1).
+    extern uint32_t cycle_3d_mode();
+    extern uint32_t get_3d_mode();
+    extern uint32_t toggle_swap_eyes();
+    extern uint32_t get_swap_eyes();
+
+    // Bug de auto-hide durante digitacao no teclado nativo — ver comentario
+    // completo em rust/bridge/src/lib.rs junto de KEYBOARD_ACTIVE.
+    extern void set_keyboard_active(uint32_t active);
+    extern uint32_t get_keyboard_active();
 }
 
 // Helper comum as 3 funcoes JNI que retornam string alocada pelo Rust
@@ -95,6 +125,35 @@ Java_com_vrplayer_VRActivity_nativeSetSpeed(JNIEnv* env, jobject thiz, jfloat sp
 extern "C" JNIEXPORT void JNICALL
 Java_com_vrplayer_VRActivity_nativeCycleAudioTrack(JNIEnv* env, jobject thiz) {
     cycle_audio_track();
+}
+
+// T1.4: botao "🧊" do painel de controles — avanca o ciclo de modo 3D e
+// retorna o novo valor (0..6, ver ScreenMode/rust/bridge/src/lib.rs) pra o
+// Kotlin atualizar o texto do botao sem precisar de uma segunda chamada.
+extern "C" JNIEXPORT jint JNICALL
+Java_com_vrplayer_VRActivity_nativeCycle3DMode(JNIEnv* env, jobject thiz) {
+    return (jint)cycle_3d_mode();
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_vrplayer_VRActivity_nativeGet3DMode(JNIEnv* env, jobject thiz) {
+    return (jint)get_3d_mode();
+}
+
+// T1.5: botao "👁 Swap eyes" — inverte qual metade do frame SBS/OU (flat ou
+// esferico) vai pro olho esquerdo/direito (ver uSwapEyes nos shaders,
+// SessionInit()).
+extern "C" JNIEXPORT jint JNICALL
+Java_com_vrplayer_VRActivity_nativeToggleSwapEyes(JNIEnv* env, jobject thiz) {
+    return (jint)toggle_swap_eyes();
+}
+
+// Bug de auto-hide durante digitacao — ver KEYBOARD_ACTIVE em
+// rust/bridge/src/lib.rs. Chamado por VRActivity.showNativeKeyboardFor/
+// hideNativeKeyboard exatamente quando o teclado nativo abre/fecha.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeSetKeyboardActive(JNIEnv* env, jobject thiz, jboolean active) {
+    set_keyboard_active(active ? 1 : 0);
 }
 
 // T6.4: inicia playback SMB. Ver nota acima de start_smb_playback sobre por
@@ -166,6 +225,91 @@ Java_com_vrplayer_VRActivity_nativeSmbListDirectory(JNIEnv* env, jobject thiz, j
     return RustStringToJStringAndFree(env, result);
 }
 
+// T6.4: playback FTP. Ver nota acima de start_smb_playback sobre por que as
+// credenciais vao como parametros separados, nao uma URI.
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativePlayFtp(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                            jstring path, jstring username, jstring password) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+
+    start_ftp_playback(hostStr, (int32_t)port, pathStr, userStr, passStr);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
+}
+
+// T6.1/T6.4: navega um diretorio num servidor FTP. BLOQUEANTE (I/O de rede
+// sincrono do lado Rust) — o Kotlin so deve chamar isto de uma coroutine em
+// Dispatchers.IO, nunca da UI thread.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeFtpListDirectory(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                                     jstring username, jstring password, jstring path) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+
+    char* result = ftp_list_directory(hostStr, (int32_t)port, userStr, passStr, pathStr);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+
+    return RustStringToJStringAndFree(env, result);
+}
+
+// T6.4: playback SFTP. `privateKey` pode ser uma jstring vazia (nao null,
+// para evitar checagem de null extra do lado Kotlin) quando a autenticacao
+// e por senha — `start_sftp_playback` (Rust) ja trata string vazia como
+// "sem chave" (ver cstr_to_string + filter(!empty) em rust/bridge/src/lib.rs).
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativePlaySftp(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                             jstring path, jstring username, jstring password,
+                                             jstring privateKey) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+    const char* keyStr = env->GetStringUTFChars(privateKey, nullptr);
+
+    start_sftp_playback(hostStr, (int32_t)port, pathStr, userStr, passStr, keyStr);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
+    env->ReleaseStringUTFChars(privateKey, keyStr);
+}
+
+// T6.2/T6.4: navega um diretorio num servidor SFTP. BLOQUEANTE, mesma
+// ressalva de nativeFtpListDirectory.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeSftpListDirectory(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                                      jstring username, jstring password,
+                                                      jstring privateKey, jstring path) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+    const char* keyStr = env->GetStringUTFChars(privateKey, nullptr);
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+
+    char* result = sftp_list_directory(hostStr, (int32_t)port, userStr, passStr, keyStr, pathStr);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
+    env->ReleaseStringUTFChars(privateKey, keyStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+
+    return RustStringToJStringAndFree(env, result);
+}
+
 // T7.1: probe HEAD-based de uma URL HTTP(S) (Accept-Ranges/tamanho) antes de
 // tocar, para a UI poder avisar se seek nao vai funcionar. Mesma ressalva de
 // bloqueio.
@@ -176,6 +320,22 @@ Java_com_vrplayer_VRActivity_nativeProbeHttpUrl(JNIEnv* env, jobject thiz, jstri
     env->ReleaseStringUTFChars(url, urlStr);
     return RustStringToJStringAndFree(env, result);
 }
+
+// T1.4/T2: espelha 1:1 a codificacao numerica de rust/bridge/src/lib.rs
+// (SCREEN_MODE/cycle_3d_mode) — qualquer mudanca aqui exige a mudanca
+// correspondente la (e vice-versa), os dois lados nao compartilham um tipo.
+enum class ScreenMode : uint32_t {
+    Flat2D = 0,
+    SBS = 1,
+    SBSHalf = 2,
+    OU = 3,
+    OUHalf = 4,
+    Sphere360 = 5,
+    Sphere180 = 6,
+    Sphere360SBS = 7,
+    Sphere360OU = 8,
+    Vr180SBS = 9,
+};
 
 class VRPlayerApp : public OVRFW::XrApp {
 public:
@@ -240,6 +400,81 @@ public:
             return target;
         }
         return current + (target > current ? maxDelta : -maxDelta);
+    }
+
+    // T2: todo modo que desenha a esfera (mono OU estereo) em vez do quad
+    // plano — usado tanto pro dispatch de desenho (Render()) quanto pro gate
+    // do recenter (T4.3, so faz sentido com a esfera ativa).
+    static bool IsSphereMode(ScreenMode mode) {
+        switch (mode) {
+            case ScreenMode::Sphere360:
+            case ScreenMode::Sphere180:
+            case ScreenMode::Sphere360SBS:
+            case ScreenMode::Sphere360OU:
+            case ScreenMode::Vr180SBS:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    // T1/T2.4/T2.5: traduz o ScreenMode atual pros uniforms que os dois
+    // programas (m_stereoFlatProgram/m_sphereProgram) de fato leem. Separado
+    // num metodo em vez de inline em Update() so pra nao duplicar este switch
+    // entre Update() (recenter gate) e Render() (dispatch de desenho) — ver
+    // chamadas em ambos.
+    void UpdateScreenModeUniforms() {
+        m_swapEyesF = (get_swap_eyes() != 0) ? 1.0f : 0.0f;
+
+        switch (m_screenMode) {
+            case ScreenMode::Sphere180:
+            case ScreenMode::Vr180SBS:
+                m_uPolar180 = 1.0f;
+                break;
+            default:
+                m_uPolar180 = 0.0f;
+                break;
+        }
+
+        switch (m_screenMode) {
+            case ScreenMode::Sphere360SBS:
+            case ScreenMode::Vr180SBS:
+                m_sphereStereoLayout = 1.0f; // SBS
+                break;
+            case ScreenMode::Sphere360OU:
+                m_sphereStereoLayout = 2.0f; // OU
+                break;
+            default:
+                m_sphereStereoLayout = 0.0f; // mono
+                break;
+        }
+
+        switch (m_screenMode) {
+            case ScreenMode::SBS:
+            case ScreenMode::SBSHalf:
+                m_flatStereoLayout = 1.0f; // SBS
+                break;
+            case ScreenMode::OU:
+            case ScreenMode::OUHalf:
+                m_flatStereoLayout = 2.0f; // OU
+                break;
+            default:
+                m_flatStereoLayout = 0.0f; // nao usado (Flat2D usa m_program, nao m_stereoFlatProgram)
+                break;
+        }
+    }
+
+    // T1: SBS/OU (flat, nao esferico) — mesma logica de IsSphereMode acima.
+    static bool IsFlatStereoMode(ScreenMode mode) {
+        switch (mode) {
+            case ScreenMode::SBS:
+            case ScreenMode::SBSHalf:
+            case ScreenMode::OU:
+            case ScreenMode::OUHalf:
+                return true;
+            default:
+                return false;
+        }
     }
 
     virtual bool AppInit(const xrJava* context) override {
@@ -310,6 +545,181 @@ public:
 
         m_surfaceRender.Init();
         m_beamRenderer.Init(256, true);
+
+        // ------------------ INITIALIZE STEREO FLAT QUAD (T1.1/T1.2/T1.5) ------------------
+        // Programa SEPARADO de m_program (que continua servindo o quad 2D/
+        // mono E os paineis de UI/controles, que NUNCA devem ser recortados
+        // por olho). A descoberta que destrava isto: mesmo sem
+        // GL_OVR_multiview2 (nao usado neste app — ver ScreenMode/
+        // TransformVertex), o framework OVRFW ja seta um uniform inteiro
+        // `ViewID` (0=esquerdo, 1=direito) em TODO draw call, uma vez por
+        // olho, automaticamente — e injeta a macro `VIEW_ID` que resolve pra
+        // ele (ver `TransformVertex` no header gerado por
+        // OVRFW::GlProgram::Build). So precisa ser repassado do vertex pro
+        // fragment shader via varying (o framework so declara isso no vertex
+        // header, nao no fragment).
+        const char* stereoFlatVertexShader = R"(
+            in vec3 Position;
+            in vec2 TexCoord;
+            out vec2 vTexCoord;
+            flat out int vEye;
+            void main() {
+                gl_Position = TransformVertex(vec4(Position, 1.0));
+                vTexCoord = TexCoord;
+                vEye = int(VIEW_ID);
+            }
+        )";
+
+        // T1.1/T1.2: uStereoLayout escolhe SBS (recorta em X) ou OU (recorta
+        // em Y) — convencao identica ao sample GLSL do doc (secao 1): olho
+        // esquerdo (view 0) recebe a METADE ESQUERDA (SBS) ou SUPERIOR (OU)
+        // do frame. uSwapEyes (T1.5) inverte qual metade cada olho recebe —
+        // cuidado do doc (CAUTION "Olho trocado causa nausea"): o botao
+        // dedicado pra isto (ver VRControlsPresentation.kt) precisa ficar
+        // facil de achar justamente por causa disto.
+        const char* stereoFlatFragmentShader = R"(
+            in vec2 vTexCoord;
+            flat in int vEye;
+            out vec4 FragColor;
+            uniform samplerExternalOES sTexture;
+            uniform float uStereoLayout; // 1 = SBS, 2 = OU
+            uniform float uSwapEyes;
+            void main() {
+                vec2 uv = vTexCoord;
+                int eye = vEye;
+                if (uSwapEyes > 0.5) {
+                    eye = 1 - eye;
+                }
+                if (uStereoLayout > 1.5) {
+                    uv.y = uv.y * 0.5 + float(eye) * 0.5;
+                } else {
+                    uv.x = uv.x * 0.5 + float(eye) * 0.5;
+                }
+                vec4 texColor = texture(sTexture, uv);
+                FragColor = vec4(texColor.rgb, 1.0);
+            }
+        )";
+
+        OVRFW::ovrProgramParm stereoFlatParms[] = {
+            {"sTexture", OVRFW::ovrProgramParmType::TEXTURE_SAMPLED},
+            {"uStereoLayout", OVRFW::ovrProgramParmType::FLOAT},
+            {"uSwapEyes", OVRFW::ovrProgramParmType::FLOAT},
+        };
+        m_stereoFlatProgram = OVRFW::GlProgram::Build(vDirective, stereoFlatVertexShader, fDirective, stereoFlatFragmentShader, stereoFlatParms, 3);
+
+        m_stereoFlatSurfaceDef.geo = OVRFW::BuildTesselatedQuad(2, 2, false);
+        m_stereoFlatSurfaceDef.graphicsCommand.Textures[0].target = GL_TEXTURE_EXTERNAL_OES;
+        m_stereoFlatSurfaceDef.graphicsCommand.Program = m_stereoFlatProgram;
+        m_stereoFlatSurfaceDef.graphicsCommand.UniformData[1].Data = &m_flatStereoLayout;
+        m_stereoFlatSurfaceDef.graphicsCommand.UniformData[2].Data = &m_swapEyesF;
+
+        // ------------------ INITIALIZE 360/180 SPHERE (T2) ------------------
+        // Mesmo vertex shader do quad plano (so faz TransformVertex + repassa
+        // UV) — a diferenca toda esta na GEOMETRIA (globo em vez de quad) e
+        // no fragment shader (que sabe recortar o hemisferio frontal pra
+        // 180). `BuildGlobe` (Render/GlGeometry.h) ja gera a malha exatamente
+        // no formato que T2.1 pede: mapeamento UV equirectangular padrao,
+        // resolucao 128x~70 (bem acima do minimo de 64x32 do doc, com linhas
+        // extras nos polos pra reduzir artefatos de triangulos degenerados),
+        // e normals apontando pra FORA (`position.Normalized()`, comentario
+        // "Build it with the equirect center down -Z" no SDK). Nao precisamos
+        // inverter as normals nem reconstruir a malha a mao: o CAUTION do doc
+        // (secao 2) sobre "normals pra dentro" e resolvido de forma
+        // equivalente desabilitando backface culling abaixo — com culling
+        // desligado, a face vista de dentro da esfera renderiza
+        // independente de winding/normal, sem inverter nada.
+        const char* sphereVertexShader = R"(
+            in vec3 Position;
+            in vec2 TexCoord;
+            out vec2 vTexCoord;
+            flat out int vEye;
+            void main() {
+                gl_Position = TransformVertex(vec4(Position, 1.0));
+                vTexCoord = TexCoord;
+                vEye = int(VIEW_ID);
+            }
+        )";
+
+        // T2.3: 180 reaproveita a MESMA esfera de 360 (opcao explicitamente
+        // aceita pelo doc: "esfera completa com UV mapping limitado a 180°
+        // horizontal") em vez de uma malha de semi-esfera separada. `BuildGlobe`
+        // centra o texel U=0.5 em -Z (frente do usuario) e mapeia U linear
+        // sobre os 360° completos; logo o hemisferio frontal (180° de longitude)
+        // corresponde exatamente a U em [0.25, 0.75]. Fora dessa faixa (o
+        // hemisferio de TRAS, que o video VR180 nao cobre) descarta o
+        // fragmento com `discard` em vez de desenhar preto — GPU nao gasta
+        // bandwidth de textura ali, e evita qualquer wrap/bleed visivel na
+        // borda U=0/U=1 da malha.
+        // (reaproveita `fDirective`/`vDirective` ja declarados acima para o
+        // programa do quad plano — mesmo extension GLSL, sem motivo pra
+        // duplicar a string.)
+        // T2.4/T2.5: uStereoLayout (0=mono, 1=SBS, 2=OU) recorta por olho DEPOIS
+        // do recorte polar — a ordem importa. `uv` comeca como o parametro de
+        // longitude da GEOMETRIA (0..1 ao redor da esfera INTEIRA, sempre no
+        // range original de vTexCoord.x); o recorte 180 (se ativo) reduz isso
+        // pro hemisferio frontal, em coordenadas 0..1 relativas a esse
+        // hemisferio. SO DEPOIS disso o recorte de olho reescala esse
+        // resultado (360 completo OU so o hemisferio frontal) pra dentro da
+        // METADE do frame FISICO que pertence a este olho — o que modela
+        // corretamente um frame estereo empacotado como [olho-esq | olho-dir]
+        // onde cada metade e uma copia INDEPENDENTE e completa do conteudo
+        // logico (360 ou 180). Pra Vr180SBS isso assume que cada metade do
+        // frame fisico segue a MESMA convencao "conteudo 180 centrado num
+        // canvas logico de largura 360" que o caso mono 180 ja usa — formatos
+        // VR180 reais variam bastante na pratica (equirect vs fisheye
+        // double-circle); nunca validado contra um arquivo VR180 SBS real
+        // nesta sessao, so raciocinado a partir do doc (secao 2, T2.3/T2.4).
+        const char* sphereFragmentShader = R"(
+            in vec2 vTexCoord;
+            flat in int vEye;
+            out vec4 FragColor;
+            uniform samplerExternalOES sTexture;
+            uniform float uPolar180;
+            uniform float uStereoLayout; // 0 = mono, 1 = SBS, 2 = OU
+            uniform float uSwapEyes;
+            void main() {
+                vec2 uv = vTexCoord;
+                if (uPolar180 > 0.5) {
+                    if (uv.x < 0.25 || uv.x > 0.75) {
+                        discard;
+                    }
+                    uv.x = (uv.x - 0.25) * 2.0;
+                }
+                int eye = vEye;
+                if (uSwapEyes > 0.5) {
+                    eye = 1 - eye;
+                }
+                if (uStereoLayout > 1.5) {
+                    uv.y = uv.y * 0.5 + float(eye) * 0.5;
+                } else if (uStereoLayout > 0.5) {
+                    uv.x = uv.x * 0.5 + float(eye) * 0.5;
+                }
+                vec4 texColor = texture(sTexture, uv);
+                FragColor = vec4(texColor.rgb, 1.0);
+            }
+        )";
+
+        OVRFW::ovrProgramParm sphereParms[] = {
+            {"sTexture", OVRFW::ovrProgramParmType::TEXTURE_SAMPLED},
+            {"uPolar180", OVRFW::ovrProgramParmType::FLOAT},
+            {"uStereoLayout", OVRFW::ovrProgramParmType::FLOAT},
+            {"uSwapEyes", OVRFW::ovrProgramParmType::FLOAT},
+        };
+        m_sphereProgram = OVRFW::GlProgram::Build(vDirective, sphereVertexShader, fDirective, sphereFragmentShader, sphereParms, 4);
+
+        m_sphereSurfaceDef.geo = OVRFW::BuildGlobe(1.0f, 1.0f, kSphereRadius);
+        m_sphereSurfaceDef.graphicsCommand.Textures[0].target = GL_TEXTURE_EXTERNAL_OES;
+        m_sphereSurfaceDef.graphicsCommand.Program = m_sphereProgram;
+        m_sphereSurfaceDef.graphicsCommand.UniformData[1].Data = &m_uPolar180;
+        m_sphereSurfaceDef.graphicsCommand.UniformData[2].Data = &m_sphereStereoLayout;
+        m_sphereSurfaceDef.graphicsCommand.UniformData[3].Data = &m_swapEyesF;
+        // T2 CAUTION/IMPORTANT do doc: sem culling (camera fica DENTRO da
+        // esfera — ver comentario acima sobre normals) e sem depth test/write
+        // (a esfera esta "infinitamente longe", nao deve interagir com o
+        // depth de paineis de UI que ja sao renderizados sem depth tambem).
+        m_sphereSurfaceDef.graphicsCommand.GpuState.cullEnable = false;
+        m_sphereSurfaceDef.graphicsCommand.GpuState.depthEnable = false;
+        m_sphereSurfaceDef.graphicsCommand.GpuState.depthMaskEnable = false;
 
         // ------------------ INITIALIZE UI ------------------
         m_uiSurfaceDef.geo = OVRFW::BuildTesselatedQuad(1, 1, false);
@@ -440,6 +850,29 @@ public:
         OVR::Vector3f cPlaneCenter = m_controlsTransform.GetTranslation();
         OVR::Vector3f cPlaneNormal = OVR::Matrix4f::RotationX(-0.3f).Transform(OVR::Vector3f(0, 0, 1));
 
+        // T1.4/T2: polling barato do modo 3D (o Rust bridge e quem guarda o
+        // estado real — ver cycle_3d_mode/get_3d_mode). Os uniforms derivados
+        // do modo (uPolar180/uStereoLayout/uSwapEyes pros dois programas) sao
+        // recalculados aqui a cada frame em vez de so na troca de modo,
+        // porque e mais simples que adicionar um segundo caminho de callback
+        // so pra isso — o custo e irrelevante (uns poucos ifs).
+        m_screenMode = static_cast<ScreenMode>(get_3d_mode());
+        UpdateScreenModeUniforms();
+        bool sphereActive = IsSphereMode(m_screenMode);
+
+        // T2.6: a esfera acompanha a TRANSLACAO da cabeca (o usuario sempre
+        // fica no centro dela) mas NAO a rotacao — a rotacao "de olhar ao
+        // redor" ja acontece de graca via viewProjection[eye] em
+        // TransformVertex, igual pra qualquer outro objeto da cena (mesmo
+        // motivo pelo qual T4.1-T4.4 nunca precisaram ler orientacao de
+        // cabeca manualmente: OVRFW ja aplica isso no pipeline padrao).
+        // Ignorar a rotacao da cabeca aqui e o que T4.4 pede: conteudo 360
+        // nao tem paralaxe, entao so a translacao (pra manter o usuario
+        // "dentro" da esfera mesmo andando fisicamente no espaco do
+        // Guardian) importa. `m_sphereYawOffset` e o unico ajuste manual de
+        // rotacao, aplicado so pelo recenter (T4.3, abaixo).
+        m_sphereTransform = OVR::Matrix4f::Translation(in.HeadPose.Translation) * OVR::Matrix4f::RotationY(m_sphereYawOffset);
+
         // Tela de video (usada apenas para detectar "apontando para a tela" -> mostra controles)
         OVR::Matrix4f screenTransform = OVR::Matrix4f::Translation(m_screenPosition) * OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
 
@@ -509,7 +942,20 @@ public:
         // paineis de UI (fora a tela de video) — o timing de auto-hide abaixo
         // (kUiAutoHideSeconds/kUiFadeDuration) nao mudou, mas vale re-validar em
         // headset fisico agora que ha um painel a menos disputando atencao.
-        if (currentHitPanel == 1) {
+        //
+        // Bug reportado em validacao real: com o teclado nativo aberto
+        // (VRActivity.showNativeKeyboardFor), o raio do controller aponta pro
+        // teclado (overlay do sistema, fora deste app), nao mais pro quad do
+        // painel — sem a checagem de `get_keyboard_active()` abaixo, isso
+        // contava como "usuario inativo" e o painel "Adicionar servidor"
+        // (ou qualquer outro com EditText focado) desaparecia no meio da
+        // digitacao. Suprime o auto-hide inteiro (nao so o do painel Home —
+        // um EditText SEMPRE vive dentro dele, nunca no painel de controles,
+        // mas manter os dois presos aqui e mais simples que decidir qual dos
+        // dois "e o painel certo" a cada chamada) enquanto o teclado estiver
+        // ativo.
+        bool keyboardActive = get_keyboard_active() != 0;
+        if (currentHitPanel == 1 || keyboardActive) {
             m_uiIdleTime = 0.0f;
         } else {
             m_uiIdleTime += in.DeltaSeconds;
@@ -587,6 +1033,57 @@ public:
         }
         m_beamHandle = m_beamRenderer.AddBeam(in, 0.015f, rayOrigin, pointerEnd, OVR::Vector4f(1.0f, 0.0f, 0.0f, 1.0f));
 
+        // Cursor/reticle no ponto de acerto: o laser sozinho termina "no
+        // vazio", o que dificulta mirar em botoes pequenos com precisao
+        // (feedback de usuario em validacao real). `ovrBeamRenderer` (a
+        // classe ja usada acima pro laser) nao tem uma API de "ponto"
+        // dedicada, e uma 1a tentativa de simular um disco com UM segmento
+        // curto ficou quase invisivel: o fragment shader parametrico do
+        // beam (BeamRenderer.cpp, sem atlas de textura — o overload que
+        // usamos) SEMPRE desvanece a opacidade de 1.0 no `StartPos` (UV.y=0)
+        // ate 0.0 no `EndPos` (UV.y=1) — e o efeito de "laser sumindo ao
+        // longe", mas aplicado a um segmento de 1cm isso rendeia metade
+        // dele quase transparente, nao um disco solido. Correcao: DOIS
+        // segmentos que COMPARTILHAM o mesmo StartPos (exatamente
+        // `pointerEnd`, onde a opacidade e sempre 1.0 pelos dois), cada um
+        // se estendendo um pouco pra um lado (ver `headUp` abaixo pro eixo
+        // escolhido e por que nao pode ser `rayDir`) — a uniao das duas
+        // metades opacas cobre o ponto de acerto de forma simetrica em vez
+        // de so um lado dele. So desenhado quando o raio esta de fato sobre
+        // um painel visivel e interativo (`dispatchHitPanel`).
+        if (m_cursorDotHandle != OVRFW::ovrBeamRenderer::INVALID_BEAM_HANDLE) {
+            m_beamRenderer.RemoveBeam(m_cursorDotHandle);
+            m_cursorDotHandle = OVRFW::ovrBeamRenderer::INVALID_BEAM_HANDLE;
+        }
+        if (m_cursorDotHandle2 != OVRFW::ovrBeamRenderer::INVALID_BEAM_HANDLE) {
+            m_beamRenderer.RemoveBeam(m_cursorDotHandle2);
+            m_cursorDotHandle2 = OVRFW::ovrBeamRenderer::INVALID_BEAM_HANDLE;
+        }
+        if (dispatchHitPanel != 0) {
+            // Vira "risco" fino em vez de disco quando o segmento aponta
+            // quase na mesma direcao que a camera olha pra ele — o
+            // billboard do BeamRenderer calcula a largura como
+            // `beamDir.Cross(viewToCenter)` (ver BeamRenderer.cpp, Frame()),
+            // e produto vetorial de dois vetores quase PARALELOS tende a
+            // zero. `rayDir` (direcao do laser) e quase sempre proximo da
+            // direcao em que a cabeca esta olhando (o usuario olha pra onde
+            // aponta) — exatamente o caso degenerado. Usar o "para cima" da
+            // cabeca como eixo dos 2 mini-segmentos em vez de `rayDir`
+            // evita isso: `headUp` e sempre ~perpendicular a direcao de
+            // visao por construcao, entao o produto vetorial nunca colapsa
+            // no uso normal (so degeneraria se o usuario estivesse olhando
+            // reto pra cima/baixo ao longo do proprio eixo up da cabeca pro
+            // alvo, caso extremo que nao ocorre apontando pra um painel a
+            // frente).
+            OVR::Vector3f headUp = in.HeadPose.Rotation.Rotate(OVR::Vector3f(0.0f, 1.0f, 0.0f));
+            const float kDotWidth = 0.08f;
+            const float kDotHalfLength = 0.015f;
+            OVR::Vector3f nearEnd = pointerEnd - headUp * kDotHalfLength;
+            OVR::Vector3f farEnd = pointerEnd + headUp * kDotHalfLength;
+            m_cursorDotHandle = m_beamRenderer.AddBeam(in, kDotWidth, pointerEnd, farEnd, OVR::Vector4f(1.0f, 0.0f, 0.0f, 1.0f));
+            m_cursorDotHandle2 = m_beamRenderer.AddBeam(in, kDotWidth, pointerEnd, nearEnd, OVR::Vector4f(1.0f, 0.0f, 0.0f, 1.0f));
+        }
+
         // T4.4: A (direita) ou X (esquerda) = Play/Pause. Trigger fora de qualquer
         // painel visivel tambem funciona como atalho de play/pause.
         if ((currA && !prevA) || (currX && !prevX) || (currTrigger && !prevTrigger && dispatchHitPanel == 0)) {
@@ -618,9 +1115,32 @@ public:
         // Menu; ver TODO acima do dono do produto revisar.
         static bool prevMenu = false;
         bool currMenu = (in.AllButtons & OVRFW::ovrApplFrameIn::kButtonMenu) != 0;
-        if (currMenu && !prevMenu) {
-            bool isCurrentlyVisible = m_uiIdleTime < kUiAutoHideSeconds;
-            m_uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
+        // T4.3: long-press no Menu = recenter (so faz sentido com a esfera
+        // 360/180 ativa). Short-press continua fazendo o toggle de
+        // visibilidade do painel Home, comportamento da Fase 2 documentado
+        // acima — a unica mudanca e que agora isso so dispara no RELEASE, e
+        // so se o long-press de recenter nao tiver disparado durante o hold.
+        if (currMenu) {
+            m_menuHoldTime += in.DeltaSeconds;
+            if (!m_recenterFiredThisHold && sphereActive && m_menuHoldTime >= kRecenterHoldSeconds) {
+                // Gira a esfera para que a direcao atual da cabeca vire a
+                // nova "frente" do conteudo (T4.3: "util quando o conteudo
+                // esta girado em relacao ao usuario"). Sinal do angulo nunca
+                // validado em headset fisico (ver static constexpr
+                // kRecenterHoldSeconds acima) — se o recenter girar pro lado
+                // errado num teste real, e so inverter o sinal abaixo.
+                OVR::Vector3f fwd = in.HeadPose.Rotation.Rotate(OVR::Vector3f(0.0f, 0.0f, -1.0f));
+                m_sphereYawOffset = atan2f(fwd.x, -fwd.z);
+                m_recenterFiredThisHold = true;
+                FireHaptic(RightHandPath, 0.5f, 30000000 /* 30ms */);
+            }
+        } else {
+            if (prevMenu && !m_recenterFiredThisHold) {
+                bool isCurrentlyVisible = m_uiIdleTime < kUiAutoHideSeconds;
+                m_uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
+            }
+            m_menuHoldTime = 0.0f;
+            m_recenterFiredThisHold = false;
         }
         prevMenu = currMenu;
 
@@ -837,10 +1357,38 @@ public:
             }
         }
 
-        // Posicao/escala ajustaveis pelo usuario via thumbstick (T3.6)
-        OVR::Matrix4f transform = OVR::Matrix4f::Translation(m_screenPosition) *
-            OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
-        out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_surfaceDef));
+        // T2.7: "o conteudo 360 E o ambiente" — a esfera e a tela plana sao
+        // mutuamente exclusivas, nunca as duas ao mesmo tempo. Entre os 3
+        // programas (mono, estereo-flat, esfera-mono-ou-estereo) so um e
+        // desenhado por frame, escolhido pelo ScreenMode atual.
+        bool sphereActive = IsSphereMode(m_screenMode);
+        bool flatStereoActive = IsFlatStereoMode(m_screenMode);
+        if (sphereActive) {
+            // T2.4/T2.5: m_sphereProgram agora sabe recortar por olho
+            // (uStereoLayout/uSwapEyes, setados em UpdateScreenModeUniforms)
+            // — ver o fragment shader em SessionInit() pra convencao exata
+            // de empacotamento (SBS/OU) e a ressalva honesta sobre Vr180SBS
+            // nunca ter sido validado contra um arquivo real.
+            m_sphereSurfaceDef.graphicsCommand.Textures[0].texture = m_textureId;
+            m_sphereSurfaceDef.graphicsCommand.BindUniformTextures();
+            out.Surfaces.push_back(OVRFW::ovrDrawSurface(m_sphereTransform, &m_sphereSurfaceDef));
+        } else if (flatStereoActive) {
+            // T1.1/T1.2/T1.5: separacao real de olho pro quad SBS/OU (half e
+            // full usam a MESMA matematica de UV — a diferenca entre half/full
+            // e so a densidade de pixels por olho na fonte, nao afeta o corte
+            // — ver T1.3 no doc). Mesma posicao/escala ajustavel do quad mono.
+            m_stereoFlatSurfaceDef.graphicsCommand.Textures[0].texture = m_textureId;
+            m_stereoFlatSurfaceDef.graphicsCommand.BindUniformTextures();
+            OVR::Matrix4f transform = OVR::Matrix4f::Translation(m_screenPosition) *
+                OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
+            out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_stereoFlatSurfaceDef));
+        } else {
+            // Flat2D: quad mono normal, posicao/escala ajustaveis pelo
+            // usuario via thumbstick (T3.6).
+            OVR::Matrix4f transform = OVR::Matrix4f::Translation(m_screenPosition) *
+                OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
+            out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_surfaceDef));
+        }
 
         // Painel do File Browser: billboard + fade in/out por auto-hide (T4.3/T4.5).
         // m_uiTransform/m_uiAlpha sao calculados em Update() para casar exatamente
@@ -883,6 +1431,10 @@ public:
         }
         m_surfaceDef.geo.Free();
         OVRFW::GlProgram::Free(m_program);
+        m_stereoFlatSurfaceDef.geo.Free();
+        OVRFW::GlProgram::Free(m_stereoFlatProgram);
+        m_sphereSurfaceDef.geo.Free();
+        OVRFW::GlProgram::Free(m_sphereProgram);
     }
 
 private:
@@ -892,6 +1444,36 @@ private:
     // Posicao/tamanho da tela virtual, ajustaveis em runtime (T3.6)
     OVR::Vector3f m_screenPosition = OVR::Vector3f(0.0f, 1.5f, -2.0f);
     OVR::Vector2f m_screenScale = OVR::Vector2f(1.6f, 0.9f);
+
+    // T1.1/T1.2/T1.5: quad SBS/OU com separacao real de olho — programa e
+    // geometria proprios, separados de m_program (que continua servindo o
+    // quad 2D mono E os paineis de UI/controles, que nunca podem ser
+    // recortados por olho).
+    OVRFW::GlProgram m_stereoFlatProgram;
+    OVRFW::ovrSurfaceDef m_stereoFlatSurfaceDef;
+    float m_flatStereoLayout = 0.0f; // uniform: 1=SBS, 2=OU (ver stereoFlatFragmentShader)
+
+    // T2: esfera 360/180, mono OU estereo (T2.4/T2.5) — o mesmo programa/
+    // geometria serve os dois casos, diferenciados pelos uniforms
+    // uPolar180/uStereoLayout (ver UpdateScreenModeUniforms). Raio de 20m:
+    // bem alem de qualquer painel de UI (que ficam a ~1.5-2.2m), dentro da
+    // faixa near/far padrao do OVRFW.
+    static constexpr float kSphereRadius = 20.0f;
+    // T4.3: long-press no botao Menu = recenter. 0.6s e o limiar padrao de
+    // "long press" do Android (ViewConfiguration.getLongPressTimeout()),
+    // reaproveitado aqui por familiaridade — nunca validado em headset real
+    // quanto a "sensacao" do timing (ver nota de N/A validation no doc).
+    static constexpr float kRecenterHoldSeconds = 0.6f;
+    OVRFW::GlProgram m_sphereProgram;
+    OVRFW::ovrSurfaceDef m_sphereSurfaceDef;
+    ScreenMode m_screenMode = ScreenMode::Flat2D;
+    float m_uPolar180 = 0.0f; // uniform: 0=360 completo, 1=180 (ver fragment shader da esfera)
+    float m_sphereStereoLayout = 0.0f; // uniform: 0=mono, 1=SBS, 2=OU (ver fragment shader da esfera)
+    float m_swapEyesF = 0.0f; // T1.5: espelha get_swap_eyes(), compartilhado pelos 2 programas estereo
+    float m_sphereYawOffset = 0.0f; // T4.3: recenter — offset de yaw aplicado a esfera
+    OVR::Matrix4f m_sphereTransform;
+    float m_menuHoldTime = 0.0f;
+    bool m_recenterFiredThisHold = false;
 
     // Auto-hide + billboard + alpha blending dos paineis de UI (T4.3/T4.5)
     float m_videoAlpha = 1.0f;
@@ -934,6 +1516,8 @@ private:
 
     OVRFW::ovrBeamRenderer m_beamRenderer;
     OVRFW::ovrBeamRenderer::handle_t m_beamHandle{OVRFW::ovrBeamRenderer::INVALID_BEAM_HANDLE};
+    OVRFW::ovrBeamRenderer::handle_t m_cursorDotHandle{OVRFW::ovrBeamRenderer::INVALID_BEAM_HANDLE};
+    OVRFW::ovrBeamRenderer::handle_t m_cursorDotHandle2{OVRFW::ovrBeamRenderer::INVALID_BEAM_HANDLE};
 };
 
 ENTRY_POINT(VRPlayerApp)

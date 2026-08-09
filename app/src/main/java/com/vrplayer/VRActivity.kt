@@ -15,6 +15,13 @@ import android.os.Environment
 import android.provider.Settings
 import android.content.Intent
 import android.net.Uri
+import android.text.Editable
+import android.text.TextWatcher
+import android.view.ViewGroup
+import android.view.inputmethod.InputMethodManager
+import android.widget.EditText
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.vrplayer.history.PlaybackHistoryTracker
 import com.vrplayer.navigation.PlaybackSource
 
@@ -24,6 +31,26 @@ class VRActivity : NativeActivity() {
 
     private var controlsVirtualDisplay: android.hardware.display.VirtualDisplay? = null
     private var controlsPresentation: VRControlsPresentation? = null
+
+    // ==================== TECLADO NATIVO (ver VRPresentation.buildVoidEditText) ====================
+    // `nativeKeyboardProxy` e um EditText REAL, anexado direto na janela
+    // desta Activity (`addContentView`, nao numa VirtualDisplay) — e o unico
+    // jeito de um EditText deste app receber o IME de verdade (ver
+    // raciocinio completo em VRPresentation.kt, secao "TECLADO NATIVO").
+    // Apps `com.oculus.vr.mode=vr_only` (ver AndroidManifest.xml) nao
+    // compositam Views 2D extras da Activity no headset — so a superficie
+    // OpenXR e mostrada — entao este proxy nunca aparece visualmente pro
+    // usuario; ele so precisa EXISTIR com foco real de janela pra o Horizon
+    // OS (com `oculus.software.overlay_keyboard` declarado no manifest)
+    // mostrar o teclado do sistema como overlay 3D. NUNCA validado em
+    // headset real (sem hardware disponivel nesta sessao) — o mecanismo em
+    // si e o mesmo da amostra oficial
+    // sdk/meta-openxr-sdk/Samples/XrSamples/XrOverlayKeyboard/java/.../MainActivity.java
+    // (inclusive o delay de 300ms antes de focar, "pra garantir que a view
+    // ja esta anexada a janela" — copiado de la, nao um numero arbitrario).
+    private lateinit var nativeKeyboardProxy: EditText
+    private var keyboardMirrorWatcher: TextWatcher? = null
+    private var keyboardMirrorTarget: EditText? = null
 
     // Hook de teste (soak test via adb, ver scripts/soak-test.sh): permite disparar
     // playback sem controller, ex. `adb shell am start -n com.vrplayer/.VRActivity
@@ -59,6 +86,86 @@ class VRActivity : NativeActivity() {
         }
 
         pendingAutoPlayPath = intent?.getStringExtra(EXTRA_AUTO_PLAY_PATH)
+
+        // Ver bloco de comentario acima de `nativeKeyboardProxy`.
+        nativeKeyboardProxy = EditText(this)
+        addContentView(nativeKeyboardProxy, ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
+
+        // KEYBOARD_ACTIVE (ver rust/bridge/src/lib.rs): em vez de uma flag
+        // manual setada "na mao" em showNativeKeyboardFor/hideNativeKeyboard
+        // (primeira versao desta correcao — fragil, porque o teclado pode
+        // fechar por um caminho que NAO passa por `hideNativeKeyboard`, ex.
+        // o usuario aperta o botao de fechar do proprio teclado nativo, e a
+        // flag ficaria presa em "ativo" pra sempre), usa a visibilidade REAL
+        // do IME que o proprio Android/sistema reporta via
+        // `WindowInsetsCompat.Type.ime()`. Isso e disparado toda vez que a
+        // visibilidade do IME muda de verdade, seja por que caminho for —
+        // fonte da verdade unica, nunca dessincroniza.
+        ViewCompat.setOnApplyWindowInsetsListener(window.decorView) { _, insets ->
+            nativeSetKeyboardActive(insets.isVisible(WindowInsetsCompat.Type.ime()))
+            insets
+        }
+    }
+
+    /**
+     * Chamado por `VRPresentation.buildVoidEditText` quando um campo de
+     * texto do painel VR ganha foco. Foca o [nativeKeyboardProxy] (EditText
+     * real, ver comentario na declaracao) pra abrir o teclado nativo do
+     * Meta Quest, pre-preenchido com o texto atual de [target], e liga um
+     * `TextWatcher` que espelha cada mudanca de volta pra [target] — o
+     * usuario ve o texto aparecer no campo do painel VR normalmente, mesmo
+     * digitando num EditText que fisicamente vive noutra janela.
+     */
+    fun showNativeKeyboardFor(target: EditText) {
+        // `nativeSetKeyboardActive` NAO e chamado aqui de proposito — o
+        // listener de WindowInsets em onCreate ja cobre isso a partir da
+        // visibilidade real do IME (ver comentario la pro raciocinio
+        // completo de por que isso e mais confiavel que setar na mao).
+        keyboardMirrorWatcher?.let { nativeKeyboardProxy.removeTextChangedListener(it) }
+
+        keyboardMirrorTarget = target
+        nativeKeyboardProxy.setText(target.text)
+        nativeKeyboardProxy.setSelection(nativeKeyboardProxy.text.length)
+
+        val watcher = object : TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
+            override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
+            override fun afterTextChanged(s: Editable) {
+                val current = keyboardMirrorTarget ?: return
+                val text = s.toString()
+                if (current.text.toString() != text) {
+                    current.setText(text)
+                    val sel = nativeKeyboardProxy.selectionStart.coerceIn(0, current.text.length)
+                    current.setSelection(sel)
+                }
+            }
+        }
+        keyboardMirrorWatcher = watcher
+        nativeKeyboardProxy.addTextChangedListener(watcher)
+
+        // Delay de 300ms: mesmo valor usado pela amostra oficial (ver
+        // comentario na declaracao de `nativeKeyboardProxy`) — sem ele, o
+        // `requestFocus()` pode disparar antes da view estar de fato anexada
+        // a janela (especialmente na primeira chamada, logo apos onCreate).
+        nativeKeyboardProxy.postDelayed({
+            nativeKeyboardProxy.requestFocus()
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.showSoftInput(nativeKeyboardProxy, InputMethodManager.SHOW_IMPLICIT)
+        }, 300L)
+    }
+
+    /** Contraparte de [showNativeKeyboardFor] — chamado ao perder foco ou trocar de tela. */
+    fun hideNativeKeyboard() {
+        keyboardMirrorWatcher?.let { nativeKeyboardProxy.removeTextChangedListener(it) }
+        keyboardMirrorWatcher = null
+        keyboardMirrorTarget = null
+        nativeKeyboardProxy.postDelayed({
+            nativeKeyboardProxy.clearFocus()
+            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+            imm.hideSoftInputFromWindow(nativeKeyboardProxy.windowToken, 0)
+        }, 300L)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -274,6 +381,24 @@ class VRActivity : NativeActivity() {
         resumeAtMs?.let { scheduleResumeSeek(it) }
     }
 
+    // T6.4: mesma logica de playSmb acima, so que sem `share`/`domain` (FTP
+    // nao tem esses conceitos).
+    fun playFtp(server: com.vrplayer.network.FtpServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
+        val source = PlaybackSource.Ftp(server, path, sizeBytes)
+        historyTracker.startTracking(source, title = path.substringAfterLast('/'))
+        nativePlayFtp(server.host, server.port, path, server.username, server.password)
+        resumeAtMs?.let { scheduleResumeSeek(it) }
+    }
+
+    // T6.4: mesma logica acima, com `privateKey` (conteudo PEM, ver
+    // `com.vrplayer.network.SftpServer`) no lugar de `share`/`domain`.
+    fun playSftp(server: com.vrplayer.network.SftpServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
+        val source = PlaybackSource.Sftp(server, path, sizeBytes)
+        historyTracker.startTracking(source, title = path.substringAfterLast('/'))
+        nativePlaySftp(server.host, server.port, path, server.username, server.password, server.privateKey ?: "")
+        resumeAtMs?.let { scheduleResumeSeek(it) }
+    }
+
     /**
      * T9.3, ressalva honesta: nao ha nenhum callback do Rust/C++ avisando
      * "playback pronto para receber seek" (o unico sinal de progresso que
@@ -313,6 +438,14 @@ class VRActivity : NativeActivity() {
     external fun nativeSetSpeed(speed: Float)
     external fun nativeCycleAudioTrack()
 
+    // T1.4/T1.5: modo de exibicao 3D (ver ScreenMode em
+    // native/src/vr_player_app.cpp e a codificacao em rust/bridge/src/lib.rs)
+    // e swap-eyes. Chamadas baratas (so um atomic no lado Rust, sem I/O) —
+    // seguro chamar direto da UI thread, sem coroutine/Dispatchers.IO.
+    external fun nativeCycle3DMode(): Int
+    external fun nativeGet3DMode(): Int
+    external fun nativeToggleSwapEyes(): Int
+
     // T6.4: playback SMB (credenciais como parametros separados, ver playSmb()).
     external fun nativePlaySmb(
         host: String,
@@ -341,4 +474,25 @@ class VRActivity : NativeActivity() {
     // T7.1: probe HEAD-based de URL HTTP(S) (bloqueante, mesma ressalva acima).
     // Retorno: "OK\t{seekable 0|1}\t{content_length ou -1}" ou "ERROR:<mensagem>".
     external fun nativeProbeHttpUrl(url: String): String
+
+    // T6.4: playback FTP (credenciais como parametros separados, ver playFtp()).
+    external fun nativePlayFtp(host: String, port: Int, path: String, username: String, password: String)
+
+    // T6.1/T6.4: listagem FTP (bloqueante — SEMPRE de Dispatchers.IO).
+    // Retorno: linhas separadas por \n, ou "ERROR:<mensagem>".
+    external fun nativeFtpListDirectory(host: String, port: Int, username: String, password: String, path: String): String
+
+    // T6.4: playback SFTP. `privateKey`: conteudo PEM da chave privada (nao
+    // um caminho de arquivo, ver rust/protocols/src/sftp/uri.rs), string
+    // vazia = autenticacao por senha.
+    external fun nativePlaySftp(host: String, port: Int, path: String, username: String, password: String, privateKey: String)
+
+    // T6.2/T6.4: listagem SFTP (bloqueante — SEMPRE de Dispatchers.IO).
+    external fun nativeSftpListDirectory(host: String, port: Int, username: String, password: String, privateKey: String, path: String): String
+
+    // Bug de auto-hide durante digitacao (ver showNativeKeyboardFor/
+    // hideNativeKeyboard abaixo, e KEYBOARD_ACTIVE em rust/bridge/src/lib.rs):
+    // avisa o render loop C++ pra suprimir o fade-out do painel enquanto o
+    // teclado nativo estiver aberto.
+    external fun nativeSetKeyboardActive(active: Boolean)
 }

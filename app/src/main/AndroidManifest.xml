@@ -6,6 +6,15 @@
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Teclado nativo do Meta Quest (VRActivity.showNativeKeyboardFor):
+         diz ao Horizon OS que este app quer o teclado do sistema exibido
+         como overlay 3D quando um EditText real (nao numa VirtualDisplay)
+         ganha foco/IME — ver amostra oficial
+         sdk/meta-openxr-sdk/Samples/XrSamples/XrOverlayKeyboard. required=false
+         pra nao impedir instalacao em versoes do Horizon OS sem o recurso
+         (o app so perderia o overlay automatico nesse caso, nao quebraria). -->
+    <uses-feature android:name="oculus.software.overlay_keyboard" android:required="false" />
+
     <application
         android:allowBackup="true"
         android:label="@string/app_name"

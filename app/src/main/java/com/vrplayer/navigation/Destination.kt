@@ -1,5 +1,7 @@
 package com.vrplayer.navigation
 
+import com.vrplayer.network.FtpServer
+import com.vrplayer.network.SftpServer
 import com.vrplayer.network.SmbServer
 
 /**
@@ -18,9 +20,11 @@ import com.vrplayer.network.SmbServer
  *
  * Este arquivo e [AppNavigator] sao Kotlin puro (sem `Context`/`View`/nenhum
  * import `android.*`) de proposito: precisam ser exercitaveis com JUnit puro
- * na JVM, sem Robolectric nem um device/emulador. A UNICA dependencia
- * "de fora" e [SmbServer], que e um data class puro (sem framework Android
- * em si — so a classe que o persiste, `SmbCredentialStore`, usa Android).
+ * na JVM, sem Robolectric nem um device/emulador. As UNICAS dependencias
+ * "de fora" sao [SmbServer]/[FtpServer]/[SftpServer], data classes puras
+ * (sem framework Android em si — so as classes que os persistem,
+ * `SmbCredentialStore`/`FtpCredentialStore`/`SftpCredentialStore`, usam
+ * Android).
  *
  * O botao fisico Menu (esquerdo), que antes abria/fechava o quad de rede
  * dedicado, agora tambem alterna a visibilidade deste quad unico (mesmo
@@ -51,6 +55,12 @@ sealed class Destination {
     /** Listagem de um diretorio dentro de um compartilhamento SMB ja conectado. */
     data class NetworkFiles(val server: SmbServer, val path: String) : Destination()
 
+    /** T6.4: listagem de um diretorio num servidor FTP ja conectado. */
+    data class NetworkFtpFiles(val server: FtpServer, val path: String) : Destination()
+
+    /** T6.4: listagem de um diretorio num servidor SFTP ja conectado. */
+    data class NetworkSftpFiles(val server: SftpServer, val path: String) : Destination()
+
     /** Reproduzindo [source]. */
     data class Player(val source: PlaybackSource) : Destination()
 }
@@ -72,4 +82,8 @@ sealed class PlaybackSource {
     data class LocalFile(val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
     data class Http(val url: String) : PlaybackSource()
     data class Smb(val server: SmbServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
+    /** T6.4: mesma logica de [Smb] acima, ver `VRActivity.playFtp`. */
+    data class Ftp(val server: FtpServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
+    /** T6.4: mesma logica de [Smb] acima, ver `VRActivity.playSftp`. */
+    data class Sftp(val server: SftpServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
 }

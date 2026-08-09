@@ -29,10 +29,12 @@
     <string name="browser_label_size_mb_format">%1$.1f MB</string>
     <string name="browser_label_size_gb_format">%1$.2f GB</string>
 
-    <!-- Rede: landing com abas URL / SMB (VRPresentation.renderNetworkHome) -->
+    <!-- Rede: landing com abas URL / SMB / FTP (VRPresentation.renderNetworkHome) -->
     <string name="network_title">Rede</string>
     <string name="network_tab_url">🔗 URL</string>
     <string name="network_tab_smb">🗄 SMB</string>
+    <string name="network_tab_ftp">📡 FTP</string>
+    <string name="network_tab_sftp">🔐 SFTP</string>
 
     <!-- Rede: aba URL (VRPresentation.buildNetworkUrlPage) -->
     <string name="network_url_hint">http:// ou https://...</string>
@@ -78,20 +80,81 @@
         <item quantity="other">✓ Conectado (%1$d shares encontrados)</item>
     </plurals>
 
-    <!-- Rede: navegacao de diretorio SMB (VRPresentation.renderNetworkFiles / loadNetworkDirectory) -->
+    <!-- Rede: navegacao de diretorio SMB/FTP (VRPresentation.renderNetworkFiles/renderNetworkFtpFiles) -->
     <string name="network_files_loading">Carregando...</string>
     <string name="network_files_empty">(vazio)</string>
+
+    <!-- T6.4: Rede: aba FTP — espelha network_smb_* acima -->
+    <string name="network_ftp_saved_servers_header">Servidores salvos</string>
+    <string name="network_ftp_empty">(nenhum servidor salvo)</string>
+    <string name="network_ftp_anonymous_label">anonimo</string>
+    <string name="network_ftp_row_label_format">📡 %1$s</string>
+    <string name="network_ftp_btn_add_server">+ Adicionar servidor</string>
+
+    <!-- Rede: aba FTP — formulario de adicionar servidor (VRPresentation.buildAddFtpServerForm) -->
+    <string name="network_ftp_form_host_label">Host / IP</string>
+    <string name="network_ftp_form_port_label">Porta</string>
+    <string name="network_ftp_form_anonymous_checkbox">Anonimo (sem usuario/senha)</string>
+    <string name="network_ftp_form_user_label">Usuario</string>
+    <string name="network_ftp_form_user_hint">usuario</string>
+    <string name="network_ftp_form_pass_label">Senha</string>
+    <string name="network_ftp_form_pass_hint">senha</string>
+    <string name="network_ftp_btn_test_save">Testar e salvar</string>
+    <string name="network_ftp_form_status_host_required">⚠ Host obrigatorio</string>
+    <string name="network_ftp_form_status_connecting">Conectando...</string>
+    <string name="network_ftp_form_status_error_format">✗ Falha: %1$s</string>
+    <string name="network_ftp_form_status_connected">✓ Conectado</string>
+
+    <!-- T6.4: Rede: aba SFTP — espelha network_ftp_* acima -->
+    <string name="network_sftp_saved_servers_header">Servidores salvos</string>
+    <string name="network_sftp_empty">(nenhum servidor salvo)</string>
+    <string name="network_sftp_key_auth_label">chave</string>
+    <string name="network_sftp_row_label_format">🔐 %1$s</string>
+    <string name="network_sftp_btn_add_server">+ Adicionar servidor</string>
+    <string name="network_sftp_form_host_label">Host / IP</string>
+    <string name="network_sftp_form_port_label">Porta</string>
+    <string name="network_sftp_form_use_key_checkbox">Usar chave privada em vez de senha</string>
+    <string name="network_sftp_form_user_label">Usuario</string>
+    <string name="network_sftp_form_user_hint">usuario</string>
+    <string name="network_sftp_form_pass_label">Senha</string>
+    <string name="network_sftp_form_pass_hint">senha</string>
+    <string name="network_sftp_form_key_label">Chave privada (PEM)</string>
+    <string name="network_sftp_form_key_hint">-----BEGIN OPENSSH PRIVATE KEY-----…</string>
+    <string name="network_sftp_form_btn_paste_key">📋 Colar chave</string>
+    <string name="network_sftp_btn_test_save">Testar e salvar</string>
+    <string name="network_sftp_form_status_host_required">⚠ Host obrigatorio</string>
+    <string name="network_sftp_form_status_auth_required">⚠ Senha ou chave privada obrigatoria</string>
+    <string name="network_sftp_form_status_connecting">Conectando...</string>
+    <string name="network_sftp_form_status_error_format">✗ Falha: %1$s</string>
+    <string name="network_sftp_form_status_connected">✓ Conectado</string>
 
     <!-- Player: tela apos selecionar midia (VRPresentation.renderPlayer) -->
     <string name="player_title">Reproduzindo</string>
     <string name="player_label_controls_hint">Os controles de reproducao (play/pause/seek/volume) aparecem ao apontar para a tela de video.</string>
     <string name="player_label_smb_source_format">%1$s/%2$s</string>
+    <string name="player_label_ftp_source_format">%1$s/%2$s</string>
+    <string name="player_label_sftp_source_format">%1$s/%2$s</string>
 
     <!-- Painel de controles de reproducao (VRControlsPresentation) -->
     <string name="player_btn_play_pause">Reproduzir / Pausar</string>
     <string name="player_controls_time_format">%1$s / %2$s</string>
     <string name="player_controls_volume_format">🔊 %1$d%%</string>
     <string name="player_controls_speed_format">⏱ %1$.2fx</string>
+
+    <!-- T1.4/T2: modo de exibicao 3D (VRControlsPresentation) -->
+    <string name="player_btn_3d_mode_format">🧊 %1$s</string>
+    <string name="player_mode_2d">2D</string>
+    <string name="player_mode_sbs">SBS</string>
+    <string name="player_mode_sbs_half">SBS (metade)</string>
+    <string name="player_mode_ou">OU</string>
+    <string name="player_mode_ou_half">OU (metade)</string>
+    <string name="player_mode_360">360°</string>
+    <string name="player_mode_180">180°</string>
+    <string name="player_mode_360_sbs">360° SBS</string>
+    <string name="player_mode_360_ou">360° OU</string>
+    <string name="player_mode_180_sbs">180° SBS</string>
+    <string name="player_btn_swap_eyes">👁 Trocar olhos</string>
+    <string name="player_btn_recenter">🎯 Recentralizar</string>
 
     <!-- Historico de reproducao (T9.3 prompt "Retomar?" / T9.4 "Continuar assistindo") -->
     <string name="history_resume_prompt_title">Continuar de onde parou?</string>
@@ -101,6 +164,8 @@
     <string name="history_continue_watching_title">Continuar assistindo</string>
     <string name="history_empty">(nenhum historico ainda)</string>
     <string name="history_row_http_format">🌐 %1$s</string>
+    <string name="history_row_ftp_format">📡 %1$s</string>
+    <string name="history_row_sftp_format">🔐 %1$s</string>
     <string name="history_row_meta_format">%1$s / %2$s · %3$d%%</string>
     <string name="history_btn_remove">✕</string>
 
