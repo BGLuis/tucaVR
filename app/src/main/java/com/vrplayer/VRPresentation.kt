@@ -608,6 +608,9 @@ class VRPresentation(
                 setPadding(0, VoidTheme.dpToPx(context, 8f), 0, 0)
             })
             form.addView(field)
+            form.addView(buildPasteButton(field), LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = VoidTheme.dpToPx(context, 4f) })
         }
 
         val formHost = buildVoidEditText("192.168.1.10")
@@ -956,6 +959,9 @@ class VRPresentation(
                 setPadding(0, VoidTheme.dpToPx(context, 8f), 0, 0)
             })
             form.addView(field)
+            form.addView(buildPasteButton(field), LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = VoidTheme.dpToPx(context, 4f) })
         }
 
         val formHost = buildVoidEditText("192.168.1.10")
@@ -1264,11 +1270,14 @@ class VRPresentation(
             setPadding(pad, pad, pad, pad)
         }
 
-        fun addLabeled(text: String, field: View) {
+        fun addLabeled(text: String, field: EditText) {
             form.addView(VoidText.mono(context, text, sizeSp = 13f).apply {
                 setPadding(0, VoidTheme.dpToPx(context, 8f), 0, 0)
             })
             form.addView(field)
+            form.addView(buildPasteButton(field), LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = VoidTheme.dpToPx(context, 4f) })
         }
 
         val formHost = buildVoidEditText("192.168.1.10")
@@ -1291,6 +1300,9 @@ class VRPresentation(
         }
         form.addView(passLabel)
         form.addView(formPass)
+        form.addView(buildPasteButton(formPass), LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = VoidTheme.dpToPx(context, 4f) })
 
         // T6.2: chave privada — colada como texto PEM (nao ha seletor de
         // arquivo aqui; "avancado" per o doc, T6.4). Multi-linha pra caber
@@ -1567,6 +1579,32 @@ class VRPresentation(
             } else if (keyboardTarget === editText) {
                 keyboardTarget = null
                 activity.hideNativeKeyboard()
+            }
+        }
+    }
+
+    /**
+     * Bolha nativa "Colar" do long-press em EditText nunca funciona aqui: e
+     * uma janela popup separada da Presentation (mesmo esta sendo composta
+     * na mesma VirtualDisplay, entao aparece no quad 3D), e o toque
+     * sintetico do controller (`dispatchVRTouch` em VRActivity.kt) so
+     * alcanca a janela da propria Presentation via `dispatchTouchEvent` —
+     * mesma classe de restricao da secao "TECLADO NATIVO" abaixo. Por isso
+     * todo EditText do painel ganha este botao "Colar" explicito (View
+     * normal dentro da hierarquia da Presentation, entao recebe o toque
+     * normalmente), lendo o ClipboardManager direto — padrao que ja existia
+     * isolado em btnPaste (aba URL) e btnPasteKey (SFTP), centralizado aqui.
+     */
+    private fun buildPasteButton(field: EditText): VoidButton = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+        text = context.getString(R.string.network_url_btn_paste)
+        textSize = 16f
+        setOnClickListener {
+            val clipboard = activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = clipboard.primaryClip
+            if (clip != null && clip.itemCount > 0) {
+                val text = clip.getItemAt(0).coerceToText(activity).toString()
+                field.setText(text)
+                field.setSelection(text.length)
             }
         }
     }

@@ -54,7 +54,7 @@ impl HwDecoder {
     /// estiver esperando essa thread tambem.
     pub fn decode_packet<F, A, S>(&self, data: &[u8], pts: i64, flags: u32, mut sync_callback: F, mut after_release: A, should_continue: S) -> Result<bool, String>
     where
-        F: FnMut(i64),
+        F: FnMut(i64) -> bool,
         A: FnMut(),
         S: Fn() -> bool,
     {
@@ -97,9 +97,9 @@ impl HwDecoder {
         }
     }
     
-    pub fn release_output_frames_with_sync<F, A>(&self, mut sync_callback: F, mut after_release: A) -> bool 
-    where 
-        F: FnMut(i64),
+    pub fn release_output_frames_with_sync<F, A>(&self, mut sync_callback: F, mut after_release: A) -> bool
+    where
+        F: FnMut(i64) -> bool,
         A: FnMut(),
     {
         let mut released = false;
@@ -108,9 +108,11 @@ impl HwDecoder {
                 match codec.dequeue_output_buffer(Duration::from_millis(0)) {
                     Ok(DequeuedOutputBufferInfoResult::Buffer(buf)) => {
                         let pts = buf.info().presentation_time_us();
-                        sync_callback(pts);
-                        let _ = codec.release_output_buffer(buf, true);
-                        after_release();
+                        let should_render = sync_callback(pts);
+                        let _ = codec.release_output_buffer(buf, should_render);
+                        if should_render {
+                            after_release();
+                        }
                         released = true;
                     }
                     Ok(DequeuedOutputBufferInfoResult::TryAgainLater) => {
@@ -125,6 +127,6 @@ impl HwDecoder {
     }
 
     pub fn release_output_frames(&self) {
-        self.release_output_frames_with_sync(|_| {}, || {});
+        self.release_output_frames_with_sync(|_| true, || {});
     }
 }

@@ -21,6 +21,10 @@
 #include <cmath>
 #include <unordered_map>
 #include <vector>
+#include <atomic>
+#include <mutex>
+#include <string>
+#include <cstdio>
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "VRPlayerApp", __VA_ARGS__)
 
@@ -28,6 +32,8 @@ extern "C" {
     extern void start_video_playback(const char* path);
     extern void stop_video_playback();
     extern void toggle_play_pause();
+    extern void on_app_focus_lost();
+    extern void on_app_focus_gained();
     extern AHardwareBuffer* get_current_video_frame();
     extern void get_video_progress(float* current, float* total);
     extern void set_video_volume(float volume);
@@ -51,6 +57,7 @@ extern "C" {
                                      const char* share, const char* path);
     extern char* probe_http_url(const char* url);
     extern void free_rust_string(char* ptr);
+    extern char* take_last_playback_error();
 
     // T6.4: FTP — mesmo padrao de start_smb_playback/smb_list_directory
     // (credenciais como parametros separados, nunca uma URI unica cruzando
@@ -74,6 +81,7 @@ extern "C" {
     // `enum class ScreenMode` abaixo espelha 1:1).
     extern uint32_t cycle_3d_mode();
     extern uint32_t get_3d_mode();
+    extern void set_3d_mode(uint32_t mode);
     extern uint32_t toggle_swap_eyes();
     extern uint32_t get_swap_eyes();
 
@@ -81,6 +89,23 @@ extern "C" {
     // completo em rust/bridge/src/lib.rs junto de KEYBOARD_ACTIVE.
     extern void set_keyboard_active(uint32_t active);
     extern uint32_t get_keyboard_active();
+}
+
+// Debug: dump do olho esquerdo pra PPM sob demanda (ver nativeRequestFrameCapture)
+// — screencap/screenrecord nao capturam vr_only (compositor OpenXR, sem layer 2D).
+static std::atomic<bool> g_captureRequested{false};
+static std::string g_capturePath;
+static std::mutex g_capturePathMutex;
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeRequestFrameCapture(JNIEnv* env, jobject thiz, jstring path) {
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+    {
+        std::lock_guard<std::mutex> lock(g_capturePathMutex);
+        g_capturePath = pathStr;
+    }
+    env->ReleaseStringUTFChars(path, pathStr);
+    g_captureRequested = true;
 }
 
 // Helper comum as 3 funcoes JNI que retornam string alocada pelo Rust
@@ -105,6 +130,19 @@ Java_com_vrplayer_VRActivity_nativePlayVideo(JNIEnv* env, jobject thiz, jstring 
 extern "C" JNIEXPORT void JNICALL
 Java_com_vrplayer_VRActivity_nativeTogglePlayPause(JNIEnv* env, jobject thiz) {
     toggle_play_pause();
+}
+
+// Kotlin faz polling disto (ver autoPlayHandler em VRActivity.kt) pra mostrar um Toast quando
+// controller.load() falha (ex.: codec nao suportado) — antes o erro so ia pro logcat.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeTakeLastPlaybackError(JNIEnv* env, jobject thiz) {
+    char* rustStr = take_last_playback_error();
+    if (!rustStr) {
+        return nullptr;
+    }
+    jstring result = env->NewStringUTF(rustStr);
+    free_rust_string(rustStr);
+    return result;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -138,6 +176,11 @@ Java_com_vrplayer_VRActivity_nativeCycle3DMode(JNIEnv* env, jobject thiz) {
 extern "C" JNIEXPORT jint JNICALL
 Java_com_vrplayer_VRActivity_nativeGet3DMode(JNIEnv* env, jobject thiz) {
     return (jint)get_3d_mode();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeSetScreenMode(JNIEnv* env, jobject thiz, jint mode) {
+    set_3d_mode((uint32_t)mode);
 }
 
 // T1.5: botao "👁 Swap eyes" — inverte qual metade do frame SBS/OU (flat ou
@@ -482,6 +525,47 @@ public:
         return true;
     }
 
+    // Sem isso, o decoder HW continua ocupado em segundo plano ao trocar de app no Quest.
+    // So STOPPING pausa: VISIBLE e normal (guardian, notificacao, dashboard piscando) e
+    // pausava o video toda hora, sentido pelo usuario como travada (achado em teste real).
+    virtual void SessionStateChanged(XrSessionState state) override {
+        if (state == XR_SESSION_STATE_FOCUSED) {
+            on_app_focus_gained();
+        } else if (state == XR_SESSION_STATE_STOPPING) {
+            on_app_focus_lost();
+        }
+    }
+
+    virtual void AppRenderEye(const OVRFW::ovrApplFrameIn& in, OVRFW::ovrRendererOutput& out, int eye) override {
+        OVRFW::XrApp::AppRenderEye(in, out, eye);
+        // Captura os DOIS olhos (nao so eye 0) — pra comparar resolucao/qualidade entre
+        // eles precisa dos dois arquivos da MESMA reproducao. So limpa g_captureRequested
+        // depois do ultimo olho (eye 1), senao o olho 1 nunca seria capturado.
+        if (g_captureRequested.load()) {
+            GLint viewport[4];
+            glGetIntegerv(GL_VIEWPORT, viewport);
+            int w = viewport[2], h = viewport[3];
+            std::vector<uint8_t> pixels((size_t)w * h * 4);
+            glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+            std::string basePath;
+            { std::lock_guard<std::mutex> lock(g_capturePathMutex); basePath = g_capturePath; }
+            std::string path = basePath + (eye == 0 ? ".left.ppm" : ".right.ppm");
+            FILE* f = fopen(path.c_str(), "wb");
+            if (f) {
+                fprintf(f, "P6\n%d %d\n255\n", w, h);
+                // glReadPixels vem de baixo pra cima; PPM espera de cima pra baixo.
+                for (int y = h - 1; y >= 0; y--) {
+                    for (int x = 0; x < w; x++) {
+                        fwrite(&pixels[(size_t)(y * w + x) * 4], 1, 3, f);
+                    }
+                }
+                fclose(f);
+                LOGI("VRPlayerApp: frame capturado em %s (%dx%d)", path.c_str(), w, h);
+            }
+            if (eye == 1) g_captureRequested = false;
+        }
+    }
+
     virtual bool SessionInit() override {
         LOGI("VRPlayerApp::SessionInit");
         
@@ -514,6 +598,15 @@ public:
         )";
 
         const char* fDirective = "#extension GL_OES_EGL_image_external_essl3 : require\n";
+
+        // FLAG: liga/desliga o sharpen adaptativo (CAS) nos shaders de video estereo/esfera.
+        // Pesquisado a pedido do usuario apos comparacao com outro player (4XVR) — formula
+        // portada do AMD FidelityFX CAS simplificado (4 vizinhos, sem upsampling/FP16), ver
+        // https://gpuopen.com/fidelityfx-cas/. Sharpen adapta a forca por contraste local
+        // (min/max da vizinhanca), diferente do unsharp mask de peso fixo testado antes.
+        constexpr bool kSharpenEnabled = true;
+        const std::string fDirectiveSharpen = std::string(fDirective) +
+            "#define SHARPEN_ENABLED " + (kSharpenEnabled ? "1" : "0") + "\n";
         const char* fragmentShader = R"(
             in vec2 vTexCoord;
             out vec4 FragColor;
@@ -584,6 +677,7 @@ public:
             uniform samplerExternalOES sTexture;
             uniform float uStereoLayout; // 1 = SBS, 2 = OU
             uniform float uSwapEyes;
+            uniform float uSharpness; // 0..1, ver SHARPEN_ENABLED/kSharpenEnabled
             void main() {
                 vec2 uv = vTexCoord;
                 int eye = vEye;
@@ -595,8 +689,26 @@ public:
                 } else {
                     uv.x = uv.x * 0.5 + float(eye) * 0.5;
                 }
-                vec4 texColor = texture(sTexture, uv);
-                FragColor = vec4(texColor.rgb, 1.0);
+#if SHARPEN_ENABLED
+                // CAS (AMD FidelityFX Contrast Adaptive Sharpening, simplificado) — forca se
+                // adapta ao contraste local (min/max da vizinhanca) em vez de peso fixo, entao
+                // areas planas/ruido sao menos afetadas que bordas reais. uSharpness em [0,1].
+                vec2 texel = 1.0 / vec2(textureSize(sTexture, 0));
+                vec3 c = texture(sTexture, uv).rgb;
+                vec3 n = texture(sTexture, uv + vec2(0.0, texel.y)).rgb;
+                vec3 s = texture(sTexture, uv - vec2(0.0, texel.y)).rgb;
+                vec3 e = texture(sTexture, uv + vec2(texel.x, 0.0)).rgb;
+                vec3 w = texture(sTexture, uv - vec2(texel.x, 0.0)).rgb;
+                vec3 mn = min(c, min(min(n, s), min(e, w)));
+                vec3 mx = max(c, max(max(n, s), max(e, w)));
+                vec3 amp = sqrt(clamp(min(mn, 2.0 - mx) / mx, 0.0, 1.0));
+                float peak = -mix(8.0, 5.0, uSharpness);
+                vec3 wgt = amp / peak;
+                vec3 sharpened = ((n + s + e + w) * wgt + c) / (1.0 + 4.0 * wgt);
+                FragColor = vec4(clamp(sharpened, 0.0, 1.0), 1.0);
+#else
+                FragColor = vec4(texture(sTexture, uv).rgb, 1.0);
+#endif
             }
         )";
 
@@ -604,14 +716,16 @@ public:
             {"sTexture", OVRFW::ovrProgramParmType::TEXTURE_SAMPLED},
             {"uStereoLayout", OVRFW::ovrProgramParmType::FLOAT},
             {"uSwapEyes", OVRFW::ovrProgramParmType::FLOAT},
+            {"uSharpness", OVRFW::ovrProgramParmType::FLOAT},
         };
-        m_stereoFlatProgram = OVRFW::GlProgram::Build(vDirective, stereoFlatVertexShader, fDirective, stereoFlatFragmentShader, stereoFlatParms, 3);
+        m_stereoFlatProgram = OVRFW::GlProgram::Build(vDirective, stereoFlatVertexShader, fDirectiveSharpen.c_str(), stereoFlatFragmentShader, stereoFlatParms, 4);
 
         m_stereoFlatSurfaceDef.geo = OVRFW::BuildTesselatedQuad(2, 2, false);
         m_stereoFlatSurfaceDef.graphicsCommand.Textures[0].target = GL_TEXTURE_EXTERNAL_OES;
         m_stereoFlatSurfaceDef.graphicsCommand.Program = m_stereoFlatProgram;
         m_stereoFlatSurfaceDef.graphicsCommand.UniformData[1].Data = &m_flatStereoLayout;
         m_stereoFlatSurfaceDef.graphicsCommand.UniformData[2].Data = &m_swapEyesF;
+        m_stereoFlatSurfaceDef.graphicsCommand.UniformData[3].Data = &m_sharpness;
 
         // ------------------ INITIALIZE 360/180 SPHERE (T2) ------------------
         // Mesmo vertex shader do quad plano (so faz TransformVertex + repassa
@@ -677,6 +791,7 @@ public:
             uniform float uPolar180;
             uniform float uStereoLayout; // 0 = mono, 1 = SBS, 2 = OU
             uniform float uSwapEyes;
+            uniform float uSharpness; // 0..1, ver SHARPEN_ENABLED/kSharpenEnabled
             void main() {
                 vec2 uv = vTexCoord;
                 if (uPolar180 > 0.5) {
@@ -694,8 +809,25 @@ public:
                 } else if (uStereoLayout > 0.5) {
                     uv.x = uv.x * 0.5 + float(eye) * 0.5;
                 }
-                vec4 texColor = texture(sTexture, uv);
-                FragColor = vec4(texColor.rgb, 1.0);
+#if SHARPEN_ENABLED
+                // CAS (AMD FidelityFX Contrast Adaptive Sharpening, simplificado) — ver
+                // stereoFlatFragmentShader acima pro comentario completo da formula.
+                vec2 texel = 1.0 / vec2(textureSize(sTexture, 0));
+                vec3 c = texture(sTexture, uv).rgb;
+                vec3 n = texture(sTexture, uv + vec2(0.0, texel.y)).rgb;
+                vec3 s = texture(sTexture, uv - vec2(0.0, texel.y)).rgb;
+                vec3 e = texture(sTexture, uv + vec2(texel.x, 0.0)).rgb;
+                vec3 w = texture(sTexture, uv - vec2(texel.x, 0.0)).rgb;
+                vec3 mn = min(c, min(min(n, s), min(e, w)));
+                vec3 mx = max(c, max(max(n, s), max(e, w)));
+                vec3 amp = sqrt(clamp(min(mn, 2.0 - mx) / mx, 0.0, 1.0));
+                float peak = -mix(8.0, 5.0, uSharpness);
+                vec3 wgt = amp / peak;
+                vec3 sharpened = ((n + s + e + w) * wgt + c) / (1.0 + 4.0 * wgt);
+                FragColor = vec4(clamp(sharpened, 0.0, 1.0), 1.0);
+#else
+                FragColor = vec4(texture(sTexture, uv).rgb, 1.0);
+#endif
             }
         )";
 
@@ -704,8 +836,9 @@ public:
             {"uPolar180", OVRFW::ovrProgramParmType::FLOAT},
             {"uStereoLayout", OVRFW::ovrProgramParmType::FLOAT},
             {"uSwapEyes", OVRFW::ovrProgramParmType::FLOAT},
+            {"uSharpness", OVRFW::ovrProgramParmType::FLOAT},
         };
-        m_sphereProgram = OVRFW::GlProgram::Build(vDirective, sphereVertexShader, fDirective, sphereFragmentShader, sphereParms, 4);
+        m_sphereProgram = OVRFW::GlProgram::Build(vDirective, sphereVertexShader, fDirectiveSharpen.c_str(), sphereFragmentShader, sphereParms, 5);
 
         m_sphereSurfaceDef.geo = OVRFW::BuildGlobe(1.0f, 1.0f, kSphereRadius);
         m_sphereSurfaceDef.graphicsCommand.Textures[0].target = GL_TEXTURE_EXTERNAL_OES;
@@ -713,6 +846,7 @@ public:
         m_sphereSurfaceDef.graphicsCommand.UniformData[1].Data = &m_uPolar180;
         m_sphereSurfaceDef.graphicsCommand.UniformData[2].Data = &m_sphereStereoLayout;
         m_sphereSurfaceDef.graphicsCommand.UniformData[3].Data = &m_swapEyesF;
+        m_sphereSurfaceDef.graphicsCommand.UniformData[4].Data = &m_sharpness;
         // T2 CAUTION/IMPORTANT do doc: sem culling (camera fica DENTRO da
         // esfera — ver comentario acima sobre normals) e sem depth test/write
         // (a esfera esta "infinitamente longe", nao deve interagir com o
@@ -774,7 +908,7 @@ public:
         m_controlsSurfaceDef.graphicsCommand.GpuState.depthMaskEnable = false;
 
         media_status_t controlsStatus = AImageReader_newWithUsage(
-            1024, 256, AIMAGE_FORMAT_RGBA_8888,
+            1024, 384, AIMAGE_FORMAT_RGBA_8888,
             AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,
             2, &m_controlsImageReader);
             
@@ -790,7 +924,7 @@ public:
                     jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
                     jmethodID setupMethod = env->GetStaticMethodID(vrActivityClass, "setupControlsVirtualDisplay", "(Lcom/vrplayer/VRActivity;Landroid/view/Surface;II)V");
                     if (setupMethod) {
-                        env->CallStaticVoidMethod(vrActivityClass, setupMethod, java->ActivityObject, surfaceObj, 1024, 256);
+                        env->CallStaticVoidMethod(vrActivityClass, setupMethod, java->ActivityObject, surfaceObj, 1024, 384);
                         LOGI("VRPlayerApp: setupControlsVirtualDisplay called successfully!");
                     }
                     env->DeleteLocalRef(surfaceObj);
@@ -845,8 +979,8 @@ public:
         OVR::Vector3f uiPlaneCenter = uiPos;
         OVR::Vector3f uiPlaneNormal = OVR::Matrix4f::RotationY(uiYaw).Transform(OVR::Vector3f(0, 0, 1));
 
-        // Painel de controles: fica logo abaixo da tela, com leve inclinacao fixa
-        m_controlsTransform = OVR::Matrix4f::Translation({0.0f, 0.4f, -1.9f}) * OVR::Matrix4f::RotationX(-0.3f) * OVR::Matrix4f::Scaling(0.8f, 0.2f, 1.0f);
+        // Painel de controles: fica logo abaixo da tela, com leve inclinacao fixa.
+        m_controlsTransform = OVR::Matrix4f::Translation({0.0f, 0.4f, -1.9f}) * OVR::Matrix4f::RotationX(-0.3f) * OVR::Matrix4f::Scaling(0.8f, 0.3f, 1.0f);
         OVR::Vector3f cPlaneCenter = m_controlsTransform.GetTranslation();
         OVR::Vector3f cPlaneNormal = OVR::Matrix4f::RotationX(-0.3f).Transform(OVR::Vector3f(0, 0, 1));
 
@@ -1234,25 +1368,34 @@ public:
                 glDeleteTextures(1, &m_textureId);
                 m_textureId = 0;
             }
-            if (m_eglImage != EGL_NO_IMAGE_KHR) {
-                if (eglDestroyImageKHR) eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImage);
-                m_eglImage = EGL_NO_IMAGE_KHR;
+            if (eglDestroyImageKHR) {
+                for (auto& entry : m_eglImageCache) eglDestroyImageKHR(eglGetCurrentDisplay(), entry.second);
             }
+            m_eglImageCache.clear();
+            m_eglImage = EGL_NO_IMAGE_KHR;
         } else if (buffer && buffer != m_lastBuffer) {
             m_lastBuffer = buffer;
-            
-            if (m_eglImage != EGL_NO_IMAGE_KHR) {
-                if (eglDestroyImageKHR) eglDestroyImageKHR(eglGetCurrentDisplay(), m_eglImage);
-                m_eglImage = EGL_NO_IMAGE_KHR;
-            }
 
-            EGLClientBuffer clientBuffer = eglGetNativeClientBufferANDROID(buffer);
-            EGLint attribs[] = { EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE };
-            
-            if (eglCreateImageKHR) {
-                m_eglImage = eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, clientBuffer, attribs);
-                if (m_eglImage == EGL_NO_IMAGE_KHR) {
-                    LOGI("VRPlayerApp: eglCreateImageKHR FAILED! Error: 0x%x", eglGetError());
+            auto cached = m_eglImageCache.find(buffer);
+            if (cached != m_eglImageCache.end()) {
+                m_eglImage = cached->second;
+            } else {
+                EGLClientBuffer clientBuffer = eglGetNativeClientBufferANDROID(buffer);
+                EGLint attribs[] = { EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE };
+                m_eglImage = EGL_NO_IMAGE_KHR;
+                if (eglCreateImageKHR) {
+                    m_eglImage = eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, clientBuffer, attribs);
+                    if (m_eglImage == EGL_NO_IMAGE_KHR) {
+                        LOGI("VRPlayerApp: eglCreateImageKHR FAILED! Error: 0x%x", eglGetError());
+                    }
+                }
+                if (m_eglImage != EGL_NO_IMAGE_KHR) {
+                    if (m_eglImageCache.size() >= 6 && eglDestroyImageKHR) {
+                        auto oldest = m_eglImageCache.begin();
+                        eglDestroyImageKHR(eglGetCurrentDisplay(), oldest->second);
+                        m_eglImageCache.erase(oldest);
+                    }
+                    m_eglImageCache[buffer] = m_eglImage;
                 }
             }
 
@@ -1470,6 +1613,7 @@ private:
     float m_uPolar180 = 0.0f; // uniform: 0=360 completo, 1=180 (ver fragment shader da esfera)
     float m_sphereStereoLayout = 0.0f; // uniform: 0=mono, 1=SBS, 2=OU (ver fragment shader da esfera)
     float m_swapEyesF = 0.0f; // T1.5: espelha get_swap_eyes(), compartilhado pelos 2 programas estereo
+    float m_sharpness = 0.5f; // uniform CAS: 0=mais leve (peak -8), 1=mais forte (peak -5). So usado se kSharpenEnabled.
     float m_sphereYawOffset = 0.0f; // T4.3: recenter — offset de yaw aplicado a esfera
     OVR::Matrix4f m_sphereTransform;
     float m_menuHoldTime = 0.0f;
@@ -1498,6 +1642,7 @@ private:
     GLuint m_textureId;
     EGLImageKHR m_eglImage;
     AHardwareBuffer* m_lastBuffer;
+    std::unordered_map<AHardwareBuffer*, EGLImageKHR> m_eglImageCache;
     OVRFW::GlProgram m_program;
     OVRFW::ovrSurfaceDef m_surfaceDef;
     OVRFW::ovrSurfaceRender m_surfaceRender;

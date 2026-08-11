@@ -20,6 +20,7 @@ import android.text.TextWatcher
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
 import android.widget.EditText
+import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.vrplayer.history.PlaybackHistoryTracker
@@ -60,8 +61,17 @@ class VRActivity : NativeActivity() {
     // inicializada de forma assíncrona pelo NativeActivity — chamar nativePlayVideo
     // cedo demais arrisca chamar antes da textura/surface estarem prontas.
     private var pendingAutoPlayPath: String? = null
+    private var pendingAutoPlayScreenMode: Int = -1
     private var autoPlayDispatched = false
     private val autoPlayHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    // Poll do erro de load() que falhou (codec nao suportado, etc.) — ver nativeTakeLastPlaybackError.
+    private val playbackErrorPoll = object : Runnable {
+        override fun run() {
+            nativeTakeLastPlaybackError()?.let { Toast.makeText(this@VRActivity, it, Toast.LENGTH_LONG).show() }
+            autoPlayHandler.postDelayed(this, PLAYBACK_ERROR_POLL_MS)
+        }
+    }
 
     // T9.1-T9.3: unico dono do historico de reproducao neste processo (mesmo
     // ciclo de vida da Activity). `by lazy` porque so e usado depois que a
@@ -86,6 +96,7 @@ class VRActivity : NativeActivity() {
         }
 
         pendingAutoPlayPath = intent?.getStringExtra(EXTRA_AUTO_PLAY_PATH)
+        pendingAutoPlayScreenMode = intent?.getIntExtra(EXTRA_SCREEN_MODE, -1) ?: -1
 
         // Ver bloco de comentario acima de `nativeKeyboardProxy`.
         nativeKeyboardProxy = EditText(this)
@@ -172,8 +183,10 @@ class VRActivity : NativeActivity() {
         super.onNewIntent(intent)
         intent.getStringExtra(EXTRA_AUTO_PLAY_PATH)?.let {
             pendingAutoPlayPath = it
+            pendingAutoPlayScreenMode = intent.getIntExtra(EXTRA_SCREEN_MODE, -1)
             autoPlayDispatched = false
         }
+        intent.getStringExtra(EXTRA_CAPTURE_PATH)?.let { nativeRequestFrameCapture(it) }
     }
 
     override fun onResume() {
@@ -182,9 +195,19 @@ class VRActivity : NativeActivity() {
         pendingAutoPlayPath?.let { path ->
             if (!autoPlayDispatched) {
                 autoPlayDispatched = true
-                autoPlayHandler.postDelayed({ playFile(path) }, AUTO_PLAY_DELAY_MS)
+                val mode = pendingAutoPlayScreenMode
+                autoPlayHandler.postDelayed({
+                    playFile(path)
+                    if (mode >= 0) nativeSetScreenMode(mode)
+                }, AUTO_PLAY_DELAY_MS)
             }
         }
+        autoPlayHandler.post(playbackErrorPoll)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        autoPlayHandler.removeCallbacks(playbackErrorPoll)
     }
 
     companion object {
@@ -196,7 +219,10 @@ class VRActivity : NativeActivity() {
 
         // Ver hook de auto-play em onCreate/onNewIntent/onResume.
         const val EXTRA_AUTO_PLAY_PATH = "video_path"
+        const val EXTRA_SCREEN_MODE = "screen_mode"
+        const val EXTRA_CAPTURE_PATH = "capture_path"
         private const val AUTO_PLAY_DELAY_MS = 3000L
+        private const val PLAYBACK_ERROR_POLL_MS = 1000L
 
         // T9.3: ver ressalva completa em `scheduleResumeSeek`.
         private const val RESUME_SEEK_DELAY_MS = 1500L
@@ -302,7 +328,7 @@ class VRActivity : NativeActivity() {
                     now,
                     action,
                     x * 1024f, // width
-                    y * 256f,  // height
+                    y * 384f,  // height
                     0
                 )
                 
@@ -444,7 +470,10 @@ class VRActivity : NativeActivity() {
     // seguro chamar direto da UI thread, sem coroutine/Dispatchers.IO.
     external fun nativeCycle3DMode(): Int
     external fun nativeGet3DMode(): Int
+    external fun nativeSetScreenMode(mode: Int)
     external fun nativeToggleSwapEyes(): Int
+    external fun nativeRequestFrameCapture(path: String)
+    external fun nativeTakeLastPlaybackError(): String?
 
     // T6.4: playback SMB (credenciais como parametros separados, ver playSmb()).
     external fun nativePlaySmb(

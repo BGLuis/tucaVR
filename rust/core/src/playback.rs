@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+const LATE_FRAME_RENDER_SKIP_SEC: f64 = 0.1;
+
 /// Envia `item` no canal com timeout, checando `is_running` entre
 /// tentativas — evita bloquear para sempre se o consumidor parou de
 /// drenar o canal (ex: durante shutdown) sem ter sido explicitamente
@@ -101,6 +103,7 @@ pub struct PlaybackController {
     // seek() ja faz.
     desired_audio_track: usize,
     audio_track_count: usize,
+    auto_paused: bool,
 }
 
 impl PlaybackController {
@@ -117,6 +120,7 @@ impl PlaybackController {
             speed_bits,
             desired_audio_track: 0,
             audio_track_count: 0,
+            auto_paused: false,
         }
     }
 
@@ -247,7 +251,8 @@ impl PlaybackController {
             self.sync_manager.update_master_clock(start_time);
         }
 
-        let (video_tx, video_rx) = crossbeam_channel::bounded::<ffmpeg_next::Packet>(30);
+        // 90 (~1.5s a 60fps) em vez de 30 (~0.5s): absorve stalls de rede maiores antes de faltar pacote pro decoder.
+        let (video_tx, video_rx) = crossbeam_channel::bounded::<ffmpeg_next::Packet>(90);
         let (audio_tx, audio_rx) = crossbeam_channel::bounded::<ffmpeg_next::Packet>(100);
 
         // Flags desta geracao: nao sao compartilhadas com nenhuma
@@ -293,7 +298,7 @@ impl PlaybackController {
         let sync_v = sync_manager.clone();
         let video_thread = thread::spawn(move || {
             if let Some(sps) = sps_pps {
-                let _ = video_decoder.decode_packet(&sps, 0, 2, |_| {}, || {}, || true);
+                let _ = video_decoder.decode_packet(&sps, 0, 2, |_| true, || {}, || true);
             }
 
             loop {
@@ -320,6 +325,7 @@ impl PlaybackController {
                                 if delay > 0.0 && delay < 1.0 {
                                     std::thread::sleep(std::time::Duration::from_secs_f64(delay));
                                 }
+                                delay > -LATE_FRAME_RENDER_SKIP_SEC
                             },
                             || {
                                 if let Ok(mut tex) = texture_output_clone.lock() {
@@ -496,6 +502,20 @@ impl PlaybackController {
 
     pub fn pause(&mut self) {
         self.set_playing(false);
+    }
+
+    pub fn on_focus_lost(&mut self) {
+        if self.session.as_ref().map(|s| s.is_playing()).unwrap_or(false) {
+            self.auto_paused = true;
+            self.pause();
+        }
+    }
+
+    pub fn on_focus_gained(&mut self) {
+        if self.auto_paused {
+            self.auto_paused = false;
+            self.play();
+        }
     }
 
     pub fn get_current_frame(&self) -> *mut std::os::raw::c_void {

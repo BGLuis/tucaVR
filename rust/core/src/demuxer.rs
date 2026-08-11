@@ -2,6 +2,9 @@ use ffmpeg_next as ffmpeg;
 use ffmpeg::format::context::{Input, StreamIo};
 use protocols::prefetch::PrefetchReader;
 
+// 12MB em vez do default 4MB: a 8K/60fps HEVC (~63Mbps / 7.85MB/s), 4MB cobre só ~0.5s por bloco.
+const REMOTE_PREFETCH_BLOCK_SIZE: usize = 12 * 1024 * 1024;
+
 pub struct Demuxer {
     pub input_context: Input,
     pub video_stream_index: Option<usize>,
@@ -43,22 +46,22 @@ impl Demuxer {
 
         let ictx = if let Some(target) = protocols::smb::SmbTarget::from_internal(path) {
             let source = protocols::smb::SmbFileSource::open(&target)?;
-            let reader = PrefetchReader::new(source);
+            let reader = PrefetchReader::with_block_size(source, REMOTE_PREFETCH_BLOCK_SIZE);
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::ftp::FtpTarget::from_internal(path) {
             let source = protocols::ftp::FtpFileSource::open(&target)?;
-            let reader = PrefetchReader::new(source);
+            let reader = PrefetchReader::with_block_size(source, REMOTE_PREFETCH_BLOCK_SIZE);
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::sftp::SftpTarget::from_internal(path) {
             let source = protocols::sftp::SftpFileSource::open(&target)?;
-            let reader = PrefetchReader::new(source);
+            let reader = PrefetchReader::with_block_size(source, REMOTE_PREFETCH_BLOCK_SIZE);
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?
         } else if path.starts_with("https://") {
             let source = protocols::http::HttpsRangeSource::new(path)?;
-            let reader = PrefetchReader::new(source);
+            let reader = PrefetchReader::with_block_size(source, REMOTE_PREFETCH_BLOCK_SIZE);
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(path), None).map_err(|e| e.to_string())?
         } else {

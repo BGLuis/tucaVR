@@ -17,6 +17,10 @@ static CONTROLLER: Lazy<Arc<Mutex<PlaybackController>>> = Lazy::new(|| {
     Arc::new(Mutex::new(PlaybackController::new()))
 });
 
+// Erro do ultimo controller.load() que falhou (ex.: codec nao suportado). Antes so ia pro logcat,
+// sem nenhum feedback pro usuario. Kotlin consome via take_last_playback_error() (polling).
+static LAST_PLAYBACK_ERROR: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
+
 // T1.4/T1.5/T2: modo de exibicao 3D (2D/SBS/OU/360/180) e swap-eyes. Isto e
 // puro ESTADO DE APRESENTACAO — nao afeta o Demuxer/PlaybackController (o
 // video decodificado e sempre o mesmo frame RGBA; o que muda e SO como
@@ -87,6 +91,13 @@ pub extern "C" fn get_3d_mode() -> u32 {
     SCREEN_MODE.load(Ordering::Relaxed)
 }
 
+#[no_mangle]
+pub extern "C" fn set_3d_mode(mode: u32) {
+    if mode < SCREEN_MODE_COUNT {
+        SCREEN_MODE.store(mode, Ordering::Relaxed);
+    }
+}
+
 /// T9 (historico): ao carregar um arquivo novo, o modo 3D da reproducao
 /// anterior nao deve vazar pro proximo video — chamado pelo `load()` da
 /// sessao de playback (ver nota em `start_video_playback`/`start_smb_playback`
@@ -136,6 +147,20 @@ pub extern "C" fn toggle_play_pause() {
     }
 }
 
+#[no_mangle]
+pub extern "C" fn on_app_focus_lost() {
+    if let Ok(mut controller) = CONTROLLER.lock() {
+        controller.on_focus_lost();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn on_app_focus_gained() {
+    if let Ok(mut controller) = CONTROLLER.lock() {
+        controller.on_focus_gained();
+    }
+}
+
 unsafe fn log(level: i32, msg: &str) {
     let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
     let msg = std::ffi::CString::new(msg).unwrap();
@@ -176,6 +201,24 @@ pub extern "C" fn free_rust_string(ptr: *mut std::os::raw::c_char) {
     }
     unsafe {
         drop(std::ffi::CString::from_raw(ptr));
+    }
+}
+
+fn set_last_playback_error(msg: String) {
+    if let Ok(mut slot) = LAST_PLAYBACK_ERROR.lock() {
+        *slot = Some(msg);
+    }
+}
+
+/// Consome (le e limpa) o erro do ultimo load() que falhou, ou nulo se nao houve nenhum desde
+/// a ultima chamada. Kotlin faz polling disto pra mostrar um Toast — antes o erro so ia pro logcat.
+/// Retorno (se nao nulo) precisa ser liberado com `free_rust_string`.
+#[no_mangle]
+pub extern "C" fn take_last_playback_error() -> *mut std::os::raw::c_char {
+    let taken = LAST_PLAYBACK_ERROR.lock().ok().and_then(|mut slot| slot.take());
+    match taken {
+        Some(msg) => string_to_c_char(msg),
+        None => std::ptr::null_mut(),
     }
 }
 
@@ -226,6 +269,7 @@ pub extern "C" fn start_smb_playback(
             controller.stop();
             if let Err(e) = controller.load(&internal_uri) {
                 unsafe { log(6, &format!("Error loading SMB video: {:?}", e)); }
+                set_last_playback_error(format!("{:?}", e));
             } else {
                 unsafe { log(4, "SMB video loaded successfully!"); }
             }
@@ -347,6 +391,7 @@ pub extern "C" fn start_ftp_playback(
             controller.stop();
             if let Err(e) = controller.load(&internal_uri) {
                 unsafe { log(6, &format!("Error loading FTP video: {:?}", e)); }
+                set_last_playback_error(format!("{:?}", e));
             } else {
                 unsafe { log(4, "FTP video loaded successfully!"); }
             }
@@ -423,6 +468,7 @@ pub extern "C" fn start_sftp_playback(
     };
     if let Err(e) = target.validate() {
         unsafe { log(6, &format!("Error loading SFTP video: {e}")); }
+        set_last_playback_error(e);
         return;
     }
 
@@ -435,6 +481,7 @@ pub extern "C" fn start_sftp_playback(
             controller.stop();
             if let Err(e) = controller.load(&internal_uri) {
                 unsafe { log(6, &format!("Error loading SFTP video: {:?}", e)); }
+                set_last_playback_error(format!("{:?}", e));
             } else {
                 unsafe { log(4, "SFTP video loaded successfully!"); }
             }
@@ -537,6 +584,7 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char) {
             controller.stop();
             if let Err(e) = controller.load(&path_str) {
                 unsafe { log(6, &format!("Error loading video: {:?}", e)); }
+                set_last_playback_error(format!("{:?}", e));
             } else {
                 unsafe { log(4, "Video loaded successfully!"); }
             }
