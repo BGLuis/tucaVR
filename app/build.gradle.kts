@@ -24,6 +24,13 @@ android {
             cmake {
                 cppFlags += "-std=c++20"
                 arguments += "-DANDROID_STL=c++_shared"
+                // Estagio 6 do plano de migracao Vulkan (docs/VULKAN-MIGRATION-PLAN.md):
+                // Vulkan e agora o backend padrao (Estagios 1-5 implementados e compilando).
+                // O caminho GLES continua disponivel via -PvrplayerGraphicsApi=GLES para
+                // fallback/regressao em caso de comportamento inesperado no hardware Quest 3.
+                // Ver ADR-003 revisado: decisao de manter GLES como fallback real (dois
+                // caminhos mantidos) ate validacao completa em headset.
+                // arguments += "-DVRPLAYER_GRAPHICS_API=${project.findProperty("vrplayerGraphicsApi") ?: "VULKAN"}"
             }
         }
         ndk {
