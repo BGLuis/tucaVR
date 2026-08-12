@@ -49,6 +49,28 @@ inline Mat4 Mat4Scale(float sx, float sy, float sz) {
     return r;
 }
 
+inline Mat4 Mat4RotationX(float angle) {
+    Mat4 r = Mat4Identity();
+    const float c = cosf(angle);
+    const float s = sinf(angle);
+    r.m[5]  = c;
+    r.m[6]  = s;
+    r.m[9]  = -s;
+    r.m[10] = c;
+    return r;
+}
+
+inline Mat4 Mat4RotationY(float angle) {
+    Mat4 r = Mat4Identity();
+    const float c = cosf(angle);
+    const float s = sinf(angle);
+    r.m[0]  = c;
+    r.m[2]  = -s;
+    r.m[8]  = s;
+    r.m[10] = c;
+    return r;
+}
+
 // Pose XR (posicao + quaternion) -> matriz de transformacao rigida.
 inline Mat4 Mat4FromXrPose(const XrPosef& pose) {
     const XrQuaternionf& q = pose.orientation;

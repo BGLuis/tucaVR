@@ -30,7 +30,7 @@ android {
                 // fallback/regressao em caso de comportamento inesperado no hardware Quest 3.
                 // Ver ADR-003 revisado: decisao de manter GLES como fallback real (dois
                 // caminhos mantidos) ate validacao completa em headset.
-                // arguments += "-DVRPLAYER_GRAPHICS_API=${project.findProperty("vrplayerGraphicsApi") ?: "VULKAN"}"
+                arguments += "-DVRPLAYER_GRAPHICS_API=${project.findProperty("vrplayerGraphicsApi") ?: "VULKAN"}"
             }
         }
         ndk {

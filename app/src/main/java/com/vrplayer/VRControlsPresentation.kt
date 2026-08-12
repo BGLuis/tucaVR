@@ -25,7 +25,7 @@ class VRControlsPresentation(
     // depender de `context`.
     private val activity: VRActivity,
     private val onPlayPause: () -> Unit
-) : Presentation(outerContext, display) {
+) : Presentation(outerContext, display, android.R.style.Theme_NoTitleBar_Fullscreen) {
 
     private lateinit var seekBar: SeekBar
     private lateinit var timeLabel: TextView
@@ -291,5 +291,11 @@ class VRControlsPresentation(
         root.addView(row3)
 
         setContentView(root)
+        
+        window?.setLayout(
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            android.view.ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
     }
 }

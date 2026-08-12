@@ -82,7 +82,7 @@ class VRPresentation(
     // ContextThemeWrapper derivado do display-context. Guardamos a Activity
     // de verdade para poder chamar nativeX()/playFile()/playUrl() etc.
     private val activity: VRActivity
-) : Presentation(outerContext, display) {
+) : Presentation(outerContext, display, android.R.style.Theme_NoTitleBar_Fullscreen) {
 
     private val appNav = AppNavigator()
 
@@ -146,6 +146,11 @@ class VRPresentation(
             setBackgroundColor(VoidTheme.colorBackground)
         }
         setContentView(screenHost)
+        window?.setLayout(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.MATCH_PARENT
+        )
+        window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
         render()
     }
 

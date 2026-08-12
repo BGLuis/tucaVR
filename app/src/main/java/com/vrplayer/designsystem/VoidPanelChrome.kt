@@ -17,6 +17,7 @@ object VoidPanelChrome {
 
     fun newRoot(context: Context): LinearLayout = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
+        gravity = Gravity.CENTER
         setBackgroundColor(VoidTheme.colorBackground)
         val padH = VoidTheme.dpToPx(context, 28f)
         val padV = VoidTheme.dpToPx(context, 24f)

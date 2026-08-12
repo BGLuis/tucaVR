@@ -262,6 +262,24 @@ struct AppState {
     float controlsAlpha = 1.0f;
     bool controlsHasFrame = false;
 
+    // OpenXR Actions
+    XrActionSet actionSet = XR_NULL_HANDLE;
+    XrAction aimAction = XR_NULL_HANDLE;
+    XrAction triggerAction = XR_NULL_HANDLE;
+    std::array<XrSpace, 2> aimSpaces = {XR_NULL_HANDLE, XR_NULL_HANDLE};
+    
+    // UI Interaction state
+    bool isTouchDown = false;
+    int activePanel = 0; // 0=none, 1=UI, 2=controls
+    XrVector3f lastRayOrigin = {0,0,0};
+    XrVector3f lastRayDir = {0,0,-1};
+    bool isTriggerPressed = false;
+    float uiIdleTime = 0.0f;
+    float controlsIdleTime = 0.0f;
+    float lastUvX = 0.0f;
+    float lastUvY = 0.0f;
+    float lastHitDist = -1.0f;
+
     // Estagio 5 — pipeline estereo/esfera (SBS/OU/360/180 com CAS sharpening).
     // Reusa o videoDescriptorSetLayout (mesmo sampler YCbCr) mas pipeline separado.
     VkPipelineLayout stereoPipelineLayout = VK_NULL_HANDLE;
@@ -291,6 +309,8 @@ struct AppState {
     bool requestExit = false;
 };
 
+#include "vr_player_input_vulkan.h"
+
 struct QuadPushConstants {
     Mat4 mvp;
     float color[4];
@@ -316,7 +336,6 @@ struct StereoPushConstants {
     int  polar180;
 };
 
-// Estagio 5: push constant do beam (MVP + cor)
 struct BeamPushConstants {
     Mat4  mvp;
     float color[4];
@@ -1145,6 +1164,7 @@ static void UpdateUiImageFromHwb(AppState& state, AHardwareBuffer* hwb, VkImage 
     region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     region.imageSubresource.layerCount = 1;
     region.imageExtent = {width, height, 1};
+    region.bufferRowLength = desc.stride; // <--- VITAL: AHardwareBuffer can have padded stride!
     vkCmdCopyBufferToImage(cmd, stagingBuf, dstImage,
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
@@ -1170,7 +1190,6 @@ static void UpdateUiImageFromHwb(AppState& state, AHardwareBuffer* hwb, VkImage 
 
 // Cria o pipeline de UI (alpha blending, sampler normal, ui.vert/ui.frag).
 void CreateUiPipeline(AppState& state, android_app* app) {
-    // Sampler linear simples (sem YcbcrConversion)
     VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     samplerInfo.magFilter = VK_FILTER_LINEAR;
     samplerInfo.minFilter = VK_FILTER_LINEAR;
@@ -1178,6 +1197,8 @@ void CreateUiPipeline(AppState& state, android_app* app) {
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.anisotropyEnable = VK_TRUE;
+    samplerInfo.maxAnisotropy = 4.0f;
     VKR(vkCreateSampler(state.vkDevice, &samplerInfo, nullptr, &state.uiSampler));
 
     // Descriptor set layout com sampler nao imutavel (RGBA normal)
@@ -1731,8 +1752,110 @@ void CreateCommandResources(AppState& state) {
 // grafico. Usado como fallback quando nao ha frame de video disponivel.
 // vkQueueWaitIdle por frame continua deliberadamente ingenuo —
 // performance so importa a partir do Estagio 3+.
+// helper para desenhar os paineis de UI/Controles (Estagio 4) por cima do video ou do fallback
+static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headPos) {
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
+
+    VkDeviceSize offset = 0;
+    // O UI Pipeline (Estagio 4) tem layout de vertices com UV (5 floats), portanto
+    // DEVE usar o videoVertexBuffer (que tem XYZ+UV) e nao o quadVertexBuffer (so XYZ)
+    vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
+
+    // Calcular UI transform (identico ao GLES: vr_player_app.cpp:973)
+    float uiPosX = -1.2f, uiPosY = 1.0f, uiPosZ = -1.0f;
+    float uiScale = 1.5f;
+    float toHeadX = headPos.x - uiPosX;
+    float toHeadZ = headPos.z - uiPosZ;
+    float uiYaw = atan2f(toHeadX, toHeadZ);
+    Mat4 uiModel = Mat4Multiply(Mat4Multiply(Mat4Translation(uiPosX, uiPosY, uiPosZ), Mat4RotationY(uiYaw)), Mat4Scale(uiScale, uiScale, 1.0f));
+    Mat4 uiMvp = Mat4Multiply(Mat4Multiply(proj, view), uiModel);
+
+    // Controls transform (identico ao GLES: vr_player_app.cpp:983)
+    Mat4 controlsModel = Mat4Multiply(
+        Mat4Multiply(Mat4Translation(0.0f, 0.4f, -1.9f), Mat4RotationX(-0.3f)),
+        Mat4Scale(0.8f, 0.3f, 1.0f));
+    Mat4 controlsMvp = Mat4Multiply(Mat4Multiply(proj, view), controlsModel);
+
+    UiPushConstants push{};
+    
+    // UI (File Browser)
+    if (state.uiHasFrame) {
+        push.mvp = uiMvp;
+        push.alpha = 1.0f; // TODO: auto-hide alpha fading
+        vkCmdPushConstants(cmd, state.uiPipelineLayout, 
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
+            0, sizeof(push), &push);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            state.uiPipelineLayout, 0, 1, &state.uiDescriptorSet, 0, nullptr);
+        vkCmdDraw(cmd, 4, 1, 0, 0);
+    }
+
+    // Controls
+    if (state.controlsHasFrame) {
+        push.mvp = controlsMvp;
+        push.alpha = 1.0f;
+        vkCmdPushConstants(cmd, state.uiPipelineLayout, 
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
+            0, sizeof(push), &push);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            state.uiPipelineLayout, 0, 1, &state.controlsDescriptorSet, 0, nullptr);
+        vkCmdDraw(cmd, 4, 1, 0, 0);
+    }
+
+    // Beam (Laser)
+    if (state.lastRayDir.z != 0.0f) { // Se o controle foi detectado
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.beamPipeline);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &state.beamVertexBuffer, &offset);
+
+        // O beam em CreateBeamResources vai de (0,0,0) ate (0,0,-2) no eixo Z negativo.
+        // Precisamos criar um model matrix que translada para a origem do raio e rotaciona para a direcao.
+        XrVector3f up = {0.0f, 1.0f, 0.0f};
+        if (fabs(state.lastRayDir.y) > 0.99f) up = {1.0f, 0.0f, 0.0f}; // fallback se olhando pra cima/baixo
+        
+        XrVector3f z = {-state.lastRayDir.x, -state.lastRayDir.y, -state.lastRayDir.z};
+        
+        XrVector3f x = {
+            up.y * z.z - up.z * z.y,
+            up.z * z.x - up.x * z.z,
+            up.x * z.y - up.y * z.x
+        };
+        float xLen = sqrtf(x.x*x.x + x.y*x.y + x.z*x.z);
+        if (xLen > 0.0001f) { x.x /= xLen; x.y /= xLen; x.z /= xLen; }
+
+        XrVector3f y = {
+            z.y * x.z - z.z * x.y,
+            z.z * x.x - z.x * x.z,
+            z.x * x.y - z.y * x.x
+        };
+
+        float beamLength = 5.0f; // Default 5 meters if no hit
+        if (state.lastHitDist > 0.0f) {
+            beamLength = state.lastHitDist;
+        }
+        float zScale = beamLength / 2.0f; // Base geometry is 2.0m long
+
+        Mat4 beamModel = {{
+            x.x, x.y, x.z, 0.0f,
+            y.x, y.y, y.z, 0.0f,
+            z.x * zScale, z.y * zScale, z.z * zScale, 0.0f,
+            state.lastRayOrigin.x, state.lastRayOrigin.y, state.lastRayOrigin.z, 1.0f
+        }};
+
+        BeamPushConstants beamPush{};
+        beamPush.mvp = Mat4Multiply(Mat4Multiply(proj, view), beamModel);
+        beamPush.color[0] = 0.0f; beamPush.color[1] = 0.5f; beamPush.color[2] = 1.0f; beamPush.color[3] = 1.0f;
+
+        vkCmdPushConstants(cmd, state.beamPipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(beamPush), &beamPush);
+        
+        vkCmdDraw(cmd, 2, 1, 0, 0); // 2 vertices para a linha
+    }
+}
+
 void RecordAndSubmitQuad(
-    AppState& state, VkFramebuffer framebuffer, VkExtent2D extent, const Mat4& mvp) {
+    AppState& state, VkFramebuffer framebuffer, VkExtent2D extent, const Mat4& mvp,
+    const Mat4& proj, const Mat4& view, XrVector3f headPos) {
     VkCommandBuffer cmd = state.vkCommandBuffer;
     VKR(vkResetCommandBuffer(cmd, 0));
 
@@ -1781,6 +1904,8 @@ void RecordAndSubmitQuad(
         &pushConstants);
 
     vkCmdDraw(cmd, 4, 1, 0, 0);
+
+    DrawUiQuads(state, cmd, proj, view, headPos);
 
     vkCmdEndRenderPass(cmd);
     VKR(vkEndCommandBuffer(cmd));
@@ -1995,7 +2120,7 @@ VideoFrame* GetOrImportVideoFrame(AppState& state, AHardwareBuffer* buffer) {
 // cai no RecordAndSubmitQuad (fallback de Estagio 2).
 void RecordAndSubmitVideo(
     AppState& state, VkFramebuffer framebuffer, VkExtent2D extent,
-    const Mat4& mvp, VideoFrame* videoFrame) {
+    const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headPos, VideoFrame* videoFrame) {
     VkCommandBuffer cmd = state.vkCommandBuffer;
     VKR(vkResetCommandBuffer(cmd, 0));
 
@@ -2062,6 +2187,8 @@ void RecordAndSubmitVideo(
 
     vkCmdDraw(cmd, 4, 1, 0, 0);
 
+    DrawUiQuads(state, cmd, proj, view, headPos);
+
     vkCmdEndRenderPass(cmd);
     VKR(vkEndCommandBuffer(cmd));
 
@@ -2120,6 +2247,9 @@ void RenderFrame(AppState& state) {
         XrViewState viewState{XR_TYPE_VIEW_STATE};
         uint32_t viewCountOutput = 0;
         OXR(xrLocateViews(state.session, &locateInfo, &viewState, kEyeCount, &viewCountOutput, views.data()));
+
+        // Estagio 4/5: Processar interacoes apos obtermos a posicao da cabeca
+        UpdateInteraction(state, frameState.predictedDisplayTime, views[0].pose.position);
 
         // Posicao/escala da tela virtual: identica ao caminho GLES
         // (vr_player_app.cpp:1588 m_screenPosition = {0, 1.5, -2},
@@ -2227,6 +2357,8 @@ void RenderFrame(AppState& state) {
                         vkCmdDraw(cmd, 4, 1, 0, 0);
                     }
 
+                    DrawUiQuads(state, cmd, proj, view, views[eye].pose.position);
+
                     vkCmdEndRenderPass(cmd);
                     VKR(vkEndCommandBuffer(cmd));
                     VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -2235,11 +2367,11 @@ void RenderFrame(AppState& state) {
                     VKR(vkQueueWaitIdle(state.vkQueue));
                 } else {
                     // Estagio 3: Flat2D com textura de video
-                    RecordAndSubmitVideo(state, fb, extent, mvp, state.activeVideoFrame);
+                    RecordAndSubmitVideo(state, fb, extent, mvp, proj, view, views[eye].pose.position, state.activeVideoFrame);
                 }
             } else {
                 // Fallback: quad solido (Estagio 2)
-                RecordAndSubmitQuad(state, fb, extent, mvp);
+                RecordAndSubmitQuad(state, fb, extent, mvp, proj, view, views[eye].pose.position);
             }
 
             XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
@@ -2318,6 +2450,7 @@ void PollXrEvents(AppState& state) {
                     XrSessionBeginInfo beginInfo{XR_TYPE_SESSION_BEGIN_INFO};
                     beginInfo.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
                     OXR(xrBeginSession(state.session, &beginInfo));
+                    AttachInputsToSession(state);
                     state.sessionRunning = true;
                     break;
                 }
@@ -2364,6 +2497,7 @@ void android_main(android_app* app) {
     sessionCreateInfo.next = &graphicsBinding;
     sessionCreateInfo.systemId = state.systemId;
     OXR(xrCreateSession(state.instance, &sessionCreateInfo, &state.session));
+    SetupOpenXrInputs(state);
 
     CreateReferenceSpace(state);
     CreateSwapchains(state);

@@ -272,7 +272,7 @@ class VRActivity : NativeActivity() {
                     now,
                     action,
                     x * 1024f,
-                    y * 1024f,
+                    y * 768f,
                     0
                 )
                 
@@ -331,6 +331,8 @@ class VRActivity : NativeActivity() {
                     y * 384f,  // height
                     0
                 )
+                
+                event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
                 
                 if (action == 7) {
                     activity.controlsPresentation?.dispatchGenericMotionEvent(event)

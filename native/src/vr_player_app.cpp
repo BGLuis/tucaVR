@@ -868,7 +868,7 @@ public:
         m_uiSurfaceDef.graphicsCommand.GpuState.depthMaskEnable = false;
 
         media_status_t status = AImageReader_newWithUsage(
-            1024, 1024, AIMAGE_FORMAT_RGBA_8888,
+            1024, 768, AIMAGE_FORMAT_RGBA_8888,
             AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,
             2, &m_uiImageReader);
             
@@ -884,7 +884,7 @@ public:
                     jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
                     jmethodID setupMethod = env->GetStaticMethodID(vrActivityClass, "setupVirtualDisplay", "(Lcom/vrplayer/VRActivity;Landroid/view/Surface;II)V");
                     if (setupMethod) {
-                        env->CallStaticVoidMethod(vrActivityClass, setupMethod, java->ActivityObject, surfaceObj, 1024, 1024);
+                        env->CallStaticVoidMethod(vrActivityClass, setupMethod, java->ActivityObject, surfaceObj, 1024, 768);
                         LOGI("VRPlayerApp: setupVirtualDisplay called successfully!");
                     } else {
                         LOGI("VRPlayerApp: setupVirtualDisplay NOT FOUND!");
@@ -953,8 +953,9 @@ public:
         bool currTrigger = in.LeftRemoteIndexClick || in.RightRemoteIndexClick || (in.AllButtons & OVRFW::ovrApplFrameIn::kTrigger) != 0;
 
         // --- RAYCAST FOR UI TOUCH (T4.1) ---
-        OVR::Vector3f rayOrigin = in.RightRemotePointPose.Translation;
-        OVR::Vector3f rawRayDir = in.RightRemotePointPose.Rotation * OVR::Vector3f(0.0f, 0.0f, -1.0f);
+        bool useLeft = in.LeftRemoteTracked && (!in.RightRemoteTracked || in.LeftRemoteIndexTrigger > 0.1f || in.LeftRemoteIndexClick);
+        OVR::Vector3f rayOrigin = useLeft ? in.LeftRemotePointPose.Translation : in.RightRemotePointPose.Translation;
+        OVR::Vector3f rawRayDir = (useLeft ? in.LeftRemotePointPose.Rotation : in.RightRemotePointPose.Rotation) * OVR::Vector3f(0.0f, 0.0f, -1.0f);
 
         // Dead zone/smoothing: o ray do controller tremula naturalmente; suaviza a
         // direcao com uma media movel exponencial para evitar que o cursor/laser fique
@@ -975,7 +976,7 @@ public:
         toHead.y = 0.0f;
         float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
         float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : 0.7f;
-        m_uiTransform = OVR::Matrix4f::Translation(uiPos) * OVR::Matrix4f::RotationY(uiYaw);
+        m_uiTransform = OVR::Matrix4f::Translation(uiPos) * OVR::Matrix4f::RotationY(uiYaw) * OVR::Matrix4f::Scaling(0.8f, 0.6f, 1.0f);
         OVR::Vector3f uiPlaneCenter = uiPos;
         OVR::Vector3f uiPlaneNormal = OVR::Matrix4f::RotationY(uiYaw).Transform(OVR::Vector3f(0, 0, 1));
 
@@ -1010,7 +1011,7 @@ public:
         // Tela de video (usada apenas para detectar "apontando para a tela" -> mostra controles)
         OVR::Matrix4f screenTransform = OVR::Matrix4f::Translation(m_screenPosition) * OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
 
-        OVR::Vector3f pointerEnd = rayOrigin + rayDir * 2.0f;
+        OVR::Vector3f pointerEnd = rayOrigin + rayDir * 10.0f;
 
         static float lastUvX = 0.0f;
         static float lastUvY = 0.0f;
@@ -1210,12 +1211,12 @@ public:
             // alvo, caso extremo que nao ocorre apontando pra um painel a
             // frente).
             OVR::Vector3f headUp = in.HeadPose.Rotation.Rotate(OVR::Vector3f(0.0f, 1.0f, 0.0f));
-            const float kDotWidth = 0.08f;
-            const float kDotHalfLength = 0.015f;
+            const float kDotWidth = 0.02f;
+            const float kDotHalfLength = 0.001f;
             OVR::Vector3f nearEnd = pointerEnd - headUp * kDotHalfLength;
             OVR::Vector3f farEnd = pointerEnd + headUp * kDotHalfLength;
-            m_cursorDotHandle = m_beamRenderer.AddBeam(in, kDotWidth, pointerEnd, farEnd, OVR::Vector4f(1.0f, 0.0f, 0.0f, 1.0f));
-            m_cursorDotHandle2 = m_beamRenderer.AddBeam(in, kDotWidth, pointerEnd, nearEnd, OVR::Vector4f(1.0f, 0.0f, 0.0f, 1.0f));
+            m_cursorDotHandle = m_beamRenderer.AddBeam(in, kDotWidth, pointerEnd, farEnd, OVR::Vector4f(0.0f, 1.0f, 1.0f, 1.0f));
+            m_cursorDotHandle2 = m_beamRenderer.AddBeam(in, kDotWidth, pointerEnd, nearEnd, OVR::Vector4f(0.0f, 1.0f, 1.0f, 1.0f));
         }
 
         // T4.4: A (direita) ou X (esquerda) = Play/Pause. Trigger fora de qualquer
