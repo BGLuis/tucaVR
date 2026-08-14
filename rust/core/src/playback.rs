@@ -529,6 +529,11 @@ impl PlaybackController {
         std::ptr::null_mut()
     }
 
+    /// Debug (docs/DEBUGGING.md) — ver comentario em TextureOutput::frames_decoded.
+    pub fn get_frames_decoded_count(&self) -> u64 {
+        self.texture_output.lock().map(|tex| tex.frames_decoded).unwrap_or(0)
+    }
+
     pub fn toggle_play_pause(&mut self) {
         let currently_playing = self.session.as_ref().map(|s| s.is_playing()).unwrap_or(false);
         let new_state = !currently_playing;

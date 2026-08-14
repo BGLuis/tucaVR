@@ -27,6 +27,8 @@
 #include <cstdio>
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "VRPlayerApp", __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "VRPlayerApp", __VA_ARGS__)
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VRPlayerApp", __VA_ARGS__)
 
 extern "C" {
     extern void start_video_playback(const char* path);
@@ -36,6 +38,7 @@ extern "C" {
     extern void on_app_focus_gained();
     extern AHardwareBuffer* get_current_video_frame();
     extern void get_video_progress(float* current, float* total);
+    extern uint64_t get_video_frames_decoded_count(); // debug, ver docs/DEBUGGING.md
     extern void set_video_volume(float volume);
     extern float get_video_volume();
     extern void set_playback_speed(float speed);
@@ -968,6 +971,50 @@ public:
     }
 
     virtual void Update(const OVRFW::ovrApplFrameIn& in) override {
+        // Metricas de performance (docs/DEBUGGING.md) — FPS suavizado (media
+        // movel exponencial) e deteccao de stutter/freeze a partir do
+        // DeltaSeconds que o OVRFW ja calcula por frame. `in.DeltaSeconds`
+        // reflete o tempo real entre chamadas de Update (nao so o intervalo
+        // "alvo" do compositor), entao um valor alto aqui indica de fato que
+        // o app CPU-side/GPU-side ficou preso (ex.: decode bloqueando,
+        // vkQueueWaitIdle/glFinish demorado) — nao so reprojection do runtime.
+        if (in.DeltaSeconds > 0.0f) {
+            m_lastFrameMs = in.DeltaSeconds * 1000.0f;
+            float instFps = 1.0f / in.DeltaSeconds;
+            m_smoothedFps = (m_smoothedFps <= 0.0f) ? instFps : (m_smoothedFps * 0.9f + instFps * 0.1f);
+            if (m_lastFrameMs > kFreezeThresholdMs) {
+                m_freezeCount++;
+                LOGE("VRPlayerApp: FREEZE detectado — frame levou %.0fms", m_lastFrameMs);
+            } else if (m_lastFrameMs > kStutterThresholdMs) {
+                m_stutterCount++;
+                LOGW("VRPlayerApp: stutter — frame levou %.1fms", m_lastFrameMs);
+            }
+
+            // Video "congelado" (mesmo frame repetido) e diferente de freeze
+            // do loop de render (acima) — ver comentario no campo
+            // m_msSinceLastVideoFrame. So loga uma vez por episodio (nao a
+            // cada frame parado), reseta quando um frame novo chega de fato
+            // (bloco de troca de buffer, mais abaixo nesta funcao).
+            m_msSinceLastVideoFrame += m_lastFrameMs;
+            if (m_lastBuffer != nullptr && !m_videoStallLogged &&
+                m_msSinceLastVideoFrame > kVideoStallThresholdMs) {
+                m_videoStallLogged = true;
+                LOGW("VRPlayerApp: video sem frame novo ha %.0fms (decode/rede travado? "
+                     "ou usuario pausou?)", m_msSinceLastVideoFrame);
+            }
+
+            // decFps: taxa real de decode (Rust), amostrada a ~1Hz — ver
+            // comentario no campo m_decodedFps.
+            m_decodedFpsPollAccumMs += m_lastFrameMs;
+            if (m_decodedFpsPollAccumMs >= kDecodedFpsPollIntervalMs) {
+                uint64_t currentCount = get_video_frames_decoded_count();
+                uint64_t delta = currentCount - m_lastDecodedFrameCount; // wrap-safe (unsigned)
+                m_decodedFps = delta / (m_decodedFpsPollAccumMs / 1000.0f);
+                m_lastDecodedFrameCount = currentCount;
+                m_decodedFpsPollAccumMs = 0.0f;
+            }
+        }
+
         // Se o OS aplicou um recenter, calibra a altura da UI para os olhos na nova origem
         if (m_needsOsRecenter) {
             OVR::Vector3f fwd = in.HeadPose.Rotation.Rotate(OVR::Vector3f(0.0f, 0.0f, -1.0f));
@@ -1014,20 +1061,30 @@ public:
         const OVR::Vector3f& rayDir = m_smoothedRayDir;
 
         // Painel do File Browser: billboard - sempre virado para a cabeca do usuario (T4.5)
-        OVR::Vector3f baseUiPos(-2.2f, 1.5f, -1.5f);
+        // Distancia/escala aumentadas na revisao pos-migracao — os valores
+        // originais (-2.2,1.5,-1.5 / escala 0.8x0.6) colocavam o painel a
+        // ~2.66m de distancia com so 0.8m de largura, um angulo visual
+        // pequeno demais (~17 graus) pro texto ficar legivel — bug
+        // reportado em teste real de hardware ("muito longe, nao da pra ler
+        // o texto"). Agora ~1.64m de distancia, 50% maior (1.2x0.9,
+        // mantendo a proporcao 4:3 da textura 1024x768 — ver kUiTexWidth/
+        // kUiTexHeight no caminho Vulkan).
+        OVR::Vector3f baseUiPos(-1.3f, 1.5f, -1.0f);
         OVR::Vector3f uiPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(baseUiPos);
         OVR::Vector3f toHead = in.HeadPose.Translation - uiPos;
         toHead.y = 0.0f;
         float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
         float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : 0.7f;
-        m_uiTransform = OVR::Matrix4f::Translation(uiPos) * OVR::Matrix4f::RotationY(uiYaw) * OVR::Matrix4f::Scaling(0.8f, 0.6f, 1.0f);
+        m_uiTransform = OVR::Matrix4f::Translation(uiPos) * OVR::Matrix4f::RotationY(uiYaw) * OVR::Matrix4f::Scaling(1.2f, 0.9f, 1.0f);
         OVR::Vector3f uiPlaneCenter = uiPos;
         OVR::Vector3f uiPlaneNormal = OVR::Matrix4f::RotationY(uiYaw).Transform(OVR::Vector3f(0, 0, 1));
 
         // Painel de controles: fica logo abaixo da tela, com leve inclinacao fixa.
-        OVR::Vector3f baseControlsPos(0.0f, 0.4f, -1.9f);
+        // Mesmo ajuste de distancia/escala do painel de UI acima (proporcao
+        // 2.667:1 da textura 1024x384 preservada: 1.2x0.45).
+        OVR::Vector3f baseControlsPos(0.0f, 0.4f, -1.3f);
         OVR::Vector3f worldControlsPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(baseControlsPos);
-        m_controlsTransform = OVR::Matrix4f::Translation(worldControlsPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) * OVR::Matrix4f::RotationX(-0.3f) * OVR::Matrix4f::Scaling(0.8f, 0.3f, 1.0f);
+        m_controlsTransform = OVR::Matrix4f::Translation(worldControlsPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) * OVR::Matrix4f::RotationX(-0.3f) * OVR::Matrix4f::Scaling(1.2f, 0.45f, 1.0f);
         OVR::Vector3f cPlaneCenter = worldControlsPos;
         OVR::Vector3f cPlaneNormal = OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(OVR::Matrix4f::RotationX(-0.3f).Transform(OVR::Vector3f(0, 0, 1)));
 
@@ -1359,11 +1416,13 @@ public:
             // debuggable, entao computar/mandar isso sempre e mais simples
             // que condicionar a compilacao nativa por build type.
             {
-                char hud[192];
+                char hud[352];
                 snprintf(hud, sizeof(hud),
-                    "GLES | %s | flat=%.0f esfera=%.0f polar180=%.0f swap=%.0f | video=%s",
+                    "GLES | %s | flat=%.0f esfera=%.0f polar180=%.0f swap=%.0f | video=%s vidGap=%.0fms vidFps=%.0f decFps=%.0f jitter=%.0fms | %.0ffps %.1fms stutter=%d freeze=%d",
                     ScreenModeName(m_screenMode), m_flatStereoLayout, m_sphereStereoLayout,
-                    m_uPolar180, m_swapEyesF, (m_lastBuffer != nullptr) ? "ativo" : "sem frame");
+                    m_uPolar180, m_swapEyesF, (m_lastBuffer != nullptr) ? "ativo" : "sem frame",
+                    m_msSinceLastVideoFrame, m_videoFps, m_decodedFps, m_videoJitterMs,
+                    m_smoothedFps, m_lastFrameMs, m_stutterCount, m_freezeCount);
                 const xrJava* java = GetContext();
                 JNIEnv* env = nullptr;
                 if (java && java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
@@ -1447,6 +1506,11 @@ public:
         if (buffer == nullptr && m_lastBuffer != nullptr) {
             LOGI("VRPlayerApp: video parou de produzir frames (get_current_video_frame() -> null)");
             m_lastBuffer = nullptr;
+            m_msSinceLastVideoFrame = 0.0f;
+            m_videoStallLogged = false;
+            m_videoGapHistoryCount = 0; // nao misturar cadencia do video anterior com o proximo
+            m_videoFps = 0.0f;
+            m_videoJitterMs = 0.0f;
             if (m_textureId != 0) {
                 glDeleteTextures(1, &m_textureId);
                 m_textureId = 0;
@@ -1463,8 +1527,15 @@ public:
             // e encheria o logcat de spam sem informacao nova).
             if (m_lastBuffer == nullptr) {
                 LOGI("VRPlayerApp: video comecou a produzir frames (1o AHardwareBuffer recebido)");
+            } else {
+                // So conta como amostra de cadencia se ja havia um frame
+                // antes (nao a latencia de startup do 1o frame, categoria
+                // diferente).
+                PushVideoGapSample(m_msSinceLastVideoFrame);
             }
             m_lastBuffer = buffer;
+            m_msSinceLastVideoFrame = 0.0f;
+            m_videoStallLogged = false;
 
             auto cached = m_eglImageCache.find(buffer);
             if (cached != m_eglImageCache.end()) {
@@ -1709,6 +1780,89 @@ private:
     float m_sceneYawOffset = 0.0f; // T4.3: recenter — offset de yaw aplicado a cena
     OVR::Vector3f m_sceneTranslationOffset = OVR::Vector3f(0.0f, 0.0f, 0.0f);
     OVR::Matrix4f m_sphereTransform;
+
+    // Metricas de performance (debug, ver docs/DEBUGGING.md) — FPS suavizado
+    // (media movel exponencial de 1/DeltaSeconds) e contadores de
+    // stutter/freeze. `in.DeltaSeconds` ja vem do OVRFW por frame, entao nao
+    // precisa medir wall-clock na mao (diferente do caminho Vulkan, que nao
+    // tem esse equivalente pronto).
+    static constexpr float kStutterThresholdMs = 20.0f;  // ~1 vsync perdido a 90Hz
+    static constexpr float kFreezeThresholdMs = 250.0f;  // stall claro, nao so reprojection
+    float m_smoothedFps = 0.0f;
+    float m_lastFrameMs = 0.0f;
+    int m_stutterCount = 0;
+    int m_freezeCount = 0;
+
+    // Metrica SEPARADA de fps/stutter/freeze acima: aquelas medem o LOOP DE
+    // RENDER (a cena XR sendo desenhada), nao o video em si — o loop pode
+    // rodar liso a 90fps redesenhando o MESMO frame de video repetido, se o
+    // decode travar (rede lenta, MediaCodec atrasado). Rastreado aqui: tempo
+    // desde a ULTIMA vez que o AHardwareBuffer de video mudou de fato (ver
+    // bloco de troca de buffer mais abaixo, onde isso zera). Se esse numero
+    // ficar alto com o video "ativo" (nao pausado pelo usuario), o problema
+    // e no pipeline de decode/rede, nao na renderizacao.
+    static constexpr float kVideoStallThresholdMs = 500.0f;
+    float m_msSinceLastVideoFrame = 0.0f;
+    bool m_videoStallLogged = false;
+
+    // Judder de video: vidGap (acima) so mostra o gap ATUAL, amostrado no
+    // HUD a ~10Hz — um video pode nunca passar de, digamos, 200ms e ainda
+    // assim ter cadencia irregular (20/20/90/20/90ms...), que E percebido
+    // como falta de fluidez mesmo sem nenhuma amostra isolada ser alarmante.
+    // Mantem um historico circular dos ultimos N gaps (cada "gap" = quanto
+    // tempo o frame anterior ficou parado na tela antes do proximo chegar)
+    // pra computar taxa de entrega real (m_videoFps, difere de FPS de
+    // renderizacao) e amplitude de variacao (m_videoJitterMs, max-min da
+    // janela) — mais o log de PushVideoGapSample, que compara cada gap novo
+    // contra a media RECENTE (nao um limiar fixo) porque um video de 24fps
+    // tem gaps ~41ms normalmente (nao e judder), enquanto o mesmo valor
+    // seria uma anomalia clara num video de 60fps.
+    static constexpr int kVideoGapHistorySize = 30;
+    float m_videoGapHistory[kVideoGapHistorySize] = {};
+    int m_videoGapHistoryCount = 0;
+    int m_videoGapHistoryIndex = 0;
+    float m_videoFps = 0.0f;
+    float m_videoJitterMs = 0.0f;
+
+    // Decode real (ground truth do lado Rust, ver TextureOutput::frames_decoded)
+    // vs. m_videoFps acima (o que o C++ CONSEGUE OBSERVAR via polling). Se os
+    // dois divergirem, o gargalo esta no consumo (import/cache Vulkan, taxa
+    // de polling), nao no decode em si. Amostrado a ~1Hz (nao a cada frame —
+    // contagem de decode e uma taxa baixa, nao precisa de mais resolucao).
+    static constexpr float kDecodedFpsPollIntervalMs = 1000.0f;
+    float m_decodedFpsPollAccumMs = 0.0f;
+    uint64_t m_lastDecodedFrameCount = 0;
+    float m_decodedFps = 0.0f;
+
+    void PushVideoGapSample(float gapMs) {
+        if (gapMs <= 0.0f) return;
+
+        if (m_videoGapHistoryCount >= 5) {
+            float prevAvg = 0.0f;
+            for (int i = 0; i < m_videoGapHistoryCount; i++) prevAvg += m_videoGapHistory[i];
+            prevAvg /= m_videoGapHistoryCount;
+            if (gapMs > prevAvg * 2.0f && gapMs > prevAvg + 20.0f) {
+                LOGW("VRPlayerApp: video judder — frame ficou %.0fms na tela (media recente %.0fms)",
+                    gapMs, prevAvg);
+            }
+        }
+
+        m_videoGapHistory[m_videoGapHistoryIndex] = gapMs;
+        m_videoGapHistoryIndex = (m_videoGapHistoryIndex + 1) % kVideoGapHistorySize;
+        if (m_videoGapHistoryCount < kVideoGapHistorySize) m_videoGapHistoryCount++;
+
+        float sum = 0.0f, minV = 1e9f, maxV = 0.0f;
+        for (int i = 0; i < m_videoGapHistoryCount; i++) {
+            float v = m_videoGapHistory[i];
+            sum += v;
+            minV = std::min(minV, v);
+            maxV = std::max(maxV, v);
+        }
+        float avg = sum / m_videoGapHistoryCount;
+        m_videoFps = (avg > 0.0f) ? (1000.0f / avg) : 0.0f;
+        m_videoJitterMs = maxV - minV;
+    }
+
     float m_menuHoldTime = 0.0f;
     bool m_recenterFiredThisHold = false;
     bool m_needsOsRecenter = false;

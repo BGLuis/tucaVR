@@ -133,10 +133,38 @@ pub extern "C" fn get_swap_eyes() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn get_current_video_frame() -> *mut c_void {
-    if let Ok(controller) = CONTROLLER.lock() {
-        controller.get_current_frame()
-    } else {
-        std::ptr::null_mut()
+    // try_lock (nao lock!): chamada incondicional a cada frame pelo render
+    // loop (C++, GLES e Vulkan). `load()`/`load_at()` (playback.rs) segura
+    // este mesmo mutex durante TODO o carregamento — abrir a
+    // conexao/arquivo, sondar o demuxer, configurar o MediaCodec — o que
+    // pode levar segundos de verdade em rede (SFTP/SMB) ou arquivos
+    // grandes. Com `lock()` bloqueante aqui, o render loop inteiro
+    // (renderizacao E processamento de input, tudo na mesma thread)
+    // travava ate o load() terminar — bug reportado em teste real de
+    // hardware ("trava a interface toda ao dar play", pior em SFTP e em
+    // arquivos maiores, exatamente o padrao de demora do load()). Se o
+    // lock estiver ocupado, so devolve null — o render loop ja trata isso
+    // como "sem frame ainda" (cai no quad solido de fallback), sem travar.
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_current_frame(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
+/// Debug (docs/DEBUGGING.md): total de frames REALMENTE decodificados pela
+/// thread de decode, independente de quantas vezes o C++ chama
+/// get_current_video_frame() acima pra observar isso. O C++ amostra este
+/// contador ao longo do tempo e calcula um delta (frames/segundo real do
+/// decode) pra comparar contra o vidFps que ele mesmo calcula por polling —
+/// se os dois nao baterem, o gargalo esta no lado do consumo (import/cache
+/// Vulkan, taxa de polling do render loop), nao no decode em si. try_lock
+/// pelo mesmo motivo de get_current_video_frame() acima (chamada automatica
+/// e periodica, nunca deve bloquear o render loop).
+#[no_mangle]
+pub extern "C" fn get_video_frames_decoded_count() -> u64 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_frames_decoded_count(),
+        Err(_) => 0,
     }
 }
 
@@ -660,7 +688,12 @@ pub extern "C" fn get_audio_track_count() -> u32 {
 
 #[no_mangle]
 pub extern "C" fn get_video_progress(current: *mut f32, total: *mut f32) {
-    if let Ok(controller) = CONTROLLER.lock() {
+    // try_lock — mesmo motivo de get_current_video_frame() acima (chamada
+    // periodica automatica do render loop, ~10Hz, nao uma acao explicita do
+    // usuario). Se o lock estiver ocupado (load() em andamento), so deixa
+    // current/total como estavam (o C++ ja cacheia o ultimo valor lido) em
+    // vez de bloquear a thread de render.
+    if let Ok(controller) = CONTROLLER.try_lock() {
         let (c, t) = controller.get_progress();
         unsafe {
             if !current.is_null() {

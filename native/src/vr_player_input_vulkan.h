@@ -34,12 +34,20 @@ inline void FireHaptic(AppState& state, XrPath hand, float amplitude, XrDuration
 // (vr_player_app.cpp: baseUiPos/baseControlsPos em Update()), pra manter os
 // dois caminhos comparaveis visualmente. Transformadas por
 // sceneTranslationOffset/sceneYawOffset em ComputeSceneTransforms abaixo.
-constexpr XrVector3f kBaseUiPos = {-2.2f, 1.5f, -1.5f};
-constexpr float kUiPanelScaleX = 0.8f;
-constexpr float kUiPanelScaleY = 0.6f;
-constexpr XrVector3f kBaseControlsPos = {0.0f, 0.4f, -1.9f};
-constexpr float kControlsPanelScaleX = 0.8f;
-constexpr float kControlsPanelScaleY = 0.3f;
+//
+// Distancia/escala aumentadas na revisao pos-migracao — os valores
+// originais (-2.2,1.5,-1.5 / escala 0.8x0.6) colocavam o painel a ~2.66m
+// com so 0.8m de largura, angulo visual pequeno demais (~17 graus) pro
+// texto ficar legivel — bug reportado em teste real de hardware ("muito
+// longe, nao da pra ler o texto"). Agora ~1.64m de distancia, 50% maior,
+// mantendo a proporcao da textura (4:3 pro UI/kUiTexWidth/kUiTexHeight,
+// 2.667:1 pros controles/kControlsTexWidth/kControlsTexHeight).
+constexpr XrVector3f kBaseUiPos = {-1.3f, 1.5f, -1.0f};
+constexpr float kUiPanelScaleX = 1.2f;
+constexpr float kUiPanelScaleY = 0.9f;
+constexpr XrVector3f kBaseControlsPos = {0.0f, 0.4f, -1.3f};
+constexpr float kControlsPanelScaleX = 1.2f;
+constexpr float kControlsPanelScaleY = 0.45f;
 constexpr float kControlsPitch = -0.3f;
 
 // Transforms de cena computados uma vez por frame e compartilhados entre
@@ -544,11 +552,13 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         // condicionar a compilacao nativa por build type.
         {
             StereoParams spHud = GetStereoParams(state.screenMode, 0);
-            char hud[192];
+            char hud[352];
             snprintf(hud, sizeof(hud),
-                "VULKAN | %s | stereoLayout=%d polar180=%d swap=%d | video=%s",
+                "VULKAN | %s | stereoLayout=%d polar180=%d swap=%d | video=%s vidGap=%.0fms vidFps=%.0f decFps=%.0f jitter=%.0fms | %.0ffps %.1fms stutter=%d freeze=%d",
                 ScreenModeName(state.screenMode), spHud.stereoLayout, spHud.polar180, spHud.swapEyes,
-                (state.activeVideoFrame != nullptr) ? "ativo" : "sem frame");
+                (state.activeVideoFrame != nullptr) ? "ativo" : "sem frame", state.msSinceLastVideoFrame,
+                state.videoFps, state.decodedFps, state.videoJitterMs,
+                state.smoothedFps, state.lastFrameMs, state.stutterCount, state.freezeCount);
             JNIEnv* env = nullptr;
             state.app->activity->vm->AttachCurrentThread(&env, nullptr);
             if (env) {

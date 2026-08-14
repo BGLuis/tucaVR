@@ -7,6 +7,15 @@ pub struct TextureOutput {
     pub reader: Option<ImageReader>,
     pub current_image: Option<Image>,
     pub current_buffer: Option<HardwareBuffer>,
+    // Debug (docs/DEBUGGING.md): conta frames REALMENTE decodificados/
+    // adquiridos aqui, na thread de decode — independente de quantas vezes
+    // o C++ chama get_current_video_frame() pra observar isso. Existe pra
+    // isolar "o decode esta lento" de "o C++ so esta perdendo frames que o
+    // decode ja produziu" quando o vidFps calculado do lado C++ (que so
+    // enxerga o que consegue observar por polling) parecer baixo — os dois
+    // numeros devem bater; se nao baterem, o problema e do lado do consumo
+    // (import/cache Vulkan, taxa de polling), nao do decode em si.
+    pub frames_decoded: u64,
 }
 
 unsafe impl Send for TextureOutput {}
@@ -14,7 +23,7 @@ unsafe impl Sync for TextureOutput {}
 
 impl TextureOutput {
     pub fn new() -> Self {
-        Self { reader: None, current_image: None, current_buffer: None }
+        Self { reader: None, current_image: None, current_buffer: None, frames_decoded: 0 }
     }
 
     pub fn allocate(&mut self, width: u32, height: u32) -> Result<(), String> {
@@ -50,6 +59,7 @@ impl TextureOutput {
                             }
                             self.current_buffer = Some(buffer);
                             self.current_image = Some(image);
+                            self.frames_decoded = self.frames_decoded.wrapping_add(1);
                         }
                         Err(e) => {
                             unsafe {

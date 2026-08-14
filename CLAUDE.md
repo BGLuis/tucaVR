@@ -88,6 +88,8 @@ Requires docker + docker compose plugin, curl, sha256sum. No headset needed. See
 
 Everything requiring actual OpenXR rendering, controller haptics, or hardware `MediaCodec` decode has no automated coverage and needs the physical Quest 3 headset — don't claim these are verified without stating that explicitly.
 
+For debugging video playback/rendering on-device (forcing a `ScreenMode` via adb without a real file in that format, an in-scene debug HUD, transition logging, optional Vulkan validation layers), see `docs/DEBUGGING.md` — debug-build-only, no-op in release.
+
 There's also `scripts/soak-test.sh` (long-run stability, results land in `soak-test-results/`, gitignored) and `scripts/test-4k-memory.sh` / `scripts/generate-4k-test-clip.sh` for memory validation against a synthetic 4K clip (`testdata/`, gitignored).
 
 ## i18n

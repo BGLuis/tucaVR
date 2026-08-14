@@ -399,6 +399,38 @@ geometria vem de `OVRFW::BuildGlobe`, não reimplementada à mão):
 Ver `docs/TESTING-PLAN.md` pro que mais exige headset físico e ainda não foi
 validado nesta revisão.
 
+### 4.1.3 Painéis de UI/controles muito distantes/pequenos para ler — confirmado em hardware
+
+Mesmo depois do fix de yaw (§4.1.1), o teste real em headset reportou que o
+texto dos painéis de File Browser e controles continuava ilegível. Não era
+mais um bug de rotação — os valores de posição/escala em si (idênticos nos
+dois caminhos, GLES e Vulkan, já que foram unificados em §4.1) colocavam o
+painel de UI a ~2.66m de distância com só 0.8m de largura, um ângulo visual
+de ~17° — pequeno demais pra ler texto confortavelmente num headset. Esses
+valores nunca tinham sido validados em hardware (herdados do design
+original do T4.5, ver comentários em `vr_player_app.cpp`).
+
+Corrigido trazendo os dois painéis pra mais perto e aumentando 50%,
+preservando a proporção de cada textura (4:3 pro UI, 1024×768; 2.667:1 pros
+controles, 1024×384):
+
+| | Antes | Depois |
+|---|---|---|
+| UI: posição base | `(-2.2, 1.5, -1.5)` | `(-1.3, 1.5, -1.0)` |
+| UI: distância / escala | ~2.66m / 0.8×0.6 | ~1.64m / 1.2×0.9 |
+| Controles: posição base | `(0, 0.4, -1.9)` | `(0, 0.4, -1.3)` |
+| Controles: distância / escala | 1.9m / 0.8×0.3 | 1.3m / 1.2×0.45 |
+
+Fonte única em cada caminho — `baseUiPos`/`baseControlsPos` em
+`vr_player_app.cpp` (GLES), `kBaseUiPos`/`kUiPanelScaleX/Y`/
+`kBaseControlsPos`/`kControlsPanelScaleX/Y` em `vr_player_input_vulkan.h`
+(Vulkan, consumidos tanto pelo hit-test quanto pelo render via
+`ComputeSceneTransforms`) — então ajustar esses valores no futuro não corre
+o risco de hit-test e render divergirem de novo.
+
+Ver `docs/TESTING-PLAN.md` pro que mais exige headset físico e ainda não foi
+validado nesta revisão.
+
 ## 5. Antes de começar — validar a premissa
 
 Este app renderiza essencialmente 1-2 quads/esfera com vídeo — carga

@@ -33,6 +33,7 @@
 #include <math.h>
 
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -68,6 +69,7 @@ extern "C" {
     extern float get_video_volume();
     extern void set_video_volume(float volume);
     extern void seek_video_playback(float position);
+    extern uint64_t get_video_frames_decoded_count(); // debug, ver docs/DEBUGGING.md
 }
 
 namespace {
@@ -86,6 +88,11 @@ constexpr uint32_t kUiTexWidth = 1024;
 constexpr uint32_t kUiTexHeight = 768;
 constexpr uint32_t kControlsTexWidth = 1024;
 constexpr uint32_t kControlsTexHeight = 384;
+
+// Metricas de performance (debug, ver docs/DEBUGGING.md).
+constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz
+constexpr float kFreezeThresholdMs = 250.0f; // stall claro, nao so reprojection
+constexpr float kVideoStallThresholdMs = 500.0f; // decode/rede travado (ver AppState.msSinceLastVideoFrame)
 
 // ScreenMode espelha exatamente o enum do caminho GLES (vr_player_app.cpp:370-381)
 enum class ScreenMode : uint32_t {
@@ -400,6 +407,55 @@ struct AppState {
     // Cursor/reticulo no ponto de acerto (Estagio 6) — desenhado por DrawUiQuads.
     bool cursorDotVisible = false;
     XrVector3f cursorDotPos = {0.0f, 0.0f, 0.0f};
+
+    // Metricas de performance (debug, ver docs/DEBUGGING.md) — medido em
+    // wall-clock (std::chrono) entre chamadas consecutivas de RenderFrame,
+    // nao a partir de predictedDisplayTime: xrWaitFrame devolve o horario
+    // que o COMPOSITOR pretende mostrar o proximo frame, nao quanto tempo
+    // o app de fato levou — um stall real (decode bloqueando,
+    // vkQueueWaitIdle demorado) atrasa a PROXIMA chamada de RenderFrame,
+    // que e exatamente o que o wall-clock aqui capta.
+    float smoothedFps = 0.0f;
+    float lastFrameMs = 0.0f;
+    int stutterCount = 0;
+    int freezeCount = 0;
+    std::chrono::steady_clock::time_point lastFrameTimestamp{};
+    bool hasLastFrameTimestamp = false;
+
+    // Metrica SEPARADA das acima: fps/stutter/freeze medem o LOOP DE
+    // RENDER, nao o video em si — o loop pode rodar liso redesenhando o
+    // MESMO frame repetido se o decode travar (rede lenta, MediaCodec
+    // atrasado). Tempo desde a ULTIMA vez que o AHardwareBuffer de video
+    // mudou de fato (ver UpdateVideoFrame, onde isso zera). Alto com o
+    // video "ativo" (nao pausado pelo usuario) = problema no pipeline de
+    // decode/rede, nao na renderizacao.
+    float msSinceLastVideoFrame = 0.0f;
+    bool videoStallLogged = false;
+
+    // Judder de video: msSinceLastVideoFrame (acima) so mostra o gap ATUAL,
+    // amostrado no HUD a ~10Hz — um video pode nunca passar de, digamos,
+    // 200ms e ainda assim ter cadencia irregular (20/20/90/20/90ms...), que
+    // E percebido como falta de fluidez mesmo sem nenhuma amostra isolada
+    // ser alarmante. Historico circular dos ultimos N gaps (cada "gap" =
+    // quanto tempo o frame anterior ficou parado na tela) pra computar taxa
+    // de entrega real (videoFps, difere de FPS de renderizacao) e amplitude
+    // de variacao (videoJitterMs, max-min da janela) — ver PushVideoGapSample.
+    static constexpr int kVideoGapHistorySize = 30;
+    float videoGapHistory[kVideoGapHistorySize] = {};
+    int videoGapHistoryCount = 0;
+    int videoGapHistoryIndex = 0;
+    float videoFps = 0.0f;
+    float videoJitterMs = 0.0f;
+
+    // Decode real (ground truth do lado Rust, ver TextureOutput::frames_decoded)
+    // vs. videoFps acima (o que o C++ CONSEGUE OBSERVAR via polling). Se os
+    // dois divergirem, o gargalo esta no consumo (import/cache Vulkan, taxa
+    // de polling), nao no decode em si. Amostrado a ~1Hz (nao a cada frame —
+    // contagem de decode e uma taxa baixa, nao precisa de mais resolucao).
+    static constexpr float kDecodedFpsPollIntervalMs = 1000.0f;
+    float decodedFpsPollAccumMs = 0.0f;
+    uint64_t lastDecodedFrameCount = 0;
+    float decodedFps = 0.0f;
 
     bool resumed = false;
     bool sessionRunning = false;
@@ -2461,6 +2517,38 @@ void RecordAndSubmitVideo(
     VKR(vkQueueWaitIdle(state.vkQueue));
 }
 
+// Ver comentario no campo AppState.videoGapHistory — compara cada gap novo
+// contra a media RECENTE (nao um limiar fixo) porque um video de 24fps tem
+// gaps ~41ms normalmente (nao e judder), enquanto o mesmo valor seria uma
+// anomalia clara num video de 60fps.
+void PushVideoGapSample(AppState& state, float gapMs) {
+    if (gapMs <= 0.0f) return;
+
+    if (state.videoGapHistoryCount >= 5) {
+        float prevAvg = 0.0f;
+        for (int i = 0; i < state.videoGapHistoryCount; i++) prevAvg += state.videoGapHistory[i];
+        prevAvg /= state.videoGapHistoryCount;
+        if (gapMs > prevAvg * 2.0f && gapMs > prevAvg + 20.0f) {
+            LOGW("Video: judder — frame ficou %.0fms na tela (media recente %.0fms)", gapMs, prevAvg);
+        }
+    }
+
+    state.videoGapHistory[state.videoGapHistoryIndex] = gapMs;
+    state.videoGapHistoryIndex = (state.videoGapHistoryIndex + 1) % AppState::kVideoGapHistorySize;
+    if (state.videoGapHistoryCount < AppState::kVideoGapHistorySize) state.videoGapHistoryCount++;
+
+    float sum = 0.0f, minV = 1e9f, maxV = 0.0f;
+    for (int i = 0; i < state.videoGapHistoryCount; i++) {
+        float v = state.videoGapHistory[i];
+        sum += v;
+        minV = std::min(minV, v);
+        maxV = std::max(maxV, v);
+    }
+    float avg = sum / state.videoGapHistoryCount;
+    state.videoFps = (avg > 0.0f) ? (1000.0f / avg) : 0.0f;
+    state.videoJitterMs = maxV - minV;
+}
+
 // Estagio 3: atualiza o frame de video ativo a partir do bridge Rust.
 // Chamado uma vez por loop de frame, antes de RenderFrame.
 // Equivale ao bloco vr_player_app.cpp:1354-1400 (m_eglImageCache).
@@ -2472,6 +2560,11 @@ void UpdateVideoFrame(AppState& state) {
         if (state.lastVideoBuffer != nullptr) {
             state.lastVideoBuffer = nullptr;
             state.activeVideoFrame = nullptr;
+            state.msSinceLastVideoFrame = 0.0f;
+            state.videoStallLogged = false;
+            state.videoGapHistoryCount = 0; // nao misturar cadencia do video anterior com o proximo
+            state.videoFps = 0.0f;
+            state.videoJitterMs = 0.0f;
             LOGI("Video: sem frame disponivel, usando fallback quad solido");
         }
         return;
@@ -2487,9 +2580,15 @@ void UpdateVideoFrame(AppState& state) {
     // frame durante playback normal — logaria a 30-60fps sem info nova).
     if (state.lastVideoBuffer == nullptr) {
         LOGI("Video: comecou a produzir frames (1o AHardwareBuffer recebido)");
+    } else {
+        // So conta como amostra de cadencia se ja havia um frame antes (nao
+        // a latencia de startup do 1o frame, categoria diferente).
+        PushVideoGapSample(state, state.msSinceLastVideoFrame);
     }
 
     state.lastVideoBuffer = buffer;
+    state.msSinceLastVideoFrame = 0.0f;
+    state.videoStallLogged = false;
     state.activeVideoFrame = GetOrImportVideoFrame(state, buffer);
     if (state.activeVideoFrame == nullptr) {
         LOGE("Video: GetOrImportVideoFrame falhou para o buffer %p — frame sera ignorado (fallback quad solido)", (void*)buffer);
@@ -2497,6 +2596,53 @@ void UpdateVideoFrame(AppState& state) {
 }
 
 void RenderFrame(AppState& state) {
+    // Metricas de performance (docs/DEBUGGING.md) — ver comentario no campo
+    // lastFrameTimestamp (AppState) sobre por que e wall-clock, nao
+    // predictedDisplayTime.
+    auto frameStart = std::chrono::steady_clock::now();
+    if (state.hasLastFrameTimestamp) {
+        float frameMs = std::chrono::duration<float, std::milli>(
+            frameStart - state.lastFrameTimestamp).count();
+        state.lastFrameMs = frameMs;
+        if (frameMs > 0.0f) {
+            float instFps = 1000.0f / frameMs;
+            state.smoothedFps = (state.smoothedFps <= 0.0f)
+                ? instFps : (state.smoothedFps * 0.9f + instFps * 0.1f);
+        }
+        if (frameMs > kFreezeThresholdMs) {
+            state.freezeCount++;
+            LOGE("Video: FREEZE detectado — frame levou %.0fms", frameMs);
+        } else if (frameMs > kStutterThresholdMs) {
+            state.stutterCount++;
+            LOGW("Video: stutter — frame levou %.1fms", frameMs);
+        }
+
+        // Video "congelado" (mesmo frame repetido) e diferente de freeze do
+        // loop de render acima — ver comentario no campo
+        // AppState.msSinceLastVideoFrame. So loga uma vez por episodio,
+        // reseta quando um frame novo chega de fato (UpdateVideoFrame).
+        state.msSinceLastVideoFrame += frameMs;
+        if (state.activeVideoFrame != nullptr && !state.videoStallLogged &&
+            state.msSinceLastVideoFrame > kVideoStallThresholdMs) {
+            state.videoStallLogged = true;
+            LOGW("Video: sem frame novo ha %.0fms (decode/rede travado? ou usuario pausou?)",
+                state.msSinceLastVideoFrame);
+        }
+
+        // decFps: taxa real de decode (Rust), amostrada a ~1Hz — ver
+        // comentario no campo AppState.decodedFps.
+        state.decodedFpsPollAccumMs += frameMs;
+        if (state.decodedFpsPollAccumMs >= AppState::kDecodedFpsPollIntervalMs) {
+            uint64_t currentCount = get_video_frames_decoded_count();
+            uint64_t delta = currentCount - state.lastDecodedFrameCount; // wrap-safe (unsigned)
+            state.decodedFps = delta / (state.decodedFpsPollAccumMs / 1000.0f);
+            state.lastDecodedFrameCount = currentCount;
+            state.decodedFpsPollAccumMs = 0.0f;
+        }
+    }
+    state.lastFrameTimestamp = frameStart;
+    state.hasLastFrameTimestamp = true;
+
     XrFrameWaitInfo waitFrameInfo{XR_TYPE_FRAME_WAIT_INFO};
     XrFrameState frameState{XR_TYPE_FRAME_STATE};
     OXR(xrWaitFrame(state.session, &waitFrameInfo, &frameState));
