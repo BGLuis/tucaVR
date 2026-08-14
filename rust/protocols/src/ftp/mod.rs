@@ -214,12 +214,21 @@ impl RangeSource for FtpFileSource {
             self.open_data_stream(offset)?;
         }
 
-        let n = self.data.as_mut().expect("acabamos de abrir o stream").read(buf)?;
-        self.data_pos += n as u64;
-        if n == 0 {
-            self.data_exhausted = true;
+        // Um unico Read::read() pode short-read (comportamento normal de
+        // socket TCP) — sem o loop, isso devolvia bem menos do que o bloco
+        // de 4-12MB que o PrefetchReader pediu, multiplicando refills.
+        let stream = self.data.as_mut().expect("acabamos de abrir o stream");
+        let mut total = 0usize;
+        while total < buf.len() {
+            let n = stream.read(&mut buf[total..])?;
+            if n == 0 {
+                self.data_exhausted = true;
+                break;
+            }
+            total += n;
         }
-        Ok(n)
+        self.data_pos += total as u64;
+        Ok(total)
     }
 
     fn len(&self) -> Option<u64> {

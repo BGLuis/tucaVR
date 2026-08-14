@@ -62,9 +62,8 @@ services:
       # Formato `user|senha|home-dir-dentro-do-container`. `/ftp/vruser` (em
       # vez do `/home/vruser` default da imagem) evita colisao com o
       # diretorio home real do usuario `vruser` que o entrypoint da imagem
-      # cria em `/home` — o volume abaixo so pode ser montado read-only
-      # depois que o diretorio ja existe, e montar por cima do home default
-      # antes do `adduser` interno rodar causa erro de permissao.
+      # cria em `/home` — ver nota no volume abaixo sobre por que o mount
+      # nao pode ser read-only.
       - USERS=vruser|vrpass123|/ftp/vruser
       # PASV_ADDRESS anunciado ao cliente no reply do comando PASV — tem que
       # ser um endereco que o CLIENTE consiga alcancar. Como o teste sempre
@@ -76,7 +75,13 @@ services:
       - MIN_PORT=12100
       - MAX_PORT=12110
     volumes:
-      - ./fixtures:/ftp/vruser:ro
+      # NAO ":ro" (achado desta sessao, corrige regressao do entrypoint da
+      # imagem `delfer/alpine-ftp-server`): o entrypoint faz `adduser -h
+      # /ftp/vruser` + `chown` no proprio diretorio home durante o boot do
+      # container, o que falha com "Read-only file system" se o mount for
+      # somente-leitura — mesmo o diretorio ja "existindo" via bind mount.
+      # Container efemero de teste, sem risco real em permitir escrita.
+      - ./fixtures:/ftp/vruser
     ports:
       - "12121:21"
       - "12100-12110:12100-12110"

@@ -3,6 +3,7 @@
 //! era um esqueleto (`pub fn add(left, right) -> u64`); substituido pela
 //! implementacao real.
 
+pub mod chunking;
 pub mod ftp;
 pub mod http;
 pub mod prefetch;

@@ -17,9 +17,19 @@
 //! especulava (que https funcionaria nativamente) — verificado direto no
 //! binario, nao assumido.
 
+use crate::chunking::split_range;
 use crate::prefetch::RangeSource;
 use std::io;
 use std::time::Duration;
+
+/// Tamanho de cada sub-GET concorrente dentro de um `read_range` (T7.2,
+/// otimizacao desta sessao — ver `crate::chunking`). HTTP/1.1 nao multiplexa
+/// requests numa unica conexao como SMB2/SFTP, mas `reqwest::blocking::Client`
+/// e `Clone` com pool de conexoes compartilhado (documentado pela propria
+/// crate como seguro para reuso concorrente sem precisar de `Arc` externo) —
+/// entao varias GETs `Range` em paralelo, cada uma na sua conexao do pool, e
+/// o caminho estabelecido para paralelizar download por range em HTTP puro.
+const HTTP_CONCURRENT_CHUNK_SIZE: u32 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone)]
 pub struct HttpCapabilities {
@@ -164,27 +174,58 @@ impl HttpsRangeSource {
     }
 }
 
+/// Uma GET com `Range` para `[offset, offset+len)`. Extraida de `read_range`
+/// para poder ser chamada de dentro de threads escopadas (`fetch_range` nao
+/// captura `self`, so as pecas que precisa).
+fn fetch_range(client: &reqwest::blocking::Client, url: &str, offset: u64, len: u32) -> io::Result<Vec<u8>> {
+    let end = offset + len as u64 - 1;
+    let range = format!("bytes={offset}-{end}");
+    let resp = client.get(url).header(reqwest::header::RANGE, range).send().map_err(|e| io::Error::other(e.to_string()))?;
+    let status = resp.status();
+    if status.as_u16() != 206 && !status.is_success() {
+        return Err(io::Error::other(format!("HTTP {status} ao ler range de {offset}")));
+    }
+    resp.bytes().map(|b| b.to_vec()).map_err(|e| io::Error::other(e.to_string()))
+}
+
 impl RangeSource for HttpsRangeSource {
     fn read_range(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
         if offset >= self.len || buf.is_empty() {
             return Ok(0);
         }
-        let end = (offset + buf.len() as u64 - 1).min(self.len - 1);
-        let range = format!("bytes={}-{}", offset, end);
-        let resp = self
-            .client
-            .get(&self.url)
-            .header(reqwest::header::RANGE, range)
-            .send()
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        let status = resp.status();
-        if status.as_u16() != 206 && !status.is_success() {
-            return Err(io::Error::other(format!("HTTP {status} ao ler range de {offset}")));
+        let want = ((self.len - offset).min(buf.len() as u64)) as u32;
+        let chunks = split_range(offset, want, HTTP_CONCURRENT_CHUNK_SIZE);
+
+        let mut results: Vec<io::Result<Vec<u8>>> = Vec::with_capacity(chunks.len());
+        std::thread::scope(|scope| {
+            let handles: Vec<_> = chunks
+                .iter()
+                .map(|&(chunk_offset, chunk_len)| {
+                    let client = self.client.clone();
+                    let url = self.url.clone();
+                    scope.spawn(move || fetch_range(&client, &url, chunk_offset, chunk_len))
+                })
+                .collect();
+            for handle in handles {
+                results.push(handle.join().unwrap_or_else(|_| Err(io::Error::other("thread de leitura HTTP entrou em panico"))));
+            }
+        });
+
+        let mut total = 0usize;
+        for (idx, result) in results.into_iter().enumerate() {
+            let data = result?;
+            let (chunk_offset, chunk_len) = chunks[idx];
+            let start_in_buf = (chunk_offset - offset) as usize;
+            let n = data.len();
+            buf[start_in_buf..start_in_buf + n].copy_from_slice(&data[..n]);
+            total += n;
+            if n < chunk_len as usize {
+                // Curto por EOF/corrida rara — chunks seguintes (se buscados)
+                // nao formam um prefixo contiguo confiavel, para aqui.
+                break;
+            }
         }
-        let bytes = resp.bytes().map_err(|e| io::Error::other(e.to_string()))?;
-        let n = bytes.len().min(buf.len());
-        buf[..n].copy_from_slice(&bytes[..n]);
-        Ok(n)
+        Ok(total)
     }
 
     fn len(&self) -> Option<u64> {

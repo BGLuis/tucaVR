@@ -32,6 +32,12 @@ russh-sftp = "2"
 # `#[async_trait]`) — russh usa a mesma crate internamente, mas o atributo
 # precisa estar disponivel para quem implementa o trait tambem.
 async-trait = "0.1"
+# `join_all` para disparar sub-leituras de um mesmo read_range CONCORRENTEMENTE
+# sobre a mesma sessao SMB/SFTP (ambas as crates multiplexam por MessageId/
+# request-id — ver docs de smb/mod.rs e sftp/mod.rs). So `future::join_all`
+# (nao precisa de runtime/executor proprio: roda dentro do block_on existente),
+# entao "futures-util" com features minimas basta, sem puxar "futures" inteiro.
+futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 httpmock = "0.8.3"

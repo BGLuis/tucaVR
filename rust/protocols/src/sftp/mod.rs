@@ -23,13 +23,19 @@
 //! com o offset pedido antes de decidir se um seek e necessario: cada
 //! `read_range` e sempre um pedido posicional novo.
 //!
-//! `try_read_range` faz um laco de `SSH_FXP_READ`s de ate
-//! `SFTP_MAX_READ_CHUNK` bytes cada, em vez de confiar que o servidor
-//! devolve o buffer inteiro pedido numa unica resposta — servidores SFTP tem
-//! permissao pelo protocolo de truncar uma leitura maior que o
-//! `max_packet_len` negociado — ate preencher o buffer pedido pelo
-//! `PrefetchReader` (`crate::prefetch`) ou bater em EOF de verdade
-//! (`StatusCode::Eof`).
+//! `try_read_range` divide o buffer pedido em sub-chunks de ate
+//! `SFTP_MAX_READ_CHUNK` bytes cada (`crate::chunking::split_range`) — em vez
+//! de confiar que o servidor devolve o buffer inteiro numa unica resposta,
+//! ja que servidores SFTP tem permissao pelo protocolo de truncar uma
+//! leitura maior que o `max_packet_len` negociado — e dispara todos os
+//! `SSH_FXP_READ`s CONCORRENTEMENTE (T6.3, otimizacao desta sessao: antes
+//! disto, o laco era sequencial, uma leitura de cada vez, apesar de
+//! `RawSftpSession::read` tomar `&self` exatamente para permitir chamadas
+//! concorrentes multiplexadas por request-id sobre a mesma sessao SSH — essa
+//! serializacao artificial era o principal suspeito da degradacao de
+//! throughput observada em streaming 8K60 via SFTP). Os resultados sao
+//! remontados na ordem original; um `StatusCode::Eof`/short-read no meio do
+//! range para a remontagem ali (o resto, se buscado, e descartado).
 //!
 //! ## Verificacao de host key: aceita qualquer uma, DE PROPOSITO
 //!
@@ -68,7 +74,9 @@ pub mod uri;
 
 pub use uri::{SftpTarget, is_sftp_uri, redact};
 
+use crate::chunking::split_range;
 use crate::prefetch::RangeSource;
+use futures_util::future::join_all;
 use russh::client::{self, Handler};
 use russh::keys::key::PublicKey;
 use russh::Disconnect;
@@ -271,23 +279,29 @@ impl SftpFileSource {
             return Err(io::Error::other("SftpFileSource sem conexao ativa"));
         };
 
+        let want = if offset >= self.size { 0 } else { (buf.len() as u64).min(self.size - offset) as u32 };
+        if want == 0 {
+            return Ok(0);
+        }
+
+        let chunks = split_range(offset, want, SFTP_MAX_READ_CHUNK);
+        let results = self.runtime.block_on(join_all(chunks.iter().map(|&(chunk_offset, chunk_len)| raw.read(handle, chunk_offset, chunk_len))));
+
         let mut total = 0usize;
-        while total < buf.len() {
-            let want = ((buf.len() - total) as u32).min(SFTP_MAX_READ_CHUNK);
-            let result = self.runtime.block_on(raw.read(handle, offset + total as u64, want));
+        for (idx, result) in results.into_iter().enumerate() {
+            let (chunk_offset, chunk_len) = chunks[idx];
             match result {
                 Ok(data) => {
                     let n = data.data.len();
-                    if n == 0 {
-                        break;
-                    }
-                    buf[total..total + n].copy_from_slice(&data.data[..n]);
+                    let start_in_buf = (chunk_offset - offset) as usize;
+                    buf[start_in_buf..start_in_buf + n].copy_from_slice(&data.data[..n]);
                     total += n;
-                    if n < want as usize {
+                    if n < chunk_len as usize {
                         // Servidor devolveu menos do que pedido sem sinalizar
-                        // EOF explicito (permitido pelo protocolo) — nao
-                        // insiste nesta chamada, o `PrefetchReader` pede mais
-                        // na proxima se precisar.
+                        // EOF explicito (permitido pelo protocolo), ou este
+                        // era o chunk final legitimo — os chunks seguintes
+                        // (se buscados) nao formam um prefixo contiguo
+                        // confiavel, entao para a remontagem aqui.
                         break;
                     }
                 }

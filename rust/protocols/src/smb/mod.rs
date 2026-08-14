@@ -26,11 +26,25 @@ pub mod uri;
 
 pub use uri::{SmbTarget, is_smb_uri, redact};
 
+use crate::chunking::split_range;
 use crate::prefetch::RangeSource;
+use futures_util::future::join_all;
 use smb2::{ClientConfig, SmbClient};
 use std::io;
 use std::time::Duration;
 use tokio::runtime::Runtime;
+
+/// Tamanho de cada sub-leitura concorrente dentro de um `read_range` (T6.3,
+/// otimizacao desta sessao — ver `crate::chunking`). `FileReader::read_at`
+/// toma `&self` e ja e seguro chamar concorrentemente sobre o mesmo reader —
+/// a doc da propria crate confirma que isso pipeline sobre a UNICA sessao
+/// SMB (multiplexado por `MessageId`), entao dividir um bloco de 4-12MB do
+/// `PrefetchReader` em varias chamadas de 1MB em voo ao mesmo tempo, em vez
+/// de uma so, usa a banda disponivel em vez de serializar RTT por RTT. Nao
+/// tentamos descobrir o `MaxReadSize` negociado (privado na crate) — se for
+/// menor que 1MB, `read_at` so faz sua propria sub-divisao sequencial interna
+/// dentro de cada chamada concorrente, sem quebrar nada.
+const SMB_CONCURRENT_CHUNK_SIZE: u32 = 1024 * 1024;
 
 fn new_runtime() -> io::Result<Runtime> {
     tokio::runtime::Builder::new_current_thread().enable_all().build()
@@ -116,13 +130,31 @@ impl RangeSource for SmbFileSource {
         let Some(reader) = self.reader.as_ref() else {
             return Err(io::Error::other("SmbFileSource ja fechado"));
         };
-        let data = self
-            .runtime
-            .block_on(reader.read_at(offset, buf.len() as u64))
-            .map_err(|e| io::Error::other(e.to_string()))?;
-        let n = data.len().min(buf.len());
-        buf[..n].copy_from_slice(&data[..n]);
-        Ok(n)
+        let want = if offset >= self.size { 0 } else { (buf.len() as u64).min(self.size - offset) as u32 };
+        if want == 0 {
+            return Ok(0);
+        }
+
+        let chunks = split_range(offset, want, SMB_CONCURRENT_CHUNK_SIZE);
+        let results = self.runtime.block_on(join_all(chunks.iter().map(|&(chunk_offset, chunk_len)| reader.read_at(chunk_offset, chunk_len as u64))));
+
+        let mut total = 0usize;
+        for (idx, result) in results.into_iter().enumerate() {
+            let data = result.map_err(|e| io::Error::other(e.to_string()))?;
+            let (chunk_offset, chunk_len) = chunks[idx];
+            let start_in_buf = (chunk_offset - offset) as usize;
+            let n = data.len();
+            buf[start_in_buf..start_in_buf + n].copy_from_slice(&data[..n]);
+            total += n;
+            if n < chunk_len as usize {
+                // Curto por causa de EOF/truncamento concorrente no servidor
+                // (ja clampado contra `self.size` acima, entao isto so deve
+                // acontecer numa corrida real) — os chunks seguintes, se
+                // houver, nao formam um prefixo contiguo confiavel; para.
+                break;
+            }
+        }
+        Ok(total)
     }
 
     fn len(&self) -> Option<u64> {
