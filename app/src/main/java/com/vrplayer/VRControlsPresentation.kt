@@ -32,6 +32,7 @@ class VRControlsPresentation(
     private lateinit var volumeBar: SeekBar
     private lateinit var speedBar: SeekBar
     private lateinit var btn3DMode: VoidButton
+    private var debugHudLabel: TextView? = null
     private var isDragging = false
     private var totalDuration = 0f
 
@@ -79,6 +80,18 @@ class VRControlsPresentation(
             lastKnownMode = mode
             btn3DMode.text = modeLabel(mode)
         }
+    }
+
+    /**
+     * HUD de debug (ver VRActivity.updateDebugHud/docs/DEBUGGING.md) — texto
+     * de diagnostico puro (ScreenMode/stereoLayout/polar180/swapEyes/estado
+     * do frame de video), formatado do lado nativo. `debugHudLabel` so
+     * existe (ver onCreate) se `activity.isDebuggable`; se for null aqui
+     * (build de release, ou VRActivity.updateDebugHud ja filtrou antes de
+     * chamar) o texto e descartado sem custo.
+     */
+    fun updateDebugHud(text: String) {
+        debugHudLabel?.text = text
     }
 
     private fun formatTime(seconds: Float): String {
@@ -289,6 +302,23 @@ class VRControlsPresentation(
         row3.addView(btnSwapEyes, marginParams)
 
         root.addView(row3)
+
+        // --- Linha 4 (so em build debuggable): HUD de diagnostico de video ---
+        // Ver docs/DEBUGGING.md. Mono/pequeno de proposito — e um dump de
+        // estado pra depuracao, nao parte da UI de producao; nao precisa de
+        // string de recurso/i18n (texto tecnico, sempre em pt-BR/ingles
+        // misto vindo direto do C++, nunca visto por usuario final numa
+        // build de release).
+        if (activity.isDebuggable) {
+            debugHudLabel = TextView(context).apply {
+                text = "debug hud"
+                typeface = VoidTheme.typefaceMono
+                textSize = 12f
+                setTextColor(VoidTheme.colorAccent)
+                setPadding(0, VoidTheme.dpToPx(context, 8f), 0, 0)
+            }
+            root.addView(debugHudLabel)
+        }
 
         setContentView(root)
         

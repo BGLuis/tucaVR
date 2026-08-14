@@ -317,9 +317,87 @@ mais graves primeiro:
   o pipeline de beam deste caminho (`quad.frag`) não tem o fade radial que
   o `BeamRenderer` do GLES tem — um segmento sólido já resolve.
 
-Nada disso foi validado no Quest 3 físico nesta sessão (sem headset
-conectado) — apenas revisão de código e checagem de compilação lógica. Ver
-`docs/TESTING-PLAN.md` pro que exige headset físico.
+Nada disso foi validado no Quest 3 físico na sessão em que foi escrito —
+apenas revisão de código e checagem de compilação lógica.
+
+### 4.1.1 Bug de sinal no yaw de recenter — confirmado em hardware
+
+Teste real em headset (sessão seguinte) reportou três sintomas que pareciam
+não relacionados: painéis de UI/controles "muito longe, serrilhados,
+impossível ler o texto"; um vídeo 180° via SMB "não tocando"; e a rotação
+automática do recenter "incorreta" (esperado: a tela ficar na frente do
+usuário). Os três eram o mesmo bug: a fórmula de yaw usada nos 4 pontos de
+recenter (`RenderFrame`/`UpdateInteraction` no Vulkan, os dois blocos
+equivalentes no GLES) —
+
+```cpp
+sceneYawOffset = atan2f(fwd.x, -fwd.z);
+```
+
+— gira o conteúdo **180° do lado errado**. Verificado algebricamente contra
+`OVR::Matrix4f::RotationY` (`OVR_Math.h:3437-3441`, mesma convenção usada
+por `Mat4RotationY` em `vk_math.h`): para um usuário virado 90° em relação
+ao mundo, a fórmula original coloca o conteúdo atrás dele em vez de na
+frente. Isso explica os 3 sintomas: painéis fora do campo de visão central
+aparecem só de raspão na borda do FOV (foreshortening severo = "serrilhado,
+ilegível"); o hemisfério frontal de um vídeo 180° acaba renderizado atrás do
+usuário (parece "não estar tocando" quando na verdade está, só que fora de
+vista). Corrigido negando o argumento X do `atan2` nos 4 pontos:
+`atan2f(-fwd.x, -fwd.z)`. Este era exatamente o cenário que o comentário
+original ("sinal do ângulo nunca validado em headset físico") avisava que
+podia acontecer.
+
+Ver `docs/TESTING-PLAN.md` pro que mais exige headset físico e ainda não foi
+validado nesta revisão.
+
+### 4.1.2 Bugs de geometria/pipeline nos modos SBS/OU/180 — confirmado em hardware
+
+Teste real após o fix do §4.1.1 reportou mais três sintomas nos modos
+estéreo/esfera (exclusivos do caminho Vulkan — GLES não tem esses bugs, sua
+geometria vem de `OVRFW::BuildGlobe`, não reimplementada à mão):
+
+- **"Alguns players de vídeo ficam cortados em um triângulo"** (modos SBS/OU
+  planos, `ScreenMode::SBS`/`SBSHalf`/`OU`/`OUHalf`): `CreateStereoPipeline`
+  criava um único `VkPipeline` com `VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST`,
+  usado tanto para o index-draw da esfera (correto, os índices formam pares
+  de triângulos discretos) quanto para o quad plano SBS/OU — que desenha os
+  mesmos 4 vértices de `state.videoVertexBuffer` (ordenados BL,BR,TL,TR,
+  comentário explícito "triangle strip" em `CreateVideoVertexBuffer`) via
+  `vkCmdDraw(cmd, 4, ...)` sem índices. Com `TRIANGLE_LIST`, 4 vértices só
+  formam **um** triângulo completo (0,1,2); o 4º vértice é descartado —
+  literalmente metade do quad, cortada na diagonal. Corrigido criando um
+  segundo pipeline (`state.stereoFlatPipeline`, mesmos shaders/layout, só
+  `TRIANGLE_STRIP`) e escolhendo qual bindar em `RenderFrame` conforme
+  `sphereMode`.
+- **"O 180 não está sendo exibido"**: `CreateSphereGeometry` (a
+  reimplementação manual da esfera pro Vulkan) parametriza a longitude com
+  `theta = 2π·s/slices`, o que coloca `uu=0` (não `uu=0.5`) em -Z (frente do
+  usuário). O fragment shader (`stereo.frag`, porta fiel do GLES) descarta
+  fora de `uv.x ∈ [0.25, 0.75]` assumindo a convenção do
+  `BuildGlobeDescriptor` do GLES — verificada direto no SDK
+  (`GlGeometryDescriptor.cpp:606`: `lon = (0.25+xf)·2π`, que calcula
+  `xf=0.5` → -Z) — onde **`uu=0.5` é a frente**. Como as duas convenções
+  divergiam em meia volta, o recorte de 180° descartava exatamente o
+  hemisfério da frente (o único visível) e mantinha o de trás. Corrigido
+  deslocando a **posição** (não o `uu`) em meia volta:
+  `theta = 2π·s/slices - π`. Deslocar o `uu` diretamente teria sido mais
+  simples mas quebraria a técnica de vértice duplicado que fecha a costura
+  da esfera sem salto de interpolação (`s=0`/`s=slices`, mesma posição,
+  `uu=0` vs `uu=1`) — com o deslocamento na posição em vez do UV, essa
+  costura continua intacta, só que agora alinhada com a convenção correta.
+- **"Um dos modelos 360 ficou com o vídeo invertido"**: mesma causa raiz do
+  item acima — o deslocamento de meia volta na longitude afeta **todos** os
+  modos de esfera igualmente (a malha é compartilhada), então o conteúdo de
+  qualquer modo 360 aparecia com a frente/trás trocadas antes deste fix.
+  Não foi possível confirmar nesta revisão (sem headset) se algum problema
+  adicional específico de SBS vs. OU (ex.: troca de olho/inversão vertical)
+  sobrevive depois do fix de longitude — se a inversão persistir após esta
+  correção, é um bug diferente (não de longitude) e precisa de mais detalhe
+  (qual dos dois, SBS ou OU, e se "invertido" é cima/baixo, espelhado
+  esquerda/direita, ou profundidade estéreo trocada).
+
+Ver `docs/TESTING-PLAN.md` pro que mais exige headset físico e ainda não foi
+validado nesta revisão.
 
 ## 5. Antes de começar — validar a premissa
 

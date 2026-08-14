@@ -500,7 +500,9 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         if (!state.recenterFiredThisHold && state.menuHoldTime >= kRecenterHoldSeconds) {
             Mat4 headRot = Mat4FromXrPose(XrPosef{headOrientation, {0.0f, 0.0f, 0.0f}});
             XrVector3f fwd = {-headRot.m[8], -headRot.m[9], -headRot.m[10]};
-            state.sceneYawOffset = atan2f(fwd.x, -fwd.z);
+            // Ver comentario equivalente em RenderFrame (vr_player_app_vulkan.cpp)
+            // sobre por que e -fwd.x e nao fwd.x.
+            state.sceneYawOffset = atan2f(-fwd.x, -fwd.z);
             state.sceneTranslationOffset = headCenter;
             state.sceneTranslationOffset.y = headCenter.y - 1.5f;
             state.recenterFiredThisHold = true;
@@ -531,6 +533,32 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                 if (updateMethod) {
                     env->CallStaticVoidMethod(vrActivityClass, updateMethod, state.app->activity->clazz,
                         state.lastKnownProgressCurrent, state.lastKnownProgressTotal);
+                }
+                env->DeleteLocalRef(vrActivityClass);
+            }
+        }
+
+        // HUD de debug (docs/DEBUGGING.md) — mesmo throttle acima (~10Hz).
+        // VRActivity.updateDebugHud descarta sem custo se o build nao for
+        // debuggable, entao computar/mandar isso sempre e mais simples que
+        // condicionar a compilacao nativa por build type.
+        {
+            StereoParams spHud = GetStereoParams(state.screenMode, 0);
+            char hud[192];
+            snprintf(hud, sizeof(hud),
+                "VULKAN | %s | stereoLayout=%d polar180=%d swap=%d | video=%s",
+                ScreenModeName(state.screenMode), spHud.stereoLayout, spHud.polar180, spHud.swapEyes,
+                (state.activeVideoFrame != nullptr) ? "ativo" : "sem frame");
+            JNIEnv* env = nullptr;
+            state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+            if (env) {
+                jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+                jmethodID hudMethod = env->GetStaticMethodID(
+                    vrActivityClass, "updateDebugHud", "(Lcom/vrplayer/VRActivity;Ljava/lang/String;)V");
+                if (hudMethod) {
+                    jstring hudStr = env->NewStringUTF(hud);
+                    env->CallStaticVoidMethod(vrActivityClass, hudMethod, state.app->activity->clazz, hudStr);
+                    env->DeleteLocalRef(hudStr);
                 }
                 env->DeleteLocalRef(vrActivityClass);
             }

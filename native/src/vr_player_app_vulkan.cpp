@@ -33,6 +33,7 @@
 #include <math.h>
 
 #include <array>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -50,6 +51,7 @@
 #include "stereo.frag.h"
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "VRPlayerAppVK", __VA_ARGS__)
+#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "VRPlayerAppVK", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VRPlayerAppVK", __VA_ARGS__)
 
 // Bridge Rust: fornece o AHardwareBuffer do frame de video atual e controle de 3D mode.
@@ -98,6 +100,23 @@ enum class ScreenMode : uint32_t {
     Sphere360OU = 8,
     Vr180SBS    = 9,
 };
+
+// Debug: nome legivel do ScreenMode pro logcat.
+static const char* ScreenModeName(ScreenMode mode) {
+    switch (mode) {
+        case ScreenMode::Flat2D: return "Flat2D";
+        case ScreenMode::SBS: return "SBS";
+        case ScreenMode::SBSHalf: return "SBSHalf";
+        case ScreenMode::OU: return "OU";
+        case ScreenMode::OUHalf: return "OUHalf";
+        case ScreenMode::Sphere360: return "Sphere360";
+        case ScreenMode::Sphere180: return "Sphere180";
+        case ScreenMode::Sphere360SBS: return "Sphere360SBS";
+        case ScreenMode::Sphere360OU: return "Sphere360OU";
+        case ScreenMode::Vr180SBS: return "Vr180SBS";
+        default: return "Desconhecido";
+    }
+}
 
 static bool IsSphereMode(ScreenMode mode) {
     switch (mode) {
@@ -223,6 +242,7 @@ struct AppState {
     std::array<EyeSwapchain, kEyeCount> eyes;
 
     VkInstance vkInstance = VK_NULL_HANDLE;
+    VkDebugUtilsMessengerEXT vkDebugMessenger = VK_NULL_HANDLE; // ver CreateVulkanInstanceAndDevice
     VkPhysicalDevice vkPhysicalDevice = VK_NULL_HANDLE;
     VkDevice vkDevice = VK_NULL_HANDLE;
     uint32_t vkQueueFamilyIndex = UINT32_MAX;
@@ -312,7 +332,8 @@ struct AppState {
     // Estagio 5 — pipeline estereo/esfera (SBS/OU/360/180 com CAS sharpening).
     // Reusa o videoDescriptorSetLayout (mesmo sampler YCbCr) mas pipeline separado.
     VkPipelineLayout stereoPipelineLayout = VK_NULL_HANDLE;
-    VkPipeline stereoPipeline = VK_NULL_HANDLE;
+    VkPipeline stereoPipeline = VK_NULL_HANDLE;     // TRIANGLE_LIST — esfera, index draw
+    VkPipeline stereoFlatPipeline = VK_NULL_HANDLE; // TRIANGLE_STRIP — quad SBS/OU plano (4 vertices)
     // Geometria da esfera (BuildGlobe equivalente)
     VkBuffer sphereVertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory sphereVertexMemory = VK_NULL_HANDLE;
@@ -454,6 +475,28 @@ void CreateXrInstance(AppState& state) {
     OXR(xrCreateInstance(&createInfo, &state.instance));
 }
 
+// Callback das Vulkan validation layers (VK_EXT_debug_utils) — ver
+// docs/DEBUGGING.md. So e de fato registrado se
+// VK_LAYER_KHRONOS_validation estiver disponivel (CreateVulkanInstanceAndDevice
+// abaixo checa isso em runtime via vkEnumerateInstanceLayerProperties; sem
+// o .so presente, isto nunca e chamado). Retornar VK_FALSE (em vez de
+// VK_TRUE) e o padrao recomendado pelo spec — nao aborta a chamada Vulkan
+// que disparou o alerta, so reporta.
+static VKAPI_ATTR VkBool32 VKAPI_CALL VulkanValidationCallback(
+    VkDebugUtilsMessageSeverityFlagBitsEXT severity,
+    VkDebugUtilsMessageTypeFlagsEXT /*type*/,
+    const VkDebugUtilsMessengerCallbackDataEXT* callbackData,
+    void* /*userData*/) {
+    if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) {
+        LOGE("VkValidation: %s", callbackData->pMessage);
+    } else if (severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT) {
+        LOGW("VkValidation: %s", callbackData->pMessage);
+    } else {
+        LOGI("VkValidation: %s", callbackData->pMessage);
+    }
+    return VK_FALSE;
+}
+
 // Cria VkInstance/VkDevice seguindo exatamente o que o runtime OpenXR exige
 // via xrGetVulkan*KHR — nao um device "generico" escolhido pelo app, porque
 // o compositor da Meta so aceita apresentar imagens de um VkPhysicalDevice
@@ -501,6 +544,48 @@ void CreateVulkanInstanceAndDevice(AppState& state) {
     addIfMissing(instanceExtStrings, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
     addIfMissing(instanceExtStrings, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
 
+    // Validation layers (opcional, ver docs/DEBUGGING.md) — o NDK nao vem
+    // com o .so (foi removido dos pacotes distribuidos ha um tempo);
+    // precisa ser colocado manualmente em
+    // app/src/main/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so.
+    // vkEnumerateInstanceLayerProperties torna isto um no-op silencioso —
+    // seguro chamar em qualquer device/build, com ou sem o .so presente.
+    uint32_t layerCount = 0;
+    vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
+    std::vector<VkLayerProperties> availableLayers(layerCount);
+    vkEnumerateInstanceLayerProperties(&layerCount, availableLayers.data());
+    bool hasValidationLayer = false;
+    for (const auto& layer : availableLayers) {
+        if (strcmp(layer.layerName, "VK_LAYER_KHRONOS_validation") == 0) {
+            hasValidationLayer = true;
+            break;
+        }
+    }
+
+    std::vector<const char*> enabledLayers;
+    bool hasDebugUtils = false;
+    if (hasValidationLayer) {
+        enabledLayers.push_back("VK_LAYER_KHRONOS_validation");
+
+        uint32_t extCount = 0;
+        vkEnumerateInstanceExtensionProperties(nullptr, &extCount, nullptr);
+        std::vector<VkExtensionProperties> availableExts(extCount);
+        vkEnumerateInstanceExtensionProperties(nullptr, &extCount, availableExts.data());
+        for (const auto& ext : availableExts) {
+            if (strcmp(ext.extensionName, VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0) {
+                hasDebugUtils = true;
+                break;
+            }
+        }
+        if (hasDebugUtils) {
+            addIfMissing(instanceExtStrings, VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+        }
+        LOGI("Vulkan: VK_LAYER_KHRONOS_validation encontrada, habilitando (VK_EXT_debug_utils=%s)",
+            hasDebugUtils ? "sim" : "nao");
+    } else {
+        LOGI("Vulkan: VK_LAYER_KHRONOS_validation nao encontrada — sem validation layers (ver docs/DEBUGGING.md)");
+    }
+
     std::vector<const char*> instanceExtPtrs;
     for (const auto& s : instanceExtStrings) instanceExtPtrs.push_back(s.c_str());
 
@@ -511,11 +596,34 @@ void CreateVulkanInstanceAndDevice(AppState& state) {
     vkAppInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     vkAppInfo.apiVersion = VK_API_VERSION_1_1;
 
+    // Chain de debug messenger na criacao da instancia (pra pegar mensagens
+    // que ocorram durante o proprio vkCreateInstance) — recriado como
+    // messenger persistente logo abaixo, apos a instancia existir, pra
+    // continuar recebendo mensagens no resto da sessao.
+    VkDebugUtilsMessengerCreateInfoEXT debugCreateInfo{VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT};
+    debugCreateInfo.messageSeverity =
+        VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT;
+    debugCreateInfo.messageType =
+        VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+        VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT;
+    debugCreateInfo.pfnUserCallback = VulkanValidationCallback;
+
     VkInstanceCreateInfo vkInstanceCreateInfo{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
+    vkInstanceCreateInfo.pNext = hasDebugUtils ? &debugCreateInfo : nullptr;
     vkInstanceCreateInfo.pApplicationInfo = &vkAppInfo;
+    vkInstanceCreateInfo.enabledLayerCount = static_cast<uint32_t>(enabledLayers.size());
+    vkInstanceCreateInfo.ppEnabledLayerNames = enabledLayers.data();
     vkInstanceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(instanceExtPtrs.size());
     vkInstanceCreateInfo.ppEnabledExtensionNames = instanceExtPtrs.data();
     VKR(vkCreateInstance(&vkInstanceCreateInfo, nullptr, &state.vkInstance));
+
+    if (hasDebugUtils) {
+        auto pfnCreateDebugMessenger = reinterpret_cast<PFN_vkCreateDebugUtilsMessengerEXT>(
+            vkGetInstanceProcAddr(state.vkInstance, "vkCreateDebugUtilsMessengerEXT"));
+        if (pfnCreateDebugMessenger) {
+            VKR(pfnCreateDebugMessenger(state.vkInstance, &debugCreateInfo, nullptr, &state.vkDebugMessenger));
+        }
+    }
 
     OXR(pfnGetGraphicsDevice(state.instance, state.systemId, state.vkInstance, &state.vkPhysicalDevice));
 
@@ -1576,7 +1684,19 @@ void CreateSphereGeometry(AppState& state) {
         float phi = M_PI * r / rings; // 0..PI (polo norte ao sul)
         float vv  = (float)r / rings;
         for (int s = 0; s <= slices; s++) {
-            float theta = 2.0f * M_PI * s / slices; // 0..2PI
+            // uu fica 0..1 linear (igual antes) — a costura da malha (vertice
+            // duplicado s=0/s=slices, mesma posicao, uu=0 vs uu=1) continua
+            // intacta, sem introduzir salto de interpolacao. So a posicao
+            // (theta) leva um deslocamento de meia volta: sem ele, uu=0
+            // (theta=0) cai em -Z (frente do usuario) — mas o fragment
+            // shader (`if (uv.x < 0.25 || uv.x > 0.75) discard`) e o resto
+            // do app assumem a convencao do `BuildGlobeDescriptor` do GLES
+            // (GlGeometryDescriptor.cpp:606: `lon = (0.25+xf)*2*PI`, que
+            // coloca xf=0.5 em -Z), verificada direto no SDK. Sem esse
+            // deslocamento, o recorte de 180 descartava exatamente o
+            // hemisferio da frente (o unico visivel) — bug reportado em
+            // teste real de hardware ("180 nao aparece").
+            float theta = 2.0f * M_PI * s / slices - (float)M_PI; // -PI..PI, uu=0.5 em -Z
             float uu    = (float)s / slices;
             float x = -radius * sinf(phi) * sinf(theta); // invertido: camera dentro da esfera
             float y =  radius * cosf(phi);
@@ -1720,6 +1840,18 @@ void CreateStereoPipeline(AppState& state) {
     pipeInfo.layout              = state.stereoPipelineLayout;
     pipeInfo.renderPass          = state.renderPass;
     VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.stereoPipeline));
+
+    // Segundo pipeline, so a topologia muda: o quad SBS/OU plano (RenderFrame,
+    // ramo `else` de `sphereMode`) desenha `state.videoVertexBuffer` — 4
+    // vertices ordenados pra TRIANGLE_STRIP (BL,BR,TL,TR, ver
+    // CreateVideoVertexBuffer) via `vkCmdDraw(cmd, 4, ...)`, sem indices.
+    // Usar TRIANGLE_LIST (o `ia` acima, pensado pro index draw da esfera)
+    // com esse mesmo buffer so forma 1 triangulo (vertices 0,1,2) e descarta
+    // o 4o vertice — a tela aparecia cortada na diagonal, exatamente num
+    // triangulo (bug reportado em teste real de hardware pros modos
+    // SBS/OU planos). Mesmos shaders/layout, so a input assembly muda.
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.stereoFlatPipeline));
 
     vkDestroyShaderModule(state.vkDevice, vertMod, nullptr);
     vkDestroyShaderModule(state.vkDevice, fragMod, nullptr);
@@ -2350,8 +2482,18 @@ void UpdateVideoFrame(AppState& state) {
         return;
     }
 
+    // So loga a transicao null->frame (video comecou a produzir frames),
+    // nao toda troca de buffer entre frames decodificados (acontece a cada
+    // frame durante playback normal — logaria a 30-60fps sem info nova).
+    if (state.lastVideoBuffer == nullptr) {
+        LOGI("Video: comecou a produzir frames (1o AHardwareBuffer recebido)");
+    }
+
     state.lastVideoBuffer = buffer;
     state.activeVideoFrame = GetOrImportVideoFrame(state, buffer);
+    if (state.activeVideoFrame == nullptr) {
+        LOGE("Video: GetOrImportVideoFrame falhou para o buffer %p — frame sera ignorado (fallback quad solido)", (void*)buffer);
+    }
 }
 
 void RenderFrame(AppState& state) {
@@ -2393,10 +2535,26 @@ void RenderFrame(AppState& state) {
         // isso isso roda aqui e nao no handler do evento em PollXrEvents).
         // Tambem dispara uma vez no 1o frame com pose valida, pra cena
         // nascer na altura dos olhos sem exigir o long-press manual (Estagio 6).
-        if (state.needsOsRecenter || !state.sceneCalibrated) {
+        // So calibra com pose de fato rastreada — nos primeiros frames de
+        // sessao a posicao/orientacao pode ainda nao estar valida, e
+        // calibrar com isso travaria a cena numa origem errada pro resto da
+        // sessao (sceneCalibrated so dispara uma vez). Sem tracking valido,
+        // tenta de novo no proximo frame.
+        constexpr XrViewStateFlags kPoseValidFlags =
+            XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT;
+        bool poseValidForCalibration = (viewState.viewStateFlags & kPoseValidFlags) == kPoseValidFlags;
+        if (poseValidForCalibration && (state.needsOsRecenter || !state.sceneCalibrated)) {
             Mat4 rot0 = Mat4FromXrPose(views[0].pose);
             XrVector3f fwd = {-rot0.m[8], -rot0.m[9], -rot0.m[10]};
-            state.sceneYawOffset = atan2f(fwd.x, -fwd.z);
+            // atan2f(fwd.x, -fwd.z) (formula original) rotaciona o conteudo
+            // 180° do lado errado: pra um usuario virado pra +X, isso
+            // colocava a tela atras dele em vez de na frente — bug
+            // reportado em teste real de hardware (paineis "longe demais"/
+            // serrilhados = visiveis so de raspao na borda do FOV; video
+            // 180° "nao tocando" = hemisferio frontal renderizado atras do
+            // usuario). Corrigido negando o argumento X do atan2 (equivale
+            // a inverter o sinal do angulo resultante).
+            state.sceneYawOffset = atan2f(-fwd.x, -fwd.z);
             state.sceneTranslationOffset = headCenter;
             state.sceneTranslationOffset.y = headCenter.y - 1.5f;
             state.needsOsRecenter = false;
@@ -2417,7 +2575,15 @@ void RenderFrame(AppState& state) {
 
         // Estagio 5: lerencia do ScreenMode a cada frame (mesmo que o GLES:
         // vr_player_app.cpp:993 "m_screenMode = static_cast<ScreenMode>(get_3d_mode())")
-        state.screenMode = static_cast<ScreenMode>(get_3d_mode());
+        {
+            ScreenMode newMode = static_cast<ScreenMode>(get_3d_mode());
+            if (newMode != state.screenMode) {
+                StereoParams spLog = GetStereoParams(newMode, 0);
+                LOGI("Video: ScreenMode -> %s (stereoLayout=%d, polar180=%d, swapEyes=%d)",
+                    ScreenModeName(newMode), spLog.stereoLayout, spLog.polar180, spLog.swapEyes);
+            }
+            state.screenMode = newMode;
+        }
         const bool sphereMode = IsSphereMode(state.screenMode);
         const bool stereoFlat = IsFlatStereoMode(state.screenMode);
 
@@ -2495,7 +2661,11 @@ void RenderFrame(AppState& state) {
                     VkRect2D scissor{{0,0}, extent};
                     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.stereoPipeline);
+                    // Esfera (index draw) usa TRIANGLE_LIST; quad plano
+                    // SBS/OU (4 vertices, sem indices) usa TRIANGLE_STRIP —
+                    // ver comentario em CreateStereoPipeline.
+                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        sphereMode ? state.stereoPipeline : state.stereoFlatPipeline);
 
                     StereoPushConstants spc{};
                     spc.mvp         = sphereMode ? sphereMvp : mvp;

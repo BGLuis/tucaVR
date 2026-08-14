@@ -380,6 +380,24 @@ enum class ScreenMode : uint32_t {
     Vr180SBS = 9,
 };
 
+// Debug: nome legivel do ScreenMode pro logcat — ver comentario acima sobre
+// os 3 lugares que precisam ficar em sincronia se este enum mudar.
+static const char* ScreenModeName(ScreenMode mode) {
+    switch (mode) {
+        case ScreenMode::Flat2D: return "Flat2D";
+        case ScreenMode::SBS: return "SBS";
+        case ScreenMode::SBSHalf: return "SBSHalf";
+        case ScreenMode::OU: return "OU";
+        case ScreenMode::OUHalf: return "OUHalf";
+        case ScreenMode::Sphere360: return "Sphere360";
+        case ScreenMode::Sphere180: return "Sphere180";
+        case ScreenMode::Sphere360SBS: return "Sphere360SBS";
+        case ScreenMode::Sphere360OU: return "Sphere360OU";
+        case ScreenMode::Vr180SBS: return "Vr180SBS";
+        default: return "Desconhecido";
+    }
+}
+
 class VRPlayerApp : public OVRFW::XrApp {
 public:
     VRPlayerApp() : OVRFW::XrApp(), m_textureId(0), m_eglImage(EGL_NO_IMAGE_KHR), m_lastBuffer(nullptr),
@@ -953,7 +971,14 @@ public:
         // Se o OS aplicou um recenter, calibra a altura da UI para os olhos na nova origem
         if (m_needsOsRecenter) {
             OVR::Vector3f fwd = in.HeadPose.Rotation.Rotate(OVR::Vector3f(0.0f, 0.0f, -1.0f));
-            m_sceneYawOffset = atan2f(fwd.x, -fwd.z);
+            // atan2f(fwd.x, -fwd.z) (formula original) rotaciona o conteudo
+            // 180 graus do lado errado — confirmado via OVR::Matrix4f::RotationY
+            // (OVR_Math.h: Transform(0,0,-1) = (-sin, 0, -cos) pro angulo
+            // usado como entrada) e via bug reportado em teste real de
+            // hardware (paineis/tela ficando fora do campo de visao em vez
+            // de na frente do usuario apos o recenter). Corrigido negando o
+            // argumento X do atan2 — equivale a inverter o sinal do angulo.
+            m_sceneYawOffset = atan2f(-fwd.x, -fwd.z);
             m_sceneTranslationOffset = in.HeadPose.Translation;
             m_sceneTranslationOffset.y = in.HeadPose.Translation.y - 1.5f;
             m_needsOsRecenter = false;
@@ -1012,8 +1037,15 @@ public:
         // recalculados aqui a cada frame em vez de so na troca de modo,
         // porque e mais simples que adicionar um segundo caminho de callback
         // so pra isso — o custo e irrelevante (uns poucos ifs).
-        m_screenMode = static_cast<ScreenMode>(get_3d_mode());
+        ScreenMode newScreenMode = static_cast<ScreenMode>(get_3d_mode());
+        bool screenModeChanged = newScreenMode != m_screenMode;
+        m_screenMode = newScreenMode;
         UpdateScreenModeUniforms();
+        if (screenModeChanged) {
+            LOGI("VRPlayerApp: ScreenMode -> %s (stereoLayout flat=%.0f esfera=%.0f, polar180=%.0f, swapEyes=%.0f)",
+                ScreenModeName(m_screenMode), m_flatStereoLayout, m_sphereStereoLayout,
+                m_uPolar180, m_swapEyesF);
+        }
 
         // T2.6: a esfera acompanha a TRANSLACAO da cabeca (o usuario sempre
         // fica no centro dela) mas NAO a rotacao — a rotacao "de olhar ao
@@ -1282,12 +1314,13 @@ public:
             if (!m_recenterFiredThisHold && m_menuHoldTime >= kRecenterHoldSeconds) {
                 // Gira a cena inteira para que a direcao atual da cabeca vire a
                 // nova "frente" do conteudo (T4.3: "util quando o conteudo
-                // esta girado em relacao ao usuario"). Sinal do angulo nunca
-                // validado em headset fisico (ver static constexpr
-                // kRecenterHoldSeconds acima) — se o recenter girar pro lado
-                // errado num teste real, e so inverter o sinal abaixo.
+                // esta girado em relacao ao usuario"). Sinal do angulo estava
+                // errado (girava 180 graus do lado errado — bug confirmado em
+                // teste real de hardware: paineis/tela ficavam fora do campo
+                // de visao em vez de na frente do usuario). Ver comentario
+                // equivalente no bloco de recenter do OS acima.
                 OVR::Vector3f fwd = in.HeadPose.Rotation.Rotate(OVR::Vector3f(0.0f, 0.0f, -1.0f));
-                m_sceneYawOffset = atan2f(fwd.x, -fwd.z);
+                m_sceneYawOffset = atan2f(-fwd.x, -fwd.z);
                 m_sceneTranslationOffset = in.HeadPose.Translation;
                 m_sceneTranslationOffset.y = in.HeadPose.Translation.y - 1.5f; // Ajusta a altura da tela para os olhos
                 m_recenterFiredThisHold = true;
@@ -1316,6 +1349,30 @@ public:
                     jmethodID updateMethod = env->GetStaticMethodID(vrActivityClass, "updateMediaProgress", "(Lcom/vrplayer/VRActivity;FF)V");
                     if (updateMethod) {
                         env->CallStaticVoidMethod(vrActivityClass, updateMethod, java->ActivityObject, m_lastKnownProgressCurrent, m_lastKnownProgressTotal);
+                    }
+                    env->DeleteLocalRef(vrActivityClass);
+                }
+            }
+
+            // HUD de debug (docs/DEBUGGING.md) — mesmo throttle acima (~10Hz).
+            // VRActivity.updateDebugHud descarta sem custo se o build nao for
+            // debuggable, entao computar/mandar isso sempre e mais simples
+            // que condicionar a compilacao nativa por build type.
+            {
+                char hud[192];
+                snprintf(hud, sizeof(hud),
+                    "GLES | %s | flat=%.0f esfera=%.0f polar180=%.0f swap=%.0f | video=%s",
+                    ScreenModeName(m_screenMode), m_flatStereoLayout, m_sphereStereoLayout,
+                    m_uPolar180, m_swapEyesF, (m_lastBuffer != nullptr) ? "ativo" : "sem frame");
+                const xrJava* java = GetContext();
+                JNIEnv* env = nullptr;
+                if (java && java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
+                    jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
+                    jmethodID hudMethod = env->GetStaticMethodID(vrActivityClass, "updateDebugHud", "(Lcom/vrplayer/VRActivity;Ljava/lang/String;)V");
+                    if (hudMethod) {
+                        jstring hudStr = env->NewStringUTF(hud);
+                        env->CallStaticVoidMethod(vrActivityClass, hudMethod, java->ActivityObject, hudStr);
+                        env->DeleteLocalRef(hudStr);
                     }
                     env->DeleteLocalRef(vrActivityClass);
                 }
@@ -1388,6 +1445,7 @@ public:
             (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
 
         if (buffer == nullptr && m_lastBuffer != nullptr) {
+            LOGI("VRPlayerApp: video parou de produzir frames (get_current_video_frame() -> null)");
             m_lastBuffer = nullptr;
             if (m_textureId != 0) {
                 glDeleteTextures(1, &m_textureId);
@@ -1399,6 +1457,13 @@ public:
             m_eglImageCache.clear();
             m_eglImage = EGL_NO_IMAGE_KHR;
         } else if (buffer && buffer != m_lastBuffer) {
+            // So loga a transicao null->frame (video comecou a produzir
+            // frames), nao toda troca de buffer entre frames decodificados
+            // (isso acontece a cada frame de video durante playback normal
+            // e encheria o logcat de spam sem informacao nova).
+            if (m_lastBuffer == nullptr) {
+                LOGI("VRPlayerApp: video comecou a produzir frames (1o AHardwareBuffer recebido)");
+            }
             m_lastBuffer = buffer;
 
             auto cached = m_eglImageCache.find(buffer);

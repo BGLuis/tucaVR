@@ -1,7 +1,9 @@
 package com.vrplayer
 
 import android.app.NativeActivity
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.IntentFilter
 import android.os.Bundle
 import java.io.File
 import java.io.FileOutputStream
@@ -9,6 +11,7 @@ import java.io.InputStream
 
 import android.hardware.display.DisplayManager
 import android.view.Surface
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
@@ -79,6 +82,48 @@ class VRActivity : NativeActivity() {
     // playSmb, chamados via VRPresentation apos onCreate).
     val historyTracker: PlaybackHistoryTracker by lazy { PlaybackHistoryTracker(this) }
 
+    // Ferramenta de debug (ver docs/DEBUGGING.md): troca o ScreenMode de um
+    // video JA tocando sem precisar reiniciar o app/relançar o intent, ex.
+    // `adb shell am broadcast -a com.vrplayer.debug.SET_SCREEN_MODE --ei mode 6`
+    // (6 = Sphere180, ver a ordem do enum ScreenMode em vr_player_app.cpp/
+    // vr_player_app_vulkan.cpp). So registrado se o app estiver debuggable
+    // (`FLAG_DEBUGGABLE` — verdadeiro pro build `debug` do Gradle por
+    // padrao) — nunca ativo num APK de release.
+    private var debugReceiver: BroadcastReceiver? = null
+
+    // Fonte unica pra "isto e um build debug" — usado tanto pro receiver
+    // acima quanto pro HUD de debug (ver updateDebugHud/VRControlsPresentation).
+    val isDebuggable: Boolean by lazy {
+        (applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) != 0
+    }
+
+    private fun registerDebugReceiverIfDebuggable() {
+        if (!isDebuggable) return
+
+        val receiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                when (intent.action) {
+                    ACTION_DEBUG_SET_SCREEN_MODE -> {
+                        val mode = intent.getIntExtra(EXTRA_SCREEN_MODE, -1)
+                        if (mode >= 0) nativeSetScreenMode(mode)
+                    }
+                    ACTION_DEBUG_CYCLE_SCREEN_MODE -> nativeCycle3DMode()
+                }
+            }
+        }
+        val filter = IntentFilter().apply {
+            addAction(ACTION_DEBUG_SET_SCREEN_MODE)
+            addAction(ACTION_DEBUG_CYCLE_SCREEN_MODE)
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(receiver, filter)
+        }
+        debugReceiver = receiver
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -118,6 +163,14 @@ class VRActivity : NativeActivity() {
             nativeSetKeyboardActive(insets.isVisible(WindowInsetsCompat.Type.ime()))
             insets
         }
+
+        registerDebugReceiverIfDebuggable()
+    }
+
+    override fun onDestroy() {
+        debugReceiver?.let { unregisterReceiver(it) }
+        debugReceiver = null
+        super.onDestroy()
     }
 
     /**
@@ -221,6 +274,11 @@ class VRActivity : NativeActivity() {
         const val EXTRA_AUTO_PLAY_PATH = "video_path"
         const val EXTRA_SCREEN_MODE = "screen_mode"
         const val EXTRA_CAPTURE_PATH = "capture_path"
+
+        // Ver registerDebugReceiverIfDebuggable — troca o ScreenMode de um
+        // video ja tocando via adb, sem relançar o intent/autoplay acima.
+        const val ACTION_DEBUG_SET_SCREEN_MODE = "com.vrplayer.debug.SET_SCREEN_MODE"
+        const val ACTION_DEBUG_CYCLE_SCREEN_MODE = "com.vrplayer.debug.CYCLE_SCREEN_MODE"
         private const val AUTO_PLAY_DELAY_MS = 3000L
         private const val PLAYBACK_ERROR_POLL_MS = 1000L
 
@@ -363,6 +421,22 @@ class VRActivity : NativeActivity() {
                 // do tracker (throttle/`current`) single-threaded, evitando
                 // uma corrida de dados sem precisar de sincronizacao extra.
                 activity.historyTracker.onProgress(currentSec, totalSec)
+            }
+        }
+
+        // HUD de debug (ver docs/DEBUGGING.md): mesmo throttle/JNI pattern
+        // de updateMediaProgress acima, so que o texto ja vem formatado do
+        // lado nativo (ScreenMode/stereoLayout/polar180/swapEyes/estado do
+        // frame de video) — sem necessidade de strings de recurso/i18n,
+        // este texto e puramente de diagnostico e so aparece em builds
+        // debuggable (`activity.isDebuggable`, checado do lado Kotlin em vez
+        // de condicionalmente compilar o lado nativo — mais simples e sem
+        // custo real, ver comentario em VRControlsPresentation.updateDebugHud).
+        @JvmStatic
+        fun updateDebugHud(activity: VRActivity, text: String) {
+            if (!activity.isDebuggable) return
+            activity.runOnUiThread {
+                activity.controlsPresentation?.updateDebugHud(text)
             }
         }
     }
