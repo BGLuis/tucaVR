@@ -59,6 +59,13 @@ extern "C" {
     extern uint32_t get_3d_mode();
     extern uint32_t get_swap_eyes();
     extern void start_video_playback(const char* path);
+    // Estagio 6 — paridade com o caminho GLES (play-pause, teclado nativo,
+    // volume, seek).
+    extern void toggle_play_pause();
+    extern uint32_t get_keyboard_active();
+    extern float get_video_volume();
+    extern void set_video_volume(float volume);
+    extern void seek_video_playback(float position);
 }
 
 namespace {
@@ -68,6 +75,15 @@ constexpr int kEyeCount = 2;
 constexpr size_t kVideoImageCacheLimit = 6;
 // Raio da esfera 360 (20m, mesmo do caminho GLES: kSphereRadius em vr_player_app.cpp:1604)
 constexpr float kSphereRadius = 20.0f;
+
+// Dimensoes dos VirtualDisplay/AImageReader dos paineis de UI — precisam
+// bater exatamente com os multiplicadores hardcoded em
+// VRActivity.dispatchVRTouch/dispatchControlsVRTouch (x*1024f, y*768f e
+// x*1024f, y*384f) ou o Y do toque fica descalibrado.
+constexpr uint32_t kUiTexWidth = 1024;
+constexpr uint32_t kUiTexHeight = 768;
+constexpr uint32_t kControlsTexWidth = 1024;
+constexpr uint32_t kControlsTexHeight = 384;
 
 // ScreenMode espelha exatamente o enum do caminho GLES (vr_player_app.cpp:370-381)
 enum class ScreenMode : uint32_t {
@@ -211,6 +227,7 @@ struct AppState {
     VkDevice vkDevice = VK_NULL_HANDLE;
     uint32_t vkQueueFamilyIndex = UINT32_MAX;
     VkQueue vkQueue = VK_NULL_HANDLE;
+    bool supportsAnisotropy = false; // ver CreateVulkanInstanceAndDevice
     VkCommandPool vkCommandPool = VK_NULL_HANDLE;
     VkCommandBuffer vkCommandBuffer = VK_NULL_HANDLE;
     VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;
@@ -244,7 +261,7 @@ struct AppState {
     VkPipelineLayout uiPipelineLayout = VK_NULL_HANDLE;
     VkPipeline uiPipeline = VK_NULL_HANDLE;
 
-    // Painel de file browser (1024x1024)
+    // Painel de file browser (kUiTexWidth x kUiTexHeight)
     AImageReader* uiImageReader = nullptr;
     VkImage uiImage = VK_NULL_HANDLE;
     VkDeviceMemory uiImageMemory = VK_NULL_HANDLE;
@@ -253,7 +270,7 @@ struct AppState {
     float uiAlpha = 1.0f;
     bool uiHasFrame = false;
 
-    // Painel de controles (1024x384)
+    // Painel de controles (kControlsTexWidth x kControlsTexHeight)
     AImageReader* controlsImageReader = nullptr;
     VkImage controlsImage = VK_NULL_HANDLE;
     VkDeviceMemory controlsImageMemory = VK_NULL_HANDLE;
@@ -267,7 +284,19 @@ struct AppState {
     XrAction aimAction = XR_NULL_HANDLE;
     XrAction triggerAction = XR_NULL_HANDLE;
     std::array<XrSpace, 2> aimSpaces = {XR_NULL_HANDLE, XR_NULL_HANDLE};
-    
+    // Paridade com o caminho GLES (Estagio 6): A/X = play-pause, B/Y = toggle
+    // do painel Home, Menu = toggle/long-press-recenter, thumbstick =
+    // mover/redimensionar tela + seek/volume, squeeze = modificador de
+    // redimensionar, haptic = feedback de hover/click.
+    XrAction aButtonAction = XR_NULL_HANDLE;    // .../right/input/a/click
+    XrAction xButtonAction = XR_NULL_HANDLE;    // .../left/input/x/click
+    XrAction bButtonAction = XR_NULL_HANDLE;    // .../right/input/b/click
+    XrAction yButtonAction = XR_NULL_HANDLE;    // .../left/input/y/click
+    XrAction menuAction = XR_NULL_HANDLE;       // .../left/input/menu/click
+    XrAction thumbstickAction = XR_NULL_HANDLE; // vector2f, ambas as maos
+    XrAction squeezeAction = XR_NULL_HANDLE;    // float, .../right/input/squeeze/value
+    XrAction hapticAction = XR_NULL_HANDLE;     // vibration output, ambas as maos
+
     // UI Interaction state
     bool isTouchDown = false;
     int activePanel = 0; // 0=none, 1=UI, 2=controls
@@ -303,6 +332,53 @@ struct AppState {
 
     // Estado de ScreenMode (lido do bridge Rust a cada frame)
     ScreenMode screenMode = ScreenMode::Flat2D;
+
+    // Estado de cena / recenter — espelha m_sceneYawOffset/m_sceneTranslationOffset
+    // do caminho GLES (vr_player_app.cpp). Toda a UI/controles/tela/esfera sao
+    // posicionados em coordenadas "base" e transformados por este offset no
+    // momento do desenho e do hit-test (ver ComputeSceneTransforms).
+    float sceneYawOffset = 0.0f;
+    XrVector3f sceneTranslationOffset = {0.0f, 0.0f, 0.0f};
+    bool needsOsRecenter = false;
+    // Dispara uma calibracao inicial no 1o frame com pose valida, pra cena
+    // nascer na altura dos olhos sem exigir long-press manual.
+    bool sceneCalibrated = false;
+
+    // Tela virtual ajustavel via thumbstick (Etapa 6) — posicao/escala em
+    // espaco "base" (antes do offset de cena acima).
+    XrVector3f screenPosition = {0.0f, 1.5f, -2.0f};
+    float screenScaleX = 1.6f;
+    float screenScaleY = 0.9f;
+
+    // Menu long-press = recenter manual (Etapa 6)
+    float menuHoldTime = 0.0f;
+    bool recenterFiredThisHold = false;
+    bool prevMenu = false;
+    bool prevA = false;
+    bool prevX = false;
+    bool prevB = false;
+    bool prevY = false;
+
+    // true so apos um xrLocateSpace valido — evita desenhar o laser antes de
+    // qualquer controle ter sido rastreado (lastRayDir comeca com z=-1, que
+    // sempre passaria num teste ingenuo de "controle detectado").
+    bool hasRay = false;
+    int lastHoverPanel = 0; // pra so disparar haptic de hover-enter uma vez
+
+    // Seek/progresso (Etapa 6) — mesmo throttle do caminho GLES (T2.6:
+    // seek() e uma operacao pesada, updateMediaProgress nao precisa rodar a 60fps).
+    int frameCount = 0;
+    float seekRepeatCooldown = 0.0f;
+    float lastKnownProgressCurrent = 0.0f;
+    float lastKnownProgressTotal = 0.0f;
+
+    // XrTime (ns) do frame anterior — usado pra derivar um "DeltaSeconds"
+    // equivalente ao do OVRFW (que so existe no caminho GLES).
+    XrTime lastPredictedDisplayTime = 0;
+
+    // Cursor/reticulo no ponto de acerto (Estagio 6) — desenhado por DrawUiQuads.
+    bool cursorDotVisible = false;
+    XrVector3f cursorDotPos = {0.0f, 0.0f, 0.0f};
 
     bool resumed = false;
     bool sessionRunning = false;
@@ -490,12 +566,24 @@ void CreateVulkanInstanceAndDevice(AppState& state) {
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SAMPLER_YCBCR_CONVERSION_FEATURES};
     ycbcrFeatures.samplerYcbcrConversion = VK_TRUE;
 
+    // O sampler de UI (CreateUiPipeline) so pode pedir anisotropia se o
+    // device de fato suportar — habilitar sem checar e undefined behavior
+    // (validation layers acusam; sem elas, comportamento nao especificado
+    // do driver). Guardado em AppState para CreateUiPipeline decidir.
+    VkPhysicalDeviceFeatures supportedFeatures{};
+    vkGetPhysicalDeviceFeatures(state.vkPhysicalDevice, &supportedFeatures);
+    state.supportsAnisotropy = supportedFeatures.samplerAnisotropy == VK_TRUE;
+
+    VkPhysicalDeviceFeatures enabledFeatures{};
+    enabledFeatures.samplerAnisotropy = state.supportsAnisotropy ? VK_TRUE : VK_FALSE;
+
     VkDeviceCreateInfo deviceCreateInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     deviceCreateInfo.pNext = &ycbcrFeatures;
     deviceCreateInfo.queueCreateInfoCount = 1;
     deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
     deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtPtrs.size());
     deviceCreateInfo.ppEnabledExtensionNames = deviceExtPtrs.data();
+    deviceCreateInfo.pEnabledFeatures = &enabledFeatures;
     VKR(vkCreateDevice(state.vkPhysicalDevice, &deviceCreateInfo, nullptr, &state.vkDevice));
 
     vkGetDeviceQueue(state.vkDevice, state.vkQueueFamilyIndex, 0, &state.vkQueue);
@@ -1197,8 +1285,10 @@ void CreateUiPipeline(AppState& state, android_app* app) {
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
-    samplerInfo.anisotropyEnable = VK_TRUE;
-    samplerInfo.maxAnisotropy = 4.0f;
+    // A feature so foi habilitada no device (CreateVulkanInstanceAndDevice)
+    // se suportada — pedir anisotropia sem isso e uso invalido da API.
+    samplerInfo.anisotropyEnable = state.supportsAnisotropy ? VK_TRUE : VK_FALSE;
+    samplerInfo.maxAnisotropy = state.supportsAnisotropy ? 4.0f : 1.0f;
     VKR(vkCreateSampler(state.vkDevice, &samplerInfo, nullptr, &state.uiSampler));
 
     // Descriptor set layout com sampler nao imutavel (RGBA normal)
@@ -1317,8 +1407,8 @@ void CreateUiPipeline(AppState& state, android_app* app) {
     vkDestroyShaderModule(state.vkDevice, fragMod, nullptr);
 
     // Alocar VkImages para UI e controles
-    CreateUiImage(state, 1024, 1024, state.uiImage, state.uiImageMemory, state.uiImageView);
-    CreateUiImage(state, 1024, 384, state.controlsImage, state.controlsImageMemory, state.controlsImageView);
+    CreateUiImage(state, kUiTexWidth, kUiTexHeight, state.uiImage, state.uiImageMemory, state.uiImageView);
+    CreateUiImage(state, kControlsTexWidth, kControlsTexHeight, state.controlsImage, state.controlsImageMemory, state.controlsImageView);
 
     // Alocar descriptor sets para UI e controles
     VkDescriptorSetAllocateInfo dsAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
@@ -1351,14 +1441,14 @@ void CreateUiPipeline(AppState& state, android_app* app) {
     // GPU_SAMPLED_IMAGE: o shader Vulkan le a textura resultante.
     // CPU_READ_RARELY: necessario para o UpdateUiImageFromHwb (staging via CPU).
     media_status_t uiStatus = AImageReader_newWithUsage(
-        1024, 1024, AIMAGE_FORMAT_RGBA_8888,
+        kUiTexWidth, kUiTexHeight, AIMAGE_FORMAT_RGBA_8888,
         AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
         AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
         AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2,
         &state.uiImageReader);
 
     media_status_t ctrlStatus = AImageReader_newWithUsage(
-        1024, 384, AIMAGE_FORMAT_RGBA_8888,
+        kControlsTexWidth, kControlsTexHeight, AIMAGE_FORMAT_RGBA_8888,
         AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
         AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
         AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2,
@@ -1381,7 +1471,7 @@ void CreateUiPipeline(AppState& state, android_app* app) {
             jobject activityObj = app->activity->clazz;
             jclass vrActivityClass = env->GetObjectClass(activityObj);
 
-            // --- UI (file browser, 1024x1024) ---
+            // --- UI (file browser, kUiTexWidth x kUiTexHeight) ---
             if (uiStatus == AMEDIA_OK && state.uiImageReader) {
                 ANativeWindow* uiWindow = nullptr;
                 AImageReader_getWindow(state.uiImageReader, &uiWindow);
@@ -1392,8 +1482,8 @@ void CreateUiPipeline(AppState& state, android_app* app) {
                         "(Lcom/vrplayer/VRActivity;Landroid/view/Surface;II)V");
                     if (setupUI) {
                         env->CallStaticVoidMethod(vrActivityClass, setupUI,
-                            activityObj, uiSurface, 1024, 1024);
-                        LOGI("Estagio 4: setupVirtualDisplay (UI 1024x1024) chamado com sucesso");
+                            activityObj, uiSurface, (jint)kUiTexWidth, (jint)kUiTexHeight);
+                        LOGI("Estagio 4: setupVirtualDisplay (UI %ux%u) chamado com sucesso", kUiTexWidth, kUiTexHeight);
                     } else {
                         LOGE("Estagio 4: setupVirtualDisplay NAO ENCONTRADO");
                     }
@@ -1405,7 +1495,7 @@ void CreateUiPipeline(AppState& state, android_app* app) {
                 LOGE("Estagio 4: AImageReader_newWithUsage falhou para UI (status=%d)", uiStatus);
             }
 
-            // --- Controles (painel inferior, 1024x384) ---
+            // --- Controles (painel inferior, kControlsTexWidth x kControlsTexHeight) ---
             if (ctrlStatus == AMEDIA_OK && state.controlsImageReader) {
                 ANativeWindow* ctrlWindow = nullptr;
                 AImageReader_getWindow(state.controlsImageReader, &ctrlWindow);
@@ -1416,8 +1506,8 @@ void CreateUiPipeline(AppState& state, android_app* app) {
                         "(Lcom/vrplayer/VRActivity;Landroid/view/Surface;II)V");
                     if (setupCtrl) {
                         env->CallStaticVoidMethod(vrActivityClass, setupCtrl,
-                            activityObj, ctrlSurface, 1024, 384);
-                        LOGI("Estagio 4: setupControlsVirtualDisplay (1024x384) chamado com sucesso");
+                            activityObj, ctrlSurface, (jint)kControlsTexWidth, (jint)kControlsTexHeight);
+                        LOGI("Estagio 4: setupControlsVirtualDisplay (%ux%u) chamado com sucesso", kControlsTexWidth, kControlsTexHeight);
                     } else {
                         LOGE("Estagio 4: setupControlsVirtualDisplay NAO ENCONTRADO");
                     }
@@ -1439,7 +1529,8 @@ void CreateUiPipeline(AppState& state, android_app* app) {
         LOGE("Estagio 4: android_app nulo — VirtualDisplay nao configurado");
     }
 
-    LOGI("Estagio 4: pipeline de UI/controles criado (1024x1024 + 1024x384)");
+    LOGI("Estagio 4: pipeline de UI/controles criado (%ux%u + %ux%u)",
+        kUiTexWidth, kUiTexHeight, kControlsTexWidth, kControlsTexHeight);
 }
 
 // Atualiza texturas de UI/controles a partir dos AImageReaders.
@@ -1459,8 +1550,8 @@ void UpdateUiFrames(AppState& state) {
             AImage_delete(image);
         }
     };
-    acquireAndUpdate(state.uiImageReader, state.uiImage, state.uiHasFrame, 1024, 1024);
-    acquireAndUpdate(state.controlsImageReader, state.controlsImage, state.controlsHasFrame, 1024, 384);
+    acquireAndUpdate(state.uiImageReader, state.uiImage, state.uiHasFrame, kUiTexWidth, kUiTexHeight);
+    acquireAndUpdate(state.controlsImageReader, state.controlsImage, state.controlsHasFrame, kControlsTexWidth, kControlsTexHeight);
 }
 
 // ===========================================================================
@@ -1707,7 +1798,11 @@ void CreateBeamResources(AppState& state) {
 
     VkPipelineRasterizationStateCreateInfo rast{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
     rast.polygonMode = VK_POLYGON_MODE_FILL; rast.cullMode = VK_CULL_MODE_NONE;
-    rast.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rast.lineWidth = 2.0f;
+    // lineWidth != 1.0 requer a feature wideLines, nao habilitada (nem
+    // garantida no Adreno do Quest 3) — pedi-la sem checar e uso invalido
+    // da API. Linha fica fina; espessura visual maior exigiria geometria de
+    // quad em vez de VK_PRIMITIVE_TOPOLOGY_LINE_LIST.
+    rast.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rast.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
@@ -1753,7 +1848,13 @@ void CreateCommandResources(AppState& state) {
 // vkQueueWaitIdle por frame continua deliberadamente ingenuo —
 // performance so importa a partir do Estagio 3+.
 // helper para desenhar os paineis de UI/Controles (Estagio 4) por cima do video ou do fallback
-static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headPos) {
+//
+// `headCenter` DEVE ser o mesmo valor (ponto medio dos dois olhos) usado por
+// UpdateInteraction e passado igual pros dois olhos — usar views[eye].pose
+// aqui faz o billboard girar de forma diferente por olho (~6cm de diferenca
+// entre as posicoes), quebrando a disparidade estereo do painel (achado da
+// revisao pos-migracao Vulkan).
+static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
 
     VkDeviceSize offset = 0;
@@ -1761,29 +1862,24 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
     // DEVE usar o videoVertexBuffer (que tem XYZ+UV) e nao o quadVertexBuffer (so XYZ)
     vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
 
-    // Calcular UI transform (identico ao GLES: vr_player_app.cpp:973)
-    float uiPosX = -1.2f, uiPosY = 1.0f, uiPosZ = -1.0f;
-    float uiScale = 1.5f;
-    float toHeadX = headPos.x - uiPosX;
-    float toHeadZ = headPos.z - uiPosZ;
-    float uiYaw = atan2f(toHeadX, toHeadZ);
-    Mat4 uiModel = Mat4Multiply(Mat4Multiply(Mat4Translation(uiPosX, uiPosY, uiPosZ), Mat4RotationY(uiYaw)), Mat4Scale(uiScale, uiScale, 1.0f));
+    // Mesmas matrizes usadas pelo hit-test (UpdateInteraction) — antes cada
+    // um recalculava por conta propria e ja tinham divergido.
+    SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
+    Mat4 uiModel = Mat4Multiply(scene.uiModelNoScale, Mat4Scale(kUiPanelScaleX, kUiPanelScaleY, 1.0f));
     Mat4 uiMvp = Mat4Multiply(Mat4Multiply(proj, view), uiModel);
 
-    // Controls transform (identico ao GLES: vr_player_app.cpp:983)
-    Mat4 controlsModel = Mat4Multiply(
-        Mat4Multiply(Mat4Translation(0.0f, 0.4f, -1.9f), Mat4RotationX(-0.3f)),
-        Mat4Scale(0.8f, 0.3f, 1.0f));
+    Mat4 controlsModel = Mat4Multiply(scene.controlsModelNoScale, Mat4Scale(kControlsPanelScaleX, kControlsPanelScaleY, 1.0f));
     Mat4 controlsMvp = Mat4Multiply(Mat4Multiply(proj, view), controlsModel);
 
     UiPushConstants push{};
-    
-    // UI (File Browser)
-    if (state.uiHasFrame) {
+
+    // UI (File Browser) — auto-hide (Estagio 6): nao desenha quando totalmente
+    // esmaecido, mesma condicao usada pra gating de dispatch em UpdateInteraction.
+    if (state.uiHasFrame && state.uiAlpha > 0.0f) {
         push.mvp = uiMvp;
-        push.alpha = 1.0f; // TODO: auto-hide alpha fading
-        vkCmdPushConstants(cmd, state.uiPipelineLayout, 
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
+        push.alpha = state.uiAlpha;
+        vkCmdPushConstants(cmd, state.uiPipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(push), &push);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             state.uiPipelineLayout, 0, 1, &state.uiDescriptorSet, 0, nullptr);
@@ -1791,19 +1887,23 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
     }
 
     // Controls
-    if (state.controlsHasFrame) {
+    if (state.controlsHasFrame && state.controlsAlpha > 0.0f) {
         push.mvp = controlsMvp;
-        push.alpha = 1.0f;
-        vkCmdPushConstants(cmd, state.uiPipelineLayout, 
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 
+        push.alpha = state.controlsAlpha;
+        vkCmdPushConstants(cmd, state.uiPipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(push), &push);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             state.uiPipelineLayout, 0, 1, &state.controlsDescriptorSet, 0, nullptr);
         vkCmdDraw(cmd, 4, 1, 0, 0);
     }
 
-    // Beam (Laser)
-    if (state.lastRayDir.z != 0.0f) { // Se o controle foi detectado
+    // Beam (Laser) — so desenha com um controle de fato rastreado neste
+    // frame (state.hasRay, setado por UpdateInteraction via xrLocateSpace).
+    // `lastRayDir.z != 0.0f` (checagem anterior) e sempre verdadeiro, ja que
+    // lastRayDir comeca inicializado em {0,0,-1} — laser aparecia mesmo sem
+    // nenhum controle ligado/rastreado.
+    if (state.hasRay) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.beamPipeline);
         vkCmdBindVertexBuffers(cmd, 0, 1, &state.beamVertexBuffer, &offset);
 
@@ -1851,11 +1951,41 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
         
         vkCmdDraw(cmd, 2, 1, 0, 0); // 2 vertices para a linha
     }
+
+    // Cursor/reticulo no ponto de acerto (Estagio 6) — sem o disco laser sozinho
+    // termina "no vazio", dificultando mirar em botoes pequenos (mesmo motivo do
+    // GLES). Reusa o pipeline do beam com um segmento curto centrado em
+    // cursorDotPos ao longo do eixo Y do mundo; a base do beam vai de (0,0,0) a
+    // (0,0,-2) em espaco local, entao a coluna Z do model e escalada pra
+    // kDotHalfLength e a translacao deslocada +kDotHalfLength no Y pra centrar
+    // o segmento no ponto de impacto (start em +halfLength, end em -halfLength).
+    if (state.cursorDotVisible) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.beamPipeline);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &state.beamVertexBuffer, &offset);
+
+        const float kDotHalfLength = 0.01f;
+        Mat4 dotModel = {{
+            1.0f, 0.0f, 0.0f, 0.0f,
+            0.0f, 0.0f, 1.0f, 0.0f,
+            0.0f, kDotHalfLength, 0.0f, 0.0f,
+            state.cursorDotPos.x, state.cursorDotPos.y + kDotHalfLength, state.cursorDotPos.z, 1.0f
+        }};
+
+        BeamPushConstants dotPush{};
+        dotPush.mvp = Mat4Multiply(Mat4Multiply(proj, view), dotModel);
+        dotPush.color[0] = 0.0f; dotPush.color[1] = 1.0f; dotPush.color[2] = 1.0f; dotPush.color[3] = 1.0f;
+
+        vkCmdPushConstants(cmd, state.beamPipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(dotPush), &dotPush);
+
+        vkCmdDraw(cmd, 2, 1, 0, 0);
+    }
 }
 
 void RecordAndSubmitQuad(
     AppState& state, VkFramebuffer framebuffer, VkExtent2D extent, const Mat4& mvp,
-    const Mat4& proj, const Mat4& view, XrVector3f headPos) {
+    const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
     VkCommandBuffer cmd = state.vkCommandBuffer;
     VKR(vkResetCommandBuffer(cmd, 0));
 
@@ -1905,7 +2035,7 @@ void RecordAndSubmitQuad(
 
     vkCmdDraw(cmd, 4, 1, 0, 0);
 
-    DrawUiQuads(state, cmd, proj, view, headPos);
+    DrawUiQuads(state, cmd, proj, view, headCenter);
 
     vkCmdEndRenderPass(cmd);
     VKR(vkEndCommandBuffer(cmd));
@@ -2120,7 +2250,7 @@ VideoFrame* GetOrImportVideoFrame(AppState& state, AHardwareBuffer* buffer) {
 // cai no RecordAndSubmitQuad (fallback de Estagio 2).
 void RecordAndSubmitVideo(
     AppState& state, VkFramebuffer framebuffer, VkExtent2D extent,
-    const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headPos, VideoFrame* videoFrame) {
+    const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter, VideoFrame* videoFrame) {
     VkCommandBuffer cmd = state.vkCommandBuffer;
     VKR(vkResetCommandBuffer(cmd, 0));
 
@@ -2187,7 +2317,7 @@ void RecordAndSubmitVideo(
 
     vkCmdDraw(cmd, 4, 1, 0, 0);
 
-    DrawUiQuads(state, cmd, proj, view, headPos);
+    DrawUiQuads(state, cmd, proj, view, headCenter);
 
     vkCmdEndRenderPass(cmd);
     VKR(vkEndCommandBuffer(cmd));
@@ -2248,15 +2378,42 @@ void RenderFrame(AppState& state) {
         uint32_t viewCountOutput = 0;
         OXR(xrLocateViews(state.session, &locateInfo, &viewState, kEyeCount, &viewCountOutput, views.data()));
 
-        // Estagio 4/5: Processar interacoes apos obtermos a posicao da cabeca
-        UpdateInteraction(state, frameState.predictedDisplayTime, views[0].pose.position);
+        // Ponto medio dos dois olhos — usado (em vez da pose de um olho so)
+        // pra tudo que depende de "onde esta a cabeca": billboard da UI,
+        // hit-test, translacao da esfera 360. Usar views[eye].pose por olho
+        // fazia o billboard da UI girar de forma diferente pra cada olho
+        // (~6cm de separacao interpupilar), quebrando a disparidade estereo
+        // do painel — achado da revisao pos-migracao Vulkan.
+        const XrVector3f headCenter = Vec3Scale(
+            Vec3Add(views[0].pose.position, views[1].pose.position), 0.5f);
 
-        // Posicao/escala da tela virtual: identica ao caminho GLES
-        // (vr_player_app.cpp:1588 m_screenPosition = {0, 1.5, -2},
-        //  m_screenScale = {1.6, 0.9}) para facilitar comparacao visual.
+        // Recenter — espelha o AppHandleEvent/Update() do caminho GLES
+        // (vr_player_app.cpp): recalibra sceneYawOffset/sceneTranslationOffset
+        // com a HeadPose fresca deste frame, nunca com uma pose antiga (por
+        // isso isso roda aqui e nao no handler do evento em PollXrEvents).
+        // Tambem dispara uma vez no 1o frame com pose valida, pra cena
+        // nascer na altura dos olhos sem exigir o long-press manual (Estagio 6).
+        if (state.needsOsRecenter || !state.sceneCalibrated) {
+            Mat4 rot0 = Mat4FromXrPose(views[0].pose);
+            XrVector3f fwd = {-rot0.m[8], -rot0.m[9], -rot0.m[10]};
+            state.sceneYawOffset = atan2f(fwd.x, -fwd.z);
+            state.sceneTranslationOffset = headCenter;
+            state.sceneTranslationOffset.y = headCenter.y - 1.5f;
+            state.needsOsRecenter = false;
+            state.sceneCalibrated = true;
+        }
+
+        // Estagio 4/5: Processar interacoes apos obtermos a posicao da cabeca
+        UpdateInteraction(state, frameState.predictedDisplayTime, headCenter, views[0].pose.orientation);
+
+        // Posicao/escala da tela virtual — mesma base do caminho GLES
+        // (vr_player_app.cpp: m_screenPosition = {0, 1.5, -2},
+        //  m_screenScale = {1.6, 0.9}), ajustavel via thumbstick (Estagio 6)
+        // e deslocada pelo offset de cena/recenter acima.
+        SceneTransforms sceneForScreen = ComputeSceneTransforms(state, headCenter);
         const Mat4 screenModel = Mat4Multiply(
-            Mat4Translation(0.0f, 1.5f, -2.0f),
-            Mat4Scale(1.6f, 0.9f, 1.0f));
+            sceneForScreen.screenModelNoScale,
+            Mat4Scale(state.screenScaleX, state.screenScaleY, 1.0f));
 
         // Estagio 5: lerencia do ScreenMode a cada frame (mesmo que o GLES:
         // vr_player_app.cpp:993 "m_screenMode = static_cast<ScreenMode>(get_3d_mode())")
@@ -2292,9 +2449,18 @@ void RenderFrame(AppState& state) {
             if (state.activeVideoFrame != nullptr) {
                 if (sphereMode || stereoFlat) {
                     // Estagio 5: pipeline estereo/esfera
-                    // Para a esfera: MVP = proj * view (sem model — a esfera
-                    // acompanha a translacao mas nao a escala da tela plana)
-                    const Mat4 sphereMvp = Mat4Multiply(proj, view);
+                    // Esfera: acompanha a TRANSLACAO da cabeca (usuario sempre
+                    // no centro, mesmo andando fisicamente no espaco do
+                    // Guardian) e o yaw de recenter, mas NAO a rotacao da
+                    // cabeca (essa ja vem de graca via `view`) nem a escala da
+                    // tela plana — mesma logica do caminho GLES
+                    // (vr_player_app.cpp: m_sphereTransform). Sem a
+                    // translacao, o usuario saia de dentro da esfera ao
+                    // andar (achado da revisao pos-migracao Vulkan).
+                    const Mat4 sphereModel = Mat4Multiply(
+                        Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
+                        Mat4RotationY(state.sceneYawOffset));
+                    const Mat4 sphereMvp = Mat4Multiply(Mat4Multiply(proj, view), sphereModel);
                     StereoParams sp = GetStereoParams(state.screenMode, eye);
 
                     VkCommandBuffer cmd = state.vkCommandBuffer;
@@ -2357,7 +2523,7 @@ void RenderFrame(AppState& state) {
                         vkCmdDraw(cmd, 4, 1, 0, 0);
                     }
 
-                    DrawUiQuads(state, cmd, proj, view, views[eye].pose.position);
+                    DrawUiQuads(state, cmd, proj, view, headCenter);
 
                     vkCmdEndRenderPass(cmd);
                     VKR(vkEndCommandBuffer(cmd));
@@ -2367,11 +2533,11 @@ void RenderFrame(AppState& state) {
                     VKR(vkQueueWaitIdle(state.vkQueue));
                 } else {
                     // Estagio 3: Flat2D com textura de video
-                    RecordAndSubmitVideo(state, fb, extent, mvp, proj, view, views[eye].pose.position, state.activeVideoFrame);
+                    RecordAndSubmitVideo(state, fb, extent, mvp, proj, view, headCenter, state.activeVideoFrame);
                 }
             } else {
                 // Fallback: quad solido (Estagio 2)
-                RecordAndSubmitQuad(state, fb, extent, mvp, proj, view, views[eye].pose.position);
+                RecordAndSubmitQuad(state, fb, extent, mvp, proj, view, headCenter);
             }
 
             XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
@@ -2441,7 +2607,15 @@ void PollXrEvents(AppState& state) {
         XrEventDataBuffer eventBuffer{XR_TYPE_EVENT_DATA_BUFFER};
         if (xrPollEvent(state.instance, &eventBuffer) != XR_SUCCESS) break;
 
-        if (eventBuffer.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
+        if (eventBuffer.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
+            // Recenter disparado pelo sistema (ex.: long-press no botao
+            // Oculus). Sinaliza para RenderFrame recalibrar a cena inteira
+            // no proximo frame, com a HeadPose fresca daquele frame — nao
+            // aqui, onde a pose ja pode estar desatualizada. Mesma logica
+            // do AppHandleEvent do caminho GLES (vr_player_app.cpp).
+            state.needsOsRecenter = true;
+            LOGI("Estagio Camera: OS Recenter event recebido. Agendando reset para o proximo frame.");
+        } else if (eventBuffer.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
             const auto* event = reinterpret_cast<XrEventDataSessionStateChanged*>(&eventBuffer);
             LOGI("Estado da sessao OpenXR mudou para %d", event->state);
 

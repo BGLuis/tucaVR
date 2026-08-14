@@ -4,6 +4,97 @@
 #include <android_native_app_glue.h>
 #include "vk_math.h"
 #include <math.h>
+#include <algorithm>
+#include <cstdint>
+
+// Timings de auto-hide/recenter — mesmos valores do caminho GLES
+// (vr_player_app.cpp: kUiAutoHideSeconds/kUiFadeDuration/kRecenterHoldSeconds).
+constexpr float kUiAutoHideSeconds = 5.0f;
+constexpr float kUiFadeDuration = 0.35f;
+constexpr float kRecenterHoldSeconds = 0.6f;
+
+inline float MoveTowards(float current, float target, float maxDelta) {
+    if (fabs(target - current) <= maxDelta) return target;
+    return current + (target > current ? maxDelta : -maxDelta);
+}
+
+inline void FireHaptic(AppState& state, XrPath hand, float amplitude, XrDuration durationNs) {
+    if (state.hapticAction == XR_NULL_HANDLE) return;
+    XrHapticVibration vibration{XR_TYPE_HAPTIC_VIBRATION};
+    vibration.amplitude = amplitude;
+    vibration.duration = durationNs;
+    vibration.frequency = XR_FREQUENCY_UNSPECIFIED;
+    XrHapticActionInfo info{XR_TYPE_HAPTIC_ACTION_INFO};
+    info.action = state.hapticAction;
+    info.subactionPath = hand;
+    xrApplyHapticFeedback(state.session, &info, (const XrHapticBaseHeader*)&vibration);
+}
+
+// Posicoes/escalas "base" dos paineis — mesmos valores do caminho GLES
+// (vr_player_app.cpp: baseUiPos/baseControlsPos em Update()), pra manter os
+// dois caminhos comparaveis visualmente. Transformadas por
+// sceneTranslationOffset/sceneYawOffset em ComputeSceneTransforms abaixo.
+constexpr XrVector3f kBaseUiPos = {-2.2f, 1.5f, -1.5f};
+constexpr float kUiPanelScaleX = 0.8f;
+constexpr float kUiPanelScaleY = 0.6f;
+constexpr XrVector3f kBaseControlsPos = {0.0f, 0.4f, -1.9f};
+constexpr float kControlsPanelScaleX = 0.8f;
+constexpr float kControlsPanelScaleY = 0.3f;
+constexpr float kControlsPitch = -0.3f;
+
+// Transforms de cena computados uma vez por frame e compartilhados entre
+// UpdateInteraction (hit-test) e DrawUiQuads (render) — antes cada um
+// recalculava isso de forma independente e ja tinha divergido (Estagio
+// Camera, achado da revisao pos-migracao). Os *ModelNoScale sao rigidos
+// (so rotacao+translacao) de proposito: Mat4RigidInverse usada no hit-test
+// assume isso, entao a escala visual e aplicada separadamente (na hora de
+// desenhar via Mat4Scale, na hora de testar dividindo o ponto local).
+struct SceneTransforms {
+    Mat4 uiModelNoScale;
+    XrVector3f uiCenter;
+    XrVector3f uiNormal;
+
+    Mat4 controlsModelNoScale;
+    XrVector3f controlsCenter;
+    XrVector3f controlsNormal;
+
+    Mat4 screenModelNoScale;
+    XrVector3f screenCenter;
+    XrVector3f screenNormal;
+};
+
+inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVector3f& headCenter) {
+    SceneTransforms t{};
+
+    // UI: billboard - sempre virado pra cabeca (mesma logica do GLES:
+    // vr_player_app.cpp, calculo de uiYaw a partir de toHead).
+    XrVector3f worldUiPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(kBaseUiPos, state.sceneYawOffset));
+    XrVector3f toHead = Vec3Sub(headCenter, worldUiPos);
+    toHead.y = 0.0f;
+    float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
+    float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : 0.7f;
+    t.uiModelNoScale = Mat4Multiply(Mat4Translation(worldUiPos.x, worldUiPos.y, worldUiPos.z), Mat4RotationY(uiYaw));
+    t.uiCenter = worldUiPos;
+    t.uiNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, uiYaw);
+
+    // Controles: segue o yaw da cena (recenter) mais uma inclinacao fixa.
+    XrVector3f worldControlsPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(kBaseControlsPos, state.sceneYawOffset));
+    Mat4 controlsRot = Mat4Multiply(Mat4RotationY(state.sceneYawOffset), Mat4RotationX(kControlsPitch));
+    t.controlsModelNoScale = Mat4Multiply(Mat4Translation(worldControlsPos.x, worldControlsPos.y, worldControlsPos.z), controlsRot);
+    t.controlsCenter = worldControlsPos;
+    // RotationX(kControlsPitch).Transform(0,0,1) = (0, -sin(pitch), cos(pitch))
+    // (ver convencao de Mat4RotationX em vk_math.h), depois rotacionado pelo yaw da cena.
+    XrVector3f pitchedNormal = {0.0f, -sinf(kControlsPitch), cosf(kControlsPitch)};
+    t.controlsNormal = Vec3RotateY(pitchedNormal, state.sceneYawOffset);
+
+    // Tela virtual: posicao/escala ajustaveis via thumbstick (Estagio 6).
+    XrVector3f worldScreenPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(state.screenPosition, state.sceneYawOffset));
+    t.screenModelNoScale = Mat4Multiply(Mat4Translation(worldScreenPos.x, worldScreenPos.y, worldScreenPos.z), Mat4RotationY(state.sceneYawOffset));
+    t.screenCenter = worldScreenPos;
+    t.screenNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.sceneYawOffset);
+
+    return t;
+}
 
 inline void SetupOpenXrInputs(AppState& state) {
     XrActionSetCreateInfo actionSetInfo{XR_TYPE_ACTION_SET_CREATE_INFO};
@@ -30,25 +121,93 @@ inline void SetupOpenXrInputs(AppState& state) {
     actionInfo.subactionPaths = handPaths;
     OXR(xrCreateAction(state.actionSet, &actionInfo, &state.triggerAction));
 
+    // Paridade com o caminho GLES (Estagio 6) — ver AppState pro que cada
+    // action controla.
+    actionInfo.countSubactionPaths = 0;
+    actionInfo.subactionPaths = nullptr;
+
+    actionInfo.actionType = XR_ACTION_TYPE_BOOLEAN_INPUT;
+    strcpy(actionInfo.actionName, "a_click");
+    strcpy(actionInfo.localizedActionName, "A Button");
+    OXR(xrCreateAction(state.actionSet, &actionInfo, &state.aButtonAction));
+
+    strcpy(actionInfo.actionName, "x_click");
+    strcpy(actionInfo.localizedActionName, "X Button");
+    OXR(xrCreateAction(state.actionSet, &actionInfo, &state.xButtonAction));
+
+    strcpy(actionInfo.actionName, "b_click");
+    strcpy(actionInfo.localizedActionName, "B Button");
+    OXR(xrCreateAction(state.actionSet, &actionInfo, &state.bButtonAction));
+
+    strcpy(actionInfo.actionName, "y_click");
+    strcpy(actionInfo.localizedActionName, "Y Button");
+    OXR(xrCreateAction(state.actionSet, &actionInfo, &state.yButtonAction));
+
+    strcpy(actionInfo.actionName, "menu_click");
+    strcpy(actionInfo.localizedActionName, "Menu Button");
+    OXR(xrCreateAction(state.actionSet, &actionInfo, &state.menuAction));
+
+    actionInfo.actionType = XR_ACTION_TYPE_FLOAT_INPUT;
+    strcpy(actionInfo.actionName, "squeeze");
+    strcpy(actionInfo.localizedActionName, "Squeeze");
+    OXR(xrCreateAction(state.actionSet, &actionInfo, &state.squeezeAction));
+
+    actionInfo.actionType = XR_ACTION_TYPE_VECTOR2F_INPUT;
+    strcpy(actionInfo.actionName, "thumbstick");
+    strcpy(actionInfo.localizedActionName, "Thumbstick");
+    actionInfo.countSubactionPaths = 2;
+    actionInfo.subactionPaths = handPaths;
+    OXR(xrCreateAction(state.actionSet, &actionInfo, &state.thumbstickAction));
+
+    actionInfo.actionType = XR_ACTION_TYPE_VIBRATION_OUTPUT;
+    strcpy(actionInfo.actionName, "haptic");
+    strcpy(actionInfo.localizedActionName, "Haptic");
+    actionInfo.countSubactionPaths = 2;
+    actionInfo.subactionPaths = handPaths;
+    OXR(xrCreateAction(state.actionSet, &actionInfo, &state.hapticAction));
+
     XrPath selectPath[2];
     xrStringToPath(state.instance, "/user/hand/left/input/aim/pose", &selectPath[0]);
     xrStringToPath(state.instance, "/user/hand/right/input/aim/pose", &selectPath[1]);
     XrPath triggerPath[2];
     xrStringToPath(state.instance, "/user/hand/left/input/trigger/value", &triggerPath[0]);
     xrStringToPath(state.instance, "/user/hand/right/input/trigger/value", &triggerPath[1]);
+    XrPath aPath, xPath, bPath, yPath, menuPath, squeezePath;
+    xrStringToPath(state.instance, "/user/hand/right/input/a/click", &aPath);
+    xrStringToPath(state.instance, "/user/hand/left/input/x/click", &xPath);
+    xrStringToPath(state.instance, "/user/hand/right/input/b/click", &bPath);
+    xrStringToPath(state.instance, "/user/hand/left/input/y/click", &yPath);
+    xrStringToPath(state.instance, "/user/hand/left/input/menu/click", &menuPath);
+    xrStringToPath(state.instance, "/user/hand/right/input/squeeze/value", &squeezePath);
+    XrPath thumbstickPath[2];
+    xrStringToPath(state.instance, "/user/hand/left/input/thumbstick", &thumbstickPath[0]);
+    xrStringToPath(state.instance, "/user/hand/right/input/thumbstick", &thumbstickPath[1]);
+    XrPath hapticPath[2];
+    xrStringToPath(state.instance, "/user/hand/left/output/haptic", &hapticPath[0]);
+    xrStringToPath(state.instance, "/user/hand/right/output/haptic", &hapticPath[1]);
 
-    XrActionSuggestedBinding bindings[4];
-    bindings[0] = {state.aimAction, selectPath[0]};
-    bindings[1] = {state.aimAction, selectPath[1]};
-    bindings[2] = {state.triggerAction, triggerPath[0]};
-    bindings[3] = {state.triggerAction, triggerPath[1]};
+    XrActionSuggestedBinding bindings[14];
+    bindings[0]  = {state.aimAction, selectPath[0]};
+    bindings[1]  = {state.aimAction, selectPath[1]};
+    bindings[2]  = {state.triggerAction, triggerPath[0]};
+    bindings[3]  = {state.triggerAction, triggerPath[1]};
+    bindings[4]  = {state.aButtonAction, aPath};
+    bindings[5]  = {state.xButtonAction, xPath};
+    bindings[6]  = {state.bButtonAction, bPath};
+    bindings[7]  = {state.yButtonAction, yPath};
+    bindings[8]  = {state.menuAction, menuPath};
+    bindings[9]  = {state.squeezeAction, squeezePath};
+    bindings[10] = {state.thumbstickAction, thumbstickPath[0]};
+    bindings[11] = {state.thumbstickAction, thumbstickPath[1]};
+    bindings[12] = {state.hapticAction, hapticPath[0]};
+    bindings[13] = {state.hapticAction, hapticPath[1]};
 
     XrPath profilePath;
     xrStringToPath(state.instance, "/interaction_profiles/oculus/touch_controller", &profilePath);
     XrInteractionProfileSuggestedBinding suggestedBindings{XR_TYPE_INTERACTION_PROFILE_SUGGESTED_BINDING};
     suggestedBindings.interactionProfile = profilePath;
     suggestedBindings.suggestedBindings = bindings;
-    suggestedBindings.countSuggestedBindings = 4;
+    suggestedBindings.countSuggestedBindings = 14;
     OXR(xrSuggestInteractionProfileBindings(state.instance, &suggestedBindings));
 }
 
@@ -71,7 +230,15 @@ inline void AttachInputsToSession(AppState& state) {
     OXR(xrCreateActionSpace(state.session, &actionSpaceInfo, &state.aimSpaces[1]));
 }
 
-inline float rayHitsQuad(const Mat4& transform, const XrVector3f& normal, const XrVector3f& center, 
+// `transformNoScale` PRECISA ser rigida (so rotacao+translacao, sem escala):
+// Mat4RigidInverse assume isso (usa a transposta da rotacao como inversa, o
+// que so vale para matrizes ortonormais). A escala visual do painel entra
+// via scaleX/scaleY, dividindo o ponto ja em espaco local — matematicamente
+// equivalente a ter a escala embutida na matriz (o parametro `t` da
+// interseccao raio-plano nao depende da escala do objeto, so do plano em
+// espaco de mundo), mas sem quebrar a premissa da inversa rigida.
+inline float rayHitsQuad(const Mat4& transformNoScale, const XrVector3f& normal, const XrVector3f& center,
+                         float scaleX, float scaleY,
                          float& outU, float& outV, const XrVector3f& rayOrigin, const XrVector3f& rayDir) {
     float dotDir = normal.x*rayDir.x + normal.y*rayDir.y + normal.z*rayDir.z;
     if (fabs(dotDir) <= 0.001f) return -1.0f;
@@ -79,22 +246,23 @@ inline float rayHitsQuad(const Mat4& transform, const XrVector3f& normal, const 
     float t = (normal.x*toCenter.x + normal.y*toCenter.y + normal.z*toCenter.z) / dotDir;
     if (t <= 0.0f) return -1.0f;
     XrVector3f hitPoint = {rayOrigin.x + rayDir.x * t, rayOrigin.y + rayDir.y * t, rayOrigin.z + rayDir.z * t};
-    
-    // transform hitPoint to local space
-    Mat4 inv = Mat4RigidInverse(transform);
+
+    Mat4 inv = Mat4RigidInverse(transformNoScale);
     float localX = inv.m[0]*hitPoint.x + inv.m[4]*hitPoint.y + inv.m[8]*hitPoint.z + inv.m[12];
     float localY = inv.m[1]*hitPoint.x + inv.m[5]*hitPoint.y + inv.m[9]*hitPoint.z + inv.m[13];
-    float localZ = inv.m[2]*hitPoint.x + inv.m[6]*hitPoint.y + inv.m[10]*hitPoint.z + inv.m[14];
-    
-    // Scale localX/Y to check boundaries (-0.5 to 0.5 because the quad is 1x1)
+    localX /= scaleX;
+    localY /= scaleY;
+
+    // Boundaries: -0.5 a 0.5 porque o quad local (sem escala) e 1x1.
     if (localX < -0.5f || localX > 0.5f || localY < -0.5f || localY > 0.5f) return -1.0f;
-    
+
     outU = localX + 0.5f;
     outV = 0.5f - localY;
     return t;
 }
 
-inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVector3f headPos) {
+inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVector3f headCenter,
+                               const XrQuaternionf& headOrientation) {
     XrActiveActionSet activeActionSet{};
     activeActionSet.actionSet = state.actionSet;
     activeActionSet.subactionPath = XR_NULL_PATH;
@@ -104,20 +272,39 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     syncInfo.activeActionSets = &activeActionSet;
     xrSyncActions(state.session, &syncInfo);
 
-    XrActionStateGetInfo getInfo{XR_TYPE_ACTION_STATE_GET_INFO};
-    getInfo.action = state.triggerAction;
-    XrActionStateBoolean triggerState{XR_TYPE_ACTION_STATE_BOOLEAN};
-    xrGetActionStateBoolean(state.session, &getInfo, &triggerState);
-    bool currTrigger = triggerState.currentState == XR_TRUE;
+    XrPath leftPath = XR_NULL_PATH, rightPath = XR_NULL_PATH;
+    xrStringToPath(state.instance, "/user/hand/left", &leftPath);
+    xrStringToPath(state.instance, "/user/hand/right", &rightPath);
 
-    XrSpaceLocation spaceLocation{XR_TYPE_SPACE_LOCATION};
-    // Prioritize right hand, fallback to left
-    xrLocateSpace(state.aimSpaces[1], state.localSpace, predictedDisplayTime, &spaceLocation);
-    if ((spaceLocation.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) == 0) {
-        xrLocateSpace(state.aimSpaces[0], state.localSpace, predictedDisplayTime, &spaceLocation);
-    }
-    
-    if (spaceLocation.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) {
+    XrActionStateGetInfo triggerInfoL{XR_TYPE_ACTION_STATE_GET_INFO};
+    triggerInfoL.action = state.triggerAction;
+    triggerInfoL.subactionPath = leftPath;
+    XrActionStateBoolean triggerL{XR_TYPE_ACTION_STATE_BOOLEAN};
+    xrGetActionStateBoolean(state.session, &triggerInfoL, &triggerL);
+
+    XrActionStateGetInfo triggerInfoR{XR_TYPE_ACTION_STATE_GET_INFO};
+    triggerInfoR.action = state.triggerAction;
+    triggerInfoR.subactionPath = rightPath;
+    XrActionStateBoolean triggerR{XR_TYPE_ACTION_STATE_BOOLEAN};
+    xrGetActionStateBoolean(state.session, &triggerInfoR, &triggerR);
+
+    XrSpaceLocation locL{XR_TYPE_SPACE_LOCATION};
+    XrSpaceLocation locR{XR_TYPE_SPACE_LOCATION};
+    xrLocateSpace(state.aimSpaces[0], state.localSpace, predictedDisplayTime, &locL);
+    xrLocateSpace(state.aimSpaces[1], state.localSpace, predictedDisplayTime, &locR);
+    bool leftTracked = (locL.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
+    bool rightTracked = (locR.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
+
+    // Mesma preferencia do caminho GLES (vr_player_app.cpp): usa a
+    // esquerda se ela estiver rastreada e (a direita nao estiver rastreada
+    // OU o trigger esquerdo estiver pressionado) — deixa o usuario apontar
+    // com a mao que estiver usando ativamente.
+    bool useLeft = leftTracked && (!rightTracked || triggerL.currentState == XR_TRUE);
+    const XrSpaceLocation& spaceLocation = useLeft ? locL : locR;
+    bool currTrigger = (useLeft ? triggerL.currentState : triggerR.currentState) == XR_TRUE;
+
+    state.hasRay = (spaceLocation.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
+    if (state.hasRay) {
         state.lastRayOrigin = spaceLocation.pose.position;
         Mat4 rot = Mat4FromXrPose(spaceLocation.pose);
         state.lastRayDir = {-rot.m[8], -rot.m[9], -rot.m[10]}; // -Z axis
@@ -126,42 +313,18 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     bool prevTrigger = state.isTriggerPressed;
     state.isTriggerPressed = currTrigger;
 
-    // Calcular matrizes de UI (tamanho visual x1.5 para melhor leitura)
-    float uiPosX = -1.2f, uiPosY = 1.0f, uiPosZ = -1.0f;
-    float uiScale = 1.5f;
-    float uiYaw = atan2f((headPos.x - uiPosX), (headPos.z - uiPosZ));
-    Mat4 uiModel = Mat4Multiply(Mat4Translation(uiPosX, uiPosY, uiPosZ), Mat4RotationY(uiYaw));
-    
-    Mat4 controlsModel = Mat4Multiply(
-        Mat4Multiply(Mat4Translation(0.0f, 0.4f, -1.9f), Mat4RotationX(-0.3f)),
-        Mat4Scale(0.8f, 0.3f, 1.0f));
+    SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
 
-    float uu=0, vu=0, uc=0, vc=0;
-    float tUi = -1.0f;
-    // Ajustar UV para o scale (hit test acha que e 1x1, mas a gente vai desenhar com uiScale)
-    // Se o rayHitsQuad bateu, uu e vu estao entre 0 e 1 apenas se bateu num 1x1.
-    // Como queremos hit num quad maior, remapeamos a coordenada de teste.
-    // Ou melhor: mudamos a logica de bounds checking. 
-    // Em vez de mudar rayHitsQuad, vamos apenas escalar o toCenter no local space?
-    // Mais facil: recriar o rayHitsQuad inline com scale.
-    float dotDirUI = uiModel.m[8]*state.lastRayDir.x + uiModel.m[9]*state.lastRayDir.y + uiModel.m[10]*state.lastRayDir.z;
-    if (fabs(dotDirUI) > 0.001f) {
-        XrVector3f toCenter = {uiPosX - state.lastRayOrigin.x, uiPosY - state.lastRayOrigin.y, uiPosZ - state.lastRayOrigin.z};
-        float t = (uiModel.m[8]*toCenter.x + uiModel.m[9]*toCenter.y + uiModel.m[10]*toCenter.z) / dotDirUI;
-        if (t > 0.0f) {
-            XrVector3f hitPoint = {state.lastRayOrigin.x + state.lastRayDir.x*t, state.lastRayOrigin.y + state.lastRayDir.y*t, state.lastRayOrigin.z + state.lastRayDir.z*t};
-            Mat4 inv = Mat4RigidInverse(uiModel);
-            float localX = inv.m[0]*hitPoint.x + inv.m[4]*hitPoint.y + inv.m[8]*hitPoint.z + inv.m[12];
-            float localY = inv.m[1]*hitPoint.x + inv.m[5]*hitPoint.y + inv.m[9]*hitPoint.z + inv.m[13];
-            localX /= uiScale; localY /= uiScale; // aplica a escala visual
-            if (localX >= -0.5f && localX <= 0.5f && localY >= -0.5f && localY <= 0.5f) {
-                tUi = t; uu = localX + 0.5f; vu = 0.5f - localY;
-            } else tUi = -1.0f;
-        } else tUi = -1.0f;
-    } else tUi = -1.0f;
+    float uu = 0, vu = 0, uc = 0, vc = 0;
+    float tUi = state.hasRay
+        ? rayHitsQuad(scene.uiModelNoScale, scene.uiNormal, scene.uiCenter, kUiPanelScaleX, kUiPanelScaleY,
+                      uu, vu, state.lastRayOrigin, state.lastRayDir)
+        : -1.0f;
+    float tControls = state.hasRay
+        ? rayHitsQuad(scene.controlsModelNoScale, scene.controlsNormal, scene.controlsCenter,
+                      kControlsPanelScaleX, kControlsPanelScaleY, uc, vc, state.lastRayOrigin, state.lastRayDir)
+        : -1.0f;
 
-    float tControls = rayHitsQuad(controlsModel, {controlsModel.m[8], controlsModel.m[9], controlsModel.m[10]}, {0, 0.4f, -1.9f}, uc, vc, state.lastRayOrigin, state.lastRayDir);
-    
     int currentHitPanel = 0; // 0=none, 1=ui, 2=controls
     float hitU = 0, hitV = 0;
     state.lastHitDist = -1.0f;
@@ -173,7 +336,58 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         currentHitPanel = 1; hitU = uu; hitV = vu;
         state.lastHitDist = tUi;
     }
-    int dispatchHitPanel = currentHitPanel; // ignorando auto-hide pra facilitar
+    // Delta de tempo entre frames — XrTime e nanosegundos desde uma epoca
+    // arbitraria do runtime; convertido pra segundos pra alimentar o
+    // auto-hide/thumbsticks/seek abaixo (equivalente a in.DeltaSeconds do
+    // caminho GLES, que so existe la porque vem do OVRFW).
+    float dt = 0.0f;
+    if (state.lastPredictedDisplayTime != 0) {
+        int64_t deltaNs = predictedDisplayTime - state.lastPredictedDisplayTime;
+        if (deltaNs > 0) dt = static_cast<float>(deltaNs) / 1e9f;
+    }
+    state.lastPredictedDisplayTime = predictedDisplayTime;
+
+    // Auto-hide com fade (Estagio 6, paridade com GLES kUiAutoHideSeconds/
+    // kUiFadeDuration): aponta pro Home -> mantem visivel; aponta pra tela
+    // ou pros controles -> mantem os controles visiveis; sem atividade por
+    // kUiAutoHideSeconds -> fade out. Suprime o auto-hide do Home enquanto o
+    // teclado nativo estiver ativo — mesmo motivo do GLES: com o teclado
+    // aberto o raio aponta pro overlay do sistema, nao mais pro quad.
+    float su = 0, sv = 0;
+    bool hitScreen = state.hasRay &&
+        rayHitsQuad(scene.screenModelNoScale, scene.screenNormal, scene.screenCenter,
+                    state.screenScaleX, state.screenScaleY, su, sv,
+                    state.lastRayOrigin, state.lastRayDir) > 0.0f;
+    bool keyboardActive = get_keyboard_active() != 0;
+
+    if (currentHitPanel == 1 || keyboardActive) {
+        state.uiIdleTime = 0.0f;
+    } else {
+        state.uiIdleTime += dt;
+    }
+    if (currentHitPanel == 2 || hitScreen) {
+        state.controlsIdleTime = 0.0f;
+    } else {
+        state.controlsIdleTime += dt;
+    }
+    float uiTargetAlpha = (state.uiIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
+    float controlsTargetAlpha = (state.controlsIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
+    float fadeStep = (kUiFadeDuration > 0.0f) ? dt / kUiFadeDuration : 1.0f;
+    state.uiAlpha = MoveTowards(state.uiAlpha, uiTargetAlpha, fadeStep);
+    state.controlsAlpha = MoveTowards(state.controlsAlpha, controlsTargetAlpha, fadeStep);
+
+    // So despacha toque/hover pra um painel de fato visivel (evita "clique
+    // invisivel" num painel escondido pelo auto-hide); a deteccao geometrica
+    // acima continua sempre ativa pra poder trazer o painel de volta.
+    bool uiVisible = state.uiAlpha > 0.5f;
+    bool controlsVisible = state.controlsAlpha > 0.5f;
+    int dispatchHitPanel = 0;
+    if (currentHitPanel == 1 && uiVisible) {
+        dispatchHitPanel = 1;
+    } else if (currentHitPanel == 2 && controlsVisible) {
+        dispatchHitPanel = 2;
+    }
+
     int action = -1;
     if (currTrigger && !prevTrigger && dispatchHitPanel != 0) {
         action = 0; // DOWN
@@ -200,6 +414,191 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                 env->CallStaticVoidMethod(vrActivityClass, touchMethod, state.app->activity->clazz, hitU, hitV, action);
             }
             env->DeleteLocalRef(vrActivityClass);
+        }
+    }
+
+    // Cursor/reticulo no ponto de acerto — desenhado por DrawUiQuads. GLES
+    // usa 2 segmentos que compartilham o StartPos pra parecer um disco
+    // solido (o BeamRenderer dele desvanece a opacidade ao longo do
+    // segmento); o pipeline de beam deste caminho usa cor solida
+    // (quad.frag), entao um unico segmento curto ja basta.
+    state.cursorDotVisible = dispatchHitPanel != 0;
+    if (state.cursorDotVisible) {
+        state.cursorDotPos = {
+            state.lastRayOrigin.x + state.lastRayDir.x * state.lastHitDist,
+            state.lastRayOrigin.y + state.lastRayDir.y * state.lastHitDist,
+            state.lastRayOrigin.z + state.lastRayDir.z * state.lastHitDist,
+        };
+    }
+
+    // Haptics (paridade com GLES: pulso leve no hover-enter, mais forte no
+    // click) — sempre na mao direita, igual ao FireHaptic(RightHandPath,...)
+    // do GLES (nao acompanha useLeft).
+    if (dispatchHitPanel != 0 && dispatchHitPanel != state.lastHoverPanel) {
+        FireHaptic(state, rightPath, 0.25f, XR_MIN_HAPTIC_DURATION);
+    }
+    state.lastHoverPanel = dispatchHitPanel;
+    if (action == 0) {
+        FireHaptic(state, rightPath, 0.6f, 20000000 /* 20ms */);
+    }
+
+    // --- A/X/B/Y/Menu (Estagio 6, paridade com GLES T4.4) ---
+    XrActionStateGetInfo aInfo{XR_TYPE_ACTION_STATE_GET_INFO};
+    aInfo.action = state.aButtonAction;
+    XrActionStateBoolean aState{XR_TYPE_ACTION_STATE_BOOLEAN};
+    xrGetActionStateBoolean(state.session, &aInfo, &aState);
+
+    XrActionStateGetInfo xInfo{XR_TYPE_ACTION_STATE_GET_INFO};
+    xInfo.action = state.xButtonAction;
+    XrActionStateBoolean xState{XR_TYPE_ACTION_STATE_BOOLEAN};
+    xrGetActionStateBoolean(state.session, &xInfo, &xState);
+
+    XrActionStateGetInfo bInfo{XR_TYPE_ACTION_STATE_GET_INFO};
+    bInfo.action = state.bButtonAction;
+    XrActionStateBoolean bState{XR_TYPE_ACTION_STATE_BOOLEAN};
+    xrGetActionStateBoolean(state.session, &bInfo, &bState);
+
+    XrActionStateGetInfo yInfo{XR_TYPE_ACTION_STATE_GET_INFO};
+    yInfo.action = state.yButtonAction;
+    XrActionStateBoolean yState{XR_TYPE_ACTION_STATE_BOOLEAN};
+    xrGetActionStateBoolean(state.session, &yInfo, &yState);
+
+    XrActionStateGetInfo menuInfo{XR_TYPE_ACTION_STATE_GET_INFO};
+    menuInfo.action = state.menuAction;
+    XrActionStateBoolean menuState{XR_TYPE_ACTION_STATE_BOOLEAN};
+    xrGetActionStateBoolean(state.session, &menuInfo, &menuState);
+
+    bool currA = aState.currentState == XR_TRUE;
+    bool currX = xState.currentState == XR_TRUE;
+    bool currB = bState.currentState == XR_TRUE;
+    bool currY = yState.currentState == XR_TRUE;
+    bool currMenu = menuState.currentState == XR_TRUE;
+
+    // A (direita) ou X (esquerda) = Play/Pause. Trigger fora de qualquer
+    // painel visivel tambem funciona como atalho.
+    if ((currA && !state.prevA) || (currX && !state.prevX) ||
+        (currTrigger && !prevTrigger && dispatchHitPanel == 0)) {
+        toggle_play_pause();
+    }
+    state.prevA = currA;
+    state.prevX = currX;
+
+    // B (direita) ou Y (esquerda) = alterna a visibilidade do painel Home
+    // instantaneamente (sem esperar o auto-hide).
+    if ((currB && !state.prevB) || (currY && !state.prevY)) {
+        bool isCurrentlyVisible = state.uiIdleTime < kUiAutoHideSeconds;
+        state.uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
+    }
+    state.prevB = currB;
+    state.prevY = currY;
+
+    // Menu: long-press = recenter da cena inteira; short-press (no RELEASE,
+    // e so se o long-press nao tiver disparado durante o hold) = mesmo
+    // toggle de B/Y — mesma logica do GLES.
+    if (currMenu) {
+        state.menuHoldTime += dt;
+        if (!state.recenterFiredThisHold && state.menuHoldTime >= kRecenterHoldSeconds) {
+            Mat4 headRot = Mat4FromXrPose(XrPosef{headOrientation, {0.0f, 0.0f, 0.0f}});
+            XrVector3f fwd = {-headRot.m[8], -headRot.m[9], -headRot.m[10]};
+            state.sceneYawOffset = atan2f(fwd.x, -fwd.z);
+            state.sceneTranslationOffset = headCenter;
+            state.sceneTranslationOffset.y = headCenter.y - 1.5f;
+            state.recenterFiredThisHold = true;
+            FireHaptic(state, rightPath, 0.5f, 30000000 /* 30ms */);
+        }
+    } else {
+        if (state.prevMenu && !state.recenterFiredThisHold) {
+            bool isCurrentlyVisible = state.uiIdleTime < kUiAutoHideSeconds;
+            state.uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
+        }
+        state.menuHoldTime = 0.0f;
+        state.recenterFiredThisHold = false;
+    }
+    state.prevMenu = currMenu;
+
+    // Progresso de reproducao -> UI Kotlin, throttled (~10x/seg a 60fps,
+    // mesmo throttle do GLES — seek() e uma operacao pesada).
+    state.frameCount++;
+    if (state.frameCount % 6 == 0) {
+        get_video_progress(&state.lastKnownProgressCurrent, &state.lastKnownProgressTotal);
+        if (state.lastKnownProgressTotal > 0.0f) {
+            JNIEnv* env = nullptr;
+            state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+            if (env) {
+                jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+                jmethodID updateMethod = env->GetStaticMethodID(
+                    vrActivityClass, "updateMediaProgress", "(Lcom/vrplayer/VRActivity;FF)V");
+                if (updateMethod) {
+                    env->CallStaticVoidMethod(vrActivityClass, updateMethod, state.app->activity->clazz,
+                        state.lastKnownProgressCurrent, state.lastKnownProgressTotal);
+                }
+                env->DeleteLocalRef(vrActivityClass);
+            }
+        }
+    }
+
+    // --- Thumbsticks (Estagio 6, paridade com GLES T3.6/T4.4) ---
+    XrActionStateGetInfo rightStickInfo{XR_TYPE_ACTION_STATE_GET_INFO};
+    rightStickInfo.action = state.thumbstickAction;
+    rightStickInfo.subactionPath = rightPath;
+    XrActionStateVector2f rightStick{XR_TYPE_ACTION_STATE_VECTOR2F};
+    xrGetActionStateVector2f(state.session, &rightStickInfo, &rightStick);
+
+    XrActionStateGetInfo leftStickInfo{XR_TYPE_ACTION_STATE_GET_INFO};
+    leftStickInfo.action = state.thumbstickAction;
+    leftStickInfo.subactionPath = leftPath;
+    XrActionStateVector2f leftStick{XR_TYPE_ACTION_STATE_VECTOR2F};
+    xrGetActionStateVector2f(state.session, &leftStickInfo, &leftStick);
+
+    XrActionStateGetInfo squeezeInfo{XR_TYPE_ACTION_STATE_GET_INFO};
+    squeezeInfo.action = state.squeezeAction;
+    XrActionStateFloat squeezeState{XR_TYPE_ACTION_STATE_FLOAT};
+    xrGetActionStateFloat(state.session, &squeezeInfo, &squeezeState);
+
+    // Thumbstick direito: sem grip move a tela (Y=frente/tras, X=cima/baixo);
+    // com grip redimensiona mantendo o aspect ratio 16:9.
+    {
+        const float kDeadzone = 0.15f;
+        float sx = (fabsf(rightStick.currentState.x) < kDeadzone) ? 0.0f : rightStick.currentState.x;
+        float sy = (fabsf(rightStick.currentState.y) < kDeadzone) ? 0.0f : rightStick.currentState.y;
+        bool gripHeld = squeezeState.currentState > 0.5f;
+
+        if (gripHeld && sy != 0.0f) {
+            const float kResizeSpeedMetersPerSec = 1.0f;
+            float newWidth = state.screenScaleX + sy * kResizeSpeedMetersPerSec * dt;
+            newWidth = std::max(0.5f, std::min(newWidth, 6.0f));
+            state.screenScaleX = newWidth;
+            state.screenScaleY = newWidth * (9.0f / 16.0f);
+        } else if (!gripHeld && (sx != 0.0f || sy != 0.0f)) {
+            const float kMoveSpeedMetersPerSec = 1.5f;
+            state.screenPosition.z -= sy * kMoveSpeedMetersPerSec * dt;
+            state.screenPosition.y += sx * kMoveSpeedMetersPerSec * dt;
+            // Limites de conforto: nunca deixar a tela grudada no rosto nem
+            // sumir no chao/teto.
+            state.screenPosition.z = std::min(-0.75f, std::max(state.screenPosition.z, -8.0f));
+            state.screenPosition.y = std::max(0.2f, std::min(state.screenPosition.y, 3.5f));
+        }
+    }
+
+    // Thumbstick esquerdo: X = seek (com cooldown, seek() e pesado), Y = volume.
+    {
+        const float kDeadzone = 0.2f;
+        float lx = (fabsf(leftStick.currentState.x) < kDeadzone) ? 0.0f : leftStick.currentState.x;
+        float ly = (fabsf(leftStick.currentState.y) < kDeadzone) ? 0.0f : leftStick.currentState.y;
+
+        if (ly != 0.0f) {
+            float vol = get_video_volume();
+            vol = std::max(0.0f, std::min(1.0f, vol + ly * 0.5f * dt));
+            set_video_volume(vol);
+        }
+
+        state.seekRepeatCooldown = std::max(0.0f, state.seekRepeatCooldown - dt);
+        if (lx != 0.0f && state.seekRepeatCooldown <= 0.0f && state.lastKnownProgressTotal > 0.0f) {
+            const float kSeekJumpSeconds = 10.0f;
+            float target = state.lastKnownProgressCurrent + (lx > 0.0f ? kSeekJumpSeconds : -kSeekJumpSeconds);
+            target = std::max(0.0f, std::min(target, state.lastKnownProgressTotal));
+            seek_video_playback(target);
+            state.seekRepeatCooldown = 0.5f;
         }
     }
 }

@@ -393,6 +393,15 @@ public:
         ::toggle_play_pause();
     }
 
+    void AppHandleEvent(XrEventDataBaseHeader* baseEventHeader) override {
+        if (baseEventHeader->type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
+            // Em vez de processar imediatamente com o HeadPose desatualizado,
+            // agendamos o recenter para rodar com o HeadPose fresco no proximo Update()
+            m_needsOsRecenter = true;
+            LOGI("VRPlayerApp: OS Recenter event recebido. Agendando reset para o proximo frame.");
+        }
+    }
+
     virtual std::vector<const char*> GetExtensions() override {
         std::vector<const char*> extensions = OVRFW::XrApp::GetExtensions();
         extensions.push_back("XR_FB_display_refresh_rate");
@@ -941,6 +950,15 @@ public:
     }
 
     virtual void Update(const OVRFW::ovrApplFrameIn& in) override {
+        // Se o OS aplicou um recenter, calibra a altura da UI para os olhos na nova origem
+        if (m_needsOsRecenter) {
+            OVR::Vector3f fwd = in.HeadPose.Rotation.Rotate(OVR::Vector3f(0.0f, 0.0f, -1.0f));
+            m_sceneYawOffset = atan2f(fwd.x, -fwd.z);
+            m_sceneTranslationOffset = in.HeadPose.Translation;
+            m_sceneTranslationOffset.y = in.HeadPose.Translation.y - 1.5f;
+            m_needsOsRecenter = false;
+        }
+
         static bool prevA = false;
         static bool prevX = false;
         static bool prevB = false;
@@ -971,7 +989,8 @@ public:
         const OVR::Vector3f& rayDir = m_smoothedRayDir;
 
         // Painel do File Browser: billboard - sempre virado para a cabeca do usuario (T4.5)
-        OVR::Vector3f uiPos(-2.2f, 1.5f, -1.5f);
+        OVR::Vector3f baseUiPos(-2.2f, 1.5f, -1.5f);
+        OVR::Vector3f uiPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(baseUiPos);
         OVR::Vector3f toHead = in.HeadPose.Translation - uiPos;
         toHead.y = 0.0f;
         float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
@@ -981,9 +1000,11 @@ public:
         OVR::Vector3f uiPlaneNormal = OVR::Matrix4f::RotationY(uiYaw).Transform(OVR::Vector3f(0, 0, 1));
 
         // Painel de controles: fica logo abaixo da tela, com leve inclinacao fixa.
-        m_controlsTransform = OVR::Matrix4f::Translation({0.0f, 0.4f, -1.9f}) * OVR::Matrix4f::RotationX(-0.3f) * OVR::Matrix4f::Scaling(0.8f, 0.3f, 1.0f);
-        OVR::Vector3f cPlaneCenter = m_controlsTransform.GetTranslation();
-        OVR::Vector3f cPlaneNormal = OVR::Matrix4f::RotationX(-0.3f).Transform(OVR::Vector3f(0, 0, 1));
+        OVR::Vector3f baseControlsPos(0.0f, 0.4f, -1.9f);
+        OVR::Vector3f worldControlsPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(baseControlsPos);
+        m_controlsTransform = OVR::Matrix4f::Translation(worldControlsPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) * OVR::Matrix4f::RotationX(-0.3f) * OVR::Matrix4f::Scaling(0.8f, 0.3f, 1.0f);
+        OVR::Vector3f cPlaneCenter = worldControlsPos;
+        OVR::Vector3f cPlaneNormal = OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(OVR::Matrix4f::RotationX(-0.3f).Transform(OVR::Vector3f(0, 0, 1)));
 
         // T1.4/T2: polling barato do modo 3D (o Rust bridge e quem guarda o
         // estado real — ver cycle_3d_mode/get_3d_mode). Os uniforms derivados
@@ -993,7 +1014,6 @@ public:
         // so pra isso — o custo e irrelevante (uns poucos ifs).
         m_screenMode = static_cast<ScreenMode>(get_3d_mode());
         UpdateScreenModeUniforms();
-        bool sphereActive = IsSphereMode(m_screenMode);
 
         // T2.6: a esfera acompanha a TRANSLACAO da cabeca (o usuario sempre
         // fica no centro dela) mas NAO a rotacao — a rotacao "de olhar ao
@@ -1004,12 +1024,13 @@ public:
         // Ignorar a rotacao da cabeca aqui e o que T4.4 pede: conteudo 360
         // nao tem paralaxe, entao so a translacao (pra manter o usuario
         // "dentro" da esfera mesmo andando fisicamente no espaco do
-        // Guardian) importa. `m_sphereYawOffset` e o unico ajuste manual de
+        // Guardian) importa. `m_sceneYawOffset` e o unico ajuste manual de
         // rotacao, aplicado so pelo recenter (T4.3, abaixo).
-        m_sphereTransform = OVR::Matrix4f::Translation(in.HeadPose.Translation) * OVR::Matrix4f::RotationY(m_sphereYawOffset);
+        m_sphereTransform = OVR::Matrix4f::Translation(in.HeadPose.Translation) * OVR::Matrix4f::RotationY(m_sceneYawOffset);
 
         // Tela de video (usada apenas para detectar "apontando para a tela" -> mostra controles)
-        OVR::Matrix4f screenTransform = OVR::Matrix4f::Translation(m_screenPosition) * OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
+        OVR::Vector3f worldScreenPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(m_screenPosition);
+        OVR::Matrix4f screenTransform = OVR::Matrix4f::Translation(worldScreenPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) * OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
 
         OVR::Vector3f pointerEnd = rayOrigin + rayDir * 10.0f;
 
@@ -1067,7 +1088,8 @@ public:
         }
 
         float screenU = 0.0f, screenV = 0.0f;
-        bool hitScreen = rayHitsQuad(screenTransform, OVR::Vector3f(0, 0, 1), m_screenPosition, screenU, screenV) > 0.0f;
+        OVR::Vector3f screenNormal = OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(OVR::Vector3f(0, 0, 1));
+        bool hitScreen = rayHitsQuad(screenTransform, screenNormal, worldScreenPos, screenU, screenV) > 0.0f;
 
         // --- T4.3: auto-hide dos paineis ---
         // Aponta pro File Browser (Home/Arquivos/Rede/Player, tudo no mesmo quad
@@ -1257,15 +1279,17 @@ public:
         // so se o long-press de recenter nao tiver disparado durante o hold.
         if (currMenu) {
             m_menuHoldTime += in.DeltaSeconds;
-            if (!m_recenterFiredThisHold && sphereActive && m_menuHoldTime >= kRecenterHoldSeconds) {
-                // Gira a esfera para que a direcao atual da cabeca vire a
+            if (!m_recenterFiredThisHold && m_menuHoldTime >= kRecenterHoldSeconds) {
+                // Gira a cena inteira para que a direcao atual da cabeca vire a
                 // nova "frente" do conteudo (T4.3: "util quando o conteudo
                 // esta girado em relacao ao usuario"). Sinal do angulo nunca
                 // validado em headset fisico (ver static constexpr
                 // kRecenterHoldSeconds acima) — se o recenter girar pro lado
                 // errado num teste real, e so inverter o sinal abaixo.
                 OVR::Vector3f fwd = in.HeadPose.Rotation.Rotate(OVR::Vector3f(0.0f, 0.0f, -1.0f));
-                m_sphereYawOffset = atan2f(fwd.x, -fwd.z);
+                m_sceneYawOffset = atan2f(fwd.x, -fwd.z);
+                m_sceneTranslationOffset = in.HeadPose.Translation;
+                m_sceneTranslationOffset.y = in.HeadPose.Translation.y - 1.5f; // Ajusta a altura da tela para os olhos
                 m_recenterFiredThisHold = true;
                 FireHaptic(RightHandPath, 0.5f, 30000000 /* 30ms */);
             }
@@ -1523,13 +1547,15 @@ public:
             // — ver T1.3 no doc). Mesma posicao/escala ajustavel do quad mono.
             m_stereoFlatSurfaceDef.graphicsCommand.Textures[0].texture = m_textureId;
             m_stereoFlatSurfaceDef.graphicsCommand.BindUniformTextures();
-            OVR::Matrix4f transform = OVR::Matrix4f::Translation(m_screenPosition) *
+            OVR::Vector3f worldScreenPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(m_screenPosition);
+            OVR::Matrix4f transform = OVR::Matrix4f::Translation(worldScreenPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) *
                 OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
             out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_stereoFlatSurfaceDef));
         } else {
             // Flat2D: quad mono normal, posicao/escala ajustaveis pelo
             // usuario via thumbstick (T3.6).
-            OVR::Matrix4f transform = OVR::Matrix4f::Translation(m_screenPosition) *
+            OVR::Vector3f worldScreenPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(m_screenPosition);
+            OVR::Matrix4f transform = OVR::Matrix4f::Translation(worldScreenPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) *
                 OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
             out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_surfaceDef));
         }
@@ -1615,10 +1641,12 @@ private:
     float m_sphereStereoLayout = 0.0f; // uniform: 0=mono, 1=SBS, 2=OU (ver fragment shader da esfera)
     float m_swapEyesF = 0.0f; // T1.5: espelha get_swap_eyes(), compartilhado pelos 2 programas estereo
     float m_sharpness = 0.5f; // uniform CAS: 0=mais leve (peak -8), 1=mais forte (peak -5). So usado se kSharpenEnabled.
-    float m_sphereYawOffset = 0.0f; // T4.3: recenter — offset de yaw aplicado a esfera
+    float m_sceneYawOffset = 0.0f; // T4.3: recenter — offset de yaw aplicado a cena
+    OVR::Vector3f m_sceneTranslationOffset = OVR::Vector3f(0.0f, 0.0f, 0.0f);
     OVR::Matrix4f m_sphereTransform;
     float m_menuHoldTime = 0.0f;
     bool m_recenterFiredThisHold = false;
+    bool m_needsOsRecenter = false;
 
     // Auto-hide + billboard + alpha blending dos paineis de UI (T4.3/T4.5)
     float m_videoAlpha = 1.0f;

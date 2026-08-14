@@ -13,6 +13,27 @@ struct Mat4 {
     float m[16];
 };
 
+inline XrVector3f Vec3Add(const XrVector3f& a, const XrVector3f& b) {
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
+inline XrVector3f Vec3Sub(const XrVector3f& a, const XrVector3f& b) {
+    return {a.x - b.x, a.y - b.y, a.z - b.z};
+}
+
+inline XrVector3f Vec3Scale(const XrVector3f& v, float s) {
+    return {v.x * s, v.y * s, v.z * s};
+}
+
+// Rotaciona em torno do eixo Y — mesma convencao de sinal de Mat4RotationY
+// abaixo (consistencia interna e o que importa aqui: nao precisa bater bit a
+// bit com OVR::Matrix4f::RotationY do caminho GLES).
+inline XrVector3f Vec3RotateY(const XrVector3f& v, float yaw) {
+    const float c = cosf(yaw);
+    const float s = sinf(yaw);
+    return {c * v.x + s * v.z, v.y, -s * v.x + c * v.z};
+}
+
 inline Mat4 Mat4Identity() {
     Mat4 r{};
     r.m[0] = r.m[5] = r.m[10] = r.m[15] = 1.0f;

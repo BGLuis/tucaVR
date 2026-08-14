@@ -192,21 +192,32 @@ Em vez de migrar `vr_player_app.cpp` in-place, o plano é:
   usar o modelo/range que ele indica em vez de hardcodar.
 
 ### Estágio 4 — Texturas de UI/controles
-- [x] `CreateUiPipeline`: `AImageReader` (1024×1024 UI + 1024×384 controles)
-      via `ANativeWindow_toSurface` → `VkImage` RGBA8888. A cada frame,
-      `UpdateUiFrames` lê `AImageReader_acquireLatestImage` → importa para
-      `VkImage` via staging buffer (CPU-readback + `vkCmdCopyBufferToImage`).
+- [x] `CreateUiPipeline`: `AImageReader` (`kUiTexWidth×kUiTexHeight` = 1024×768
+      pro file browser, `kControlsTexWidth×kControlsTexHeight` = 1024×384 pros
+      controles) via `ANativeWindow_toSurface` → `VkImage` RGBA8888. A cada
+      frame, `UpdateUiFrames` lê `AImageReader_acquireLatestImage` → importa
+      para `VkImage` via staging buffer (CPU-readback + `vkCmdCopyBufferToImage`).
       Descriptor set RGBA8888 com sampler linear normal (sem YCbCr).
+      **Correção pós-migração**: o file browser tinha nascido em 1024×1024
+      neste arquivo, mas `VRActivity.dispatchVRTouch` já assumia 1024×768
+      (contrato compartilhado com o caminho GLES) — o Y do toque saía
+      comprimido nos 75% superiores do painel. Unificado pra 1024×768 (ver
+      revisão pós-migração abaixo).
 - [x] Pipeline separado com alpha blending
       (`SRC_ALPHA / ONE_MINUS_SRC_ALPHA`) para fade de auto-hide
       (equivalente a `vr_player_app.cpp:863-868`). Shaders `ui.vert`/
-      `ui.frag` passam `alpha` via push constant.
+      `ui.frag` passam `alpha` via push constant — `DrawUiQuads` agora
+      alimenta isso com `state.uiAlpha`/`state.controlsAlpha` (antes era
+      `1.0f` fixo, sem fade nenhum).
 - [x] Conexão com Kotlin (`setupVirtualDisplay`/`setupControlsVirtualDisplay`)
-      pendente de wiring JNI (o `AImageReader` já está criado e a
-      `ANativeWindow` disponível; o callback deve ser chamado após a sessão
-      OpenXR ser iniciada, que requer contexto Java).
-- **Critério de sucesso — PENDENTE DE VALIDAÇÃO EM HARDWARE**: painel de UI
-  e painel de controles renderizam e recebem toque/interação normalmente.
+      — wiring JNI feito (`android_main`, após `xrCreateSession`); o
+      `AImageReader` é criado e a `ANativeWindow` convertida pra `Surface`
+      Java direto em `CreateUiPipeline`.
+- **Critério de sucesso**: painel de UI e painel de controles renderizam e
+  recebem toque/interação — **verificado no sentido "hit-test bate com o
+  texel certo"** na revisão pós-migração (matrizes/dimensões corrigidas);
+  **ainda PENDENTE DE VALIDAÇÃO VISUAL EM HARDWARE** (não há headset físico
+  disponível nesta sessão).
 
 ### Estágio 5 — Geometria restante
 - [x] Pipeline estereo (`stereo.vert`/`stereo.frag`) com push constant de
@@ -222,12 +233,19 @@ Em vez de migrar `vr_player_app.cpp` in-place, o plano é:
       (Estágio 3), SBS/OU→stereo pipeline + quad, Sphere*→stereo pipeline +
       esfera. `get_3d_mode()` lido a cada frame do bridge Rust.
 - [x] `CreateBeamResources`: linha de laser simples (2 vértices,
-      `VK_PRIMITIVE_TOPOLOGY_LINE_LIST`) via `quad.vert/frag` com
-      `lineWidth=2`. Equivale funcionalmente ao `ovrBeamRenderer` do GLES;
-      não porta a geometria de taper/billboard (fora de escopo desta fase).
-- **Critério de sucesso — PENDENTE DE VALIDAÇÃO EM HARDWARE**: paridade
-  funcional completa com o caminho GLES — todos os modos de tela e
-  interação por controle funcionando.
+      `VK_PRIMITIVE_TOPOLOGY_LINE_LIST`) via `quad.vert/frag`. Equivale
+      funcionalmente ao `ovrBeamRenderer` do GLES; não porta a geometria de
+      taper/billboard (fora de escopo desta fase). `lineWidth` voltou pra
+      `1.0f` na revisão pós-migração — o valor original (`2.0f`) requer a
+      feature Vulkan `wideLines`, não habilitada em `vkCreateDevice` (nem
+      garantida no Adreno do Quest 3); pedi-la sem checar era uso inválido
+      da API.
+- **Critério de sucesso**: **não tinha paridade funcional completa** como
+  este documento afirmava antes da revisão pós-migração — ver seção
+  "Revisão pós-migração" abaixo pro que realmente faltava e foi corrigido
+  nesta rodada. Ainda **PENDENTE DE VALIDAÇÃO EM HARDWARE** (todos os itens
+  abaixo foram corrigidos por leitura/análise de código, sem headset físico
+  disponível nesta sessão).
 
 ### Estágio 6 — Corte
 - [x] `app/build.gradle.kts`: default trocado de `"GLES"` para `"VULKAN"`
@@ -238,6 +256,70 @@ Em vez de migrar `vr_player_app.cpp` in-place, o plano é:
 - **Critério de sucesso — PENDENTE DE VALIDAÇÃO EM HARDWARE**: build de
   release padrão usa Vulkan; regressão zero nos testes manuais de
   reprodução (`docs/TESTING-PLAN.md`).
+
+## 4.1 Revisão pós-migração — achados e correções
+
+Sessão de revisão (posterior aos Estágios 1–6 acima) motivada por dois
+problemas reportados: um build quebrado por uma refatoração concorrente de
+recenter no caminho GLES, e uma câmera/UI com geometria visivelmente errada
+em capturas de tela do caminho Vulkan (fundo escuro `0.02,0.02,0.05`, laser
+azul — identificável como Vulkan, não GLES, pelas cores). A investigação
+achou que o Estágio 6 já tinha trocado o default do Gradle pra `VULKAN`, mas
+o caminho Vulkan não tinha nem a correção de câmera nem boa parte da
+paridade de interação que os Estágios 4/5 acima declaravam pronta. Achados,
+mais graves primeiro:
+
+- **Billboard calculado por olho, não por cabeça**: `DrawUiQuads` era
+  chamado dentro do laço de olhos com `views[eye].pose.position` — o yaw do
+  billboard da UI saía diferente pra cada olho (~6cm de separação
+  interpupilar), quebrando a disparidade estéreo do painel. É a causa mais
+  provável da geometria estranha nas capturas de tela. Corrigido: um
+  `headCenter` (média dos dois olhos) calculado uma vez por frame em
+  `RenderFrame`, usado por `UpdateInteraction` e por todas as chamadas de
+  `DrawUiQuads`/`RecordAndSubmitVideo`/`RecordAndSubmitQuad`.
+- **Dimensões de textura divergentes do contrato Kotlin**: ver nota no
+  Estágio 4 acima (1024×1024 vs. os 1024×768 que `VRActivity.dispatchVRTouch`
+  já assumia).
+- **`rayHitsQuad` recebendo matriz com escala embutida**: `Mat4RigidInverse`
+  assume rotação ortonormal; passar uma matriz com `Mat4Scale` quebrava a
+  inversa e por tabela o hit-test do painel de controles. Corrigido:
+  `rayHitsQuad` agora recebe a matriz *sem* escala e os fatores de escala
+  como parâmetros separados, dividindo o ponto local (mesma técnica que já
+  existia, informalmente, só pro painel de UI).
+- **Matemática de transform duplicada e já divergente**: `UpdateInteraction`
+  e `DrawUiQuads` recalculavam as matrizes de UI/controles cada um por
+  conta própria — uma aplicava a escala embutida na matriz, a outra dividia
+  o ponto local depois. Extraído em `ComputeSceneTransforms` (compartilhado)
+  em `vr_player_input_vulkan.h`.
+- **Sem recenter nenhum**: nem o evento
+  `XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING` (recenter do sistema)
+  nem o long-press do Menu (recenter manual, T4.3 no GLES) existiam no
+  caminho Vulkan. Portado `sceneYawOffset`/`sceneTranslationOffset` (mesmo
+  conceito do GLES) mais a calibração inicial no 1º frame com pose válida.
+- **Esfera 360 fixa na origem**: MVP da esfera era `proj * view` puro, sem
+  acompanhar a translação da cabeça — andando fisicamente no Guardian o
+  usuário saía de dentro da esfera. Corrigido pra espelhar
+  `m_sphereTransform` do GLES.
+- **Beam sempre desenhado**: o teste "controle detectado" (`lastRayDir.z !=
+  0.0f`) era sempre verdadeiro, já que `lastRayDir` nasce com `z=-1`.
+  Substituído por uma flag (`state.hasRay`) setada pelo resultado real de
+  `xrLocateSpace`.
+- **`samplerAnisotropy` pedido sem checar suporte**: mesma categoria do
+  `wideLines` acima (ver Estágio 5) — `vkCreateDevice` agora consulta
+  `vkGetPhysicalDeviceFeatures` e só habilita/pede o que o device suporta.
+- **Sem paridade de interação**: auto-hide com fade, gating de
+  dispatch por painel visível, haptics, A/X/B/Y/Menu, thumbsticks (mover/
+  redimensionar tela, seek/volume), progresso periódico e cursor no ponto de
+  acerto não existiam no caminho Vulkan — portados em `UpdateInteraction`
+  (novas OpenXR actions em `SetupOpenXrInputs`: `a_click`/`x_click`/
+  `b_click`/`y_click`/`menu_click`/`thumbstick`/`squeeze`/`haptic`). O cursor
+  no ponto de acerto usa um único segmento (em vez dos dois do GLES) porque
+  o pipeline de beam deste caminho (`quad.frag`) não tem o fade radial que
+  o `BeamRenderer` do GLES tem — um segmento sólido já resolve.
+
+Nada disso foi validado no Quest 3 físico nesta sessão (sem headset
+conectado) — apenas revisão de código e checagem de compilação lógica. Ver
+`docs/TESTING-PLAN.md` pro que exige headset físico.
 
 ## 5. Antes de começar — validar a premissa
 
