@@ -6,12 +6,15 @@ import android.content.Context
 import android.os.Bundle
 import android.text.InputType
 import android.view.Display
+import android.view.GestureDetector
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -29,6 +32,7 @@ import com.vrplayer.filebrowser.MediaEntry
 import com.vrplayer.filebrowser.MediaType
 import com.vrplayer.filebrowser.SortBy
 import com.vrplayer.filebrowser.ThumbnailGenerator
+import com.vrplayer.filebrowser.VideoMetadataReader
 import com.vrplayer.filebrowser.mediaTypeForExtension
 import com.vrplayer.filebrowser.sortMediaEntries
 import com.vrplayer.history.HistorySourceType
@@ -174,6 +178,7 @@ class VRPresentation(
         when (val destination = appNav.current) {
             is Destination.Home -> renderHome()
             is Destination.LocalFiles -> renderLocalFiles()
+            is Destination.LocalFileDetail -> renderLocalFileDetail(destination.entry)
             is Destination.NetworkHome -> renderNetworkHome()
             is Destination.NetworkFiles -> renderNetworkFiles(destination.server)
             is Destination.NetworkFtpFiles -> renderNetworkFtpFiles(destination.server)
@@ -306,7 +311,11 @@ class VRPresentation(
                 dirNavigator.enter(dir)
                 renderLocalFiles()
             },
-            onVideoClick = { entry -> playLocalVideo(entry) }
+            // Single-click abre o detalhe (thumbnail + metadados + botao
+            // Reproduzir); double-click continua tocando direto, sem passar
+            // pelo detalhe — ver renderLocalFileDetail().
+            onVideoClick = { entry -> navigateTo(Destination.LocalFileDetail(entry)) },
+            onVideoDoubleClick = { entry -> playLocalVideo(entry) }
         )
         localFileAdapter = adapter
         recycler.adapter = adapter
@@ -333,6 +342,80 @@ class VRPresentation(
         promptResumeOrPlay(source) { resumeAtMs ->
             activity.playFile(entry.path, entry.sizeBytes, resumeAtMs)
             navigateTo(Destination.Player(source))
+        }
+    }
+
+    // ---------- Detalhe de arquivo local (Destination.LocalFileDetail) ----------
+    //
+    // Tela intermediaria entre a listagem e o Player: thumbnail grande +
+    // metadados (tamanho, data de modificacao, duracao, resolucao, caminho)
+    // + botao Reproduzir. Thumbnail e duracao/resolucao chegam de forma
+    // assincrona (mesmo cuidado do FileAdapter: MediaMetadataRetriever nao
+    // pode rodar na main thread) e sao adicionados a tela ja visivel.
+    private fun renderLocalFileDetail(entry: MediaEntry) {
+        val root = VoidPanelChrome.newRoot(context)
+        root.addView(VoidPanelChrome.buildHeader(context, title = entry.name, onBack = { handleBack() }))
+
+        val thumbnailView = ImageView(context).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, VoidTheme.dpToPx(context, 200f)
+            ).apply { bottomMargin = VoidTheme.dpToPx(context, 20f) }
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(VoidTheme.colorSurfaceAlt)
+                cornerRadius = VoidTheme.dp(context, 10f)
+            }
+            clipToOutline = true
+        }
+        root.addView(thumbnailView)
+
+        val metaContainer = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+        root.addView(metaContainer)
+
+        fun addMetaRow(label: String, value: String) {
+            metaContainer.addView(
+                VoidText.body(
+                    context,
+                    context.getString(R.string.file_detail_row_format, label, value),
+                    sizeSp = 16f,
+                    secondary = true
+                ).apply { setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f)) }
+            )
+        }
+
+        addMetaRow(context.getString(R.string.file_detail_label_size), formatFileSize(context, entry.sizeBytes))
+        addMetaRow(context.getString(R.string.file_detail_label_modified), formatModifiedDate(entry.lastModified))
+        addMetaRow(context.getString(R.string.file_detail_label_path), entry.path)
+
+        val btnPlay = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+            text = context.getString(R.string.file_detail_btn_play)
+            textSize = 22f
+            setOnClickListener { playLocalVideo(entry) }
+        }
+        root.addView(btnPlay, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = VoidTheme.dpToPx(context, 20f) })
+
+        showScreen(root)
+
+        scope.launch {
+            val bitmap = ThumbnailGenerator.getThumbnail(context, entry)
+            if (bitmap != null) thumbnailView.setImageBitmap(bitmap)
+
+            val metadata = VideoMetadataReader.read(entry.path)
+            if (metadata != null) {
+                if (metadata.durationMs > 0L) {
+                    addMetaRow(context.getString(R.string.file_detail_label_duration), formatDurationMs(metadata.durationMs))
+                }
+                if (metadata.width > 0 && metadata.height > 0) {
+                    addMetaRow(context.getString(R.string.file_detail_label_resolution), "${metadata.width}×${metadata.height}")
+                }
+            }
         }
     }
 
@@ -1979,7 +2062,10 @@ class VRPresentation(
         private val scope: CoroutineScope,
         private val onUpClick: () -> Unit,
         private val onDirectoryClick: (File) -> Unit,
-        private val onVideoClick: (MediaEntry) -> Unit
+        // Single-click num video -> abre o detalhe (thumbnail + metadados).
+        private val onVideoClick: (MediaEntry) -> Unit,
+        // Double-click num video -> toca direto, sem passar pelo detalhe.
+        private val onVideoDoubleClick: (MediaEntry) -> Unit
     ) : RecyclerView.Adapter<FileAdapter.ViewHolder>() {
 
         private sealed class Row {
@@ -1999,6 +2085,21 @@ class VRPresentation(
 
         inner class ViewHolder(val row: VoidListRow) : RecyclerView.ViewHolder(row) {
             var thumbnailJob: Job? = null
+            // Entrada atualmente vinculada a este holder — o GestureDetector e
+            // criado uma unica vez (nao a cada bind) e le este campo no
+            // momento do toque, entao ele sempre reflete o item mais recente
+            // mesmo apos reciclagem da view.
+            var boundEntry: MediaEntry? = null
+            val gestureDetector = GestureDetector(row.context, object : GestureDetector.SimpleOnGestureListener() {
+                override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                    boundEntry?.let(onVideoClick)
+                    return true
+                }
+                override fun onDoubleTap(e: MotionEvent): Boolean {
+                    boundEntry?.let(onVideoDoubleClick)
+                    return true
+                }
+            })
         }
 
         override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
@@ -2013,6 +2114,8 @@ class VRPresentation(
         override fun onBindViewHolder(holder: ViewHolder, position: Int) {
             holder.thumbnailJob?.cancel()
             holder.row.thumbnail.setImageBitmap(null)
+            holder.boundEntry = null
+            holder.itemView.setOnTouchListener(null)
 
             when (val row = rows[position]) {
                 is Row.Up -> {
@@ -2026,13 +2129,20 @@ class VRPresentation(
                     } else {
                         context.getString(R.string.common_row_video_format, entry.name)
                     }
-                    val meta = if (entry.type == MediaType.VIDEO) formatSize(entry.sizeBytes) else null
+                    val meta = if (entry.type == MediaType.VIDEO) formatFileSize(context, entry.sizeBytes) else null
                     holder.row.bind(label, meta = meta, showThumbnailSlot = entry.type == MediaType.VIDEO)
-                    holder.itemView.setOnClickListener {
-                        if (entry.type == MediaType.DIRECTORY) {
-                            onDirectoryClick(File(entry.path))
-                        } else {
-                            onVideoClick(entry)
+                    if (entry.type == MediaType.DIRECTORY) {
+                        holder.itemView.setOnClickListener { onDirectoryClick(File(entry.path)) }
+                    } else {
+                        // Video: single-tap (detalhe) vs. double-tap (toca
+                        // direto) so podem ser distinguidos com um
+                        // GestureDetector — um unico setOnClickListener nao
+                        // sabe esperar pelo segundo toque.
+                        holder.itemView.setOnClickListener(null)
+                        holder.boundEntry = entry
+                        holder.itemView.setOnTouchListener { _, event ->
+                            holder.gestureDetector.onTouchEvent(event)
+                            true
                         }
                     }
                     if (entry.type == MediaType.VIDEO) {
@@ -2049,14 +2159,17 @@ class VRPresentation(
         }
 
         override fun getItemCount() = rows.size
-
-        private fun formatSize(bytes: Long): String {
-            val mb = bytes / (1024.0 * 1024.0)
-            return if (mb >= 1024) {
-                context.getString(R.string.browser_label_size_gb_format, mb / 1024.0)
-            } else {
-                context.getString(R.string.browser_label_size_mb_format, mb)
-            }
-        }
     }
 }
+
+private fun formatFileSize(context: Context, bytes: Long): String {
+    val mb = bytes / (1024.0 * 1024.0)
+    return if (mb >= 1024) {
+        context.getString(R.string.browser_label_size_gb_format, mb / 1024.0)
+    } else {
+        context.getString(R.string.browser_label_size_mb_format, mb)
+    }
+}
+
+private fun formatModifiedDate(millis: Long): String =
+    java.text.SimpleDateFormat("yyyy-MM-dd HH:mm", java.util.Locale.getDefault()).format(java.util.Date(millis))

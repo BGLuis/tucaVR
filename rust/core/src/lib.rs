@@ -7,3 +7,4 @@ pub mod playback;
 pub mod h264;
 pub mod hevc;
 pub mod nal;
+pub mod thumbnail;

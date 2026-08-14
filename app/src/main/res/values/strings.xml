@@ -37,6 +37,18 @@
     <string name="browser_label_size_mb_format">%1$.1f MB</string>
     <string name="browser_label_size_gb_format">%1$.2f GB</string>
 
+    <!-- Detalhe de arquivo local (VRPresentation.renderLocalFileDetail) — tela
+         intermediaria entre a listagem e o Player: single-click num video
+         chega aqui (thumbnail + metadados + botao Reproduzir); double-click
+         na listagem continua tocando direto, sem passar por aqui. -->
+    <string name="file_detail_row_format">%1$s: %2$s</string>
+    <string name="file_detail_label_size">Size</string>
+    <string name="file_detail_label_modified">Modified</string>
+    <string name="file_detail_label_duration">Duration</string>
+    <string name="file_detail_label_resolution">Resolution</string>
+    <string name="file_detail_label_path">Path</string>
+    <string name="file_detail_btn_play">▶ Play</string>
+
     <!-- Rede: landing com abas URL / SMB / FTP (VRPresentation.renderNetworkHome) -->
     <string name="network_title">Network</string>
     <string name="network_tab_url">🔗 URL</string>

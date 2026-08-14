@@ -686,6 +686,172 @@ pub extern "C" fn get_audio_track_count() -> u32 {
     }
 }
 
+/// Libera o buffer retornado por `smb_generate_thumbnail`/
+/// `ftp_generate_thumbnail`/`sftp_generate_thumbnail`. `len` precisa ser
+/// exatamente o valor escrito em `out_len` por essas chamadas — o buffer foi
+/// alocado com essa capacidade exata (ver `write_thumbnail` abaixo), entao
+/// reconstruir o `Vec` com um `len` diferente e undefined behavior.
+#[no_mangle]
+pub extern "C" fn free_rust_thumbnail_buffer(ptr: *mut u8, len: usize) {
+    if ptr.is_null() {
+        return;
+    }
+    unsafe {
+        drop(Vec::from_raw_parts(ptr, len, len));
+    }
+}
+
+/// Converte o resultado de `core::thumbnail::generate` num ponteiro cru RGBA
+/// (ou nulo em qualquer falha) + as dimensoes/tamanho via out-params —
+/// mesmo padrao dos out-params de `get_video_progress` abaixo, escolhido em
+/// vez de um struct `#[repr(C)]` pra manter a fronteira C ABI so com tipos
+/// primitivos (mesma razao documentada em `toggle_swap_eyes` sobre `bool`).
+fn write_thumbnail(
+    image: Option<core::thumbnail::ThumbnailImage>,
+    out_width: *mut u32,
+    out_height: *mut u32,
+    out_len: *mut usize,
+) -> *mut u8 {
+    let (ptr, width, height, len) = match image {
+        Some(img) => {
+            let mut buf = img.rgba;
+            buf.shrink_to_fit();
+            let len = buf.len();
+            let ptr = buf.as_mut_ptr();
+            std::mem::forget(buf);
+            (ptr, img.width, img.height, len)
+        }
+        None => (std::ptr::null_mut(), 0, 0, 0),
+    };
+    unsafe {
+        if !out_width.is_null() { *out_width = width; }
+        if !out_height.is_null() { *out_height = height; }
+        if !out_len.is_null() { *out_len = len; }
+    }
+    ptr
+}
+
+/// Gera um thumbnail (RGBA cru, `max_width * max_height * 4` bytes) de um
+/// video num share SMB, decodificando UM frame por software — ver
+/// `core::thumbnail::generate` para os detalhes (seek de 1s pra dentro,
+/// limite de pacotes, sem MediaCodec). Chamada BLOQUEANTE (rede + decode
+/// sincronos) — Kotlin SEMPRE de `Dispatchers.IO`, uma por item de video
+/// visivel na listagem (mesmo cuidado de "nunca gerar pra pasta inteira de
+/// uma vez" do `ThumbnailGenerator` local). Retorna nulo em qualquer falha
+/// (sem popup de erro — mesmo contrato de silencio do lado local); o
+/// ponteiro retornado (se nao nulo) DEVE ser liberado com
+/// `free_rust_thumbnail_buffer`.
+#[no_mangle]
+pub extern "C" fn smb_generate_thumbnail(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    domain: *const std::os::raw::c_char,
+    share: *const std::os::raw::c_char,
+    path: *const std::os::raw::c_char,
+    max_width: u32,
+    max_height: u32,
+    out_width: *mut u32,
+    out_height: *mut u32,
+    out_len: *mut usize,
+) -> *mut u8 {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return write_thumbnail(None, out_width, out_height, out_len) };
+        let share = match cstr_to_string(share) { Some(s) => s, None => return write_thumbnail(None, out_width, out_height, out_len) };
+        let path = match cstr_to_string(path) { Some(s) => s, None => return write_thumbnail(None, out_width, out_height, out_len) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        let domain = cstr_to_string(domain).unwrap_or_default();
+        protocols::smb::SmbTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            share,
+            path,
+            username,
+            password,
+            domain,
+        }
+    };
+    let internal_uri = target.to_internal();
+    let image = core::thumbnail::generate(&internal_uri, max_width, max_height);
+    write_thumbnail(image, out_width, out_height, out_len)
+}
+
+/// Mesma logica de `smb_generate_thumbnail`, para um arquivo num servidor
+/// FTP. Ver esse comentario para a justificativa completa (identica aqui).
+#[no_mangle]
+pub extern "C" fn ftp_generate_thumbnail(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    path: *const std::os::raw::c_char,
+    max_width: u32,
+    max_height: u32,
+    out_width: *mut u32,
+    out_height: *mut u32,
+    out_len: *mut usize,
+) -> *mut u8 {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return write_thumbnail(None, out_width, out_height, out_len) };
+        let path = match cstr_to_string(path) { Some(s) => s, None => return write_thumbnail(None, out_width, out_height, out_len) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        protocols::ftp::FtpTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            path,
+            username,
+            password,
+        }
+    };
+    let internal_uri = target.to_internal();
+    let image = core::thumbnail::generate(&internal_uri, max_width, max_height);
+    write_thumbnail(image, out_width, out_height, out_len)
+}
+
+/// Mesma logica de `smb_generate_thumbnail`, para um arquivo num servidor
+/// SFTP. `private_key` e o CONTEUDO PEM (nao um caminho de arquivo — mesma
+/// convencao de `start_sftp_playback`), ponteiro nulo ou string vazia =
+/// autenticacao por senha em vez de chave.
+#[no_mangle]
+pub extern "C" fn sftp_generate_thumbnail(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    private_key: *const std::os::raw::c_char,
+    path: *const std::os::raw::c_char,
+    max_width: u32,
+    max_height: u32,
+    out_width: *mut u32,
+    out_height: *mut u32,
+    out_len: *mut usize,
+) -> *mut u8 {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return write_thumbnail(None, out_width, out_height, out_len) };
+        let path = match cstr_to_string(path) { Some(s) => s, None => return write_thumbnail(None, out_width, out_height, out_len) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        protocols::sftp::SftpTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            path,
+            username,
+            password,
+            private_key,
+        }
+    };
+    if target.validate().is_err() {
+        return write_thumbnail(None, out_width, out_height, out_len);
+    }
+    let internal_uri = target.to_internal();
+    let image = core::thumbnail::generate(&internal_uri, max_width, max_height);
+    write_thumbnail(image, out_width, out_height, out_len)
+}
+
 #[no_mangle]
 pub extern "C" fn get_video_progress(current: *mut f32, total: *mut f32) {
     // try_lock — mesmo motivo de get_current_video_frame() acima (chamada

@@ -1,5 +1,6 @@
 package com.vrplayer.navigation
 
+import com.vrplayer.filebrowser.MediaEntry
 import com.vrplayer.network.FtpServer
 import com.vrplayer.network.SftpServer
 import com.vrplayer.network.SmbServer
@@ -43,6 +44,15 @@ sealed class Destination {
 
     /** Listagem de arquivos locais na pasta [path] (path absoluto). */
     data class LocalFiles(val path: String) : Destination()
+
+    /**
+     * Detalhe de um video local: thumbnail + metadados (tamanho, data de
+     * modificacao, duracao, resolucao, caminho) + botao Reproduzir.
+     * Single-click num video na listagem (`FileAdapter.onVideoClick`) chega
+     * aqui; double-click continua tocando direto (`onVideoDoubleClick`),
+     * sem empilhar esta tela.
+     */
+    data class LocalFileDetail(val entry: MediaEntry) : Destination()
 
     /**
      * Landing da secao "Rede" (abas URL / SMB), renderizada dentro do mesmo
