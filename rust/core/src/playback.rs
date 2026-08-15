@@ -381,8 +381,16 @@ impl PlaybackController {
                     let pts = packet.pts().unwrap_or(0);
                     let pts_sec = pts as f64 * video_time_base;
                     let lag = sync_v.get_master_clock() - pts_sec;
-                    if lag > CATCH_UP_SKIP_THRESHOLD_SEC && !packet.is_key() {
-                        continue;
+                    if lag > CATCH_UP_SKIP_THRESHOLD_SEC {
+                        if packet.is_key() {
+                            unsafe {
+                                let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
+                                let msg = std::ffi::CString::new(format!("Video catch-up: retomando decode na keyframe (lag era {lag:.2}s)")).unwrap();
+                                ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
+                            }
+                        } else {
+                            continue;
+                        }
                     }
 
                     if let Some(data) = packet.data() {

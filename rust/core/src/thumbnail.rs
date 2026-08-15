@@ -312,6 +312,7 @@ fn generate_strip_hw(path: &str, interval_secs: f64, max_width: u32, max_height:
 
     let frame_len = (max_width * max_height * 4) as usize;
     let mut rgba = vec![0u8; count * frame_len];
+    let mut ok_count = 0usize;
 
     for (i, chunk) in rgba.chunks_exact_mut(frame_len).enumerate() {
         let target_secs = (i + 1) as f64 * interval_secs;
@@ -320,22 +321,27 @@ fn generate_strip_hw(path: &str, interval_secs: f64, max_width: u32, max_height:
             continue;
         }
 
-        let Ok(mut video_decoder) = HwDecoder::new(mime) else { continue };
+        let Ok(mut video_decoder) = HwDecoder::new(mime) else {
+            log_thumb_once("generate_strip_hw: HwDecoder::new falhou");
+            continue;
+        };
         let mut format = MediaFormat::new();
         format.set_str("mime", mime);
         format.set_i32("width", src_width as i32);
         format.set_i32("height", src_height as i32);
         if video_decoder.configure(&format, None).is_err() {
+            log_thumb_once("generate_strip_hw: configure(window=None) falhou");
             continue;
         }
         if video_decoder.start().is_err() {
+            log_thumb_once("generate_strip_hw: start() falhou");
             continue;
         }
         if let Some(sps) = &sps_pps {
             let _ = video_decoder.decode_packet(sps, 0, 2, |_| true, || {}, || true);
         }
 
-        if let Some(image) = decode_and_scale_hw(
+        match decode_and_scale_hw(
             &mut demuxer,
             &mut video_decoder,
             video_stream_index,
@@ -343,12 +349,35 @@ fn generate_strip_hw(path: &str, interval_secs: f64, max_width: u32, max_height:
             max_width,
             max_height,
         ) {
-            chunk.copy_from_slice(&image.rgba);
+            Some(image) => {
+                chunk.copy_from_slice(&image.rgba);
+                ok_count += 1;
+            }
+            None => log_thumb_once("generate_strip_hw: decode_and_scale_hw retornou None"),
         }
         let _ = video_decoder.stop();
     }
 
+    unsafe {
+        let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
+        let msg = std::ffi::CString::new(format!("generate_strip_hw: {ok_count}/{count} posicoes com sucesso")).unwrap();
+        ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
+    }
+
     Some(ThumbnailStrip { rgba, count, width: max_width, height: max_height })
+}
+
+fn log_thumb_once(msg: &str) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static LOGGED: AtomicBool = AtomicBool::new(false);
+    if LOGGED.swap(true, Ordering::Relaxed) {
+        return;
+    }
+    unsafe {
+        let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
+        let cmsg = std::ffi::CString::new(msg).unwrap();
+        ndk_sys::__android_log_print(5, tag.as_ptr(), cmsg.as_ptr());
+    }
 }
 
 /// Equivalente hardware de `decode_and_scale`: alimenta pacotes ate um
