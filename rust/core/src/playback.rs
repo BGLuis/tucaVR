@@ -205,23 +205,10 @@ impl PlaybackController {
 
         // O Quest 3 (MediaCodec) exige o mime correto do decoder de hardware;
         // usar "video/avc" para um stream HEVC falha ou decodifica lixo.
-        let mime = match codec_id {
-            ffmpeg_next::codec::Id::H264 => "video/avc",
-            ffmpeg_next::codec::Id::HEVC => "video/hevc",
-            ffmpeg_next::codec::Id::VP9 => "video/x-vnd.on2.vp9",
-            ffmpeg_next::codec::Id::AV1 => "video/av01",
-            other => return Err(format!(
-                "Unsupported video codec: {:?} (H.264/H.265/VP9/AV1 sao suportados)",
-                other
-            ).into()),
-        };
         // VP9/AV1 nao usam framing NAL (avcC/hvcC) — os pacotes ja vem no
         // formato bruto que o MediaCodec espera, converter pra Annex-B
         // corromperia os dados.
-        let video_is_nal_based = matches!(
-            codec_id,
-            ffmpeg_next::codec::Id::H264 | ffmpeg_next::codec::Id::HEVC
-        );
+        let (mime, video_is_nal_based) = crate::decoder::mime_for_codec_id(codec_id)?;
 
         let mut tex = self.texture_output.lock().unwrap();
         // Allocate with exact size of the video

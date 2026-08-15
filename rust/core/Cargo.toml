@@ -5,7 +5,12 @@ edition = "2021"
 
 [dependencies]
 ffmpeg-next = "9.0"
-ndk = { version = "0.9", features = ["media", "api-level-26", "nativewindow"] }
+# api-level-28: precisa de OutputBuffer::format()/MediaCodec::output_format()
+# (thumbnail.rs, decode de hardware da trilha de scrub) — as funcoes C
+# subjacentes (AMediaCodec_getOutputFormat/getBufferFormat) existem desde a
+# API 21 no NDK, o gate da crate ndk e so um agrupamento de superficie Rust,
+# nao um requisito real de plataforma mais nova que o -P 26 ja usado no build.
+ndk = { version = "0.9", features = ["media", "api-level-26", "api-level-28", "nativewindow"] }
 ndk-sys = "0.6"
 crossbeam-channel = "0.5"
 tokio = { version = "1.0", features = ["full"] }

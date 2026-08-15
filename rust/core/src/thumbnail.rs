@@ -2,7 +2,9 @@ use ffmpeg_next as ffmpeg;
 use ffmpeg::format::Pixel;
 use ffmpeg::software::scaling::{context::Context as ScalingContext, flag::Flags};
 
+use crate::decoder::{HwDecoder, RawFrame};
 use crate::demuxer::{Demuxer, ReadPacketOutcome};
+use ndk::media::media_format::MediaFormat;
 
 pub struct ThumbnailImage {
     /// Pixels RGBA8 empacotados, `width * height * 4` bytes, sem padding de
@@ -226,7 +228,11 @@ pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height
     let mut decoder = codec_context.decoder().video().ok()?;
 
     if decoder.width().saturating_mul(decoder.height()) > MAX_STRIP_SOURCE_PIXELS {
-        return None;
+        // Acima do limite seguro pra decode por SOFTWARE (ver comentario da
+        // constante acima) — tenta decode por HARDWARE em vez de desistir.
+        // MediaCodec e um ASIC dedicado, nao compete por RAM/CPU geral do
+        // jeito que o software compete com a reproducao real concorrente.
+        return generate_strip_hw(path, interval_secs, max_width, max_height);
     }
 
     let duration_secs = demuxer.input_context.duration() as f64 / 1_000_000.0;
@@ -258,4 +264,193 @@ pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height
     }
 
     Some(ThumbnailStrip { rgba, count, width: max_width, height: max_height })
+}
+
+/// Trilha por decode de HARDWARE (MediaCodec, ver `crate::decoder::HwDecoder`)
+/// pra fontes acima de `MAX_STRIP_SOURCE_PIXELS` — mesma logica de
+/// `generate_strip` (um seek + decode por posicao), so trocando o decoder e
+/// a conversao de pixel. `configure` e chamado com `window: None`: sem
+/// Surface, o MediaCodec entrega bytes YUV legiveis por CPU direto (ver
+/// `RawFrame`/`decode_one_frame_raw`), evitando precisar de um contexto
+/// GL/Vulkan headless soo pra ler os pixels de volta.
+///
+/// Recria o `HwDecoder` inteiro a cada posicao da trilha em vez de
+/// `flush()`: e o UNICO padrao ja validado em hardware neste projeto pra
+/// "seek durante decode MediaCodec" (`PlaybackController::seek` tambem
+/// recria a sessao inteira, ver playback.rs) — `flush()` nunca foi
+/// exercitado aqui, e o custo de recriar (dezenas de ms por posicao, mais
+/// caro que flush) e aceitavel pra uma trilha gerada em background.
+fn generate_strip_hw(path: &str, interval_secs: f64, max_width: u32, max_height: u32) -> Option<ThumbnailStrip> {
+    let mut demuxer = Demuxer::new(path).ok()?;
+    let video_stream_index = demuxer.video_stream_index?;
+    let stream = demuxer.input_context.stream(video_stream_index)?;
+    let codec_id = stream.parameters().id();
+    let (mime, video_is_nal_based) = crate::decoder::mime_for_codec_id(codec_id).ok()?;
+
+    let codec_context = ffmpeg::codec::context::Context::from_parameters(stream.parameters()).ok()?;
+    let video_decoder_ctx = codec_context.decoder().video().ok()?;
+    let src_width = video_decoder_ctx.width();
+    let src_height = video_decoder_ctx.height();
+    if src_width == 0 || src_height == 0 {
+        return None;
+    }
+
+    let sps_pps = demuxer.get_video_extradata().and_then(|ed| match codec_id {
+        ffmpeg::codec::Id::HEVC => crate::hevc::extract_vps_sps_pps(&ed),
+        ffmpeg::codec::Id::H264 => crate::h264::extract_sps_pps(&ed),
+        ffmpeg::codec::Id::AV1 => crate::av1::extract_config_obus(&ed),
+        // VP9 nao tem SPS/PPS/config OBU em banda (mesmo motivo de
+        // playback.rs).
+        _ => None,
+    });
+
+    let duration_secs = demuxer.input_context.duration() as f64 / 1_000_000.0;
+    let count = (duration_secs / interval_secs).floor() as usize;
+    if count == 0 {
+        return None;
+    }
+
+    let frame_len = (max_width * max_height * 4) as usize;
+    let mut rgba = vec![0u8; count * frame_len];
+
+    for (i, chunk) in rgba.chunks_exact_mut(frame_len).enumerate() {
+        let target_secs = (i + 1) as f64 * interval_secs;
+        let target_us = (target_secs * 1_000_000.0) as i64;
+        if demuxer.input_context.seek(target_us, ..target_us).is_err() {
+            continue;
+        }
+
+        let Ok(mut video_decoder) = HwDecoder::new(mime) else { continue };
+        let mut format = MediaFormat::new();
+        format.set_str("mime", mime);
+        format.set_i32("width", src_width as i32);
+        format.set_i32("height", src_height as i32);
+        if video_decoder.configure(&format, None).is_err() {
+            continue;
+        }
+        if video_decoder.start().is_err() {
+            continue;
+        }
+        if let Some(sps) = &sps_pps {
+            let _ = video_decoder.decode_packet(sps, 0, 2, |_| true, || {}, || true);
+        }
+
+        if let Some(image) = decode_and_scale_hw(
+            &mut demuxer,
+            &mut video_decoder,
+            video_stream_index,
+            video_is_nal_based,
+            max_width,
+            max_height,
+        ) {
+            chunk.copy_from_slice(&image.rgba);
+        }
+        let _ = video_decoder.stop();
+    }
+
+    Some(ThumbnailStrip { rgba, count, width: max_width, height: max_height })
+}
+
+/// Equivalente hardware de `decode_and_scale`: alimenta pacotes ate um
+/// frame de saida ficar pronto (decoders com B-frames tem atraso de
+/// reordenacao — um pacote so nao basta) ou `MAX_PACKETS_TRIED` estourar.
+fn decode_and_scale_hw(
+    demuxer: &mut Demuxer,
+    video_decoder: &mut HwDecoder,
+    video_stream_index: usize,
+    video_is_nal_based: bool,
+    max_width: u32,
+    max_height: u32,
+) -> Option<ThumbnailImage> {
+    let mut tried = 0u32;
+
+    while tried < MAX_PACKETS_TRIED {
+        let (stream_index, packet) = match demuxer.read_packet() {
+            ReadPacketOutcome::Packet(idx, packet) => (idx, packet),
+            ReadPacketOutcome::Eof | ReadPacketOutcome::Error(_) => break,
+        };
+        if stream_index != video_stream_index {
+            continue;
+        }
+        tried += 1;
+
+        let pts = packet.pts().unwrap_or(0);
+        let Some(data) = packet.data() else { continue };
+        let frame_data = if video_is_nal_based {
+            crate::nal::convert_avcc_to_annexb(data)
+        } else {
+            data.to_vec()
+        };
+
+        match video_decoder.decode_one_frame_raw(&frame_data, pts, 0) {
+            Ok(Some(raw)) => return raw_frame_to_thumbnail(&raw, max_width, max_height),
+            Ok(None) => continue,
+            Err(_) => break,
+        }
+    }
+    None
+}
+
+/// Interpreta os bytes crus do MediaCodec (`RawFrame`) conforme o
+/// color-format negociado em runtime e converte pra RGBA na resolucao
+/// minuscula da trilha — ver `media_logic::yuv_convert` pra por que essa
+/// logica vive numa crate pura e testavel em vez de aqui direto.
+fn raw_frame_to_thumbnail(raw: &RawFrame, max_width: u32, max_height: u32) -> Option<ThumbnailImage> {
+    use media_logic::yuv_convert::{yuv420_to_rgba_scaled, YuvLayout, YuvPlanes};
+
+    let layout = YuvLayout::from_android_color_format(raw.color_format)?;
+    let width = raw.width.max(0) as u32;
+    let height = raw.height.max(0) as u32;
+    if width == 0 || height == 0 {
+        return None;
+    }
+    let stride = if raw.stride > 0 { raw.stride as usize } else { width as usize };
+    let slice_height = if raw.slice_height > 0 { raw.slice_height as usize } else { height as usize };
+
+    let y_size = stride.checked_mul(slice_height)?;
+    if raw.data.len() < y_size {
+        return None;
+    }
+    let y = &raw.data[..y_size];
+    let chroma_h = slice_height / 2;
+
+    let planes = match layout {
+        YuvLayout::Planar => {
+            let chroma_stride = stride / 2;
+            let c_size = chroma_stride.checked_mul(chroma_h)?;
+            let u_start = y_size;
+            let v_start = u_start.checked_add(c_size)?;
+            if raw.data.len() < v_start.checked_add(c_size)? {
+                return None;
+            }
+            YuvPlanes {
+                y,
+                y_stride: stride,
+                u: &raw.data[u_start..u_start + c_size],
+                u_stride: chroma_stride,
+                v: &raw.data[v_start..v_start + c_size],
+                v_stride: chroma_stride,
+            }
+        }
+        YuvLayout::SemiPlanar => {
+            // UV intercalado (2 bytes por amostra de croma) — mesmo stride
+            // em bytes do plano Y.
+            let c_size = stride.checked_mul(chroma_h)?;
+            let uv_start = y_size;
+            if raw.data.len() < uv_start.checked_add(c_size)? {
+                return None;
+            }
+            YuvPlanes {
+                y,
+                y_stride: stride,
+                u: &raw.data[uv_start..uv_start + c_size],
+                u_stride: stride,
+                v: &[],
+                v_stride: 0,
+            }
+        }
+    };
+
+    let rgba = yuv420_to_rgba_scaled(&planes, layout, width, height, max_width, max_height)?;
+    Some(ThumbnailImage { rgba, width: max_width, height: max_height })
 }
