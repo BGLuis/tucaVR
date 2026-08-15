@@ -54,6 +54,20 @@ extern "C" {
     extern char* sftp_list_directory(const char* host, int32_t port, const char* username,
                                       const char* password, const char* private_key,
                                       const char* path);
+    // Thumbnails de rede — mesmo contrato de vr_player_app.cpp.
+    extern uint8_t* smb_generate_thumbnail(const char* host, int32_t port, const char* username,
+                                            const char* password, const char* domain, const char* share,
+                                            const char* path, uint32_t max_width, uint32_t max_height,
+                                            uint32_t* out_width, uint32_t* out_height, size_t* out_len);
+    extern uint8_t* ftp_generate_thumbnail(const char* host, int32_t port, const char* username,
+                                            const char* password, const char* path,
+                                            uint32_t max_width, uint32_t max_height,
+                                            uint32_t* out_width, uint32_t* out_height, size_t* out_len);
+    extern uint8_t* sftp_generate_thumbnail(const char* host, int32_t port, const char* username,
+                                             const char* password, const char* private_key, const char* path,
+                                             uint32_t max_width, uint32_t max_height,
+                                             uint32_t* out_width, uint32_t* out_height, size_t* out_len);
+    extern void free_rust_thumbnail_buffer(uint8_t* ptr, size_t len);
 }
 
 // Captura de frame (nao implementada no caminho Vulkan ainda — funcao existe
@@ -80,6 +94,16 @@ static jstring RustStringToJStringAndFree(JNIEnv* env, char* rustStr) {
     if (!rustStr) return env->NewStringUTF("ERROR:null");
     jstring result = env->NewStringUTF(rustStr);
     free_rust_string(rustStr);
+    return result;
+}
+
+// Helper: converte o buffer RGBA alocado pelo Rust para jbyteArray e libera
+// o original — mesma logica de vr_player_app.cpp.
+static jbyteArray RustThumbnailToJByteArrayAndFree(JNIEnv* env, uint8_t* data, size_t len) {
+    if (!data) return nullptr;
+    jbyteArray result = env->NewByteArray((jsize)len);
+    env->SetByteArrayRegion(result, 0, (jsize)len, reinterpret_cast<jbyte*>(data));
+    free_rust_thumbnail_buffer(data, len);
     return result;
 }
 
@@ -275,6 +299,74 @@ Java_com_vrplayer_VRActivity_nativeSftpListDirectory(JNIEnv* env, jobject,
     env->ReleaseStringUTFChars(privateKey, k);
     env->ReleaseStringUTFChars(path, p);
     return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_vrplayer_VRActivity_nativeSmbGenerateThumbnail(JNIEnv* env, jobject,
+                                                         jstring host, jint port,
+                                                         jstring username, jstring password,
+                                                         jstring domain, jstring share, jstring path,
+                                                         jint maxWidth, jint maxHeight) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    const char* d = env->GetStringUTFChars(domain, nullptr);
+    const char* sh = env->GetStringUTFChars(share, nullptr);
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    uint32_t outWidth = 0, outHeight = 0;
+    size_t outLen = 0;
+    uint8_t* data = smb_generate_thumbnail(h, (int32_t)port, u, pw, d, sh, p,
+                                            (uint32_t)maxWidth, (uint32_t)maxHeight, &outWidth, &outHeight, &outLen);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    env->ReleaseStringUTFChars(domain, d);
+    env->ReleaseStringUTFChars(share, sh);
+    env->ReleaseStringUTFChars(path, p);
+    return RustThumbnailToJByteArrayAndFree(env, data, outLen);
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_vrplayer_VRActivity_nativeFtpGenerateThumbnail(JNIEnv* env, jobject,
+                                                         jstring host, jint port,
+                                                         jstring username, jstring password, jstring path,
+                                                         jint maxWidth, jint maxHeight) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    uint32_t outWidth = 0, outHeight = 0;
+    size_t outLen = 0;
+    uint8_t* data = ftp_generate_thumbnail(h, (int32_t)port, u, pw, p,
+                                            (uint32_t)maxWidth, (uint32_t)maxHeight, &outWidth, &outHeight, &outLen);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    env->ReleaseStringUTFChars(path, p);
+    return RustThumbnailToJByteArrayAndFree(env, data, outLen);
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject,
+                                                          jstring host, jint port,
+                                                          jstring username, jstring password,
+                                                          jstring privateKey, jstring path,
+                                                          jint maxWidth, jint maxHeight) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    const char* k = env->GetStringUTFChars(privateKey, nullptr);
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    uint32_t outWidth = 0, outHeight = 0;
+    size_t outLen = 0;
+    uint8_t* data = sftp_generate_thumbnail(h, (int32_t)port, u, pw, k, p,
+                                             (uint32_t)maxWidth, (uint32_t)maxHeight, &outWidth, &outHeight, &outLen);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    env->ReleaseStringUTFChars(privateKey, k);
+    env->ReleaseStringUTFChars(path, p);
+    return RustThumbnailToJByteArrayAndFree(env, data, outLen);
 }
 
 extern "C" JNIEXPORT jstring JNICALL

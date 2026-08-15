@@ -595,6 +595,45 @@ class VRActivity : NativeActivity() {
     // T6.2/T6.4: listagem SFTP (bloqueante — SEMPRE de Dispatchers.IO).
     external fun nativeSftpListDirectory(host: String, port: Int, username: String, password: String, privateKey: String, path: String): String
 
+    // T9: thumbnail de arquivo de video num share/servidor de rede — decode
+    // de UM frame por software do lado Rust (core::thumbnail::generate, ver
+    // rust/bridge/src/lib.rs). Bloqueante (rede + decode sincronos) — SEMPRE
+    // de Dispatchers.IO, nunca da UI thread (ver NetworkThumbnailGenerator.kt).
+    // Retorno: RGBA cru (maxWidth*maxHeight*4 bytes, sem padding de linha) ou
+    // null em qualquer falha (sem faixa de video, arquivo inacessivel, etc.).
+    external fun nativeSmbGenerateThumbnail(
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        domain: String,
+        share: String,
+        path: String,
+        maxWidth: Int,
+        maxHeight: Int
+    ): ByteArray?
+
+    external fun nativeFtpGenerateThumbnail(
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        path: String,
+        maxWidth: Int,
+        maxHeight: Int
+    ): ByteArray?
+
+    external fun nativeSftpGenerateThumbnail(
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        privateKey: String,
+        path: String,
+        maxWidth: Int,
+        maxHeight: Int
+    ): ByteArray?
+
     // Bug de auto-hide durante digitacao (ver showNativeKeyboardFor/
     // hideNativeKeyboard abaixo, e KEYBOARD_ACTIVE em rust/bridge/src/lib.rs):
     // avisa o render loop C++ pra suprimir o fade-out do painel enquanto o

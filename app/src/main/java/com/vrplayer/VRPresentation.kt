@@ -30,6 +30,7 @@ import com.vrplayer.filebrowser.DirectoryLister
 import com.vrplayer.filebrowser.DirectoryNavigator
 import com.vrplayer.filebrowser.MediaEntry
 import com.vrplayer.filebrowser.MediaType
+import com.vrplayer.filebrowser.NetworkThumbnailGenerator
 import com.vrplayer.filebrowser.SortBy
 import com.vrplayer.filebrowser.ThumbnailGenerator
 import com.vrplayer.filebrowser.VideoMetadataReader
@@ -934,6 +935,7 @@ class VRPresentation(
                 val name = parts.getOrElse(0) { return@forEach }
                 val isDir = parts.getOrNull(1) == "1"
                 val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
+                val childPath = if (requestedPath.isEmpty()) name else "$requestedPath/$name"
                 val row = VoidListRow(context).apply {
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -944,10 +946,9 @@ class VRPresentation(
                         } else {
                             context.getString(R.string.common_row_video_format, name)
                         },
-                        showThumbnailSlot = false
+                        showThumbnailSlot = !isDir
                     )
                     setOnClickListener {
-                        val childPath = if (requestedPath.isEmpty()) name else "$requestedPath/$name"
                         if (isDir) {
                             networkBrowsePath = childPath
                             renderNetworkFiles(server)
@@ -961,6 +962,19 @@ class VRPresentation(
                     }
                 }
                 entriesContainer.addView(row)
+                if (!isDir) {
+                    val source = PlaybackSource.Smb(server, childPath, sizeBytes)
+                    scope.launch {
+                        val bitmap = NetworkThumbnailGenerator.getThumbnail(context, activity, source)
+                        // Usuario pode ter navegado pra outro nivel/servidor enquanto a
+                        // chamada de rede estava em voo — mesma checagem de "resultado
+                        // obsoleto" do carregamento da listagem acima.
+                        if (bitmap != null && networkBrowsingServer == server && networkBrowsePath == requestedPath) {
+                            row.thumbnail.setImageBitmap(bitmap)
+                            row.thumbnail.visibility = View.VISIBLE
+                        }
+                    }
+                }
             }
         }
     }
@@ -1250,6 +1264,7 @@ class VRPresentation(
                 val name = parts.getOrElse(0) { return@forEach }
                 val isDir = parts.getOrNull(1) == "1"
                 val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
+                val childPath = if (requestedPath.isEmpty()) name else "$requestedPath/$name"
                 val row = VoidListRow(context).apply {
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -1260,10 +1275,9 @@ class VRPresentation(
                         } else {
                             context.getString(R.string.common_row_video_format, name)
                         },
-                        showThumbnailSlot = false
+                        showThumbnailSlot = !isDir
                     )
                     setOnClickListener {
-                        val childPath = if (requestedPath.isEmpty()) name else "$requestedPath/$name"
                         if (isDir) {
                             networkBrowseFtpPath = childPath
                             renderNetworkFtpFiles(server)
@@ -1277,6 +1291,16 @@ class VRPresentation(
                     }
                 }
                 entriesContainer.addView(row)
+                if (!isDir) {
+                    val source = PlaybackSource.Ftp(server, childPath, sizeBytes)
+                    scope.launch {
+                        val bitmap = NetworkThumbnailGenerator.getThumbnail(context, activity, source)
+                        if (bitmap != null && networkBrowsingFtpServer == server && networkBrowseFtpPath == requestedPath) {
+                            row.thumbnail.setImageBitmap(bitmap)
+                            row.thumbnail.visibility = View.VISIBLE
+                        }
+                    }
+                }
             }
         }
     }
@@ -1608,6 +1632,7 @@ class VRPresentation(
                 val name = parts.getOrElse(0) { return@forEach }
                 val isDir = parts.getOrNull(1) == "1"
                 val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
+                val childPath = if (requestedPath.isEmpty()) name else "$requestedPath/$name"
                 val row = VoidListRow(context).apply {
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -1618,10 +1643,9 @@ class VRPresentation(
                         } else {
                             context.getString(R.string.common_row_video_format, name)
                         },
-                        showThumbnailSlot = false
+                        showThumbnailSlot = !isDir
                     )
                     setOnClickListener {
-                        val childPath = if (requestedPath.isEmpty()) name else "$requestedPath/$name"
                         if (isDir) {
                             networkBrowseSftpPath = childPath
                             renderNetworkSftpFiles(server)
@@ -1635,6 +1659,16 @@ class VRPresentation(
                     }
                 }
                 entriesContainer.addView(row)
+                if (!isDir) {
+                    val source = PlaybackSource.Sftp(server, childPath, sizeBytes)
+                    scope.launch {
+                        val bitmap = NetworkThumbnailGenerator.getThumbnail(context, activity, source)
+                        if (bitmap != null && networkBrowsingSftpServer == server && networkBrowseSftpPath == requestedPath) {
+                            row.thumbnail.setImageBitmap(bitmap)
+                            row.thumbnail.visibility = View.VISIBLE
+                        }
+                    }
+                }
             }
         }
     }

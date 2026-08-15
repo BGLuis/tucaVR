@@ -89,6 +89,24 @@ extern "C" {
     extern char* sftp_list_directory(const char* host, int32_t port, const char* username,
                                       const char* password, const char* private_key, const char* path);
 
+    // T9: thumbnails de rede — ver rust/bridge/src/lib.rs para o contrato
+    // completo (RGBA cru exatamente max_width*max_height*4 bytes, ou nulo em
+    // qualquer falha; o ponteiro retornado DEVE ser liberado com
+    // free_rust_thumbnail_buffer).
+    extern uint8_t* smb_generate_thumbnail(const char* host, int32_t port, const char* username,
+                                            const char* password, const char* domain, const char* share,
+                                            const char* path, uint32_t max_width, uint32_t max_height,
+                                            uint32_t* out_width, uint32_t* out_height, size_t* out_len);
+    extern uint8_t* ftp_generate_thumbnail(const char* host, int32_t port, const char* username,
+                                            const char* password, const char* path,
+                                            uint32_t max_width, uint32_t max_height,
+                                            uint32_t* out_width, uint32_t* out_height, size_t* out_len);
+    extern uint8_t* sftp_generate_thumbnail(const char* host, int32_t port, const char* username,
+                                             const char* password, const char* private_key, const char* path,
+                                             uint32_t max_width, uint32_t max_height,
+                                             uint32_t* out_width, uint32_t* out_height, size_t* out_len);
+    extern void free_rust_thumbnail_buffer(uint8_t* ptr, size_t len);
+
     // T1.4/T1.5/T2: modo de exibicao 3D (2D/SBS/OU/360/180) e swap-eyes —
     // estado de apresentacao puro, vive como atomics no bridge Rust (ver
     // rust/bridge/src/lib.rs para a codificacao numerica exata, que
@@ -131,6 +149,19 @@ static jstring RustStringToJStringAndFree(JNIEnv* env, char* rustStr) {
     }
     jstring result = env->NewStringUTF(rustStr);
     free_rust_string(rustStr);
+    return result;
+}
+
+// Helper comum as 3 funcoes JNI de thumbnail de rede: converte o buffer RGBA
+// alocado pelo Rust para jbyteArray e libera o original. Retorna nullptr
+// (equivalente a Kotlin `null`) quando a geracao falhou do lado Rust.
+static jbyteArray RustThumbnailToJByteArrayAndFree(JNIEnv* env, uint8_t* data, size_t len) {
+    if (!data) {
+        return nullptr;
+    }
+    jbyteArray result = env->NewByteArray((jsize)len);
+    env->SetByteArrayRegion(result, 0, (jsize)len, reinterpret_cast<jbyte*>(data));
+    free_rust_thumbnail_buffer(data, len);
     return result;
 }
 
@@ -365,6 +396,86 @@ Java_com_vrplayer_VRActivity_nativeSftpListDirectory(JNIEnv* env, jobject thiz, 
     env->ReleaseStringUTFChars(path, pathStr);
 
     return RustStringToJStringAndFree(env, result);
+}
+
+// T9: thumbnail de um video num share SMB. BLOQUEANTE (rede + decode
+// sincronos do lado Rust) — Kotlin SEMPRE de Dispatchers.IO (ver
+// NetworkThumbnailGenerator.kt).
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_vrplayer_VRActivity_nativeSmbGenerateThumbnail(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                                         jstring username, jstring password, jstring domain,
+                                                         jstring share, jstring path, jint maxWidth, jint maxHeight) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+    const char* domainStr = env->GetStringUTFChars(domain, nullptr);
+    const char* shareStr = env->GetStringUTFChars(share, nullptr);
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+
+    uint32_t outWidth = 0, outHeight = 0;
+    size_t outLen = 0;
+    uint8_t* data = smb_generate_thumbnail(hostStr, (int32_t)port, userStr, passStr, domainStr, shareStr, pathStr,
+                                            (uint32_t)maxWidth, (uint32_t)maxHeight, &outWidth, &outHeight, &outLen);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
+    env->ReleaseStringUTFChars(domain, domainStr);
+    env->ReleaseStringUTFChars(share, shareStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+
+    return RustThumbnailToJByteArrayAndFree(env, data, outLen);
+}
+
+// T9: mesma logica de nativeSmbGenerateThumbnail, para um arquivo num
+// servidor FTP.
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_vrplayer_VRActivity_nativeFtpGenerateThumbnail(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                                         jstring username, jstring password, jstring path,
+                                                         jint maxWidth, jint maxHeight) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+
+    uint32_t outWidth = 0, outHeight = 0;
+    size_t outLen = 0;
+    uint8_t* data = ftp_generate_thumbnail(hostStr, (int32_t)port, userStr, passStr, pathStr,
+                                            (uint32_t)maxWidth, (uint32_t)maxHeight, &outWidth, &outHeight, &outLen);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+
+    return RustThumbnailToJByteArrayAndFree(env, data, outLen);
+}
+
+// T9: mesma logica de nativeSmbGenerateThumbnail, para um arquivo num
+// servidor SFTP. `privateKey` pode ser string vazia (autenticacao por
+// senha) — mesma convencao de nativePlaySftp.
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                                          jstring username, jstring password, jstring privateKey,
+                                                          jstring path, jint maxWidth, jint maxHeight) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+    const char* keyStr = env->GetStringUTFChars(privateKey, nullptr);
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+
+    uint32_t outWidth = 0, outHeight = 0;
+    size_t outLen = 0;
+    uint8_t* data = sftp_generate_thumbnail(hostStr, (int32_t)port, userStr, passStr, keyStr, pathStr,
+                                             (uint32_t)maxWidth, (uint32_t)maxHeight, &outWidth, &outHeight, &outLen);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
+    env->ReleaseStringUTFChars(privateKey, keyStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+
+    return RustThumbnailToJByteArrayAndFree(env, data, outLen);
 }
 
 // T7.1: probe HEAD-based de uma URL HTTP(S) (Accept-Ranges/tamanho) antes de
