@@ -82,6 +82,15 @@ class VRActivity : NativeActivity() {
     // playSmb, chamados via VRPresentation apos onCreate).
     val historyTracker: PlaybackHistoryTracker by lazy { PlaybackHistoryTracker(this) }
 
+    // Fonte da reproducao atual (T-seek-ux) — setado nos 5 entry points de
+    // playback abaixo. `PlaybackHistoryTracker.current` ja guarda algo
+    // parecido, mas ja convertido pro registro achatado do Room (perde
+    // host/credenciais); isto aqui e o `PlaybackSource` original, usado
+    // pra saber SE/COMO gerar a trilha de thumbnails de preview de arrasto
+    // (so SMB/SFTP tem isso, ver NetworkThumbnailGenerator.getScrubStrip).
+    var currentPlaybackSource: PlaybackSource? = null
+        private set
+
     // Ferramenta de debug (ver docs/DEBUGGING.md): troca o ScreenMode de um
     // video JA tocando sem precisar reiniciar o app/relançar o intent, ex.
     // `adb shell am broadcast -a com.vrplayer.debug.SET_SCREEN_MODE --ei mode 6`
@@ -424,6 +433,22 @@ class VRActivity : NativeActivity() {
             }
         }
 
+        /**
+         * Feedback de loading/play-pause — mesmo padrao/cadencia de
+         * updateMediaProgress (chamado ~10x/s pelo C++ via JNI), mas SEM o
+         * gate de `total > 0`: precisa dar sinal ja no primeiro load, antes
+         * de qualquer duracao ser conhecida (ver comentario no C++). Estado
+         * real da sessao Rust, nao um espelho otimista de cliques no
+         * Kotlin — reage tambem a play/pause disparado pelo botao do
+         * controle VR (ver toggle_video_state em vr_player_app.cpp).
+         */
+        @JvmStatic
+        fun updateMediaState(activity: VRActivity, isLoading: Boolean, isPlaying: Boolean) {
+            activity.runOnUiThread {
+                activity.controlsPresentation?.updateMediaState(isLoading, isPlaying)
+            }
+        }
+
         // HUD de debug (ver docs/DEBUGGING.md): mesmo throttle/JNI pattern
         // de updateMediaProgress acima, so que o texto ja vem formatado do
         // lado nativo (ScreenMode/stereoLayout/polar180/swapEyes/estado do
@@ -460,6 +485,7 @@ class VRActivity : NativeActivity() {
     fun playFile(filePath: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val resolvedSize = if (sizeBytes > 0L) sizeBytes else runCatching { File(filePath).length() }.getOrDefault(0L)
         val source = PlaybackSource.LocalFile(filePath, resolvedSize)
+        currentPlaybackSource = source
         historyTracker.startTracking(source, title = File(filePath).name)
         nativePlayVideo(filePath)
         resumeAtMs?.let { scheduleResumeSeek(it) }
@@ -468,7 +494,9 @@ class VRActivity : NativeActivity() {
     // T7: URL HTTP(S) reusa o mesmo entry point que arquivo local — o
     // Demuxer (Rust) despacha por esquema (ver rust/core/src/demuxer.rs).
     fun playUrl(url: String, resumeAtMs: Long? = null) {
-        historyTracker.startTracking(PlaybackSource.Http(url), title = url)
+        val source = PlaybackSource.Http(url)
+        currentPlaybackSource = source
+        historyTracker.startTracking(source, title = url)
         nativePlayVideo(url)
         resumeAtMs?.let { scheduleResumeSeek(it) }
     }
@@ -478,6 +506,7 @@ class VRActivity : NativeActivity() {
     // cruzando a fronteira JNI (ver nota em rust/bridge/src/lib.rs).
     fun playSmb(server: com.vrplayer.network.SmbServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val source = PlaybackSource.Smb(server, path, sizeBytes)
+        currentPlaybackSource = source
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
         nativePlaySmb(server.host, server.port, server.share, path, server.username, server.password, server.domain)
         resumeAtMs?.let { scheduleResumeSeek(it) }
@@ -487,6 +516,7 @@ class VRActivity : NativeActivity() {
     // nao tem esses conceitos).
     fun playFtp(server: com.vrplayer.network.FtpServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val source = PlaybackSource.Ftp(server, path, sizeBytes)
+        currentPlaybackSource = source
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
         nativePlayFtp(server.host, server.port, path, server.username, server.password)
         resumeAtMs?.let { scheduleResumeSeek(it) }
@@ -496,6 +526,7 @@ class VRActivity : NativeActivity() {
     // `com.vrplayer.network.SftpServer`) no lugar de `share`/`domain`.
     fun playSftp(server: com.vrplayer.network.SftpServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val source = PlaybackSource.Sftp(server, path, sizeBytes)
+        currentPlaybackSource = source
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
         nativePlaySftp(server.host, server.port, path, server.username, server.password, server.privateKey ?: "")
         resumeAtMs?.let { scheduleResumeSeek(it) }
@@ -630,6 +661,37 @@ class VRActivity : NativeActivity() {
         password: String,
         privateKey: String,
         path: String,
+        maxWidth: Int,
+        maxHeight: Int
+    ): ByteArray?
+
+    // Preview de arrasto no seekbar (T-seek-ux): mesma logica das duas
+    // funcoes acima, so que devolve N frames concatenados (um a cada
+    // intervalSeconds) em vez de 1 — ver core::thumbnail::generate_strip.
+    // Retorno: RGBA cru, byteArray.size / (maxWidth*maxHeight*4) frames na
+    // ordem do arquivo (posicao do frame i = (i+1)*intervalSeconds), ou
+    // null em qualquer falha. So SMB/SFTP tem geracao de thumbnail hoje.
+    external fun nativeSmbGenerateThumbnailStrip(
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        domain: String,
+        share: String,
+        path: String,
+        intervalSeconds: Float,
+        maxWidth: Int,
+        maxHeight: Int
+    ): ByteArray?
+
+    external fun nativeSftpGenerateThumbnailStrip(
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        privateKey: String,
+        path: String,
+        intervalSeconds: Float,
         maxWidth: Int,
         maxHeight: Int
     ): ByteArray?

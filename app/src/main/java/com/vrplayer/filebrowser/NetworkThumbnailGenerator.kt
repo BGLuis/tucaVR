@@ -101,4 +101,104 @@ object NetworkThumbnailGenerator {
         val digest = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
         return digest.joinToString("") { "%02x".format(it) }
     }
+
+    // --- Preview de arrasto no seekbar (T-seek-ux) ---
+    //
+    // Trilha esparsa de miniaturas BEM menores que THUMB_WIDTH/HEIGHT acima
+    // (80x45 em vez de 256x144) — um preview de arrasto fica na tela por
+    // milissegundos, nao precisa da mesma resolucao da miniatura "hero" da
+    // listagem, e o tamanho em disco escala linear com resolucao x numero
+    // de frames (a cada SCRUB_INTERVAL_SECONDS): num filme de 2h a 15s de
+    // intervalo isso já são ~480 frames — em 256x144 seriam ~70MB de cache
+    // POR VIDEO, inviavel; em 80x45 fica ~7MB, razoavel.
+    //
+    // Guardado como UM blob RGBA cru concatenado (sem compressao JPEG por
+    // frame) — mais simples que gerenciar N arquivos, e o Rust ja entrega
+    // RGBA puro, entao nao ha decode/encode extra em nenhuma ponta; so
+    // corta um Bitmap sob demanda (bitmapAt) na hora de exibir.
+    private const val SCRUB_WIDTH = 80
+    private const val SCRUB_HEIGHT = 45
+    private const val SCRUB_INTERVAL_SECONDS = 15f
+    private const val SCRUB_CACHE_DIR_NAME = "network_scrub_strips"
+
+    // Cache em memoria (alem do disco): evita reler/realocar o blob a cada
+    // vez que o usuario abre os controles do mesmo video na mesma sessao do
+    // app. Nunca invalidado explicitamente — o processo inteiro morre
+    // quando o app fecha, e o cache em disco (chave por sha256) ja cuida de
+    // detectar arquivo trocado (ver cacheKeyFor).
+    private val scrubMemoryCache = mutableMapOf<String, ScrubStrip>()
+
+    /**
+     * Gera (ou reaproveita do cache) a trilha de preview de arrasto pra
+     * ESTE video. So SMB/SFTP tem geracao de thumbnail hoje (mesma
+     * limitacao de [getThumbnail] acima — FTP/HTTPS/local nao passam por
+     * aqui, ver [generateScrubRgba]). Chamada BLOQUEANTE na primeira vez
+     * (rede + N decodes sincronos do lado Rust) — SEMPRE de
+     * `Dispatchers.IO`; chamadas seguintes pro MESMO video (cache hit, em
+     * memoria ou disco) retornam rapido.
+     */
+    suspend fun getScrubStrip(context: Context, activity: VRActivity, source: PlaybackSource): ScrubStrip? {
+        val key = runCatching { cacheKeyFor(source) }.getOrNull() ?: return null
+        scrubMemoryCache[key]?.let { return it }
+
+        return withContext(Dispatchers.IO) {
+            val cacheFile = scrubCacheFileFor(context, key)
+            val cachedRgba = if (cacheFile.exists()) runCatching { cacheFile.readBytes() }.getOrNull() else null
+            val rgba = cachedRgba ?: generateScrubRgba(activity, source)?.also { writeScrubCache(it, cacheFile) }
+            val strip = rgba?.let { ScrubStrip(it, SCRUB_WIDTH, SCRUB_HEIGHT, SCRUB_INTERVAL_SECONDS) } ?: return@withContext null
+            scrubMemoryCache[key] = strip
+            strip
+        }
+    }
+
+    private fun generateScrubRgba(activity: VRActivity, source: PlaybackSource): ByteArray? {
+        return when (source) {
+            is PlaybackSource.Smb -> activity.nativeSmbGenerateThumbnailStrip(
+                source.server.host, source.server.port, source.server.username, source.server.password,
+                source.server.domain, source.server.share, source.path,
+                SCRUB_INTERVAL_SECONDS, SCRUB_WIDTH, SCRUB_HEIGHT
+            )
+            is PlaybackSource.Sftp -> activity.nativeSftpGenerateThumbnailStrip(
+                source.server.host, source.server.port, source.server.username, source.server.password,
+                source.server.privateKey ?: "", source.path,
+                SCRUB_INTERVAL_SECONDS, SCRUB_WIDTH, SCRUB_HEIGHT
+            )
+            is PlaybackSource.Ftp, is PlaybackSource.LocalFile, is PlaybackSource.Http -> null
+        }
+    }
+
+    private fun writeScrubCache(rgba: ByteArray, cacheFile: File) {
+        try {
+            cacheFile.parentFile?.mkdirs()
+            cacheFile.writeBytes(rgba)
+        } catch (e: Exception) {
+            // Falha ao persistir nao e fatal -- mesma tolerancia de writeToCache acima.
+        }
+    }
+
+    private fun scrubCacheFileFor(context: Context, key: String): File {
+        val cacheDir = File(context.cacheDir, SCRUB_CACHE_DIR_NAME)
+        return File(cacheDir, "$key.rgba")
+    }
+}
+
+/**
+ * Trilha de frames RGBA de mesma resolucao, concatenados — ver
+ * [NetworkThumbnailGenerator.getScrubStrip]. A posicao do frame `i` e
+ * sempre `(i + 1) * intervalSeconds` (mesma convencao do lado Rust,
+ * `core::thumbnail::generate_strip`).
+ */
+class ScrubStrip(private val rgba: ByteArray, val frameWidth: Int, val frameHeight: Int, val intervalSeconds: Float) {
+    private val frameBytes = frameWidth * frameHeight * 4
+    val count: Int get() = if (frameBytes == 0) 0 else rgba.size / frameBytes
+
+    /** Frame mais proximo de `positionSeconds`, ou null se a trilha estiver vazia. */
+    fun bitmapAt(positionSeconds: Float): Bitmap? {
+        if (count == 0) return null
+        val index = (positionSeconds / intervalSeconds).toInt().coerceIn(0, count - 1)
+        val start = index * frameBytes
+        return Bitmap.createBitmap(frameWidth, frameHeight, Bitmap.Config.ARGB_8888).apply {
+            copyPixelsFromBuffer(ByteBuffer.wrap(rgba, start, frameBytes))
+        }
+    }
 }

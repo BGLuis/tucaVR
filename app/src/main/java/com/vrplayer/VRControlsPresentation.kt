@@ -2,16 +2,31 @@ package com.vrplayer
 
 import android.app.Presentation
 import android.content.Context
+import android.graphics.Bitmap
+import android.media.MediaMetadataRetriever
 import android.os.Bundle
 import android.view.Display
+import android.widget.FrameLayout
+import android.widget.ImageView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.graphics.Color
 import android.view.Gravity
+import android.view.View
 import android.widget.SeekBar
 import android.widget.TextView
 import com.vrplayer.designsystem.VoidButton
 import com.vrplayer.designsystem.VoidButtonStyle
 import com.vrplayer.designsystem.VoidTheme
+import com.vrplayer.filebrowser.NetworkThumbnailGenerator
+import com.vrplayer.filebrowser.ScrubStrip
+import com.vrplayer.navigation.PlaybackSource
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class VRControlsPresentation(
     outerContext: Context,
@@ -32,9 +47,29 @@ class VRControlsPresentation(
     private lateinit var volumeBar: SeekBar
     private lateinit var speedBar: SeekBar
     private lateinit var btn3DMode: VoidButton
+    private lateinit var feedbackLabel: TextView
+    private lateinit var loadingSpinner: ProgressBar
+    private lateinit var scrubPreview: ImageView
     private var debugHudLabel: TextView? = null
     private var isDragging = false
     private var totalDuration = 0f
+
+    // `null` ate a primeira leitura real de updateMediaState — evita
+    // mostrar um flash de play/pause "do nada" assim que o painel e criado
+    // (nao ha estado anterior pra comparar ainda).
+    private var lastKnownIsPlaying: Boolean? = null
+
+    // Preview de arrasto no seekbar (T-seek-ux). Escopo proprio (nunca
+    // cancelado explicitamente) em vez de lifecycleScope porque
+    // `Presentation` nao e um `LifecycleOwner` — mesmo padrao ja usado por
+    // `PlaybackHistoryTracker` (escopo vive junto do processo).
+    private val scrubScope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var networkScrubStrip: ScrubStrip? = null
+    private var localScrubRetriever: MediaMetadataRetriever? = null
+    // "Latest wins": um `getFrameAtTime` local e uma decodificacao sincrona
+    // (dezenas de ms) — sem isto, arrastar rapido enfileiraria um decode
+    // por pixel de movimento, cada um mais atrasado que o anterior.
+    private var localScrubJob: Job? = null
 
     // T1.4/T2.4/T2.5: indices DEVEM casar com ScreenMode em
     // native/src/vr_player_app.cpp e a codificacao numerica em
@@ -94,6 +129,109 @@ class VRControlsPresentation(
         debugHudLabel?.text = text
     }
 
+    /**
+     * Sinal de loading/play-pause (ver VRActivity.updateMediaState),
+     * chamado ~10x/s pelo C++ independente de `updateProgress` acima (sem
+     * gate de duracao conhecida, ver comentario no C++). `isPlaying` so e
+     * comparado com o estado anterior quando NAO esta carregando — durante
+     * o proprio load()/seek() o estado de sessao ainda nao é o final (ver
+     * get_playback_is_playing), entao comparar ali daria falso-positivo.
+     */
+    fun updateMediaState(isLoading: Boolean, isPlaying: Boolean) {
+        loadingSpinner.visibility = if (isLoading) View.VISIBLE else View.GONE
+        if (isLoading) return
+
+        val previous = lastKnownIsPlaying
+        if (previous != null && previous != isPlaying) {
+            showFeedback(if (isPlaying) "▶" else "⏸")
+        }
+        lastKnownIsPlaying = isPlaying
+    }
+
+    /**
+     * Flash central tipo YouTube (play/pause, +10s/-10s) — some sozinho
+     * apos um pequeno delay. Cancela qualquer animacao de saida pendente
+     * antes de reiniciar, pra um segundo toque rapido nao deixar o texto
+     * "preso" em alpha parcial.
+     */
+    private fun showFeedback(text: String) {
+        feedbackLabel.animate().cancel()
+        feedbackLabel.text = text
+        feedbackLabel.alpha = 1f
+        feedbackLabel.visibility = View.VISIBLE
+        feedbackLabel.animate()
+            .alpha(0f)
+            .setStartDelay(450)
+            .setDuration(350)
+            .withEndAction { feedbackLabel.visibility = View.GONE }
+            .start()
+    }
+
+    /**
+     * Inicio do arrasto no seekbar (T-seek-ux): prepara a fonte de preview
+     * conforme o tipo de video tocando. Rede (SMB/SFTP): busca a trilha ja
+     * gerada/cacheada — se este for o primeiro arrasto deste video na
+     * sessao, a trilha ainda nao existe e so fica pronta no MEIO do
+     * arrasto (limitacao conhecida, ver stopScrubPreview); arrastos
+     * seguintes no mesmo video sao instantaneos (cache em memoria). Local:
+     * abre um `MediaMetadataRetriever` reaproveitado por todo o arrasto,
+     * em vez de um por tick. FTP/HTTP(S): sem preview ainda (mesma
+     * limitacao de geracao de thumbnail — ver NetworkThumbnailGenerator).
+     */
+    private fun startScrubPreview() {
+        when (val source = activity.currentPlaybackSource) {
+            is PlaybackSource.Smb, is PlaybackSource.Sftp -> {
+                scrubScope.launch {
+                    networkScrubStrip = NetworkThumbnailGenerator.getScrubStrip(context, activity, source)
+                }
+            }
+            is PlaybackSource.LocalFile -> {
+                localScrubRetriever = MediaMetadataRetriever().apply {
+                    runCatching { setDataSource(source.path) }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Atualiza a imagem de preview pra `positionSeconds`. Rede: so leitura
+     * de memoria (recorta um frame ja decodificado, sem I/O) — roda direto
+     * na UI thread. Local: `getFrameAtTime` e uma decodificacao sincrona
+     * (dezenas de ms), roda em `Dispatchers.IO`; `localScrubJob` garante
+     * que so a ULTIMA posicao pedida importa (arrastar rapido nao enfileira
+     * um decode atrasado atras do outro).
+     */
+    private fun updateScrubPreview(positionSeconds: Float) {
+        networkScrubStrip?.bitmapAt(positionSeconds)?.let { bitmap ->
+            scrubPreview.visibility = View.VISIBLE
+            scrubPreview.setImageBitmap(bitmap)
+            return
+        }
+        val retriever = localScrubRetriever ?: return
+        localScrubJob?.cancel()
+        localScrubJob = scrubScope.launch {
+            val bitmap = withContext(Dispatchers.IO) {
+                runCatching {
+                    retriever.getFrameAtTime((positionSeconds * 1_000_000).toLong(), MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                }.getOrNull()
+            }
+            if (bitmap != null) {
+                scrubPreview.visibility = View.VISIBLE
+                scrubPreview.setImageBitmap(bitmap)
+            }
+        }
+    }
+
+    private fun stopScrubPreview() {
+        scrubPreview.visibility = View.GONE
+        localScrubJob?.cancel()
+        localScrubJob = null
+        networkScrubStrip = null
+        localScrubRetriever?.release()
+        localScrubRetriever = null
+    }
+
     private fun formatTime(seconds: Float): String {
         val total = seconds.toInt().coerceAtLeast(0)
         // Formato numerico puro (MM:SS) -- nao depende de idioma, mantido via
@@ -134,6 +272,7 @@ class VRControlsPresentation(
             text = "<<"
             textSize = 24f
             setOnClickListener {
+                showFeedback("-10s")
                 val currentProgress = (seekBar.progress / 100f) * totalDuration
                 val newTarget = kotlin.math.max(0f, currentProgress - 10f)
                 activity.nativeSeekVideo(newTarget)
@@ -152,6 +291,7 @@ class VRControlsPresentation(
             text = ">>"
             textSize = 24f
             setOnClickListener {
+                showFeedback("+10s")
                 val currentProgress = (seekBar.progress / 100f) * totalDuration
                 val newTarget = kotlin.math.min(totalDuration, currentProgress + 10f)
                 activity.nativeSeekVideo(newTarget)
@@ -168,12 +308,18 @@ class VRControlsPresentation(
             max = 100
             progress = 0
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(p0: SeekBar?, p1: Int, fromUser: Boolean) {}
+                override fun onProgressChanged(p0: SeekBar?, progress: Int, fromUser: Boolean) {
+                    if (fromUser && totalDuration > 0) {
+                        updateScrubPreview((progress / 100f) * totalDuration)
+                    }
+                }
                 override fun onStartTrackingTouch(p0: SeekBar?) {
                     isDragging = true
+                    startScrubPreview()
                 }
                 override fun onStopTrackingTouch(p0: SeekBar?) {
                     isDragging = false
+                    stopScrubPreview()
                     if (totalDuration > 0) {
                         activity.nativeSeekVideo((progress / 100f) * totalDuration)
                     }
@@ -320,8 +466,52 @@ class VRControlsPresentation(
             root.addView(debugHudLabel)
         }
 
-        setContentView(root)
-        
+        // FrameLayout envolvendo `root` so pra poder sobrepor o flash de
+        // feedback (play/pause, +10s/-10s) e o spinner de loading
+        // centralizados por cima do painel inteiro, sem entrar no fluxo
+        // vertical do LinearLayout das linhas 1-4 acima.
+        val overlay = FrameLayout(context)
+        overlay.addView(root, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT
+        ))
+
+        feedbackLabel = TextView(context).apply {
+            typeface = VoidTheme.typefaceBody
+            textSize = 40f
+            setTextColor(VoidTheme.colorText)
+            setShadowLayer(12f, 0f, 0f, VoidTheme.colorBackground)
+            visibility = View.GONE
+        }
+        overlay.addView(feedbackLabel, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER
+        ))
+
+        loadingSpinner = ProgressBar(context).apply {
+            indeterminateTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
+            visibility = View.GONE
+        }
+        overlay.addView(loadingSpinner, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER
+        ))
+
+        // Preview de arrasto (T-seek-ux) — flutua ACIMA do seekbar (linha 1
+        // de `root`), escalado bem maior que a resolucao nativa (80x45, ver
+        // ScrubStrip) porque e so um preview grosseiro, nao uma miniatura
+        // de qualidade.
+        scrubPreview = ImageView(context).apply {
+            scaleType = ImageView.ScaleType.FIT_CENTER
+            setBackgroundColor(VoidTheme.colorSurface)
+            visibility = View.GONE
+        }
+        overlay.addView(
+            scrubPreview,
+            FrameLayout.LayoutParams(
+                VoidTheme.dpToPx(context, 160f), VoidTheme.dpToPx(context, 90f), Gravity.TOP or Gravity.CENTER_HORIZONTAL
+            ).apply { topMargin = VoidTheme.dpToPx(context, 8f) }
+        )
+
+        setContentView(overlay)
+
         window?.setLayout(
             android.view.ViewGroup.LayoutParams.MATCH_PARENT,
             android.view.ViewGroup.LayoutParams.MATCH_PARENT
