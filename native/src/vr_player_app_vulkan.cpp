@@ -42,6 +42,7 @@
 #include <vector>
 
 #include "vk_math.h"
+#include "vr_player_feedback_overlay.h"
 #include "quad.vert.h"
 #include "quad.frag.h"
 #include "video.vert.h"
@@ -88,6 +89,9 @@ extern "C" {
     // ver comentario em rust/bridge/src/lib.rs sobre spawn_loading.
     extern uint32_t get_playback_is_loading();
     extern uint32_t get_playback_is_playing();
+    // Overlay de feedback sobre a tela de video (ver vr_player_feedback_overlay.h):
+    // sequencia nos 32 bits altos, FeedbackKind nos 32 baixos.
+    extern uint64_t get_playback_feedback_event();
 }
 
 namespace {
@@ -388,6 +392,18 @@ struct AppState {
     // Endpoint do beam: origem no controller, destino no alvo/quad
     float beamStart[3] = {0, 0, 0};
     float beamEnd[3]   = {0, 0, -2};
+
+    // Overlay de feedback (paridade com o GLES): um unico vertex buffer com as
+    // formas concatenadas, o desenho so escolhe o intervalo do kind ativo.
+    VkPipeline feedbackPipeline = VK_NULL_HANDLE;
+    VkBuffer feedbackVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory feedbackVertexMemory = VK_NULL_HANDLE;
+    uint32_t feedbackFirstVertex[vrplayer::kFeedbackKindCount] = {};
+    uint32_t feedbackVertexCount[vrplayer::kFeedbackKindCount] = {};
+    vrplayer::FeedbackKind feedbackKind = vrplayer::FeedbackKind::None;
+    uint32_t feedbackSeq = 0;
+    float feedbackHoldTime = 0.0f;
+    float feedbackAlpha = 0.0f;
 
     // Estado de ScreenMode (lido do bridge Rust a cada frame)
     ScreenMode screenMode = ScreenMode::Flat2D;
@@ -2065,6 +2081,105 @@ void CreateBeamResources(AppState& state) {
     LOGI("Estagio 5: beam pipeline criado");
 }
 
+// Reusa quad.vert/quad.frag (MVP + cor solida no push constant), mas com
+// pipeline proprio: o do quad e TRIANGLE_STRIP e sem blend, e aqui precisa de
+// TRIANGLE_LIST e alpha blending pro fade.
+void CreateFeedbackResources(AppState& state) {
+    std::vector<float> vertices;
+    for (uint32_t kind = 1; kind < vrplayer::kFeedbackKindCount; kind++) {
+        vrplayer::FeedbackShape shape =
+            vrplayer::GetFeedbackShape(static_cast<vrplayer::FeedbackKind>(kind));
+        state.feedbackFirstVertex[kind] = static_cast<uint32_t>(vertices.size() / 3);
+        state.feedbackVertexCount[kind] = shape.vertexCount;
+        for (uint32_t v = 0; v < shape.vertexCount; v++) {
+            vertices.push_back(shape.xy[v * 2]);
+            vertices.push_back(shape.xy[v * 2 + 1]);
+            vertices.push_back(0.0f);
+        }
+    }
+
+    const VkDeviceSize bufferSize = vertices.size() * sizeof(float);
+    VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bufInfo.size = bufferSize;
+    bufInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VKR(vkCreateBuffer(state.vkDevice, &bufInfo, nullptr, &state.feedbackVertexBuffer));
+
+    VkMemoryRequirements memReq{};
+    vkGetBufferMemoryRequirements(state.vkDevice, state.feedbackVertexBuffer, &memReq);
+    VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocInfo.allocationSize = memReq.size;
+    allocInfo.memoryTypeIndex = FindMemoryType(
+        state, memReq.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &state.feedbackVertexMemory));
+    VKR(vkBindBufferMemory(state.vkDevice, state.feedbackVertexBuffer, state.feedbackVertexMemory, 0));
+
+    void* mapped = nullptr;
+    VKR(vkMapMemory(state.vkDevice, state.feedbackVertexMemory, 0, bufferSize, 0, &mapped));
+    std::memcpy(mapped, vertices.data(), static_cast<size_t>(bufferSize));
+    vkUnmapMemory(state.vkDevice, state.feedbackVertexMemory);
+
+    VkShaderModule vertMod = CreateShaderModule(state, kQuadVertSpirv, kQuadVertSpirv_size);
+    VkShaderModule fragMod = CreateShaderModule(state, kQuadFragSpirv, kQuadFragSpirv_size);
+
+    VkPipelineShaderStageCreateInfo stages[2] = {};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT; stages[0].module = vertMod; stages[0].pName = "main";
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = fragMod; stages[1].pName = "main";
+
+    VkVertexInputBindingDescription bindDesc{0, 3 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attr{0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0};
+    VkPipelineVertexInputStateCreateInfo vtxInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vtxInput.vertexBindingDescriptionCount = 1; vtxInput.pVertexBindingDescriptions = &bindDesc;
+    vtxInput.vertexAttributeDescriptionCount = 1; vtxInput.pVertexAttributeDescriptions = &attr;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vp.viewportCount = 1; vp.scissorCount = 1;
+    VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dyn.dynamicStateCount = 2; dyn.pDynamicStates = dynStates;
+
+    VkPipelineRasterizationStateCreateInfo rast{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rast.polygonMode = VK_POLYGON_MODE_FILL; rast.cullMode = VK_CULL_MODE_NONE;
+    rast.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rast.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState blendAtt{};
+    blendAtt.blendEnable = VK_TRUE;
+    blendAtt.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAtt.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAtt.colorBlendOp = VK_BLEND_OP_ADD;
+    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAtt.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAtt.alphaBlendOp = VK_BLEND_OP_ADD;
+    blendAtt.colorWriteMask = 0xF;
+    VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    blend.attachmentCount = 1; blend.pAttachments = &blendAtt;
+
+    VkPipelineDepthStencilStateCreateInfo dsState{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    dsState.depthTestEnable = VK_FALSE; dsState.depthWriteEnable = VK_FALSE;
+
+    VkGraphicsPipelineCreateInfo pipeInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipeInfo.stageCount = 2; pipeInfo.pStages = stages;
+    pipeInfo.pVertexInputState = &vtxInput; pipeInfo.pInputAssemblyState = &ia;
+    pipeInfo.pViewportState = &vp; pipeInfo.pRasterizationState = &rast;
+    pipeInfo.pMultisampleState = &ms; pipeInfo.pColorBlendState = &blend;
+    pipeInfo.pDepthStencilState = &dsState; pipeInfo.pDynamicState = &dyn;
+    pipeInfo.layout = state.pipelineLayout; pipeInfo.renderPass = state.renderPass;
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.feedbackPipeline));
+
+    vkDestroyShaderModule(state.vkDevice, vertMod, nullptr);
+    vkDestroyShaderModule(state.vkDevice, fragMod, nullptr);
+    LOGI("Overlay de feedback: pipeline criado (%zu vertices)", vertices.size() / 3);
+}
+
 void CreateCommandResources(AppState& state) {
     VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -2216,6 +2331,31 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
             0, sizeof(dotPush), &dotPush);
 
         vkCmdDraw(cmd, 2, 1, 0, 0);
+    }
+
+    // Posicao/orientacao da tela, mas sem a escala dela: o icone tem tamanho
+    // fixo. Por ultimo pra nao ser encoberto (pipelines aqui sao sem depth).
+    if (state.feedbackAlpha > 0.01f && state.feedbackKind != vrplayer::FeedbackKind::None) {
+        const uint32_t kindIndex = static_cast<uint32_t>(state.feedbackKind);
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.feedbackPipeline);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &state.feedbackVertexBuffer, &offset);
+
+        Mat4 feedbackModel = Mat4Multiply(
+            Mat4Multiply(scene.screenModelNoScale,
+                         Mat4Translation(0.0f, 0.0f, vrplayer::kFeedbackDepthOffset)),
+            Mat4Scale(vrplayer::kFeedbackScale, vrplayer::kFeedbackScale, 1.0f));
+
+        QuadPushConstants feedbackPush{};
+        feedbackPush.mvp = Mat4Multiply(Mat4Multiply(proj, view), feedbackModel);
+        feedbackPush.color[0] = 1.0f;
+        feedbackPush.color[1] = 1.0f;
+        feedbackPush.color[2] = 1.0f;
+        feedbackPush.color[3] = state.feedbackAlpha;
+        vkCmdPushConstants(cmd, state.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+            0, sizeof(feedbackPush), &feedbackPush);
+
+        vkCmdDraw(cmd, state.feedbackVertexCount[kindIndex], 1,
+                  state.feedbackFirstVertex[kindIndex], 0);
     }
 }
 
@@ -3106,6 +3246,7 @@ void android_main(android_app* app) {
     CreateSphereGeometry(state);
     CreateStereoPipeline(state);
     CreateBeamResources(state);
+    CreateFeedbackResources(state);
 
     // O video e iniciado via nativePlayVideo (JNI) quando o usuario seleciona
     // um arquivo no painel de UI — identico ao caminho GLES.
@@ -3179,6 +3320,15 @@ void android_main(android_app* app) {
     }
     if (state.quadVertexMemory != VK_NULL_HANDLE) {
         vkFreeMemory(state.vkDevice, state.quadVertexMemory, nullptr);
+    }
+    if (state.feedbackVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.feedbackVertexBuffer, nullptr);
+    }
+    if (state.feedbackVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.feedbackVertexMemory, nullptr);
+    }
+    if (state.feedbackPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.feedbackPipeline, nullptr);
     }
     if (state.pipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(state.vkDevice, state.pipeline, nullptr);

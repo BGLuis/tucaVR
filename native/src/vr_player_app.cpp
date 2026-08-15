@@ -13,6 +13,7 @@
 #include <GLES3/gl3ext.h>
 #include <android/log.h>
 #include "Render/BeamRenderer.h"
+#include "vr_player_feedback_overlay.h"
 #include <media/NdkImageReader.h>
 #include <media/NdkImage.h>
 #include <android/native_window_jni.h>
@@ -60,6 +61,9 @@ extern "C" {
     // mutex de CONTROLLER, seguro de chamar no mesmo poll ~10Hz abaixo.
     extern uint32_t get_playback_is_loading();
     extern uint32_t get_playback_is_playing();
+    // Overlay de feedback sobre a tela de video (ver vr_player_feedback_overlay.h):
+    // sequencia nos 32 bits altos, FeedbackKind nos 32 baixos.
+    extern uint64_t get_playback_feedback_event();
 
     // T6/T7: SMB e HTTP(S) — ver rust/bridge/src/lib.rs. Playback de URL
     // HTTP(S) reusa start_video_playback (o Demuxer despacha por esquema);
@@ -1186,6 +1190,53 @@ public:
             }
         }
 
+        // ------------------ INITIALIZE FEEDBACK OVERLAY ------------------
+        // Programa proprio: e o unico desenho do app sem textura nenhuma.
+        const char* feedbackVertexShader = R"(
+            in vec3 Position;
+            void main() {
+                gl_Position = TransformVertex(vec4(Position, 1.0));
+            }
+        )";
+        const char* feedbackFragmentShader = R"(
+            out vec4 FragColor;
+            uniform float uAlpha;
+            void main() {
+                FragColor = vec4(1.0, 1.0, 1.0, uAlpha);
+            }
+        )";
+        OVRFW::ovrProgramParm feedbackParms[] = {
+            {"uAlpha", OVRFW::ovrProgramParmType::FLOAT},
+        };
+        m_feedbackProgram = OVRFW::GlProgram::Build(
+            "", feedbackVertexShader, "", feedbackFragmentShader, feedbackParms, 1);
+
+        for (uint32_t kind = 1; kind < vrplayer::kFeedbackKindCount; kind++) {
+            vrplayer::FeedbackShape shape =
+                vrplayer::GetFeedbackShape(static_cast<vrplayer::FeedbackKind>(kind));
+            OVRFW::VertexAttribs attribs;
+            std::vector<OVRFW::TriangleIndex> indices;
+            attribs.position.reserve(shape.vertexCount);
+            indices.reserve(shape.vertexCount);
+            for (uint32_t v = 0; v < shape.vertexCount; v++) {
+                attribs.position.push_back(
+                    OVR::Vector3f(shape.xy[v * 2], shape.xy[v * 2 + 1], 0.0f));
+                indices.push_back(static_cast<OVRFW::TriangleIndex>(v));
+            }
+            m_feedbackGeo[kind].Create(attribs, indices);
+        }
+
+        m_feedbackSurfaceDef.graphicsCommand.Program = m_feedbackProgram;
+        m_feedbackSurfaceDef.graphicsCommand.UniformData[0].Data = &m_feedbackAlpha;
+        m_feedbackSurfaceDef.graphicsCommand.GpuState.blendEnable = OVRFW::ovrGpuState::BLEND_ENABLE;
+        m_feedbackSurfaceDef.graphicsCommand.GpuState.blendSrc = OVRFW::ovrGpuState::kGL_SRC_ALPHA;
+        m_feedbackSurfaceDef.graphicsCommand.GpuState.blendDst = OVRFW::ovrGpuState::kGL_ONE_MINUS_SRC_ALPHA;
+        m_feedbackSurfaceDef.graphicsCommand.GpuState.blendSrcAlpha = OVRFW::ovrGpuState::kGL_SRC_ALPHA;
+        m_feedbackSurfaceDef.graphicsCommand.GpuState.blendDstAlpha = OVRFW::ovrGpuState::kGL_ONE_MINUS_SRC_ALPHA;
+        m_feedbackSurfaceDef.graphicsCommand.GpuState.depthEnable = false;
+        m_feedbackSurfaceDef.graphicsCommand.GpuState.depthMaskEnable = false;
+        m_feedbackSurfaceDef.graphicsCommand.GpuState.cullEnable = false;
+
         // INICIAR VÍDEO DE TESTE AUTOMATICAMENTE
         LOGI("VRPlayerApp: Iniciando vídeo de teste automaticamente!");
         start_video_playback("/sdcard/Android/data/com.vrplayer/files/test.mp4");
@@ -1468,6 +1519,9 @@ public:
         float fadeStep = in.DeltaSeconds / kUiFadeDuration;
         m_uiAlpha = MoveTowards(m_uiAlpha, uiTargetAlpha, fadeStep);
         m_controlsAlpha = MoveTowards(m_controlsAlpha, controlsTargetAlpha, fadeStep);
+
+        // Mesmo fade dos paineis acima, so que o alvo cai sozinho por tempo.
+        UpdateFeedbackOverlay(in.DeltaSeconds, fadeStep);
 
         // So despacha toque/hover para um painel que esteja de fato visivel (evita
         // "clique invisivel" em um painel escondido pelo auto-hide); a deteccao
@@ -1874,6 +1928,25 @@ public:
         }
     }
 
+    // Qualquer mudanca na sequencia do bridge conta como evento novo — nao ha
+    // relogio compartilhado com o Rust.
+    void UpdateFeedbackOverlay(float deltaSeconds, float fadeStep) {
+        uint64_t event = get_playback_feedback_event();
+        uint32_t seq = static_cast<uint32_t>(event >> 32);
+        if (seq != m_feedbackSeq) {
+            m_feedbackSeq = seq;
+            m_feedbackKind = static_cast<vrplayer::FeedbackKind>(event & 0xFFFFFFFFu);
+            m_feedbackHoldTime = 0.0f;
+        } else {
+            m_feedbackHoldTime += deltaSeconds;
+        }
+        float feedbackTargetAlpha = (m_feedbackKind != vrplayer::FeedbackKind::None &&
+                                     m_feedbackHoldTime < vrplayer::kFeedbackHoldSeconds)
+            ? 1.0f
+            : 0.0f;
+        m_feedbackAlpha = MoveTowards(m_feedbackAlpha, feedbackTargetAlpha, fadeStep);
+    }
+
     virtual void Render(const OVRFW::ovrApplFrameIn& in, OVRFW::ovrRendererOutput& out) override {
         // --- PROCESS UI TEXTURE UPDATE ---
         if (m_uiImageReader) {
@@ -2004,6 +2077,18 @@ public:
             out.Surfaces.push_back(OVRFW::ovrDrawSurface(m_controlsTransform, &m_controlsSurfaceDef));
         }
 
+        // Posicao/orientacao da tela, mas sem a escala dela: o icone tem
+        // tamanho fixo, nao acompanha o redimensionamento da tela.
+        if (m_feedbackAlpha > 0.01f && m_feedbackKind != vrplayer::FeedbackKind::None) {
+            OVR::Vector3f worldScreenPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(m_screenPosition);
+            OVR::Matrix4f feedbackTransform = OVR::Matrix4f::Translation(worldScreenPos) *
+                OVR::Matrix4f::RotationY(m_sceneYawOffset) *
+                OVR::Matrix4f::Translation(OVR::Vector3f(0.0f, 0.0f, vrplayer::kFeedbackDepthOffset)) *
+                OVR::Matrix4f::Scaling(vrplayer::kFeedbackScale, vrplayer::kFeedbackScale, 1.0f);
+            m_feedbackSurfaceDef.geo = m_feedbackGeo[static_cast<uint32_t>(m_feedbackKind)];
+            out.Surfaces.push_back(OVRFW::ovrDrawSurface(feedbackTransform, &m_feedbackSurfaceDef));
+        }
+
         m_beamRenderer.Frame(in, out.FrameMatrices.CenterView);
         m_beamRenderer.Render(out.Surfaces);
     }
@@ -2031,11 +2116,26 @@ public:
         OVRFW::GlProgram::Free(m_stereoFlatProgram);
         m_sphereSurfaceDef.geo.Free();
         OVRFW::GlProgram::Free(m_sphereProgram);
+        // m_feedbackSurfaceDef.geo e so uma COPIA de um destes handles —
+        // liberar os dois seria double free das mesmas VBO/VAO.
+        for (uint32_t kind = 1; kind < vrplayer::kFeedbackKindCount; kind++) {
+            m_feedbackGeo[kind].Free();
+        }
+        OVRFW::GlProgram::Free(m_feedbackProgram);
     }
 
 private:
     static constexpr float kUiAutoHideSeconds = 5.0f;
     static constexpr float kUiFadeDuration = 0.35f;
+
+    // Overlay de feedback: uma geometria por FeedbackKind, um surfaceDef so.
+    OVRFW::GlProgram m_feedbackProgram;
+    OVRFW::ovrSurfaceDef m_feedbackSurfaceDef;
+    OVRFW::GlGeometry m_feedbackGeo[vrplayer::kFeedbackKindCount];
+    vrplayer::FeedbackKind m_feedbackKind = vrplayer::FeedbackKind::None;
+    uint32_t m_feedbackSeq = 0;
+    float m_feedbackHoldTime = 0.0f;
+    float m_feedbackAlpha = 0.0f;
 
     // Posicao/tamanho da tela virtual, ajustaveis em runtime (T3.6)
     OVR::Vector3f m_screenPosition = OVR::Vector3f(0.0f, 1.5f, -2.0f);

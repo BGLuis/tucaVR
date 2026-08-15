@@ -107,6 +107,31 @@ pub extern "C" fn get_playback_is_playing() -> u32 {
     }
 }
 
+// Feedback visual de acao desenhado pelo C++ sobre a tela de video (o flash do
+// painel Kotlin so aparece com o painel visivel). Um AtomicU64 so: sequencia
+// nos 32 bits altos, tipo nos baixos — snapshot atomico numa leitura.
+// Tipo (DEVE casar com `enum class FeedbackKind` em native/src/vr_player_feedback_overlay.h):
+//   0=nenhum, 1=play, 2=pause, 3=seek adiante, 4=seek atras
+static FEEDBACK_EVENT: AtomicU64 = AtomicU64::new(0);
+const FEEDBACK_PLAY: u32 = 1;
+const FEEDBACK_PAUSE: u32 = 2;
+const FEEDBACK_SEEK_FORWARD: u32 = 3;
+const FEEDBACK_SEEK_BACKWARD: u32 = 4;
+
+fn emit_playback_feedback(kind: u32) {
+    let _ = FEEDBACK_EVENT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |prev| {
+        Some((((prev >> 32) + 1) << 32) | u64::from(kind))
+    });
+}
+
+/// UI: ultimo evento de feedback. A sequencia (32 bits altos) muda a cada
+/// disparo, e so o que o C++ precisa pra reiniciar a animacao — nao ha
+/// relogio compartilhado entre Rust e o render loop. Nunca bloqueia.
+#[no_mangle]
+pub extern "C" fn get_playback_feedback_event() -> u64 {
+    FEEDBACK_EVENT.load(Ordering::Relaxed)
+}
+
 // T1.4/T1.5/T2: modo de exibicao 3D (2D/SBS/OU/360/180) e swap-eyes. Isto e
 // puro ESTADO DE APRESENTACAO — nao afeta o Demuxer/PlaybackController (o
 // video decodificado e sempre o mesmo frame RGBA; o que muda e SO como
@@ -368,6 +393,11 @@ pub extern "C" fn get_network_blocks_discarded() -> u64 {
 pub extern "C" fn toggle_play_pause() {
     if let Ok(mut controller) = CONTROLLER.lock() {
         controller.toggle_play_pause();
+        emit_playback_feedback(if controller.is_playing() {
+            FEEDBACK_PLAY
+        } else {
+            FEEDBACK_PAUSE
+        });
     }
 }
 
@@ -825,6 +855,18 @@ pub extern "C" fn stop_video_playback() {
 
 #[no_mangle]
 pub extern "C" fn seek_video_playback(position: f32) {
+    // Direcao do icone tem que sair ANTES do spawn_loading: depois do seek a
+    // posicao corrente ja e a de destino. try_lock pra nunca atrasar a UI
+    // thread — sem posicao conhecida o overlay so nao dispara.
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        let (current, _) = controller.get_progress();
+        emit_playback_feedback(if f64::from(position) >= current {
+            FEEDBACK_SEEK_FORWARD
+        } else {
+            FEEDBACK_SEEK_BACKWARD
+        });
+    }
+
     spawn_loading(move || {
         if let Ok(mut controller) = CONTROLLER.lock() {
             if let Err(e) = controller.seek(position as f64) {

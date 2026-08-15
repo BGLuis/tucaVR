@@ -3,6 +3,7 @@
 #include <jni.h>
 #include <android_native_app_glue.h>
 #include "vk_math.h"
+#include "vr_player_feedback_overlay.h"
 #include <math.h>
 #include <algorithm>
 #include <cstdint>
@@ -383,6 +384,26 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     float fadeStep = (kUiFadeDuration > 0.0f) ? dt / kUiFadeDuration : 1.0f;
     state.uiAlpha = MoveTowards(state.uiAlpha, uiTargetAlpha, fadeStep);
     state.controlsAlpha = MoveTowards(state.controlsAlpha, controlsTargetAlpha, fadeStep);
+
+    // Overlay de feedback (paridade com o GLES): mesmo fade dos paineis acima,
+    // so que o alvo cai sozinho por tempo. Qualquer mudanca na sequencia do
+    // bridge conta como evento novo — nao ha relogio compartilhado com o Rust.
+    {
+        uint64_t feedbackEvent = get_playback_feedback_event();
+        uint32_t feedbackSeq = static_cast<uint32_t>(feedbackEvent >> 32);
+        if (feedbackSeq != state.feedbackSeq) {
+            state.feedbackSeq = feedbackSeq;
+            state.feedbackKind = static_cast<vrplayer::FeedbackKind>(feedbackEvent & 0xFFFFFFFFu);
+            state.feedbackHoldTime = 0.0f;
+        } else {
+            state.feedbackHoldTime += dt;
+        }
+        float feedbackTargetAlpha = (state.feedbackKind != vrplayer::FeedbackKind::None &&
+                                     state.feedbackHoldTime < vrplayer::kFeedbackHoldSeconds)
+            ? 1.0f
+            : 0.0f;
+        state.feedbackAlpha = MoveTowards(state.feedbackAlpha, feedbackTargetAlpha, fadeStep);
+    }
 
     // So despacha toque/hover pra um painel de fato visivel (evita "clique
     // invisivel" num painel escondido pelo auto-hide); a deteccao geometrica
