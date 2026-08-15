@@ -33,12 +33,12 @@
 //! vez de fingido, mesmo padrao de `crate::smb`): FTPS/TLS (a crate esta
 //! configurada sem a feature de TLS — FTP em si e sempre texto claro, doc
 //! secao 6 aviso "FTP senha em texto claro"; recomendacao la e usar SFTP
-//! quando possivel), reconexao automatica/keepalive em cima de idle
-//! timeout do servidor (doc, secao 6, nota "Timeout agressivo" — a
-//! `suppaftp` nao tem um equivalente ao `ClientConfig::auto_reconnect` da
-//! `smb2`; cada `FtpFileSource` mantem uma unica conexao de controle pela
-//! duracao do playback e nao tenta se reconectar se o servidor a derrubar
-//! por idle).
+//! quando possivel), keepalive em cima de idle timeout do servidor (doc,
+//! secao 6, nota "Timeout agressivo" — a `suppaftp` nao tem um equivalente
+//! ao `ClientConfig::auto_reconnect` da `smb2`). `FtpFileSource::read_range`
+//! reconecta a conexao de controle e tenta a mesma leitura mais uma vez se um
+//! erro de I/O acontecer (mesmo padrao de `SftpFileSource`, ver
+//! `crate::sftp`), mas nao ha keepalive proativo antes de um erro ocorrer.
 
 pub mod uri;
 
@@ -136,6 +136,11 @@ pub fn list_directory(t: &FtpTarget, path: &str) -> Result<Vec<FtpDirEntry>, Str
 /// leitura sequencial vs. reconexao via REST+RETR em seeks de verdade.
 pub struct FtpFileSource {
     control: FtpStream,
+    /// Guardado para poder reabrir a conexao de controle do zero em
+    /// `reconnect()` sem o chamador precisar reconstruir um `FtpFileSource`
+    /// inteiro apos um erro transiente de rede — mesmo padrao de
+    /// `SftpFileSource::target` (ver sftp/mod.rs).
+    target: FtpTarget,
     path: String,
     size: u64,
     /// Stream de dados atualmente aberto (RETR em andamento), se houver.
@@ -159,7 +164,20 @@ impl FtpFileSource {
     pub fn open(t: &FtpTarget) -> Result<Self, String> {
         let mut control = connect_and_login(t)?;
         let size = control.size(&t.path).map_err(|e| e.to_string())? as u64;
-        Ok(Self { control, path: t.path.clone(), size, data: None, data_pos: 0, data_exhausted: false })
+        Ok(Self { control, target: t.clone(), path: t.path.clone(), size, data: None, data_pos: 0, data_exhausted: false })
+    }
+
+    /// Reabre a conexao de controle do zero, no mesmo caminho — mesmo padrao
+    /// de `SftpFileSource::reconnect` (sftp/mod.rs). A conexao antiga
+    /// provavelmente ja caiu, entao so descarta o estado velho (sem tentar um
+    /// `close_data_stream`/`quit` "limpo", que exigiria a conexao ainda viva).
+    fn reconnect(&mut self) -> Result<(), String> {
+        log::warn!("FtpFileSource: reconectando apos falha de leitura");
+        self.data = None;
+        self.data_exhausted = false;
+        self.control = connect_and_login(&self.target)?;
+        self.data_pos = 0;
+        Ok(())
     }
 
     /// Fecha o stream de dados atual (se houver), com o encerramento correto
@@ -194,10 +212,8 @@ impl FtpFileSource {
         self.data_exhausted = false;
         Ok(())
     }
-}
 
-impl RangeSource for FtpFileSource {
-    fn read_range(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+    fn try_read_range(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
         if buf.is_empty() || offset >= self.size {
             return Ok(0);
         }
@@ -229,6 +245,22 @@ impl RangeSource for FtpFileSource {
         }
         self.data_pos += total as u64;
         Ok(total)
+    }
+}
+
+impl RangeSource for FtpFileSource {
+    fn read_range(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+        match self.try_read_range(offset, buf) {
+            Ok(n) => Ok(n),
+            Err(_first_err) => {
+                // Conexao provavelmente caiu (timeout/idle do servidor, doc
+                // secao 6) — reconecta do zero uma vez e tenta a MESMA
+                // leitura de novo antes de propagar o erro pro Demuxer.
+                // Mesmo padrao de `SftpFileSource::read_range` (sftp/mod.rs).
+                self.reconnect().map_err(io::Error::other)?;
+                self.try_read_range(offset, buf)
+            }
+        }
     }
 
     fn len(&self) -> Option<u64> {
