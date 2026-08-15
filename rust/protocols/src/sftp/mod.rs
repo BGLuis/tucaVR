@@ -131,6 +131,21 @@ const SFTP_MAX_CONCURRENT_CHUNKS: usize = 4;
 /// reabrir arquivo) so pra refazer os mesmos ~12MB do zero.
 const SFTP_CHUNK_RETRY_ATTEMPTS: usize = 2;
 
+/// Teto de tempo pra UM lote de leitura concorrente. Sem isto, um SSH_FXP_READ
+/// que o servidor nunca responde (canal continua vivo — keepalive_interval/
+/// keepalive_max acima nao pegam isso, so detectam conexao MORTA, nao uma
+/// requisicao especifica travada do lado do servidor) travava
+/// `self.runtime.block_on(...)` para sempre. Achado real em hardware
+/// (T-seek-ux): com a conexao agora reaproveitada entre seeks
+/// (ConnectionCache em core/demuxer.rs), esse tipo de trava fica MAIS
+/// provavel de ser encontrado (conexao fica aberta por mais tempo) e MUITO
+/// mais grave — `PlaybackController::seek()` precisa dar join() na thread
+/// antiga antes de prosseguir, entao travar aqui trava o controller
+/// INTEIRO (todo play/pause/volume/seek subsequente) ate isto expirar.
+/// Estourar o timeout vira um io::Error normal, que `read_range` abaixo ja
+/// trata reconectando e tentando de novo uma vez.
+const SFTP_READ_TIMEOUT: Duration = Duration::from_secs(20);
+
 /// Handler minimo exigido pelo `russh::client` para receber eventos da
 /// sessao SSH (banner, checagem de host key, etc). `check_server_key`
 /// aceita QUALQUER chave — ver `[!WARNING]` no doc do modulo. Todos os
@@ -361,9 +376,18 @@ impl SftpFileSource {
         let chunks = split_range(offset, want, SFTP_MAX_READ_CHUNK);
         let mut total = 0usize;
         'batches: for batch in chunks.chunks(SFTP_MAX_CONCURRENT_CHUNKS) {
-            let mut results = self.runtime.block_on(join_all(
-                batch.iter().map(|&(chunk_offset, chunk_len)| Self::read_chunk_filling(raw, handle, chunk_offset, chunk_len)),
-            ));
+            let mut results = match self.runtime.block_on(tokio::time::timeout(
+                SFTP_READ_TIMEOUT,
+                join_all(batch.iter().map(|&(chunk_offset, chunk_len)| Self::read_chunk_filling(raw, handle, chunk_offset, chunk_len))),
+            )) {
+                Ok(results) => results,
+                Err(_elapsed) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("SFTP: sem resposta do servidor por {}s (leitura travada)", SFTP_READ_TIMEOUT.as_secs()),
+                    ));
+                }
+            };
 
             // Repete SO os chunks que falharam com um erro de verdade (nao
             // Eof — isso e um resultado legitimo, nao uma falha) antes de

@@ -45,7 +45,7 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 /// Contadores de instrumentacao do `PrefetchReader` (docs/DEBUGGING.md),
@@ -110,6 +110,31 @@ pub trait RangeSource: Send {
     /// Tamanho total em bytes, se conhecido de antemao (SMB/SFTP: retornado
     /// no open; HTTP: Content-Length do probe; FTP: `SIZE`).
     fn len(&self) -> Option<u64>;
+}
+
+/// `RangeSource` compartilhavel entre varios `PrefetchReader` sucessivos
+/// (ex.: seeks) sem reabrir a conexao — ver `core::demuxer::ConnectionCache`.
+/// So serializa acesso via mutex; quem decide reconectar em erro continua
+/// sendo a implementacao de `S::read_range` (ex.: `SftpFileSource`).
+pub struct SharedRangeSource<S>(Arc<Mutex<S>>);
+
+impl<S> SharedRangeSource<S> {
+    pub fn new(inner: Arc<Mutex<S>>) -> Self {
+        Self(inner)
+    }
+}
+
+impl<S: RangeSource> RangeSource for SharedRangeSource<S> {
+    fn read_range(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+        self.0
+            .lock()
+            .map_err(|_| io::Error::other("SharedRangeSource: mutex envenenado"))?
+            .read_range(offset, buf)
+    }
+
+    fn len(&self) -> Option<u64> {
+        self.0.lock().ok()?.len()
+    }
 }
 
 /// 4MB — dentro da faixa 2-8MB que o doc recomenda para o buffer de

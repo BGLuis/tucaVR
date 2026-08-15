@@ -111,6 +111,9 @@ pub struct PlaybackController {
     video_queue: Option<crossbeam_channel::Sender<ffmpeg_next::Packet>>,
     frames_output: Option<Arc<std::sync::atomic::AtomicU64>>,
     frames_dropped: Option<Arc<std::sync::atomic::AtomicU64>>,
+    // Conexao de rede reaproveitavel entre seeks no mesmo path (so SFTP por
+    // enquanto) — ver `crate::demuxer::ConnectionCache`.
+    connection_cache: crate::demuxer::ConnectionCache,
 }
 
 impl PlaybackController {
@@ -132,14 +135,31 @@ impl PlaybackController {
             video_queue: None,
             frames_output: None,
             frames_dropped: None,
+            connection_cache: crate::demuxer::ConnectionCache::default(),
         }
     }
 
-    pub fn seek(&mut self, position_sec: f64) {
+    /// Erro retornado (se houver) precisa ser reportado pelo chamador via
+    /// `set_last_playback_error` (ver `bridge::seek_video_playback`) — sem
+    /// isso, uma falha aqui era inteiramente silenciosa: antes do frame
+    /// congelado (T-seek-ux) isso pelo menos aparecia como tela preta
+    /// obviamente quebrada; agora fica esperando atras do ultimo frame,
+    /// parecendo "travado" em vez de "erro", se ninguem repassar o erro.
+    pub fn seek(&mut self, position_sec: f64) -> Result<(), String> {
         if let Some(path) = self.current_path.clone() {
+            // load_at() sempre cria uma Generation nova com is_playing=true
+            // (ver media_logic::session::Generation::new) — sem isto, um
+            // seek durante pausa despausava sozinho, e o indicador de
+            // play/pause da UI (get_playback_is_playing) mentiria logo
+            // depois de qualquer seek com o video pausado.
+            let was_playing = self.is_playing();
             self.stop();
-            let _ = self.load_at(&path, position_sec);
+            self.load_at(&path, position_sec).map_err(|e| e.to_string())?;
+            if !was_playing {
+                self.pause();
+            }
         }
+        Ok(())
     }
 
     pub fn load(&mut self, path: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -154,7 +174,7 @@ impl PlaybackController {
         }
 
         self.current_path = Some(path.to_string());
-        let mut demuxer = Demuxer::new(path).map_err(|e| e.to_string())?;
+        let mut demuxer = Demuxer::open(path, Some(&mut self.connection_cache)).map_err(|e| e.to_string())?;
         self.network_stats = demuxer.network_stats.clone();
         demuxer.select_audio_track(self.desired_audio_track);
         self.audio_track_count = demuxer.audio_streams.len();
@@ -499,6 +519,15 @@ impl PlaybackController {
         self.set_playing(true);
     }
 
+    /// Estado real da sessao atual (nao um espelho otimista do lado
+    /// Kotlin) — usado pela UI pra reagir a QUALQUER caminho que mude o
+    /// play/pause (botao na tela, botao do controle VR, auto-pause por
+    /// perda de foco), nao so o clique direto no botao. Ver
+    /// get_playback_is_playing em rust/bridge/src/lib.rs.
+    pub fn is_playing(&self) -> bool {
+        self.session.as_ref().map(|s| s.is_playing()).unwrap_or(false)
+    }
+
     /// Volume vai de 0.0 (mudo) a 1.0 (100%); valores fora do range sao
     /// truncados. Persiste entre trocas de video (ver campo `volume`).
     pub fn set_volume(&mut self, volume: f32) {
@@ -553,7 +582,11 @@ impl PlaybackController {
         }
         self.desired_audio_track = (self.desired_audio_track + 1) % self.audio_track_count;
         let (current_position, _) = self.get_progress();
-        self.seek(current_position);
+        // Erro descartado de proposito: cycle_audio_track() nao tem
+        // caminho de reporte pro usuario (diferente de seek_video_playback,
+        // ver bridge/lib.rs) — trocar de trilha e uma acao secundaria, uma
+        // falha aqui nao deveria virar um erro de playback "principal".
+        let _ = self.seek(current_position);
     }
 
     pub fn pause(&mut self) {

@@ -60,6 +60,53 @@ static CONTROLLER: Lazy<Arc<Mutex<PlaybackController>>> = Lazy::new(|| {
 // sem nenhum feedback pro usuario. Kotlin consome via take_last_playback_error() (polling).
 static LAST_PLAYBACK_ERROR: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
 
+// Contador (nao bool) porque duas chamadas de carregamento podem se
+// sobrepor (ex.: usuario solta o seek e arrasta de novo antes da primeira
+// terminar) — com um bool simples, a primeira terminando derrubaria a flag
+// enquanto a segunda ainda esta em andamento. So incrementado/decrementado
+// por `spawn_loading`, nunca lido dentro do lock de CONTROLLER (para nao
+// arriscar contencao/deadlock com ele).
+static LOADING_COUNT: AtomicU32 = AtomicU32::new(0);
+
+/// Roda `f` numa thread separada com o contador de loading incrementado
+/// durante a execucao — usado em todo ponto que faz stop()+load()/seek()
+/// (reconexao de rede + reprobe do demuxer podem levar segundos, ver
+/// docs/NETWORK-IO-PERFORMANCE.md). UI consome via get_playback_is_loading()
+/// (polling, mesmo padrao de get_video_progress) para mostrar um indicador
+/// de carregamento em vez de a tela simplesmente parar de responder.
+fn spawn_loading<F: FnOnce() + Send + 'static>(f: F) {
+    LOADING_COUNT.fetch_add(1, Ordering::Relaxed);
+    std::thread::spawn(move || {
+        f();
+        LOADING_COUNT.fetch_sub(1, Ordering::Relaxed);
+    });
+}
+
+/// Debug/UI (docs/DEBUGGING.md): 1 enquanto ha pelo menos um load()/seek()
+/// em andamento em background (ver spawn_loading acima), 0 caso contrario.
+/// Nao toca o mutex de CONTROLLER — pode ser chamado a qualquer momento,
+/// inclusive enquanto load()/seek() o segura, sem risco de bloquear.
+#[no_mangle]
+pub extern "C" fn get_playback_is_loading() -> u32 {
+    (LOADING_COUNT.load(Ordering::Relaxed) > 0) as u32
+}
+
+/// UI (feedback de play/pause): estado real da sessao, nao um espelho
+/// otimista do que o Kotlin acha que mandou — reage a qualquer caminho que
+/// mude o play/pause (botao na tela, botao do controle VR, auto-pause por
+/// perda de foco). try_lock (mesmo motivo de get_video_progress): chamada
+/// periodica ~10Hz, nunca deve bloquear o render loop. Em contencao
+/// (load()/seek() em andamento — get_playback_is_loading() ja sinaliza
+/// isso), devolve 0: nao ha sessao tocando ainda de qualquer forma nesse
+/// momento.
+#[no_mangle]
+pub extern "C" fn get_playback_is_playing() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.is_playing() as u32,
+        Err(_) => 0,
+    }
+}
+
 // T1.4/T1.5/T2: modo de exibicao 3D (2D/SBS/OU/360/180) e swap-eyes. Isto e
 // puro ESTADO DE APRESENTACAO — nao afeta o Demuxer/PlaybackController (o
 // video decodificado e sempre o mesmo frame RGBA; o que muda e SO como
@@ -437,7 +484,7 @@ pub extern "C" fn start_smb_playback(
         }
     };
 
-    std::thread::spawn(move || {
+    spawn_loading(move || {
         let internal_uri = target.to_internal();
         unsafe { log(4, &format!("Loading SMB video: {}", protocols::smb::redact(&internal_uri))); }
 
@@ -559,7 +606,7 @@ pub extern "C" fn start_ftp_playback(
         }
     };
 
-    std::thread::spawn(move || {
+    spawn_loading(move || {
         let internal_uri = target.to_internal();
         unsafe { log(4, &format!("Loading FTP video: {}", protocols::ftp::redact(&internal_uri))); }
 
@@ -649,7 +696,7 @@ pub extern "C" fn start_sftp_playback(
         return;
     }
 
-    std::thread::spawn(move || {
+    spawn_loading(move || {
         let internal_uri = target.to_internal();
         unsafe { log(4, &format!("Loading SFTP video: {}", protocols::sftp::redact(&internal_uri))); }
 
@@ -753,7 +800,7 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char) {
         Err(_) => return,
     };
 
-    std::thread::spawn(move || {
+    spawn_loading(move || {
         unsafe { log(4, &format!("Loading video: {}", path_str)); }
 
         reset_3d_mode();
@@ -778,9 +825,12 @@ pub extern "C" fn stop_video_playback() {
 
 #[no_mangle]
 pub extern "C" fn seek_video_playback(position: f32) {
-    std::thread::spawn(move || {
+    spawn_loading(move || {
         if let Ok(mut controller) = CONTROLLER.lock() {
-            controller.seek(position as f64);
+            if let Err(e) = controller.seek(position as f64) {
+                unsafe { log(6, &format!("Error seeking video: {e}")); }
+                set_last_playback_error(e);
+            }
         }
     });
 }
@@ -819,7 +869,7 @@ pub extern "C" fn get_playback_speed() -> f32 {
 
 #[no_mangle]
 pub extern "C" fn cycle_audio_track() {
-    std::thread::spawn(move || {
+    spawn_loading(move || {
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.cycle_audio_track();
         }
@@ -999,6 +1049,139 @@ pub extern "C" fn sftp_generate_thumbnail(
     let internal_uri = target.to_internal();
     let image = core::thumbnail::generate(&internal_uri, max_width, max_height);
     write_thumbnail(image, out_width, out_height, out_len)
+}
+
+/// Libera o buffer retornado por `smb_generate_thumbnail_strip`/
+/// `sftp_generate_thumbnail_strip`. Mesma ressalva de
+/// `free_rust_thumbnail_buffer`: `len` precisa ser exatamente o `out_len`
+/// devolvido por essas chamadas.
+#[no_mangle]
+pub extern "C" fn free_rust_thumbnail_strip(ptr: *mut u8, len: usize) {
+    if ptr.is_null() {
+        return;
+    }
+    unsafe {
+        drop(Vec::from_raw_parts(ptr, len, len));
+    }
+}
+
+/// Como `write_thumbnail`, mas pra `core::thumbnail::ThumbnailStrip` —
+/// `out_count` e o numero de frames concatenados no buffer (a posicao do
+/// frame `i` e sempre `(i+1) * interval_secs`, o Kotlin ja sabe
+/// `interval_secs` porque foi ele quem pediu).
+fn write_thumbnail_strip(
+    strip: Option<core::thumbnail::ThumbnailStrip>,
+    out_width: *mut u32,
+    out_height: *mut u32,
+    out_count: *mut usize,
+    out_len: *mut usize,
+) -> *mut u8 {
+    let (ptr, width, height, count, len) = match strip {
+        Some(s) => {
+            let mut buf = s.rgba;
+            buf.shrink_to_fit();
+            let len = buf.len();
+            let ptr = buf.as_mut_ptr();
+            std::mem::forget(buf);
+            (ptr, s.width, s.height, s.count, len)
+        }
+        None => (std::ptr::null_mut(), 0, 0, 0, 0),
+    };
+    unsafe {
+        if !out_width.is_null() { *out_width = width; }
+        if !out_height.is_null() { *out_height = height; }
+        if !out_count.is_null() { *out_count = count; }
+        if !out_len.is_null() { *out_len = len; }
+    }
+    ptr
+}
+
+/// Gera uma trilha de thumbnails (preview de arrasto no seekbar, T-seek-ux)
+/// de um video num share SMB — ver `core::thumbnail::generate_strip`.
+/// Mesmas ressalvas de `smb_generate_thumbnail` (chamada BLOQUEANTE, so de
+/// `Dispatchers.IO`, retorna nulo em qualquer falha); o ponteiro retornado
+/// (se nao nulo) DEVE ser liberado com `free_rust_thumbnail_strip`.
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn smb_generate_thumbnail_strip(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    domain: *const std::os::raw::c_char,
+    share: *const std::os::raw::c_char,
+    path: *const std::os::raw::c_char,
+    interval_secs: f32,
+    max_width: u32,
+    max_height: u32,
+    out_width: *mut u32,
+    out_height: *mut u32,
+    out_count: *mut usize,
+    out_len: *mut usize,
+) -> *mut u8 {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return write_thumbnail_strip(None, out_width, out_height, out_count, out_len) };
+        let share = match cstr_to_string(share) { Some(s) => s, None => return write_thumbnail_strip(None, out_width, out_height, out_count, out_len) };
+        let path = match cstr_to_string(path) { Some(s) => s, None => return write_thumbnail_strip(None, out_width, out_height, out_count, out_len) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        let domain = cstr_to_string(domain).unwrap_or_default();
+        protocols::smb::SmbTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            share,
+            path,
+            username,
+            password,
+            domain,
+        }
+    };
+    let internal_uri = target.to_internal();
+    let strip = core::thumbnail::generate_strip(&internal_uri, interval_secs as f64, max_width, max_height);
+    write_thumbnail_strip(strip, out_width, out_height, out_count, out_len)
+}
+
+/// Mesma logica de `smb_generate_thumbnail_strip`, para um arquivo num
+/// servidor SFTP — `private_key` segue a mesma convencao de
+/// `sftp_generate_thumbnail` (conteudo PEM, nao caminho de arquivo).
+#[no_mangle]
+#[allow(clippy::too_many_arguments)]
+pub extern "C" fn sftp_generate_thumbnail_strip(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    private_key: *const std::os::raw::c_char,
+    path: *const std::os::raw::c_char,
+    interval_secs: f32,
+    max_width: u32,
+    max_height: u32,
+    out_width: *mut u32,
+    out_height: *mut u32,
+    out_count: *mut usize,
+    out_len: *mut usize,
+) -> *mut u8 {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return write_thumbnail_strip(None, out_width, out_height, out_count, out_len) };
+        let path = match cstr_to_string(path) { Some(s) => s, None => return write_thumbnail_strip(None, out_width, out_height, out_count, out_len) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        protocols::sftp::SftpTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            path,
+            username,
+            password,
+            private_key,
+        }
+    };
+    if target.validate().is_err() {
+        return write_thumbnail_strip(None, out_width, out_height, out_count, out_len);
+    }
+    let internal_uri = target.to_internal();
+    let strip = core::thumbnail::generate_strip(&internal_uri, interval_secs as f64, max_width, max_height);
+    write_thumbnail_strip(strip, out_width, out_height, out_count, out_len)
 }
 
 #[no_mangle]

@@ -1,7 +1,7 @@
 use ffmpeg_next as ffmpeg;
 use ffmpeg::format::context::{Input, StreamIo};
-use protocols::prefetch::{PrefetchReader, PrefetchStats};
-use std::sync::Arc;
+use protocols::prefetch::{PrefetchReader, PrefetchStats, SharedRangeSource};
+use std::sync::{Arc, Mutex};
 
 // 12MB em vez do default 4MB: a 8K/60fps HEVC (~63Mbps / 7.85MB/s), 4MB cobre só ~0.5s por bloco.
 const REMOTE_PREFETCH_BLOCK_SIZE: usize = 12 * 1024 * 1024;
@@ -12,6 +12,28 @@ pub enum ReadPacketOutcome {
     Packet(usize, ffmpeg::Packet),
     Eof,
     Error(String),
+}
+
+/// Conexao de rede reaproveitavel entre `Demuxer::open()` sucessivos no
+/// MESMO path (ver `PlaybackController::seek`) — SFTP, SMB e HTTPS por
+/// enquanto, os protocolos cujo `RangeSource` ja tolera ficar aberto entre
+/// sessoes (SFTP reconecta sozinho em erro de leitura, ver
+/// `SftpFileSource::read_range`; SMB usa `auto_reconnect` da propria lib
+/// cliente; HTTPS usa `reqwest::blocking::Client`, que já faz pooling e
+/// reconexao transparente por request). FTP ainda nao tem essa garantia
+/// (sem retry/reconnect na leitura), entao continua abrindo conexao nova a
+/// cada seek — cachear sem isso arriscaria falhar um seek que hoje sempre
+/// funciona. `ffmpeg-next` nao expoe API pra recuperar o stream de dentro
+/// de um `Input` ja construido, entao a conexao e compartilhada via
+/// `Arc<Mutex<_>>` desde o inicio em vez de "recuperada" depois do Demuxer
+/// antigo morrer.
+#[derive(Default)]
+pub enum ConnectionCache {
+    #[default]
+    Empty,
+    Sftp(String, Arc<Mutex<protocols::sftp::SftpFileSource>>),
+    Smb(String, Arc<Mutex<protocols::smb::SmbFileSource>>),
+    Https(String, Arc<Mutex<protocols::http::HttpsRangeSource>>),
 }
 
 pub struct Demuxer {
@@ -56,13 +78,22 @@ impl Demuxer {
     ///   internamente, entao nao ha necessidade de reinventar isso para
     ///   HTTP sem TLS.
     pub fn new(path: &str) -> Result<Self, String> {
+        Self::open(path, None)
+    }
+
+    /// Como `new()`, mas aceita um `ConnectionCache` opcional (ver o tipo
+    /// acima) pra reaproveitar a conexao SFTP de uma sessao anterior no
+    /// MESMO path em vez de reabrir do zero — usado por
+    /// `PlaybackController::load_at` (seek), nao por chamadores avulsos
+    /// como `thumbnail::generate`.
+    pub fn open(path: &str, cache: Option<&mut ConnectionCache>) -> Result<Self, String> {
         ffmpeg::init().map_err(|e| e.to_string())?;
 
         let mut network_stats = None;
 
         let ictx = if let Some(target) = protocols::smb::SmbTarget::from_internal(path) {
-            let source = protocols::smb::SmbFileSource::open(&target)?;
-            let reader = PrefetchReader::with_block_size(source, REMOTE_PREFETCH_BLOCK_SIZE);
+            let shared = Self::smb_source(path, &target, cache)?;
+            let reader = PrefetchReader::with_block_size(shared, REMOTE_PREFETCH_BLOCK_SIZE);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?
@@ -73,14 +104,14 @@ impl Demuxer {
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::sftp::SftpTarget::from_internal(path) {
-            let source = protocols::sftp::SftpFileSource::open(&target)?;
-            let reader = PrefetchReader::with_block_size(source, REMOTE_PREFETCH_BLOCK_SIZE);
+            let shared = Self::sftp_source(path, &target, cache)?;
+            let reader = PrefetchReader::with_block_size(shared, REMOTE_PREFETCH_BLOCK_SIZE);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?
         } else if path.starts_with("https://") {
-            let source = protocols::http::HttpsRangeSource::new(path)?;
-            let reader = PrefetchReader::with_block_size(source, REMOTE_PREFETCH_BLOCK_SIZE);
+            let shared = Self::https_source(path, cache)?;
+            let reader = PrefetchReader::with_block_size(shared, REMOTE_PREFETCH_BLOCK_SIZE);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(path), None).map_err(|e| e.to_string())?
@@ -111,6 +142,72 @@ impl Demuxer {
             audio_streams,
             network_stats,
         })
+    }
+
+    /// Reaproveita a conexao SFTP do `cache` se `path` bate com a da ultima
+    /// sessao; senao abre uma nova e (se `cache` foi passado) a guarda pra
+    /// o proximo `open()`. So o `Arc` e clonado aqui — a sessao SSH de
+    /// verdade so fecha quando o ultimo clone for dropado (a sessao antiga,
+    /// se houver, ja foi finalizada por `stop_and_join()` antes de chegar
+    /// aqui — ver `PlaybackController::load_at`).
+    fn sftp_source(
+        path: &str,
+        target: &protocols::sftp::SftpTarget,
+        cache: Option<&mut ConnectionCache>,
+    ) -> Result<SharedRangeSource<protocols::sftp::SftpFileSource>, String> {
+        let Some(cache) = cache else {
+            let source = protocols::sftp::SftpFileSource::open(target)?;
+            return Ok(SharedRangeSource::new(Arc::new(Mutex::new(source))));
+        };
+        if let ConnectionCache::Sftp(cached_path, conn) = cache {
+            if cached_path.as_str() == path {
+                return Ok(SharedRangeSource::new(conn.clone()));
+            }
+        }
+        let conn = Arc::new(Mutex::new(protocols::sftp::SftpFileSource::open(target)?));
+        *cache = ConnectionCache::Sftp(path.to_string(), conn.clone());
+        Ok(SharedRangeSource::new(conn))
+    }
+
+    /// Mesma logica de `sftp_source`, pra SMB (a lib cliente ja tem
+    /// `auto_reconnect` proprio, ver `SmbFileSource`).
+    fn smb_source(
+        path: &str,
+        target: &protocols::smb::SmbTarget,
+        cache: Option<&mut ConnectionCache>,
+    ) -> Result<SharedRangeSource<protocols::smb::SmbFileSource>, String> {
+        let Some(cache) = cache else {
+            let source = protocols::smb::SmbFileSource::open(target)?;
+            return Ok(SharedRangeSource::new(Arc::new(Mutex::new(source))));
+        };
+        if let ConnectionCache::Smb(cached_path, conn) = cache {
+            if cached_path.as_str() == path {
+                return Ok(SharedRangeSource::new(conn.clone()));
+            }
+        }
+        let conn = Arc::new(Mutex::new(protocols::smb::SmbFileSource::open(target)?));
+        *cache = ConnectionCache::Smb(path.to_string(), conn.clone());
+        Ok(SharedRangeSource::new(conn))
+    }
+
+    /// Mesma logica de `sftp_source`/`smb_source`, pra HTTPS — sem `target`
+    /// separado porque `HttpsRangeSource::new` ja recebe `path` direto.
+    fn https_source(
+        path: &str,
+        cache: Option<&mut ConnectionCache>,
+    ) -> Result<SharedRangeSource<protocols::http::HttpsRangeSource>, String> {
+        let Some(cache) = cache else {
+            let source = protocols::http::HttpsRangeSource::new(path)?;
+            return Ok(SharedRangeSource::new(Arc::new(Mutex::new(source))));
+        };
+        if let ConnectionCache::Https(cached_path, conn) = cache {
+            if cached_path.as_str() == path {
+                return Ok(SharedRangeSource::new(conn.clone()));
+            }
+        }
+        let conn = Arc::new(Mutex::new(protocols::http::HttpsRangeSource::new(path)?));
+        *cache = ConnectionCache::Https(path.to_string(), conn.clone());
+        Ok(SharedRangeSource::new(conn))
     }
 
     /// Seleciona a trilha de audio pela posicao ordinal (0 = primeira
