@@ -1940,10 +1940,16 @@ public:
         } else {
             m_feedbackHoldTime += deltaSeconds;
         }
-        float feedbackTargetAlpha = (m_feedbackKind != vrplayer::FeedbackKind::None &&
-                                     m_feedbackHoldTime < vrplayer::kFeedbackHoldSeconds)
-            ? 1.0f
-            : 0.0f;
+        // Pause fica parado na tela (nao desaparece sozinho) — so some quando um
+        // novo evento troca m_feedbackKind (ex: play). Play/seek continuam com
+        // hold+fade normal, sao acoes pontuais, nao um estado persistente.
+        float feedbackTargetAlpha = 0.0f;
+        if (m_feedbackKind == vrplayer::FeedbackKind::Pause) {
+            feedbackTargetAlpha = 1.0f;
+        } else if (m_feedbackKind != vrplayer::FeedbackKind::None &&
+                   m_feedbackHoldTime < vrplayer::kFeedbackHoldSeconds) {
+            feedbackTargetAlpha = 1.0f;
+        }
         m_feedbackAlpha = MoveTowards(m_feedbackAlpha, feedbackTargetAlpha, fadeStep);
     }
 

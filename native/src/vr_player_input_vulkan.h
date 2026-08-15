@@ -398,10 +398,16 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         } else {
             state.feedbackHoldTime += dt;
         }
-        float feedbackTargetAlpha = (state.feedbackKind != vrplayer::FeedbackKind::None &&
-                                     state.feedbackHoldTime < vrplayer::kFeedbackHoldSeconds)
-            ? 1.0f
-            : 0.0f;
+        // Pause fica parado na tela (nao desaparece sozinho) — so some quando um
+        // novo evento troca state.feedbackKind (ex: play). Play/seek continuam
+        // com hold+fade normal, sao acoes pontuais, nao um estado persistente.
+        float feedbackTargetAlpha = 0.0f;
+        if (state.feedbackKind == vrplayer::FeedbackKind::Pause) {
+            feedbackTargetAlpha = 1.0f;
+        } else if (state.feedbackKind != vrplayer::FeedbackKind::None &&
+                   state.feedbackHoldTime < vrplayer::kFeedbackHoldSeconds) {
+            feedbackTargetAlpha = 1.0f;
+        }
         state.feedbackAlpha = MoveTowards(state.feedbackAlpha, feedbackTargetAlpha, fadeStep);
     }
 
