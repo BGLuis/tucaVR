@@ -11,6 +11,15 @@ use std::thread;
 
 const LATE_FRAME_RENDER_SKIP_SEC: f64 = 0.1;
 
+/// Quando o proximo pacote de video ja nasce mais atrasado que isto em
+/// relacao ao master_clock, pacotes nao-chave sao descartados sem decodificar
+/// ate a proxima keyframe (ver video_thread). Sem isso, um atraso persistente
+/// (decode mais lento que o exigido pela velocidade pedida, ex: 2x em 8K60,
+/// onde o hardware ja decodifica perto do limite em 1x) nunca se recupera —
+/// LATE_FRAME_RENDER_SKIP_SEC so descarta no render, sem reduzir o backlog,
+/// entao o atraso so cresce e trava no ultimo frame renderizado pra sempre.
+const CATCH_UP_SKIP_THRESHOLD_SEC: f64 = 0.5;
+
 /// Envia `item` no canal com timeout, checando `is_running` entre
 /// tentativas — evita bloquear para sempre se o consumidor parou de
 /// drenar o canal (ex: durante shutdown) sem ter sido explicitamente
@@ -383,6 +392,11 @@ impl PlaybackController {
 
                 if let Ok(packet) = video_rx.recv_timeout(std::time::Duration::from_millis(50)) {
                     let pts = packet.pts().unwrap_or(0);
+                    let pts_sec = pts as f64 * video_time_base;
+                    let lag = sync_v.get_master_clock() - pts_sec;
+                    if lag > CATCH_UP_SKIP_THRESHOLD_SEC && !packet.is_key() {
+                        continue;
+                    }
 
                     if let Some(data) = packet.data() {
                         let frame_data = if video_is_nal_based {
