@@ -252,6 +252,9 @@ pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height
         if let Some(image) = decode_and_scale(&mut demuxer, &mut decoder, video_stream_index, max_width, max_height) {
             chunk.copy_from_slice(&image.rgba);
         }
+        // Mitigacao de pico de memoria (nao tuning de performance): da espaco pra
+        // reproducao de verdade antes do proximo decode caro de software.
+        std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
     Some(ThumbnailStrip { rgba, count, width: max_width, height: max_height })
