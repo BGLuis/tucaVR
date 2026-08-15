@@ -546,6 +546,26 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             }
         }
 
+        // Feedback de loading/play-pause (T-seek-ux), paridade com o
+        // caminho GLES — NAO gated por progressTotal>0: precisa disparar
+        // ja no primeiro load, antes de qualquer duracao ser conhecida.
+        {
+            uint32_t isLoading = get_playback_is_loading();
+            uint32_t isPlaying = get_playback_is_playing();
+            JNIEnv* env = nullptr;
+            state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+            if (env) {
+                jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+                jmethodID stateMethod = env->GetStaticMethodID(
+                    vrActivityClass, "updateMediaState", "(Lcom/vrplayer/VRActivity;ZZ)V");
+                if (stateMethod) {
+                    env->CallStaticVoidMethod(vrActivityClass, stateMethod, state.app->activity->clazz,
+                        (jboolean)(isLoading != 0), (jboolean)(isPlaying != 0));
+                }
+                env->DeleteLocalRef(vrActivityClass);
+            }
+        }
+
         // HUD de debug (docs/DEBUGGING.md) — mesmo throttle acima (~10Hz).
         // VRActivity.updateDebugHud descarta sem custo se o build nao for
         // debuggable, entao computar/mandar isso sempre e mais simples que

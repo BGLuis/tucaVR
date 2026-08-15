@@ -68,6 +68,21 @@ extern "C" {
                                              uint32_t max_width, uint32_t max_height,
                                              uint32_t* out_width, uint32_t* out_height, size_t* out_len);
     extern void free_rust_thumbnail_buffer(uint8_t* ptr, size_t len);
+    // Preview de arrasto no seekbar (T-seek-ux) — mesmo contrato de
+    // vr_player_app.cpp: trilha de thumbnails em vez de 1 so, ver
+    // core::thumbnail::generate_strip em rust/bridge/src/lib.rs.
+    extern uint8_t* smb_generate_thumbnail_strip(const char* host, int32_t port, const char* username,
+                                                  const char* password, const char* domain, const char* share,
+                                                  const char* path, float interval_secs,
+                                                  uint32_t max_width, uint32_t max_height,
+                                                  uint32_t* out_width, uint32_t* out_height,
+                                                  size_t* out_count, size_t* out_len);
+    extern uint8_t* sftp_generate_thumbnail_strip(const char* host, int32_t port, const char* username,
+                                                   const char* password, const char* private_key, const char* path,
+                                                   float interval_secs, uint32_t max_width, uint32_t max_height,
+                                                   uint32_t* out_width, uint32_t* out_height,
+                                                   size_t* out_count, size_t* out_len);
+    extern void free_rust_thumbnail_strip(uint8_t* ptr, size_t len);
 }
 
 // Captura de frame (nao implementada no caminho Vulkan ainda — funcao existe
@@ -104,6 +119,17 @@ static jbyteArray RustThumbnailToJByteArrayAndFree(JNIEnv* env, uint8_t* data, s
     jbyteArray result = env->NewByteArray((jsize)len);
     env->SetByteArrayRegion(result, 0, (jsize)len, reinterpret_cast<jbyte*>(data));
     free_rust_thumbnail_buffer(data, len);
+    return result;
+}
+
+// Mesma logica acima, pro alocador da trilha de thumbnails (free_rust_thumbnail_strip
+// em vez de free_rust_thumbnail_buffer — capacidades diferentes do lado Rust,
+// nao da pra misturar).
+static jbyteArray RustThumbnailStripToJByteArrayAndFree(JNIEnv* env, uint8_t* data, size_t len) {
+    if (!data) return nullptr;
+    jbyteArray result = env->NewByteArray((jsize)len);
+    env->SetByteArrayRegion(result, 0, (jsize)len, reinterpret_cast<jbyte*>(data));
+    free_rust_thumbnail_strip(data, len);
     return result;
 }
 
@@ -367,6 +393,65 @@ Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject,
     env->ReleaseStringUTFChars(privateKey, k);
     env->ReleaseStringUTFChars(path, p);
     return RustThumbnailToJByteArrayAndFree(env, data, outLen);
+}
+
+// Preview de arrasto no seekbar (T-seek-ux) — mesma logica de
+// nativeSmbGenerateThumbnail, devolve N frames concatenados em vez de 1.
+// outWidth/outHeight/outCount descartados de proposito: o Kotlin ja sabe
+// max_width/max_height (foi ele quem pediu) e calcula count como
+// byteArray.size / (width*height*4).
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_vrplayer_VRActivity_nativeSmbGenerateThumbnailStrip(JNIEnv* env, jobject,
+                                                              jstring host, jint port,
+                                                              jstring username, jstring password,
+                                                              jstring domain, jstring share, jstring path,
+                                                              jfloat intervalSeconds,
+                                                              jint maxWidth, jint maxHeight) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    const char* d = env->GetStringUTFChars(domain, nullptr);
+    const char* sh = env->GetStringUTFChars(share, nullptr);
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    uint32_t outWidth = 0, outHeight = 0;
+    size_t outCount = 0, outLen = 0;
+    uint8_t* data = smb_generate_thumbnail_strip(h, (int32_t)port, u, pw, d, sh, p, (float)intervalSeconds,
+                                                  (uint32_t)maxWidth, (uint32_t)maxHeight,
+                                                  &outWidth, &outHeight, &outCount, &outLen);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    env->ReleaseStringUTFChars(domain, d);
+    env->ReleaseStringUTFChars(share, sh);
+    env->ReleaseStringUTFChars(path, p);
+    return RustThumbnailStripToJByteArrayAndFree(env, data, outLen);
+}
+
+// Mesma logica de nativeSmbGenerateThumbnailStrip, para um arquivo num
+// servidor SFTP.
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnailStrip(JNIEnv* env, jobject,
+                                                               jstring host, jint port,
+                                                               jstring username, jstring password,
+                                                               jstring privateKey, jstring path,
+                                                               jfloat intervalSeconds,
+                                                               jint maxWidth, jint maxHeight) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    const char* k = env->GetStringUTFChars(privateKey, nullptr);
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    uint32_t outWidth = 0, outHeight = 0;
+    size_t outCount = 0, outLen = 0;
+    uint8_t* data = sftp_generate_thumbnail_strip(h, (int32_t)port, u, pw, k, p, (float)intervalSeconds,
+                                                   (uint32_t)maxWidth, (uint32_t)maxHeight,
+                                                   &outWidth, &outHeight, &outCount, &outLen);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    env->ReleaseStringUTFChars(privateKey, k);
+    env->ReleaseStringUTFChars(path, p);
+    return RustThumbnailStripToJByteArrayAndFree(env, data, outLen);
 }
 
 extern "C" JNIEXPORT jstring JNICALL

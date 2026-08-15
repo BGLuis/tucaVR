@@ -55,6 +55,11 @@ extern "C" {
     extern void set_playback_speed(float speed);
     extern void cycle_audio_track();
     extern void seek_video_playback(float position);
+    // UX de feedback (loading/play-pause) — ver comentario em
+    // rust/bridge/src/lib.rs sobre spawn_loading/LOADING_COUNT. Nao toca o
+    // mutex de CONTROLLER, seguro de chamar no mesmo poll ~10Hz abaixo.
+    extern uint32_t get_playback_is_loading();
+    extern uint32_t get_playback_is_playing();
 
     // T6/T7: SMB e HTTP(S) — ver rust/bridge/src/lib.rs. Playback de URL
     // HTTP(S) reusa start_video_playback (o Demuxer despacha por esquema);
@@ -106,6 +111,26 @@ extern "C" {
                                              uint32_t max_width, uint32_t max_height,
                                              uint32_t* out_width, uint32_t* out_height, size_t* out_len);
     extern void free_rust_thumbnail_buffer(uint8_t* ptr, size_t len);
+
+    // Preview de arrasto no seekbar (T-seek-ux): trilha de thumbnails (N
+    // frames concatenados de max_width*max_height*4 bytes cada) em vez de
+    // um so — ver core::thumbnail::generate_strip em rust/bridge/src/lib.rs.
+    // So SMB e SFTP (os dois protocolos com geracao de thumbnail hoje E
+    // conexao reaproveitavel entre seeks, ver ConnectionCache em
+    // rust/core/src/demuxer.rs); FTP/HTTPS nao tem thumbnail (nem strip)
+    // ainda.
+    extern uint8_t* smb_generate_thumbnail_strip(const char* host, int32_t port, const char* username,
+                                                  const char* password, const char* domain, const char* share,
+                                                  const char* path, float interval_secs,
+                                                  uint32_t max_width, uint32_t max_height,
+                                                  uint32_t* out_width, uint32_t* out_height,
+                                                  size_t* out_count, size_t* out_len);
+    extern uint8_t* sftp_generate_thumbnail_strip(const char* host, int32_t port, const char* username,
+                                                   const char* password, const char* private_key, const char* path,
+                                                   float interval_secs, uint32_t max_width, uint32_t max_height,
+                                                   uint32_t* out_width, uint32_t* out_height,
+                                                   size_t* out_count, size_t* out_len);
+    extern void free_rust_thumbnail_strip(uint8_t* ptr, size_t len);
 
     // T1.4/T1.5/T2: modo de exibicao 3D (2D/SBS/OU/360/180) e swap-eyes —
     // estado de apresentacao puro, vive como atomics no bridge Rust (ver
@@ -162,6 +187,20 @@ static jbyteArray RustThumbnailToJByteArrayAndFree(JNIEnv* env, uint8_t* data, s
     jbyteArray result = env->NewByteArray((jsize)len);
     env->SetByteArrayRegion(result, 0, (jsize)len, reinterpret_cast<jbyte*>(data));
     free_rust_thumbnail_buffer(data, len);
+    return result;
+}
+
+// Mesma logica de RustThumbnailToJByteArrayAndFree, pro alocador da trilha
+// de thumbnails (buffer maior, free_rust_thumbnail_strip em vez de
+// free_rust_thumbnail_buffer — os dois lados do Rust usam Vec::from_raw_parts
+// com capacidades diferentes, nao dá pra misturar).
+static jbyteArray RustThumbnailStripToJByteArrayAndFree(JNIEnv* env, uint8_t* data, size_t len) {
+    if (!data) {
+        return nullptr;
+    }
+    jbyteArray result = env->NewByteArray((jsize)len);
+    env->SetByteArrayRegion(result, 0, (jsize)len, reinterpret_cast<jbyte*>(data));
+    free_rust_thumbnail_strip(data, len);
     return result;
 }
 
@@ -476,6 +515,68 @@ Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject th
     env->ReleaseStringUTFChars(path, pathStr);
 
     return RustThumbnailToJByteArrayAndFree(env, data, outLen);
+}
+
+// Preview de arrasto no seekbar (T-seek-ux): mesma logica de
+// nativeSmbGenerateThumbnail, so que devolve N frames concatenados em vez
+// de 1. outWidth/outHeight/outCount sao descartados aqui de proposito — o
+// Kotlin ja sabe max_width/max_height (foi ele quem pediu) e calcula count
+// como byteArray.size / (width*height*4), entao nao precisa cruzar o JNI
+// de novo so pra confirmar o que ja mandou.
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_vrplayer_VRActivity_nativeSmbGenerateThumbnailStrip(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                                              jstring username, jstring password, jstring domain,
+                                                              jstring share, jstring path, jfloat intervalSeconds,
+                                                              jint maxWidth, jint maxHeight) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+    const char* domainStr = env->GetStringUTFChars(domain, nullptr);
+    const char* shareStr = env->GetStringUTFChars(share, nullptr);
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+
+    uint32_t outWidth = 0, outHeight = 0;
+    size_t outCount = 0, outLen = 0;
+    uint8_t* data = smb_generate_thumbnail_strip(hostStr, (int32_t)port, userStr, passStr, domainStr, shareStr, pathStr,
+                                                  (float)intervalSeconds, (uint32_t)maxWidth, (uint32_t)maxHeight,
+                                                  &outWidth, &outHeight, &outCount, &outLen);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
+    env->ReleaseStringUTFChars(domain, domainStr);
+    env->ReleaseStringUTFChars(share, shareStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+
+    return RustThumbnailStripToJByteArrayAndFree(env, data, outLen);
+}
+
+// Mesma logica de nativeSmbGenerateThumbnailStrip, para um arquivo num
+// servidor SFTP.
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnailStrip(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                                               jstring username, jstring password, jstring privateKey,
+                                                               jstring path, jfloat intervalSeconds,
+                                                               jint maxWidth, jint maxHeight) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+    const char* keyStr = env->GetStringUTFChars(privateKey, nullptr);
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+
+    uint32_t outWidth = 0, outHeight = 0;
+    size_t outCount = 0, outLen = 0;
+    uint8_t* data = sftp_generate_thumbnail_strip(hostStr, (int32_t)port, userStr, passStr, keyStr, pathStr,
+                                                   (float)intervalSeconds, (uint32_t)maxWidth, (uint32_t)maxHeight,
+                                                   &outWidth, &outHeight, &outCount, &outLen);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
+    env->ReleaseStringUTFChars(privateKey, keyStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+
+    return RustThumbnailStripToJByteArrayAndFree(env, data, outLen);
 }
 
 // T7.1: probe HEAD-based de uma URL HTTP(S) (Accept-Ranges/tamanho) antes de
@@ -1562,6 +1663,26 @@ public:
                 }
             }
 
+            // Feedback de loading/play-pause (nao gated por progressTotal>0:
+            // precisa disparar tambem no PRIMEIRO load, antes de qualquer
+            // duracao ser conhecida — e exatamente esse o momento em que o
+            // usuario mais precisa ver que algo esta acontecendo).
+            {
+                uint32_t isLoading = get_playback_is_loading();
+                uint32_t isPlaying = get_playback_is_playing();
+                const xrJava* java = GetContext();
+                JNIEnv* env = nullptr;
+                if (java && java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
+                    jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
+                    jmethodID stateMethod = env->GetStaticMethodID(vrActivityClass, "updateMediaState", "(Lcom/vrplayer/VRActivity;ZZ)V");
+                    if (stateMethod) {
+                        env->CallStaticVoidMethod(vrActivityClass, stateMethod, java->ActivityObject,
+                            (jboolean)(isLoading != 0), (jboolean)(isPlaying != 0));
+                    }
+                    env->DeleteLocalRef(vrActivityClass);
+                }
+            }
+
             // HUD de debug (docs/DEBUGGING.md) — mesmo throttle acima (~10Hz).
             // VRActivity.updateDebugHud descarta sem custo se o build nao for
             // debuggable, entao computar/mandar isso sempre e mais simples
@@ -1656,22 +1777,39 @@ public:
             (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
 
         if (buffer == nullptr && m_lastBuffer != nullptr) {
-            LOGI("VRPlayerApp: video parou de produzir frames (get_current_video_frame() -> null)");
+            LOGI("VRPlayerApp: video parou de produzir frames (get_current_video_frame() -> null) — mantendo ultimo frame na tela ate a proxima sessao (load/seek) produzir um novo");
+            AHardwareBuffer* frozenBuffer = m_lastBuffer;
             m_lastBuffer = nullptr;
             m_msSinceLastVideoFrame = 0.0f;
             m_videoStallLogged = false;
             m_videoGapHistoryCount = 0; // nao misturar cadencia do video anterior com o proximo
             m_videoFps = 0.0f;
             m_videoJitterMs = 0.0f;
-            if (m_textureId != 0) {
-                glDeleteTextures(1, &m_textureId);
-                m_textureId = 0;
-            }
+            // NAO deleta m_textureId/m_eglImage aqui: o quad continua
+            // mostrando o ultimo frame decodificado (congelado) em vez de
+            // piscar pro vazio enquanto stop()+load_at() roda em background
+            // (T-seek-ux, docs no chat — pode levar segundos em rede,
+            // especialmente SFTP). Seguro porque eglCreateImageKHR com
+            // EGL_NATIVE_BUFFER_ANDROID ja mantem sua propria referencia no
+            // AHardwareBuffer nativo, independente do AImageReader que o
+            // produziu ser destruido do lado Rust (mesma garantia de
+            // plataforma que ja sustenta m_eglImageCache dentro de uma
+            // sessao) — mas nunca validado atravessando uma troca de
+            // ImageReader entre sessoes, exige confirmacao em hardware real.
+            // So limpa o CACHE de lookup por ponteiro: ele existe pra
+            // reaproveitar EGLImage quando o MESMO AHardwareBuffer* volta a
+            // aparecer dentro da mesma sessao; entre sessoes o ImageReader
+            // antigo morre e um ponteiro novo pode colidir por acaso com um
+            // ja cacheado, entao mante-lo arriscaria reusar o EGLImage
+            // errado. A entrada do buffer congelado (frozenBuffer, ainda em
+            // tela via m_eglImage) fica de fora de proposito.
             if (eglDestroyImageKHR) {
-                for (auto& entry : m_eglImageCache) eglDestroyImageKHR(eglGetCurrentDisplay(), entry.second);
+                for (auto it = m_eglImageCache.begin(); it != m_eglImageCache.end(); ) {
+                    if (it->first == frozenBuffer) { ++it; continue; }
+                    eglDestroyImageKHR(eglGetCurrentDisplay(), it->second);
+                    it = m_eglImageCache.erase(it);
+                }
             }
-            m_eglImageCache.clear();
-            m_eglImage = EGL_NO_IMAGE_KHR;
         } else if (buffer && buffer != m_lastBuffer) {
             // So loga a transicao null->frame (video comecou a produzir
             // frames), nao toda troca de buffer entre frames decodificados

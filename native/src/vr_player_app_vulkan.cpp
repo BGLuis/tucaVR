@@ -84,6 +84,10 @@ extern "C" {
     extern float get_network_last_block_fetch_ms();
     extern uint64_t get_network_blocks_fetched();
     extern uint64_t get_network_blocks_discarded();
+    // UX de feedback (loading/play-pause), paridade com o caminho GLES —
+    // ver comentario em rust/bridge/src/lib.rs sobre spawn_loading.
+    extern uint32_t get_playback_is_loading();
+    extern uint32_t get_playback_is_playing();
 }
 
 namespace {
@@ -2610,16 +2614,27 @@ void UpdateVideoFrame(AppState& state) {
     AHardwareBuffer* buffer = get_current_video_frame();
 
     if (buffer == nullptr) {
-        // Sem frame: limpar estado de video ativo
+        // Sem frame: NAO limpa state.activeVideoFrame — mantem o ultimo
+        // frame decodificado na tela em vez de cair pro fallback quad
+        // solido enquanto a proxima sessao (load/seek) carrega, que pode
+        // levar segundos em rede, especialmente SFTP (T-seek-ux, paridade
+        // com o caminho GLES). Seguro: `state.activeVideoFrame` e um
+        // ponteiro pra dentro de `state.videoImageCache`
+        // (std::unordered_map), que NUNCA invalida ponteiros/referencias
+        // de elementos nao apagados, mesmo com insercao/rehash. E a
+        // evicao LRU em GetOrImportVideoFrame so apaga a entrada com o
+        // MENOR lastUsedFrame — a entrada ativa sempre tem o lastUsedFrame
+        // mais recente do cache neste momento (foi a ultima usada antes do
+        // buffer virar null), entao nao e candidata a evicao enquanto
+        // ainda for a exibida.
         if (state.lastVideoBuffer != nullptr) {
             state.lastVideoBuffer = nullptr;
-            state.activeVideoFrame = nullptr;
             state.msSinceLastVideoFrame = 0.0f;
             state.videoStallLogged = false;
             state.videoGapHistoryCount = 0; // nao misturar cadencia do video anterior com o proximo
             state.videoFps = 0.0f;
             state.videoJitterMs = 0.0f;
-            LOGI("Video: sem frame disponivel, usando fallback quad solido");
+            LOGI("Video: sem frame disponivel, mantendo ultimo frame na tela ate a proxima sessao produzir um novo");
         }
         return;
     }
