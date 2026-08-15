@@ -54,6 +54,9 @@ const SMB_CONCURRENT_CHUNK_SIZE: u32 = 1024 * 1024;
 /// risco de estourar algum limite do lado do servidor.
 const SMB_MAX_CONCURRENT_CHUNKS: usize = 4;
 
+/// Teto por lote de leitura — mesmo risco e mesmo valor do `SFTP_READ_TIMEOUT` (`crate::sftp`): sem isto, um `read_at` sem resposta trava `block_on` pra sempre e prende `seek()`/`stop()` no `join()` da thread.
+const SMB_READ_TIMEOUT: Duration = Duration::from_secs(20);
+
 fn new_runtime() -> io::Result<Runtime> {
     tokio::runtime::Builder::new_current_thread().enable_all().build()
 }
@@ -146,7 +149,18 @@ impl RangeSource for SmbFileSource {
         let chunks = split_range(offset, want, SMB_CONCURRENT_CHUNK_SIZE);
         let mut total = 0usize;
         'batches: for batch in chunks.chunks(SMB_MAX_CONCURRENT_CHUNKS) {
-            let results = self.runtime.block_on(join_all(batch.iter().map(|&(chunk_offset, chunk_len)| reader.read_at(chunk_offset, chunk_len as u64))));
+            let results = match self.runtime.block_on(tokio::time::timeout(
+                SMB_READ_TIMEOUT,
+                join_all(batch.iter().map(|&(chunk_offset, chunk_len)| reader.read_at(chunk_offset, chunk_len as u64))),
+            )) {
+                Ok(results) => results,
+                Err(_elapsed) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        format!("SMB: sem resposta do servidor por {}s (leitura travada)", SMB_READ_TIMEOUT.as_secs()),
+                    ));
+                }
+            };
 
             for (idx, result) in results.into_iter().enumerate() {
                 let data = result.map_err(|e| io::Error::other(e.to_string()))?;
