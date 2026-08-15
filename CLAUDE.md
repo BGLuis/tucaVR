@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-VR Multimedia Player for Meta Quest 3 (Qualcomm XR2 Gen 2): a 2D/3D video player built as a fully immersive OpenXR app (`com.oculus.vr.mode = vr_only`, `NativeActivity`, no classic 2D Android UI). Requirements/spec lives in `docs/REQUIREMENTS.md` (Portuguese); phase breakdown with task IDs (`T1.1`, `T6.3`, etc.) is in `docs/phases/PHASE-0.*.md`. Code comments and docs are written in Portuguese (BR) — match that when adding comments to existing files. Most in-repo documentation records *why* a decision was made and what was validated on real hardware vs. only theoretically — preserve that style rather than writing generic comments.
+VR Multimedia Player for Meta Quest 3 (Qualcomm XR2 Gen 2): a 2D/3D video player built as a fully immersive OpenXR app (`com.oculus.vr.mode = vr_only`, `NativeActivity`, no classic 2D Android UI). Requirements/spec lives in `docs/REQUIREMENTS.md` (Portuguese); phase breakdown with task IDs (`T1.1`, `T6.3`, etc.) is in `docs/phases/PHASE-0.*.md`. Code comments and docs are written in Portuguese (BR) — match that when adding comments to existing files.
 
 ## Three-language architecture — know which layer you're in
 
