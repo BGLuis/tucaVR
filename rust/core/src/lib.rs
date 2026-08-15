@@ -6,5 +6,6 @@ pub mod texture;
 pub mod playback;
 pub mod h264;
 pub mod hevc;
+pub mod av1;
 pub mod nal;
 pub mod thumbnail;

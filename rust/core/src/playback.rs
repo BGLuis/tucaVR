@@ -179,11 +179,20 @@ impl PlaybackController {
         let mime = match codec_id {
             ffmpeg_next::codec::Id::H264 => "video/avc",
             ffmpeg_next::codec::Id::HEVC => "video/hevc",
+            ffmpeg_next::codec::Id::VP9 => "video/x-vnd.on2.vp9",
+            ffmpeg_next::codec::Id::AV1 => "video/av01",
             other => return Err(format!(
-                "Unsupported video codec: {:?} (apenas H.264/H.265 sao suportados na v0.1)",
+                "Unsupported video codec: {:?} (H.264/H.265/VP9/AV1 sao suportados)",
                 other
             ).into()),
         };
+        // VP9/AV1 nao usam framing NAL (avcC/hvcC) — os pacotes ja vem no
+        // formato bruto que o MediaCodec espera, converter pra Annex-B
+        // corromperia os dados.
+        let video_is_nal_based = matches!(
+            codec_id,
+            ffmpeg_next::codec::Id::H264 | ffmpeg_next::codec::Id::HEVC
+        );
 
         let mut tex = self.texture_output.lock().unwrap();
         // Allocate with exact size of the video
@@ -213,7 +222,11 @@ impl PlaybackController {
         if let Some(ed) = demuxer.get_video_extradata() {
             sps_pps = match codec_id {
                 ffmpeg_next::codec::Id::HEVC => crate::hevc::extract_vps_sps_pps(&ed),
-                _ => crate::h264::extract_sps_pps(&ed),
+                ffmpeg_next::codec::Id::H264 => crate::h264::extract_sps_pps(&ed),
+                ffmpeg_next::codec::Id::AV1 => crate::av1::extract_config_obus(&ed),
+                // VP9 nao tem SPS/PPS/config OBU em banda: cada keyframe ja
+                // carrega dimensao/perfil no proprio bitstream.
+                _ => None,
             };
         }
 
@@ -352,9 +365,13 @@ impl PlaybackController {
                     let pts = packet.pts().unwrap_or(0);
 
                     if let Some(data) = packet.data() {
-                        let annexb = crate::nal::convert_avcc_to_annexb(data);
+                        let frame_data = if video_is_nal_based {
+                            crate::nal::convert_avcc_to_annexb(data)
+                        } else {
+                            data.to_vec()
+                        };
                         let _ = video_decoder.decode_packet(
-                            &annexb,
+                            &frame_data,
                             pts,
                             0,
                             |out_pts| {
