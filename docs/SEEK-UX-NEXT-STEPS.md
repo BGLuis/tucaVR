@@ -84,14 +84,46 @@ Esboço do trabalho (não iniciado):
 mitigação por espaçamento) vale o esforço primeiro. Recomendo medir a opção 4
 (mais barata de implementar) antes de investir na opção 1-3.
 
-**Atualização**: opção 4 implementada — `generate_strip()` agora dá uma pausa
-de 100ms entre cada frame decodificado (`rust/core/src/thumbnail.rs`, dentro
-do loop principal), reduzindo a chance de o pico de memória da trilha
-coincidir com o pico da reprodução real. **Isso não elimina o risco, só
-reduz a probabilidade** — não foi medido em hardware contra o acervo 8K real,
-e o gate `MAX_STRIP_SOURCE_PIXELS` (4K) continua ativo. A decisão sobre
-migrar pra hardware decode (passos 1-3 acima) segue em aberto até essa
-medição acontecer.
+**Atualização 1**: opção 4 (pacing) implementada primeiro — `generate_strip()`
+deu uma pausa de 100ms entre frames (`rust/core/src/thumbnail.rs`). Mitigação
+apenas, não desbloqueava o gate de 4K sozinha.
+
+**Atualização 2 — hardware decode implementado**: acima de `MAX_STRIP_SOURCE_PIXELS`,
+`generate_strip()` agora chama `generate_strip_hw()` em vez de desistir.
+Achado que simplificou bastante o esboço original: **não precisou de
+Surface/AHardwareBuffer/GL/Vulkan nenhum**. `ndk::media::media_codec::OutputBuffer::buffer()`
+deixa ler os bytes YUV crus direto quando `HwDecoder::configure()` é chamado
+com `window: None` — decode pra buffer de CPU em vez de decode pra Surface.
+A conversão YUV→RGBA (nearest-neighbor, já que a saída é minúscula) virou
+`media_logic::yuv_convert` — pura, testada via `cargo test -p media-logic`
+sem hardware nenhum (6 testes: branco/preto, planar vs. semi-planar,
+padding de stride, out-of-bounds). Só os dois color-formats "flat" do
+Android são suportados (`COLOR_FormatYUV420Planar`=19, `COLOR_FormatYUV420SemiPlanar`=21,
+ver `YuvLayout::from_android_color_format`) — `COLOR_FormatYUV420Flexible`
+exigiria a API `Image`/`MediaImage`, que a API crua de `AMediaCodec` usada
+aqui não expõe; se o decoder devolver outro formato, aquela posição da
+trilha fica preta (mesmo contrato de silêncio do resto do módulo) em vez de
+lixo.
+
+Decisão de arquitetura: o `HwDecoder` é recriado do zero a cada posição da
+trilha (não `flush()`) — é o único padrão já validado em hardware neste
+projeto pra "seek durante decode MediaCodec" (`PlaybackController::seek`
+também recria a sessão inteira em vez de reaproveitar o decoder,
+`playback.rs`). Mais caro que `flush()` teria sido, mas sem o risco de um
+bug silencioso específico de driver que nunca foi testado aqui.
+
+**Risco real não descartado**: decoders de hardware Qualcomm nem sempre
+suportam decode sem Surface de forma confiável — em alguns dispositivos o
+caminho acelerado exige uma Surface real, e sem ela `configure()` falha ou
+cai pra um caminho não acelerado. Só se confirma testando no Quest 3 de
+verdade. Se falhar, o plano B é o esboço original (Surface + AHardwareBuffer
++ readback via GL/Vulkan headless, passos 1-3 acima) — mais código, mas usa
+o mecanismo que já se sabe que funciona (reprodução real usa Surface com
+sucesso).
+
+O gate `MAX_STRIP_SOURCE_PIXELS` (4K) continua ativo pro caminho por
+software — só passa a usar hardware quando ultrapassa esse limite, o
+caminho ≤4K existente não foi tocado.
 
 ## 2. O que aparece durante o arrasto (UX do preview)
 
@@ -188,4 +220,17 @@ compilados/build-verificados, nunca rodados no Quest 3): pacing de 100ms no
 scrub >4K (item 1), overlay de feedback sobre a quad de vídeo em ambos os
 modos GLES/Vulkan e nos modos 360/180 (item 3), reconnect de FTP em conexão
 real derrubada (item 4), timeout de leitura SMB contra um travamento real
-(item 5).
+(item 5), pause fixo na tela em vez de sumir sozinho (item 3), remoção do
+flash redundante no painel de controles, catch-up por keyframe-skip quando
+o decode de vídeo fica atrás do speed pedido (playback.rs, achado via bug
+real de 2x travando em 8K60 local — o pulo em si nunca foi visto rodando).
+
+**Item 1 (scrub hardware decode) merece atenção especial na validação**: é o
+item de maior incerteza técnica desta rodada — depende de o decoder
+Qualcomm do Quest 3 suportar `MediaCodec` configurado sem Surface
+(`window: None`), o que não é garantido em toda combinação de
+hardware/driver Android e só se confirma testando de verdade. Se
+`generate_strip_hw()` falhar silenciosamente (contrato de silêncio do
+módulo: sem popup de erro, só sem trilha), pode passar despercebido —
+vale testar explicitamente arrastando o tracker num arquivo local >4K e
+confirmar que a trilha aparece, não só que o app não trava.
