@@ -21,3 +21,4 @@ pub mod format3d;
 pub mod playback_params;
 pub mod session;
 pub mod sync;
+pub mod yuv_convert;
