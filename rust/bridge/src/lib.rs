@@ -10,10 +10,49 @@
 use std::os::raw::c_void;
 use core::playback::PlaybackController;
 use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use once_cell::sync::Lazy;
 
+// Nenhum backend de `log` (facade usada por `protocols`, ex.
+// `log::warn!("SftpFileSource: reconectando...")`) era inicializado em
+// lugar nenhum do workspace — achado nesta sessao (docs/NETWORK-IO-PERFORMANCE.md):
+// sem `log::set_logger`, toda chamada `log::warn!`/`log::info!` e um no-op
+// silencioso, entao os logs de diagnostico de rede adicionados nas sessoes
+// anteriores nunca apareciam no logcat. Implementacao minima em vez de puxar
+// a crate `android_logger` (que nao estava em nenhuma arvore de dependencia
+// deste workspace ainda) — so redireciona pra `__android_log_print`, mesmo
+// mecanismo que o resto do bridge ja usa.
+struct AndroidLogger;
+
+impl log::Log for AndroidLogger {
+    fn enabled(&self, _metadata: &log::Metadata) -> bool {
+        true
+    }
+
+    fn log(&self, record: &log::Record) {
+        let prio = match record.level() {
+            log::Level::Error => 6, // ANDROID_LOG_ERROR
+            log::Level::Warn => 5,  // ANDROID_LOG_WARN
+            log::Level::Info => 4,  // ANDROID_LOG_INFO
+            log::Level::Debug => 3, // ANDROID_LOG_DEBUG
+            log::Level::Trace => 2, // ANDROID_LOG_VERBOSE
+        };
+        unsafe { log(prio, &format!("[{}] {}", record.target(), record.args())); }
+    }
+
+    fn flush(&self) {}
+}
+
+static ANDROID_LOGGER: AndroidLogger = AndroidLogger;
+
 static CONTROLLER: Lazy<Arc<Mutex<PlaybackController>>> = Lazy::new(|| {
+    // Forcado aqui (nao num JNI_OnLoad — este crate nao tem um) porque
+    // CONTROLLER e a primeira coisa que praticamente toda funcao extern "C"
+    // deste bridge toca; qualquer thread de sessao (prefetch, demux, decode)
+    // so nasce depois de load_at(), que ja exige o mutex de CONTROLLER —
+    // ou seja, o logger sempre esta pronto antes de qualquer log::* rodar.
+    let _ = log::set_logger(&ANDROID_LOGGER);
+    log::set_max_level(log::LevelFilter::Info);
     Arc::new(Mutex::new(PlaybackController::new()))
 });
 
@@ -151,6 +190,20 @@ pub extern "C" fn get_current_video_frame() -> *mut c_void {
     }
 }
 
+// Cache do ultimo valor lido de cada contador de instrumentacao — usado
+// quando CONTROLLER.try_lock() falha por contencao (load()/seek() em
+// andamento). Achado desta sessao (docs/NETWORK-IO-PERFORMANCE.md): as
+// versoes anteriores destas funcoes devolviam 0 nesse caso, e o C++ calcula
+// um DELTA em uint64_t contra a ultima amostra — 0 produzia um delta negativo
+// que "dava a volta" (wraparound unsigned) e um pico de decFps absurdo na
+// amostra seguinte. Devolver o ultimo valor conhecido faz o delta dessa
+// amostra ser 0 (sem progresso observado), o que e a resposta correta —
+// "nao sei" nao e "zero frames".
+static LAST_FRAMES_DECODED: AtomicU64 = AtomicU64::new(0);
+static LAST_FRAMES_OUTPUT: AtomicU64 = AtomicU64::new(0);
+static LAST_FRAMES_DROPPED: AtomicU64 = AtomicU64::new(0);
+static LAST_NETWORK_BYTES: AtomicU64 = AtomicU64::new(0);
+
 /// Debug (docs/DEBUGGING.md): total de frames REALMENTE decodificados pela
 /// thread de decode, independente de quantas vezes o C++ chama
 /// get_current_video_frame() acima pra observar isso. O C++ amostra este
@@ -159,11 +212,107 @@ pub extern "C" fn get_current_video_frame() -> *mut c_void {
 /// se os dois nao baterem, o gargalo esta no lado do consumo (import/cache
 /// Vulkan, taxa de polling do render loop), nao no decode em si. try_lock
 /// pelo mesmo motivo de get_current_video_frame() acima (chamada automatica
-/// e periodica, nunca deve bloquear o render loop).
+/// e periodica, nunca deve bloquear o render loop); em contencao devolve o
+/// ultimo valor conhecido (ver LAST_FRAMES_DECODED acima), nao 0.
 #[no_mangle]
 pub extern "C" fn get_video_frames_decoded_count() -> u64 {
     match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_frames_decoded_count(),
+        Ok(controller) => {
+            let v = controller.get_frames_decoded_count();
+            LAST_FRAMES_DECODED.store(v, Ordering::Relaxed);
+            v
+        }
+        Err(_) => LAST_FRAMES_DECODED.load(Ordering::Relaxed),
+    }
+}
+
+/// Debug (docs/DEBUGGING.md): total de buffers de saida que o MediaCodec
+/// REALMENTE desenfileirou, independente do callback de sync decidir
+/// renderizar ou descartar por atraso — ver PlaybackController::get_frames_output_count.
+/// Diferente de get_video_frames_decoded_count() (que so conta frames
+/// RENDERIZADOS): a investigacao desta sessao achou que os dois numeros
+/// batendo nao prova que o decode esta saudavel, porque decoded_count ja e
+/// filtrado pelo mesmo descarte por atraso — este contador nao e.
+#[no_mangle]
+pub extern "C" fn get_video_frames_output_count() -> u64 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => {
+            let v = controller.get_frames_output_count();
+            LAST_FRAMES_OUTPUT.store(v, Ordering::Relaxed);
+            v
+        }
+        Err(_) => LAST_FRAMES_OUTPUT.load(Ordering::Relaxed),
+    }
+}
+
+/// Debug (docs/DEBUGGING.md): frames que o MediaCodec produziu mas foram
+/// descartados por chegarem atrasados (LATE_FRAME_RENDER_SKIP_SEC).
+#[no_mangle]
+pub extern "C" fn get_video_frames_dropped_count() -> u64 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => {
+            let v = controller.get_frames_dropped_count();
+            LAST_FRAMES_DROPPED.store(v, Ordering::Relaxed);
+            v
+        }
+        Err(_) => LAST_FRAMES_DROPPED.load(Ordering::Relaxed),
+    }
+}
+
+/// Debug (docs/DEBUGGING.md): quantos pacotes de video estao bufferizados
+/// entre a thread de demux e a de decode agora — sem cache-on-contencao
+/// porque um valor "errado por um frame" aqui nao produz nenhum artefato
+/// tipo wraparound (nao e usado pra calcular delta), so um numero levemente
+/// atrasado.
+#[no_mangle]
+pub extern "C" fn get_video_queue_depth() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_video_queue_depth(),
+        Err(_) => 0,
+    }
+}
+
+/// Debug (docs/DEBUGGING.md): bytes recebidos da rede pelo PrefetchReader da
+/// fonte atual, soma cumulativa (0 para arquivo local/`http://` puro). O C++
+/// amostra isto ao longo do tempo e calcula MB/s, mesmo padrao de decFps.
+#[no_mangle]
+pub extern "C" fn get_network_bytes_read() -> u64 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => {
+            let v = controller.get_network_bytes_read();
+            LAST_NETWORK_BYTES.store(v, Ordering::Relaxed);
+            v
+        }
+        Err(_) => LAST_NETWORK_BYTES.load(Ordering::Relaxed),
+    }
+}
+
+/// Debug (docs/DEBUGGING.md): duracao do ULTIMO fetch de bloco completo do
+/// PrefetchReader, em ms — diferencia throughput estavel de media baixa por
+/// stalls pontuais. Sem cache-on-contencao: um valor levemente atrasado nao
+/// produz artefato (nao e usado em calculo de delta).
+#[no_mangle]
+pub extern "C" fn get_network_last_block_fetch_ms() -> f32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_network_last_block_fetch_ms(),
+        Err(_) => 0.0,
+    }
+}
+
+/// Debug (docs/DEBUGGING.md): blocos buscados e descartados por seek do
+/// PrefetchReader — ver PlaybackController::get_network_blocks_discarded.
+#[no_mangle]
+pub extern "C" fn get_network_blocks_fetched() -> u64 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_network_blocks_fetched(),
+        Err(_) => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_network_blocks_discarded() -> u64 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_network_blocks_discarded(),
         Err(_) => 0,
     }
 }

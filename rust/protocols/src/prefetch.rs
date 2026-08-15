@@ -29,11 +29,68 @@
 //! prefetch em voo (o resultado e apenas descartado quando chega — nao ha
 //! cancelamento cooperativo real de uma leitura de rede ja em andamento, so
 //! do PROXIMO passo do worker). Ver `PrefetchReader::ensure_cache`.
+//!
+//! Refinamento desta sessao (investigacao da regressao 30fps->10fps
+//! documentada em docs/NETWORK-IO-PERFORMANCE.md): apos um miss
+//! NAO-sequencial (seek de verdade), `ensure_cache` NAO dispara mais o
+//! prefetch especulativo do proximo bloco imediatamente — so no acesso
+//! SEGUINTE, se ele confirmar que a leitura continua dentro do bloco que o
+//! seek acabou de instalar. Um seek isolado seguido de leitura sequencial
+//! ainda ganha read-ahead (soo adiado por um passo); uma sequencia de seeks
+//! encadeados (probe do container, cues no fim do arquivo, ou o usuario
+//! arrastando a barra) para de pagar por um prefetch que o proximo seek so
+//! ia descartar de qualquer forma.
 
 use std::io::{self, Read, Seek, SeekFrom};
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::Arc;
 use std::thread::JoinHandle;
+
+/// Contadores de instrumentacao do `PrefetchReader` (docs/DEBUGGING.md),
+/// expostos via `PrefetchReader::stats()` — quem pega o `Arc` pode fazer
+/// polling de fora sem tocar os canais de comando/resultado. So atualizados
+/// nos limites de bloco (dentro da thread de background), entao nao custam
+/// nada por `read()`.
+#[derive(Default)]
+pub struct PrefetchStats {
+    /// Bytes recebidos da rede, soma cumulativa de todo bloco buscado —
+    /// inclusive blocos descartados por seek (reflete trafego real gerado,
+    /// nao bytes uteis entregues ao chamador).
+    pub bytes_fetched: AtomicU64,
+    /// Duracao do ULTIMO fetch de bloco completo, em microssegundos.
+    pub last_fetch_us: AtomicU64,
+    /// Quantos blocos foram buscados no total (sucesso ou erro).
+    pub blocks_fetched: AtomicU64,
+    /// Quantos prefetches em voo foram descartados por um seek real (ver
+    /// ensure_cache) — alto = padrao de acesso pouco sequencial.
+    pub blocks_discarded: AtomicU64,
+}
+
+/// Melhor esforco pra elevar a prioridade da thread de I/O de rede acima do
+/// nice padrao (0). Achado desta sessao: nenhuma thread deste workspace
+/// definia prioridade/afinidade explicita, e no XR2 Gen 2 (nucleos
+/// performance + eficiencia) uma thread nova sem prioridade pode ser
+/// escalonada num nucleo de eficiencia — ruim para trabalho CPU-bound (cripto
+/// SSH/TLS) que agora roda CONCORRENTEMENTE com o decode, em vez de
+/// serializado como antes do read-ahead em background (ver
+/// docs/NETWORK-IO-PERFORMANCE.md). Falha silenciosamente (processo sem
+/// permissao pra baixar o nice) — so loga o resultado pra confirmar em
+/// hardware se a chamada realmente pegou.
+fn raise_io_thread_priority() {
+    const TARGET_NICE: i32 = -10;
+    unsafe {
+        let before = libc::getpriority(libc::PRIO_PROCESS, 0);
+        libc::setpriority(libc::PRIO_PROCESS, 0, TARGET_NICE);
+        let after = libc::getpriority(libc::PRIO_PROCESS, 0);
+        // sched_getcpu(): so um snapshot instantaneo (a thread pode migrar
+        // depois), mas o suficiente pra confirmar se caiu num nucleo de
+        // performance ou eficiencia do XR2 Gen 2 logo apos o setpriority.
+        let cpu = libc::sched_getcpu();
+        log::info!("vrplayer-prefetch-io: nice {before} -> {after} (pedido {TARGET_NICE}), cpu={cpu}");
+    }
+}
 
 /// Fonte de bytes por offset absoluto — sem cursor proprio, sem estado de
 /// "posicao atual". E o unico contrato que SMB, SFTP, HTTP(S) e FTP
@@ -90,6 +147,7 @@ pub struct PrefetchReader<S: RangeSource> {
     /// acabou de instalar um bloco final/vazio, ver `ensure_cache`).
     pending_start: Option<u64>,
     worker: Option<JoinHandle<()>>,
+    stats: Arc<PrefetchStats>,
     _source: PhantomData<S>,
 }
 
@@ -104,10 +162,13 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
 
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
         let (result_tx, result_rx) = mpsc::channel::<FetchResult>();
+        let stats = Arc::new(PrefetchStats::default());
+        let worker_stats = stats.clone();
 
         let worker = std::thread::Builder::new()
             .name("vrplayer-prefetch-io".to_string())
             .spawn(move || {
+                raise_io_thread_priority();
                 for cmd in cmd_rx {
                     match cmd {
                         Command::Fetch(offset) => {
@@ -117,7 +178,13 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
                             // (segundos de video cada), entao a alocacao nao
                             // e o gargalo aqui.
                             let mut data = vec![0u8; block_size];
+                            let fetch_start = std::time::Instant::now();
                             let result = source.read_range(offset, &mut data).map(|len| Block { start: offset, data, len });
+                            if let Ok(ref block) = result {
+                                worker_stats.bytes_fetched.fetch_add(block.len as u64, Ordering::Relaxed);
+                                worker_stats.blocks_fetched.fetch_add(1, Ordering::Relaxed);
+                                worker_stats.last_fetch_us.store(fetch_start.elapsed().as_micros() as u64, Ordering::Relaxed);
+                            }
                             if result_tx.send(result).is_err() {
                                 break;
                             }
@@ -139,6 +206,7 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
             result_rx,
             pending_start: None,
             worker: Some(worker),
+            stats,
             _source: PhantomData,
         };
         // Dispara a busca do primeiro bloco ja na construcao: o primeiro
@@ -150,6 +218,14 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
 
     fn cache_hit(&self, pos: u64) -> bool {
         self.cache_len > 0 && pos >= self.cache_start && pos < self.cache_start + self.cache_len as u64
+    }
+
+    /// Clone do `Arc` de instrumentacao — pega isto ANTES de entregar o
+    /// `PrefetchReader` para o `StreamIo` do FFmpeg (que o engole por
+    /// dentro de um `Box<dyn Read+Seek+Send>` opaco); ver
+    /// `core::demuxer::Demuxer::network_stats`.
+    pub fn stats(&self) -> Arc<PrefetchStats> {
+        self.stats.clone()
     }
 
     /// Dispara em background a busca do bloco iniciando em `offset`, se
@@ -177,6 +253,14 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
     /// background ja em voo.
     fn ensure_cache(&mut self, pos: u64) -> io::Result<()> {
         if self.cache_hit(pos) {
+            // Ja dentro do bloco corrente. Se ele veio de um miss
+            // NAO-sequencial (seek) sem prefetch especulativo ainda em voo,
+            // este e o primeiro acesso que confirma que a leitura continua
+            // dentro dele — so agora vale disparar o proximo bloco (ver doc
+            // do modulo sobre por que isso nao acontece direto no install).
+            if self.pending_start.is_none() && self.cache_len > 0 {
+                self.kick_prefetch(self.cache_start + self.cache_len as u64);
+            }
             return Ok(());
         }
 
@@ -186,6 +270,10 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
             let result = self.result_rx.recv().map_err(|_| worker_gone_err())?;
             self.pending_start = None;
             self.install(result?);
+            if self.cache_len > 0 {
+                // Ainda sequencial — encadeia o proximo prefetch normalmente.
+                self.kick_prefetch(self.cache_start + self.cache_len as u64);
+            }
         } else {
             // Cache-miss que nao bate com o prefetch em andamento — ou e a
             // primeiríssima leitura, ou um seek de verdade tornou o
@@ -194,17 +282,14 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
             // antes de pedir o bloco certo, para nao deixar uma resposta
             // orfa no canal.
             if self.pending_start.take().is_some() {
+                self.stats.blocks_discarded.fetch_add(1, Ordering::Relaxed);
                 let _ = self.result_rx.recv();
             }
             self.cmd_tx.send(Command::Fetch(pos)).map_err(|_| worker_gone_err())?;
             let result = self.result_rx.recv().map_err(|_| worker_gone_err())?;
             self.install(result?);
-        }
-
-        if self.cache_len > 0 {
-            // Bloco valido instalado — aposta que a leitura continua
-            // sequencial e ja dispara a busca do proximo em background.
-            self.kick_prefetch(self.cache_start + self.cache_len as u64);
+            // Deliberadamente NAO kicka o proximo bloco aqui — ver doc do
+            // modulo e o comentario no ramo cache_hit acima.
         }
         Ok(())
     }

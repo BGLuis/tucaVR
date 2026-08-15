@@ -1,9 +1,18 @@
 use ffmpeg_next as ffmpeg;
 use ffmpeg::format::context::{Input, StreamIo};
-use protocols::prefetch::PrefetchReader;
+use protocols::prefetch::{PrefetchReader, PrefetchStats};
+use std::sync::Arc;
 
 // 12MB em vez do default 4MB: a 8K/60fps HEVC (~63Mbps / 7.85MB/s), 4MB cobre só ~0.5s por bloco.
 const REMOTE_PREFETCH_BLOCK_SIZE: usize = 12 * 1024 * 1024;
+
+/// Resultado de `Demuxer::read_packet` — ver comentario no metodo sobre por
+/// que isto nao e so `Option<(usize, Packet)>` como antes.
+pub enum ReadPacketOutcome {
+    Packet(usize, ffmpeg::Packet),
+    Eof,
+    Error(String),
+}
 
 pub struct Demuxer {
     pub input_context: Input,
@@ -16,6 +25,11 @@ pub struct Demuxer {
     // stream index bruto do container.
     pub video_streams: Vec<usize>,
     pub audio_streams: Vec<usize>,
+    // Instrumentacao do PrefetchReader da fonte remota (docs/DEBUGGING.md) —
+    // `None` para arquivo local ou `http://` puro (sem PrefetchReader
+    // envolvido, ver roteamento em `new()`). Capturado ANTES de o
+    // PrefetchReader ser engolido pelo `StreamIo` opaco do ffmpeg-next.
+    pub network_stats: Option<Arc<PrefetchStats>>,
 }
 
 impl Demuxer {
@@ -44,24 +58,30 @@ impl Demuxer {
     pub fn new(path: &str) -> Result<Self, String> {
         ffmpeg::init().map_err(|e| e.to_string())?;
 
+        let mut network_stats = None;
+
         let ictx = if let Some(target) = protocols::smb::SmbTarget::from_internal(path) {
             let source = protocols::smb::SmbFileSource::open(&target)?;
             let reader = PrefetchReader::with_block_size(source, REMOTE_PREFETCH_BLOCK_SIZE);
+            network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::ftp::FtpTarget::from_internal(path) {
             let source = protocols::ftp::FtpFileSource::open(&target)?;
             let reader = PrefetchReader::with_block_size(source, REMOTE_PREFETCH_BLOCK_SIZE);
+            network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::sftp::SftpTarget::from_internal(path) {
             let source = protocols::sftp::SftpFileSource::open(&target)?;
             let reader = PrefetchReader::with_block_size(source, REMOTE_PREFETCH_BLOCK_SIZE);
+            network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?
         } else if path.starts_with("https://") {
             let source = protocols::http::HttpsRangeSource::new(path)?;
             let reader = PrefetchReader::with_block_size(source, REMOTE_PREFETCH_BLOCK_SIZE);
+            network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(path), None).map_err(|e| e.to_string())?
         } else {
@@ -89,6 +109,7 @@ impl Demuxer {
             audio_stream_index,
             video_streams,
             audio_streams,
+            network_stats,
         })
     }
 
@@ -109,11 +130,30 @@ impl Demuxer {
         }
     }
 
-    pub fn read_packet(&mut self) -> Option<(usize, ffmpeg::Packet)> {
-        for (stream, packet) in self.input_context.packets() {
-            return Some((stream.index(), packet));
+    /// Le o proximo pacote, dirigindo `Packet::read` diretamente em vez do
+    /// iterator de conveniencia `Input::packets()` — achado desta sessao
+    /// (docs/NETWORK-IO-PERFORMANCE.md): `packets()` devolve `None` tanto
+    /// para EOF de verdade quanto para QUALQUER erro de I/O (rede caindo no
+    /// meio de uma leitura, por exemplo), entao o chamador nao tinha como
+    /// distinguir "acabou o arquivo" de "a rede falhou" — uma falha de rede
+    /// virava um restart silencioso pro inicio do arquivo (ver playback.rs).
+    /// A doc do proprio `PacketIter` recomenda isto para quem precisa
+    /// observar o erro.
+    pub fn read_packet(&mut self) -> ReadPacketOutcome {
+        let mut packet = ffmpeg::Packet::empty();
+        loop {
+            match packet.read(&mut self.input_context) {
+                Ok(()) => {
+                    let idx = packet.stream();
+                    return ReadPacketOutcome::Packet(idx, packet);
+                }
+                Err(ffmpeg::Error::Eof) => return ReadPacketOutcome::Eof,
+                // Pacote corrompido isolado — o demuxer consegue
+                // resincronizar (mesmo comportamento do PacketIter interno).
+                Err(ffmpeg::Error::InvalidData) => continue,
+                Err(e) => return ReadPacketOutcome::Error(e.to_string()),
+            }
         }
-        None
     }
 
     pub fn get_video_extradata(&self) -> Option<Vec<u8>> {

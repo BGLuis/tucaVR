@@ -12,3 +12,6 @@ protocols = { path = "../protocols" }
 audio = { path = "../audio" }
 once_cell = "1.19"
 ndk-sys = "0.6.0"
+# So pra poder implementar log::Log (ver AndroidLogger em lib.rs) — ja estava
+# no Cargo.lock transitivamente (via protocols), nao adiciona dependencia nova.
+log = "0.4"

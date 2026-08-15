@@ -2,7 +2,7 @@ use ffmpeg_next as ffmpeg;
 use ffmpeg::format::Pixel;
 use ffmpeg::software::scaling::{context::Context as ScalingContext, flag::Flags};
 
-use crate::demuxer::Demuxer;
+use crate::demuxer::{Demuxer, ReadPacketOutcome};
 
 pub struct ThumbnailImage {
     /// Pixels RGBA8 empacotados, `width * height * 4` bytes, sem padding de
@@ -61,8 +61,8 @@ pub fn generate(path: &str, max_width: u32, max_height: u32) -> Option<Thumbnail
 
     while tried < MAX_PACKETS_TRIED {
         let (stream_index, packet) = match demuxer.read_packet() {
-            Some(p) => p,
-            None => break,
+            ReadPacketOutcome::Packet(idx, packet) => (idx, packet),
+            ReadPacketOutcome::Eof | ReadPacketOutcome::Error(_) => break,
         };
         if stream_index != video_stream_index {
             continue;

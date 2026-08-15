@@ -82,7 +82,7 @@ use russh::keys::key::PublicKey;
 use russh::Disconnect;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::{RawSftpSession, SftpSession};
-use russh_sftp::protocol::{FileAttributes, OpenFlags, StatusCode};
+use russh_sftp::protocol::{Data, FileAttributes, OpenFlags, StatusCode};
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -96,6 +96,40 @@ fn new_runtime() -> io::Result<Runtime> {
 /// `max_packet_len` default de `russh_sftp` (256KiB) pra sobrar folga de
 /// overhead de protocolo. Ver doc do modulo sobre o laco de leitura.
 const SFTP_MAX_READ_CHUNK: u32 = 256 * 1024 - 4096;
+
+/// Quantos `SSH_FXP_READ` concorrentes no maximo por vez. Um bloco de 12MB
+/// (ver `REMOTE_PREFETCH_BLOCK_SIZE` em `core/src/demuxer.rs`) dividido em
+/// chunks de ~252KB da ~48 chunks — disparar os 48 de uma vez (primeira
+/// versao desta otimizacao, so testada via Docker/localhost) coincidiu com
+/// uma REGRESSAO reportada no Quest 3 real (decFps ~30 -> media 10, jitter
+/// ~200ms -> ~300ms) assim que a otimizacao foi ao ar.
+///
+/// **Atualizacao (sessao seguinte, com acesso a logcat de verdade):** este
+/// limite de 4 ja estava rodando no APK que reproduziu vidFps~10/decFps~17
+/// contra SFTP (mesmo timestamp de build), e o mesmo arquivo local (sem
+/// rede) fez decFps~60/vidFps~50-55 no mesmo dispositivo — ou seja, a
+/// hipotese "burst de 48 requisicoes" abaixo esta REFUTADA como causa
+/// principal da regressao; o gargalo e throughput sustentado da leitura de
+/// rede, nao contencao de burst. As duas causas originais ficam registradas
+/// porque o limite continua uma protecao razoavel contra bursts (nao ha
+/// motivo pra tira-lo), so nao explicam mais os ~10fps observados:
+/// (1) cada `SSH_FXP_READ` custa criptografia SSH de verdade (CPU, ao
+/// contrario do decode de video que roda em hardware) — um burst de 48
+/// concorrentes compete por CPU com a thread de decode muito mais do que um
+/// numero pequeno em voo por vez; (2) um burst desse tamanho pode estourar a
+/// janela de fluxo do canal SSH ou algum limite do servidor, fazendo uma
+/// unica falha disparar reconexao completa (handshake SSH + auth + reabrir o
+/// arquivo, ver `SftpFileSource::reconnect`) — bem mais caro que o RTT que a
+/// concorrencia deveria estar economizando. Ver docs/NETWORK-IO-PERFORMANCE.md.
+const SFTP_MAX_CONCURRENT_CHUNKS: usize = 4;
+
+/// Quantas vezes tentar de novo SO o(s) chunk(s) que falharam dentro de um
+/// lote, antes de desistir e deixar o erro propagar para `read_range`
+/// (que ai sim reconecta a sessao inteira). Sem isto, uma unica falha
+/// transiente de UM chunk entre 4 concorrentes descartava os outros 3 que
+/// tinham vindo certos e forcava reconexao completa (handshake SSH + auth +
+/// reabrir arquivo) so pra refazer os mesmos ~12MB do zero.
+const SFTP_CHUNK_RETRY_ATTEMPTS: usize = 2;
 
 /// Handler minimo exigido pelo `russh::client` para receber eventos da
 /// sessao SSH (banner, checagem de host key, etc). `check_server_key`
@@ -260,6 +294,11 @@ impl SftpFileSource {
     /// tentativa — nao ha cursor de handle pra realinhar (essa e a vantagem
     /// do pread nativo, ver doc do modulo).
     fn reconnect(&mut self) -> Result<(), String> {
+        // Reconexao completa (handshake SSH + auth + reabrir arquivo) e
+        // MUITO mais cara que uma leitura normal — se isto aparecer com
+        // frequencia no log durante playback, e sinal de que algo esta
+        // derrubando a conexao com regularidade (ver SFTP_MAX_CONCURRENT_CHUNKS).
+        log::warn!("SftpFileSource: reconectando apos falha de leitura");
         // Solta o que sobrou da conexao anterior antes de abrir outra —
         // best-effort, o socket provavelmente ja caiu de qualquer forma.
         self.raw = None;
@@ -274,6 +313,41 @@ impl SftpFileSource {
         Ok(())
     }
 
+    /// Le um chunk ate preenche-lo por completo, tratando "servidor devolveu
+    /// menos do que pedido sem sinalizar EOF" como leitura PARCIAL LEGITIMA
+    /// (permitida pelo protocolo — a doc do modulo ja citava isso, mas o
+    /// codigo tratava como fim de dados) em vez de encerrar ali. Achado
+    /// desta sessao (docs/NETWORK-IO-PERFORMANCE.md): sem este laco, o
+    /// "bloco" efetivo do `PrefetchReader` colapsava pro tamanho que o
+    /// servidor de fato devolve por `SSH_FXP_READ` — medido em ~30KB neste
+    /// NAS, bem abaixo de `SFTP_MAX_READ_CHUNK` (~252KB) e MUITO abaixo dos
+    /// 12MB do bloco do Demuxer. Cada troca de bloco pagava overhead de
+    /// round-trip/canal pra uma fracao minuscula dos dados — o gargalo real
+    /// da regressao 30fps->10fps, nao prioridade de thread (confirmado
+    /// via SMB no mesmo arquivo/servidor: ~11-12MB/s sustentado, sem
+    /// nenhuma mudanca de prioridade envolvida nesse caminho).
+    async fn read_chunk_filling(raw: &RawSftpSession, handle: &str, chunk_offset: u64, chunk_len: u32) -> Result<Data, SftpError> {
+        let mut acc = Vec::with_capacity(chunk_len as usize);
+        let mut offset = chunk_offset;
+        let mut remaining = chunk_len;
+        while remaining > 0 {
+            match raw.read(handle, offset, remaining).await {
+                Ok(data) => {
+                    let n = data.data.len();
+                    if n == 0 {
+                        break; // sem mais dados pra este pedido, sem status explicito de EOF
+                    }
+                    acc.extend_from_slice(&data.data[..n]);
+                    offset += n as u64;
+                    remaining -= n as u32;
+                }
+                Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => break,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(Data { id: 0, data: acc })
+    }
+
     fn try_read_range(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
         let (Some(raw), Some(handle)) = (self.raw.as_ref(), self.handle.as_deref()) else {
             return Err(io::Error::other("SftpFileSource sem conexao ativa"));
@@ -285,28 +359,61 @@ impl SftpFileSource {
         }
 
         let chunks = split_range(offset, want, SFTP_MAX_READ_CHUNK);
-        let results = self.runtime.block_on(join_all(chunks.iter().map(|&(chunk_offset, chunk_len)| raw.read(handle, chunk_offset, chunk_len))));
-
         let mut total = 0usize;
-        for (idx, result) in results.into_iter().enumerate() {
-            let (chunk_offset, chunk_len) = chunks[idx];
-            match result {
-                Ok(data) => {
-                    let n = data.data.len();
-                    let start_in_buf = (chunk_offset - offset) as usize;
-                    buf[start_in_buf..start_in_buf + n].copy_from_slice(&data.data[..n]);
-                    total += n;
-                    if n < chunk_len as usize {
-                        // Servidor devolveu menos do que pedido sem sinalizar
-                        // EOF explicito (permitido pelo protocolo), ou este
-                        // era o chunk final legitimo — os chunks seguintes
-                        // (se buscados) nao formam um prefixo contiguo
-                        // confiavel, entao para a remontagem aqui.
-                        break;
-                    }
+        'batches: for batch in chunks.chunks(SFTP_MAX_CONCURRENT_CHUNKS) {
+            let mut results = self.runtime.block_on(join_all(
+                batch.iter().map(|&(chunk_offset, chunk_len)| Self::read_chunk_filling(raw, handle, chunk_offset, chunk_len)),
+            ));
+
+            // Repete SO os chunks que falharam com um erro de verdade (nao
+            // Eof — isso e um resultado legitimo, nao uma falha) antes de
+            // desistir do lote inteiro. Ver doc de SFTP_CHUNK_RETRY_ATTEMPTS.
+            for _ in 0..SFTP_CHUNK_RETRY_ATTEMPTS {
+                let retry_slots: Vec<usize> = results
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, r)| match r {
+                        // Eof e um resultado legitimo (fim do arquivo), nao
+                        // uma falha — nao ha nada pra reler.
+                        Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => None,
+                        Err(_) => Some(i),
+                        Ok(_) => None,
+                    })
+                    .collect();
+                if retry_slots.is_empty() {
+                    break;
                 }
-                Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => break,
-                Err(e) => return Err(io::Error::other(e.to_string())),
+                let retried = self
+                    .runtime
+                    .block_on(join_all(retry_slots.iter().map(|&i| {
+                        let (chunk_offset, chunk_len) = batch[i];
+                        Self::read_chunk_filling(raw, handle, chunk_offset, chunk_len)
+                    })));
+                for (slot, result) in retry_slots.into_iter().zip(retried) {
+                    results[slot] = result;
+                }
+            }
+
+            for (idx, result) in results.into_iter().enumerate() {
+                let (chunk_offset, chunk_len) = batch[idx];
+                match result {
+                    Ok(data) => {
+                        let n = data.data.len();
+                        let start_in_buf = (chunk_offset - offset) as usize;
+                        buf[start_in_buf..start_in_buf + n].copy_from_slice(&data.data[..n]);
+                        total += n;
+                        if n < chunk_len as usize {
+                            // Servidor devolveu menos do que pedido sem sinalizar
+                            // EOF explicito (permitido pelo protocolo), ou este
+                            // era o chunk final legitimo — os chunks seguintes
+                            // (se buscados) nao formam um prefixo contiguo
+                            // confiavel, entao para a remontagem aqui.
+                            break 'batches;
+                        }
+                    }
+                    Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => break 'batches,
+                    Err(e) => return Err(io::Error::other(e.to_string())),
+                }
             }
         }
         Ok(total)

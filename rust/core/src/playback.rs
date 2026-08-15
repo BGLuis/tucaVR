@@ -104,6 +104,13 @@ pub struct PlaybackController {
     desired_audio_track: usize,
     audio_track_count: usize,
     auto_paused: bool,
+    // Instrumentacao (docs/DEBUGGING.md), capturada em load_at() antes de
+    // mover o Demuxer/HwDecoder pra dentro das threads de sessao — ver
+    // getters no fim do impl. `None`/valores zerados antes do primeiro load.
+    network_stats: Option<Arc<protocols::prefetch::PrefetchStats>>,
+    video_queue: Option<crossbeam_channel::Sender<ffmpeg_next::Packet>>,
+    frames_output: Option<Arc<std::sync::atomic::AtomicU64>>,
+    frames_dropped: Option<Arc<std::sync::atomic::AtomicU64>>,
 }
 
 impl PlaybackController {
@@ -121,6 +128,10 @@ impl PlaybackController {
             desired_audio_track: 0,
             audio_track_count: 0,
             auto_paused: false,
+            network_stats: None,
+            video_queue: None,
+            frames_output: None,
+            frames_dropped: None,
         }
     }
 
@@ -144,6 +155,7 @@ impl PlaybackController {
 
         self.current_path = Some(path.to_string());
         let mut demuxer = Demuxer::new(path).map_err(|e| e.to_string())?;
+        self.network_stats = demuxer.network_stats.clone();
         demuxer.select_audio_track(self.desired_audio_track);
         self.audio_track_count = demuxer.audio_streams.len();
         self.duration = demuxer.input_context.duration() as f64 / 1_000_000.0;
@@ -185,6 +197,9 @@ impl PlaybackController {
         }
 
         let mut video_decoder = HwDecoder::new(mime).map_err(|e| e.to_string())?;
+        let (frames_output, frames_dropped) = video_decoder.metrics();
+        self.frames_output = Some(frames_output);
+        self.frames_dropped = Some(frames_dropped);
 
         let mut format = MediaFormat::new();
         format.set_str("mime", mime);
@@ -254,6 +269,10 @@ impl PlaybackController {
         // 90 (~1.5s a 60fps) em vez de 30 (~0.5s): absorve stalls de rede maiores antes de faltar pacote pro decoder.
         let (video_tx, video_rx) = crossbeam_channel::bounded::<ffmpeg_next::Packet>(90);
         let (audio_tx, audio_rx) = crossbeam_channel::bounded::<ffmpeg_next::Packet>(100);
+        // Clone do Sender so pra poder consultar profundidade (`len()`) de
+        // fora da thread de demux — nao envia nada por este handle, ver
+        // get_video_queue_depth().
+        self.video_queue = Some(video_tx.clone());
 
         // Flags desta geracao: nao sao compartilhadas com nenhuma
         // sessao anterior ou futura (ver media_logic::session::Generation e
@@ -281,15 +300,35 @@ impl PlaybackController {
                     continue;
                 }
 
-                if let Some((idx, packet)) = demuxer.read_packet() {
-                    if idx == video_idx {
-                        if !try_send_until_stopped(&video_tx, packet, &is_running_d) { break; }
-                    } else if demuxer.audio_stream_index == Some(idx) {
-                        if !try_send_until_stopped(&audio_tx, packet, &is_running_d) { break; }
+                match demuxer.read_packet() {
+                    crate::demuxer::ReadPacketOutcome::Packet(idx, packet) => {
+                        if idx == video_idx {
+                            if !try_send_until_stopped(&video_tx, packet, &is_running_d) { break; }
+                        } else if demuxer.audio_stream_index == Some(idx) {
+                            if !try_send_until_stopped(&audio_tx, packet, &is_running_d) { break; }
+                        }
                     }
-                } else {
-                    let _ = demuxer.input_context.seek(0, 0..1);
-                    sync_d.reset();
+                    crate::demuxer::ReadPacketOutcome::Eof => {
+                        let _ = demuxer.input_context.seek(0, 0..1);
+                        sync_d.reset();
+                    }
+                    crate::demuxer::ReadPacketOutcome::Error(e) => {
+                        // Distinguido de EOF nesta sessao
+                        // (docs/NETWORK-IO-PERFORMANCE.md) — antes disto uma
+                        // falha de rede virava um restart silencioso e
+                        // indistinguivel de EOF. Mantem a mesma recuperacao
+                        // (seek pro inicio) por ora: e o unico caminho
+                        // testado hoje pra "o AVFormatContext esta num
+                        // estado de erro sticky, precisa recomecar" — so que
+                        // agora loga em vez de esconder.
+                        unsafe {
+                            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
+                            let msg = std::ffi::CString::new(format!("Demuxer: erro de leitura ({e}), reiniciando do inicio")).unwrap();
+                            ndk_sys::__android_log_print(5, tag.as_ptr(), msg.as_ptr()); // 5 = ANDROID_LOG_WARN
+                        }
+                        let _ = demuxer.input_context.seek(0, 0..1);
+                        sync_d.reset();
+                    }
                 }
             }
         });
@@ -530,8 +569,62 @@ impl PlaybackController {
     }
 
     /// Debug (docs/DEBUGGING.md) — ver comentario em TextureOutput::frames_decoded.
+    /// Conta frames APRESENTADOS (renderizados), nao frames que o MediaCodec
+    /// produziu — ver get_frames_output_count() pra essa distincao.
     pub fn get_frames_decoded_count(&self) -> u64 {
         self.texture_output.lock().map(|tex| tex.frames_decoded).unwrap_or(0)
+    }
+
+    /// Debug (docs/DEBUGGING.md) — total de buffers de saida que o
+    /// MediaCodec realmente desenfileirou, independente do callback de sync
+    /// decidir renderizar ou descartar. Ground truth do throughput real do
+    /// decoder — ver HwDecoder::metrics().
+    pub fn get_frames_output_count(&self) -> u64 {
+        self.frames_output.as_ref().map(|a| a.load(Ordering::Relaxed)).unwrap_or(0)
+    }
+
+    /// Debug (docs/DEBUGGING.md) — frames que o MediaCodec produziu mas o
+    /// callback de sync descartou por atraso (LATE_FRAME_RENDER_SKIP_SEC).
+    pub fn get_frames_dropped_count(&self) -> u64 {
+        self.frames_dropped.as_ref().map(|a| a.load(Ordering::Relaxed)).unwrap_or(0)
+    }
+
+    /// Debug (docs/DEBUGGING.md) — quantos pacotes de video estao
+    /// bufferizados entre a thread de demux e a de decode agora. Perto de 0
+    /// de forma sustentada = a thread de demux nao esta acompanhando o
+    /// consumo (rede lenta ou travada); alto e estavel = normal.
+    pub fn get_video_queue_depth(&self) -> u32 {
+        self.video_queue.as_ref().map(|s| s.len() as u32).unwrap_or(0)
+    }
+
+    /// Debug (docs/DEBUGGING.md) — bytes recebidos da rede pelo
+    /// PrefetchReader da fonte atual, soma cumulativa. 0 para arquivo local
+    /// ou `http://` puro (sem PrefetchReader envolvido). O C++ amostra isto
+    /// ao longo do tempo e calcula MB/s, mesmo padrao de decFps.
+    pub fn get_network_bytes_read(&self) -> u64 {
+        self.network_stats.as_ref().map(|s| s.bytes_fetched.load(Ordering::Relaxed)).unwrap_or(0)
+    }
+
+    /// Debug (docs/DEBUGGING.md) — duracao do ULTIMO fetch de bloco completo
+    /// do PrefetchReader, em ms. Diferencia throughput ESTAVEL (todo bloco de
+    /// 12MB leva ~o mesmo tempo) de throughput em MEDIA baixa por causa de
+    /// stalls/retries pontuais (alguns blocos rapidos, outros muito lentos) —
+    /// ver docs/NETWORK-IO-PERFORMANCE.md.
+    pub fn get_network_last_block_fetch_ms(&self) -> f32 {
+        self.network_stats.as_ref().map(|s| s.last_fetch_us.load(Ordering::Relaxed) as f32 / 1000.0).unwrap_or(0.0)
+    }
+
+    /// Debug (docs/DEBUGGING.md) — quantos blocos foram buscados no total
+    /// (sucesso ou erro) e quantos desses foram descartados por um seek real
+    /// antes de serem consumidos. Alto `discarded` relativo a `fetched`
+    /// durante playback estavel (nao logo apos abrir o arquivo) indica
+    /// acesso menos sequencial do que o esperado.
+    pub fn get_network_blocks_fetched(&self) -> u64 {
+        self.network_stats.as_ref().map(|s| s.blocks_fetched.load(Ordering::Relaxed)).unwrap_or(0)
+    }
+
+    pub fn get_network_blocks_discarded(&self) -> u64 {
+        self.network_stats.as_ref().map(|s| s.blocks_discarded.load(Ordering::Relaxed)).unwrap_or(0)
     }
 
     pub fn toggle_play_pause(&mut self) {

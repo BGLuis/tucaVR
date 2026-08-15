@@ -7,14 +7,14 @@ pub struct TextureOutput {
     pub reader: Option<ImageReader>,
     pub current_image: Option<Image>,
     pub current_buffer: Option<HardwareBuffer>,
-    // Debug (docs/DEBUGGING.md): conta frames REALMENTE decodificados/
-    // adquiridos aqui, na thread de decode — independente de quantas vezes
-    // o C++ chama get_current_video_frame() pra observar isso. Existe pra
-    // isolar "o decode esta lento" de "o C++ so esta perdendo frames que o
-    // decode ja produziu" quando o vidFps calculado do lado C++ (que so
-    // enxerga o que consegue observar por polling) parecer baixo — os dois
-    // numeros devem bater; se nao baterem, o problema e do lado do consumo
-    // (import/cache Vulkan, taxa de polling), nao do decode em si.
+    // Debug (docs/DEBUGGING.md): conta frames REALMENTE apresentados aqui
+    // (ImageReader adquiriu um buffer novo), na thread de decode —
+    // independente de quantas vezes o C++ chama get_current_video_frame()
+    // pra observar isso. Renomeado de "decoded" pra "apresentados" nesta
+    // sessao (docs/NETWORK-IO-PERFORMANCE.md): so incrementa quando o
+    // callback de sync decide RENDERIZAR o frame, entao nao mede o
+    // throughput real do MediaCodec — pra isso ver HwDecoder::metrics()
+    // (frames_output), que conta todo buffer de saida desenfileirado.
     pub frames_decoded: u64,
 }
 
@@ -52,11 +52,12 @@ impl TextureOutput {
                 Ok(AcquireResult::Image(image)) => {
                     match image.hardware_buffer() {
                         Ok(buffer) => {
-                            unsafe {
-                                let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-                                let msg = std::ffi::CString::new("Successfully acquired a new frame!").unwrap();
-                                ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-                            }
+                            // Log por frame removido nesta sessao
+                            // (docs/NETWORK-IO-PERFORMANCE.md): disparava a
+                            // ~30-60Hz, na thread de decode, dentro do mutex
+                            // texture_output que o loop de render tambem
+                            // disputa — custo real por frame por um log que
+                            // ninguem lia.
                             self.current_buffer = Some(buffer);
                             self.current_image = Some(image);
                             self.frames_decoded = self.frames_decoded.wrapping_add(1);

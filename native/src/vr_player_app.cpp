@@ -39,6 +39,17 @@ extern "C" {
     extern AHardwareBuffer* get_current_video_frame();
     extern void get_video_progress(float* current, float* total);
     extern uint64_t get_video_frames_decoded_count(); // debug, ver docs/DEBUGGING.md
+    // Instrumentacao adicional (docs/NETWORK-IO-PERFORMANCE.md) — ver
+    // comentario no bloco equivalente de vr_player_app_vulkan.cpp.
+    extern uint64_t get_video_frames_output_count();
+    extern uint64_t get_video_frames_dropped_count();
+    extern uint32_t get_video_queue_depth();
+    extern uint64_t get_network_bytes_read();
+    // Diagnostico do gargalo de throughput (docs/NETWORK-IO-PERFORMANCE.md
+    // secao 7) — ver comentario equivalente em vr_player_app_vulkan.cpp.
+    extern float get_network_last_block_fetch_ms();
+    extern uint64_t get_network_blocks_fetched();
+    extern uint64_t get_network_blocks_discarded();
     extern void set_video_volume(float volume);
     extern float get_video_volume();
     extern void set_playback_speed(float speed);
@@ -1007,10 +1018,39 @@ public:
             // comentario no campo m_decodedFps.
             m_decodedFpsPollAccumMs += m_lastFrameMs;
             if (m_decodedFpsPollAccumMs >= kDecodedFpsPollIntervalMs) {
+                float pollSec = m_decodedFpsPollAccumMs / 1000.0f;
+
                 uint64_t currentCount = get_video_frames_decoded_count();
                 uint64_t delta = currentCount - m_lastDecodedFrameCount; // wrap-safe (unsigned)
-                m_decodedFps = delta / (m_decodedFpsPollAccumMs / 1000.0f);
+                m_decodedFps = delta / pollSec;
                 m_lastDecodedFrameCount = currentCount;
+
+                uint64_t outputCount = get_video_frames_output_count();
+                m_outputFps = (outputCount - m_lastOutputFrameCount) / pollSec;
+                m_lastOutputFrameCount = outputCount;
+
+                uint64_t droppedCount = get_video_frames_dropped_count();
+                m_droppedFps = (droppedCount - m_lastDroppedFrameCount) / pollSec;
+                m_lastDroppedFrameCount = droppedCount;
+
+                uint64_t netBytes = get_network_bytes_read();
+                float netMB = (netBytes - m_lastNetworkBytes) / (1024.0f * 1024.0f);
+                m_netMBs = netMB / pollSec;
+                m_lastNetworkBytes = netBytes;
+
+                m_videoQueueDepth = get_video_queue_depth();
+
+                // Diagnostico do gargalo de throughput
+                // (docs/NETWORK-IO-PERFORMANCE.md secao 7) — ver comentario
+                // equivalente em vr_player_app_vulkan.cpp.
+                if (m_lastNetworkBytes > 0 || get_network_blocks_fetched() > 0) {
+                    LOGI("net: %.2fMB/s blockFetchMs=%.0f blocksFetched=%llu blocksDiscarded=%llu q=%u",
+                        m_netMBs, get_network_last_block_fetch_ms(),
+                        (unsigned long long)get_network_blocks_fetched(),
+                        (unsigned long long)get_network_blocks_discarded(),
+                        m_videoQueueDepth);
+                }
+
                 m_decodedFpsPollAccumMs = 0.0f;
             }
         }
@@ -1416,12 +1456,13 @@ public:
             // debuggable, entao computar/mandar isso sempre e mais simples
             // que condicionar a compilacao nativa por build type.
             {
-                char hud[352];
+                char hud[448];
                 snprintf(hud, sizeof(hud),
-                    "GLES | %s | flat=%.0f esfera=%.0f polar180=%.0f swap=%.0f | video=%s vidGap=%.0fms vidFps=%.0f decFps=%.0f jitter=%.0fms | %.0ffps %.1fms stutter=%d freeze=%d",
+                    "GLES | %s | flat=%.0f esfera=%.0f polar180=%.0f swap=%.0f | video=%s vidGap=%.0fms vidFps=%.0f decFps=%.0f outFps=%.0f drop=%.0f jitter=%.0fms | net=%.1fMB/s q=%u | %.0ffps %.1fms stutter=%d freeze=%d",
                     ScreenModeName(m_screenMode), m_flatStereoLayout, m_sphereStereoLayout,
                     m_uPolar180, m_swapEyesF, (m_lastBuffer != nullptr) ? "ativo" : "sem frame",
-                    m_msSinceLastVideoFrame, m_videoFps, m_decodedFps, m_videoJitterMs,
+                    m_msSinceLastVideoFrame, m_videoFps, m_decodedFps, m_outputFps, m_droppedFps, m_videoJitterMs,
+                    m_netMBs, m_videoQueueDepth,
                     m_smoothedFps, m_lastFrameMs, m_stutterCount, m_freezeCount);
                 const xrJava* java = GetContext();
                 JNIEnv* env = nullptr;
@@ -1833,6 +1874,17 @@ private:
     float m_decodedFpsPollAccumMs = 0.0f;
     uint64_t m_lastDecodedFrameCount = 0;
     float m_decodedFps = 0.0f;
+
+    // Instrumentacao adicional desta sessao (docs/NETWORK-IO-PERFORMANCE.md),
+    // amostrada na MESMA janela de 1Hz que m_decodedFps acima — ver
+    // comentario equivalente em AppState::outputFps (vr_player_app_vulkan.cpp).
+    uint64_t m_lastOutputFrameCount = 0;
+    float m_outputFps = 0.0f;
+    uint64_t m_lastDroppedFrameCount = 0;
+    float m_droppedFps = 0.0f;
+    uint64_t m_lastNetworkBytes = 0;
+    float m_netMBs = 0.0f;
+    uint32_t m_videoQueueDepth = 0;
 
     void PushVideoGapSample(float gapMs) {
         if (gapMs <= 0.0f) return;

@@ -46,6 +46,14 @@ use tokio::runtime::Runtime;
 /// dentro de cada chamada concorrente, sem quebrar nada.
 const SMB_CONCURRENT_CHUNK_SIZE: u32 = 1024 * 1024;
 
+/// Quantas sub-leituras concorrentes no maximo por vez — mesmo raciocinio e
+/// mesmo valor do `SFTP_MAX_CONCURRENT_CHUNKS` (ver `crate::sftp`): um
+/// disparo sem limite (todos os chunks do bloco de uma vez) coincidiu com uma
+/// regressao de desempenho medida no Quest 3 no caminho SFTP irmao deste;
+/// limitar reduz tanto a contencao de CPU com a thread de decode quanto o
+/// risco de estourar algum limite do lado do servidor.
+const SMB_MAX_CONCURRENT_CHUNKS: usize = 4;
+
 fn new_runtime() -> io::Result<Runtime> {
     tokio::runtime::Builder::new_current_thread().enable_all().build()
 }
@@ -136,22 +144,24 @@ impl RangeSource for SmbFileSource {
         }
 
         let chunks = split_range(offset, want, SMB_CONCURRENT_CHUNK_SIZE);
-        let results = self.runtime.block_on(join_all(chunks.iter().map(|&(chunk_offset, chunk_len)| reader.read_at(chunk_offset, chunk_len as u64))));
-
         let mut total = 0usize;
-        for (idx, result) in results.into_iter().enumerate() {
-            let data = result.map_err(|e| io::Error::other(e.to_string()))?;
-            let (chunk_offset, chunk_len) = chunks[idx];
-            let start_in_buf = (chunk_offset - offset) as usize;
-            let n = data.len();
-            buf[start_in_buf..start_in_buf + n].copy_from_slice(&data[..n]);
-            total += n;
-            if n < chunk_len as usize {
-                // Curto por causa de EOF/truncamento concorrente no servidor
-                // (ja clampado contra `self.size` acima, entao isto so deve
-                // acontecer numa corrida real) — os chunks seguintes, se
-                // houver, nao formam um prefixo contiguo confiavel; para.
-                break;
+        'batches: for batch in chunks.chunks(SMB_MAX_CONCURRENT_CHUNKS) {
+            let results = self.runtime.block_on(join_all(batch.iter().map(|&(chunk_offset, chunk_len)| reader.read_at(chunk_offset, chunk_len as u64))));
+
+            for (idx, result) in results.into_iter().enumerate() {
+                let data = result.map_err(|e| io::Error::other(e.to_string()))?;
+                let (chunk_offset, chunk_len) = batch[idx];
+                let start_in_buf = (chunk_offset - offset) as usize;
+                let n = data.len();
+                buf[start_in_buf..start_in_buf + n].copy_from_slice(&data[..n]);
+                total += n;
+                if n < chunk_len as usize {
+                    // Curto por causa de EOF/truncamento concorrente no servidor
+                    // (ja clampado contra `self.size` acima, entao isto so deve
+                    // acontecer numa corrida real) — os chunks seguintes, se
+                    // houver, nao formam um prefixo contiguo confiavel; para.
+                    break 'batches;
+                }
             }
         }
         Ok(total)

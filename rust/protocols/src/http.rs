@@ -31,6 +31,13 @@ use std::time::Duration;
 /// o caminho estabelecido para paralelizar download por range em HTTP puro.
 const HTTP_CONCURRENT_CHUNK_SIZE: u32 = 2 * 1024 * 1024;
 
+/// Quantas threads/GETs concorrentes no maximo por vez — mesmo raciocinio do
+/// `SFTP_MAX_CONCURRENT_CHUNKS` (`crate::sftp`): limitar o burst de OS
+/// threads (`std::thread::scope` spawna uma por chunk) reduz a contencao com
+/// a thread de decode e evita depender de um numero de conexoes simultaneas
+/// que o servidor/roteador domestico nao necessariamente aguenta bem.
+const HTTP_MAX_CONCURRENT_CHUNKS: usize = 4;
+
 #[derive(Debug, Clone)]
 pub struct HttpCapabilities {
     pub reachable: bool,
@@ -114,16 +121,16 @@ pub fn probe(url: &str) -> HttpCapabilities {
         }
     };
 
-    if let Ok(resp) = client.head(url).send() {
-        if resp.status().is_success() {
-            let seekable = resp
-                .headers()
-                .get(reqwest::header::ACCEPT_RANGES)
-                .map(|v| v.to_str().unwrap_or("").eq_ignore_ascii_case("bytes"))
-                .unwrap_or(false);
-            let content_length = parse_content_length_header(resp.headers());
-            return HttpCapabilities { reachable: true, status: resp.status().as_u16(), seekable, content_length, error: None };
-        }
+    if let Ok(resp) = client.head(url).send()
+        && resp.status().is_success()
+    {
+        let seekable = resp
+            .headers()
+            .get(reqwest::header::ACCEPT_RANGES)
+            .map(|v| v.to_str().unwrap_or("").eq_ignore_ascii_case("bytes"))
+            .unwrap_or(false);
+        let content_length = parse_content_length_header(resp.headers());
+        return HttpCapabilities { reachable: true, status: resp.status().as_u16(), seekable, content_length, error: None };
     }
 
     match client.get(url).header(reqwest::header::RANGE, "bytes=0-0").send() {
@@ -196,33 +203,35 @@ impl RangeSource for HttpsRangeSource {
         let want = ((self.len - offset).min(buf.len() as u64)) as u32;
         let chunks = split_range(offset, want, HTTP_CONCURRENT_CHUNK_SIZE);
 
-        let mut results: Vec<io::Result<Vec<u8>>> = Vec::with_capacity(chunks.len());
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = chunks
-                .iter()
-                .map(|&(chunk_offset, chunk_len)| {
-                    let client = self.client.clone();
-                    let url = self.url.clone();
-                    scope.spawn(move || fetch_range(&client, &url, chunk_offset, chunk_len))
-                })
-                .collect();
-            for handle in handles {
-                results.push(handle.join().unwrap_or_else(|_| Err(io::Error::other("thread de leitura HTTP entrou em panico"))));
-            }
-        });
-
         let mut total = 0usize;
-        for (idx, result) in results.into_iter().enumerate() {
-            let data = result?;
-            let (chunk_offset, chunk_len) = chunks[idx];
-            let start_in_buf = (chunk_offset - offset) as usize;
-            let n = data.len();
-            buf[start_in_buf..start_in_buf + n].copy_from_slice(&data[..n]);
-            total += n;
-            if n < chunk_len as usize {
-                // Curto por EOF/corrida rara — chunks seguintes (se buscados)
-                // nao formam um prefixo contiguo confiavel, para aqui.
-                break;
+        'batches: for batch in chunks.chunks(HTTP_MAX_CONCURRENT_CHUNKS) {
+            let mut results: Vec<io::Result<Vec<u8>>> = Vec::with_capacity(batch.len());
+            std::thread::scope(|scope| {
+                let handles: Vec<_> = batch
+                    .iter()
+                    .map(|&(chunk_offset, chunk_len)| {
+                        let client = self.client.clone();
+                        let url = self.url.clone();
+                        scope.spawn(move || fetch_range(&client, &url, chunk_offset, chunk_len))
+                    })
+                    .collect();
+                for handle in handles {
+                    results.push(handle.join().unwrap_or_else(|_| Err(io::Error::other("thread de leitura HTTP entrou em panico"))));
+                }
+            });
+
+            for (idx, result) in results.into_iter().enumerate() {
+                let data = result?;
+                let (chunk_offset, chunk_len) = batch[idx];
+                let start_in_buf = (chunk_offset - offset) as usize;
+                let n = data.len();
+                buf[start_in_buf..start_in_buf + n].copy_from_slice(&data[..n]);
+                total += n;
+                if n < chunk_len as usize {
+                    // Curto por EOF/corrida rara — chunks seguintes (se buscados)
+                    // nao formam um prefixo contiguo confiavel, para aqui.
+                    break 'batches;
+                }
             }
         }
         Ok(total)

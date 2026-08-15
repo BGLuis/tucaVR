@@ -70,13 +70,33 @@ extern "C" {
     extern void set_video_volume(float volume);
     extern void seek_video_playback(float position);
     extern uint64_t get_video_frames_decoded_count(); // debug, ver docs/DEBUGGING.md
+    // Instrumentacao adicional (docs/NETWORK-IO-PERFORMANCE.md): ground
+    // truth de saida do MediaCodec, frames descartados por atraso, fila
+    // demux->decode e throughput de rede — ver comentario no AppState.
+    extern uint64_t get_video_frames_output_count();
+    extern uint64_t get_video_frames_dropped_count();
+    extern uint32_t get_video_queue_depth();
+    extern uint64_t get_network_bytes_read();
+    // Diagnostico do gargalo de throughput (docs/NETWORK-IO-PERFORMANCE.md
+    // secao 7): latencia do ULTIMO fetch de bloco completo do PrefetchReader
+    // e contagem de blocos buscados/descartados — logado a 1Hz junto com
+    // decFps/netMBs, ver bloco de amostragem em RenderFrame.
+    extern float get_network_last_block_fetch_ms();
+    extern uint64_t get_network_blocks_fetched();
+    extern uint64_t get_network_blocks_discarded();
 }
 
 namespace {
 
 constexpr int kEyeCount = 2;
-// Limite de entradas no cache de VkImage por AHardwareBuffer.
-constexpr size_t kVideoImageCacheLimit = 6;
+// Limite de entradas no cache de VkImage por AHardwareBuffer. Era 6
+// (herdado do m_eglImageCache do caminho GLES) — logcat de hardware desta
+// sessao (docs/NETWORK-IO-PERFORMANCE.md) mostrou evicao em TODO frame
+// (~10 ponteiros de AHardwareBuffer distintos circulando contra um limite
+// de 6), o que reimporta a VkImage/aloca descriptor set do zero a cada
+// frame em vez de reaproveitar. Subido pra folga real acima do numero de
+// buffers que o MediaCodec/ImageReader mantem em voo.
+constexpr size_t kVideoImageCacheLimit = 16;
 // Raio da esfera 360 (20m, mesmo do caminho GLES: kSphereRadius em vr_player_app.cpp:1604)
 constexpr float kSphereRadius = 20.0f;
 
@@ -237,6 +257,10 @@ struct VideoFrame {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkImageView imageView = VK_NULL_HANDLE;
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE; // alocado do pool
+    // Carimbo de uso pra evicao LRU de verdade (ver AppState::videoFrameCacheClock
+    // e GetOrImportVideoFrame) — a evicao anterior usava unordered_map::begin(),
+    // que e um bucket arbitrario do hash, nao o mais antigo de verdade.
+    uint64_t lastUsedFrame = 0;
 };
 
 struct AppState {
@@ -277,6 +301,9 @@ struct AppState {
     VkDeviceMemory videoVertexMemory = VK_NULL_HANDLE;
 
     std::unordered_map<AHardwareBuffer*, VideoFrame> videoImageCache;
+    // Relogio logico pra LRU de videoImageCache — incrementado a cada
+    // acesso (hit ou insercao nova), carimbado em VideoFrame::lastUsedFrame.
+    uint64_t videoFrameCacheClock = 0;
     AHardwareBuffer* lastVideoBuffer = nullptr;
     VideoFrame* activeVideoFrame = nullptr;
 
@@ -456,6 +483,23 @@ struct AppState {
     float decodedFpsPollAccumMs = 0.0f;
     uint64_t lastDecodedFrameCount = 0;
     float decodedFps = 0.0f;
+
+    // Instrumentacao adicional desta sessao (docs/NETWORK-IO-PERFORMANCE.md),
+    // amostrada na MESMA janela de 1Hz que decodedFps acima. outputFps e o
+    // ground truth do MediaCodec (TODO buffer de saida, nao so os
+    // renderizados como decodedFps) — a investigacao da regressao 30->10fps
+    // achou que decodedFps~=videoFps NAO prova que o decode esta saudavel,
+    // porque os dois ja sao filtrados pelo mesmo descarte por atraso.
+    // netMBs e o throughput real do PrefetchReader da fonte de rede (0 para
+    // arquivo local). videoQueueDepth e a fila demux->decode (perto de 0 de
+    // forma sustentada = a rede nao esta acompanhando o consumo).
+    uint64_t lastOutputFrameCount = 0;
+    float outputFps = 0.0f;
+    uint64_t lastDroppedFrameCount = 0;
+    float droppedFps = 0.0f;
+    uint64_t lastNetworkBytes = 0;
+    float netMBs = 0.0f;
+    uint32_t videoQueueDepth = 0;
 
     bool resumed = false;
     bool sessionRunning = false;
@@ -2246,13 +2290,22 @@ VideoFrame* GetOrImportVideoFrame(AppState& state, AHardwareBuffer* buffer) {
     // Verificar cache primeiro (equivalente ao m_eglImageCache)
     auto it = state.videoImageCache.find(buffer);
     if (it != state.videoImageCache.end()) {
+        it->second.lastUsedFrame = ++state.videoFrameCacheClock;
         return &it->second;
     }
 
-    // Evicao LRU simplificada: remover a entrada mais antiga se o cache
-    // atingiu o limite (equivalente a vr_player_app.cpp:1393-1396).
+    // Evicao LRU de verdade: remove a entrada com o MENOR lastUsedFrame, nao
+    // unordered_map::begin() (bucket arbitrario do hash — a versao anterior
+    // dizia "LRU" no comentario mas nao era; achado ao investigar por que o
+    // logcat de hardware mostrava evicao em todo frame, ver
+    // docs/NETWORK-IO-PERFORMANCE.md).
     if (state.videoImageCache.size() >= kVideoImageCacheLimit) {
         auto oldest = state.videoImageCache.begin();
+        for (auto candidate = state.videoImageCache.begin(); candidate != state.videoImageCache.end(); ++candidate) {
+            if (candidate->second.lastUsedFrame < oldest->second.lastUsedFrame) {
+                oldest = candidate;
+            }
+        }
         VideoFrame& oldFrame = oldest->second;
         if (oldFrame.descriptorSet != VK_NULL_HANDLE) {
             vkFreeDescriptorSets(
@@ -2428,6 +2481,7 @@ VideoFrame* GetOrImportVideoFrame(AppState& state, AHardwareBuffer* buffer) {
     LOGI("Cache de video: importado AHardwareBuffer %p (%ux%u)",
          static_cast<void*>(buffer), hwbDesc.width, hwbDesc.height);
 
+    frame.lastUsedFrame = ++state.videoFrameCacheClock;
     auto [inserted, ok] = state.videoImageCache.emplace(buffer, frame);
     (void)ok;
     return &inserted->second;
@@ -2633,10 +2687,42 @@ void RenderFrame(AppState& state) {
         // comentario no campo AppState.decodedFps.
         state.decodedFpsPollAccumMs += frameMs;
         if (state.decodedFpsPollAccumMs >= AppState::kDecodedFpsPollIntervalMs) {
+            float pollSec = state.decodedFpsPollAccumMs / 1000.0f;
+
             uint64_t currentCount = get_video_frames_decoded_count();
             uint64_t delta = currentCount - state.lastDecodedFrameCount; // wrap-safe (unsigned)
-            state.decodedFps = delta / (state.decodedFpsPollAccumMs / 1000.0f);
+            state.decodedFps = delta / pollSec;
             state.lastDecodedFrameCount = currentCount;
+
+            uint64_t outputCount = get_video_frames_output_count();
+            state.outputFps = (outputCount - state.lastOutputFrameCount) / pollSec;
+            state.lastOutputFrameCount = outputCount;
+
+            uint64_t droppedCount = get_video_frames_dropped_count();
+            state.droppedFps = (droppedCount - state.lastDroppedFrameCount) / pollSec;
+            state.lastDroppedFrameCount = droppedCount;
+
+            uint64_t netBytes = get_network_bytes_read();
+            float netMB = (netBytes - state.lastNetworkBytes) / (1024.0f * 1024.0f);
+            state.netMBs = netMB / pollSec;
+            state.lastNetworkBytes = netBytes;
+
+            state.videoQueueDepth = get_video_queue_depth();
+
+            // Diagnostico do gargalo de throughput (docs/NETWORK-IO-PERFORMANCE.md
+            // secao 7) — so pro logcat, nao vai pro HUD (ja denso o
+            // suficiente). blockFetchMs estavel proximo do esperado
+            // (~12MB/netMBs) = throughput realmente limitado; blockFetchMs
+            // com picos bem acima da media = stalls/retries pontuais
+            // derrubando a media, nao um teto constante.
+            if (state.lastNetworkBytes > 0 || get_network_blocks_fetched() > 0) {
+                LOGI("net: %.2fMB/s blockFetchMs=%.0f blocksFetched=%llu blocksDiscarded=%llu q=%u",
+                    state.netMBs, get_network_last_block_fetch_ms(),
+                    (unsigned long long)get_network_blocks_fetched(),
+                    (unsigned long long)get_network_blocks_discarded(),
+                    state.videoQueueDepth);
+            }
+
             state.decodedFpsPollAccumMs = 0.0f;
         }
     }

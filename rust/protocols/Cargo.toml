@@ -38,6 +38,10 @@ async-trait = "0.1"
 # (nao precisa de runtime/executor proprio: roda dentro do block_on existente),
 # entao "futures-util" com features minimas basta, sem puxar "futures" inteiro.
 futures-util = { version = "0.3", default-features = false, features = ["alloc"] }
+# setpriority/getpriority para a thread de I/O do PrefetchReader (ver
+# prefetch.rs) — ja estava no Cargo.lock transitivamente (ndk/tokio), entao
+# nao adiciona arvore de dependencia nova.
+libc = "0.2"
 
 [dev-dependencies]
 httpmock = "0.8.3"

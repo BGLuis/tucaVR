@@ -475,7 +475,7 @@ class VRPresentation(
     private fun buildNetworkUrlPage(): View {
         val page = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
         val urlInput = buildVoidEditText(context.getString(R.string.network_url_hint)).apply {
@@ -557,7 +557,22 @@ class VRPresentation(
         page.addView(recentContainer)
 
         refreshRecentUrls()
-        return page
+        return wrapNetworkPageInScroll(page)
+    }
+
+    // Paginas da aba "Rede" (URL/SMB/FTP/SFTP) tinham conteudo mais alto que
+    // o canvas de 1024x768 da Presentation (formularios com 5-7 campos +
+    // botao "Testar e salvar" no fim) sem nenhum ScrollView — o usuario
+    // ficava sem conseguir alcancar o botao de salvar em hardware real, ja
+    // que tudo fora do canvas fixo nao e so invisivel, e tambem nao
+    // recebe toque (VRActivity.dispatchVRTouch remapeia coordenadas pro
+    // range 0..768). Mesmo padrao de ScrollView ja usado nas listagens de
+    // diretorio (ver renderNetworkFiles/loadFtpDirectory/loadSftpDirectory).
+    private fun wrapNetworkPageInScroll(page: View): View {
+        return ScrollView(context).apply {
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            addView(page)
+        }
     }
 
     private fun playUrl(url: String, statusView: android.widget.TextView, onHistoryChanged: () -> Unit) {
@@ -603,7 +618,7 @@ class VRPresentation(
     private fun buildNetworkSmbPage(): View {
         val page = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
         val header = VoidText.title(context, context.getString(R.string.network_smb_saved_servers_header), sizeSp = 20f).apply {
@@ -676,7 +691,7 @@ class VRPresentation(
         page.addView(addForm)
 
         refreshServerList()
-        return page
+        return wrapNetworkPageInScroll(page)
     }
 
     /**
@@ -958,7 +973,7 @@ class VRPresentation(
     private fun buildNetworkFtpPage(): View {
         val page = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
         val header = VoidText.title(context, context.getString(R.string.network_ftp_saved_servers_header), sizeSp = 20f).apply {
@@ -1031,7 +1046,7 @@ class VRPresentation(
         page.addView(addForm)
 
         refreshServerList()
-        return page
+        return wrapNetworkPageInScroll(page)
     }
 
     private fun buildAddFtpServerForm(onSaved: () -> Unit): LinearLayout {
@@ -1274,7 +1289,7 @@ class VRPresentation(
     private fun buildNetworkSftpPage(): View {
         val page = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
         val header = VoidText.title(context, context.getString(R.string.network_sftp_saved_servers_header), sizeSp = 20f).apply {
@@ -1347,7 +1362,7 @@ class VRPresentation(
         page.addView(addForm)
 
         refreshServerList()
-        return page
+        return wrapNetworkPageInScroll(page)
     }
 
     private fun buildAddSftpServerForm(onSaved: () -> Unit): LinearLayout {
