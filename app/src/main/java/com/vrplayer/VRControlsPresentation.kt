@@ -47,17 +47,11 @@ class VRControlsPresentation(
     private lateinit var volumeBar: SeekBar
     private lateinit var speedBar: SeekBar
     private lateinit var btn3DMode: VoidButton
-    private lateinit var feedbackLabel: TextView
     private lateinit var loadingSpinner: ProgressBar
     private lateinit var scrubPreview: ImageView
     private var debugHudLabel: TextView? = null
     private var isDragging = false
     private var totalDuration = 0f
-
-    // `null` ate a primeira leitura real de updateMediaState — evita
-    // mostrar um flash de play/pause "do nada" assim que o painel e criado
-    // (nao ha estado anterior pra comparar ainda).
-    private var lastKnownIsPlaying: Boolean? = null
 
     // Preview de arrasto no seekbar (T-seek-ux). Escopo proprio (nunca
     // cancelado explicitamente) em vez de lifecycleScope porque
@@ -130,41 +124,13 @@ class VRControlsPresentation(
     }
 
     /**
-     * Sinal de loading/play-pause (ver VRActivity.updateMediaState),
-     * chamado ~10x/s pelo C++ independente de `updateProgress` acima (sem
-     * gate de duracao conhecida, ver comentario no C++). `isPlaying` so e
-     * comparado com o estado anterior quando NAO esta carregando — durante
-     * o proprio load()/seek() o estado de sessao ainda nao é o final (ver
-     * get_playback_is_playing), entao comparar ali daria falso-positivo.
+     * Sinal de loading (ver VRActivity.updateMediaState), chamado ~10x/s
+     * pelo C++. Feedback de play/pause/seek agora e desenhado sobre a quad
+     * de video (native/src/vr_player_feedback_overlay.h), nao mais aqui no
+     * painel — este metodo so cuida do spinner de loading.
      */
     fun updateMediaState(isLoading: Boolean, isPlaying: Boolean) {
         loadingSpinner.visibility = if (isLoading) View.VISIBLE else View.GONE
-        if (isLoading) return
-
-        val previous = lastKnownIsPlaying
-        if (previous != null && previous != isPlaying) {
-            showFeedback(if (isPlaying) "▶" else "⏸")
-        }
-        lastKnownIsPlaying = isPlaying
-    }
-
-    /**
-     * Flash central tipo YouTube (play/pause, +10s/-10s) — some sozinho
-     * apos um pequeno delay. Cancela qualquer animacao de saida pendente
-     * antes de reiniciar, pra um segundo toque rapido nao deixar o texto
-     * "preso" em alpha parcial.
-     */
-    private fun showFeedback(text: String) {
-        feedbackLabel.animate().cancel()
-        feedbackLabel.text = text
-        feedbackLabel.alpha = 1f
-        feedbackLabel.visibility = View.VISIBLE
-        feedbackLabel.animate()
-            .alpha(0f)
-            .setStartDelay(450)
-            .setDuration(350)
-            .withEndAction { feedbackLabel.visibility = View.GONE }
-            .start()
     }
 
     /**
@@ -272,7 +238,6 @@ class VRControlsPresentation(
             text = "<<"
             textSize = 24f
             setOnClickListener {
-                showFeedback("-10s")
                 val currentProgress = (seekBar.progress / 100f) * totalDuration
                 val newTarget = kotlin.math.max(0f, currentProgress - 10f)
                 activity.nativeSeekVideo(newTarget)
@@ -291,7 +256,6 @@ class VRControlsPresentation(
             text = ">>"
             textSize = 24f
             setOnClickListener {
-                showFeedback("+10s")
                 val currentProgress = (seekBar.progress / 100f) * totalDuration
                 val newTarget = kotlin.math.min(totalDuration, currentProgress + 10f)
                 activity.nativeSeekVideo(newTarget)
@@ -466,24 +430,12 @@ class VRControlsPresentation(
             root.addView(debugHudLabel)
         }
 
-        // FrameLayout envolvendo `root` so pra poder sobrepor o flash de
-        // feedback (play/pause, +10s/-10s) e o spinner de loading
-        // centralizados por cima do painel inteiro, sem entrar no fluxo
-        // vertical do LinearLayout das linhas 1-4 acima.
+        // FrameLayout envolvendo `root` so pra poder sobrepor o spinner de
+        // loading centralizado por cima do painel inteiro, sem entrar no
+        // fluxo vertical do LinearLayout das linhas 1-4 acima.
         val overlay = FrameLayout(context)
         overlay.addView(root, FrameLayout.LayoutParams(
             FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT
-        ))
-
-        feedbackLabel = TextView(context).apply {
-            typeface = VoidTheme.typefaceBody
-            textSize = 40f
-            setTextColor(VoidTheme.colorText)
-            setShadowLayer(12f, 0f, 0f, VoidTheme.colorBackground)
-            visibility = View.GONE
-        }
-        overlay.addView(feedbackLabel, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER
         ))
 
         loadingSpinner = ProgressBar(context).apply {
