@@ -30,6 +30,10 @@
 //! cancelamento cooperativo real de uma leitura de rede ja em andamento, so
 //! do PROXIMO passo do worker). Ver `PrefetchReader::ensure_cache`.
 //!
+//! O primeiro bloco pos-seek (miss nao-sequencial, sincrono) usa
+//! `seek_block_size` em vez do `block_size` cheio — blocos seguintes
+//! (prefetch especulativo, leitura sequencial confirmada) voltam ao cheio.
+//!
 //! Refinamento desta sessao (investigacao da regressao 30fps->10fps
 //! documentada em docs/NETWORK-IO-PERFORMANCE.md): apos um miss
 //! NAO-sequencial (seek de verdade), `ensure_cache` NAO dispara mais o
@@ -142,6 +146,9 @@ impl<S: RangeSource> RangeSource for SharedRangeSource<S> {
 /// (12MB) para video remoto — ver `core/src/demuxer.rs`.
 const DEFAULT_BLOCK_SIZE: usize = 4 * 1024 * 1024;
 
+// 1MB: pequeno o bastante pro primeiro round-trip pos-seek nao travar perceptivelmente.
+const DEFAULT_SEEK_BLOCK_SIZE: usize = 1024 * 1024;
+
 struct Block {
     start: u64,
     data: Vec<u8>,
@@ -149,13 +156,14 @@ struct Block {
 }
 
 enum Command {
-    Fetch(u64),
+    Fetch(u64, usize),
     Shutdown,
 }
 
 type FetchResult = io::Result<Block>;
 
 fn worker_gone_err() -> io::Error {
+    log::warn!("PrefetchReader: thread de leitura em background encerrada inesperadamente");
     io::Error::other("PrefetchReader: thread de leitura em background encerrada inesperadamente")
 }
 
@@ -173,6 +181,8 @@ pub struct PrefetchReader<S: RangeSource> {
     pending_start: Option<u64>,
     worker: Option<JoinHandle<()>>,
     stats: Arc<PrefetchStats>,
+    block_size: usize,
+    seek_block_size: usize,
     _source: PhantomData<S>,
 }
 
@@ -181,8 +191,15 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
         Self::with_block_size(source, DEFAULT_BLOCK_SIZE)
     }
 
-    pub fn with_block_size(mut source: S, block_size: usize) -> Self {
+    pub fn with_block_size(source: S, block_size: usize) -> Self {
         let block_size = block_size.max(64 * 1024);
+        Self::with_block_sizes(source, block_size, block_size.min(DEFAULT_SEEK_BLOCK_SIZE))
+    }
+
+    /// Como `with_block_size`, mas com o tamanho do bloco pos-seek explicito.
+    pub fn with_block_sizes(mut source: S, block_size: usize, seek_block_size: usize) -> Self {
+        let block_size = block_size.max(64 * 1024);
+        let seek_block_size = seek_block_size.max(64 * 1024).min(block_size);
         let total_len = source.len();
 
         let (cmd_tx, cmd_rx) = mpsc::channel::<Command>();
@@ -196,19 +213,22 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
                 raise_io_thread_priority();
                 for cmd in cmd_rx {
                     match cmd {
-                        Command::Fetch(offset) => {
+                        Command::Fetch(offset, size) => {
                             // Vec novo por bloco (nao reaproveita o buffer da
                             // thread principal): os dados precisam atravessar
                             // o canal por valor. Blocos sao grandes mas raros
                             // (segundos de video cada), entao a alocacao nao
                             // e o gargalo aqui.
-                            let mut data = vec![0u8; block_size];
+                            log::info!("vrplayer-prefetch-io: buscando bloco offset={offset} ({size} bytes)");
+                            let mut data = vec![0u8; size];
                             let fetch_start = std::time::Instant::now();
                             let result = source.read_range(offset, &mut data).map(|len| Block { start: offset, data, len });
                             if let Ok(ref block) = result {
                                 worker_stats.bytes_fetched.fetch_add(block.len as u64, Ordering::Relaxed);
                                 worker_stats.blocks_fetched.fetch_add(1, Ordering::Relaxed);
                                 worker_stats.last_fetch_us.store(fetch_start.elapsed().as_micros() as u64, Ordering::Relaxed);
+                            } else if let Err(ref e) = result {
+                                log::warn!("vrplayer-prefetch-io: falha ao buscar bloco offset={offset}: {e}");
                             }
                             if result_tx.send(result).is_err() {
                                 break;
@@ -232,12 +252,17 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
             pending_start: None,
             worker: Some(worker),
             stats,
+            block_size,
+            seek_block_size,
             _source: PhantomData,
         };
         // Dispara a busca do primeiro bloco ja na construcao: o primeiro
         // `read()` (quase sempre offset 0) encontra o prefetch em andamento
-        // em vez de comecar do zero.
-        this.kick_prefetch(0);
+        // em vez de comecar do zero. Tamanho pequeno (nao block_size): abrir
+        // um arquivo novo e tao "cold start" quanto um seek — probe do
+        // demuxer nao deveria pagar o mesmo round-trip grande que a leitura
+        // sequencial em regime permanente.
+        this.kick_prefetch_sized(0, seek_block_size);
         this
     }
 
@@ -257,12 +282,16 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
     /// ainda fizer sentido (dentro do tamanho conhecido do arquivo). Nao
     /// bloqueia — o resultado chega por `result_rx` numa chamada futura.
     fn kick_prefetch(&mut self, offset: u64) {
+        self.kick_prefetch_sized(offset, self.block_size);
+    }
+
+    fn kick_prefetch_sized(&mut self, offset: u64, size: usize) {
         if let Some(total) = self.total_len
             && offset >= total
         {
             return;
         }
-        if self.cmd_tx.send(Command::Fetch(offset)).is_ok() {
+        if self.cmd_tx.send(Command::Fetch(offset, size)).is_ok() {
             self.pending_start = Some(offset);
         }
     }
@@ -310,7 +339,7 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
                 self.stats.blocks_discarded.fetch_add(1, Ordering::Relaxed);
                 let _ = self.result_rx.recv();
             }
-            self.cmd_tx.send(Command::Fetch(pos)).map_err(|_| worker_gone_err())?;
+            self.cmd_tx.send(Command::Fetch(pos, self.seek_block_size)).map_err(|_| worker_gone_err())?;
             let result = self.result_rx.recv().map_err(|_| worker_gone_err())?;
             self.install(result?);
             // Deliberadamente NAO kicka o proximo bloco aqui — ver doc do
@@ -580,5 +609,109 @@ mod tests {
         let mut buf = vec![0u8; block];
         let result = reader.read(&mut buf);
         assert!(result.is_err(), "erro da fonte deveria propagar, obteve: {result:?}");
+    }
+
+    /// Fonte fake que registra o TAMANHO de cada `read_range` pedido, para
+    /// provar a rampa (T-seek-ux): o primeiro fetch pos-seek deve ser
+    /// pequeno, os seguintes (leitura sequencial confirmada) devem voltar ao
+    /// tamanho cheio.
+    struct SizeTrackingSource {
+        data: Vec<u8>,
+        requested_sizes: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl RangeSource for SizeTrackingSource {
+        fn read_range(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+            self.requested_sizes.lock().unwrap().push(buf.len());
+            let offset = offset as usize;
+            if offset >= self.data.len() {
+                return Ok(0);
+            }
+            let n = (self.data.len() - offset).min(buf.len());
+            buf[..n].copy_from_slice(&self.data[offset..offset + n]);
+            Ok(n)
+        }
+
+        fn len(&self) -> Option<u64> {
+            Some(self.data.len() as u64)
+        }
+    }
+
+    #[test]
+    fn fresh_open_fetches_small_first_block_instead_of_full_size() {
+        let full_block = 8 * 1024 * 1024;
+        let seek_block = 512 * 1024;
+        let data: Vec<u8> = (0..255u8).cycle().take(full_block * 3).collect();
+        let sizes = Arc::new(Mutex::new(Vec::new()));
+        let source = SizeTrackingSource { data: data.clone(), requested_sizes: sizes.clone() };
+        let mut reader = PrefetchReader::with_block_sizes(source, full_block, seek_block);
+
+        let mut buf = vec![0u8; 100];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, data[..100]);
+
+        let requested = sizes.lock().unwrap();
+        assert_eq!(
+            requested.first(),
+            Some(&seek_block),
+            "esperava o primeiro fetch (construcao) ser de {seek_block} bytes, fetches pedidos: {requested:?}"
+        );
+    }
+
+    #[test]
+    fn seek_fetches_small_block_instead_of_full_size() {
+        let full_block = 8 * 1024 * 1024;
+        let seek_block = 512 * 1024;
+        let data: Vec<u8> = (0..255u8).cycle().take(full_block * 3).collect();
+        let sizes = Arc::new(Mutex::new(Vec::new()));
+        let source = SizeTrackingSource { data: data.clone(), requested_sizes: sizes.clone() };
+        let mut reader = PrefetchReader::with_block_sizes(source, full_block, seek_block);
+
+        let jump_to = (full_block * 2) as u64;
+        reader.seek(SeekFrom::Start(jump_to)).unwrap();
+        let mut buf = vec![0u8; 100];
+        reader.read_exact(&mut buf).unwrap();
+        assert_eq!(buf, data[jump_to as usize..jump_to as usize + 100]);
+
+        // O ultimo fetch e o que respondeu a leitura pos-seek.
+        let requested = sizes.lock().unwrap();
+        assert_eq!(
+            requested.last(),
+            Some(&seek_block),
+            "esperava o fetch pos-seek ser de {seek_block} bytes, fetches pedidos: {requested:?}"
+        );
+    }
+
+    #[test]
+    fn sequential_reads_after_seek_ramp_back_to_full_block_size() {
+        let full_block = 4 * 1024 * 1024;
+        let seek_block = 256 * 1024;
+        let data: Vec<u8> = (0..255u8).cycle().take(full_block * 4).collect();
+        let sizes = Arc::new(Mutex::new(Vec::new()));
+        let source = SizeTrackingSource { data: data.clone(), requested_sizes: sizes.clone() };
+        let mut reader = PrefetchReader::with_block_sizes(source, full_block, seek_block);
+
+        let jump_to = (full_block * 2) as u64;
+        reader.seek(SeekFrom::Start(jump_to)).unwrap();
+        // Le em pedacos pequenos pra pos ficar estritamente dentro do bloco
+        // pos-seek, confirmando continuidade sequencial (dispara o proximo
+        // prefetch, ja de tamanho cheio).
+        let mut out = vec![0u8; seek_block + 4096];
+        let mut done = 0;
+        while done < out.len() {
+            let chunk = 4096.min(out.len() - done);
+            reader.read_exact(&mut out[done..done + chunk]).unwrap();
+            done += chunk;
+        }
+        assert_eq!(out, data[jump_to as usize..jump_to as usize + out.len()]);
+
+        // De tempo para o prefetch especulativo (background) completar.
+        std::thread::sleep(Duration::from_millis(50));
+
+        let requested = sizes.lock().unwrap();
+        assert!(
+            requested.contains(&full_block),
+            "esperava a rampa voltar ao bloco cheio ({full_block}) apos leitura sequencial, fetches pedidos: {requested:?}"
+        );
     }
 }

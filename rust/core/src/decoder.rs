@@ -84,6 +84,14 @@ impl HwDecoder {
         }
     }
 
+    /// Descarta estado de referencia interno sem destruir o codec — permite
+    /// reaproveitar o mesmo MediaCodec num seek. So entre start() e stop();
+    /// o proximo pacote apos o flush precisa ser uma keyframe.
+    pub fn flush(&self) -> Result<(), String> {
+        let codec = self.codec.as_ref().ok_or("Codec not initialized")?;
+        codec.flush().map_err(|e| format!("Failed to flush codec: {:?}", e))
+    }
+
     /// `should_continue` e checado a cada volta do loop de retry (quando o
     /// MediaCodec esta com o buffer de entrada cheio). Sem isso, se o
     /// codec nunca liberar espaco (decoder travado, app fechando, etc.),

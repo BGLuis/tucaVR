@@ -53,6 +53,8 @@ static CONTROLLER: Lazy<Arc<Mutex<PlaybackController>>> = Lazy::new(|| {
     // ou seja, o logger sempre esta pronto antes de qualquer log::* rodar.
     let _ = log::set_logger(&ANDROID_LOGGER);
     log::set_max_level(log::LevelFilter::Info);
+    // Sem isto, panic em thread de fundo morre silencioso: stderr nao vai pro logcat neste app.
+    std::panic::set_hook(Box::new(|info| log::error!("PANIC: {info}")));
     Arc::new(Mutex::new(PlaybackController::new()))
 });
 
@@ -104,6 +106,15 @@ pub extern "C" fn get_playback_is_playing() -> u32 {
     match CONTROLLER.try_lock() {
         Ok(controller) => controller.is_playing() as u32,
         Err(_) => 0,
+    }
+}
+
+// Dois HwDecoder concorrentes derrubam o driver de video: strip de scrub desiste cedo se ativo.
+// try_lock (nao lock() — chamador nao deve travar); em contencao assume ativo (mais seguro).
+fn playback_is_active() -> bool {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.is_playing(),
+        Err(_) => true,
     }
 }
 
@@ -389,6 +400,15 @@ pub extern "C" fn get_network_blocks_discarded() -> u64 {
     }
 }
 
+// Debug (docs/DEBUGGING.md): duracao do ultimo seek concluido, em ms.
+#[no_mangle]
+pub extern "C" fn get_last_seek_latency_ms() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_last_seek_latency_ms(),
+        Err(_) => 0,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn toggle_play_pause() {
     if let Ok(mut controller) = CONTROLLER.lock() {
@@ -495,6 +515,7 @@ pub extern "C" fn start_smb_playback(
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     domain: *const std::os::raw::c_char,
+    start_time_sec: f32,
 ) {
     let target = unsafe {
         let host = match cstr_to_string(host) { Some(s) => s, None => return };
@@ -521,7 +542,7 @@ pub extern "C" fn start_smb_playback(
         reset_3d_mode();
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
-            if let Err(e) = controller.load(&internal_uri) {
+            if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
                 unsafe { log(6, &format!("Error loading SMB video: {:?}", e)); }
                 set_last_playback_error(format!("{:?}", e));
             } else {
@@ -621,6 +642,7 @@ pub extern "C" fn start_ftp_playback(
     path: *const std::os::raw::c_char,
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
+    start_time_sec: f32,
 ) {
     let target = unsafe {
         let host = match cstr_to_string(host) { Some(s) => s, None => return };
@@ -643,7 +665,7 @@ pub extern "C" fn start_ftp_playback(
         reset_3d_mode();
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
-            if let Err(e) = controller.load(&internal_uri) {
+            if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
                 unsafe { log(6, &format!("Error loading FTP video: {:?}", e)); }
                 set_last_playback_error(format!("{:?}", e));
             } else {
@@ -704,6 +726,7 @@ pub extern "C" fn start_sftp_playback(
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     private_key: *const std::os::raw::c_char,
+    start_time_sec: f32,
 ) {
     let target = unsafe {
         let host = match cstr_to_string(host) { Some(s) => s, None => return };
@@ -733,7 +756,7 @@ pub extern "C" fn start_sftp_playback(
         reset_3d_mode();
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
-            if let Err(e) = controller.load(&internal_uri) {
+            if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
                 unsafe { log(6, &format!("Error loading SFTP video: {:?}", e)); }
                 set_last_playback_error(format!("{:?}", e));
             } else {
@@ -822,7 +845,7 @@ pub extern "C" fn probe_http_url(url: *const std::os::raw::c_char) -> *mut std::
 /// chamadas so despacham o trabalho para uma thread separada e retornam
 /// imediatamente.
 #[no_mangle]
-pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char) {
+pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_time_sec: f32) {
     if path.is_null() { return; }
     let c_str = unsafe { std::ffi::CStr::from_ptr(path) };
     let path_str = match c_str.to_str() {
@@ -836,7 +859,7 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char) {
         reset_3d_mode();
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
-            if let Err(e) = controller.load(&path_str) {
+            if let Err(e) = controller.load_at(&path_str, f64::from(start_time_sec)) {
                 unsafe { log(6, &format!("Error loading video: {:?}", e)); }
                 set_last_playback_error(format!("{:?}", e));
             } else {
@@ -877,20 +900,21 @@ pub extern "C" fn seek_video_playback(position: f32) {
     });
 }
 
+// Espelho lock-free: chamado todo frame pelo render loop (try_lock, nunca lock()); em
+// contencao o controller so reaplica no proximo frame.
+static VOLUME_BITS: AtomicU32 = AtomicU32::new(0x3F800000); // 1.0f32
+
 #[no_mangle]
 pub extern "C" fn set_video_volume(volume: f32) {
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    VOLUME_BITS.store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.set_volume(volume);
     }
 }
 
 #[no_mangle]
 pub extern "C" fn get_video_volume() -> f32 {
-    if let Ok(controller) = CONTROLLER.lock() {
-        controller.get_volume()
-    } else {
-        1.0
-    }
+    f32::from_bits(VOLUME_BITS.load(Ordering::Relaxed))
 }
 
 #[no_mangle]
@@ -1178,6 +1202,9 @@ pub extern "C" fn smb_generate_thumbnail_strip(
             domain,
         }
     };
+    if playback_is_active() {
+        return write_thumbnail_strip(None, out_width, out_height, out_count, out_len);
+    }
     let internal_uri = target.to_internal();
     let strip = core::thumbnail::generate_strip(&internal_uri, interval_secs as f64, max_width, max_height);
     write_thumbnail_strip(strip, out_width, out_height, out_count, out_len)
@@ -1219,6 +1246,9 @@ pub extern "C" fn sftp_generate_thumbnail_strip(
         }
     };
     if target.validate().is_err() {
+        return write_thumbnail_strip(None, out_width, out_height, out_count, out_len);
+    }
+    if playback_is_active() {
         return write_thumbnail_strip(None, out_width, out_height, out_count, out_len);
     }
     let internal_uri = target.to_internal();

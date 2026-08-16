@@ -62,7 +62,7 @@ extern "C" {
     extern void get_video_progress(float* current, float* total);
     extern uint32_t get_3d_mode();
     extern uint32_t get_swap_eyes();
-    extern void start_video_playback(const char* path);
+    extern void start_video_playback(const char* path, float startTimeSec);
     // Estagio 6 — paridade com o caminho GLES (play-pause, teclado nativo,
     // volume, seek).
     extern void toggle_play_pause();
@@ -85,6 +85,7 @@ extern "C" {
     extern float get_network_last_block_fetch_ms();
     extern uint64_t get_network_blocks_fetched();
     extern uint64_t get_network_blocks_discarded();
+    extern uint32_t get_last_seek_latency_ms(); // debug, ver docs/DEBUGGING.md
     // UX de feedback (loading/play-pause), paridade com o caminho GLES —
     // ver comentario em rust/bridge/src/lib.rs sobre spawn_loading.
     extern uint32_t get_playback_is_loading();

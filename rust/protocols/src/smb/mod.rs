@@ -149,10 +149,14 @@ impl RangeSource for SmbFileSource {
         let chunks = split_range(offset, want, SMB_CONCURRENT_CHUNK_SIZE);
         let mut total = 0usize;
         'batches: for batch in chunks.chunks(SMB_MAX_CONCURRENT_CHUNKS) {
-            let results = match self.runtime.block_on(tokio::time::timeout(
-                SMB_READ_TIMEOUT,
-                join_all(batch.iter().map(|&(chunk_offset, chunk_len)| reader.read_at(chunk_offset, chunk_len as u64))),
-            )) {
+            // tokio::time::timeout registra o timer na construcao, entao precisa rodar dentro do block_on.
+            let results = match self.runtime.block_on(async {
+                tokio::time::timeout(
+                    SMB_READ_TIMEOUT,
+                    join_all(batch.iter().map(|&(chunk_offset, chunk_len)| reader.read_at(chunk_offset, chunk_len as u64))),
+                )
+                .await
+            }) {
                 Ok(results) => results,
                 Err(_elapsed) => {
                     return Err(io::Error::new(

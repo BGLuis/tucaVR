@@ -32,7 +32,7 @@
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VRPlayerApp", __VA_ARGS__)
 
 extern "C" {
-    extern void start_video_playback(const char* path);
+    extern void start_video_playback(const char* path, float startTimeSec);
     extern void stop_video_playback();
     extern void toggle_play_pause();
     extern void on_app_focus_lost();
@@ -51,6 +51,7 @@ extern "C" {
     extern float get_network_last_block_fetch_ms();
     extern uint64_t get_network_blocks_fetched();
     extern uint64_t get_network_blocks_discarded();
+    extern uint32_t get_last_seek_latency_ms(); // debug, ver docs/DEBUGGING.md
     extern void set_video_volume(float volume);
     extern float get_video_volume();
     extern void set_playback_speed(float speed);
@@ -72,7 +73,7 @@ extern "C" {
     // uma string "smb://user:pass@host/..." — ver nota em bridge/src/lib.rs).
     extern void start_smb_playback(const char* host, int32_t port, const char* share,
                                     const char* path, const char* username,
-                                    const char* password, const char* domain);
+                                    const char* password, const char* domain, float startTimeSec);
     extern char* smb_list_shares(const char* host, int32_t port, const char* username,
                                   const char* password, const char* domain);
     extern char* smb_list_directory(const char* host, int32_t port, const char* username,
@@ -86,7 +87,7 @@ extern "C" {
     // (credenciais como parametros separados, nunca uma URI unica cruzando
     // o JNI). Ver rust/bridge/src/lib.rs.
     extern void start_ftp_playback(const char* host, int32_t port, const char* path,
-                                    const char* username, const char* password);
+                                    const char* username, const char* password, float startTimeSec);
     extern char* ftp_list_directory(const char* host, int32_t port, const char* username,
                                      const char* password, const char* path);
 
@@ -94,7 +95,7 @@ extern "C" {
     // caminho de arquivo — ver rust/protocols/src/sftp/uri.rs) a mais.
     extern void start_sftp_playback(const char* host, int32_t port, const char* path,
                                      const char* username, const char* password,
-                                     const char* private_key);
+                                     const char* private_key, float startTimeSec);
     extern char* sftp_list_directory(const char* host, int32_t port, const char* username,
                                       const char* password, const char* private_key, const char* path);
 
@@ -209,9 +210,9 @@ static jbyteArray RustThumbnailStripToJByteArrayAndFree(JNIEnv* env, uint8_t* da
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativePlayVideo(JNIEnv* env, jobject thiz, jstring path) {
+Java_com_vrplayer_VRActivity_nativePlayVideo(JNIEnv* env, jobject thiz, jstring path, jfloat startTimeSec) {
     const char* pathStr = env->GetStringUTFChars(path, nullptr);
-    start_video_playback(pathStr);
+    start_video_playback(pathStr, startTimeSec);
     env->ReleaseStringUTFChars(path, pathStr);
 }
 
@@ -292,7 +293,7 @@ Java_com_vrplayer_VRActivity_nativeSetKeyboardActive(JNIEnv* env, jobject thiz, 
 extern "C" JNIEXPORT void JNICALL
 Java_com_vrplayer_VRActivity_nativePlaySmb(JNIEnv* env, jobject thiz, jstring host, jint port,
                                             jstring share, jstring path, jstring username,
-                                            jstring password, jstring domain) {
+                                            jstring password, jstring domain, jfloat startTimeSec) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
     const char* shareStr = env->GetStringUTFChars(share, nullptr);
     const char* pathStr = env->GetStringUTFChars(path, nullptr);
@@ -300,7 +301,7 @@ Java_com_vrplayer_VRActivity_nativePlaySmb(JNIEnv* env, jobject thiz, jstring ho
     const char* passStr = env->GetStringUTFChars(password, nullptr);
     const char* domainStr = env->GetStringUTFChars(domain, nullptr);
 
-    start_smb_playback(hostStr, (int32_t)port, shareStr, pathStr, userStr, passStr, domainStr);
+    start_smb_playback(hostStr, (int32_t)port, shareStr, pathStr, userStr, passStr, domainStr, startTimeSec);
 
     env->ReleaseStringUTFChars(host, hostStr);
     env->ReleaseStringUTFChars(share, shareStr);
@@ -360,13 +361,13 @@ Java_com_vrplayer_VRActivity_nativeSmbListDirectory(JNIEnv* env, jobject thiz, j
 // credenciais vao como parametros separados, nao uma URI.
 extern "C" JNIEXPORT void JNICALL
 Java_com_vrplayer_VRActivity_nativePlayFtp(JNIEnv* env, jobject thiz, jstring host, jint port,
-                                            jstring path, jstring username, jstring password) {
+                                            jstring path, jstring username, jstring password, jfloat startTimeSec) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
     const char* pathStr = env->GetStringUTFChars(path, nullptr);
     const char* userStr = env->GetStringUTFChars(username, nullptr);
     const char* passStr = env->GetStringUTFChars(password, nullptr);
 
-    start_ftp_playback(hostStr, (int32_t)port, pathStr, userStr, passStr);
+    start_ftp_playback(hostStr, (int32_t)port, pathStr, userStr, passStr, startTimeSec);
 
     env->ReleaseStringUTFChars(host, hostStr);
     env->ReleaseStringUTFChars(path, pathStr);
@@ -402,14 +403,14 @@ Java_com_vrplayer_VRActivity_nativeFtpListDirectory(JNIEnv* env, jobject thiz, j
 extern "C" JNIEXPORT void JNICALL
 Java_com_vrplayer_VRActivity_nativePlaySftp(JNIEnv* env, jobject thiz, jstring host, jint port,
                                              jstring path, jstring username, jstring password,
-                                             jstring privateKey) {
+                                             jstring privateKey, jfloat startTimeSec) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
     const char* pathStr = env->GetStringUTFChars(path, nullptr);
     const char* userStr = env->GetStringUTFChars(username, nullptr);
     const char* passStr = env->GetStringUTFChars(password, nullptr);
     const char* keyStr = env->GetStringUTFChars(privateKey, nullptr);
 
-    start_sftp_playback(hostStr, (int32_t)port, pathStr, userStr, passStr, keyStr);
+    start_sftp_playback(hostStr, (int32_t)port, pathStr, userStr, passStr, keyStr, startTimeSec);
 
     env->ReleaseStringUTFChars(host, hostStr);
     env->ReleaseStringUTFChars(path, pathStr);
@@ -1239,7 +1240,7 @@ public:
 
         // INICIAR VÍDEO DE TESTE AUTOMATICAMENTE
         LOGI("VRPlayerApp: Iniciando vídeo de teste automaticamente!");
-        start_video_playback("/sdcard/Android/data/com.vrplayer/files/test.mp4");
+        start_video_playback("/sdcard/Android/data/com.vrplayer/files/test.mp4", 0.0f);
 
         return true;
     }
@@ -1744,11 +1745,11 @@ public:
             {
                 char hud[448];
                 snprintf(hud, sizeof(hud),
-                    "GLES | %s | flat=%.0f esfera=%.0f polar180=%.0f swap=%.0f | video=%s vidGap=%.0fms vidFps=%.0f decFps=%.0f outFps=%.0f drop=%.0f jitter=%.0fms | net=%.1fMB/s q=%u | %.0ffps %.1fms stutter=%d freeze=%d",
+                    "GLES | %s | flat=%.0f esfera=%.0f polar180=%.0f swap=%.0f | video=%s vidGap=%.0fms vidFps=%.0f decFps=%.0f outFps=%.0f drop=%.0f jitter=%.0fms | net=%.1fMB/s q=%u seekMs=%u | %.0ffps %.1fms stutter=%d freeze=%d",
                     ScreenModeName(m_screenMode), m_flatStereoLayout, m_sphereStereoLayout,
                     m_uPolar180, m_swapEyesF, (m_lastBuffer != nullptr) ? "ativo" : "sem frame",
                     m_msSinceLastVideoFrame, m_videoFps, m_decodedFps, m_outputFps, m_droppedFps, m_videoJitterMs,
-                    m_netMBs, m_videoQueueDepth,
+                    m_netMBs, m_videoQueueDepth, get_last_seek_latency_ms(),
                     m_smoothedFps, m_lastFrameMs, m_stutterCount, m_freezeCount);
                 const xrJava* java = GetContext();
                 JNIEnv* env = nullptr;

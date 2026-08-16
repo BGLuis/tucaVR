@@ -19,7 +19,7 @@
 
 // Bridge Rust — mesmas funções do vr_player_app.cpp:48-88.
 extern "C" {
-    extern void start_video_playback(const char* path);
+    extern void start_video_playback(const char* path, float startTimeSec);
     extern void toggle_play_pause();
     extern void seek_video_playback(float position_seconds);
     extern void set_video_volume(float volume);
@@ -36,7 +36,7 @@ extern "C" {
     // SMB
     extern void start_smb_playback(const char* host, int32_t port, const char* share,
                                     const char* path, const char* username,
-                                    const char* password, const char* domain);
+                                    const char* password, const char* domain, float startTimeSec);
     extern char* smb_list_shares(const char* host, int32_t port, const char* username,
                                   const char* password, const char* domain);
     extern char* smb_list_directory(const char* host, int32_t port, const char* username,
@@ -44,13 +44,13 @@ extern "C" {
                                      const char* share, const char* path);
     // FTP
     extern void start_ftp_playback(const char* host, int32_t port, const char* path,
-                                    const char* username, const char* password);
+                                    const char* username, const char* password, float startTimeSec);
     extern char* ftp_list_directory(const char* host, int32_t port, const char* username,
                                      const char* password, const char* path);
     // SFTP
     extern void start_sftp_playback(const char* host, int32_t port, const char* path,
                                      const char* username, const char* password,
-                                     const char* private_key);
+                                     const char* private_key, float startTimeSec);
     extern char* sftp_list_directory(const char* host, int32_t port, const char* username,
                                       const char* password, const char* private_key,
                                       const char* path);
@@ -134,9 +134,9 @@ static jbyteArray RustThumbnailStripToJByteArrayAndFree(JNIEnv* env, uint8_t* da
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativePlayVideo(JNIEnv* env, jobject, jstring path) {
+Java_com_vrplayer_VRActivity_nativePlayVideo(JNIEnv* env, jobject, jstring path, jfloat startTimeSec) {
     const char* pathStr = env->GetStringUTFChars(path, nullptr);
-    start_video_playback(pathStr);
+    start_video_playback(pathStr, startTimeSec);
     env->ReleaseStringUTFChars(path, pathStr);
 }
 
@@ -203,14 +203,14 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_vrplayer_VRActivity_nativePlaySmb(JNIEnv* env, jobject,
                                             jstring host, jint port, jstring share,
                                             jstring path, jstring username,
-                                            jstring password, jstring domain) {
+                                            jstring password, jstring domain, jfloat startTimeSec) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* sh = env->GetStringUTFChars(share, nullptr);
     const char* p = env->GetStringUTFChars(path, nullptr);
     const char* u = env->GetStringUTFChars(username, nullptr);
     const char* pw = env->GetStringUTFChars(password, nullptr);
     const char* d = env->GetStringUTFChars(domain, nullptr);
-    start_smb_playback(h, (int32_t)port, sh, p, u, pw, d);
+    start_smb_playback(h, (int32_t)port, sh, p, u, pw, d, startTimeSec);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(share, sh);
     env->ReleaseStringUTFChars(path, p);
@@ -261,12 +261,12 @@ Java_com_vrplayer_VRActivity_nativeSmbListDirectory(JNIEnv* env, jobject,
 extern "C" JNIEXPORT void JNICALL
 Java_com_vrplayer_VRActivity_nativePlayFtp(JNIEnv* env, jobject,
                                             jstring host, jint port, jstring path,
-                                            jstring username, jstring password) {
+                                            jstring username, jstring password, jfloat startTimeSec) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* p = env->GetStringUTFChars(path, nullptr);
     const char* u = env->GetStringUTFChars(username, nullptr);
     const char* pw = env->GetStringUTFChars(password, nullptr);
-    start_ftp_playback(h, (int32_t)port, p, u, pw);
+    start_ftp_playback(h, (int32_t)port, p, u, pw, startTimeSec);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(path, p);
     env->ReleaseStringUTFChars(username, u);
@@ -294,13 +294,13 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_vrplayer_VRActivity_nativePlaySftp(JNIEnv* env, jobject,
                                              jstring host, jint port, jstring path,
                                              jstring username, jstring password,
-                                             jstring privateKey) {
+                                             jstring privateKey, jfloat startTimeSec) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* p = env->GetStringUTFChars(path, nullptr);
     const char* u = env->GetStringUTFChars(username, nullptr);
     const char* pw = env->GetStringUTFChars(password, nullptr);
     const char* k = env->GetStringUTFChars(privateKey, nullptr);
-    start_sftp_playback(h, (int32_t)port, p, u, pw, k);
+    start_sftp_playback(h, (int32_t)port, p, u, pw, k, startTimeSec);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(path, p);
     env->ReleaseStringUTFChars(username, u);

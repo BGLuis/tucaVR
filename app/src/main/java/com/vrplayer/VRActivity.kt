@@ -291,9 +291,6 @@ class VRActivity : NativeActivity() {
         private const val AUTO_PLAY_DELAY_MS = 3000L
         private const val PLAYBACK_ERROR_POLL_MS = 1000L
 
-        // T9.3: ver ressalva completa em `scheduleResumeSeek`.
-        private const val RESUME_SEEK_DELAY_MS = 1500L
-
         @JvmStatic
         fun openFilePicker(activity: VRActivity) {
             activity.runOnUiThread {
@@ -478,17 +475,21 @@ class VRActivity : NativeActivity() {
     // T9.1-T9.3: os 3 entry points de playback (playFile/playUrl/playSmb) sao
     // exatamente onde path/titulo/fonte estao disponiveis para popular o
     // historico — chamam `historyTracker.startTracking` ANTES de iniciar a
-    // reproducao nativa. `resumeAtMs` (T9.3, opcional): quando informado
-    // pelo prompt "Retomar de XX:XX?" (ver VRPresentation.renderResumePrompt),
-    // agenda um seek para essa posicao pouco depois de iniciar o playback.
+    // reproducao nativa. `resumeAtMs` (T9.3, opcional, do prompt "Retomar de
+    // XX:XX?" — ver VRPresentation.renderResumePrompt) vai direto como
+    // posicao inicial pro load nativo (rust/core/src/playback.rs::load_at ja
+    // faz seek + pre-roll durante a ABERTURA), em vez do antigo padrao de
+    // carregar do zero e soh depois agendar um segundo nativeSeekVideo com
+    // delay fixo — isso fazia DOIS carregamentos completos por resume (mais
+    // lento) e, se o usuario trocasse de video antes do delay expirar, o
+    // seek atrasado disparava contra a sessao NOVA (ja de outro video).
 
     fun playFile(filePath: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val resolvedSize = if (sizeBytes > 0L) sizeBytes else runCatching { File(filePath).length() }.getOrDefault(0L)
         val source = PlaybackSource.LocalFile(filePath, resolvedSize)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = File(filePath).name)
-        nativePlayVideo(filePath)
-        resumeAtMs?.let { scheduleResumeSeek(it) }
+        nativePlayVideo(filePath, (resumeAtMs ?: 0L) / 1000f)
     }
 
     // T7: URL HTTP(S) reusa o mesmo entry point que arquivo local — o
@@ -497,8 +498,7 @@ class VRActivity : NativeActivity() {
         val source = PlaybackSource.Http(url)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = url)
-        nativePlayVideo(url)
-        resumeAtMs?.let { scheduleResumeSeek(it) }
+        nativePlayVideo(url, (resumeAtMs ?: 0L) / 1000f)
     }
 
     // T6.4: playback SMB tem entry point JNI dedicado porque as credenciais
@@ -508,8 +508,7 @@ class VRActivity : NativeActivity() {
         val source = PlaybackSource.Smb(server, path, sizeBytes)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
-        nativePlaySmb(server.host, server.port, server.share, path, server.username, server.password, server.domain)
-        resumeAtMs?.let { scheduleResumeSeek(it) }
+        nativePlaySmb(server.host, server.port, server.share, path, server.username, server.password, server.domain, (resumeAtMs ?: 0L) / 1000f)
     }
 
     // T6.4: mesma logica de playSmb acima, so que sem `share`/`domain` (FTP
@@ -518,8 +517,7 @@ class VRActivity : NativeActivity() {
         val source = PlaybackSource.Ftp(server, path, sizeBytes)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
-        nativePlayFtp(server.host, server.port, path, server.username, server.password)
-        resumeAtMs?.let { scheduleResumeSeek(it) }
+        nativePlayFtp(server.host, server.port, path, server.username, server.password, (resumeAtMs ?: 0L) / 1000f)
     }
 
     // T6.4: mesma logica acima, com `privateKey` (conteudo PEM, ver
@@ -528,27 +526,7 @@ class VRActivity : NativeActivity() {
         val source = PlaybackSource.Sftp(server, path, sizeBytes)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
-        nativePlaySftp(server.host, server.port, path, server.username, server.password, server.privateKey ?: "")
-        resumeAtMs?.let { scheduleResumeSeek(it) }
-    }
-
-    /**
-     * T9.3, ressalva honesta: nao ha nenhum callback do Rust/C++ avisando
-     * "playback pronto para receber seek" (o unico sinal de progresso que
-     * existe, `updateMediaProgress`, so comeca a chegar DEPOIS que o
-     * playback ja carregou — ver T2.6 sobre `load_at`/threads assincronas).
-     * Isto e um delay heuristico fixo, no mesmo espirito do
-     * `AUTO_PLAY_DELAY_MS` ja usado pelo hook de soak-test acima, so que bem
-     * mais curto (retomar uma midia ja tocando e mais leve que o cold-start
-     * inteiro do app). NUNCA validado em headset real — se o playback
-     * demorar mais que isso pra carregar (rede lenta em SMB/HTTP, por
-     * exemplo), o seek pode disparar cedo demais e ser ignorado/incorreto.
-     * Ver nota em T9.3 no PHASE-0.1-MVP.md.
-     */
-    private fun scheduleResumeSeek(resumeAtMs: Long) {
-        autoPlayHandler.postDelayed({
-            nativeSeekVideo(resumeAtMs / 1000f)
-        }, RESUME_SEEK_DELAY_MS)
+        nativePlaySftp(server.host, server.port, path, server.username, server.password, server.privateKey ?: "", (resumeAtMs ?: 0L) / 1000f)
     }
 
     private fun processVideoUri(uri: Uri) {
@@ -557,14 +535,14 @@ class VRActivity : NativeActivity() {
             if (pfd != null) {
                 val fd = pfd.detachFd()
                 val fdPath = "/proc/self/fd/$fd"
-                nativePlayVideo(fdPath)
+                nativePlayVideo(fdPath, 0f)
             }
         } catch (e: Exception) {
             e.printStackTrace()
         }
     }
 
-    external fun nativePlayVideo(path: String)
+    external fun nativePlayVideo(path: String, startTimeSec: Float)
     external fun nativeTogglePlayPause()
     external fun nativeSeekVideo(positionSeconds: Float)
     external fun nativeSetVolume(volume: Float)
@@ -590,7 +568,8 @@ class VRActivity : NativeActivity() {
         path: String,
         username: String,
         password: String,
-        domain: String
+        domain: String,
+        startTimeSec: Float
     )
 
     // T6.1/T6.4: listagem SMB (bloqueante — SEMPRE chamar de uma coroutine em
@@ -612,7 +591,7 @@ class VRActivity : NativeActivity() {
     external fun nativeProbeHttpUrl(url: String): String
 
     // T6.4: playback FTP (credenciais como parametros separados, ver playFtp()).
-    external fun nativePlayFtp(host: String, port: Int, path: String, username: String, password: String)
+    external fun nativePlayFtp(host: String, port: Int, path: String, username: String, password: String, startTimeSec: Float)
 
     // T6.1/T6.4: listagem FTP (bloqueante — SEMPRE de Dispatchers.IO).
     // Retorno: linhas separadas por \n, ou "ERROR:<mensagem>".
@@ -621,7 +600,7 @@ class VRActivity : NativeActivity() {
     // T6.4: playback SFTP. `privateKey`: conteudo PEM da chave privada (nao
     // um caminho de arquivo, ver rust/protocols/src/sftp/uri.rs), string
     // vazia = autenticacao por senha.
-    external fun nativePlaySftp(host: String, port: Int, path: String, username: String, password: String, privateKey: String)
+    external fun nativePlaySftp(host: String, port: Int, path: String, username: String, password: String, privateKey: String, startTimeSec: Float)
 
     // T6.2/T6.4: listagem SFTP (bloqueante — SEMPRE de Dispatchers.IO).
     external fun nativeSftpListDirectory(host: String, port: Int, username: String, password: String, privateKey: String, path: String): String

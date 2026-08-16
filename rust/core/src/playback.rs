@@ -5,9 +5,10 @@ use audio::output::AudioOutput;
 use crate::sync::SyncManager;
 use crate::texture::TextureOutput;
 use ndk::media::media_format::MediaFormat;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 
 const LATE_FRAME_RENDER_SKIP_SEC: f64 = 0.1;
 
@@ -44,6 +45,15 @@ fn try_send_until_stopped<T>(
     }
 }
 
+enum DemuxCommand {
+    SeekTo(f64),
+}
+
+struct TaggedPacket {
+    epoch: u64,
+    packet: ffmpeg_next::Packet,
+}
+
 /// Estado e threads de uma unica "geracao" de playback (um load_at()).
 /// Cada load_at() cria uma sessao nova com suas proprias flags
 /// is_running/is_playing, em vez de reaproveitar as flags da sessao
@@ -61,6 +71,7 @@ struct PlaybackSession {
     demux_thread: Option<thread::JoinHandle<()>>,
     video_thread: Option<thread::JoinHandle<()>>,
     audio_thread: Option<thread::JoinHandle<()>>,
+    command_tx: crossbeam_channel::Sender<DemuxCommand>,
 }
 
 impl PlaybackSession {
@@ -117,12 +128,14 @@ pub struct PlaybackController {
     // mover o Demuxer/HwDecoder pra dentro das threads de sessao — ver
     // getters no fim do impl. `None`/valores zerados antes do primeiro load.
     network_stats: Option<Arc<protocols::prefetch::PrefetchStats>>,
-    video_queue: Option<crossbeam_channel::Sender<ffmpeg_next::Packet>>,
+    video_queue: Option<crossbeam_channel::Sender<TaggedPacket>>,
     frames_output: Option<Arc<std::sync::atomic::AtomicU64>>,
     frames_dropped: Option<Arc<std::sync::atomic::AtomicU64>>,
     // Conexao de rede reaproveitavel entre seeks no mesmo path (so SFTP por
     // enquanto) — ver `crate::demuxer::ConnectionCache`.
     connection_cache: crate::demuxer::ConnectionCache,
+    seek_started_at: Arc<Mutex<Option<Instant>>>,
+    seek_latency_ms: Arc<AtomicU32>,
 }
 
 impl PlaybackController {
@@ -145,6 +158,8 @@ impl PlaybackController {
             frames_output: None,
             frames_dropped: None,
             connection_cache: crate::demuxer::ConnectionCache::default(),
+            seek_started_at: Arc::new(Mutex::new(None)),
+            seek_latency_ms: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -155,18 +170,23 @@ impl PlaybackController {
     /// obviamente quebrada; agora fica esperando atras do ultimo frame,
     /// parecendo "travado" em vez de "erro", se ninguem repassar o erro.
     pub fn seek(&mut self, position_sec: f64) -> Result<(), String> {
-        if let Some(path) = self.current_path.clone() {
-            // load_at() sempre cria uma Generation nova com is_playing=true
-            // (ver media_logic::session::Generation::new) — sem isto, um
-            // seek durante pausa despausava sozinho, e o indicador de
-            // play/pause da UI (get_playback_is_playing) mentiria logo
-            // depois de qualquer seek com o video pausado.
-            let was_playing = self.is_playing();
-            self.stop();
-            self.load_at(&path, position_sec).map_err(|e| e.to_string())?;
-            if !was_playing {
-                self.pause();
+        let Some(path) = self.current_path.clone() else {
+            return Ok(());
+        };
+
+        *self.seek_started_at.lock().unwrap() = Some(Instant::now());
+
+        if let Some(session) = &self.session {
+            if session.command_tx.send(DemuxCommand::SeekTo(position_sec)).is_ok() {
+                return Ok(());
             }
+        }
+
+        let was_playing = self.is_playing();
+        self.stop();
+        self.load_at(&path, position_sec).map_err(|e| e.to_string())?;
+        if !was_playing {
+            self.pause();
         }
         Ok(())
     }
@@ -176,6 +196,14 @@ impl PlaybackController {
     }
 
     pub fn load_at(&mut self, path: &str, start_time: f64) -> Result<(), Box<dyn std::error::Error>> {
+        let load_started_at = Instant::now();
+        {
+            let mut marker = self.seek_started_at.lock().unwrap();
+            if marker.is_none() {
+                *marker = Some(load_started_at);
+            }
+        }
+
         // Garante que a geracao anterior (se houver) esta totalmente
         // parada antes de tocar em qualquer estado compartilhado.
         if let Some(session) = self.session.take() {
@@ -184,6 +212,11 @@ impl PlaybackController {
 
         self.current_path = Some(path.to_string());
         let mut demuxer = Demuxer::open(path, Some(&mut self.connection_cache)).map_err(|e| e.to_string())?;
+        unsafe {
+            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
+            let msg = std::ffi::CString::new(format!("load_at: demux_open={}ms", load_started_at.elapsed().as_millis())).unwrap();
+            ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
+        }
         self.network_stats = demuxer.network_stats.clone();
         demuxer.select_audio_track(self.desired_audio_track);
         self.audio_track_count = demuxer.audio_streams.len();
@@ -233,6 +266,11 @@ impl PlaybackController {
 
         video_decoder.configure(&format, window.as_ref()).map_err(|e| e.to_string())?;
         video_decoder.start().map_err(|e| e.to_string())?;
+        unsafe {
+            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
+            let msg = std::ffi::CString::new(format!("load_at: decoder_ready={}ms", load_started_at.elapsed().as_millis())).unwrap();
+            ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
+        }
 
         let mut sps_pps = None;
         if let Some(ed) = demuxer.get_video_extradata() {
@@ -256,6 +294,11 @@ impl PlaybackController {
                 let _ = out.start();
                 audio_out = Some(out);
             }
+        }
+        unsafe {
+            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
+            let msg = std::ffi::CString::new(format!("load_at: audio_ready={}ms", load_started_at.elapsed().as_millis())).unwrap();
+            ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
         }
 
         if let Ok(mut out_guard) = self.audio_output.lock() {
@@ -296,12 +339,25 @@ impl PlaybackController {
         }
 
         // 90 (~1.5s a 60fps) em vez de 30 (~0.5s): absorve stalls de rede maiores antes de faltar pacote pro decoder.
-        let (video_tx, video_rx) = crossbeam_channel::bounded::<ffmpeg_next::Packet>(90);
-        let (audio_tx, audio_rx) = crossbeam_channel::bounded::<ffmpeg_next::Packet>(100);
+        let (video_tx, video_rx) = crossbeam_channel::bounded::<TaggedPacket>(90);
+        let (audio_tx, audio_rx) = crossbeam_channel::bounded::<TaggedPacket>(100);
         // Clone do Sender so pra poder consultar profundidade (`len()`) de
         // fora da thread de demux — nao envia nada por este handle, ver
         // get_video_queue_depth().
         self.video_queue = Some(video_tx.clone());
+
+        let (command_tx, command_rx) = crossbeam_channel::unbounded::<DemuxCommand>();
+
+        // Epoca da sessao — so a thread de demux escreve (dentro do tratamento
+        // de DemuxCommand::SeekTo); video/audio usam pra descartar pacotes de
+        // uma epoca ja superada e pra saber quando rearmar o pre-roll (ver TaggedPacket).
+        let epoch: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+        let epoch_d = epoch.clone();
+        let epoch_v = epoch.clone();
+        let epoch_a = epoch.clone();
+
+        let seek_started_at_v = self.seek_started_at.clone();
+        let seek_latency_v = self.seek_latency_ms.clone();
 
         // Flags desta geracao: nao sao compartilhadas com nenhuma
         // sessao anterior ou futura (ver media_logic::session::Generation e
@@ -324,17 +380,28 @@ impl PlaybackController {
             loop {
                 if !*is_running_d.lock().unwrap() { break; }
 
+                if let Ok(DemuxCommand::SeekTo(target_sec)) = command_rx.try_recv() {
+                    let target_ts = (target_sec * 1_000_000.0) as i64;
+                    let _ = demuxer.input_context.seek(target_ts, ..);
+                    epoch_d.fetch_add(1, Ordering::SeqCst);
+                    // Placeholder ate a thread de video/audio "pousar" e corrigir o
+                    // clock pra posicao real (ver PrerollState::take_landing) — so
+                    // evita a barra de progresso piscar um valor velho nesse meio-tempo.
+                    sync_d.update_master_clock(target_sec);
+                }
+
                 if !*is_playing_d.lock().unwrap() {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                     continue;
                 }
 
+                let current_epoch = epoch_d.load(Ordering::SeqCst);
                 match demuxer.read_packet() {
                     crate::demuxer::ReadPacketOutcome::Packet(idx, packet) => {
                         if idx == video_idx {
-                            if !try_send_until_stopped(&video_tx, packet, &is_running_d) { break; }
+                            if !try_send_until_stopped(&video_tx, TaggedPacket { epoch: current_epoch, packet }, &is_running_d) { break; }
                         } else if demuxer.audio_stream_index == Some(idx) {
-                            if !try_send_until_stopped(&audio_tx, packet, &is_running_d) { break; }
+                            if !try_send_until_stopped(&audio_tx, TaggedPacket { epoch: current_epoch, packet }, &is_running_d) { break; }
                         }
                     }
                     crate::demuxer::ReadPacketOutcome::Eof => {
@@ -369,6 +436,11 @@ impl PlaybackController {
                 let _ = video_decoder.decode_packet(&sps, 0, 2, |_| true, || {}, || true);
             }
 
+            let mut current_epoch: u64 = 0;
+            let mut preroll = media_logic::preroll::PrerollState::idle();
+            preroll.begin();
+            let mut catchup_packets: u32 = 0;
+
             loop {
                 if !*is_running_v.lock().unwrap() { break; }
 
@@ -377,20 +449,35 @@ impl PlaybackController {
                     continue;
                 }
 
-                if let Ok(packet) = video_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                if let Ok(tagged) = video_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                    let latest_epoch = epoch_v.load(Ordering::SeqCst);
+                    if tagged.epoch < latest_epoch {
+                        continue;
+                    }
+                    if tagged.epoch != current_epoch {
+                        current_epoch = tagged.epoch;
+                        let _ = video_decoder.flush();
+                        preroll.begin();
+                    }
+                    let packet = tagged.packet;
+
+                    let was_active = preroll.is_active();
+                    if was_active {
+                        catchup_packets += 1;
+                    }
+
                     let pts = packet.pts().unwrap_or(0);
                     let pts_sec = pts as f64 * video_time_base;
                     let lag = sync_v.get_master_clock() - pts_sec;
-                    if lag > CATCH_UP_SKIP_THRESHOLD_SEC {
-                        if packet.is_key() {
-                            unsafe {
-                                let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-                                let msg = std::ffi::CString::new(format!("Video catch-up: retomando decode na keyframe (lag era {lag:.2}s)")).unwrap();
-                                ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-                            }
-                        } else {
-                            continue;
+                    if !was_active && lag > CATCH_UP_SKIP_THRESHOLD_SEC && packet.is_key() {
+                        unsafe {
+                            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
+                            let msg = std::ffi::CString::new(format!("Video catch-up: retomando decode na keyframe (lag era {lag:.2}s)")).unwrap();
+                            ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
                         }
+                    }
+                    if preroll.should_skip_packet(packet.is_key(), lag, CATCH_UP_SKIP_THRESHOLD_SEC) {
+                        continue;
                     }
 
                     if let Some(data) = packet.data() {
@@ -405,6 +492,14 @@ impl PlaybackController {
                             0,
                             |out_pts| {
                                 let pts_sec = out_pts as f64 * video_time_base;
+                                // Quadro de pouso do seek (T-seek-ux): mostra na hora, na posicao
+                                // real onde caiu (pode ser ate um GOP antes do alvo pedido) em vez
+                                // de esperar decodificar ate a posicao exata — troca precisao por
+                                // resposta instantanea (mesmo comportamento do 4XVR/concorrentes).
+                                if preroll.take_landing() {
+                                    sync_v.update_master_clock(pts_sec);
+                                    return true;
+                                }
                                 let master_clock = sync_v.get_master_clock();
                                 let delay = pts_sec - master_clock;
                                 if delay > 0.0 && delay < 1.0 {
@@ -419,6 +514,18 @@ impl PlaybackController {
                             },
                             || *is_running_v.lock().unwrap()
                         );
+                        if was_active && !preroll.is_active() {
+                            if let Some(start) = seek_started_at_v.lock().unwrap().take() {
+                                let ms = start.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
+                                seek_latency_v.store(ms, Ordering::Relaxed);
+                                unsafe {
+                                    let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
+                                    let msg = std::ffi::CString::new(format!("seek: landing={ms}ms catchup_packets={catchup_packets}")).unwrap();
+                                    ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
+                                }
+                            }
+                            catchup_packets = 0;
+                        }
                     }
                 }
             }
@@ -456,7 +563,12 @@ impl PlaybackController {
                     continue;
                 }
 
-                if let Ok(packet) = audio_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                if let Ok(tagged) = audio_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                    if tagged.epoch < epoch_a.load(Ordering::SeqCst) {
+                        continue;
+                    }
+                    let packet = tagged.packet;
+
                     if let Some(ref mut ad) = audio_decoder {
                         let desired_speed = f32::from_bits(speed_bits_a.load(Ordering::Relaxed));
                         if (desired_speed - applied_speed).abs() > 0.01
@@ -493,6 +605,7 @@ impl PlaybackController {
             demux_thread: Some(demux_thread),
             video_thread: Some(video_thread),
             audio_thread: Some(audio_thread),
+            command_tx,
         });
 
         Ok(())
@@ -584,18 +697,25 @@ impl PlaybackController {
     }
 
     /// Avanca para a proxima trilha de audio (com wrap-around) e recarrega
-    /// o video na posicao atual para aplicar a troca.
+    /// o video na posicao atual para aplicar a troca. Usa stop()+load_at()
+    /// direto (nao seek()): so um reload reconfigura o AudioDecoder pro stream novo.
     pub fn cycle_audio_track(&mut self) {
         if self.audio_track_count <= 1 {
             return;
         }
         self.desired_audio_track = (self.desired_audio_track + 1) % self.audio_track_count;
         let (current_position, _) = self.get_progress();
+        let Some(path) = self.current_path.clone() else { return };
+        let was_playing = self.is_playing();
+        self.stop();
         // Erro descartado de proposito: cycle_audio_track() nao tem
         // caminho de reporte pro usuario (diferente de seek_video_playback,
         // ver bridge/lib.rs) — trocar de trilha e uma acao secundaria, uma
         // falha aqui nao deveria virar um erro de playback "principal".
-        let _ = self.seek(current_position);
+        let _ = self.load_at(&path, current_position);
+        if !was_playing {
+            self.pause();
+        }
     }
 
     pub fn pause(&mut self) {
@@ -684,6 +804,11 @@ impl PlaybackController {
 
     pub fn get_network_blocks_discarded(&self) -> u64 {
         self.network_stats.as_ref().map(|s| s.blocks_discarded.load(Ordering::Relaxed)).unwrap_or(0)
+    }
+
+    // Duracao do ultimo seek concluido (pedido -> pre-roll terminou), em ms. 0 antes do primeiro.
+    pub fn get_last_seek_latency_ms(&self) -> u32 {
+        self.seek_latency_ms.load(Ordering::Relaxed)
     }
 
     pub fn toggle_play_pause(&mut self) {

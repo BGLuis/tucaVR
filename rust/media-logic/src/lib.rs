@@ -19,6 +19,7 @@
 pub mod audio_resample;
 pub mod format3d;
 pub mod playback_params;
+pub mod preroll;
 pub mod session;
 pub mod sync;
 pub mod yuv_convert;

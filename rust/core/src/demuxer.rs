@@ -5,6 +5,23 @@ use std::sync::{Arc, Mutex};
 
 // 12MB em vez do default 4MB: a 8K/60fps HEVC (~63Mbps / 7.85MB/s), 4MB cobre só ~0.5s por bloco.
 const REMOTE_PREFETCH_BLOCK_SIZE: usize = 12 * 1024 * 1024;
+// Bloco pequeno so pro PRIMEIRO fetch pos-seek — ver doc de protocols::prefetch sobre a rampa.
+const SEEK_PREFETCH_BLOCK_SIZE: usize = 1024 * 1024;
+
+/// `probesize`/`analyzeduration` do libavformat (default 5MB / 5s) controlam
+/// quanto o `avformat_find_stream_info` le antes de devolver o controle —
+/// custo pago em TODA abertura (arquivo novo, nao so seek), multiplicado
+/// pelo RTT de rede em SMB/SFTP. Reduzido pra 1MB/1s: suficiente pros
+/// containers usados aqui (MP4/MKV com header bem formado ja declara
+/// codec/dimensoes; nao decodifica frame nenhum pra isso), mas nao
+/// validado contra arquivo exotico/corrompido — se a deteccao de trilha
+/// falhar de forma nova, este e o primeiro lugar a suspeitar.
+fn fast_probe_options() -> ffmpeg::Dictionary<'static> {
+    let mut opts = ffmpeg::Dictionary::new();
+    opts.set("probesize", "1000000");
+    opts.set("analyzeduration", "1000000");
+    opts
+}
 
 /// Resultado de `Demuxer::read_packet` — ver comentario no metodo sobre por
 /// que isto nao e so `Option<(usize, Packet)>` como antes.
@@ -93,30 +110,30 @@ impl Demuxer {
 
         let ictx = if let Some(target) = protocols::smb::SmbTarget::from_internal(path) {
             let shared = Self::smb_source(path, &target, cache)?;
-            let reader = PrefetchReader::with_block_size(shared, REMOTE_PREFETCH_BLOCK_SIZE);
+            let reader = PrefetchReader::with_block_sizes(shared, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?
+            ffmpeg::format::input_from_stream(stream_io, Some(&target.path), Some(fast_probe_options())).map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::ftp::FtpTarget::from_internal(path) {
             let source = protocols::ftp::FtpFileSource::open(&target)?;
-            let reader = PrefetchReader::with_block_size(source, REMOTE_PREFETCH_BLOCK_SIZE);
+            let reader = PrefetchReader::with_block_sizes(source, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?
+            ffmpeg::format::input_from_stream(stream_io, Some(&target.path), Some(fast_probe_options())).map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::sftp::SftpTarget::from_internal(path) {
             let shared = Self::sftp_source(path, &target, cache)?;
-            let reader = PrefetchReader::with_block_size(shared, REMOTE_PREFETCH_BLOCK_SIZE);
+            let reader = PrefetchReader::with_block_sizes(shared, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(stream_io, Some(&target.path), None).map_err(|e| e.to_string())?
+            ffmpeg::format::input_from_stream(stream_io, Some(&target.path), Some(fast_probe_options())).map_err(|e| e.to_string())?
         } else if path.starts_with("https://") {
             let shared = Self::https_source(path, cache)?;
-            let reader = PrefetchReader::with_block_size(shared, REMOTE_PREFETCH_BLOCK_SIZE);
+            let reader = PrefetchReader::with_block_sizes(shared, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(stream_io, Some(path), None).map_err(|e| e.to_string())?
+            ffmpeg::format::input_from_stream(stream_io, Some(path), Some(fast_probe_options())).map_err(|e| e.to_string())?
         } else {
-            ffmpeg::format::input(&path).map_err(|e| e.to_string())?
+            ffmpeg::format::input_with_dictionary(&path, fast_probe_options()).map_err(|e| e.to_string())?
         };
 
         let mut video_streams = Vec::new();

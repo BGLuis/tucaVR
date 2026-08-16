@@ -1063,17 +1063,17 @@ Salvar progresso de reprodução para retomar de onde parou.
   > `AppNavigator` — é uma decisão pontual, não um novo nível de navegação;
   > o back-stack continua exatamente onde estava.
   >
-  > Retomar de fato: `VRActivity.playFile/playUrl/playSmb` ganharam um
-  > parâmetro opcional `resumeAtMs`, que agenda `nativeSeekVideo` via um
-  > `Handler.postDelayed` de 1.5s (`scheduleResumeSeek`) após iniciar o
-  > playback. **Ressalva honesta, não testada em headset real**: não há
-  > nenhum callback do Rust/C++ avisando "pronto para receber seek" — é um
-  > delay heurístico fixo, não uma sincronização de verdade. Se o
-  > carregamento demorar mais que 1.5s (rede lenta em SMB/HTTP, por
-  > exemplo), o seek pode disparar cedo demais e ser ignorado/ficar
-  > incorreto. Documentado explicitamente no código
-  > (`VRActivity.scheduleResumeSeek`) em vez de vendido como resolvido.
-  > Formatação "XX:XX"/"H:MM:SS" via `formatDurationMs` (testada em
+  > Retomar de fato: `VRActivity.playFile/playUrl/playSmb/playFtp/playSftp`
+  > ganharam um parâmetro opcional `resumeAtMs`, passado direto como posição
+  > inicial pros `native*` (`start_video_playback`/`start_smb_playback`/etc.,
+  > todos com `startTimeSec` novo) — `PlaybackController::load_at` já faz
+  > seek + pre-roll durante a própria abertura (T-seek-ux). Substituiu o
+  > `Handler.postDelayed`/`scheduleResumeSeek` original (delay heurístico de
+  > 1.5s sem sincronização real com "pronto pra seek", que carregava do zero
+  > e só depois buscava a posição salva — dois carregamentos completos por
+  > resume, e uma corrida real: trocar de vídeo antes do delay expirar fazia
+  > o seek atrasado disparar contra a sessão do vídeo NOVO). Formatação
+  > "XX:XX"/"H:MM:SS" via `formatDurationMs` (testada em
   > `PlaybackHistoryFormatTest`).
 - [x] **T9.4** — Tela "Continuar assistindo" no menu principal
   > O botão "▶ Continuar assistindo" em `renderHome()` (`VRPresentation.kt`)
