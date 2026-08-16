@@ -97,6 +97,12 @@ fn new_runtime() -> io::Result<Runtime> {
 /// overhead de protocolo. Ver doc do modulo sobre o laco de leitura.
 const SFTP_MAX_READ_CHUNK: u32 = 256 * 1024 - 4096;
 
+/// Granularidade interna de `read_chunk_filling` — ver comentario la sobre
+/// por que um chunk de `SFTP_MAX_READ_CHUNK` precisa ser sub-dividido e
+/// pedido em paralelo em vez de preenchido com leituras sequenciais.
+const SFTP_SUB_READ_SIZE: u32 = 64 * 1024;
+const SFTP_SUB_READ_ROUNDS: usize = 4;
+
 /// Quantos `SSH_FXP_READ` concorrentes no maximo por vez. Um bloco de 12MB
 /// (ver `REMOTE_PREFETCH_BLOCK_SIZE` em `core/src/demuxer.rs`) dividido em
 /// chunks de ~252KB da ~48 chunks — disparar os 48 de uma vez (primeira
@@ -178,9 +184,16 @@ fn client_config(keepalive: bool) -> client::Config {
 /// `SftpTarget::private_key` esta preenchido ou nao (ver `uri.rs`).
 async fn connect_and_auth(t: &SftpTarget, keepalive: bool) -> Result<client::Handle<SftpHandler>, String> {
     t.validate()?;
-    let mut session = client::connect(Arc::new(client_config(keepalive)), (t.host.as_str(), t.port), SftpHandler)
-        .await
-        .map_err(|e| e.to_string())?;
+    let mut session = match client::connect(Arc::new(client_config(keepalive)), (t.host.as_str(), t.port), SftpHandler).await {
+        Ok(session) => {
+            log::info!("SFTP: conexao TCP/SSH estabelecida com {}:{}", t.host, t.port);
+            session
+        }
+        Err(e) => {
+            log::warn!("SFTP: falha ao conectar em {}:{}: {e}", t.host, t.port);
+            return Err(e.to_string());
+        }
+    };
 
     let authenticated = if let Some(pem) = t.private_key.as_deref().filter(|k| !k.is_empty()) {
         let key_pair = russh::keys::decode_secret_key(pem, None).map_err(|e| format!("chave privada invalida: {e}"))?;
@@ -196,8 +209,10 @@ async fn connect_and_auth(t: &SftpTarget, keepalive: bool) -> Result<client::Han
     };
 
     if !authenticated {
+        log::warn!("SFTP: autenticacao rejeitada para usuario {}", t.username);
         return Err("autenticacao SFTP falhou (usuario/senha ou chave privada invalidos)".to_string());
     }
+    log::info!("SFTP: autenticado como {}", t.username);
     Ok(session)
 }
 
@@ -298,8 +313,15 @@ impl SftpFileSource {
     async fn connect_open(t: &SftpTarget) -> Result<(client::Handle<SftpHandler>, RawSftpSession, String, u64), String> {
         let session = connect_and_auth(t, true).await?;
         let raw = open_raw_sftp(&session).await?;
-        let handle = raw.open(t.path.as_str(), OpenFlags::READ, FileAttributes::empty()).await.map_err(|e| e.to_string())?.handle;
-        let size = raw.fstat(handle.as_str()).await.map_err(|e| e.to_string())?.attrs.len();
+        let handle = raw.open(t.path.as_str(), OpenFlags::READ, FileAttributes::empty()).await.map_err(|e| {
+            log::warn!("SFTP: falha ao abrir arquivo {}: {e}", t.path);
+            e.to_string()
+        })?.handle;
+        let size = raw.fstat(handle.as_str()).await.map_err(|e| {
+            log::warn!("SFTP: falha ao obter tamanho de {}: {e}", t.path);
+            e.to_string()
+        })?.attrs.len();
+        log::info!("SFTP: arquivo aberto {} ({size} bytes)", t.path);
         Ok((session, raw, handle, size))
     }
 
@@ -330,43 +352,95 @@ impl SftpFileSource {
 
     /// Le um chunk ate preenche-lo por completo, tratando "servidor devolveu
     /// menos do que pedido sem sinalizar EOF" como leitura PARCIAL LEGITIMA
-    /// (permitida pelo protocolo — a doc do modulo ja citava isso, mas o
-    /// codigo tratava como fim de dados) em vez de encerrar ali. Achado
-    /// desta sessao (docs/NETWORK-IO-PERFORMANCE.md): sem este laco, o
-    /// "bloco" efetivo do `PrefetchReader` colapsava pro tamanho que o
-    /// servidor de fato devolve por `SSH_FXP_READ` — medido em ~30KB neste
-    /// NAS, bem abaixo de `SFTP_MAX_READ_CHUNK` (~252KB) e MUITO abaixo dos
-    /// 12MB do bloco do Demuxer. Cada troca de bloco pagava overhead de
-    /// round-trip/canal pra uma fracao minuscula dos dados — o gargalo real
-    /// da regressao 30fps->10fps, nao prioridade de thread (confirmado
-    /// via SMB no mesmo arquivo/servidor: ~11-12MB/s sustentado, sem
-    /// nenhuma mudanca de prioridade envolvida nesse caminho).
+    /// (permitida pelo protocolo) em vez de fim de dados. Achado original
+    /// (docs/NETWORK-IO-PERFORMANCE.md): este NAS devolve ~30KB por
+    /// `SSH_FXP_READ` independente do quanto se pede, bem abaixo de
+    /// `SFTP_MAX_READ_CHUNK` (~252KB) — sem preencher em varias leituras, o
+    /// "bloco" efetivo do `PrefetchReader` colapsava pro tamanho real de
+    /// resposta do servidor.
+    ///
+    /// Refinamento desta sessao: preencher um chunk de ~252KB a ~30KB por
+    /// vez SEQUENCIALMENTE (uma leitura por vez, esperando cada resposta)
+    /// significa ~8 idas-e-voltas em serie por chunk — a concorrencia de
+    /// `SFTP_MAX_CONCURRENT_CHUNKS` so se aplica ENTRE chunks, nao dentro de
+    /// um. Aqui o chunk e sub-dividido em pedacos de `SFTP_SUB_READ_SIZE` e
+    /// todos pedidos em paralelo por rodada (`join_all`) — cada rodada
+    /// preenche o que ainda falta; o que sobrar apos `SFTP_SUB_READ_ROUNDS`
+    /// cai pro laco sequencial original (garante terminar sempre, sem
+    /// arriscar buracos silenciosos de zeros no meio do bloco).
     async fn read_chunk_filling(raw: &RawSftpSession, handle: &str, chunk_offset: u64, chunk_len: u32) -> Result<Data, SftpError> {
-        let mut acc = Vec::with_capacity(chunk_len as usize);
-        let mut offset = chunk_offset;
-        let mut remaining = chunk_len;
-        while remaining > 0 {
-            match raw.read(handle, offset, remaining).await {
-                Ok(data) => {
-                    let n = data.data.len();
-                    if n == 0 {
-                        break; // sem mais dados pra este pedido, sem status explicito de EOF
-                    }
-                    acc.extend_from_slice(&data.data[..n]);
-                    offset += n as u64;
-                    remaining -= n as u32;
-                }
-                Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => break,
-                Err(e) => return Err(e),
+        let mut acc = vec![0u8; chunk_len as usize];
+        let mut hit_end_at: Option<u32> = None;
+        let mut missing: Vec<(u64, u32)> = split_range(chunk_offset, chunk_len, SFTP_SUB_READ_SIZE);
+
+        for _ in 0..SFTP_SUB_READ_ROUNDS {
+            if missing.is_empty() || hit_end_at.is_some() {
+                break;
             }
+            let results = join_all(missing.iter().map(|&(off, len)| raw.read(handle, off, len))).await;
+            let mut next_missing = Vec::new();
+            for (&(off, len), result) in missing.iter().zip(results) {
+                let rel = (off - chunk_offset) as u32;
+                match result {
+                    Ok(data) => {
+                        let n = (data.data.len() as u32).min(len);
+                        if n == 0 {
+                            hit_end_at = Some(hit_end_at.map_or(rel, |v| v.min(rel)));
+                            continue;
+                        }
+                        acc[rel as usize..(rel + n) as usize].copy_from_slice(&data.data[..n as usize]);
+                        if n < len {
+                            next_missing.push((off + n as u64, len - n));
+                        }
+                    }
+                    Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => {
+                        hit_end_at = Some(hit_end_at.map_or(rel, |v| v.min(rel)));
+                    }
+                    Err(e) => return Err(e),
+                }
+            }
+            missing = next_missing;
+        }
+
+        if hit_end_at.is_none() {
+            for (mut sub_offset, mut sub_remaining) in missing {
+                while sub_remaining > 0 {
+                    match raw.read(handle, sub_offset, sub_remaining).await {
+                        Ok(data) => {
+                            let n = data.data.len() as u32;
+                            if n == 0 {
+                                let rel = (sub_offset - chunk_offset) as u32;
+                                hit_end_at = Some(hit_end_at.map_or(rel, |v| v.min(rel)));
+                                break;
+                            }
+                            let rel = (sub_offset - chunk_offset) as usize;
+                            acc[rel..rel + n as usize].copy_from_slice(&data.data[..n as usize]);
+                            sub_offset += n as u64;
+                            sub_remaining -= n;
+                        }
+                        Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => {
+                            let rel = (sub_offset - chunk_offset) as u32;
+                            hit_end_at = Some(hit_end_at.map_or(rel, |v| v.min(rel)));
+                            break;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+        }
+
+        if let Some(end) = hit_end_at {
+            acc.truncate(end as usize);
         }
         Ok(Data { id: 0, data: acc })
     }
 
     fn try_read_range(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
         let (Some(raw), Some(handle)) = (self.raw.as_ref(), self.handle.as_deref()) else {
+            log::warn!("SFTP: try_read_range chamado sem conexao ativa (offset {offset}, buf {} bytes)", buf.len());
             return Err(io::Error::other("SftpFileSource sem conexao ativa"));
         };
+        log::info!("SFTP: try_read_range offset={offset} pedindo {} bytes", buf.len());
 
         let want = if offset >= self.size { 0 } else { (buf.len() as u64).min(self.size - offset) as u32 };
         if want == 0 {
@@ -376,12 +450,17 @@ impl SftpFileSource {
         let chunks = split_range(offset, want, SFTP_MAX_READ_CHUNK);
         let mut total = 0usize;
         'batches: for batch in chunks.chunks(SFTP_MAX_CONCURRENT_CHUNKS) {
-            let mut results = match self.runtime.block_on(tokio::time::timeout(
-                SFTP_READ_TIMEOUT,
-                join_all(batch.iter().map(|&(chunk_offset, chunk_len)| Self::read_chunk_filling(raw, handle, chunk_offset, chunk_len))),
-            )) {
+            // tokio::time::timeout registra o timer na construcao, entao precisa rodar dentro do block_on.
+            let mut results = match self.runtime.block_on(async {
+                tokio::time::timeout(
+                    SFTP_READ_TIMEOUT,
+                    join_all(batch.iter().map(|&(chunk_offset, chunk_len)| Self::read_chunk_filling(raw, handle, chunk_offset, chunk_len))),
+                )
+                .await
+            }) {
                 Ok(results) => results,
                 Err(_elapsed) => {
+                    log::warn!("SFTP: sem resposta do servidor por {}s no offset {offset} (leitura travada)", SFTP_READ_TIMEOUT.as_secs());
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
                         format!("SFTP: sem resposta do servidor por {}s (leitura travada)", SFTP_READ_TIMEOUT.as_secs()),
@@ -436,7 +515,10 @@ impl SftpFileSource {
                         }
                     }
                     Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => break 'batches,
-                    Err(e) => return Err(io::Error::other(e.to_string())),
+                    Err(e) => {
+                        log::warn!("SFTP: leitura em offset {chunk_offset} (tam {chunk_len}) falhou: {e}");
+                        return Err(io::Error::other(e.to_string()));
+                    }
                 }
             }
         }
