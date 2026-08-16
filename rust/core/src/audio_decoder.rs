@@ -24,7 +24,7 @@ impl AudioDecoder {
             .ok_or(ffmpeg::Error::StreamNotFound)?;
 
         let context = ffmpeg::codec::context::Context::from_parameters(stream.parameters())?;
-        let mut decoder = context.decoder().audio()?;
+        let decoder = context.decoder().audio()?;
 
         let resampler = Resampler::get(
             decoder.format(),

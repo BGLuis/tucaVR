@@ -46,7 +46,7 @@ impl AudioOutput {
         let volume_bits = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let callback = AudioPlayerCallback { receiver, volume_bits: volume_bits.clone() };
 
-        let mut builder = AudioStreamBuilder::default();
+        let builder = AudioStreamBuilder::default();
         let stream = builder
             .set_direction::<Output>()
             .set_performance_mode(PerformanceMode::LowLatency)

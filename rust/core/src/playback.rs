@@ -617,7 +617,7 @@ impl PlaybackController {
     }
 
     pub fn get_current_frame(&self) -> *mut std::os::raw::c_void {
-        if let Ok(mut tex) = self.texture_output.lock() {
+        if let Ok(tex) = self.texture_output.lock() {
             // Note: acquire_latest_buffer is called in decoding loop thread,
             // but we can also just return current_buffer here.
             if let Some(buffer) = tex.current_buffer.as_ref() {
