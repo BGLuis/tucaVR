@@ -374,6 +374,12 @@ struct AppState {
     bool scrubOverlayReady = false;
 
     // OpenXR Actions
+    // xrAttachSessionActionSets so pode ser chamada 1x por XrSession (spec) —
+    // XR_SESSION_STATE_READY dispara de novo toda vez que o app reganha foco
+    // (headset recolocado, voltar do menu do Oculus), nao so no primeiro
+    // start. Sem essa flag, a segunda chamada retorna
+    // XR_ERROR_ACTIONSETS_ALREADY_ATTACHED e o OXR() aborta o processo.
+    bool actionSetsAttached = false;
     XrActionSet actionSet = XR_NULL_HANDLE;
     XrAction aimAction = XR_NULL_HANDLE;
     XrAction triggerAction = XR_NULL_HANDLE;

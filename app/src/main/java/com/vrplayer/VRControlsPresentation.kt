@@ -162,6 +162,7 @@ class VRControlsPresentation(
      * limitacao de geracao de thumbnail — ver NetworkThumbnailGenerator).
      */
     private fun startScrubPreview() {
+        if (!FeatureFlags.isEnabled(context, FeatureFlags.Flag.SCRUB_PREVIEW)) return
         activity.nativeSetScrubOverlayVisible(true)
         when (val source = activity.currentPlaybackSource) {
             is PlaybackSource.Smb, is PlaybackSource.Sftp -> {

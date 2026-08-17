@@ -221,10 +221,14 @@ inline void SetupOpenXrInputs(AppState& state) {
 }
 
 inline void AttachInputsToSession(AppState& state) {
+    if (state.actionSetsAttached) {
+        return;
+    }
     XrSessionActionSetsAttachInfo attachInfo{XR_TYPE_SESSION_ACTION_SETS_ATTACH_INFO};
     attachInfo.countActionSets = 1;
     attachInfo.actionSets = &state.actionSet;
     OXR(xrAttachSessionActionSets(state.session, &attachInfo));
+    state.actionSetsAttached = true;
 
     XrPath handPaths[2];
     xrStringToPath(state.instance, "/user/hand/left", &handPaths[0]);
