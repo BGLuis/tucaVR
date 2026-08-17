@@ -254,18 +254,15 @@ impl PlaybackController {
             let _ = demuxer.input_context.seek(target_ts, ..);
         }
 
-        let mut video_decoder = HwDecoder::new(mime).map_err(|e| e.to_string())?;
-        let (frames_output, frames_dropped) = video_decoder.metrics();
-        self.frames_output = Some(frames_output);
-        self.frames_dropped = Some(frames_dropped);
-
         let mut format = MediaFormat::new();
         format.set_str("mime", mime);
         format.set_i32("width", width as i32);
         format.set_i32("height", height as i32);
 
-        video_decoder.configure(&format, window.as_ref()).map_err(|e| e.to_string())?;
-        video_decoder.start().map_err(|e| e.to_string())?;
+        let video_decoder = HwDecoder::new_configured_and_started(mime, &format, window.as_ref()).map_err(|e| e.to_string())?;
+        let (frames_output, frames_dropped) = video_decoder.metrics();
+        self.frames_output = Some(frames_output);
+        self.frames_dropped = Some(frames_dropped);
         unsafe {
             let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
             let msg = std::ffi::CString::new(format!("load_at: decoder_ready={}ms", load_started_at.elapsed().as_millis())).unwrap();
@@ -440,6 +437,8 @@ impl PlaybackController {
             let mut preroll = media_logic::preroll::PrerollState::idle();
             preroll.begin();
             let mut catchup_packets: u32 = 0;
+            // Marca troca de epoca (seek) pra detectar fila de video vazia logo em seguida (rede lenta).
+            let mut last_epoch_change_at: Option<std::time::Instant> = None;
 
             loop {
                 if !*is_running_v.lock().unwrap() { break; }
@@ -449,7 +448,8 @@ impl PlaybackController {
                     continue;
                 }
 
-                if let Ok(tagged) = video_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                match video_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                Ok(tagged) => {
                     let latest_epoch = epoch_v.load(Ordering::SeqCst);
                     if tagged.epoch < latest_epoch {
                         continue;
@@ -458,6 +458,7 @@ impl PlaybackController {
                         current_epoch = tagged.epoch;
                         let _ = video_decoder.flush();
                         preroll.begin();
+                        last_epoch_change_at = Some(std::time::Instant::now());
                     }
                     let packet = tagged.packet;
 
@@ -527,6 +528,22 @@ impl PlaybackController {
                             catchup_packets = 0;
                         }
                     }
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                    if let Some(t) = last_epoch_change_at {
+                        if t.elapsed() < std::time::Duration::from_secs(3) {
+                            unsafe {
+                                let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
+                                let msg = std::ffi::CString::new(format!(
+                                    "seek: fila de video vazia {}ms apos epoca mudar",
+                                    t.elapsed().as_millis()
+                                )).unwrap();
+                                ndk_sys::__android_log_print(5, tag.as_ptr(), msg.as_ptr()); // 5 = ANDROID_LOG_WARN
+                            }
+                        }
+                    }
+                }
+                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {}
                 }
             }
         });

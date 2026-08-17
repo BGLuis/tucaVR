@@ -11,8 +11,10 @@
 #include <jni.h>
 #include <android/log.h>
 #include <atomic>
+#include <cstdint>
 #include <mutex>
 #include <string>
+#include <vector>
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "VRPlayerJNI_VK", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VRPlayerJNI_VK", __VA_ARGS__)
@@ -83,6 +85,9 @@ extern "C" {
                                                    uint32_t* out_width, uint32_t* out_height,
                                                    size_t* out_count, size_t* out_len);
     extern void free_rust_thumbnail_strip(uint8_t* ptr, size_t len);
+    // Interrompe uma geracao de tira em andamento — ver comentario em
+    // rust/bridge/src/lib.rs::cancel_thumbnail_strip_generation.
+    extern void cancel_thumbnail_strip_generation();
 }
 
 // Captura de frame (nao implementada no caminho Vulkan ainda — funcao existe
@@ -102,6 +107,45 @@ Java_com_vrplayer_VRActivity_nativeRequestFrameCapture(JNIEnv* env, jobject, jst
     env->ReleaseStringUTFChars(path, pathStr);
     g_captureRequested = true;
     LOGI("nativeRequestFrameCapture: %s (VkImage readback pendente)", g_capturePath.c_str());
+}
+
+// Preview de arrasto sobre o quad do video — estado compartilhado com o loop
+// de render em vr_player_app_vulkan.cpp (extern, nao static: unica excecao a
+// separacao "JNI so delega pro bridge Rust" do topo deste arquivo — os bytes
+// crus do preview nao tem por que passar pelo Rust so pra voltar pro C++ sem
+// nenhum processamento; ver comentario simetrico em vr_player_app_vulkan.cpp
+// junto da definicao). So tipos simples cruzam a fronteira (atomic/vector),
+// nenhum tipo de Vulkan/OpenXR — mantem este arquivo leve de incluir.
+extern std::atomic<bool> g_scrubOverlayDirty;
+extern std::atomic<bool> g_scrubOverlayVisible;
+extern std::vector<uint8_t> g_scrubOverlayRgba;
+extern uint32_t g_scrubOverlayWidth;
+extern uint32_t g_scrubOverlayHeight;
+extern std::mutex g_scrubOverlayMutex;
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeUpdateScrubOverlay(JNIEnv* env, jobject, jbyteArray rgba, jint width, jint height) {
+    jsize len = env->GetArrayLength(rgba);
+    std::vector<uint8_t> buf(static_cast<size_t>(len));
+    env->GetByteArrayRegion(rgba, 0, len, reinterpret_cast<jbyte*>(buf.data()));
+    {
+        std::lock_guard<std::mutex> lock(g_scrubOverlayMutex);
+        g_scrubOverlayRgba = std::move(buf);
+        g_scrubOverlayWidth = static_cast<uint32_t>(width);
+        g_scrubOverlayHeight = static_cast<uint32_t>(height);
+    }
+    g_scrubOverlayDirty = true;
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        LOGI("nativeUpdateScrubOverlay: primeira chamada, %dx%d, %d bytes", width, height, (int)len);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeSetScrubOverlayVisible(JNIEnv* env, jobject, jboolean visible) {
+    g_scrubOverlayVisible = (visible == JNI_TRUE);
+    LOGI("nativeSetScrubOverlayVisible: %d", (int)(visible == JNI_TRUE));
 }
 
 // Helper: converte char* alocado pelo Rust para jstring e libera o original.
@@ -452,6 +496,13 @@ Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnailStrip(JNIEnv* env, jobje
     env->ReleaseStringUTFChars(privateKey, k);
     env->ReleaseStringUTFChars(path, p);
     return RustThumbnailStripToJByteArrayAndFree(env, data, outLen);
+}
+
+// Interrompe uma geracao de tira de scrub ja em andamento (chamadas acima sao
+// sincronas/bloqueantes — um Job.cancel() do lado Kotlin nao as interrompe).
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeCancelScrubStrip(JNIEnv* env, jobject) {
+    cancel_thumbnail_strip_generation();
 }
 
 extern "C" JNIEXPORT jstring JNICALL

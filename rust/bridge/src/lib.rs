@@ -109,8 +109,12 @@ pub extern "C" fn get_playback_is_playing() -> u32 {
     }
 }
 
-// Dois HwDecoder concorrentes derrubam o driver de video: strip de scrub desiste cedo se ativo.
+// Nao chamada mais pelas funcoes de tira de scrub (ver comentario "Experimento"
+// em smb_generate_thumbnail_strip/sftp_generate_thumbnail_strip) — mantida e
+// nao removida de proposito, pra poder reverter rapido esse experimento se o
+// crash de driver documentado voltar a acontecer em hardware real.
 // try_lock (nao lock() — chamador nao deve travar); em contencao assume ativo (mais seguro).
+#[allow(dead_code)]
 fn playback_is_active() -> bool {
     match CONTROLLER.try_lock() {
         Ok(controller) => controller.is_playing(),
@@ -1202,9 +1206,13 @@ pub extern "C" fn smb_generate_thumbnail_strip(
             domain,
         }
     };
-    if playback_is_active() {
-        return write_thumbnail_strip(None, out_width, out_height, out_count, out_len);
-    }
+    // Experimento (docs/SEEK-NETWORK-STUTTER-NEXT-SESSION.md): antes, `playback_is_active()`
+    // recusava a tira inteira se o playback estivesse ativo (duas sessoes MediaCodec
+    // concorrentes derrubavam o driver de video). Agora serializa so a JANELA de
+    // setup (new+configure+start) via HwDecoder::new_configured_and_started
+    // (SESSION_SETUP_LOCK em core/src/decoder.rs), deixando o resto da decodificacao
+    // rodar concorrente com o playback principal — precisa validar em hardware real
+    // que isso de fato evita o crash antigo antes de considerar definitivo.
     let internal_uri = target.to_internal();
     let strip = core::thumbnail::generate_strip(&internal_uri, interval_secs as f64, max_width, max_height);
     write_thumbnail_strip(strip, out_width, out_height, out_count, out_len)
@@ -1248,12 +1256,22 @@ pub extern "C" fn sftp_generate_thumbnail_strip(
     if target.validate().is_err() {
         return write_thumbnail_strip(None, out_width, out_height, out_count, out_len);
     }
-    if playback_is_active() {
-        return write_thumbnail_strip(None, out_width, out_height, out_count, out_len);
-    }
+    // Ver comentario equivalente em smb_generate_thumbnail_strip acima — experimento,
+    // playback_is_active() nao gate mais aqui, SESSION_SETUP_LOCK assume esse papel.
     let internal_uri = target.to_internal();
     let strip = core::thumbnail::generate_strip(&internal_uri, interval_secs as f64, max_width, max_height);
     write_thumbnail_strip(strip, out_width, out_height, out_count, out_len)
+}
+
+/// Interrompe uma geracao de tira de scrub em andamento (`sftp_generate_thumbnail_strip`/
+/// `smb_generate_thumbnail_strip`) — essas chamadas sao sincronas/bloqueantes
+/// e um Job.cancel() do lado Kotlin nao as interrompe (ver
+/// docs/SEEK-NETWORK-STUTTER-NEXT-SESSION.md). Chamar quando o arrasto do
+/// tracker termina (`stopScrubPreview`), pra nao deixar uma geracao orfa
+/// competindo por banda/decoder com o playback principal.
+#[no_mangle]
+pub extern "C" fn cancel_thumbnail_strip_generation() {
+    core::thumbnail::cancel_strip_generation();
 }
 
 #[no_mangle]

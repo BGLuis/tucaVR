@@ -201,4 +201,13 @@ class ScrubStrip(private val rgba: ByteArray, val frameWidth: Int, val frameHeig
             copyPixelsFromBuffer(ByteBuffer.wrap(rgba, start, frameBytes))
         }
     }
+
+    /** Bytes RGBA crus do frame mais proximo de `positionSeconds`, sem passar por Bitmap
+     * (ver VRActivity.nativeUpdateScrubOverlay). Null se a trilha estiver vazia. */
+    fun rgbaAt(positionSeconds: Float): ByteArray? {
+        if (count == 0) return null
+        val index = (positionSeconds / intervalSeconds).toInt().coerceIn(0, count - 1)
+        val start = index * frameBytes
+        return rgba.copyOfRange(start, start + frameBytes)
+    }
 }

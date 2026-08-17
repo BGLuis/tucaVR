@@ -675,6 +675,18 @@ class VRActivity : NativeActivity() {
         maxHeight: Int
     ): ByteArray?
 
+    // Interrompe uma geracao de tira em andamento (as duas funcoes acima sao
+    // bloqueantes/sincronas do lado Rust — cancelar a Job do Kotlin nao as
+    // interrompe). Ver VRControlsPresentation.stopScrubPreview().
+    external fun nativeCancelScrubStrip()
+
+    // Preview de arrasto renderizado direto sobre o quad do video (T-seek-ux)
+    // em modos planos (2D/SBS/OU) — ver VRControlsPresentation.updateScrubPreview.
+    // Nao coberto: 360/180 (esfera, sem quad pra sobrepor); nesses modos o
+    // painel pequeno de sempre (scrubPreview ImageView) continua sendo usado.
+    external fun nativeUpdateScrubOverlay(rgba: ByteArray, width: Int, height: Int)
+    external fun nativeSetScrubOverlayVisible(visible: Boolean)
+
     // Bug de auto-hide durante digitacao (ver showNativeKeyboardFor/
     // hideNativeKeyboard abaixo, e KEYBOARD_ACTIVE em rust/bridge/src/lib.rs):
     // avisa o render loop C++ pra suprimir o fade-out do painel enquanto o

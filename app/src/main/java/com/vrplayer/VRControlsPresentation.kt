@@ -27,6 +27,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.nio.ByteBuffer
 
 class VRControlsPresentation(
     outerContext: Context,
@@ -64,6 +65,10 @@ class VRControlsPresentation(
     // (dezenas de ms) — sem isto, arrastar rapido enfileiraria um decode
     // por pixel de movimento, cada um mais atrasado que o anterior.
     private var localScrubJob: Job? = null
+    // Job.cancel() nao interrompe a chamada JNI bloqueante em andamento (ver
+    // stopScrubPreview) — guardada so pra evitar reatribuir networkScrubStrip
+    // depois que o usuario ja soltou o dedo.
+    private var networkScrubJob: Job? = null
 
     // T1.4/T2.4/T2.5: indices DEVEM casar com ScreenMode em
     // native/src/vr_player_app.cpp e a codificacao numerica em
@@ -85,6 +90,18 @@ class VRControlsPresentation(
     private fun modeLabel(mode: Int): String {
         val resId = modeLabelResIds.getOrElse(mode) { R.string.player_mode_2d }
         return context.getString(R.string.player_btn_3d_mode_format, context.getString(resId))
+    }
+
+    // Indices 5-9 de modeLabelResIds acima (360/180 e variantes estereo) usam
+    // esfera, nao quad — o overlay de preview sobre o video (nativeUpdateScrubOverlay)
+    // so cobre modo plano (ver comentario em VRActivity.nativeUpdateScrubOverlay).
+    private fun isSphereMode(mode: Int) = mode >= 5
+
+    // Resolucao pedida pro decode escalado de scrub local (ver updateScrubPreview) —
+    // rapido o bastante pra acompanhar arrastos continuos, ainda reconhecivel.
+    private companion object {
+        const val LOCAL_SCRUB_WIDTH = 320
+        const val LOCAL_SCRUB_HEIGHT = 180
     }
 
     private var lastKnownMode = 0
@@ -145,9 +162,10 @@ class VRControlsPresentation(
      * limitacao de geracao de thumbnail — ver NetworkThumbnailGenerator).
      */
     private fun startScrubPreview() {
+        activity.nativeSetScrubOverlayVisible(true)
         when (val source = activity.currentPlaybackSource) {
             is PlaybackSource.Smb, is PlaybackSource.Sftp -> {
-                scrubScope.launch {
+                networkScrubJob = scrubScope.launch {
                     networkScrubStrip = NetworkThumbnailGenerator.getScrubStrip(context, activity, source)
                 }
             }
@@ -161,17 +179,30 @@ class VRControlsPresentation(
     }
 
     /**
-     * Atualiza a imagem de preview pra `positionSeconds`. Rede: so leitura
-     * de memoria (recorta um frame ja decodificado, sem I/O) — roda direto
-     * na UI thread. Local: `getFrameAtTime` e uma decodificacao sincrona
-     * (dezenas de ms), roda em `Dispatchers.IO`; `localScrubJob` garante
-     * que so a ULTIMA posicao pedida importa (arrastar rapido nao enfileira
-     * um decode atrasado atras do outro).
+     * Atualiza o preview pra `positionSeconds`. Em modo plano (2D/SBS/OU),
+     * empurra o frame direto pro overlay sobre o quad do video em vez do
+     * painel pequeno (ver isSphereMode/nativeUpdateScrubOverlay); em 360/180
+     * (esfera, sem quad pra sobrepor) mantem o painel de sempre. Rede: so
+     * leitura de memoria (recorta um frame ja decodificado, sem I/O) — roda
+     * direto na UI thread. Local: `getFrameAtTime` e uma decodificacao
+     * sincrona (dezenas de ms), roda em `Dispatchers.IO`; `localScrubJob`
+     * garante que so a ULTIMA posicao pedida importa (arrastar rapido nao
+     * enfileira um decode atrasado atras do outro).
      */
     private fun updateScrubPreview(positionSeconds: Float) {
-        networkScrubStrip?.bitmapAt(positionSeconds)?.let { bitmap ->
-            scrubPreview.visibility = View.VISIBLE
-            scrubPreview.setImageBitmap(bitmap)
+        android.util.Log.i("VRPlayer_Scrub", "updateScrubPreview: pos=$positionSeconds networkScrubStrip=${networkScrubStrip != null} localScrubRetriever=${localScrubRetriever != null} mode=$lastKnownMode")
+        networkScrubStrip?.let { strip ->
+            if (isSphereMode(lastKnownMode)) {
+                strip.bitmapAt(positionSeconds)?.let { bitmap ->
+                    scrubPreview.visibility = View.VISIBLE
+                    scrubPreview.setImageBitmap(bitmap)
+                }
+            } else {
+                scrubPreview.visibility = View.GONE
+                strip.rgbaAt(positionSeconds)?.let { rgba ->
+                    activity.nativeUpdateScrubOverlay(rgba, strip.frameWidth, strip.frameHeight)
+                }
+            }
             return
         }
         val retriever = localScrubRetriever ?: return
@@ -179,20 +210,57 @@ class VRControlsPresentation(
         localScrubJob = scrubScope.launch {
             val bitmap = withContext(Dispatchers.IO) {
                 runCatching {
-                    retriever.getFrameAtTime((positionSeconds * 1_000_000).toLong(), MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    val timeUs = (positionSeconds * 1_000_000).toLong()
+                    // getScaledFrameAtTime decodifica ja na resolucao pedida (o
+                    // decoder pula trabalho, nao e um resize depois) — em 4K,
+                    // decodificar o frame inteiro pra descartar a resolucao levava
+                    // tempo suficiente (dezenas a centenas de ms) pra o preview
+                    // ficar sempre atrasado dezenas de posicoes atras do arrasto
+                    // real. API 27+; abaixo disso (nunca deve rodar no Quest) cai
+                    // pro caminho antigo sem downscale.
+                    if (android.os.Build.VERSION.SDK_INT >= 27) {
+                        retriever.getScaledFrameAtTime(
+                            timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, LOCAL_SCRUB_WIDTH, LOCAL_SCRUB_HEIGHT
+                        )
+                    } else {
+                        retriever.getFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    }
                 }.getOrNull()
             }
-            if (bitmap != null) {
+            if (bitmap == null) return@launch
+            if (isSphereMode(lastKnownMode)) {
                 scrubPreview.visibility = View.VISIBLE
                 scrubPreview.setImageBitmap(bitmap)
+            } else {
+                scrubPreview.visibility = View.GONE
+                // getFrameAtTime nao garante o Config do Bitmap (pode vir RGB_565,
+                // 2 bytes/pixel, em vez de ARGB_8888) — o overlay nativo espera
+                // sempre RGBA8 (4 bytes/pixel), senao o upload e rejeitado por
+                // tamanho incompativel.
+                val argbBitmap = if (bitmap.config == Bitmap.Config.ARGB_8888) {
+                    bitmap
+                } else {
+                    bitmap.copy(Bitmap.Config.ARGB_8888, false)
+                }
+                val buffer = ByteBuffer.allocate(argbBitmap.byteCount)
+                argbBitmap.copyPixelsToBuffer(buffer)
+                activity.nativeUpdateScrubOverlay(buffer.array(), argbBitmap.width, argbBitmap.height)
             }
         }
     }
 
     private fun stopScrubPreview() {
+        activity.nativeSetScrubOverlayVisible(false)
         scrubPreview.visibility = View.GONE
         localScrubJob?.cancel()
         localScrubJob = null
+        networkScrubJob?.cancel()
+        networkScrubJob = null
+        // Job.cancel() acima nao interrompe a chamada JNI bloqueante ja em
+        // andamento (getScrubStrip -> nativeS*GenerateThumbnailStrip) — sem
+        // isto, ela continua rodando e competindo por banda/decoder com o
+        // playback principal por ate minutos num arquivo grande.
+        activity.nativeCancelScrubStrip()
         networkScrubStrip = null
         localScrubRetriever?.release()
         localScrubRetriever = null
@@ -273,6 +341,7 @@ class VRControlsPresentation(
             progress = 0
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(p0: SeekBar?, progress: Int, fromUser: Boolean) {
+                    android.util.Log.i("VRPlayer_Scrub", "onProgressChanged: progress=$progress fromUser=$fromUser totalDuration=$totalDuration")
                     if (fromUser && totalDuration > 0) {
                         updateScrubPreview((progress / 100f) * totalDuration)
                     }

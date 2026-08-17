@@ -136,6 +136,9 @@ extern "C" {
                                                    uint32_t* out_width, uint32_t* out_height,
                                                    size_t* out_count, size_t* out_len);
     extern void free_rust_thumbnail_strip(uint8_t* ptr, size_t len);
+    // Interrompe uma geracao de tira em andamento — ver comentario em
+    // rust/bridge/src/lib.rs::cancel_thumbnail_strip_generation.
+    extern void cancel_thumbnail_strip_generation();
 
     // T1.4/T1.5/T2: modo de exibicao 3D (2D/SBS/OU/360/180) e swap-eyes —
     // estado de apresentacao puro, vive como atomics no bridge Rust (ver
@@ -158,6 +161,42 @@ extern "C" {
 static std::atomic<bool> g_captureRequested{false};
 static std::string g_capturePath;
 static std::mutex g_capturePathMutex;
+
+// Preview de arrasto no seekbar renderizado direto sobre o quad do video (T-seek-ux):
+// Kotlin empurra bytes RGBA crus aqui (thread do painel de UI), o loop de render em
+// VRPlayerApp::Render() consome no proprio frame e faz o upload GL (so a thread dona
+// do contexto GL pode tocar GL). Mesmo padrao de g_captureRequested acima.
+static std::atomic<bool> g_scrubOverlayDirty{false};
+static std::atomic<bool> g_scrubOverlayVisible{false};
+static std::vector<uint8_t> g_scrubOverlayRgba;
+static uint32_t g_scrubOverlayWidth = 0;
+static uint32_t g_scrubOverlayHeight = 0;
+static std::mutex g_scrubOverlayMutex;
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeUpdateScrubOverlay(JNIEnv* env, jobject thiz, jbyteArray rgba, jint width, jint height) {
+    jsize len = env->GetArrayLength(rgba);
+    std::vector<uint8_t> buf(static_cast<size_t>(len));
+    env->GetByteArrayRegion(rgba, 0, len, reinterpret_cast<jbyte*>(buf.data()));
+    {
+        std::lock_guard<std::mutex> lock(g_scrubOverlayMutex);
+        g_scrubOverlayRgba = std::move(buf);
+        g_scrubOverlayWidth = static_cast<uint32_t>(width);
+        g_scrubOverlayHeight = static_cast<uint32_t>(height);
+    }
+    g_scrubOverlayDirty = true;
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        LOGI("nativeUpdateScrubOverlay: primeira chamada, %dx%d, %d bytes", width, height, (int)len);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeSetScrubOverlayVisible(JNIEnv* env, jobject thiz, jboolean visible) {
+    g_scrubOverlayVisible = (visible == JNI_TRUE);
+    LOGI("nativeSetScrubOverlayVisible: %d", (int)(visible == JNI_TRUE));
+}
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_vrplayer_VRActivity_nativeRequestFrameCapture(JNIEnv* env, jobject thiz, jstring path) {
@@ -584,6 +623,13 @@ Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnailStrip(JNIEnv* env, jobje
     return RustThumbnailStripToJByteArrayAndFree(env, data, outLen);
 }
 
+// Interrompe uma geracao de tira de scrub ja em andamento (chamadas acima sao
+// sincronas/bloqueantes — um Job.cancel() do lado Kotlin nao as interrompe).
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeCancelScrubStrip(JNIEnv* env, jobject thiz) {
+    cancel_thumbnail_strip_generation();
+}
+
 // T7.1: probe HEAD-based de uma URL HTTP(S) (Accept-Ranges/tamanho) antes de
 // tocar, para a UI poder avisar se seek nao vai funcionar. Mesma ressalva de
 // bloqueio.
@@ -896,6 +942,40 @@ public:
 
         m_surfaceRender.Init();
         m_beamRenderer.Init(256, true);
+
+        // ------------------ INITIALIZE SCRUB OVERLAY QUAD (preview de arrasto) ------------------
+        // sampler2D comum, nao samplerExternalOES: os bytes chegam crus do
+        // Kotlin (ver g_scrubOverlay* acima), sem extensao OES nem alpha
+        // (sempre opaco quando desenhado).
+        const char* scrubOverlayVertexShader = R"(
+            in vec3 Position;
+            in vec2 TexCoord;
+            out vec2 vTexCoord;
+            void main() {
+                gl_Position = TransformVertex(vec4(Position, 1.0));
+                vTexCoord = TexCoord;
+            }
+        )";
+        const char* scrubOverlayFragmentShader = R"(
+            in vec2 vTexCoord;
+            out vec4 FragColor;
+            uniform sampler2D sTexture;
+            void main() {
+                FragColor = texture(sTexture, vTexCoord);
+            }
+        )";
+        OVRFW::ovrProgramParm scrubOverlayParms[] = {
+            {"sTexture", OVRFW::ovrProgramParmType::TEXTURE_SAMPLED},
+        };
+        m_scrubOverlayProgram = OVRFW::GlProgram::Build("", scrubOverlayVertexShader, "", scrubOverlayFragmentShader, scrubOverlayParms, 1);
+        m_scrubOverlaySurfaceDef.geo = OVRFW::BuildTesselatedQuad(2, 2, false);
+        m_scrubOverlaySurfaceDef.graphicsCommand.Textures[0].target = GL_TEXTURE_2D;
+        m_scrubOverlaySurfaceDef.graphicsCommand.Program = m_scrubOverlayProgram;
+        m_scrubOverlaySurfaceDef.graphicsCommand.BindUniformTextures();
+        // Mesma posicao/escala exata do quad de video (ver Render()) — sem
+        // depth test, senao coincide em Z com o quad de video e da z-fighting.
+        m_scrubOverlaySurfaceDef.graphicsCommand.GpuState.depthEnable = false;
+        m_scrubOverlaySurfaceDef.graphicsCommand.GpuState.depthMaskEnable = false;
 
         // ------------------ INITIALIZE STEREO FLAT QUAD (T1.1/T1.2/T1.5) ------------------
         // Programa SEPARADO de m_program (que continua servindo o quad 2D/
@@ -1955,6 +2035,46 @@ public:
     }
 
     virtual void Render(const OVRFW::ovrApplFrameIn& in, OVRFW::ovrRendererOutput& out) override {
+        // --- PROCESS SCRUB OVERLAY TEXTURE UPDATE ---
+        // So a thread dona do contexto GL (esta) pode chamar glTexImage2D —
+        // ver g_scrubOverlay* e nativeUpdateScrubOverlay acima.
+        if (g_scrubOverlayDirty.exchange(false)) {
+            std::vector<uint8_t> rgba;
+            uint32_t w = 0, h = 0;
+            {
+                std::lock_guard<std::mutex> lock(g_scrubOverlayMutex);
+                rgba = g_scrubOverlayRgba;
+                w = g_scrubOverlayWidth;
+                h = g_scrubOverlayHeight;
+            }
+            if (!rgba.empty() && w > 0 && h > 0 && rgba.size() >= static_cast<size_t>(w) * h * 4) {
+                if (m_scrubOverlayTextureId == 0) {
+                    glGenTextures(1, &m_scrubOverlayTextureId);
+                    glBindTexture(GL_TEXTURE_2D, m_scrubOverlayTextureId);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                } else {
+                    glBindTexture(GL_TEXTURE_2D, m_scrubOverlayTextureId);
+                }
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, static_cast<GLsizei>(w), static_cast<GLsizei>(h), 0,
+                             GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+                glBindTexture(GL_TEXTURE_2D, 0);
+                static bool loggedUpload = false;
+                if (!loggedUpload) {
+                    loggedUpload = true;
+                    LOGI("scrub overlay: textura criada/atualizada %ux%u, id=%u", w, h, m_scrubOverlayTextureId);
+                }
+            } else {
+                static bool loggedRejected = false;
+                if (!loggedRejected) {
+                    loggedRejected = true;
+                    LOGI("scrub overlay: upload rejeitado, w=%u h=%u rgba.size=%zu", w, h, rgba.size());
+                }
+            }
+        }
+
         // --- PROCESS UI TEXTURE UPDATE ---
         if (m_uiImageReader) {
             AImage* image = nullptr;
@@ -2037,6 +2157,13 @@ public:
         // desenhado por frame, escolhido pelo ScreenMode atual.
         bool sphereActive = IsSphereMode(m_screenMode);
         bool flatStereoActive = IsFlatStereoMode(m_screenMode);
+        if (g_scrubOverlayVisible.load()) {
+            static int scrubDebugFrameCount = 0;
+            if ((scrubDebugFrameCount++ % 30) == 0) {
+                LOGI("scrub overlay debug: mode=%d sphereActive=%d textureId=%u screenScale=(%.2f,%.2f)",
+                     (int)m_screenMode, (int)sphereActive, m_scrubOverlayTextureId, m_screenScale.x, m_screenScale.y);
+            }
+        }
         if (sphereActive) {
             // T2.4/T2.5: m_sphereProgram agora sabe recortar por olho
             // (uStereoLayout/uSwapEyes, setados em UpdateScreenModeUniforms)
@@ -2057,6 +2184,11 @@ public:
             OVR::Matrix4f transform = OVR::Matrix4f::Translation(worldScreenPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) *
                 OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
             out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_stereoFlatSurfaceDef));
+            if (m_scrubOverlayTextureId != 0 && g_scrubOverlayVisible.load()) {
+                m_scrubOverlaySurfaceDef.graphicsCommand.Textures[0].texture = m_scrubOverlayTextureId;
+                m_scrubOverlaySurfaceDef.graphicsCommand.BindUniformTextures();
+                out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_scrubOverlaySurfaceDef));
+            }
         } else {
             // Flat2D: quad mono normal, posicao/escala ajustaveis pelo
             // usuario via thumbstick (T3.6).
@@ -2064,6 +2196,13 @@ public:
             OVR::Matrix4f transform = OVR::Matrix4f::Translation(worldScreenPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) *
                 OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
             out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_surfaceDef));
+            // Preview de arrasto (T-seek-ux): mesmo transform do quad de
+            // video, so no modo plano (sphereActive ja exclui 360/180 acima).
+            if (m_scrubOverlayTextureId != 0 && g_scrubOverlayVisible.load()) {
+                m_scrubOverlaySurfaceDef.graphicsCommand.Textures[0].texture = m_scrubOverlayTextureId;
+                m_scrubOverlaySurfaceDef.graphicsCommand.BindUniformTextures();
+                out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_scrubOverlaySurfaceDef));
+            }
         }
 
         // Painel do File Browser: billboard + fade in/out por auto-hide (T4.3/T4.5).
@@ -2123,6 +2262,12 @@ public:
         OVRFW::GlProgram::Free(m_stereoFlatProgram);
         m_sphereSurfaceDef.geo.Free();
         OVRFW::GlProgram::Free(m_sphereProgram);
+        m_scrubOverlaySurfaceDef.geo.Free();
+        OVRFW::GlProgram::Free(m_scrubOverlayProgram);
+        if (m_scrubOverlayTextureId != 0) {
+            glDeleteTextures(1, &m_scrubOverlayTextureId);
+            m_scrubOverlayTextureId = 0;
+        }
         // m_feedbackSurfaceDef.geo e so uma COPIA de um destes handles —
         // liberar os dois seria double free das mesmas VBO/VAO.
         for (uint32_t kind = 1; kind < vrplayer::kFeedbackKindCount; kind++) {
@@ -2302,7 +2447,14 @@ private:
     OVRFW::GlProgram m_program;
     OVRFW::ovrSurfaceDef m_surfaceDef;
     OVRFW::ovrSurfaceRender m_surfaceRender;
-    
+
+    // Preview de arrasto sobre o quad do video (ver g_scrubOverlay* acima) —
+    // textura 2D comum (nao EGLImage/EXTERNAL_OES: os bytes vem crus do
+    // Kotlin via JNI, nao de um AHardwareBuffer/Surface).
+    GLuint m_scrubOverlayTextureId = 0;
+    OVRFW::GlProgram m_scrubOverlayProgram;
+    OVRFW::ovrSurfaceDef m_scrubOverlaySurfaceDef;
+
     // UI System
     AImageReader* m_uiImageReader;
     GLuint m_uiTextureId;

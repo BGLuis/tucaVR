@@ -2,8 +2,19 @@ use ndk::media::media_codec::{MediaCodec, MediaCodecDirection, DequeuedInputBuff
 use ndk::media::media_format::MediaFormat;
 use ndk::native_window::NativeWindow;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+// Coordena a JANELA de criacao/configuracao/start de sessoes MediaCodec entre
+// a decodificacao principal (playback.rs) e a geracao de tira de scrub em
+// background (thumbnail.rs) — achado real em hardware (Quest 3, ver
+// bridge/src/lib.rs::playback_is_active): duas sessoes MediaCodec sendo
+// CRIADAS/INICIADAS ao mesmo tempo derrubam o driver de video. So serializa
+// o setup, nao a decodificacao: uma vez que ambas as sessoes ja estao
+// rodando (start() retornou), decode_packet() de cada uma prossegue livre,
+// concorrente. Hipotese ainda nao validada em hardware — ver comentario em
+// new_configured_and_started.
+static SESSION_SETUP_LOCK: Mutex<()> = Mutex::new(());
 
 /// Mime do MediaCodec de hardware + se o stream usa framing NAL (avcC/hvcC,
 /// precisa converter pra Annex-B antes de decodificar) pro `codec_id` do
@@ -54,6 +65,22 @@ impl HwDecoder {
     /// ritmo certo quando o gargalo esta a montante (rede/demux).
     pub fn metrics(&self) -> (Arc<AtomicU64>, Arc<AtomicU64>) {
         (self.frames_output.clone(), self.frames_dropped.clone())
+    }
+
+    /// new()+configure()+start() atomicamente sob SESSION_SETUP_LOCK — ver
+    /// comentario no lock acima. Usar isto em vez de chamar os tres
+    /// separadamente sempre que a chamada puder acontecer concorrente com
+    /// outra sessao MediaCodec (decode principal vs scrub em background).
+    pub fn new_configured_and_started(
+        mime: &str,
+        format: &MediaFormat,
+        window: Option<&NativeWindow>,
+    ) -> Result<Self, String> {
+        let _guard = SESSION_SETUP_LOCK.lock().unwrap();
+        let mut decoder = Self::new(mime)?;
+        decoder.configure(format, window)?;
+        decoder.start()?;
+        Ok(decoder)
     }
 
     pub fn configure(&mut self, format: &MediaFormat, window: Option<&NativeWindow>) -> Result<(), String> {

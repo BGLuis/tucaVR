@@ -33,10 +33,12 @@
 #include <math.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -94,6 +96,20 @@ extern "C" {
     // sequencia nos 32 bits altos, FeedbackKind nos 32 baixos.
     extern uint64_t get_playback_feedback_event();
 }
+
+// Preview de arrasto no seekbar renderizado sobre o quad do video
+// (T-seek-ux) — escrito por nativeUpdateScrubOverlay/nativeSetScrubOverlayVisible
+// em vr_player_jni_vulkan.cpp (arquivo separado do render loop aqui neste
+// build Vulkan, ao contrario do caminho GLES onde JNI e render loop vivem no
+// mesmo arquivo), lido a cada frame por VRPlayerApp abaixo. Definido FORA do
+// namespace anonimo logo abaixo (que da linkage interna a tudo dentro dele)
+// de proposito, pra ter linkage externa e cruzar a fronteira de translation unit.
+std::atomic<bool> g_scrubOverlayDirty{false};
+std::atomic<bool> g_scrubOverlayVisible{false};
+std::vector<uint8_t> g_scrubOverlayRgba;
+uint32_t g_scrubOverlayWidth = 0;
+uint32_t g_scrubOverlayHeight = 0;
+std::mutex g_scrubOverlayMutex;
 
 namespace {
 
@@ -341,6 +357,21 @@ struct AppState {
     VkDescriptorSet controlsDescriptorSet = VK_NULL_HANDLE;
     float controlsAlpha = 1.0f;
     bool controlsHasFrame = false;
+
+    // Preview de arrasto sobre o quad do video (T-seek-ux): reaproveita
+    // uiPipeline/uiPipelineLayout/uiSampler (RGBA8 comum, sem YCbCr) — so
+    // precisa da propria VkImage (tamanho variavel, recriada se mudar) e um
+    // descriptor pool proprio (o de UI ja esta cheio com os 2 paineis
+    // acima). Bytes crus chegam via nativeUpdateScrubOverlay em
+    // vr_player_jni_vulkan.cpp (ver g_scrubOverlay* la).
+    VkDescriptorPool scrubOverlayDescriptorPool = VK_NULL_HANDLE;
+    VkImage scrubOverlayImage = VK_NULL_HANDLE;
+    VkDeviceMemory scrubOverlayImageMemory = VK_NULL_HANDLE;
+    VkImageView scrubOverlayImageView = VK_NULL_HANDLE;
+    VkDescriptorSet scrubOverlayDescriptorSet = VK_NULL_HANDLE;
+    uint32_t scrubOverlayTexWidth = 0;
+    uint32_t scrubOverlayTexHeight = 0;
+    bool scrubOverlayReady = false;
 
     // OpenXR Actions
     XrActionSet actionSet = XR_NULL_HANDLE;
@@ -1503,6 +1534,144 @@ static void UpdateUiImageFromHwb(AppState& state, AHardwareBuffer* hwb, VkImage 
     vkFreeCommandBuffers(state.vkDevice, state.vkCommandPool, 1, &cmd);
     vkDestroyBuffer(state.vkDevice, stagingBuf, nullptr);
     vkFreeMemory(state.vkDevice, stagingMem, nullptr);
+}
+
+// Mesma logica de UpdateUiImageFromHwb, mas a fonte e um buffer de bytes RGBA
+// crus em memoria (nao um AHardwareBuffer) — usado pelo preview de arrasto
+// (ver g_scrubOverlay* acima). Sem stride/lock: o buffer chega do Kotlin via
+// JNI ja compacto (largura*4 bytes por linha).
+static void UpdateUiImageFromBytes(AppState& state, const uint8_t* data, uint32_t width, uint32_t height, VkImage dstImage) {
+    const VkDeviceSize bufSize = (VkDeviceSize)width * height * 4;
+    VkBuffer stagingBuf;
+    VkDeviceMemory stagingMem;
+
+    VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bufInfo.size  = bufSize;
+    bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    VKR(vkCreateBuffer(state.vkDevice, &bufInfo, nullptr, &stagingBuf));
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(state.vkDevice, stagingBuf, &memReqs);
+    VkPhysicalDeviceMemoryProperties memProps;
+    vkGetPhysicalDeviceMemoryProperties(state.vkPhysicalDevice, &memProps);
+    uint32_t memTypeIdx = UINT32_MAX;
+    const auto hostVisible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        if ((memReqs.memoryTypeBits & (1u << i)) &&
+            ((memProps.memoryTypes[i].propertyFlags & hostVisible) == hostVisible)) {
+            memTypeIdx = i; break;
+        }
+    }
+    VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocInfo.allocationSize  = memReqs.size;
+    allocInfo.memoryTypeIndex = memTypeIdx;
+    VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &stagingMem));
+    VKR(vkBindBufferMemory(state.vkDevice, stagingBuf, stagingMem, 0));
+
+    void* dst = nullptr;
+    VKR(vkMapMemory(state.vkDevice, stagingMem, 0, bufSize, 0, &dst));
+    memcpy(dst, data, (size_t)bufSize);
+    vkUnmapMemory(state.vkDevice, stagingMem);
+
+    VkCommandBufferAllocateInfo cbAlloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cbAlloc.commandPool        = state.vkCommandPool;
+    cbAlloc.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbAlloc.commandBufferCount = 1;
+    VkCommandBuffer cmd;
+    VKR(vkAllocateCommandBuffers(state.vkDevice, &cbAlloc, &cmd));
+
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VKR(vkBeginCommandBuffer(cmd, &beginInfo));
+
+    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.image = dstImage;
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyBufferToImage(cmd, stagingBuf, dstImage,
+        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VKR(vkEndCommandBuffer(cmd));
+    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
+    VKR(vkQueueWaitIdle(state.vkQueue));
+
+    vkFreeCommandBuffers(state.vkDevice, state.vkCommandPool, 1, &cmd);
+    vkDestroyBuffer(state.vkDevice, stagingBuf, nullptr);
+    vkFreeMemory(state.vkDevice, stagingMem, nullptr);
+}
+
+// Garante que a VkImage/descriptor set do preview de arrasto existem e tem o
+// tamanho pedido — recria a imagem (mas nao o pool/descriptor set, so
+// reescritos) se o tamanho mudou desde a ultima chamada (rede usa sempre
+// SCRUB_WIDTH/HEIGHT fixos, local pode variar com a resolucao do video).
+// Precisa de state.uiSampler/uiDescriptorSetLayout ja criados (CreateUiPipeline).
+static void EnsureScrubOverlayTexture(AppState& state, uint32_t width, uint32_t height) {
+    if (!state.scrubOverlayReady || state.scrubOverlayTexWidth != width || state.scrubOverlayTexHeight != height) {
+        if (state.scrubOverlayImageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(state.vkDevice, state.scrubOverlayImageView, nullptr);
+            state.scrubOverlayImageView = VK_NULL_HANDLE;
+        }
+        if (state.scrubOverlayImage != VK_NULL_HANDLE) {
+            vkDestroyImage(state.vkDevice, state.scrubOverlayImage, nullptr);
+            state.scrubOverlayImage = VK_NULL_HANDLE;
+        }
+        if (state.scrubOverlayImageMemory != VK_NULL_HANDLE) {
+            vkFreeMemory(state.vkDevice, state.scrubOverlayImageMemory, nullptr);
+            state.scrubOverlayImageMemory = VK_NULL_HANDLE;
+        }
+        CreateUiImage(state, width, height, state.scrubOverlayImage, state.scrubOverlayImageMemory, state.scrubOverlayImageView);
+        state.scrubOverlayTexWidth = width;
+        state.scrubOverlayTexHeight = height;
+        state.scrubOverlayReady = true;
+    }
+
+    if (state.scrubOverlayDescriptorPool == VK_NULL_HANDLE) {
+        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+        VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        poolInfo.maxSets       = 1;
+        poolInfo.poolSizeCount = 1;
+        poolInfo.pPoolSizes    = &poolSize;
+        VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.scrubOverlayDescriptorPool));
+
+        VkDescriptorSetAllocateInfo dsAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        dsAlloc.descriptorPool     = state.scrubOverlayDescriptorPool;
+        dsAlloc.descriptorSetCount = 1;
+        dsAlloc.pSetLayouts        = &state.uiDescriptorSetLayout;
+        VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.scrubOverlayDescriptorSet));
+    }
+
+    VkDescriptorImageInfo imgInfo{};
+    imgInfo.sampler     = state.uiSampler;
+    imgInfo.imageView   = state.scrubOverlayImageView;
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet          = state.scrubOverlayDescriptorSet;
+    write.dstBinding      = 0;
+    write.descriptorCount = 1;
+    write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo      = &imgInfo;
+    vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
 }
 
 // Cria o pipeline de UI (alpha blending, sampler normal, ui.vert/ui.frag).
@@ -2704,6 +2873,22 @@ void RecordAndSubmitVideo(
 
     vkCmdDraw(cmd, 4, 1, 0, 0);
 
+    // Preview de arrasto (T-seek-ux): mesmo transform do quad de video
+    // (Flat2D), reaproveitando o pipeline de UI (RGBA8 simples, sem YCbCr).
+    if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
+        VkDeviceSize ovOffset = 0;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &ovOffset);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            state.uiPipelineLayout, 0, 1, &state.scrubOverlayDescriptorSet, 0, nullptr);
+        UiPushConstants ovpc{};
+        ovpc.mvp = mvp;
+        ovpc.alpha = 1.0f;
+        vkCmdPushConstants(cmd, state.uiPipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
+        vkCmdDraw(cmd, 4, 1, 0, 0);
+    }
+
     DrawUiQuads(state, cmd, proj, view, headCenter);
 
     vkCmdEndRenderPass(cmd);
@@ -2975,6 +3160,43 @@ void RenderFrame(AppState& state) {
         const bool sphereMode = IsSphereMode(state.screenMode);
         const bool stereoFlat = IsFlatStereoMode(state.screenMode);
 
+        if (g_scrubOverlayVisible.load()) {
+            static int scrubDebugFrameCount = 0;
+            if ((scrubDebugFrameCount++ % 30) == 0) {
+                LOGI("scrub overlay debug: mode=%d sphereMode=%d ready=%d hasVideoFrame=%d",
+                     (int)state.screenMode, (int)sphereMode, (int)state.scrubOverlayReady,
+                     (int)(state.activeVideoFrame != nullptr));
+            }
+        }
+
+        // Preview de arrasto (T-seek-ff): processa upload pendente uma vez
+        // por frame (nao por olho) — ver g_scrubOverlay* acima.
+        if (g_scrubOverlayDirty.exchange(false)) {
+            std::vector<uint8_t> rgba;
+            uint32_t w = 0, h = 0;
+            {
+                std::lock_guard<std::mutex> lock(g_scrubOverlayMutex);
+                rgba = g_scrubOverlayRgba;
+                w = g_scrubOverlayWidth;
+                h = g_scrubOverlayHeight;
+            }
+            if (!rgba.empty() && w > 0 && h > 0 && rgba.size() >= (size_t)w * h * 4) {
+                EnsureScrubOverlayTexture(state, w, h);
+                UpdateUiImageFromBytes(state, rgba.data(), w, h, state.scrubOverlayImage);
+                static bool loggedUpload = false;
+                if (!loggedUpload) {
+                    loggedUpload = true;
+                    LOGI("scrub overlay: textura criada/atualizada %ux%u, ready=%d", w, h, (int)state.scrubOverlayReady);
+                }
+            } else {
+                static bool loggedRejected = false;
+                if (!loggedRejected) {
+                    loggedRejected = true;
+                    LOGI("scrub overlay: upload rejeitado, w=%u h=%u rgba.size=%zu", w, h, rgba.size());
+                }
+            }
+        }
+
         for (int eye = 0; eye < kEyeCount; eye++) {
             EyeSwapchain& eyeChain = state.eyes[eye];
 
@@ -3079,6 +3301,22 @@ void RenderFrame(AppState& state) {
                         VkDeviceSize offset = 0;
                         vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
                         vkCmdDraw(cmd, 4, 1, 0, 0);
+
+                        // Preview de arrasto (T-seek-ux): mesmo transform do quad de
+                        // video, reaproveitando o pipeline de UI (RGBA8 simples).
+                        if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
+                            VkDeviceSize ovOffset = 0;
+                            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
+                            vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &ovOffset);
+                            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                state.uiPipelineLayout, 0, 1, &state.scrubOverlayDescriptorSet, 0, nullptr);
+                            UiPushConstants ovpc{};
+                            ovpc.mvp = mvp;
+                            ovpc.alpha = 1.0f;
+                            vkCmdPushConstants(cmd, state.uiPipelineLayout,
+                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
+                            vkCmdDraw(cmd, 4, 1, 0, 0);
+                        }
                     }
 
                     DrawUiQuads(state, cmd, proj, view, headCenter);

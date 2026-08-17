@@ -183,6 +183,9 @@ pub struct PrefetchReader<S: RangeSource> {
     stats: Arc<PrefetchStats>,
     block_size: usize,
     seek_block_size: usize,
+    /// Quantos blocos especulativos seguidos ja foram pedidos desde o
+    /// ultimo miss nao-sequencial — ver `next_ramp_size`.
+    sequential_streak: u32,
     _source: PhantomData<S>,
 }
 
@@ -254,6 +257,7 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
             stats,
             block_size,
             seek_block_size,
+            sequential_streak: 0,
             _source: PhantomData,
         };
         // Dispara a busca do primeiro bloco ja na construcao: o primeiro
@@ -281,8 +285,24 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
     /// Dispara em background a busca do bloco iniciando em `offset`, se
     /// ainda fizer sentido (dentro do tamanho conhecido do arquivo). Nao
     /// bloqueia — o resultado chega por `result_rx` numa chamada futura.
+    /// Tamanho em rampa (ver `next_ramp_size`): o primeiro bloco especulativo
+    /// apos um seek nao pula direto pro `block_size` cheio — a leitura
+    /// sequencial confirmada uma vez ja e um sinal razoavel, mas ainda nao
+    /// forte o bastante pra pagar o bloco inteiro se o acesso for so um
+    /// pulo curto (ex.: keyframe seguinte de um GOP menor que o esperado).
     fn kick_prefetch(&mut self, offset: u64) {
-        self.kick_prefetch_sized(offset, self.block_size);
+        let size = self.next_ramp_size();
+        self.kick_prefetch_sized(offset, size);
+    }
+
+    fn next_ramp_size(&mut self) -> usize {
+        let size = if self.sequential_streak == 0 {
+            (self.seek_block_size * 4).min(self.block_size)
+        } else {
+            self.block_size
+        };
+        self.sequential_streak = self.sequential_streak.saturating_add(1);
+        size
     }
 
     fn kick_prefetch_sized(&mut self, offset: u64, size: usize) {
@@ -339,6 +359,7 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
                 self.stats.blocks_discarded.fetch_add(1, Ordering::Relaxed);
                 let _ = self.result_rx.recv();
             }
+            self.sequential_streak = 0;
             self.cmd_tx.send(Command::Fetch(pos, self.seek_block_size)).map_err(|_| worker_gone_err())?;
             let result = self.result_rx.recv().map_err(|_| worker_gone_err())?;
             self.install(result?);
@@ -712,6 +733,41 @@ mod tests {
         assert!(
             requested.contains(&full_block),
             "esperava a rampa voltar ao bloco cheio ({full_block}) apos leitura sequencial, fetches pedidos: {requested:?}"
+        );
+    }
+
+    #[test]
+    fn ramp_grows_in_three_steps_seek_then_medium_then_full() {
+        let full_block = 8 * 1024 * 1024;
+        let seek_block = 512 * 1024;
+        let medium_block = (seek_block * 4).min(full_block);
+        let data: Vec<u8> = (0..255u8).cycle().take(full_block * 4).collect();
+        let sizes = Arc::new(Mutex::new(Vec::new()));
+        let source = SizeTrackingSource { data: data.clone(), requested_sizes: sizes.clone() };
+        let mut reader = PrefetchReader::with_block_sizes(source, full_block, seek_block);
+
+        let jump_to = (full_block * 2) as u64;
+        reader.seek(SeekFrom::Start(jump_to)).unwrap();
+        // Fica dentro do bloco medio (nao cruza pro cheio): consumir o bloco
+        // cheio instalado dispararia mais um kick especulativo encadeado,
+        // o que tornaria a asserção de 3 passos exatos fragil.
+        let mut out = vec![0u8; seek_block + medium_block - 4096];
+        let mut done = 0;
+        while done < out.len() {
+            let chunk = 4096.min(out.len() - done);
+            reader.read_exact(&mut out[done..done + chunk]).unwrap();
+            done += chunk;
+        }
+        assert_eq!(out, data[jump_to as usize..jump_to as usize + out.len()]);
+
+        std::thread::sleep(Duration::from_millis(50));
+
+        let requested = sizes.lock().unwrap();
+        // `ends_with` (nao `==`): a construcao ja dispara um kick(0, seek_block)
+        // proprio antes do seek acontecer, que tambem aparece na lista.
+        assert!(
+            requested.ends_with(&[seek_block, medium_block, full_block]),
+            "esperava a rampa em 3 passos (seek -> medio -> cheio) no final, fetches pedidos: {requested:?}"
         );
     }
 }

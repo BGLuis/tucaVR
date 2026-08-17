@@ -1,10 +1,23 @@
 use ffmpeg_next as ffmpeg;
 use ffmpeg::format::Pixel;
 use ffmpeg::software::scaling::{context::Context as ScalingContext, flag::Flags};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::decoder::{HwDecoder, RawFrame};
 use crate::demuxer::{Demuxer, ReadPacketOutcome};
 use ndk::media::media_format::MediaFormat;
+
+// generate_strip()/generate_strip_hw() sao chamadas SINCRONAS e bloqueantes
+// que rodam por minutos num arquivo grande (uma decodificacao por posicao da
+// trilha inteira) — o cancelamento cooperativo do Kotlin (Job.cancel()) nao
+// interrompe uma chamada JNI ja em andamento, entao o cancelamento real
+// precisa ser um flag do lado Rust checado a cada posicao. Ver
+// `cancel_strip_generation`/`bridge::cancel_thumbnail_strip_generation`.
+static STRIP_CANCELLED: AtomicBool = AtomicBool::new(false);
+
+pub fn cancel_strip_generation() {
+    STRIP_CANCELLED.store(true, Ordering::Relaxed);
+}
 
 pub struct ThumbnailImage {
     /// Pixels RGBA8 empacotados, `width * height * 4` bytes, sem padding de
@@ -219,6 +232,7 @@ pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height
     if max_width == 0 || max_height == 0 || interval_secs <= 0.0 {
         return None;
     }
+    STRIP_CANCELLED.store(false, Ordering::Relaxed);
 
     ffmpeg::init().ok()?;
     let mut demuxer = Demuxer::new(path).ok()?;
@@ -244,6 +258,9 @@ pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height
     let frame_len = (max_width * max_height * 4) as usize;
     let mut rgba = vec![0u8; count * frame_len];
     for (i, chunk) in rgba.chunks_exact_mut(frame_len).enumerate() {
+        if STRIP_CANCELLED.load(Ordering::Relaxed) {
+            break;
+        }
         let target_secs = (i + 1) as f64 * interval_secs;
         let target_us = (target_secs * 1_000_000.0) as i64;
         if demuxer.input_context.seek(target_us, ..target_us).is_err() {
@@ -261,6 +278,15 @@ pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height
         // Mitigacao de pico de memoria (nao tuning de performance): da espaco pra
         // reproducao de verdade antes do proximo decode caro de software.
         std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+
+    // Cancelada antes de terminar (usuario soltou o arrasto) — nao devolve um
+    // resultado parcial (quase todo preto): o lado Kotlin cacheia (memoria e
+    // disco) qualquer retorno nao-nulo daqui pra sempre, entao um parcial
+    // cacheado ficaria preso mostrando o mesmo preview quebrado pro resto da
+    // sessao. Devolver None deixa o PROXIMO arrasto tentar de novo do zero.
+    if STRIP_CANCELLED.load(Ordering::Relaxed) {
+        return None;
     }
 
     Some(ThumbnailStrip { rgba, count, width: max_width, height: max_height })
@@ -281,6 +307,7 @@ pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height
 /// exercitado aqui, e o custo de recriar (dezenas de ms por posicao, mais
 /// caro que flush) e aceitavel pra uma trilha gerada em background.
 fn generate_strip_hw(path: &str, interval_secs: f64, max_width: u32, max_height: u32) -> Option<ThumbnailStrip> {
+    STRIP_CANCELLED.store(false, Ordering::Relaxed);
     let mut demuxer = Demuxer::new(path).ok()?;
     let video_stream_index = demuxer.video_stream_index?;
     let stream = demuxer.input_context.stream(video_stream_index)?;
@@ -315,28 +342,26 @@ fn generate_strip_hw(path: &str, interval_secs: f64, max_width: u32, max_height:
     let mut ok_count = 0usize;
 
     for (i, chunk) in rgba.chunks_exact_mut(frame_len).enumerate() {
+        if STRIP_CANCELLED.load(Ordering::Relaxed) {
+            break;
+        }
         let target_secs = (i + 1) as f64 * interval_secs;
         let target_us = (target_secs * 1_000_000.0) as i64;
         if demuxer.input_context.seek(target_us, ..target_us).is_err() {
             continue;
         }
 
-        let Ok(mut video_decoder) = HwDecoder::new(mime) else {
-            log_thumb_once("generate_strip_hw: HwDecoder::new falhou");
-            continue;
-        };
         let mut format = MediaFormat::new();
         format.set_str("mime", mime);
         format.set_i32("width", src_width as i32);
         format.set_i32("height", src_height as i32);
-        if video_decoder.configure(&format, None).is_err() {
-            log_thumb_once("generate_strip_hw: configure(window=None) falhou");
-            continue;
-        }
-        if video_decoder.start().is_err() {
-            log_thumb_once("generate_strip_hw: start() falhou");
-            continue;
-        }
+        let mut video_decoder = match HwDecoder::new_configured_and_started(mime, &format, None) {
+            Ok(d) => d,
+            Err(e) => {
+                log_thumb_once(&format!("generate_strip_hw: setup falhou: {e}"));
+                continue;
+            }
+        };
         if let Some(sps) = &sps_pps {
             let _ = video_decoder.decode_packet(sps, 0, 2, |_| true, || {}, || true);
         }
@@ -358,10 +383,18 @@ fn generate_strip_hw(path: &str, interval_secs: f64, max_width: u32, max_height:
         let _ = video_decoder.stop();
     }
 
+    let cancelled = STRIP_CANCELLED.load(Ordering::Relaxed);
     unsafe {
         let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-        let msg = std::ffi::CString::new(format!("generate_strip_hw: {ok_count}/{count} posicoes com sucesso")).unwrap();
+        let msg = std::ffi::CString::new(format!(
+            "generate_strip_hw: {ok_count}/{count} posicoes com sucesso{}",
+            if cancelled { " (cancelada, nao sera cacheada)" } else { "" }
+        )).unwrap();
         ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
+    }
+    // Ver comentario equivalente em generate_strip acima: nao cachear parcial.
+    if cancelled {
+        return None;
     }
 
     Some(ThumbnailStrip { rgba, count, width: max_width, height: max_height })
