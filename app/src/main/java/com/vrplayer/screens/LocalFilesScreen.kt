@@ -62,7 +62,7 @@ class LocalFilesScreen(
                 context,
                 title = context.getString(R.string.browser_title_local_files),
                 subtitle = dirNavigator.currentPath.absolutePath,
-                onBack = { handleBack() }
+                onBack = { onBack() }
             )
         )
 
@@ -76,7 +76,7 @@ class LocalFilesScreen(
         val fileAdapter = FileAdapter(
             context = context,
             scope = scope,
-            onUpClick = { handleBack() },
+            onUpClick = { onBack() },
             onDirectoryClick = { dir ->
                 dirNavigator.enter(dir)
                 renderLocalFiles()
@@ -110,13 +110,13 @@ class LocalFilesScreen(
      * Sobe um nível no diretório sem sair da tela; quando na raiz, delega
      * para [onBack] que volta ao Home via AppNavigator.
      */
-    fun handleBack() {
+    fun handleBack(): Boolean {
         if (dirNavigator.canGoBack()) {
             dirNavigator.goBack()
             renderLocalFiles()
-        } else {
-            onBack()
+            return true
         }
+        return false
     }
 
     // ---- Detalhe de arquivo local ----

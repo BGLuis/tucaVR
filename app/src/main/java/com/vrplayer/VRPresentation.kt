@@ -288,12 +288,23 @@ class VRPresentation(
      * Quando já na raiz, o AppNavigator faz o pop e [render] re-renderiza.
      */
     private fun handleBack() {
-        when (val current = appNav.current) {
-            is Destination.LocalFiles       -> localFilesScreen.handleBack()
-            is Destination.NetworkFiles     -> networkSmbScreen.handleBack(current.server)
-            is Destination.NetworkFtpFiles  -> networkFtpScreen.handleBack(current.server)
-            is Destination.NetworkSftpFiles -> networkSftpScreen.handleBack(current.server)
-            else -> if (appNav.back()) render()
+        val current = appNav.current
+        val handled = when {
+            current is Destination.LocalFiles       -> localFilesScreen.handleBack()
+            current is Destination.NetworkFiles     -> networkSmbScreen.handleBack(current.server)
+            current is Destination.NetworkFtpFiles  -> networkFtpScreen.handleBack(current.server)
+            current is Destination.NetworkSftpFiles -> networkSftpScreen.handleBack(current.server)
+            current is Destination.NetworkHome      -> {
+                appNav.navigateTo(Destination.Home)
+                render()
+                true
+            }
+            else -> false
+        }
+        if (!handled) {
+            if (appNav.back()) {
+                render()
+            }
         }
     }
 }

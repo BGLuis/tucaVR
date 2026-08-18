@@ -274,7 +274,7 @@ class NetworkSftpScreen(
                 context,
                 title    = server.name,
                 subtitle = "/$browsePath",
-                onBack   = { handleBack(server) }
+                onBack = { onBack() }
             )
         )
 
@@ -288,13 +288,13 @@ class NetworkSftpScreen(
         loadDirectory(server, entriesContainer)
     }
 
-    fun handleBack(server: SftpServer) {
+    fun handleBack(server: SftpServer): Boolean {
         if (browsePath.isNotEmpty()) {
             browsePath = browsePath.substringBeforeLast('/', missingDelimiterValue = "")
             renderFiles(server)
-        } else {
-            onBack()
+            return true
         }
+        return false
     }
 
     private fun loadDirectory(server: SftpServer, entriesContainer: LinearLayout) {

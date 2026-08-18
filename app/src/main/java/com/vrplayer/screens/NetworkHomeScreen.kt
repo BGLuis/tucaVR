@@ -53,9 +53,9 @@ class NetworkHomeScreen(
 
     fun render() {
         val root = VoidPanelChrome.newRoot(context)
-        // Voltar do painel principal de rede vai para o Home, simulando o appNav.backToHome() do original.
+        // Voltar do painel principal de rede vai para o Home, via orquestrador
         root.addView(
-            VoidPanelChrome.buildHeader(context, title = context.getString(R.string.network_title), onBack = { onNavigate(Destination.Home) })
+            VoidPanelChrome.buildHeader(context, title = context.getString(R.string.network_title), onBack = { onBack() })
         )
 
         val pageContainer = FrameLayout(context).apply {

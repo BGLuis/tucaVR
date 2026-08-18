@@ -231,7 +231,7 @@ class NetworkFtpScreen(
                 context,
                 title    = server.name,
                 subtitle = "/$browsePath",
-                onBack   = { handleBack(server) }
+                onBack = { onBack() }
             )
         )
 
@@ -245,13 +245,13 @@ class NetworkFtpScreen(
         loadDirectory(server, entriesContainer)
     }
 
-    fun handleBack(server: FtpServer) {
+    fun handleBack(server: FtpServer): Boolean {
         if (browsePath.isNotEmpty()) {
             browsePath = browsePath.substringBeforeLast('/', missingDelimiterValue = "")
             renderFiles(server)
-        } else {
-            onBack()
+            return true
         }
+        return false
     }
 
     private fun loadDirectory(server: FtpServer, entriesContainer: LinearLayout) {
