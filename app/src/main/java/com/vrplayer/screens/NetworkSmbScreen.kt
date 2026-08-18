@@ -277,13 +277,13 @@ class NetworkSmbScreen(
      * Sobe um nível no share SMB sem sair da tela; quando na raiz do share
      * volta para a lista de servidores via [onBack].
      */
-    fun handleBack(server: SmbServer) {
+    fun handleBack(server: SmbServer): Boolean {
         if (browsePath.isNotEmpty()) {
             browsePath = browsePath.substringBeforeLast('/', missingDelimiterValue = "")
             renderFiles(server)
-        } else {
-            onBack()
+            return true
         }
+        return false
     }
 
     private fun loadDirectory(server: SmbServer, entriesContainer: LinearLayout) {
