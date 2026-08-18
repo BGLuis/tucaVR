@@ -28,7 +28,7 @@ jobs:
         run: cargo install cargo-ndk
         
       - name: Lint Rust (clippy)
-        run: cd rust && cargo clippy -- -D warnings
+        run: cd rust && cargo clippy -p protocols -p media-logic -- -D warnings
 
       # `core`, `audio` e `bridge` dependem de ndk/ndk-sys/oboe (Android-only) e nao
       # rodam (nem compilam de forma confiavel) num host generico com `cargo test` —
