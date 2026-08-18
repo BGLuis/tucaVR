@@ -231,7 +231,7 @@ class NetworkFtpScreen(
                 context,
                 title    = server.name,
                 subtitle = "/$browsePath",
-                onBack   = { handleBack(server) }
+                onBack = { onBack() }
             )
         )
 

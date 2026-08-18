@@ -259,7 +259,7 @@ class NetworkSmbScreen(
                 context,
                 title    = server.name,
                 subtitle = "${server.share}/$browsePath",
-                onBack   = { handleBack(server) }
+                onBack = { onBack() }
             )
         )
 

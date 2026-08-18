@@ -62,7 +62,7 @@ class LocalFilesScreen(
                 context,
                 title = context.getString(R.string.browser_title_local_files),
                 subtitle = dirNavigator.currentPath.absolutePath,
-                onBack = { handleBack() }
+                onBack = { onBack() }
             )
         )
 
@@ -76,7 +76,7 @@ class LocalFilesScreen(
         val fileAdapter = FileAdapter(
             context = context,
             scope = scope,
-            onUpClick = { handleBack() },
+            onUpClick = { onBack() },
             onDirectoryClick = { dir ->
                 dirNavigator.enter(dir)
                 renderLocalFiles()
