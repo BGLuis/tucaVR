@@ -229,11 +229,15 @@ pub extern "C" fn set_3d_mode(mode: u32) {
 /// sessao de playback (ver nota em `start_video_playback`/`start_smb_playback`
 /// abaixo). Sempre volta pra 2D; auto-deteccao (quando estiver ligada ao
 /// bridge, ver docs/phases/PHASE-0.2-3D-NETWORK.md T3.4 "cache de deteccao")
-/// e swap-eyes por-arquivo ficam para uma sessao futura.
+/// fica para uma sessao futura.
+///
+/// SWAP_EYES deliberadamente NAO e resetado aqui: reportado que o usuario
+/// precisava reativar "swap eyes" a cada video, porque o conteudo dele e
+/// consistentemente invertido na mesma direcao — a preferencia agora e
+/// "sticky" (global, sobrevive entre videos) em vez de por-arquivo.
 #[no_mangle]
 pub extern "C" fn reset_3d_mode() {
     SCREEN_MODE.store(0, Ordering::Relaxed);
-    SWAP_EYES.store(false, Ordering::Relaxed);
 }
 
 /// T1.5: "swap eyes" — inverte qual metade do frame SBS/OU vai pro olho
