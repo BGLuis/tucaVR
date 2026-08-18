@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Help, Questions & Setup
+    url: https://github.com/BGLuis/vr-multmidia/discussions
+    about: Please do not open issues for basic support requests. Use the Discussions area!

@@ -2,9 +2,17 @@ name: VR Player CI
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [ master, main, develop ]
+    paths-ignore:
+      - '**/*.md'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
   pull_request:
-    branches: [ master, main ]
+    branches: [ master, main, develop ]
+    paths-ignore:
+      - '**/*.md'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
 
 jobs:
   build-and-lint:
