@@ -1,0 +1,69 @@
+name: 🐛 Bug Report
+description: Create a structured bug report to help us improve the VR Player
+title: "[BUG] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please provide the details below as clearly as possible.
+  - type: input
+    id: version
+    attributes:
+      label: App Version / Commit
+      description: On which version, commit, or branch did the issue occur?
+      placeholder: e.g. main, v1.0.0, commit 1234abc
+    validations:
+      required: true
+  - type: dropdown
+    id: headset
+    attributes:
+      label: VR Headset / Environment
+      description: On which device did the bug happen?
+      options:
+        - Meta Quest 3
+        - Meta Quest 3s
+        - Meta Quest 2
+        - Meta Quest Pro
+        - Emulator/Host only (Native C++/Rust tests)
+    validations:
+      required: true
+  - type: dropdown
+    id: graphics
+    attributes:
+      label: Graphics API
+      description: Which rendering mode was in use?
+      options:
+        - Vulkan (Default)
+        - GLES (Fallback)
+        - Unknown / Not Applicable
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce the problem step-by-step?
+      value: |
+        1. 
+        2. 
+        3. 
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or Screenshots
+      description: Paste logs (`adb logcat`), or drag and drop screenshots/videos recorded from the Quest here.
