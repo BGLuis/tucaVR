@@ -294,10 +294,17 @@ class VRPresentation(
             current is Destination.NetworkFiles     -> networkSmbScreen.handleBack(current.server)
             current is Destination.NetworkFtpFiles  -> networkFtpScreen.handleBack(current.server)
             current is Destination.NetworkSftpFiles -> networkSftpScreen.handleBack(current.server)
+            current is Destination.NetworkHome      -> {
+                appNav.navigateTo(Destination.Home)
+                render()
+                true
+            }
             else -> false
         }
         if (!handled) {
-            if (appNav.back()) render()
+            if (appNav.back()) {
+                render()
+            }
         }
     }
 }
