@@ -3,7 +3,7 @@ name: VR Player Release (Auto & Manual)
 on:
   push:
     branches:
-      - main
+      - develop
     tags:
       - 'v*' # Dispara também quando uma tag começar com 'v' (ex: v1.0.0, v1.0.0-beta)
 
