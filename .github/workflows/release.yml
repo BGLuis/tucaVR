@@ -1,9 +1,11 @@
-name: VR Player Release (Beta & Stable)
+name: VR Player Release (Auto & Manual)
 
 on:
   push:
+    branches:
+      - main
     tags:
-      - 'v*' # Dispara quando uma tag começar com 'v' (ex: v1.0.0, v1.0.0-beta)
+      - 'v*' # Dispara também quando uma tag começar com 'v' (ex: v1.0.0, v1.0.0-beta)
 
 jobs:
   build-and-release:
@@ -67,20 +69,29 @@ jobs:
           PKG_CONFIG_PATH: ${{ github.workspace }}/ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/pkgconfig
           BINDGEN_EXTRA_CLANG_ARGS: "-I${{ github.workspace }}/ffmpeg-android-maker/output/include/arm64-v8a -I${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
-      - name: Determine if Pre-release
-        id: check-prerelease
+      - name: Determine Release Configuration
+        id: config
         run: |
-          if [[ "${{ github.ref }}" == *"-beta"* ]] || [[ "${{ github.ref }}" == *"-alpha"* ]]; then
-            echo "is_prerelease=true" >> $GITHUB_ENV
+          if [[ "${{ github.ref_type }}" == "tag" ]]; then
+            echo "rel_name=Release ${{ github.ref_name }}" >> $GITHUB_ENV
+            echo "rel_tag=${{ github.ref_name }}" >> $GITHUB_ENV
+            if [[ "${{ github.ref }}" == *"-beta"* ]] || [[ "${{ github.ref }}" == *"-alpha"* ]]; then
+              echo "is_prerelease=true" >> $GITHUB_ENV
+            else
+              echo "is_prerelease=false" >> $GITHUB_ENV
+            fi
           else
-            echo "is_prerelease=false" >> $GITHUB_ENV
+            echo "rel_name=Auto-Build #${{ github.run_number }}" >> $GITHUB_ENV
+            echo "rel_tag=build-${{ github.run_number }}" >> $GITHUB_ENV
+            echo "is_prerelease=true" >> $GITHUB_ENV
           fi
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: app/build/outputs/apk/debug/app-debug.apk
-          name: Release ${{ github.ref_name }}
+          name: ${{ env.rel_name }}
+          tag_name: ${{ env.rel_tag }}
           generate_release_notes: true
           prerelease: ${{ env.is_prerelease == 'true' }}
           draft: false
