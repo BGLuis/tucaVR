@@ -16,6 +16,7 @@ import android.view.View
 import android.widget.SeekBar
 import android.widget.TextView
 import com.vrplayer.designsystem.VoidButton
+import com.vrplayer.designsystem.VoidIconButton
 import com.vrplayer.designsystem.VoidButtonStyle
 import com.vrplayer.designsystem.VoidTheme
 import com.vrplayer.filebrowser.NetworkThumbnailGenerator
@@ -42,16 +43,28 @@ class VRControlsPresentation(
     private val activity: VRActivity,
     private val onPlayPause: () -> Unit
 ) : Presentation(outerContext, display, android.R.style.Theme_NoTitleBar_Fullscreen) {
+    fun updateTitle(title: String) {
+        if (::titleLabel.isInitialized) {
+            titleLabel.text = title
+        }
+    }
+
 
     private lateinit var seekBar: SeekBar
+    private lateinit var batteryIcon: ImageView
+    private lateinit var batteryLabel: TextView
+    private lateinit var clockLabel: TextView
+    private lateinit var btnPlayPause: com.vrplayer.designsystem.VoidIconButton
+    private lateinit var modeSelectionModal: FrameLayout
+    private var hudReceiver: android.content.BroadcastReceiver? = null
     private lateinit var timeLabel: TextView
-    private lateinit var volumeBar: SeekBar
-    private lateinit var speedBar: SeekBar
-    private lateinit var btn3DMode: VoidButton
+    private lateinit var titleLabel: TextView
+    private lateinit var totalTimeLabel: TextView
     private lateinit var loadingSpinner: ProgressBar
     private lateinit var scrubPreview: ImageView
     private var debugHudLabel: TextView? = null
     private var isDragging = false
+    private var lastSeekTime = 0L
     private var totalDuration = 0f
 
     // Preview de arrasto no seekbar (T-seek-ux). Escopo proprio (nunca
@@ -108,12 +121,13 @@ class VRControlsPresentation(
 
     fun updateProgress(currentSec: Float, totalSec: Float) {
         totalDuration = totalSec
-        if (!isDragging && totalSec > 0) {
+        if (!isDragging && totalSec > 0 && (System.currentTimeMillis() - lastSeekTime > 800)) {
             seekBar.progress = ((currentSec / totalSec) * 100).toInt()
+            timeLabel.text = formatTime(currentSec)
         }
-        timeLabel.text = context.getString(
-            R.string.player_controls_time_format, formatTime(currentSec), formatTime(totalSec)
-        )
+        if (::totalTimeLabel.isInitialized) {
+            totalTimeLabel.text = formatTime(totalSec)
+        }
 
         // T9: cada novo playback (playFile/playSmb) reseta o modo 3D no lado
         // Rust (ver reset_3d_mode em rust/bridge/src/lib.rs) pra nao vazar o
@@ -121,11 +135,7 @@ class VRControlsPresentation(
         // ja e chamado ~10x/s durante playback (ver frameCount%6 em
         // vr_player_app.cpp), em vez de adicionar um callback JNI dedicado
         // so pra isto.
-        val mode = activity.nativeGet3DMode()
-        if (mode != lastKnownMode) {
-            lastKnownMode = mode
-            btn3DMode.text = modeLabel(mode)
-        }
+
     }
 
     /**
@@ -148,6 +158,9 @@ class VRControlsPresentation(
      */
     fun updateMediaState(isLoading: Boolean, isPlaying: Boolean) {
         loadingSpinner.visibility = if (isLoading) View.VISIBLE else View.GONE
+        if (::btnPlayPause.isInitialized) {
+            btnPlayPause.setImageResource(if (isPlaying) R.drawable.icon_pause else R.drawable.icon_play)
+        }
     }
 
     /**
@@ -276,268 +289,513 @@ class VRControlsPresentation(
 
     private fun speedFromProgress(progress: Int): Float = 0.5f + (progress / 100f) * 1.5f
 
+
+    override fun onAttachedToWindow() {
+        super.onAttachedToWindow()
+        val filter = android.content.IntentFilter().apply {
+            addAction(android.content.Intent.ACTION_BATTERY_CHANGED)
+            addAction(android.content.Intent.ACTION_TIME_TICK)
+        }
+        hudReceiver = object : android.content.BroadcastReceiver() {
+            override fun onReceive(ctx: android.content.Context, intent: android.content.Intent) {
+                if (intent.action == android.content.Intent.ACTION_BATTERY_CHANGED) {
+                    val level = intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
+                    val scale = intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
+                    val status = intent.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
+                    val isCharging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING || status == android.os.BatteryManager.BATTERY_STATUS_FULL
+                    
+                    if (level >= 0 && scale > 0) {
+                        val pct = (level * 100) / scale
+                        if (::batteryLabel.isInitialized) batteryLabel.text = "${pct}%"
+                        
+                        val iconRes = when {
+                            isCharging -> com.vrplayer.R.drawable.icon_battery_charging
+                            pct > 80 -> com.vrplayer.R.drawable.icon_battery_full
+                            pct > 40 -> com.vrplayer.R.drawable.icon_battery_medium
+                            pct > 15 -> com.vrplayer.R.drawable.icon_battery_low
+                            else -> com.vrplayer.R.drawable.icon_battery_empty
+                        }
+                        if (::batteryIcon.isInitialized) batteryIcon.setImageResource(iconRes)
+                        
+                        val color = if (!isCharging && pct <= 15) android.graphics.Color.parseColor("#FF4444") else com.vrplayer.designsystem.VoidTheme.colorText
+                        if (::batteryIcon.isInitialized) batteryIcon.setColorFilter(color)
+                        if (::batteryLabel.isInitialized) batteryLabel.setTextColor(color)
+                    }
+                } else if (intent.action == android.content.Intent.ACTION_TIME_TICK) {
+                    val sdf = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+                    if (::clockLabel.isInitialized) clockLabel.text = sdf.format(java.util.Date())
+                }
+            }
+        }
+        context.registerReceiver(hudReceiver, filter)
+        
+        val sdf = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
+        if (::clockLabel.isInitialized) clockLabel.text = sdf.format(java.util.Date())
+    }
+
+    override fun onDetachedFromWindow() {
+        super.onDetachedFromWindow()
+        hudReceiver?.let { context.unregisterReceiver(it) }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val root = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
-            // Fundo "Void" semi-transparente (em vez do cinza-escuro
-            // generico anterior) — flutua sobre a tela de video sem quebrar
-            // a identidade visual do resto do app.
-            setBackgroundColor(Color.argb(215, Color.red(VoidTheme.colorBackground), Color.green(VoidTheme.colorBackground), Color.blue(VoidTheme.colorBackground)))
-            val padH = VoidTheme.dpToPx(context, 24f)
-            val padV = VoidTheme.dpToPx(context, 16f)
+            // Fundo transparente
+        }
+
+        // --- Top Bar (Header) ---
+        val headerRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            val pad = VoidTheme.dpToPx(context, 10f)
+            setPadding(pad, pad, pad, pad)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        }
+
+        val btnClose = VoidIconButton(context, R.drawable.icon_x, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+            setOnClickListener { activity.nativeSetScrubOverlayVisible(false) }
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
+        }
+        headerRow.addView(btnClose)
+
+        headerRow.addView(View(context).apply { layoutParams = LinearLayout.LayoutParams(0, 0, 1.0f) })
+
+        val statusBadge = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(VoidTheme.colorBackground) // #121212
+                cornerRadius = VoidTheme.dp(context, 18f)
+            }
+            val padH = VoidTheme.dpToPx(context, 16f)
+            val padV = VoidTheme.dpToPx(context, 10f)
             setPadding(padH, padV, padH, padV)
         }
 
-        val marginParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.WRAP_CONTENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply {
-            setMargins(VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 8f), 0)
+        batteryIcon = ImageView(context).apply {
+            setImageResource(R.drawable.icon_battery_full)
+            setColorFilter(VoidTheme.colorText)
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 36f), VoidTheme.dpToPx(context, 36f)).apply {
+                rightMargin = VoidTheme.dpToPx(context, 10f)
+            }
+        }
+        statusBadge.addView(batteryIcon)
+
+        batteryLabel = TextView(context).apply {
+            text = "100%"
+            typeface = VoidTheme.typefaceMono
+            textSize = 32f
+            setTextColor(VoidTheme.colorText)
+            setPadding(0, 0, VoidTheme.dpToPx(context, 20f), 0)
+        }
+        statusBadge.addView(batteryLabel)
+
+        val clockIcon = ImageView(context).apply {
+            setImageResource(R.drawable.icon_clock)
+            setColorFilter(VoidTheme.colorText)
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 36f), VoidTheme.dpToPx(context, 36f)).apply {
+                rightMargin = VoidTheme.dpToPx(context, 10f)
+            }
+        }
+        statusBadge.addView(clockIcon)
+
+        clockLabel = TextView(context).apply {
+            text = "12:00"
+            typeface = VoidTheme.typefaceMono
+            textSize = 32f
+            setTextColor(VoidTheme.colorText)
+        }
+        statusBadge.addView(clockLabel)
+
+        headerRow.addView(statusBadge)
+
+        headerRow.addView(View(context).apply { layoutParams = LinearLayout.LayoutParams(0, 0, 1.0f) })
+
+        val btnSettings = VoidIconButton(context, R.drawable.icon_settings, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
+        }
+        headerRow.addView(btnSettings)
+
+        root.addView(headerRow)
+
+        // Espaçador exato do Figma (10px)
+        root.addView(View(context).apply { layoutParams = LinearLayout.LayoutParams(0, VoidTheme.dpToPx(context, 10f)) })
+
+        // --- Bottom Bar (Controles) ---
+        val bottomPanel = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER_HORIZONTAL
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(VoidTheme.colorBackground)
+                cornerRadius = VoidTheme.dp(context, 18f)
+            }
+            val padH = VoidTheme.dpToPx(context, 61f)
+            val padV = VoidTheme.dpToPx(context, 54f)
+            setPadding(padH, padV, padH, padV)
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         }
 
-        // --- Linha 1: transporte (rewind / play-pause / forward) + seek + tempo ---
-        val row1 = LinearLayout(context).apply {
+        titleLabel = TextView(context).apply {
+            text = ""
+            typeface = VoidTheme.typefaceBody
+            textSize = 32f
+            setTextColor(VoidTheme.colorText)
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, VoidTheme.dpToPx(context, 32f))
+        }
+        bottomPanel.addView(titleLabel)
+
+        // Linha de Botoes
+        val controlsRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        }
+
+        // Esquerda: Modos VR
+        val vrModesLayout = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+                val btnGlass = VoidIconButton(context, R.drawable.icon_vr_headset, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+            setOnClickListener {
+                try {
+                    val currentMode = activity.nativeGet3DMode()
+                    val panel = modeSelectionModal.getChildAt(0) as LinearLayout
+                    val grid = panel.getChildAt(1) as LinearLayout
+                    for (r in 0 until grid.childCount) {
+                        val row = grid.getChildAt(r) as LinearLayout
+                        for (i in 0 until row.childCount) {
+                            val btnContainer = row.getChildAt(i) as? LinearLayout ?: continue
+                            if (btnContainer.childCount == 0) continue
+                            val btn = btnContainer.getChildAt(0) as? LinearLayout ?: continue
+                            val modeValue = btn.tag as? Int ?: -1
+                            if (modeValue == currentMode) {
+                                btn.background = android.graphics.drawable.GradientDrawable().apply {
+                                    setColor(com.vrplayer.designsystem.VoidTheme.colorSurfaceAlt)
+                                    cornerRadius = com.vrplayer.designsystem.VoidTheme.dp(context, 16f)
+                                    setStroke(com.vrplayer.designsystem.VoidTheme.dpToPx(context, 2f), com.vrplayer.designsystem.VoidTheme.colorAccent)
+                                }
+                            } else {
+                                btn.background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#33FFFFFF")), null, null)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.e("VRControls", "Error updating modal state", e)
+                } finally {
+                    modeSelectionModal.visibility = View.VISIBLE
+                }
+            }
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
+        }
+        vrModesLayout.addView(btnGlass)
 
-        val btnRewind = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-            text = "<<"
-            textSize = 24f
+        val btnSwapEyes = VoidIconButton(context, R.drawable.icon_glasses, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+            setOnClickListener {
+                activity.nativeToggleSwapEyes()
+                // Efeito visual de confirmacao rapida
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(com.vrplayer.designsystem.VoidTheme.colorSurfaceAlt)
+                    cornerRadius = com.vrplayer.designsystem.VoidTheme.dp(context, 200f)
+                    setStroke(com.vrplayer.designsystem.VoidTheme.dpToPx(context, 2f), com.vrplayer.designsystem.VoidTheme.colorAccent)
+                }
+                postDelayed({
+                    background = android.graphics.drawable.RippleDrawable(
+                        android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#33FFFFFF")),
+                        android.graphics.drawable.GradientDrawable().apply {
+                            setColor(android.graphics.Color.TRANSPARENT)
+                            cornerRadius = com.vrplayer.designsystem.VoidTheme.dp(context, 200f)
+                        }, null
+                    )
+                }, 300)
+            }
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
+                leftMargin = VoidTheme.dpToPx(context, 8f)
+            }
+        }
+        vrModesLayout.addView(btnSwapEyes)
+
+        val btnPassthrough = VoidIconButton(context, R.drawable.icon_eye_dashed, VoidButtonStyle.DISABLED, isCircular = true, isTransparent = true).apply {
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
+                leftMargin = VoidTheme.dpToPx(context, 8f)
+            }
+        }
+        vrModesLayout.addView(btnPassthrough)
+        controlsRow.addView(vrModesLayout)
+
+        controlsRow.addView(View(context).apply { layoutParams = LinearLayout.LayoutParams(0, 0, 1.0f) })
+
+        // Centro: Playback
+        val playbackLayout = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val btnRewind = VoidIconButton(context, R.drawable.icon_skip_back, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
             setOnClickListener {
                 val currentProgress = (seekBar.progress / 100f) * totalDuration
                 val newTarget = kotlin.math.max(0f, currentProgress - 10f)
                 activity.nativeSeekVideo(newTarget)
             }
         }
-        row1.addView(btnRewind)
+        playbackLayout.addView(btnRewind)
 
-        val btnPlayPause = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = context.getString(R.string.player_btn_play_pause)
-            textSize = 22f
+        btnPlayPause = VoidIconButton(context, R.drawable.icon_pause, VoidButtonStyle.PRIMARY, isCircular = true, isTransparent = true).apply {
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
+                leftMargin = VoidTheme.dpToPx(context, 97f)
+                rightMargin = VoidTheme.dpToPx(context, 97f)
+            }
             setOnClickListener { onPlayPause() }
         }
-        row1.addView(btnPlayPause, marginParams)
+        playbackLayout.addView(btnPlayPause)
 
-        val btnForward = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-            text = ">>"
-            textSize = 24f
+        val btnForward = VoidIconButton(context, R.drawable.icon_skip_forward, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
             setOnClickListener {
                 val currentProgress = (seekBar.progress / 100f) * totalDuration
                 val newTarget = kotlin.math.min(totalDuration, currentProgress + 10f)
                 activity.nativeSeekVideo(newTarget)
             }
         }
-        row1.addView(btnForward)
+        playbackLayout.addView(btnForward)
+        controlsRow.addView(playbackLayout)
+
+        controlsRow.addView(View(context).apply { layoutParams = LinearLayout.LayoutParams(0, 0, 1.0f) })
+
+        // Direita: Utilitarios (Apenas os icones para bater com o Figma)
+        val utilsLayout = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val btnVolume = VoidIconButton(context, R.drawable.icon_volume_2, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
+        }
+        utilsLayout.addView(btnVolume)
+        
+        val btnSpeed = VoidIconButton(context, R.drawable.icon_gauge, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
+        }
+        utilsLayout.addView(btnSpeed)
+
+        controlsRow.addView(utilsLayout)
+        bottomPanel.addView(controlsRow)
+
+        // Linha da Timeline
+        val timelineRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = VoidTheme.dpToPx(context, 32f)
+            }
+        }
+
+        timeLabel = TextView(context).apply {
+            text = "00:00"
+            typeface = VoidTheme.typefaceMono
+            textSize = 32f
+            setTextColor(VoidTheme.colorText)
+        }
+        timelineRow.addView(timeLabel)
 
         seekBar = SeekBar(context).apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f).apply {
-                setMargins(VoidTheme.dpToPx(context, 16f), 0, VoidTheme.dpToPx(context, 8f), 0)
+                setMargins(VoidTheme.dpToPx(context, 32f), 0, VoidTheme.dpToPx(context, 32f), 0)
             }
             progressTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
             thumbTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
-            max = 100
-            progress = 0
+            max = 100; progress = 0
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(p0: SeekBar?, progress: Int, fromUser: Boolean) {
-                    android.util.Log.i("VRPlayer_Scrub", "onProgressChanged: progress=$progress fromUser=$fromUser totalDuration=$totalDuration")
-                    if (fromUser && totalDuration > 0) {
-                        updateScrubPreview((progress / 100f) * totalDuration)
-                    }
+                    if (fromUser && totalDuration > 0) updateScrubPreview((progress / 100f) * totalDuration)
                 }
-                override fun onStartTrackingTouch(p0: SeekBar?) {
-                    isDragging = true
-                    startScrubPreview()
-                }
+                override fun onStartTrackingTouch(p0: SeekBar?) { isDragging = true; startScrubPreview() }
                 override fun onStopTrackingTouch(p0: SeekBar?) {
-                    isDragging = false
-                    stopScrubPreview()
+                    isDragging = false; stopScrubPreview()
+                    lastSeekTime = System.currentTimeMillis()
                     if (totalDuration > 0) {
-                        activity.nativeSeekVideo((progress / 100f) * totalDuration)
+                        val target = (progress / 100f) * totalDuration
+                        timeLabel.text = formatTime(target)
+                        activity.nativeSeekVideo(target)
                     }
                 }
             })
         }
-        row1.addView(seekBar)
+        timelineRow.addView(seekBar)
 
-        timeLabel = TextView(context).apply {
-            text = context.getString(R.string.player_controls_time_format, "00:00", "00:00")
+        totalTimeLabel = TextView(context).apply {
+            text = "00:00"
             typeface = VoidTheme.typefaceMono
-            textSize = 16f
-            setTextColor(VoidTheme.colorText)
-            setPadding(VoidTheme.dpToPx(context, 8f), 0, 0, 0)
-        }
-        row1.addView(timeLabel)
-
-        root.addView(row1)
-
-        // --- Linha 2: volume, velocidade (sliders, nao botoes de incremento) e trilha de audio ---
-        val row2 = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, VoidTheme.dpToPx(context, 16f), 0, 0)
-        }
-
-        val volumeLabel = TextView(context).apply {
-            text = context.getString(R.string.player_controls_volume_format, 100)
-            typeface = VoidTheme.typefaceBody
-            textSize = 16f
+            textSize = 32f
             setTextColor(VoidTheme.colorText)
         }
-        row2.addView(volumeLabel)
+        timelineRow.addView(totalTimeLabel)
+        
+        bottomPanel.addView(timelineRow)
 
-        volumeBar = SeekBar(context).apply {
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f).apply {
-                setMargins(VoidTheme.dpToPx(context, 12f), 0, VoidTheme.dpToPx(context, 28f), 0)
-            }
-            progressTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
-            thumbTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
-            max = 100
-            progress = 100
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(p0: SeekBar?, progress: Int, fromUser: Boolean) {
-                    volumeLabel.text = context.getString(R.string.player_controls_volume_format, progress)
-                    if (fromUser) {
-                        activity.nativeSetVolume(progress / 100f)
-                    }
-                }
-                override fun onStartTrackingTouch(p0: SeekBar?) {}
-                override fun onStopTrackingTouch(p0: SeekBar?) {}
-            })
-        }
-        row2.addView(volumeBar)
-
-        val speedLabel = TextView(context).apply {
-            text = context.getString(R.string.player_controls_speed_format, speedFromProgress(33))
-            typeface = VoidTheme.typefaceBody
-            textSize = 16f
-            setTextColor(VoidTheme.colorText)
-        }
-        row2.addView(speedLabel)
-
-        speedBar = SeekBar(context).apply {
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f).apply {
-                setMargins(VoidTheme.dpToPx(context, 12f), 0, VoidTheme.dpToPx(context, 28f), 0)
-            }
-            progressTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
-            thumbTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
-            max = 100
-            // speedFromProgress(33) ~= 1.0x — valor inicial neutro
-            progress = 33
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(p0: SeekBar?, progress: Int, fromUser: Boolean) {
-                    val speed = speedFromProgress(progress)
-                    speedLabel.text = context.getString(R.string.player_controls_speed_format, speed)
-                    if (fromUser) {
-                        activity.nativeSetSpeed(speed)
-                    }
-                }
-                override fun onStartTrackingTouch(p0: SeekBar?) {}
-                override fun onStopTrackingTouch(p0: SeekBar?) {}
-            })
-        }
-        row2.addView(speedBar)
-
-        val btnAudioTrack = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-            text = "🎵"
-            textSize = 20f
-            setOnClickListener {
-                activity.nativeCycleAudioTrack()
-            }
-        }
-        row2.addView(btnAudioTrack)
-
-        root.addView(row2)
-
-        // --- Linha 3: modo de exibicao 3D (T1.4) + swap eyes (T1.5) ---
-        // So relevante pra conteudo 3D/360/180; fica sempre visivel (nao ha
-        // sinal ainda de "este arquivo e realmente 3D" chegando ate aqui —
-        // auto-deteccao, T3.4, ainda nao esta ligada a UI) em vez de
-        // esconder condicionalmente e arriscar o usuario nao achar o botao
-        // pra um arquivo que a deteccao errou.
-        val row3 = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, VoidTheme.dpToPx(context, 16f), 0, 0)
-        }
-
-        btn3DMode = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-            text = modeLabel(0)
-            textSize = 16f
-            setOnClickListener {
-                text = modeLabel(activity.nativeCycle3DMode())
-            }
-        }
-        row3.addView(btn3DMode, marginParams)
-
-        val btnSwapEyes = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-            text = context.getString(R.string.player_btn_swap_eyes)
-            textSize = 16f
-            setOnClickListener {
-                activity.nativeToggleSwapEyes()
-            }
-        }
-        row3.addView(btnSwapEyes, marginParams)
-
-        root.addView(row3)
-
-        // --- Linha 4 (so em build debuggable): HUD de diagnostico de video ---
-        // Ver docs/DEBUGGING.md. Mono/pequeno de proposito — e um dump de
-        // estado pra depuracao, nao parte da UI de producao; nao precisa de
-        // string de recurso/i18n (texto tecnico, sempre em pt-BR/ingles
-        // misto vindo direto do C++, nunca visto por usuario final numa
-        // build de release).
         if (activity.isDebuggable) {
             debugHudLabel = TextView(context).apply {
-                text = "debug hud"
+                text = ""
                 typeface = VoidTheme.typefaceMono
                 textSize = 12f
                 setTextColor(VoidTheme.colorAccent)
                 setPadding(0, VoidTheme.dpToPx(context, 8f), 0, 0)
             }
-            root.addView(debugHudLabel)
+            bottomPanel.addView(debugHudLabel)
         }
 
-        // FrameLayout envolvendo `root` so pra poder sobrepor o spinner de
-        // loading centralizado por cima do painel inteiro, sem entrar no
-        // fluxo vertical do LinearLayout das linhas 1-4 acima.
+        root.addView(bottomPanel)
+
         val overlay = FrameLayout(context)
-        overlay.addView(root, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT
-        ))
+        overlay.addView(root, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
 
         loadingSpinner = ProgressBar(context).apply {
             indeterminateTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
             visibility = View.GONE
         }
-        overlay.addView(loadingSpinner, FrameLayout.LayoutParams(
-            FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER
-        ))
+        overlay.addView(loadingSpinner, FrameLayout.LayoutParams(FrameLayout.LayoutParams.WRAP_CONTENT, FrameLayout.LayoutParams.WRAP_CONTENT, Gravity.CENTER))
 
-        // Preview de arrasto (T-seek-ux) — flutua ACIMA do seekbar (linha 1
-        // de `root`), escalado bem maior que a resolucao nativa (80x45, ver
-        // ScrubStrip) porque e so um preview grosseiro, nao uma miniatura
-        // de qualidade.
         scrubPreview = ImageView(context).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
             setBackgroundColor(VoidTheme.colorSurface)
             visibility = View.GONE
         }
-        overlay.addView(
-            scrubPreview,
-            FrameLayout.LayoutParams(
-                VoidTheme.dpToPx(context, 160f), VoidTheme.dpToPx(context, 90f), Gravity.TOP or Gravity.CENTER_HORIZONTAL
-            ).apply { topMargin = VoidTheme.dpToPx(context, 8f) }
-        )
+        overlay.addView(scrubPreview, FrameLayout.LayoutParams(VoidTheme.dpToPx(context, 160f), VoidTheme.dpToPx(context, 90f), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = VoidTheme.dpToPx(context, 8f) })
 
+        
+        // Modal de Selecao de Modo VR
+        modeSelectionModal = FrameLayout(context).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            setBackgroundColor(android.graphics.Color.parseColor("#E6000000"))
+            visibility = View.GONE
+            isClickable = true
+            
+            setOnClickListener { modeSelectionModal.visibility = View.GONE }
+            
+            val panel = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = android.widget.FrameLayout.LayoutParams(com.vrplayer.designsystem.VoidTheme.dpToPx(context, 800f), android.widget.FrameLayout.LayoutParams.WRAP_CONTENT).apply {
+                    gravity = Gravity.CENTER
+                }
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(com.vrplayer.designsystem.VoidTheme.colorSurface)
+                    cornerRadius = com.vrplayer.designsystem.VoidTheme.dp(context, 16f)
+                    setStroke(com.vrplayer.designsystem.VoidTheme.dpToPx(context, com.vrplayer.designsystem.VoidTheme.borderWidthDp), com.vrplayer.designsystem.VoidTheme.colorBorder)
+                }
+                setPadding(com.vrplayer.designsystem.VoidTheme.dpToPx(context, 24f), com.vrplayer.designsystem.VoidTheme.dpToPx(context, 24f), com.vrplayer.designsystem.VoidTheme.dpToPx(context, 24f), com.vrplayer.designsystem.VoidTheme.dpToPx(context, 24f))
+                
+                val title = TextView(context).apply {
+                    text = "Formatos de Tela"
+                    typeface = com.vrplayer.designsystem.VoidTheme.typefaceBody
+                    textSize = 24f
+                    setTextColor(com.vrplayer.designsystem.VoidTheme.colorText)
+                    setPadding(0, 0, 0, com.vrplayer.designsystem.VoidTheme.dpToPx(context, 24f))
+                    gravity = Gravity.CENTER
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                }
+                addView(title)
+                
+                val grid = LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                }
+                
+                val row1 = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = com.vrplayer.designsystem.VoidTheme.dpToPx(context, 16f)
+                    }
+                }
+                val row2 = LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                        bottomMargin = com.vrplayer.designsystem.VoidTheme.dpToPx(context, 24f)
+                    }
+                }
+                
+                val modes = listOf(
+                    Triple("Plano 2D", R.drawable.icon_2d, 0),
+                    Triple("Lado a Lado", R.drawable.icon_3d_sbs, 1),
+                    Triple("Cima/Baixo", R.drawable.icon_3d_ou, 3),
+                    Triple("180 SBS", R.drawable.icon_360, 9),
+                    Triple("360 Graus", R.drawable.icon_360, 5)
+                )
+                
+                for ((index, mode) in modes.withIndex()) {
+                    val btnContainer = LinearLayout(context).apply {
+                        orientation = LinearLayout.VERTICAL
+                        gravity = Gravity.CENTER
+                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                            setMargins(com.vrplayer.designsystem.VoidTheme.dpToPx(context, 8f), 0, com.vrplayer.designsystem.VoidTheme.dpToPx(context, 8f), 0)
+                        }
+                    }
+                    
+                    val btn = LinearLayout(context).apply {
+                        tag = mode.third
+                        orientation = LinearLayout.VERTICAL
+                        gravity = Gravity.CENTER
+                        background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#33FFFFFF")), null, null)
+                        setPadding(0, com.vrplayer.designsystem.VoidTheme.dpToPx(context, 16f), 0, com.vrplayer.designsystem.VoidTheme.dpToPx(context, 16f))
+                        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+                        
+                        val icon = ImageView(context).apply {
+                            setImageResource(mode.second)
+                            setColorFilter(com.vrplayer.designsystem.VoidTheme.colorText)
+                            layoutParams = LinearLayout.LayoutParams(com.vrplayer.designsystem.VoidTheme.dpToPx(context, 48f), com.vrplayer.designsystem.VoidTheme.dpToPx(context, 48f))
+                        }
+                        addView(icon)
+                        
+                        val label = TextView(context).apply {
+                            text = mode.first
+                            typeface = com.vrplayer.designsystem.VoidTheme.typefaceBody
+                            textSize = 16f
+                            setTextColor(com.vrplayer.designsystem.VoidTheme.colorText)
+                            setPadding(0, com.vrplayer.designsystem.VoidTheme.dpToPx(context, 8f), 0, 0)
+                        }
+                        addView(label)
+                        
+                        setOnClickListener {
+                            activity.nativeSetScreenMode(mode.third)
+                            modeSelectionModal.visibility = View.GONE
+                        }
+                    }
+                    
+                    btnContainer.addView(btn)
+                    
+                    if (index < 3) {
+                        row1.addView(btnContainer)
+                    } else {
+                        row2.addView(btnContainer)
+                    }
+                }
+                
+                // Add an empty space to row2 so the 2 items match the 3 columns of row1
+                val emptySpace = View(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+                }
+                row2.addView(emptySpace)
+                
+                grid.addView(row1)
+                grid.addView(row2)
+                addView(grid)
+                
+                val closeBtn = com.vrplayer.designsystem.VoidIconButton(context, R.drawable.icon_x, com.vrplayer.designsystem.VoidButtonStyle.SECONDARY).apply {
+                    val p = LinearLayout.LayoutParams(com.vrplayer.designsystem.VoidTheme.dpToPx(context, 64f), com.vrplayer.designsystem.VoidTheme.dpToPx(context, 64f))
+                    p.gravity = Gravity.CENTER
+                    layoutParams = p
+                    setOnClickListener { modeSelectionModal.visibility = View.GONE }
+                }
+                addView(closeBtn)
+            }
+            addView(panel)
+        }
+        overlay.addView(modeSelectionModal)
         setContentView(overlay)
 
-        window?.setLayout(
-            android.view.ViewGroup.LayoutParams.MATCH_PARENT,
-            android.view.ViewGroup.LayoutParams.MATCH_PARENT
-        )
+        window?.setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
         window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
     }
 }

@@ -83,7 +83,7 @@ class VRActivity : NativeActivity() {
     val historyTracker: PlaybackHistoryTracker by lazy { PlaybackHistoryTracker(this) }
 
     // Fonte da reproducao atual (T-seek-ux) — setado nos 5 entry points de
-    // playback abaixo. `PlaybackHistoryTracker.current` ja guarda algo
+    // playback abaixo. `PlaybackHistoryTracker.getCurrent()` ja guarda algo
     // parecido, mas ja convertido pro registro achatado do Room (perde
     // host/credenciais); isto aqui e o `PlaybackSource` original, usado
     // pra saber SE/COMO gerar a trilha de thumbnails de preview de arrasto
@@ -135,6 +135,7 @@ class VRActivity : NativeActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        com.vrplayer.designsystem.VoidTheme.init(this)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (!Environment.isExternalStorageManager()) {
@@ -335,7 +336,7 @@ class VRActivity : NativeActivity() {
                     downTime,
                     now,
                     action,
-                    x * 1024f,
+                    x * 1582f,
                     y * 768f,
                     0
                 )
@@ -391,8 +392,8 @@ class VRActivity : NativeActivity() {
                     downTime,
                     now,
                     action,
-                    x * 1024f, // width
-                    y * 384f,  // height
+                    x * 1582f, // width
+                    y * 800f,  // height
                     0
                 )
                 
@@ -489,6 +490,7 @@ class VRActivity : NativeActivity() {
         val source = PlaybackSource.LocalFile(filePath, resolvedSize)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = File(filePath).name)
+        controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
         nativePlayVideo(filePath, (resumeAtMs ?: 0L) / 1000f)
     }
 
@@ -498,6 +500,7 @@ class VRActivity : NativeActivity() {
         val source = PlaybackSource.Http(url)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = url)
+        controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
         nativePlayVideo(url, (resumeAtMs ?: 0L) / 1000f)
     }
 
@@ -508,6 +511,7 @@ class VRActivity : NativeActivity() {
         val source = PlaybackSource.Smb(server, path, sizeBytes)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
+        controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
         nativePlaySmb(server.host, server.port, server.share, path, server.username, server.password, server.domain, (resumeAtMs ?: 0L) / 1000f)
     }
 
@@ -517,6 +521,7 @@ class VRActivity : NativeActivity() {
         val source = PlaybackSource.Ftp(server, path, sizeBytes)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
+        controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
         nativePlayFtp(server.host, server.port, path, server.username, server.password, (resumeAtMs ?: 0L) / 1000f)
     }
 
@@ -526,6 +531,7 @@ class VRActivity : NativeActivity() {
         val source = PlaybackSource.Sftp(server, path, sizeBytes)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
+        controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
         nativePlaySftp(server.host, server.port, path, server.username, server.password, server.privateKey ?: "", (resumeAtMs ?: 0L) / 1000f)
     }
 
@@ -535,7 +541,8 @@ class VRActivity : NativeActivity() {
             if (pfd != null) {
                 val fd = pfd.detachFd()
                 val fdPath = "/proc/self/fd/$fd"
-                nativePlayVideo(fdPath, 0f)
+                controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
+        nativePlayVideo(fdPath, 0f)
             }
         } catch (e: Exception) {
             e.printStackTrace()
