@@ -33,20 +33,23 @@ class HomeScreen(
         ).apply { topMargin = VoidTheme.dpToPx(context, 20f) }
 
         val btnLocal = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = context.getString(R.string.home_btn_local_files)
+            text = context.getString(R.string.home_btn_local_files).trim()
             textSize = 24f
+            setIcon(R.drawable.ic_folder)
             setOnClickListener { onNavigate(Destination.LocalFiles("")) }
         }
         val btnNetwork = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = context.getString(R.string.home_btn_network)
+            text = context.getString(R.string.home_btn_network).trim()
             textSize = 24f
+            setIcon(R.drawable.ic_network)
             setOnClickListener { onNavigate(Destination.NetworkHome) }
         }
         // T9.4: histórico implementado — botão ativo. A tela lida com lista
         // vazia internamente; não precisa consultar Room aqui.
         val btnContinueWatching = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = context.getString(R.string.home_btn_continue_watching)
+            text = context.getString(R.string.home_btn_continue_watching).trim()
             textSize = 20f
+            setIcon(R.drawable.ic_play_arrow)
             setOnClickListener { onNavigate(Destination.ContinueWatching) }
         }
 

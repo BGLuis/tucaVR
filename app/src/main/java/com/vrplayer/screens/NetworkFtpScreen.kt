@@ -302,9 +302,10 @@ class NetworkFtpScreen(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                     ).also { it.bottomMargin = VoidTheme.dpToPx(context, 8f) }
                     bind(
-                        if (isDir) context.getString(R.string.common_row_dir_format, name)
-                        else       context.getString(R.string.common_row_video_format, name),
-                        showThumbnailSlot = !isDir
+                        if (isDir) context.getString(R.string.common_row_dir_format, name).trim()
+                        else       context.getString(R.string.common_row_video_format, name).trim(),
+                        showThumbnailSlot = !isDir,
+                        iconResId = if (isDir) R.drawable.ic_folder else R.drawable.ic_movie
                     )
                     setOnClickListener {
                         if (isDir) {
@@ -348,11 +349,12 @@ class NetworkFtpScreen(
 
         addView(VoidListRow(context).apply {
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            bind(labelText, meta = metaText, showThumbnailSlot = false)
+            bind(labelText, meta = metaText, showThumbnailSlot = false, iconResId = R.drawable.ic_broadcast)
             setOnClickListener { onConnect() }
         })
         addView(VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-            text = "✕"; textSize = 16f; minHeight = 0
+            text = ""
+            setIcon(R.drawable.icon_x); textSize = 16f; minHeight = 0
             val pad = VoidTheme.dpToPx(context, 12f); setPadding(pad, pad, pad, pad)
             setOnClickListener { onRemove() }
         }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)

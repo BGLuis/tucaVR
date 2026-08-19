@@ -21,19 +21,19 @@
 
     <!-- Comum / reusado entre telas (VoidPanelChrome, listagens de arquivo) -->
     <string name="common_btn_back">‹ Back</string>
-    <string name="common_warning_format">⚠ %1$s</string>
-    <string name="common_row_dir_format">📁 %1$s</string>
-    <string name="common_row_video_format">🎬 %1$s</string>
+    <string name="common_warning_format">%1$s</string>
+    <string name="common_row_dir_format">%1$s</string>
+    <string name="common_row_video_format">%1$s</string>
 
     <!-- Home (VRPresentation.renderHome) -->
     <string name="home_title">VR Player</string>
-    <string name="home_btn_local_files">📁  Local Files</string>
-    <string name="home_btn_network">🌐  Network</string>
-    <string name="home_btn_continue_watching">▶  Continue Watching</string>
+    <string name="home_btn_local_files"> Local Files</string>
+    <string name="home_btn_network"> Network</string>
+    <string name="home_btn_continue_watching"> Continue Watching</string>
 
     <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
     <string name="browser_title_local_files">Local Files</string>
-    <string name="browser_row_up">⬆ Go up one level</string>
+    <string name="browser_row_up">Go up one level</string>
     <string name="browser_label_size_mb_format">%1$.1f MB</string>
     <string name="browser_label_size_gb_format">%1$.2f GB</string>
 
@@ -47,32 +47,32 @@
     <string name="file_detail_label_duration">Duration</string>
     <string name="file_detail_label_resolution">Resolution</string>
     <string name="file_detail_label_path">Path</string>
-    <string name="file_detail_btn_play">▶ Play</string>
+    <string name="file_detail_btn_play">Play</string>
 
     <!-- Rede: landing com abas URL / SMB / FTP (VRPresentation.renderNetworkHome) -->
     <string name="network_title">Network</string>
-    <string name="network_tab_url">🔗 URL</string>
-    <string name="network_tab_smb">🗄 SMB</string>
-    <string name="network_tab_ftp">📡 FTP</string>
-    <string name="network_tab_sftp">🔐 SFTP</string>
+    <string name="network_tab_url">URL</string>
+    <string name="network_tab_smb">SMB</string>
+    <string name="network_tab_ftp">FTP</string>
+    <string name="network_tab_sftp">SFTP</string>
 
     <!-- Rede: aba URL (VRPresentation.buildNetworkUrlPage) -->
     <string name="network_url_hint">http:// or https://...</string>
     <string name="network_url_recent_header">Recent</string>
     <string name="network_url_recent_empty">(no URL played yet)</string>
-    <string name="network_url_recent_row_format">🕓 %1$s</string>
-    <string name="network_url_btn_paste">📋 Paste</string>
-    <string name="network_url_btn_play">▶ Play</string>
-    <string name="network_url_status_invalid">⚠ URL must start with http:// or https://</string>
+    <string name="network_url_recent_row_format">%1$s</string>
+    <string name="network_url_btn_paste">Paste</string>
+    <string name="network_url_btn_play">Play</string>
+    <string name="network_url_status_invalid">URL must start with http:// or https://</string>
     <string name="network_url_status_checking">Checking server…</string>
-    <string name="network_url_status_seekable">✓ Server supports seek</string>
-    <string name="network_url_status_not_seekable">⚠ Server does NOT support seek (Accept-Ranges missing)</string>
+    <string name="network_url_status_seekable">Server supports seek</string>
+    <string name="network_url_status_not_seekable">Server does NOT support seek (Accept-Ranges missing)</string>
 
     <!-- Rede: aba SMB — lista de servidores salvos (VRPresentation.buildNetworkSmbPage) -->
     <string name="network_smb_saved_servers_header">Saved servers</string>
     <string name="network_smb_empty">(no server saved)</string>
     <string name="network_smb_guest_label">guest</string>
-    <string name="network_smb_row_label_format">🖥 %1$s</string>
+    <string name="network_smb_row_label_format">%1$s</string>
     <string name="network_smb_btn_add_server">+ Add server</string>
 
     <!-- Rede: aba SMB — formulario de adicionar servidor (VRPresentation.buildAddServerForm) -->
@@ -88,15 +88,15 @@
     <string name="network_smb_form_domain_label">Domain</string>
     <string name="network_smb_form_domain_hint">(optional)</string>
     <string name="network_smb_btn_test_save">Test and save</string>
-    <string name="network_smb_form_status_host_required">⚠ Host required</string>
+    <string name="network_smb_form_status_host_required">Host required</string>
     <string name="network_smb_form_status_connecting">Connecting…</string>
-    <string name="network_smb_form_status_error_format">✗ Failed: %1$s</string>
+    <string name="network_smb_form_status_error_format">Failed: %1$s</string>
 
     <!-- Plural: T8.5 / nota do doc — resultado de smb_list_shares ao testar um
          servidor ("N share(s) encontrado(s)"). -->
     <plurals name="network_smb_form_status_connected">
-        <item quantity="one">✓ Connected (%1$d share found)</item>
-        <item quantity="other">✓ Connected (%1$d shares found)</item>
+        <item quantity="one">Connected (%1$d share found)</item>
+        <item quantity="other">Connected (%1$d shares found)</item>
     </plurals>
 
     <!-- Rede: navegacao de diretorio SMB/FTP (VRPresentation.renderNetworkFiles/renderNetworkFtpFiles) -->
@@ -108,7 +108,7 @@
     <string name="network_ftp_saved_servers_header">Saved servers</string>
     <string name="network_ftp_empty">(no server saved)</string>
     <string name="network_ftp_anonymous_label">anonymous</string>
-    <string name="network_ftp_row_label_format">📡 %1$s</string>
+    <string name="network_ftp_row_label_format">%1$s</string>
     <string name="network_ftp_btn_add_server">+ Add server</string>
 
     <!-- Rede: aba FTP — formulario de adicionar servidor (VRPresentation.buildAddFtpServerForm) -->
@@ -120,17 +120,17 @@
     <string name="network_ftp_form_pass_label">Password</string>
     <string name="network_ftp_form_pass_hint">password</string>
     <string name="network_ftp_btn_test_save">Test and save</string>
-    <string name="network_ftp_form_status_host_required">⚠ Host required</string>
+    <string name="network_ftp_form_status_host_required">Host required</string>
     <string name="network_ftp_form_status_connecting">Connecting…</string>
-    <string name="network_ftp_form_status_error_format">✗ Failed: %1$s</string>
-    <string name="network_ftp_form_status_connected">✓ Connected</string>
+    <string name="network_ftp_form_status_error_format">Failed: %1$s</string>
+    <string name="network_ftp_form_status_connected">Connected</string>
 
     <!-- T6.4: Rede: aba SFTP — espelha network_ftp_* acima, com autenticacao
          por chave privada (T6.2) no lugar de "anonimo" (SFTP nao tem). -->
     <string name="network_sftp_saved_servers_header">Saved servers</string>
     <string name="network_sftp_empty">(no server saved)</string>
     <string name="network_sftp_key_auth_label">key</string>
-    <string name="network_sftp_row_label_format">🔐 %1$s</string>
+    <string name="network_sftp_row_label_format">%1$s</string>
     <string name="network_sftp_btn_add_server">+ Add server</string>
     <string name="network_sftp_form_host_label">Host / IP</string>
     <string name="network_sftp_form_port_label">Port</string>
@@ -141,13 +141,13 @@
     <string name="network_sftp_form_pass_hint">password</string>
     <string name="network_sftp_form_key_label">Private key (PEM)</string>
     <string name="network_sftp_form_key_hint">-----BEGIN OPENSSH PRIVATE KEY-----…</string>
-    <string name="network_sftp_form_btn_paste_key">📋 Paste key</string>
+    <string name="network_sftp_form_btn_paste_key">Paste key</string>
     <string name="network_sftp_btn_test_save">Test and save</string>
-    <string name="network_sftp_form_status_host_required">⚠ Host required</string>
-    <string name="network_sftp_form_status_auth_required">⚠ Password or private key required</string>
+    <string name="network_sftp_form_status_host_required">Host required</string>
+    <string name="network_sftp_form_status_auth_required">Password or private key required</string>
     <string name="network_sftp_form_status_connecting">Connecting…</string>
-    <string name="network_sftp_form_status_error_format">✗ Failed: %1$s</string>
-    <string name="network_sftp_form_status_connected">✓ Connected</string>
+    <string name="network_sftp_form_status_error_format">Failed: %1$s</string>
+    <string name="network_sftp_form_status_connected">Connected</string>
 
     <!-- Player: tela apos selecionar midia (VRPresentation.renderPlayer) -->
     <string name="player_title">Playing</string>
@@ -159,14 +159,14 @@
     <!-- Painel de controles de reproducao (VRControlsPresentation) -->
     <string name="player_btn_play_pause">Play / Pause</string>
     <string name="player_controls_time_format">%1$s / %2$s</string>
-    <string name="player_controls_volume_format">🔊 %1$d%%</string>
-    <string name="player_controls_speed_format">⏱ %1$.2fx</string>
+    <string name="player_controls_volume_format">%1$d%%</string>
+    <string name="player_controls_speed_format">%1$.2fx</string>
 
     <!-- T1.4/T2: modo de exibicao 3D (VRControlsPresentation) — ciclo
          2D -> SBS -> SBS(half) -> OU -> OU(half) -> 360 -> 180 -> 2D.
          Ordem/indices DEVEM casar com ScreenMode em native/src/vr_player_app.cpp
          e a codificacao numerica em rust/bridge/src/lib.rs (cycle_3d_mode). -->
-    <string name="player_btn_3d_mode_format">🧊 %1$s</string>
+    <string name="player_btn_3d_mode_format">%1$s</string>
     <string name="player_mode_2d">2D</string>
     <string name="player_mode_sbs">SBS</string>
     <string name="player_mode_sbs_half">SBS (half)</string>
@@ -177,20 +177,20 @@
     <string name="player_mode_360_sbs">360° SBS</string>
     <string name="player_mode_360_ou">360° OU</string>
     <string name="player_mode_180_sbs">180° SBS</string>
-    <string name="player_btn_swap_eyes">👁 Swap eyes</string>
-    <string name="player_btn_recenter">🎯 Recenter</string>
+    <string name="player_btn_swap_eyes">Swap eyes</string>
+    <string name="player_btn_recenter">Recenter</string>
 
     <!-- Historico de reproducao (T9.3 prompt "Retomar?" / T9.4 "Continue Watching") -->
     <string name="history_resume_prompt_title">Continue where you left off?</string>
     <string name="history_resume_prompt_watched_format">Watched %1$s of %2$s (%3$d%%)</string>
-    <string name="history_resume_prompt_btn_resume_format">▶ Resume from %1$s</string>
+    <string name="history_resume_prompt_btn_resume_format">Resume from %1$s</string>
     <string name="history_resume_prompt_btn_restart">Start over</string>
     <string name="history_continue_watching_title">Continue Watching</string>
     <string name="history_empty">(no history yet)</string>
-    <string name="history_row_http_format">🌐 %1$s</string>
-    <string name="history_row_ftp_format">📡 %1$s</string>
-    <string name="history_row_sftp_format">🔐 %1$s</string>
+    <string name="history_row_http_format">%1$s</string>
+    <string name="history_row_ftp_format">%1$s</string>
+    <string name="history_row_sftp_format">%1$s</string>
     <string name="history_row_meta_format">%1$s / %2$s · %3$d%%</string>
-    <string name="history_btn_remove">✕</string>
+    <string name="history_btn_remove"></string>
 
 </resources>

@@ -2,6 +2,8 @@ package com.vrplayer.designsystem
 
 import android.content.Context
 import android.graphics.drawable.GradientDrawable
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffColorFilter
 import android.widget.Button
 
 /**
@@ -34,6 +36,8 @@ class VoidButton @JvmOverloads constructor(
             applyStyle()
         }
 
+    private var currentIconResId: Int = 0
+
     init {
         isAllCaps = false
         typeface = VoidTheme.typefaceBody
@@ -50,6 +54,12 @@ class VoidButton @JvmOverloads constructor(
         val paddingV = VoidTheme.dpToPx(context, 22f)
         setPadding(paddingH, paddingV, paddingH, paddingV)
         minHeight = VoidTheme.dpToPx(context, 76f)
+        compoundDrawablePadding = VoidTheme.dpToPx(context, 12f)
+        applyStyle()
+    }
+
+    fun setIcon(resId: Int) {
+        this.currentIconResId = resId
         applyStyle()
     }
 
@@ -85,6 +95,19 @@ class VoidButton @JvmOverloads constructor(
             setStroke(VoidTheme.dpToPx(context, VoidTheme.borderWidthDp), borderColor)
         }
         setTextColor(textColor)
+        
+        if (currentIconResId != 0) {
+            val icon = context.getDrawable(currentIconResId)?.mutate()
+            icon?.colorFilter = PorterDuffColorFilter(textColor, PorterDuff.Mode.SRC_IN)
+            if (icon != null) {
+                val size = VoidTheme.dpToPx(context, 24f)
+                icon.setBounds(0, 0, size, size)
+                setCompoundDrawables(icon, null, null, null)
+            }
+        } else {
+            setCompoundDrawables(null, null, null, null)
+        }
+
         isEnabled = style != VoidButtonStyle.DISABLED
         alpha = if (style == VoidButtonStyle.DISABLED) 0.55f else 1f
     }

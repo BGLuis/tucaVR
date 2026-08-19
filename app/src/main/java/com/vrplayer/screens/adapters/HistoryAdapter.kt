@@ -46,7 +46,8 @@ class HistoryAdapter(
             layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
         }
         val btnRemove = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-            text = context.getString(R.string.history_btn_remove)
+            text = ""
+            setIcon(R.drawable.icon_x)
             textSize = 16f
             minHeight = 0
             val pad = VoidTheme.dpToPx(context, 12f)
@@ -76,11 +77,18 @@ class HistoryAdapter(
         val entry = items[position]
 
         val titleWithIcon = when (entry.sourceType) {
-            HistorySourceType.LOCAL -> context.getString(R.string.common_row_video_format, entry.title)
-            HistorySourceType.SMB   -> context.getString(R.string.network_smb_row_label_format, entry.title)
-            HistorySourceType.HTTP  -> context.getString(R.string.history_row_http_format, entry.title)
-            HistorySourceType.FTP   -> context.getString(R.string.history_row_ftp_format, entry.title)
-            HistorySourceType.SFTP  -> context.getString(R.string.history_row_sftp_format, entry.title)
+            HistorySourceType.LOCAL -> context.getString(R.string.common_row_video_format, entry.title).trim()
+            HistorySourceType.SMB   -> context.getString(R.string.network_smb_row_label_format, entry.title).trim()
+            HistorySourceType.HTTP  -> context.getString(R.string.history_row_http_format, entry.title).trim()
+            HistorySourceType.FTP   -> context.getString(R.string.history_row_ftp_format, entry.title).trim()
+            HistorySourceType.SFTP  -> context.getString(R.string.history_row_sftp_format, entry.title).trim()
+        }
+        val iconRes = when (entry.sourceType) {
+            HistorySourceType.LOCAL -> R.drawable.ic_movie
+            HistorySourceType.SMB   -> R.drawable.ic_storage
+            HistorySourceType.HTTP  -> R.drawable.ic_link
+            HistorySourceType.FTP   -> R.drawable.ic_broadcast
+            HistorySourceType.SFTP  -> R.drawable.ic_lock
         }
         val meta = context.getString(
             R.string.history_row_meta_format,
@@ -88,7 +96,7 @@ class HistoryAdapter(
             formatDurationMs(entry.durationMs),
             watchedPercent(entry)
         )
-        holder.listRow.bind(titleWithIcon, meta = meta, showThumbnailSlot = false)
+        holder.listRow.bind(titleWithIcon, meta = meta, showThumbnailSlot = false, iconResId = iconRes)
         holder.listRow.setOnClickListener { onItemClick(entry) }
     }
 

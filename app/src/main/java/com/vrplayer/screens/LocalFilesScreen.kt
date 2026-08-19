@@ -173,7 +173,8 @@ class LocalFilesScreen(
         addMetaRow(context.getString(R.string.file_detail_label_path), entry.path)
 
         val btnPlay = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = context.getString(R.string.file_detail_btn_play)
+            text = context.getString(R.string.file_detail_btn_play).trim()
+            setIcon(R.drawable.ic_play_arrow)
             textSize = 22f
             setOnClickListener { onPlayLocalVideo(entry) }
         }
