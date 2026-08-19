@@ -144,7 +144,7 @@ impl PlaybackController {
         Self {
             texture_output: Arc::new(Mutex::new(TextureOutput::new())),
             audio_output: Arc::new(Mutex::new(None)),
-            sync_manager: Arc::new(SyncManager::new(speed_bits.clone())),
+            sync_manager: Arc::new(SyncManager::new(speed_bits.clone(), 0.0)),
             session: None,
             current_path: None,
             duration: 0.0,
@@ -327,7 +327,7 @@ impl PlaybackController {
         // e mais previsivel do que tentar "resetar" o anterior.
         // start() precisa de &mut, entao e chamado antes de mover o
         // SyncManager para dentro do Arc (compartilhado com as threads).
-        let mut sync_manager = SyncManager::new(self.speed_bits.clone());
+        let mut sync_manager = SyncManager::new(self.speed_bits.clone(), start_time);
         sync_manager.start();
         let sync_manager = Arc::new(sync_manager);
         self.sync_manager = sync_manager.clone();
@@ -387,10 +387,7 @@ impl PlaybackController {
                     sync_d.update_master_clock(target_sec);
                 }
 
-                if !*is_playing_d.lock().unwrap() {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    continue;
-                }
+
 
                 let current_epoch = epoch_d.load(Ordering::SeqCst);
                 match demuxer.read_packet() {
@@ -443,7 +440,7 @@ impl PlaybackController {
             loop {
                 if !*is_running_v.lock().unwrap() { break; }
 
-                if !*is_playing_v.lock().unwrap() {
+                if !*is_playing_v.lock().unwrap() && !preroll.is_awaiting_landing() {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                     continue;
                 }
