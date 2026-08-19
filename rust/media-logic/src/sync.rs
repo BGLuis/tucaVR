@@ -187,7 +187,7 @@ mod tests {
     #[test]
     fn wall_clock_fallback_tracks_elapsed_time_at_normal_speed() {
         let clock = Arc::new(FakeClock::new());
-        let mut sync = SyncManager::with_clock(speed_bits(1.0), clock.clone());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 0.0, clock.clone());
         sync.start();
 
         clock.advance(Duration::from_millis(500));
@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn wall_clock_fallback_scales_by_playback_speed() {
         let clock = Arc::new(FakeClock::new());
-        let mut sync = SyncManager::with_clock(speed_bits(2.0), clock.clone());
+        let mut sync = SyncManager::with_clock(speed_bits(2.0), 0.0, clock.clone());
         sync.start();
 
         clock.advance(Duration::from_secs(1));
@@ -211,7 +211,7 @@ mod tests {
     #[test]
     fn audio_pts_overrides_wall_clock_fallback_once_present() {
         let clock = Arc::new(FakeClock::new());
-        let mut sync = SyncManager::with_clock(speed_bits(1.0), clock.clone());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 0.0, clock.clone());
         sync.start();
         clock.advance(Duration::from_secs(10));
 
@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn pause_then_resume_does_not_count_the_paused_interval() {
         let clock = Arc::new(FakeClock::new());
-        let mut sync = SyncManager::with_clock(speed_bits(1.0), clock.clone());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 0.0, clock.clone());
         sync.start();
 
         clock.advance(Duration::from_secs(2));
@@ -243,7 +243,7 @@ mod tests {
     #[test]
     fn resume_without_a_matching_pause_is_a_harmless_no_op() {
         let clock = Arc::new(FakeClock::new());
-        let mut sync = SyncManager::with_clock(speed_bits(1.0), clock.clone());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 0.0, clock.clone());
         sync.start();
         clock.advance(Duration::from_secs(1));
 
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn reset_zeroes_audio_pts_and_restarts_wall_clock() {
         let clock = Arc::new(FakeClock::new());
-        let mut sync = SyncManager::with_clock(speed_bits(1.0), clock.clone());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 0.0, clock.clone());
         sync.start();
         sync.update_audio_pts(42.0);
         clock.advance(Duration::from_secs(3));
@@ -270,7 +270,7 @@ mod tests {
     #[test]
     fn multiple_pause_resume_cycles_accumulate_correctly() {
         let clock = Arc::new(FakeClock::new());
-        let mut sync = SyncManager::with_clock(speed_bits(1.0), clock.clone());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 0.0, clock.clone());
         sync.start();
 
         clock.advance(Duration::from_secs(1));
