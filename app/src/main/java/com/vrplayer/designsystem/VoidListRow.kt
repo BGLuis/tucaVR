@@ -71,8 +71,22 @@ class VoidListRow(context: Context) : LinearLayout(context) {
      * quando a linha nao tem imagem (ex.: entrada "subir um nivel") — evita
      * o titulo "pular" horizontalmente conforme a linha tem ou nao thumbnail.
      */
-    fun bind(title: String, meta: String? = null, showThumbnailSlot: Boolean = true) {
+    fun bind(title: String, meta: String? = null, showThumbnailSlot: Boolean = true, iconResId: Int = 0) {
         titleView.text = title
+        
+        if (iconResId != 0) {
+            val icon = context.getDrawable(iconResId)?.mutate()
+            icon?.colorFilter = android.graphics.PorterDuffColorFilter(VoidTheme.colorText, android.graphics.PorterDuff.Mode.SRC_IN)
+            if (icon != null) {
+                val size = VoidTheme.dpToPx(context, 24f)
+                icon.setBounds(0, 0, size, size)
+                titleView.setCompoundDrawables(icon, null, null, null)
+                titleView.compoundDrawablePadding = VoidTheme.dpToPx(context, 12f)
+            }
+        } else {
+            titleView.setCompoundDrawables(null, null, null, null)
+        }
+        
         if (meta != null) {
             metaView.text = meta
             metaView.visibility = View.VISIBLE

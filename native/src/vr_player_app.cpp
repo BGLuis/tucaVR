@@ -1246,7 +1246,7 @@ public:
         m_controlsSurfaceDef.graphicsCommand.GpuState.depthMaskEnable = false;
 
         media_status_t controlsStatus = AImageReader_newWithUsage(
-            1024, 384, AIMAGE_FORMAT_RGBA_8888,
+            1582, 800, AIMAGE_FORMAT_RGBA_8888,
             AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,
             2, &m_controlsImageReader);
             
@@ -1262,7 +1262,7 @@ public:
                     jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
                     jmethodID setupMethod = env->GetStaticMethodID(vrActivityClass, "setupControlsVirtualDisplay", "(Lcom/vrplayer/VRActivity;Landroid/view/Surface;II)V");
                     if (setupMethod) {
-                        env->CallStaticVoidMethod(vrActivityClass, setupMethod, java->ActivityObject, surfaceObj, 1024, 384);
+                        env->CallStaticVoidMethod(vrActivityClass, setupMethod, java->ActivityObject, surfaceObj, 1582, 800);
                         LOGI("VRPlayerApp: setupControlsVirtualDisplay called successfully!");
                     }
                     env->DeleteLocalRef(surfaceObj);
@@ -1468,7 +1468,7 @@ public:
         // 2.667:1 da textura 1024x384 preservada: 1.2x0.45).
         OVR::Vector3f baseControlsPos(0.0f, 0.4f, -1.3f);
         OVR::Vector3f worldControlsPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(baseControlsPos);
-        m_controlsTransform = OVR::Matrix4f::Translation(worldControlsPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) * OVR::Matrix4f::RotationX(-0.3f) * OVR::Matrix4f::Scaling(1.2f, 0.45f, 1.0f);
+        m_controlsTransform = OVR::Matrix4f::Translation(worldControlsPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) * OVR::Matrix4f::RotationX(-0.3f) * OVR::Matrix4f::Scaling(1.582f, 0.8f, 1.0f);
         OVR::Vector3f cPlaneCenter = worldControlsPos;
         OVR::Vector3f cPlaneNormal = OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(OVR::Matrix4f::RotationX(-0.3f).Transform(OVR::Vector3f(0, 0, 1)));
 

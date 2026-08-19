@@ -20,6 +20,7 @@ import android.widget.TextView
 class VoidTabRow(
     context: Context,
     labels: List<String>,
+    private val iconResIds: List<Int>? = null,
     private val onTabSelected: (index: Int) -> Unit
 ) : LinearLayout(context) {
 
@@ -31,12 +32,13 @@ class VoidTabRow(
     init {
         orientation = HORIZONTAL
         labels.forEachIndexed { index, label ->
-            addView(buildTab(label, index), LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
+            val iconId = iconResIds?.getOrNull(index) ?: 0
+            addView(buildTab(label, index, iconId), LayoutParams(0, LayoutParams.WRAP_CONTENT, 1f))
         }
         styleAll()
     }
 
-    private fun buildTab(label: String, index: Int): LinearLayout {
+    private fun buildTab(label: String, index: Int, iconResId: Int): LinearLayout {
         // Alvo de toque generoso (mesma razao do VoidButton/VoidListRow —
         // feedback de usuario em validacao real: hitbox pequena demais pra
         // apontar com precisao via raycast em VR).
@@ -50,6 +52,17 @@ class VoidTabRow(
             gravity = Gravity.CENTER
             val padV = VoidTheme.dpToPx(context, 24f)
             setPadding(0, padV, 0, padV)
+            
+            if (iconResId != 0) {
+                val icon = context.getDrawable(iconResId)?.mutate()
+                icon?.colorFilter = android.graphics.PorterDuffColorFilter(VoidTheme.colorTextSecondary, android.graphics.PorterDuff.Mode.SRC_IN)
+                if (icon != null) {
+                    val size = VoidTheme.dpToPx(context, 20f)
+                    icon.setBounds(0, 0, size, size)
+                    setCompoundDrawables(icon, null, null, null)
+                    compoundDrawablePadding = VoidTheme.dpToPx(context, 8f)
+                }
+            }
         }
         tabLabels.add(text)
         column.addView(text)
@@ -90,7 +103,11 @@ class VoidTabRow(
     private fun styleAll() {
         tabLabels.forEachIndexed { i, tv ->
             val active = i == activeIndex
-            tv.setTextColor(if (active) VoidTheme.colorAccent else VoidTheme.colorTextSecondary)
+            val color = if (active) VoidTheme.colorAccent else VoidTheme.colorTextSecondary
+            tv.setTextColor(color)
+            tv.compoundDrawables[0]?.let { drawable ->
+                drawable.colorFilter = android.graphics.PorterDuffColorFilter(color, android.graphics.PorterDuff.Mode.SRC_IN)
+            }
             tabUnderlineCores[i].visibility = if (active) View.VISIBLE else View.INVISIBLE
             tabUnderlineGlows[i].visibility = if (active) View.VISIBLE else View.INVISIBLE
         }

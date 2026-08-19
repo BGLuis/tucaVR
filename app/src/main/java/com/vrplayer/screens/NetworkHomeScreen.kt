@@ -75,17 +75,21 @@ class NetworkHomeScreen(
             pageContainer.addView(page)
         }
 
+        val tabIcons = listOf(R.drawable.ic_link, R.drawable.ic_storage, R.drawable.ic_broadcast, R.drawable.ic_lock)
         val tabRow = VoidTabRow(
             context,
             listOf(
-                context.getString(R.string.network_tab_url),
-                context.getString(R.string.network_tab_smb),
-                context.getString(R.string.network_tab_ftp),
-                context.getString(R.string.network_tab_sftp)
-            )
+                context.getString(R.string.network_tab_url).trim(),
+                context.getString(R.string.network_tab_smb).trim(),
+                context.getString(R.string.network_tab_ftp).trim(),
+                context.getString(R.string.network_tab_sftp).trim()
+            ),
+            iconResIds = tabIcons
         ) { index ->
             activeTabIndex = index
-            pages.forEachIndexed { i, page -> page.visibility = if (i == index) View.VISIBLE else View.GONE }
+            pages.forEachIndexed { i, page ->
+                page.visibility = if (i == activeTabIndex) View.VISIBLE else View.GONE
+            }
         }
         tabRow.setActiveIndex(activeTabIndex, notify = false)
         tabRow.layoutParams = LinearLayout.LayoutParams(
@@ -142,7 +146,7 @@ class NetworkHomeScreen(
                     layoutParams = LinearLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
                     ).also { it.bottomMargin = VoidTheme.dpToPx(context, 8f) }
-                    bind(context.getString(R.string.network_url_recent_row_format, url), showThumbnailSlot = false)
+                    bind(context.getString(R.string.network_url_recent_row_format, url).trim(), showThumbnailSlot = false, iconResId = R.drawable.ic_link)
                     titleView.typeface = VoidTheme.typefaceMono
                     titleView.textSize = 15f
                 }
@@ -160,11 +164,13 @@ class NetworkHomeScreen(
         }
 
         val btnPaste = UiHelpers.buildPasteButton(context, activity, urlInput).apply {
-            text = context.getString(R.string.network_url_btn_paste)
+            text = context.getString(R.string.network_url_btn_paste).trim()
+            setIcon(R.drawable.ic_content_paste)
             textSize = 18f
         }
         val btnPlay = com.vrplayer.designsystem.VoidButton(context, com.vrplayer.designsystem.VoidButtonStyle.PRIMARY).apply {
-            text = context.getString(R.string.network_url_btn_play)
+            text = context.getString(R.string.network_url_btn_play).trim()
+            setIcon(R.drawable.ic_play_arrow)
             textSize = 18f
             setOnClickListener {
                 playUrl(urlInput.text.toString().trim(), urlStatus) { refreshRecentUrls() }

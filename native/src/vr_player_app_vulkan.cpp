@@ -131,8 +131,8 @@ constexpr float kSphereRadius = 20.0f;
 // x*1024f, y*384f) ou o Y do toque fica descalibrado.
 constexpr uint32_t kUiTexWidth = 1024;
 constexpr uint32_t kUiTexHeight = 768;
-constexpr uint32_t kControlsTexWidth = 1024;
-constexpr uint32_t kControlsTexHeight = 384;
+constexpr uint32_t kControlsTexWidth = 1582;
+constexpr uint32_t kControlsTexHeight = 800;
 
 // Metricas de performance (debug, ver docs/DEBUGGING.md).
 constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz

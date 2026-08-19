@@ -93,18 +93,19 @@ class FileAdapter(
 
         when (val row = rows[position]) {
             is Row.Up -> {
-                holder.row.bind(context.getString(R.string.browser_row_up), showThumbnailSlot = false)
+                holder.row.bind(context.getString(R.string.browser_row_up).trim(), showThumbnailSlot = false, iconResId = R.drawable.ic_arrow_up)
                 holder.itemView.setOnClickListener { onUpClick() }
             }
             is Row.Item -> {
                 val entry = row.entry
                 val label = if (entry.type == MediaType.DIRECTORY) {
-                    context.getString(R.string.common_row_dir_format, entry.name)
+                    context.getString(R.string.common_row_dir_format, entry.name).trim()
                 } else {
-                    context.getString(R.string.common_row_video_format, entry.name)
+                    context.getString(R.string.common_row_video_format, entry.name).trim()
                 }
+                val iconRes = if (entry.type == MediaType.DIRECTORY) R.drawable.ic_folder else R.drawable.ic_movie
                 val meta = if (entry.type == MediaType.VIDEO) formatFileSize(context, entry.sizeBytes) else null
-                holder.row.bind(label, meta = meta, showThumbnailSlot = entry.type == MediaType.VIDEO)
+                holder.row.bind(label, meta = meta, showThumbnailSlot = entry.type == MediaType.VIDEO, iconResId = iconRes)
 
                 if (entry.type == MediaType.DIRECTORY) {
                     holder.itemView.setOnClickListener { onDirectoryClick(File(entry.path)) }
