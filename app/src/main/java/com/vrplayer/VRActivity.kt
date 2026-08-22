@@ -90,6 +90,24 @@ class VRActivity : NativeActivity() {
     // playSmb, chamados via VRPresentation apos onCreate).
     val historyTracker: PlaybackHistoryTracker by lazy { PlaybackHistoryTracker(this) }
     val format3dStore: Format3DPreferenceStore by lazy { Format3DPreferenceStore(this) }
+    val thermalMonitor: ThermalMonitor by lazy { ThermalMonitor(this) }
+
+    private val thermalCallback: (ThermalMonitor.ThermalState) -> Unit = { state ->
+        onThermalStateChanged(state)
+    }
+
+    private fun onThermalStateChanged(state: ThermalMonitor.ThermalState) {
+        nativeSetThermalLevel(state.level.rawLevel)
+        controlsPresentation?.onThermalStateChanged(state)
+
+        if (state.actions.contains(ThermalMonitor.ThermalAction.PAUSE_PLAYBACK)) {
+            // T14.1/T14.2: Em nível crítico/shutdown, pausa a reprodução imediatamente para resfriamento
+            nativeTogglePlayPause()
+            Toast.makeText(this, getString(R.string.thermal_critical_pause), Toast.LENGTH_LONG).show()
+        } else if (state.actions.contains(ThermalMonitor.ThermalAction.WARN_USER) && state.level == ThermalMonitor.ThermalLevel.SEVERE) {
+            Toast.makeText(this, getString(R.string.thermal_warning_reducing_quality), Toast.LENGTH_SHORT).show()
+        }
+    }
 
     // Fonte da reproducao atual (T-seek-ux) — setado nos 5 entry points de
     // playback abaixo. `PlaybackHistoryTracker.getCurrent()` ja guarda algo
@@ -126,12 +144,17 @@ class VRActivity : NativeActivity() {
                         if (mode >= 0) nativeSetScreenMode(mode)
                     }
                     ACTION_DEBUG_CYCLE_SCREEN_MODE -> nativeCycle3DMode()
+                    ACTION_DEBUG_SET_THERMAL_STATUS -> {
+                        val status = intent.getIntExtra(EXTRA_THERMAL_STATUS, -1)
+                        if (status >= 0) thermalMonitor.simulateThermalStatus(status)
+                    }
                 }
             }
         }
         val filter = IntentFilter().apply {
             addAction(ACTION_DEBUG_SET_SCREEN_MODE)
             addAction(ACTION_DEBUG_CYCLE_SCREEN_MODE)
+            addAction(ACTION_DEBUG_SET_THERMAL_STATUS)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
@@ -284,6 +307,7 @@ class VRActivity : NativeActivity() {
     override fun onResume() {
         super.onResume()
         presentation?.loadFiles()
+        thermalMonitor.startMonitoring(callback = thermalCallback)
         pendingAutoPlayPath?.let { path ->
             if (!autoPlayDispatched) {
                 autoPlayDispatched = true
@@ -299,6 +323,7 @@ class VRActivity : NativeActivity() {
 
     override fun onPause() {
         super.onPause()
+        thermalMonitor.stopMonitoring(thermalCallback)
         autoPlayHandler.removeCallbacks(playbackErrorPoll)
     }
 
@@ -314,10 +339,12 @@ class VRActivity : NativeActivity() {
         const val EXTRA_SCREEN_MODE = "screen_mode"
         const val EXTRA_CAPTURE_PATH = "capture_path"
 
-        // Ver registerDebugReceiverIfDebuggable — troca o ScreenMode de um
-        // video ja tocando via adb, sem relançar o intent/autoplay acima.
+        // Ver registerDebugReceiverIfDebuggable — troca o ScreenMode ou simula status termico
+        // de um video ja tocando via adb, sem relançar o intent/autoplay acima.
         const val ACTION_DEBUG_SET_SCREEN_MODE = "com.vrplayer.debug.SET_SCREEN_MODE"
         const val ACTION_DEBUG_CYCLE_SCREEN_MODE = "com.vrplayer.debug.CYCLE_SCREEN_MODE"
+        const val ACTION_DEBUG_SET_THERMAL_STATUS = "com.vrplayer.debug.SET_THERMAL_STATUS"
+        const val EXTRA_THERMAL_STATUS = "status"
         private const val AUTO_PLAY_DELAY_MS = 3000L
         private const val PLAYBACK_ERROR_POLL_MS = 1000L
 
@@ -840,9 +867,6 @@ class VRActivity : NativeActivity() {
     // sobre select_audio_track). Chamada barata (so grava um campo), segura
     // direto da UI thread.
     external fun nativeSetAudioTrack(ordinal: Int)
-    external fun nativeSetSpatialAudioMode(mode: Int)
-    external fun nativeSetSpatialAudioHeadTracking(enabled: Boolean)
-
     // Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
     external fun nativeSetSubtitleTrack(trackIndex: Int)
     external fun nativeGetSubtitleTrack(): Int
@@ -850,4 +874,7 @@ class VRActivity : NativeActivity() {
     external fun nativeGetSubtitleOffsetMs(): Long
     external fun nativeLoadExternalSubtitle(path: String): Boolean
     external fun nativeGetSubtitleTrackCount(): Int
+
+    // T14.1/T14.2: Notifica o pipeline de render nativo (C++/Rust) sobre o nível térmico atual
+    external fun nativeSetThermalLevel(level: Int)
 }

@@ -36,6 +36,9 @@ extern "C" {
     // Fase 0.4 T5: Foveated Rendering (implementacao real em
     // vr_player_app_vulkan.cpp, ver ApplyFoveation).
     extern void set_foveation_enabled(uint32_t enabled);
+    // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
+    extern void set_thermal_level(uint32_t level);
+    extern uint32_t get_thermal_level();
     extern void set_spatial_audio_mode(uint32_t mode);
     extern uint32_t get_spatial_audio_mode();
     extern void set_spatial_audio_head_tracking(uint32_t enabled);
@@ -291,6 +294,11 @@ Java_com_vrplayer_VRActivity_nativeSetKeyboardActive(JNIEnv*, jobject, jboolean 
 extern "C" JNIEXPORT void JNICALL
 Java_com_vrplayer_VRActivity_nativeSetFoveationEnabled(JNIEnv*, jobject, jboolean enabled) {
     set_foveation_enabled(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeSetThermalLevel(JNIEnv*, jobject, jint level) {
+    set_thermal_level(static_cast<uint32_t>(level));
 }
 
 extern "C" JNIEXPORT void JNICALL

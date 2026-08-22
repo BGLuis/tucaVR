@@ -57,6 +57,12 @@
 #include "subtitle.vert.h"
 #include "subtitle.frag.h"
 
+#ifndef XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME
+#define XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME "XR_FB_display_refresh_rate"
+#endif
+
+typedef XrResult (XRAPI_PTR *PFN_xrRequestDisplayRefreshRateFB)(XrSession session, float displayRefreshRate);
+
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "VRPlayerAppVK", __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "VRPlayerAppVK", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VRPlayerAppVK", __VA_ARGS__)
@@ -69,6 +75,8 @@ extern "C" {
     extern uint32_t get_swap_eyes();
     // Fase 0.4 T5: Foveated Rendering — ver ApplyFoveation abaixo.
     extern uint32_t get_foveation_enabled();
+    // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006)
+    extern uint32_t get_thermal_level();
     // Rastreamento de cabeça para áudio espacial
     extern void set_head_pose_orientation(float x, float y, float z, float w);
     // Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
@@ -318,6 +326,13 @@ struct AppState {
     PFN_xrUpdateSwapchainFB pfnUpdateSwapchainFB = nullptr;
     XrFoveationProfileFB foveationProfile = XR_NULL_HANDLE;
     bool foveationCurrentlyApplied = false; // ultimo estado efetivamente aplicado aos swapchains
+
+    // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006)
+    PFN_xrRequestDisplayRefreshRateFB pfnRequestDisplayRefreshRateFB = nullptr;
+    uint32_t thermalLevel = 0;
+    float renderResolutionScale = 1.0f;
+    float thermalPollAccumMs = 0.0f;
+    static constexpr float kThermalPollIntervalMs = 1000.0f;
 
     VkInstance vkInstance = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT vkDebugMessenger = VK_NULL_HANDLE; // ver CreateVulkanInstanceAndDevice
@@ -673,6 +688,7 @@ void CreateXrInstance(AppState& state) {
         XR_FB_FOVEATION_EXTENSION_NAME,
         XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME,
         XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME,
+        XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME,
     };
 
     XrApplicationInfo appInfo{};
@@ -3543,6 +3559,36 @@ void RenderFrame(AppState& state) {
                 ApplyFoveation(state, desired);
             }
         }
+
+        // Fase 0.2 T14: mesma cadencia ~1Hz, checa se houve mudanca de status termico
+        state.thermalPollAccumMs += frameMs;
+        if (state.thermalPollAccumMs >= AppState::kThermalPollIntervalMs) {
+            state.thermalPollAccumMs = 0.0f;
+            uint32_t currentThermal = get_thermal_level();
+            if (currentThermal != state.thermalLevel) {
+                state.thermalLevel = currentThermal;
+
+                // T14.2 REDUCE_RENDER_RESOLUTION: escala de viewport/scissor dinâmica
+                if (state.thermalLevel == 0 || state.thermalLevel == 1) {
+                    state.renderResolutionScale = 1.0f;
+                } else if (state.thermalLevel == 2) {
+                    state.renderResolutionScale = 0.9f;
+                } else {
+                    state.renderResolutionScale = 0.8f;
+                }
+
+                // T14.2 LIMIT_FPS: 72Hz em níveis térmicos elevados (SEVERE / CRITICAL)
+                if (state.pfnRequestDisplayRefreshRateFB != nullptr) {
+                    float targetFps = (state.thermalLevel >= 3) ? 72.0f : 90.0f;
+                    state.pfnRequestDisplayRefreshRateFB(state.session, targetFps);
+                    LOGI("VRPlayerAppVK: Thermal status %u -> scale %.2f, refresh rate %.0fHz",
+                        state.thermalLevel, state.renderResolutionScale, targetFps);
+                } else {
+                    LOGI("VRPlayerAppVK: Thermal status %u -> scale %.2f",
+                        state.thermalLevel, state.renderResolutionScale);
+                }
+            }
+        }
     }
     state.lastFrameTimestamp = frameStart;
     state.hasLastFrameTimestamp = true;
@@ -3697,7 +3743,10 @@ void RenderFrame(AppState& state) {
             const Mat4 proj = Mat4ProjectionFromFov(views[eye].fov, 0.05f, 100.0f);
             const Mat4 mvp  = Mat4Multiply(Mat4Multiply(proj, view), screenModel);
 
-            VkExtent2D extent{static_cast<uint32_t>(eyeChain.width), static_cast<uint32_t>(eyeChain.height)};
+            // T14.2 REDUCE_RENDER_RESOLUTION: renderiza em viewport redimensionado sob estresse térmico
+            const int32_t renderW = static_cast<int32_t>(eyeChain.width * state.renderResolutionScale);
+            const int32_t renderH = static_cast<int32_t>(eyeChain.height * state.renderResolutionScale);
+            const VkExtent2D extent{static_cast<uint32_t>(renderW), static_cast<uint32_t>(renderH)};
             VkFramebuffer fb = eyeChain.framebuffers[imageIndex];
 
             // ---------------------------------------------------------------
@@ -3829,7 +3878,7 @@ void RenderFrame(AppState& state) {
             projectionViews[eye].fov  = views[eye].fov;
             projectionViews[eye].subImage.swapchain = eyeChain.handle;
             projectionViews[eye].subImage.imageRect.offset = {0, 0};
-            projectionViews[eye].subImage.imageRect.extent = {eyeChain.width, eyeChain.height};
+            projectionViews[eye].subImage.imageRect.extent = {renderW, renderH};
         }
     }
 
@@ -3953,6 +4002,15 @@ void android_main(android_app* app) {
     sessionCreateInfo.systemId = state.systemId;
     OXR(xrCreateSession(state.instance, &sessionCreateInfo, &state.session));
     SetupOpenXrInputs(state);
+
+    state.pfnRequestDisplayRefreshRateFB =
+        LoadXrFunction<PFN_xrRequestDisplayRefreshRateFB>(state.instance, "xrRequestDisplayRefreshRateFB");
+    if (state.pfnRequestDisplayRefreshRateFB != nullptr) {
+        state.pfnRequestDisplayRefreshRateFB(state.session, 90.0f);
+        LOGI("VRPlayerAppVK: Requested 90Hz refresh rate.");
+    } else {
+        LOGI("VRPlayerAppVK: xrRequestDisplayRefreshRateFB not available.");
+    }
 
     CreateReferenceSpace(state);
     CreateSwapchains(state);

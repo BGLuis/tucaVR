@@ -32,9 +32,10 @@ out/
 app/src/main/jniLibs/
 
 # Dependencias externas baixadas por scripts/setup-deps.sh (nao versionar SDKs de terceiros)
-/sdk/meta-openxr-sdk/
-/sdk/*.zip
+/sdk/
+sdk
 /ffmpeg-android-maker/
+ffmpeg-android-maker
 
 # Fixtures/certificados gerados por scripts/test-network-protocols.sh (T6/T7 integration tests)
 /docker/network-tests/fixtures/

@@ -47,10 +47,23 @@
 
 use std::io::{self, Read, Seek, SeekFrom};
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+
+/// Flag global de estresse térmico (T14.1/T14.2 `PAUSE_PREFETCH`).
+/// Quando ativada (nível MODERATE ou superior), pausa a pre-busca especulativa
+/// em segundo plano para aliviar CPU / tráfego de rede concorrente.
+static THERMAL_THROTTLE_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_thermal_throttle_active(active: bool) {
+    THERMAL_THROTTLE_ACTIVE.store(active, Ordering::Relaxed);
+}
+
+pub fn is_thermal_throttle_active() -> bool {
+    THERMAL_THROTTLE_ACTIVE.load(Ordering::Relaxed)
+}
 
 /// Contadores de instrumentacao do `PrefetchReader` (docs/DEBUGGING.md),
 /// expostos via `PrefetchReader::stats()` — quem pega o `Arc` pode fazer
@@ -186,6 +199,7 @@ pub struct PrefetchReader<S: RangeSource> {
     /// Quantos blocos especulativos seguidos ja foram pedidos desde o
     /// ultimo miss nao-sequencial — ver `next_ramp_size`.
     sequential_streak: u32,
+    thermal_throttled: Option<bool>,
     _source: PhantomData<S>,
 }
 
@@ -258,6 +272,7 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
             block_size,
             seek_block_size,
             sequential_streak: 0,
+            thermal_throttled: None,
             _source: PhantomData,
         };
         // Dispara a busca do primeiro bloco ja na construcao: o primeiro
@@ -268,6 +283,16 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
         // sequencial em regime permanente.
         this.kick_prefetch_sized(0, seek_block_size);
         this
+    }
+
+    /// Permite forçar localmente o estado de thermal throttle neste reader
+    /// (útil para testes unitários isolados de concorrência).
+    pub fn set_local_thermal_throttle(&mut self, active: bool) {
+        self.thermal_throttled = Some(active);
+    }
+
+    fn is_throttled(&self) -> bool {
+        self.thermal_throttled.unwrap_or_else(is_thermal_throttle_active)
     }
 
     fn cache_hit(&self, pos: u64) -> bool {
@@ -291,6 +316,10 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
     /// forte o bastante pra pagar o bloco inteiro se o acesso for so um
     /// pulo curto (ex.: keyframe seguinte de um GOP menor que o esperado).
     fn kick_prefetch(&mut self, offset: u64) {
+        if self.is_throttled() {
+            // T14.1/T14.2: Em estresse térmico, suspende read-ahead especulativo
+            return;
+        }
         let size = self.next_ramp_size();
         self.kick_prefetch_sized(offset, size);
     }
@@ -769,5 +798,30 @@ mod tests {
             requested.ends_with(&[seek_block, medium_block, full_block]),
             "esperava a rampa em 3 passos (seek -> medio -> cheio) no final, fetches pedidos: {requested:?}"
         );
+    }
+
+    #[test]
+    fn thermal_throttle_pauses_speculative_prefetch() {
+        let block_size = 64 * 1024;
+        let data: Vec<u8> = (0..255u8).cycle().take(block_size * 4).collect();
+        let sizes = Arc::new(Mutex::new(Vec::new()));
+        let source = SizeTrackingSource { data: data.clone(), requested_sizes: sizes.clone() };
+        let mut reader = PrefetchReader::with_block_size(source, block_size);
+        reader.set_local_thermal_throttle(true);
+
+        // O bloco inicial (0) é buscado na criação via kick_prefetch_sized
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Consome todo o bloco 0 sequencialmente
+        let mut out = vec![0u8; block_size];
+        reader.read_exact(&mut out).unwrap();
+        assert_eq!(out, data[0..block_size]);
+
+        std::thread::sleep(Duration::from_millis(50));
+
+        // Com thermal throttle ativo, kick_prefetch não deve ter disparado prefetch especulativo
+        let requested = sizes.lock().unwrap();
+        // Apenas o primeiro bloco síncrono/inicial foi pedido
+        assert_eq!(requested.len(), 1, "com thermal throttle ativo, nenhum prefetch especulativo deveria ter sido disparado: {requested:?}");
     }
 }

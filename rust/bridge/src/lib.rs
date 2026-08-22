@@ -222,6 +222,25 @@ pub extern "C" fn get_foveation_enabled() -> u32 {
     FOVEATION_ENABLED.load(Ordering::Relaxed) as u32
 }
 
+// Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
+// Guarda o nível térmico atual enviado pelo Kotlin ThermalMonitor (via JNI/C++).
+// 0=NORMAL, 1=LIGHT, 2=MODERATE, 3=SEVERE, 4=CRITICAL, 5=SHUTDOWN.
+// C++ Vulkan e GLES fazem polling (~1Hz) para aplicar ações no pipeline de render
+// (escala de resolução do viewport, refresh rate 72Hz, foveation boost).
+static THERMAL_LEVEL: AtomicU32 = AtomicU32::new(0);
+
+#[no_mangle]
+pub extern "C" fn set_thermal_level(level: u32) {
+    THERMAL_LEVEL.store(level, Ordering::Relaxed);
+    // Nível >= 2 (MODERATE) ativa mitigação no prefetch de rede (T14.1/T14.2 PAUSE_PREFETCH)
+    protocols::prefetch::set_thermal_throttle_active(level >= 2);
+}
+
+#[no_mangle]
+pub extern "C" fn get_thermal_level() -> u32 {
+    THERMAL_LEVEL.load(Ordering::Relaxed)
+}
+
 /// T1.4: avanca pro proximo modo do ciclo (chamado pelo botao "🧊" do painel
 /// de controles). Retorna o novo modo, pra o Kotlin nao precisar de uma
 /// chamada extra so pra ler de volta o que acabou de escrever.
