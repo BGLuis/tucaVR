@@ -178,6 +178,13 @@ extern "C" {
     // T13.2: seleciona a trilha de audio pro PROXIMO load_at() — chamar
     // sempre antes de tocar (inclusive ordinal 0), ver rust/bridge/src/lib.rs.
     extern void set_desired_audio_track(uint32_t ordinal);
+
+    // Rastreamento de cabeça e configuração de áudio espacial
+    extern void set_head_pose_orientation(float x, float y, float z, float w);
+    extern void set_spatial_audio_mode(uint32_t mode);
+    extern uint32_t get_spatial_audio_mode();
+    extern void set_spatial_audio_head_tracking(uint32_t enabled);
+    extern uint32_t get_spatial_audio_head_tracking();
 }
 
 // Debug: dump do olho esquerdo pra PPM sob demanda (ver nativeRequestFrameCapture)
@@ -359,6 +366,16 @@ Java_com_vrplayer_VRActivity_nativeSetKeyboardActive(JNIEnv* env, jobject thiz, 
 extern "C" JNIEXPORT void JNICALL
 Java_com_vrplayer_VRActivity_nativeSetFoveationEnabled(JNIEnv* env, jobject thiz, jboolean enabled) {
     set_foveation_enabled(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeSetSpatialAudioMode(JNIEnv* env, jobject thiz, jint mode) {
+    set_spatial_audio_mode((uint32_t)(mode < 0 ? 0 : mode));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeSetSpatialAudioHeadTracking(JNIEnv* env, jobject thiz, jboolean enabled) {
+    set_spatial_audio_head_tracking(enabled ? 1 : 0);
 }
 
 // T6.4: inicia playback SMB. Ver nota acima de start_smb_playback sobre por
@@ -1523,6 +1540,14 @@ public:
             m_sceneTranslationOffset.y = in.HeadPose.Translation.y - 1.5f;
             m_needsOsRecenter = false;
         }
+
+        // Rastreamento de cabeça para o processador de áudio espacial (Rust)
+        set_head_pose_orientation(
+            in.HeadPose.Rotation.x,
+            in.HeadPose.Rotation.y,
+            in.HeadPose.Rotation.z,
+            in.HeadPose.Rotation.w
+        );
 
         static bool prevA = false;
         static bool prevX = false;

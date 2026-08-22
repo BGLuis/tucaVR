@@ -66,6 +66,8 @@ extern "C" {
     extern uint32_t get_swap_eyes();
     // Fase 0.4 T5: Foveated Rendering — ver ApplyFoveation abaixo.
     extern uint32_t get_foveation_enabled();
+    // Rastreamento de cabeça para áudio espacial
+    extern void set_head_pose_orientation(float x, float y, float z, float w);
     extern void start_video_playback(const char* path, float startTimeSec);
     // Estagio 6 — paridade com o caminho GLES (play-pause, teclado nativo,
     // volume, seek).
@@ -3228,6 +3230,14 @@ void RenderFrame(AppState& state) {
 
         // Estagio 4/5: Processar interacoes apos obtermos a posicao da cabeca
         UpdateInteraction(state, frameState.predictedDisplayTime, headCenter, views[0].pose.orientation);
+
+        // Atualiza a orientação da cabeça para o pipeline de áudio espacial (Rust)
+        set_head_pose_orientation(
+            views[0].pose.orientation.x,
+            views[0].pose.orientation.y,
+            views[0].pose.orientation.z,
+            views[0].pose.orientation.w
+        );
 
         // Posicao/escala da tela virtual — mesma base do caminho GLES
         // (vr_player_app.cpp: m_screenPosition = {0, 1.5, -2},

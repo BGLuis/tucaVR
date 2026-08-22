@@ -36,6 +36,10 @@ extern "C" {
     // Fase 0.4 T5: Foveated Rendering (implementacao real em
     // vr_player_app_vulkan.cpp, ver ApplyFoveation).
     extern void set_foveation_enabled(uint32_t enabled);
+    extern void set_spatial_audio_mode(uint32_t mode);
+    extern uint32_t get_spatial_audio_mode();
+    extern void set_spatial_audio_head_tracking(uint32_t enabled);
+    extern uint32_t get_spatial_audio_head_tracking();
     extern char* take_last_playback_error();
     extern void free_rust_string(char* s);
     extern char* probe_http_url(const char* url);
@@ -607,4 +611,14 @@ Java_com_vrplayer_VRActivity_nativeSftpReadMetadata(JNIEnv* env, jobject,
 extern "C" JNIEXPORT void JNICALL
 Java_com_vrplayer_VRActivity_nativeSetAudioTrack(JNIEnv* env, jobject, jint ordinal) {
     set_desired_audio_track((uint32_t)(ordinal < 0 ? 0 : ordinal));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeSetSpatialAudioMode(JNIEnv* env, jobject, jint mode) {
+    set_spatial_audio_mode((uint32_t)(mode < 0 ? 0 : mode));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeSetSpatialAudioHeadTracking(JNIEnv* env, jobject, jboolean enabled) {
+    set_spatial_audio_head_tracking(enabled ? 1 : 0);
 }

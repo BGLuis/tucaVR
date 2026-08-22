@@ -562,6 +562,14 @@ impl PlaybackController {
 
         let audio_thread = thread::spawn(move || {
             let mut applied_speed = 1.0f32;
+            let layout = audio_decoder
+                .as_ref()
+                .map(|ad| ad.channel_layout())
+                .unwrap_or(media_logic::spatial_audio::AudioChannelLayout::Stereo);
+            let mut spatial_processor =
+                media_logic::spatial_audio::SpatialAudioProcessor::new(layout, 48000.0);
+            let mut binaural_buffer = Vec::with_capacity(4096);
+
             // Reconstruir o resampler descarta o historico interno do filtro
             // FIR, o que gera um pequeno estalo/transiente a cada troca. O
             // slider de velocidade dispara onProgressChanged (e portanto
@@ -604,8 +612,16 @@ impl PlaybackController {
                                 let pts_sec = pts as f64 * audio_time_base;
                                 sync_a.update_audio_pts(pts_sec);
 
+                                let head_rot = media_logic::spatial_audio::get_global_head_orientation();
+                                let spatial_mode = media_logic::spatial_audio::get_global_spatial_mode();
+                                let head_tracking = media_logic::spatial_audio::get_global_head_tracking_enabled();
+
+                                spatial_processor.set_mode(spatial_mode);
+                                spatial_processor.set_head_tracking_enabled(head_tracking);
+                                spatial_processor.process(&samples, head_rot, &mut binaural_buffer);
+
                                 if let Some(sender) = &audio_sender {
-                                    for &sample in &samples {
+                                    for &sample in &binaural_buffer {
                                         if !try_send_until_stopped(sender, sample, &is_running_a) {
                                             break;
                                         }

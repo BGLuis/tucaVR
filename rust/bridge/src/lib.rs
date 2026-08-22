@@ -1024,6 +1024,36 @@ pub extern "C" fn set_desired_audio_track(ordinal: u32) {
     }
 }
 
+/// Atualiza a orientação da cabeça (quaternion x, y, z, w) a cada frame do OpenXR (~90Hz).
+/// Lock-free, chamado diretamente pelo render loop C++.
+#[no_mangle]
+pub extern "C" fn set_head_pose_orientation(x: f32, y: f32, z: f32, w: f32) {
+    media_logic::spatial_audio::set_global_head_orientation(x, y, z, w);
+}
+
+/// Configura o modo de processamento espacial:
+/// 0 = DirectStereo (pass-through), 1 = VirtualizedBinaural (HRTF 3D), 2 = SimpleDownmix.
+#[no_mangle]
+pub extern "C" fn set_spatial_audio_mode(mode: u32) {
+    media_logic::spatial_audio::set_global_spatial_mode(media_logic::spatial_audio::SpatialAudioMode::from(mode));
+}
+
+#[no_mangle]
+pub extern "C" fn get_spatial_audio_mode() -> u32 {
+    media_logic::spatial_audio::get_global_spatial_mode() as u32
+}
+
+/// Ativa ou desativa rastreamento de cabeça (head tracking) no áudio espacial.
+#[no_mangle]
+pub extern "C" fn set_spatial_audio_head_tracking(enabled: u32) {
+    media_logic::spatial_audio::set_global_head_tracking_enabled(enabled != 0);
+}
+
+#[no_mangle]
+pub extern "C" fn get_spatial_audio_head_tracking() -> u32 {
+    media_logic::spatial_audio::get_global_head_tracking_enabled() as u32
+}
+
 /// Libera o buffer retornado por `smb_generate_thumbnail`/
 /// `ftp_generate_thumbnail`/`sftp_generate_thumbnail`. `len` precisa ser
 /// exatamente o valor escrito em `out_len` por essas chamadas — o buffer foi
