@@ -49,6 +49,7 @@ fun PlaybackSource.historyKey(): String = when (this) {
     is PlaybackSource.Ftp -> "ftp|${server.name}|$path|$sizeBytes"
     is PlaybackSource.Sftp -> "sftp|${server.name}|$path|$sizeBytes"
     is PlaybackSource.Nfs -> "nfs|${server.name}|${server.path}|$path|$sizeBytes"
+    is PlaybackSource.Dlna -> "dlna|${server.name}|$url|$sizeBytes"
 }
 
 /** Ver [PlaybackHistory.mediaPath]. */
@@ -59,6 +60,7 @@ fun PlaybackSource.mediaPath(): String = when (this) {
     is PlaybackSource.Ftp -> path
     is PlaybackSource.Sftp -> path
     is PlaybackSource.Nfs -> path
+    is PlaybackSource.Dlna -> url
 }
 
 fun PlaybackSource.historySourceType(): HistorySourceType = when (this) {
@@ -68,6 +70,7 @@ fun PlaybackSource.historySourceType(): HistorySourceType = when (this) {
     is PlaybackSource.Ftp -> HistorySourceType.FTP
     is PlaybackSource.Sftp -> HistorySourceType.SFTP
     is PlaybackSource.Nfs -> HistorySourceType.NFS
+    is PlaybackSource.Dlna -> HistorySourceType.DLNA
 }
 
 /** Titulo padrao (usado quando quem chama nao tem um titulo melhor a mao). */
@@ -78,10 +81,11 @@ fun PlaybackSource.defaultHistoryTitle(): String = when (this) {
     is PlaybackSource.Ftp -> path.substringAfterLast('/')
     is PlaybackSource.Sftp -> path.substringAfterLast('/')
     is PlaybackSource.Nfs -> path.substringAfterLast('/')
+    is PlaybackSource.Dlna -> title
 }
 
 /**
- * JSON com dados do servidor SMB/FTP/SFTP/NFS para [PlaybackHistory.serverInfo]
+ * JSON com dados do servidor SMB/FTP/SFTP/NFS/DLNA para [PlaybackHistory.serverInfo]
  * — `null` para fontes que nao vem de um servidor salvo (local/HTTP).
  */
 fun PlaybackSource.serverInfoJson(): String? = when (this) {
@@ -111,6 +115,13 @@ fun PlaybackSource.serverInfoJson(): String? = when (this) {
         put("host", server.host)
         put("port", server.port)
         put("exportPath", server.path)
+    }.toString()
+    is PlaybackSource.Dlna -> JSONObject().apply {
+        put("serverId", server.id)
+        put("name", server.name)
+        put("host", server.host)
+        put("port", server.port)
+        put("controlUrl", server.path)
     }.toString()
     else -> null
 }

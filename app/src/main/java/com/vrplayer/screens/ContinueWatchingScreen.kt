@@ -186,6 +186,20 @@ class ContinueWatchingScreen(
                 activity.playNfs(server, entry.mediaPath, resumeAtMs = entry.positionMs)
                 onNavigate(Destination.Player(source))
             }
+            HistorySourceType.DLNA -> {
+                val server = resolveServer(entry.serverInfo) { id ->
+                    kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            com.vrplayer.history.AppDatabase.getInstance(context).savedServerDao().getById(id)
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                } ?: com.vrplayer.network.SavedServer(name = entry.title, protocol = com.vrplayer.network.ServerProtocol.DLNA, host = "", port = 0, path = "")
+                val source = PlaybackSource.Dlna(server, entry.title, entry.mediaPath)
+                activity.playDlna(server, entry.title, entry.mediaPath, resumeAtMs = entry.positionMs)
+                onNavigate(Destination.Player(source))
+            }
         }
     }
 

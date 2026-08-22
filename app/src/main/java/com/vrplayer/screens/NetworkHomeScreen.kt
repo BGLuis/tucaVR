@@ -42,13 +42,14 @@ class NetworkHomeScreen(
     private val scope: CoroutineScope,
     private val urlHistory: UrlHistoryStore,
     private val discoveryPageBuilder: () -> View,
+    private val dlnaPageBuilder: () -> View,
     private val smbPageBuilder: () -> View,
     private val nfsPageBuilder: () -> View,
     private val ftpPageBuilder: () -> View,
     private val sftpPageBuilder: () -> View,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
-    /** Índice da aba ativa (Discovery=0 / URL=1 / SMB=2 / NFS=3 / FTP=4 / SFTP=5). */
+    /** Índice da aba ativa (Discovery=0 / DLNA=1 / URL=2 / SMB=3 / NFS=4 / FTP=5 / SFTP=6). */
     var activeTabIndex: Int = 0
 ) {
 
@@ -66,12 +67,13 @@ class NetworkHomeScreen(
         }
 
         val discoveryPage = discoveryPageBuilder()
+        val dlnaPage      = dlnaPageBuilder()
         val urlPage       = buildUrlPage()
         val smbPage       = smbPageBuilder()
         val nfsPage       = nfsPageBuilder()
         val ftpPage       = ftpPageBuilder()
         val sftpPage      = sftpPageBuilder()
-        val pages = listOf(discoveryPage, urlPage, smbPage, nfsPage, ftpPage, sftpPage)
+        val pages = listOf(discoveryPage, dlnaPage, urlPage, smbPage, nfsPage, ftpPage, sftpPage)
 
         pages.forEachIndexed { index, page ->
             page.visibility = if (index == activeTabIndex) View.VISIBLE else View.GONE
@@ -80,6 +82,7 @@ class NetworkHomeScreen(
 
         val tabIcons = listOf(
             R.drawable.ic_search,
+            R.drawable.ic_movie,
             R.drawable.ic_link,
             R.drawable.ic_storage,
             R.drawable.ic_storage,
@@ -90,6 +93,7 @@ class NetworkHomeScreen(
             context,
             listOf(
                 context.getString(R.string.network_tab_discovery).trim(),
+                context.getString(R.string.network_tab_dlna).trim(),
                 context.getString(R.string.network_tab_url).trim(),
                 context.getString(R.string.network_tab_smb).trim(),
                 context.getString(R.string.network_tab_nfs).trim(),

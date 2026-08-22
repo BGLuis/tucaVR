@@ -57,6 +57,7 @@ class VRControlsPresentation(
     private lateinit var clockLabel: TextView
     private lateinit var btnPlayPause: com.vrplayer.designsystem.VoidIconButton
     private lateinit var modeSelectionModal: FrameLayout
+    private lateinit var subtitleSelectionModal: FrameLayout
     private var hudReceiver: android.content.BroadcastReceiver? = null
     private lateinit var timeLabel: TextView
     private lateinit var titleLabel: TextView
@@ -572,6 +573,17 @@ class VRControlsPresentation(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        val btnSubtitles = VoidIconButton(context, R.drawable.icon_subtitles, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
+                rightMargin = VoidTheme.dpToPx(context, 8f)
+            }
+            setOnClickListener {
+                buildSubtitleModalContent()
+                subtitleSelectionModal.visibility = View.VISIBLE
+            }
+        }
+        utilsLayout.addView(btnSubtitles)
+
         val btnVolume = VoidIconButton(context, R.drawable.icon_volume_2, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
             layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
         }
@@ -799,9 +811,196 @@ class VRControlsPresentation(
             addView(panel)
         }
         overlay.addView(modeSelectionModal)
+
+        // Modal de Selecao e Sincronizacao de Legendas (T9.6)
+        subtitleSelectionModal = FrameLayout(context).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            setBackgroundColor(android.graphics.Color.parseColor("#E6000000"))
+            visibility = View.GONE
+            isClickable = true
+            setOnClickListener { subtitleSelectionModal.visibility = View.GONE }
+
+            val panel = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = FrameLayout.LayoutParams(VoidTheme.dpToPx(context, 640f), FrameLayout.LayoutParams.WRAP_CONTENT).apply {
+                    gravity = Gravity.CENTER
+                }
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(VoidTheme.colorSurface)
+                    cornerRadius = VoidTheme.dp(context, 16f)
+                    setStroke(VoidTheme.dpToPx(context, VoidTheme.borderWidthDp), VoidTheme.colorBorder)
+                }
+                setPadding(VoidTheme.dpToPx(context, 24f), VoidTheme.dpToPx(context, 24f), VoidTheme.dpToPx(context, 24f), VoidTheme.dpToPx(context, 24f))
+            }
+            addView(panel)
+        }
+        overlay.addView(subtitleSelectionModal)
+
         setContentView(overlay)
 
         window?.setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
         window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+    }
+
+    private fun buildSubtitleModalContent() {
+        val panel = subtitleSelectionModal.getChildAt(0) as? LinearLayout ?: return
+        panel.removeAllViews()
+
+        val title = TextView(context).apply {
+            text = context.getString(R.string.subtitles_modal_title)
+            typeface = VoidTheme.typefaceBody
+            textSize = 24f
+            setTextColor(VoidTheme.colorText)
+            setPadding(0, 0, 0, VoidTheme.dpToPx(context, 20f))
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        }
+        panel.addView(title)
+
+        val trackCount = activity.nativeGetSubtitleTrackCount()
+        val currentTrack = activity.nativeGetSubtitleTrack()
+
+        // Container de faixas
+        val trackListContainer = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        }
+
+        // Opção Desativado (track = -1)
+        val isOffSelected = currentTrack < 0
+        val offBtn = buildSubtitleTrackButton(context.getString(R.string.subtitles_option_off), isOffSelected) {
+            activity.nativeSetSubtitleTrack(-1)
+            buildSubtitleModalContent()
+        }
+        trackListContainer.addView(offBtn)
+
+        // Faixas disponíveis
+        for (i in 0 until trackCount) {
+            val isSelected = currentTrack == i
+            val trackLabel = context.getString(R.string.subtitles_track_format, i + 1, "Track ${i + 1}")
+            val trackBtn = buildSubtitleTrackButton(trackLabel, isSelected) {
+                activity.nativeSetSubtitleTrack(i)
+                buildSubtitleModalContent()
+            }
+            trackListContainer.addView(trackBtn)
+        }
+        panel.addView(trackListContainer)
+
+        // Seção de Ajuste de Sincronização (Offset)
+        val syncSection = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = VoidTheme.dpToPx(context, 20f)
+                bottomMargin = VoidTheme.dpToPx(context, 20f)
+            }
+        }
+
+        val syncLabel = TextView(context).apply {
+            text = context.getString(R.string.subtitles_sync_label)
+            typeface = VoidTheme.typefaceBody
+            textSize = 18f
+            setTextColor(VoidTheme.colorText)
+            gravity = Gravity.CENTER
+        }
+        syncSection.addView(syncLabel)
+
+        val currentOffsetMs = activity.nativeGetSubtitleOffsetMs()
+        val offsetSec = currentOffsetMs / 1000.0
+        val offsetValueText = TextView(context).apply {
+            text = context.getString(R.string.subtitles_sync_value_format, offsetSec)
+            typeface = VoidTheme.typefaceMono
+            textSize = 22f
+            setTextColor(VoidTheme.colorAccent)
+            gravity = Gravity.CENTER
+            setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 12f))
+        }
+        syncSection.addView(offsetValueText)
+
+        val syncBtnsRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+        }
+
+        fun addOffsetBtn(label: String, deltaMs: Long) {
+            val btn = com.vrplayer.designsystem.VoidButton(context, com.vrplayer.designsystem.VoidButtonStyle.SECONDARY).apply {
+                text = label
+                textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    setMargins(VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f), 0)
+                }
+                setOnClickListener {
+                    val newOffset = if (deltaMs == 0L) 0L else activity.nativeGetSubtitleOffsetMs() + deltaMs
+                    activity.nativeSetSubtitleOffsetMs(newOffset)
+                    buildSubtitleModalContent()
+                }
+            }
+            syncBtnsRow.addView(btn)
+        }
+
+        addOffsetBtn(context.getString(R.string.subtitles_sync_minus_500), -500L)
+        addOffsetBtn(context.getString(R.string.subtitles_sync_minus_100), -100L)
+        addOffsetBtn(context.getString(R.string.subtitles_sync_reset), 0L)
+        addOffsetBtn(context.getString(R.string.subtitles_sync_plus_100), 100L)
+        addOffsetBtn(context.getString(R.string.subtitles_sync_plus_500), 500L)
+
+        syncSection.addView(syncBtnsRow)
+        panel.addView(syncSection)
+
+        // Botão Fechar
+        val closeBtn = com.vrplayer.designsystem.VoidIconButton(context, R.drawable.icon_x, com.vrplayer.designsystem.VoidButtonStyle.SECONDARY).apply {
+            val p = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 64f), VoidTheme.dpToPx(context, 64f)).apply {
+                gravity = Gravity.CENTER
+            }
+            layoutParams = p
+            setOnClickListener { subtitleSelectionModal.visibility = View.GONE }
+        }
+        panel.addView(closeBtn)
+    }
+
+    private fun buildSubtitleTrackButton(label: String, isSelected: Boolean, onClick: () -> Unit): LinearLayout {
+        return LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = VoidTheme.dpToPx(context, 8f)
+            }
+            if (isSelected) {
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(VoidTheme.colorSurfaceAlt)
+                    cornerRadius = VoidTheme.dp(context, 12f)
+                    setStroke(VoidTheme.dpToPx(context, 2f), VoidTheme.colorAccent)
+                }
+            } else {
+                background = android.graphics.drawable.RippleDrawable(
+                    android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#33FFFFFF")),
+                    android.graphics.drawable.GradientDrawable().apply {
+                        setColor(VoidTheme.colorSurfaceAlt)
+                        cornerRadius = VoidTheme.dp(context, 12f)
+                    }, null
+                )
+            }
+            setPadding(VoidTheme.dpToPx(context, 16f), VoidTheme.dpToPx(context, 12f), VoidTheme.dpToPx(context, 16f), VoidTheme.dpToPx(context, 12f))
+
+            val icon = ImageView(context).apply {
+                setImageResource(R.drawable.icon_subtitles)
+                setColorFilter(if (isSelected) VoidTheme.colorAccent else VoidTheme.colorText)
+                layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 28f), VoidTheme.dpToPx(context, 28f))
+            }
+            addView(icon)
+
+            val text = TextView(context).apply {
+                this.text = if (isSelected) "$label ✓" else label
+                typeface = VoidTheme.typefaceBody
+                textSize = 16f
+                setTextColor(if (isSelected) VoidTheme.colorAccent else VoidTheme.colorText)
+                setPadding(VoidTheme.dpToPx(context, 12f), 0, 0, 0)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+            addView(text)
+
+            setOnClickListener { onClick() }
+        }
     }
 }

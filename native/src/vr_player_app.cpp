@@ -109,6 +109,13 @@ extern "C" {
     // T10.1: Descoberta Automática
     extern char* discovery_scan_network(uint32_t timeout_ms);
 
+    // T7.2/T7.3: DLNA
+    extern char* dlna_get_device_description(const char* location);
+    extern char* dlna_browse_directory(const char* control_url, const char* object_id, uint32_t start_index, uint32_t max_count);
+
+    // T8.1/T8.6: HLS
+    extern char* hls_probe_variants(const char* url);
+
     // T9: thumbnails de rede — ver rust/bridge/src/lib.rs para o contrato
     // completo (RGBA cru exatamente max_width*max_height*4 bytes, ou nulo em
     // qualquer falha; o ponteiro retornado DEVE ser liberado com
@@ -747,13 +754,39 @@ Java_com_vrplayer_VRActivity_nativeCancelScrubStrip(JNIEnv* env, jobject thiz) {
     cancel_thumbnail_strip_generation();
 }
 
-// T7.1: probe HEAD-based de uma URL HTTP(S) (Accept-Ranges/tamanho) antes de
-// tocar, para a UI poder avisar se seek nao vai funcionar. Mesma ressalva de
-// bloqueio.
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_vrplayer_VRActivity_nativeProbeHttpUrl(JNIEnv* env, jobject thiz, jstring url) {
     const char* urlStr = env->GetStringUTFChars(url, nullptr);
     char* result = probe_http_url(urlStr);
+    env->ReleaseStringUTFChars(url, urlStr);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeDlnaGetDevice(JNIEnv* env, jobject thiz, jstring location) {
+    const char* locStr = env->GetStringUTFChars(location, nullptr);
+    char* result = dlna_get_device_description(locStr);
+    env->ReleaseStringUTFChars(location, locStr);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeDlnaBrowse(JNIEnv* env, jobject thiz, jstring controlUrl,
+                                              jstring objectId, jint startIndex, jint maxCount) {
+    const char* ctrlStr = env->GetStringUTFChars(controlUrl, nullptr);
+    const char* objStr = env->GetStringUTFChars(objectId, nullptr);
+
+    char* result = dlna_browse_directory(ctrlStr, objStr, (uint32_t)startIndex, (uint32_t)maxCount);
+
+    env->ReleaseStringUTFChars(controlUrl, ctrlStr);
+    env->ReleaseStringUTFChars(objectId, objStr);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeHlsProbeVariants(JNIEnv* env, jobject thiz, jstring url) {
+    const char* urlStr = env->GetStringUTFChars(url, nullptr);
+    char* result = hls_probe_variants(urlStr);
     env->ReleaseStringUTFChars(url, urlStr);
     return RustStringToJStringAndFree(env, result);
 }

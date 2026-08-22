@@ -5,7 +5,9 @@
 
 pub mod chunking;
 pub mod discovery;
+pub mod dlna;
 pub mod ftp;
+pub mod hls;
 pub mod http;
 pub mod nfs;
 pub mod prefetch;

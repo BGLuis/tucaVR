@@ -75,6 +75,7 @@ class FileDetailScreen(
     fun render(dest: Destination.FileDetail) {
         val source = dest.source
         var selectedAudioOrdinal = 0
+        var selectedSubtitleOrdinal = -1
 
         val root = VoidPanelChrome.newRoot(context)
         root.addView(
@@ -130,6 +131,7 @@ class FileDetailScreen(
             textSize = 22f
             setOnClickListener {
                 activity.nativeSetAudioTrack(selectedAudioOrdinal)
+                activity.nativeSetSubtitleTrack(selectedSubtitleOrdinal)
                 onPlay(source)
             }
         }
@@ -154,12 +156,11 @@ class FileDetailScreen(
                     renderTracks(metadata)
                 })
             }
-            metadata.subtitleTracks.forEach { track -> tracksSection.addView(buildSubtitleTrackRow(track)) }
-            if (metadata.subtitleTracks.isNotEmpty()) {
-                tracksSection.addView(
-                    VoidText.body(context, context.getString(R.string.file_detail_tracks_subtitle_note), sizeSp = 13f, secondary = true)
-                        .apply { setPadding(0, VoidTheme.dpToPx(context, 8f), 0, 0) }
-                )
+            metadata.subtitleTracks.forEach { track ->
+                tracksSection.addView(buildSubtitleTrackRow(track, selected = track.ordinal == selectedSubtitleOrdinal) {
+                    selectedSubtitleOrdinal = if (selectedSubtitleOrdinal == track.ordinal) -1 else track.ordinal
+                    renderTracks(metadata)
+                })
             }
         }
 
@@ -171,7 +172,7 @@ class FileDetailScreen(
                     ThumbnailGenerator.getThumbnail(context, MediaEntry(dest.displayName, source.path, dest.sizeBytes, dest.lastModified, MediaType.VIDEO))
                 is PlaybackSource.Smb, is PlaybackSource.Ftp, is PlaybackSource.Sftp ->
                     NetworkThumbnailGenerator.getThumbnail(context, activity, source)
-                is PlaybackSource.Http, is PlaybackSource.Nfs -> null
+                is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Dlna -> null
             }
             if (bitmap != null) thumbnailView.setImageBitmap(bitmap)
         }
@@ -271,19 +272,21 @@ class FileDetailScreen(
             setOnClickListener { onSelect() }
         }
 
-    private fun buildSubtitleTrackRow(track: TrackInfo): VoidListRow =
+    private fun buildSubtitleTrackRow(track: TrackInfo, selected: Boolean, onSelect: () -> Unit): VoidListRow =
         VoidListRow(context).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 .also { it.bottomMargin = VoidTheme.dpToPx(context, 8f) }
             val lang = track.language.ifBlank { context.getString(R.string.file_detail_track_lang_unknown) }
+            val titleBase = context.getString(R.string.file_detail_track_subtitle_format, track.ordinal + 1, lang)
+            val title = if (selected) "$titleBase ✓" else titleBase
             bind(
-                context.getString(R.string.file_detail_track_subtitle_format, track.ordinal + 1, lang),
+                title,
                 meta = track.codec,
                 showThumbnailSlot = false,
-                iconResId = R.drawable.ic_movie
+                iconResId = R.drawable.icon_subtitles
             )
-            alpha = 0.5f
-            isClickable = false
+            alpha = if (selected) 1.0f else 0.85f
+            setOnClickListener { onSelect() }
         }
 
     private fun pathFor(source: PlaybackSource): String = when (source) {
@@ -293,6 +296,7 @@ class FileDetailScreen(
         is PlaybackSource.Ftp -> source.path
         is PlaybackSource.Sftp -> source.path
         is PlaybackSource.Nfs -> "${source.server.path}/${source.path}"
+        is PlaybackSource.Dlna -> source.url
     }
 
     private fun subtitleFor(source: PlaybackSource): String = when (source) {
@@ -302,6 +306,7 @@ class FileDetailScreen(
         is PlaybackSource.Ftp -> context.getString(R.string.file_detail_subtitle_ftp_format, source.server.name)
         is PlaybackSource.Sftp -> context.getString(R.string.file_detail_subtitle_sftp_format, source.server.name)
         is PlaybackSource.Nfs -> "${source.server.name} (${source.server.host})"
+        is PlaybackSource.Dlna -> "${source.server.name} (DLNA)"
     }
 
     private fun formatBitrate(bitsPerSecond: Long): String {

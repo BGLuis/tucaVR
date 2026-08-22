@@ -532,6 +532,7 @@ class VRActivity : NativeActivity() {
         is PlaybackSource.Ftp -> src.path.substringAfterLast("/")
         is PlaybackSource.Sftp -> src.path.substringAfterLast("/")
         is PlaybackSource.Nfs -> src.path.substringAfterLast("/")
+        is PlaybackSource.Dlna -> src.title
     }
 
     fun playFile(filePath: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
@@ -597,6 +598,16 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayNfs(server.host, server.port, server.path, path, 3, (resumeAtMs ?: 0L) / 1000f)
+    }
+
+    // T7.4: playback DLNA
+    fun playDlna(server: com.vrplayer.network.SavedServer, title: String, url: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
+        val source = PlaybackSource.Dlna(server, title, url, sizeBytes)
+        currentPlaybackSource = source
+        historyTracker.startTracking(source, title = title)
+        controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
+        applyFormat3dOverride(source)
+        nativePlayVideo(url, (resumeAtMs ?: 0L) / 1000f)
     }
 
     private fun processVideoUri(uri: Uri) {
@@ -692,6 +703,15 @@ class VRActivity : NativeActivity() {
     // T10.1: Varredura de servidores na rede local (bloqueante — SEMPRE de Dispatchers.IO).
     // Retorno: linhas separadas por \n, cada uma com "PROTOCOL\tNAME\tHOST\tPORT\tPATH"
     external fun nativeDiscoveryScan(timeoutMs: Int): String
+
+    // T7.2: Device Description UPnP/DLNA (bloqueante — SEMPRE de Dispatchers.IO).
+    external fun nativeDlnaGetDevice(location: String): String
+
+    // T7.3: Browse ContentDirectory UPnP/DLNA (bloqueante — SEMPRE de Dispatchers.IO).
+    external fun nativeDlnaBrowse(controlUrl: String, objectId: String, startIndex: Int, maxCount: Int): String
+
+    // T8.1/T8.6: Probe de variantes HLS (bloqueante — SEMPRE de Dispatchers.IO).
+    external fun nativeHlsProbeVariants(url: String): String
 
     // T9: thumbnail de arquivo de video num share/servidor de rede — decode
     // de UM frame por software do lado Rust (core::thumbnail::generate, ver
@@ -822,4 +842,12 @@ class VRActivity : NativeActivity() {
     external fun nativeSetAudioTrack(ordinal: Int)
     external fun nativeSetSpatialAudioMode(mode: Int)
     external fun nativeSetSpatialAudioHeadTracking(enabled: Boolean)
+
+    // Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
+    external fun nativeSetSubtitleTrack(trackIndex: Int)
+    external fun nativeGetSubtitleTrack(): Int
+    external fun nativeSetSubtitleOffsetMs(offsetMs: Long)
+    external fun nativeGetSubtitleOffsetMs(): Long
+    external fun nativeLoadExternalSubtitle(path: String): Boolean
+    external fun nativeGetSubtitleTrackCount(): Int
 }

@@ -40,6 +40,14 @@ extern "C" {
     extern uint32_t get_spatial_audio_mode();
     extern void set_spatial_audio_head_tracking(uint32_t enabled);
     extern uint32_t get_spatial_audio_head_tracking();
+    // Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
+    extern void set_subtitle_track(int32_t track_index);
+    extern int32_t get_subtitle_track();
+    extern void set_subtitle_offset_ms(int64_t offset_ms);
+    extern int64_t get_subtitle_offset_ms();
+    extern uint32_t load_external_subtitle(const char* path);
+    extern uint32_t get_subtitle_track_count();
+    extern uint32_t get_active_subtitle_text(char* out_buf, size_t max_len);
     extern char* take_last_playback_error();
     extern void free_rust_string(char* s);
     extern char* probe_http_url(const char* url);
@@ -72,6 +80,11 @@ extern "C" {
     extern char* nfs_list_exports(const char* host, int32_t port);
     // Descoberta Automática (mDNS + SSDP)
     extern char* discovery_scan_network(uint32_t timeout_ms);
+    // DLNA
+    extern char* dlna_get_device_description(const char* location);
+    extern char* dlna_browse_directory(const char* control_url, const char* object_id, uint32_t start_index, uint32_t max_count);
+    // HLS
+    extern char* hls_probe_variants(const char* url);
     // Thumbnails de rede — mesmo contrato de vr_player_app.cpp.
     extern uint8_t* smb_generate_thumbnail(const char* host, int32_t port, const char* username,
                                             const char* password, const char* domain, const char* share,
@@ -595,6 +608,35 @@ Java_com_vrplayer_VRActivity_nativeProbeHttpUrl(JNIEnv* env, jobject, jstring ur
 }
 
 extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeDlnaGetDevice(JNIEnv* env, jobject, jstring location) {
+    const char* locStr = env->GetStringUTFChars(location, nullptr);
+    char* result = dlna_get_device_description(locStr);
+    env->ReleaseStringUTFChars(location, locStr);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeDlnaBrowse(JNIEnv* env, jobject, jstring controlUrl,
+                                              jstring objectId, jint startIndex, jint maxCount) {
+    const char* ctrlStr = env->GetStringUTFChars(controlUrl, nullptr);
+    const char* objStr = env->GetStringUTFChars(objectId, nullptr);
+
+    char* result = dlna_browse_directory(ctrlStr, objStr, (uint32_t)startIndex, (uint32_t)maxCount);
+
+    env->ReleaseStringUTFChars(controlUrl, ctrlStr);
+    env->ReleaseStringUTFChars(objectId, objStr);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeHlsProbeVariants(JNIEnv* env, jobject, jstring url) {
+    const char* urlStr = env->GetStringUTFChars(url, nullptr);
+    char* result = hls_probe_variants(urlStr);
+    env->ReleaseStringUTFChars(url, urlStr);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
 Java_com_vrplayer_VRActivity_nativeReadMediaMetadata(JNIEnv* env, jobject, jstring path) {
     const char* p = env->GetStringUTFChars(path, nullptr);
     char* result = read_media_metadata(p);
@@ -673,4 +715,42 @@ Java_com_vrplayer_VRActivity_nativeSetSpatialAudioMode(JNIEnv* env, jobject, jin
 extern "C" JNIEXPORT void JNICALL
 Java_com_vrplayer_VRActivity_nativeSetSpatialAudioHeadTracking(JNIEnv* env, jobject, jboolean enabled) {
     set_spatial_audio_head_tracking(enabled ? 1 : 0);
+}
+
+// ============================================================================
+// Métodos JNI de Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
+// ============================================================================
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeSetSubtitleTrack(JNIEnv* env, jobject, jint trackIndex) {
+    set_subtitle_track((int32_t)trackIndex);
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_vrplayer_VRActivity_nativeGetSubtitleTrack(JNIEnv* env, jobject) {
+    return (jint)get_subtitle_track();
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeSetSubtitleOffsetMs(JNIEnv* env, jobject, jlong offsetMs) {
+    set_subtitle_offset_ms((int64_t)offsetMs);
+}
+
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_vrplayer_VRActivity_nativeGetSubtitleOffsetMs(JNIEnv* env, jobject) {
+    return (jlong)get_subtitle_offset_ms();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_vrplayer_VRActivity_nativeLoadExternalSubtitle(JNIEnv* env, jobject, jstring path) {
+    if (!path) return JNI_FALSE;
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    uint32_t count = load_external_subtitle(p);
+    env->ReleaseStringUTFChars(path, p);
+    return count > 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_vrplayer_VRActivity_nativeGetSubtitleTrackCount(JNIEnv* env, jobject) {
+    return (jint)get_subtitle_track_count();
 }

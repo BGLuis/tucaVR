@@ -973,6 +973,116 @@ pub extern "C" fn discovery_scan_network(timeout_ms: u32) -> *mut std::os::raw::
     string_to_c_char(lines.join("\n"))
 }
 
+/// T7.2: Obtém o Device Description XML de um servidor DLNA e retorna detalhes (friendlyName, controlURL, icon).
+/// Chamada BLOQUEANTE. Retorna "OK\t{friendlyName}\t{controlURL}\t{iconUrl}" ou "ERROR:<msg>".
+#[no_mangle]
+pub extern "C" fn dlna_get_device_description(location: *const std::os::raw::c_char) -> *mut std::os::raw::c_char {
+    let location_str = match unsafe { cstr_to_string(location) } {
+        Some(s) => s,
+        None => return string_to_c_char("ERROR:location invalida".into()),
+    };
+
+    match protocols::dlna::fetch_device_description(&location_str) {
+        Ok(dev) => {
+            string_to_c_char(format!(
+                "OK\t{}\t{}\t{}",
+                dev.friendly_name,
+                dev.control_url,
+                dev.icon_url.unwrap_or_default()
+            ))
+        }
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
+/// T7.3: Lista o conteúdo de um container DLNA via SOAP Browse.
+/// Chamada BLOQUEANTE. Retorna linhas separadas por '\n':
+/// "id\ttitle\t{is_container 0|1}\turl\tsize\tduration_sec\tresolution\tthumbnail_url"
+#[no_mangle]
+pub extern "C" fn dlna_browse_directory(
+    control_url: *const std::os::raw::c_char,
+    object_id: *const std::os::raw::c_char,
+    start_index: u32,
+    max_count: u32,
+) -> *mut std::os::raw::c_char {
+    let control_url = match unsafe { cstr_to_string(control_url) } {
+        Some(s) => s,
+        None => return string_to_c_char("ERROR:control_url invalida".into()),
+    };
+    let object_id = unsafe { cstr_to_string(object_id).unwrap_or_else(|| "0".to_string()) };
+
+    match protocols::dlna::browse_directory(&control_url, &object_id, start_index, max_count) {
+        Ok(items) => {
+            let lines: Vec<String> = items
+                .into_iter()
+                .map(|item| {
+                    format!(
+                        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                        item.id,
+                        item.title,
+                        if item.is_container { 1 } else { 0 },
+                        item.res_url.unwrap_or_default(),
+                        item.size_bytes.map(|s| s as i64).unwrap_or(-1),
+                        item.duration_sec.map(|d| format!("{:.2}", d)).unwrap_or_default(),
+                        item.resolution.unwrap_or_default(),
+                        item.album_art_url.unwrap_or_default()
+                    )
+                })
+                .collect();
+            string_to_c_char(lines.join("\n"))
+        }
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
+/// T8.1/T8.6: Faz o probe de variantes de uma URL M3U8 Master Playlist.
+/// Chamada BLOQUEANTE. Retorna linhas separadas por '\n': "index\tbandwidth\twidthxheight\tcodecs\turl"
+#[no_mangle]
+pub extern "C" fn hls_probe_variants(url: *const std::os::raw::c_char) -> *mut std::os::raw::c_char {
+    let url_str = match unsafe { cstr_to_string(url) } {
+        Some(s) => s,
+        None => return string_to_c_char("ERROR:URL invalida".into()),
+    };
+
+    let client = match reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(5)).build() {
+        Ok(c) => c,
+        Err(e) => return string_to_c_char(format!("ERROR:{e}")),
+    };
+
+    let resp = match client.get(&url_str).send() {
+        Ok(r) => r,
+        Err(e) => return string_to_c_char(format!("ERROR:{e}")),
+    };
+
+    if !resp.status().is_success() {
+        return string_to_c_char(format!("ERROR:HTTP status {}", resp.status()));
+    }
+
+    let body = match resp.text() {
+        Ok(b) => b,
+        Err(e) => return string_to_c_char(format!("ERROR:{e}")),
+    };
+
+    match protocols::hls::parse_playlist(&body, &url_str) {
+        Ok(protocols::hls::HlsPlaylist::Master(master)) => {
+            let lines: Vec<String> = master
+                .variants
+                .into_iter()
+                .enumerate()
+                .map(|(idx, v)| {
+                    let res_str = v.resolution.map(|(w, h)| format!("{w}x{h}")).unwrap_or_else(|| "auto".to_string());
+                    format!("{}\t{}\t{}\t{}\t{}", idx, v.bandwidth, res_str, v.codecs.unwrap_or_default(), v.url)
+                })
+                .collect();
+            string_to_c_char(lines.join("\n"))
+        }
+        Ok(protocols::hls::HlsPlaylist::Media(_)) => {
+            string_to_c_char("0\t0\tauto\t\t".to_string())
+        }
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
 /// T7.1: probe HEAD-based de uma URL HTTP(S) — descobre ANTES de tocar se o
 /// servidor suporta range requests (necessario pra seek) e o tamanho do
 /// arquivo, para a UI poder avisar o usuario (doc, secao 7, aviso
@@ -1615,5 +1725,85 @@ pub extern "C" fn get_video_progress(current: *mut f32, total: *mut f32) {
             }
         }
     }
+}
+
+// ============================================================================
+// Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
+// ============================================================================
+
+#[no_mangle]
+pub extern "C" fn set_subtitle_track(track_index: i32) {
+    if let Ok(mut controller) = CONTROLLER.lock() {
+        controller.set_subtitle_track(track_index);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_subtitle_track() -> i32 {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        controller.get_subtitle_track()
+    } else {
+        -1
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn set_subtitle_offset_ms(offset_ms: i64) {
+    if let Ok(mut controller) = CONTROLLER.lock() {
+        controller.set_subtitle_offset_ms(offset_ms);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_subtitle_offset_ms() -> i64 {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        controller.get_subtitle_offset_ms()
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn load_external_subtitle(path: *const std::os::raw::c_char) -> u32 {
+    let path_str = match cstr_to_string(path) {
+        Some(s) => s,
+        None => return 0,
+    };
+    if let Ok(mut controller) = CONTROLLER.lock() {
+        controller.load_external_subtitle(&path_str).unwrap_or(0)
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_subtitle_track_count() -> u32 {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        controller.get_subtitle_track_count() as u32
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_active_subtitle_text(out_buf: *mut std::os::raw::c_char, max_len: usize) -> u32 {
+    if out_buf.is_null() || max_len == 0 {
+        return 0;
+    }
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        if let Some(text) = controller.get_active_subtitle_text() {
+            let bytes = text.as_bytes();
+            let copy_len = bytes.len().min(max_len - 1);
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf as *mut u8, copy_len);
+                *out_buf.add(copy_len) = 0;
+            }
+            return copy_len as u32;
+        }
+    }
+    unsafe {
+        *out_buf = 0;
+    }
+    0
 }
 

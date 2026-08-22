@@ -84,6 +84,9 @@ sealed class Destination {
     /** T5.4: listagem de um diretorio num servidor NFS ja conectado. */
     data class NetworkNfsFiles(val server: SavedServer, val path: String) : Destination()
 
+    /** T7.5: listagem de um container num servidor DLNA ja conectado. */
+    data class NetworkDlnaFiles(val server: SavedServer, val objectId: String, val folderName: String) : Destination()
+
     /** Reproduzindo [source]. */
     data class Player(val source: PlaybackSource) : Destination()
 
@@ -114,4 +117,6 @@ sealed class PlaybackSource {
     data class Sftp(val server: SftpServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
     /** T5.4: playback NFS a partir de um [SavedServer]. */
     data class Nfs(val server: SavedServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
+    /** T7.4: playback DLNA a partir de um [SavedServer]. */
+    data class Dlna(val server: SavedServer, val title: String, val url: String, val sizeBytes: Long = 0L) : PlaybackSource()
 }

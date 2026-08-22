@@ -124,11 +124,24 @@
     <!-- Rede: landing com abas URL / SMB / NFS / FTP / SFTP / Descoberta (VRPresentation.renderNetworkHome) -->
     <string name="network_title">Network</string>
     <string name="network_tab_discovery">Discovery</string>
+    <string name="network_tab_dlna">DLNA</string>
     <string name="network_tab_url">URL</string>
     <string name="network_tab_smb">SMB</string>
     <string name="network_tab_nfs">NFS</string>
     <string name="network_tab_ftp">FTP</string>
     <string name="network_tab_sftp">SFTP</string>
+
+    <!-- Rede: aba DLNA -->
+    <string name="network_dlna_header">UPnP / DLNA Servers</string>
+    <string name="network_dlna_empty">(no DLNA server saved or discovered)</string>
+    <string name="network_dlna_loading">Browsing folder…</string>
+    <string name="network_dlna_no_items">(no media items found in folder)</string>
+    <string name="network_dlna_error_format">Failed to browse: %1$s</string>
+    <string name="network_dlna_folder_tag">Folder</string>
+
+    <!-- HLS Streaming -->
+    <string name="player_hls_quality_auto">Auto (%1$s)</string>
+    <string name="player_hls_quality_menu_title">Video Quality</string>
 
     <!-- Rede: aba URL (VRPresentation.buildNetworkUrlPage) -->
     <string name="network_url_hint">http:// or https://...</string>
@@ -294,5 +307,25 @@
     <string name="history_row_sftp_format">%1$s</string>
     <string name="history_row_meta_format">%1$s / %2$s · %3$d%%</string>
     <string name="history_btn_remove"></string>
+
+    <!-- Subtitles (T9.1-T9.6) -->
+    <string name="player_btn_subtitles">Subtitles</string>
+    <string name="subtitles_modal_title">Subtitles</string>
+    <string name="subtitles_option_off">Off</string>
+    <string name="subtitles_track_format">Track %1$d: %2$s</string>
+    <string name="subtitles_sync_label">Sync Offset</string>
+    <string name="subtitles_sync_value_format">%1$+.1f s</string>
+    <string name="subtitles_sync_minus_500">–0.5s</string>
+    <string name="subtitles_sync_minus_100">–0.1s</string>
+    <string name="subtitles_sync_reset">Reset</string>
+    <string name="subtitles_sync_plus_100">+0.1s</string>
+    <string name="subtitles_sync_plus_500">+0.5s</string>
+    <string name="subtitles_size_label">Font Size</string>
+    <string name="subtitles_size_small">Small</string>
+    <string name="subtitles_size_medium">Medium</string>
+    <string name="subtitles_size_large">Large</string>
+    <string name="settings_section_subtitles">Subtitles</string>
+    <string name="settings_subtitles_auto_load_label">Auto-load Subtitles</string>
+    <string name="settings_subtitles_auto_load_description">Automatically detects and loads subtitle files (.srt, .vtt) located next to the video.</string>
 
 </resources>

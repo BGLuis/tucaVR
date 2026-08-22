@@ -86,6 +86,8 @@ class PlaybackHistoryMappingTest {
         assertEquals(HistorySourceType.LOCAL, PlaybackSource.LocalFile("/a").historySourceType())
         assertEquals(HistorySourceType.HTTP, PlaybackSource.Http("http://a").historySourceType())
         assertEquals(HistorySourceType.SMB, PlaybackSource.Smb(smbServer(), "a").historySourceType())
+        val dlnaServer = com.vrplayer.network.SavedServer(name = "Plex", protocol = com.vrplayer.network.ServerProtocol.DLNA, host = "192.168.1.5", port = 32469, path = "http://192.168.1.5:32469/control/ContentDirectory")
+        assertEquals(HistorySourceType.DLNA, PlaybackSource.Dlna(dlnaServer, "Movie", "http://192.168.1.5:32469/media/1.mp4").historySourceType())
     }
 
     @Test
@@ -93,6 +95,8 @@ class PlaybackHistoryMappingTest {
         assertEquals("/sdcard/Movies/foo.mp4", PlaybackSource.LocalFile("/sdcard/Movies/foo.mp4", 100L).mediaPath())
         assertEquals("https://example.com/x.mp4", PlaybackSource.Http("https://example.com/x.mp4").mediaPath())
         assertEquals("Filmes/foo.mkv", PlaybackSource.Smb(smbServer(), "Filmes/foo.mkv", 100L).mediaPath())
+        val dlnaServer = com.vrplayer.network.SavedServer(name = "Plex", protocol = com.vrplayer.network.ServerProtocol.DLNA, host = "192.168.1.5", port = 32469, path = "http://192.168.1.5:32469/control/ContentDirectory")
+        assertEquals("http://192.168.1.5:32469/media/1.mp4", PlaybackSource.Dlna(dlnaServer, "Movie", "http://192.168.1.5:32469/media/1.mp4").mediaPath())
     }
 
     // ---------- isResumable ----------

@@ -273,7 +273,31 @@ class NetworkDiscoveryScreen(
                 }
                 onNavigate(Destination.NetworkNfsFiles(server, ""))
             }
-            ServerProtocol.SMB, ServerProtocol.FTP, ServerProtocol.SFTP, ServerProtocol.WEBDAV, ServerProtocol.DLNA -> {
+            ServerProtocol.DLNA -> {
+                scope.launch {
+                    val rawDesc = withContext(Dispatchers.IO) {
+                        activity.nativeDlnaGetDevice(item.path)
+                    }
+                    val parts = rawDesc.split("\t")
+                    val friendlyName = if (parts.size >= 2 && parts[0] == "OK" && parts[1].isNotBlank()) parts[1] else item.name
+                    val controlUrl = if (parts.size >= 3 && parts[0] == "OK") parts[2] else item.path
+
+                    val server = SavedServer(
+                        name = friendlyName,
+                        protocol = ServerProtocol.DLNA,
+                        host = item.host,
+                        port = item.port,
+                        path = controlUrl,
+                        isAutoDiscovered = true,
+                        lastConnectedAt = System.currentTimeMillis()
+                    )
+                    withContext(Dispatchers.IO) {
+                        savedServerDao.insert(server)
+                    }
+                    onNavigate(Destination.NetworkDlnaFiles(server, "0", friendlyName))
+                }
+            }
+            ServerProtocol.SMB, ServerProtocol.FTP, ServerProtocol.SFTP, ServerProtocol.WEBDAV -> {
                 onConfigureServer(item.protocol, item.host, item.port, item.name, item.path)
             }
         }

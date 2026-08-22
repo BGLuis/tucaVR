@@ -20,6 +20,7 @@ import com.vrplayer.screens.FileDetailScreen
 import com.vrplayer.screens.HomeScreen
 import com.vrplayer.screens.LocalFilesScreen
 import com.vrplayer.screens.NetworkDiscoveryScreen
+import com.vrplayer.screens.NetworkDlnaScreen
 import com.vrplayer.screens.NetworkFtpScreen
 import com.vrplayer.screens.NetworkHomeScreen
 import com.vrplayer.screens.NetworkNfsScreen
@@ -122,6 +123,7 @@ class VRPresentation(
     private lateinit var networkNfsScreen: NetworkNfsScreen
     private lateinit var networkFtpScreen: NetworkFtpScreen
     private lateinit var networkSftpScreen: NetworkSftpScreen
+    private lateinit var networkDlnaScreen: NetworkDlnaScreen
     private lateinit var networkDiscoveryScreen: NetworkDiscoveryScreen
     private lateinit var networkHomeScreen: NetworkHomeScreen
     private lateinit var continueWatchingScreen: ContinueWatchingScreen
@@ -244,6 +246,19 @@ class VRPresentation(
             onBack                = { handleBack() }
         )
 
+        networkDlnaScreen = NetworkDlnaScreen(
+            context        = context,
+            activity       = activity,
+            host           = host,
+            scope          = scope,
+            savedServerDao = savedServerDao,
+            onNavigate     = { dest -> navigateTo(dest) },
+            onPlayDlna     = { server: com.vrplayer.network.SavedServer, title: String, url: String, sizeBytes: Long ->
+                playSource(PlaybackSource.Dlna(server, title, url, sizeBytes))
+            },
+            onBack         = { handleBack() }
+        )
+
         networkDiscoveryScreen = NetworkDiscoveryScreen(
             context               = context,
             activity              = activity,
@@ -254,11 +269,12 @@ class VRPresentation(
             onNavigate            = { dest -> navigateTo(dest) },
             onConfigureServer     = { protocol: com.vrplayer.network.ServerProtocol, hostStr: String, portNum: Int, nameStr: String, pathStr: String ->
                 when (protocol) {
-                    com.vrplayer.network.ServerProtocol.SMB -> networkHomeScreen.activeTabIndex = 2
-                    com.vrplayer.network.ServerProtocol.NFS -> networkHomeScreen.activeTabIndex = 3
-                    com.vrplayer.network.ServerProtocol.FTP -> networkHomeScreen.activeTabIndex = 4
-                    com.vrplayer.network.ServerProtocol.SFTP -> networkHomeScreen.activeTabIndex = 5
-                    else -> networkHomeScreen.activeTabIndex = 1
+                    com.vrplayer.network.ServerProtocol.DLNA -> networkHomeScreen.activeTabIndex = 1
+                    com.vrplayer.network.ServerProtocol.SMB  -> networkHomeScreen.activeTabIndex = 3
+                    com.vrplayer.network.ServerProtocol.NFS  -> networkHomeScreen.activeTabIndex = 4
+                    com.vrplayer.network.ServerProtocol.FTP  -> networkHomeScreen.activeTabIndex = 5
+                    com.vrplayer.network.ServerProtocol.SFTP -> networkHomeScreen.activeTabIndex = 6
+                    else -> networkHomeScreen.activeTabIndex = 2
                 }
                 render()
             }
@@ -271,6 +287,7 @@ class VRPresentation(
             scope                 = scope,
             urlHistory            = urlHistory,
             discoveryPageBuilder  = { networkDiscoveryScreen.buildPage() },
+            dlnaPageBuilder       = { networkDlnaScreen.buildPage() },
             smbPageBuilder        = { networkSmbScreen.buildPage() },
             nfsPageBuilder        = { networkNfsScreen.buildPage() },
             ftpPageBuilder        = { networkFtpScreen.buildPage() },
@@ -317,6 +334,7 @@ class VRPresentation(
             is Destination.NetworkHome      -> networkHomeScreen.render()
             is Destination.NetworkFiles     -> networkSmbScreen.renderFiles(destination.server)
             is Destination.NetworkNfsFiles  -> networkNfsScreen.renderFiles(destination.server, destination.path)
+            is Destination.NetworkDlnaFiles -> networkDlnaScreen.renderFiles(destination.server, destination.objectId)
             is Destination.NetworkFtpFiles  -> networkFtpScreen.renderFiles(destination.server)
             is Destination.NetworkSftpFiles -> networkSftpScreen.renderFiles(destination.server)
             is Destination.ContinueWatching -> continueWatchingScreen.render()
@@ -343,6 +361,7 @@ class VRPresentation(
                 is PlaybackSource.Http      -> activity.playUrl(source.url, resumeAtMs)
                 is PlaybackSource.Smb       -> activity.playSmb(source.server, source.path, source.sizeBytes, resumeAtMs)
                 is PlaybackSource.Nfs       -> activity.playNfs(source.server, source.path, source.sizeBytes, resumeAtMs)
+                is PlaybackSource.Dlna      -> activity.playDlna(source.server, source.title, source.url, source.sizeBytes, resumeAtMs)
                 is PlaybackSource.Ftp       -> activity.playFtp(source.server, source.path, source.sizeBytes, resumeAtMs)
                 is PlaybackSource.Sftp      -> activity.playSftp(source.server, source.path, source.sizeBytes, resumeAtMs)
             }

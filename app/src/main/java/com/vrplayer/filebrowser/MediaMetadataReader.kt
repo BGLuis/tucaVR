@@ -47,6 +47,7 @@ object MediaMetadataReader {
             val wire = when (source) {
                 is PlaybackSource.LocalFile -> activity.nativeReadMediaMetadata(source.path)
                 is PlaybackSource.Http -> activity.nativeReadMediaMetadata(source.url)
+                is PlaybackSource.Dlna -> activity.nativeReadMediaMetadata(source.url)
                 is PlaybackSource.Smb -> activity.nativeSmbReadMetadata(
                     source.server.host, source.server.port, source.server.username, source.server.password,
                     source.server.domain, source.server.share, source.path

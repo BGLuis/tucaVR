@@ -16,7 +16,7 @@ import androidx.room.PrimaryKey
  * casando manualmente com um branch de `PlaybackSource`, entao os dois nunca
  * podem divergir silenciosamente.
  */
-enum class HistorySourceType { LOCAL, SMB, HTTP, FTP, SFTP, NFS }
+enum class HistorySourceType { LOCAL, SMB, HTTP, FTP, SFTP, NFS, DLNA }
 
 /**
  * T9.1: registro de progresso de reproducao (Room). Segue o exemplo do doc
