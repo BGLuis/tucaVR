@@ -868,6 +868,111 @@ pub extern "C" fn sftp_list_directory(
     }
 }
 
+/// T5.1/T5.4: Inicia playback de vídeo a partir de um compartilhamento NFS.
+#[no_mangle]
+pub extern "C" fn start_nfs_playback(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    export_path: *const std::os::raw::c_char,
+    file_path: *const std::os::raw::c_char,
+    version: i32,
+    start_time_sec: f32,
+) {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return };
+        let export_path = match cstr_to_string(export_path) { Some(s) => s, None => return };
+        let file_path = match cstr_to_string(file_path) { Some(s) => s, None => return };
+        protocols::nfs::NfsTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            export_path,
+            file_path,
+            version: version.clamp(3, 4) as u8,
+        }
+    };
+
+    spawn_loading(move || {
+        let internal_uri = target.to_internal();
+        unsafe { log(4, &format!("Loading NFS video: {}", protocols::nfs::redact(&internal_uri))); }
+
+        reset_3d_mode();
+        if let Ok(mut controller) = CONTROLLER.lock() {
+            controller.stop();
+            if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
+                unsafe { log(6, &format!("Error loading NFS video: {:?}", e)); }
+                set_last_playback_error(format!("{:?}", e));
+            } else {
+                apply_screen_mode_after_load(&controller);
+                unsafe { log(4, "NFS video loaded successfully!"); }
+            }
+        }
+    });
+}
+
+/// T5.2/T5.4: Lista arquivos e pastas num servidor NFS. Chamada BLOQUEANTE.
+#[no_mangle]
+pub extern "C" fn nfs_list_directory(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    export_path: *const std::os::raw::c_char,
+    dir_path: *const std::os::raw::c_char,
+    version: i32,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
+        let export_path = match cstr_to_string(export_path) { Some(s) => s, None => return string_to_c_char("ERROR:export_path invalido".into()) };
+        protocols::nfs::NfsTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            export_path,
+            file_path: String::new(),
+            version: version.clamp(3, 4) as u8,
+        }
+    };
+    let dir_path = unsafe { cstr_to_string(dir_path).unwrap_or_default() };
+
+    match protocols::nfs::list_directory(&target, &dir_path) {
+        Ok(entries) => {
+            let lines: Vec<String> = entries
+                .into_iter()
+                .map(|e| format!("{}\t{}\t{}", e.name, if e.is_dir { 1 } else { 0 }, e.size))
+                .collect();
+            string_to_c_char(lines.join("\n"))
+        }
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
+/// T5.2/T5.4: Lista exports disponíveis num servidor NFS. Chamada BLOQUEANTE.
+#[no_mangle]
+pub extern "C" fn nfs_list_exports(
+    host: *const std::os::raw::c_char,
+    port: i32,
+) -> *mut std::os::raw::c_char {
+    let host = match unsafe { cstr_to_string(host) } {
+        Some(s) => s,
+        None => return string_to_c_char("ERROR:host invalido".into()),
+    };
+    let port = port.clamp(1, u16::MAX as i32) as u16;
+
+    match protocols::nfs::list_exports(&host, port) {
+        Ok(exports) => string_to_c_char(exports.join("\n")),
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
+/// T10.1: Varredura de servidores na rede local (mDNS + SSDP). Chamada BLOQUEANTE.
+/// Retorna linhas separadas por '\n': "PROTOCOL\tNAME\tHOST\tPORT\tPATH"
+#[no_mangle]
+pub extern "C" fn discovery_scan_network(timeout_ms: u32) -> *mut std::os::raw::c_char {
+    let servers = protocols::discovery::scan_local_network(timeout_ms as u64);
+    let lines: Vec<String> = servers
+        .into_iter()
+        .map(|s| format!("{}\t{}\t{}\t{}\t{}", s.protocol, s.name, s.host, s.port, s.path))
+        .collect();
+    string_to_c_char(lines.join("\n"))
+}
+
 /// T7.1: probe HEAD-based de uma URL HTTP(S) — descobre ANTES de tocar se o
 /// servidor suporta range requests (necessario pra seek) e o tamanho do
 /// arquivo, para a UI poder avisar o usuario (doc, secao 7, aviso

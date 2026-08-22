@@ -99,6 +99,16 @@ extern "C" {
     extern char* sftp_list_directory(const char* host, int32_t port, const char* username,
                                       const char* password, const char* private_key, const char* path);
 
+    // T5.1/T5.2/T5.4: NFS
+    extern void start_nfs_playback(const char* host, int32_t port, const char* export_path,
+                                    const char* file_path, int32_t version, float startTimeSec);
+    extern char* nfs_list_directory(const char* host, int32_t port, const char* export_path,
+                                     const char* dir_path, int32_t version);
+    extern char* nfs_list_exports(const char* host, int32_t port);
+
+    // T10.1: Descoberta Automática
+    extern char* discovery_scan_network(uint32_t timeout_ms);
+
     // T9: thumbnails de rede — ver rust/bridge/src/lib.rs para o contrato
     // completo (RGBA cru exatamente max_width*max_height*4 bytes, ou nulo em
     // qualquer falha; o ponteiro retornado DEVE ser liberado com
@@ -529,6 +539,62 @@ Java_com_vrplayer_VRActivity_nativeSftpListDirectory(JNIEnv* env, jobject thiz, 
     env->ReleaseStringUTFChars(privateKey, keyStr);
     env->ReleaseStringUTFChars(path, pathStr);
 
+    return RustStringToJStringAndFree(env, result);
+}
+
+// T5.1/T5.4: Playback NFS
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativePlayNfs(JNIEnv* env, jobject thiz,
+                                            jstring host, jint port, jstring exportPath,
+                                            jstring filePath, jint version, jfloat startTimeSec) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* expStr = env->GetStringUTFChars(exportPath, nullptr);
+    const char* fileStr = env->GetStringUTFChars(filePath, nullptr);
+
+    start_nfs_playback(hostStr, (int32_t)port, expStr, fileStr, (int32_t)version, startTimeSec);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(exportPath, expStr);
+    env->ReleaseStringUTFChars(filePath, fileStr);
+}
+
+// T5.2/T5.4: Listagem de diretório NFS
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeNfsListDirectory(JNIEnv* env, jobject thiz,
+                                                     jstring host, jint port,
+                                                     jstring exportPath, jstring dirPath,
+                                                     jint version) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* expStr = env->GetStringUTFChars(exportPath, nullptr);
+    const char* dirStr = env->GetStringUTFChars(dirPath, nullptr);
+
+    char* result = nfs_list_directory(hostStr, (int32_t)port, expStr, dirStr, (int32_t)version);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(exportPath, expStr);
+    env->ReleaseStringUTFChars(dirPath, dirStr);
+
+    return RustStringToJStringAndFree(env, result);
+}
+
+// T5.2/T5.4: Listagem de exports NFS
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeNfsListExports(JNIEnv* env, jobject thiz,
+                                                  jstring host, jint port) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+
+    char* result = nfs_list_exports(hostStr, (int32_t)port);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+
+    return RustStringToJStringAndFree(env, result);
+}
+
+// T10.1: Descoberta Automática de Servidores
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeDiscoveryScan(JNIEnv* env, jobject thiz,
+                                                 jint timeoutMs) {
+    char* result = discovery_scan_network((uint32_t)timeoutMs);
     return RustStringToJStringAndFree(env, result);
 }
 

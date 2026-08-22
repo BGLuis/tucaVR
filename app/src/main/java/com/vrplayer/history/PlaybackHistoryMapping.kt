@@ -48,6 +48,7 @@ fun PlaybackSource.historyKey(): String = when (this) {
     // (rotulo escolhido pelo usuario), nunca host/porta (que podem mudar).
     is PlaybackSource.Ftp -> "ftp|${server.name}|$path|$sizeBytes"
     is PlaybackSource.Sftp -> "sftp|${server.name}|$path|$sizeBytes"
+    is PlaybackSource.Nfs -> "nfs|${server.name}|${server.path}|$path|$sizeBytes"
 }
 
 /** Ver [PlaybackHistory.mediaPath]. */
@@ -57,6 +58,7 @@ fun PlaybackSource.mediaPath(): String = when (this) {
     is PlaybackSource.Smb -> path
     is PlaybackSource.Ftp -> path
     is PlaybackSource.Sftp -> path
+    is PlaybackSource.Nfs -> path
 }
 
 fun PlaybackSource.historySourceType(): HistorySourceType = when (this) {
@@ -65,6 +67,7 @@ fun PlaybackSource.historySourceType(): HistorySourceType = when (this) {
     is PlaybackSource.Smb -> HistorySourceType.SMB
     is PlaybackSource.Ftp -> HistorySourceType.FTP
     is PlaybackSource.Sftp -> HistorySourceType.SFTP
+    is PlaybackSource.Nfs -> HistorySourceType.NFS
 }
 
 /** Titulo padrao (usado quando quem chama nao tem um titulo melhor a mao). */
@@ -74,17 +77,12 @@ fun PlaybackSource.defaultHistoryTitle(): String = when (this) {
     is PlaybackSource.Smb -> path.substringAfterLast('/')
     is PlaybackSource.Ftp -> path.substringAfterLast('/')
     is PlaybackSource.Sftp -> path.substringAfterLast('/')
+    is PlaybackSource.Nfs -> path.substringAfterLast('/')
 }
 
 /**
- * JSON com dados do servidor SMB/FTP/SFTP para [PlaybackHistory.serverInfo]
- * — `null` para fontes que nao vem de um servidor salvo (local/HTTP). NUNCA
- * inclui `username`/`password`/`privateKey` (ver aviso "Credenciais" na
- * secao 6 do doc, aplicado aqui por extensao mesmo nao sendo o alvo
- * original daquele aviso): a credencial continua vivendo SOMENTE em
- * `SmbCredentialStore`/`FtpCredentialStore`/`SftpCredentialStore`
- * (`EncryptedSharedPreferences`); `serverId` e guardado para poder buscar a
- * credencial de novo la na hora de retomar.
+ * JSON com dados do servidor SMB/FTP/SFTP/NFS para [PlaybackHistory.serverInfo]
+ * — `null` para fontes que nao vem de um servidor salvo (local/HTTP).
  */
 fun PlaybackSource.serverInfoJson(): String? = when (this) {
     is PlaybackSource.Smb -> JSONObject().apply {
@@ -106,6 +104,13 @@ fun PlaybackSource.serverInfoJson(): String? = when (this) {
         put("name", server.name)
         put("host", server.host)
         put("port", server.port)
+    }.toString()
+    is PlaybackSource.Nfs -> JSONObject().apply {
+        put("serverId", server.id)
+        put("name", server.name)
+        put("host", server.host)
+        put("port", server.port)
+        put("exportPath", server.path)
     }.toString()
     else -> null
 }

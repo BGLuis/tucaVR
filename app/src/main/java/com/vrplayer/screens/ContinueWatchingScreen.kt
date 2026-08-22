@@ -172,6 +172,20 @@ class ContinueWatchingScreen(
                 activity.playSftp(server, entry.mediaPath, resumeAtMs = entry.positionMs)
                 onNavigate(Destination.Player(source))
             }
+            HistorySourceType.NFS -> {
+                val server = resolveServer(entry.serverInfo) { id ->
+                    kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            com.vrplayer.history.AppDatabase.getInstance(context).savedServerDao().getById(id)
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                } ?: return
+                val source = PlaybackSource.Nfs(server, entry.mediaPath)
+                activity.playNfs(server, entry.mediaPath, resumeAtMs = entry.positionMs)
+                onNavigate(Destination.Player(source))
+            }
         }
     }
 

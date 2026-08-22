@@ -127,6 +127,12 @@ impl Demuxer {
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(&target.path), Some(fast_probe_options())).map_err(|e| e.to_string())?
+        } else if let Some(target) = protocols::nfs::NfsTarget::from_internal(path) {
+            let source = protocols::nfs::NfsFileSource::open(&target)?;
+            let reader = PrefetchReader::with_block_sizes(source, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);
+            network_stats = Some(reader.stats());
+            let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
+            ffmpeg::format::input_from_stream(stream_io, Some(&target.file_path), Some(fast_probe_options())).map_err(|e| e.to_string())?
         } else if path.starts_with("https://") {
             let shared = Self::https_source(path, cache)?;
             let reader = PrefetchReader::with_block_sizes(shared, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);

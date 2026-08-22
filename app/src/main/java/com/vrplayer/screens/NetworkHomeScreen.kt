@@ -41,13 +41,14 @@ class NetworkHomeScreen(
     private val host: ScreenHost,
     private val scope: CoroutineScope,
     private val urlHistory: UrlHistoryStore,
+    private val discoveryPageBuilder: () -> View,
     private val smbPageBuilder: () -> View,
+    private val nfsPageBuilder: () -> View,
     private val ftpPageBuilder: () -> View,
     private val sftpPageBuilder: () -> View,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
-    /** Índice da aba ativa (URL=0 / SMB=1 / FTP=2 / SFTP=3) — mutável pelo
-     *  caller para preservar estado entre navegações. */
+    /** Índice da aba ativa (Discovery=0 / URL=1 / SMB=2 / NFS=3 / FTP=4 / SFTP=5). */
     var activeTabIndex: Int = 0
 ) {
 
@@ -64,23 +65,34 @@ class NetworkHomeScreen(
             )
         }
 
-        val urlPage  = buildUrlPage()
-        val smbPage  = smbPageBuilder()
-        val ftpPage  = ftpPageBuilder()
-        val sftpPage = sftpPageBuilder()
-        val pages = listOf(urlPage, smbPage, ftpPage, sftpPage)
+        val discoveryPage = discoveryPageBuilder()
+        val urlPage       = buildUrlPage()
+        val smbPage       = smbPageBuilder()
+        val nfsPage       = nfsPageBuilder()
+        val ftpPage       = ftpPageBuilder()
+        val sftpPage      = sftpPageBuilder()
+        val pages = listOf(discoveryPage, urlPage, smbPage, nfsPage, ftpPage, sftpPage)
 
         pages.forEachIndexed { index, page ->
             page.visibility = if (index == activeTabIndex) View.VISIBLE else View.GONE
             pageContainer.addView(page)
         }
 
-        val tabIcons = listOf(R.drawable.ic_link, R.drawable.ic_storage, R.drawable.ic_broadcast, R.drawable.ic_lock)
+        val tabIcons = listOf(
+            R.drawable.ic_search,
+            R.drawable.ic_link,
+            R.drawable.ic_storage,
+            R.drawable.ic_storage,
+            R.drawable.ic_broadcast,
+            R.drawable.ic_lock
+        )
         val tabRow = VoidTabRow(
             context,
             listOf(
+                context.getString(R.string.network_tab_discovery).trim(),
                 context.getString(R.string.network_tab_url).trim(),
                 context.getString(R.string.network_tab_smb).trim(),
+                context.getString(R.string.network_tab_nfs).trim(),
                 context.getString(R.string.network_tab_ftp).trim(),
                 context.getString(R.string.network_tab_sftp).trim()
             ),

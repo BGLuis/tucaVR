@@ -4,8 +4,10 @@
 //! implementacao real.
 
 pub mod chunking;
+pub mod discovery;
 pub mod ftp;
 pub mod http;
+pub mod nfs;
 pub mod prefetch;
 pub mod sftp;
 pub mod smb;

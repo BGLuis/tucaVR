@@ -171,7 +171,7 @@ class FileDetailScreen(
                     ThumbnailGenerator.getThumbnail(context, MediaEntry(dest.displayName, source.path, dest.sizeBytes, dest.lastModified, MediaType.VIDEO))
                 is PlaybackSource.Smb, is PlaybackSource.Ftp, is PlaybackSource.Sftp ->
                     NetworkThumbnailGenerator.getThumbnail(context, activity, source)
-                is PlaybackSource.Http -> null
+                is PlaybackSource.Http, is PlaybackSource.Nfs -> null
             }
             if (bitmap != null) thumbnailView.setImageBitmap(bitmap)
         }
@@ -292,6 +292,7 @@ class FileDetailScreen(
         is PlaybackSource.Smb -> "${source.server.share}/${source.path}"
         is PlaybackSource.Ftp -> source.path
         is PlaybackSource.Sftp -> source.path
+        is PlaybackSource.Nfs -> "${source.server.path}/${source.path}"
     }
 
     private fun subtitleFor(source: PlaybackSource): String = when (source) {
@@ -300,6 +301,7 @@ class FileDetailScreen(
         is PlaybackSource.Smb -> context.getString(R.string.file_detail_subtitle_smb_format, source.server.name)
         is PlaybackSource.Ftp -> context.getString(R.string.file_detail_subtitle_ftp_format, source.server.name)
         is PlaybackSource.Sftp -> context.getString(R.string.file_detail_subtitle_sftp_format, source.server.name)
+        is PlaybackSource.Nfs -> "${source.server.name} (${source.server.host})"
     }
 
     private fun formatBitrate(bitsPerSecond: Long): String {

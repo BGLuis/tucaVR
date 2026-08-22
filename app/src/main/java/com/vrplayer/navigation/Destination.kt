@@ -1,6 +1,7 @@
 package com.vrplayer.navigation
 
 import com.vrplayer.network.FtpServer
+import com.vrplayer.network.SavedServer
 import com.vrplayer.network.SftpServer
 import com.vrplayer.network.SmbServer
 
@@ -80,6 +81,9 @@ sealed class Destination {
     /** T6.4: listagem de um diretorio num servidor SFTP ja conectado. */
     data class NetworkSftpFiles(val server: SftpServer, val path: String) : Destination()
 
+    /** T5.4: listagem de um diretorio num servidor NFS ja conectado. */
+    data class NetworkNfsFiles(val server: SavedServer, val path: String) : Destination()
+
     /** Reproduzindo [source]. */
     data class Player(val source: PlaybackSource) : Destination()
 
@@ -108,4 +112,6 @@ sealed class PlaybackSource {
     data class Ftp(val server: FtpServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
     /** T6.4: mesma logica de [Smb] acima, ver `VRActivity.playSftp`. */
     data class Sftp(val server: SftpServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
+    /** T5.4: playback NFS a partir de um [SavedServer]. */
+    data class Nfs(val server: SavedServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
 }

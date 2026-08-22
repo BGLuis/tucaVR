@@ -121,10 +121,12 @@
     <string name="file_detail_tag_genre">Genre</string>
     <string name="file_detail_tag_comment">Comment</string>
 
-    <!-- Rede: landing com abas URL / SMB / FTP (VRPresentation.renderNetworkHome) -->
+    <!-- Rede: landing com abas URL / SMB / NFS / FTP / SFTP / Descoberta (VRPresentation.renderNetworkHome) -->
     <string name="network_title">Network</string>
+    <string name="network_tab_discovery">Discovery</string>
     <string name="network_tab_url">URL</string>
     <string name="network_tab_smb">SMB</string>
+    <string name="network_tab_nfs">NFS</string>
     <string name="network_tab_ftp">FTP</string>
     <string name="network_tab_sftp">SFTP</string>
 
@@ -221,12 +223,40 @@
     <string name="network_sftp_form_status_error_format">Failed: %1$s</string>
     <string name="network_sftp_form_status_connected">Connected</string>
 
+    <!-- T5.4: Rede: aba NFS -->
+    <string name="network_nfs_saved_servers_header">Saved servers</string>
+    <string name="network_nfs_empty">(no server saved)</string>
+    <string name="network_nfs_row_label_format">%1$s</string>
+    <string name="network_nfs_btn_add_server">+ Add server</string>
+    <string name="network_nfs_form_host_label">Host / IP</string>
+    <string name="network_nfs_form_port_label">Port</string>
+    <string name="network_nfs_form_name_label">Friendly Name</string>
+    <string name="network_nfs_form_name_hint">My Linux NAS</string>
+    <string name="network_nfs_form_export_label">Export Path</string>
+    <string name="network_nfs_form_export_hint">/volume1/media</string>
+    <string name="network_nfs_form_btn_find_exports">Browse exports</string>
+    <string name="network_nfs_btn_test_save">Test and save</string>
+    <string name="network_nfs_form_status_host_required">Host required</string>
+    <string name="network_nfs_form_status_export_required">Export path required</string>
+    <string name="network_nfs_form_status_connecting">Connecting…</string>
+    <string name="network_nfs_form_status_error_format">Failed: %1$s</string>
+    <string name="network_nfs_form_status_connected">Connected</string>
+
+    <!-- T10.4: Rede: aba Descoberta Automatica -->
+    <string name="network_discovery_header">Discovered Servers</string>
+    <string name="network_discovery_empty">(no servers found on local network)</string>
+    <string name="network_discovery_scanning">Scanning local network for SMB, NFS, FTP, SFTP and DLNA…</string>
+    <string name="network_discovery_btn_rescan">Scan Network</string>
+    <string name="network_discovery_action_connect">Connect</string>
+    <string name="network_discovery_action_configure">Configure</string>
+
     <!-- Player: tela apos selecionar midia (VRPresentation.renderPlayer) -->
     <string name="player_title">Playing</string>
     <string name="player_label_controls_hint">Playback controls (play/pause/seek/volume) appear when you point at the video screen.</string>
     <string name="player_label_smb_source_format">%1$s/%2$s</string>
     <string name="player_label_ftp_source_format">%1$s/%2$s</string>
     <string name="player_label_sftp_source_format">%1$s/%2$s</string>
+    <string name="player_label_nfs_source_format">%1$s:%2$s/%3$s</string>
 
     <!-- Painel de controles de reproducao (VRControlsPresentation) -->
     <string name="player_btn_play_pause">Play / Pause</string>

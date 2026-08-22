@@ -55,7 +55,7 @@ object NetworkThumbnailGenerator {
                 source.server.host, source.server.port, source.server.username, source.server.password,
                 source.server.privateKey ?: "", source.path, THUMB_WIDTH, THUMB_HEIGHT
             )
-            is PlaybackSource.LocalFile, is PlaybackSource.Http -> null
+            is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs -> null
         }
     }
 
@@ -91,7 +91,7 @@ object NetworkThumbnailGenerator {
                 "ftp|${source.server.host}|${source.server.port}|${source.path}|${source.sizeBytes}"
             is PlaybackSource.Sftp ->
                 "sftp|${source.server.host}|${source.server.port}|${source.path}|${source.sizeBytes}"
-            is PlaybackSource.LocalFile, is PlaybackSource.Http ->
+            is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs ->
                 throw IllegalArgumentException("NetworkThumbnailGenerator nao suporta $source")
         }
         return sha256(raw)
@@ -163,7 +163,7 @@ object NetworkThumbnailGenerator {
                 source.server.privateKey ?: "", source.path,
                 SCRUB_INTERVAL_SECONDS, SCRUB_WIDTH, SCRUB_HEIGHT
             )
-            is PlaybackSource.Ftp, is PlaybackSource.LocalFile, is PlaybackSource.Http -> null
+            is PlaybackSource.Ftp, is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs -> null
         }
     }
 

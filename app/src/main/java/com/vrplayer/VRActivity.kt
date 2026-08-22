@@ -26,10 +26,16 @@ import android.widget.EditText
 import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.vrplayer.history.AppDatabase
 import com.vrplayer.history.PlaybackHistoryTracker
 import com.vrplayer.history.historyKey
 import com.vrplayer.navigation.PlaybackSource
 import com.vrplayer.network.Format3DPreferenceStore
+import com.vrplayer.network.LegacyCredentialMigrator
+import com.vrplayer.network.ServerCredentialStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 class VRActivity : NativeActivity() {
     private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
@@ -155,6 +161,15 @@ class VRActivity : NativeActivity() {
 
         pendingAutoPlayPath = intent?.getStringExtra(EXTRA_AUTO_PLAY_PATH)
         pendingAutoPlayScreenMode = intent?.getIntExtra(EXTRA_SCREEN_MODE, -1) ?: -1
+
+        // T11.1: Migra credenciais legadas para o Room / ServerCredentialStore se necessario
+        CoroutineScope(Dispatchers.IO).launch {
+            LegacyCredentialMigrator(
+                this@VRActivity,
+                AppDatabase.getInstance(this@VRActivity).savedServerDao(),
+                ServerCredentialStore(this@VRActivity)
+            ).migrateIfNeeded()
+        }
 
         // Ver bloco de comentario acima de `nativeKeyboardProxy`.
         nativeKeyboardProxy = EditText(this)
@@ -510,12 +525,21 @@ class VRActivity : NativeActivity() {
         nativeSetScreenModeOverride(cached ?: -1)
     }
 
+    private fun resolveSourceTitle(src: PlaybackSource): String = when (src) {
+        is PlaybackSource.LocalFile -> File(src.path).name
+        is PlaybackSource.Http -> src.url
+        is PlaybackSource.Smb -> src.path.substringAfterLast("/")
+        is PlaybackSource.Ftp -> src.path.substringAfterLast("/")
+        is PlaybackSource.Sftp -> src.path.substringAfterLast("/")
+        is PlaybackSource.Nfs -> src.path.substringAfterLast("/")
+    }
+
     fun playFile(filePath: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val resolvedSize = if (sizeBytes > 0L) sizeBytes else runCatching { File(filePath).length() }.getOrDefault(0L)
         val source = PlaybackSource.LocalFile(filePath, resolvedSize)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = File(filePath).name)
-        controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
+        controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayVideo(filePath, (resumeAtMs ?: 0L) / 1000f)
     }
@@ -526,7 +550,7 @@ class VRActivity : NativeActivity() {
         val source = PlaybackSource.Http(url)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = url)
-        controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
+        controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayVideo(url, (resumeAtMs ?: 0L) / 1000f)
     }
@@ -538,7 +562,7 @@ class VRActivity : NativeActivity() {
         val source = PlaybackSource.Smb(server, path, sizeBytes)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
-        controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
+        controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlaySmb(server.host, server.port, server.share, path, server.username, server.password, server.domain, (resumeAtMs ?: 0L) / 1000f)
     }
@@ -549,7 +573,7 @@ class VRActivity : NativeActivity() {
         val source = PlaybackSource.Ftp(server, path, sizeBytes)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
-        controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
+        controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayFtp(server.host, server.port, path, server.username, server.password, (resumeAtMs ?: 0L) / 1000f)
     }
@@ -560,9 +584,19 @@ class VRActivity : NativeActivity() {
         val source = PlaybackSource.Sftp(server, path, sizeBytes)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
-        controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
+        controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlaySftp(server.host, server.port, path, server.username, server.password, server.privateKey ?: "", (resumeAtMs ?: 0L) / 1000f)
+    }
+
+    // T5.4: playback NFS
+    fun playNfs(server: com.vrplayer.network.SavedServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
+        val source = PlaybackSource.Nfs(server, path, sizeBytes)
+        currentPlaybackSource = source
+        historyTracker.startTracking(source, title = path.substringAfterLast('/'))
+        controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
+        applyFormat3dOverride(source)
+        nativePlayNfs(server.host, server.port, server.path, path, 3, (resumeAtMs ?: 0L) / 1000f)
     }
 
     private fun processVideoUri(uri: Uri) {
@@ -573,7 +607,7 @@ class VRActivity : NativeActivity() {
                 val fdPath = "/proc/self/fd/$fd"
                 val source = PlaybackSource.LocalFile(fdPath, 0L)
                 currentPlaybackSource = source
-                controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
+                controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
                 applyFormat3dOverride(source)
                 nativePlayVideo(fdPath, 0f)
             }
@@ -645,6 +679,19 @@ class VRActivity : NativeActivity() {
 
     // T6.2/T6.4: listagem SFTP (bloqueante — SEMPRE de Dispatchers.IO).
     external fun nativeSftpListDirectory(host: String, port: Int, username: String, password: String, privateKey: String, path: String): String
+
+    // T5.1/T5.4: playback NFS
+    external fun nativePlayNfs(host: String, port: Int, exportPath: String, filePath: String, version: Int, startTimeSec: Float)
+
+    // T5.2/T5.4: listagem de diretório NFS (bloqueante — SEMPRE de Dispatchers.IO).
+    external fun nativeNfsListDirectory(host: String, port: Int, exportPath: String, dirPath: String, version: Int): String
+
+    // T5.2/T5.4: listagem de exports NFS (bloqueante — SEMPRE de Dispatchers.IO).
+    external fun nativeNfsListExports(host: String, port: Int): String
+
+    // T10.1: Varredura de servidores na rede local (bloqueante — SEMPRE de Dispatchers.IO).
+    // Retorno: linhas separadas por \n, cada uma com "PROTOCOL\tNAME\tHOST\tPORT\tPATH"
+    external fun nativeDiscoveryScan(timeoutMs: Int): String
 
     // T9: thumbnail de arquivo de video num share/servidor de rede — decode
     // de UM frame por software do lado Rust (core::thumbnail::generate, ver

@@ -82,6 +82,7 @@ class HistoryAdapter(
             HistorySourceType.HTTP  -> context.getString(R.string.history_row_http_format, entry.title).trim()
             HistorySourceType.FTP   -> context.getString(R.string.history_row_ftp_format, entry.title).trim()
             HistorySourceType.SFTP  -> context.getString(R.string.history_row_sftp_format, entry.title).trim()
+            HistorySourceType.NFS   -> context.getString(R.string.network_nfs_row_label_format, entry.title).trim()
         }
         val iconRes = when (entry.sourceType) {
             HistorySourceType.LOCAL -> R.drawable.ic_movie
@@ -89,6 +90,7 @@ class HistoryAdapter(
             HistorySourceType.HTTP  -> R.drawable.ic_link
             HistorySourceType.FTP   -> R.drawable.ic_broadcast
             HistorySourceType.SFTP  -> R.drawable.ic_lock
+            HistorySourceType.NFS   -> R.drawable.ic_storage
         }
         val meta = context.getString(
             R.string.history_row_meta_format,

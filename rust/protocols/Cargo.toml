@@ -42,6 +42,8 @@ futures-util = { version = "0.3", default-features = false, features = ["alloc"]
 # prefetch.rs) — ja estava no Cargo.lock transitivamente (ndk/tokio), entao
 # nao adiciona arvore de dependencia nova.
 libc = "0.2"
+# Descoberta mDNS/DNS-SD (T10.2) — biblioteca de descoberta pura-Rust sem dependencia async
+mdns-sd = "0.21"
 
 [dev-dependencies]
 httpmock = "0.8.3"

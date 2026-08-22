@@ -19,8 +19,10 @@ import com.vrplayer.screens.ContinueWatchingScreen
 import com.vrplayer.screens.FileDetailScreen
 import com.vrplayer.screens.HomeScreen
 import com.vrplayer.screens.LocalFilesScreen
+import com.vrplayer.screens.NetworkDiscoveryScreen
 import com.vrplayer.screens.NetworkFtpScreen
 import com.vrplayer.screens.NetworkHomeScreen
+import com.vrplayer.screens.NetworkNfsScreen
 import com.vrplayer.screens.NetworkSftpScreen
 import com.vrplayer.screens.NetworkSmbScreen
 import com.vrplayer.screens.PlayerScreen
@@ -117,19 +119,26 @@ class VRPresentation(
     private lateinit var localFilesScreen: LocalFilesScreen
     private lateinit var fileDetailScreen: FileDetailScreen
     private lateinit var networkSmbScreen: NetworkSmbScreen
+    private lateinit var networkNfsScreen: NetworkNfsScreen
     private lateinit var networkFtpScreen: NetworkFtpScreen
     private lateinit var networkSftpScreen: NetworkSftpScreen
+    private lateinit var networkDiscoveryScreen: NetworkDiscoveryScreen
     private lateinit var networkHomeScreen: NetworkHomeScreen
     private lateinit var continueWatchingScreen: ContinueWatchingScreen
     private lateinit var playerScreen: PlayerScreen
     private lateinit var resumePromptScreen: ResumePromptScreen
     private lateinit var settingsScreen: SettingsScreen
+    private lateinit var multicastLockManager: com.vrplayer.network.MulticastLockManager
+    private lateinit var savedServerDao: com.vrplayer.network.SavedServerDao
 
     // ---- Ciclo de vida ----
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        val db          = com.vrplayer.history.AppDatabase.getInstance(activity)
+        savedServerDao  = db.savedServerDao()
+        multicastLockManager = com.vrplayer.network.MulticastLockManager(activity)
         smbCredentials  = SmbCredentialStore(activity)
         ftpCredentials  = FtpCredentialStore(activity)
         sftpCredentials = SftpCredentialStore(activity)
@@ -205,6 +214,16 @@ class VRPresentation(
             onBack                = { handleBack() }
         )
 
+        networkNfsScreen = NetworkNfsScreen(
+            context               = context,
+            activity              = activity,
+            host                  = host,
+            scope                 = scope,
+            savedServerDao        = savedServerDao,
+            onNavigate            = { dest -> navigateTo(dest) },
+            onBack                = { handleBack() }
+        )
+
         networkFtpScreen = NetworkFtpScreen(
             context               = context,
             activity              = activity,
@@ -225,17 +244,39 @@ class VRPresentation(
             onBack                = { handleBack() }
         )
 
+        networkDiscoveryScreen = NetworkDiscoveryScreen(
+            context               = context,
+            activity              = activity,
+            host                  = host,
+            scope                 = scope,
+            savedServerDao        = savedServerDao,
+            lockManager           = multicastLockManager,
+            onNavigate            = { dest -> navigateTo(dest) },
+            onConfigureServer     = { protocol: com.vrplayer.network.ServerProtocol, hostStr: String, portNum: Int, nameStr: String, pathStr: String ->
+                when (protocol) {
+                    com.vrplayer.network.ServerProtocol.SMB -> networkHomeScreen.activeTabIndex = 2
+                    com.vrplayer.network.ServerProtocol.NFS -> networkHomeScreen.activeTabIndex = 3
+                    com.vrplayer.network.ServerProtocol.FTP -> networkHomeScreen.activeTabIndex = 4
+                    com.vrplayer.network.ServerProtocol.SFTP -> networkHomeScreen.activeTabIndex = 5
+                    else -> networkHomeScreen.activeTabIndex = 1
+                }
+                render()
+            }
+        )
+
         networkHomeScreen = NetworkHomeScreen(
-            context          = context,
-            activity         = activity,
-            host             = host,
-            scope            = scope,
-            urlHistory       = urlHistory,
-            smbPageBuilder   = { networkSmbScreen.buildPage() },
-            ftpPageBuilder   = { networkFtpScreen.buildPage() },
-            sftpPageBuilder  = { networkSftpScreen.buildPage() },
-            onNavigate       = { dest -> navigateTo(dest) },
-            onBack           = { handleBack() }
+            context               = context,
+            activity              = activity,
+            host                  = host,
+            scope                 = scope,
+            urlHistory            = urlHistory,
+            discoveryPageBuilder  = { networkDiscoveryScreen.buildPage() },
+            smbPageBuilder        = { networkSmbScreen.buildPage() },
+            nfsPageBuilder        = { networkNfsScreen.buildPage() },
+            ftpPageBuilder        = { networkFtpScreen.buildPage() },
+            sftpPageBuilder       = { networkSftpScreen.buildPage() },
+            onNavigate            = { dest -> navigateTo(dest) },
+            onBack                = { handleBack() }
         )
 
         continueWatchingScreen = ContinueWatchingScreen(
@@ -275,6 +316,7 @@ class VRPresentation(
             is Destination.FileDetail       -> fileDetailScreen.render(destination)
             is Destination.NetworkHome      -> networkHomeScreen.render()
             is Destination.NetworkFiles     -> networkSmbScreen.renderFiles(destination.server)
+            is Destination.NetworkNfsFiles  -> networkNfsScreen.renderFiles(destination.server, destination.path)
             is Destination.NetworkFtpFiles  -> networkFtpScreen.renderFiles(destination.server)
             is Destination.NetworkSftpFiles -> networkSftpScreen.renderFiles(destination.server)
             is Destination.ContinueWatching -> continueWatchingScreen.render()
@@ -300,6 +342,7 @@ class VRPresentation(
                 is PlaybackSource.LocalFile -> activity.playFile(source.path, source.sizeBytes, resumeAtMs)
                 is PlaybackSource.Http      -> activity.playUrl(source.url, resumeAtMs)
                 is PlaybackSource.Smb       -> activity.playSmb(source.server, source.path, source.sizeBytes, resumeAtMs)
+                is PlaybackSource.Nfs       -> activity.playNfs(source.server, source.path, source.sizeBytes, resumeAtMs)
                 is PlaybackSource.Ftp       -> activity.playFtp(source.server, source.path, source.sizeBytes, resumeAtMs)
                 is PlaybackSource.Sftp      -> activity.playSftp(source.server, source.path, source.sizeBytes, resumeAtMs)
             }
@@ -319,6 +362,10 @@ class VRPresentation(
         val handled = when {
             current is Destination.LocalFiles       -> localFilesScreen.handleBack()
             current is Destination.NetworkFiles     -> networkSmbScreen.handleBack(current.server)
+            current is Destination.NetworkNfsFiles  -> {
+                networkNfsScreen.handleBack()
+                true
+            }
             current is Destination.NetworkFtpFiles  -> networkFtpScreen.handleBack(current.server)
             current is Destination.NetworkSftpFiles -> networkSftpScreen.handleBack(current.server)
             current is Destination.NetworkHome      -> {

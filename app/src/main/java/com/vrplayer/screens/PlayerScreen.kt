@@ -302,6 +302,7 @@ class PlayerScreen(
         is PlaybackSource.Smb -> source.path.substringAfterLast('/')
         is PlaybackSource.Ftp -> source.path.substringAfterLast('/')
         is PlaybackSource.Sftp -> source.path.substringAfterLast('/')
+        is PlaybackSource.Nfs -> source.path.substringAfterLast('/')
     }
 
     private fun resolveSubtitle(source: PlaybackSource): String = when (source) {
@@ -310,6 +311,7 @@ class PlayerScreen(
         is PlaybackSource.Smb -> context.getString(R.string.file_detail_subtitle_smb_format, source.server.name)
         is PlaybackSource.Ftp -> context.getString(R.string.file_detail_subtitle_ftp_format, source.server.name)
         is PlaybackSource.Sftp -> context.getString(R.string.file_detail_subtitle_sftp_format, source.server.name)
+        is PlaybackSource.Nfs -> "${source.server.name} (${source.server.host})"
     }
 
     private fun pathFor(source: PlaybackSource): String = when (source) {
@@ -318,6 +320,7 @@ class PlayerScreen(
         is PlaybackSource.Smb -> "${source.server.share}/${source.path}"
         is PlaybackSource.Ftp -> source.path
         is PlaybackSource.Sftp -> source.path
+        is PlaybackSource.Nfs -> "${source.server.path}/${source.path}"
     }
 
     private fun sizeBytesFor(source: PlaybackSource): Long = when (source) {
@@ -325,6 +328,7 @@ class PlayerScreen(
         is PlaybackSource.Smb -> source.sizeBytes
         is PlaybackSource.Ftp -> source.sizeBytes
         is PlaybackSource.Sftp -> source.sizeBytes
+        is PlaybackSource.Nfs -> source.sizeBytes
         is PlaybackSource.Http -> 0L
     }
 }
