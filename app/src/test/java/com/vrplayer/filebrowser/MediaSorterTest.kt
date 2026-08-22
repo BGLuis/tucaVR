@@ -128,4 +128,20 @@ class MediaSorterTest {
 
         assertEquals(listOf("alpha_dir", "zeta_dir", "file.mp4"), sorted.map { it.name })
     }
+
+    @Test
+    fun sortsByLastPlayedAscendingAndDescending() {
+        val entries = listOf(
+            MediaEntry("old_played.mp4", "/path/1", 100, 100, MediaType.VIDEO, lastPlayedAt = 1000L),
+            MediaEntry("recent_played.mp4", "/path/2", 100, 100, MediaType.VIDEO, lastPlayedAt = 5000L),
+            MediaEntry("never_played.mp4", "/path/3", 100, 100, MediaType.VIDEO, lastPlayedAt = null),
+            MediaEntry("my_dir", "/path/dir", 0, 100, MediaType.DIRECTORY)
+        )
+
+        val sortedDesc = sortMediaEntries(entries, SortBy.LAST_PLAYED, ascending = false)
+        assertEquals(listOf("my_dir", "recent_played.mp4", "old_played.mp4", "never_played.mp4"), sortedDesc.map { it.name })
+
+        val sortedAsc = sortMediaEntries(entries, SortBy.LAST_PLAYED, ascending = true)
+        assertEquals(listOf("my_dir", "never_played.mp4", "old_played.mp4", "recent_played.mp4"), sortedAsc.map { it.name })
+    }
 }

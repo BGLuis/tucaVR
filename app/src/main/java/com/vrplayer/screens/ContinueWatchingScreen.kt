@@ -1,6 +1,7 @@
 package com.vrplayer.screens
 
 import android.content.Context
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
@@ -8,13 +9,13 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.vrplayer.R
 import com.vrplayer.VRActivity
-import com.vrplayer.designsystem.VoidButton
-import com.vrplayer.designsystem.VoidButtonStyle
+import com.vrplayer.designsystem.VoidFilterChip
 import com.vrplayer.designsystem.VoidPanelChrome
 import com.vrplayer.designsystem.VoidText
 import com.vrplayer.designsystem.VoidTheme
 import com.vrplayer.history.HistorySourceType
 import com.vrplayer.history.PlaybackHistory
+import com.vrplayer.history.isResumable
 import com.vrplayer.navigation.Destination
 import com.vrplayer.navigation.PlaybackSource
 import com.vrplayer.network.FtpCredentialStore
@@ -27,12 +28,7 @@ import org.json.JSONObject
 
 /**
  * Tela "Continuar Assistindo" (T9.4) e lógica de retomada a partir do histórico.
- *
- * Gerencia a consulta ao [historyTracker], a exibição da lista e a resolução
- * de servidores de rede a partir do JSON de [PlaybackHistory.serverInfo].
- *
- * Retomada via esta tela é direta (sem prompt "Retomar de XX:XX?") pois a
- * intenção do usuário já é explícita — ele clicou numa entrada de histórico.
+ * Inclui filtro rápido entre mídias em andamento ("Não finalizados", T12.4) e histórico completo.
  */
 class ContinueWatchingScreen(
     private val context: Context,
@@ -46,6 +42,8 @@ class ContinueWatchingScreen(
     private val onBack: () -> Unit
 ) {
 
+    private var filterOnlyResumable: Boolean = true
+
     fun render() {
         val root = VoidPanelChrome.newRoot(context)
         root.addView(
@@ -55,6 +53,18 @@ class ContinueWatchingScreen(
                 onBack = { onBack() }
             )
         )
+
+        // Filtro T12.4: Não-finalizados vs Todos
+        val filterRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
+                it.bottomMargin = VoidTheme.dpToPx(context, 12f)
+            }
+        }
+
+        lateinit var chipResumable: VoidFilterChip
+        lateinit var chipAll: VoidFilterChip
 
         val recycler = RecyclerView(context).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
@@ -68,12 +78,43 @@ class ContinueWatchingScreen(
 
         fun refresh() {
             scope.launch {
-                val items = activity.historyTracker.listRecent()
+                val allItems = activity.historyTracker.listRecent()
+                val items = if (filterOnlyResumable) {
+                    allItems.filter { it.isResumable() }
+                } else {
+                    allItems
+                }
                 adapter.submit(items)
                 recycler.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
                 emptyText.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
             }
         }
+
+        chipResumable = VoidFilterChip(context, context.getString(R.string.history_filter_resumable), isSelectedChip = filterOnlyResumable).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
+                it.marginEnd = VoidTheme.dpToPx(context, 8f)
+            }
+            setOnClickListener {
+                filterOnlyResumable = true
+                chipResumable.setSelectedState(true)
+                chipAll.setSelectedState(false)
+                refresh()
+            }
+        }
+        filterRow.addView(chipResumable)
+
+        chipAll = VoidFilterChip(context, context.getString(R.string.history_filter_all), isSelectedChip = !filterOnlyResumable).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            setOnClickListener {
+                filterOnlyResumable = false
+                chipResumable.setSelectedState(false)
+                chipAll.setSelectedState(true)
+                refresh()
+            }
+        }
+        filterRow.addView(chipAll)
+
+        root.addView(filterRow)
 
         adapter = HistoryAdapter(
             onItemClick    = { entry -> resumeFromHistory(entry) },
@@ -93,11 +134,7 @@ class ContinueWatchingScreen(
     }
 
     /**
-     * Retoma a reprodução diretamente na posição salva — sem prompt
-     * intermediário, pois o clique aqui já é a confirmação de intenção.
-     * Servidores removidos desde a última sessão geram falha silenciosa
-     * (não há credencial para reconectar — "não precisa ser sofisticado",
-     * escopo T9.3/T9.4).
+     * Retoma a reprodução diretamente na posição salva.
      */
     private fun resumeFromHistory(entry: PlaybackHistory) {
         when (entry.sourceType) {
@@ -138,11 +175,6 @@ class ContinueWatchingScreen(
         }
     }
 
-    /**
-     * Resolve um servidor salvo a partir do JSON de [PlaybackHistory.serverInfo].
-     * A credencial nunca foi duplicada no histórico — apenas a referência ao
-     * servidor salvo no respectivo CredentialStore.
-     */
     private fun <T> resolveServer(serverInfoJson: String?, finder: (String) -> T?): T? {
         if (serverInfoJson == null) return null
         return try {

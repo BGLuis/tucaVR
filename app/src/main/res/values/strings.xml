@@ -48,6 +48,36 @@
     <string name="browser_row_up">Go up one level</string>
     <string name="browser_label_size_mb_format">%1$.1f MB</string>
     <string name="browser_label_size_gb_format">%1$.2f GB</string>
+    <string name="browser_search_hint">Search files…</string>
+    <string name="browser_view_grid">Grid</string>
+    <string name="browser_view_list">List</string>
+    <string name="browser_sort_name">Name</string>
+    <string name="browser_sort_date">Date</string>
+    <string name="browser_sort_size">Size</string>
+    <string name="browser_sort_type">Type</string>
+    <string name="browser_sort_last_played">Last Played</string>
+    <string name="browser_filter_all">All</string>
+    <string name="browser_filter_video">Videos</string>
+    <string name="browser_filter_audio">Audio</string>
+    <string name="browser_filter_image">Images</string>
+    <string name="browser_filter_3d_all">3D: All</string>
+    <string name="browser_filter_3d_2d">2D</string>
+    <string name="browser_filter_3d_sbs">SBS</string>
+    <string name="browser_filter_3d_ou">OU</string>
+    <string name="browser_filter_3d_180">180°</string>
+    <string name="browser_filter_3d_360">360°</string>
+    <string name="browser_filter_date_all">Date: All</string>
+    <string name="browser_filter_date_recent">24 hours</string>
+    <string name="browser_filter_date_week">7 days</string>
+    <string name="browser_filter_date_month">30 days</string>
+    <string name="browser_results_count_format">Showing %1$d of %2$d items</string>
+    <string name="browser_empty_search">No files matching the search criteria</string>
+    <string name="browser_btn_clear_filters">Clear filters</string>
+    <string name="browser_folder_summary_format">%1$s · %2$d items</string>
+    <string name="history_filter_resumable">In Progress</string>
+    <string name="history_filter_all">All History</string>
+    <string name="player_now_playing_title">Now Playing</string>
+
 
     <!-- Detalhe de arquivo (FileDetailScreen) — tela intermediaria entre a
          listagem (local ou de rede) e o Player: single-click num video

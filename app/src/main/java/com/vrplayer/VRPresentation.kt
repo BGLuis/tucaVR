@@ -177,6 +177,7 @@ class VRPresentation(
 
         localFilesScreen = LocalFilesScreen(
             context       = context,
+            activity      = activity,
             host          = host,
             scope         = scope,
             dirNavigator  = dirNavigator,
@@ -250,9 +251,11 @@ class VRPresentation(
         )
 
         playerScreen = PlayerScreen(
-            context = context,
-            host    = host,
-            onBack  = { handleBack() }
+            context  = context,
+            activity = activity,
+            host     = host,
+            scope    = scope,
+            onBack   = { handleBack() }
         )
 
         settingsScreen = SettingsScreen(

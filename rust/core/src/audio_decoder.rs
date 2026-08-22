@@ -15,6 +15,8 @@ pub struct AudioDecoder {
     resampler_layout: ffmpeg::util::channel_layout::ChannelLayout,
 }
 
+unsafe impl Send for AudioDecoder {}
+
 impl AudioDecoder {
     /// `stream_index` deve vir do `Demuxer` (ver `Demuxer::audio_stream_index` /
     /// `select_audio_track`).

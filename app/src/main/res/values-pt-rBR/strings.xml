@@ -40,6 +40,36 @@
     <string name="browser_row_up">Subir um nivel</string>
     <string name="browser_label_size_mb_format">%1$.1f MB</string>
     <string name="browser_label_size_gb_format">%1$.2f GB</string>
+    <string name="browser_search_hint">Buscar arquivos…</string>
+    <string name="browser_view_grid">Grade</string>
+    <string name="browser_view_list">Lista</string>
+    <string name="browser_sort_name">Nome</string>
+    <string name="browser_sort_date">Data</string>
+    <string name="browser_sort_size">Tamanho</string>
+    <string name="browser_sort_type">Tipo</string>
+    <string name="browser_sort_last_played">Ultimo Reproduzido</string>
+    <string name="browser_filter_all">Todos</string>
+    <string name="browser_filter_video">Videos</string>
+    <string name="browser_filter_audio">Audios</string>
+    <string name="browser_filter_image">Imagens</string>
+    <string name="browser_filter_3d_all">3D: Todos</string>
+    <string name="browser_filter_3d_2d">2D</string>
+    <string name="browser_filter_3d_sbs">SBS</string>
+    <string name="browser_filter_3d_ou">OU</string>
+    <string name="browser_filter_3d_180">180°</string>
+    <string name="browser_filter_3d_360">360°</string>
+    <string name="browser_filter_date_all">Data: Todas</string>
+    <string name="browser_filter_date_recent">24 horas</string>
+    <string name="browser_filter_date_week">7 dias</string>
+    <string name="browser_filter_date_month">30 dias</string>
+    <string name="browser_results_count_format">Exibindo %1$d de %2$d itens</string>
+    <string name="browser_empty_search">Nenhum arquivo corresponde aos criterios de busca</string>
+    <string name="browser_btn_clear_filters">Limpar filtros</string>
+    <string name="browser_folder_summary_format">%1$s · %2$d itens</string>
+    <string name="history_filter_resumable">Nao finalizados</string>
+    <string name="history_filter_all">Historico Completo</string>
+    <string name="player_now_playing_title">Tocando Agora</string>
+
 
     <!-- Detalhe de arquivo (FileDetailScreen) — local e rede -->
     <string name="file_detail_row_format">%1$s: %2$s</string>

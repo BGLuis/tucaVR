@@ -18,9 +18,9 @@ import java.security.MessageDigest
 // SMB/FTP/SFTP; este objeto so cuida de cache em disco + conversao RGBA -> Bitmap.
 object NetworkThumbnailGenerator {
 
-    private const val THUMB_WIDTH = 256
-    private const val THUMB_HEIGHT = 144
-    private const val CACHE_DIR_NAME = "network_thumbnails"
+    const val THUMB_WIDTH = 512
+    const val THUMB_HEIGHT = 288
+    private const val CACHE_DIR_NAME = "network_thumbnails_v2"
 
     suspend fun getThumbnail(context: Context, activity: VRActivity, source: PlaybackSource): Bitmap? {
         return withContext(Dispatchers.IO) {

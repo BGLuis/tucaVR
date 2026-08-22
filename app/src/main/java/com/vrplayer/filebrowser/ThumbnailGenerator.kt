@@ -12,9 +12,9 @@ import java.security.MessageDigest
 
 object ThumbnailGenerator {
 
-    private const val THUMB_WIDTH = 256
-    private const val THUMB_HEIGHT = 144
-    private const val CACHE_DIR_NAME = "thumbnails"
+    const val THUMB_WIDTH = 512
+    const val THUMB_HEIGHT = 288
+    private const val CACHE_DIR_NAME = "thumbnails_v2"
 
     suspend fun getThumbnail(context: Context, entry: MediaEntry): Bitmap? {
         if (entry.type != MediaType.VIDEO) return null
@@ -31,16 +31,44 @@ object ThumbnailGenerator {
         }
     }
 
-    // T13.3: alvo ~10% da duracao (doc da fase 0.2, secao 13), mesma
-    // heuristica e mesmos limites (1s-30s) do lado Rust (core::thumbnail,
-    // usado pelas miniaturas de rede) -- clipe curto nao pede seek quase
-    // nulo, filme longo nao pede seek minutos adentro so pra gerar miniatura.
-    private const val MIN_TARGET_US = 1_000_000L
-    private const val MAX_TARGET_US = 30_000_000L
+    // Alvo primário ~10% da duração, com mínimo de 5s para pular vinhetas/intros pretas
+    // e máximo de 60s para não avançar excessivamente em filmes longos.
+    private const val MIN_TARGET_US = 5_000_000L
+    private const val MAX_TARGET_US = 60_000_000L
 
     internal fun targetTimeUs(durationMs: Long): Long {
         if (durationMs <= 0L) return MIN_TARGET_US
         return (durationMs * 1000L / 10L).coerceIn(MIN_TARGET_US, MAX_TARGET_US)
+    }
+
+    /**
+     * Detector de quadro essencialmente preto ou inútil.
+     * Amostra a luminância de pixels espaçados para execução rápida na CPU.
+     */
+    internal fun isEffectivelyBlack(bitmap: Bitmap): Boolean {
+        val width = bitmap.width
+        val height = bitmap.height
+        if (width <= 0 || height <= 0) return true
+
+        var totalLuminance = 0L
+        var sampleCount = 0
+        val stepX = (width / 32).coerceAtLeast(1)
+        val stepY = (height / 32).coerceAtLeast(1)
+
+        for (y in 0 until height step stepY) {
+            for (x in 0 until width step stepX) {
+                val pixel = bitmap.getPixel(x, y)
+                val r = (pixel shr 16) and 0xFF
+                val g = (pixel shr 8) and 0xFF
+                val b = pixel and 0xFF
+                val lum = (r * 299 + g * 587 + b * 114) / 1000
+                totalLuminance += lum
+                sampleCount++
+            }
+        }
+
+        val avg = if (sampleCount > 0) totalLuminance / sampleCount else 0
+        return avg < 14
     }
 
     private fun generateFrame(path: String): Bitmap? {
@@ -48,21 +76,52 @@ object ThumbnailGenerator {
         return try {
             retriever.setDataSource(path)
             val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
-            val targetUs = targetTimeUs(durationMs)
+            val primaryTargetUs = targetTimeUs(durationMs)
 
-            val scaled = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                retriever.getScaledFrameAtTime(
-                    targetUs,
-                    MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
-                    THUMB_WIDTH,
-                    THUMB_HEIGHT
-                )
-            } else {
-                null
+            // Lista de timestamps candidatos para evitar miniaturas pretas (10%, 15s, 30s, 60s, 5s)
+            val candidateTargetsUs = listOf(
+                primaryTargetUs,
+                15_000_000L,
+                30_000_000L,
+                60_000_000L,
+                5_000_000L
+            ).distinct()
+
+            var bestBitmap: Bitmap? = null
+
+            for (targetUs in candidateTargetsUs) {
+                if (durationMs > 0 && targetUs > durationMs * 1000L) continue
+
+                val candidate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                    retriever.getScaledFrameAtTime(
+                        targetUs,
+                        MediaMetadataRetriever.OPTION_CLOSEST,
+                        THUMB_WIDTH,
+                        THUMB_HEIGHT
+                    ) ?: retriever.getScaledFrameAtTime(
+                        targetUs,
+                        MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                        THUMB_WIDTH,
+                        THUMB_HEIGHT
+                    )
+                } else {
+                    null
+                } ?: retriever.getFrameAtTime(targetUs, MediaMetadataRetriever.OPTION_CLOSEST)
+                    ?.let { Bitmap.createScaledBitmap(it, THUMB_WIDTH, THUMB_HEIGHT, true) }
+                    ?: retriever.getFrameAtTime(targetUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                    ?.let { Bitmap.createScaledBitmap(it, THUMB_WIDTH, THUMB_HEIGHT, true) }
+
+                if (candidate != null) {
+                    if (!isEffectivelyBlack(candidate)) {
+                        return candidate
+                    }
+                    if (bestBitmap == null) {
+                        bestBitmap = candidate
+                    }
+                }
             }
 
-            scaled ?: retriever.getFrameAtTime(targetUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                ?.let { Bitmap.createScaledBitmap(it, THUMB_WIDTH, THUMB_HEIGHT, true) }
+            bestBitmap
         } catch (e: Exception) {
             null
         } finally {

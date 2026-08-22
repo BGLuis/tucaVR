@@ -4,7 +4,8 @@ enum class SortBy {
     NAME,
     DATE,
     SIZE,
-    TYPE
+    TYPE,
+    LAST_PLAYED
 }
 
 // Directories are grouped before files regardless of sort mode, matching the
@@ -15,6 +16,7 @@ fun sortMediaEntries(entries: List<MediaEntry>, sortBy: SortBy, ascending: Boole
         SortBy.DATE -> compareBy { it.lastModified }
         SortBy.SIZE -> compareBy { it.sizeBytes }
         SortBy.TYPE -> compareBy { it.type.name }
+        SortBy.LAST_PLAYED -> compareBy { it.lastPlayedAt ?: 0L }
     }
 
     val directoriesFirst = compareByDescending<MediaEntry> { it.type == MediaType.DIRECTORY }

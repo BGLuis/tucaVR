@@ -16,26 +16,26 @@ class ThumbnailGeneratorTargetTimeTest {
     }
 
     @Test
-    fun tenPercentOfATypicalMovieDurationClampsToTheThirtySecondMaximum() {
+    fun tenPercentOfATypicalMovieDurationClampsToTheSixtySecondMaximum() {
         val twoHoursMs = 2 * 60 * 60 * 1000L
-        assertEquals(30_000_000L, ThumbnailGenerator.targetTimeUs(twoHoursMs))
+        assertEquals(60_000_000L, ThumbnailGenerator.targetTimeUs(twoHoursMs))
     }
 
     @Test
-    fun shortClipClampsToTheOneSecondMinimum() {
+    fun shortClipClampsToTheFiveSecondMinimum() {
         val fiveSecondsMs = 5_000L
-        assertEquals(1_000_000L, ThumbnailGenerator.targetTimeUs(fiveSecondsMs))
+        assertEquals(5_000_000L, ThumbnailGenerator.targetTimeUs(fiveSecondsMs))
     }
 
     @Test
-    fun veryLongVideoClampsToTheThirtySecondMaximum() {
+    fun veryLongVideoClampsToTheSixtySecondMaximum() {
         val eightHoursMs = 8 * 60 * 60 * 1000L
-        assertEquals(30_000_000L, ThumbnailGenerator.targetTimeUs(eightHoursMs))
+        assertEquals(60_000_000L, ThumbnailGenerator.targetTimeUs(eightHoursMs))
     }
 
     @Test
-    fun unknownDurationFallsBackToTheOneSecondMinimum() {
-        assertEquals(1_000_000L, ThumbnailGenerator.targetTimeUs(0L))
-        assertEquals(1_000_000L, ThumbnailGenerator.targetTimeUs(-1L))
+    fun unknownDurationFallsBackToTheFiveSecondMinimum() {
+        assertEquals(5_000_000L, ThumbnailGenerator.targetTimeUs(0L))
+        assertEquals(5_000_000L, ThumbnailGenerator.targetTimeUs(-1L))
     }
 }
