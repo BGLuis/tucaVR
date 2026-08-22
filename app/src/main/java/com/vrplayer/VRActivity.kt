@@ -867,6 +867,9 @@ class VRActivity : NativeActivity() {
     // sobre select_audio_track). Chamada barata (so grava um campo), segura
     // direto da UI thread.
     external fun nativeSetAudioTrack(ordinal: Int)
+    external fun nativeSetSpatialAudioMode(mode: Int)
+    external fun nativeSetSpatialAudioHeadTracking(enabled: Boolean)
+
     // Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
     external fun nativeSetSubtitleTrack(trackIndex: Int)
     external fun nativeGetSubtitleTrack(): Int

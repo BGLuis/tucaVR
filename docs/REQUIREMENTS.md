@@ -32,7 +32,7 @@ graph TB
         LIB["Biblioteca / Favoritos / Histórico"]
     end
 
-    subgraph "Rust Core (via JNI/UniFFI)"
+    subgraph "Rust Core (via C ABI)"
         DEMUX["Demuxer<br/>(FFmpeg bindings)"]
         DECODE["Decoder Manager<br/>(MediaCodec HW)"]
         AUDIO["Audio Engine<br/>(Oboe NDK + Ambisonics)"]
@@ -245,7 +245,7 @@ graph TB
 | Persistência | Room + DataStore | Biblioteca, histórico, settings |
 | Networking (discovery) | Ktor Client | Coroutines-native |
 | i18n | Android Resources (strings.xml) | Padrão Android, ferramentas maduras |
-| Interop Rust | UniFFI | Geração automática de bindings |
+| Interop Rust | Indireto via C++ (JNI → C++ → Rust C ABI) | Kotlin nunca chama Rust diretamente (ver ADR-002) |
 
 ### 5.2 Rust Core (Performance)
 | Componente | Tecnologia | Justificativa |
@@ -255,28 +255,28 @@ graph TB
 | Áudio | `oboe` (Google Oboe NDK) | Baixa latência no Android |
 | Ambisonics | `ambisonics` crate ou custom | Áudio espacial |
 | Streaming | `reqwest` + `tokio` | HTTP/HLS/DASH async |
-| SMB | `pavão` ou `libsmbclient` binding | Shares Windows/NAS |
+| SMB | `smb2` crate | Shares Windows/NAS |
 | NFS | `nfs-client` ou binding `libnfs` | NFS shares |
-| FTP/SFTP | `suppaftp` + `ssh2` | Transferência de arquivos |
+| FTP/SFTP | `suppaftp` + `russh`/`russh-sftp` | Transferência de arquivos |
 | DLNA/UPnP | `rupnp` | Descoberta automática |
 | WebDAV | `reqwest` + custom DAV parser | WebDAV protocol |
 | Subtitles | `subparse` + custom ASS renderer | Legendas |
 | Async runtime | `tokio` | Async I/O |
 | Serialization | `serde` | Config, cache |
 | Build target | `aarch64-linux-android` | Quest 3 ARM64 |
-| JNI bridge | `uniffi` | Auto-generated bindings |
+| C ABI bridge | `extern "C"` em `rust/bridge/` | Interface C++↔Rust (ver ADR-002) |
 
 ### 5.3 OpenXR / C++ Layer (VR Rendering)
 | Componente | Tecnologia | Justificativa |
 |------------|------------|---------------|
 | VR Runtime | OpenXR 1.0 (Meta OpenXR loader) | Padrão da indústria |
-| Graphics API | Vulkan 1.1 (preferencial) | Performance máxima no Quest 3 |
-| Fallback | OpenGL ES 3.2 | Compatibilidade Quest 2 |
+| Graphics API | Vulkan 1.1 (default, via migração — ver ADR-003) | Controle fino do pipeline, compute shaders futuros |
+| Fallback | OpenGL ES 3.x (via OVRFW, `-PvrplayerGraphicsApi=GLES`) | Mantido como caminho alternativo |
 | Passthrough | Meta Passthrough API (XR extension) | Mixed reality |
 | Hand tracking | XR_EXT_hand_tracking | Gestos naturais |
 | Eye tracking | XR_EXT_eye_gaze_interaction | UI por olhar |
 | Environment | Meshes customizados + skyboxes | Ambientes 3D |
-| Shader lang | GLSL / SPIR-V | Vulkan shaders |
+| Shader lang | GLSL → SPIR-V (Vulkan, via `glslc`) / GLSL (GLES fallback) | Shaders em `native/shaders/vulkan/` |
 | Math | `glm` | Álgebra linear |
 
 ### 5.4 Build & Tooling
@@ -367,7 +367,7 @@ graph TB
 |---|-------|-------|---------|-----------|
 | 1 | **Decodificação 8K excede capacidade do XR2 Gen 2** | Alta | Alto | Downscale adaptativo, tiling, foveated decode |
 | 2 | **FFmpeg licenciamento (LGPL/GPL)** | Média | Alto | Linking dinâmico, audit de features GPL |
-| 3 | **Complexidade tri-layer (Kotlin/Rust/C++)** | Alta | Alto | UniFFI para Kotlin↔Rust, C API limpa para Rust↔C++ |
+| 3 | **Complexidade tri-layer (Kotlin/Rust/C++)** | Alta | Alto | C API minimalista (`extern "C"`) Rust↔C++, JNI manual limitado Kotlin↔C++ (ver ADR-002) |
 | 4 | **Thermal throttling em sessões longas** | Alta | Médio | Monitor térmico + adaptive quality + limitar ambiente |
 | 5 | **OpenXR extensions variam entre headsets** | Média | Médio | Feature detection + graceful degradation |
 | 6 | **SMB/NFS em Rust pode ser imaturo** | Média | Médio | Fallback para bindings de libs C (libsmbclient, libnfs) |
