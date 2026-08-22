@@ -16,6 +16,11 @@ object FeatureFlags {
         // Desligado por padrao: causa travamentos/queda de performance
         // perceptiveis ao arrastar o seekbar (ver VRControlsPresentation).
         SCRUB_PREVIEW("scrub_preview", defaultEnabled = false),
+
+        // Fase 0.4 T5: Foveated Rendering fixo (XR_FB_foveation, so caminho
+        // Vulkan — ver vr_player_app_vulkan.cpp::ApplyFoveation). Desligado
+        // por padrao: nunca validado em headset real ate agora.
+        FOVEATED_RENDERING("foveated_rendering", defaultEnabled = false),
     }
 
     fun isEnabled(context: Context, flag: Flag): Boolean =

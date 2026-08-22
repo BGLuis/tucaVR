@@ -30,8 +30,12 @@ extern "C" {
     extern uint32_t cycle_3d_mode();
     extern uint32_t get_3d_mode();
     extern void set_3d_mode(uint32_t mode);
+    extern void set_screen_mode_override(int32_t mode);
     extern uint32_t toggle_swap_eyes();
     extern void set_keyboard_active(int active);
+    // Fase 0.4 T5: Foveated Rendering (implementacao real em
+    // vr_player_app_vulkan.cpp, ver ApplyFoveation).
+    extern void set_foveation_enabled(uint32_t enabled);
     extern char* take_last_playback_error();
     extern void free_rust_string(char* s);
     extern char* probe_http_url(const char* url);
@@ -88,6 +92,17 @@ extern "C" {
     // Interrompe uma geracao de tira em andamento — ver comentario em
     // rust/bridge/src/lib.rs::cancel_thumbnail_strip_generation.
     extern void cancel_thumbnail_strip_generation();
+    // T13.1/T13.2: metadados de midia + selecao de trilha de audio — mesmo
+    // contrato de vr_player_app.cpp (ver rust/media_logic/src/metadata_wire.rs).
+    extern char* read_media_metadata(const char* path);
+    extern char* smb_read_metadata(const char* host, int32_t port, const char* username,
+                                    const char* password, const char* domain, const char* share,
+                                    const char* path);
+    extern char* ftp_read_metadata(const char* host, int32_t port, const char* username,
+                                    const char* password, const char* path);
+    extern char* sftp_read_metadata(const char* host, int32_t port, const char* username,
+                                     const char* password, const char* private_key, const char* path);
+    extern void set_desired_audio_track(uint32_t ordinal);
 }
 
 // Captura de frame (nao implementada no caminho Vulkan ainda — funcao existe
@@ -233,6 +248,11 @@ Java_com_vrplayer_VRActivity_nativeSetScreenMode(JNIEnv*, jobject, jint mode) {
     set_3d_mode((uint32_t)mode);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeSetScreenModeOverride(JNIEnv*, jobject, jint mode) {
+    set_screen_mode_override((int32_t)mode);
+}
+
 extern "C" JNIEXPORT jint JNICALL
 Java_com_vrplayer_VRActivity_nativeToggleSwapEyes(JNIEnv*, jobject) {
     return (jint)toggle_swap_eyes();
@@ -241,6 +261,11 @@ Java_com_vrplayer_VRActivity_nativeToggleSwapEyes(JNIEnv*, jobject) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_vrplayer_VRActivity_nativeSetKeyboardActive(JNIEnv*, jobject, jboolean active) {
     set_keyboard_active(active ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeSetFoveationEnabled(JNIEnv*, jobject, jboolean enabled) {
+    set_foveation_enabled(enabled ? 1 : 0);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -511,4 +536,75 @@ Java_com_vrplayer_VRActivity_nativeProbeHttpUrl(JNIEnv* env, jobject, jstring ur
     char* result = probe_http_url(urlStr);
     env->ReleaseStringUTFChars(url, urlStr);
     return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeReadMediaMetadata(JNIEnv* env, jobject, jstring path) {
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    char* result = read_media_metadata(p);
+    env->ReleaseStringUTFChars(path, p);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeSmbReadMetadata(JNIEnv* env, jobject,
+                                                    jstring host, jint port,
+                                                    jstring username, jstring password,
+                                                    jstring domain, jstring share,
+                                                    jstring path) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    const char* d = env->GetStringUTFChars(domain, nullptr);
+    const char* sh = env->GetStringUTFChars(share, nullptr);
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    char* result = smb_read_metadata(h, (int32_t)port, u, pw, d, sh, p);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    env->ReleaseStringUTFChars(domain, d);
+    env->ReleaseStringUTFChars(share, sh);
+    env->ReleaseStringUTFChars(path, p);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeFtpReadMetadata(JNIEnv* env, jobject,
+                                                    jstring host, jint port,
+                                                    jstring username, jstring password,
+                                                    jstring path) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    char* result = ftp_read_metadata(h, (int32_t)port, u, pw, p);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    env->ReleaseStringUTFChars(path, p);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_vrplayer_VRActivity_nativeSftpReadMetadata(JNIEnv* env, jobject,
+                                                     jstring host, jint port,
+                                                     jstring username, jstring password,
+                                                     jstring privateKey, jstring path) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    const char* k = env->GetStringUTFChars(privateKey, nullptr);
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    char* result = sftp_read_metadata(h, (int32_t)port, u, pw, k, p);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    env->ReleaseStringUTFChars(privateKey, k);
+    env->ReleaseStringUTFChars(path, p);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeSetAudioTrack(JNIEnv* env, jobject, jint ordinal) {
+    set_desired_audio_track((uint32_t)(ordinal < 0 ? 0 : ordinal));
 }

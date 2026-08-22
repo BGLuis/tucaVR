@@ -123,6 +123,7 @@ pub struct PlaybackController {
     // seek() ja faz.
     desired_audio_track: usize,
     audio_track_count: usize,
+    detected_screen_mode: u32,
     auto_paused: bool,
     // Instrumentacao (docs/DEBUGGING.md), capturada em load_at() antes de
     // mover o Demuxer/HwDecoder pra dentro das threads de sessao — ver
@@ -152,6 +153,7 @@ impl PlaybackController {
             speed_bits,
             desired_audio_track: 0,
             audio_track_count: 0,
+            detected_screen_mode: 0,
             auto_paused: false,
             network_stats: None,
             video_queue: None,
@@ -235,6 +237,9 @@ impl PlaybackController {
                 }
             }
         }
+
+        let (fmt3d, _) = crate::format3d_detect::detect(&demuxer, path, width, height);
+        self.detected_screen_mode = fmt3d.to_screen_mode_index();
 
         // O Quest 3 (MediaCodec) exige o mime correto do decoder de hardware;
         // usar "video/avc" para um stream HEVC falha ou decodifica lixo.
@@ -365,7 +370,6 @@ impl PlaybackController {
 
         let is_playing_v = is_playing.clone();
         let is_playing_a = is_playing.clone();
-        let is_playing_d = is_playing.clone();
 
         let is_running_v = is_running.clone();
         let is_running_a = is_running.clone();
@@ -855,5 +859,9 @@ impl PlaybackController {
 
     pub fn get_progress(&self) -> (f64, f64) {
         (self.sync_manager.get_master_clock(), self.duration)
+    }
+
+    pub fn detected_screen_mode(&self) -> u32 {
+        self.detected_screen_mode
     }
 }

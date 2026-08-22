@@ -44,8 +44,7 @@ class NetworkFtpScreen(
     private val scope: CoroutineScope,
     private val credentialStore: FtpCredentialStore,
     private val onNavigate: (Destination) -> Unit,
-    private val onBack: () -> Unit,
-    private val onPromptResumeOrPlay: (PlaybackSource, (Long?) -> Unit) -> Unit
+    private val onBack: () -> Unit
 ) {
 
     var browsingServer: FtpServer? = null
@@ -313,10 +312,7 @@ class NetworkFtpScreen(
                             renderFiles(server)
                         } else {
                             val source = PlaybackSource.Ftp(server, childPath, sizeBytes)
-                            onPromptResumeOrPlay(source) { resumeAtMs ->
-                                activity.playFtp(server, childPath, sizeBytes, resumeAtMs)
-                                onNavigate(Destination.Player(source))
-                            }
+                            onNavigate(Destination.FileDetail(source, name, sizeBytes))
                         }
                     }
                 }

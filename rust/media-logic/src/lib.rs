@@ -18,6 +18,7 @@
 //! delegates to it instead of reimplementing the same logic.
 pub mod audio_resample;
 pub mod format3d;
+pub mod metadata_wire;
 pub mod playback_params;
 pub mod preroll;
 pub mod session;

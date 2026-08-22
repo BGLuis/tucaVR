@@ -64,6 +64,8 @@ extern "C" {
     extern void get_video_progress(float* current, float* total);
     extern uint32_t get_3d_mode();
     extern uint32_t get_swap_eyes();
+    // Fase 0.4 T5: Foveated Rendering — ver ApplyFoveation abaixo.
+    extern uint32_t get_foveation_enabled();
     extern void start_video_playback(const char* path, float startTimeSec);
     // Estagio 6 — paridade com o caminho GLES (play-pause, teclado nativo,
     // volume, seek).
@@ -296,6 +298,13 @@ struct AppState {
     XrSession session = XR_NULL_HANDLE;
     XrSpace localSpace = XR_NULL_HANDLE;
     std::array<EyeSwapchain, kEyeCount> eyes;
+
+    // Fase 0.4 T5: Foveated Rendering (XR_FB_foveation) — ver ApplyFoveation.
+    PFN_xrCreateFoveationProfileFB pfnCreateFoveationProfileFB = nullptr;
+    PFN_xrDestroyFoveationProfileFB pfnDestroyFoveationProfileFB = nullptr;
+    PFN_xrUpdateSwapchainFB pfnUpdateSwapchainFB = nullptr;
+    XrFoveationProfileFB foveationProfile = XR_NULL_HANDLE;
+    bool foveationCurrentlyApplied = false; // ultimo estado efetivamente aplicado aos swapchains
 
     VkInstance vkInstance = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT vkDebugMessenger = VK_NULL_HANDLE; // ver CreateVulkanInstanceAndDevice
@@ -542,6 +551,13 @@ struct AppState {
     uint64_t lastDecodedFrameCount = 0;
     float decodedFps = 0.0f;
 
+    // Fase 0.4 T5: mesma cadencia ~1Hz acima, pra checar se
+    // get_foveation_enabled() mudou desde a ultima vez (ApplyFoveation, ver
+    // AppState.foveationCurrentlyApplied) — xrUpdateSwapchainFB nao e uma
+    // operacao de frame, checar a cada frame seria desperdicio.
+    static constexpr float kFoveationPollIntervalMs = 1000.0f;
+    float foveationPollAccumMs = 0.0f;
+
     // Instrumentacao adicional desta sessao (docs/NETWORK-IO-PERFORMANCE.md),
     // amostrada na MESMA janela de 1Hz que decodedFps acima. outputFps e o
     // ground truth do MediaCodec (TODO buffer de saida, nao so os
@@ -616,7 +632,16 @@ void InitializeOpenXrLoader(AppState& state) {
 }
 
 void CreateXrInstance(AppState& state) {
-    const char* extensions[] = {XR_KHR_VULKAN_ENABLE_EXTENSION_NAME};
+    // Fase 0.4 T5: Foveated Rendering — as 3 extensoes que xrCreateFoveationProfileFB/
+    // xrUpdateSwapchainFB (ApplyFoveation, abaixo) exigem. Sem checagem previa
+    // de suporte (sem precedente neste arquivo, ver XR_KHR_VULKAN_ENABLE
+    // acima); no Quest 3 real estao sempre presentes.
+    const char* extensions[] = {
+        XR_KHR_VULKAN_ENABLE_EXTENSION_NAME,
+        XR_FB_FOVEATION_EXTENSION_NAME,
+        XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME,
+        XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME,
+    };
 
     XrApplicationInfo appInfo{};
     std::strncpy(appInfo.applicationName, "VRPlayerVulkanStage1", XR_MAX_APPLICATION_NAME_SIZE - 1);
@@ -934,6 +959,56 @@ void CreateSwapchains(AppState& state) {
             eyeChain.handle, imageCount, &imageCount,
             reinterpret_cast<XrSwapchainImageBaseHeader*>(eyeChain.images.data())));
     }
+}
+
+// Fase 0.4 T5: Foveated Rendering fixo via XR_FB_foveation — NAO e Vulkan
+// VRS. E aplicado pelo COMPOSITOR do runtime OpenXR (ver aviso CAUTION da
+// secao 5 em docs/phases/PHASE-0.4-ADVANCED.md: foveacao manual no shader
+// causaria foveacao dupla). Chamada tanto na inicializacao quanto sempre que
+// get_foveation_enabled() muda de valor (polling de baixa frequencia no loop
+// principal — xrUpdateSwapchainFB troca estado do swapchain, nao e uma
+// operacao de frame). Nivel unico MEDIUM quando ligado, `dynamic =
+// LEVEL_ENABLED_FB` deixa o compositor ajustar a intensidade sozinho — nao
+// ha AdaptiveQualityManager/ThermalMonitor neste projeto ainda pra guiar
+// multiplos niveis (fase 0.2 secao 14, task separada).
+void ApplyFoveation(AppState& state, bool enabled) {
+    if (state.pfnCreateFoveationProfileFB == nullptr) {
+        state.pfnCreateFoveationProfileFB =
+            LoadXrFunction<PFN_xrCreateFoveationProfileFB>(state.instance, "xrCreateFoveationProfileFB");
+        state.pfnDestroyFoveationProfileFB =
+            LoadXrFunction<PFN_xrDestroyFoveationProfileFB>(state.instance, "xrDestroyFoveationProfileFB");
+        state.pfnUpdateSwapchainFB =
+            LoadXrFunction<PFN_xrUpdateSwapchainFB>(state.instance, "xrUpdateSwapchainFB");
+    }
+
+    XrFoveationLevelProfileCreateInfoFB levelInfo{XR_TYPE_FOVEATION_LEVEL_PROFILE_CREATE_INFO_FB};
+    levelInfo.level = enabled ? XR_FOVEATION_LEVEL_MEDIUM_FB : XR_FOVEATION_LEVEL_NONE_FB;
+    levelInfo.verticalOffset = 0.0f;
+    levelInfo.dynamic = XR_FOVEATION_DYNAMIC_LEVEL_ENABLED_FB;
+
+    XrFoveationProfileCreateInfoFB profileInfo{XR_TYPE_FOVEATION_PROFILE_CREATE_INFO_FB};
+    profileInfo.next = &levelInfo;
+
+    XrFoveationProfileFB newProfile = XR_NULL_HANDLE;
+    OXR(state.pfnCreateFoveationProfileFB(state.session, &profileInfo, &newProfile));
+
+    XrSwapchainStateFoveationFB swapchainState{XR_TYPE_SWAPCHAIN_STATE_FOVEATION_FB};
+    swapchainState.flags = 0;
+    swapchainState.profile = newProfile;
+    for (auto& eyeChain : state.eyes) {
+        OXR(state.pfnUpdateSwapchainFB(
+            eyeChain.handle, reinterpret_cast<XrSwapchainStateBaseHeaderFB*>(&swapchainState)));
+    }
+
+    // So destroi o profile ANTERIOR depois dos swapchains ja apontarem pro
+    // novo — nunca ha uma janela em que um swapchain referencia um profile
+    // destruido.
+    if (state.foveationProfile != XR_NULL_HANDLE) {
+        state.pfnDestroyFoveationProfileFB(state.foveationProfile);
+    }
+    state.foveationProfile = newProfile;
+    state.foveationCurrentlyApplied = enabled;
+    LOGI("Foveated Rendering: %s", enabled ? "ativado (MEDIUM, dynamic)" : "desativado");
 }
 
 // Um subpass, um color attachment (o proprio swapchain image), sem depth —
@@ -3072,6 +3147,17 @@ void RenderFrame(AppState& state) {
 
             state.decodedFpsPollAccumMs = 0.0f;
         }
+
+        // Fase 0.4 T5: mesma cadencia ~1Hz, checa se o usuario mudou o
+        // toggle de Foveated Rendering desde a ultima vez.
+        state.foveationPollAccumMs += frameMs;
+        if (state.foveationPollAccumMs >= AppState::kFoveationPollIntervalMs) {
+            state.foveationPollAccumMs = 0.0f;
+            bool desired = get_foveation_enabled() != 0;
+            if (desired != state.foveationCurrentlyApplied) {
+                ApplyFoveation(state, desired);
+            }
+        }
     }
     state.lastFrameTimestamp = frameStart;
     state.hasLastFrameTimestamp = true;
@@ -3477,6 +3563,9 @@ void android_main(android_app* app) {
 
     CreateReferenceSpace(state);
     CreateSwapchains(state);
+    // Fase 0.4 T5: estado inicial do toggle, persistido pelo Kotlin e
+    // empurrado no startup (VRActivity.onCreate -> nativeSetFoveationEnabled).
+    ApplyFoveation(state, get_foveation_enabled() != 0);
     CreateRenderPass(state);
     CreateFramebuffers(state);
     CreateGraphicsPipeline(state);
@@ -3594,6 +3683,9 @@ void android_main(android_app* app) {
     }
     if (state.vkCommandPool != VK_NULL_HANDLE) {
         vkDestroyCommandPool(state.vkDevice, state.vkCommandPool, nullptr);
+    }
+    if (state.foveationProfile != XR_NULL_HANDLE && state.pfnDestroyFoveationProfileFB != nullptr) {
+        state.pfnDestroyFoveationProfileFB(state.foveationProfile);
     }
     for (auto& eye : state.eyes) {
         if (eye.handle != XR_NULL_HANDLE) xrDestroySwapchain(eye.handle);

@@ -155,6 +155,102 @@ impl Format3D {
             Format3D::Vr180Sbs => true,
         }
     }
+
+    /// Índice numérico do `enum class ScreenMode` nativo (0-9) — precisa
+    /// ficar em sincronia com `native/src/vr_player_app.cpp`,
+    /// `native/src/vr_player_app_vulkan.cpp` e `modeLabelResIds` em
+    /// `VRControlsPresentation.kt` (ver CLAUDE.md). O `ScreenMode` nativo
+    /// tem só 10 valores contra os 12 daqui — `Spherical360SbsHalf`/
+    /// `Spherical360OverUnderHalf` colapsam nos mesmos índices de suas
+    /// contrapartes "full" (a geometria da esfera não muda entre full/half,
+    /// só a resolução efetiva por olho — diferente do caso plano, onde
+    /// full/half tem aspect ratio de quad diferente e por isso tem índices
+    /// próprios). `Vr180Mono` usa o mesmo índice de `Sphere180` (não existe
+    /// um "VR180 mono" separado no nativo). Match exaustivo — adicionar uma
+    /// variante nova em `Format3D` é erro de compilação aqui até decidir
+    /// pra qual índice ela mapeia.
+    pub fn to_screen_mode_index(self) -> u32 {
+        match self {
+            Format3D::Flat2D => 0,
+            Format3D::SbsFull => 1,
+            Format3D::SbsHalf => 2,
+            Format3D::OverUnderFull => 3,
+            Format3D::OverUnderHalf => 4,
+            Format3D::Spherical360Mono => 5,
+            Format3D::Vr180Mono => 6,
+            Format3D::Spherical360SbsFull => 7,
+            Format3D::Spherical360SbsHalf => 7,
+            Format3D::Spherical360OverUnderFull => 8,
+            Format3D::Spherical360OverUnderHalf => 8,
+            Format3D::Vr180Sbs => 9,
+        }
+    }
+}
+
+// SBS: aspecto de frame full (dois olhos completos lado a lado) e cerca do
+// dobro do de um frame normal; half (olhos espremidos pra caber num frame
+// normal) fica proximo do aspecto normal. OU: o inverso (full ~metade,
+// half ~normal, pela pilha vertical dobrar a altura). Limiares generosos
+// (nao os valores exatos 32:9/4:1 de detect_from_resolution) porque aqui a
+// decisao "e 3D" ja veio confirmada pelos metadados do container — s
+// escolhendo entre full/half, nunca inventando stereo do nada, entao um
+// limiar largo e seguro. Documentado como aproximacao, nao garantia.
+fn is_full_packing(is_sbs: bool, aspect: f64) -> bool {
+    if is_sbs { aspect >= 2.4 } else { aspect <= 1.2 }
+}
+
+/// T3.1: resolve o `Format3D` final a partir do que os metadados do
+/// container JÁ CONFIRMARAM (`stereo`/`projection`, produzidos por
+/// `core` a partir de tags MKV/side data MP4 — ver doc-comment de
+/// [`detect`] sobre por que essa combinação não pode viver só aqui).
+/// Nunca inventa um sinal de stereo/esfera que os metadados não deram —
+/// só refina full-vs-half via aspect ratio quando o metadado confirma o
+/// layout (SBS/OU) sem dizer a resolução por olho. 180° é tratado como
+/// SBS-only nesta app (mesmo judgment call de [`detect_from_filename`]) —
+/// qualquer stereo não-mono + `HalfEquirectangular` vira [`Format3D::Vr180Sbs`].
+pub fn resolve_container_hint(
+    stereo: Option<VideoStereoMode>,
+    projection: Option<VideoProjection>,
+    width: u32,
+    height: u32,
+) -> Option<Format3D> {
+    let is_stereo = matches!(
+        stereo,
+        Some(VideoStereoMode::SideBySideLeft)
+            | Some(VideoStereoMode::SideBySideRight)
+            | Some(VideoStereoMode::TopBottomLeft)
+            | Some(VideoStereoMode::TopBottomRight)
+    );
+    let is_sbs = matches!(
+        stereo,
+        Some(VideoStereoMode::SideBySideLeft) | Some(VideoStereoMode::SideBySideRight)
+    );
+    let aspect = if width == 0 || height == 0 { 0.0 } else { width as f64 / height as f64 };
+
+    match projection {
+        Some(VideoProjection::HalfEquirectangular) => {
+            Some(if is_stereo { Format3D::Vr180Sbs } else { Format3D::Vr180Mono })
+        }
+        Some(VideoProjection::Equirectangular) => Some(if !is_stereo {
+            Format3D::Spherical360Mono
+        } else if is_sbs {
+            if is_full_packing(true, aspect) { Format3D::Spherical360SbsFull } else { Format3D::Spherical360SbsHalf }
+        } else if is_full_packing(false, aspect) {
+            Format3D::Spherical360OverUnderFull
+        } else {
+            Format3D::Spherical360OverUnderHalf
+        }),
+        // Cubemap/EAC/fisheye/etc: fora da taxonomia deste app — sem sinal
+        // utilizavel, deixa pra filename/resolucao decidirem.
+        Some(_) => None,
+        None if is_stereo && is_sbs => {
+            Some(if is_full_packing(true, aspect) { Format3D::SbsFull } else { Format3D::SbsHalf })
+        }
+        None if is_stereo => {
+            Some(if is_full_packing(false, aspect) { Format3D::OverUnderFull } else { Format3D::OverUnderHalf })
+        }
+        None => None,
+    }
 }
 
 /// How [`detect`] arrived at its answer — lets the T3.4 confirmation UI
@@ -749,5 +845,183 @@ mod tests {
         let (format, confidence) = detect("family_video.mp4", 1920, 1080, None);
         assert_eq!(format, Format3D::Flat2D);
         assert_eq!(confidence, DetectionConfidence::Default);
+    }
+
+    // ---- to_screen_mode_index: mapeamento exaustivo pros 10 indices nativos ----
+
+    #[test]
+    fn to_screen_mode_index_maps_all_variants_correctly() {
+        assert_eq!(Format3D::Flat2D.to_screen_mode_index(), 0);
+        assert_eq!(Format3D::SbsFull.to_screen_mode_index(), 1);
+        assert_eq!(Format3D::SbsHalf.to_screen_mode_index(), 2);
+        assert_eq!(Format3D::OverUnderFull.to_screen_mode_index(), 3);
+        assert_eq!(Format3D::OverUnderHalf.to_screen_mode_index(), 4);
+        assert_eq!(Format3D::Spherical360Mono.to_screen_mode_index(), 5);
+        assert_eq!(Format3D::Vr180Mono.to_screen_mode_index(), 6);
+        assert_eq!(Format3D::Spherical360SbsFull.to_screen_mode_index(), 7);
+        assert_eq!(Format3D::Spherical360SbsHalf.to_screen_mode_index(), 7);
+        assert_eq!(Format3D::Spherical360OverUnderFull.to_screen_mode_index(), 8);
+        assert_eq!(Format3D::Spherical360OverUnderHalf.to_screen_mode_index(), 8);
+        assert_eq!(Format3D::Vr180Sbs.to_screen_mode_index(), 9);
+    }
+
+    // ---- resolve_container_hint ----
+
+    #[test]
+    fn resolve_container_hint_vr180_cases() {
+        // VR180 mono
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::Mono),
+                Some(VideoProjection::HalfEquirectangular),
+                1920,
+                1920
+            ),
+            Some(Format3D::Vr180Mono)
+        );
+        assert_eq!(
+            resolve_container_hint(
+                None,
+                Some(VideoProjection::HalfEquirectangular),
+                1920,
+                1920
+            ),
+            Some(Format3D::Vr180Mono)
+        );
+
+        // VR180 stereo (qualquer layout estereo vira Vr180Sbs)
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(VideoProjection::HalfEquirectangular),
+                3840,
+                1920
+            ),
+            Some(Format3D::Vr180Sbs)
+        );
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::TopBottomLeft),
+                Some(VideoProjection::HalfEquirectangular),
+                1920,
+                3840
+            ),
+            Some(Format3D::Vr180Sbs)
+        );
+    }
+
+    #[test]
+    fn resolve_container_hint_360_cases() {
+        // 360 Mono
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::Mono),
+                Some(VideoProjection::Equirectangular),
+                3840,
+                1920
+            ),
+            Some(Format3D::Spherical360Mono)
+        );
+        assert_eq!(
+            resolve_container_hint(
+                None,
+                Some(VideoProjection::Equirectangular),
+                3840,
+                1920
+            ),
+            Some(Format3D::Spherical360Mono)
+        );
+
+        // 360 SBS Full (aspect >= 2.4, ex: 3840x1080 -> 3.55)
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(VideoProjection::Equirectangular),
+                3840,
+                1080
+            ),
+            Some(Format3D::Spherical360SbsFull)
+        );
+
+        // 360 SBS Half (aspect < 2.4, ex: 3840x1920 -> 2.0)
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(VideoProjection::Equirectangular),
+                3840,
+                1920
+            ),
+            Some(Format3D::Spherical360SbsHalf)
+        );
+
+        // 360 OU Full (aspect <= 1.2, ex: 1920x1920 -> 1.0 ou 1920x2160 -> 0.88)
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::TopBottomLeft),
+                Some(VideoProjection::Equirectangular),
+                1920,
+                1920
+            ),
+            Some(Format3D::Spherical360OverUnderFull)
+        );
+
+        // 360 OU Half (aspect > 1.2, ex: 3840x1920 -> 2.0)
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::TopBottomLeft),
+                Some(VideoProjection::Equirectangular),
+                3840,
+                1920
+            ),
+            Some(Format3D::Spherical360OverUnderHalf)
+        );
+    }
+
+    #[test]
+    fn resolve_container_hint_flat_stereo_cases() {
+        // Flat SBS Full (aspect >= 2.4, ex: 3840x1080 -> ~3.55)
+        assert_eq!(
+            resolve_container_hint(Some(VideoStereoMode::SideBySideLeft), None, 3840, 1080),
+            Some(Format3D::SbsFull)
+        );
+
+        // Flat SBS Half (aspect < 2.4, ex: 1920x1080 -> ~1.77)
+        assert_eq!(
+            resolve_container_hint(Some(VideoStereoMode::SideBySideRight), None, 1920, 1080),
+            Some(Format3D::SbsHalf)
+        );
+
+        // Flat OU Full (aspect <= 1.2, ex: 1920x2160 -> ~0.88)
+        assert_eq!(
+            resolve_container_hint(Some(VideoStereoMode::TopBottomLeft), None, 1920, 2160),
+            Some(Format3D::OverUnderFull)
+        );
+
+        // Flat OU Half (aspect > 1.2, ex: 1920x1080 -> ~1.77)
+        assert_eq!(
+            resolve_container_hint(Some(VideoStereoMode::TopBottomRight), None, 1920, 1080),
+            Some(Format3D::OverUnderHalf)
+        );
+    }
+
+    #[test]
+    fn resolve_container_hint_unsupported_or_empty_returns_none() {
+        // Cubemap -> None
+        assert_eq!(
+            resolve_container_hint(None, Some(VideoProjection::Cubemap), 1920, 1080),
+            None
+        );
+        // Mono sem projeção -> None (fica pra filename/resolução decidirem)
+        assert_eq!(
+            resolve_container_hint(Some(VideoStereoMode::Mono), None, 1920, 1080),
+            None
+        );
+        // Sem metadados
+        assert_eq!(resolve_container_hint(None, None, 1920, 1080), None);
+        // Dimensões zeradas
+        assert_eq!(
+            resolve_container_hint(Some(VideoStereoMode::SideBySideLeft), None, 0, 0),
+            Some(Format3D::SbsHalf) // aspect 0.0 < 2.4 -> Half
+        );
     }
 }

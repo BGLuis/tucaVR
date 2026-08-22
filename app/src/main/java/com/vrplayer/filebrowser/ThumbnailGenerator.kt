@@ -31,14 +31,28 @@ object ThumbnailGenerator {
         }
     }
 
+    // T13.3: alvo ~10% da duracao (doc da fase 0.2, secao 13), mesma
+    // heuristica e mesmos limites (1s-30s) do lado Rust (core::thumbnail,
+    // usado pelas miniaturas de rede) -- clipe curto nao pede seek quase
+    // nulo, filme longo nao pede seek minutos adentro so pra gerar miniatura.
+    private const val MIN_TARGET_US = 1_000_000L
+    private const val MAX_TARGET_US = 30_000_000L
+
+    internal fun targetTimeUs(durationMs: Long): Long {
+        if (durationMs <= 0L) return MIN_TARGET_US
+        return (durationMs * 1000L / 10L).coerceIn(MIN_TARGET_US, MAX_TARGET_US)
+    }
+
     private fun generateFrame(path: String): Bitmap? {
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(path)
+            val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0L
+            val targetUs = targetTimeUs(durationMs)
 
             val scaled = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
                 retriever.getScaledFrameAtTime(
-                    -1,
+                    targetUs,
                     MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
                     THUMB_WIDTH,
                     THUMB_HEIGHT
@@ -47,7 +61,7 @@ object ThumbnailGenerator {
                 null
             }
 
-            scaled ?: retriever.getFrameAtTime(-1, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            scaled ?: retriever.getFrameAtTime(targetUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                 ?.let { Bitmap.createScaledBitmap(it, THUMB_WIDTH, THUMB_HEIGHT, true) }
         } catch (e: Exception) {
             null

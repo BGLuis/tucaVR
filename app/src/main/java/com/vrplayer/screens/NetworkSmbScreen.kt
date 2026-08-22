@@ -48,8 +48,7 @@ class NetworkSmbScreen(
     private val scope: CoroutineScope,
     private val credentialStore: SmbCredentialStore,
     private val onNavigate: (Destination) -> Unit,
-    private val onBack: () -> Unit,
-    private val onPromptResumeOrPlay: (PlaybackSource, (Long?) -> Unit) -> Unit
+    private val onBack: () -> Unit
 ) {
 
     var browsingServer: SmbServer? = null
@@ -350,10 +349,7 @@ class NetworkSmbScreen(
                             renderFiles(server)
                         } else {
                             val source = PlaybackSource.Smb(server, childPath, sizeBytes)
-                            onPromptResumeOrPlay(source) { resumeAtMs ->
-                                activity.playSmb(server, childPath, sizeBytes, resumeAtMs)
-                                onNavigate(Destination.Player(source))
-                            }
+                            onNavigate(Destination.FileDetail(source, name, sizeBytes))
                         }
                     }
                 }

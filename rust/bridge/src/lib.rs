@@ -200,6 +200,28 @@ pub extern "C" fn get_keyboard_active() -> u32 {
     KEYBOARD_ACTIVE.load(Ordering::Relaxed) as u32
 }
 
+// Fase 0.4 T5: Foveated Rendering (fixo, via extensao OpenXR XR_FB_foveation
+// no caminho Vulkan — ver native/src/vr_player_app_vulkan.cpp). Default OFF:
+// feature nunca validada em headset real nesta sessao, ligar e acao
+// explicita do usuario na tela de Configuracoes (Kotlin). So tem efeito real
+// no caminho Vulkan (padrao de build); no caminho GLES o valor e aceito e
+// guardado aqui, mas nada le/aplica — OVRFW::XrApp nao expoe o XrSwapchain
+// necessario pra xrUpdateSwapchainFB.
+static FOVEATION_ENABLED: AtomicBool = AtomicBool::new(false);
+
+#[no_mangle]
+pub extern "C" fn set_foveation_enabled(enabled: u32) {
+    FOVEATION_ENABLED.store(enabled != 0, Ordering::Relaxed);
+}
+
+/// Polling de baixa frequencia (~1x/s, nao a cada frame) pelo loop principal
+/// do caminho Vulkan — aplicar via xrUpdateSwapchainFB nao e uma operacao de
+/// frame, ver comentario em ApplyFoveation.
+#[no_mangle]
+pub extern "C" fn get_foveation_enabled() -> u32 {
+    FOVEATION_ENABLED.load(Ordering::Relaxed) as u32
+}
+
 /// T1.4: avanca pro proximo modo do ciclo (chamado pelo botao "🧊" do painel
 /// de controles). Retorna o novo modo, pra o Kotlin nao precisar de uma
 /// chamada extra so pra ler de volta o que acabou de escrever.
@@ -222,6 +244,31 @@ pub extern "C" fn set_3d_mode(mode: u32) {
     if mode < SCREEN_MODE_COUNT {
         SCREEN_MODE.store(mode, Ordering::Relaxed);
     }
+}
+
+static SCREEN_MODE_OVERRIDE: AtomicU32 = AtomicU32::new(u32::MAX);
+
+/// Seta um override explicito para o modo 3D do proximo video (ou u32::MAX / valor negativo
+/// para "sem override / usar auto-deteccao"). Chamado pelo Kotlin ANTES de disparar o play.
+#[no_mangle]
+pub extern "C" fn set_screen_mode_override(mode: i32) {
+    if mode < 0 || mode >= SCREEN_MODE_COUNT as i32 {
+        SCREEN_MODE_OVERRIDE.store(u32::MAX, Ordering::Relaxed);
+    } else {
+        SCREEN_MODE_OVERRIDE.store(mode as u32, Ordering::Relaxed);
+    }
+}
+
+/// Aplica o modo 3D apos o carregamento de video: se houver override valido, usa-o;
+/// caso contrario, usa o modo detectado pelo controller.
+fn apply_screen_mode_after_load(controller: &core::playback::PlaybackController) {
+    let ovr = SCREEN_MODE_OVERRIDE.load(Ordering::Relaxed);
+    let final_mode = if ovr < SCREEN_MODE_COUNT {
+        ovr
+    } else {
+        controller.detected_screen_mode()
+    };
+    set_3d_mode(final_mode);
 }
 
 /// T9 (historico): ao carregar um arquivo novo, o modo 3D da reproducao
@@ -472,10 +519,11 @@ fn string_to_c_char(s: String) -> *mut std::os::raw::c_char {
         .into_raw()
 }
 
-/// Libera uma string retornada por `smb_list_shares`, `smb_list_directory`
-/// ou `probe_http_url`. Toda `*mut c_char` que este bridge retorna (exceto
-/// via parametros `out`) precisa passar por aqui — sem isso, vaza memoria do
-/// lado Rust a cada chamada.
+/// Libera uma string retornada por `smb_list_shares`, `smb_list_directory`,
+/// `probe_http_url` ou `read_media_metadata`/`smb_read_metadata`/
+/// `ftp_read_metadata`/`sftp_read_metadata`. Toda `*mut c_char` que este
+/// bridge retorna (exceto via parametros `out`) precisa passar por aqui —
+/// sem isso, vaza memoria do lado Rust a cada chamada.
 #[no_mangle]
 pub extern "C" fn free_rust_string(ptr: *mut std::os::raw::c_char) {
     if ptr.is_null() {
@@ -554,6 +602,7 @@ pub extern "C" fn start_smb_playback(
                 unsafe { log(6, &format!("Error loading SMB video: {:?}", e)); }
                 set_last_playback_error(format!("{:?}", e));
             } else {
+                apply_screen_mode_after_load(&controller);
                 unsafe { log(4, "SMB video loaded successfully!"); }
             }
         }
@@ -677,6 +726,7 @@ pub extern "C" fn start_ftp_playback(
                 unsafe { log(6, &format!("Error loading FTP video: {:?}", e)); }
                 set_last_playback_error(format!("{:?}", e));
             } else {
+                apply_screen_mode_after_load(&controller);
                 unsafe { log(4, "FTP video loaded successfully!"); }
             }
         }
@@ -768,6 +818,7 @@ pub extern "C" fn start_sftp_playback(
                 unsafe { log(6, &format!("Error loading SFTP video: {:?}", e)); }
                 set_last_playback_error(format!("{:?}", e));
             } else {
+                apply_screen_mode_after_load(&controller);
                 unsafe { log(4, "SFTP video loaded successfully!"); }
             }
         }
@@ -871,6 +922,7 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
                 unsafe { log(6, &format!("Error loading video: {:?}", e)); }
                 set_last_playback_error(format!("{:?}", e));
             } else {
+                apply_screen_mode_after_load(&controller);
                 unsafe { log(4, "Video loaded successfully!"); }
             }
         }
@@ -956,6 +1008,19 @@ pub extern "C" fn get_audio_track_count() -> u32 {
         controller.audio_track_count() as u32
     } else {
         0
+    }
+}
+
+/// Seleciona a trilha de audio desejada pro PROXIMO `load_at()` — nao troca
+/// a trilha ao vivo (ver `PlaybackController::select_audio_track`). Uso
+/// pretendido: a tela de detalhe do arquivo chama isto antes de tocar.
+/// `desired_audio_track` e estado GLOBAL do controller — o chamador DEVE
+/// chamar isto sempre antes de tocar (inclusive `ordinal = 0`), senao a
+/// escolha feita num arquivo vaza silenciosamente pro proximo.
+#[no_mangle]
+pub extern "C" fn set_desired_audio_track(ordinal: u32) {
+    if let Ok(mut controller) = CONTROLLER.lock() {
+        controller.select_audio_track(ordinal as usize);
     }
 }
 
@@ -1276,6 +1341,125 @@ pub extern "C" fn sftp_generate_thumbnail_strip(
 #[no_mangle]
 pub extern "C" fn cancel_thumbnail_strip_generation() {
     core::thumbnail::cancel_strip_generation();
+}
+
+/// Roda `core::metadata::extract` e serializa o resultado (ver
+/// `media_logic::metadata_wire`) numa string liberada com `free_rust_string`,
+/// ou `"ERROR:<msg>"` em qualquer falha — mesmo contrato de erro de
+/// `smb_list_directory`/`probe_http_url`. Reusado pelas 4 funcoes de
+/// metadados abaixo (local e as 3 de rede) — so o marshalling de credenciais
+/// difere entre elas, ver justificativa em `smb_generate_thumbnail`.
+fn metadata_to_c_char(internal_uri: &str) -> *mut std::os::raw::c_char {
+    match core::metadata::extract(internal_uri) {
+        Ok(meta) => string_to_c_char(media_logic::metadata_wire::encode(&meta)),
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace(['\n', '\t'], " "))),
+    }
+}
+
+/// T13.1: extrai metadados de midia (container, duracao, bitrate, trilhas)
+/// de um arquivo local ou de uma URL http(s):// direta — `core::metadata::extract`
+/// despacha por esquema do mesmo jeito que o playback, entao uma unica funcao
+/// cobre os dois casos. Chamada BLOQUEANTE (probe de container, sem decodificar
+/// frame nenhum) — Kotlin SEMPRE de `Dispatchers.IO`. Retorno DEVE ser
+/// liberado com `free_rust_string`.
+#[no_mangle]
+pub extern "C" fn read_media_metadata(path: *const std::os::raw::c_char) -> *mut std::os::raw::c_char {
+    let path = match unsafe { cstr_to_string(path) } {
+        Some(s) => s,
+        None => return string_to_c_char("ERROR:caminho invalido".to_string()),
+    };
+    metadata_to_c_char(&path)
+}
+
+/// Mesma logica de `read_media_metadata`, para um arquivo num share SMB —
+/// credenciais como parametros separados, mesma justificativa de
+/// `smb_generate_thumbnail`.
+#[no_mangle]
+pub extern "C" fn smb_read_metadata(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    domain: *const std::os::raw::c_char,
+    share: *const std::os::raw::c_char,
+    path: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".to_string()) };
+        let share = match cstr_to_string(share) { Some(s) => s, None => return string_to_c_char("ERROR:share invalido".to_string()) };
+        let path = match cstr_to_string(path) { Some(s) => s, None => return string_to_c_char("ERROR:caminho invalido".to_string()) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        let domain = cstr_to_string(domain).unwrap_or_default();
+        protocols::smb::SmbTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            share,
+            path,
+            username,
+            password,
+            domain,
+        }
+    };
+    metadata_to_c_char(&target.to_internal())
+}
+
+/// Mesma logica de `read_media_metadata`, para um arquivo num servidor FTP.
+#[no_mangle]
+pub extern "C" fn ftp_read_metadata(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    path: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".to_string()) };
+        let path = match cstr_to_string(path) { Some(s) => s, None => return string_to_c_char("ERROR:caminho invalido".to_string()) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        protocols::ftp::FtpTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            path,
+            username,
+            password,
+        }
+    };
+    metadata_to_c_char(&target.to_internal())
+}
+
+/// Mesma logica de `read_media_metadata`, para um arquivo num servidor SFTP.
+/// `private_key` e o CONTEUDO PEM (nao um caminho), mesma convencao de
+/// `sftp_generate_thumbnail`.
+#[no_mangle]
+pub extern "C" fn sftp_read_metadata(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    private_key: *const std::os::raw::c_char,
+    path: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".to_string()) };
+        let path = match cstr_to_string(path) { Some(s) => s, None => return string_to_c_char("ERROR:caminho invalido".to_string()) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        protocols::sftp::SftpTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            path,
+            username,
+            password,
+            private_key,
+        }
+    };
+    if target.validate().is_err() {
+        return string_to_c_char("ERROR:credenciais SFTP invalidas".to_string());
+    }
+    metadata_to_c_char(&target.to_internal())
 }
 
 #[no_mangle]

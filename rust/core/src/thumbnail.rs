@@ -35,12 +35,22 @@ pub struct ThumbnailImage {
 // Kotlin).
 const MAX_PACKETS_TRIED: u32 = 500;
 
-// Seek de 1s pra dentro do arquivo antes de decodificar: muitos videos tem
-// frame(s) preto(s)/fade-in logo no inicio, e um thumbnail totalmente preto
-// nao ajuda o usuario a reconhecer o arquivo. Best-effort: se o seek falhar
-// (formato/protocolo que nao suporta bem), decodifica a partir do que o
-// demuxer conseguir entregar mesmo assim.
-const SEEK_TARGET_US: i64 = 1_000_000;
+// T13.3: alvo primario e ~10% da duracao (doc da fase 0.2, secao 13) — melhor
+// heuristica que um instante fixo pra pular intros/fade-in em videos longos
+// (comum em VR180 8K, ver achado abaixo). Clampado em [1s, 30s]: sem isso um
+// clipe de 5s pediria seek pra 0.5s (quase nada) e um filme de 2h pediria
+// seek pra 12min (decode desnecessariamente longe do inicio so pra gerar
+// uma miniatura). Duracao desconhecida (`duration_us <= 0`, streams sem
+// duration confiavel) cai no fallback fixo de 1s de sempre.
+const MIN_SEEK_TARGET_US: i64 = 1_000_000;
+const MAX_SEEK_TARGET_US: i64 = 30_000_000;
+
+fn primary_seek_target_us(duration_us: i64) -> i64 {
+    if duration_us <= 0 {
+        return MIN_SEEK_TARGET_US;
+    }
+    (duration_us / 10).clamp(MIN_SEEK_TARGET_US, MAX_SEEK_TARGET_US)
+}
 
 // Achado real em producao (nao teorico): a maioria dos videos VR 180
 // 8K testados tem fade-in/intro preto de MAIS de 1s (comum pra nao ofuscar
@@ -93,7 +103,8 @@ pub fn generate(path: &str, max_width: u32, max_height: u32) -> Option<Thumbnail
     let codec_context = ffmpeg::codec::context::Context::from_parameters(stream.parameters()).ok()?;
     let mut decoder = codec_context.decoder().video().ok()?;
 
-    let _ = demuxer.input_context.seek(SEEK_TARGET_US, ..SEEK_TARGET_US);
+    let primary_target_us = primary_seek_target_us(demuxer.input_context.duration());
+    let _ = demuxer.input_context.seek(primary_target_us, ..primary_target_us);
     let mut image = decode_and_scale(&mut demuxer, &mut decoder, video_stream_index, max_width, max_height);
 
     for &fallback_us in FALLBACK_SEEK_TARGETS_US.iter() {

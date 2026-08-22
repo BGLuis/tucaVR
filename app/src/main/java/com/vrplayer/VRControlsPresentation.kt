@@ -21,6 +21,7 @@ import com.vrplayer.designsystem.VoidButtonStyle
 import com.vrplayer.designsystem.VoidTheme
 import com.vrplayer.filebrowser.NetworkThumbnailGenerator
 import com.vrplayer.filebrowser.ScrubStrip
+import com.vrplayer.history.historyKey
 import com.vrplayer.navigation.PlaybackSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -716,68 +717,73 @@ class VRControlsPresentation(
                     }
                 }
                 
-                val modes = listOf(
-                    Triple("Plano 2D", R.drawable.icon_2d, 0),
-                    Triple("Lado a Lado", R.drawable.icon_3d_sbs, 1),
-                    Triple("Cima/Baixo", R.drawable.icon_3d_ou, 3),
-                    Triple("180 SBS", R.drawable.icon_360, 9),
-                    Triple("360 Graus", R.drawable.icon_360, 5)
+                val flatModes = listOf(
+                    Triple(context.getString(modeLabelResIds[0]), R.drawable.icon_2d, 0),
+                    Triple(context.getString(modeLabelResIds[1]), R.drawable.icon_3d_sbs, 1),
+                    Triple(context.getString(modeLabelResIds[2]), R.drawable.icon_3d_sbs, 2),
+                    Triple(context.getString(modeLabelResIds[3]), R.drawable.icon_3d_ou, 3),
+                    Triple(context.getString(modeLabelResIds[4]), R.drawable.icon_3d_ou, 4),
                 )
-                
-                for ((index, mode) in modes.withIndex()) {
-                    val btnContainer = LinearLayout(context).apply {
-                        orientation = LinearLayout.VERTICAL
-                        gravity = Gravity.CENTER
-                        layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                            setMargins(com.vrplayer.designsystem.VoidTheme.dpToPx(context, 8f), 0, com.vrplayer.designsystem.VoidTheme.dpToPx(context, 8f), 0)
+                val immersiveModes = listOf(
+                    Triple(context.getString(modeLabelResIds[5]), R.drawable.icon_360, 5),
+                    Triple(context.getString(modeLabelResIds[6]), R.drawable.icon_360, 6),
+                    Triple(context.getString(modeLabelResIds[7]), R.drawable.icon_360, 7),
+                    Triple(context.getString(modeLabelResIds[8]), R.drawable.icon_360, 8),
+                    Triple(context.getString(modeLabelResIds[9]), R.drawable.icon_360, 9),
+                )
+
+                fun addModeRow(targetRow: LinearLayout, modesList: List<Triple<String, Int, Int>>) {
+                    for (mode in modesList) {
+                        val btnContainer = LinearLayout(context).apply {
+                            orientation = LinearLayout.VERTICAL
+                            gravity = Gravity.CENTER
+                            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                                setMargins(VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f), 0)
+                            }
                         }
-                    }
-                    
-                    val btn = LinearLayout(context).apply {
-                        tag = mode.third
-                        orientation = LinearLayout.VERTICAL
-                        gravity = Gravity.CENTER
-                        background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#33FFFFFF")), null, null)
-                        setPadding(0, com.vrplayer.designsystem.VoidTheme.dpToPx(context, 16f), 0, com.vrplayer.designsystem.VoidTheme.dpToPx(context, 16f))
-                        layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                        
-                        val icon = ImageView(context).apply {
-                            setImageResource(mode.second)
-                            setColorFilter(com.vrplayer.designsystem.VoidTheme.colorText)
-                            layoutParams = LinearLayout.LayoutParams(com.vrplayer.designsystem.VoidTheme.dpToPx(context, 48f), com.vrplayer.designsystem.VoidTheme.dpToPx(context, 48f))
+
+                        val btn = LinearLayout(context).apply {
+                            tag = mode.third
+                            orientation = LinearLayout.VERTICAL
+                            gravity = Gravity.CENTER
+                            background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#33FFFFFF")), null, null)
+                            setPadding(0, VoidTheme.dpToPx(context, 12f), 0, VoidTheme.dpToPx(context, 12f))
+                            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+
+                            val icon = ImageView(context).apply {
+                                setImageResource(mode.second)
+                                setColorFilter(VoidTheme.colorText)
+                                layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 40f), VoidTheme.dpToPx(context, 40f))
+                            }
+                            addView(icon)
+
+                            val label = TextView(context).apply {
+                                text = mode.first
+                                typeface = VoidTheme.typefaceBody
+                                textSize = 13f
+                                setTextColor(VoidTheme.colorText)
+                                setPadding(0, VoidTheme.dpToPx(context, 6f), 0, 0)
+                                gravity = Gravity.CENTER
+                            }
+                            addView(label)
+
+                            setOnClickListener {
+                                activity.nativeSetScreenMode(mode.third)
+                                activity.currentPlaybackSource?.let { src ->
+                                    activity.format3dStore.set(src.historyKey(), mode.third)
+                                }
+                                modeSelectionModal.visibility = View.GONE
+                            }
                         }
-                        addView(icon)
-                        
-                        val label = TextView(context).apply {
-                            text = mode.first
-                            typeface = com.vrplayer.designsystem.VoidTheme.typefaceBody
-                            textSize = 16f
-                            setTextColor(com.vrplayer.designsystem.VoidTheme.colorText)
-                            setPadding(0, com.vrplayer.designsystem.VoidTheme.dpToPx(context, 8f), 0, 0)
-                        }
-                        addView(label)
-                        
-                        setOnClickListener {
-                            activity.nativeSetScreenMode(mode.third)
-                            modeSelectionModal.visibility = View.GONE
-                        }
-                    }
-                    
-                    btnContainer.addView(btn)
-                    
-                    if (index < 3) {
-                        row1.addView(btnContainer)
-                    } else {
-                        row2.addView(btnContainer)
+
+                        btnContainer.addView(btn)
+                        targetRow.addView(btnContainer)
                     }
                 }
-                
-                // Add an empty space to row2 so the 2 items match the 3 columns of row1
-                val emptySpace = View(context).apply {
-                    layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                }
-                row2.addView(emptySpace)
-                
+
+                addModeRow(row1, flatModes)
+                addModeRow(row2, immersiveModes)
+
                 grid.addView(row1)
                 grid.addView(row2)
                 addView(grid)

@@ -16,6 +16,7 @@ import com.vrplayer.network.SftpCredentialStore
 import com.vrplayer.network.SmbCredentialStore
 import com.vrplayer.network.UrlHistoryStore
 import com.vrplayer.screens.ContinueWatchingScreen
+import com.vrplayer.screens.FileDetailScreen
 import com.vrplayer.screens.HomeScreen
 import com.vrplayer.screens.LocalFilesScreen
 import com.vrplayer.screens.NetworkFtpScreen
@@ -25,6 +26,7 @@ import com.vrplayer.screens.NetworkSmbScreen
 import com.vrplayer.screens.PlayerScreen
 import com.vrplayer.screens.ResumePromptScreen
 import com.vrplayer.screens.ScreenHost
+import com.vrplayer.screens.SettingsScreen
 import com.vrplayer.designsystem.VoidTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -113,6 +115,7 @@ class VRPresentation(
 
     private lateinit var homeScreen: HomeScreen
     private lateinit var localFilesScreen: LocalFilesScreen
+    private lateinit var fileDetailScreen: FileDetailScreen
     private lateinit var networkSmbScreen: NetworkSmbScreen
     private lateinit var networkFtpScreen: NetworkFtpScreen
     private lateinit var networkSftpScreen: NetworkSftpScreen
@@ -120,6 +123,7 @@ class VRPresentation(
     private lateinit var continueWatchingScreen: ContinueWatchingScreen
     private lateinit var playerScreen: PlayerScreen
     private lateinit var resumePromptScreen: ResumePromptScreen
+    private lateinit var settingsScreen: SettingsScreen
 
     // ---- Ciclo de vida ----
 
@@ -173,19 +177,21 @@ class VRPresentation(
 
         localFilesScreen = LocalFilesScreen(
             context       = context,
-            activity      = activity,
             host          = host,
             scope         = scope,
             dirNavigator  = dirNavigator,
             onNavigate    = { dest -> navigateTo(dest) },
             onBack        = { handleBack() },
-            onPlayLocalVideo = { entry ->
-                val source = PlaybackSource.LocalFile(entry.path, entry.sizeBytes)
-                resumePromptScreen.promptOrPlay(source) { resumeAtMs ->
-                    activity.playFile(entry.path, entry.sizeBytes, resumeAtMs)
-                    navigateTo(Destination.Player(source))
-                }
-            }
+            onPlayLocalVideo = { entry -> playSource(PlaybackSource.LocalFile(entry.path, entry.sizeBytes)) }
+        )
+
+        fileDetailScreen = FileDetailScreen(
+            context  = context,
+            activity = activity,
+            host     = host,
+            scope    = scope,
+            onBack   = { handleBack() },
+            onPlay   = { source -> playSource(source) }
         )
 
         networkSmbScreen = NetworkSmbScreen(
@@ -195,10 +201,7 @@ class VRPresentation(
             scope                 = scope,
             credentialStore       = smbCredentials,
             onNavigate            = { dest -> navigateTo(dest) },
-            onBack                = { handleBack() },
-            onPromptResumeOrPlay  = { source, onDecided ->
-                resumePromptScreen.promptOrPlay(source, onDecided)
-            }
+            onBack                = { handleBack() }
         )
 
         networkFtpScreen = NetworkFtpScreen(
@@ -208,10 +211,7 @@ class VRPresentation(
             scope                 = scope,
             credentialStore       = ftpCredentials,
             onNavigate            = { dest -> navigateTo(dest) },
-            onBack                = { handleBack() },
-            onPromptResumeOrPlay  = { source, onDecided ->
-                resumePromptScreen.promptOrPlay(source, onDecided)
-            }
+            onBack                = { handleBack() }
         )
 
         networkSftpScreen = NetworkSftpScreen(
@@ -221,10 +221,7 @@ class VRPresentation(
             scope                 = scope,
             credentialStore       = sftpCredentials,
             onNavigate            = { dest -> navigateTo(dest) },
-            onBack                = { handleBack() },
-            onPromptResumeOrPlay  = { source, onDecided ->
-                resumePromptScreen.promptOrPlay(source, onDecided)
-            }
+            onBack                = { handleBack() }
         )
 
         networkHomeScreen = NetworkHomeScreen(
@@ -257,6 +254,13 @@ class VRPresentation(
             host    = host,
             onBack  = { handleBack() }
         )
+
+        settingsScreen = SettingsScreen(
+            context  = context,
+            activity = activity,
+            host     = host,
+            onBack   = { handleBack() }
+        )
     }
 
     // ---- Máquina de telas ----
@@ -265,19 +269,39 @@ class VRPresentation(
         when (val destination = appNav.current) {
             is Destination.Home             -> homeScreen.render()
             is Destination.LocalFiles       -> localFilesScreen.renderLocalFiles()
-            is Destination.LocalFileDetail  -> localFilesScreen.renderLocalFileDetail(destination.entry)
+            is Destination.FileDetail       -> fileDetailScreen.render(destination)
             is Destination.NetworkHome      -> networkHomeScreen.render()
             is Destination.NetworkFiles     -> networkSmbScreen.renderFiles(destination.server)
             is Destination.NetworkFtpFiles  -> networkFtpScreen.renderFiles(destination.server)
             is Destination.NetworkSftpFiles -> networkSftpScreen.renderFiles(destination.server)
             is Destination.ContinueWatching -> continueWatchingScreen.render()
             is Destination.Player           -> playerScreen.render(destination.source)
+            is Destination.Settings         -> settingsScreen.render()
         }
     }
 
     private fun navigateTo(destination: Destination) {
         appNav.navigateTo(destination)
         render()
+    }
+
+    /**
+     * Ponto único de "tocar [source]": pergunta se retoma (via
+     * [resumePromptScreen]), despacha pro `nativePlayXxx` certo por tipo de
+     * fonte, e navega pro Player. Usado tanto pelo double-click local quanto
+     * pelo botão Reproduzir de [FileDetailScreen] (local e rede).
+     */
+    private fun playSource(source: PlaybackSource) {
+        resumePromptScreen.promptOrPlay(source) { resumeAtMs ->
+            when (source) {
+                is PlaybackSource.LocalFile -> activity.playFile(source.path, source.sizeBytes, resumeAtMs)
+                is PlaybackSource.Http      -> activity.playUrl(source.url, resumeAtMs)
+                is PlaybackSource.Smb       -> activity.playSmb(source.server, source.path, source.sizeBytes, resumeAtMs)
+                is PlaybackSource.Ftp       -> activity.playFtp(source.server, source.path, source.sizeBytes, resumeAtMs)
+                is PlaybackSource.Sftp      -> activity.playSftp(source.server, source.path, source.sizeBytes, resumeAtMs)
+            }
+            navigateTo(Destination.Player(source))
+        }
     }
 
     /**

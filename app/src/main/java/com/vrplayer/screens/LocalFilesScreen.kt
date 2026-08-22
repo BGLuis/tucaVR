@@ -1,36 +1,23 @@
 package com.vrplayer.screens
 
 import android.content.Context
-import android.view.View
 import android.view.ViewGroup
-import android.widget.ImageView
 import android.widget.LinearLayout
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.vrplayer.R
-import com.vrplayer.VRActivity
-import com.vrplayer.designsystem.VoidButton
-import com.vrplayer.designsystem.VoidButtonStyle
 import com.vrplayer.designsystem.VoidPanelChrome
-import com.vrplayer.designsystem.VoidText
-import com.vrplayer.designsystem.VoidTheme
 import com.vrplayer.filebrowser.DirectoryLister
 import com.vrplayer.filebrowser.DirectoryNavigator
 import com.vrplayer.filebrowser.MediaEntry
 import com.vrplayer.filebrowser.MediaType
 import com.vrplayer.filebrowser.SortBy
-import com.vrplayer.filebrowser.ThumbnailGenerator
-import com.vrplayer.filebrowser.VideoMetadataReader
 import com.vrplayer.filebrowser.sortMediaEntries
-import com.vrplayer.history.formatDurationMs
 import com.vrplayer.navigation.Destination
 import com.vrplayer.navigation.PlaybackSource
 import com.vrplayer.screens.adapters.FileAdapter
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import java.io.File
 
 /**
  * Tela de navegação de arquivos locais (T5) e tela de detalhe de arquivo.
@@ -42,7 +29,6 @@ import java.io.File
  */
 class LocalFilesScreen(
     private val context: Context,
-    private val activity: VRActivity,
     private val host: ScreenHost,
     private val scope: CoroutineScope,
     private val dirNavigator: DirectoryNavigator,
@@ -82,7 +68,16 @@ class LocalFilesScreen(
                 renderLocalFiles()
             },
             // Single-click → detalhe; double-click → toca direto.
-            onVideoClick = { entry -> onNavigate(Destination.LocalFileDetail(entry)) },
+            onVideoClick = { entry ->
+                onNavigate(
+                    Destination.FileDetail(
+                        source = PlaybackSource.LocalFile(entry.path, entry.sizeBytes),
+                        displayName = entry.name,
+                        sizeBytes = entry.sizeBytes,
+                        lastModified = entry.lastModified
+                    )
+                )
+            },
             onVideoDoubleClick = { entry -> onPlayLocalVideo(entry) }
         )
         adapter = fileAdapter
@@ -119,85 +114,4 @@ class LocalFilesScreen(
         return false
     }
 
-    // ---- Detalhe de arquivo local ----
-
-    /**
-     * Tela intermediária entre a listagem e o Player: thumbnail grande +
-     * metadados (tamanho, data, duração, resolução, caminho) + botão Reproduzir.
-     *
-     * Thumbnail e metadados de vídeo chegam de forma assíncrona — são
-     * adicionados à tela já visível (MediaMetadataRetriever não pode rodar
-     * na main thread).
-     */
-    fun renderLocalFileDetail(entry: MediaEntry) {
-        val root = VoidPanelChrome.newRoot(context)
-        // Voltar do detalhe sempre retorna para a listagem da pasta atual,
-        // não usa onBack() global (que faria appNav.back() e poria o AppNavigator
-        // em estado incorreto — o Destination.LocalFileDetail ainda está na pilha).
-        root.addView(VoidPanelChrome.buildHeader(context, title = entry.name, onBack = { onBack() }))
-
-        val thumbnailView = ImageView(context).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, VoidTheme.dpToPx(context, 200f)
-            ).apply { bottomMargin = VoidTheme.dpToPx(context, 20f) }
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            background = android.graphics.drawable.GradientDrawable().apply {
-                setColor(VoidTheme.colorSurfaceAlt)
-                cornerRadius = VoidTheme.dp(context, 10f)
-            }
-            clipToOutline = true
-        }
-        root.addView(thumbnailView)
-
-        val metaContainer = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
-        root.addView(metaContainer)
-
-        fun addMetaRow(label: String, value: String) {
-            metaContainer.addView(
-                VoidText.body(
-                    context,
-                    context.getString(R.string.file_detail_row_format, label, value),
-                    sizeSp = 16f,
-                    secondary = true
-                ).apply { setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f)) }
-            )
-        }
-
-        addMetaRow(context.getString(R.string.file_detail_label_size), formatFileSize(context, entry.sizeBytes))
-        addMetaRow(context.getString(R.string.file_detail_label_modified), formatModifiedDate(entry.lastModified))
-        addMetaRow(context.getString(R.string.file_detail_label_path), entry.path)
-
-        val btnPlay = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = context.getString(R.string.file_detail_btn_play).trim()
-            setIcon(R.drawable.ic_play_arrow)
-            textSize = 22f
-            setOnClickListener { onPlayLocalVideo(entry) }
-        }
-        root.addView(btnPlay, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = VoidTheme.dpToPx(context, 20f) })
-
-        host.showScreen(root)
-
-        // Thumbnail e metadados de vídeo carregados em background.
-        scope.launch {
-            val bitmap = ThumbnailGenerator.getThumbnail(context, entry)
-            if (bitmap != null) thumbnailView.setImageBitmap(bitmap)
-
-            val metadata = VideoMetadataReader.read(entry.path)
-            if (metadata != null) {
-                if (metadata.durationMs > 0L) {
-                    addMetaRow(context.getString(R.string.file_detail_label_duration), formatDurationMs(metadata.durationMs))
-                }
-                if (metadata.width > 0 && metadata.height > 0) {
-                    addMetaRow(context.getString(R.string.file_detail_label_resolution), "${metadata.width}×${metadata.height}")
-                }
-            }
-        }
-    }
 }

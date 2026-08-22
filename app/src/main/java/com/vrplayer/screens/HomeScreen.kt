@@ -52,10 +52,17 @@ class HomeScreen(
             setIcon(R.drawable.ic_play_arrow)
             setOnClickListener { onNavigate(Destination.ContinueWatching) }
         }
+        val btnSettings = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+            text = context.getString(R.string.home_btn_settings).trim()
+            textSize = 18f
+            setIcon(R.drawable.icon_settings)
+            setOnClickListener { onNavigate(Destination.Settings) }
+        }
 
         root.addView(btnLocal, bigButtonParams)
         root.addView(btnNetwork, bigButtonParams)
         root.addView(btnContinueWatching, bigButtonParams)
+        root.addView(btnSettings, bigButtonParams)
 
         host.showScreen(root)
     }

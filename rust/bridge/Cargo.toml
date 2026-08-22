@@ -10,6 +10,7 @@ crate-type = ["cdylib", "staticlib", "lib"]
 core = { path = "../core" }
 protocols = { path = "../protocols" }
 audio = { path = "../audio" }
+media-logic = { path = "../media-logic" }
 once_cell = "1.19"
 ndk-sys = "0.6.0"
 # So pra poder implementar log::Log (ver AndroidLogger em lib.rs) — ja estava

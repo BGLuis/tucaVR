@@ -27,7 +27,9 @@ import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.vrplayer.history.PlaybackHistoryTracker
+import com.vrplayer.history.historyKey
 import com.vrplayer.navigation.PlaybackSource
+import com.vrplayer.network.Format3DPreferenceStore
 
 class VRActivity : NativeActivity() {
     private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
@@ -81,6 +83,7 @@ class VRActivity : NativeActivity() {
     // Activity ja existe (primeiro uso real e dentro de playFile/playUrl/
     // playSmb, chamados via VRPresentation apos onCreate).
     val historyTracker: PlaybackHistoryTracker by lazy { PlaybackHistoryTracker(this) }
+    val format3dStore: Format3DPreferenceStore by lazy { Format3DPreferenceStore(this) }
 
     // Fonte da reproducao atual (T-seek-ux) — setado nos 5 entry points de
     // playback abaixo. `PlaybackHistoryTracker.getCurrent()` ja guarda algo
@@ -175,6 +178,12 @@ class VRActivity : NativeActivity() {
         }
 
         registerDebugReceiverIfDebuggable()
+
+        // Fase 0.4 T5: empurra o valor persistido do toggle de Foveated
+        // Rendering pro Rust — o C++ (caminho Vulkan) le isso na
+        // inicializacao do XrInstance/swapchains. Trocas em runtime (tela de
+        // Configuracoes) empurram de novo na hora, ver SettingsScreen.kt.
+        nativeSetFoveationEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.FOVEATED_RENDERING))
     }
 
     override fun onDestroy() {
@@ -485,12 +494,18 @@ class VRActivity : NativeActivity() {
     // lento) e, se o usuario trocasse de video antes do delay expirar, o
     // seek atrasado disparava contra a sessao NOVA (ja de outro video).
 
+    private fun applyFormat3dOverride(source: PlaybackSource) {
+        val cached = format3dStore.get(source.historyKey())
+        nativeSetScreenModeOverride(cached ?: -1)
+    }
+
     fun playFile(filePath: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val resolvedSize = if (sizeBytes > 0L) sizeBytes else runCatching { File(filePath).length() }.getOrDefault(0L)
         val source = PlaybackSource.LocalFile(filePath, resolvedSize)
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = File(filePath).name)
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
+        applyFormat3dOverride(source)
         nativePlayVideo(filePath, (resumeAtMs ?: 0L) / 1000f)
     }
 
@@ -501,6 +516,7 @@ class VRActivity : NativeActivity() {
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = url)
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
+        applyFormat3dOverride(source)
         nativePlayVideo(url, (resumeAtMs ?: 0L) / 1000f)
     }
 
@@ -512,6 +528,7 @@ class VRActivity : NativeActivity() {
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
+        applyFormat3dOverride(source)
         nativePlaySmb(server.host, server.port, server.share, path, server.username, server.password, server.domain, (resumeAtMs ?: 0L) / 1000f)
     }
 
@@ -522,6 +539,7 @@ class VRActivity : NativeActivity() {
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
+        applyFormat3dOverride(source)
         nativePlayFtp(server.host, server.port, path, server.username, server.password, (resumeAtMs ?: 0L) / 1000f)
     }
 
@@ -532,6 +550,7 @@ class VRActivity : NativeActivity() {
         currentPlaybackSource = source
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
+        applyFormat3dOverride(source)
         nativePlaySftp(server.host, server.port, path, server.username, server.password, server.privateKey ?: "", (resumeAtMs ?: 0L) / 1000f)
     }
 
@@ -541,8 +560,11 @@ class VRActivity : NativeActivity() {
             if (pfd != null) {
                 val fd = pfd.detachFd()
                 val fdPath = "/proc/self/fd/$fd"
+                val source = PlaybackSource.LocalFile(fdPath, 0L)
+                currentPlaybackSource = source
                 controlsPresentation?.updateTitle(currentPlaybackSource?.let { src -> when(src) { is PlaybackSource.LocalFile -> java.io.File(src.path).name; is PlaybackSource.Http -> src.url; is PlaybackSource.Smb -> src.path.substringAfterLast("/"); is PlaybackSource.Ftp -> src.path.substringAfterLast("/"); is PlaybackSource.Sftp -> src.path.substringAfterLast("/") } } ?: "Desconhecido")
-        nativePlayVideo(fdPath, 0f)
+                applyFormat3dOverride(source)
+                nativePlayVideo(fdPath, 0f)
             }
         } catch (e: Exception) {
             e.printStackTrace()
@@ -563,6 +585,7 @@ class VRActivity : NativeActivity() {
     external fun nativeCycle3DMode(): Int
     external fun nativeGet3DMode(): Int
     external fun nativeSetScreenMode(mode: Int)
+    external fun nativeSetScreenModeOverride(mode: Int)
     external fun nativeToggleSwapEyes(): Int
     external fun nativeRequestFrameCapture(path: String)
     external fun nativeTakeLastPlaybackError(): String?
@@ -699,4 +722,44 @@ class VRActivity : NativeActivity() {
     // avisa o render loop C++ pra suprimir o fade-out do painel enquanto o
     // teclado nativo estiver aberto.
     external fun nativeSetKeyboardActive(active: Boolean)
+
+    // Fase 0.4 T5: Foveated Rendering. So tem efeito real no caminho Vulkan
+    // (padrao de build); GLES aceita a chamada mas nao aplica — ver
+    // comentario em native/src/vr_player_app.cpp. Chamada barata (so um
+    // atomic no lado Rust), segura direto da UI thread.
+    external fun nativeSetFoveationEnabled(enabled: Boolean)
+
+    // T13.1: metadados de midia (container/duracao/bitrate/trilhas) pra tela
+    // de detalhe do arquivo — bloqueante (probe de container, rede se remoto),
+    // SEMPRE de Dispatchers.IO. Retorno: string na gramatica de
+    // rust/media-logic/src/metadata_wire.rs, ou "ERROR:<mensagem>" (ver
+    // MediaMetadataReader.parse).
+    external fun nativeReadMediaMetadata(path: String): String
+
+    external fun nativeSmbReadMetadata(
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        domain: String,
+        share: String,
+        path: String
+    ): String
+
+    external fun nativeFtpReadMetadata(host: String, port: Int, username: String, password: String, path: String): String
+
+    external fun nativeSftpReadMetadata(
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        privateKey: String,
+        path: String
+    ): String
+
+    // T13.2: seleciona a trilha de audio pro PROXIMO load — so tem efeito
+    // combinada com um play logo em seguida (ver nota em rust/bridge/src/lib.rs
+    // sobre select_audio_track). Chamada barata (so grava um campo), segura
+    // direto da UI thread.
+    external fun nativeSetAudioTrack(ordinal: Int)
 }

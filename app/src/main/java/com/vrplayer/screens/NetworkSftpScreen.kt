@@ -45,8 +45,7 @@ class NetworkSftpScreen(
     private val scope: CoroutineScope,
     private val credentialStore: SftpCredentialStore,
     private val onNavigate: (Destination) -> Unit,
-    private val onBack: () -> Unit,
-    private val onPromptResumeOrPlay: (PlaybackSource, (Long?) -> Unit) -> Unit
+    private val onBack: () -> Unit
 ) {
 
     var browsingServer: SftpServer? = null
@@ -359,10 +358,7 @@ class NetworkSftpScreen(
                             renderFiles(server)
                         } else {
                             val source = PlaybackSource.Sftp(server, childPath, sizeBytes)
-                            onPromptResumeOrPlay(source) { resumeAtMs ->
-                                activity.playSftp(server, childPath, sizeBytes, resumeAtMs)
-                                onNavigate(Destination.Player(source))
-                            }
+                            onNavigate(Destination.FileDetail(source, name, sizeBytes))
                         }
                     }
                 }

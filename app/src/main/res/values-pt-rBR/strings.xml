@@ -22,6 +22,13 @@
     <string name="home_btn_local_files"> Arquivos locais</string>
     <string name="home_btn_network"> Rede</string>
     <string name="home_btn_continue_watching"> Continuar assistindo</string>
+    <string name="home_btn_settings"> Configuracoes</string>
+
+    <!-- Configuracoes (SettingsScreen) -->
+    <string name="settings_title">Configuracoes</string>
+    <string name="settings_section_video">Video</string>
+    <string name="settings_foveated_rendering_label">Foveated Rendering</string>
+    <string name="settings_foveated_rendering_description">Reduz a carga da GPU diminuindo o detalhe na visao periferica. Pode reduzir levemente a nitidez das bordas. So no Vulkan.</string>
 
     <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
     <string name="browser_title_local_files">Arquivos locais</string>
@@ -29,7 +36,7 @@
     <string name="browser_label_size_mb_format">%1$.1f MB</string>
     <string name="browser_label_size_gb_format">%1$.2f GB</string>
 
-    <!-- Detalhe de arquivo local (VRPresentation.renderLocalFileDetail) -->
+    <!-- Detalhe de arquivo (FileDetailScreen) — local e rede -->
     <string name="file_detail_row_format">%1$s: %2$s</string>
     <string name="file_detail_label_size">Tamanho</string>
     <string name="file_detail_label_modified">Modificado em</string>
@@ -37,6 +44,36 @@
     <string name="file_detail_label_resolution">Resolucao</string>
     <string name="file_detail_label_path">Caminho</string>
     <string name="file_detail_btn_play">Reproduzir</string>
+    <string name="file_detail_section_file">Arquivo</string>
+    <string name="file_detail_section_media">Midia</string>
+    <string name="file_detail_section_tags">Tags</string>
+    <string name="file_detail_section_tracks">Trilhas</string>
+    <string name="file_detail_label_container">Container</string>
+    <string name="file_detail_label_bitrate">Bitrate</string>
+    <string name="file_detail_label_video_codec">Codec de video</string>
+    <string name="file_detail_label_audio_codec">Codec de audio</string>
+    <string name="file_detail_label_format3d">Formato 3D</string>
+    <string name="file_detail_format3d_low_confidence_suffix"> (estimado)</string>
+    <string name="file_detail_value_bitrate_format">%1$.1f Mbps</string>
+    <string name="file_detail_track_video_format">%1$d. Video — %2$s</string>
+    <string name="file_detail_track_audio_format">%1$d. Audio — %2$s</string>
+    <string name="file_detail_track_subtitle_format">%1$d. Legenda — %2$s</string>
+    <string name="file_detail_track_lang_unknown">Idioma desconhecido</string>
+    <string name="file_detail_tracks_empty">Nenhuma trilha encontrada</string>
+    <string name="file_detail_tracks_subtitle_note">Renderizacao de legenda ainda nao disponivel</string>
+    <string name="file_detail_metadata_loading">Carregando informacoes de midia…</string>
+    <string name="file_detail_metadata_error">Informacoes de midia indisponiveis</string>
+    <string name="file_detail_subtitle_local">Local</string>
+    <string name="file_detail_subtitle_http">HTTP</string>
+    <string name="file_detail_subtitle_smb_format">SMB · %1$s</string>
+    <string name="file_detail_subtitle_ftp_format">FTP · %1$s</string>
+    <string name="file_detail_subtitle_sftp_format">SFTP · %1$s</string>
+    <string name="file_detail_tag_title">Titulo</string>
+    <string name="file_detail_tag_artist">Artista</string>
+    <string name="file_detail_tag_album">Album</string>
+    <string name="file_detail_tag_date">Data</string>
+    <string name="file_detail_tag_genre">Genero</string>
+    <string name="file_detail_tag_comment">Comentario</string>
 
     <!-- Rede: landing com abas URL / SMB / FTP (VRPresentation.renderNetworkHome) -->
     <string name="network_title">Rede</string>

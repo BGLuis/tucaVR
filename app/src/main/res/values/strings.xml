@@ -30,6 +30,13 @@
     <string name="home_btn_local_files"> Local Files</string>
     <string name="home_btn_network"> Network</string>
     <string name="home_btn_continue_watching"> Continue Watching</string>
+    <string name="home_btn_settings"> Settings</string>
+
+    <!-- Configuracoes (SettingsScreen) -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_section_video">Video</string>
+    <string name="settings_foveated_rendering_label">Foveated Rendering</string>
+    <string name="settings_foveated_rendering_description">Reduces GPU load by lowering detail in peripheral vision. May slightly reduce edge sharpness. Vulkan only.</string>
 
     <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
     <string name="browser_title_local_files">Local Files</string>
@@ -37,10 +44,10 @@
     <string name="browser_label_size_mb_format">%1$.1f MB</string>
     <string name="browser_label_size_gb_format">%1$.2f GB</string>
 
-    <!-- Detalhe de arquivo local (VRPresentation.renderLocalFileDetail) — tela
-         intermediaria entre a listagem e o Player: single-click num video
-         chega aqui (thumbnail + metadados + botao Reproduzir); double-click
-         na listagem continua tocando direto, sem passar por aqui. -->
+    <!-- Detalhe de arquivo (FileDetailScreen) — tela intermediaria entre a
+         listagem (local ou de rede) e o Player: single-click num video
+         chega aqui (thumbnail + metadados + trilhas + botao Reproduzir);
+         double-click na listagem local continua tocando direto. -->
     <string name="file_detail_row_format">%1$s: %2$s</string>
     <string name="file_detail_label_size">Size</string>
     <string name="file_detail_label_modified">Modified</string>
@@ -48,6 +55,36 @@
     <string name="file_detail_label_resolution">Resolution</string>
     <string name="file_detail_label_path">Path</string>
     <string name="file_detail_btn_play">Play</string>
+    <string name="file_detail_section_file">File</string>
+    <string name="file_detail_section_media">Media</string>
+    <string name="file_detail_section_tags">Tags</string>
+    <string name="file_detail_section_tracks">Tracks</string>
+    <string name="file_detail_label_container">Container</string>
+    <string name="file_detail_label_bitrate">Bitrate</string>
+    <string name="file_detail_label_video_codec">Video codec</string>
+    <string name="file_detail_label_audio_codec">Audio codec</string>
+    <string name="file_detail_label_format3d">3D Format</string>
+    <string name="file_detail_format3d_low_confidence_suffix"> (estimated)</string>
+    <string name="file_detail_value_bitrate_format">%1$.1f Mbps</string>
+    <string name="file_detail_track_video_format">%1$d. Video — %2$s</string>
+    <string name="file_detail_track_audio_format">%1$d. Audio — %2$s</string>
+    <string name="file_detail_track_subtitle_format">%1$d. Subtitle — %2$s</string>
+    <string name="file_detail_track_lang_unknown">Unknown language</string>
+    <string name="file_detail_tracks_empty">No tracks found</string>
+    <string name="file_detail_tracks_subtitle_note">Subtitle rendering is not available yet</string>
+    <string name="file_detail_metadata_loading">Loading media info…</string>
+    <string name="file_detail_metadata_error">Media info unavailable</string>
+    <string name="file_detail_subtitle_local">Local</string>
+    <string name="file_detail_subtitle_http">HTTP</string>
+    <string name="file_detail_subtitle_smb_format">SMB · %1$s</string>
+    <string name="file_detail_subtitle_ftp_format">FTP · %1$s</string>
+    <string name="file_detail_subtitle_sftp_format">SFTP · %1$s</string>
+    <string name="file_detail_tag_title">Title</string>
+    <string name="file_detail_tag_artist">Artist</string>
+    <string name="file_detail_tag_album">Album</string>
+    <string name="file_detail_tag_date">Date</string>
+    <string name="file_detail_tag_genre">Genre</string>
+    <string name="file_detail_tag_comment">Comment</string>
 
     <!-- Rede: landing com abas URL / SMB / FTP (VRPresentation.renderNetworkHome) -->
     <string name="network_title">Network</string>

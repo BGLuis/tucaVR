@@ -1,6 +1,5 @@
 package com.vrplayer.navigation
 
-import com.vrplayer.filebrowser.MediaEntry
 import com.vrplayer.network.FtpServer
 import com.vrplayer.network.SftpServer
 import com.vrplayer.network.SmbServer
@@ -46,13 +45,23 @@ sealed class Destination {
     data class LocalFiles(val path: String) : Destination()
 
     /**
-     * Detalhe de um video local: thumbnail + metadados (tamanho, data de
-     * modificacao, duracao, resolucao, caminho) + botao Reproduzir.
-     * Single-click num video na listagem (`FileAdapter.onVideoClick`) chega
-     * aqui; double-click continua tocando direto (`onVideoDoubleClick`),
-     * sem empilhar esta tela.
+     * Detalhe de um video (local OU de rede): thumbnail + metadados
+     * (tamanho, data de modificacao se conhecida, duracao, container,
+     * bitrate, codecs, trilhas) + botao Reproduzir. Single-click num video
+     * na listagem local (`FileAdapter.onVideoClick`) ou nas listagens de
+     * rede (SMB/FTP/SFTP) chega aqui; double-click no local continua tocando
+     * direto (`onVideoDoubleClick`), sem empilhar esta tela — as listagens
+     * de rede nao tem double-click (ver `FileDetailScreen`).
+     *
+     * [lastModified] e `0L` (desconhecido) pra fontes de rede — SMB/FTP/SFTP
+     * so devolvem nome/tipo/tamanho na listagem, ver `NetworkThumbnailGenerator`.
      */
-    data class LocalFileDetail(val entry: MediaEntry) : Destination()
+    data class FileDetail(
+        val source: PlaybackSource,
+        val displayName: String,
+        val sizeBytes: Long = 0L,
+        val lastModified: Long = 0L
+    ) : Destination()
 
     /**
      * Landing da secao "Rede" (abas URL / SMB), renderizada dentro do mesmo
@@ -73,6 +82,9 @@ sealed class Destination {
 
     /** Reproduzindo [source]. */
     data class Player(val source: PlaybackSource) : Destination()
+
+    /** Fase 0.4 T5: toggles de feature flags (Foveated Rendering, e futuros). */
+    object Settings : Destination()
 }
 
 /**

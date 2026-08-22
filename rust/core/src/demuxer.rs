@@ -64,6 +64,7 @@ pub struct Demuxer {
     // stream index bruto do container.
     pub video_streams: Vec<usize>,
     pub audio_streams: Vec<usize>,
+    pub subtitle_streams: Vec<usize>,
     // Instrumentacao do PrefetchReader da fonte remota (docs/DEBUGGING.md) —
     // `None` para arquivo local ou `http://` puro (sem PrefetchReader
     // envolvido, ver roteamento em `new()`). Capturado ANTES de o
@@ -138,12 +139,14 @@ impl Demuxer {
 
         let mut video_streams = Vec::new();
         let mut audio_streams = Vec::new();
+        let mut subtitle_streams = Vec::new();
 
         for stream in ictx.streams() {
             let codec = stream.parameters();
             match codec.medium() {
                 ffmpeg::media::Type::Video => video_streams.push(stream.index()),
                 ffmpeg::media::Type::Audio => audio_streams.push(stream.index()),
+                ffmpeg::media::Type::Subtitle => subtitle_streams.push(stream.index()),
                 _ => {}
             }
         }
@@ -157,6 +160,7 @@ impl Demuxer {
             audio_stream_index,
             video_streams,
             audio_streams,
+            subtitle_streams,
             network_stats,
         })
     }
