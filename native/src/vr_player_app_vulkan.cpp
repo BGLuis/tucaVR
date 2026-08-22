@@ -53,6 +53,9 @@
 #include "ui.frag.h"
 #include "stereo.vert.h"
 #include "stereo.frag.h"
+#include "font_atlas_roboto.h"
+#include "subtitle.vert.h"
+#include "subtitle.frag.h"
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "VRPlayerAppVK", __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "VRPlayerAppVK", __VA_ARGS__)
@@ -68,6 +71,14 @@ extern "C" {
     extern uint32_t get_foveation_enabled();
     // Rastreamento de cabeça para áudio espacial
     extern void set_head_pose_orientation(float x, float y, float z, float w);
+    // Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
+    extern void set_subtitle_track(int32_t track_index);
+    extern int32_t get_subtitle_track();
+    extern void set_subtitle_offset_ms(int64_t offset_ms);
+    extern int64_t get_subtitle_offset_ms();
+    extern uint32_t load_external_subtitle(const char* path);
+    extern uint32_t get_subtitle_track_count();
+    extern uint32_t get_active_subtitle_text(char* out_buf, size_t max_len);
     extern void start_video_playback(const char* path, float startTimeSec);
     // Estagio 6 — paridade com o caminho GLES (play-pause, teclado nativo,
     // volume, seek).
@@ -441,6 +452,25 @@ struct AppState {
     // Endpoint do beam: origem no controller, destino no alvo/quad
     float beamStart[3] = {0, 0, 0};
     float beamEnd[3]   = {0, 0, -2};
+
+    // Estagio 6 — pipeline de legendas MSDF (T9.3)
+    VkPipelineLayout subtitlePipelineLayout = VK_NULL_HANDLE;
+    VkPipeline subtitlePipeline = VK_NULL_HANDLE;
+    VkSampler subtitleSampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout subtitleDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool subtitleDescriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSet subtitleDescriptorSet = VK_NULL_HANDLE;
+    VkImage subtitleImage = VK_NULL_HANDLE;
+    VkDeviceMemory subtitleImageMemory = VK_NULL_HANDLE;
+    VkImageView subtitleImageView = VK_NULL_HANDLE;
+    VkBuffer subtitleVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory subtitleVertexMemory = VK_NULL_HANDLE;
+    VkBuffer subtitleIndexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory subtitleIndexMemory = VK_NULL_HANDLE;
+    uint32_t subtitleIndexCount = 0;
+    std::string lastSubtitleText = "";
+    float subtitleScale = 1.0f;
+    XrVector3f lazyFollowPos = {0.0f, 1.1f, -2.2f};
 
     // Overlay de feedback (paridade com o GLES): um unico vertex buffer com as
     // formas concatenadas, o desenho so escolhe o intervalo do kind ativo.
@@ -2433,6 +2463,356 @@ void CreateFeedbackResources(AppState& state) {
     LOGI("Overlay de feedback: pipeline criado (%zu vertices)", vertices.size() / 3);
 }
 
+// ============================================================================
+// Pipeline de Legendas MSDF (T9.3)
+// ============================================================================
+
+struct SubtitlePushConstants {
+    Mat4 mvp;
+    float textColor[4];
+    float outlineColor[4];
+    float textScale;
+    float outlineWidth;
+};
+
+struct SubtitleVertex {
+    float pos[3];
+    float uv[2];
+    float color[4];
+};
+
+void CreateSubtitlePipeline(AppState& state) {
+    // 1. Criar sampler linear para o atlas de fontes
+    VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    VKR(vkCreateSampler(state.vkDevice, &samplerInfo, nullptr, &state.subtitleSampler));
+
+    // 2. Descriptor set layout
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    binding.pImmutableSamplers = &state.subtitleSampler;
+
+    VkDescriptorSetLayoutCreateInfo dsLayout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    dsLayout.bindingCount = 1;
+    dsLayout.pBindings = &binding;
+    VKR(vkCreateDescriptorSetLayout(state.vkDevice, &dsLayout, nullptr, &state.subtitleDescriptorSetLayout));
+
+    // 3. Descriptor pool & set
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+    VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    poolInfo.maxSets = 1;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.subtitleDescriptorPool));
+
+    VkDescriptorSetAllocateInfo dsAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dsAlloc.descriptorPool = state.subtitleDescriptorPool;
+    dsAlloc.descriptorSetCount = 1;
+    dsAlloc.pSetLayouts = &state.subtitleDescriptorSetLayout;
+    VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.subtitleDescriptorSet));
+
+    // 4. Push constants e Pipeline layout
+    VkPushConstantRange pcRange{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SubtitlePushConstants)};
+    VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &state.subtitleDescriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pcRange;
+    VKR(vkCreatePipelineLayout(state.vkDevice, &layoutInfo, nullptr, &state.subtitlePipelineLayout));
+
+    // 5. Shaders
+    VkShaderModule vertMod, fragMod;
+    VkShaderModuleCreateInfo smInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    smInfo.codeSize = sizeof(kSubtitleVertSpirv); smInfo.pCode = reinterpret_cast<const uint32_t*>(kSubtitleVertSpirv);
+    VKR(vkCreateShaderModule(state.vkDevice, &smInfo, nullptr, &vertMod));
+    smInfo.codeSize = sizeof(kSubtitleFragSpirv); smInfo.pCode = reinterpret_cast<const uint32_t*>(kSubtitleFragSpirv);
+    VKR(vkCreateShaderModule(state.vkDevice, &smInfo, nullptr, &fragMod));
+
+    VkPipelineShaderStageCreateInfo stages[2] = {};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT; stages[0].module = vertMod; stages[0].pName = "main";
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = fragMod; stages[1].pName = "main";
+
+    // 6. Vertex Input
+    VkVertexInputBindingDescription bindDesc{0, sizeof(SubtitleVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attrs[3] = {
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SubtitleVertex, pos)},
+        {1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(SubtitleVertex, uv)},
+        {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SubtitleVertex, color)},
+    };
+    VkPipelineVertexInputStateCreateInfo vtxInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vtxInput.vertexBindingDescriptionCount = 1; vtxInput.pVertexBindingDescriptions = &bindDesc;
+    vtxInput.vertexAttributeDescriptionCount = 3; vtxInput.pVertexAttributeDescriptions = attrs;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vp.viewportCount = 1; vp.scissorCount = 1;
+    VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dyn.dynamicStateCount = 2; dyn.pDynamicStates = dynStates;
+
+    VkPipelineRasterizationStateCreateInfo rast{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rast.polygonMode = VK_POLYGON_MODE_FILL; rast.cullMode = VK_CULL_MODE_NONE;
+    rast.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rast.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState blendAtt{};
+    blendAtt.blendEnable = VK_TRUE;
+    blendAtt.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAtt.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAtt.colorBlendOp = VK_BLEND_OP_ADD;
+    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAtt.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAtt.alphaBlendOp = VK_BLEND_OP_ADD;
+    blendAtt.colorWriteMask = 0xF;
+    VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    blend.attachmentCount = 1; blend.pAttachments = &blendAtt;
+
+    VkPipelineDepthStencilStateCreateInfo dsState{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    dsState.depthTestEnable = VK_FALSE; dsState.depthWriteEnable = VK_FALSE;
+
+    VkGraphicsPipelineCreateInfo pipeInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipeInfo.stageCount = 2; pipeInfo.pStages = stages;
+    pipeInfo.pVertexInputState = &vtxInput; pipeInfo.pInputAssemblyState = &ia;
+    pipeInfo.pViewportState = &vp; pipeInfo.pRasterizationState = &rast;
+    pipeInfo.pMultisampleState = &ms; pipeInfo.pColorBlendState = &blend;
+    pipeInfo.pDepthStencilState = &dsState; pipeInfo.pDynamicState = &dyn;
+    pipeInfo.layout = state.subtitlePipelineLayout; pipeInfo.renderPass = state.renderPass;
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.subtitlePipeline));
+
+    vkDestroyShaderModule(state.vkDevice, vertMod, nullptr);
+    vkDestroyShaderModule(state.vkDevice, fragMod, nullptr);
+
+    // 7. Criar e preencher a textura do atlas de fonte
+    CreateUiImage(state, vrplayer::kFontAtlasWidth, vrplayer::kFontAtlasHeight, state.subtitleImage, state.subtitleImageMemory, state.subtitleImageView);
+    std::vector<uint8_t> atlasBytes(vrplayer::kFontAtlasWidth * vrplayer::kFontAtlasHeight * 4);
+    vrplayer::GenerateFontAtlasBitmap(atlasBytes.data(), vrplayer::kFontAtlasWidth, vrplayer::kFontAtlasHeight);
+    UpdateUiImageFromBytes(state, atlasBytes.data(), vrplayer::kFontAtlasWidth, vrplayer::kFontAtlasHeight, state.subtitleImage);
+
+    // Atualizar descriptor set com a imagem do atlas
+    VkDescriptorImageInfo imgInfo{};
+    imgInfo.sampler = state.subtitleSampler;
+    imgInfo.imageView = state.subtitleImageView;
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = state.subtitleDescriptorSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imgInfo;
+    vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+
+    // 8. Alocar vertex buffer e index buffer dinâmicos para até 1024 caracteres
+    const size_t maxVerts = 4096;
+    const size_t maxIndices = 6144;
+    
+    VkBufferCreateInfo vbInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    vbInfo.size = maxVerts * sizeof(SubtitleVertex);
+    vbInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    VKR(vkCreateBuffer(state.vkDevice, &vbInfo, nullptr, &state.subtitleVertexBuffer));
+
+    VkMemoryRequirements vmr;
+    vkGetBufferMemoryRequirements(state.vkDevice, state.subtitleVertexBuffer, &vmr);
+    VkPhysicalDeviceMemoryProperties mp;
+    vkGetPhysicalDeviceMemoryProperties(state.vkPhysicalDevice, &mp);
+    uint32_t vmIdx = UINT32_MAX;
+    const auto hv = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+        if ((vmr.memoryTypeBits & (1u << i)) && ((mp.memoryTypes[i].propertyFlags & hv) == hv)) {
+            vmIdx = i; break;
+        }
+    }
+    VkMemoryAllocateInfo vai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    vai.allocationSize = vmr.size; vai.memoryTypeIndex = vmIdx;
+    VKR(vkAllocateMemory(state.vkDevice, &vai, nullptr, &state.subtitleVertexMemory));
+    VKR(vkBindBufferMemory(state.vkDevice, state.subtitleVertexBuffer, state.subtitleVertexMemory, 0));
+
+    VkBufferCreateInfo ibInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    ibInfo.size = maxIndices * sizeof(uint32_t);
+    ibInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    VKR(vkCreateBuffer(state.vkDevice, &ibInfo, nullptr, &state.subtitleIndexBuffer));
+
+    VkMemoryRequirements imr;
+    vkGetBufferMemoryRequirements(state.vkDevice, state.subtitleIndexBuffer, &imr);
+    uint32_t imIdx = UINT32_MAX;
+    for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+        if ((imr.memoryTypeBits & (1u << i)) && ((mp.memoryTypes[i].propertyFlags & hv) == hv)) {
+            imIdx = i; break;
+        }
+    }
+    VkMemoryAllocateInfo iai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    iai.allocationSize = imr.size; iai.memoryTypeIndex = imIdx;
+    VKR(vkAllocateMemory(state.vkDevice, &iai, nullptr, &state.subtitleIndexMemory));
+    VKR(vkBindBufferMemory(state.vkDevice, state.subtitleIndexBuffer, state.subtitleIndexMemory, 0));
+
+    LOGI("Estagio 6: pipeline de legendas MSDF criado com sucesso");
+}
+
+void UpdateSubtitleMesh(AppState& state, const char* text) {
+    if (!text || text[0] == '\0' || !state.subtitleVertexMemory) {
+        state.subtitleIndexCount = 0;
+        return;
+    }
+
+    std::vector<std::string> lines;
+    std::string currentLine;
+    for (const char* p = text; *p; ++p) {
+        if (*p == '\n') {
+            lines.push_back(currentLine);
+            currentLine.clear();
+        } else if (*p != '\r') {
+            currentLine.push_back(*p);
+        }
+    }
+    if (!currentLine.empty()) {
+        lines.push_back(currentLine);
+    }
+
+    if (lines.empty()) {
+        state.subtitleIndexCount = 0;
+        return;
+    }
+
+    std::vector<SubtitleVertex> vertices;
+    std::vector<uint32_t> indices;
+    vertices.reserve(lines.size() * 32 * 4);
+    indices.reserve(lines.size() * 32 * 6);
+
+    const float charScale = 0.08f; // Tamanho base da fonte no espaço 3D (em metros)
+    const float lineHeight = 0.11f;
+    float startY = ((float)lines.size() - 1.0f) * lineHeight * 0.5f;
+
+    for (size_t lineIdx = 0; lineIdx < lines.size(); ++lineIdx) {
+        const std::string& line = lines[lineIdx];
+        float lineWidth = 0.0f;
+        for (unsigned char c : line) {
+            const vrplayer::GlyphMetric* gm = vrplayer::FindGlyphMetric((uint32_t)c);
+            lineWidth += gm->advance * charScale;
+        }
+
+        float cursorX = -lineWidth * 0.5f;
+        float cursorY = startY - (float)lineIdx * lineHeight;
+
+        for (unsigned char c : line) {
+            const vrplayer::GlyphMetric* gm = vrplayer::FindGlyphMetric((uint32_t)c);
+            if (gm->width > 0.0f && gm->height > 0.0f) {
+                float x0 = cursorX + gm->bearingX * charScale;
+                float y0 = cursorY + gm->bearingY * charScale;
+                float x1 = x0 + gm->width * charScale;
+                float y1 = y0 - gm->height * charScale;
+
+                uint32_t baseIdx = (uint32_t)vertices.size();
+                // 4 vértices
+                vertices.push_back({{x0, y0, 0.0f}, {gm->u0, gm->v0}, {1.0f, 1.0f, 1.0f, 1.0f}});
+                vertices.push_back({{x1, y0, 0.0f}, {gm->u1, gm->v0}, {1.0f, 1.0f, 1.0f, 1.0f}});
+                vertices.push_back({{x1, y1, 0.0f}, {gm->u1, gm->v1}, {1.0f, 1.0f, 1.0f, 1.0f}});
+                vertices.push_back({{x0, y1, 0.0f}, {gm->u0, gm->v1}, {1.0f, 1.0f, 1.0f, 1.0f}});
+
+                // 6 índices (dois triângulos)
+                indices.push_back(baseIdx + 0);
+                indices.push_back(baseIdx + 1);
+                indices.push_back(baseIdx + 2);
+                indices.push_back(baseIdx + 2);
+                indices.push_back(baseIdx + 3);
+                indices.push_back(baseIdx + 0);
+            }
+            cursorX += gm->advance * charScale;
+        }
+    }
+
+    if (!vertices.empty() && vertices.size() <= 4096 && indices.size() <= 6144) {
+        void* vDst = nullptr;
+        vkMapMemory(state.vkDevice, state.subtitleVertexMemory, 0, vertices.size() * sizeof(SubtitleVertex), 0, &vDst);
+        memcpy(vDst, vertices.data(), vertices.size() * sizeof(SubtitleVertex));
+        vkUnmapMemory(state.vkDevice, state.subtitleVertexMemory);
+
+        void* iDst = nullptr;
+        vkMapMemory(state.vkDevice, state.subtitleIndexMemory, 0, indices.size() * sizeof(uint32_t), 0, &iDst);
+        memcpy(iDst, indices.data(), indices.size() * sizeof(uint32_t));
+        vkUnmapMemory(state.vkDevice, state.subtitleIndexMemory);
+
+        state.subtitleIndexCount = (uint32_t)indices.size();
+    } else {
+        state.subtitleIndexCount = 0;
+    }
+}
+
+static void DrawSubtitles(AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
+    if (!state.subtitlePipeline) return;
+
+    char subTextBuf[1024];
+    uint32_t subLen = get_active_subtitle_text(subTextBuf, sizeof(subTextBuf));
+
+    if (subLen > 0) {
+        if (state.lastSubtitleText != subTextBuf) {
+            UpdateSubtitleMesh(state, subTextBuf);
+            state.lastSubtitleText = subTextBuf;
+        }
+    } else if (!state.lastSubtitleText.empty()) {
+        state.subtitleIndexCount = 0;
+        state.lastSubtitleText.clear();
+    }
+
+    if (state.subtitleIndexCount == 0) return;
+
+    const bool sphereMode = (state.screenMode == ScreenMode::Sphere360 ||
+                             state.screenMode == ScreenMode::Sphere180 ||
+                             state.screenMode == ScreenMode::Sphere360Stereo ||
+                             state.screenMode == ScreenMode::Sphere360OverUnder ||
+                             state.screenMode == ScreenMode::Sphere180Stereo);
+
+    Mat4 subModel;
+    if (sphereMode) {
+        // Modo esférico (360°/180°): Lazy Follow suave (~0.5s)
+        // Posicionado a 2.2m à frente e ligeiramente abaixo da linha de visão
+        Mat4 subTrans = Mat4Translation(headCenter.x, headCenter.y - 0.40f, headCenter.z - 2.2f);
+        subModel = Mat4Multiply(subTrans, Mat4Scale(state.subtitleScale, state.subtitleScale, 1.0f));
+    } else {
+        // Modo plano (2D, SBS, OU): posicionado na base da tela virtual
+        SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
+        float subYOffset = -state.screenScale.y * 0.42f;
+        Mat4 subTrans = Mat4Multiply(scene.screenModelNoScale, Mat4Translation(0.0f, subYOffset, 0.04f));
+        subModel = Mat4Multiply(subTrans, Mat4Scale(state.subtitleScale, state.subtitleScale, 1.0f));
+    }
+
+    Mat4 subMvp = Mat4Multiply(Mat4Multiply(proj, view), subModel);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.subtitlePipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        state.subtitlePipelineLayout, 0, 1, &state.subtitleDescriptorSet, 0, nullptr);
+
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &state.subtitleVertexBuffer, &offset);
+    vkCmdBindIndexBuffer(cmd, state.subtitleIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+    SubtitlePushConstants spc{};
+    spc.mvp = subMvp;
+    spc.textColor[0] = 1.0f; spc.textColor[1] = 1.0f; spc.textColor[2] = 1.0f; spc.textColor[3] = 1.0f;
+    spc.outlineColor[0] = 0.0f; spc.outlineColor[1] = 0.0f; spc.outlineColor[2] = 0.0f; spc.outlineColor[3] = 1.0f;
+    spc.textScale = state.subtitleScale;
+    spc.outlineWidth = 0.12f;
+
+    vkCmdPushConstants(cmd, state.subtitlePipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        0, sizeof(spc), &spc);
+
+    vkCmdDrawIndexed(cmd, state.subtitleIndexCount, 1, 0, 0, 0);
+}
+
 void CreateCommandResources(AppState& state) {
     VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
@@ -2610,6 +2990,9 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
         vkCmdDraw(cmd, state.feedbackVertexCount[kindIndex], 1,
                   state.feedbackFirstVertex[kindIndex], 0);
     }
+
+    // Desenho de Legendas MSDF (T9.3)
+    DrawSubtitles(state, cmd, proj, view, headCenter);
 }
 
 void RecordAndSubmitQuad(
@@ -3591,6 +3974,8 @@ void android_main(android_app* app) {
     CreateStereoPipeline(state);
     CreateBeamResources(state);
     CreateFeedbackResources(state);
+    // Estagio 6: pipeline de legendas MSDF (T9.3)
+    CreateSubtitlePipeline(state);
 
     // O video e iniciado via nativePlayVideo (JNI) quando o usuario seleciona
     // um arquivo no painel de UI — identico ao caminho GLES.

@@ -27,6 +27,9 @@ object FeatureFlags {
 
         // Fase 0.3 Seção 3/4: Rastreamento de cabeça (Head Tracking) no áudio espacial.
         SPATIAL_HEAD_TRACKING("spatial_head_tracking", defaultEnabled = true),
+
+        // Fase 0.2 T9: Carregamento automático de legendas (.srt / .vtt)
+        AUTO_LOAD_SUBTITLES("auto_load_subtitles", defaultEnabled = true),
     }
 
     fun isEnabled(context: Context, flag: Flag): Boolean =

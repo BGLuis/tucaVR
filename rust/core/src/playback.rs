@@ -137,6 +137,11 @@ pub struct PlaybackController {
     connection_cache: crate::demuxer::ConnectionCache,
     seek_started_at: Arc<Mutex<Option<Instant>>>,
     seek_latency_ms: Arc<AtomicU32>,
+    // Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
+    subtitle_entries: Option<Vec<media_logic::subtitle::SubtitleEntry>>,
+    selected_subtitle_track: i32,
+    subtitle_offset_ms: i64,
+    available_subtitle_tracks: Vec<crate::subtitle_loader::SubtitleTrackInfo>,
 }
 
 impl PlaybackController {
@@ -162,6 +167,10 @@ impl PlaybackController {
             connection_cache: crate::demuxer::ConnectionCache::default(),
             seek_started_at: Arc::new(Mutex::new(None)),
             seek_latency_ms: Arc::new(AtomicU32::new(0)),
+            subtitle_entries: None,
+            selected_subtitle_track: -1,
+            subtitle_offset_ms: 0,
+            available_subtitle_tracks: Vec::new(),
         }
     }
 
@@ -240,6 +249,26 @@ impl PlaybackController {
 
         let (fmt3d, _) = crate::format3d_detect::detect(&demuxer, path, width, height);
         self.detected_screen_mode = fmt3d.to_screen_mode_index();
+
+        // Descoberta de legendas sidecar (.srt/.vtt) e trilhas embutidas (T9.1, T9.6)
+        self.available_subtitle_tracks = crate::subtitle_loader::probe_sidecar_subtitles(path);
+        for (i, &stream_idx) in demuxer.subtitle_streams.iter().enumerate() {
+            let stream = demuxer.input_context.stream(stream_idx);
+            let lang = stream.as_ref().and_then(|s| s.metadata().get("language")).unwrap_or_default().to_string();
+            let title = stream.as_ref().and_then(|s| s.metadata().get("title")).unwrap_or_default().to_string();
+            self.available_subtitle_tracks.push(crate::subtitle_loader::SubtitleTrackInfo {
+                title: if title.is_empty() { format!("Track {}", i + 1) } else { title },
+                language: lang,
+                is_external: false,
+                source_path: None,
+                stream_index: Some(stream_idx),
+            });
+        }
+        if self.selected_subtitle_track >= 0 && (self.selected_subtitle_track as usize) < self.available_subtitle_tracks.len() {
+            self.load_subtitle_track(self.selected_subtitle_track as usize);
+        } else if !self.available_subtitle_tracks.is_empty() && self.selected_subtitle_track == 0 {
+            self.load_subtitle_track(0);
+        }
 
         // O Quest 3 (MediaCodec) exige o mime correto do decoder de hardware;
         // usar "video/avc" para um stream HEVC falha ou decodifica lixo.
@@ -879,5 +908,65 @@ impl PlaybackController {
 
     pub fn detected_screen_mode(&self) -> u32 {
         self.detected_screen_mode
+    }
+
+    pub fn set_subtitle_track(&mut self, track: i32) {
+        self.selected_subtitle_track = track;
+        if track < 0 || (track as usize) >= self.available_subtitle_tracks.len() {
+            self.subtitle_entries = None;
+        } else {
+            self.load_subtitle_track(track as usize);
+        }
+    }
+
+    pub fn get_subtitle_track(&self) -> i32 {
+        self.selected_subtitle_track
+    }
+
+    pub fn set_subtitle_offset_ms(&mut self, offset_ms: i64) {
+        self.subtitle_offset_ms = offset_ms;
+    }
+
+    pub fn get_subtitle_offset_ms(&self) -> i64 {
+        self.subtitle_offset_ms
+    }
+
+    pub fn get_subtitle_track_count(&self) -> usize {
+        self.available_subtitle_tracks.len()
+    }
+
+    pub fn load_external_subtitle(&mut self, path: &str) -> Result<u32, String> {
+        let entries = crate::subtitle_loader::load_subtitle_from_path(path)?;
+        let count = entries.len() as u32;
+        self.subtitle_entries = Some(entries);
+        let idx = self.available_subtitle_tracks.len();
+        self.available_subtitle_tracks.push(crate::subtitle_loader::SubtitleTrackInfo {
+            title: std::path::Path::new(path).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "External".into()),
+            language: String::new(),
+            is_external: true,
+            source_path: Some(path.to_string()),
+            stream_index: None,
+        });
+        self.selected_subtitle_track = idx as i32;
+        Ok(count)
+    }
+
+    fn load_subtitle_track(&mut self, idx: usize) {
+        if let Some(track) = self.available_subtitle_tracks.get(idx) {
+            if track.is_external {
+                if let Some(path) = &track.source_path {
+                    if let Ok(entries) = crate::subtitle_loader::load_subtitle_from_path(path) {
+                        self.subtitle_entries = Some(entries);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn get_active_subtitle_text(&self) -> Option<String> {
+        let entries = self.subtitle_entries.as_ref()?;
+        let current_pts_sec = self.sync_manager.get_master_clock();
+        let current_pts_ms = (current_pts_sec * 1000.0) as i64;
+        media_logic::subtitle::find_active_cue(entries, current_pts_ms, self.subtitle_offset_ms).map(|c| c.text.clone())
     }
 }

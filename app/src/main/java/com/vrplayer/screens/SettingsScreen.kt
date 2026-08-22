@@ -72,6 +72,22 @@ class SettingsScreen(
             )
         )
 
+        // Seção Legendas (T9.6)
+        root.addView(
+            VoidText.title(context, context.getString(R.string.settings_section_subtitles), sizeSp = 18f).apply {
+                setPadding(0, VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 8f))
+            }
+        )
+
+        root.addView(
+            buildFlagRow(
+                labelRes = R.string.settings_subtitles_auto_load_label,
+                descriptionRes = R.string.settings_subtitles_auto_load_description,
+                flag = FeatureFlags.Flag.AUTO_LOAD_SUBTITLES,
+                onChanged = { /* flag persisted automatically */ }
+            )
+        )
+
         host.showScreen(root)
     }
 
