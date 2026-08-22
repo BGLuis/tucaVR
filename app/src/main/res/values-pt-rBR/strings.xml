@@ -29,6 +29,11 @@
     <string name="settings_section_video">Video</string>
     <string name="settings_foveated_rendering_label">Foveated Rendering</string>
     <string name="settings_foveated_rendering_description">Reduz a carga da GPU diminuindo o detalhe na visao periferica. Pode reduzir levemente a nitidez das bordas. So no Vulkan.</string>
+    <string name="settings_section_audio">Audio</string>
+    <string name="settings_spatial_audio_label">Audio Espacial e Surround 3D</string>
+    <string name="settings_spatial_audio_description">Habilita audio binaural 3D imersivo com virtualizacao HRTF para surround 5.1/7.1 e Ambisonics.</string>
+    <string name="settings_spatial_head_tracking_label">Head Tracking no Audio</string>
+    <string name="settings_spatial_head_tracking_description">Rotaciona as caixas acusticas virtuais e o palco sonoro ao virar a cabeca para realismo espacial.</string>
 
     <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
     <string name="browser_title_local_files">Arquivos locais</string>

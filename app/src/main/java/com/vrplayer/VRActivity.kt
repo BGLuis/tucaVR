@@ -184,6 +184,11 @@ class VRActivity : NativeActivity() {
         // inicializacao do XrInstance/swapchains. Trocas em runtime (tela de
         // Configuracoes) empurram de novo na hora, ver SettingsScreen.kt.
         nativeSetFoveationEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.FOVEATED_RENDERING))
+
+        // Fase 0.3 Seção 3/4: empurra valores persistidos de Áudio Espacial e Head Tracking pro nativo
+        val spatialAudio = FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_AUDIO)
+        nativeSetSpatialAudioMode(if (spatialAudio) 1 else 0)
+        nativeSetSpatialAudioHeadTracking(FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_HEAD_TRACKING))
     }
 
     override fun onDestroy() {
@@ -768,4 +773,6 @@ class VRActivity : NativeActivity() {
     // sobre select_audio_track). Chamada barata (so grava um campo), segura
     // direto da UI thread.
     external fun nativeSetAudioTrack(ordinal: Int)
+    external fun nativeSetSpatialAudioMode(mode: Int)
+    external fun nativeSetSpatialAudioHeadTracking(enabled: Boolean)
 }

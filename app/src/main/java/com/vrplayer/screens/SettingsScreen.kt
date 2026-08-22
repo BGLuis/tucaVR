@@ -47,6 +47,31 @@ class SettingsScreen(
             )
         )
 
+        // Seção Áudio
+        root.addView(
+            VoidText.title(context, context.getString(R.string.settings_section_audio), sizeSp = 18f).apply {
+                setPadding(0, VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 8f))
+            }
+        )
+
+        root.addView(
+            buildFlagRow(
+                labelRes = R.string.settings_spatial_audio_label,
+                descriptionRes = R.string.settings_spatial_audio_description,
+                flag = FeatureFlags.Flag.SPATIAL_AUDIO,
+                onChanged = { enabled -> activity.nativeSetSpatialAudioMode(if (enabled) 1 else 0) }
+            )
+        )
+
+        root.addView(
+            buildFlagRow(
+                labelRes = R.string.settings_spatial_head_tracking_label,
+                descriptionRes = R.string.settings_spatial_head_tracking_description,
+                flag = FeatureFlags.Flag.SPATIAL_HEAD_TRACKING,
+                onChanged = { enabled -> activity.nativeSetSpatialAudioHeadTracking(enabled) }
+            )
+        )
+
         host.showScreen(root)
     }
 

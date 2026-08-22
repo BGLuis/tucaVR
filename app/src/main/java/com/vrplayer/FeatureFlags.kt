@@ -21,6 +21,12 @@ object FeatureFlags {
         // Vulkan — ver vr_player_app_vulkan.cpp::ApplyFoveation). Desligado
         // por padrao: nunca validado em headset real ate agora.
         FOVEATED_RENDERING("foveated_rendering", defaultEnabled = false),
+
+        // Fase 0.3 Seção 3/4: Áudio Espacial 3D (HRTF Binaural para 5.1/7.1 e Ambisonics).
+        SPATIAL_AUDIO("spatial_audio", defaultEnabled = true),
+
+        // Fase 0.3 Seção 3/4: Rastreamento de cabeça (Head Tracking) no áudio espacial.
+        SPATIAL_HEAD_TRACKING("spatial_head_tracking", defaultEnabled = true),
     }
 
     fun isEnabled(context: Context, flag: Flag): Boolean =
