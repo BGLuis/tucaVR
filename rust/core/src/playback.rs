@@ -253,9 +253,15 @@ impl PlaybackController {
         // Descoberta de legendas sidecar (.srt/.vtt) e trilhas embutidas (T9.1, T9.6)
         self.available_subtitle_tracks = crate::subtitle_loader::probe_sidecar_subtitles(path);
         for (i, &stream_idx) in demuxer.subtitle_streams.iter().enumerate() {
-            let stream = demuxer.input_context.stream(stream_idx);
-            let lang = stream.as_ref().and_then(|s| s.metadata().get("language")).unwrap_or_default().to_string();
-            let title = stream.as_ref().and_then(|s| s.metadata().get("title")).unwrap_or_default().to_string();
+            let (lang, title) = if let Some(stream) = demuxer.input_context.stream(stream_idx) {
+                let meta = stream.metadata();
+                (
+                    meta.get("language").unwrap_or_default().to_string(),
+                    meta.get("title").unwrap_or_default().to_string(),
+                )
+            } else {
+                (String::new(), String::new())
+            };
             self.available_subtitle_tracks.push(crate::subtitle_loader::SubtitleTrackInfo {
                 title: if title.is_empty() { format!("Track {}", i + 1) } else { title },
                 language: lang,

@@ -1063,29 +1063,9 @@ pub extern "C" fn hls_probe_variants(url: *const std::os::raw::c_char) -> *mut s
         None => return string_to_c_char("ERROR:URL invalida".into()),
     };
 
-    let client = match reqwest::blocking::Client::builder().timeout(std::time::Duration::from_secs(5)).build() {
-        Ok(c) => c,
-        Err(e) => return string_to_c_char(format!("ERROR:{e}")),
-    };
-
-    let resp = match client.get(&url_str).send() {
-        Ok(r) => r,
-        Err(e) => return string_to_c_char(format!("ERROR:{e}")),
-    };
-
-    if !resp.status().is_success() {
-        return string_to_c_char(format!("ERROR:HTTP status {}", resp.status()));
-    }
-
-    let body = match resp.text() {
-        Ok(b) => b,
-        Err(e) => return string_to_c_char(format!("ERROR:{e}")),
-    };
-
-    match protocols::hls::parse_playlist(&body, &url_str) {
-        Ok(protocols::hls::HlsPlaylist::Master(master)) => {
-            let lines: Vec<String> = master
-                .variants
+    match protocols::hls::fetch_and_probe_variants(&url_str) {
+        Ok(variants) => {
+            let lines: Vec<String> = variants
                 .into_iter()
                 .enumerate()
                 .map(|(idx, v)| {
@@ -1095,10 +1075,7 @@ pub extern "C" fn hls_probe_variants(url: *const std::os::raw::c_char) -> *mut s
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
-        Ok(protocols::hls::HlsPlaylist::Media(_)) => {
-            string_to_c_char("0\t0\tauto\t\t".to_string())
-        }
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => string_to_c_char(format!("ERROR:{e}")),
     }
 }
 
@@ -1784,7 +1761,7 @@ pub extern "C" fn get_subtitle_offset_ms() -> i64 {
 
 #[no_mangle]
 pub extern "C" fn load_external_subtitle(path: *const std::os::raw::c_char) -> u32 {
-    let path_str = match cstr_to_string(path) {
+    let path_str = match unsafe { cstr_to_string(path) } {
         Some(s) => s,
         None => return 0,
     };

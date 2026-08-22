@@ -39,39 +39,47 @@ pub fn load_subtitle_from_path(path: &str) -> Result<Vec<SubtitleEntry>, String>
 
 /// Lê o conteúdo bruto de um arquivo local ou remoto.
 fn read_file_bytes(path: &str) -> Result<Vec<u8>, String> {
+    use protocols::prefetch::RangeSource;
+
     if path.starts_with("http://") || path.starts_with("https://") {
-        let resp = reqwest::blocking::get(path).map_err(|e| format!("HTTP fetch error: {e}"))?;
-        let bytes = resp.bytes().map_err(|e| format!("HTTP bytes error: {e}"))?;
-        Ok(bytes.to_vec())
-    } else if let Some(target) = protocols::smb::SmbTarget::from_internal(path) {
-        let mut source = protocols::smb::SmbFileSource::open(&target)?;
-        let size = source.size();
+        let mut source = protocols::http::HttpsRangeSource::new(path)
+            .map_err(|e| format!("HTTP fetch error: {e}"))?;
+        let size = source.len().unwrap_or(0);
         if size > 10 * 1024 * 1024 {
             return Err("Subtitle file too large (>10MB)".into());
         }
         let mut buf = vec![0u8; size as usize];
-        use protocols::prefetch::RangeSource;
-        source.read_range(0, &mut buf)?;
+        source.read_range(0, &mut buf).map_err(|e| e.to_string())?;
+        Ok(buf)
+    } else if let Some(target) = protocols::smb::SmbTarget::from_internal(path) {
+        let mut source = protocols::smb::SmbFileSource::open(&target)
+            .map_err(|e| format!("SMB open error: {e}"))?;
+        let size = source.len().unwrap_or(0);
+        if size > 10 * 1024 * 1024 {
+            return Err("Subtitle file too large (>10MB)".into());
+        }
+        let mut buf = vec![0u8; size as usize];
+        source.read_range(0, &mut buf).map_err(|e| e.to_string())?;
         Ok(buf)
     } else if let Some(target) = protocols::sftp::SftpTarget::from_internal(path) {
-        let mut source = protocols::sftp::SftpFileSource::open(&target)?;
-        let size = source.size();
+        let mut source = protocols::sftp::SftpFileSource::open(&target)
+            .map_err(|e| format!("SFTP open error: {e}"))?;
+        let size = source.len().unwrap_or(0);
         if size > 10 * 1024 * 1024 {
             return Err("Subtitle file too large (>10MB)".into());
         }
         let mut buf = vec![0u8; size as usize];
-        use protocols::prefetch::RangeSource;
-        source.read_range(0, &mut buf)?;
+        source.read_range(0, &mut buf).map_err(|e| e.to_string())?;
         Ok(buf)
     } else if let Some(target) = protocols::nfs::NfsTarget::from_internal(path) {
-        let mut source = protocols::nfs::NfsFileSource::open(&target)?;
-        let size = source.size();
+        let mut source = protocols::nfs::NfsFileSource::open(&target)
+            .map_err(|e| format!("NFS open error: {e}"))?;
+        let size = source.len().unwrap_or(0);
         if size > 10 * 1024 * 1024 {
             return Err("Subtitle file too large (>10MB)".into());
         }
         let mut buf = vec![0u8; size as usize];
-        use protocols::prefetch::RangeSource;
-        source.read_range(0, &mut buf)?;
+        source.read_range(0, &mut buf).map_err(|e| e.to_string())?;
         Ok(buf)
     } else {
         // Arquivo local no sistema de arquivos

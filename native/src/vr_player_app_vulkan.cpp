@@ -2785,11 +2785,7 @@ static void DrawSubtitles(AppState& state, VkCommandBuffer cmd, const Mat4& proj
 
     if (state.subtitleIndexCount == 0) return;
 
-    const bool sphereMode = (state.screenMode == ScreenMode::Sphere360 ||
-                             state.screenMode == ScreenMode::Sphere180 ||
-                             state.screenMode == ScreenMode::Sphere360Stereo ||
-                             state.screenMode == ScreenMode::Sphere360OverUnder ||
-                             state.screenMode == ScreenMode::Sphere180Stereo);
+    const bool sphereMode = IsSphereMode(state.screenMode);
 
     Mat4 subModel;
     if (sphereMode) {
@@ -2800,7 +2796,7 @@ static void DrawSubtitles(AppState& state, VkCommandBuffer cmd, const Mat4& proj
     } else {
         // Modo plano (2D, SBS, OU): posicionado na base da tela virtual
         SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
-        float subYOffset = -state.screenScale.y * 0.42f;
+        float subYOffset = -state.screenScaleY * 0.42f;
         Mat4 subTrans = Mat4Multiply(scene.screenModelNoScale, Mat4Translation(0.0f, subYOffset, 0.04f));
         subModel = Mat4Multiply(subTrans, Mat4Scale(state.subtitleScale, state.subtitleScale, 1.0f));
     }

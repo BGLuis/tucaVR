@@ -47,6 +47,30 @@ pub enum HlsPlaylist {
     Media(HlsMediaPlaylist),
 }
 
+/// Faz o download da playlist Master HLS e extrai as variantes.
+pub fn fetch_and_probe_variants(url: &str) -> Result<Vec<HlsVariant>, String> {
+    let client = reqwest::blocking::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| format!("HTTP client error: {e}"))?;
+
+    let resp = client
+        .get(url)
+        .send()
+        .map_err(|e| format!("HTTP request error: {e}"))?;
+
+    if !resp.status().is_success() {
+        return Err(format!("HTTP status {}", resp.status()));
+    }
+
+    let body = resp.text().map_err(|e| format!("HTTP read error: {e}"))?;
+
+    match parse_playlist(&body, url)? {
+        HlsPlaylist::Master(master) => Ok(master.variants),
+        HlsPlaylist::Media(_) => Err("A URL fornecida é uma Media Playlist, não Master Playlist".to_string()),
+    }
+}
+
 /// Faz o parse de uma playlist M3U8 (Master ou Media) a partir do texto e resolve URLs relativas.
 pub fn parse_playlist(content: &str, base_url: &str) -> Result<HlsPlaylist, String> {
     let lines: Vec<&str> = content.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
