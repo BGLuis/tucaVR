@@ -54,6 +54,8 @@ class VRControlsPresentation(
     private lateinit var seekBar: SeekBar
     private lateinit var batteryIcon: ImageView
     private lateinit var batteryLabel: TextView
+    private lateinit var thermalIcon: ImageView
+    private lateinit var thermalLabel: TextView
     private lateinit var clockLabel: TextView
     private lateinit var btnPlayPause: com.vrplayer.designsystem.VoidIconButton
     private lateinit var modeSelectionModal: FrameLayout
@@ -149,6 +151,45 @@ class VRControlsPresentation(
      */
     fun updateDebugHud(text: String) {
         debugHudLabel?.text = text
+    }
+
+    /**
+     * T14.3: Atualiza o ícone e rótulo de status térmico no header do painel de controles.
+     */
+    fun onThermalStateChanged(state: ThermalMonitor.ThermalState) {
+        if (!::thermalIcon.isInitialized || !::thermalLabel.isInitialized) return
+        when (state.level) {
+            ThermalMonitor.ThermalLevel.NORMAL,
+            ThermalMonitor.ThermalLevel.LIGHT -> {
+                thermalIcon.visibility = View.GONE
+                thermalLabel.visibility = View.GONE
+            }
+            ThermalMonitor.ThermalLevel.MODERATE -> {
+                val color = android.graphics.Color.parseColor("#FFCC00")
+                thermalIcon.visibility = View.VISIBLE
+                thermalIcon.setColorFilter(color)
+                thermalLabel.visibility = View.VISIBLE
+                thermalLabel.text = context.getString(R.string.thermal_level_moderate)
+                thermalLabel.setTextColor(color)
+            }
+            ThermalMonitor.ThermalLevel.SEVERE -> {
+                val color = android.graphics.Color.parseColor("#FF8800")
+                thermalIcon.visibility = View.VISIBLE
+                thermalIcon.setColorFilter(color)
+                thermalLabel.visibility = View.VISIBLE
+                thermalLabel.text = context.getString(R.string.thermal_level_severe)
+                thermalLabel.setTextColor(color)
+            }
+            ThermalMonitor.ThermalLevel.CRITICAL,
+            ThermalMonitor.ThermalLevel.SHUTDOWN -> {
+                val color = android.graphics.Color.parseColor("#FF3333")
+                thermalIcon.visibility = View.VISIBLE
+                thermalIcon.setColorFilter(color)
+                thermalLabel.visibility = View.VISIBLE
+                thermalLabel.text = context.getString(R.string.thermal_level_critical)
+                thermalLabel.setTextColor(color)
+            }
+        }
     }
 
     /**
@@ -332,6 +373,7 @@ class VRControlsPresentation(
         
         val sdf = java.text.SimpleDateFormat("HH:mm", java.util.Locale.getDefault())
         if (::clockLabel.isInitialized) clockLabel.text = sdf.format(java.util.Date())
+        onThermalStateChanged(activity.thermalMonitor.currentState)
     }
 
     override fun onDetachedFromWindow() {
@@ -410,6 +452,26 @@ class VRControlsPresentation(
             setTextColor(VoidTheme.colorText)
         }
         statusBadge.addView(clockLabel)
+
+        thermalIcon = ImageView(context).apply {
+            setImageResource(R.drawable.icon_thermal)
+            setColorFilter(VoidTheme.colorText)
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 36f), VoidTheme.dpToPx(context, 36f)).apply {
+                leftMargin = VoidTheme.dpToPx(context, 20f)
+                rightMargin = VoidTheme.dpToPx(context, 10f)
+            }
+            visibility = View.GONE
+        }
+        statusBadge.addView(thermalIcon)
+
+        thermalLabel = TextView(context).apply {
+            text = ""
+            typeface = VoidTheme.typefaceMono
+            textSize = 32f
+            setTextColor(VoidTheme.colorText)
+            visibility = View.GONE
+        }
+        statusBadge.addView(thermalLabel)
 
         headerRow.addView(statusBadge)
 

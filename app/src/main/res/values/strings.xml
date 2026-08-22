@@ -293,6 +293,13 @@
     <string name="history_row_ftp_format">%1$s</string>
     <string name="history_row_sftp_format">%1$s</string>
     <string name="history_row_meta_format">%1$s / %2$s · %3$d%%</string>
-    <string name="history_btn_remove"></string>
+
+    <!-- Monitoramento térmico (T14.1-T14.3) -->
+    <string name="thermal_warning_reducing_quality">Reducing quality to prevent overheating</string>
+    <string name="thermal_critical_pause">Critical temperature detected. Playback paused for cooling.</string>
+    <string name="thermal_level_normal">Normal</string>
+    <string name="thermal_level_moderate">Moderate</string>
+    <string name="thermal_level_severe">Severe</string>
+    <string name="thermal_level_critical">Critical</string>
 
 </resources>

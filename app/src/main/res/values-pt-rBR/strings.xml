@@ -278,6 +278,13 @@
     <string name="history_row_ftp_format">%1$s</string>
     <string name="history_row_sftp_format">%1$s</string>
     <string name="history_row_meta_format">%1$s / %2$s · %3$d%%</string>
-    <string name="history_btn_remove"></string>
+
+    <!-- Monitoramento termico (T14.1-T14.3) -->
+    <string name="thermal_warning_reducing_quality">Reduzindo qualidade para evitar superaquecimento</string>
+    <string name="thermal_critical_pause">Temperatura crítica detectada. Reprodução pausada para resfriamento.</string>
+    <string name="thermal_level_normal">Normal</string>
+    <string name="thermal_level_moderate">Moderado</string>
+    <string name="thermal_level_severe">Severo</string>
+    <string name="thermal_level_critical">Crítico</string>
 
 </resources>

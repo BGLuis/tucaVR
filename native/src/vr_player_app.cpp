@@ -172,6 +172,9 @@ extern "C" {
     // aceito e guardado no Rust mesmo assim (nao rejeita a chamada), so nao
     // ha nada aqui que o leia.
     extern void set_foveation_enabled(uint32_t enabled);
+    // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
+    extern void set_thermal_level(uint32_t level);
+    extern uint32_t get_thermal_level();
 
     // T13.1: metadados de midia (container/duracao/bitrate/trilhas) pra tela
     // de detalhe do arquivo — ver rust/media_logic/src/metadata_wire.rs pra
@@ -376,6 +379,11 @@ Java_com_vrplayer_VRActivity_nativeSetKeyboardActive(JNIEnv* env, jobject thiz, 
 extern "C" JNIEXPORT void JNICALL
 Java_com_vrplayer_VRActivity_nativeSetFoveationEnabled(JNIEnv* env, jobject thiz, jboolean enabled) {
     set_foveation_enabled(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_vrplayer_VRActivity_nativeSetThermalLevel(JNIEnv* env, jobject thiz, jint level) {
+    set_thermal_level(static_cast<uint32_t>(level));
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -1065,10 +1073,9 @@ public:
     virtual bool SessionInit() override {
         LOGI("VRPlayerApp::SessionInit");
         
-        PFN_xrRequestDisplayRefreshRateFB pfnRequestDisplayRefreshRateFB = nullptr;
-        xrGetInstanceProcAddr(GetInstance(), "xrRequestDisplayRefreshRateFB", (PFN_xrVoidFunction*)&pfnRequestDisplayRefreshRateFB);
-        if (pfnRequestDisplayRefreshRateFB) {
-            pfnRequestDisplayRefreshRateFB(GetSession(), 90.0f);
+        xrGetInstanceProcAddr(GetInstance(), "xrRequestDisplayRefreshRateFB", (PFN_xrVoidFunction*)&m_pfnRequestDisplayRefreshRateFB);
+        if (m_pfnRequestDisplayRefreshRateFB) {
+            m_pfnRequestDisplayRefreshRateFB(GetSession(), 90.0f);
             LOGI("VRPlayerApp: Requested 90Hz refresh rate.");
         } else {
             LOGI("VRPlayerApp: xrRequestDisplayRefreshRateFB not found.");
@@ -1589,6 +1596,17 @@ public:
 
                 m_decodedFpsPollAccumMs = 0.0f;
             }
+
+            // T14.2: Polling de status térmico (~1Hz) para ajuste dinâmico de taxa de atualização
+            uint32_t currentThermal = get_thermal_level();
+            if (currentThermal != m_thermalLevel) {
+                m_thermalLevel = currentThermal;
+                if (m_pfnRequestDisplayRefreshRateFB) {
+                    float targetFps = (m_thermalLevel >= 3) ? 72.0f : 90.0f;
+                    m_pfnRequestDisplayRefreshRateFB(GetSession(), targetFps);
+                    LOGI("VRPlayerApp: Nível térmico alterado para %u -> refresh rate %.0fHz", m_thermalLevel, targetFps);
+                }
+            }
         }
 
         // Se o OS aplicou um recenter, calibra a altura da UI para os olhos na nova origem
@@ -2023,14 +2041,14 @@ public:
             // debuggable, entao computar/mandar isso sempre e mais simples
             // que condicionar a compilacao nativa por build type.
             {
-                char hud[448];
+                char hud[512];
                 snprintf(hud, sizeof(hud),
-                    "GLES | %s | flat=%.0f esfera=%.0f polar180=%.0f swap=%.0f | video=%s vidGap=%.0fms vidFps=%.0f decFps=%.0f outFps=%.0f drop=%.0f jitter=%.0fms | net=%.1fMB/s q=%u seekMs=%u | %.0ffps %.1fms stutter=%d freeze=%d",
+                    "GLES | %s | flat=%.0f esfera=%.0f polar180=%.0f swap=%.0f | video=%s vidGap=%.0fms vidFps=%.0f decFps=%.0f outFps=%.0f drop=%.0f jitter=%.0fms | net=%.1fMB/s q=%u seekMs=%u | %.0ffps %.1fms stutter=%d freeze=%d | thermal=%u",
                     ScreenModeName(m_screenMode), m_flatStereoLayout, m_sphereStereoLayout,
                     m_uPolar180, m_swapEyesF, (m_lastBuffer != nullptr) ? "ativo" : "sem frame",
                     m_msSinceLastVideoFrame, m_videoFps, m_decodedFps, m_outputFps, m_droppedFps, m_videoJitterMs,
                     m_netMBs, m_videoQueueDepth, get_last_seek_latency_ms(),
-                    m_smoothedFps, m_lastFrameMs, m_stutterCount, m_freezeCount);
+                    m_smoothedFps, m_lastFrameMs, m_stutterCount, m_freezeCount, m_thermalLevel);
                 const xrJava* java = GetContext();
                 JNIEnv* env = nullptr;
                 if (java && java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
@@ -2520,6 +2538,8 @@ private:
     float m_swapEyesF = 0.0f; // T1.5: espelha get_swap_eyes(), compartilhado pelos 2 programas estereo
     float m_sharpness = 0.5f; // uniform CAS: 0=mais leve (peak -8), 1=mais forte (peak -5). So usado se kSharpenEnabled.
     float m_sceneYawOffset = 0.0f; // T4.3: recenter — offset de yaw aplicado a cena
+    PFN_xrRequestDisplayRefreshRateFB m_pfnRequestDisplayRefreshRateFB = nullptr;
+    uint32_t m_thermalLevel = 0;
     OVR::Vector3f m_sceneTranslationOffset = OVR::Vector3f(0.0f, 0.0f, 0.0f);
     OVR::Matrix4f m_sphereTransform;
 
