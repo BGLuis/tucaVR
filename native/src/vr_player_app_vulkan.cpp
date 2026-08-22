@@ -128,9 +128,9 @@ constexpr size_t kVideoImageCacheLimit = 16;
 constexpr float kSphereRadius = 20.0f;
 
 // Dimensoes dos VirtualDisplay/AImageReader dos paineis de UI — precisam
-// bater exatamente com os multiplicadores hardcoded em
-// VRActivity.dispatchVRTouch/dispatchControlsVRTouch (x*1024f, y*768f e
-// x*1024f, y*384f) ou o Y do toque fica descalibrado.
+// bater exatamente com as constantes em
+// VRActivity.dispatchVRTouch/dispatchControlsVRTouch (1024x768 e 1582x800)
+// para que as coordenadas normalizadas do raycast casem com a janela Android.
 constexpr uint32_t kUiTexWidth = 1024;
 constexpr uint32_t kUiTexHeight = 768;
 constexpr uint32_t kControlsTexWidth = 1582;
@@ -2534,7 +2534,7 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
         if (state.lastHitDist > 0.0f) {
             beamLength = state.lastHitDist;
         }
-        float zScale = beamLength / 2.0f; // Base geometry is 2.0m long
+        float zScale = beamLength; // Base geometry is 1.0m long (from 0 to -1.0 in Z)
 
         Mat4 beamModel = {{
             x.x, x.y, x.z, 0.0f,

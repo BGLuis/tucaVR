@@ -301,6 +301,12 @@ class VRActivity : NativeActivity() {
         private const val AUTO_PLAY_DELAY_MS = 3000L
         private const val PLAYBACK_ERROR_POLL_MS = 1000L
 
+        // Dimensões nominais dos VirtualDisplays de UI e Controles (devem bater com o nativo C++).
+        const val UI_DISPLAY_WIDTH = 1024
+        const val UI_DISPLAY_HEIGHT = 768
+        const val CONTROLS_DISPLAY_WIDTH = 1582
+        const val CONTROLS_DISPLAY_HEIGHT = 800
+
         @JvmStatic
         fun openFilePicker(activity: VRActivity) {
             activity.runOnUiThread {
@@ -345,8 +351,8 @@ class VRActivity : NativeActivity() {
                     downTime,
                     now,
                     action,
-                    x * 1582f,
-                    y * 768f,
+                    x * UI_DISPLAY_WIDTH.toFloat(),
+                    y * UI_DISPLAY_HEIGHT.toFloat(),
                     0
                 )
                 
@@ -401,8 +407,8 @@ class VRActivity : NativeActivity() {
                     downTime,
                     now,
                     action,
-                    x * 1582f, // width
-                    y * 800f,  // height
+                    x * CONTROLS_DISPLAY_WIDTH.toFloat(),
+                    y * CONTROLS_DISPLAY_HEIGHT.toFloat(),
                     0
                 )
                 

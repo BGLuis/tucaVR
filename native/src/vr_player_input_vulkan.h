@@ -42,13 +42,13 @@ inline void FireHaptic(AppState& state, XrPath hand, float amplitude, XrDuration
 // texto ficar legivel — bug reportado em teste real de hardware ("muito
 // longe, nao da pra ler o texto"). Agora ~1.64m de distancia, 50% maior,
 // mantendo a proporcao da textura (4:3 pro UI/kUiTexWidth/kUiTexHeight,
-// 2.667:1 pros controles/kControlsTexWidth/kControlsTexHeight).
+// 1582:800 pros controles/kControlsTexWidth/kControlsTexHeight).
 constexpr XrVector3f kBaseUiPos = {-1.3f, 1.5f, -1.0f};
 constexpr float kUiPanelScaleX = 1.2f;
 constexpr float kUiPanelScaleY = 0.9f;
 constexpr XrVector3f kBaseControlsPos = {0.0f, 0.4f, -1.3f};
 constexpr float kControlsPanelScaleX = 1.2f;
-constexpr float kControlsPanelScaleY = 0.45f;
+constexpr float kControlsPanelScaleY = 1.2f * (800.0f / 1582.0f); // ~0.607m (aspect ratio 1582:800)
 constexpr float kControlsPitch = -0.3f;
 
 // Transforms de cena computados uma vez por frame e compartilhados entre
