@@ -579,7 +579,7 @@ Renderizar legendas SRT e VTT sobrepostas ao vídeo na tela virtual.
 
 ### Tarefas
 
-- [ ] **T9.1** — Implementar parser **SRT** no Rust:
+- [x] **T9.1** — Implementar parser **SRT** no Rust:
 
     ```rust
     struct SubtitleEntry {
@@ -598,11 +598,11 @@ Renderizar legendas SRT e VTT sobrepostas ao vídeo na tela virtual.
     }
     ```
 
-- [ ] **T9.2** — Implementar parser **WebVTT** no Rust:
+- [x] **T9.2** — Implementar parser **WebVTT** no Rust:
     - Similar a SRT com header `WEBVTT`
     - Suporta posicionamento (`position:`, `align:`)
     - Cue settings opcionais
-- [ ] **T9.3** — Implementar **renderização de texto em VR** (C++):
+- [x] **T9.3** — Implementar **renderização de texto em VR** (C++):
     - Gerar atlas SDF (Signed Distance Field) para fonte (Roboto/Inter)
     - Renderizar texto como quad texturizado
     - Posicionar na parte inferior da tela virtual
@@ -620,11 +620,11 @@ Renderizar legendas SRT e VTT sobrepostas ao vídeo na tela virtual.
     fragColor = vec4(color, outlineAlpha);
     ```
 
-- [ ] **T9.4** — Sincronizar legendas com reprodução:
+- [x] **T9.4** — Sincronizar legendas com reprodução:
     - Buscar entrada ativa baseado no PTS atual do vídeo
     - Ajuste de offset (± segundos) se legenda está fora de sync
-- [ ] **T9.5** — Detecção automática de encoding (UTF-8, Latin1, Windows-1252)
-- [ ] **T9.6** — UI para legendas:
+- [x] **T9.5** — Detecção automática de encoding (UTF-8, Latin1, Windows-1252)
+- [x] **T9.6** — UI para legendas:
     - Seleção de arquivo de legenda (ou embedded track)
     - Ajuste de tamanho do texto
     - Ajuste de offset temporal (± sync)
@@ -769,18 +769,59 @@ Exibir informações detalhadas sobre cada arquivo de mídia.
 
 ### Tarefas
 
-- [ ] **T13.1** — Extrair metadados via FFmpeg (Rust):
+- [x] **T13.1** — Extrair metadados via FFmpeg (Rust):
     - Resolução, codec vídeo, codec áudio, bitrate, duração
     - Número de tracks (áudio, vídeo, legendas)
     - Container format
     - Metadata tags (título, artista, etc.)
-- [ ] **T13.2** — UI de detalhes do arquivo:
+  > `rust/core/src/metadata.rs::extract()` reusa `Demuxer::open` (mesmo
+  > roteamento de protocolo do playback — local/SMB/FTP/SFTP/HTTP(S) num
+  > único caminho). Serialização/testes em
+  > `rust/media-logic/src/metadata_wire.rs` (gramática `F`/`M`/`T` por linha,
+  > 4 testes `cargo test -p media-logic`). FFI: `read_media_metadata` +
+  > `smb_/ftp_/sftp_read_metadata` (`rust/bridge/src/lib.rs`), JNI espelhado
+  > nos DOIS arquivos C++ (`vr_player_app.cpp` GLES e `vr_player_jni_vulkan.cpp`
+  > Vulkan/padrão — confirmado com `assembleDebug` nas duas variantes +
+  > `nm -D` nos `.so` gerados). Contagem de trilhas de legenda exigiu um
+  > `subtitle_streams: Vec<usize>` novo em `Demuxer` (antes descartadas
+  > silenciosamente). Width/height/channels/sample_rate lidos direto do
+  > `AVCodecParameters` cru (ponteiro, `unsafe`) em vez de abrir um
+  > `AVCodecContext`/decoder por trilha — abrir decoder é caro e FALHA pra
+  > codecs sem decoder nesta build enxuta (legenda, áudio exótico), achado
+  > confirmado no FFmpeg 8.1.2 vendorizado (`ch_layout.nb_channels`, campo
+  > `channels` legado não existe mais nesta versão).
+- [x] **T13.2** — UI de detalhes do arquivo:
     - Card com thumbnail + informações
     - Lista de tracks com opção de seleção
-- [ ] **T13.3** — Gerar thumbnails:
+  > Nova `screens/FileDetailScreen.kt`, compartilhada entre local e rede
+  > (antes só existia para local, via `LocalFilesScreen.renderLocalFileDetail`,
+  > removida). `Destination.LocalFileDetail(entry)` virou
+  > `Destination.FileDetail(source: PlaybackSource, ...)`. Seleção de trilha
+  > de áudio é real (não um ciclo às cegas): nova FFI `set_desired_audio_track`
+  > reusa `PlaybackController::select_audio_track` (já existia, nunca exposta),
+  > chamada sempre no botão Reproduzir — inclusive com o ordinal default (0),
+  > porque é estado GLOBAL do controller e vazaria pro próximo arquivo senão.
+  > Trilhas de vídeo/legenda são listadas mas não selecionáveis (sem
+  > plumbing/renderização de legenda ainda — ver seção 9). Efeito colateral
+  > descoberto na auditoria: o botão de trilha de áudio do painel de
+  > controles tinha sido perdido no redesign de UI (`nativeCycleAudioTrack`
+  > declarado e nunca chamado) — não restaurado nesta rodada (fora do escopo
+  > de T13, é troca AO VIVO durante playback, não pré-seleção).
+- [x] **T13.3** — Gerar thumbnails:
     - Capturar frame em ~10% da duração do vídeo
     - Cache em disco (`/data/data/com.vrplayer/cache/thumbs/`)
     - Lazy loading na lista
+  > Cache e lazy loading já existiam (`ThumbnailGenerator.kt` local,
+  > `NetworkThumbnailGenerator.kt` rede) — só o alvo do frame não batia com o
+  > doc (posição fixa de 1s no Rust, frame arbitrário `-1` no
+  > `MediaMetadataRetriever` local). Ambos os lados corrigidos pra ~10% da
+  > duração, clampado em [1s, 30s] (clipe curto não pede seek quase nulo,
+  > filme longo não pede seek minutos adentro só pra gerar miniatura) —
+  > `core::thumbnail::primary_seek_target_us` (Rust) e
+  > `ThumbnailGenerator.targetTimeUs` (Kotlin, testado em
+  > `ThumbnailGeneratorTargetTimeTest`, 4 casos). Fallback de frame preto
+  > (5s/15s, achado de sessão anterior pra VR180 8K com fade-in longo)
+  > preservado sem alteração.
 
 ### ⚠️ Cuidados e Armadilhas
 

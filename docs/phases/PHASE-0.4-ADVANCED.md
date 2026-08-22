@@ -687,7 +687,7 @@ Eye-Tracked Foveated Rendering: Centro segue o olhar (v0.5)
 
 ### Tarefas
 
-- [ ] **T5.1** — Habilitar **Fixed Foveated Rendering (FFR)** via Meta SDK:
+- [x] **T5.1** — Habilitar **Fixed Foveated Rendering (FFR)** via Meta SDK:
   ```cpp
   // Meta OpenXR extension para FFR
   // XR_FB_foveation + XR_FB_foveation_configuration
@@ -716,6 +716,31 @@ Eye-Tracked Foveated Rendering: Centro segue o olhar (v0.5)
   foveationState.profile = foveationProfile;
   xrUpdateSwapchainFB(swapchain, (XrSwapchainStateBaseHeaderFB*)&foveationState);
   ```
+  > Implementado só no caminho **Vulkan** (`native/src/vr_player_app_vulkan.cpp`,
+  > `ApplyFoveation`) — é o padrão real de build (`app/build.gradle.kts`
+  > passa `VULKAN` por default). O caminho GLES (`vr_player_app.cpp`, via
+  > `OVRFW::XrApp` da Meta) não expõe o `XrSwapchain` que
+  > `xrUpdateSwapchainFB` exige — não implementável sem alterar o
+  > `SampleXrFramework` vendorizado; a flag é aceita nesse binário (mesma
+  > FFI) mas o setter é um no-op documentado. Assinaturas reais verificadas
+  > no header vendorizado da AAR `openxr_loader_for_android-1.0.34` antes de
+  > escrever qualquer código — `XrFoveationLevelFB` só tem
+  > `NONE/LOW/MEDIUM/HIGH` nesta versão do SDK (**`HIGH_TOP_FB` do bloco de
+  > código acima não existe**, não usar). Nível fixo `MEDIUM` com
+  > `dynamic = XR_FOVEATION_DYNAMIC_LEVEL_ENABLED_FB` (deixa o compositor
+  > ajustar a intensidade sozinho — aceita o trade-off de "pulsação visual"
+  > citado no aviso desta seção, já que não há telemetria/controle manual
+  > ainda). Toggle em runtime: `FeatureFlags.Flag.FOVEATED_RENDERING`
+  > (`SharedPreferences`, default OFF — feature nunca validada em headset
+  > real) → `nativeSetFoveationEnabled` → `set_foveation_enabled` (atomic
+  > Rust) → polling ~1Hz no loop principal do Vulkan (`xrUpdateSwapchainFB`
+  > não é operação de frame, chamar a cada frame seria desperdício).
+  > Build real validado: `cargo ndk build --release` + `nm -D` confirmando
+  > os símbolos, `externalNativeBuildDebug` compilando e linkando nas DUAS
+  > variantes gráficas (Vulkan e GLES), `assembleDebug` completo. **Não
+  > validado em headset real** — se `xrCreateFoveationProfileFB`/
+  > `xrUpdateSwapchainFB` de fato têm sucesso no runtime do Quest 3 e se o
+  > efeito visual/de performance é perceptível continua em aberto.
 - [ ] **T5.2** — Configurar **níveis de foveação** adaptáveis:
   ```cpp
   enum FoveationLevel {
@@ -759,9 +784,17 @@ Eye-Tracked Foveated Rendering: Centro segue o olhar (v0.5)
   │ ░░░░░░░░░░░ │     │ └───────┘   │
   └─────────────┘     └─────────────┘
   ```
-- [ ] **T5.5** — Opção de **desabilitar foveation** no menu de settings:
+- [x] **T5.5** — Opção de **desabilitar foveation** no menu de settings:
   - Alguns usuários preferem qualidade uniforme
   - Mostrar impacto estimado: "Foveation ALTA: +35% performance, -20% qualidade periférica"
+  > Nova `screens/SettingsScreen.kt` (não existia tela de Configurações
+  > antes desta task — botão novo na Home, `Destination.Settings`). Um
+  > checkbox "Foveated Rendering" com descrição curta do trade-off
+  > (qualidade periférica vs. performance) — não a estimativa percentual
+  > por nível (não implementamos os níveis LOW/HIGH/HIGH_TOP de T5.2, só
+  > liga/desliga). Tela pensada como ponto de extensão: os próximos toggles
+  > planejados (áudio multicanal, áudio espacial) entram como uma
+  > `buildFlagRow` a mais.
 
 ### ⚠️ Cuidados e Armadilhas
 
