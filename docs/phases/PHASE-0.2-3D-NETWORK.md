@@ -809,7 +809,7 @@ Exibir informações detalhadas sobre cada arquivo de mídia.
   > de T13, é troca AO VIVO durante playback, não pré-seleção).
 - [x] **T13.3** — Gerar thumbnails:
     - Capturar frame em ~10% da duração do vídeo
-    - Cache em disco (`/data/data/com.vrplayer/cache/thumbs/`)
+    - Cache em disco (`/data/data/com.tucavr/cache/thumbs/`)
     - Lazy loading na lista
   > Cache e lazy loading já existiam (`ThumbnailGenerator.kt` local,
   > `NetworkThumbnailGenerator.kt` rede) — só o alvo do frame não batia com o

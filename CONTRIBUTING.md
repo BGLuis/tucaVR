@@ -57,7 +57,7 @@ If you only intend to touch `protocols` or `media-logic`, you can skip both: tho
 Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocols/audio/media-logic)
 ```
 
-- **Kotlin** (`app/src/main/java/com/vrplayer/`) — the Android shell and the UI. The UI is drawn as plain Android `View`s inside an `android.app.Presentation` on a `VirtualDisplay`, and the native layer projects it onto 3D quads. It is **not** XML layouts as a screen hierarchy and **not** Jetpack Compose. Also owns credential storage, Room-backed history and i18n.
+- **Kotlin** (`app/src/main/java/com/tucavr/`) — the Android shell and the UI. The UI is drawn as plain Android `View`s inside an `android.app.Presentation` on a `VirtualDisplay`, and the native layer projects it onto 3D quads. It is **not** XML layouts as a screen hierarchy and **not** Jetpack Compose. Also owns credential storage, Room-backed history and i18n.
 - **C++** (`native/src/`) — OpenXR session, swapchains and the render loop, built on Meta's `SampleXrFramework` (OVRFW). Vulkan is the default backend; the OpenGL ES path is kept as a real fallback (`-PvrplayerGraphicsApi=GLES`).
 - **Rust** (`rust/`) — demuxing (`ffmpeg-next`), hardware decode (`ndk::MediaCodec`), audio (Oboe) and every network protocol client.
 
@@ -95,7 +95,7 @@ Changing one without the others produces a silently wrong projection, not a comp
 
 **i18n.** UI strings live in `app/src/main/res/values/strings.xml` (English, default) and `app/src/main/res/values-pt-rBR/strings.xml` (Portuguese, mirroring the key order exactly so the two diff side by side). Interpolated strings use positional placeholders (`%1$s`, `%1$d`) through `getString(R.string.xxx, arg1, …)` — **never** Kotlin string concatenation, so that argument order can change per locale. See `docs/i18n.md`, including the section on adding a new locale.
 
-**Credentials.** Server passwords go through `EncryptedSharedPreferences` (see `app/src/main/java/com/vrplayer/network/`). Never store or log a credential in plain text, and make sure URIs are redacted before they reach a log line.
+**Credentials.** Server passwords go through `EncryptedSharedPreferences` (see `app/src/main/java/com/tucavr/network/`). Never store or log a credential in plain text, and make sure URIs are redacted before they reach a log line.
 
 ## Testing your changes
 
@@ -109,7 +109,7 @@ cd rust && cargo test -p media-logic sync::tests::some_test_name
 
 # Kotlin JVM unit tests
 ./gradlew testDebugUnitTest
-./gradlew testDebugUnitTest --tests "com.vrplayer.filebrowser.MediaSorterTest"
+./gradlew testDebugUnitTest --tests "com.tucavr.filebrowser.MediaSorterTest"
 
 # Kotlin lint
 ./gradlew ktlintCheck

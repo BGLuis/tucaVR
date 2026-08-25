@@ -4,7 +4,7 @@ set -e
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-echo "🚀 Iniciando o build unificado (VR Multimedia Player)..."
+echo "🚀 Iniciando o build unificado (tucaVR)..."
 
 # 1. Compilar Rust via cargo ndk
 echo "🦀 Compilando Rust Core (aarch64-linux-android)..."

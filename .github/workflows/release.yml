@@ -1,4 +1,4 @@
-name: VR Player Release (Auto & Manual)
+name: tucaVR Release (Auto & Manual)
 
 on:
   push:

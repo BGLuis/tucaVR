@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-VR Multimedia Player for Meta Quest 3 (Qualcomm XR2 Gen 2): a 2D/3D video player built as a fully immersive OpenXR app (`com.oculus.vr.mode = vr_only`, `NativeActivity`, no classic 2D Android UI). Requirements/spec lives in `docs/REQUIREMENTS.md` (Portuguese); phase breakdown with task IDs (`T1.1`, `T6.3`, etc.) is in `docs/phases/PHASE-0.*.md`. Code comments and docs are written in Portuguese (BR) — match that when adding comments to existing files.
+tucaVR for Meta Quest 3 (Qualcomm XR2 Gen 2): a 2D/3D video player built as a fully immersive OpenXR app (`com.oculus.vr.mode = vr_only`, `NativeActivity`, no classic 2D Android UI). Requirements/spec lives in `docs/REQUIREMENTS.md` (Portuguese); phase breakdown with task IDs (`T1.1`, `T6.3`, etc.) is in `docs/phases/PHASE-0.*.md`. Code comments and docs are written in Portuguese (BR) — match that when adding comments to existing files.
 
 ## Three-language architecture — know which layer you're in
 
@@ -12,7 +12,7 @@ VR Multimedia Player for Meta Quest 3 (Qualcomm XR2 Gen 2): a 2D/3D video player
 Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocols/audio/media-logic)
 ```
 
-- **Kotlin** (`app/src/main/java/com/vrplayer/`): Android app shell, UI (drawn as plain Android `View`s inside `android.app.Presentation` on a `VirtualDisplay`, projected as textures onto 3D quads by C++ — **not** XML layouts, **not** Compose), network credential storage, Room-based playback history, i18n resources.
+- **Kotlin** (`app/src/main/java/com/tucavr/`): Android app shell, UI (drawn as plain Android `View`s inside `android.app.Presentation` on a `VirtualDisplay`, projected as textures onto 3D quads by C++ — **not** XML layouts, **not** Compose), network credential storage, Room-based playback history, i18n resources.
 - **C++** (`native/src/vr_player_app.cpp`, built via CMake, `native/CMakeLists.txt`): OpenXR session/swapchain/render loop, Meta's `SampleXrFramework` (OVRFW) from `sdk/meta-openxr-sdk/`, controller input, converts decoded `AHardwareBuffer` frames to `GL_TEXTURE_EXTERNAL_OES` via `eglCreateImageKHR` for zero-copy video rendering.
 - **Rust** (`rust/`, cross-compiled to `aarch64-linux-android` via `cargo ndk`): demuxing (`ffmpeg-next`), hardware decode via `ndk::MediaCodec`, audio (Oboe), network protocol clients (SMB/HTTP/HTTPS/FTP/SFTP).
 
@@ -73,7 +73,7 @@ cd rust && cargo test -p media-logic sync::tests::some_test_name
 ./gradlew testDebugUnitTest
 
 # Single Kotlin test class
-./gradlew testDebugUnitTest --tests "com.vrplayer.filebrowser.MediaSorterTest"
+./gradlew testDebugUnitTest --tests "com.tucavr.filebrowser.MediaSorterTest"
 
 # Kotlin lint
 ./gradlew ktlintCheck

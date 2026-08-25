@@ -17,7 +17,9 @@
 <resources>
 
     <!-- App -->
-    <string name="app_name">VR Player</string>
+    <!-- Nome da marca: nao traduzir em nenhum locale (values-pt-rBR repete o
+         mesmo literal de proposito). -->
+    <string name="app_name" translatable="false">tucaVR</string>
 
     <!-- Comum / reusado entre telas (VoidPanelChrome, listagens de arquivo) -->
     <string name="common_btn_back">‹ Back</string>
@@ -38,7 +40,7 @@
     <string name="field_error_invalid_url">Invalid URL format</string>
 
     <!-- Home (VRPresentation.renderHome) -->
-    <string name="home_title">VR Player</string>
+    <string name="home_title">tucaVR</string>
     <string name="home_btn_local_files"> Local Files</string>
     <string name="home_btn_network"> Network</string>
     <string name="home_btn_continue_watching"> Continue Watching</string>

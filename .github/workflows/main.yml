@@ -1,4 +1,4 @@
-name: VR Player CI
+name: tucaVR CI
 
 on:
   push:

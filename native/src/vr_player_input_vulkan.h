@@ -448,7 +448,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         if (env) {
             jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
             const char* methodName = (dispatchHitPanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch";
-            jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/vrplayer/VRActivity;FFI)V");
+            jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
             if (touchMethod) {
                 env->CallStaticVoidMethod(vrActivityClass, touchMethod, state.app->activity->clazz, hitU, hitV, action);
             }
@@ -568,7 +568,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             if (env) {
                 jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
                 jmethodID updateMethod = env->GetStaticMethodID(
-                    vrActivityClass, "updateMediaProgress", "(Lcom/vrplayer/VRActivity;FF)V");
+                    vrActivityClass, "updateMediaProgress", "(Lcom/tucavr/VRActivity;FF)V");
                 if (updateMethod) {
                     env->CallStaticVoidMethod(vrActivityClass, updateMethod, state.app->activity->clazz,
                         state.lastKnownProgressCurrent, state.lastKnownProgressTotal);
@@ -588,7 +588,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             if (env) {
                 jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
                 jmethodID stateMethod = env->GetStaticMethodID(
-                    vrActivityClass, "updateMediaState", "(Lcom/vrplayer/VRActivity;ZZ)V");
+                    vrActivityClass, "updateMediaState", "(Lcom/tucavr/VRActivity;ZZ)V");
                 if (stateMethod) {
                     env->CallStaticVoidMethod(vrActivityClass, stateMethod, state.app->activity->clazz,
                         (jboolean)(isLoading != 0), (jboolean)(isPlaying != 0));
@@ -617,7 +617,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             if (env) {
                 jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
                 jmethodID hudMethod = env->GetStaticMethodID(
-                    vrActivityClass, "updateDebugHud", "(Lcom/vrplayer/VRActivity;Ljava/lang/String;)V");
+                    vrActivityClass, "updateDebugHud", "(Lcom/tucavr/VRActivity;Ljava/lang/String;)V");
                 if (hudMethod) {
                     jstring hudStr = env->NewStringUTF(hud);
                     env->CallStaticVoidMethod(vrActivityClass, hudMethod, state.app->activity->clazz, hudStr);

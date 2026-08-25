@@ -691,10 +691,13 @@ void CreateXrInstance(AppState& state) {
         XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME,
     };
 
+    // Este e o nome pelo qual o runtime OpenXR do Horizon OS conhece o app —
+    // era "VRPlayerVulkanStage1", sobra do estagio 1 da migracao Vulkan
+    // (docs/VULKAN-MIGRATION-PLAN.md), nunca atualizado pro nome real.
     XrApplicationInfo appInfo{};
-    std::strncpy(appInfo.applicationName, "VRPlayerVulkanStage1", XR_MAX_APPLICATION_NAME_SIZE - 1);
+    std::strncpy(appInfo.applicationName, "tucaVR", XR_MAX_APPLICATION_NAME_SIZE - 1);
     appInfo.applicationVersion = 1;
-    std::strncpy(appInfo.engineName, "VRPlayer", XR_MAX_ENGINE_NAME_SIZE - 1);
+    std::strncpy(appInfo.engineName, "tucaVR", XR_MAX_ENGINE_NAME_SIZE - 1);
     appInfo.engineVersion = 1;
     appInfo.apiVersion = XR_CURRENT_API_VERSION;
 
@@ -821,9 +824,10 @@ void CreateVulkanInstanceAndDevice(AppState& state) {
     for (const auto& s : instanceExtStrings) instanceExtPtrs.push_back(s.c_str());
 
     VkApplicationInfo vkAppInfo{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-    vkAppInfo.pApplicationName = "VRPlayerVulkanStage3";
+    // Idem: "VRPlayerVulkanStage3" era sobra do estagio 3 da migracao Vulkan.
+    vkAppInfo.pApplicationName = "tucaVR";
     vkAppInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-    vkAppInfo.pEngineName = "VRPlayer";
+    vkAppInfo.pEngineName = "tucaVR";
     vkAppInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     vkAppInfo.apiVersion = VK_API_VERSION_1_1;
 
@@ -2006,7 +2010,7 @@ void CreateUiPipeline(AppState& state, android_app* app) {
                     jobject uiSurface = ANativeWindow_toSurface(env, uiWindow);
                     jmethodID setupUI = env->GetStaticMethodID(
                         vrActivityClass, "setupVirtualDisplay",
-                        "(Lcom/vrplayer/VRActivity;Landroid/view/Surface;II)V");
+                        "(Lcom/tucavr/VRActivity;Landroid/view/Surface;II)V");
                     if (setupUI) {
                         env->CallStaticVoidMethod(vrActivityClass, setupUI,
                             activityObj, uiSurface, (jint)kUiTexWidth, (jint)kUiTexHeight);
@@ -2030,7 +2034,7 @@ void CreateUiPipeline(AppState& state, android_app* app) {
                     jobject ctrlSurface = ANativeWindow_toSurface(env, ctrlWindow);
                     jmethodID setupCtrl = env->GetStaticMethodID(
                         vrActivityClass, "setupControlsVirtualDisplay",
-                        "(Lcom/vrplayer/VRActivity;Landroid/view/Surface;II)V");
+                        "(Lcom/tucavr/VRActivity;Landroid/view/Surface;II)V");
                     if (setupCtrl) {
                         env->CallStaticVoidMethod(vrActivityClass, setupCtrl,
                             activityObj, ctrlSurface, (jint)kControlsTexWidth, (jint)kControlsTexHeight);

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# download-test-vectors.sh — VR Multimedia Player Test Vectors v3
+# download-test-vectors.sh — tucaVR Test Vectors v3
 # =============================================================================
 #
 # Baixa vídeos REAIS para teste, cobrindo docs/REQUIREMENTS.md.
@@ -85,7 +85,7 @@ echo "# Log — $(date)" > "$LOG"
 
 echo -e "${BOLD}"
 echo "╔════════════════════════════════════════════════════════════╗"
-echo "║   VR Multimedia Player — Test Vector Downloader v3        ║"
+echo "║   tucaVR — Test Vector Downloader v3                      ║"
 echo "║   Vídeos reais + ffmpeg apenas onde não há fonte pública  ║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
@@ -422,7 +422,7 @@ WEBVTT
 
 00:00:00.500 --> 00:00:02.500
 WebVTT subtitle test — English
-VR Multimedia Player | RF-2D-006
+tucaVR | RF-2D-006
 
 00:00:03.000 --> 00:00:05.500
 <b>Bold</b>, <i>italic</i>, <u>underline</u>
@@ -627,7 +627,7 @@ section "Relatório ffprobe + README"
 
 REPORT="$OUTDIR/REPORT.md"
 cat > "$REPORT" << 'EOF'
-# Test Vector Report — VR Multimedia Player
+# Test Vector Report — tucaVR
 
 | Arquivo | Requisito | Codec Vídeo | Codec Áudio | Resolução | Duração | Fonte |
 |---------|-----------|-------------|-------------|-----------|---------|-------|
@@ -682,7 +682,7 @@ if command -v ffprobe &>/dev/null; then
 fi
 
 cat > "$OUTDIR/README.md" << 'MDEOF'
-# 🎬 Test Vectors — VR Multimedia Player
+# 🎬 Test Vectors — tucaVR
 
 Vídeos de teste para cobrir `docs/REQUIREMENTS.md`.
 Gerado por `scripts/download-test-vectors.sh`.

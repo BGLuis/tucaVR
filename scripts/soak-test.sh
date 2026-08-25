@@ -16,7 +16,7 @@
 # o que não corresponde ao cenário "reprodução de vídeo 4K" da DoD.
 set -euo pipefail
 
-PACKAGE="com.vrplayer"
+PACKAGE="com.tucavr"
 ACTIVITY=".VRActivity"
 DURATION_MIN=30
 INTERVAL_SEC=15
@@ -34,7 +34,7 @@ Uso: $0 [opcoes]
   --video-path PATH    Caminho do video no dispositivo para auto-play (ex: /sdcard/Movies/x.mp4)
   --apk PATH           Instala este APK antes do teste (ex: app/build/outputs/apk/debug/app-debug.apk)
   --serial SERIAL      Serial do dispositivo adb (equivalente a 'adb -s')
-  --package NAME       Application ID (padrao: com.vrplayer)
+  --package NAME       Application ID (padrao: com.tucavr)
   -h, --help            Mostra esta ajuda
 EOF
 }

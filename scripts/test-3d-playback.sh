@@ -6,7 +6,7 @@
 #          mono360 mono180 sbs360 ou360 sbs180
 set -euo pipefail
 
-PACKAGE="com.vrplayer"
+PACKAGE="com.tucavr"
 ACTIVITY=".VRActivity"
 DEVICE_PATH="/sdcard/Movies/vr-test-clip.mp4"
 WAIT_SEC=8

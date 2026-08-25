@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Camada de fundo do adaptive icon do tucaVR. Usa o mesmo `colorBackground`
+  (#121212) do VoidTheme, pra o tile na biblioteca do Horizon OS ficar
+  coerente com os paineis 3D do app.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:pathData="M0,0h108v108h-108z"
+        android:fillColor="#121212" />
+</vector>

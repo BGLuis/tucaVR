@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Icone do app. Antes da migracao pra tucaVR o manifest nao declarava
+  `android:icon` nenhum, entao o Horizon OS caia no placeholder generico do
+  Android tanto na biblioteca quanto na barra de tarefas — o tile ficava sem
+  identidade visual junto do nome ausente.
+
+  So existe a variante `-anydpi-v26` (adaptive icon) porque `minSdk = 26`:
+  nao ha nenhuma versao do Android suportada por este projeto que precise do
+  fallback PNG por densidade.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@drawable/ic_launcher_background" />
+    <foreground android:drawable="@drawable/ic_launcher_foreground" />
+    <monochrome android:drawable="@drawable/ic_launcher_foreground" />
+</adaptive-icon>

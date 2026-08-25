@@ -141,7 +141,7 @@ static std::string g_capturePath;
 static std::mutex g_capturePathMutex;
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeRequestFrameCapture(JNIEnv* env, jobject, jstring path) {
+Java_com_tucavr_VRActivity_nativeRequestFrameCapture(JNIEnv* env, jobject, jstring path) {
     const char* pathStr = env->GetStringUTFChars(path, nullptr);
     {
         std::lock_guard<std::mutex> lock(g_capturePathMutex);
@@ -167,7 +167,7 @@ extern uint32_t g_scrubOverlayHeight;
 extern std::mutex g_scrubOverlayMutex;
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeUpdateScrubOverlay(JNIEnv* env, jobject, jbyteArray rgba, jint width, jint height) {
+Java_com_tucavr_VRActivity_nativeUpdateScrubOverlay(JNIEnv* env, jobject, jbyteArray rgba, jint width, jint height) {
     jsize len = env->GetArrayLength(rgba);
     std::vector<uint8_t> buf(static_cast<size_t>(len));
     env->GetByteArrayRegion(rgba, 0, len, reinterpret_cast<jbyte*>(buf.data()));
@@ -186,7 +186,7 @@ Java_com_vrplayer_VRActivity_nativeUpdateScrubOverlay(JNIEnv* env, jobject, jbyt
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetScrubOverlayVisible(JNIEnv* env, jobject, jboolean visible) {
+Java_com_tucavr_VRActivity_nativeSetScrubOverlayVisible(JNIEnv* env, jobject, jboolean visible) {
     g_scrubOverlayVisible = (visible == JNI_TRUE);
     LOGI("nativeSetScrubOverlayVisible: %d", (int)(visible == JNI_TRUE));
 }
@@ -221,19 +221,19 @@ static jbyteArray RustThumbnailStripToJByteArrayAndFree(JNIEnv* env, uint8_t* da
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativePlayVideo(JNIEnv* env, jobject, jstring path, jfloat startTimeSec) {
+Java_com_tucavr_VRActivity_nativePlayVideo(JNIEnv* env, jobject, jstring path, jfloat startTimeSec) {
     const char* pathStr = env->GetStringUTFChars(path, nullptr);
     start_video_playback(pathStr, startTimeSec);
     env->ReleaseStringUTFChars(path, pathStr);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeTogglePlayPause(JNIEnv*, jobject) {
+Java_com_tucavr_VRActivity_nativeTogglePlayPause(JNIEnv*, jobject) {
     toggle_play_pause();
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeTakeLastPlaybackError(JNIEnv* env, jobject) {
+Java_com_tucavr_VRActivity_nativeTakeLastPlaybackError(JNIEnv* env, jobject) {
     char* rustStr = take_last_playback_error();
     if (!rustStr) return nullptr;
     jstring result = env->NewStringUTF(rustStr);
@@ -242,67 +242,67 @@ Java_com_vrplayer_VRActivity_nativeTakeLastPlaybackError(JNIEnv* env, jobject) {
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSeekVideo(JNIEnv*, jobject, jfloat positionSeconds) {
+Java_com_tucavr_VRActivity_nativeSeekVideo(JNIEnv*, jobject, jfloat positionSeconds) {
     seek_video_playback(positionSeconds);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetVolume(JNIEnv*, jobject, jfloat volume) {
+Java_com_tucavr_VRActivity_nativeSetVolume(JNIEnv*, jobject, jfloat volume) {
     set_video_volume(volume);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetSpeed(JNIEnv*, jobject, jfloat speed) {
+Java_com_tucavr_VRActivity_nativeSetSpeed(JNIEnv*, jobject, jfloat speed) {
     set_playback_speed(speed);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeCycleAudioTrack(JNIEnv*, jobject) {
+Java_com_tucavr_VRActivity_nativeCycleAudioTrack(JNIEnv*, jobject) {
     cycle_audio_track();
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_vrplayer_VRActivity_nativeCycle3DMode(JNIEnv*, jobject) {
+Java_com_tucavr_VRActivity_nativeCycle3DMode(JNIEnv*, jobject) {
     return (jint)cycle_3d_mode();
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_vrplayer_VRActivity_nativeGet3DMode(JNIEnv*, jobject) {
+Java_com_tucavr_VRActivity_nativeGet3DMode(JNIEnv*, jobject) {
     return (jint)get_3d_mode();
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetScreenMode(JNIEnv*, jobject, jint mode) {
+Java_com_tucavr_VRActivity_nativeSetScreenMode(JNIEnv*, jobject, jint mode) {
     set_3d_mode((uint32_t)mode);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetScreenModeOverride(JNIEnv*, jobject, jint mode) {
+Java_com_tucavr_VRActivity_nativeSetScreenModeOverride(JNIEnv*, jobject, jint mode) {
     set_screen_mode_override((int32_t)mode);
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_vrplayer_VRActivity_nativeToggleSwapEyes(JNIEnv*, jobject) {
+Java_com_tucavr_VRActivity_nativeToggleSwapEyes(JNIEnv*, jobject) {
     return (jint)toggle_swap_eyes();
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetKeyboardActive(JNIEnv*, jobject, jboolean active) {
+Java_com_tucavr_VRActivity_nativeSetKeyboardActive(JNIEnv*, jobject, jboolean active) {
     set_keyboard_active(active ? 1 : 0);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetFoveationEnabled(JNIEnv*, jobject, jboolean enabled) {
+Java_com_tucavr_VRActivity_nativeSetFoveationEnabled(JNIEnv*, jobject, jboolean enabled) {
     set_foveation_enabled(enabled ? 1 : 0);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetThermalLevel(JNIEnv*, jobject, jint level) {
+Java_com_tucavr_VRActivity_nativeSetThermalLevel(JNIEnv*, jobject, jint level) {
     set_thermal_level(static_cast<uint32_t>(level));
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativePlaySmb(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativePlaySmb(JNIEnv* env, jobject,
                                             jstring host, jint port, jstring share,
                                             jstring path, jstring username,
                                             jstring password, jstring domain, jfloat startTimeSec) {
@@ -322,7 +322,7 @@ Java_com_vrplayer_VRActivity_nativePlaySmb(JNIEnv* env, jobject,
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeSmbListShares(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativeSmbListShares(JNIEnv* env, jobject,
                                                    jstring host, jint port,
                                                    jstring username, jstring password,
                                                    jstring domain) {
@@ -339,7 +339,7 @@ Java_com_vrplayer_VRActivity_nativeSmbListShares(JNIEnv* env, jobject,
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeSmbListDirectory(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativeSmbListDirectory(JNIEnv* env, jobject,
                                                       jstring host, jint port,
                                                       jstring username, jstring password,
                                                       jstring domain, jstring share,
@@ -361,7 +361,7 @@ Java_com_vrplayer_VRActivity_nativeSmbListDirectory(JNIEnv* env, jobject,
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativePlayFtp(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativePlayFtp(JNIEnv* env, jobject,
                                             jstring host, jint port, jstring path,
                                             jstring username, jstring password, jfloat startTimeSec) {
     const char* h = env->GetStringUTFChars(host, nullptr);
@@ -376,7 +376,7 @@ Java_com_vrplayer_VRActivity_nativePlayFtp(JNIEnv* env, jobject,
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeFtpListDirectory(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativeFtpListDirectory(JNIEnv* env, jobject,
                                                       jstring host, jint port,
                                                       jstring username, jstring password,
                                                       jstring path) {
@@ -393,7 +393,7 @@ Java_com_vrplayer_VRActivity_nativeFtpListDirectory(JNIEnv* env, jobject,
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativePlaySftp(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativePlaySftp(JNIEnv* env, jobject,
                                              jstring host, jint port, jstring path,
                                              jstring username, jstring password,
                                              jstring privateKey, jfloat startTimeSec) {
@@ -411,7 +411,7 @@ Java_com_vrplayer_VRActivity_nativePlaySftp(JNIEnv* env, jobject,
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeSftpListDirectory(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativeSftpListDirectory(JNIEnv* env, jobject,
                                                        jstring host, jint port,
                                                        jstring username, jstring password,
                                                        jstring privateKey, jstring path) {
@@ -430,7 +430,7 @@ Java_com_vrplayer_VRActivity_nativeSftpListDirectory(JNIEnv* env, jobject,
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativePlayNfs(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativePlayNfs(JNIEnv* env, jobject,
                                             jstring host, jint port, jstring exportPath,
                                             jstring filePath, jint version, jfloat startTimeSec) {
     const char* h = env->GetStringUTFChars(host, nullptr);
@@ -443,7 +443,7 @@ Java_com_vrplayer_VRActivity_nativePlayNfs(JNIEnv* env, jobject,
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeNfsListDirectory(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativeNfsListDirectory(JNIEnv* env, jobject,
                                                      jstring host, jint port,
                                                      jstring exportPath, jstring dirPath,
                                                      jint version) {
@@ -458,7 +458,7 @@ Java_com_vrplayer_VRActivity_nativeNfsListDirectory(JNIEnv* env, jobject,
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeNfsListExports(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativeNfsListExports(JNIEnv* env, jobject,
                                                   jstring host, jint port) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     char* result = nfs_list_exports(h, (int32_t)port);
@@ -467,14 +467,14 @@ Java_com_vrplayer_VRActivity_nativeNfsListExports(JNIEnv* env, jobject,
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeDiscoveryScan(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativeDiscoveryScan(JNIEnv* env, jobject,
                                                  jint timeoutMs) {
     char* result = discovery_scan_network((uint32_t)timeoutMs);
     return RustStringToJStringAndFree(env, result);
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_vrplayer_VRActivity_nativeSmbGenerateThumbnail(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativeSmbGenerateThumbnail(JNIEnv* env, jobject,
                                                          jstring host, jint port,
                                                          jstring username, jstring password,
                                                          jstring domain, jstring share, jstring path,
@@ -499,7 +499,7 @@ Java_com_vrplayer_VRActivity_nativeSmbGenerateThumbnail(JNIEnv* env, jobject,
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_vrplayer_VRActivity_nativeFtpGenerateThumbnail(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativeFtpGenerateThumbnail(JNIEnv* env, jobject,
                                                          jstring host, jint port,
                                                          jstring username, jstring password, jstring path,
                                                          jint maxWidth, jint maxHeight) {
@@ -519,7 +519,7 @@ Java_com_vrplayer_VRActivity_nativeFtpGenerateThumbnail(JNIEnv* env, jobject,
 }
 
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject,
                                                           jstring host, jint port,
                                                           jstring username, jstring password,
                                                           jstring privateKey, jstring path,
@@ -547,7 +547,7 @@ Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject,
 // max_width/max_height (foi ele quem pediu) e calcula count como
 // byteArray.size / (width*height*4).
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_vrplayer_VRActivity_nativeSmbGenerateThumbnailStrip(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativeSmbGenerateThumbnailStrip(JNIEnv* env, jobject,
                                                               jstring host, jint port,
                                                               jstring username, jstring password,
                                                               jstring domain, jstring share, jstring path,
@@ -576,7 +576,7 @@ Java_com_vrplayer_VRActivity_nativeSmbGenerateThumbnailStrip(JNIEnv* env, jobjec
 // Mesma logica de nativeSmbGenerateThumbnailStrip, para um arquivo num
 // servidor SFTP.
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnailStrip(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativeSftpGenerateThumbnailStrip(JNIEnv* env, jobject,
                                                                jstring host, jint port,
                                                                jstring username, jstring password,
                                                                jstring privateKey, jstring path,
@@ -603,12 +603,12 @@ Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnailStrip(JNIEnv* env, jobje
 // Interrompe uma geracao de tira de scrub ja em andamento (chamadas acima sao
 // sincronas/bloqueantes — um Job.cancel() do lado Kotlin nao as interrompe).
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeCancelScrubStrip(JNIEnv* env, jobject) {
+Java_com_tucavr_VRActivity_nativeCancelScrubStrip(JNIEnv* env, jobject) {
     cancel_thumbnail_strip_generation();
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeProbeHttpUrl(JNIEnv* env, jobject, jstring url) {
+Java_com_tucavr_VRActivity_nativeProbeHttpUrl(JNIEnv* env, jobject, jstring url) {
     const char* urlStr = env->GetStringUTFChars(url, nullptr);
     char* result = probe_http_url(urlStr);
     env->ReleaseStringUTFChars(url, urlStr);
@@ -616,7 +616,7 @@ Java_com_vrplayer_VRActivity_nativeProbeHttpUrl(JNIEnv* env, jobject, jstring ur
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeDlnaGetDevice(JNIEnv* env, jobject, jstring location) {
+Java_com_tucavr_VRActivity_nativeDlnaGetDevice(JNIEnv* env, jobject, jstring location) {
     const char* locStr = env->GetStringUTFChars(location, nullptr);
     char* result = dlna_get_device_description(locStr);
     env->ReleaseStringUTFChars(location, locStr);
@@ -624,7 +624,7 @@ Java_com_vrplayer_VRActivity_nativeDlnaGetDevice(JNIEnv* env, jobject, jstring l
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeDlnaBrowse(JNIEnv* env, jobject, jstring controlUrl,
+Java_com_tucavr_VRActivity_nativeDlnaBrowse(JNIEnv* env, jobject, jstring controlUrl,
                                               jstring objectId, jint startIndex, jint maxCount) {
     const char* ctrlStr = env->GetStringUTFChars(controlUrl, nullptr);
     const char* objStr = env->GetStringUTFChars(objectId, nullptr);
@@ -637,7 +637,7 @@ Java_com_vrplayer_VRActivity_nativeDlnaBrowse(JNIEnv* env, jobject, jstring cont
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeHlsProbeVariants(JNIEnv* env, jobject, jstring url) {
+Java_com_tucavr_VRActivity_nativeHlsProbeVariants(JNIEnv* env, jobject, jstring url) {
     const char* urlStr = env->GetStringUTFChars(url, nullptr);
     char* result = hls_probe_variants(urlStr);
     env->ReleaseStringUTFChars(url, urlStr);
@@ -645,7 +645,7 @@ Java_com_vrplayer_VRActivity_nativeHlsProbeVariants(JNIEnv* env, jobject, jstrin
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeReadMediaMetadata(JNIEnv* env, jobject, jstring path) {
+Java_com_tucavr_VRActivity_nativeReadMediaMetadata(JNIEnv* env, jobject, jstring path) {
     const char* p = env->GetStringUTFChars(path, nullptr);
     char* result = read_media_metadata(p);
     env->ReleaseStringUTFChars(path, p);
@@ -653,7 +653,7 @@ Java_com_vrplayer_VRActivity_nativeReadMediaMetadata(JNIEnv* env, jobject, jstri
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeSmbReadMetadata(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativeSmbReadMetadata(JNIEnv* env, jobject,
                                                     jstring host, jint port,
                                                     jstring username, jstring password,
                                                     jstring domain, jstring share,
@@ -675,7 +675,7 @@ Java_com_vrplayer_VRActivity_nativeSmbReadMetadata(JNIEnv* env, jobject,
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeFtpReadMetadata(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativeFtpReadMetadata(JNIEnv* env, jobject,
                                                     jstring host, jint port,
                                                     jstring username, jstring password,
                                                     jstring path) {
@@ -692,7 +692,7 @@ Java_com_vrplayer_VRActivity_nativeFtpReadMetadata(JNIEnv* env, jobject,
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeSftpReadMetadata(JNIEnv* env, jobject,
+Java_com_tucavr_VRActivity_nativeSftpReadMetadata(JNIEnv* env, jobject,
                                                      jstring host, jint port,
                                                      jstring username, jstring password,
                                                      jstring privateKey, jstring path) {
@@ -711,17 +711,17 @@ Java_com_vrplayer_VRActivity_nativeSftpReadMetadata(JNIEnv* env, jobject,
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetAudioTrack(JNIEnv* env, jobject, jint ordinal) {
+Java_com_tucavr_VRActivity_nativeSetAudioTrack(JNIEnv* env, jobject, jint ordinal) {
     set_desired_audio_track((uint32_t)(ordinal < 0 ? 0 : ordinal));
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetSpatialAudioMode(JNIEnv* env, jobject, jint mode) {
+Java_com_tucavr_VRActivity_nativeSetSpatialAudioMode(JNIEnv* env, jobject, jint mode) {
     set_spatial_audio_mode((uint32_t)(mode < 0 ? 0 : mode));
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetSpatialAudioHeadTracking(JNIEnv* env, jobject, jboolean enabled) {
+Java_com_tucavr_VRActivity_nativeSetSpatialAudioHeadTracking(JNIEnv* env, jobject, jboolean enabled) {
     set_spatial_audio_head_tracking(enabled ? 1 : 0);
 }
 
@@ -730,27 +730,27 @@ Java_com_vrplayer_VRActivity_nativeSetSpatialAudioHeadTracking(JNIEnv* env, jobj
 // ============================================================================
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetSubtitleTrack(JNIEnv* env, jobject, jint trackIndex) {
+Java_com_tucavr_VRActivity_nativeSetSubtitleTrack(JNIEnv* env, jobject, jint trackIndex) {
     set_subtitle_track((int32_t)trackIndex);
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_vrplayer_VRActivity_nativeGetSubtitleTrack(JNIEnv* env, jobject) {
+Java_com_tucavr_VRActivity_nativeGetSubtitleTrack(JNIEnv* env, jobject) {
     return (jint)get_subtitle_track();
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetSubtitleOffsetMs(JNIEnv* env, jobject, jlong offsetMs) {
+Java_com_tucavr_VRActivity_nativeSetSubtitleOffsetMs(JNIEnv* env, jobject, jlong offsetMs) {
     set_subtitle_offset_ms((int64_t)offsetMs);
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_vrplayer_VRActivity_nativeGetSubtitleOffsetMs(JNIEnv* env, jobject) {
+Java_com_tucavr_VRActivity_nativeGetSubtitleOffsetMs(JNIEnv* env, jobject) {
     return (jlong)get_subtitle_offset_ms();
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_com_vrplayer_VRActivity_nativeLoadExternalSubtitle(JNIEnv* env, jobject, jstring path) {
+Java_com_tucavr_VRActivity_nativeLoadExternalSubtitle(JNIEnv* env, jobject, jstring path) {
     if (!path) return JNI_FALSE;
     const char* p = env->GetStringUTFChars(path, nullptr);
     uint32_t count = load_external_subtitle(p);
@@ -759,6 +759,6 @@ Java_com_vrplayer_VRActivity_nativeLoadExternalSubtitle(JNIEnv* env, jobject, js
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_vrplayer_VRActivity_nativeGetSubtitleTrackCount(JNIEnv* env, jobject) {
+Java_com_tucavr_VRActivity_nativeGetSubtitleTrackCount(JNIEnv* env, jobject) {
     return (jint)get_subtitle_track_count();
 }

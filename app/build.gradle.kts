@@ -6,7 +6,7 @@ plugins {
 }
 
 android {
-    namespace = "com.vrplayer"
+    namespace = "com.tucavr"
     compileSdk = 34
 
     buildFeatures {
@@ -14,7 +14,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.vrplayer"
+        applicationId = "com.tucavr"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
@@ -76,7 +76,7 @@ dependencies {
     // NUNCA armazenar senha em texto plano (doc, secao 6, aviso "Credenciais").
     implementation("androidx.security:security-crypto:1.1.0")
 
-    // T9.1: Room para o historico de reproducao (ver app/src/main/java/com/vrplayer/history/).
+    // T9.1: Room para o historico de reproducao (ver app/src/main/java/com/tucavr/history/).
     // 2.6.1 e a ultima release estavel da linha 2.6.x compativel com Kotlin
     // 1.9.0 / KSP 1.9.0-1.0.13 (ver build.gradle.kts raiz) — nao usamos a
     // linha 2.8.x (mais nova) de proposito, para nao arriscar exigir um AGP/

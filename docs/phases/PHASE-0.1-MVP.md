@@ -28,7 +28,7 @@
 vr-multimedia/
 ├── app/                          # Módulo Android/Kotlin principal
 │   ├── src/main/
-│   │   ├── java/com/vrplayer/    # Código Kotlin
+│   │   ├── java/com/tucavr/    # Código Kotlin
 │   │   ├── res/                  # Resources Android (strings, layouts)
 │   │   └── AndroidManifest.xml
 │   └── build.gradle.kts
@@ -522,7 +522,7 @@ UI flutuante minimalista que aparece quando o usuário aponta o controller para 
 Navegador de arquivos para o armazenamento interno do Quest 3.
 
 > [!NOTE]
-> **Lógica interna** (`app/src/main/java/com/vrplayer/filebrowser/`): `MediaEntry`/`MediaType`
+> **Lógica interna** (`app/src/main/java/com/tucavr/filebrowser/`): `MediaEntry`/`MediaType`
 > (T5.3, sem I/O no construtor), `DirectoryLister.listMedia()` (T5.1/T5.2 — suspend fun
 > em `Dispatchers.IO`, lista só um nível por vez, filtra por extensão de vídeo/áudio/imagem),
 > `DirectoryNavigator` (T5.5 — back-stack simples com `enter()`/`goBack()`),
@@ -858,7 +858,7 @@ Configurar sistema de tradução desde o início com Português (BR) e Inglês.
   > `VRPresentation.kt`, `VRControlsPresentation.kt` e
   > `VoidPanelChrome.kt` (botão "Voltar" compartilhado por todos os headers
   > de tela); `AndroidManifest.xml` passou a referenciar `@string/app_name`
-  > em vez do literal `"VR Player"`. Strings com interpolação (ex.
+  > em vez de trazer o nome do app hardcoded. Strings com interpolação (ex.
   > `"${server.name}/${source.path}"` em `VRPresentation.renderPlayer`)
   > viraram `getString(res, arg1, arg2)` com placeholders posicionais
   > (`%1$s`/`%2$s`), cobrindo o pedido explícito de T8.5/cuidados. Um caso
@@ -963,7 +963,7 @@ Salvar progresso de reprodução para retomar de onde parou.
       val serverInfo: String?            // JSON com dados do servidor
   )
   ```
-  > Implementado em `app/src/main/java/com/vrplayer/history/` (Room 2.6.1,
+  > Implementado em `app/src/main/java/com/tucavr/history/` (Room 2.6.1,
   > compilador via **KSP** — plugin `com.google.devtools.ksp` versão
   > `1.9.0-1.0.13`, confirmada existente no Maven Central e casada com o
   > Kotlin 1.9.0 já usado no projeto; adicionado em `build.gradle.kts` raiz
@@ -1000,7 +1000,7 @@ Salvar progresso de reprodução para retomar de onde parou.
   > `sourceType: SourceType` do exemplo virou `HistorySourceType` — um enum
   > que só existe como formato de armazenamento da coluna Room, SEMPRE
   > derivado de um `PlaybackSource` (o sealed class que já modelava "de onde
-  > vem a mídia" em toda a navegação/UI, `com.vrplayer.navigation.
+  > vem a mídia" em toda a navegação/UI, `com.tucavr.navigation.
   > Destination.kt`) através de UMA única função
   > (`PlaybackSource.historySourceType()`), nunca construído manualmente em
   > outro lugar — reusa `PlaybackSource` em vez de duplicar um enum de
@@ -1029,7 +1029,7 @@ Salvar progresso de reprodução para retomar de onde parou.
   > (`frameCount % 6 == 0` a 60fps), não uma vez a cada 10s — sem throttle,
   > isso viraria ~10 escritas Room/segundo pelo tempo inteiro de reprodução.
   > Implementado `PlaybackProgressThrottle` (Kotlin puro, relógio injetável,
-  > `app/src/main/java/com/vrplayer/history/PlaybackProgressThrottle.kt`) e
+  > `app/src/main/java/com/tucavr/history/PlaybackProgressThrottle.kt`) e
   > `PlaybackHistoryTracker` (orquestra DAO + throttle,
   > `PlaybackHistoryTracker.kt`), instanciado uma vez por `VRActivity`
   > (`historyTracker`, `by lazy`). Os 3 entry points de playback
@@ -1107,7 +1107,7 @@ Salvar progresso de reprodução para retomar de onde parou.
   > o processamento KSP/Room (`kspDebugKotlin` sem erro); (b) `./gradlew
   > :app:testDebugUnitTest` — toda a lógica pura extraível (chave estável,
   > throttle de 10s, `isResumable`, formatação de tempo/percentual) tem
-  > testes JVM puros novos em `app/src/test/java/com/vrplayer/history/`
+  > testes JVM puros novos em `app/src/test/java/com/tucavr/history/`
   > (`PlaybackHistoryMappingTest`, `PlaybackProgressThrottleTest`,
   > `PlaybackHistoryFormatTest` — 24 testes novos, 0 falhas; suíte completa
   > do módulo em 54 testcases, 0 falhas/erros). **Nota de ambiente**: rodar
@@ -1127,7 +1127,7 @@ Salvar progresso de reprodução para retomar de onde parou.
 > [!WARNING]
 > **URI estabilidade**: URIs de SMB podem mudar se o IP do servidor mudar. Use um identificador composto: `server_name + share + path + filename + file_size` como chave, não apenas o URI.
 >
-> **Nesta implementação**: seguido à risca, com uma adaptação — a chave usa `server.name` (o rótulo local que o usuário escolheu ao salvar o servidor em `SmbCredentialStore`, T6.4) em vez de tentar derivar um "nome do servidor" de outra fonte, já que não há descoberta automática de servidor (T6.2, não implementada) nem nenhum outro identificador estável de servidor no projeto. Ver `PlaybackSource.historyKey()` em `app/src/main/java/com/vrplayer/history/PlaybackHistoryMapping.kt` e o teste `PlaybackHistoryMappingTest.smb key does NOT depend on host or port`, que existe especificamente para não deixar essa garantia regredir silenciosamente.
+> **Nesta implementação**: seguido à risca, com uma adaptação — a chave usa `server.name` (o rótulo local que o usuário escolheu ao salvar o servidor em `SmbCredentialStore`, T6.4) em vez de tentar derivar um "nome do servidor" de outra fonte, já que não há descoberta automática de servidor (T6.2, não implementada) nem nenhum outro identificador estável de servidor no projeto. Ver `PlaybackSource.historyKey()` em `app/src/main/java/com/tucavr/history/PlaybackHistoryMapping.kt` e o teste `PlaybackHistoryMappingTest.smb key does NOT depend on host or port`, que existe especificamente para não deixar essa garantia regredir silenciosamente.
 
 ---
 
@@ -1204,7 +1204,7 @@ Salvar progresso de reprodução para retomar de onde parou.
 >
 > **Resultado**: 30min corridos, mesmo PID do início ao fim (sem restart), sem `FATAL EXCEPTION`/ANR/`has died` no logcat. PSS máximo observado: 273MB (279.747 KB) — bem abaixo do limite de 2.5GB. Thermal status `NONE` a sessão inteira (sem throttling).
 >
-> **Ressalva honesta sobre os 273MB**: é o PSS do processo `com.vrplayer` reportado por `dumpsys meminfo` — a mesma métrica que esta seção define ("Seu app DEVE usar menos de 2.5GB"). Boa parte dos buffers de decode de hardware (DPB, frames UBWC do Codec2/Venus da Qualcomm) fica alocada via ION/dma-buf no processo do HAL de mídia, não contabilizada no PSS por-processo do app — comportamento padrão do Android, não uma limitação da medição. Ou seja: o *orçamento de memória do app* está validado com folga; o pico *total* de pressão de memória do sistema durante decode 4K (via `dumpsys gpumem`/dma-buf) não foi medido nesta sessão.
+> **Ressalva honesta sobre os 273MB**: é o PSS do processo `com.tucavr` reportado por `dumpsys meminfo` — a mesma métrica que esta seção define ("Seu app DEVE usar menos de 2.5GB"). Boa parte dos buffers de decode de hardware (DPB, frames UBWC do Codec2/Venus da Qualcomm) fica alocada via ION/dma-buf no processo do HAL de mídia, não contabilizada no PSS por-processo do app — comportamento padrão do Android, não uma limitação da medição. Ou seja: o *orçamento de memória do app* está validado com folga; o pico *total* de pressão de memória do sistema durante decode 4K (via `dumpsys gpumem`/dma-buf) não foi medido nesta sessão.
 >
 > **Achado lateral**: o primeiro `adb shell am start` de cada bateria de testes falhava com um falso-positivo de "crash" no `soak-test.sh` — na verdade o Quest bloqueia `am start` de apps VR com um diálogo de sistema (`LaunchCheckControllerRequiredDialogActivity`) quando os controllers estão hibernados; não é bug do app. Corrigido também um bug real no próprio script: parsing de `dumpsys thermalservice` esperava o formato antigo `mStatus=PALAVRA`, mas o Android 14 do Quest 3 reporta `Thermal Status: N` (numérico).
 

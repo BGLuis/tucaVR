@@ -396,7 +396,7 @@ A primeira impressão determina a retenção. Esta seção consolida todas as co
 Fluxo de Primeira Execução (Onboarding):
 
   ┌─────────────────────────────────────────────────────┐
-  │  "Bem-vindo ao VR Player!"                          │
+  │  "Bem-vindo ao tucaVR!"                             │
   │                                                     │
   │  ┌────────────────────────────────────────────┐     │
   │  │ Step 1: Olhe ao redor — você está num      │     │

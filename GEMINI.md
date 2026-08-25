@@ -6,7 +6,7 @@ This file provides architectural context, build workflows, testing guidelines, a
 
 ## 1. Project Overview
 
-The **VR Multimedia Player** is an immersive 2D/3D video player built specifically for the **Meta Quest 3** (Qualcomm XR2 Gen 2 platform).
+The **tucaVR** is an immersive 2D/3D video player built specifically for the **Meta Quest 3** (Qualcomm XR2 Gen 2 platform).
 
 - **Application Model:** 100% immersive OpenXR application (`NativeActivity`), declared with `<meta-data android:name="com.oculus.vr.mode" android:value="vr_only" />` in `AndroidManifest.xml`. There are **no** standard 2D Android activities or flat Compose windows.
 - **User Interface:** UI is rendered via `android.app.Presentation` on a `VirtualDisplay`. The resulting buffers are rendered to textures and projected onto interactive 3D quad panels in VR space by the C++ engine.
@@ -38,12 +38,12 @@ The system is strictly partitioned into three communicating layers:
 
 ### Layer Responsibilities:
 
-1. **Kotlin (`app/src/main/java/com/vrplayer/`):**
+1. **Kotlin (`app/src/main/java/com/tucavr/`):**
    - Android application shell and lifecycle management (`VRActivity.kt`).
    - UI views using pure Android `View`s inside `VRPresentation` / `VRControlsPresentation` hosted on a `VirtualDisplay` (no XML layouts, no Jetpack Compose).
-   - Custom UI design system in `com.vrplayer.designsystem` (`VoidButton`, `VoidTheme`, `VoidPanelChrome`, etc.).
+   - Custom UI design system in `com.tucavr.designsystem` (`VoidButton`, `VoidTheme`, `VoidPanelChrome`, etc.).
    - Secure credential storage using `androidx.security:security-crypto` (`EncryptedSharedPreferences` — **never** store passwords in plain text).
-   - Playback history persistence via Android Room DB using KSP (`app/src/main/java/com/vrplayer/history/`).
+   - Playback history persistence via Android Room DB using KSP (`app/src/main/java/com/tucavr/history/`).
    - Localization & i18n resources (`app/src/main/res/values/strings.xml` and `values-pt-rBR/strings.xml`).
 
 2. **C++ (`native/src/`, built via CMake `native/CMakeLists.txt`):**
@@ -143,7 +143,7 @@ cd rust && cargo test -p media-logic sync::tests::test_name
 ./gradlew testDebugUnitTest
 
 # Run a specific Kotlin test class
-./gradlew testDebugUnitTest --tests "com.vrplayer.filebrowser.MediaSorterTest"
+./gradlew testDebugUnitTest --tests "com.tucavr.filebrowser.MediaSorterTest"
 
 # Kotlin linter
 ./gradlew ktlintCheck

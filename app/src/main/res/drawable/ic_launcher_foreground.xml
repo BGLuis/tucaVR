@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Camada de frente do adaptive icon do tucaVR: o mesmo desenho de
+  `drawable/icon_vr_headset.xml` (viewport 24x24), na cor de acento do
+  VoidTheme (#FF6B00).
+
+  O <group> escala 3x e desloca 18,18 pra mapear os 24x24 originais em
+  18..90 dentro do viewport 108x108 — ou seja, exatamente a safe zone
+  central de 72x72dp que o Android garante nao ser cortada por nenhuma
+  mascara de adaptive icon. Assim o desenho continua vindo de uma unica
+  fonte (o path do headset) em vez de ser reescalado na mao.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <group
+        android:scaleX="3"
+        android:scaleY="3"
+        android:translateX="18"
+        android:translateY="18">
+        <path
+            android:pathData="M4 8h16a2 2 0 0 1 2 2v4a2 2 0 0 1-2 2h-1.5a1.5 1.5 0 0 0-1.5-1.5h-5a1.5 1.5 0 0 0-1.5 1.5H4a2 2 0 0 1-2-2v-4a2 2 0 0 1 2-2z"
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFF6B00"
+            android:strokeWidth="2"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+        <path
+            android:pathData="M8 8v8"
+            android:fillColor="#00000000"
+            android:strokeColor="#FFFF6B00"
+            android:strokeWidth="2"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+    </group>
+</vector>
