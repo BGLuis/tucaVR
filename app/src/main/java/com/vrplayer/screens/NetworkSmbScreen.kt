@@ -15,15 +15,20 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.vrplayer.R
 import com.vrplayer.VRActivity
+import com.vrplayer.designsystem.FieldValidators
 import com.vrplayer.designsystem.VoidButton
 import com.vrplayer.designsystem.VoidButtonStyle
+import com.vrplayer.designsystem.VoidFieldAction
+import com.vrplayer.designsystem.VoidFieldKind
 import com.vrplayer.designsystem.VoidFilterChip
+import com.vrplayer.designsystem.VoidForm
 import com.vrplayer.designsystem.VoidIconButton
 import com.vrplayer.designsystem.VoidListRow
 import com.vrplayer.designsystem.VoidPanelChrome
 import com.vrplayer.designsystem.VoidSearchBar
 import com.vrplayer.designsystem.VoidSortSelector
 import com.vrplayer.designsystem.VoidText
+import com.vrplayer.designsystem.VoidTextField
 import com.vrplayer.designsystem.VoidTheme
 import com.vrplayer.filebrowser.DateFilter
 import com.vrplayer.filebrowser.FolderConfig
@@ -140,21 +145,44 @@ class NetworkSmbScreen(
     }
 
     private fun buildAddServerForm(onSaved: () -> Unit): View {
-        val form = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
+        val form = VoidForm(context)
 
-        val fieldHost = buildFormField(context.getString(R.string.network_smb_form_host_label), "192.168.1.100")
-        val fieldPort = buildFormField(context.getString(R.string.network_smb_form_port_label), "445", inputType = InputType.TYPE_CLASS_NUMBER)
-        val fieldShare = buildFormField(context.getString(R.string.network_smb_form_share_label), "Videos")
-        val fieldUser = buildFormField(context.getString(R.string.network_smb_form_user_label), "user")
-        val fieldPass = buildFormField(
-            context.getString(R.string.network_smb_form_pass_label),
-            "",
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        val fieldHost = form.field(
+            host = host,
+            label = context.getString(R.string.network_smb_form_host_label),
+            hint = "192.168.1.100",
+            kind = VoidFieldKind.TEXT,
+            validator = FieldValidators.required(context.getString(R.string.network_smb_form_status_host_required))
         )
-        val fieldDomain = buildFormField(context.getString(R.string.network_smb_form_domain_label), "WORKGROUP")
+        val fieldPort = form.field(
+            host = host,
+            label = context.getString(R.string.network_smb_form_port_label),
+            hint = "445",
+            kind = VoidFieldKind.NUMBER,
+            validator = FieldValidators.port(context.getString(R.string.field_error_invalid_port))
+        )
+        val fieldShare = form.field(
+            host = host,
+            label = context.getString(R.string.network_smb_form_share_label),
+            hint = "Videos",
+            kind = VoidFieldKind.TEXT
+        )
+
+        val fieldUser = VoidTextField(
+            context = context,
+            host = host,
+            label = context.getString(R.string.network_smb_form_user_label),
+            hint = "user",
+            kind = VoidFieldKind.TEXT
+        )
+        val fieldPass = VoidTextField(
+            context = context,
+            host = host,
+            label = context.getString(R.string.network_smb_form_pass_label),
+            hint = "",
+            kind = VoidFieldKind.PASSWORD,
+            actions = setOf(VoidFieldAction.PASTE, VoidFieldAction.REVEAL, VoidFieldAction.CONTEXT_MENU)
+        )
 
         val guestCheckbox = CheckBox(context).apply {
             text = context.getString(R.string.network_smb_form_guest_checkbox)
@@ -164,10 +192,21 @@ class NetworkSmbScreen(
             val pad = VoidTheme.dpToPx(context, 8f)
             setPadding(pad, pad, pad, pad)
             setOnCheckedChangeListener { _, isChecked ->
-                fieldUser.root.visibility = if (isChecked) View.GONE else View.VISIBLE
-                fieldPass.root.visibility = if (isChecked) View.GONE else View.VISIBLE
+                fieldUser.visibility = if (isChecked) View.GONE else View.VISIBLE
+                fieldPass.visibility = if (isChecked) View.GONE else View.VISIBLE
             }
         }
+
+        form.addView(guestCheckbox)
+        form.addField(fieldUser)
+        form.addField(fieldPass)
+
+        val fieldDomain = form.field(
+            host = host,
+            label = context.getString(R.string.network_smb_form_domain_label),
+            hint = "WORKGROUP",
+            kind = VoidFieldKind.TEXT
+        )
 
         val statusText = VoidText.body(context, "", sizeSp = 14f, secondary = true).apply {
             setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f))
@@ -178,31 +217,26 @@ class NetworkSmbScreen(
             textSize = 16f
             minHeight = VoidTheme.dpToPx(context, 48f)
             setOnClickListener {
-                val host = fieldHost.input.text.toString().trim()
-                val port = fieldPort.input.text.toString().trim().toIntOrNull() ?: 445
-                val share = fieldShare.input.text.toString().trim()
+                if (!form.validate()) return@setOnClickListener
+
+                val hostStr = fieldHost.getText().trim()
+                val portStr = fieldPort.getText().trim()
+                val port = if (portStr.isEmpty()) 445 else (portStr.toIntOrNull() ?: 445)
+                val share = fieldShare.getText().trim()
                 val isGuest = guestCheckbox.isChecked
-                val user = fieldUser.input.text.toString().trim()
-                val pass = fieldPass.input.text.toString().trim()
-                val domain = fieldDomain.input.text.toString().trim()
-                testAndSave(host, port, share, isGuest, user, pass, domain, statusText) {
-                    fieldHost.input.text.clear()
-                    fieldShare.input.text.clear()
-                    fieldUser.input.text.clear()
-                    fieldPass.input.text.clear()
+                val user = fieldUser.getText().trim()
+                val pass = fieldPass.getText().trim()
+                val domain = fieldDomain.getText().trim()
+                testAndSave(hostStr, port, share, isGuest, user, pass, domain, statusText) {
+                    form.clearAll()
                     statusText.text = context.resources.getQuantityString(R.plurals.network_smb_form_status_connected, 1, 1)
                     onSaved()
                 }
             }
         }
 
-        form.addView(fieldHost.root)
-        form.addView(fieldPort.root)
-        form.addView(fieldShare.root)
-        form.addView(guestCheckbox)
-        form.addView(fieldUser.root)
-        form.addView(fieldPass.root)
-        form.addView(fieldDomain.root)
+        form.onFormSubmit = { btnSave.performClick() }
+
         form.addView(statusText)
         form.addView(btnSave, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -593,35 +627,4 @@ class NetworkSmbScreen(
             marginStart = VoidTheme.dpToPx(context, 8f)
         })
     }
-
-    private fun buildFormField(
-        label: String,
-        placeholder: String,
-        inputType: Int = InputType.TYPE_CLASS_TEXT
-    ): FormField {
-        val root = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, 0, 0, VoidTheme.dpToPx(context, 6f))
-        }
-        root.addView(VoidText.mono(context, label, sizeSp = 13f, secondary = true))
-        val input = android.widget.EditText(context).apply {
-            this.inputType = inputType
-            hint = placeholder
-            setTextColor(VoidTheme.colorText)
-            setHintTextColor(VoidTheme.colorTextSecondary)
-            textSize = 15f
-            typeface = VoidTheme.typefaceBody
-            val pad = VoidTheme.dpToPx(context, 10f)
-            setPadding(pad, pad, pad, pad)
-            background = android.graphics.drawable.GradientDrawable().apply {
-                setColor(VoidTheme.colorSurface)
-                cornerRadius = VoidTheme.dp(context, 4f)
-                setStroke(VoidTheme.dpToPx(context, 1f), VoidTheme.colorBorder)
-            }
-        }
-        root.addView(input)
-        return FormField(root, input)
-    }
-
-    private class FormField(val root: View, val input: android.widget.EditText)
 }

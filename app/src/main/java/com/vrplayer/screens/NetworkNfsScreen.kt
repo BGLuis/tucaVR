@@ -13,15 +13,20 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.vrplayer.R
 import com.vrplayer.VRActivity
+import com.vrplayer.designsystem.FieldValidators
 import com.vrplayer.designsystem.VoidButton
 import com.vrplayer.designsystem.VoidButtonStyle
+import com.vrplayer.designsystem.VoidFieldAction
+import com.vrplayer.designsystem.VoidFieldKind
 import com.vrplayer.designsystem.VoidFilterChip
+import com.vrplayer.designsystem.VoidForm
 import com.vrplayer.designsystem.VoidIconButton
 import com.vrplayer.designsystem.VoidListRow
 import com.vrplayer.designsystem.VoidPanelChrome
 import com.vrplayer.designsystem.VoidSearchBar
 import com.vrplayer.designsystem.VoidSortSelector
 import com.vrplayer.designsystem.VoidText
+import com.vrplayer.designsystem.VoidTextField
 import com.vrplayer.designsystem.VoidTheme
 import com.vrplayer.filebrowser.DateFilter
 import com.vrplayer.filebrowser.FolderConfig
@@ -150,39 +155,40 @@ class NetworkNfsScreen(
     }
 
     private fun buildAddServerForm(onSaved: () -> Unit): View {
-        val form = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
+        val form = VoidForm(context)
 
-        form.addView(VoidText.body(context, context.getString(R.string.network_nfs_form_host_label), sizeSp = 14f, secondary = true))
-        val hostInput = UiHelpers.buildVoidEditText(context, "192.168.1.100", host).apply {
-            setSingleLine(true)
-            inputType = InputType.TYPE_CLASS_TEXT
-        }
-        form.addView(hostInput)
+        val hostInput = form.field(
+            host = host,
+            label = context.getString(R.string.network_nfs_form_host_label),
+            hint = "192.168.1.100",
+            kind = VoidFieldKind.TEXT,
+            validator = FieldValidators.required(context.getString(R.string.network_nfs_form_status_host_required))
+        )
 
-        form.addView(VoidText.body(context, context.getString(R.string.network_nfs_form_port_label), sizeSp = 14f, secondary = true))
-        val portInput = UiHelpers.buildVoidEditText(context, "2049", host).apply {
+        val portInput = form.field(
+            host = host,
+            label = context.getString(R.string.network_nfs_form_port_label),
+            hint = "2049",
+            kind = VoidFieldKind.NUMBER,
+            validator = FieldValidators.port(context.getString(R.string.field_error_invalid_port))
+        ).apply {
             setText("2049")
-            setSingleLine(true)
-            inputType = InputType.TYPE_CLASS_NUMBER
         }
-        form.addView(portInput)
 
-        form.addView(VoidText.body(context, context.getString(R.string.network_nfs_form_export_label), sizeSp = 14f, secondary = true))
-        val exportInput = UiHelpers.buildVoidEditText(context, context.getString(R.string.network_nfs_form_export_hint), host).apply {
-            setSingleLine(true)
-            inputType = InputType.TYPE_CLASS_TEXT
-        }
-        form.addView(exportInput)
+        val exportInput = form.field(
+            host = host,
+            label = context.getString(R.string.network_nfs_form_export_label),
+            hint = context.getString(R.string.network_nfs_form_export_hint),
+            kind = VoidFieldKind.TEXT,
+            validator = FieldValidators.required(context.getString(R.string.network_nfs_form_status_export_required))
+        )
 
-        form.addView(VoidText.body(context, context.getString(R.string.network_nfs_form_name_label), sizeSp = 14f, secondary = true))
-        val nameInput = UiHelpers.buildVoidEditText(context, context.getString(R.string.network_nfs_form_name_hint), host).apply {
-            setSingleLine(true)
-            inputType = InputType.TYPE_CLASS_TEXT
-        }
-        form.addView(nameInput)
+        val nameInput = form.field(
+            host = host,
+            label = context.getString(R.string.network_nfs_form_name_label),
+            hint = context.getString(R.string.network_nfs_form_name_hint),
+            kind = VoidFieldKind.TEXT
+        )
 
         val statusText = VoidText.body(context, "", sizeSp = 14f, secondary = true).apply {
             setPadding(0, VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 8f))
@@ -198,9 +204,10 @@ class NetworkNfsScreen(
             setIcon(R.drawable.ic_search)
             textSize = 16f
             setOnClickListener {
-                val h = hostInput.text.toString().trim()
-                val p = portInput.text.toString().toIntOrNull() ?: 2049
+                val h = hostInput.getText().trim()
+                val p = portInput.getText().toIntOrNull() ?: 2049
                 if (h.isEmpty()) {
+                    hostInput.setError(context.getString(R.string.network_nfs_form_status_host_required))
                     statusText.text = context.getString(R.string.network_nfs_form_status_host_required)
                     return@setOnClickListener
                 }
@@ -229,42 +236,43 @@ class NetworkNfsScreen(
             setIcon(R.drawable.ic_check)
             textSize = 16f
             setOnClickListener {
-                testAndSave(hostInput, portInput, exportInput, nameInput, statusText, onSaved)
+                if (!form.validate()) return@setOnClickListener
+
+                val h = hostInput.getText().trim()
+                val p = portInput.getText().toIntOrNull() ?: 2049
+                val exp = exportInput.getText().trim()
+                val name = nameInput.getText().trim()
+                testAndSave(h, p, exp, name, statusText) {
+                    form.clearAll()
+                    portInput.setText("2049")
+                    statusText.text = context.getString(R.string.network_nfs_form_status_connected)
+                    onSaved()
+                }
             }
         }
 
-        val margin = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-            it.marginEnd = VoidTheme.dpToPx(context, 12f)
+        form.onFormSubmit = { btnSave.performClick() }
+
+        val margin = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).also {
+            it.marginEnd = VoidTheme.dpToPx(context, 8f)
         }
         btnRow.addView(btnBrowseExports, margin)
-        btnRow.addView(btnSave)
+        btnRow.addView(btnSave, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
-        form.addView(btnRow)
         form.addView(statusText)
+        form.addView(btnRow)
         return form
     }
 
     private fun testAndSave(
-        hostInput: android.widget.EditText,
-        portInput: android.widget.EditText,
-        exportInput: android.widget.EditText,
-        nameInput: android.widget.EditText,
+        h: String,
+        p: Int,
+        exp: String,
+        name: String,
         statusView: android.widget.TextView,
         onSaved: () -> Unit
     ) {
-        val h = hostInput.text.toString().trim()
-        val p = portInput.text.toString().toIntOrNull() ?: 2049
-        val exp = exportInput.text.toString().trim()
-        val n = nameInput.text.toString().trim().ifEmpty { h }
-
-        if (h.isEmpty()) {
-            statusView.text = context.getString(R.string.network_nfs_form_status_host_required)
-            return
-        }
-        if (exp.isEmpty()) {
-            statusView.text = context.getString(R.string.network_nfs_form_status_export_required)
-            return
-        }
+        val n = name.ifEmpty { h }
 
         statusView.text = context.getString(R.string.network_nfs_form_status_connecting)
 
@@ -292,9 +300,6 @@ class NetworkNfsScreen(
             }
 
             statusView.text = context.getString(R.string.network_nfs_form_status_connected)
-            hostInput.text?.clear()
-            exportInput.text?.clear()
-            nameInput.text?.clear()
             onSaved()
         }
     }

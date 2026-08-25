@@ -515,8 +515,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
     // A (direita) ou X (esquerda) = Play/Pause. Trigger fora de qualquer
     // painel visivel tambem funciona como atalho.
-    if ((currA && !state.prevA) || (currX && !state.prevX) ||
-        (currTrigger && !prevTrigger && dispatchHitPanel == 0)) {
+    if (((currA && !state.prevA) || (currX && !state.prevX) ||
+        (currTrigger && !prevTrigger && dispatchHitPanel == 0)) && !keyboardActive) {
         toggle_play_pause();
     }
     state.prevA = currA;

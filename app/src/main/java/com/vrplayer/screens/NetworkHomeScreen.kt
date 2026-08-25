@@ -8,10 +8,16 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import com.vrplayer.R
 import com.vrplayer.VRActivity
+import com.vrplayer.designsystem.FieldValidators
+import com.vrplayer.designsystem.VoidButton
+import com.vrplayer.designsystem.VoidButtonStyle
+import com.vrplayer.designsystem.VoidFieldAction
+import com.vrplayer.designsystem.VoidFieldKind
 import com.vrplayer.designsystem.VoidListRow
 import com.vrplayer.designsystem.VoidPanelChrome
 import com.vrplayer.designsystem.VoidTabRow
 import com.vrplayer.designsystem.VoidText
+import com.vrplayer.designsystem.VoidTextField
 import com.vrplayer.designsystem.VoidTheme
 import com.vrplayer.navigation.Destination
 import com.vrplayer.navigation.PlaybackSource
@@ -126,14 +132,14 @@ class NetworkHomeScreen(
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
-        val urlInput = UiHelpers.buildVoidEditText(
-            context,
-            context.getString(R.string.network_url_hint),
-            host
-        ).apply {
-            inputType = android.text.InputType.TYPE_TEXT_VARIATION_URI or android.text.InputType.TYPE_CLASS_TEXT
-            setSingleLine(true)
-        }
+        val urlInput = VoidTextField(
+            context = context,
+            host = host,
+            hint = context.getString(R.string.network_url_hint),
+            kind = VoidFieldKind.URI,
+            actions = setOf(VoidFieldAction.PASTE, VoidFieldAction.CLEAR, VoidFieldAction.CONTEXT_MENU),
+            validator = FieldValidators.url(context.getString(R.string.field_error_invalid_url))
+        )
         page.addView(urlInput)
 
         val urlStatus = VoidText.body(context, "", sizeSp = 16f, secondary = true).apply {
@@ -179,25 +185,22 @@ class NetworkHomeScreen(
             setPadding(0, VoidTheme.dpToPx(context, 16f), 0, VoidTheme.dpToPx(context, 8f))
         }
 
-        val btnPaste = UiHelpers.buildPasteButton(context, activity, urlInput).apply {
-            text = context.getString(R.string.network_url_btn_paste).trim()
-            setIcon(R.drawable.ic_content_paste)
-            textSize = 18f
-        }
-        val btnPlay = com.vrplayer.designsystem.VoidButton(context, com.vrplayer.designsystem.VoidButtonStyle.PRIMARY).apply {
+        val btnPlay = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
             text = context.getString(R.string.network_url_btn_play).trim()
             setIcon(R.drawable.ic_play_arrow)
             textSize = 18f
             setOnClickListener {
-                playUrl(urlInput.text.toString().trim(), urlStatus) { refreshRecentUrls() }
+                if (urlInput.validate()) {
+                    playUrl(urlInput.getText().trim(), urlStatus) { refreshRecentUrls() }
+                }
             }
         }
 
-        val btnMargin = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { marginEnd = VoidTheme.dpToPx(context, 12f) }
-        row.addView(btnPaste, btnMargin)
-        row.addView(btnPlay)
+        urlInput.onImeDone = { btnPlay.performClick() }
+
+        row.addView(btnPlay, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ))
 
         page.addView(row)
         page.addView(urlStatus)

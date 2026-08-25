@@ -1970,7 +1970,7 @@ public:
 
         // T4.4: A (direita) ou X (esquerda) = Play/Pause. Trigger fora de qualquer
         // painel visivel tambem funciona como atalho de play/pause.
-        if ((currA && !prevA) || (currX && !prevX) || (currTrigger && !prevTrigger && dispatchHitPanel == 0)) {
+        if (((currA && !prevA) || (currX && !prevX) || (currTrigger && !prevTrigger && dispatchHitPanel == 0)) && !keyboardActive) {
             LOGI("USER PRESSED PLAY/PAUSE!");
             toggle_video_state();
         }

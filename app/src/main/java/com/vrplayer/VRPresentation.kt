@@ -5,8 +5,8 @@ import android.content.Context
 import android.os.Bundle
 import android.view.Display
 import android.view.ViewGroup
-import android.widget.EditText
 import android.widget.FrameLayout
+import com.vrplayer.designsystem.KeyboardBinding
 import com.vrplayer.filebrowser.DirectoryNavigator
 import com.vrplayer.navigation.AppNavigator
 import com.vrplayer.navigation.Destination
@@ -52,7 +52,7 @@ import kotlinx.coroutines.cancel
  * o botão "Voltar" Void dentro do painel anda pelo back-stack do navigator.
  *
  * **Teclado nativo:** VirtualDisplay não recebe IME do sistema (restrição
- * AOSP de segurança). A solução usa um EditText proxy real na Activity —
+ * AOSP de segurança). A solução usa um proxy de teclado real na Activity —
  * ver VRActivity.showNativeKeyboardFor() e a seção "TECLADO NATIVO" no
  * histórico de commits para o raciocínio completo.
  */
@@ -85,8 +85,8 @@ class VRPresentation(
 
     private lateinit var screenHost: FrameLayout
 
-    // Rastreia o EditText com foco para fechar o teclado ao trocar de tela.
-    private var keyboardTarget: EditText? = null
+    // Rastreia o KeyboardBinding com foco para fechar o teclado ao trocar de tela.
+    private var keyboardTarget: KeyboardBinding? = null
 
     private val host: ScreenHost by lazy {
         object : ScreenHost {
@@ -99,13 +99,28 @@ class VRPresentation(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
                 ))
             }
-            override fun showNativeKeyboard(field: EditText) {
-                keyboardTarget = field
-                activity.showNativeKeyboardFor(field)
+            override fun showNativeKeyboard(binding: KeyboardBinding) {
+                keyboardTarget = binding
+                activity.showNativeKeyboardFor(binding)
             }
             override fun hideNativeKeyboard() {
                 keyboardTarget = null
                 activity.hideNativeKeyboard()
+            }
+            override fun syncKeyboard(binding: KeyboardBinding) {
+                if (keyboardTarget === binding) {
+                    activity.syncKeyboardText(binding)
+                }
+            }
+            override fun showOverlay(view: android.view.View) {
+                if (view.parent == null) {
+                    screenHost.addView(view, FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
+                    ))
+                }
+            }
+            override fun hideOverlay(view: android.view.View) {
+                screenHost.removeView(view)
             }
         }
     }

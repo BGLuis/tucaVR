@@ -15,15 +15,20 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.vrplayer.R
 import com.vrplayer.VRActivity
+import com.vrplayer.designsystem.FieldValidators
 import com.vrplayer.designsystem.VoidButton
 import com.vrplayer.designsystem.VoidButtonStyle
+import com.vrplayer.designsystem.VoidFieldAction
+import com.vrplayer.designsystem.VoidFieldKind
 import com.vrplayer.designsystem.VoidFilterChip
+import com.vrplayer.designsystem.VoidForm
 import com.vrplayer.designsystem.VoidIconButton
 import com.vrplayer.designsystem.VoidListRow
 import com.vrplayer.designsystem.VoidPanelChrome
 import com.vrplayer.designsystem.VoidSearchBar
 import com.vrplayer.designsystem.VoidSortSelector
 import com.vrplayer.designsystem.VoidText
+import com.vrplayer.designsystem.VoidTextField
 import com.vrplayer.designsystem.VoidTheme
 import com.vrplayer.filebrowser.DateFilter
 import com.vrplayer.filebrowser.FolderConfig
@@ -136,23 +141,45 @@ class NetworkSftpScreen(
     }
 
     private fun buildAddServerForm(onSaved: () -> Unit): View {
-        val form = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
+        val form = VoidForm(context)
 
-        val fieldHost = buildFormField(context.getString(R.string.network_sftp_form_host_label), "sftp.example.com")
-        val fieldPort = buildFormField(context.getString(R.string.network_sftp_form_port_label), "22", inputType = InputType.TYPE_CLASS_NUMBER)
-        val fieldUser = buildFormField(context.getString(R.string.network_sftp_form_user_label), "user")
-        val fieldPass = buildFormField(
-            context.getString(R.string.network_sftp_form_pass_label),
-            "",
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+        val fieldHost = form.field(
+            host = host,
+            label = context.getString(R.string.network_sftp_form_host_label),
+            hint = "sftp.example.com",
+            kind = VoidFieldKind.TEXT,
+            validator = FieldValidators.required(context.getString(R.string.network_sftp_form_status_host_required))
         )
-        val fieldKey = buildFormField(
-            context.getString(R.string.network_sftp_form_key_label),
-            context.getString(R.string.network_sftp_form_key_hint),
-            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE
+        val fieldPort = form.field(
+            host = host,
+            label = context.getString(R.string.network_sftp_form_port_label),
+            hint = "22",
+            kind = VoidFieldKind.NUMBER,
+            validator = FieldValidators.port(context.getString(R.string.field_error_invalid_port))
+        )
+        val fieldUser = form.field(
+            host = host,
+            label = context.getString(R.string.network_sftp_form_user_label),
+            hint = "user",
+            kind = VoidFieldKind.TEXT,
+            validator = FieldValidators.required(context.getString(R.string.field_error_required))
+        )
+
+        val fieldPass = VoidTextField(
+            context = context,
+            host = host,
+            label = context.getString(R.string.network_sftp_form_pass_label),
+            hint = "",
+            kind = VoidFieldKind.PASSWORD,
+            actions = setOf(VoidFieldAction.PASTE, VoidFieldAction.REVEAL, VoidFieldAction.CONTEXT_MENU)
+        )
+        val fieldKey = VoidTextField(
+            context = context,
+            host = host,
+            label = context.getString(R.string.network_sftp_form_key_label),
+            hint = context.getString(R.string.network_sftp_form_key_hint),
+            kind = VoidFieldKind.MULTILINE,
+            actions = setOf(VoidFieldAction.PASTE, VoidFieldAction.CLEAR, VoidFieldAction.CONTEXT_MENU)
         )
 
         val keyCheckbox = CheckBox(context).apply {
@@ -163,11 +190,15 @@ class NetworkSftpScreen(
             val pad = VoidTheme.dpToPx(context, 8f)
             setPadding(pad, pad, pad, pad)
             setOnCheckedChangeListener { _, isChecked ->
-                fieldPass.root.visibility = if (isChecked) View.GONE else View.VISIBLE
-                fieldKey.root.visibility = if (isChecked) View.VISIBLE else View.GONE
+                fieldPass.visibility = if (isChecked) View.GONE else View.VISIBLE
+                fieldKey.visibility = if (isChecked) View.VISIBLE else View.GONE
             }
         }
-        fieldKey.root.visibility = View.GONE
+        fieldKey.visibility = View.GONE
+
+        form.addView(keyCheckbox)
+        form.addField(fieldPass)
+        form.addField(fieldKey)
 
         val statusText = VoidText.body(context, "", sizeSp = 14f, secondary = true).apply {
             setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f))
@@ -178,29 +209,31 @@ class NetworkSftpScreen(
             textSize = 16f
             minHeight = VoidTheme.dpToPx(context, 48f)
             setOnClickListener {
-                val host = fieldHost.input.text.toString().trim()
-                val port = fieldPort.input.text.toString().trim().toIntOrNull() ?: 22
-                val user = fieldUser.input.text.toString().trim()
+                if (!form.validate()) return@setOnClickListener
+
+                val hostStr = fieldHost.getText().trim()
+                val portStr = fieldPort.getText().trim()
+                val port = if (portStr.isEmpty()) 22 else (portStr.toIntOrNull() ?: 22)
+                val user = fieldUser.getText().trim()
                 val useKey = keyCheckbox.isChecked
-                val pass = if (useKey) "" else fieldPass.input.text.toString().trim()
-                val key = if (useKey) fieldKey.input.text.toString().trim() else ""
-                testAndSave(host, port, user, pass, key, statusText) {
-                    fieldHost.input.text.clear()
-                    fieldUser.input.text.clear()
-                    fieldPass.input.text.clear()
-                    fieldKey.input.text.clear()
-                    statusText.text = context.getString(R.string.network_ftp_form_status_connected)
+                val pass = if (useKey) "" else fieldPass.getText().trim()
+                val key = if (useKey) fieldKey.getText().trim() else ""
+
+                if (useKey && key.isEmpty()) {
+                    fieldKey.setError(context.getString(R.string.network_sftp_form_status_auth_required))
+                    return@setOnClickListener
+                }
+
+                testAndSave(hostStr, port, user, pass, key, statusText) {
+                    form.clearAll()
+                    statusText.text = context.getString(R.string.network_sftp_form_status_connected)
                     onSaved()
                 }
             }
         }
 
-        form.addView(fieldHost.root)
-        form.addView(fieldPort.root)
-        form.addView(fieldUser.root)
-        form.addView(keyCheckbox)
-        form.addView(fieldPass.root)
-        form.addView(fieldKey.root)
+        form.onFormSubmit = { btnSave.performClick() }
+
         form.addView(statusText)
         form.addView(btnSave, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
@@ -588,35 +621,4 @@ class NetworkSftpScreen(
             marginStart = VoidTheme.dpToPx(context, 8f)
         })
     }
-
-    private fun buildFormField(
-        label: String,
-        placeholder: String,
-        inputType: Int = InputType.TYPE_CLASS_TEXT
-    ): FormField {
-        val root = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, 0, 0, VoidTheme.dpToPx(context, 6f))
-        }
-        root.addView(VoidText.mono(context, label, sizeSp = 13f, secondary = true))
-        val input = android.widget.EditText(context).apply {
-            this.inputType = inputType
-            hint = placeholder
-            setTextColor(VoidTheme.colorText)
-            setHintTextColor(VoidTheme.colorTextSecondary)
-            textSize = 15f
-            typeface = VoidTheme.typefaceBody
-            val pad = VoidTheme.dpToPx(context, 10f)
-            setPadding(pad, pad, pad, pad)
-            background = android.graphics.drawable.GradientDrawable().apply {
-                setColor(VoidTheme.colorSurface)
-                cornerRadius = VoidTheme.dp(context, 4f)
-                setStroke(VoidTheme.dpToPx(context, 1f), VoidTheme.colorBorder)
-            }
-        }
-        root.addView(input)
-        return FormField(root, input)
-    }
-
-    private class FormField(val root: View, val input: android.widget.EditText)
 }

@@ -25,6 +25,18 @@
     <string name="common_row_dir_format">%1$s</string>
     <string name="common_row_video_format">%1$s</string>
 
+    <!-- Acoes de texto / Menu de contexto / Validacao (VoidTextField, VoidContextMenu, VoidForm) -->
+    <string name="text_action_copy">Copy</string>
+    <string name="text_action_cut">Cut</string>
+    <string name="text_action_paste">Paste</string>
+    <string name="text_action_select_all">Select all</string>
+    <string name="text_action_clear">Clear</string>
+    <string name="text_action_reveal">Show password</string>
+    <string name="text_action_hide">Hide password</string>
+    <string name="field_error_required">This field is required</string>
+    <string name="field_error_invalid_port">Port must be between 1 and 65535</string>
+    <string name="field_error_invalid_url">Invalid URL format</string>
+
     <!-- Home (VRPresentation.renderHome) -->
     <string name="home_title">VR Player</string>
     <string name="home_btn_local_files"> Local Files</string>

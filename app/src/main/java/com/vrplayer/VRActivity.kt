@@ -26,6 +26,7 @@ import android.widget.EditText
 import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.vrplayer.designsystem.KeyboardBinding
 import com.vrplayer.history.AppDatabase
 import com.vrplayer.history.PlaybackHistoryTracker
 import com.vrplayer.history.historyKey
@@ -62,7 +63,8 @@ class VRActivity : NativeActivity() {
     // ja esta anexada a janela" — copiado de la, nao um numero arbitrario).
     private lateinit var nativeKeyboardProxy: EditText
     private var keyboardMirrorWatcher: TextWatcher? = null
-    private var keyboardMirrorTarget: EditText? = null
+    private var keyboardMirrorTarget: KeyboardBinding? = null
+    private var pendingHideRunnable: Runnable? = null
 
     // Hook de teste (soak test via adb, ver scripts/soak-test.sh): permite disparar
     // playback sem controller, ex. `adb shell am start -n com.vrplayer/.VRActivity
@@ -244,16 +246,33 @@ class VRActivity : NativeActivity() {
      * usuario ve o texto aparecer no campo do painel VR normalmente, mesmo
      * digitando num EditText que fisicamente vive noutra janela.
      */
-    fun showNativeKeyboardFor(target: EditText) {
-        // `nativeSetKeyboardActive` NAO e chamado aqui de proposito — o
-        // listener de WindowInsets em onCreate ja cobre isso a partir da
-        // visibilidade real do IME (ver comentario la pro raciocinio
-        // completo de por que isso e mais confiavel que setar na mao).
+    /**
+     * Chamado por [VRPresentation] quando um [KeyboardBinding] (campo de texto do painel VR)
+     * ganha foco. Foca o [nativeKeyboardProxy] para abrir o teclado nativo do Meta Quest,
+     * pre-preenchido com o texto atual do [target], herda o `inputType` e `imeOptions`,
+     * e liga um [TextWatcher] que espelha as alterações de volta para o [target].
+     */
+    fun showNativeKeyboardFor(target: KeyboardBinding) {
+        // Cancela qualquer fechamento de teclado pendente (evita corrida ao alternar entre campos)
+        pendingHideRunnable?.let {
+            nativeKeyboardProxy.removeCallbacks(it)
+            pendingHideRunnable = null
+        }
+
         keyboardMirrorWatcher?.let { nativeKeyboardProxy.removeTextChangedListener(it) }
 
         keyboardMirrorTarget = target
-        nativeKeyboardProxy.setText(target.text)
+        nativeKeyboardProxy.inputType = target.inputType
+        nativeKeyboardProxy.imeOptions = target.imeOptions
+
+        val currentText = target.currentText()
+        nativeKeyboardProxy.setText(currentText)
         nativeKeyboardProxy.setSelection(nativeKeyboardProxy.text.length)
+
+        nativeKeyboardProxy.setOnEditorActionListener { _, actionId, _ ->
+            keyboardMirrorTarget?.onImeAction(actionId)
+            true
+        }
 
         val watcher = object : TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
@@ -261,10 +280,9 @@ class VRActivity : NativeActivity() {
             override fun afterTextChanged(s: Editable) {
                 val current = keyboardMirrorTarget ?: return
                 val text = s.toString()
-                if (current.text.toString() != text) {
-                    current.setText(text)
-                    val sel = nativeKeyboardProxy.selectionStart.coerceIn(0, current.text.length)
-                    current.setSelection(sel)
+                if (current.currentText().toString() != text) {
+                    val sel = nativeKeyboardProxy.selectionStart.coerceIn(0, text.length)
+                    current.onKeyboardText(text, sel)
                 }
             }
         }
@@ -282,16 +300,40 @@ class VRActivity : NativeActivity() {
         }, 300L)
     }
 
+    /**
+     * Sincroniza o texto do proxy da Activity quando o campo do painel sofre alteração
+     * programática (ex.: colar, limpar, autocorreção).
+     */
+    fun syncKeyboardText(binding: KeyboardBinding) {
+        if (keyboardMirrorTarget === binding) {
+            val text = binding.currentText().toString()
+            if (nativeKeyboardProxy.text.toString() != text) {
+                keyboardMirrorWatcher?.let { nativeKeyboardProxy.removeTextChangedListener(it) }
+                nativeKeyboardProxy.setText(text)
+                nativeKeyboardProxy.setSelection(text.length)
+                keyboardMirrorWatcher?.let { nativeKeyboardProxy.addTextChangedListener(it) }
+            }
+        }
+    }
+
     /** Contraparte de [showNativeKeyboardFor] — chamado ao perder foco ou trocar de tela. */
     fun hideNativeKeyboard() {
         keyboardMirrorWatcher?.let { nativeKeyboardProxy.removeTextChangedListener(it) }
         keyboardMirrorWatcher = null
         keyboardMirrorTarget = null
-        nativeKeyboardProxy.postDelayed({
-            nativeKeyboardProxy.clearFocus()
-            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.hideSoftInputFromWindow(nativeKeyboardProxy.windowToken, 0)
-        }, 300L)
+
+        val runnable = object : Runnable {
+            override fun run() {
+                nativeKeyboardProxy.clearFocus()
+                val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                imm.hideSoftInputFromWindow(nativeKeyboardProxy.windowToken, 0)
+                if (pendingHideRunnable === this) {
+                    pendingHideRunnable = null
+                }
+            }
+        }
+        pendingHideRunnable = runnable
+        nativeKeyboardProxy.postDelayed(runnable, 300L)
     }
 
     override fun onNewIntent(intent: Intent) {
