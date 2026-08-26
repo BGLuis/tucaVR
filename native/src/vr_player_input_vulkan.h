@@ -601,21 +601,49 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             }
         }
 
-        // HUD de debug (docs/DEBUGGING.md) — mesmo throttle acima (~10Hz).
-        // VRActivity.updateDebugHud descarta sem custo se o build nao for
-        // debuggable, entao computar/mandar isso sempre e mais simples que
-        // condicionar a compilacao nativa por build type.
-        {
+        // HUD de debug (docs/DEBUGGING.md / docs/reports/DEBUG-STATS-MODAL.md)
+        if (g_debugStatsEnabled.load(std::memory_order_relaxed)) {
             StereoParams spHud = GetStereoParams(state.screenMode, 0);
-            char hud[512];
-            snprintf(hud, sizeof(hud),
-                "VULKAN | %s | stereoLayout=%d polar180=%d swap=%d | video=%s vidGap=%.0fms vidFps=%.0f decFps=%.0f outFps=%.0f drop=%.0f jitter=%.0fms | net=%.1fMB/s q=%u seekMs=%u | %.0ffps %.1fms stutter=%d freeze=%d | thermal=%u scale=%.2f",
-                ScreenModeName(state.screenMode), spHud.stereoLayout, spHud.polar180, spHud.swapEyes,
-                (state.activeVideoFrame != nullptr) ? "ativo" : "sem frame", state.msSinceLastVideoFrame,
-                state.videoFps, state.decodedFps, state.outputFps, state.droppedFps, state.videoJitterMs,
-                state.netMBs, state.videoQueueDepth, get_last_seek_latency_ms(),
-                state.smoothedFps, state.lastFrameMs, state.stutterCount, state.freezeCount,
-                state.thermalLevel, state.renderResolutionScale);
+            DebugStats stats;
+            stats.backend = "VULKAN";
+            stats.screenMode = ScreenModeName(state.screenMode);
+            stats.stereoLayout = spHud.stereoLayout;
+            stats.polar180 = spHud.polar180;
+            stats.swapEyes = spHud.swapEyes;
+            stats.hasActiveFrame = (state.activeVideoFrame != nullptr) ? 1 : 0;
+            stats.msSinceLastVideoFrame = state.msSinceLastVideoFrame;
+            stats.videoFps = state.videoFps;
+            stats.decodedFps = state.decodedFps;
+            stats.outputFps = state.outputFps;
+            stats.droppedFps = state.droppedFps;
+            stats.videoJitterMs = state.videoJitterMs;
+            stats.netMBs = state.netMBs;
+            stats.videoQueueDepth = state.videoQueueDepth;
+            stats.seekLatencyMs = get_last_seek_latency_ms();
+            stats.smoothedFps = state.smoothedFps;
+            stats.lastFrameMs = state.lastFrameMs;
+            stats.stutterCount = state.stutterCount;
+            stats.freezeCount = state.freezeCount;
+            stats.thermalLevel = state.thermalLevel;
+            stats.renderResolutionScale = state.renderResolutionScale;
+            stats.displayRefreshRate = 90.0f;
+            stats.avDriftMs = get_last_av_drift_ms();
+            stats.netLastFetchMs = get_network_last_block_fetch_ms();
+            stats.netBlocksFetched = get_network_blocks_fetched();
+            stats.netBlocksDiscarded = get_network_blocks_discarded();
+            stats.foveationEnabled = (int)get_foveation_enabled();
+            stats.spatialAudioMode = (int)get_spatial_audio_mode();
+            stats.spatialHeadTracking = (int)get_spatial_audio_head_tracking();
+            stats.playbackSpeed = get_playback_speed();
+            stats.audioVolume = get_video_volume();
+            stats.audioTrackIndex = 0;
+            stats.audioTrackCount = (int)get_audio_track_count();
+            stats.subtitleTrackIndex = get_subtitle_track();
+            stats.subtitleOffsetMs = (int32_t)get_subtitle_offset_ms();
+
+            char hudBuffer[2048];
+            SerializeDebugStats(stats, hudBuffer, sizeof(hudBuffer));
+
             JNIEnv* env = nullptr;
             state.app->activity->vm->AttachCurrentThread(&env, nullptr);
             if (env) {
@@ -623,7 +651,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                 jmethodID hudMethod = env->GetStaticMethodID(
                     vrActivityClass, "updateDebugHud", "(Lcom/tucavr/VRActivity;Ljava/lang/String;)V");
                 if (hudMethod) {
-                    jstring hudStr = env->NewStringUTF(hud);
+                    jstring hudStr = env->NewStringUTF(hudBuffer);
                     env->CallStaticVoidMethod(vrActivityClass, hudMethod, state.app->activity->clazz, hudStr);
                     env->DeleteLocalRef(hudStr);
                 }

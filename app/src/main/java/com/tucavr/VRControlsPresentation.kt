@@ -67,7 +67,11 @@ class VRControlsPresentation(
     private lateinit var totalTimeLabel: TextView
     private lateinit var loadingSpinner: ProgressBar
     private lateinit var scrubPreview: ImageView
-    private var debugHudLabel: TextView? = null
+    private lateinit var debugStatsModal: FrameLayout
+    private lateinit var btnDebugStats: VoidIconButton
+    private val debugStatValueViews = mutableMapOf<String, TextView>()
+    private var lastKnownBatteryPercent: Int = 100
+    private var lastKnownIsCharging: Boolean = false
     private var isDragging = false
     private var lastSeekTime = 0L
     private var totalDuration = 0f
@@ -117,15 +121,128 @@ class VRControlsPresentation(
     }
 
     /**
-     * HUD de debug (ver VRActivity.updateDebugHud/docs/DEBUGGING.md) — texto
-     * de diagnostico puro (ScreenMode/stereoLayout/polar180/swapEyes/estado
-     * do frame de video), formatado do lado nativo. `debugHudLabel` so
-     * existe (ver onCreate) se `activity.isDebuggable`; se for null aqui
-     * (build de release, ou VRActivity.updateDebugHud ja filtrou antes de
-     * chamar) o texto e descartado sem custo.
+     * Modal de Estatísticas Técnicas / Stats for Nerds (docs/reports/DEBUG-STATS-MODAL.md)
+     * Parseia a wire tabular TSV e atualiza os cards de métricas em tempo real caso o modal esteja aberto.
      */
-    fun updateDebugHud(text: String) {
-        debugHudLabel?.text = text
+    fun updateDebugStats(text: String) {
+        val stats = com.tucavr.debug.DebugStatsParser.parse(text) ?: return
+        if (!::debugStatsModal.isInitialized || debugStatsModal.visibility != View.VISIBLE) return
+
+        val meta = activity.currentMediaMetadata
+        val videoTrack = meta?.videoTracks?.firstOrNull()
+        val audioTrack = meta?.audioTracks?.firstOrNull()
+
+        // 1. Vídeo & Renderização
+        val resText = if (videoTrack != null && videoTrack.width > 0) {
+            "${videoTrack.width}x${videoTrack.height} (${videoTrack.codec.uppercase()})"
+        } else if (meta != null && meta.container.isNotEmpty()) {
+            meta.container.uppercase()
+        } else {
+            "—"
+        }
+        debugStatValueViews["resolution"]?.text = resText
+
+        debugStatValueViews["fps"]?.text = String.format(
+            java.util.Locale.US, "%.1f dec / %.1f out (%.0f Hz)",
+            stats.decodedFps, stats.outputFps, stats.refreshRate
+        )
+
+        val totalFrames = stats.decodedFps + stats.droppedFps
+        val dropPct = if (totalFrames > 0f) (stats.droppedFps / totalFrames) * 100f else 0f
+        debugStatValueViews["dropped_frames"]?.text = String.format(
+            java.util.Locale.US, "%.0f fps (%.1f%%)", stats.droppedFps, dropPct
+        )
+
+        debugStatValueViews["stutter_freeze"]?.text = "${stats.stutterCount} / ${stats.freezeCount}"
+
+        debugStatValueViews["jitter"]?.text = String.format(
+            java.util.Locale.US, "%.1f ms (gap %.1f ms)", stats.jitterMs, stats.frameGapMs
+        )
+
+        val swapStr = if (stats.swapEyes != 0) " [Swap]" else ""
+        debugStatValueViews["stereo"]?.text = "${stats.screenMode}$swapStr"
+
+        val fovStr = if (stats.foveationEnabled) "Foveation: On" else "Foveation: Off"
+        debugStatValueViews["render_scale"]?.text = String.format(
+            java.util.Locale.US, "%.2fx | %s", stats.renderScale, fovStr
+        )
+
+        debugStatValueViews["backend"]?.text = stats.backend
+
+        // 2. Áudio & Sincronização
+        val audioCodecStr = if (audioTrack != null && audioTrack.codec.isNotEmpty()) {
+            "${audioTrack.codec.uppercase()} (${audioTrack.channels}ch, ${audioTrack.sampleRate / 1000}kHz)"
+        } else {
+            "—"
+        }
+        debugStatValueViews["audio_codec"]?.text = audioCodecStr
+
+        val driftSign = if (stats.avDriftMs >= 0) "+" else ""
+        debugStatValueViews["av_drift"]?.text = String.format(java.util.Locale.US, "%s%.1f ms", driftSign, stats.avDriftMs)
+
+        val spatialName = when (stats.spatialAudioMode) {
+            1 -> "Binaural (5.1/7.1)"
+            2 -> "Ambisonics"
+            else -> "Off (Stereo)"
+        }
+        val headStr = if (stats.spatialHeadTracking) " [HeadTrack]" else ""
+        debugStatValueViews["spatial_audio"]?.text = "$spatialName$headStr"
+
+        debugStatValueViews["audio_track"]?.text = "${stats.audioTrackIndex + 1} / ${maxOf(1, stats.audioTrackCount)}"
+
+        val subText = if (stats.subtitleTrackIndex < 0) {
+            context.getString(R.string.subtitles_option_off)
+        } else {
+            "Track ${stats.subtitleTrackIndex + 1} (${String.format(java.util.Locale.US, "%+.1fs", stats.subtitleOffsetMs / 1000f)})"
+        }
+        debugStatValueViews["subtitles"]?.text = subText
+
+        // 3. Rede & Buffer
+        val src = activity.currentPlaybackSource
+        val srcText = when (src) {
+            is PlaybackSource.LocalFile -> "Local Storage"
+            is PlaybackSource.Http -> "HTTP(S)"
+            is PlaybackSource.Smb -> "SMB (${src.server.host})"
+            is PlaybackSource.Ftp -> "FTP (${src.server.host})"
+            is PlaybackSource.Sftp -> "SFTP (${src.server.host})"
+            is PlaybackSource.Nfs -> "NFS (${src.server.host})"
+            is PlaybackSource.Dlna -> "DLNA (${src.server.name})"
+            null -> "None"
+        }
+        debugStatValueViews["source"]?.text = srcText
+
+        debugStatValueViews["net_speed"]?.text = String.format(java.util.Locale.US, "%.2f MB/s", stats.netMBs)
+        debugStatValueViews["buffer_queue"]?.text = "${stats.queueDepth} packets"
+        debugStatValueViews["fetch_latency"]?.text = String.format(java.util.Locale.US, "%.1f ms", stats.netLastFetchMs)
+        debugStatValueViews["blocks"]?.text = "${stats.netBlocksFetched} / ${stats.netBlocksDiscarded}"
+        debugStatValueViews["seek_latency"]?.text = "${stats.seekLatencyMs} ms"
+
+        // 4. Sistema & Hardware
+        val thermalName = when (stats.thermalLevel) {
+            0 -> context.getString(R.string.thermal_level_normal)
+            1 -> "Light"
+            2 -> context.getString(R.string.thermal_level_moderate)
+            3 -> context.getString(R.string.thermal_level_severe)
+            4 -> context.getString(R.string.thermal_level_critical)
+            else -> "${stats.thermalLevel}"
+        }
+        debugStatValueViews["thermal"]?.text = "$thermalName (${stats.thermalLevel})"
+
+        val chargingStr = if (lastKnownIsCharging) " [Charging]" else ""
+        debugStatValueViews["battery"]?.text = "$lastKnownBatteryPercent%$chargingStr"
+        debugStatValueViews["app_version"]?.text = "${com.tucavr.BuildConfig.VERSION_NAME} (${if (activity.isDebuggable) "Debug" else "Release"})"
+    }
+
+    /**
+     * Notificado quando a Feature Flag do painel de estatísticas técnicas muda em tempo real.
+     */
+    fun onDebugStatsFlagChanged(enabled: Boolean) {
+        if (::btnDebugStats.isInitialized) {
+            btnDebugStats.visibility = if (enabled) View.VISIBLE else View.GONE
+        }
+        if (!enabled && ::debugStatsModal.isInitialized) {
+            debugStatsModal.visibility = View.GONE
+        }
     }
 
     /**
@@ -323,6 +440,8 @@ class VRControlsPresentation(
                     
                     if (level >= 0 && scale > 0) {
                         val pct = (level * 100) / scale
+                        lastKnownBatteryPercent = pct
+                        lastKnownIsCharging = isCharging
                         if (::batteryLabel.isInitialized) batteryLabel.text = "${pct}%"
                         
                         val iconRes = when {
@@ -604,6 +723,17 @@ class VRControlsPresentation(
         }
         utilsLayout.addView(btnSpeed)
 
+        btnDebugStats = VoidIconButton(context, R.drawable.icon_stats, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
+                leftMargin = VoidTheme.dpToPx(context, 8f)
+            }
+            visibility = if (activity.isDebugStatsEnabled) View.VISIBLE else View.GONE
+            setOnClickListener {
+                debugStatsModal.visibility = View.VISIBLE
+            }
+        }
+        utilsLayout.addView(btnDebugStats)
+
         controlsRow.addView(utilsLayout)
         bottomPanel.addView(controlsRow)
 
@@ -659,17 +789,6 @@ class VRControlsPresentation(
         
         bottomPanel.addView(timelineRow)
 
-        if (activity.isDebuggable) {
-            debugHudLabel = TextView(context).apply {
-                text = ""
-                typeface = VoidTheme.typefaceMono
-                textSize = 12f
-                setTextColor(VoidTheme.colorAccent)
-                setPadding(0, VoidTheme.dpToPx(context, 8f), 0, 0)
-            }
-            bottomPanel.addView(debugHudLabel)
-        }
-
         root.addView(bottomPanel)
 
         val overlay = FrameLayout(context)
@@ -712,10 +831,174 @@ class VRControlsPresentation(
         }
         overlay.addView(subtitleSelectionModal)
 
+        // Modal de Estatísticas Técnicas (Stats for Nerds / docs/reports/DEBUG-STATS-MODAL.md)
+        debugStatsModal = FrameLayout(context).apply {
+            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
+            setBackgroundColor(android.graphics.Color.parseColor("#E6000000"))
+            visibility = View.GONE
+            isClickable = true
+            setOnClickListener { debugStatsModal.visibility = View.GONE }
+
+            val panel = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = FrameLayout.LayoutParams(VoidTheme.dpToPx(context, 760f), VoidTheme.dpToPx(context, 540f)).apply {
+                    gravity = Gravity.CENTER
+                }
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(VoidTheme.colorSurface)
+                    cornerRadius = VoidTheme.dp(context, 16f)
+                    setStroke(VoidTheme.dpToPx(context, VoidTheme.borderWidthDp), VoidTheme.colorBorder)
+                }
+                setPadding(VoidTheme.dpToPx(context, 24f), VoidTheme.dpToPx(context, 20f), VoidTheme.dpToPx(context, 24f), VoidTheme.dpToPx(context, 20f))
+                isClickable = true
+            }
+
+            // Header do Modal
+            val header = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                    bottomMargin = VoidTheme.dpToPx(context, 12f)
+                }
+            }
+            val modalTitle = TextView(context).apply {
+                text = context.getString(R.string.debug_stats_modal_title)
+                typeface = VoidTheme.typefaceBody
+                textSize = 22f
+                setTextColor(VoidTheme.colorText)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f)
+            }
+            header.addView(modalTitle)
+
+            val btnCloseStats = VoidIconButton(context, R.drawable.icon_x, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+                layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 48f), VoidTheme.dpToPx(context, 48f))
+                setOnClickListener { debugStatsModal.visibility = View.GONE }
+            }
+            header.addView(btnCloseStats)
+            panel.addView(header)
+
+            // Scrollview das estatísticas
+            val scrollView = android.widget.ScrollView(context).apply {
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1.0f)
+                isVerticalScrollBarEnabled = false
+            }
+            val contentContainer = LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+            }
+
+            buildStatSection(
+                context.getString(R.string.debug_stats_section_video_render),
+                listOf(
+                    "resolution" to context.getString(R.string.debug_stats_label_resolution),
+                    "fps" to context.getString(R.string.debug_stats_label_fps),
+                    "dropped_frames" to context.getString(R.string.debug_stats_label_dropped_frames),
+                    "stutter_freeze" to context.getString(R.string.debug_stats_label_stutter_freeze),
+                    "jitter" to context.getString(R.string.debug_stats_label_video_jitter),
+                    "stereo" to context.getString(R.string.debug_stats_label_stereo_mode),
+                    "render_scale" to context.getString(R.string.debug_stats_label_render_scale),
+                    "backend" to context.getString(R.string.debug_stats_label_graphics_backend)
+                ),
+                contentContainer
+            )
+
+            buildStatSection(
+                context.getString(R.string.debug_stats_section_audio_sync),
+                listOf(
+                    "audio_codec" to context.getString(R.string.debug_stats_label_audio_format),
+                    "av_drift" to context.getString(R.string.debug_stats_label_av_drift),
+                    "spatial_audio" to context.getString(R.string.debug_stats_label_spatial_audio),
+                    "audio_track" to context.getString(R.string.debug_stats_label_audio_track),
+                    "subtitles" to context.getString(R.string.debug_stats_label_subtitles)
+                ),
+                contentContainer
+            )
+
+            buildStatSection(
+                context.getString(R.string.debug_stats_section_network_buffer),
+                listOf(
+                    "source" to context.getString(R.string.debug_stats_label_source),
+                    "net_speed" to context.getString(R.string.debug_stats_label_network_speed),
+                    "buffer_queue" to context.getString(R.string.debug_stats_label_buffer_queue),
+                    "fetch_latency" to context.getString(R.string.debug_stats_label_fetch_latency),
+                    "blocks" to context.getString(R.string.debug_stats_label_blocks),
+                    "seek_latency" to context.getString(R.string.debug_stats_label_seek_latency)
+                ),
+                contentContainer
+            )
+
+            buildStatSection(
+                context.getString(R.string.debug_stats_section_system),
+                listOf(
+                    "thermal" to context.getString(R.string.debug_stats_label_thermal),
+                    "battery" to context.getString(R.string.debug_stats_label_battery),
+                    "app_version" to context.getString(R.string.debug_stats_label_app_version)
+                ),
+                contentContainer
+            )
+
+            scrollView.addView(contentContainer)
+            panel.addView(scrollView)
+            addView(panel)
+        }
+        overlay.addView(debugStatsModal)
+
         setContentView(overlay)
 
         window?.setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
         window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+    }
+
+    private fun buildStatSection(titleText: String, rows: List<Pair<String, String>>, container: LinearLayout) {
+        val sectionHeader = com.tucavr.designsystem.VoidText.title(context, titleText, sizeSp = 16f).apply {
+            setPadding(0, VoidTheme.dpToPx(context, 10f), 0, VoidTheme.dpToPx(context, 6f))
+        }
+        container.addView(sectionHeader)
+
+        val card = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(VoidTheme.colorSurfaceAlt)
+                cornerRadius = VoidTheme.dp(context, 10f)
+            }
+            setPadding(VoidTheme.dpToPx(context, 16f), VoidTheme.dpToPx(context, 8f), VoidTheme.dpToPx(context, 16f), VoidTheme.dpToPx(context, 8f))
+            layoutParams = LinearLayout.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { bottomMargin = VoidTheme.dpToPx(context, 8f) }
+        }
+
+        rows.forEach { (key, label) ->
+            val row = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams = LinearLayout.LayoutParams(
+                    android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+                ).apply { topMargin = VoidTheme.dpToPx(context, 4f); bottomMargin = VoidTheme.dpToPx(context, 4f) }
+            }
+
+            val labelView = TextView(context).apply {
+                text = label
+                textSize = 14f
+                typeface = VoidTheme.typefaceBody
+                setTextColor(VoidTheme.colorTextSecondary)
+                layoutParams = LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1.2f)
+            }
+            val valueView = TextView(context).apply {
+                text = "—"
+                textSize = 14f
+                typeface = VoidTheme.typefaceMono
+                setTextColor(VoidTheme.colorText)
+                gravity = Gravity.END
+                layoutParams = LinearLayout.LayoutParams(0, android.view.ViewGroup.LayoutParams.WRAP_CONTENT, 1.8f)
+            }
+            debugStatValueViews[key] = valueView
+
+            row.addView(labelView)
+            row.addView(valueView)
+            card.addView(row)
+        }
+
+        container.addView(card)
     }
 
     private fun buildSubtitleModalContent() {

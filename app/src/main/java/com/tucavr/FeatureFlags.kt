@@ -30,6 +30,9 @@ object FeatureFlags {
 
         // Fase 0.2 T9: Carregamento automático de legendas (.srt / .vtt)
         AUTO_LOAD_SUBTITLES("auto_load_subtitles", defaultEnabled = true),
+
+        // Painel de Estatísticas Técnicas / Stats for Nerds (docs/reports/DEBUG-STATS-MODAL.md)
+        DEBUG_STATS_PANEL("debug_stats_panel", defaultEnabled = false),
     }
 
     fun isEnabled(context: Context, flag: Flag): Boolean =

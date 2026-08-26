@@ -5,7 +5,7 @@ use audio::output::AudioOutput;
 use crate::sync::SyncManager;
 use crate::texture::TextureOutput;
 use ndk::media::media_format::MediaFormat;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -137,6 +137,7 @@ pub struct PlaybackController {
     connection_cache: crate::demuxer::ConnectionCache,
     seek_started_at: Arc<Mutex<Option<Instant>>>,
     seek_latency_ms: Arc<AtomicU32>,
+    av_drift_ms: Arc<AtomicI32>,
     // Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
     subtitle_entries: Option<Vec<media_logic::subtitle::SubtitleEntry>>,
     selected_subtitle_track: i32,
@@ -167,6 +168,7 @@ impl PlaybackController {
             connection_cache: crate::demuxer::ConnectionCache::default(),
             seek_started_at: Arc::new(Mutex::new(None)),
             seek_latency_ms: Arc::new(AtomicU32::new(0)),
+            av_drift_ms: Arc::new(AtomicI32::new(0)),
             subtitle_entries: None,
             selected_subtitle_track: -1,
             subtitle_offset_ms: 0,
@@ -395,6 +397,7 @@ impl PlaybackController {
 
         let seek_started_at_v = self.seek_started_at.clone();
         let seek_latency_v = self.seek_latency_ms.clone();
+        let av_drift_v = self.av_drift_ms.clone();
 
         // Flags desta geracao: nao sao compartilhadas com nenhuma
         // sessao anterior ou futura (ver media_logic::session::Generation e
@@ -539,6 +542,8 @@ impl PlaybackController {
                                 }
                                 let master_clock = sync_v.get_master_clock();
                                 let delay = pts_sec - master_clock;
+                                let drift_ms = (-delay * 1000.0).clamp(i32::MIN as f64, i32::MAX as f64) as i32;
+                                av_drift_v.store(drift_ms, Ordering::Relaxed);
                                 if delay > 0.0 && delay < 1.0 {
                                     std::thread::sleep(std::time::Duration::from_secs_f64(delay));
                                 }
@@ -878,6 +883,11 @@ impl PlaybackController {
     // Duracao do ultimo seek concluido (pedido -> pre-roll terminou), em ms. 0 antes do primeiro.
     pub fn get_last_seek_latency_ms(&self) -> u32 {
         self.seek_latency_ms.load(Ordering::Relaxed)
+    }
+
+    // Drift A/V (master_clock - video_pts) do ultimo frame decodificado, em ms.
+    pub fn get_last_av_drift_ms(&self) -> f32 {
+        self.av_drift_ms.load(Ordering::Relaxed) as f32
     }
 
     pub fn toggle_play_pause(&mut self) {
