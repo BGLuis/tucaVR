@@ -148,15 +148,19 @@ extern "C" {
     extern uint8_t* smb_generate_thumbnail(const char* host, int32_t port, const char* username,
                                             const char* password, const char* domain, const char* share,
                                             const char* path, uint32_t max_width, uint32_t max_height,
+                                            uint64_t cancel_token,
                                             uint32_t* out_width, uint32_t* out_height, size_t* out_len);
     extern uint8_t* ftp_generate_thumbnail(const char* host, int32_t port, const char* username,
                                             const char* password, const char* path,
                                             uint32_t max_width, uint32_t max_height,
+                                            uint64_t cancel_token,
                                             uint32_t* out_width, uint32_t* out_height, size_t* out_len);
     extern uint8_t* sftp_generate_thumbnail(const char* host, int32_t port, const char* username,
                                              const char* password, const char* private_key, const char* path,
                                              uint32_t max_width, uint32_t max_height,
+                                             uint64_t cancel_token,
                                              uint32_t* out_width, uint32_t* out_height, size_t* out_len);
+    extern void cancel_thumbnail_generation(uint64_t cancel_token);
     extern void free_rust_thumbnail_buffer(uint8_t* ptr, size_t len);
 
     // Preview de arrasto no seekbar (T-seek-ux): trilha de thumbnails (N
@@ -684,7 +688,8 @@ Java_com_tucavr_VRActivity_nativeDiscoveryScan(JNIEnv* env, jobject thiz,
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_tucavr_VRActivity_nativeSmbGenerateThumbnail(JNIEnv* env, jobject thiz, jstring host, jint port,
                                                          jstring username, jstring password, jstring domain,
-                                                         jstring share, jstring path, jint maxWidth, jint maxHeight) {
+                                                         jstring share, jstring path, jint maxWidth, jint maxHeight,
+                                                         jlong cancelToken) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
     const char* userStr = env->GetStringUTFChars(username, nullptr);
     const char* passStr = env->GetStringUTFChars(password, nullptr);
@@ -695,7 +700,8 @@ Java_com_tucavr_VRActivity_nativeSmbGenerateThumbnail(JNIEnv* env, jobject thiz,
     uint32_t outWidth = 0, outHeight = 0;
     size_t outLen = 0;
     uint8_t* data = smb_generate_thumbnail(hostStr, (int32_t)port, userStr, passStr, domainStr, shareStr, pathStr,
-                                            (uint32_t)maxWidth, (uint32_t)maxHeight, &outWidth, &outHeight, &outLen);
+                                            (uint32_t)maxWidth, (uint32_t)maxHeight, (uint64_t)cancelToken,
+                                            &outWidth, &outHeight, &outLen);
 
     env->ReleaseStringUTFChars(host, hostStr);
     env->ReleaseStringUTFChars(username, userStr);
@@ -712,7 +718,8 @@ Java_com_tucavr_VRActivity_nativeSmbGenerateThumbnail(JNIEnv* env, jobject thiz,
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_tucavr_VRActivity_nativeFtpGenerateThumbnail(JNIEnv* env, jobject thiz, jstring host, jint port,
                                                          jstring username, jstring password, jstring path,
-                                                         jint maxWidth, jint maxHeight) {
+                                                         jint maxWidth, jint maxHeight,
+                                                         jlong cancelToken) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
     const char* userStr = env->GetStringUTFChars(username, nullptr);
     const char* passStr = env->GetStringUTFChars(password, nullptr);
@@ -721,7 +728,8 @@ Java_com_tucavr_VRActivity_nativeFtpGenerateThumbnail(JNIEnv* env, jobject thiz,
     uint32_t outWidth = 0, outHeight = 0;
     size_t outLen = 0;
     uint8_t* data = ftp_generate_thumbnail(hostStr, (int32_t)port, userStr, passStr, pathStr,
-                                            (uint32_t)maxWidth, (uint32_t)maxHeight, &outWidth, &outHeight, &outLen);
+                                            (uint32_t)maxWidth, (uint32_t)maxHeight, (uint64_t)cancelToken,
+                                            &outWidth, &outHeight, &outLen);
 
     env->ReleaseStringUTFChars(host, hostStr);
     env->ReleaseStringUTFChars(username, userStr);
@@ -737,7 +745,8 @@ Java_com_tucavr_VRActivity_nativeFtpGenerateThumbnail(JNIEnv* env, jobject thiz,
 extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_tucavr_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject thiz, jstring host, jint port,
                                                           jstring username, jstring password, jstring privateKey,
-                                                          jstring path, jint maxWidth, jint maxHeight) {
+                                                          jstring path, jint maxWidth, jint maxHeight,
+                                                          jlong cancelToken) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
     const char* userStr = env->GetStringUTFChars(username, nullptr);
     const char* passStr = env->GetStringUTFChars(password, nullptr);
@@ -747,7 +756,8 @@ Java_com_tucavr_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject thiz
     uint32_t outWidth = 0, outHeight = 0;
     size_t outLen = 0;
     uint8_t* data = sftp_generate_thumbnail(hostStr, (int32_t)port, userStr, passStr, keyStr, pathStr,
-                                             (uint32_t)maxWidth, (uint32_t)maxHeight, &outWidth, &outHeight, &outLen);
+                                             (uint32_t)maxWidth, (uint32_t)maxHeight, (uint64_t)cancelToken,
+                                             &outWidth, &outHeight, &outLen);
 
     env->ReleaseStringUTFChars(host, hostStr);
     env->ReleaseStringUTFChars(username, userStr);
@@ -756,6 +766,11 @@ Java_com_tucavr_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject thiz
     env->ReleaseStringUTFChars(path, pathStr);
 
     return RustThumbnailToJByteArrayAndFree(env, data, outLen);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeCancelThumbnailGeneration(JNIEnv* env, jobject, jlong cancelToken) {
+    cancel_thumbnail_generation((uint64_t)cancelToken);
 }
 
 // Preview de arrasto no seekbar (T-seek-ux): mesma logica de

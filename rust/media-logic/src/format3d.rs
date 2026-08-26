@@ -185,7 +185,60 @@ impl Format3D {
             Format3D::Vr180Sbs => 9,
         }
     }
+
+    /// Determina a região de corte do thumbnail para este formato estereoscópico.
+    pub fn thumbnail_crop_region(&self) -> ThumbnailCropRegion {
+        match self {
+            Format3D::Flat2D | Format3D::Spherical360Mono | Format3D::Vr180Mono => {
+                ThumbnailCropRegion::None
+            }
+            Format3D::SbsFull
+            | Format3D::SbsHalf
+            | Format3D::Spherical360SbsFull
+            | Format3D::Spherical360SbsHalf
+            | Format3D::Vr180Sbs => ThumbnailCropRegion::LeftHalf,
+            Format3D::OverUnderFull
+            | Format3D::OverUnderHalf
+            | Format3D::Spherical360OverUnderFull
+            | Format3D::Spherical360OverUnderHalf => ThumbnailCropRegion::TopHalf,
+        }
+    }
+
+    /// Calcula a largura e altura recortadas para o thumbnail a partir das dimensões do frame.
+    /// Garante alinhamento par para manter a integridade de croma YUV subsampleado (ex: YUV420).
+    pub fn thumbnail_dimensions(&self, src_w: u32, src_h: u32) -> ThumbnailDimensions {
+        match self.thumbnail_crop_region() {
+            ThumbnailCropRegion::None => ThumbnailDimensions {
+                width: src_w,
+                height: src_h,
+            },
+            ThumbnailCropRegion::LeftHalf => ThumbnailDimensions {
+                width: (src_w / 2) & !1,
+                height: src_h,
+            },
+            ThumbnailCropRegion::TopHalf => ThumbnailDimensions {
+                width: src_w,
+                height: (src_h / 2) & !1,
+            },
+        }
+    }
 }
+
+/// Região de corte para thumbnail de um único olho em vídeos estereoscópicos.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThumbnailCropRegion {
+    None,
+    LeftHalf,
+    TopHalf,
+}
+
+/// Dimensões pós-recorte para geração de thumbnail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ThumbnailDimensions {
+    pub width: u32,
+    pub height: u32,
+}
+
 
 // SBS: aspecto de frame full (dois olhos completos lado a lado) e cerca do
 // dobro do de um frame normal; half (olhos espremidos pra caber num frame
@@ -1024,4 +1077,56 @@ mod tests {
             Some(Format3D::SbsHalf) // aspect 0.0 < 2.4 -> Half
         );
     }
+
+    #[test]
+    fn test_thumbnail_crop_region_and_dimensions() {
+        // Flat 2D e Mono não recortam
+        assert_eq!(Format3D::Flat2D.thumbnail_crop_region(), ThumbnailCropRegion::None);
+        assert_eq!(
+            Format3D::Flat2D.thumbnail_dimensions(1920, 1080),
+            ThumbnailDimensions { width: 1920, height: 1080 }
+        );
+        assert_eq!(Format3D::Spherical360Mono.thumbnail_crop_region(), ThumbnailCropRegion::None);
+        assert_eq!(Format3D::Vr180Mono.thumbnail_crop_region(), ThumbnailCropRegion::None);
+
+        // SBS corta metade esquerda (com alinhamento par)
+        assert_eq!(Format3D::SbsFull.thumbnail_crop_region(), ThumbnailCropRegion::LeftHalf);
+        assert_eq!(
+            Format3D::SbsFull.thumbnail_dimensions(3840, 1080),
+            ThumbnailDimensions { width: 1920, height: 1080 }
+        );
+        assert_eq!(Format3D::SbsHalf.thumbnail_crop_region(), ThumbnailCropRegion::LeftHalf);
+        assert_eq!(
+            Format3D::SbsHalf.thumbnail_dimensions(1920, 1080),
+            ThumbnailDimensions { width: 960, height: 1080 }
+        );
+        assert_eq!(Format3D::Vr180Sbs.thumbnail_crop_region(), ThumbnailCropRegion::LeftHalf);
+        assert_eq!(
+            Format3D::Vr180Sbs.thumbnail_dimensions(7680, 3840),
+            ThumbnailDimensions { width: 3840, height: 3840 }
+        );
+
+        // Over/Under corta metade superior
+        assert_eq!(Format3D::OverUnderFull.thumbnail_crop_region(), ThumbnailCropRegion::TopHalf);
+        assert_eq!(
+            Format3D::OverUnderFull.thumbnail_dimensions(1920, 2160),
+            ThumbnailDimensions { width: 1920, height: 1080 }
+        );
+        assert_eq!(Format3D::OverUnderHalf.thumbnail_crop_region(), ThumbnailCropRegion::TopHalf);
+        assert_eq!(
+            Format3D::OverUnderHalf.thumbnail_dimensions(1920, 1080),
+            ThumbnailDimensions { width: 1920, height: 540 }
+        );
+
+        // Teste de alinhamento ímpar -> par
+        assert_eq!(
+            Format3D::SbsFull.thumbnail_dimensions(1921, 1080),
+            ThumbnailDimensions { width: 960, height: 1080 }
+        );
+        assert_eq!(
+            Format3D::OverUnderFull.thumbnail_dimensions(1920, 1081),
+            ThumbnailDimensions { width: 1920, height: 540 }
+        );
+    }
 }
+

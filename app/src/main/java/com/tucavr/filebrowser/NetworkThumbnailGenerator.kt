@@ -3,13 +3,20 @@ package com.tucavr.filebrowser
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.LruCache
 import com.tucavr.VRActivity
 import com.tucavr.navigation.PlaybackSource
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.coroutineContext
 
 // Contraparte de rede do ThumbnailGenerator local (ver esse arquivo para o
 // raciocinio do cache em disco). A geracao em si e feita do lado Rust
@@ -22,6 +29,16 @@ object NetworkThumbnailGenerator {
     const val THUMB_HEIGHT = 288
     private const val CACHE_DIR_NAME = "network_thumbnails_v2"
 
+    // Trabalho 1: Gate adaptativo de orçamento de memória para limitar a concorrência
+    // e impedir OOM em pastas contendo múltiplos vídeos 8K.
+    internal val budgetGate = MemoryBudgetGate()
+
+    // Gate leve para operações de probe de metadados antes da decodificação.
+    private val probeSemaphore = Semaphore(4)
+
+    // Gerador de tokens para cancelamento cooperativo instantâneo no Rust.
+    private val nextCancelToken = AtomicLong(1L)
+
     suspend fun getThumbnail(context: Context, activity: VRActivity, source: PlaybackSource): Bitmap? {
         return withContext(Dispatchers.IO) {
             val cacheFile = cacheFileFor(context, source)
@@ -29,7 +46,32 @@ object NetworkThumbnailGenerator {
             val cached = if (cacheFile.exists()) BitmapFactory.decodeFile(cacheFile.absolutePath) else null
             if (cached != null) return@withContext cached
 
-            val rgba = generateRgba(activity, source) ?: return@withContext null
+            if (!coroutineContext.isActive) return@withContext null
+
+            // 1. Fase de Probe com cache em disco do resultado (.meta)
+            val key = cacheKeyFor(source)
+            val metaCacheFile = File(context.cacheDir, "$CACHE_DIR_NAME/$key.meta")
+            val (width, height) = readCachedDimensions(metaCacheFile) ?: probeDimensions(activity, source, metaCacheFile)
+
+            if (!coroutineContext.isActive) return@withContext null
+
+            // 2. Estima o custo de memória nativa
+            val costBytes = MemoryBudgetGate.calculateCostBytes(width, height)
+
+            // 3. Registra cancelToken para cancelamento cooperativo no Rust via invokeOnCompletion
+            val cancelToken = nextCancelToken.incrementAndGet()
+            coroutineContext[Job]?.invokeOnCompletion { cause ->
+                if (cause != null) {
+                    activity.nativeCancelThumbnailGeneration(cancelToken)
+                }
+            }
+
+            // 4. Adquire orçamento no gate e decodifica
+            val rgba = budgetGate.withBudget(costBytes) {
+                if (!coroutineContext.isActive) return@withBudget null
+                generateRgba(activity, source, cancelToken)
+            } ?: return@withContext null
+
             val bitmap = Bitmap.createBitmap(THUMB_WIDTH, THUMB_HEIGHT, Bitmap.Config.ARGB_8888).apply {
                 copyPixelsFromBuffer(ByteBuffer.wrap(rgba))
             }
@@ -38,22 +80,54 @@ object NetworkThumbnailGenerator {
         }
     }
 
+    private fun readCachedDimensions(metaFile: File): Pair<Int, Int>? {
+        return runCatching {
+            if (!metaFile.exists()) return null
+            val line = metaFile.readText().trim()
+            val parts = line.split("x")
+            if (parts.size == 2) {
+                val w = parts[0].toIntOrNull() ?: return null
+                val h = parts[1].toIntOrNull() ?: return null
+                Pair(w, h)
+            } else null
+        }.getOrNull()
+    }
+
+    private suspend fun probeDimensions(activity: VRActivity, source: PlaybackSource, metaFile: File): Pair<Int, Int> {
+        return probeSemaphore.withPermit {
+            readCachedDimensions(metaFile)?.let { return@withPermit it }
+
+            val meta = runCatching { MediaMetadataReader.read(activity, source) }.getOrNull()
+            val videoTrack = meta?.videoTracks?.firstOrNull()
+            val w = videoTrack?.width ?: 0
+            val h = videoTrack?.height ?: 0
+
+            if (w > 0 && h > 0) {
+                runCatching {
+                    metaFile.parentFile?.mkdirs()
+                    metaFile.writeText("${w}x${h}")
+                }
+            }
+            Pair(w, h)
+        }
+    }
+
     // Chamada BLOQUEANTE (rede + decode sincronos do lado Rust) -- so deve
     // ser chamada de Dispatchers.IO, mesma ressalva documentada em
     // rust/bridge/src/lib.rs junto de smb_generate_thumbnail.
-    private fun generateRgba(activity: VRActivity, source: PlaybackSource): ByteArray? {
+    private fun generateRgba(activity: VRActivity, source: PlaybackSource, cancelToken: Long): ByteArray? {
         return when (source) {
             is PlaybackSource.Smb -> activity.nativeSmbGenerateThumbnail(
                 source.server.host, source.server.port, source.server.username, source.server.password,
-                source.server.domain, source.server.share, source.path, THUMB_WIDTH, THUMB_HEIGHT
+                source.server.domain, source.server.share, source.path, THUMB_WIDTH, THUMB_HEIGHT, cancelToken
             )
             is PlaybackSource.Ftp -> activity.nativeFtpGenerateThumbnail(
                 source.server.host, source.server.port, source.server.username, source.server.password,
-                source.path, THUMB_WIDTH, THUMB_HEIGHT
+                source.path, THUMB_WIDTH, THUMB_HEIGHT, cancelToken
             )
             is PlaybackSource.Sftp -> activity.nativeSftpGenerateThumbnail(
                 source.server.host, source.server.port, source.server.username, source.server.password,
-                source.server.privateKey ?: "", source.path, THUMB_WIDTH, THUMB_HEIGHT
+                source.server.privateKey ?: "", source.path, THUMB_WIDTH, THUMB_HEIGHT, cancelToken
             )
             is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Dlna -> null
         }
@@ -123,12 +197,11 @@ object NetworkThumbnailGenerator {
     private const val SCRUB_INTERVAL_SECONDS = 15f
     private const val SCRUB_CACHE_DIR_NAME = "network_scrub_strips"
 
-    // Cache em memoria (alem do disco): evita reler/realocar o blob a cada
-    // vez que o usuario abre os controles do mesmo video na mesma sessao do
-    // app. Nunca invalidado explicitamente — o processo inteiro morre
-    // quando o app fecha, e o cache em disco (chave por sha256) ja cuida de
-    // detectar arquivo trocado (ver cacheKeyFor).
-    private val scrubMemoryCache = mutableMapOf<String, ScrubStrip>()
+    // Cache em memoria dimensionado por bytes (64 MiB) para evitar vazamento
+    // em sessões longas, com evicção automática LRU.
+    private val scrubMemoryCache = object : LruCache<String, ScrubStrip>(64 * 1024 * 1024) {
+        override fun sizeOf(key: String, value: ScrubStrip): Int = value.byteCount
+    }
 
     /**
      * Gera (ou reaproveita do cache) a trilha de preview de arrasto pra
@@ -141,14 +214,14 @@ object NetworkThumbnailGenerator {
      */
     suspend fun getScrubStrip(context: Context, activity: VRActivity, source: PlaybackSource): ScrubStrip? {
         val key = runCatching { cacheKeyFor(source) }.getOrNull() ?: return null
-        scrubMemoryCache[key]?.let { return it }
+        scrubMemoryCache.get(key)?.let { return it }
 
         return withContext(Dispatchers.IO) {
             val cacheFile = scrubCacheFileFor(context, key)
             val cachedRgba = if (cacheFile.exists()) runCatching { cacheFile.readBytes() }.getOrNull() else null
             val rgba = cachedRgba ?: generateScrubRgba(activity, source)?.also { writeScrubCache(it, cacheFile) }
             val strip = rgba?.let { ScrubStrip(it, SCRUB_WIDTH, SCRUB_HEIGHT, SCRUB_INTERVAL_SECONDS) } ?: return@withContext null
-            scrubMemoryCache[key] = strip
+            scrubMemoryCache.put(key, strip)
             strip
         }
     }
@@ -193,6 +266,7 @@ object NetworkThumbnailGenerator {
 class ScrubStrip(private val rgba: ByteArray, val frameWidth: Int, val frameHeight: Int, val intervalSeconds: Float) {
     private val frameBytes = frameWidth * frameHeight * 4
     val count: Int get() = if (frameBytes == 0) 0 else rgba.size / frameBytes
+    val byteCount: Int get() = rgba.size
 
     /** Frame mais proximo de `positionSeconds`, ou null se a trilha estiver vazia. */
     fun bitmapAt(positionSeconds: Float): Bitmap? {
