@@ -27,11 +27,14 @@ data class FolderSummary(
  */
 object FolderPreviewGenerator {
 
-    private val summaryCache = mutableMapOf<String, FolderSummary>()
-    private val mosaicCache = mutableMapOf<String, Bitmap>()
+    // Caches limitados para evitar vazamento de memória nativa com bitmaps de mosaicos
+    private val summaryCache = android.util.LruCache<String, FolderSummary>(200)
+    private val mosaicCache = object : android.util.LruCache<String, Bitmap>(32 * 1024 * 1024) { // 32 MiB
+        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
+    }
 
     suspend fun getSummary(dirPath: String): FolderSummary? = withContext(Dispatchers.IO) {
-        summaryCache[dirPath]?.let { return@withContext it }
+        summaryCache.get(dirPath)?.let { return@withContext it }
 
         val dir = File(dirPath)
         if (!dir.exists() || !dir.isDirectory) return@withContext null
@@ -81,7 +84,7 @@ object FolderPreviewGenerator {
             available3DFormats = formats3D
         )
 
-        summaryCache[dirPath] = summary
+        summaryCache.put(dirPath, summary)
         summary
     }
 
@@ -93,7 +96,7 @@ object FolderPreviewGenerator {
         dirPath: String,
         thumbnailLoader: (suspend (MediaEntry) -> Bitmap?)? = null
     ): Bitmap? = withContext(Dispatchers.IO) {
-        mosaicCache[dirPath]?.let { return@withContext it }
+        mosaicCache.get(dirPath)?.let { return@withContext it }
 
         val summary = getSummary(dirPath) ?: return@withContext null
         if (summary.previewEntries.isEmpty()) return@withContext null
@@ -114,7 +117,7 @@ object FolderPreviewGenerator {
 
         val mosaic = createFolderMosaic(loadedBitmaps)
         if (mosaic != null) {
-            mosaicCache[dirPath] = mosaic
+            mosaicCache.put(dirPath, mosaic)
         }
         mosaic
     }
@@ -226,7 +229,7 @@ object FolderPreviewGenerator {
     }
 
     fun clearCache() {
-        summaryCache.clear()
-        mosaicCache.clear()
+        summaryCache.evictAll()
+        mosaicCache.evictAll()
     }
 }

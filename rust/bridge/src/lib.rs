@@ -1366,6 +1366,7 @@ pub extern "C" fn smb_generate_thumbnail(
     path: *const std::os::raw::c_char,
     max_width: u32,
     max_height: u32,
+    cancel_token: u64,
     out_width: *mut u32,
     out_height: *mut u32,
     out_len: *mut usize,
@@ -1388,7 +1389,7 @@ pub extern "C" fn smb_generate_thumbnail(
         }
     };
     let internal_uri = target.to_internal();
-    let image = core::thumbnail::generate(&internal_uri, max_width, max_height);
+    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
     write_thumbnail(image, out_width, out_height, out_len)
 }
 
@@ -1403,6 +1404,7 @@ pub extern "C" fn ftp_generate_thumbnail(
     path: *const std::os::raw::c_char,
     max_width: u32,
     max_height: u32,
+    cancel_token: u64,
     out_width: *mut u32,
     out_height: *mut u32,
     out_len: *mut usize,
@@ -1421,7 +1423,7 @@ pub extern "C" fn ftp_generate_thumbnail(
         }
     };
     let internal_uri = target.to_internal();
-    let image = core::thumbnail::generate(&internal_uri, max_width, max_height);
+    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
     write_thumbnail(image, out_width, out_height, out_len)
 }
 
@@ -1439,6 +1441,7 @@ pub extern "C" fn sftp_generate_thumbnail(
     path: *const std::os::raw::c_char,
     max_width: u32,
     max_height: u32,
+    cancel_token: u64,
     out_width: *mut u32,
     out_height: *mut u32,
     out_len: *mut usize,
@@ -1462,8 +1465,14 @@ pub extern "C" fn sftp_generate_thumbnail(
         return write_thumbnail(None, out_width, out_height, out_len);
     }
     let internal_uri = target.to_internal();
-    let image = core::thumbnail::generate(&internal_uri, max_width, max_height);
+    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
     write_thumbnail(image, out_width, out_height, out_len)
+}
+
+/// Cancela a geração de um thumbnail de listagem em andamento identificada por `cancel_token`.
+#[no_mangle]
+pub extern "C" fn cancel_thumbnail_generation(cancel_token: u64) {
+    core::thumbnail::cancel_thumbnail_generation(cancel_token);
 }
 
 /// Libera o buffer retornado por `smb_generate_thumbnail_strip`/

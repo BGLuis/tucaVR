@@ -935,7 +935,8 @@ class VRActivity : NativeActivity() {
         share: String,
         path: String,
         maxWidth: Int,
-        maxHeight: Int
+        maxHeight: Int,
+        cancelToken: Long
     ): ByteArray?
 
     external fun nativeFtpGenerateThumbnail(
@@ -945,7 +946,8 @@ class VRActivity : NativeActivity() {
         password: String,
         path: String,
         maxWidth: Int,
-        maxHeight: Int
+        maxHeight: Int,
+        cancelToken: Long
     ): ByteArray?
 
     external fun nativeSftpGenerateThumbnail(
@@ -956,8 +958,12 @@ class VRActivity : NativeActivity() {
         privateKey: String,
         path: String,
         maxWidth: Int,
-        maxHeight: Int
+        maxHeight: Int,
+        cancelToken: Long
     ): ByteArray?
+
+    // Cancela a geração de um thumbnail em andamento associada ao cancelToken
+    external fun nativeCancelThumbnailGeneration(cancelToken: Long)
 
     // Preview de arrasto no seekbar (T-seek-ux): mesma logica das duas
     // funcoes acima, so que devolve N frames concatenados (um a cada
