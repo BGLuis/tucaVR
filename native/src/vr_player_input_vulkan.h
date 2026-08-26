@@ -612,6 +612,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.controlsIdleTime = 0.0f;
         }
     }
+    state.prevA = currA;
+    state.prevX = currX;
     state.prevB = currB;
     state.prevY = currY;
 

@@ -167,3 +167,41 @@ inline Mat4 Mat4ProjectionFromFov(const XrFovf& fov, float nearZ, float farZ) {
     r.m[11] = -1.0f;
     return r;
 }
+
+inline XrQuaternionf QuatFromYaw(float yaw) {
+    return {0.0f, sinf(yaw * 0.5f), 0.0f, cosf(yaw * 0.5f)};
+}
+
+inline XrQuaternionf QuatFromMat4(const Mat4& m) {
+    XrQuaternionf q{};
+    float trace = m.m[0] + m.m[5] + m.m[10];
+    if (trace > 0.0f) {
+        float s = 0.5f / sqrtf(trace + 1.0f);
+        q.w = 0.25f / s;
+        q.x = (m.m[6] - m.m[9]) * s;
+        q.y = (m.m[8] - m.m[2]) * s;
+        q.z = (m.m[1] - m.m[4]) * s;
+    } else {
+        if (m.m[0] > m.m[5] && m.m[0] > m.m[10]) {
+            float s = 2.0f * sqrtf(1.0f + m.m[0] - m.m[5] - m.m[10]);
+            q.w = (m.m[6] - m.m[9]) / s;
+            q.x = 0.25f * s;
+            q.y = (m.m[4] + m.m[1]) / s;
+            q.z = (m.m[8] + m.m[2]) / s;
+        } else if (m.m[5] > m.m[10]) {
+            float s = 2.0f * sqrtf(1.0f + m.m[5] - m.m[0] - m.m[10]);
+            q.w = (m.m[8] - m.m[2]) / s;
+            q.x = (m.m[4] + m.m[1]) / s;
+            q.y = 0.25f * s;
+            q.z = (m.m[9] + m.m[6]) / s;
+        } else {
+            float s = 2.0f * sqrtf(1.0f + m.m[10] - m.m[0] - m.m[5]);
+            q.w = (m.m[1] - m.m[4]) / s;
+            q.x = (m.m[8] + m.m[2]) / s;
+            q.y = (m.m[9] + m.m[6]) / s;
+            q.z = 0.25f * s;
+        }
+    }
+    return q;
+}
+

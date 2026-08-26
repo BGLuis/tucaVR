@@ -631,6 +631,7 @@ class VRControlsPresentation(
             layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
                 leftMargin = VoidTheme.dpToPx(context, 8f)
             }
+            contentDescription = context.getString(R.string.player_btn_debug_stats)
             visibility = if (activity.isDebugStatsEnabled) View.VISIBLE else View.GONE
             setOnClickListener {
                 activity.openDebugStatsModal()

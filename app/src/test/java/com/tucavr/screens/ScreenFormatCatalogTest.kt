@@ -58,4 +58,27 @@ class ScreenFormatCatalogTest {
             assertTrue("Modo $mode deve ser esférico", ScreenFormatCatalog.isSpherical(mode))
         }
     }
+
+    @Test
+    fun testContractParityWithNativeAndRust() {
+        // Invariante de contrato cross-language:
+        // C-ABI ScreenMode em C++ (screen_mode.h) e Rust (format3d.rs)
+        val expectedContract = listOf(
+            0 to "Flat2D",
+            1 to "SBS",
+            2 to "SBSHalf",
+            3 to "OU",
+            4 to "OUHalf",
+            5 to "Sphere360",
+            6 to "Sphere180",
+            7 to "Sphere360SBS",
+            8 to "Sphere360OU",
+            9 to "Vr180SBS"
+        )
+        assertEquals(10, ScreenFormatCatalog.entries.size)
+        expectedContract.forEach { (expectedIndex, modeKey) ->
+            val entry = ScreenFormatCatalog.get(expectedIndex)
+            assertEquals("O índice do modo $modeKey deve ser exatamente $expectedIndex", expectedIndex, entry.index)
+        }
+    }
 }

@@ -36,6 +36,7 @@ class VRModalPresentation(
     private lateinit var rootContainer: FrameLayout
     private var currentModalView: View? = null
     private var currentDebugStatsModal: DebugStatsModal? = null
+    private var lastStatsWire: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,12 +97,24 @@ class VRModalPresentation(
         )
         currentDebugStatsModal = modal
         showModal(modal)
+
+        lastStatsWire?.let { wire ->
+            modal.updateStats(
+                text = wire,
+                meta = activity.currentMediaMetadata,
+                source = activity.currentPlaybackSource,
+                isCharging = activity.isBatteryCharging(),
+                batteryPercent = activity.getBatteryPercent(),
+                isDebuggable = activity.isDebuggable
+            )
+        }
     }
 
     /**
      * Atualiza as estatísticas no modal se estiver ativo.
      */
     fun updateDebugStats(text: String) {
+        lastStatsWire = text
         val modal = currentDebugStatsModal ?: return
         val batteryPct = activity.getBatteryPercent()
         val isCharging = activity.isBatteryCharging()

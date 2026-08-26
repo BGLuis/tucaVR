@@ -44,6 +44,7 @@
 #include <vector>
 
 #include "vk_math.h"
+#include "screen_mode.h"
 #include "vr_player_feedback_overlay.h"
 #include "debug_stats.h"
 #include "quad.vert.h"
@@ -221,61 +222,7 @@ constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz
 constexpr float kFreezeThresholdMs = 250.0f; // stall claro, nao so reprojection
 constexpr float kVideoStallThresholdMs = 500.0f; // decode/rede travado (ver AppState.msSinceLastVideoFrame)
 
-// ScreenMode espelha exatamente o enum do caminho GLES (vr_player_app.cpp:370-381)
-enum class ScreenMode : uint32_t {
-    Flat2D      = 0,
-    SBS         = 1,
-    SBSHalf     = 2,
-    OU          = 3,
-    OUHalf      = 4,
-    Sphere360   = 5,
-    Sphere180   = 6,
-    Sphere360SBS = 7,
-    Sphere360OU = 8,
-    Vr180SBS    = 9,
-};
-
-// Debug: nome legivel do ScreenMode pro logcat.
-static const char* ScreenModeName(ScreenMode mode) {
-    switch (mode) {
-        case ScreenMode::Flat2D: return "Flat2D";
-        case ScreenMode::SBS: return "SBS";
-        case ScreenMode::SBSHalf: return "SBSHalf";
-        case ScreenMode::OU: return "OU";
-        case ScreenMode::OUHalf: return "OUHalf";
-        case ScreenMode::Sphere360: return "Sphere360";
-        case ScreenMode::Sphere180: return "Sphere180";
-        case ScreenMode::Sphere360SBS: return "Sphere360SBS";
-        case ScreenMode::Sphere360OU: return "Sphere360OU";
-        case ScreenMode::Vr180SBS: return "Vr180SBS";
-        default: return "Desconhecido";
-    }
-}
-
-static bool IsSphereMode(ScreenMode mode) {
-    switch (mode) {
-        case ScreenMode::Sphere360:
-        case ScreenMode::Sphere180:
-        case ScreenMode::Sphere360SBS:
-        case ScreenMode::Sphere360OU:
-        case ScreenMode::Vr180SBS:
-            return true;
-        default:
-            return false;
-    }
-}
-
-static bool IsFlatStereoMode(ScreenMode mode) {
-    switch (mode) {
-        case ScreenMode::SBS:
-        case ScreenMode::SBSHalf:
-        case ScreenMode::OU:
-        case ScreenMode::OUHalf:
-            return true;
-        default:
-            return false;
-    }
-}
+// ScreenMode e helpers estao centralizados em screen_mode.h
 
 // Parâmetros de estereo para o push constant do stereo.vert/frag
 struct StereoParams {
@@ -481,6 +428,18 @@ struct AppState {
     float modalAlpha = 0.0f;
     bool modalHasFrame = false;
     bool modalActive = false;
+
+    // R-01 & R-06: Swapchains OpenXR dedicados para composição de painéis 2D como XrCompositionLayerQuad
+    struct ImportedUiHwb {
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+    };
+    std::unordered_map<AHardwareBuffer*, ImportedUiHwb> uiHwbCache;
+    EyeSwapchain uiPanelSwapchain;
+    EyeSwapchain controlsPanelSwapchain;
+    EyeSwapchain modalPanelSwapchain;
+    EyeSwapchain cursorSwapchain;
+    VkCommandBuffer uiCopyCmd = VK_NULL_HANDLE;
 
     // Preview de arrasto sobre o quad do video (T-seek-ux): reaproveita
     // uiPipeline/uiPipelineLayout/uiSampler (RGBA8 comum, sem YCbCr) — so
@@ -1099,10 +1058,21 @@ void CreateSwapchains(AppState& state) {
     OXR(xrEnumerateSwapchainFormats(state.session, formatCount, &formatCount, formats.data()));
 
     int64_t chosenFormat = 0;
+    // R-05: xrEnumerateSwapchainFormats devolve a lista em ordem de preferência
+    // do runtime (Meta lista sRGB primeiro). Preferimos formatos sRGB, caindo
+    // para UNORM apenas como fallback.
     for (int64_t format : formats) {
-        if (format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_B8G8R8A8_UNORM) {
+        if (format == VK_FORMAT_R8G8B8A8_SRGB || format == VK_FORMAT_B8G8R8A8_SRGB) {
             chosenFormat = format;
             break;
+        }
+    }
+    if (chosenFormat == 0) {
+        for (int64_t format : formats) {
+            if (format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_B8G8R8A8_UNORM) {
+                chosenFormat = format;
+                break;
+            }
         }
     }
     if (chosenFormat == 0) chosenFormat = formats.front();
@@ -1132,6 +1102,36 @@ void CreateSwapchains(AppState& state) {
             eyeChain.handle, imageCount, &imageCount,
             reinterpret_cast<XrSwapchainImageBaseHeader*>(eyeChain.images.data())));
     }
+
+    // R-01: Swapchains OpenXR dedicados para composição de painéis 2D como XrCompositionLayerQuad
+    auto createPanelChain = [&](EyeSwapchain& chain, uint32_t width, uint32_t height) {
+        chain.width = static_cast<int32_t>(width);
+        chain.height = static_cast<int32_t>(height);
+        XrSwapchainCreateInfo pInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+        pInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT |
+                           XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
+                           0x00000010; // XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT
+        pInfo.format = chosenFormat;
+        pInfo.sampleCount = 1;
+        pInfo.width = width;
+        pInfo.height = height;
+        pInfo.faceCount = 1;
+        pInfo.arraySize = 1;
+        pInfo.mipCount = 1;
+        OXR(xrCreateSwapchain(state.session, &pInfo, &chain.handle));
+
+        uint32_t imgCount = 0;
+        OXR(xrEnumerateSwapchainImages(chain.handle, 0, &imgCount, nullptr));
+        chain.images.assign(imgCount, XrSwapchainImageVulkanKHR{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
+        OXR(xrEnumerateSwapchainImages(
+            chain.handle, imgCount, &imgCount,
+            reinterpret_cast<XrSwapchainImageBaseHeader*>(chain.images.data())));
+    };
+
+    createPanelChain(state.uiPanelSwapchain, kUiTexWidth, kUiTexHeight);
+    createPanelChain(state.controlsPanelSwapchain, kControlsTexWidth, kControlsTexHeight);
+    createPanelChain(state.modalPanelSwapchain, kModalTexWidth, kModalTexHeight);
+    createPanelChain(state.cursorSwapchain, 64, 64);
 }
 
 // Fase 0.4 T5: Foveated Rendering fixo via XR_FB_foveation — NAO e Vulkan
@@ -1691,103 +1691,268 @@ static void CreateUiImage(AppState& state, uint32_t width, uint32_t height,
     VKR(vkCreateImageView(state.vkDevice, &viewInfo, nullptr, &outView));
 }
 
-// Atualiza uma VkImage de UI a partir de um AHardwareBuffer (RGBA8888).
-// Usa blit via staging buffer (a forma mais portavel — sem extensoes EGL).
-// Chamado a cada frame que um novo AImage esta disponivel via AImageReader.
-static void UpdateUiImageFromHwb(AppState& state, AHardwareBuffer* hwb, VkImage dstImage,
-                                  uint32_t width, uint32_t height) {
-    // Lockear o AHardwareBuffer para leitura da CPU
-    void* src = nullptr;
-    AHardwareBuffer_lock(hwb, AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, -1, nullptr, &src);
-    if (!src) return;
+// R-01 & R-06: Atualiza o swapchain OpenXR do painel a partir de um AHardwareBuffer
+// usando importacao direta como VkImage externa e copia por GPU (zero-copy),
+// eliminando lock de CPU, memcpy e vkQueueWaitIdle.
+static void UpdatePanelSwapchainFromHwb(AppState& state, EyeSwapchain& panelChain,
+                                       AHardwareBuffer* hwb, uint32_t width, uint32_t height) {
+    if (!hwb || panelChain.handle == XR_NULL_HANDLE || state.uiCopyCmd == VK_NULL_HANDLE) return;
 
-    AHardwareBuffer_Desc desc{};
-    AHardwareBuffer_describe(hwb, &desc);
-    const uint32_t rowBytes = desc.stride * 4; // RGBA8888
+    // 1. Obter ou importar VkImage vinculada ao AHardwareBuffer
+    auto it = state.uiHwbCache.find(hwb);
+    if (it == state.uiHwbCache.end()) {
+        auto pfnGetProperties = reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(
+            vkGetDeviceProcAddr(state.vkDevice, "vkGetAndroidHardwareBufferPropertiesANDROID"));
+        if (!pfnGetProperties) {
+            LOGE("vkGetAndroidHardwareBufferPropertiesANDROID nao disponivel para UI");
+            return;
+        }
 
-    // Criar staging buffer
-    const VkDeviceSize bufSize = (VkDeviceSize)rowBytes * height;
+        VkAndroidHardwareBufferFormatPropertiesANDROID formatProps{
+            VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_FORMAT_PROPERTIES_ANDROID};
+        VkAndroidHardwareBufferPropertiesANDROID hwbProps{
+            VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID};
+        hwbProps.pNext = &formatProps;
+
+        if (pfnGetProperties(state.vkDevice, hwb, &hwbProps) != VK_SUCCESS) {
+            LOGE("vkGetAndroidHardwareBufferPropertiesANDROID falhou para UI");
+            return;
+        }
+
+        VkExternalMemoryImageCreateInfo extMemInfo{
+            VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
+        extMemInfo.handleTypes =
+            VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+
+        AHardwareBuffer_Desc hwbDesc{};
+        AHardwareBuffer_describe(hwb, &hwbDesc);
+
+        VkImageCreateInfo imgInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        imgInfo.pNext = &extMemInfo;
+        imgInfo.imageType = VK_IMAGE_TYPE_2D;
+        imgInfo.format = (formatProps.format != VK_FORMAT_UNDEFINED) ? formatProps.format : VK_FORMAT_R8G8B8A8_UNORM;
+        imgInfo.extent = {hwbDesc.width, hwbDesc.height, 1};
+        imgInfo.mipLevels = 1;
+        imgInfo.arrayLayers = 1;
+        imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        AppState::ImportedUiHwb imported{};
+        if (vkCreateImage(state.vkDevice, &imgInfo, nullptr, &imported.image) != VK_SUCCESS) {
+            LOGE("vkCreateImage para UI AHardwareBuffer falhou");
+            return;
+        }
+
+        VkImportAndroidHardwareBufferInfoANDROID importInfo{
+            VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID};
+        importInfo.buffer = hwb;
+
+        VkMemoryDedicatedAllocateInfo dedicatedAlloc{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+        dedicatedAlloc.pNext = &importInfo;
+        dedicatedAlloc.image = imported.image;
+
+        VkMemoryAllocateInfo memAlloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        memAlloc.pNext = &dedicatedAlloc;
+        memAlloc.allocationSize = hwbProps.allocationSize;
+        memAlloc.memoryTypeIndex = FindMemoryType(state, hwbProps.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        if (vkAllocateMemory(state.vkDevice, &memAlloc, nullptr, &imported.memory) != VK_SUCCESS) {
+            LOGE("vkAllocateMemory para UI AHardwareBuffer falhou");
+            vkDestroyImage(state.vkDevice, imported.image, nullptr);
+            return;
+        }
+        vkBindImageMemory(state.vkDevice, imported.image, imported.memory, 0);
+        state.uiHwbCache[hwb] = imported;
+        it = state.uiHwbCache.find(hwb);
+    }
+
+    VkImage srcImage = it->second.image;
+
+    // 2. Adquirir próxima imagem do swapchain OpenXR do painel
+    XrSwapchainImageAcquireInfo acqInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    uint32_t imageIndex = 0;
+    if (xrAcquireSwapchainImage(panelChain.handle, &acqInfo, &imageIndex) != XR_SUCCESS) {
+        LOGE("xrAcquireSwapchainImage falhou para painel de UI");
+        return;
+    }
+
+    XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    waitInfo.timeout = XR_INFINITE_DURATION;
+    if (xrWaitSwapchainImage(panelChain.handle, &waitInfo) != XR_SUCCESS) {
+        LOGE("xrWaitSwapchainImage falhou para painel de UI");
+        return;
+    }
+
+    VkImage dstImage = panelChain.images[imageIndex].image;
+
+    // 3. Gravar cópia direta GPU -> GPU sem bloqueio de CPU (R-06)
+    VKR(vkResetCommandBuffer(state.uiCopyCmd, 0));
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VKR(vkBeginCommandBuffer(state.uiCopyCmd, &beginInfo));
+
+    VkImageMemoryBarrier barriers[2]{};
+    barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barriers[0].srcAccessMask = 0;
+    barriers[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barriers[0].image = srcImage;
+    barriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    barriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barriers[1].srcAccessMask = 0;
+    barriers[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barriers[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barriers[1].image = dstImage;
+    barriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    vkCmdPipelineBarrier(state.uiCopyCmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, barriers);
+
+    VkImageCopy region{};
+    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.extent = {width, height, 1};
+    vkCmdCopyImage(state.uiCopyCmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   dstImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    VkImageMemoryBarrier dstBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    dstBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    dstBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    dstBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+    dstBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    dstBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    dstBarrier.image = dstImage;
+    dstBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    vkCmdPipelineBarrier(state.uiCopyCmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &dstBarrier);
+
+    VKR(vkEndCommandBuffer(state.uiCopyCmd));
+
+    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &state.uiCopyCmd;
+    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
+
+    // 4. Liberar swapchain para o compositor OpenXR (sem vkQueueWaitIdle!)
+    XrSwapchainImageReleaseInfo relInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    OXR(xrReleaseSwapchainImage(panelChain.handle, &relInfo));
+}
+
+// Inicializa a imagem do retículo laser uma única vez no swapchain dedicado
+static void InitCursorSwapchain(AppState& state) {
+    if (state.cursorSwapchain.handle == XR_NULL_HANDLE || state.uiCopyCmd == VK_NULL_HANDLE) return;
+
+    XrSwapchainImageAcquireInfo acq{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    uint32_t imgIndex = 0;
+    if (xrAcquireSwapchainImage(state.cursorSwapchain.handle, &acq, &imgIndex) != XR_SUCCESS) return;
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    wait.timeout = XR_INFINITE_DURATION;
+    if (xrWaitSwapchainImage(state.cursorSwapchain.handle, &wait) != XR_SUCCESS) return;
+
+    constexpr uint32_t kSize = 64;
+    std::vector<uint32_t> pixels(kSize * kSize, 0);
+    const float center = (kSize - 1) * 0.5f;
+    const float innerR = 8.0f;
+    const float ringR1 = 18.0f;
+    const float ringR2 = 24.0f;
+
+    for (uint32_t y = 0; y < kSize; y++) {
+        for (uint32_t x = 0; x < kSize; x++) {
+            float dx = static_cast<float>(x) - center;
+            float dy = static_cast<float>(y) - center;
+            float dist = sqrtf(dx * dx + dy * dy);
+
+            if (dist <= innerR) {
+                float a = (dist > (innerR - 1.0f)) ? (innerR - dist) : 1.0f;
+                uint8_t alpha = static_cast<uint8_t>(a * 255.0f);
+                pixels[y * kSize + x] = (alpha << 24) | (0xFF << 16) | (0xD0 << 8) | 0x00;
+            } else if (dist >= ringR1 && dist <= (ringR2 + 1.0f)) {
+                float a = 1.0f;
+                if (dist < (ringR1 + 1.0f)) a = dist - ringR1;
+                else if (dist > ringR2) a = (ringR2 + 1.0f) - dist;
+                float clamped = fmaxf(0.0f, fminf(1.0f, a));
+                uint8_t alpha = static_cast<uint8_t>(clamped * 230.0f);
+                pixels[y * kSize + x] = (alpha << 24) | (0xFF << 16) | (0xFF << 8) | 0xFF;
+            }
+        }
+    }
+
+    const VkDeviceSize bufSize = (VkDeviceSize)kSize * kSize * 4;
     VkBuffer stagingBuf;
     VkDeviceMemory stagingMem;
 
     VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bufInfo.size  = bufSize;
+    bufInfo.size = bufSize;
     bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     VKR(vkCreateBuffer(state.vkDevice, &bufInfo, nullptr, &stagingBuf));
 
     VkMemoryRequirements memReqs;
     vkGetBufferMemoryRequirements(state.vkDevice, stagingBuf, &memReqs);
-    VkPhysicalDeviceMemoryProperties memProps;
-    vkGetPhysicalDeviceMemoryProperties(state.vkPhysicalDevice, &memProps);
-    uint32_t memTypeIdx = UINT32_MAX;
-    const auto hostVisible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
-        if ((memReqs.memoryTypeBits & (1u << i)) &&
-            ((memProps.memoryTypes[i].propertyFlags & hostVisible) == hostVisible)) {
-            memTypeIdx = i; break;
-        }
-    }
+    uint32_t memTypeIdx = FindMemoryType(state, memReqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
     VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    allocInfo.allocationSize  = memReqs.size;
+    allocInfo.allocationSize = memReqs.size;
     allocInfo.memoryTypeIndex = memTypeIdx;
     VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &stagingMem));
     VKR(vkBindBufferMemory(state.vkDevice, stagingBuf, stagingMem, 0));
 
-    void* dst = nullptr;
-    VKR(vkMapMemory(state.vkDevice, stagingMem, 0, bufSize, 0, &dst));
-    memcpy(dst, src, (size_t)bufSize);
+    void* mapped = nullptr;
+    VKR(vkMapMemory(state.vkDevice, stagingMem, 0, bufSize, 0, &mapped));
+    memcpy(mapped, pixels.data(), (size_t)bufSize);
     vkUnmapMemory(state.vkDevice, stagingMem);
-    AHardwareBuffer_unlock(hwb, nullptr);
 
-    // Command buffer de upload (one-shot)
-    VkCommandBufferAllocateInfo cbAlloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    cbAlloc.commandPool        = state.vkCommandPool;
-    cbAlloc.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cbAlloc.commandBufferCount = 1;
-    VkCommandBuffer cmd;
-    VKR(vkAllocateCommandBuffers(state.vkDevice, &cbAlloc, &cmd));
-
+    VKR(vkResetCommandBuffer(state.uiCopyCmd, 0));
     VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    VKR(vkBeginCommandBuffer(cmd, &beginInfo));
+    VKR(vkBeginCommandBuffer(state.uiCopyCmd, &beginInfo));
 
-    // UNDEFINED -> TRANSFER_DST
+    VkImage cursorImg = state.cursorSwapchain.images[imgIndex].image;
+
     VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     barrier.srcAccessMask = 0;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier.image = dstImage;
+    barrier.image = cursorImg;
     barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+    vkCmdPipelineBarrier(state.uiCopyCmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
     VkBufferImageCopy region{};
-    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    region.imageSubresource.layerCount = 1;
-    region.imageExtent = {width, height, 1};
-    region.bufferRowLength = desc.stride; // <--- VITAL: AHardwareBuffer can have padded stride!
-    vkCmdCopyBufferToImage(cmd, stagingBuf, dstImage,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {kSize, kSize, 1};
+    vkCmdCopyBufferToImage(state.uiCopyCmd, stagingBuf, cursorImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    // TRANSFER_DST -> SHADER_READ_ONLY
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
     barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    vkCmdPipelineBarrier(state.uiCopyCmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-    VKR(vkEndCommandBuffer(cmd));
+    VKR(vkEndCommandBuffer(state.uiCopyCmd));
+
     VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &cmd;
+    submitInfo.pCommandBuffers = &state.uiCopyCmd;
     VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
     VKR(vkQueueWaitIdle(state.vkQueue));
 
-    vkFreeCommandBuffers(state.vkDevice, state.vkCommandPool, 1, &cmd);
     vkDestroyBuffer(state.vkDevice, stagingBuf, nullptr);
     vkFreeMemory(state.vkDevice, stagingMem, nullptr);
+
+    XrSwapchainImageReleaseInfo rel{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    OXR(xrReleaseSwapchainImage(state.cursorSwapchain.handle, &rel));
 }
 
 // Mesma logica de UpdateUiImageFromHwb, mas a fonte e um buffer de bytes RGBA
@@ -2094,26 +2259,24 @@ void CreateUiPipeline(AppState& state, android_app* app) {
     // do Kotlin possa renderizar na Surface (equivale ao GLES: vr_player_app.cpp:870-913).
     // GPU_COLOR_OUTPUT: o Kotlin escreve na Surface via VirtualDisplay/Canvas.
     // GPU_SAMPLED_IMAGE: o shader Vulkan le a textura resultante.
-    // CPU_READ_RARELY: necessario para o UpdateUiImageFromHwb (staging via CPU).
+    // R-06: GPU_COLOR_OUTPUT para escrita do Canvas, GPU_SAMPLED_IMAGE para leitura GPU.
+    // Sem CPU_READ_RARELY para permitir layout nativo de alta performance na GPU.
     media_status_t uiStatus = AImageReader_newWithUsage(
         kUiTexWidth, kUiTexHeight, AIMAGE_FORMAT_RGBA_8888,
         AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
-        AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
-        AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2,
+        AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT, 2,
         &state.uiImageReader);
 
     media_status_t ctrlStatus = AImageReader_newWithUsage(
         kControlsTexWidth, kControlsTexHeight, AIMAGE_FORMAT_RGBA_8888,
         AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
-        AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
-        AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2,
+        AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT, 2,
         &state.controlsImageReader);
 
     media_status_t modalStatus = AImageReader_newWithUsage(
         kModalTexWidth, kModalTexHeight, AIMAGE_FORMAT_RGBA_8888,
         AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
-        AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
-        AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2,
+        AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT, 2,
         &state.modalImageReader);
 
     // Wiring JNI: obter ANativeWindow de cada AImageReader, converter para
@@ -2219,10 +2382,10 @@ void CreateUiPipeline(AppState& state, android_app* app) {
         kUiTexWidth, kUiTexHeight, kControlsTexWidth, kControlsTexHeight, kModalTexWidth, kModalTexHeight);
 }
 
-// Atualiza texturas de UI/controles a partir dos AImageReaders.
+// Atualiza swapchains de UI/controles/modal a partir dos AImageReaders.
 // Chamado a cada frame antes de RenderFrame.
 void UpdateUiFrames(AppState& state) {
-    auto acquireAndUpdate = [&](AImageReader* reader, VkImage dst, bool& hasFrame,
+    auto acquireAndUpdate = [&](AImageReader* reader, EyeSwapchain& panelChain, bool& hasFrame,
                                  uint32_t w, uint32_t h) {
         if (!reader) return;
         AImage* image = nullptr;
@@ -2230,15 +2393,15 @@ void UpdateUiFrames(AppState& state) {
             AHardwareBuffer* hwb = nullptr;
             AImage_getHardwareBuffer(image, &hwb);
             if (hwb) {
-                UpdateUiImageFromHwb(state, hwb, dst, w, h);
+                UpdatePanelSwapchainFromHwb(state, panelChain, hwb, w, h);
                 hasFrame = true;
             }
             AImage_delete(image);
         }
     };
-    acquireAndUpdate(state.uiImageReader, state.uiImage, state.uiHasFrame, kUiTexWidth, kUiTexHeight);
-    acquireAndUpdate(state.controlsImageReader, state.controlsImage, state.controlsHasFrame, kControlsTexWidth, kControlsTexHeight);
-    acquireAndUpdate(state.modalImageReader, state.modalImage, state.modalHasFrame, kModalTexWidth, kModalTexHeight);
+    acquireAndUpdate(state.uiImageReader, state.uiPanelSwapchain, state.uiHasFrame, kUiTexWidth, kUiTexHeight);
+    acquireAndUpdate(state.controlsImageReader, state.controlsPanelSwapchain, state.controlsHasFrame, kControlsTexWidth, kControlsTexHeight);
+    acquireAndUpdate(state.modalImageReader, state.modalPanelSwapchain, state.modalHasFrame, kModalTexWidth, kModalTexHeight);
 }
 
 // ===========================================================================
@@ -3003,6 +3166,13 @@ void CreateCommandResources(AppState& state) {
         VKR(vkCreateFence(state.vkDevice, &fenceInfo, nullptr, &state.inFlightFences[f]));
     }
 
+    // Command buffer para cópia zero-copy de texturas de UI (R-06)
+    VkCommandBufferAllocateInfo copyAlloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    copyAlloc.commandPool = state.vkCommandPool;
+    copyAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    copyAlloc.commandBufferCount = 1;
+    VKR(vkAllocateCommandBuffers(state.vkDevice, &copyAlloc, &state.uiCopyCmd));
+
     // F0: Query pool para timestamps de GPU (2 timestamps por olho por frame in flight)
     VkQueryPoolCreateInfo queryPoolInfo{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
     queryPoolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
@@ -3022,78 +3192,22 @@ void CreateCommandResources(AppState& state) {
 // aqui faz o billboard girar de forma diferente por olho (~6cm de diferenca
 // entre as posicoes), quebrando a disparidade estereo do painel (achado da
 // revisao pos-migracao Vulkan).
+// helper para desenhar elementos 3D na camada de projeção (laser e feedback).
+// Os painéis 2D (UI, Controles, Modal) e o retículo agora são submetidos diretamente
+// como XrCompositionLayerQuad no xrEndFrame (R-01) para máxima nitidez de texto.
 static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
-
     VkDeviceSize offset = 0;
-    // O UI Pipeline (Estagio 4) tem layout de vertices com UV (5 floats), portanto
-    // DEVE usar o videoVertexBuffer (que tem XYZ+UV) e nao o quadVertexBuffer (so XYZ)
-    vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
-
-    // Mesmas matrizes usadas pelo hit-test (UpdateInteraction) — antes cada
-    // um recalculava por conta propria e ja tinham divergido.
     SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
-    Mat4 uiModel = Mat4Multiply(scene.uiModelNoScale, Mat4Scale(kUiPanelScaleX, kUiPanelScaleY, 1.0f));
-    Mat4 uiMvp = Mat4Multiply(Mat4Multiply(proj, view), uiModel);
-
-    Mat4 controlsModel = Mat4Multiply(scene.controlsModelNoScale, Mat4Scale(kControlsPanelScaleX, kControlsPanelScaleY, 1.0f));
-    Mat4 controlsMvp = Mat4Multiply(Mat4Multiply(proj, view), controlsModel);
-
-    Mat4 modalModel = Mat4Multiply(scene.modalModelNoScale, Mat4Scale(kModalPanelScaleX, kModalPanelScaleY, 1.0f));
-    Mat4 modalMvp = Mat4Multiply(Mat4Multiply(proj, view), modalModel);
-
-    UiPushConstants push{};
-
-    // UI (File Browser) — auto-hide (Estagio 6): nao desenha quando totalmente
-    // esmaecido, mesma condicao usada pra gating de dispatch em UpdateInteraction.
-    if (state.uiHasFrame && state.uiAlpha > 0.0f) {
-        push.mvp = uiMvp;
-        push.alpha = state.uiAlpha;
-        vkCmdPushConstants(cmd, state.uiPipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(push), &push);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            state.uiPipelineLayout, 0, 1, &state.uiDescriptorSet, 0, nullptr);
-        vkCmdDraw(cmd, 4, 1, 0, 0);
-    }
-
-    // Controls
-    if (state.controlsHasFrame && state.controlsAlpha > 0.0f) {
-        push.mvp = controlsMvp;
-        push.alpha = state.controlsAlpha;
-        vkCmdPushConstants(cmd, state.uiPipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(push), &push);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            state.uiPipelineLayout, 0, 1, &state.controlsDescriptorSet, 0, nullptr);
-        vkCmdDraw(cmd, 4, 1, 0, 0);
-    }
-
-    // Modal (3o Quad frontal flutuante)
-    if (state.modalHasFrame && state.modalAlpha > 0.0f) {
-        push.mvp = modalMvp;
-        push.alpha = state.modalAlpha;
-        vkCmdPushConstants(cmd, state.uiPipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(push), &push);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            state.uiPipelineLayout, 0, 1, &state.modalDescriptorSet, 0, nullptr);
-        vkCmdDraw(cmd, 4, 1, 0, 0);
-    }
 
     // Beam (Laser) — so desenha com um controle de fato rastreado neste
     // frame (state.hasRay, setado por UpdateInteraction via xrLocateSpace).
-    // `lastRayDir.z != 0.0f` (checagem anterior) e sempre verdadeiro, ja que
-    // lastRayDir comeca inicializado em {0,0,-1} — laser aparecia mesmo sem
-    // nenhum controle ligado/rastreado.
     if (state.hasRay) {
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.beamPipeline);
         vkCmdBindVertexBuffers(cmd, 0, 1, &state.beamVertexBuffer, &offset);
 
         // O beam em CreateBeamResources vai de (0,0,0) ate (0,0,-2) no eixo Z negativo.
-        // Precisamos criar um model matrix que translada para a origem do raio e rotaciona para a direcao.
         XrVector3f up = {0.0f, 1.0f, 0.0f};
-        if (fabs(state.lastRayDir.y) > 0.99f) up = {1.0f, 0.0f, 0.0f}; // fallback se olhando pra cima/baixo
+        if (fabs(state.lastRayDir.y) > 0.99f) up = {1.0f, 0.0f, 0.0f};
         
         XrVector3f z = {-state.lastRayDir.x, -state.lastRayDir.y, -state.lastRayDir.z};
         
@@ -3115,7 +3229,7 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
         if (state.lastHitDist > 0.0f) {
             beamLength = state.lastHitDist;
         }
-        float zScale = beamLength; // Base geometry is 1.0m long (from 0 to -1.0 in Z)
+        float zScale = beamLength;
 
         Mat4 beamModel = {{
             x.x, x.y, x.z, 0.0f,
@@ -3133,36 +3247,6 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
             0, sizeof(beamPush), &beamPush);
         
         vkCmdDraw(cmd, 2, 1, 0, 0); // 2 vertices para a linha
-    }
-
-    // Cursor/reticulo no ponto de acerto (Estagio 6) — sem o disco laser sozinho
-    // termina "no vazio", dificultando mirar em botoes pequenos (mesmo motivo do
-    // GLES). Reusa o pipeline do beam com um segmento curto centrado em
-    // cursorDotPos ao longo do eixo Y do mundo; a base do beam vai de (0,0,0) a
-    // (0,0,-2) em espaco local, entao a coluna Z do model e escalada pra
-    // kDotHalfLength e a translacao deslocada +kDotHalfLength no Y pra centrar
-    // o segmento no ponto de impacto (start em +halfLength, end em -halfLength).
-    if (state.cursorDotVisible) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.beamPipeline);
-        vkCmdBindVertexBuffers(cmd, 0, 1, &state.beamVertexBuffer, &offset);
-
-        const float kDotHalfLength = 0.01f;
-        Mat4 dotModel = {{
-            1.0f, 0.0f, 0.0f, 0.0f,
-            0.0f, 0.0f, 1.0f, 0.0f,
-            0.0f, kDotHalfLength, 0.0f, 0.0f,
-            state.cursorDotPos.x, state.cursorDotPos.y + kDotHalfLength, state.cursorDotPos.z, 1.0f
-        }};
-
-        BeamPushConstants dotPush{};
-        dotPush.mvp = Mat4Multiply(Mat4Multiply(proj, view), dotModel);
-        dotPush.color[0] = 0.0f; dotPush.color[1] = 1.0f; dotPush.color[2] = 1.0f; dotPush.color[3] = 1.0f;
-
-        vkCmdPushConstants(cmd, state.beamPipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(dotPush), &dotPush);
-
-        vkCmdDraw(cmd, 2, 1, 0, 0);
     }
 
     // Posicao/orientacao da tela, mas sem a escala dela: o icone tem tamanho
@@ -4012,6 +4096,8 @@ void RenderFrame(AppState& state) {
 
     std::array<XrCompositionLayerProjectionView, kEyeCount> projectionViews{};
     const bool shouldSubmitLayer = frameState.shouldRender;
+    const XrCompositionLayerBaseHeader* layers[5]{};
+    uint32_t layerCount = 0;
 
     if (shouldSubmitLayer) {
         std::array<XrView, kEyeCount> views{};
@@ -4261,31 +4347,115 @@ void RenderFrame(AppState& state) {
             projectionViews[eye].subImage.imageRect.offset = {0, 0};
             projectionViews[eye].subImage.imageRect.extent = {renderW, renderH};
         }
+
+        XrCompositionLayerProjection projectionLayer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+        projectionLayer.space     = state.localSpace;
+        projectionLayer.viewCount = kEyeCount;
+        projectionLayer.views     = projectionViews.data();
+
+        // F2: Meta Quest Super Resolution (XR_FB_composition_layer_settings)
+        XrCompositionLayerSettingsFB mqsrSettings{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
+        if (state.supportsMqsr) {
+            mqsrSettings.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
+            if (state.upscalingEnabled) {
+                mqsrSettings.layerFlags |= XR_COMPOSITION_LAYER_SETTINGS_AUTO_LAYER_FILTER_BIT_META;
+            }
+            projectionLayer.next = &mqsrSettings;
+        } else {
+            projectionLayer.next = nullptr;
+        }
+
+        // R-01: Submeter painéis 2D (UI, Controles, Modal) e o Cursor como XrCompositionLayerQuad
+        // para amostragem direta pelo hardware compositor da Meta (máxima nitidez de texto).
+        SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
+
+        // Painel 1: Home (UI / File Browser)
+        XrCompositionLayerQuad uiQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+        uiQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        uiQuad.space = state.localSpace;
+        uiQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        uiQuad.subImage.swapchain = state.uiPanelSwapchain.handle;
+        uiQuad.subImage.imageRect.offset = {0, 0};
+        uiQuad.subImage.imageRect.extent = {static_cast<int32_t>(kUiTexWidth), static_cast<int32_t>(kUiTexHeight)};
+        uiQuad.pose.position = scene.uiCenter;
+        XrVector3f toHead = Vec3Sub(headCenter, scene.uiCenter);
+        toHead.y = 0.0f;
+        float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
+        float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : 0.7f;
+        uiQuad.pose.orientation = QuatFromYaw(uiYaw);
+        uiQuad.size = {kUiPanelScaleX, kUiPanelScaleY};
+
+        // Painel 2: Controls
+        XrCompositionLayerQuad controlsQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+        controlsQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        controlsQuad.space = state.localSpace;
+        controlsQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        controlsQuad.subImage.swapchain = state.controlsPanelSwapchain.handle;
+        controlsQuad.subImage.imageRect.offset = {0, 0};
+        controlsQuad.subImage.imageRect.extent = {static_cast<int32_t>(kControlsTexWidth), static_cast<int32_t>(kControlsTexHeight)};
+        controlsQuad.pose.position = scene.controlsCenter;
+        Mat4 controlsRot = Mat4Multiply(Mat4RotationY(state.sceneYawOffset), Mat4RotationX(kControlsPitch));
+        controlsQuad.pose.orientation = QuatFromMat4(controlsRot);
+        controlsQuad.size = {kControlsPanelScaleX, kControlsPanelScaleY};
+
+        // Painel 3: Modal frontal (3o Quad flutuante)
+        XrCompositionLayerQuad modalQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+        modalQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        modalQuad.space = state.localSpace;
+        modalQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        modalQuad.subImage.swapchain = state.modalPanelSwapchain.handle;
+        modalQuad.subImage.imageRect.offset = {0, 0};
+        modalQuad.subImage.imageRect.extent = {static_cast<int32_t>(kModalTexWidth), static_cast<int32_t>(kModalTexHeight)};
+        modalQuad.pose.position = scene.modalCenter;
+        modalQuad.pose.orientation = QuatFromYaw(state.sceneYawOffset);
+        modalQuad.size = {kModalPanelScaleX, kModalPanelScaleY};
+
+        // Retículo do Laser no topo de todos os painéis
+        XrCompositionLayerQuad cursorQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+        cursorQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        cursorQuad.space = state.localSpace;
+        cursorQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        cursorQuad.subImage.swapchain = state.cursorSwapchain.handle;
+        cursorQuad.subImage.imageRect.offset = {0, 0};
+        cursorQuad.subImage.imageRect.extent = {64, 64};
+        cursorQuad.pose.position = state.cursorDotPos;
+        cursorQuad.pose.orientation = QuatFromYaw(state.sceneYawOffset);
+        cursorQuad.size = {0.025f, 0.025f}; // 2.5 cm diâmetro
+
+        // MQSR Sharpening nos quads de UI para dobrar o ganho de nitidez nas fontes
+        XrCompositionLayerSettingsFB uiMqsr{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
+        XrCompositionLayerSettingsFB ctrlMqsr{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
+        XrCompositionLayerSettingsFB modalMqsr{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
+        if (state.supportsMqsr) {
+            uiMqsr.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
+            uiQuad.next = &uiMqsr;
+            ctrlMqsr.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
+            controlsQuad.next = &ctrlMqsr;
+            modalMqsr.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
+            modalQuad.next = &modalMqsr;
+        }
+
+        layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projectionLayer);
+
+        if (state.uiHasFrame && state.uiAlpha > 0.05f) {
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&uiQuad);
+        }
+        if (state.controlsHasFrame && state.controlsAlpha > 0.05f) {
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&controlsQuad);
+        }
+        if (state.modalHasFrame && state.modalAlpha > 0.05f) {
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&modalQuad);
+        }
+        if (state.cursorDotVisible && state.hasRay) {
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cursorQuad);
+        }
     }
-
-    XrCompositionLayerProjection projectionLayer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-    projectionLayer.space     = state.localSpace;
-    projectionLayer.viewCount = kEyeCount;
-    projectionLayer.views     = projectionViews.data();
-
-    // F2: Meta Quest Super Resolution (XR_FB_composition_layer_settings)
-    XrCompositionLayerSettingsFB mqsrSettings{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
-    if (state.supportsMqsr && state.upscalingEnabled) {
-        mqsrSettings.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB |
-                                 XR_COMPOSITION_LAYER_SETTINGS_AUTO_LAYER_FILTER_BIT_META;
-        projectionLayer.next = &mqsrSettings;
-    } else {
-        projectionLayer.next = nullptr;
-    }
-
-    const XrCompositionLayerBaseHeader* layers[1] = {
-        reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projectionLayer)};
 
     XrFrameEndInfo endFrameInfo{XR_TYPE_FRAME_END_INFO};
     endFrameInfo.displayTime           = frameState.predictedDisplayTime;
     endFrameInfo.environmentBlendMode  = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-    endFrameInfo.layerCount            = shouldSubmitLayer ? 1 : 0;
-    endFrameInfo.layers                = shouldSubmitLayer ? layers : nullptr;
+    endFrameInfo.layerCount            = layerCount;
+    endFrameInfo.layers                = layerCount > 0 ? layers : nullptr;
     OXR(xrEndFrame(state.session, &endFrameInfo));
 
     state.currentFrameIndex = (state.currentFrameIndex + 1) % AppState::kMaxFramesInFlight;
@@ -4625,6 +4795,13 @@ void DestroyAppResources(AppState& state) {
         state.modalImageMemory = VK_NULL_HANDLE;
     }
 
+    // Limpar cache de AHardwareBuffers importados para UI (R-06)
+    for (auto& pair : state.uiHwbCache) {
+        if (pair.second.image != VK_NULL_HANDLE) vkDestroyImage(state.vkDevice, pair.second.image, nullptr);
+        if (pair.second.memory != VK_NULL_HANDLE) vkFreeMemory(state.vkDevice, pair.second.memory, nullptr);
+    }
+    state.uiHwbCache.clear();
+
     // 8. Quad vertex buffer & Base pipeline
     if (state.quadVertexBuffer != VK_NULL_HANDLE) {
         vkDestroyBuffer(state.vkDevice, state.quadVertexBuffer, nullptr);
@@ -4755,6 +4932,7 @@ void android_main(android_app* app) {
     CreateVideoVertexBuffer(state);
     // Estagio 4: pipeline de UI/controles (RGBA8888 + AImageReader)
     CreateUiPipeline(state, app);
+    InitCursorSwapchain(state);
     // Estagio 5: geometria de esfera, pipeline estereo, beam cursor
     CreateSphereGeometry(state);
     CreateStereoPipeline(state);
@@ -4796,6 +4974,10 @@ void android_main(android_app* app) {
     for (auto& eye : state.eyes) {
         if (eye.handle != XR_NULL_HANDLE) xrDestroySwapchain(eye.handle);
     }
+    if (state.uiPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.uiPanelSwapchain.handle);
+    if (state.controlsPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.controlsPanelSwapchain.handle);
+    if (state.modalPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.modalPanelSwapchain.handle);
+    if (state.cursorSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.cursorSwapchain.handle);
     if (state.localSpace != XR_NULL_HANDLE) xrDestroySpace(state.localSpace);
     if (state.session != XR_NULL_HANDLE) xrDestroySession(state.session);
     if (state.vkDevice != VK_NULL_HANDLE) vkDestroyDevice(state.vkDevice, nullptr);

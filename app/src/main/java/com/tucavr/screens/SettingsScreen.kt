@@ -9,6 +9,8 @@ import com.tucavr.FeatureFlags
 import com.tucavr.R
 import com.tucavr.UpscalingModeStore
 import com.tucavr.VRActivity
+import com.tucavr.designsystem.VoidButton
+import com.tucavr.designsystem.VoidButtonStyle
 import com.tucavr.designsystem.VoidFilterChip
 import com.tucavr.designsystem.VoidPanelChrome
 import com.tucavr.designsystem.VoidText
@@ -121,6 +123,8 @@ class SettingsScreen(
                 labelRes = R.string.settings_debug_stats_label,
                 descriptionRes = R.string.settings_debug_stats_description,
                 flag = FeatureFlags.Flag.DEBUG_STATS_PANEL,
+                actionButtonTextRes = R.string.settings_debug_stats_open_button,
+                onActionClicked = { activity.openDebugStatsModal() },
                 onChanged = { enabled -> activity.setDebugStatsEnabled(enabled) }
             )
         )
@@ -141,6 +145,8 @@ class SettingsScreen(
         labelRes: Int,
         descriptionRes: Int,
         flag: FeatureFlags.Flag,
+        actionButtonTextRes: Int? = null,
+        onActionClicked: (() -> Unit)? = null,
         onChanged: (Boolean) -> Unit
     ): LinearLayout = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
@@ -148,13 +154,17 @@ class SettingsScreen(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
         ).apply { bottomMargin = VoidTheme.dpToPx(context, 16f) }
 
+        val isFlagEnabled = FeatureFlags.isEnabled(context, flag)
+        var actionBtn: VoidButton? = null
+
         addView(CheckBox(context).apply {
             text = context.getString(labelRes)
             textSize = 18f
             setTextColor(VoidTheme.colorText)
-            isChecked = FeatureFlags.isEnabled(context, flag)
+            isChecked = isFlagEnabled
             setOnCheckedChangeListener { _, checked ->
                 FeatureFlags.setEnabled(context, flag, checked)
+                actionBtn?.visibility = if (checked) android.view.View.VISIBLE else android.view.View.GONE
                 onChanged(checked)
             }
         })
@@ -164,6 +174,23 @@ class SettingsScreen(
                 setPadding(VoidTheme.dpToPx(context, 4f), VoidTheme.dpToPx(context, 4f), 0, 0)
             }
         )
+
+        if (actionButtonTextRes != null && onActionClicked != null) {
+            actionBtn = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(actionButtonTextRes)
+                textSize = 14f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    VoidTheme.dpToPx(context, 60f)
+                ).apply {
+                    topMargin = VoidTheme.dpToPx(context, 8f)
+                    leftMargin = VoidTheme.dpToPx(context, 4f)
+                }
+                visibility = if (isFlagEnabled) android.view.View.VISIBLE else android.view.View.GONE
+                setOnClickListener { onActionClicked() }
+            }
+            addView(actionBtn)
+        }
     }
 
     private fun buildUpscalingRow(): LinearLayout = LinearLayout(context).apply {

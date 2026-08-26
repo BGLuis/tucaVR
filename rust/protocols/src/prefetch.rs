@@ -761,16 +761,17 @@ mod tests {
     fn sequential_reads_after_seek_ramp_back_to_full_block_size() {
         let full_block = 4 * 1024 * 1024;
         let seek_block = 256 * 1024;
+        let medium_block = (seek_block * 4).min(full_block);
         let data: Vec<u8> = (0..255u8).cycle().take(full_block * 4).collect();
         let (source, sizes) = SizeTrackingSource::new(data.clone());
         let mut reader = PrefetchReader::with_block_sizes(source, full_block, seek_block);
 
         let jump_to = (full_block * 2) as u64;
         reader.seek(SeekFrom::Start(jump_to)).unwrap();
-        // Le em pedacos pequenos pra pos ficar estritamente dentro do bloco
-        // pos-seek, confirmando continuidade sequencial (dispara o proximo
-        // prefetch, ja de tamanho cheio).
-        let mut out = vec![0u8; seek_block + 4096];
+        // Lê através do bloco pós-seek e do bloco médio intermediário,
+        // confirmando continuidade sequencial para que a rampa alcance
+        // o prefetch de tamanho cheio (full_block).
+        let mut out = vec![0u8; seek_block + medium_block + 4096];
         let mut done = 0;
         while done < out.len() {
             let chunk = 4096.min(out.len() - done);
@@ -779,8 +780,8 @@ mod tests {
         }
         assert_eq!(out, data[jump_to as usize..jump_to as usize + out.len()]);
 
-        // Aguarda determinísticamente o prefetch especulativo completar.
-        let requested = wait_for_requests(&sizes, 3);
+        // Aguarda determinísticamente o prefetch especulativo do bloco cheio.
+        let requested = wait_for_requests(&sizes, 4);
         assert!(
             requested.contains(&full_block),
             "esperava a rampa voltar ao bloco cheio ({full_block}) apos leitura sequencial, fetches pedidos: {requested:?}"

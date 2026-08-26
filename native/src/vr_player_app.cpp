@@ -25,8 +25,8 @@
 #include <atomic>
 #include <mutex>
 #include <string>
-#include <cstdio>
 #include "debug_stats.h"
+#include "screen_mode.h"
 
 static char g_sessionId[32] = "--------";
 static std::mutex g_sessionIdMutex;
@@ -994,39 +994,7 @@ Java_com_tucavr_VRActivity_nativeSetAudioTrack(JNIEnv* env, jobject thiz, jint o
     set_desired_audio_track((uint32_t)(ordinal < 0 ? 0 : ordinal));
 }
 
-// T1.4/T2: espelha 1:1 a codificacao numerica de rust/bridge/src/lib.rs
-// (SCREEN_MODE/cycle_3d_mode) — qualquer mudanca aqui exige a mudanca
-// correspondente la (e vice-versa), os dois lados nao compartilham um tipo.
-enum class ScreenMode : uint32_t {
-    Flat2D = 0,
-    SBS = 1,
-    SBSHalf = 2,
-    OU = 3,
-    OUHalf = 4,
-    Sphere360 = 5,
-    Sphere180 = 6,
-    Sphere360SBS = 7,
-    Sphere360OU = 8,
-    Vr180SBS = 9,
-};
-
-// Debug: nome legivel do ScreenMode pro logcat — ver comentario acima sobre
-// os 3 lugares que precisam ficar em sincronia se este enum mudar.
-static const char* ScreenModeName(ScreenMode mode) {
-    switch (mode) {
-        case ScreenMode::Flat2D: return "Flat2D";
-        case ScreenMode::SBS: return "SBS";
-        case ScreenMode::SBSHalf: return "SBSHalf";
-        case ScreenMode::OU: return "OU";
-        case ScreenMode::OUHalf: return "OUHalf";
-        case ScreenMode::Sphere360: return "Sphere360";
-        case ScreenMode::Sphere180: return "Sphere180";
-        case ScreenMode::Sphere360SBS: return "Sphere360SBS";
-        case ScreenMode::Sphere360OU: return "Sphere360OU";
-        case ScreenMode::Vr180SBS: return "Vr180SBS";
-        default: return "Desconhecido";
-    }
-}
+// ScreenMode e helpers estao centralizados em screen_mode.h
 
 class VRPlayerApp : public OVRFW::XrApp {
 public:

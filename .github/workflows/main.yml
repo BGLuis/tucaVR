@@ -49,6 +49,11 @@ jobs:
       - name: Run Rust unit tests (host-testable crates)
         run: cd rust && cargo test -p protocols -p media-logic
 
+      - name: Run C++ Host unit tests
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y libopenxr-dev
+          ./scripts/test-native-host.sh
+
       - name: Lint Kotlin (ktlint)
         run: ./gradlew ktlintCheck || echo "ktlint not configured yet"
 

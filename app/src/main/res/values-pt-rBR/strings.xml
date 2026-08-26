@@ -357,6 +357,7 @@
     <string name="settings_section_advanced">Avançado</string>
     <string name="settings_debug_stats_label">Estatísticas Técnicas (Stats for Nerds)</string>
     <string name="settings_debug_stats_description">Exibe diagnósticos de reprodução em tempo real, codecs, taxas de quadros, métricas de buffer e dados do hardware no player.</string>
+    <string name="settings_debug_stats_open_button">Abrir painel de estatísticas</string>
     <string name="settings_telemetry_export_label">Exportar Telemetria de Debug (CSV)</string>
     <string name="settings_telemetry_export_description">Grava periodicamente série temporal de desempenho (FPS, jitter, fila, térmico) em arquivos CSV de sessão na pasta de debug.</string>
 

@@ -1128,5 +1128,42 @@ mod tests {
             ThumbnailDimensions { width: 1920, height: 540 }
         );
     }
+
+    #[test]
+    fn test_screen_mode_contract_indices() {
+        // Invariante de contrato: to_screen_mode_index deve mapear estritamente para 0..=9,
+        // casando com screen_mode.h no C++ e ScreenFormatCatalog.kt no Kotlin.
+        assert_eq!(Format3D::Flat2D.to_screen_mode_index(), 0);
+        assert_eq!(Format3D::SbsFull.to_screen_mode_index(), 1);
+        assert_eq!(Format3D::SbsHalf.to_screen_mode_index(), 2);
+        assert_eq!(Format3D::OverUnderFull.to_screen_mode_index(), 3);
+        assert_eq!(Format3D::OverUnderHalf.to_screen_mode_index(), 4);
+        assert_eq!(Format3D::Spherical360Mono.to_screen_mode_index(), 5);
+        assert_eq!(Format3D::Vr180Mono.to_screen_mode_index(), 6);
+        assert_eq!(Format3D::Spherical360SbsFull.to_screen_mode_index(), 7);
+        assert_eq!(Format3D::Spherical360SbsHalf.to_screen_mode_index(), 7);
+        assert_eq!(Format3D::Spherical360OverUnderFull.to_screen_mode_index(), 8);
+        assert_eq!(Format3D::Spherical360OverUnderHalf.to_screen_mode_index(), 8);
+        assert_eq!(Format3D::Vr180Sbs.to_screen_mode_index(), 9);
+
+        // Nenhuma variante pode mapear para índice >= 10
+        let all_variants = [
+            Format3D::Flat2D,
+            Format3D::SbsFull,
+            Format3D::SbsHalf,
+            Format3D::OverUnderFull,
+            Format3D::OverUnderHalf,
+            Format3D::Spherical360Mono,
+            Format3D::Vr180Mono,
+            Format3D::Spherical360SbsFull,
+            Format3D::Spherical360SbsHalf,
+            Format3D::Spherical360OverUnderFull,
+            Format3D::Spherical360OverUnderHalf,
+            Format3D::Vr180Sbs,
+        ];
+        for v in all_variants {
+            assert!(v.to_screen_mode_index() <= 9);
+        }
+    }
 }
 
