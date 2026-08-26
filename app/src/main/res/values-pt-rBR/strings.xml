@@ -319,6 +319,7 @@
     <string name="history_resume_prompt_watched_format">Assistido %1$s de %2$s (%3$d%%)</string>
     <string name="history_resume_prompt_btn_resume_format">Retomar de %1$s</string>
     <string name="history_resume_prompt_btn_restart">Comecar do zero</string>
+    <string name="history_resume_prompt_btn_cancel">Cancelar</string>
     <string name="history_continue_watching_title">Continuar assistindo</string>
     <string name="history_empty">(nenhum historico ainda)</string>
     <string name="history_row_http_format">%1$s</string>
@@ -332,6 +333,12 @@
     <string name="thermal_level_moderate">Moderado</string>
     <string name="thermal_level_severe">Severo</string>
     <string name="thermal_level_critical">Crítico</string>
+
+    <!-- Trilhas de Áudio -->
+    <string name="player_btn_audio">Trilhas de Áudio</string>
+    <string name="audio_tracks_modal_title">Trilhas de Áudio</string>
+    <string name="audio_tracks_empty">Nenhuma trilha de áudio encontrada</string>
+    <string name="audio_tracks_active_badge">Ativo</string>
 
     <!-- Legendas (T9.1-T9.6) -->
     <string name="player_btn_subtitles">Legendas</string>

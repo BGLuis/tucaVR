@@ -48,12 +48,9 @@ class PlayerScreen(
     private val onBack: () -> Unit
 ) {
 
-    private var activeAudioOrdinal = 0
-
     fun render(source: PlaybackSource) {
         val root = VoidPanelChrome.newRoot(context)
         val displayName = resolveDisplayName(source)
-        val subtitle = resolveSubtitle(source)
 
         root.addView(
             VoidPanelChrome.buildHeader(
@@ -231,7 +228,7 @@ class PlayerScreen(
             val desc = if (descParts.isNotEmpty()) descParts.joinToString(" · ") else context.getString(R.string.file_detail_track_lang_unknown)
 
             if (isAudio) {
-                val isSelected = track.ordinal == activeAudioOrdinal
+                val isSelected = track.ordinal == activity.currentAudioTrackOrdinal
                 val btn = VoidButton(context, if (isSelected) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY).apply {
                     text = "$kindLabel ($desc)"
                     textSize = 15f
@@ -240,10 +237,22 @@ class PlayerScreen(
                     val padV = VoidTheme.dpToPx(context, 8f)
                     setPadding(padH, padV, padH, padV)
                     setOnClickListener {
-                        activeAudioOrdinal = track.ordinal
-                        activity.nativeSetAudioTrack(track.ordinal)
-                        // Atualiza estilos dos botões da seção de trilhas
-                        populateTracksSection(section.apply { removeAllViews() }, meta)
+                        activity.openAudioTracksModal()
+                    }
+                }
+                section.addView(btn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
+                    it.bottomMargin = VoidTheme.dpToPx(context, 6f)
+                })
+            } else if (isSubtitle) {
+                val btn = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                    text = "$kindLabel ($desc)"
+                    textSize = 15f
+                    minHeight = VoidTheme.dpToPx(context, 48f)
+                    val padH = VoidTheme.dpToPx(context, 14f)
+                    val padV = VoidTheme.dpToPx(context, 8f)
+                    setPadding(padH, padV, padH, padV)
+                    setOnClickListener {
+                        activity.openSubtitlesModal()
                     }
                 }
                 section.addView(btn, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {

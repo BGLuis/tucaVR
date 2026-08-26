@@ -334,6 +334,7 @@
     <string name="history_resume_prompt_watched_format">Watched %1$s of %2$s (%3$d%%)</string>
     <string name="history_resume_prompt_btn_resume_format">Resume from %1$s</string>
     <string name="history_resume_prompt_btn_restart">Start over</string>
+    <string name="history_resume_prompt_btn_cancel">Cancel</string>
     <string name="history_continue_watching_title">Continue Watching</string>
     <string name="history_empty">(no history yet)</string>
     <string name="history_row_http_format">%1$s</string>
@@ -348,6 +349,12 @@
     <string name="thermal_level_moderate">Moderate</string>
     <string name="thermal_level_severe">Severe</string>
     <string name="thermal_level_critical">Critical</string>
+
+    <!-- Audio Tracks -->
+    <string name="player_btn_audio">Audio Tracks</string>
+    <string name="audio_tracks_modal_title">Audio Tracks</string>
+    <string name="audio_tracks_empty">No audio tracks found</string>
+    <string name="audio_tracks_active_badge">Active</string>
 
     <!-- Subtitles (T9.1-T9.6) -->
     <string name="player_btn_subtitles">Subtitles</string>

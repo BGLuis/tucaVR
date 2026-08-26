@@ -9,9 +9,13 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import com.tucavr.designsystem.AudioTrackModal
 import com.tucavr.designsystem.DebugStatsModal
+import com.tucavr.designsystem.ResumePromptModal
 import com.tucavr.designsystem.ScreenFormatModal
+import com.tucavr.designsystem.SubtitleSelectionModal
 import com.tucavr.filebrowser.MediaMetadataReader
+import com.tucavr.history.PlaybackHistory
 import com.tucavr.history.historyKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -168,6 +172,77 @@ class VRModalPresentation(
             )
             showModal(modal)
         }
+    }
+
+    /**
+     * Prepara e exibe o modal de seleção e sincronização de legendas ([SubtitleSelectionModal]).
+     */
+    fun showSubtitlesModal() {
+        val trackCount = activity.nativeGetSubtitleTrackCount()
+        val currentTrack = activity.nativeGetSubtitleTrack()
+        val currentOffsetMs = activity.nativeGetSubtitleOffsetMs()
+
+        val modal = SubtitleSelectionModal(
+            context = context,
+            trackCount = trackCount,
+            currentTrack = currentTrack,
+            currentOffsetMs = currentOffsetMs,
+            onTrackSelected = { trackIndex ->
+                activity.nativeSetSubtitleTrack(trackIndex)
+            },
+            onOffsetChanged = { offsetMs ->
+                activity.nativeSetSubtitleOffsetMs(offsetMs)
+            },
+            onDismiss = { dismissModal() }
+        )
+        showModal(modal)
+    }
+
+    /**
+     * Prepara e exibe o modal de seleção de faixas de áudio ([AudioTrackModal]).
+     */
+    fun showAudioTracksModal() {
+        val currentSource = activity.currentPlaybackSource
+        scope.launch {
+            val meta = activity.currentMediaMetadata ?: currentSource?.let { src ->
+                MediaMetadataReader.read(activity, src)
+            }
+            val tracks = meta?.tracks ?: emptyList()
+            val modal = AudioTrackModal(
+                context = context,
+                tracks = tracks,
+                activeOrdinal = activity.currentAudioTrackOrdinal,
+                onTrackSelected = { ordinal ->
+                    activity.switchAudioTrack(ordinal)
+                },
+                onDismiss = { dismissModal() }
+            )
+            showModal(modal)
+        }
+    }
+
+    /**
+     * Prepara e exibe o modal de prompt de retomada ([ResumePromptModal]).
+     */
+    fun showResumePromptModal(
+        entry: PlaybackHistory,
+        onResume: () -> Unit,
+        onRestart: () -> Unit
+    ) {
+        val modal = ResumePromptModal(
+            context = context,
+            entry = entry,
+            onResume = {
+                dismissModal()
+                onResume()
+            },
+            onRestart = {
+                dismissModal()
+                onRestart()
+            },
+            onDismiss = { dismissModal() }
+        )
+        showModal(modal)
     }
 
     override fun onDetachedFromWindow() {

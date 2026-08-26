@@ -155,9 +155,12 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.onDebugStatsFlagChanged(enabled)
     }
 
+    var currentAudioTrackOrdinal: Int = 0
+
     private fun updateCurrentPlaybackSource(source: PlaybackSource?) {
         currentPlaybackSource = source
         currentMediaMetadata = null
+        currentAudioTrackOrdinal = 0
         if (source != null) {
             CoroutineScope(Dispatchers.IO).launch {
                 currentMediaMetadata = com.tucavr.filebrowser.MediaMetadataReader.read(this@VRActivity, source)
@@ -1021,6 +1024,51 @@ class VRActivity : NativeActivity() {
         runOnUiThread {
             nativeShowModalPanel()
             modalPresentation?.showDebugStatsModal()
+        }
+    }
+
+    /**
+     * Aplica uma nova trilha de áudio e atualiza a reprodução imediatamente caso ativa.
+     */
+    fun switchAudioTrack(ordinal: Int) {
+        currentAudioTrackOrdinal = ordinal
+        nativeSetAudioTrack(ordinal)
+        if (currentPlaybackSource != null && lastMediaProgressCurrent > 0f) {
+            nativeSeekVideo(lastMediaProgressCurrent)
+        }
+    }
+
+    /**
+     * Exibe o modal de Legendas no 3º Quad dedicado frontal (VRModalPresentation).
+     */
+    fun openSubtitlesModal() {
+        runOnUiThread {
+            nativeShowModalPanel()
+            modalPresentation?.showSubtitlesModal()
+        }
+    }
+
+    /**
+     * Exibe o modal de Trilhas de Áudio no 3º Quad dedicado frontal (VRModalPresentation).
+     */
+    fun openAudioTracksModal() {
+        runOnUiThread {
+            nativeShowModalPanel()
+            modalPresentation?.showAudioTracksModal()
+        }
+    }
+
+    /**
+     * Exibe o prompt de confirmação de retomada ("Retomar de XX:XX?") no 3º Quad frontal (VRModalPresentation).
+     */
+    fun openResumePromptModal(
+        entry: com.tucavr.history.PlaybackHistory,
+        onResume: () -> Unit,
+        onRestart: () -> Unit
+    ) {
+        runOnUiThread {
+            nativeShowModalPanel()
+            modalPresentation?.showResumePromptModal(entry, onResume, onRestart)
         }
     }
 
