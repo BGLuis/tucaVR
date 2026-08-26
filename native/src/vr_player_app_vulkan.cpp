@@ -3892,7 +3892,9 @@ void RenderFrame(AppState& state) {
         }
     }
 
-    VKR(vkResetFences(state.vkDevice, 1, &state.inFlightFences[state.currentFrameIndex]));
+    // vkResetFences movido para dentro de `if (shouldSubmitLayer)` antes de vkQueueSubmit
+    // para evitar que frames pulados (shouldRender=false por doff/perda de visibilidade)
+    // deixem as fences em estado permanentemente nao-sinalizado (deadlock).
 
     XrFrameWaitInfo waitFrameInfo{XR_TYPE_FRAME_WAIT_INFO};
     XrFrameState frameState{XR_TYPE_FRAME_STATE};
@@ -4237,7 +4239,11 @@ void RenderFrame(AppState& state) {
             VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
             submitInfo.commandBufferCount = 1;
             submitInfo.pCommandBuffers = &cmd;
-            VkFence submitFence = (eye == kEyeCount - 1) ? state.inFlightFences[state.currentFrameIndex] : VK_NULL_HANDLE;
+            VkFence submitFence = VK_NULL_HANDLE;
+            if (eye == kEyeCount - 1) {
+                VKR(vkResetFences(state.vkDevice, 1, &state.inFlightFences[state.currentFrameIndex]));
+                submitFence = state.inFlightFences[state.currentFrameIndex];
+            }
             VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, submitFence));
 
             if (g_captureRequested.load()) {

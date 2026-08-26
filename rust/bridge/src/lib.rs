@@ -1271,7 +1271,9 @@ pub extern "C" fn set_playback_speed(speed: f32) {
 
 #[no_mangle]
 pub extern "C" fn get_playback_speed() -> f32 {
-    if let Ok(controller) = CONTROLLER.lock() {
+    // try_lock (nao lock!): chamada periodica do render loop (C++ HUD / telemetry).
+    // Se o lock estiver ocupado (load() em background), retorna 1.0 sem bloquear a render thread.
+    if let Ok(controller) = CONTROLLER.try_lock() {
         controller.get_speed()
     } else {
         1.0
@@ -1289,7 +1291,9 @@ pub extern "C" fn cycle_audio_track() {
 
 #[no_mangle]
 pub extern "C" fn get_audio_track_count() -> u32 {
-    if let Ok(controller) = CONTROLLER.lock() {
+    // try_lock (nao lock!): chamada periodica do render loop (C++ HUD / telemetry).
+    // Se o lock estiver ocupado (load() em background), retorna 0 sem bloquear a render thread.
+    if let Ok(controller) = CONTROLLER.try_lock() {
         controller.audio_track_count() as u32
     } else {
         0
