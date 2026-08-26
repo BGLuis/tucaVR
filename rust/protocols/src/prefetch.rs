@@ -824,4 +824,41 @@ mod tests {
         // Apenas o primeiro bloco síncrono/inicial foi pedido
         assert_eq!(requested.len(), 1, "com thermal throttle ativo, nenhum prefetch especulativo deveria ter sido disparado: {requested:?}");
     }
+
+    /// Fonte que simula entrega parcial de blocos (ex.: quando ocorre timeout de
+    /// rede / stall e a fonte entrega apenas o que conseguiu antes ou depois da retomada).
+    /// O PrefetchReader deve continuar lendo o fluxo completo sem perdas ou offsets desalinhados.
+    struct PartialDeliverySource {
+        data: Vec<u8>,
+        max_chunk: usize,
+    }
+
+    impl RangeSource for PartialDeliverySource {
+        fn read_range(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+            let offset = offset as usize;
+            if offset >= self.data.len() {
+                return Ok(0);
+            }
+            let n = (self.data.len() - offset).min(buf.len()).min(self.max_chunk);
+            buf[..n].copy_from_slice(&self.data[offset..offset + n]);
+            Ok(n)
+        }
+
+        fn len(&self) -> Option<u64> {
+            Some(self.data.len() as u64)
+        }
+    }
+
+    #[test]
+    fn partial_block_delivery_handled_correctly() {
+        let block_size = 4096;
+        let data: Vec<u8> = (0..255u8).cycle().take(block_size * 5).collect();
+        // Força cada read_range a entregar no máximo 1000 bytes (< block_size)
+        let source = PartialDeliverySource { data: data.clone(), max_chunk: 1000 };
+        let mut reader = PrefetchReader::with_block_size(source, block_size);
+
+        let mut out = vec![0u8; data.len()];
+        reader.read_exact(&mut out).expect("falha ao ler de fonte com entrega parcial");
+        assert_eq!(out, data, "dados lidos diferem do conteudo original sob entregas parciais");
+    }
 }
