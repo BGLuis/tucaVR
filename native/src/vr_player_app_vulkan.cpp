@@ -3785,12 +3785,16 @@ void RenderFrame(AppState& state) {
             LOGW("Video: stutter — frame levou %.1fms", frameMs);
         }
 
-        // Amostragem de FPS do video a cada ~1s (mesma cadencia do caminho GLES)
-        state.fpsPollAccumMs += frameMs;
-        if (state.fpsPollAccumMs >= 1000.0f) {
-            state.videoFps = (state.videoFramesInPollInterval * 1000.0f) / state.fpsPollAccumMs;
-            state.videoFramesInPollInterval = 0;
-            state.fpsPollAccumMs = 0.0f;
+        // Video "congelado" (mesmo frame repetido) e diferente de freeze do
+        // loop de render acima — ver comentario no campo
+        // AppState.msSinceLastVideoFrame. So loga uma vez por episodio,
+        // reseta quando um frame novo chega de fato (UpdateVideoFrame).
+        state.msSinceLastVideoFrame += frameMs;
+        if (state.activeVideoFrame != nullptr && !state.videoStallLogged &&
+            state.msSinceLastVideoFrame > kVideoStallThresholdMs) {
+            state.videoStallLogged = true;
+            LOGW("Video: sem frame novo ha %.0fms (decode/rede travado? ou usuario pausou?)",
+                state.msSinceLastVideoFrame);
         }
 
         state.decodedFpsPollAccumMs += frameMs;
@@ -3887,58 +3891,62 @@ void RenderFrame(AppState& state) {
 
         constexpr XrViewStateFlags kPoseValidFlags =
             XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT;
-        if (!state.sceneCalibrated && (viewState.viewStateFlags & kPoseValidFlags) == kPoseValidFlags) {
-            state.sceneYawOffset = -ExtractYawFromQuat(views[0].pose.orientation);
-            state.sceneTranslationOffset = Vec3Negate(headCenter);
+        bool poseValidForCalibration = (viewState.viewStateFlags & kPoseValidFlags) == kPoseValidFlags;
+        if (poseValidForCalibration && (state.needsOsRecenter || !state.sceneCalibrated)) {
+            Mat4 rot0 = Mat4FromXrPose(views[0].pose);
+            XrVector3f fwd = {-rot0.m[8], -rot0.m[9], -rot0.m[10]};
+            state.sceneYawOffset = atan2f(-fwd.x, -fwd.z);
+            state.sceneTranslationOffset = headCenter;
+            state.sceneTranslationOffset.y = headCenter.y - 1.5f;
+            state.needsOsRecenter = false;
             state.sceneCalibrated = true;
-            LOGI("Recenter automatico no 1o frame: yaw=%.2frad pos=(%.2f, %.2f, %.2f)",
-                state.sceneYawOffset,
-                state.sceneTranslationOffset.x,
-                state.sceneTranslationOffset.y,
-                state.sceneTranslationOffset.z);
         }
 
-        // Posicao do quad do video no mundo: recenter de translacao e yaw
-        // aplicados a partir da origem do espaco local, distanciado em Z
-        // (docs/REQUIREMENTS.md RNF-UI-003: tela plana a 2.5m de distancia).
-        // A escala em X/Y vem do aspect ratio do video atual (ou padrao 16:9).
+        // Estagio 4/5: Processar interacoes apos obtermos a posicao da cabeca
+        UpdateInteraction(state, frameState.predictedDisplayTime, headCenter, views[0].pose.orientation);
+
+        // Atualiza a orientação da cabeça para o pipeline de áudio espacial (Rust)
+        set_head_pose_orientation(
+            views[0].pose.orientation.x,
+            views[0].pose.orientation.y,
+            views[0].pose.orientation.z,
+            views[0].pose.orientation.w
+        );
+
+        // Posicao/escala da tela virtual — mesma base do caminho GLES
+        // (vr_player_app.cpp: m_screenPosition = {0, 1.5, -2},
+        //  m_screenScale = {1.6, 0.9}), ajustavel via thumbstick (Estagio 6)
+        // e deslocada pelo offset de cena/recenter acima.
+        SceneTransforms sceneForScreen = ComputeSceneTransforms(state, headCenter);
         const Mat4 screenModel = Mat4Multiply(
-            Mat4Translation(
-                state.sceneTranslationOffset.x,
-                state.sceneTranslationOffset.y,
-                state.sceneTranslationOffset.z - 2.5f),
-            Mat4Multiply(
-                Mat4RotationY(state.sceneYawOffset),
-                Mat4Scale(state.screenScaleX, state.screenScaleY, 1.0f)));
+            sceneForScreen.screenModelNoScale,
+            Mat4Scale(state.screenScaleX, state.screenScaleY, 1.0f));
 
-        // Matriz SEM a escala do video (para UI/feedback terem tamanho fixo)
-        const Mat4 screenModelNoScale = Mat4Multiply(
-            Mat4Translation(
-                state.sceneTranslationOffset.x,
-                state.sceneTranslationOffset.y,
-                state.sceneTranslationOffset.z - 2.5f),
-            Mat4RotationY(state.sceneYawOffset));
+        // Estagio 5: lerencia do ScreenMode a cada frame (mesmo que o GLES:
+        // vr_player_app.cpp:993 "m_screenMode = static_cast<ScreenMode>(get_3d_mode())")
+        {
+            ScreenMode newMode = static_cast<ScreenMode>(get_3d_mode());
+            if (newMode != state.screenMode) {
+                StereoParams spLog = GetStereoParams(newMode, 0);
+                LOGI("Video: ScreenMode -> %s (stereoLayout=%d, polar180=%d, swapEyes=%d)",
+                    ScreenModeName(newMode), spLog.stereoLayout, spLog.polar180, spLog.swapEyes);
+            }
+            state.screenMode = newMode;
+        }
+        const bool sphereMode = IsSphereMode(state.screenMode);
+        const bool stereoFlat = IsFlatStereoMode(state.screenMode);
 
-        vrplayer::SceneContext scene{};
-        scene.headCenter           = headCenter;
-        scene.screenModel          = screenModel;
-        scene.screenModelNoScale   = screenModelNoScale;
-        scene.sceneYawOffset       = state.sceneYawOffset;
-        scene.sceneTranslationOffset = state.sceneTranslationOffset;
-        scene.screenScaleX         = state.screenScaleX;
-        scene.screenScaleY         = state.screenScaleY;
+        if (g_scrubOverlayVisible.load()) {
+            static int scrubDebugFrameCount = 0;
+            if ((scrubDebugFrameCount++ % 30) == 0) {
+                LOGI("scrub overlay debug: mode=%d sphereMode=%d ready=%d hasVideoFrame=%d",
+                     (int)state.screenMode, (int)sphereMode, (int)state.scrubOverlayReady,
+                     (int)(state.activeVideoFrame != nullptr));
+            }
+        }
 
-        UpdateInteraction(state, scene, views);
-
-        const bool sphereMode = (state.screenMode == ScreenMode::Sphere360 ||
-                                 state.screenMode == ScreenMode::Sphere180 ||
-                                 state.screenMode == ScreenMode::Sphere360SBS ||
-                                 state.screenMode == ScreenMode::Sphere360OU ||
-                                 state.screenMode == ScreenMode::Vr180SBS);
-        const bool stereoFlat = (state.screenMode == ScreenMode::SideBySide3D ||
-                                 state.screenMode == ScreenMode::TopBottom3D);
-
-        // Upload do preview de arrasto (T-seek-ux)
+        // Preview de arrasto (T-seek-ff): processa upload pendente uma vez
+        // por frame (nao por olho) — ver g_scrubOverlay* acima.
         if (g_scrubOverlayDirty.exchange(false)) {
             std::vector<uint8_t> rgba;
             uint32_t w = 0, h = 0;
@@ -3948,8 +3956,9 @@ void RenderFrame(AppState& state) {
                 w = g_scrubOverlayWidth;
                 h = g_scrubOverlayHeight;
             }
-            if (w > 0 && h > 0 && rgba.size() >= static_cast<size_t>(w * h * 4)) {
-                UpdateScrubOverlayTexture(state, rgba.data(), w, h);
+            if (!rgba.empty() && w > 0 && h > 0 && rgba.size() >= (size_t)w * h * 4) {
+                EnsureScrubOverlayTexture(state, w, h);
+                UpdateUiImageFromBytes(state, rgba.data(), w, h, state.scrubOverlayImage);
                 static bool loggedUpload = false;
                 if (!loggedUpload) {
                     loggedUpload = true;
