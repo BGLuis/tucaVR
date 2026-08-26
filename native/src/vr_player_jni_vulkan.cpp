@@ -9,12 +9,13 @@
 // entre os dois caminhos (Estágio 6: dois caminhos em paralelo).
 
 #include <jni.h>
-#include <android/log.h>
+#include <android/native_window_jni.h>
+#include <vector>
+#include <string>
+#include "debug_stats.h"
 #include <atomic>
 #include <cstdint>
 #include <mutex>
-#include <string>
-#include <vector>
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "VRPlayerJNI_VK", __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VRPlayerJNI_VK", __VA_ARGS__)
@@ -305,6 +306,11 @@ Java_com_tucavr_VRActivity_nativeSetFoveationEnabled(JNIEnv*, jobject, jboolean 
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetThermalLevel(JNIEnv*, jobject, jint level) {
     set_thermal_level(static_cast<uint32_t>(level));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetDebugStatsEnabled(JNIEnv*, jobject, jboolean enabled) {
+    g_debugStatsEnabled.store(enabled, std::memory_order_relaxed);
 }
 
 extern "C" JNIEXPORT void JNICALL

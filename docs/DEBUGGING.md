@@ -87,96 +87,45 @@ O receiver só é registrado se `ApplicationInfo.FLAG_DEBUGGABLE` estiver
 setada (verdadeiro pro build `debug` do Gradle por padrão) — nunca existe
 num APK de release, então não é uma superfície de ataque nesse caso.
 
-## 3. HUD de debug na cena (inclui FPS/stutter/freeze/atraso de vídeo)
+## 3. Modal de Estatísticas Técnicas ("Stats for Nerds")
 
-Com um build debuggable, o painel de controles (mesmo painel do
-play/pause/seek) ganha uma linha extra de texto pequeno, atualizada ~10x/seg,
-formato:
+O app possui um modal completo de diagnóstico em tempo real ("Stats for Nerds"), acessível através do botão de estatísticas na barra de controles do player quando ativado em **Configurações > Avançado > Estatísticas Técnicas**.
 
-```
-VULKAN | Sphere180 | stereoLayout=1 polar180=1 swap=0 | video=ativo vidGap=16ms vidFps=24 decFps=24 jitter=18ms | 89fps 11.2ms stutter=2 freeze=0
-```
+### Ativação e Zero Overhead
+- **Configurações**: O toggle `DEBUG_STATS_PANEL` persiste a preferência do usuário e notifica instantaneamente o motor nativo via JNI (`nativeSetDebugStatsEnabled`).
+- **Zero Overhead**: Quando desativado, o motor nativo (C++/Rust) realiza early-exit com flag atômica (`g_debugStatsEnabled`), eliminando chamadas JNI periódicas, alocações de string e coletas de métricas no loop de render.
 
-Mostra exatamente o que o pipeline de renderização está usando naquele
-frame — sem precisar cruzar logcat com o que a UI do botão "modo 3D" diz que
-está selecionado (que podem divergir se o Rust resetar o modo num novo
-`playFile`, por exemplo — ver comentário em
-`VRControlsPresentation.updateProgress`) — mais os números de performance.
+### Seções e Métricas Disponíveis
 
-**Importante**: `fps`/`ms`/`stutter`/`freeze` medem o **loop de render** (a
-cena XR sendo desenhada e enviada pro compositor) — `vidGap` mede o
-**vídeo em si**, e são coisas diferentes. O loop de render pode rodar liso a
-90fps redesenhando o *mesmo* frame de vídeo repetido se o decode travar
-(rede lenta, MediaCodec atrasado) — nesse caso `stutter`/`freeze` ficam
-parados enquanto o usuário vê o vídeo engasgar. É por isso que existem os
-dois:
+1. **Vídeo & Renderização**:
+   - **Resolução / Codec**: Resolução nativa do vídeo e codec decodificado (ex.: `3840x2160 (HEVC)`).
+   - **Taxa de Quadros / Display**: `decoded_fps` (taxa de decodificação real na thread Rust) / `output_fps` (taxa de entrega no compositor) e taxa de atualização do headset (`90 Hz`).
+   - **Quadros Descartados**: FPS e percentual de frames descartados (`dropped_fps`).
+   - **Stutter / Freeze**: Contadores cumulativos de stutters (>20ms) e freezes (>250ms) no loop de render.
+   - **Jitter de Vídeo**: Variação do intervalo entre quadros (`jitter_ms`) e tempo decorrido desde a última mudança do buffer (`frame_gap_ms`).
+   - **Modo de Tela / Estéreo**: Projeção e layout 3D (ex.: `Sphere180`, `OverUnder [Swap]`).
+   - **Escala de Resolução / Foveation**: Fator de escala da viewport e status de Foveated Rendering.
+   - **Backend Gráfico**: Backend ativo (`VULKAN` ou `GLES`).
 
-- **`vidGap=Xms`**: tempo desde a última vez que o `AHardwareBuffer` de
-  vídeo mudou de fato (não é resolução nem frame count — é só "há quanto
-  tempo o frame na tela é o mesmo"). Some passo de decodificação nenhuma
-  vez zera esse número sem que o *pointer* do buffer mude, então ele reflete
-  literalmente "o que está na textura mudou ou não". Fica alto tanto se o
-  usuário pausou quanto se o decode/rede travou — o app não distingue os
-  dois casos (não há um `is_playing` exposto pro C++ ainda); se `vidGap`
-  subir muito **enquanto você sabe que o vídeo deveria estar tocando**, é o
-  pipeline de decode/rede, não a renderização. Passar de 500ms loga
-  `video sem frame novo ha Xms (decode/rede travado? ou usuario pausou?)`
-  (WARN) uma vez por episódio (não repete a cada frame parado).
-- **`vidFps=X` / `jitter=Xms`**: `vidGap` sozinho só mostra o gap *atual*,
-  amostrado no HUD a ~10Hz — um vídeo pode nunca passar de, digamos, 200ms
-  e ainda assim ter cadência irregular (20/20/90/20/90ms...), percebida como
-  falta de fluidez mesmo sem nenhuma amostra isolada ser alarmante. Por
-  isso existe um histórico circular dos últimos 30 gaps (cada "gap" = quanto
-  tempo o frame anterior ficou parado na tela antes do próximo chegar):
-  `vidFps` é a taxa de entrega real medida a partir da média desses gaps
-  (**diferente** do FPS de renderização acima — pode ser um vídeo de 24fps
-  rodando dentro de um loop de render a 90fps); `jitter` é a amplitude
-  (máximo − mínimo) da janela — jitter alto com `vidFps` "normal" pra aquele
-  vídeo é a assinatura de judder (frames vindo em rajadas irregulares em vez
-  de cadência estável). Cada gap novo que passa de 2× a média recente **e**
-  passa de +20ms da média (não um limiar fixo — um vídeo de 24fps tem gaps
-  ~41ms normalmente, isso não seria judder; o mesmo valor seria uma anomalia
-  clara num vídeo de 60fps) loga
-  `video judder — frame ficou Xms na tela (media recente Yms)` (WARN).
-- **`decFps=X`**: `vidFps` acima só mede o que o **C++ consegue observar**
-  via polling (uma vez por iteração do loop de render) — se o loop estiver
-  saudável mas ainda assim `vidFps` cair, isso não prova que o *decode* em
-  si ficou mais lento; pode ser só o consumo do lado C++ (import/cache
-  Vulkan) perdendo frames que o decode já produziu. `decFps` é a taxa real
-  de decode, contada direto na thread de decode do Rust
-  (`TextureOutput::frames_decoded`, incrementado toda vez que
-  `acquire_latest_buffer()` adquire uma imagem nova de verdade) e amostrada
-  a ~1Hz via `get_video_frames_decoded_count()` — **completamente
-  independente** de quantas vezes o C++ chama `get_current_video_frame()`.
-  Se `vidFps` e `decFps` baterem, o decode é o gargalo (útil pra descartar
-  hipóteses de import/cache Vulkan). Se `decFps` ficar alto e `vidFps`
-  baixo, o gargalo está no consumo do lado C++, não no decode.
-- **`Xfps`**: FPS instantâneo suavizado por média móvel exponencial
-  (peso 0.1 no valor novo a cada frame).
-- **`X.Xms`**: duração do último frame **do loop de render** (não do
-  vídeo — ver `vidGap` acima). No GLES vem direto de `in.DeltaSeconds` (o
-  OVRFW já mede isso). No Vulkan não existe esse equivalente pronto — é
-  medido em wall-clock (`std::chrono::steady_clock`) entre chamadas
-  consecutivas de `RenderFrame`, de propósito, **não** a partir de
-  `predictedDisplayTime`: esse último é o horário que o *compositor*
-  pretende mostrar o próximo frame, não quanto tempo o app realmente levou.
-  Um stall real (decode bloqueando, `vkQueueWaitIdle` demorado) atrasa a
-  *próxima* chamada de `RenderFrame`, que é exatamente o que o wall-clock
-  capta.
-- **`stutter=N`**: contador cumulativo de frames **de render** que levaram
-  mais de 20ms (~1 vsync perdido a 90Hz) — cada ocorrência também loga
-  `stutter — frame levou X.Xms` (nível WARN) no logcat, com timestamp, pra
-  correlacionar com o que estava acontecendo na hora (seek? troca de modo?
-  frame 8K chegando?).
-- **`freeze=N`**: contador de frames que levaram mais de 250ms — um stall
-  bem mais sério que reprojection normal. Loga nível ERROR
-  (`FREEZE detectado — frame levou Xms`).
+2. **Áudio & Sincronização**:
+   - **Codec de Áudio / Canais**: Formato de áudio e configuração de canais (ex.: `AAC (6ch, 48kHz)`).
+   - **Desvio A/V (Drift)**: Diferença de sincronização entre áudio e vídeo em milissegundos (`av_drift_ms`).
+   - **Áudio Espacial**: Modo de espacialização (`Binaural (5.1/7.1)`, `Ambisonics`, `Off`) e rastreamento de cabeça (`HeadTrack`).
+   - **Faixa de Áudio**: Índice da faixa ativa e total de faixas disponíveis.
+   - **Legendas / Sincronia**: Faixa de legenda ativa e offset de sincronização aplicado.
 
-Os thresholds (`kStutterThresholdMs`/`kFreezeThresholdMs`/`kVideoStallThresholdMs`
-— 20ms/250ms/500ms) são arbitrários — um ponto de partida razoável pra
-distinguir "hitch perceptível" de "travamento de verdade", não calibrados
-contra dados reais do Quest 3 (sem headset disponível nesta sessão). Ajuste
-se gerarem falsos positivos/negativos demais no seu teste.
+3. **Rede & Buffer**:
+   - **Origem / Protocolo**: Tipo de fonte (`Local Storage`, `SMB`, `FTP`, `SFTP`, `NFS`, `DLNA`, `HTTP(S)`).
+   - **Taxa de Rede**: Throughput recente de leitura em MB/s (`net_mbs`).
+   - **Fila de Buffer**: Quantidade de pacotes/blocos na fila de decodificação (`queue_depth`).
+   - **Latência por Bloco**: Tempo de busca do último bloco em milissegundos (`net_last_fetch_ms`).
+   - **Blocos**: Total de blocos de rede buscados e descartados após seeks (`net_blocks_fetched` / `net_blocks_discarded`).
+   - **Latência do Último Seek**: Tempo total medido no último seek (`seek_latency_ms`).
+
+4. **Sistema & Hardware**:
+   - **Status Térmico**: Nível de estresse térmico reportado pelo sistema (`Normal`, `Light`, `Moderate`, `Severe`, `Critical`).
+   - **Bateria**: Nível de carga percentual e status de carregamento.
+   - **Versão do App**: Versão do aplicativo e tipo de build (`Debug` / `Release`).
 
 Implementação: `native/src/vr_player_app.cpp` / `vr_player_input_vulkan.h`
 chamam `VRActivity.updateDebugHud(texto)` via JNI no mesmo throttle que já

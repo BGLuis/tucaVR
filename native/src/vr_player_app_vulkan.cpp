@@ -45,6 +45,7 @@
 
 #include "vk_math.h"
 #include "vr_player_feedback_overlay.h"
+#include "debug_stats.h"
 #include "quad.vert.h"
 #include "quad.frag.h"
 #include "video.vert.h"
@@ -118,6 +119,12 @@ extern "C" {
     // Overlay de feedback sobre a tela de video (ver vr_player_feedback_overlay.h):
     // sequencia nos 32 bits altos, FeedbackKind nos 32 baixos.
     extern uint64_t get_playback_feedback_event();
+    extern float get_last_av_drift_ms();
+    extern uint32_t get_foveation_enabled();
+    extern uint32_t get_spatial_audio_mode();
+    extern uint32_t get_spatial_audio_head_tracking();
+    extern float get_playback_speed();
+    extern uint32_t get_audio_track_count();
 }
 
 // Preview de arrasto no seekbar renderizado sobre o quad do video

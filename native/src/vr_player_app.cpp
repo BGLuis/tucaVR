@@ -26,6 +26,7 @@
 #include <mutex>
 #include <string>
 #include <cstdio>
+#include "debug_stats.h"
 
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "VRPlayerApp", __VA_ARGS__)
 #define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "VRPlayerApp", __VA_ARGS__)
@@ -205,6 +206,13 @@ extern "C" {
     extern uint32_t get_spatial_audio_mode();
     extern void set_spatial_audio_head_tracking(uint32_t enabled);
     extern uint32_t get_spatial_audio_head_tracking();
+
+    // Debug Stats Modal (docs/reports/DEBUG-STATS-MODAL.md)
+    extern float get_last_av_drift_ms();
+    extern uint32_t get_foveation_enabled();
+    extern uint32_t get_audio_track_count();
+    extern int32_t get_subtitle_track();
+    extern int64_t get_subtitle_offset_ms();
 }
 
 // Debug: dump do olho esquerdo pra PPM sob demanda (ver nativeRequestFrameCapture)
@@ -410,6 +418,11 @@ Java_com_tucavr_VRActivity_nativeSetSpatialAudioMode(JNIEnv* env, jobject thiz, 
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetSpatialAudioHeadTracking(JNIEnv* env, jobject thiz, jboolean enabled) {
     set_spatial_audio_head_tracking(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetDebugStatsEnabled(JNIEnv* env, jobject thiz, jboolean enabled) {
+    g_debugStatsEnabled.store(enabled, std::memory_order_relaxed);
 }
 
 // T6.4: inicia playback SMB. Ver nota acima de start_smb_playback sobre por
@@ -2081,26 +2094,55 @@ public:
                 }
             }
 
-            // HUD de debug (docs/DEBUGGING.md) — mesmo throttle acima (~10Hz).
-            // VRActivity.updateDebugHud descarta sem custo se o build nao for
-            // debuggable, entao computar/mandar isso sempre e mais simples
-            // que condicionar a compilacao nativa por build type.
-            {
-                char hud[512];
-                snprintf(hud, sizeof(hud),
-                    "GLES | %s | flat=%.0f esfera=%.0f polar180=%.0f swap=%.0f | video=%s vidGap=%.0fms vidFps=%.0f decFps=%.0f outFps=%.0f drop=%.0f jitter=%.0fms | net=%.1fMB/s q=%u seekMs=%u | %.0ffps %.1fms stutter=%d freeze=%d | thermal=%u",
-                    ScreenModeName(m_screenMode), m_flatStereoLayout, m_sphereStereoLayout,
-                    m_uPolar180, m_swapEyesF, (m_lastBuffer != nullptr) ? "ativo" : "sem frame",
-                    m_msSinceLastVideoFrame, m_videoFps, m_decodedFps, m_outputFps, m_droppedFps, m_videoJitterMs,
-                    m_netMBs, m_videoQueueDepth, get_last_seek_latency_ms(),
-                    m_smoothedFps, m_lastFrameMs, m_stutterCount, m_freezeCount, m_thermalLevel);
+            // HUD de debug (docs/DEBUGGING.md / docs/reports/DEBUG-STATS-MODAL.md)
+            if (g_debugStatsEnabled.load(std::memory_order_relaxed)) {
+                DebugStats stats;
+                stats.backend = "GLES";
+                stats.screenMode = ScreenModeName(m_screenMode);
+                stats.stereoLayout = (int)m_flatStereoLayout;
+                stats.polar180 = (int)m_uPolar180;
+                stats.swapEyes = (int)m_swapEyesF;
+                stats.hasActiveFrame = (m_lastBuffer != nullptr) ? 1 : 0;
+                stats.msSinceLastVideoFrame = m_msSinceLastVideoFrame;
+                stats.videoFps = m_videoFps;
+                stats.decodedFps = m_decodedFps;
+                stats.outputFps = m_outputFps;
+                stats.droppedFps = m_droppedFps;
+                stats.videoJitterMs = m_videoJitterMs;
+                stats.netMBs = m_netMBs;
+                stats.videoQueueDepth = m_videoQueueDepth;
+                stats.seekLatencyMs = get_last_seek_latency_ms();
+                stats.smoothedFps = m_smoothedFps;
+                stats.lastFrameMs = m_lastFrameMs;
+                stats.stutterCount = m_stutterCount;
+                stats.freezeCount = m_freezeCount;
+                stats.thermalLevel = m_thermalLevel;
+                stats.renderResolutionScale = 1.0f;
+                stats.displayRefreshRate = 90.0f;
+                stats.avDriftMs = get_last_av_drift_ms();
+                stats.netLastFetchMs = get_network_last_block_fetch_ms();
+                stats.netBlocksFetched = get_network_blocks_fetched();
+                stats.netBlocksDiscarded = get_network_blocks_discarded();
+                stats.foveationEnabled = (int)get_foveation_enabled();
+                stats.spatialAudioMode = (int)get_spatial_audio_mode();
+                stats.spatialHeadTracking = (int)get_spatial_audio_head_tracking();
+                stats.playbackSpeed = get_playback_speed();
+                stats.audioVolume = get_video_volume();
+                stats.audioTrackIndex = 0;
+                stats.audioTrackCount = (int)get_audio_track_count();
+                stats.subtitleTrackIndex = get_subtitle_track();
+                stats.subtitleOffsetMs = (int32_t)get_subtitle_offset_ms();
+
+                char hudBuffer[2048];
+                SerializeDebugStats(stats, hudBuffer, sizeof(hudBuffer));
+
                 const xrJava* java = GetContext();
                 JNIEnv* env = nullptr;
                 if (java && java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
                     jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
                     jmethodID hudMethod = env->GetStaticMethodID(vrActivityClass, "updateDebugHud", "(Lcom/tucavr/VRActivity;Ljava/lang/String;)V");
                     if (hudMethod) {
-                        jstring hudStr = env->NewStringUTF(hud);
+                        jstring hudStr = env->NewStringUTF(hudBuffer);
                         env->CallStaticVoidMethod(vrActivityClass, hudMethod, java->ActivityObject, hudStr);
                         env->DeleteLocalRef(hudStr);
                     }

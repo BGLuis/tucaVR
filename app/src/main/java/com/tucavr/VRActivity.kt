@@ -121,6 +121,27 @@ class VRActivity : NativeActivity() {
     var currentPlaybackSource: PlaybackSource? = null
         private set
 
+    var currentMediaMetadata: com.tucavr.filebrowser.MediaMetadata? = null
+        private set
+
+    @Volatile
+    var isDebugStatsEnabled: Boolean = false
+        private set
+
+    fun setDebugStatsEnabled(enabled: Boolean) {
+        isDebugStatsEnabled = enabled
+        nativeSetDebugStatsEnabled(enabled)
+        controlsPresentation?.onDebugStatsFlagChanged(enabled)
+    }
+
+    private fun updateCurrentPlaybackSource(source: PlaybackSource) {
+        currentPlaybackSource = source
+        currentMediaMetadata = null
+        CoroutineScope(Dispatchers.IO).launch {
+            currentMediaMetadata = com.tucavr.filebrowser.MediaMetadataReader.read(this@VRActivity, source)
+        }
+    }
+
     // Ferramenta de debug (ver docs/DEBUGGING.md): troca o ScreenMode de um
     // video JA tocando sem precisar reiniciar o app/relançar o intent, ex.
     // `adb shell am broadcast -a com.tucavr.debug.SET_SCREEN_MODE --ei mode 6`
@@ -270,6 +291,10 @@ class VRActivity : NativeActivity() {
         val spatialAudio = FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_AUDIO)
         nativeSetSpatialAudioMode(if (spatialAudio) 1 else 0)
         nativeSetSpatialAudioHeadTracking(FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_HEAD_TRACKING))
+
+        // Painel de Estatísticas Técnicas / Stats for Nerds (docs/reports/DEBUG-STATS-MODAL.md)
+        isDebugStatsEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.DEBUG_STATS_PANEL)
+        nativeSetDebugStatsEnabled(isDebugStatsEnabled)
     }
 
     override fun onDestroy() {
@@ -592,19 +617,12 @@ class VRActivity : NativeActivity() {
             }
         }
 
-        // HUD de debug (ver docs/DEBUGGING.md): mesmo throttle/JNI pattern
-        // de updateMediaProgress acima, so que o texto ja vem formatado do
-        // lado nativo (ScreenMode/stereoLayout/polar180/swapEyes/estado do
-        // frame de video) — sem necessidade de strings de recurso/i18n,
-        // este texto e puramente de diagnostico e so aparece em builds
-        // debuggable (`activity.isDebuggable`, checado do lado Kotlin em vez
-        // de condicionalmente compilar o lado nativo — mais simples e sem
-        // custo real, ver comentario em VRControlsPresentation.updateDebugHud).
+        // Estatísticas de debug (ver docs/DEBUGGING.md / docs/reports/DEBUG-STATS-MODAL.md)
         @JvmStatic
         fun updateDebugHud(activity: VRActivity, text: String) {
-            if (!activity.isDebuggable) return
+            if (!activity.isDebugStatsEnabled) return
             activity.runOnUiThread {
-                activity.controlsPresentation?.updateDebugHud(text)
+                activity.controlsPresentation?.updateDebugStats(text)
             }
         }
     }
@@ -648,7 +666,7 @@ class VRActivity : NativeActivity() {
     fun playFile(filePath: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val resolvedSize = if (sizeBytes > 0L) sizeBytes else runCatching { File(filePath).length() }.getOrDefault(0L)
         val source = PlaybackSource.LocalFile(filePath, resolvedSize)
-        currentPlaybackSource = source
+        updateCurrentPlaybackSource(source)
         historyTracker.startTracking(source, title = File(filePath).name)
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
@@ -659,7 +677,7 @@ class VRActivity : NativeActivity() {
     // Demuxer (Rust) despacha por esquema (ver rust/core/src/demuxer.rs).
     fun playUrl(url: String, resumeAtMs: Long? = null) {
         val source = PlaybackSource.Http(url)
-        currentPlaybackSource = source
+        updateCurrentPlaybackSource(source)
         historyTracker.startTracking(source, title = url)
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
@@ -671,7 +689,7 @@ class VRActivity : NativeActivity() {
     // cruzando a fronteira JNI (ver nota em rust/bridge/src/lib.rs).
     fun playSmb(server: com.tucavr.network.SmbServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val source = PlaybackSource.Smb(server, path, sizeBytes)
-        currentPlaybackSource = source
+        updateCurrentPlaybackSource(source)
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
@@ -682,7 +700,7 @@ class VRActivity : NativeActivity() {
     // nao tem esses conceitos).
     fun playFtp(server: com.tucavr.network.FtpServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val source = PlaybackSource.Ftp(server, path, sizeBytes)
-        currentPlaybackSource = source
+        updateCurrentPlaybackSource(source)
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
@@ -693,7 +711,7 @@ class VRActivity : NativeActivity() {
     // `com.tucavr.network.SftpServer`) no lugar de `share`/`domain`.
     fun playSftp(server: com.tucavr.network.SftpServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val source = PlaybackSource.Sftp(server, path, sizeBytes)
-        currentPlaybackSource = source
+        updateCurrentPlaybackSource(source)
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
@@ -703,7 +721,7 @@ class VRActivity : NativeActivity() {
     // T5.4: playback NFS
     fun playNfs(server: com.tucavr.network.SavedServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val source = PlaybackSource.Nfs(server, path, sizeBytes)
-        currentPlaybackSource = source
+        updateCurrentPlaybackSource(source)
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
@@ -713,7 +731,7 @@ class VRActivity : NativeActivity() {
     // T7.4: playback DLNA
     fun playDlna(server: com.tucavr.network.SavedServer, title: String, url: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val source = PlaybackSource.Dlna(server, title, url, sizeBytes)
-        currentPlaybackSource = source
+        updateCurrentPlaybackSource(source)
         historyTracker.startTracking(source, title = title)
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
@@ -727,7 +745,7 @@ class VRActivity : NativeActivity() {
                 val fd = pfd.detachFd()
                 val fdPath = "/proc/self/fd/$fd"
                 val source = PlaybackSource.LocalFile(fdPath, 0L)
-                currentPlaybackSource = source
+                updateCurrentPlaybackSource(source)
                 controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
                 applyFormat3dOverride(source)
                 nativePlayVideo(fdPath, 0f)
@@ -974,4 +992,7 @@ class VRActivity : NativeActivity() {
 
     // T14.1/T14.2: Notifica o pipeline de render nativo (C++/Rust) sobre o nível térmico atual
     external fun nativeSetThermalLevel(level: Int)
+
+    // Painel de Estatísticas Técnicas / Stats for Nerds (docs/reports/DEBUG-STATS-MODAL.md)
+    external fun nativeSetDebugStatsEnabled(enabled: Boolean)
 }

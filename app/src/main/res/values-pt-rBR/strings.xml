@@ -345,4 +345,43 @@
     <string name="settings_subtitles_auto_load_label">Carregar Legendas Automaticamente</string>
     <string name="settings_subtitles_auto_load_description">Detecta e carrega automaticamente arquivos de legenda (.srt, .vtt) ao lado do vídeo.</string>
 
+    <!-- Configurações: Avançado (Painel de Estatísticas) -->
+    <string name="settings_section_advanced">Avançado</string>
+    <string name="settings_debug_stats_label">Estatísticas Técnicas (Stats for Nerds)</string>
+    <string name="settings_debug_stats_description">Exibe diagnósticos de reprodução em tempo real, codecs, taxas de quadros, métricas de buffer e dados do hardware no player.</string>
+
+    <!-- Modal de Estatísticas Técnicas -->
+    <string name="player_btn_debug_stats">Estatísticas Técnicas</string>
+    <string name="debug_stats_modal_title">Estatísticas Técnicas</string>
+    <string name="debug_stats_section_video_render">Vídeo &amp; Renderização</string>
+    <string name="debug_stats_section_audio_sync">Áudio &amp; Sincronização</string>
+    <string name="debug_stats_section_network_buffer">Rede &amp; Buffer</string>
+    <string name="debug_stats_section_system">Sistema &amp; Hardware</string>
+
+    <string name="debug_stats_label_resolution">Resolução / Codec</string>
+    <string name="debug_stats_label_fps">Taxa de Quadros / Display</string>
+    <string name="debug_stats_label_dropped_frames">Quadros Descartados</string>
+    <string name="debug_stats_label_stutter_freeze">Stutter / Freeze</string>
+    <string name="debug_stats_label_video_jitter">Jitter de Vídeo</string>
+    <string name="debug_stats_label_stereo_mode">Modo de Tela / Estéreo</string>
+    <string name="debug_stats_label_render_scale">Escala de Resolução / Foveation</string>
+    <string name="debug_stats_label_graphics_backend">Backend Gráfico</string>
+
+    <string name="debug_stats_label_audio_format">Codec de Áudio / Canais</string>
+    <string name="debug_stats_label_av_drift">Desvio A/V (Drift)</string>
+    <string name="debug_stats_label_spatial_audio">Áudio Espacial</string>
+    <string name="debug_stats_label_audio_track">Faixa de Áudio</string>
+    <string name="debug_stats_label_subtitles">Legendas / Sincronia</string>
+
+    <string name="debug_stats_label_source">Origem / Protocolo</string>
+    <string name="debug_stats_label_network_speed">Taxa de Rede</string>
+    <string name="debug_stats_label_buffer_queue">Fila de Buffer</string>
+    <string name="debug_stats_label_fetch_latency">Latência por Bloco</string>
+    <string name="debug_stats_label_blocks">Blocos Buscados / Descartados</string>
+    <string name="debug_stats_label_seek_latency">Latência do Último Seek</string>
+
+    <string name="debug_stats_label_thermal">Status Térmico</string>
+    <string name="debug_stats_label_battery">Bateria</string>
+    <string name="debug_stats_label_app_version">Versão do App</string>
+
 </resources>

@@ -11,6 +11,7 @@ android {
 
     buildFeatures {
         prefab = true
+        buildConfig = true
     }
 
     defaultConfig {

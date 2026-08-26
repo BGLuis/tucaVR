@@ -483,6 +483,15 @@ pub extern "C" fn get_last_seek_latency_ms() -> u32 {
     }
 }
 
+/// Debug (docs/DEBUGGING.md): desvio A/V instantaneo (master_clock - video_pts), em ms.
+#[no_mangle]
+pub extern "C" fn get_last_av_drift_ms() -> f32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_last_av_drift_ms(),
+        Err(_) => 0.0,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn toggle_play_pause() {
     if let Ok(mut controller) = CONTROLLER.lock() {
