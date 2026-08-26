@@ -9,6 +9,7 @@
 // entre os dois caminhos (Estágio 6: dois caminhos em paralelo).
 
 #include <jni.h>
+#include <android/log.h>
 #include <android/native_window_jni.h>
 #include <vector>
 #include <string>

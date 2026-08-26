@@ -56,6 +56,7 @@ extern "C" {
     extern void set_video_volume(float volume);
     extern float get_video_volume();
     extern void set_playback_speed(float speed);
+    extern float get_playback_speed();
     extern void cycle_audio_track();
     extern void seek_video_playback(float position);
     // UX de feedback (loading/play-pause) — ver comentario em
