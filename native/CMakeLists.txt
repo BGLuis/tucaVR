@@ -22,6 +22,10 @@ include_directories(include)
 # VULKAN = esqueleto do Estagio 1 do plano de migracao — caminho paralelo,
 # independente do OVRFW (que e GLES-only por construcao, ver o plano).
 set(VRPLAYER_GRAPHICS_API "GLES" CACHE STRING "Graphics API for VR rendering: GLES or VULKAN")
+option(ENABLE_VK_VALIDATION_LAYERS "Enable Vulkan validation layers" OFF)
+if(ENABLE_VK_VALIDATION_LAYERS)
+    add_compile_definitions(ENABLE_VK_VALIDATION_LAYERS=1)
+endif()
 
 # -----------------------------------------------------------------------------
 # Source Files

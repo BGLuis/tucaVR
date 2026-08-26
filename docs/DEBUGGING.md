@@ -140,49 +140,21 @@ de release recebem a chamada mas ela é descartada sem custo.
 runtime (`vkEnumerateInstanceLayerProperties`) se `VK_LAYER_KHRONOS_validation`
 está disponível e, se estiver, habilita a layer + `VK_EXT_debug_utils` com um
 callback que loga pro logcat (`VkValidation: ...`, tag `VRPlayerAppVK`,
-níveis WARN/ERROR habilitados por padrão). **Sem o arquivo `.so` da layer, é
-um no-op silencioso** — nada quebra, a instância Vulkan é criada normalmente
-sem a layer.
+níveis WARN/ERROR habilitados por padrão).
 
-`app/src/main/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so` já está
-presente nesta máquina — build arm64-v8a legítima (NDK r28c, o mesmo major
-usado por este projeto), obtida do cache local do Gradle (artefato do motor
-do Flutter, que embute essa mesma layer pra debug; resolvido originalmente
-via Maven oficial do Google por outro projeto nesta máquina, não baixado
-manualmente). `sha256sum` conferido igual em duas cópias independentes no
-disco. O arquivo de origem tem ~223MB **não stripado** (símbolos de debug
-completos) — o `stripDebugDebugSymbols` do AGP já reduz isso pra ~15MB antes
-de empacotar no APK (confirmado nesta sessão: `app-debug.apk` final ficou
-com 64MB no total, nada fora do normal).
+**Gating por flag de build:**
+A validation layer vem desabilitada por padrão tanto no código C++ quanto no empacotamento do APK. Para habilitá-la:
+1. Adicione o `.so` da layer em `app/src/main/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so`.
+2. Compile passando a flag Gradle `-PenableVulkanValidation=true`:
+   ```bash
+   ./gradlew assembleDebug -PenableVulkanValidation=true
+   ```
+Sem essa flag, o Gradle exclui o `.so` do APK via `packaging.jniLibs.excludes` e o CMake não define `ENABLE_VK_VALIDATION_LAYERS`, garantindo que builds padrão e de produção não sofram sobrecarga de CPU/GPU nem interceptações no hot path de submissão de comandos e fences.
 
-**Este arquivo não é versionado** —
-`app/src/main/jniLibs/` está no `.gitignore` (mesmo diretório onde
-`scripts/build.sh` já copia `libbridge.so`/ffmpeg a cada build; nem esse
-script nem `cargo ndk` limpam o diretório antes de copiar, então o arquivo
-da layer sobrevive a rebuilds normais). Se você clonar o repo numa outra
-máquina, o arquivo não vem junto — para reobter, use a mesma fonte que deu
-certo aqui (`~/.gradle/caches/**/transformed/*_debug-*/arm64-v8a/`, se você
-já tiver algum projeto Flutter/Android buildado nessa máquina) ou baixe um
-release oficial de
-[`KhronosGroup/Vulkan-ValidationLayers`](https://github.com/KhronosGroup/Vulkan-ValidationLayers/releases)
-(asset Android, variante **arm64-v8a** — o único ABI que este projeto
-builda, ver `native/CMakeLists.txt`) e copie pro mesmo caminho.
-
-No primeiro frame com a layer ativa, o logcat deve mostrar
-`VK_LAYER_KHRONOS_validation encontrada, habilitando`.
-
-**Apague `app/src/main/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so`
-antes de qualquer build que não seja pra você mesmo testar** — validation
-layers têm custo de performance real e não devem ir num build de
-release/distribuição (o projeto não publica em loja no momento, mas o
-hábito vale a pena). Removê-lo volta automaticamente ao comportamento
-no-op descrito acima, sem precisar mudar nenhum código.
-
-Nada disso foi validado num Quest 3 físico — só compilação/empacotamento
-verificados nesta sessão (sem headset disponível). Se o runtime do Quest não expuser a layer
-mesmo com o `.so` presente (algumas plataformas Android restringem quais
-processos podem carregar layers), o fallback continua sendo os logs comuns
-da seção 1.
+**Obtendo o arquivo `.so` (não versionado):**
+`app/src/main/jniLibs/` está no `.gitignore`. Para reobter o binário arm64-v8a da layer:
+- Baixe uma release oficial de [`KhronosGroup/Vulkan-ValidationLayers`](https://github.com/KhronosGroup/Vulkan-ValidationLayers/releases) (asset Android, variante **arm64-v8a**) e copie para `app/src/main/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so`.
+- Ao compilar com `-PenableVulkanValidation=true`, o primeiro frame com a layer ativa exibirá no logcat: `Vulkan: VK_LAYER_KHRONOS_validation encontrada, habilitando`. Em builds comuns sem a flag, o log registrará: `Vulkan: Validation layers desabilitadas por configuracao de build`.
 
 ## 5. Session IDs e Rastreabilidade Multi-Camada (N1 e N6)
 

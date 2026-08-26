@@ -211,6 +211,7 @@ extern uint32_t g_scrubOverlayWidth;
 extern uint32_t g_scrubOverlayHeight;
 extern std::mutex g_scrubOverlayMutex;
 extern std::atomic<bool> g_requestUiPanelVisible;
+extern std::atomic<bool> g_requestControlsPanelVisible;
 extern std::atomic<bool> g_stopVideoRequested;
 extern std::atomic<bool> g_modalPanelActive;
 extern std::atomic<bool> g_modalPanelShowRequested;
@@ -225,6 +226,11 @@ Java_com_tucavr_VRActivity_nativeStopVideo(JNIEnv*, jobject) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeRequestUiPanelVisible(JNIEnv*, jobject) {
     g_requestUiPanelVisible.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRequestControlsPanelVisible(JNIEnv*, jobject) {
+    g_requestControlsPanelVisible.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -301,11 +307,13 @@ Java_com_tucavr_VRActivity_nativePlayVideo(JNIEnv* env, jobject, jstring path, j
     const char* pathStr = env->GetStringUTFChars(path, nullptr);
     start_video_playback(pathStr, startTimeSec);
     env->ReleaseStringUTFChars(path, pathStr);
+    g_requestControlsPanelVisible.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeTogglePlayPause(JNIEnv*, jobject) {
     toggle_play_pause();
+    g_requestControlsPanelVisible.store(true);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -320,6 +328,7 @@ Java_com_tucavr_VRActivity_nativeTakeLastPlaybackError(JNIEnv* env, jobject) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSeekVideo(JNIEnv*, jobject, jfloat positionSeconds) {
     seek_video_playback(positionSeconds);
+    g_requestControlsPanelVisible.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL

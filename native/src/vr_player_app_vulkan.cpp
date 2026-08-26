@@ -168,6 +168,7 @@ uint32_t g_scrubOverlayWidth = 0;
 uint32_t g_scrubOverlayHeight = 0;
 std::mutex g_scrubOverlayMutex;
 std::atomic<bool> g_requestUiPanelVisible{false};
+std::atomic<bool> g_requestControlsPanelVisible{false};
 std::atomic<bool> g_stopVideoRequested{false};
 std::atomic<bool> g_modalPanelActive{false};
 std::atomic<bool> g_modalPanelShowRequested{false};
@@ -183,6 +184,7 @@ void ResetGlobalState() {
         g_scrubOverlayHeight = 0;
     }
     g_requestUiPanelVisible.store(false);
+    g_requestControlsPanelVisible.store(false);
     g_stopVideoRequested.store(false);
     g_modalPanelActive.store(false);
     g_modalPanelShowRequested.store(false);
@@ -892,12 +894,11 @@ void CreateVulkanInstanceAndDevice(AppState& state) {
     addIfMissing(instanceExtStrings, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
     addIfMissing(instanceExtStrings, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
 
-    // Validation layers (opcional, ver docs/DEBUGGING.md) — o NDK nao vem
-    // com o .so (foi removido dos pacotes distribuidos ha um tempo);
-    // precisa ser colocado manualmente em
-    // app/src/main/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so.
-    // vkEnumerateInstanceLayerProperties torna isto um no-op silencioso —
-    // seguro chamar em qualquer device/build, com ou sem o .so presente.
+    std::vector<const char*> enabledLayers;
+    bool hasDebugUtils = false;
+#if defined(ENABLE_VK_VALIDATION_LAYERS)
+    // Validation layers (opcional, ver docs/DEBUGGING.md) — habilitado apenas
+    // via flag de build -PenableVulkanValidation=true.
     uint32_t layerCount = 0;
     vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
     std::vector<VkLayerProperties> availableLayers(layerCount);
@@ -910,8 +911,6 @@ void CreateVulkanInstanceAndDevice(AppState& state) {
         }
     }
 
-    std::vector<const char*> enabledLayers;
-    bool hasDebugUtils = false;
     if (hasValidationLayer) {
         enabledLayers.push_back("VK_LAYER_KHRONOS_validation");
 
@@ -933,6 +932,9 @@ void CreateVulkanInstanceAndDevice(AppState& state) {
     } else {
         LOGI("Vulkan: VK_LAYER_KHRONOS_validation nao encontrada — sem validation layers (ver docs/DEBUGGING.md)");
     }
+#else
+    LOGI("Vulkan: Validation layers desabilitadas por configuracao de build (use -PenableVulkanValidation=true para ativar)");
+#endif
 
     std::vector<const char*> instanceExtPtrs;
     for (const auto& s : instanceExtStrings) instanceExtPtrs.push_back(s.c_str());
@@ -3840,9 +3842,35 @@ static void CaptureFramePpm(AppState& state, VkImage srcImage, uint32_t width, u
     }
 }
 
+void PollAndroidEvents(AppState& state);
+void PollXrEvents(AppState& state);
+
 void RenderFrame(AppState& state) {
     // Sincronizacao de frames em voo (F1)
-    VKR(vkWaitForFences(state.vkDevice, 1, &state.inFlightFences[state.currentFrameIndex], VK_TRUE, UINT64_MAX));
+    // Timeout finito com re-bombeamento de eventos Android/OpenXR para evitar ANR
+    // na main thread caso a GPU demore ou ocorra transicao de ciclo de vida.
+    constexpr uint64_t kFenceTimeoutNs = 25'000'000ULL; // 25ms
+    VkResult waitRes = VK_TIMEOUT;
+    uint32_t waitAttempts = 0;
+    while (waitRes == VK_TIMEOUT) {
+        if (state.app->destroyRequested != 0 || state.requestExit || !state.sessionRunning) {
+            return;
+        }
+        waitRes = vkWaitForFences(state.vkDevice, 1, &state.inFlightFences[state.currentFrameIndex], VK_TRUE, kFenceTimeoutNs);
+        if (waitRes == VK_TIMEOUT) {
+            PollAndroidEvents(state);
+            PollXrEvents(state);
+            waitAttempts++;
+            if (waitAttempts % 40 == 0) { // a cada ~1s
+                LOGW("RenderFrame: aguardando fence do frame %d ha %u ms...", state.currentFrameIndex, waitAttempts * 25);
+            }
+        }
+    }
+
+    if (waitRes != VK_SUCCESS) {
+        LOGE("RenderFrame: vkWaitForFences falhou com codigo %d", waitRes);
+        return;
+    }
 
     // Coleta dos timestamps da execucao anterior deste slot (F0)
     if (state.queryPool != VK_NULL_HANDLE && state.timestampPeriod > 0.0f) {
@@ -3866,16 +3894,21 @@ void RenderFrame(AppState& state) {
 
     VKR(vkResetFences(state.vkDevice, 1, &state.inFlightFences[state.currentFrameIndex]));
 
-    // Metricas de performance (docs/DEBUGGING.md)
-    auto frameStart = std::chrono::steady_clock::now();
-    if (state.hasLastFrameTimestamp) {
-        float frameMs = std::chrono::duration<float, std::milli>(
-            frameStart - state.lastFrameTimestamp).count();
+    XrFrameWaitInfo waitFrameInfo{XR_TYPE_FRAME_WAIT_INFO};
+    XrFrameState frameState{XR_TYPE_FRAME_STATE};
+    OXR(xrWaitFrame(state.session, &waitFrameInfo, &frameState));
+
+    // Metricas de performance baseadas no pacing real do compositor OpenXR
+    if (state.lastPredictedDisplayTime > 0) {
+        float frameMs = static_cast<float>(frameState.predictedDisplayTime - state.lastPredictedDisplayTime) * 1e-6f;
         state.lastFrameMs = frameMs;
         if (frameMs > 0.0f) {
             float instFps = 1000.0f / frameMs;
             state.smoothedFps = (state.smoothedFps <= 0.0f)
                 ? instFps : (state.smoothedFps * 0.9f + instFps * 0.1f);
+            if (state.smoothedFps > 90.0f) {
+                state.smoothedFps = 90.0f;
+            }
         }
         if (frameMs > kFreezeThresholdMs) {
             state.freezeCount++;
@@ -3885,35 +3918,43 @@ void RenderFrame(AppState& state) {
             LOGW("Video: stutter — frame levou %.1fms", frameMs);
         }
 
-        // Video "congelado" (mesmo frame repetido) e diferente de freeze do
-        // loop de render acima — ver comentario no campo
-        // AppState.msSinceLastVideoFrame. So loga uma vez por episodio,
-        // reseta quando um frame novo chega de fato (UpdateVideoFrame).
         state.msSinceLastVideoFrame += frameMs;
-        if (state.activeVideoFrame != nullptr && !state.videoStallLogged &&
-            state.msSinceLastVideoFrame > kVideoStallThresholdMs) {
-            state.videoStallLogged = true;
-            LOGW("Video: sem frame novo ha %.0fms (decode/rede travado? ou usuario pausou?)",
-                state.msSinceLastVideoFrame);
+        if (state.msSinceLastVideoFrame > kVideoStallThresholdMs) {
+            state.videoFps = 0.0f;
+            if (state.activeVideoFrame != nullptr && !state.videoStallLogged) {
+                state.videoStallLogged = true;
+                LOGW("Video: sem frame novo ha %.0fms (decode/rede travado? ou usuario pausou?)",
+                    state.msSinceLastVideoFrame);
+            }
         }
 
         state.decodedFpsPollAccumMs += frameMs;
         if (state.decodedFpsPollAccumMs >= 1000.0f) {
             float pollSec = state.decodedFpsPollAccumMs / 1000.0f;
+            if (pollSec < 0.001f) pollSec = 0.001f;
+
             uint64_t decodedCount = get_video_frames_decoded_count();
-            state.decodedFps = (decodedCount - state.lastDecodedFrameCount) / pollSec;
+            state.decodedFps = (decodedCount >= state.lastDecodedFrameCount)
+                ? ((decodedCount - state.lastDecodedFrameCount) / pollSec)
+                : 0.0f;
             state.lastDecodedFrameCount = decodedCount;
 
             uint64_t outputCount = get_video_frames_output_count();
-            state.outputFps = (outputCount - state.lastOutputFrameCount) / pollSec;
+            state.outputFps = (outputCount >= state.lastOutputFrameCount)
+                ? ((outputCount - state.lastOutputFrameCount) / pollSec)
+                : 0.0f;
             state.lastOutputFrameCount = outputCount;
 
             uint64_t droppedCount = get_video_frames_dropped_count();
-            state.droppedFps = (droppedCount - state.lastDroppedFrameCount) / pollSec;
+            state.droppedFps = (droppedCount >= state.lastDroppedFrameCount)
+                ? ((droppedCount - state.lastDroppedFrameCount) / pollSec)
+                : 0.0f;
             state.lastDroppedFrameCount = droppedCount;
 
             uint64_t netBytes = get_network_bytes_read();
-            float netMB = (netBytes - state.lastNetworkBytes) / (1024.0f * 1024.0f);
+            float netMB = (netBytes >= state.lastNetworkBytes)
+                ? ((netBytes - state.lastNetworkBytes) / (1024.0f * 1024.0f))
+                : 0.0f;
             state.netMBs = netMB / pollSec;
             state.lastNetworkBytes = netBytes;
 
@@ -3960,12 +4001,9 @@ void RenderFrame(AppState& state) {
             }
         }
     }
-    state.lastFrameTimestamp = frameStart;
-    state.hasLastFrameTimestamp = true;
-
-    XrFrameWaitInfo waitFrameInfo{XR_TYPE_FRAME_WAIT_INFO};
-    XrFrameState frameState{XR_TYPE_FRAME_STATE};
-    OXR(xrWaitFrame(state.session, &waitFrameInfo, &frameState));
+    if (!frameState.shouldRender) {
+        state.lastPredictedDisplayTime = frameState.predictedDisplayTime;
+    }
 
     XrFrameBeginInfo beginFrameInfo{XR_TYPE_FRAME_BEGIN_INFO};
     OXR(xrBeginFrame(state.session, &beginFrameInfo));

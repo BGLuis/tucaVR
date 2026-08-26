@@ -45,23 +45,140 @@ class DebugTelemetryExporterTest {
         assertEquals("42.00", cols[2])
         assertEquals("VULKAN", cols[3])
         assertEquals("SIDE_BY_SIDE", cols[4])
-        assertEquals("ativo", cols[5])
-        assertEquals("59.9", cols[6])
-        assertEquals("60.0", cols[7])
-        assertEquals("60.0", cols[8])
-        assertEquals("2.0", cols[9])
-        assertEquals("3.5", cols[10])
-        assertEquals("22.50", cols[11])
-        assertEquals("12", cols[12])
-        assertEquals("120", cols[13])
-        assertEquals("72.0", cols[14])
-        assertEquals("13.8", cols[15])
-        assertEquals("4", cols[16])
-        assertEquals("1", cols[17])
-        assertEquals("2", cols[18])
-        assertEquals("0.85", cols[19])
-        assertEquals("Http", cols[20])
-        assertEquals("https://stream.local/live.m3u8", cols[21])
+        assertEquals("1", cols[5]) // stereo_layout
+        assertEquals("0", cols[6]) // polar_180
+        assertEquals("0", cols[7]) // swap_eyes
+        assertEquals("ativo", cols[8])
+        assertEquals("16.0", cols[9]) // frame_gap_ms
+        assertEquals("59.9", cols[10])
+        assertEquals("60.0", cols[11])
+        assertEquals("60.0", cols[12])
+        assertEquals("2.0", cols[13])
+        assertEquals("3.5", cols[14])
+        assertEquals("22.50", cols[15])
+        assertEquals("12", cols[16])
+        assertEquals("120", cols[17])
+        assertEquals("72.0", cols[18])
+        assertEquals("13.8", cols[19])
+        assertEquals("4", cols[25]) // stutter_count
+        assertEquals("1", cols[26]) // freeze_count
+        assertEquals("2", cols[27]) // thermal_level
+        assertEquals("0.85", cols[28]) // scale
+        assertEquals("Http", cols[43])
+        assertEquals("https://stream.local/live.m3u8", cols[44])
+    }
+
+    @Test
+    fun testParseTsvHudFormat() {
+        val tsvHud = """
+            backend	VULKAN
+            screen_mode	Vr180SBS
+            stereo_layout	1
+            polar_180	1
+            swap_eyes	0
+            has_frame	1
+            frame_gap_ms	10.9
+            video_fps	59.5
+            decoded_fps	60.0
+            output_fps	59.8
+            dropped_fps	0.2
+            jitter_ms	1.1
+            net_mbs	24.50
+            queue_depth	88
+            seek_latency_ms	150
+            smoothed_fps	90.0
+            frame_time_ms	11.1
+            gpu_time_ms	4.25
+            smoothed_gpu_time_ms	4.10
+            upscaling_mode	QUAL
+            upscaling_sharpness	0.75
+            mqsr_enabled	1
+            stutter_count	2
+            freeze_count	0
+            thermal_level	1
+            render_scale	1.00
+            refresh_rate	90.0
+            av_drift_ms	12.5
+            net_last_fetch_ms	8.0
+            net_blocks_fetched	1240
+            net_blocks_discarded	5
+            foveation	1
+            spatial_audio	2
+            head_tracking	1
+            speed	1.00
+            volume	0.80
+            audio_track	1
+            audio_track_count	2
+            sub_track	0
+            sub_offset_ms	-100
+        """.trimIndent()
+
+        val source = PlaybackSource.Sftp(
+            server = com.tucavr.network.SftpServer(
+                id = "sftp-1",
+                name = "NAS",
+                host = "10.10.10.44",
+                port = 2022,
+                username = "user",
+                password = "secret",
+                privateKey = null
+            ),
+            path = "videos/8k.mp4"
+        )
+
+        val row = DebugTelemetryExporter.parseHudToCsvRow(
+            hudText = tsvHud,
+            sessionId = "d212b387",
+            timestampMs = 1700000002000L,
+            source = source,
+            elapsedSeconds = 157.25f
+        )
+
+        val cols = row.split(',')
+        assertEquals(DebugTelemetryExporter.CSV_HEADER.split(',').size, cols.size)
+        assertEquals("d212b387", cols[1])
+        assertEquals("157.25", cols[2])
+        assertEquals("VULKAN", cols[3])
+        assertEquals("Vr180SBS", cols[4])
+        assertEquals("1", cols[5])
+        assertEquals("1", cols[6])
+        assertEquals("0", cols[7])
+        assertEquals("ativo", cols[8])
+        assertEquals("10.9", cols[9])
+        assertEquals("59.5", cols[10])
+        assertEquals("60.0", cols[11])
+        assertEquals("59.8", cols[12])
+        assertEquals("0.2", cols[13])
+        assertEquals("1.1", cols[14])
+        assertEquals("24.50", cols[15])
+        assertEquals("88", cols[16])
+        assertEquals("150", cols[17])
+        assertEquals("90.0", cols[18])
+        assertEquals("11.1", cols[19])
+        assertEquals("4.25", cols[20])
+        assertEquals("4.10", cols[21])
+        assertEquals("QUAL", cols[22])
+        assertEquals("0.75", cols[23])
+        assertEquals("1", cols[24])
+        assertEquals("2", cols[25])
+        assertEquals("0", cols[26])
+        assertEquals("1", cols[27])
+        assertEquals("1.00", cols[28])
+        assertEquals("90.0", cols[29])
+        assertEquals("12.5", cols[30])
+        assertEquals("8.0", cols[31])
+        assertEquals("1240", cols[32])
+        assertEquals("5", cols[33])
+        assertEquals("1", cols[34])
+        assertEquals("2", cols[35])
+        assertEquals("1", cols[36])
+        assertEquals("1.00", cols[37])
+        assertEquals("0.80", cols[38])
+        assertEquals("1", cols[39])
+        assertEquals("2", cols[40])
+        assertEquals("0", cols[41])
+        assertEquals("-100", cols[42])
+        assertEquals("Sftp", cols[43])
     }
 
     @Test

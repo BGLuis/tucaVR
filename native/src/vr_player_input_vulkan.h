@@ -9,6 +9,8 @@
 #include <atomic>
 #include <cstdint>
 
+extern std::atomic<bool> g_requestControlsPanelVisible;
+
 // Timings de auto-hide/recenter — mesmos valores do caminho GLES
 // (vr_player_app.cpp: kUiAutoHideSeconds/kUiFadeDuration/kRecenterHoldSeconds).
 constexpr float kUiAutoHideSeconds = 5.0f;
@@ -407,13 +409,23 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     // teclado nativo estiver ativo — mesmo motivo do GLES: com o teclado
     // aberto o raio aponta pro overlay do sistema, nao mais pro quad.
     float su = 0, sv = 0;
-    bool hitScreen = state.hasRay &&
-        rayHitsQuad(scene.screenModelNoScale, scene.screenNormal, scene.screenCenter,
-                    state.screenScaleX, state.screenScaleY, su, sv,
-                    state.lastRayOrigin, state.lastRayDir) > 0.0f;
+    bool hitScreen = false;
+    if (IsSphereMode(state.screenMode)) {
+        // No modo esférico (180° SBS / 360°), qualquer raio do controle apontado para frente mantém os controles visíveis
+        hitScreen = state.hasRay && (state.lastRayDir.z < -0.1f);
+    } else {
+        hitScreen = state.hasRay &&
+            rayHitsQuad(scene.screenModelNoScale, scene.screenNormal, scene.screenCenter,
+                        state.screenScaleX, state.screenScaleY, su, sv,
+                        state.lastRayOrigin, state.lastRayDir) > 0.0f;
+    }
     bool keyboardActive = get_keyboard_active() != 0;
     if (::g_requestUiPanelVisible.exchange(false)) {
         state.uiIdleTime = 0.0f;
+    }
+    if (::g_requestControlsPanelVisible.exchange(false)) {
+        state.controlsIdleTime = 0.0f;
+        state.controlsAlpha = 1.0f;
     }
 
     if (currentHitPanel == 1 || keyboardActive) {
@@ -421,7 +433,10 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     } else {
         state.uiIdleTime += dt;
     }
-    if (currentHitPanel == 2 || hitScreen) {
+
+    bool isPlaying = get_playback_is_playing() != 0;
+    // Se o vídeo estiver pausado, o painel de controles e o botão de pause não devem sumir por auto-hide
+    if (currentHitPanel == 2 || hitScreen || !isPlaying) {
         state.controlsIdleTime = 0.0f;
     } else {
         state.controlsIdleTime += dt;
@@ -585,6 +600,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         if (((currA && !state.prevA) || (currX && !state.prevX) ||
             (currTrigger && !prevTrigger && dispatchHitPanel == 0)) && !keyboardActive) {
             toggle_play_pause();
+            state.controlsIdleTime = 0.0f;
+            state.controlsAlpha = 1.0f;
         }
 
         // B (direita) ou Y (esquerda) = alterna a visibilidade do painel Home
@@ -592,6 +609,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         if ((currB && !state.prevB) || (currY && !state.prevY)) {
             bool isCurrentlyVisible = state.uiIdleTime < kUiAutoHideSeconds;
             state.uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
+            state.controlsIdleTime = 0.0f;
         }
     }
     state.prevB = currB;

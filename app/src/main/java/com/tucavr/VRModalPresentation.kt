@@ -69,6 +69,9 @@ class VRModalPresentation(
         )
         currentModalView = view
         rootContainer.visibility = View.VISIBLE
+        rootContainer.requestLayout()
+        rootContainer.invalidate()
+        activity.nativeShowModalPanel()
     }
 
     /**

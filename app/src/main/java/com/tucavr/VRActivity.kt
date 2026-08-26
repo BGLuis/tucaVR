@@ -769,13 +769,19 @@ class VRActivity : NativeActivity() {
         // Estatísticas de debug (ver docs/DEBUGGING.md / docs/reports/DEBUG-STATS-MODAL.md)
         @JvmStatic
         fun updateDebugHud(activity: VRActivity, text: String) {
-            val sid = activity.currentSessionId ?: "--------"
-            DebugTelemetryExporter.recordHudSample(
-                context = activity,
-                sessionId = sid,
-                hudText = text,
-                source = activity.currentPlaybackSource
-            )
+            val sid = activity.currentSessionId
+            if (sid != null) {
+                val elapsed = if (activity.sessionStartRealtimeMs > 0L) {
+                    (android.os.SystemClock.elapsedRealtime() - activity.sessionStartRealtimeMs) / 1000f
+                } else 0f
+                DebugTelemetryExporter.recordHudSample(
+                    context = activity,
+                    sessionId = sid,
+                    hudText = text,
+                    source = activity.currentPlaybackSource,
+                    elapsedSeconds = elapsed
+                )
+            }
 
             if (!activity.isDebugStatsEnabled) return
             activity.runOnUiThread {
@@ -797,9 +803,13 @@ class VRActivity : NativeActivity() {
     var currentSessionId: String? = null
         private set
 
+    @Volatile
+    private var sessionStartRealtimeMs: Long = 0L
+
     private fun startSession(source: PlaybackSource) {
         val sessionId = java.util.UUID.randomUUID().toString().replace("-", "").take(8)
         currentSessionId = sessionId
+        sessionStartRealtimeMs = android.os.SystemClock.elapsedRealtime()
         VRLog.activeSessionId = sessionId
         VRLog.i("Iniciando sessao de reproducao $sessionId para $source")
         nativeSetSessionId(sessionId)
@@ -944,7 +954,9 @@ class VRActivity : NativeActivity() {
             historyTracker.stopTracking()
             updateCurrentPlaybackSource(null)
             currentSessionId = null
+            sessionStartRealtimeMs = 0L
             VRLog.activeSessionId = null
+            DebugTelemetryExporter.onSessionEnded()
             lastMediaProgressCurrent = 0f
             lastMediaProgressTotal = 0f
             nativeStopVideo()
@@ -975,6 +987,7 @@ class VRActivity : NativeActivity() {
     external fun nativeSetScreenModeOverride(mode: Int)
     external fun nativeToggleSwapEyes(): Int
     external fun nativeRequestUiPanelVisible()
+    external fun nativeRequestControlsPanelVisible()
     external fun nativeShowModalPanel()
     external fun nativeHideModalPanel()
     external fun nativeIsModalActive(): Boolean

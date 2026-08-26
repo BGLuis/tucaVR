@@ -32,10 +32,21 @@ android {
                 // Ver ADR-003 revisado: decisao de manter GLES como fallback real (dois
                 // caminhos mantidos) ate validacao completa em headset.
                 arguments += "-DVRPLAYER_GRAPHICS_API=${project.findProperty("vrplayerGraphicsApi") ?: "VULKAN"}"
+                if (project.findProperty("enableVulkanValidation") == "true") {
+                    arguments += "-DENABLE_VK_VALIDATION_LAYERS=ON"
+                }
             }
         }
         ndk {
             abiFilters.add("arm64-v8a")
+        }
+    }
+
+    packaging {
+        jniLibs {
+            if (project.findProperty("enableVulkanValidation") != "true") {
+                excludes.add("**/libVkLayer_khronos_validation.so")
+            }
         }
     }
 

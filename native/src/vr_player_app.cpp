@@ -289,6 +289,7 @@ Java_com_tucavr_VRActivity_nativeSetScrubOverlayVisible(JNIEnv* env, jobject thi
 // Solicitação explícita para acordar e manter o painel de UI visível (reset de m_uiIdleTime),
 // por exemplo ao abrir modais como o seletor de formato de tela (T3.4).
 static std::atomic<bool> g_requestUiPanelVisible{false};
+static std::atomic<bool> g_requestControlsPanelVisible{false};
 static std::atomic<bool> g_stopVideoRequested{false};
 static std::atomic<bool> g_modalPanelActive{false};
 static std::atomic<bool> g_modalPanelShowRequested{false};
@@ -303,6 +304,11 @@ Java_com_tucavr_VRActivity_nativeStopVideo(JNIEnv* env, jobject thiz) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeRequestUiPanelVisible(JNIEnv* env, jobject thiz) {
     g_requestUiPanelVisible.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRequestControlsPanelVisible(JNIEnv* env, jobject thiz) {
+    g_requestControlsPanelVisible.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -394,11 +400,13 @@ Java_com_tucavr_VRActivity_nativePlayVideo(JNIEnv* env, jobject thiz, jstring pa
     const char* pathStr = env->GetStringUTFChars(path, nullptr);
     start_video_playback(pathStr, startTimeSec);
     env->ReleaseStringUTFChars(path, pathStr);
+    g_requestControlsPanelVisible.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeTogglePlayPause(JNIEnv* env, jobject thiz) {
     toggle_play_pause();
+    g_requestControlsPanelVisible.store(true);
 }
 
 // Kotlin faz polling disto (ver autoPlayHandler em VRActivity.kt) pra mostrar um Toast quando
@@ -417,6 +425,7 @@ Java_com_tucavr_VRActivity_nativeTakeLastPlaybackError(JNIEnv* env, jobject thiz
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSeekVideo(JNIEnv* env, jobject thiz, jfloat positionSeconds) {
     seek_video_playback(positionSeconds);
+    g_requestControlsPanelVisible.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -1734,6 +1743,9 @@ public:
             m_lastFrameMs = in.DeltaSeconds * 1000.0f;
             float instFps = 1.0f / in.DeltaSeconds;
             m_smoothedFps = (m_smoothedFps <= 0.0f) ? instFps : (m_smoothedFps * 0.9f + instFps * 0.1f);
+            if (m_smoothedFps > 90.0f) {
+                m_smoothedFps = 90.0f;
+            }
             if (m_lastFrameMs > kFreezeThresholdMs) {
                 m_freezeCount++;
                 LOGE("VRPlayerApp: FREEZE detectado — frame levou %.0fms", m_lastFrameMs);
@@ -1748,11 +1760,13 @@ public:
             // cada frame parado), reseta quando um frame novo chega de fato
             // (bloco de troca de buffer, mais abaixo nesta funcao).
             m_msSinceLastVideoFrame += m_lastFrameMs;
-            if (m_lastBuffer != nullptr && !m_videoStallLogged &&
-                m_msSinceLastVideoFrame > kVideoStallThresholdMs) {
-                m_videoStallLogged = true;
-                LOGW("VRPlayerApp: video sem frame novo ha %.0fms (decode/rede travado? "
-                     "ou usuario pausou?)", m_msSinceLastVideoFrame);
+            if (m_msSinceLastVideoFrame > kVideoStallThresholdMs) {
+                m_videoFps = 0.0f;
+                if (m_lastBuffer != nullptr && !m_videoStallLogged) {
+                    m_videoStallLogged = true;
+                    LOGW("VRPlayerApp: video sem frame novo ha %.0fms (decode/rede travado? "
+                         "ou usuario pausou?)", m_msSinceLastVideoFrame);
+                }
             }
 
             // decFps: taxa real de decode (Rust), amostrada a ~1Hz — ver
@@ -1760,22 +1774,30 @@ public:
             m_decodedFpsPollAccumMs += m_lastFrameMs;
             if (m_decodedFpsPollAccumMs >= kDecodedFpsPollIntervalMs) {
                 float pollSec = m_decodedFpsPollAccumMs / 1000.0f;
+                if (pollSec < 0.001f) pollSec = 0.001f;
 
                 uint64_t currentCount = get_video_frames_decoded_count();
-                uint64_t delta = currentCount - m_lastDecodedFrameCount; // wrap-safe (unsigned)
-                m_decodedFps = delta / pollSec;
+                m_decodedFps = (currentCount >= m_lastDecodedFrameCount)
+                    ? ((currentCount - m_lastDecodedFrameCount) / pollSec)
+                    : 0.0f;
                 m_lastDecodedFrameCount = currentCount;
 
                 uint64_t outputCount = get_video_frames_output_count();
-                m_outputFps = (outputCount - m_lastOutputFrameCount) / pollSec;
+                m_outputFps = (outputCount >= m_lastOutputFrameCount)
+                    ? ((outputCount - m_lastOutputFrameCount) / pollSec)
+                    : 0.0f;
                 m_lastOutputFrameCount = outputCount;
 
                 uint64_t droppedCount = get_video_frames_dropped_count();
-                m_droppedFps = (droppedCount - m_lastDroppedFrameCount) / pollSec;
+                m_droppedFps = (droppedCount >= m_lastDroppedFrameCount)
+                    ? ((droppedCount - m_lastDroppedFrameCount) / pollSec)
+                    : 0.0f;
                 m_lastDroppedFrameCount = droppedCount;
 
                 uint64_t netBytes = get_network_bytes_read();
-                float netMB = (netBytes - m_lastNetworkBytes) / (1024.0f * 1024.0f);
+                float netMB = (netBytes >= m_lastNetworkBytes)
+                    ? ((netBytes - m_lastNetworkBytes) / (1024.0f * 1024.0f))
+                    : 0.0f;
                 m_netMBs = netMB / pollSec;
                 m_lastNetworkBytes = netBytes;
 
@@ -2006,40 +2028,34 @@ public:
             }
         }
 
-        float screenU = 0.0f, screenV = 0.0f;
-        OVR::Vector3f screenNormal = OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(OVR::Vector3f(0, 0, 1));
-        bool hitScreen = rayHitsQuad(screenTransform, screenNormal, worldScreenPos, screenU, screenV) > 0.0f;
+        bool hitScreen = false;
+        bool hasRay = in.LeftRemoteTracked || in.RightRemoteTracked;
+        if (IsSphereMode(m_screenMode)) {
+            hitScreen = hasRay && (rayDir.z < -0.1f);
+        } else {
+            float screenU = 0.0f, screenV = 0.0f;
+            OVR::Vector3f screenNormal = OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(OVR::Vector3f(0, 0, 1));
+            hitScreen = rayHitsQuad(screenTransform, screenNormal, worldScreenPos, screenU, screenV) > 0.0f;
+        }
 
         // --- T4.3: auto-hide dos paineis ---
-        // Aponta pro File Browser (Home/Arquivos/Rede/Player, tudo no mesmo quad
-        // desde a Fase 2) -> mantem ele visivel. Aponta pra tela ou pros
-        // controles -> mantem os controles visiveis. Sem atividade por 5s -> fade
-        // out. Com a fusao dos paineis Local/Rede num so quad, so sobram estes 2
-        // paineis de UI (fora a tela de video) — o timing de auto-hide abaixo
-        // (kUiAutoHideSeconds/kUiFadeDuration) nao mudou, mas vale re-validar em
-        // headset fisico agora que ha um painel a menos disputando atencao.
-        //
-        // Bug reportado em validacao real: com o teclado nativo aberto
-        // (VRActivity.showNativeKeyboardFor), o raio do controller aponta pro
-        // teclado (overlay do sistema, fora deste app), nao mais pro quad do
-        // painel — sem a checagem de `get_keyboard_active()` abaixo, isso
-        // contava como "usuario inativo" e o painel "Adicionar servidor"
-        // (ou qualquer outro com EditText focado) desaparecia no meio da
-        // digitacao. Suprime o auto-hide inteiro (nao so o do painel Home —
-        // um EditText SEMPRE vive dentro dele, nunca no painel de controles,
-        // mas manter os dois presos aqui e mais simples que decidir qual dos
-        // dois "e o painel certo" a cada chamada) enquanto o teclado estiver
-        // ativo.
         bool keyboardActive = get_keyboard_active() != 0;
         if (g_requestUiPanelVisible.exchange(false)) {
             m_uiIdleTime = 0.0f;
+        }
+        if (g_requestControlsPanelVisible.exchange(false)) {
+            m_controlsIdleTime = 0.0f;
+            m_controlsAlpha = 1.0f;
         }
         if (currentHitPanel == 1 || keyboardActive) {
             m_uiIdleTime = 0.0f;
         } else {
             m_uiIdleTime += in.DeltaSeconds;
         }
-        if (currentHitPanel == 2 || hitScreen) {
+
+        bool isPlaying = get_playback_is_playing() != 0;
+        // Se o vídeo estiver pausado, o painel de controles e o botão de pause não devem sumir por auto-hide
+        if (currentHitPanel == 2 || hitScreen || !isPlaying) {
             m_controlsIdleTime = 0.0f;
         } else {
             m_controlsIdleTime += in.DeltaSeconds;
@@ -2195,6 +2211,8 @@ public:
             if (((currA && !prevA) || (currX && !prevX) || (currTrigger && !prevTrigger && dispatchHitPanel == 0)) && !keyboardActive) {
                 LOGI("USER PRESSED PLAY/PAUSE!");
                 toggle_video_state();
+                m_controlsIdleTime = 0.0f;
+                m_controlsAlpha = 1.0f;
             }
 
             // T4.4: B (direita) ou Y (esquerda) = Menu/Back -> alterna a visibilidade do
@@ -2202,6 +2220,7 @@ public:
             if ((currB && !prevB) || (currY && !prevY)) {
                 bool isCurrentlyVisible = m_uiIdleTime < kUiAutoHideSeconds;
                 m_uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
+                m_controlsIdleTime = 0.0f;
             }
         }
 
