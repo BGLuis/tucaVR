@@ -49,6 +49,12 @@
     <!-- Configuracoes (SettingsScreen) -->
     <string name="settings_title">Settings</string>
     <string name="settings_section_video">Video</string>
+    <string name="settings_upscaling_label">Video Upscaling &amp; Super Resolution</string>
+    <string name="settings_upscaling_description">Enhances video clarity and GPU efficiency via MQSR (Meta Quest Super Resolution) and Snapdragon GSR shader processing.</string>
+    <string name="settings_upscaling_mode_off">Off</string>
+    <string name="settings_upscaling_mode_quality">Quality (SGSR1)</string>
+    <string name="settings_upscaling_mode_performance">Performance (Render Scale 0.8x + MQSR)</string>
+    <string name="settings_upscaling_mode_auto">Auto (Adaptive)</string>
     <string name="settings_foveated_rendering_label">Foveated Rendering</string>
     <string name="settings_foveated_rendering_description">Reduces GPU load by lowering detail in peripheral vision. May slightly reduce edge sharpness. Vulkan only.</string>
     <string name="settings_section_audio">Audio</string>

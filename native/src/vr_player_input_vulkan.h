@@ -607,15 +607,21 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         // condicionar a compilacao nativa por build type.
         {
             StereoParams spHud = GetStereoParams(state.screenMode, 0);
-            char hud[512];
+            const char* upscaleStr = "OFF";
+            if (state.upscalingMode == 1) upscaleStr = "QUAL";
+            else if (state.upscalingMode == 2) upscaleStr = "PERF";
+            else if (state.upscalingMode == 3) upscaleStr = "AUTO";
+
+            char hud[1024];
             snprintf(hud, sizeof(hud),
-                "VULKAN | %s | stereoLayout=%d polar180=%d swap=%d | video=%s vidGap=%.0fms vidFps=%.0f decFps=%.0f outFps=%.0f drop=%.0f jitter=%.0fms | net=%.1fMB/s q=%u seekMs=%u | %.0ffps %.1fms stutter=%d freeze=%d | thermal=%u scale=%.2f",
+                "VULKAN | %s | stereoLayout=%d polar180=%d swap=%d | video=%s vidFps=%.0f decFps=%.0f drop=%.0f | net=%.1fMB/s q=%u seekMs=%u | %.0ffps %.1fms gpu=%.2fms (smooth=%.2fms) | thermal=%u scale=%.2f upscale=%s(s=%.2f,mqsr=%d) stutter=%d",
                 ScreenModeName(state.screenMode), spHud.stereoLayout, spHud.polar180, spHud.swapEyes,
-                (state.activeVideoFrame != nullptr) ? "ativo" : "sem frame", state.msSinceLastVideoFrame,
-                state.videoFps, state.decodedFps, state.outputFps, state.droppedFps, state.videoJitterMs,
+                (state.activeVideoFrame != nullptr) ? "ativo" : "sem frame",
+                state.videoFps, state.decodedFps, state.droppedFps,
                 state.netMBs, state.videoQueueDepth, get_last_seek_latency_ms(),
-                state.smoothedFps, state.lastFrameMs, state.stutterCount, state.freezeCount,
-                state.thermalLevel, state.renderResolutionScale);
+                state.smoothedFps, state.lastFrameMs, state.lastGpuTimeMs, state.smoothedGpuTimeMs,
+                state.thermalLevel, state.renderResolutionScale, upscaleStr, state.upscalingSharpness,
+                (int)(state.supportsMqsr && state.upscalingEnabled), state.stutterCount);
             JNIEnv* env = nullptr;
             state.app->activity->vm->AttachCurrentThread(&env, nullptr);
             if (env) {

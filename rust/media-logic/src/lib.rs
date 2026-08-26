@@ -25,4 +25,5 @@ pub mod session;
 pub mod spatial_audio;
 pub mod subtitle;
 pub mod sync;
+pub mod upscaling;
 pub mod yuv_convert;
