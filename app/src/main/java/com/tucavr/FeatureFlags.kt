@@ -33,6 +33,9 @@ object FeatureFlags {
 
         // Painel de Estatísticas Técnicas / Stats for Nerds (docs/reports/DEBUG-STATS-MODAL.md)
         DEBUG_STATS_PANEL("debug_stats_panel", defaultEnabled = false),
+
+        // Telemetria de Debug: exporta série temporal de reprodução em CSV (N2).
+        DEBUG_STATS_EXPORT("debug_stats_export", defaultEnabled = false),
     }
 
     fun isEnabled(context: Context, flag: Flag): Boolean =

@@ -28,11 +28,34 @@
 #include <cstdio>
 #include "debug_stats.h"
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "VRPlayerApp", __VA_ARGS__)
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "VRPlayerApp", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VRPlayerApp", __VA_ARGS__)
+static char g_sessionId[32] = "--------";
+static std::mutex g_sessionIdMutex;
+
+static inline void get_current_session_id(char* out, size_t maxLen) {
+    std::lock_guard<std::mutex> lock(g_sessionIdMutex);
+    snprintf(out, maxLen, "%s", g_sessionId);
+}
+
+#define LOGI(fmt, ...) do { \
+    char _sId[32]; \
+    get_current_session_id(_sId, sizeof(_sId)); \
+    __android_log_print(ANDROID_LOG_INFO, "VRPlayerApp", "[s:%s] " fmt, _sId, ##__VA_ARGS__); \
+} while (0)
+
+#define LOGW(fmt, ...) do { \
+    char _sId[32]; \
+    get_current_session_id(_sId, sizeof(_sId)); \
+    __android_log_print(ANDROID_LOG_WARN, "VRPlayerApp", "[s:%s] " fmt, _sId, ##__VA_ARGS__); \
+} while (0)
+
+#define LOGE(fmt, ...) do { \
+    char _sId[32]; \
+    get_current_session_id(_sId, sizeof(_sId)); \
+    __android_log_print(ANDROID_LOG_ERROR, "VRPlayerApp", "[s:%s] " fmt, _sId, ##__VA_ARGS__); \
+} while (0)
 
 extern "C" {
+    extern void set_session_id(const char* session_id);
     extern void start_video_playback(const char* path, float startTimeSec);
     extern void stop_video_playback();
     extern void toggle_play_pause();
@@ -315,6 +338,25 @@ static jbyteArray RustThumbnailStripToJByteArrayAndFree(JNIEnv* env, uint8_t* da
     env->SetByteArrayRegion(result, 0, (jsize)len, reinterpret_cast<jbyte*>(data));
     free_rust_thumbnail_strip(data, len);
     return result;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetSessionId(JNIEnv* env, jobject thiz, jstring jSessionId) {
+    if (jSessionId) {
+        const char* s = env->GetStringUTFChars(jSessionId, nullptr);
+        {
+            std::lock_guard<std::mutex> lock(g_sessionIdMutex);
+            snprintf(g_sessionId, sizeof(g_sessionId), "%s", (s && s[0] != '\0') ? s : "--------");
+        }
+        set_session_id(s);
+        env->ReleaseStringUTFChars(jSessionId, s);
+    } else {
+        {
+            std::lock_guard<std::mutex> lock(g_sessionIdMutex);
+            snprintf(g_sessionId, sizeof(g_sessionId), "--------");
+        }
+        set_session_id("");
+    }
 }
 
 extern "C" JNIEXPORT void JNICALL

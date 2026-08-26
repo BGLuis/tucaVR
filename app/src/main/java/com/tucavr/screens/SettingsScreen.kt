@@ -88,7 +88,7 @@ class SettingsScreen(
             )
         )
 
-        // Seção Avançado (Stats for Nerds / Debug Stats Panel)
+        // Seção Avançado (Diagnóstico e Telemetria)
         root.addView(
             VoidText.title(context, context.getString(R.string.settings_section_advanced), sizeSp = 18f).apply {
                 setPadding(0, VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 8f))
@@ -101,6 +101,15 @@ class SettingsScreen(
                 descriptionRes = R.string.settings_debug_stats_description,
                 flag = FeatureFlags.Flag.DEBUG_STATS_PANEL,
                 onChanged = { enabled -> activity.setDebugStatsEnabled(enabled) }
+            )
+        )
+
+        root.addView(
+            buildFlagRow(
+                labelRes = R.string.settings_telemetry_export_label,
+                descriptionRes = R.string.settings_telemetry_export_description,
+                flag = FeatureFlags.Flag.DEBUG_STATS_EXPORT,
+                onChanged = { /* flag persisted automatically */ }
             )
         )
 

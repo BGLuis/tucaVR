@@ -64,9 +64,31 @@
 
 typedef XrResult (XRAPI_PTR *PFN_xrRequestDisplayRefreshRateFB)(XrSession session, float displayRefreshRate);
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "VRPlayerAppVK", __VA_ARGS__)
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "VRPlayerAppVK", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VRPlayerAppVK", __VA_ARGS__)
+std::atomic<bool> g_captureRequested{false};
+std::string g_capturePath;
+std::mutex g_capturePathMutex;
+std::string g_sessionId = "--------";
+std::mutex g_sessionIdMutex;
+
+static inline std::string get_current_session_id_vk_app() {
+    std::lock_guard<std::mutex> lock(g_sessionIdMutex);
+    return g_sessionId;
+}
+
+#define LOGI(fmt, ...) do { \
+    std::string _sId = get_current_session_id_vk_app(); \
+    __android_log_print(ANDROID_LOG_INFO, "VRPlayerAppVK", "[s:%s] " fmt, _sId.c_str(), ##__VA_ARGS__); \
+} while (0)
+
+#define LOGW(fmt, ...) do { \
+    std::string _sId = get_current_session_id_vk_app(); \
+    __android_log_print(ANDROID_LOG_WARN, "VRPlayerAppVK", "[s:%s] " fmt, _sId.c_str(), ##__VA_ARGS__); \
+} while (0)
+
+#define LOGE(fmt, ...) do { \
+    std::string _sId = get_current_session_id_vk_app(); \
+    __android_log_print(ANDROID_LOG_ERROR, "VRPlayerAppVK", "[s:%s] " fmt, _sId.c_str(), ##__VA_ARGS__); \
+} while (0)
 
 // Bridge Rust: fornece o AHardwareBuffer do frame de video atual e controle de 3D mode.
 extern "C" {
@@ -1002,7 +1024,7 @@ void CreateSwapchains(AppState& state) {
         eyeChain.height = static_cast<int32_t>(views[eye].recommendedImageRectHeight);
 
         XrSwapchainCreateInfo createInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-        createInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+        createInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT | 0x00000008; // 0x8 = XR_SWAPCHAIN_USAGE_TRANSFER_SRC_BIT (para captura de frame N4)
         createInfo.format = chosenFormat;
         createInfo.sampleCount = 1;
         createInfo.width = static_cast<uint32_t>(eyeChain.width);
@@ -3480,6 +3502,124 @@ void UpdateVideoFrame(AppState& state) {
     }
 }
 
+// Captura de frame no Vulkan (N4): readback da VkImage do swapchain para PPM.
+static void CaptureFramePpm(AppState& state, VkImage srcImage, uint32_t width, uint32_t height, int eye) {
+    std::string basePath;
+    {
+        std::lock_guard<std::mutex> lock(g_capturePathMutex);
+        basePath = g_capturePath;
+    }
+    if (basePath.empty()) return;
+
+    VkDeviceSize bufSize = static_cast<VkDeviceSize>(width) * height * 4;
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bufInfo.size = bufSize;
+    bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VKR(vkCreateBuffer(state.vkDevice, &bufInfo, nullptr, &stagingBuf));
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(state.vkDevice, stagingBuf, &memReqs);
+    VkPhysicalDeviceMemoryProperties memProps;
+    vkGetPhysicalDeviceMemoryProperties(state.vkPhysicalDevice, &memProps);
+    uint32_t memTypeIdx = UINT32_MAX;
+    const auto hostVisible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        if ((memReqs.memoryTypeBits & (1u << i)) &&
+            ((memProps.memoryTypes[i].propertyFlags & hostVisible) == hostVisible)) {
+            memTypeIdx = i;
+            break;
+        }
+    }
+    if (memTypeIdx == UINT32_MAX) {
+        vkDestroyBuffer(state.vkDevice, stagingBuf, nullptr);
+        LOGE("CaptureFramePpm: host-visible memory type nao encontrada");
+        return;
+    }
+
+    VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = memTypeIdx;
+    VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &stagingMem));
+    VKR(vkBindBufferMemory(state.vkDevice, stagingBuf, stagingMem, 0));
+
+    VkCommandBufferAllocateInfo cbAlloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cbAlloc.commandPool = state.vkCommandPool;
+    cbAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbAlloc.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VKR(vkAllocateCommandBuffers(state.vkDevice, &cbAlloc, &cmd));
+
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VKR(vkBeginCommandBuffer(cmd, &beginInfo));
+
+    VkImageMemoryBarrier barrierToSrc{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrierToSrc.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrierToSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrierToSrc.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrierToSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrierToSrc.image = srcImage;
+    barrierToSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrierToSrc);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuf, 1, &region);
+
+    VkImageMemoryBarrier barrierBack{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrierBack.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrierBack.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrierBack.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrierBack.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrierBack.image = srcImage;
+    barrierBack.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrierBack);
+
+    VKR(vkEndCommandBuffer(cmd));
+
+    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
+    VKR(vkQueueWaitIdle(state.vkQueue));
+    vkFreeCommandBuffers(state.vkDevice, state.vkCommandPool, 1, &cmd);
+
+    void* mapped = nullptr;
+    VKR(vkMapMemory(state.vkDevice, stagingMem, 0, bufSize, 0, &mapped));
+    if (mapped) {
+        const uint8_t* pixels = static_cast<const uint8_t*>(mapped);
+        std::string path = basePath + (eye == 0 ? ".left.ppm" : ".right.ppm");
+        FILE* f = fopen(path.c_str(), "wb");
+        if (f) {
+            fprintf(f, "P6\n%u %u\n255\n", width, height);
+            for (uint32_t y = 0; y < height; y++) {
+                for (uint32_t x = 0; x < width; x++) {
+                    fwrite(&pixels[(size_t)(y * width + x) * 4], 1, 3, f);
+                }
+            }
+            fclose(f);
+            LOGI("CaptureFramePpm: frame capturado em %s (%ux%u)", path.c_str(), width, height);
+        } else {
+            LOGE("CaptureFramePpm: falha ao abrir %s para escrita", path.c_str());
+        }
+        vkUnmapMemory(state.vkDevice, stagingMem);
+    }
+
+    vkDestroyBuffer(state.vkDevice, stagingBuf, nullptr);
+    vkFreeMemory(state.vkDevice, stagingMem, nullptr);
+
+    if (eye == 1) {
+        g_captureRequested.store(false);
+    }
+}
+
 void RenderFrame(AppState& state) {
     // Metricas de performance (docs/DEBUGGING.md) — ver comentario no campo
     // lastFrameTimestamp (AppState) sobre por que e wall-clock, nao
@@ -3876,6 +4016,11 @@ void RenderFrame(AppState& state) {
             } else {
                 // Fallback: quad solido (Estagio 2)
                 RecordAndSubmitQuad(state, fb, extent, mvp, proj, view, headCenter);
+            }
+
+            if (g_captureRequested.load()) {
+                CaptureFramePpm(state, eyeChain.images[imageIndex].image,
+                                static_cast<uint32_t>(renderW), static_cast<uint32_t>(renderH), eye);
             }
 
             XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};

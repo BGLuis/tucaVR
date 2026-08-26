@@ -18,11 +18,27 @@
 #include <cstdint>
 #include <mutex>
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "VRPlayerJNI_VK", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VRPlayerJNI_VK", __VA_ARGS__)
+extern std::string g_sessionId;
+extern std::mutex g_sessionIdMutex;
+
+static inline std::string get_current_session_id_vk() {
+    std::lock_guard<std::mutex> lock(g_sessionIdMutex);
+    return g_sessionId;
+}
+
+#define LOGI(fmt, ...) do { \
+    std::string _sId = get_current_session_id_vk(); \
+    __android_log_print(ANDROID_LOG_INFO, "VRPlayerJNI_VK", "[s:%s] " fmt, _sId.c_str(), ##__VA_ARGS__); \
+} while (0)
+
+#define LOGE(fmt, ...) do { \
+    std::string _sId = get_current_session_id_vk(); \
+    __android_log_print(ANDROID_LOG_ERROR, "VRPlayerJNI_VK", "[s:%s] " fmt, _sId.c_str(), ##__VA_ARGS__); \
+} while (0)
 
 // Bridge Rust — mesmas funções do vr_player_app.cpp:48-88.
 extern "C" {
+    extern void set_session_id(const char* session_id);
     extern void start_video_playback(const char* path, float startTimeSec);
     extern void toggle_play_pause();
     extern void seek_video_playback(float position_seconds);
@@ -135,12 +151,29 @@ extern "C" {
     extern void set_desired_audio_track(uint32_t ordinal);
 }
 
-// Captura de frame (nao implementada no caminho Vulkan ainda — funcao existe
-// para evitar UnsatisfiedLinkError; o VkImage readback sera adicionado
-// quando necessario).
-static std::atomic<bool> g_captureRequested{false};
-static std::string g_capturePath;
-static std::mutex g_capturePathMutex;
+// Captura de frame no caminho Vulkan (coordenada com loop de render em vr_player_app_vulkan.cpp).
+extern std::atomic<bool> g_captureRequested;
+extern std::string g_capturePath;
+extern std::mutex g_capturePathMutex;
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetSessionId(JNIEnv* env, jobject, jstring jSessionId) {
+    if (jSessionId) {
+        const char* s = env->GetStringUTFChars(jSessionId, nullptr);
+        {
+            std::lock_guard<std::mutex> lock(g_sessionIdMutex);
+            g_sessionId = (s && s[0] != '\0') ? s : "--------";
+        }
+        set_session_id(s);
+        env->ReleaseStringUTFChars(jSessionId, s);
+    } else {
+        {
+            std::lock_guard<std::mutex> lock(g_sessionIdMutex);
+            g_sessionId = "--------";
+        }
+        set_session_id("");
+    }
+}
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeRequestFrameCapture(JNIEnv* env, jobject, jstring path) {
@@ -151,7 +184,7 @@ Java_com_tucavr_VRActivity_nativeRequestFrameCapture(JNIEnv* env, jobject, jstri
     }
     env->ReleaseStringUTFChars(path, pathStr);
     g_captureRequested = true;
-    LOGI("nativeRequestFrameCapture: %s (VkImage readback pendente)", g_capturePath.c_str());
+    LOGI("nativeRequestFrameCapture: %s", g_capturePath.c_str());
 }
 
 // Preview de arrasto sobre o quad do video — estado compartilhado com o loop
