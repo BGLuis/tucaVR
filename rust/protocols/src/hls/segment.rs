@@ -114,7 +114,7 @@ pub fn decrypt_aes128_cbc(key: &[u8; 16], iv: &[u8; 16], ciphertext: &[u8]) -> R
     let mut decrypted = Vec::with_capacity(ciphertext.len());
     let mut prev_block = *iv;
 
-    for chunk in ciphertext.chunks_exact(16) {
+    for chunk in ciphertext.as_chunks::<16>().0 {
         let mut block = aes::Block::clone_from_slice(chunk);
         cipher.decrypt_block(&mut block);
         for i in 0..16 {
@@ -166,7 +166,7 @@ mod tests {
         let mut ciphertext = Vec::with_capacity(padded.len());
         let mut prev = iv;
 
-        for chunk in padded.chunks_exact(16) {
+        for chunk in padded.as_chunks::<16>().0 {
             let mut block = aes::Block::clone_from_slice(chunk);
             for i in 0..16 {
                 block[i] ^= prev[i];

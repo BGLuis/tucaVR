@@ -148,7 +148,7 @@ mod tests {
         let (y, u, v) = solid_planar(235, 128, 128, 4, 4);
         let planes = YuvPlanes { y: &y, y_stride: 4, u: &u, u_stride: 2, v: &v, v_stride: 2 };
         let rgba = yuv420_to_rgba_scaled(&planes, YuvLayout::Planar, 4, 4, 2, 2).unwrap();
-        for px in rgba.chunks_exact(4) {
+        for px in rgba.as_chunks::<4>().0 {
             assert!(px[0] > 220 && px[1] > 220 && px[2] > 220, "pixel nao ficou proximo de branco: {:?}", px);
             assert_eq!(px[3], 255);
         }
@@ -159,7 +159,7 @@ mod tests {
         let (y, u, v) = solid_planar(16, 128, 128, 4, 4);
         let planes = YuvPlanes { y: &y, y_stride: 4, u: &u, u_stride: 2, v: &v, v_stride: 2 };
         let rgba = yuv420_to_rgba_scaled(&planes, YuvLayout::Planar, 4, 4, 2, 2).unwrap();
-        for px in rgba.chunks_exact(4) {
+        for px in rgba.as_chunks::<4>().0 {
             assert!(px[0] < 30 && px[1] < 30 && px[2] < 30, "pixel nao ficou proximo de preto: {:?}", px);
         }
     }
@@ -201,7 +201,7 @@ mod tests {
         let v = vec![128u8; 2];
         let planes = YuvPlanes { y: &y, y_stride: stride, u: &u, u_stride: 2, v: &v, v_stride: 2 };
         let rgba = yuv420_to_rgba_scaled(&planes, YuvLayout::Planar, width, height, width, height).unwrap();
-        for px in rgba.chunks_exact(4) {
+        for px in rgba.as_chunks::<4>().0 {
             assert!(px[0] > 220, "leu padding de stride como pixel de imagem: {:?}", px);
         }
     }
