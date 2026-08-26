@@ -46,3 +46,7 @@ ffmpeg-android-maker
 
 # Clipe 4K sintetico gerado por scripts/generate-4k-test-clip.sh
 /testdata/
+
+# Relatórios e investigações técnicas locais
+/docs/reports/
+

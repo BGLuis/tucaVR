@@ -55,8 +55,8 @@ arquivo já carregado**, sem precisar de um arquivo real gravado naquele
 formato específico:
 
 ```bash
-adb shell am broadcast -a com.vrplayer.debug.SET_SCREEN_MODE --ei mode 6
-adb shell am broadcast -a com.vrplayer.debug.CYCLE_SCREEN_MODE
+adb shell am broadcast -a com.tucavr.debug.SET_SCREEN_MODE --ei mode 6
+adb shell am broadcast -a com.tucavr.debug.CYCLE_SCREEN_MODE
 ```
 
 Índice de `mode` (precisa bater com `enum class ScreenMode` em
@@ -75,7 +75,7 @@ Existe também um mecanismo mais antigo pra **lançar** o app já num modo
 específico com um arquivo (soak test, ver `scripts/soak-test.sh`):
 
 ```bash
-adb shell am start -n com.vrplayer/.VRActivity \
+adb shell am start -n com.tucavr/.VRActivity \
   -e video_path /sdcard/Movies/teste_8k_180.mp4 --ei screen_mode 9
 ```
 

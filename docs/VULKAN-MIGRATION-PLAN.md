@@ -105,7 +105,7 @@ Em vez de migrar `vr_player_app.cpp` in-place, o plano é:
   por ora. Para validar: ligar os controles, `adb install -r
   app/build/outputs/apk/debug/app-debug.apk` (buildado com
   `-PvrplayerGraphicsApi=VULKAN`), `adb shell am start -n
-  com.vrplayer/.VRActivity`, e checar `adb logcat -s VRPlayerAppVK:*` — a
+  com.tucavr/.VRActivity`, e checar `adb logcat -s VRPlayerAppVK:*` — a
   linha `"Estagio 2 (quad estatico Vulkan) inicializado"` (nome do log
   evoluiu junto com o estágio, ver Estágio 2 abaixo) seguida de mudanças de
   estado de sessão sem `OXR(...)`/`VKR(...)` abortando indica sucesso.

@@ -1,4 +1,4 @@
-# 🥽 VR Multimedia Player — Documento de Requisitos (v0.2)
+# 🥽 tucaVR — Documento de Requisitos (v0.2)
 
 > **Projeto**: Player Multimídia 2D/3D para Realidade Virtual  
 > **Stack**: Kotlin + Rust + OpenXR nativo (C/C++ para rendering)  
