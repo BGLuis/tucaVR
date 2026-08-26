@@ -1271,13 +1271,9 @@ pub extern "C" fn set_playback_speed(speed: f32) {
 
 #[no_mangle]
 pub extern "C" fn get_playback_speed() -> f32 {
-    // try_lock (nao lock!): chamada periodica do render loop (C++ HUD / telemetry).
-    // Se o lock estiver ocupado (load() em background), retorna 1.0 sem bloquear a render thread.
-    if let Ok(controller) = CONTROLLER.try_lock() {
-        controller.get_speed()
-    } else {
-        1.0
-    }
+    // try_sample_or: chamada periodica do render loop (C++ HUD / telemetry a 90Hz).
+    // Se o lock estiver ocupado (load_at em background), devolve 1.0 sem bloquear a render thread.
+    media_logic::session::try_sample_or(&CONTROLLER, 1.0, |controller| controller.get_speed())
 }
 
 #[no_mangle]
@@ -1291,13 +1287,9 @@ pub extern "C" fn cycle_audio_track() {
 
 #[no_mangle]
 pub extern "C" fn get_audio_track_count() -> u32 {
-    // try_lock (nao lock!): chamada periodica do render loop (C++ HUD / telemetry).
-    // Se o lock estiver ocupado (load() em background), retorna 0 sem bloquear a render thread.
-    if let Ok(controller) = CONTROLLER.try_lock() {
-        controller.audio_track_count() as u32
-    } else {
-        0
-    }
+    // try_sample_or: chamada periodica do render loop (C++ HUD / telemetry a 90Hz).
+    // Se o lock estiver ocupado (load_at em background), devolve 0 sem bloquear a render thread.
+    media_logic::session::try_sample_or(&CONTROLLER, 0, |controller| controller.audio_track_count() as u32)
 }
 
 /// Seleciona a trilha de audio desejada pro PROXIMO `load_at()` — nao troca

@@ -100,6 +100,19 @@ impl Default for Generation {
     }
 }
 
+/// Helper para amostragem periódica não-bloqueante no render loop (90Hz OpenXR).
+/// Se o recurso protegido estiver sob contenção (ex.: carregamento/conexão em background),
+/// devolve `fallback` imediatamente sem bloquear a thread que o invoca.
+pub fn try_sample_or<T, R, F>(lock: &Mutex<T>, fallback: R, f: F) -> R
+where
+    F: FnOnce(&T) -> R,
+{
+    match lock.try_lock() {
+        Ok(guard) => f(&*guard),
+        Err(_) => fallback,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,5 +204,41 @@ mod tests {
         let handle = thread::spawn(|| {});
         gen.clone().stop_and_join(vec![handle]);
         assert!(!gen.is_running());
+    }
+
+    #[test]
+    fn try_sample_or_returns_value_when_uncontended() {
+        let lock = Mutex::new(42);
+        let val = try_sample_or(&lock, 0, |v| *v * 2);
+        assert_eq!(val, 84);
+    }
+
+    #[test]
+    fn try_sample_or_returns_fallback_immediately_when_contended() {
+        let lock = Arc::new(Mutex::new(42));
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+        let lock_clone = lock.clone();
+        let background_thread = thread::spawn(move || {
+            let _guard = lock_clone.lock().unwrap();
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+
+        // Aguarda a thread de background adquirir o lock
+        started_rx.recv().unwrap();
+
+        // Simula o render loop (90Hz) tentando ler enquanto há contenção
+        let start = std::time::Instant::now();
+        let val = try_sample_or(&lock, 999, |v| *v);
+        let elapsed = start.elapsed();
+
+        // Libera a thread de background
+        release_tx.send(()).unwrap();
+        background_thread.join().unwrap();
+
+        assert_eq!(val, 999, "deve retornar fallback imediatamente sob contencao");
+        assert!(elapsed < Duration::from_millis(10), "try_sample_or demorou demais ({elapsed:?}), bloqueou a thread!");
     }
 }
