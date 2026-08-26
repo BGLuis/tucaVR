@@ -48,6 +48,9 @@ class VRActivity : NativeActivity() {
     private var controlsVirtualDisplay: android.hardware.display.VirtualDisplay? = null
     private var controlsPresentation: VRControlsPresentation? = null
 
+    private var modalVirtualDisplay: android.hardware.display.VirtualDisplay? = null
+    var modalPresentation: VRModalPresentation? = null
+
     // ==================== TECLADO NATIVO (ver VRPresentation.buildVoidEditText) ====================
     // `nativeKeyboardProxy` e um EditText REAL, anexado direto na janela
     // desta Activity (`addContentView`, nao numa VirtualDisplay) — e o unico
@@ -341,6 +344,9 @@ class VRActivity : NativeActivity() {
         DebugTelemetryExporter.onSessionEnded()
         debugReceiver?.let { unregisterReceiver(it) }
         debugReceiver = null
+        modalVirtualDisplay?.release()
+        modalVirtualDisplay = null
+        modalPresentation = null
         super.onDestroy()
     }
 
@@ -502,6 +508,8 @@ class VRActivity : NativeActivity() {
         const val UI_DISPLAY_HEIGHT = 768
         const val CONTROLS_DISPLAY_WIDTH = 1582
         const val CONTROLS_DISPLAY_HEIGHT = 800
+        const val MODAL_DISPLAY_WIDTH = 1024
+        const val MODAL_DISPLAY_HEIGHT = 768
 
         @JvmStatic
         fun openFilePicker(activity: VRActivity) {
@@ -621,6 +629,67 @@ class VRActivity : NativeActivity() {
                 if (action == android.view.MotionEvent.ACTION_UP) {
                     lastControlsDownTime = 0L
                 }
+            }
+        }
+
+        @JvmStatic
+        fun setupModalVirtualDisplay(activity: VRActivity, surface: Surface, width: Int, height: Int) {
+            activity.runOnUiThread {
+                val displayManager = activity.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+                activity.modalVirtualDisplay = displayManager.createVirtualDisplay(
+                    "VR_Modal_Display",
+                    width, height, 160,
+                    surface,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+                )
+                
+                activity.modalVirtualDisplay?.display?.let { display ->
+                    activity.modalPresentation = VRModalPresentation(activity, display, activity)
+                    activity.modalPresentation?.show()
+                }
+            }
+        }
+
+        private var lastModalDownTime: Long = 0
+
+        @JvmStatic
+        fun dispatchModalVRTouch(activity: VRActivity, x: Float, y: Float, action: Int) {
+            activity.runOnUiThread {
+                val now = android.os.SystemClock.uptimeMillis()
+                if (action == android.view.MotionEvent.ACTION_DOWN) {
+                    lastModalDownTime = now
+                }
+                
+                val downTime = if (lastModalDownTime == 0L) now else lastModalDownTime
+                val event = android.view.MotionEvent.obtain(
+                    downTime,
+                    now,
+                    action,
+                    x * MODAL_DISPLAY_WIDTH.toFloat(),
+                    y * MODAL_DISPLAY_HEIGHT.toFloat(),
+                    0
+                )
+                
+                event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+                
+                if (action == 7) {
+                    activity.modalPresentation?.dispatchGenericMotionEvent(event)
+                } else {
+                    activity.modalPresentation?.dispatchTouchEvent(event)
+                }
+                
+                event.recycle()
+                
+                if (action == android.view.MotionEvent.ACTION_UP) {
+                    lastModalDownTime = 0L
+                }
+            }
+        }
+
+        @JvmStatic
+        fun dismissModalFromNative(activity: VRActivity) {
+            activity.runOnUiThread {
+                activity.modalPresentation?.dismissModal()
             }
         }
 
@@ -840,16 +909,29 @@ class VRActivity : NativeActivity() {
     external fun nativeSetScreenModeOverride(mode: Int)
     external fun nativeToggleSwapEyes(): Int
     external fun nativeRequestUiPanelVisible()
+    external fun nativeShowModalPanel()
+    external fun nativeHideModalPanel()
+    external fun nativeIsModalActive(): Boolean
     external fun nativeRequestFrameCapture(path: String)
     external fun nativeTakeLastPlaybackError(): String?
 
     /**
-     * Acorda o quad de UI (VRPresentation) e exibe o modal de formato de tela (T3.4).
+     * Exibe o modal de formato de tela no 3º Quad dedicado frontal (VRModalPresentation).
      */
     fun openScreenFormatModal() {
         runOnUiThread {
-            nativeRequestUiPanelVisible()
-            presentation?.showScreenFormatModal()
+            nativeShowModalPanel()
+            modalPresentation?.showScreenFormatModal()
+        }
+    }
+
+    /**
+     * Fecha o modal frontal flutuante (3º Quad).
+     */
+    fun dismissModalPanel() {
+        runOnUiThread {
+            nativeHideModalPanel()
+            modalPresentation?.dismissModal()
         }
     }
 

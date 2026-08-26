@@ -4,6 +4,7 @@ import android.content.Context
 import android.view.ViewGroup
 import android.widget.CheckBox
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import com.tucavr.FeatureFlags
 import com.tucavr.R
 import com.tucavr.UpscalingModeStore
@@ -31,15 +32,25 @@ class SettingsScreen(
         val root = VoidPanelChrome.newRoot(context)
         root.addView(VoidPanelChrome.buildHeader(context, title = context.getString(R.string.settings_title), onBack = { onBack() }))
 
-        root.addView(
+        val content = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        val scroller = ScrollView(context).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            isFillViewport = true
+            addView(content, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        }
+        root.addView(scroller)
+
+        content.addView(
             VoidText.title(context, context.getString(R.string.settings_section_video), sizeSp = 18f).apply {
                 setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
             }
         )
 
-        root.addView(buildUpscalingRow())
+        content.addView(buildUpscalingRow())
 
-        root.addView(
+        content.addView(
             buildFlagRow(
                 labelRes = R.string.settings_foveated_rendering_label,
                 descriptionRes = R.string.settings_foveated_rendering_description,
@@ -49,13 +60,13 @@ class SettingsScreen(
         )
 
         // Seção Áudio
-        root.addView(
+        content.addView(
             VoidText.title(context, context.getString(R.string.settings_section_audio), sizeSp = 18f).apply {
                 setPadding(0, VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 8f))
             }
         )
 
-        root.addView(
+        content.addView(
             buildFlagRow(
                 labelRes = R.string.settings_spatial_audio_label,
                 descriptionRes = R.string.settings_spatial_audio_description,
@@ -64,7 +75,7 @@ class SettingsScreen(
             )
         )
 
-        root.addView(
+        content.addView(
             buildFlagRow(
                 labelRes = R.string.settings_spatial_head_tracking_label,
                 descriptionRes = R.string.settings_spatial_head_tracking_description,
@@ -74,13 +85,13 @@ class SettingsScreen(
         )
 
         // Seção Legendas (T9.6)
-        root.addView(
+        content.addView(
             VoidText.title(context, context.getString(R.string.settings_section_subtitles), sizeSp = 18f).apply {
                 setPadding(0, VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 8f))
             }
         )
 
-        root.addView(
+        content.addView(
             buildFlagRow(
                 labelRes = R.string.settings_subtitles_auto_load_label,
                 descriptionRes = R.string.settings_subtitles_auto_load_description,
@@ -90,13 +101,13 @@ class SettingsScreen(
         )
 
         // Seção Avançado (Diagnóstico e Telemetria)
-        root.addView(
+        content.addView(
             VoidText.title(context, context.getString(R.string.settings_section_advanced), sizeSp = 18f).apply {
                 setPadding(0, VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 8f))
             }
         )
 
-        root.addView(
+        content.addView(
             buildFlagRow(
                 labelRes = R.string.settings_debug_stats_label,
                 descriptionRes = R.string.settings_debug_stats_description,
@@ -105,7 +116,7 @@ class SettingsScreen(
             )
         )
 
-        root.addView(
+        content.addView(
             buildFlagRow(
                 labelRes = R.string.settings_telemetry_export_label,
                 descriptionRes = R.string.settings_telemetry_export_description,

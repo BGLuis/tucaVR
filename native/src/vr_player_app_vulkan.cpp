@@ -165,6 +165,9 @@ uint32_t g_scrubOverlayWidth = 0;
 uint32_t g_scrubOverlayHeight = 0;
 std::mutex g_scrubOverlayMutex;
 std::atomic<bool> g_requestUiPanelVisible{false};
+std::atomic<bool> g_modalPanelActive{false};
+std::atomic<bool> g_modalPanelShowRequested{false};
+std::atomic<bool> g_modalPanelHideRequested{false};
 
 namespace {
 
@@ -188,6 +191,8 @@ constexpr uint32_t kUiTexWidth = 1024;
 constexpr uint32_t kUiTexHeight = 768;
 constexpr uint32_t kControlsTexWidth = 1582;
 constexpr uint32_t kControlsTexHeight = 800;
+constexpr uint32_t kModalTexWidth = 1024;
+constexpr uint32_t kModalTexHeight = 768;
 
 // Metricas de performance (debug, ver docs/DEBUGGING.md).
 constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz
@@ -444,6 +449,19 @@ struct AppState {
     VkDescriptorSet controlsDescriptorSet = VK_NULL_HANDLE;
     float controlsAlpha = 1.0f;
     bool controlsHasFrame = false;
+
+    // Painel Modal frontal flutuante (3o Quad, kModalTexWidth x kModalTexHeight)
+    AImageReader* modalImageReader = nullptr;
+    VkImage modalImage = VK_NULL_HANDLE;
+    VkDeviceMemory modalImageMemory = VK_NULL_HANDLE;
+    VkImageView modalImageView = VK_NULL_HANDLE;
+    VkDescriptorSet modalDescriptorSet = VK_NULL_HANDLE;
+    float modalAlpha = 0.0f;
+    bool modalHasFrame = false;
+    bool modalActive = false;
+    XrVector3f modalBasePos = {0.0f, 1.2f, -1.3f};
+    float modalYaw = 0.0f;
+    bool modalYawCaptured = false;
 
     // Preview de arrasto sobre o quad do video (T-seek-ux): reaproveita
     // uiPipeline/uiPipelineLayout/uiSampler (RGBA8 comum, sem YCbCr) — so
@@ -1919,11 +1937,11 @@ void CreateUiPipeline(AppState& state, android_app* app) {
     dsLayout.pBindings    = &binding;
     VKR(vkCreateDescriptorSetLayout(state.vkDevice, &dsLayout, nullptr, &state.uiDescriptorSetLayout));
 
-    // Pool para 2 sets (ui + controls)
-    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    // Pool para 3 sets (ui + controls + modal)
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3};
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    poolInfo.maxSets       = 2;
+    poolInfo.maxSets       = 3;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes    = &poolSize;
     VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.uiDescriptorPool));
@@ -2021,17 +2039,19 @@ void CreateUiPipeline(AppState& state, android_app* app) {
     vkDestroyShaderModule(state.vkDevice, vertMod, nullptr);
     vkDestroyShaderModule(state.vkDevice, fragMod, nullptr);
 
-    // Alocar VkImages para UI e controles
+    // Alocar VkImages para UI, controles e modal
     CreateUiImage(state, kUiTexWidth, kUiTexHeight, state.uiImage, state.uiImageMemory, state.uiImageView);
     CreateUiImage(state, kControlsTexWidth, kControlsTexHeight, state.controlsImage, state.controlsImageMemory, state.controlsImageView);
+    CreateUiImage(state, kModalTexWidth, kModalTexHeight, state.modalImage, state.modalImageMemory, state.modalImageView);
 
-    // Alocar descriptor sets para UI e controles
+    // Alocar descriptor sets para UI, controles e modal
     VkDescriptorSetAllocateInfo dsAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     dsAlloc.descriptorPool     = state.uiDescriptorPool;
     dsAlloc.descriptorSetCount = 1;
     dsAlloc.pSetLayouts        = &state.uiDescriptorSetLayout;
     VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.uiDescriptorSet));
     VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.controlsDescriptorSet));
+    VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.modalDescriptorSet));
 
     // Atualizar descriptor sets com as image views
     auto writeUiDs = [&](VkDescriptorSet ds, VkImageView view) {
@@ -2049,6 +2069,7 @@ void CreateUiPipeline(AppState& state, android_app* app) {
     };
     writeUiDs(state.uiDescriptorSet, state.uiImageView);
     writeUiDs(state.controlsDescriptorSet, state.controlsImageView);
+    writeUiDs(state.modalDescriptorSet, state.modalImageView);
 
     // Criar AImageReaders com flags GPU_COLOR_OUTPUT para que o VirtualDisplay
     // do Kotlin possa renderizar na Surface (equivale ao GLES: vr_player_app.cpp:870-913).
@@ -2069,8 +2090,15 @@ void CreateUiPipeline(AppState& state, android_app* app) {
         AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2,
         &state.controlsImageReader);
 
+    media_status_t modalStatus = AImageReader_newWithUsage(
+        kModalTexWidth, kModalTexHeight, AIMAGE_FORMAT_RGBA_8888,
+        AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
+        AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
+        AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2,
+        &state.modalImageReader);
+
     // Wiring JNI: obter ANativeWindow de cada AImageReader, converter para
-    // Surface Java e chamar setupVirtualDisplay / setupControlsVirtualDisplay.
+    // Surface Java e chamar setupVirtualDisplay / setupControlsVirtualDisplay / setupModalVirtualDisplay.
     // Exatamente o mesmo padrao do caminho GLES (vr_player_app.cpp:878-934),
     // so que usando android_app->activity em vez de xrJava do OVRFW.
     if (app && app->activity && app->activity->vm) {
@@ -2134,6 +2162,30 @@ void CreateUiPipeline(AppState& state, android_app* app) {
                 LOGE("Estagio 4: AImageReader_newWithUsage falhou para controles (status=%d)", ctrlStatus);
             }
 
+            // --- Modal (3o Quad frontal flutuante, kModalTexWidth x kModalTexHeight) ---
+            if (modalStatus == AMEDIA_OK && state.modalImageReader) {
+                ANativeWindow* modalWindow = nullptr;
+                AImageReader_getWindow(state.modalImageReader, &modalWindow);
+                if (modalWindow) {
+                    jobject modalSurface = ANativeWindow_toSurface(env, modalWindow);
+                    jmethodID setupModal = env->GetStaticMethodID(
+                        vrActivityClass, "setupModalVirtualDisplay",
+                        "(Lcom/tucavr/VRActivity;Landroid/view/Surface;II)V");
+                    if (setupModal) {
+                        env->CallStaticVoidMethod(vrActivityClass, setupModal,
+                            activityObj, modalSurface, (jint)kModalTexWidth, (jint)kModalTexHeight);
+                        LOGI("Estagio 4: setupModalVirtualDisplay (%ux%u) chamado com sucesso", kModalTexWidth, kModalTexHeight);
+                    } else {
+                        LOGE("Estagio 4: setupModalVirtualDisplay NAO ENCONTRADO");
+                    }
+                    env->DeleteLocalRef(modalSurface);
+                } else {
+                    LOGE("Estagio 4: AImageReader_getWindow retornou null para modal");
+                }
+            } else {
+                LOGE("Estagio 4: AImageReader_newWithUsage falhou para modal (status=%d)", modalStatus);
+            }
+
             env->DeleteLocalRef(vrActivityClass);
         }
 
@@ -2144,8 +2196,8 @@ void CreateUiPipeline(AppState& state, android_app* app) {
         LOGE("Estagio 4: android_app nulo — VirtualDisplay nao configurado");
     }
 
-    LOGI("Estagio 4: pipeline de UI/controles criado (%ux%u + %ux%u)",
-        kUiTexWidth, kUiTexHeight, kControlsTexWidth, kControlsTexHeight);
+    LOGI("Estagio 4: pipeline de UI/controles/modal criado (%ux%u + %ux%u + %ux%u)",
+        kUiTexWidth, kUiTexHeight, kControlsTexWidth, kControlsTexHeight, kModalTexWidth, kModalTexHeight);
 }
 
 // Atualiza texturas de UI/controles a partir dos AImageReaders.
@@ -2167,6 +2219,7 @@ void UpdateUiFrames(AppState& state) {
     };
     acquireAndUpdate(state.uiImageReader, state.uiImage, state.uiHasFrame, kUiTexWidth, kUiTexHeight);
     acquireAndUpdate(state.controlsImageReader, state.controlsImage, state.controlsHasFrame, kControlsTexWidth, kControlsTexHeight);
+    acquireAndUpdate(state.modalImageReader, state.modalImage, state.modalHasFrame, kModalTexWidth, kModalTexHeight);
 }
 
 // ===========================================================================
@@ -2967,6 +3020,9 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
     Mat4 controlsModel = Mat4Multiply(scene.controlsModelNoScale, Mat4Scale(kControlsPanelScaleX, kControlsPanelScaleY, 1.0f));
     Mat4 controlsMvp = Mat4Multiply(Mat4Multiply(proj, view), controlsModel);
 
+    Mat4 modalModel = Mat4Multiply(scene.modalModelNoScale, Mat4Scale(kModalPanelScaleX, kModalPanelScaleY, 1.0f));
+    Mat4 modalMvp = Mat4Multiply(Mat4Multiply(proj, view), modalModel);
+
     UiPushConstants push{};
 
     // UI (File Browser) — auto-hide (Estagio 6): nao desenha quando totalmente
@@ -2991,6 +3047,18 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
             0, sizeof(push), &push);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             state.uiPipelineLayout, 0, 1, &state.controlsDescriptorSet, 0, nullptr);
+        vkCmdDraw(cmd, 4, 1, 0, 0);
+    }
+
+    // Modal (3o Quad frontal flutuante)
+    if (state.modalHasFrame && state.modalAlpha > 0.0f) {
+        push.mvp = modalMvp;
+        push.alpha = state.modalAlpha;
+        vkCmdPushConstants(cmd, state.uiPipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(push), &push);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            state.uiPipelineLayout, 0, 1, &state.modalDescriptorSet, 0, nullptr);
         vkCmdDraw(cmd, 4, 1, 0, 0);
     }
 

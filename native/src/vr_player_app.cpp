@@ -288,10 +288,28 @@ Java_com_tucavr_VRActivity_nativeSetScrubOverlayVisible(JNIEnv* env, jobject thi
 // Solicitação explícita para acordar e manter o painel de UI visível (reset de m_uiIdleTime),
 // por exemplo ao abrir modais como o seletor de formato de tela (T3.4).
 static std::atomic<bool> g_requestUiPanelVisible{false};
+static std::atomic<bool> g_modalPanelActive{false};
+static std::atomic<bool> g_modalPanelShowRequested{false};
+static std::atomic<bool> g_modalPanelHideRequested{false};
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeRequestUiPanelVisible(JNIEnv* env, jobject thiz) {
     g_requestUiPanelVisible.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeShowModalPanel(JNIEnv* env, jobject thiz) {
+    g_modalPanelShowRequested.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeHideModalPanel(JNIEnv* env, jobject thiz) {
+    g_modalPanelHideRequested.store(true);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeIsModalActive(JNIEnv* env, jobject thiz) {
+    return g_modalPanelActive.load() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -992,13 +1010,28 @@ class VRPlayerApp : public OVRFW::XrApp {
 public:
     VRPlayerApp() : OVRFW::XrApp(), m_textureId(0), m_eglImage(EGL_NO_IMAGE_KHR), m_lastBuffer(nullptr),
                     m_uiImageReader(nullptr), m_uiTextureId(0), m_uiEglImage(EGL_NO_IMAGE_KHR),
-                    m_controlsImageReader(nullptr), m_controlsTextureId(0), m_controlsEglImage(EGL_NO_IMAGE_KHR) {
+                    m_controlsImageReader(nullptr), m_controlsTextureId(0), m_controlsEglImage(EGL_NO_IMAGE_KHR),
+                    m_modalImageReader(nullptr), m_modalTextureId(0), m_modalEglImage(EGL_NO_IMAGE_KHR),
+                    m_modalAlpha(0.0f), m_modalActive(false), m_modalYawCaptured(false) {
         // Ambiente "void": fundo totalmente preto, sem geometria de ambiente (T3.3)
         BackgroundColor = OVR::Vector4f(0.0f, 0.0f, 0.0f, 1.0f);
     }
 
     void toggle_video_state() {
         ::toggle_play_pause();
+    }
+
+    void ShowModalPanel() {
+        m_modalActive = true;
+        m_modalYawCaptured = false;
+    }
+
+    void HideModalPanel() {
+        m_modalActive = false;
+    }
+
+    bool IsModalActive() const {
+        return m_modalActive;
     }
 
     void AppHandleEvent(XrEventDataBaseHeader* baseEventHeader) override {
@@ -1583,6 +1616,45 @@ public:
             }
         }
 
+        // ------------------ INITIALIZE MODAL UI (3o Quad frontal) ------------------
+        m_modalSurfaceDef.geo = OVRFW::BuildTesselatedQuad(1, 1, false);
+        m_modalSurfaceDef.graphicsCommand.Program = m_program;
+        m_modalSurfaceDef.graphicsCommand.UniformData[1].Data = &m_modalAlpha;
+        m_modalSurfaceDef.graphicsCommand.GpuState.blendEnable = OVRFW::ovrGpuState::BLEND_ENABLE;
+        m_modalSurfaceDef.graphicsCommand.GpuState.blendSrc = OVRFW::ovrGpuState::kGL_SRC_ALPHA;
+        m_modalSurfaceDef.graphicsCommand.GpuState.blendDst = OVRFW::ovrGpuState::kGL_ONE_MINUS_SRC_ALPHA;
+        m_modalSurfaceDef.graphicsCommand.GpuState.blendSrcAlpha = OVRFW::ovrGpuState::kGL_SRC_ALPHA;
+        m_modalSurfaceDef.graphicsCommand.GpuState.blendDstAlpha = OVRFW::ovrGpuState::kGL_ONE_MINUS_SRC_ALPHA;
+        m_modalSurfaceDef.graphicsCommand.GpuState.depthMaskEnable = false;
+
+        media_status_t modalStatus = AImageReader_newWithUsage(
+            1024, 768, AIMAGE_FORMAT_RGBA_8888,
+            AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,
+            2, &m_modalImageReader);
+
+        if (modalStatus == AMEDIA_OK && m_modalImageReader) {
+            LOGI("VRPlayerApp: Modal ImageReader created successfully!");
+            ANativeWindow* window = nullptr;
+            AImageReader_getWindow(m_modalImageReader, &window);
+            if (window) {
+                const xrJava* java = GetContext();
+                JNIEnv* env = nullptr;
+                if (java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
+                    jobject surfaceObj = ANativeWindow_toSurface(env, window);
+                    jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
+                    jmethodID setupMethod = env->GetStaticMethodID(vrActivityClass, "setupModalVirtualDisplay", "(Lcom/tucavr/VRActivity;Landroid/view/Surface;II)V");
+                    if (setupMethod) {
+                        env->CallStaticVoidMethod(vrActivityClass, setupMethod, java->ActivityObject, surfaceObj, 1024, 768);
+                        LOGI("VRPlayerApp: setupModalVirtualDisplay called successfully!");
+                    } else {
+                        LOGI("VRPlayerApp: setupModalVirtualDisplay NOT FOUND!");
+                    }
+                    env->DeleteLocalRef(surfaceObj);
+                    env->DeleteLocalRef(vrActivityClass);
+                }
+            }
+        }
+
         // ------------------ INITIALIZE FEEDBACK OVERLAY ------------------
         // Programa proprio: e o unico desenho do app sem textura nenhuma.
         const char* feedbackVertexShader = R"(
@@ -1803,6 +1875,36 @@ public:
         OVR::Vector3f cPlaneCenter = worldControlsPos;
         OVR::Vector3f cPlaneNormal = OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(OVR::Matrix4f::RotationX(-0.3f).Transform(OVR::Vector3f(0, 0, 1)));
 
+        // Painel modal frontal flutuante (3o Quad)
+        if (g_modalPanelShowRequested.exchange(false)) {
+            m_modalActive = true;
+            m_modalYawCaptured = false;
+        }
+        if (g_modalPanelHideRequested.exchange(false)) {
+            m_modalActive = false;
+        }
+        g_modalPanelActive.store(m_modalActive);
+
+        if (m_modalActive && !m_modalYawCaptured) {
+            OVR::Vector3f fwd = in.HeadPose.Rotation.Rotate(OVR::Vector3f(0.0f, 0.0f, -1.0f));
+            fwd.y = 0.0f;
+            float fwdLen = sqrtf(fwd.x * fwd.x + fwd.z * fwd.z);
+            if (fwdLen > 1e-4f) {
+                fwd.x /= fwdLen;
+                fwd.z /= fwdLen;
+            } else {
+                fwd = OVR::Vector3f(0.0f, 0.0f, -1.0f);
+            }
+            m_modalYaw = atan2f(-fwd.x, -fwd.z);
+            m_modalPos = in.HeadPose.Translation + fwd * 1.3f;
+            m_modalPos.y -= 0.05f;
+            m_modalYawCaptured = true;
+        }
+
+        m_modalTransform = OVR::Matrix4f::Translation(m_modalPos) * OVR::Matrix4f::RotationY(m_modalYaw) * OVR::Matrix4f::Scaling(1.2f, 0.9f, 1.0f);
+        OVR::Vector3f modalPlaneCenter = m_modalPos;
+        OVR::Vector3f modalPlaneNormal = OVR::Matrix4f::RotationY(m_modalYaw).Transform(OVR::Vector3f(0, 0, 1));
+
         // T1.4/T2: polling barato do modo 3D (o Rust bridge e quem guarda o
         // estado real — ver cycle_3d_mode/get_3d_mode). Os uniforms derivados
         // do modo (uPolar180/uStereoLayout/uSwapEyes pros dois programas) sao
@@ -1873,22 +1975,37 @@ public:
         float minT = 10.0f;
         float u = 0.0f, v = 0.0f;
 
-        float tUi = rayHitsQuad(m_uiTransform, uiPlaneNormal, uiPlaneCenter, u, v);
-        if (tUi > 0.0f && tUi < minT) {
-            currentHitPanel = 1;
-            minT = tUi;
-            pointerEnd = rayOrigin + rayDir * tUi;
-            lastUvX = u;
-            lastUvY = v;
-        }
+        float tModal = (m_modalAlpha > 0.01f) ? rayHitsQuad(m_modalTransform, modalPlaneNormal, modalPlaneCenter, u, v) : -1.0f;
 
-        float tControls = rayHitsQuad(m_controlsTransform, cPlaneNormal, cPlaneCenter, u, v);
-        if (tControls > 0.0f && tControls < minT) {
-            currentHitPanel = 2;
-            minT = tControls;
-            pointerEnd = rayOrigin + rayDir * tControls;
-            lastUvX = u;
-            lastUvY = v;
+        // Foco exclusivo no modal se ativo e visivel
+        if (m_modalActive && m_modalAlpha > 0.5f) {
+            if (tModal > 0.0f && tModal < minT) {
+                currentHitPanel = 3;
+                minT = tModal;
+                pointerEnd = rayOrigin + rayDir * tModal;
+                lastUvX = u;
+                lastUvY = v;
+            } else {
+                currentHitPanel = 0;
+            }
+        } else {
+            float tUi = rayHitsQuad(m_uiTransform, uiPlaneNormal, uiPlaneCenter, u, v);
+            if (tUi > 0.0f && tUi < minT) {
+                currentHitPanel = 1;
+                minT = tUi;
+                pointerEnd = rayOrigin + rayDir * tUi;
+                lastUvX = u;
+                lastUvY = v;
+            }
+
+            float tControls = rayHitsQuad(m_controlsTransform, cPlaneNormal, cPlaneCenter, u, v);
+            if (tControls > 0.0f && tControls < minT) {
+                currentHitPanel = 2;
+                minT = tControls;
+                pointerEnd = rayOrigin + rayDir * tControls;
+                lastUvX = u;
+                lastUvY = v;
+            }
         }
 
         float screenU = 0.0f, screenV = 0.0f;
@@ -1931,9 +2048,11 @@ public:
         }
         float uiTargetAlpha = (m_uiIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
         float controlsTargetAlpha = (m_controlsIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
+        float modalTargetAlpha = m_modalActive ? 1.0f : 0.0f;
         float fadeStep = in.DeltaSeconds / kUiFadeDuration;
         m_uiAlpha = MoveTowards(m_uiAlpha, uiTargetAlpha, fadeStep);
         m_controlsAlpha = MoveTowards(m_controlsAlpha, controlsTargetAlpha, fadeStep);
+        m_modalAlpha = MoveTowards(m_modalAlpha, modalTargetAlpha, fadeStep);
 
         // Mesmo fade dos paineis acima, so que o alvo cai sozinho por tempo.
         UpdateFeedbackOverlay(in.DeltaSeconds, fadeStep);
@@ -1943,8 +2062,11 @@ public:
         // geometrica acima continua sempre ativa para poder trazer o painel de volta.
         bool uiVisible = m_uiAlpha > 0.5f;
         bool controlsVisible = m_controlsAlpha > 0.5f;
+        bool modalVisible = m_modalAlpha > 0.5f;
         int dispatchHitPanel = 0;
-        if (currentHitPanel == 1 && uiVisible) {
+        if (currentHitPanel == 3 && modalVisible) {
+            dispatchHitPanel = 3;
+        } else if (currentHitPanel == 1 && uiVisible) {
             dispatchHitPanel = 1;
         } else if (currentHitPanel == 2 && controlsVisible) {
             dispatchHitPanel = 2;
@@ -1974,7 +2096,8 @@ public:
                 // sua UI agora mora dentro do mesmo quad do Home/File Browser
                 // (activePanel == 1), entao todo toque nesse painel (incluindo
                 // as telas de Rede) roteia por "dispatchVRTouch", igual antes.
-                const char* methodName = (activePanel == 1) ? "dispatchVRTouch" : "dispatchControlsVRTouch";
+                const char* methodName = (activePanel == 3) ? "dispatchModalVRTouch"
+                                       : ((activePanel == 1) ? "dispatchVRTouch" : "dispatchControlsVRTouch");
                 jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
                 if (touchMethod) {
                     env->CallStaticVoidMethod(vrActivityClass, touchMethod, java->ActivityObject, lastUvX, lastUvY, action);
@@ -2051,23 +2174,42 @@ public:
             m_cursorDotHandle2 = m_beamRenderer.AddBeam(in, kDotWidth, pointerEnd, nearEnd, OVR::Vector4f(0.0f, 1.0f, 1.0f, 1.0f));
         }
 
-        // T4.4: A (direita) ou X (esquerda) = Play/Pause. Trigger fora de qualquer
-        // painel visivel tambem funciona como atalho de play/pause.
-        if (((currA && !prevA) || (currX && !prevX) || (currTrigger && !prevTrigger && dispatchHitPanel == 0)) && !keyboardActive) {
-            LOGI("USER PRESSED PLAY/PAUSE!");
-            toggle_video_state();
+        // Se o modal estiver ativo, fechar ao clicar fora ou apertar B/Y
+        if (m_modalActive) {
+            if (((currTrigger && !prevTrigger && dispatchHitPanel == 0) ||
+                 (currB && !prevB) || (currY && !prevY)) && !keyboardActive) {
+                m_modalActive = false;
+                g_modalPanelActive.store(false);
+                const xrJava* java = GetContext();
+                JNIEnv* env = nullptr;
+                if (java && java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
+                    jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
+                    jmethodID dismissMethod = env->GetStaticMethodID(vrActivityClass, "dismissModalFromNative", "(Lcom/tucavr/VRActivity;)V");
+                    if (dismissMethod) {
+                        env->CallStaticVoidMethod(vrActivityClass, dismissMethod, java->ActivityObject);
+                    }
+                    env->DeleteLocalRef(vrActivityClass);
+                }
+            }
+        } else {
+            // T4.4: A (direita) ou X (esquerda) = Play/Pause. Trigger fora de qualquer
+            // painel visivel tambem funciona como atalho de play/pause.
+            if (((currA && !prevA) || (currX && !prevX) || (currTrigger && !prevTrigger && dispatchHitPanel == 0)) && !keyboardActive) {
+                LOGI("USER PRESSED PLAY/PAUSE!");
+                toggle_video_state();
+            }
+
+            // T4.4: B (direita) ou Y (esquerda) = Menu/Back -> alterna a visibilidade do
+            // painel do File Browser instantaneamente (sem esperar o auto-hide).
+            if ((currB && !prevB) || (currY && !prevY)) {
+                bool isCurrentlyVisible = m_uiIdleTime < kUiAutoHideSeconds;
+                m_uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
+            }
         }
 
         prevA = currA;
         prevX = currX;
         prevTrigger = currTrigger;
-
-        // T4.4: B (direita) ou Y (esquerda) = Menu/Back -> alterna a visibilidade do
-        // painel do File Browser instantaneamente (sem esperar o auto-hide).
-        if ((currB && !prevB) || (currY && !prevY)) {
-            bool isCurrentlyVisible = m_uiIdleTime < kUiAutoHideSeconds;
-            m_uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
-        }
         prevB = currB;
         prevY = currY;
 
@@ -2514,6 +2656,44 @@ public:
             }
         }
 
+        // --- PROCESS MODAL UI TEXTURE UPDATE (3o Quad) ---
+        if (m_modalImageReader) {
+            AImage* image = nullptr;
+            if (AImageReader_acquireLatestImage(m_modalImageReader, &image) == AMEDIA_OK && image) {
+                AHardwareBuffer* buffer = nullptr;
+                AImage_getHardwareBuffer(image, &buffer);
+                if (buffer) {
+                    static PFNEGLGETNATIVECLIENTBUFFERANDROIDPROC eglGetNativeClientBufferANDROID = (PFNEGLGETNATIVECLIENTBUFFERANDROIDPROC)eglGetProcAddress("eglGetNativeClientBufferANDROID");
+                    if (m_modalEglImage != EGL_NO_IMAGE_KHR) {
+                        static PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+                        if (eglDestroyImageKHR) eglDestroyImageKHR(eglGetCurrentDisplay(), m_modalEglImage);
+                        m_modalEglImage = EGL_NO_IMAGE_KHR;
+                    }
+                    EGLClientBuffer clientBuffer = eglGetNativeClientBufferANDROID(buffer);
+                    EGLint eglImageAttributes[] = { EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE };
+                    static PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+                    if (eglCreateImageKHR) {
+                        m_modalEglImage = eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, clientBuffer, eglImageAttributes);
+                        if (m_modalEglImage != EGL_NO_IMAGE_KHR) {
+                            if (m_modalTextureId == 0) {
+                                glGenTextures(1, &m_modalTextureId);
+                                glBindTexture(GL_TEXTURE_EXTERNAL_OES, m_modalTextureId);
+                                glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                                glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                                glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                                glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                            }
+                            glBindTexture(GL_TEXTURE_EXTERNAL_OES, m_modalTextureId);
+                            static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
+                            if (glEGLImageTargetTexture2DOES) glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES, m_modalEglImage);
+                            glBindTexture(GL_TEXTURE_EXTERNAL_OES, 0);
+                        }
+                    }
+                }
+                AImage_delete(image);
+            }
+        }
+
         // T2.7: "o conteudo 360 E o ambiente" — a esfera e a tela plana sao
         // mutuamente exclusivas, nunca as duas ao mesmo tempo. Entre os 3
         // programas (mono, estereo-flat, esfera-mono-ou-estereo) so um e
@@ -2584,6 +2764,14 @@ public:
             m_controlsSurfaceDef.graphicsCommand.Textures[0].target = GL_TEXTURE_EXTERNAL_OES;
             m_controlsSurfaceDef.graphicsCommand.BindUniformTextures();
             out.Surfaces.push_back(OVRFW::ovrDrawSurface(m_controlsTransform, &m_controlsSurfaceDef));
+        }
+
+        // Painel Modal frontal flutuante (3o Quad)
+        if (m_modalTextureId != 0 && m_modalAlpha > 0.01f) {
+            m_modalSurfaceDef.graphicsCommand.Textures[0].texture = m_modalTextureId;
+            m_modalSurfaceDef.graphicsCommand.Textures[0].target = GL_TEXTURE_EXTERNAL_OES;
+            m_modalSurfaceDef.graphicsCommand.BindUniformTextures();
+            out.Surfaces.push_back(OVRFW::ovrDrawSurface(m_modalTransform, &m_modalSurfaceDef));
         }
 
         // Posicao/orientacao da tela, mas sem a escala dela: o icone tem
@@ -2831,6 +3019,18 @@ private:
     GLuint m_controlsTextureId;
     EGLImageKHR m_controlsEglImage;
     OVRFW::ovrSurfaceDef m_controlsSurfaceDef;
+
+    // Modal UI System (3o Quad frontal flutuante)
+    AImageReader* m_modalImageReader;
+    GLuint m_modalTextureId;
+    EGLImageKHR m_modalEglImage;
+    OVRFW::ovrSurfaceDef m_modalSurfaceDef;
+    OVR::Matrix4f m_modalTransform;
+    OVR::Vector3f m_modalPos;
+    float m_modalYaw;
+    float m_modalAlpha;
+    bool m_modalActive;
+    bool m_modalYawCaptured;
 
     OVRFW::ovrBeamRenderer m_beamRenderer;
     OVRFW::ovrBeamRenderer::handle_t m_beamHandle{OVRFW::ovrBeamRenderer::INVALID_BEAM_HANDLE};
