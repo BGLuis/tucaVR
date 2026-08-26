@@ -45,7 +45,7 @@ class ScreenFormatModal(
 
     init {
         layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
-        setBackgroundColor(Color.parseColor("#E6000000"))
+        setBackgroundColor(Color.parseColor("#80000000"))
         isClickable = true
         setOnClickListener { onDismiss() }
 
@@ -276,7 +276,6 @@ class ScreenFormatModal(
             currentMode = entry.index
             updateCardsHighlight()
             onModeSelected(entry.index)
-            onDismiss()
         }
 
         modeCardMap[entry.index] = ModeCardViews(card, icon, label)

@@ -51,10 +51,12 @@ constexpr XrVector3f kBaseControlsPos = {0.0f, 0.4f, -1.3f};
 constexpr float kControlsPanelScaleX = 1.2f;
 constexpr float kControlsPanelScaleY = 1.2f * (800.0f / 1582.0f); // ~0.607m (aspect ratio 1582:800)
 constexpr float kControlsPitch = -0.3f;
+constexpr float kModalPanelScaleX = 1.2f;
+constexpr float kModalPanelScaleY = 0.9f;
 
 // Transforms de cena computados uma vez por frame e compartilhados entre
 // UpdateInteraction (hit-test) e DrawUiQuads (render) — antes cada um
-// recalculava isso de forma independente e ja tinha divergido (Estagio
+// recalculava isso de forma independente e ja tinham divergido (Estagio
 // Camera, achado da revisao pos-migracao). Os *ModelNoScale sao rigidos
 // (so rotacao+translacao) de proposito: Mat4RigidInverse usada no hit-test
 // assume isso, entao a escala visual e aplicada separadamente (na hora de
@@ -67,6 +69,10 @@ struct SceneTransforms {
     Mat4 controlsModelNoScale;
     XrVector3f controlsCenter;
     XrVector3f controlsNormal;
+
+    Mat4 modalModelNoScale;
+    XrVector3f modalCenter;
+    XrVector3f modalNormal;
 
     Mat4 screenModelNoScale;
     XrVector3f screenCenter;
@@ -96,6 +102,14 @@ inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVec
     // (ver convencao de Mat4RotationX em vk_math.h), depois rotacionado pelo yaw da cena.
     XrVector3f pitchedNormal = {0.0f, -sinf(kControlsPitch), cosf(kControlsPitch)};
     t.controlsNormal = Vec3RotateY(pitchedNormal, state.sceneYawOffset);
+
+    // Modal (3o Quad frontal): fixado no espaco da cena onde foi aberto
+    t.modalModelNoScale = Mat4Multiply(
+        Mat4Translation(state.modalBasePos.x, state.modalBasePos.y, state.modalBasePos.z),
+        Mat4RotationY(state.modalYaw)
+    );
+    t.modalCenter = state.modalBasePos;
+    t.modalNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.modalYaw);
 
     // Tela virtual: posicao/escala ajustaveis via thumbstick (Estagio 6).
     XrVector3f worldScreenPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(state.screenPosition, state.sceneYawOffset));
@@ -327,9 +341,37 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     bool prevTrigger = state.isTriggerPressed;
     state.isTriggerPressed = currTrigger;
 
+    if (::g_modalPanelShowRequested.exchange(false)) {
+        state.modalActive = true;
+        state.modalYawCaptured = false;
+    }
+    if (::g_modalPanelHideRequested.exchange(false)) {
+        state.modalActive = false;
+    }
+    ::g_modalPanelActive.store(state.modalActive);
+
+    if (state.modalActive && !state.modalYawCaptured) {
+        Mat4 headRot = Mat4FromXrPose(XrPosef{headOrientation, {0.0f, 0.0f, 0.0f}});
+        XrVector3f fwd = {-headRot.m[8], 0.0f, -headRot.m[10]};
+        float fwdLen = sqrtf(fwd.x * fwd.x + fwd.z * fwd.z);
+        if (fwdLen > 1e-4f) {
+            fwd.x /= fwdLen;
+            fwd.z /= fwdLen;
+        } else {
+            fwd = {0.0f, 0.0f, -1.0f};
+        }
+        state.modalYaw = atan2f(-fwd.x, -fwd.z);
+        state.modalBasePos = {
+            headCenter.x + fwd.x * 1.3f,
+            headCenter.y - 0.05f,
+            headCenter.z + fwd.z * 1.3f
+        };
+        state.modalYawCaptured = true;
+    }
+
     SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
 
-    float uu = 0, vu = 0, uc = 0, vc = 0;
+    float uu = 0, vu = 0, uc = 0, vc = 0, um = 0, vm = 0;
     float tUi = state.hasRay
         ? rayHitsQuad(scene.uiModelNoScale, scene.uiNormal, scene.uiCenter, kUiPanelScaleX, kUiPanelScaleY,
                       uu, vu, state.lastRayOrigin, state.lastRayDir)
@@ -338,17 +380,32 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         ? rayHitsQuad(scene.controlsModelNoScale, scene.controlsNormal, scene.controlsCenter,
                       kControlsPanelScaleX, kControlsPanelScaleY, uc, vc, state.lastRayOrigin, state.lastRayDir)
         : -1.0f;
+    float tModal = (state.hasRay && state.modalAlpha > 0.01f)
+        ? rayHitsQuad(scene.modalModelNoScale, scene.modalNormal, scene.modalCenter,
+                      kModalPanelScaleX, kModalPanelScaleY, um, vm, state.lastRayOrigin, state.lastRayDir)
+        : -1.0f;
 
-    int currentHitPanel = 0; // 0=none, 1=ui, 2=controls
+    int currentHitPanel = 0; // 0=none, 1=ui, 2=controls, 3=modal
     float hitU = 0, hitV = 0;
     state.lastHitDist = -1.0f;
 
-    if (tControls > 0.0f) {
-        currentHitPanel = 2; hitU = uc; hitV = vc;
-        state.lastHitDist = tControls;
-    } else if (tUi > 0.0f) {
-        currentHitPanel = 1; hitU = uu; hitV = vu;
-        state.lastHitDist = tUi;
+    // Foco exclusivo no modal se estiver ativo e visível
+    if (state.modalActive && state.modalAlpha > 0.5f) {
+        if (tModal > 0.0f) {
+            currentHitPanel = 3; hitU = um; hitV = vm;
+            state.lastHitDist = tModal;
+        } else {
+            currentHitPanel = 0;
+            state.lastHitDist = -1.0f;
+        }
+    } else {
+        if (tControls > 0.0f) {
+            currentHitPanel = 2; hitU = uc; hitV = vc;
+            state.lastHitDist = tControls;
+        } else if (tUi > 0.0f) {
+            currentHitPanel = 1; hitU = uu; hitV = vu;
+            state.lastHitDist = tUi;
+        }
     }
     // Delta de tempo entre frames — XrTime e nanosegundos desde uma epoca
     // arbitraria do runtime; convertido pra segundos pra alimentar o
@@ -389,9 +446,11 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     }
     float uiTargetAlpha = (state.uiIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
     float controlsTargetAlpha = (state.controlsIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
+    float modalTargetAlpha = state.modalActive ? 1.0f : 0.0f;
     float fadeStep = (kUiFadeDuration > 0.0f) ? dt / kUiFadeDuration : 1.0f;
     state.uiAlpha = MoveTowards(state.uiAlpha, uiTargetAlpha, fadeStep);
     state.controlsAlpha = MoveTowards(state.controlsAlpha, controlsTargetAlpha, fadeStep);
+    state.modalAlpha = MoveTowards(state.modalAlpha, modalTargetAlpha, fadeStep);
 
     // Overlay de feedback (paridade com o GLES): mesmo fade dos paineis acima,
     // so que o alvo cai sozinho por tempo. Qualquer mudanca na sequencia do
@@ -424,8 +483,11 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     // acima continua sempre ativa pra poder trazer o painel de volta.
     bool uiVisible = state.uiAlpha > 0.5f;
     bool controlsVisible = state.controlsAlpha > 0.5f;
+    bool modalVisible = state.modalAlpha > 0.5f;
     int dispatchHitPanel = 0;
-    if (currentHitPanel == 1 && uiVisible) {
+    if (currentHitPanel == 3 && modalVisible) {
+        dispatchHitPanel = 3;
+    } else if (currentHitPanel == 1 && uiVisible) {
         dispatchHitPanel = 1;
     } else if (currentHitPanel == 2 && controlsVisible) {
         dispatchHitPanel = 2;
@@ -451,7 +513,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         state.app->activity->vm->AttachCurrentThread(&env, nullptr);
         if (env) {
             jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
-            const char* methodName = (dispatchHitPanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch";
+            const char* methodName = (dispatchHitPanel == 3) ? "dispatchModalVRTouch"
+                                   : ((dispatchHitPanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch");
             jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
             if (touchMethod) {
                 env->CallStaticVoidMethod(vrActivityClass, touchMethod, state.app->activity->clazz, hitU, hitV, action);
@@ -517,20 +580,37 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     bool currY = yState.currentState == XR_TRUE;
     bool currMenu = menuState.currentState == XR_TRUE;
 
-    // A (direita) ou X (esquerda) = Play/Pause. Trigger fora de qualquer
-    // painel visivel tambem funciona como atalho.
-    if (((currA && !state.prevA) || (currX && !state.prevX) ||
-        (currTrigger && !prevTrigger && dispatchHitPanel == 0)) && !keyboardActive) {
-        toggle_play_pause();
-    }
-    state.prevA = currA;
-    state.prevX = currX;
+    // Se o modal estiver ativo, fechar modal ao clicar fora ou ao pressionar B/Y
+    if (state.modalActive) {
+        if (((currTrigger && !prevTrigger && dispatchHitPanel == 0) ||
+             (currB && !state.prevB) || (currY && !state.prevY)) && !keyboardActive) {
+            state.modalActive = false;
+            ::g_modalPanelActive.store(false);
+            JNIEnv* env = nullptr;
+            state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+            if (env) {
+                jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+                jmethodID dismissMethod = env->GetStaticMethodID(vrActivityClass, "dismissModalFromNative", "(Lcom/tucavr/VRActivity;)V");
+                if (dismissMethod) {
+                    env->CallStaticVoidMethod(vrActivityClass, dismissMethod, state.app->activity->clazz);
+                }
+                env->DeleteLocalRef(vrActivityClass);
+            }
+        }
+    } else {
+        // A (direita) ou X (esquerda) = Play/Pause. Trigger fora de qualquer
+        // painel visivel tambem funciona como atalho.
+        if (((currA && !state.prevA) || (currX && !state.prevX) ||
+            (currTrigger && !prevTrigger && dispatchHitPanel == 0)) && !keyboardActive) {
+            toggle_play_pause();
+        }
 
-    // B (direita) ou Y (esquerda) = alterna a visibilidade do painel Home
-    // instantaneamente (sem esperar o auto-hide).
-    if ((currB && !state.prevB) || (currY && !state.prevY)) {
-        bool isCurrentlyVisible = state.uiIdleTime < kUiAutoHideSeconds;
-        state.uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
+        // B (direita) ou Y (esquerda) = alterna a visibilidade do painel Home
+        // instantaneamente (sem esperar o auto-hide).
+        if ((currB && !state.prevB) || (currY && !state.prevY)) {
+            bool isCurrentlyVisible = state.uiIdleTime < kUiAutoHideSeconds;
+            state.uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
+        }
     }
     state.prevB = currB;
     state.prevY = currY;

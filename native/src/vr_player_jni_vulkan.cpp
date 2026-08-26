@@ -208,10 +208,28 @@ extern uint32_t g_scrubOverlayWidth;
 extern uint32_t g_scrubOverlayHeight;
 extern std::mutex g_scrubOverlayMutex;
 extern std::atomic<bool> g_requestUiPanelVisible;
+extern std::atomic<bool> g_modalPanelActive;
+extern std::atomic<bool> g_modalPanelShowRequested;
+extern std::atomic<bool> g_modalPanelHideRequested;
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeRequestUiPanelVisible(JNIEnv*, jobject) {
     g_requestUiPanelVisible.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeShowModalPanel(JNIEnv*, jobject) {
+    g_modalPanelShowRequested.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeHideModalPanel(JNIEnv*, jobject) {
+    g_modalPanelHideRequested.store(true);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeIsModalActive(JNIEnv*, jobject) {
+    return g_modalPanelActive.load() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
