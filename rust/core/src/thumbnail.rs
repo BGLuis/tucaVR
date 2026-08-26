@@ -395,14 +395,10 @@ fn generate_strip_hw(path: &str, interval_secs: f64, max_width: u32, max_height:
     }
 
     let cancelled = STRIP_CANCELLED.load(Ordering::Relaxed);
-    unsafe {
-        let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-        let msg = std::ffi::CString::new(format!(
-            "generate_strip_hw: {ok_count}/{count} posicoes com sucesso{}",
-            if cancelled { " (cancelada, nao sera cacheada)" } else { "" }
-        )).unwrap();
-        ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-    }
+    crate::log_info!(
+        "generate_strip_hw: {ok_count}/{count} posicoes com sucesso{}",
+        if cancelled { " (cancelada, nao sera cacheada)" } else { "" }
+    );
     // Ver comentario equivalente em generate_strip acima: nao cachear parcial.
     if cancelled {
         return None;
@@ -417,11 +413,7 @@ fn log_thumb_once(msg: &str) {
     if LOGGED.swap(true, Ordering::Relaxed) {
         return;
     }
-    unsafe {
-        let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-        let cmsg = std::ffi::CString::new(msg).unwrap();
-        ndk_sys::__android_log_print(5, tag.as_ptr(), cmsg.as_ptr());
-    }
+    crate::log_warn!("{}", msg);
 }
 
 /// Equivalente hardware de `decode_and_scale`: alimenta pacotes ate um

@@ -12,3 +12,4 @@ pub mod thumbnail;
 pub mod metadata;
 pub mod format3d_detect;
 pub mod subtitle_loader;
+pub mod log;

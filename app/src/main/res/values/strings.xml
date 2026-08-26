@@ -360,5 +360,8 @@
     <string name="settings_section_subtitles">Subtitles</string>
     <string name="settings_subtitles_auto_load_label">Auto-load Subtitles</string>
     <string name="settings_subtitles_auto_load_description">Automatically detects and loads subtitle files (.srt, .vtt) located next to the video.</string>
+    <string name="settings_section_advanced">Advanced</string>
+    <string name="settings_telemetry_export_label">Export Debug Telemetry (CSV)</string>
+    <string name="settings_telemetry_export_description">Periodically records performance time-series (FPS, jitter, queue, thermal) to session CSV files in debug storage.</string>
 
 </resources>

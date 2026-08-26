@@ -58,9 +58,9 @@ static CONTROLLER: Lazy<Arc<Mutex<PlaybackController>>> = Lazy::new(|| {
     Arc::new(Mutex::new(PlaybackController::new()))
 });
 
-// Erro do ultimo controller.load() que falhou (ex.: codec nao suportado). Antes so ia pro logcat,
-// sem nenhum feedback pro usuario. Kotlin consome via take_last_playback_error() (polling).
-static LAST_PLAYBACK_ERROR: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
+// Anel circular de erros de reprodução (N6). Mantém histórico e preserva polling para Toast.
+static ERROR_RING: Lazy<media_logic::error_ring::ErrorRingBuffer> =
+    Lazy::new(|| media_logic::error_ring::ErrorRingBuffer::new(media_logic::error_ring::ErrorRingBuffer::DEFAULT_CAPACITY));
 
 // Contador (nao bool) porque duas chamadas de carregamento podem se
 // sobrepor (ex.: usuario solta o seek e arrasta de novo antes da primeira
@@ -509,10 +509,14 @@ pub extern "C" fn on_app_focus_gained() {
     }
 }
 
+#[no_mangle]
+pub extern "C" fn set_session_id(session_id: *const std::os::raw::c_char) {
+    let s = unsafe { cstr_to_string(session_id) };
+    core::log::set_session_id(s);
+}
+
 unsafe fn log(level: i32, msg: &str) {
-    let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-    let msg = std::ffi::CString::new(msg).unwrap();
-    ndk_sys::__android_log_print(level, tag.as_ptr(), msg.as_ptr());
+    core::log::log_android(level, msg);
 }
 
 /// Le uma `*const c_char` vinda do JNI. `None` so em ponteiro nulo ou UTF-8
@@ -554,9 +558,12 @@ pub extern "C" fn free_rust_string(ptr: *mut std::os::raw::c_char) {
 }
 
 fn set_last_playback_error(msg: String) {
-    if let Ok(mut slot) = LAST_PLAYBACK_ERROR.lock() {
-        *slot = Some(msg);
-    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let session_id = core::log::get_session_id();
+    ERROR_RING.push(msg, now_ms, session_id);
 }
 
 /// Consome (le e limpa) o erro do ultimo load() que falhou, ou nulo se nao houve nenhum desde
@@ -564,11 +571,16 @@ fn set_last_playback_error(msg: String) {
 /// Retorno (se nao nulo) precisa ser liberado com `free_rust_string`.
 #[no_mangle]
 pub extern "C" fn take_last_playback_error() -> *mut std::os::raw::c_char {
-    let taken = LAST_PLAYBACK_ERROR.lock().ok().and_then(|mut slot| slot.take());
-    match taken {
+    match ERROR_RING.take_latest_unconsumed() {
         Some(msg) => string_to_c_char(msg),
         None => std::ptr::null_mut(),
     }
+}
+
+/// Retorna o total de erros registrados no anel circular na sessão.
+#[no_mangle]
+pub extern "C" fn get_playback_error_count() -> i32 {
+    ERROR_RING.count() as i32
 }
 
 /// T6.4: inicia playback de um arquivo via SMB. Recebe host/share/caminho/

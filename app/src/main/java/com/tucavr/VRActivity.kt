@@ -27,6 +27,8 @@ import android.widget.EditText
 import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.tucavr.debug.DebugTelemetryExporter
+import com.tucavr.debug.VRLog
 import com.tucavr.designsystem.KeyboardBinding
 import com.tucavr.history.AppDatabase
 import com.tucavr.history.PlaybackHistoryTracker
@@ -270,9 +272,34 @@ class VRActivity : NativeActivity() {
         val spatialAudio = FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_AUDIO)
         nativeSetSpatialAudioMode(if (spatialAudio) 1 else 0)
         nativeSetSpatialAudioHeadTracking(FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_HEAD_TRACKING))
+
+        // N6: Captura de crashes não tratados para arquivo de diagnóstico com session ID
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
+            val sid = currentSessionId ?: "--------"
+            VRLog.e("Crash nao capturado na thread ${thread.name} (sessao $sid)", throwable)
+            try {
+                val debugDir = getExternalFilesDir("debug")
+                if (debugDir != null) {
+                    if (!debugDir.exists()) debugDir.mkdirs()
+                    val timeStr = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
+                    val crashFile = File(debugDir, "crash-$sid-$timeStr.txt")
+                    java.io.PrintWriter(java.io.FileWriter(crashFile)).use { writer ->
+                        writer.println("Session ID: $sid")
+                        writer.println("Timestamp: ${System.currentTimeMillis()}")
+                        writer.println("Thread: ${thread.name} (ID: ${thread.id})")
+                        writer.println("Current Source: $currentPlaybackSource")
+                        writer.println("StackTrace:")
+                        throwable.printStackTrace(writer)
+                    }
+                }
+            } catch (_: Exception) {}
+            previousHandler?.uncaughtException(thread, throwable)
+        }
     }
 
     override fun onDestroy() {
+        DebugTelemetryExporter.onSessionEnded()
         debugReceiver?.let { unregisterReceiver(it) }
         debugReceiver = null
         super.onDestroy()
@@ -602,6 +629,14 @@ class VRActivity : NativeActivity() {
         // custo real, ver comentario em VRControlsPresentation.updateDebugHud).
         @JvmStatic
         fun updateDebugHud(activity: VRActivity, text: String) {
+            val sid = activity.currentSessionId ?: "--------"
+            DebugTelemetryExporter.recordHudSample(
+                context = activity,
+                sessionId = sid,
+                hudText = text,
+                source = activity.currentPlaybackSource
+            )
+
             if (!activity.isDebuggable) return
             activity.runOnUiThread {
                 activity.controlsPresentation?.updateDebugHud(text)
@@ -616,6 +651,18 @@ class VRActivity : NativeActivity() {
                 processVideoUri(uri)
             }
         }
+    }
+
+    @Volatile
+    var currentSessionId: String? = null
+        private set
+
+    private fun startSession(source: PlaybackSource) {
+        val sessionId = java.util.UUID.randomUUID().toString().replace("-", "").take(8)
+        currentSessionId = sessionId
+        VRLog.activeSessionId = sessionId
+        VRLog.i("Iniciando sessao de reproducao $sessionId para $source")
+        nativeSetSessionId(sessionId)
     }
 
     // T9.1-T9.3: os 3 entry points de playback (playFile/playUrl/playSmb) sao
@@ -649,6 +696,7 @@ class VRActivity : NativeActivity() {
         val resolvedSize = if (sizeBytes > 0L) sizeBytes else runCatching { File(filePath).length() }.getOrDefault(0L)
         val source = PlaybackSource.LocalFile(filePath, resolvedSize)
         currentPlaybackSource = source
+        startSession(source)
         historyTracker.startTracking(source, title = File(filePath).name)
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
@@ -660,6 +708,7 @@ class VRActivity : NativeActivity() {
     fun playUrl(url: String, resumeAtMs: Long? = null) {
         val source = PlaybackSource.Http(url)
         currentPlaybackSource = source
+        startSession(source)
         historyTracker.startTracking(source, title = url)
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
@@ -672,6 +721,7 @@ class VRActivity : NativeActivity() {
     fun playSmb(server: com.tucavr.network.SmbServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val source = PlaybackSource.Smb(server, path, sizeBytes)
         currentPlaybackSource = source
+        startSession(source)
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
@@ -683,6 +733,7 @@ class VRActivity : NativeActivity() {
     fun playFtp(server: com.tucavr.network.FtpServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val source = PlaybackSource.Ftp(server, path, sizeBytes)
         currentPlaybackSource = source
+        startSession(source)
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
@@ -694,6 +745,7 @@ class VRActivity : NativeActivity() {
     fun playSftp(server: com.tucavr.network.SftpServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val source = PlaybackSource.Sftp(server, path, sizeBytes)
         currentPlaybackSource = source
+        startSession(source)
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
@@ -704,6 +756,7 @@ class VRActivity : NativeActivity() {
     fun playNfs(server: com.tucavr.network.SavedServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val source = PlaybackSource.Nfs(server, path, sizeBytes)
         currentPlaybackSource = source
+        startSession(source)
         historyTracker.startTracking(source, title = path.substringAfterLast('/'))
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
@@ -714,6 +767,7 @@ class VRActivity : NativeActivity() {
     fun playDlna(server: com.tucavr.network.SavedServer, title: String, url: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
         val source = PlaybackSource.Dlna(server, title, url, sizeBytes)
         currentPlaybackSource = source
+        startSession(source)
         historyTracker.startTracking(source, title = title)
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
@@ -974,4 +1028,7 @@ class VRActivity : NativeActivity() {
 
     // T14.1/T14.2: Notifica o pipeline de render nativo (C++/Rust) sobre o nível térmico atual
     external fun nativeSetThermalLevel(level: Int)
+
+    // N1: Propaga o identificador de sessão ativo para C++ e Rust
+    external fun nativeSetSessionId(sessionId: String)
 }

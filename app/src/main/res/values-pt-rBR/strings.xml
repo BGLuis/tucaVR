@@ -344,5 +344,8 @@
     <string name="settings_section_subtitles">Legendas</string>
     <string name="settings_subtitles_auto_load_label">Carregar Legendas Automaticamente</string>
     <string name="settings_subtitles_auto_load_description">Detecta e carrega automaticamente arquivos de legenda (.srt, .vtt) ao lado do vídeo.</string>
+    <string name="settings_section_advanced">Avançado</string>
+    <string name="settings_telemetry_export_label">Exportar Telemetria de Debug (CSV)</string>
+    <string name="settings_telemetry_export_description">Grava periodicamente série temporal de desempenho (FPS, jitter, fila, térmico) em arquivos CSV de sessão na pasta de debug.</string>
 
 </resources>

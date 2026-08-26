@@ -88,6 +88,22 @@ class SettingsScreen(
             )
         )
 
+        // Seção Avançado (N2 - Telemetria de Debug)
+        root.addView(
+            VoidText.title(context, context.getString(R.string.settings_section_advanced), sizeSp = 18f).apply {
+                setPadding(0, VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 8f))
+            }
+        )
+
+        root.addView(
+            buildFlagRow(
+                labelRes = R.string.settings_telemetry_export_label,
+                descriptionRes = R.string.settings_telemetry_export_description,
+                flag = FeatureFlags.Flag.DEBUG_STATS_EXPORT,
+                onChanged = { /* flag persisted automatically */ }
+            )
+        )
+
         host.showScreen(root)
     }
 

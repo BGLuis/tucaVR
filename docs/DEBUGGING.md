@@ -234,3 +234,58 @@ verificados nesta sessão (sem headset disponível). Se o runtime do Quest não 
 mesmo com o `.so` presente (algumas plataformas Android restringem quais
 processos podem carregar layers), o fallback continua sendo os logs comuns
 da seção 1.
+
+## 5. Session IDs e Rastreabilidade Multi-Camada (N1 e N6)
+
+Para rastrear o ciclo de vida completo de cada reprodução através das 3 linguagens do projeto (Kotlin $\rightarrow$ C++ $\rightarrow$ Rust), cada início de reprodução (`playFile`, `playUrl`, `playSmb`, etc.) gera um identificador de sessão pseudo-aleatório de 8 caracteres hexadecimais (ex: `a1b2c3d4`).
+
+O Session ID é propagado imediatamente via JNI para o C++ e via C-ABI para a camada Rust. Todos os logs do sistema passam a incluir o prefixo `[s:<session_id>]`:
+
+- **Kotlin (`VRPlayer_App`):** logs via `VRLog` (ex: `[s:a1b2c3d4] Iniciando sessao de reproducao...`).
+- **C++ (`VRPlayerApp` / `VRPlayerAppVK`):** macros `LOGI`, `LOGW`, `LOGE`.
+- **Rust (`VRPlayer_Rust`):** macros `log_info!`, `log_warn!`, `log_error!`, `log_debug!`.
+
+### Histórico de Erros e Crash Reporter
+- **Rust Error Ring Buffer:** A bridge Rust mantém um buffer circular não destrutivo com capacidade para os últimos 16 erros (`ErrorRingBuffer`), preservando timestamp e session ID mesmo após consumo pelo Toast da UI.
+- **Crash Reporter:** Exceções não capturadas no Kotlin acionam o `UncaughtExceptionHandler`, gravando o stack trace e metadados da sessão em `/sdcard/Android/data/com.tucavr/files/debug/crash-<sessionId>-<timestamp>.txt`.
+
+## 6. Exportação de Séries Temporais de Telemetria em CSV (N2)
+
+O aplicativo suporta gravação periódica de métricas de desempenho em arquivos CSV para diagnóstico aprofundado sem necessidade de conexão USB em tempo real.
+
+### Ativação
+- Acesse **Configurações > Avançado > Exportar Telemetria de Debug (CSV)** ou ative via `FeatureFlags.Flag.DEBUG_STATS_EXPORT`.
+- Os arquivos são gravados em `/sdcard/Android/data/com.tucavr/files/debug/session-<sessionId>-<timestamp>.csv`.
+
+### Formato do Arquivo CSV
+```csv
+timestamp_ms,session_id,elapsed_s,backend,screen_mode,video_status,video_fps,decoded_fps,output_fps,dropped_fps,jitter_ms,net_mbs,video_q_depth,seek_ms,smoothed_fps,frame_ms,stutter_count,freeze_count,thermal_level,scale,source_type,source_redacted
+```
+
+> [!IMPORTANT]
+> **Privacidade:** Senhas e tokens em URLs de rede (SMB, FTP, SFTP, HTTP) são sanitizados automaticamente (`redactSource`) antes da gravação no CSV ou logcat.
+
+## 7. Coleta Automatizada de Pacote de Debug (`collect-debug.sh` - N3)
+
+Para obter um diagnóstico completo do headset com um único comando:
+
+```bash
+./scripts/collect-debug.sh
+# ou com serial específico e bugreport do Android:
+./scripts/collect-debug.sh --serial <SERIAL> --bugreport
+```
+
+O script gera um pacote `.tar.gz` contendo:
+1. `manifest.txt`: Metadados do Quest 3, versão do app, build e commit git.
+2. `logcat.txt` e `logcat-filtered.txt`: Registros completos e filtrados pelas tags do player.
+3. `telemetry/`: Arquivos CSV de telemetria e relatórios de crash transferidos do headset.
+4. `meminfo.txt` e `thermalservice.txt`: Diagnósticos de memória e estrangulamento térmico.
+5. `dropbox_crashes.txt`: Registros de falhas do sistema Android.
+
+## 8. Captura Visual de Frames no Vulkan e GLES (N4)
+
+Como o compositor OpenXR desenha diretamente no display em modo `vr_only`, ferramentas padrão como `screencap` não capturam a cena do vídeo.
+
+O player fornece captura direta de frames renderizados através de `nativeRequestFrameCapture`, suportado em ambos os backends (Vulkan e GLES):
+- Salva o frame do olho esquerdo e direito como imagens PPM (`.left.ppm` e `.right.ppm`).
+- O script `scripts/test-3d-playback.sh` utiliza esse mecanismo para validar projeções estereoscópicas e converte automaticamente os frames para PNG usando `ffmpeg`.

@@ -223,11 +223,7 @@ impl PlaybackController {
 
         self.current_path = Some(path.to_string());
         let mut demuxer = Demuxer::open(path, Some(&mut self.connection_cache)).map_err(|e| e.to_string())?;
-        unsafe {
-            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-            let msg = std::ffi::CString::new(format!("load_at: demux_open={}ms", load_started_at.elapsed().as_millis())).unwrap();
-            ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-        }
+        crate::log_info!("load_at: demux_open={}ms", load_started_at.elapsed().as_millis());
         self.network_stats = demuxer.network_stats.clone();
         demuxer.select_audio_track(self.desired_audio_track);
         self.audio_track_count = demuxer.audio_streams.len();
@@ -303,11 +299,7 @@ impl PlaybackController {
         let (frames_output, frames_dropped) = video_decoder.metrics();
         self.frames_output = Some(frames_output);
         self.frames_dropped = Some(frames_dropped);
-        unsafe {
-            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-            let msg = std::ffi::CString::new(format!("load_at: decoder_ready={}ms", load_started_at.elapsed().as_millis())).unwrap();
-            ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-        }
+        crate::log_info!("load_at: decoder_ready={}ms", load_started_at.elapsed().as_millis());
 
         let mut sps_pps = None;
         if let Some(ed) = demuxer.get_video_extradata() {
@@ -332,11 +324,7 @@ impl PlaybackController {
                 audio_out = Some(out);
             }
         }
-        unsafe {
-            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-            let msg = std::ffi::CString::new(format!("load_at: audio_ready={}ms", load_started_at.elapsed().as_millis())).unwrap();
-            ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-        }
+        crate::log_info!("load_at: audio_ready={}ms", load_started_at.elapsed().as_millis());
 
         if let Ok(mut out_guard) = self.audio_output.lock() {
             // Reaplica o volume persistido (o AudioOutput e recriado a cada load).
@@ -450,11 +438,7 @@ impl PlaybackController {
                         // testado hoje pra "o AVFormatContext esta num
                         // estado de erro sticky, precisa recomecar" — so que
                         // agora loga em vez de esconder.
-                        unsafe {
-                            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-                            let msg = std::ffi::CString::new(format!("Demuxer: erro de leitura ({e}), reiniciando do inicio")).unwrap();
-                            ndk_sys::__android_log_print(5, tag.as_ptr(), msg.as_ptr()); // 5 = ANDROID_LOG_WARN
-                        }
+                        crate::log_warn!("Demuxer: erro de leitura ({e}), reiniciando do inicio");
                         let _ = demuxer.input_context.seek(0, 0..1);
                         sync_d.reset();
                     }
@@ -507,11 +491,7 @@ impl PlaybackController {
                     let pts_sec = pts as f64 * video_time_base;
                     let lag = sync_v.get_master_clock() - pts_sec;
                     if !was_active && lag > CATCH_UP_SKIP_THRESHOLD_SEC && packet.is_key() {
-                        unsafe {
-                            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-                            let msg = std::ffi::CString::new(format!("Video catch-up: retomando decode na keyframe (lag era {lag:.2}s)")).unwrap();
-                            ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-                        }
+                        crate::log_info!("Video catch-up: retomando decode na keyframe (lag era {lag:.2}s)");
                     }
                     if preroll.should_skip_packet(packet.is_key(), lag, CATCH_UP_SKIP_THRESHOLD_SEC) {
                         continue;
@@ -555,11 +535,7 @@ impl PlaybackController {
                             if let Some(start) = seek_started_at_v.lock().unwrap().take() {
                                 let ms = start.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
                                 seek_latency_v.store(ms, Ordering::Relaxed);
-                                unsafe {
-                                    let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-                                    let msg = std::ffi::CString::new(format!("seek: landing={ms}ms catchup_packets={catchup_packets}")).unwrap();
-                                    ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-                                }
+                                crate::log_info!("seek: landing={ms}ms catchup_packets={catchup_packets}");
                             }
                             catchup_packets = 0;
                         }
@@ -568,14 +544,10 @@ impl PlaybackController {
                 Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
                     if let Some(t) = last_epoch_change_at {
                         if t.elapsed() < std::time::Duration::from_secs(3) {
-                            unsafe {
-                                let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-                                let msg = std::ffi::CString::new(format!(
-                                    "seek: fila de video vazia {}ms apos epoca mudar",
-                                    t.elapsed().as_millis()
-                                )).unwrap();
-                                ndk_sys::__android_log_print(5, tag.as_ptr(), msg.as_ptr()); // 5 = ANDROID_LOG_WARN
-                            }
+                            crate::log_warn!(
+                                "seek: fila de video vazia {}ms apos epoca mudar",
+                                t.elapsed().as_millis()
+                            );
                         }
                     }
                 }
@@ -885,11 +857,7 @@ impl PlaybackController {
         let new_state = !currently_playing;
         self.set_playing(new_state);
 
-        unsafe {
-            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-            let msg = std::ffi::CString::new(if new_state { "Resumed playback" } else { "Paused playback" }).unwrap();
-            ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-        }
+        crate::log_info!("{}", if new_state { "Resumed playback" } else { "Paused playback" });
     }
 
     /// Para a geracao atual de threads e espera (join) elas

@@ -17,6 +17,7 @@
 //! instantly on any machine. `core` depends on this crate and re-exports/
 //! delegates to it instead of reimplementing the same logic.
 pub mod audio_resample;
+pub mod error_ring;
 pub mod format3d;
 pub mod metadata_wire;
 pub mod playback_params;
@@ -25,4 +26,5 @@ pub mod session;
 pub mod spatial_audio;
 pub mod subtitle;
 pub mod sync;
+pub mod telemetry;
 pub mod yuv_convert;

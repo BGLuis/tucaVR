@@ -30,6 +30,9 @@ object FeatureFlags {
 
         // Fase 0.2 T9: Carregamento automático de legendas (.srt / .vtt)
         AUTO_LOAD_SUBTITLES("auto_load_subtitles", defaultEnabled = true),
+
+        // Telemetria de Debug: exporta série temporal de reprodução em CSV (N2).
+        DEBUG_STATS_EXPORT("debug_stats_export", defaultEnabled = false),
     }
 
     fun isEnabled(context: Context, flag: Flag): Boolean =
