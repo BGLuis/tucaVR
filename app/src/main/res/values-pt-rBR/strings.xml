@@ -48,6 +48,8 @@
     <string name="settings_upscaling_mode_auto">Automatico (Adaptativo)</string>
     <string name="settings_foveated_rendering_label">Foveated Rendering</string>
     <string name="settings_foveated_rendering_description">Reduz a carga da GPU diminuindo o detalhe na visao periferica. Pode reduzir levemente a nitidez das bordas. So no Vulkan.</string>
+    <string name="settings_pause_on_exit_label">Pausar ao sair</string>
+    <string name="settings_pause_on_exit_description">Pausa o video automaticamente ao voltar ao menu do sistema ou passthrough.</string>
     <string name="settings_section_audio">Audio</string>
     <string name="settings_spatial_audio_label">Audio Espacial e Surround 3D</string>
     <string name="settings_spatial_audio_description">Habilita audio binaural 3D imersivo com virtualizacao HRTF para surround 5.1/7.1 e Ambisonics.</string>

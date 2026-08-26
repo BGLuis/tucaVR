@@ -208,6 +208,7 @@ extern "C" {
     // aceito e guardado no Rust mesmo assim (nao rejeita a chamada), so nao
     // ha nada aqui que o leia.
     extern void set_foveation_enabled(uint32_t enabled);
+    extern void set_pause_on_exit(uint32_t enabled);
     // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
     extern void set_thermal_level(uint32_t level);
     extern uint32_t get_thermal_level();
@@ -475,6 +476,11 @@ Java_com_tucavr_VRActivity_nativeSetKeyboardActive(JNIEnv* env, jobject thiz, jb
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetFoveationEnabled(JNIEnv* env, jobject thiz, jboolean enabled) {
     set_foveation_enabled(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPauseOnExit(JNIEnv* env, jobject thiz, jboolean enabled) {
+    set_pause_on_exit(enabled ? 1 : 0);
 }
 
 extern "C" JNIEXPORT void JNICALL

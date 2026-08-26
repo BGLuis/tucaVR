@@ -57,6 +57,8 @@
     <string name="settings_upscaling_mode_auto">Auto (Adaptive)</string>
     <string name="settings_foveated_rendering_label">Foveated Rendering</string>
     <string name="settings_foveated_rendering_description">Reduces GPU load by lowering detail in peripheral vision. May slightly reduce edge sharpness. Vulkan only.</string>
+    <string name="settings_pause_on_exit_label">Pause on exit</string>
+    <string name="settings_pause_on_exit_description">Automatically pause playback when returning to the system menu or passthrough.</string>
     <string name="settings_section_audio">Audio</string>
     <string name="settings_spatial_audio_label">Spatial Audio &amp; Surround 3D</string>
     <string name="settings_spatial_audio_description">Enables immersive 3D binaural audio with HRTF virtualization for 5.1/7.1 surround sound and Ambisonics.</string>

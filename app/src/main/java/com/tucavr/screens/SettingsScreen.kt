@@ -59,6 +59,15 @@ class SettingsScreen(
             )
         )
 
+        content.addView(
+            buildFlagRow(
+                labelRes = R.string.settings_pause_on_exit_label,
+                descriptionRes = R.string.settings_pause_on_exit_description,
+                flag = FeatureFlags.Flag.PAUSE_ON_EXIT,
+                onChanged = { enabled -> activity.nativeSetPauseOnExit(enabled) }
+            )
+        )
+
         // Seção Áudio
         content.addView(
             VoidText.title(context, context.getString(R.string.settings_section_audio), sizeSp = 18f).apply {

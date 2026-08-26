@@ -238,3 +238,31 @@ Como o compositor OpenXR desenha diretamente no display em modo `vr_only`, ferra
 O player fornece captura direta de frames renderizados através de `nativeRequestFrameCapture`, suportado em ambos os backends (Vulkan e GLES):
 - Salva o frame do olho esquerdo e direito como imagens PPM (`.left.ppm` e `.right.ppm`).
 - O script `scripts/test-3d-playback.sh` utiliza esse mecanismo para validar projeções estereoscópicas e converte automaticamente os frames para PNG usando `ffmpeg`.
+
+## 9. Diagnóstico de Falhas Nativas e Ciclo de Vida (C-01 a C-04)
+
+> [!WARNING]
+> O manipulador de crash padrão da JVM (`Thread.setDefaultUncaughtExceptionHandler`, Seção 5) grava arquivos `crash-*.txt` **apenas** para exceções Java (`Throwable`). Falhas nativas em C++/Rust (como `SIGABRT` gerado pelo ART ou `SIGSEGV` no driver gráfico Adreno) são sinais POSIX que derrubam o processo imediatamente, sem passar pelo manipulador Kotlin.
+
+Para capturar e diagnosticar falhas nativas no Meta Quest:
+
+```bash
+# 1. Visualizar o buffer de crash do logcat:
+adb logcat -d -b crash
+
+# 2. Inspecionar arquivos de tombstone gerados pelo SO:
+adb shell ls -la /data/tombstones/
+
+# 3. Sessão de monitoramento focada em ciclo de vida e renderização:
+adb logcat -c
+# execute a ação (ex: abrir, reproduzir, fechar pelo Horizon OS, reabrir)
+adb logcat -d -b main -b crash -s \
+  DEBUG:* AndroidRuntime:* libc:* art:* VRPlayerAppVK:* VkValidation:*
+```
+
+### Interpretação dos Padrões de Falha:
+- `Native thread exited without calling DetachCurrentThread` (art): Indica que a thread nativa encerrou sem chamar `DetachCurrentThread` (**C-01**).
+- `SIGSEGV`/`SIGABRT` envolvendo `libvulkan.so` ou driver `adreno`: Trabalho pendente na GPU durante destruição do dispositivo por ausência de `vkDeviceWaitIdle` (**C-02**).
+- `VUID-vkDestroyDevice-device-05137` / `VUID-vkDestroyCommandPool-...`: Objetos Vulkan destruídos fora de ordem ou após o `VkDevice` (**C-03**).
+- `WindowLeaked` com `VRPresentation`: `Presentation` ou `VirtualDisplay` não foram liberadas no `onDestroy` da Activity (**R-01**).
+- Comportamento de reabertura suja (ex: tocar mídia anterior ou nascer em 3D incorreto): Variáveis estáticas retidas no processo em cache sem reset na reinicialização (**C-04**). Consulte [`docs/reports/CICLO-DE-VIDA-CRASH-FECHAMENTO.md`](./reports/CICLO-DE-VIDA-CRASH-FECHAMENTO.md) para a análise detalhada.

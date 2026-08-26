@@ -9,6 +9,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import com.tucavr.designsystem.DebugStatsModal
 import com.tucavr.designsystem.ScreenFormatModal
 import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.history.historyKey
@@ -22,8 +23,8 @@ import kotlinx.coroutines.launch
  * Apresentação dedicada para o 3º Quad 3D no OpenXR (painel modal frontal flutuante).
  *
  * Desacoplada do painel esquerdo (`VRPresentation`) e do painel inferior (`VRControlsPresentation`).
- * Permite exibir qualquer diálogo ou modal frontal (ex.: seleção de formato de tela 3D)
- * flutuando diretamente na linha de visão do usuário sobre um fundo semi-translúcido (scrim).
+ * Permite exibir qualquer diálogo ou modal frontal (ex.: seleção de formato de tela 3D ou Estatísticas Técnicas)
+ * flutuando diretamente na linha de visão do usuário com transparência completa externa.
  */
 class VRModalPresentation(
     private val activity: VRActivity,
@@ -34,6 +35,7 @@ class VRModalPresentation(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private lateinit var rootContainer: FrameLayout
     private var currentModalView: View? = null
+    private var currentDebugStatsModal: DebugStatsModal? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -76,8 +78,38 @@ class VRModalPresentation(
         if (currentModalView == null) return
         rootContainer.removeAllViews()
         currentModalView = null
+        currentDebugStatsModal = null
         rootContainer.setBackgroundColor(Color.TRANSPARENT)
         activity.nativeHideModalPanel()
+    }
+
+    /**
+     * Prepara e exibe o modal de estatísticas técnicas ([DebugStatsModal]).
+     */
+    fun showDebugStatsModal() {
+        val modal = DebugStatsModal(
+            context = context,
+            onDismiss = { dismissModal() }
+        )
+        currentDebugStatsModal = modal
+        showModal(modal)
+    }
+
+    /**
+     * Atualiza as estatísticas no modal se estiver ativo.
+     */
+    fun updateDebugStats(text: String) {
+        val modal = currentDebugStatsModal ?: return
+        val batteryPct = activity.getBatteryPercent()
+        val isCharging = activity.isBatteryCharging()
+        modal.updateStats(
+            text = text,
+            meta = activity.currentMediaMetadata,
+            source = activity.currentPlaybackSource,
+            isCharging = isCharging,
+            batteryPercent = batteryPct,
+            isDebuggable = activity.isDebuggable
+        )
     }
 
     /**

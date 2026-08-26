@@ -42,6 +42,11 @@ impl TextureOutput {
         Ok(())
     }
 
+    pub fn clear(&mut self) {
+        self.current_buffer = None;
+        self.current_image = None;
+    }
+
     pub fn get_window(&self) -> Option<NativeWindow> {
         self.reader.as_ref().and_then(|r| r.window().ok())
     }

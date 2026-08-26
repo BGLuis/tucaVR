@@ -36,6 +36,9 @@ object FeatureFlags {
 
         // Telemetria de Debug: exporta série temporal de reprodução em CSV (N2).
         DEBUG_STATS_EXPORT("debug_stats_export", defaultEnabled = false),
+
+        // Pausar ao sair: pausa a reprodução ao sair pro menu do sistema ou passthrough
+        PAUSE_ON_EXIT("pause_on_exit", defaultEnabled = true),
     }
 
     fun isEnabled(context: Context, flag: Flag): Boolean =

@@ -183,4 +183,13 @@ mod tests {
         // different generation) would hang this test forever.
         assert!(iterations.load(Ordering::SeqCst) > 0);
     }
+
+    #[test]
+    fn stop_and_join_resets_is_running_flag() {
+        let gen = Generation::new();
+        assert!(gen.is_running());
+        let handle = thread::spawn(|| {});
+        gen.clone().stop_and_join(vec![handle]);
+        assert!(!gen.is_running());
+    }
 }

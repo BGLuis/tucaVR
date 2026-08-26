@@ -16,11 +16,16 @@ import kotlinx.coroutines.withContext
  * VRActivity.kt) e pelo hook `updateMediaProgress` (chamado pelo C++ via
  * JNI, ver `PlaybackProgressThrottle` para a frequencia real).
  */
-class PlaybackHistoryTracker(context: Context) {
-
-    private val dao = AppDatabase.getInstance(context).playbackHistoryDao()
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-    private val throttle = PlaybackProgressThrottle()
+class PlaybackHistoryTracker internal constructor(
+    private val dao: PlaybackHistoryDao,
+    private val scope: CoroutineScope,
+    private val throttle: PlaybackProgressThrottle
+) {
+    constructor(context: Context) : this(
+        dao = AppDatabase.getInstance(context).playbackHistoryDao(),
+        scope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
+        throttle = PlaybackProgressThrottle()
+    )
 
     // Estado da midia tocando agora — atualizado a cada `startTracking` e a
     // cada save de progresso (para o proximo save "herdar" positionMs/
@@ -74,6 +79,31 @@ class PlaybackHistoryTracker(context: Context) {
         )
         current = updated
         scope.launch { dao.upsert(updated) }
+    }
+
+    /**
+     * Força o salvamento imediato do progresso atual (sem esperar o throttle de 10s),
+     * chamado ao encerrar a reprodução (ex: botão Fechar/X).
+     */
+    fun flushProgress(currentSec: Float, totalSec: Float) {
+        val base = current ?: return
+        if (totalSec <= 0f) return
+
+        val updated = base.copy(
+            positionMs = (currentSec * 1000).toLong().coerceAtLeast(0L),
+            durationMs = (totalSec * 1000).toLong().coerceAtLeast(0L),
+            lastPlayedAt = System.currentTimeMillis()
+        )
+        current = updated
+        scope.launch { dao.upsert(updated) }
+    }
+
+    /**
+     * Encerra o rastreamento da mídia atual e reinicia o throttle.
+     */
+    fun stopTracking() {
+        current = null
+        throttle.reset()
     }
 
     /**

@@ -45,7 +45,7 @@ class ScreenFormatModal(
 
     init {
         layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
-        setBackgroundColor(Color.parseColor("#80000000"))
+        setBackgroundColor(Color.TRANSPARENT)
         isClickable = true
         setOnClickListener { onDismiss() }
 

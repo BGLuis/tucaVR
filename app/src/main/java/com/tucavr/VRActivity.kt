@@ -144,17 +144,24 @@ class VRActivity : NativeActivity() {
     var isDebugStatsEnabled: Boolean = false
         private set
 
+    var lastMediaProgressCurrent: Float = 0f
+        private set
+    var lastMediaProgressTotal: Float = 0f
+        private set
+
     fun setDebugStatsEnabled(enabled: Boolean) {
         isDebugStatsEnabled = enabled
         nativeSetDebugStatsEnabled(enabled)
         controlsPresentation?.onDebugStatsFlagChanged(enabled)
     }
 
-    private fun updateCurrentPlaybackSource(source: PlaybackSource) {
+    private fun updateCurrentPlaybackSource(source: PlaybackSource?) {
         currentPlaybackSource = source
         currentMediaMetadata = null
-        CoroutineScope(Dispatchers.IO).launch {
-            currentMediaMetadata = com.tucavr.filebrowser.MediaMetadataReader.read(this@VRActivity, source)
+        if (source != null) {
+            CoroutineScope(Dispatchers.IO).launch {
+                currentMediaMetadata = com.tucavr.filebrowser.MediaMetadataReader.read(this@VRActivity, source)
+            }
         }
     }
 
@@ -303,6 +310,9 @@ class VRActivity : NativeActivity() {
         // Configuracoes) empurram de novo na hora, ver SettingsScreen.kt.
         nativeSetFoveationEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.FOVEATED_RENDERING))
 
+        // Pausar ao sair: empurra preferência inicial de auto-pause para a camada nativa
+        nativeSetPauseOnExit(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PAUSE_ON_EXIT))
+
         // Fase 0.3 Seção 3/4: empurra valores persistidos de Áudio Espacial e Head Tracking pro nativo
         val spatialAudio = FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_AUDIO)
         nativeSetSpatialAudioMode(if (spatialAudio) 1 else 0)
@@ -341,12 +351,35 @@ class VRActivity : NativeActivity() {
     }
 
     override fun onDestroy() {
+        // R-02: Para o vídeo e decodificadores/áudio nativos antes do teardown nativo
+        stopPlayback()
+
         DebugTelemetryExporter.onSessionEnded()
         debugReceiver?.let { unregisterReceiver(it) }
         debugReceiver = null
+
+        // R-01: Desmontagem ordenada e completa das Presentations e VirtualDisplays
+        try {
+            modalPresentation?.dismiss()
+        } catch (_: Exception) {}
+        modalPresentation = null
         modalVirtualDisplay?.release()
         modalVirtualDisplay = null
-        modalPresentation = null
+
+        try {
+            controlsPresentation?.dismiss()
+        } catch (_: Exception) {}
+        controlsPresentation = null
+        controlsVirtualDisplay?.release()
+        controlsVirtualDisplay = null
+
+        try {
+            presentation?.dismiss()
+        } catch (_: Exception) {}
+        presentation = null
+        virtualDisplay?.release()
+        virtualDisplay = null
+
         super.onDestroy()
     }
 
@@ -480,6 +513,10 @@ class VRActivity : NativeActivity() {
         super.onPause()
         thermalMonitor.stopMonitoring(thermalCallback)
         autoPlayHandler.removeCallbacks(playbackErrorPoll)
+        // R-03: Garante o salvamento do progresso antes da Activity ir a segundo plano
+        currentPlaybackSource?.let {
+            historyTracker.flushProgress(lastMediaProgressCurrent, lastMediaProgressTotal)
+        }
     }
 
     companion object {
@@ -696,6 +733,8 @@ class VRActivity : NativeActivity() {
         @JvmStatic
         fun updateMediaProgress(activity: VRActivity, currentSec: Float, totalSec: Float) {
             activity.runOnUiThread {
+                activity.lastMediaProgressCurrent = currentSec
+                activity.lastMediaProgressTotal = totalSec
                 activity.controlsPresentation?.updateProgress(currentSec, totalSec)
                 // T9.2: mesmo hook que ja existia para a UI de controles —
                 // chamado pelo C++ via JNI ~10x/segundo (ver
@@ -740,7 +779,7 @@ class VRActivity : NativeActivity() {
 
             if (!activity.isDebugStatsEnabled) return
             activity.runOnUiThread {
-                activity.controlsPresentation?.updateDebugStats(text)
+                activity.modalPresentation?.updateDebugStats(text)
             }
         }
     }
@@ -892,7 +931,34 @@ class VRActivity : NativeActivity() {
         }
     }
 
+    /**
+     * Encerra a reprodução do vídeo atual: salva a posição no histórico,
+     * para o pipeline nativo de áudio/decodificação/renderização, oculta
+     * a barra de controles e reabre o painel Home (navegador de arquivos).
+     */
+    fun stopPlayback() {
+        runOnUiThread {
+            currentPlaybackSource?.let {
+                historyTracker.flushProgress(lastMediaProgressCurrent, lastMediaProgressTotal)
+            }
+            historyTracker.stopTracking()
+            updateCurrentPlaybackSource(null)
+            currentSessionId = null
+            VRLog.activeSessionId = null
+            lastMediaProgressCurrent = 0f
+            lastMediaProgressTotal = 0f
+            nativeStopVideo()
+            controlsPresentation?.resetPlaybackState()
+            // Se a Activity estiver finalizando ou destruída, não tenta recarregar painéis
+            if (!isFinishing && !isDestroyed) {
+                nativeRequestUiPanelVisible()
+                presentation?.loadFiles()
+            }
+        }
+    }
+
     external fun nativePlayVideo(path: String, startTimeSec: Float)
+    external fun nativeStopVideo()
     external fun nativeTogglePlayPause()
     external fun nativeSeekVideo(positionSeconds: Float)
     external fun nativeSetVolume(volume: Float)
@@ -933,6 +999,29 @@ class VRActivity : NativeActivity() {
             nativeHideModalPanel()
             modalPresentation?.dismissModal()
         }
+    }
+
+    /**
+     * Exibe o modal de Estatísticas Técnicas no 3º Quad dedicado frontal (VRModalPresentation).
+     */
+    fun openDebugStatsModal() {
+        runOnUiThread {
+            nativeShowModalPanel()
+            modalPresentation?.showDebugStatsModal()
+        }
+    }
+
+    fun getBatteryPercent(): Int {
+        val intent = registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+        val level = intent?.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = intent?.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1) ?: -1
+        return if (level >= 0 && scale > 0) (level * 100) / scale else 100
+    }
+
+    fun isBatteryCharging(): Boolean {
+        val intent = registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+        val status = intent?.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ?: -1
+        return status == android.os.BatteryManager.BATTERY_STATUS_CHARGING || status == android.os.BatteryManager.BATTERY_STATUS_FULL
     }
 
     // T6.4: playback SMB (credenciais como parametros separados, ver playSmb()).
@@ -1101,6 +1190,7 @@ class VRActivity : NativeActivity() {
     // comentario em native/src/vr_player_app.cpp. Chamada barata (so um
     // atomic no lado Rust), segura direto da UI thread.
     external fun nativeSetFoveationEnabled(enabled: Boolean)
+    external fun nativeSetPauseOnExit(enabled: Boolean)
 
     // T13.1: metadados de midia (container/duracao/bitrate/trilhas) pra tela
     // de detalhe do arquivo — bloqueante (probe de container, rede se remoto),

@@ -40,6 +40,7 @@ static inline std::string get_current_session_id_vk() {
 extern "C" {
     extern void set_session_id(const char* session_id);
     extern void start_video_playback(const char* path, float startTimeSec);
+    extern void stop_video_playback();
     extern void toggle_play_pause();
     extern void seek_video_playback(float position_seconds);
     extern void set_video_volume(float volume);
@@ -54,6 +55,8 @@ extern "C" {
     // Fase 0.4 T5: Foveated Rendering (implementacao real em
     // vr_player_app_vulkan.cpp, ver ApplyFoveation).
     extern void set_foveation_enabled(uint32_t enabled);
+    extern void set_pause_on_exit(uint32_t enabled);
+    extern uint32_t get_pause_on_exit();
     // Upscaling de vídeo (Vulkan-only, MQSR & SGSR1)
     extern void set_upscaling_mode(uint32_t mode);
     extern uint32_t get_upscaling_mode();
@@ -208,9 +211,16 @@ extern uint32_t g_scrubOverlayWidth;
 extern uint32_t g_scrubOverlayHeight;
 extern std::mutex g_scrubOverlayMutex;
 extern std::atomic<bool> g_requestUiPanelVisible;
+extern std::atomic<bool> g_stopVideoRequested;
 extern std::atomic<bool> g_modalPanelActive;
 extern std::atomic<bool> g_modalPanelShowRequested;
 extern std::atomic<bool> g_modalPanelHideRequested;
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeStopVideo(JNIEnv*, jobject) {
+    stop_video_playback();
+    g_stopVideoRequested.store(true);
+}
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeRequestUiPanelVisible(JNIEnv*, jobject) {
@@ -360,6 +370,11 @@ Java_com_tucavr_VRActivity_nativeSetKeyboardActive(JNIEnv*, jobject, jboolean ac
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetFoveationEnabled(JNIEnv*, jobject, jboolean enabled) {
     set_foveation_enabled(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPauseOnExit(JNIEnv*, jobject, jboolean enabled) {
+    set_pause_on_exit(enabled ? 1 : 0);
 }
 
 extern "C" JNIEXPORT void JNICALL

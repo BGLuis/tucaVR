@@ -884,6 +884,13 @@ impl PlaybackController {
         if let Some(mut output) = audio_output.take() {
             let _ = output.stop();
         }
+
+        if let Ok(mut tex) = self.texture_output.lock() {
+            tex.clear();
+        }
+        self.duration = 0.0;
+        self.current_path = None;
+        self.auto_paused = false;
     }
 
     pub fn get_progress(&self) -> (f64, f64) {

@@ -399,6 +399,10 @@ graph TB
 **Decisão**: Projeto sob licença MIT.  
 **Razão**: Máxima permissividade, compatível com distribuição futura na Quest Store.
 
+### ADR-006: Ciclo de vida e auto-pausa via eventos de sessão OpenXR
+**Decisão**: Gerenciar auto-pausa e retomada através dos estados de sessão OpenXR (`XR_SESSION_STATE_STOPPING` e `XR_SESSION_STATE_FOCUSED`) no loop de render nativo, e não pelos callbacks de ciclo de vida tradicionais do Android (`Activity.onPause`/`onResume`).  
+**Razão**: A aplicação é declarada com `<meta-data android:name="com.oculus.vr.focusaware" android:value="true" />`, fazendo com que o Android mantenha a Activity ativa e renderizando em segundo plano quando o usuário acessa o menu do Horizon OS ou entra em modo Passthrough. Por consequência, `Activity.onPause` não é disparado nesses momentos. O sinal OpenXR `XR_SESSION_STATE_STOPPING` é o gatilho determinístico para pausar decodificadores/áudio antes de `xrEndSession`, enquanto `Activity.onDestroy` é reservado para encerramento definitivo (`stopPlayback`) e desmontagem de recursos.
+
 ---
 
 ## 9. Itens Excluídos da v1 (Backlog Futuro)

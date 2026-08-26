@@ -222,6 +222,20 @@ pub extern "C" fn get_foveation_enabled() -> u32 {
     FOVEATION_ENABLED.load(Ordering::Relaxed) as u32
 }
 
+/// Preferência do usuário para pausar automaticamente ao sair pro menu do sistema / passthrough.
+/// Ativada por padrão (true).
+static PAUSE_ON_EXIT: AtomicBool = AtomicBool::new(true);
+
+#[no_mangle]
+pub extern "C" fn set_pause_on_exit(enabled: u32) {
+    PAUSE_ON_EXIT.store(enabled != 0, Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_pause_on_exit() -> u32 {
+    PAUSE_ON_EXIT.load(Ordering::Relaxed) as u32
+}
+
 // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
 // Guarda o nível térmico atual enviado pelo Kotlin ThermalMonitor (via JNI/C++).
 // 0=NORMAL, 1=LIGHT, 2=MODERATE, 3=SEVERE, 4=CRITICAL, 5=SHUTDOWN.
@@ -520,6 +534,9 @@ pub extern "C" fn toggle_play_pause() {
 
 #[no_mangle]
 pub extern "C" fn on_app_focus_lost() {
+    if !PAUSE_ON_EXIT.load(Ordering::Relaxed) {
+        return;
+    }
     if let Ok(mut controller) = CONTROLLER.lock() {
         controller.on_focus_lost();
     }
@@ -1177,9 +1194,31 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
 
 #[no_mangle]
 pub extern "C" fn stop_video_playback() {
+    std::thread::spawn(|| {
+        if let Ok(mut controller) = CONTROLLER.lock() {
+            controller.stop();
+        }
+    });
+}
+
+/// C-04: Zera o estado global do processo para evitar que uma nova sessão
+/// herde modo de tela, contadores ou sessão anterior em processos em cache.
+#[no_mangle]
+pub extern "C" fn reset_process_state() {
     if let Ok(mut controller) = CONTROLLER.lock() {
         controller.stop();
     }
+    LOADING_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+    FEEDBACK_EVENT.store(0, std::sync::atomic::Ordering::SeqCst);
+    SCREEN_MODE.store(0, std::sync::atomic::Ordering::SeqCst);
+    SWAP_EYES.store(false, std::sync::atomic::Ordering::SeqCst);
+    KEYBOARD_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+    SCREEN_MODE_OVERRIDE.store(u32::MAX, std::sync::atomic::Ordering::SeqCst);
+    LAST_FRAMES_DECODED.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_FRAMES_OUTPUT.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_FRAMES_DROPPED.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_NETWORK_BYTES.store(0, std::sync::atomic::Ordering::SeqCst);
+    ERROR_RING.clear();
 }
 
 #[no_mangle]

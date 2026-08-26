@@ -149,6 +149,9 @@ extern "C" {
     extern uint32_t get_spatial_audio_head_tracking();
     extern float get_playback_speed();
     extern uint32_t get_audio_track_count();
+    extern void reset_process_state();
+    extern void on_app_focus_lost();
+    extern void on_app_focus_gained();
 }
 
 // Preview de arrasto no seekbar renderizado sobre o quad do video
@@ -169,6 +172,22 @@ std::atomic<bool> g_stopVideoRequested{false};
 std::atomic<bool> g_modalPanelActive{false};
 std::atomic<bool> g_modalPanelShowRequested{false};
 std::atomic<bool> g_modalPanelHideRequested{false};
+
+void ResetGlobalState() {
+    g_scrubOverlayDirty.store(false);
+    g_scrubOverlayVisible.store(false);
+    {
+        std::lock_guard<std::mutex> lock(g_scrubOverlayMutex);
+        g_scrubOverlayRgba.clear();
+        g_scrubOverlayWidth = 0;
+        g_scrubOverlayHeight = 0;
+    }
+    g_requestUiPanelVisible.store(false);
+    g_stopVideoRequested.store(false);
+    g_modalPanelActive.store(false);
+    g_modalPanelShowRequested.store(false);
+    g_modalPanelHideRequested.store(false);
+}
 
 namespace {
 
@@ -4245,15 +4264,17 @@ void HandleAppCmd(android_app* app, int32_t cmd) {
     }
 }
 
-// Mesma logica de timeout do ALooper que o OVRFW usa (ActivityMainLoopContext
-// ::HandleOsEvents, XrApp.cpp:1453-1474): bloqueia indefinidamente enquanto a
-// activity nao esta resumed/com sessao ativa, para nao girar a CPU a toa.
+// C-05: Se a activity não está resumed, bloqueia indefinidamente (-1).
+// Se está resumed mas a sessão OpenXR ainda não está rodando, usa timeout moderado de 20ms
+// para não girar a CPU a 100% enquanto continua sondando eventos OpenXR.
+// Com sessão rodando, timeout 0 para processar eventos sem travar a renderização.
 void PollAndroidEvents(AppState& state) {
     for (;;) {
         int events = 0;
         android_poll_source* source = nullptr;
-        const int timeoutMs =
-            (!state.resumed && !state.sessionRunning && state.app->destroyRequested == 0) ? -1 : 0;
+        const int timeoutMs = (!state.resumed && state.app->destroyRequested == 0)
+            ? -1
+            : ((!state.sessionRunning && state.app->destroyRequested == 0) ? 20 : 0);
         if (ALooper_pollOnce(timeoutMs, nullptr, &events, reinterpret_cast<void**>(&source)) < 0) {
             break;
         }
@@ -4281,6 +4302,9 @@ void PollXrEvents(AppState& state) {
             LOGI("Estado da sessao OpenXR mudou para %d", event->state);
 
             switch (event->state) {
+                case XR_SESSION_STATE_FOCUSED:
+                    on_app_focus_gained();
+                    break;
                 case XR_SESSION_STATE_READY: {
                     XrSessionBeginInfo beginInfo{XR_TYPE_SESSION_BEGIN_INFO};
                     beginInfo.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
@@ -4290,6 +4314,8 @@ void PollXrEvents(AppState& state) {
                     break;
                 }
                 case XR_SESSION_STATE_STOPPING:
+                    // F0: Notifica a perda de foco ANTES de xrEndSession para pausar a reprodução
+                    on_app_focus_lost();
                     OXR(xrEndSession(state.session));
                     state.sessionRunning = false;
                     break;
@@ -4304,9 +4330,336 @@ void PollXrEvents(AppState& state) {
     }
 }
 
+// C-03: Desmonta ordenadamente todos os 41 recursos Vulkan filhos e os 3 AImageReaders
+void DestroyAppResources(AppState& state) {
+    if (state.vkDevice == VK_NULL_HANDLE) return;
+
+    // 1. Limpar cache de frames de vídeo (YCbCr)
+    for (auto& [buf, frame] : state.videoImageCache) {
+        if (frame.descriptorSet != VK_NULL_HANDLE && state.videoDescriptorPool != VK_NULL_HANDLE) {
+            vkFreeDescriptorSets(state.vkDevice, state.videoDescriptorPool, 1, &frame.descriptorSet);
+            frame.descriptorSet = VK_NULL_HANDLE;
+        }
+        if (frame.imageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(state.vkDevice, frame.imageView, nullptr);
+            frame.imageView = VK_NULL_HANDLE;
+        }
+        if (frame.image != VK_NULL_HANDLE) {
+            vkDestroyImage(state.vkDevice, frame.image, nullptr);
+            frame.image = VK_NULL_HANDLE;
+        }
+        if (frame.memory != VK_NULL_HANDLE) {
+            vkFreeMemory(state.vkDevice, frame.memory, nullptr);
+            frame.memory = VK_NULL_HANDLE;
+        }
+    }
+    state.videoImageCache.clear();
+
+    if (state.videoDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.videoDescriptorPool, nullptr);
+        state.videoDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (state.videoPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.videoPipeline, nullptr);
+        state.videoPipeline = VK_NULL_HANDLE;
+    }
+    if (state.videoPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.videoPipelineLayout, nullptr);
+        state.videoPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.videoDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(state.vkDevice, state.videoDescriptorSetLayout, nullptr);
+        state.videoDescriptorSetLayout = VK_NULL_HANDLE;
+    }
+    if (state.videoSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(state.vkDevice, state.videoSampler, nullptr);
+        state.videoSampler = VK_NULL_HANDLE;
+    }
+    if (state.ycbcrConversion != VK_NULL_HANDLE) {
+        auto pfnDestroyYcbcrConversion = reinterpret_cast<PFN_vkDestroySamplerYcbcrConversion>(
+            vkGetDeviceProcAddr(state.vkDevice, "vkDestroySamplerYcbcrConversion"));
+        if (pfnDestroyYcbcrConversion) {
+            pfnDestroyYcbcrConversion(state.vkDevice, state.ycbcrConversion, nullptr);
+        }
+        state.ycbcrConversion = VK_NULL_HANDLE;
+    }
+    if (state.videoVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.videoVertexBuffer, nullptr);
+        state.videoVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.videoVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.videoVertexMemory, nullptr);
+        state.videoVertexMemory = VK_NULL_HANDLE;
+    }
+
+    // 2. Recursos do Beam
+    if (state.beamPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.beamPipeline, nullptr);
+        state.beamPipeline = VK_NULL_HANDLE;
+    }
+    state.beamPipelineLayout = VK_NULL_HANDLE; // Reusa pipelineLayout, não destruir separadamente
+    if (state.beamVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.beamVertexBuffer, nullptr);
+        state.beamVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.beamVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.beamVertexMemory, nullptr);
+        state.beamVertexMemory = VK_NULL_HANDLE;
+    }
+
+    // 3. Feedback overlay
+    if (state.feedbackPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.feedbackPipeline, nullptr);
+        state.feedbackPipeline = VK_NULL_HANDLE;
+    }
+    if (state.feedbackVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.feedbackVertexBuffer, nullptr);
+        state.feedbackVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.feedbackVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.feedbackVertexMemory, nullptr);
+        state.feedbackVertexMemory = VK_NULL_HANDLE;
+    }
+
+    // 4. Scrub overlay
+    if (state.scrubOverlayDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.scrubOverlayDescriptorPool, nullptr);
+        state.scrubOverlayDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (state.scrubOverlayImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.scrubOverlayImageView, nullptr);
+        state.scrubOverlayImageView = VK_NULL_HANDLE;
+    }
+    if (state.scrubOverlayImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.scrubOverlayImage, nullptr);
+        state.scrubOverlayImage = VK_NULL_HANDLE;
+    }
+    if (state.scrubOverlayImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.scrubOverlayImageMemory, nullptr);
+        state.scrubOverlayImageMemory = VK_NULL_HANDLE;
+    }
+    state.scrubOverlayReady = false;
+
+    // 5. Legendas MSDF
+    if (state.subtitlePipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.subtitlePipeline, nullptr);
+        state.subtitlePipeline = VK_NULL_HANDLE;
+    }
+    if (state.subtitlePipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.subtitlePipelineLayout, nullptr);
+        state.subtitlePipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.subtitleDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.subtitleDescriptorPool, nullptr);
+        state.subtitleDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (state.subtitleDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(state.vkDevice, state.subtitleDescriptorSetLayout, nullptr);
+        state.subtitleDescriptorSetLayout = VK_NULL_HANDLE;
+    }
+    if (state.subtitleImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.subtitleImageView, nullptr);
+        state.subtitleImageView = VK_NULL_HANDLE;
+    }
+    if (state.subtitleImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.subtitleImage, nullptr);
+        state.subtitleImage = VK_NULL_HANDLE;
+    }
+    if (state.subtitleImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.subtitleImageMemory, nullptr);
+        state.subtitleImageMemory = VK_NULL_HANDLE;
+    }
+    if (state.subtitleSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(state.vkDevice, state.subtitleSampler, nullptr);
+        state.subtitleSampler = VK_NULL_HANDLE;
+    }
+    if (state.subtitleIndexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.subtitleIndexBuffer, nullptr);
+        state.subtitleIndexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.subtitleIndexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.subtitleIndexMemory, nullptr);
+        state.subtitleIndexMemory = VK_NULL_HANDLE;
+    }
+    if (state.subtitleVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.subtitleVertexBuffer, nullptr);
+        state.subtitleVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.subtitleVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.subtitleVertexMemory, nullptr);
+        state.subtitleVertexMemory = VK_NULL_HANDLE;
+    }
+
+    // 6. Pipelines estéreo e esfera 360/180
+    if (state.stereoFlatPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.stereoFlatPipeline, nullptr);
+        state.stereoFlatPipeline = VK_NULL_HANDLE;
+    }
+    if (state.stereoPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.stereoPipeline, nullptr);
+        state.stereoPipeline = VK_NULL_HANDLE;
+    }
+    if (state.stereoPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.stereoPipelineLayout, nullptr);
+        state.stereoPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.sphereIndexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.sphereIndexBuffer, nullptr);
+        state.sphereIndexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.sphereIndexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.sphereIndexMemory, nullptr);
+        state.sphereIndexMemory = VK_NULL_HANDLE;
+    }
+    if (state.sphereVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.sphereVertexBuffer, nullptr);
+        state.sphereVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.sphereVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.sphereVertexMemory, nullptr);
+        state.sphereVertexMemory = VK_NULL_HANDLE;
+    }
+
+    // 7. UI / Controles / Modal (Pipelines, descritores, imagens)
+    if (state.uiPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.uiPipeline, nullptr);
+        state.uiPipeline = VK_NULL_HANDLE;
+    }
+    if (state.uiPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.uiPipelineLayout, nullptr);
+        state.uiPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.uiDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.uiDescriptorPool, nullptr);
+        state.uiDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (state.uiDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(state.vkDevice, state.uiDescriptorSetLayout, nullptr);
+        state.uiDescriptorSetLayout = VK_NULL_HANDLE;
+    }
+    if (state.uiSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(state.vkDevice, state.uiSampler, nullptr);
+        state.uiSampler = VK_NULL_HANDLE;
+    }
+
+    if (state.uiImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.uiImageView, nullptr);
+        state.uiImageView = VK_NULL_HANDLE;
+    }
+    if (state.uiImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.uiImage, nullptr);
+        state.uiImage = VK_NULL_HANDLE;
+    }
+    if (state.uiImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.uiImageMemory, nullptr);
+        state.uiImageMemory = VK_NULL_HANDLE;
+    }
+
+    if (state.controlsImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.controlsImageView, nullptr);
+        state.controlsImageView = VK_NULL_HANDLE;
+    }
+    if (state.controlsImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.controlsImage, nullptr);
+        state.controlsImage = VK_NULL_HANDLE;
+    }
+    if (state.controlsImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.controlsImageMemory, nullptr);
+        state.controlsImageMemory = VK_NULL_HANDLE;
+    }
+
+    if (state.modalImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.modalImageView, nullptr);
+        state.modalImageView = VK_NULL_HANDLE;
+    }
+    if (state.modalImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.modalImage, nullptr);
+        state.modalImage = VK_NULL_HANDLE;
+    }
+    if (state.modalImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.modalImageMemory, nullptr);
+        state.modalImageMemory = VK_NULL_HANDLE;
+    }
+
+    // 8. Quad vertex buffer & Base pipeline
+    if (state.quadVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.quadVertexBuffer, nullptr);
+        state.quadVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.quadVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.quadVertexMemory, nullptr);
+        state.quadVertexMemory = VK_NULL_HANDLE;
+    }
+    if (state.pipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.pipeline, nullptr);
+        state.pipeline = VK_NULL_HANDLE;
+    }
+    if (state.pipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.pipelineLayout, nullptr);
+        state.pipelineLayout = VK_NULL_HANDLE;
+    }
+
+    // 9. Framebuffers e ImageViews dos olhos
+    for (auto& eyeChain : state.eyes) {
+        for (auto framebuffer : eyeChain.framebuffers) {
+            if (framebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(state.vkDevice, framebuffer, nullptr);
+            }
+        }
+        eyeChain.framebuffers.clear();
+        for (auto imageView : eyeChain.imageViews) {
+            if (imageView != VK_NULL_HANDLE) {
+                vkDestroyImageView(state.vkDevice, imageView, nullptr);
+            }
+        }
+        eyeChain.imageViews.clear();
+    }
+
+    if (state.queryPool != VK_NULL_HANDLE) {
+        vkDestroyQueryPool(state.vkDevice, state.queryPool, nullptr);
+        state.queryPool = VK_NULL_HANDLE;
+    }
+    for (uint32_t f = 0; f < AppState::kMaxFramesInFlight; f++) {
+        if (state.inFlightFences[f] != VK_NULL_HANDLE) {
+            vkDestroyFence(state.vkDevice, state.inFlightFences[f], nullptr);
+            state.inFlightFences[f] = VK_NULL_HANDLE;
+        }
+    }
+    if (state.renderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(state.vkDevice, state.renderPass, nullptr);
+        state.renderPass = VK_NULL_HANDLE;
+    }
+    if (state.vkCommandPool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(state.vkDevice, state.vkCommandPool, nullptr);
+        state.vkCommandPool = VK_NULL_HANDLE;
+    }
+    if (state.foveationProfile != XR_NULL_HANDLE && state.pfnDestroyFoveationProfileFB != nullptr) {
+        state.pfnDestroyFoveationProfileFB(state.foveationProfile);
+        state.foveationProfile = XR_NULL_HANDLE;
+    }
+
+    // 10. AImageReaders (NDK) - deletados após recursos Vulkan estarem desfeitos
+    if (state.uiImageReader != nullptr) {
+        AImageReader_delete(state.uiImageReader);
+        state.uiImageReader = nullptr;
+    }
+    if (state.controlsImageReader != nullptr) {
+        AImageReader_delete(state.controlsImageReader);
+        state.controlsImageReader = nullptr;
+    }
+    if (state.modalImageReader != nullptr) {
+        AImageReader_delete(state.modalImageReader);
+        state.modalImageReader = nullptr;
+    }
+}
+
 } // namespace
 
 void android_main(android_app* app) {
+    // C-04: Reset defensivo de estado global na inicialização (cold start ou reabertura de processo em cache)
+    reset_process_state();
+    ResetGlobalState();
+
     AppState state;
     state.app = app;
     app->userData = &state;
@@ -4387,100 +4740,15 @@ void android_main(android_app* app) {
     }
 
     LOGI("Encerrando: destruindo sessao/recursos Vulkan");
-    // Estagio 3: destruir cache de video antes de destruir sampler/conversion
-    for (auto& [buf, frame] : state.videoImageCache) {
-        if (frame.descriptorSet != VK_NULL_HANDLE) {
-            vkFreeDescriptorSets(
-                state.vkDevice, state.videoDescriptorPool, 1, &frame.descriptorSet);
-        }
-        if (frame.imageView != VK_NULL_HANDLE) {
-            vkDestroyImageView(state.vkDevice, frame.imageView, nullptr);
-        }
-        if (frame.image != VK_NULL_HANDLE) {
-            vkDestroyImage(state.vkDevice, frame.image, nullptr);
-        }
-        if (frame.memory != VK_NULL_HANDLE) {
-            vkFreeMemory(state.vkDevice, frame.memory, nullptr);
-        }
+
+    // C-02: Aguarda GPU terminar qualquer frame/comando em voo antes de desalocar
+    if (state.vkDevice != VK_NULL_HANDLE) {
+        VKR(vkDeviceWaitIdle(state.vkDevice));
     }
-    state.videoImageCache.clear();
-    if (state.videoDescriptorPool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(state.vkDevice, state.videoDescriptorPool, nullptr);
-    }
-    if (state.videoPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(state.vkDevice, state.videoPipeline, nullptr);
-    }
-    if (state.videoPipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(state.vkDevice, state.videoPipelineLayout, nullptr);
-    }
-    if (state.videoDescriptorSetLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(state.vkDevice, state.videoDescriptorSetLayout, nullptr);
-    }
-    if (state.videoSampler != VK_NULL_HANDLE) {
-        vkDestroySampler(state.vkDevice, state.videoSampler, nullptr);
-    }
-    if (state.ycbcrConversion != VK_NULL_HANDLE) {
-        auto pfnDestroyYcbcrConversion =
-            reinterpret_cast<PFN_vkDestroySamplerYcbcrConversion>(
-                vkGetDeviceProcAddr(state.vkDevice, "vkDestroySamplerYcbcrConversion"));
-        if (pfnDestroyYcbcrConversion) {
-            pfnDestroyYcbcrConversion(state.vkDevice, state.ycbcrConversion, nullptr);
-        }
-    }
-    if (state.videoVertexBuffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(state.vkDevice, state.videoVertexBuffer, nullptr);
-    }
-    if (state.videoVertexMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(state.vkDevice, state.videoVertexMemory, nullptr);
-    }
-    if (state.quadVertexBuffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(state.vkDevice, state.quadVertexBuffer, nullptr);
-    }
-    if (state.quadVertexMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(state.vkDevice, state.quadVertexMemory, nullptr);
-    }
-    if (state.feedbackVertexBuffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(state.vkDevice, state.feedbackVertexBuffer, nullptr);
-    }
-    if (state.feedbackVertexMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(state.vkDevice, state.feedbackVertexMemory, nullptr);
-    }
-    if (state.feedbackPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(state.vkDevice, state.feedbackPipeline, nullptr);
-    }
-    if (state.pipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(state.vkDevice, state.pipeline, nullptr);
-    }
-    if (state.pipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(state.vkDevice, state.pipelineLayout, nullptr);
-    }
-    for (auto& eyeChain : state.eyes) {
-        for (auto framebuffer : eyeChain.framebuffers) {
-            vkDestroyFramebuffer(state.vkDevice, framebuffer, nullptr);
-        }
-        for (auto imageView : eyeChain.imageViews) {
-            vkDestroyImageView(state.vkDevice, imageView, nullptr);
-        }
-    }
-    if (state.queryPool != VK_NULL_HANDLE) {
-        vkDestroyQueryPool(state.vkDevice, state.queryPool, nullptr);
-        state.queryPool = VK_NULL_HANDLE;
-    }
-    for (uint32_t f = 0; f < AppState::kMaxFramesInFlight; f++) {
-        if (state.inFlightFences[f] != VK_NULL_HANDLE) {
-            vkDestroyFence(state.vkDevice, state.inFlightFences[f], nullptr);
-            state.inFlightFences[f] = VK_NULL_HANDLE;
-        }
-    }
-    if (state.renderPass != VK_NULL_HANDLE) {
-        vkDestroyRenderPass(state.vkDevice, state.renderPass, nullptr);
-    }
-    if (state.vkCommandPool != VK_NULL_HANDLE) {
-        vkDestroyCommandPool(state.vkDevice, state.vkCommandPool, nullptr);
-    }
-    if (state.foveationProfile != XR_NULL_HANDLE && state.pfnDestroyFoveationProfileFB != nullptr) {
-        state.pfnDestroyFoveationProfileFB(state.foveationProfile);
-    }
+
+    // C-03: Destruir ordenadamente todos os 41 recursos Vulkan e 3 AImageReaders
+    DestroyAppResources(state);
+
     for (auto& eye : state.eyes) {
         if (eye.handle != XR_NULL_HANDLE) xrDestroySwapchain(eye.handle);
     }
@@ -4489,4 +4757,16 @@ void android_main(android_app* app) {
     if (state.vkDevice != VK_NULL_HANDLE) vkDestroyDevice(state.vkDevice, nullptr);
     if (state.vkInstance != VK_NULL_HANDLE) vkDestroyInstance(state.vkInstance, nullptr);
     if (state.instance != XR_NULL_HANDLE) xrDestroyInstance(state.instance);
+
+    // C-04: Limpa o estado global no fechamento para deixar o processo em cache limpo
+    reset_process_state();
+    ResetGlobalState();
+
+    // C-01: Desanexar thread nativa da JVM antes de retornar de android_main
+    if (app && app->activity && app->activity->vm) {
+        JNIEnv* env = nullptr;
+        if (app->activity->vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK) {
+            app->activity->vm->DetachCurrentThread();
+        }
+    }
 }
