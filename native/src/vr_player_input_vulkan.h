@@ -51,6 +51,7 @@ constexpr XrVector3f kBaseControlsPos = {0.0f, 0.4f, -1.3f};
 constexpr float kControlsPanelScaleX = 1.2f;
 constexpr float kControlsPanelScaleY = 1.2f * (800.0f / 1582.0f); // ~0.607m (aspect ratio 1582:800)
 constexpr float kControlsPitch = -0.3f;
+constexpr XrVector3f kBaseModalPos = {0.0f, 1.35f, -1.35f};
 constexpr float kModalPanelScaleX = 1.2f;
 constexpr float kModalPanelScaleY = 0.9f;
 
@@ -103,13 +104,14 @@ inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVec
     XrVector3f pitchedNormal = {0.0f, -sinf(kControlsPitch), cosf(kControlsPitch)};
     t.controlsNormal = Vec3RotateY(pitchedNormal, state.sceneYawOffset);
 
-    // Modal (3o Quad frontal): fixado no espaco da cena onde foi aberto
+    // Modal (3o Quad frontal): alinhado com a tela de video e controles no centro da cena
+    XrVector3f worldModalPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(kBaseModalPos, state.sceneYawOffset));
     t.modalModelNoScale = Mat4Multiply(
-        Mat4Translation(state.modalBasePos.x, state.modalBasePos.y, state.modalBasePos.z),
-        Mat4RotationY(state.modalYaw)
+        Mat4Translation(worldModalPos.x, worldModalPos.y, worldModalPos.z),
+        Mat4RotationY(state.sceneYawOffset)
     );
-    t.modalCenter = state.modalBasePos;
-    t.modalNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.modalYaw);
+    t.modalCenter = worldModalPos;
+    t.modalNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.sceneYawOffset);
 
     // Tela virtual: posicao/escala ajustaveis via thumbstick (Estagio 6).
     XrVector3f worldScreenPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(state.screenPosition, state.sceneYawOffset));
@@ -343,31 +345,11 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
     if (::g_modalPanelShowRequested.exchange(false)) {
         state.modalActive = true;
-        state.modalYawCaptured = false;
     }
     if (::g_modalPanelHideRequested.exchange(false)) {
         state.modalActive = false;
     }
     ::g_modalPanelActive.store(state.modalActive);
-
-    if (state.modalActive && !state.modalYawCaptured) {
-        Mat4 headRot = Mat4FromXrPose(XrPosef{headOrientation, {0.0f, 0.0f, 0.0f}});
-        XrVector3f fwd = {-headRot.m[8], 0.0f, -headRot.m[10]};
-        float fwdLen = sqrtf(fwd.x * fwd.x + fwd.z * fwd.z);
-        if (fwdLen > 1e-4f) {
-            fwd.x /= fwdLen;
-            fwd.z /= fwdLen;
-        } else {
-            fwd = {0.0f, 0.0f, -1.0f};
-        }
-        state.modalYaw = atan2f(-fwd.x, -fwd.z);
-        state.modalBasePos = {
-            headCenter.x + fwd.x * 1.3f,
-            headCenter.y - 0.05f,
-            headCenter.z + fwd.z * 1.3f
-        };
-        state.modalYawCaptured = true;
-    }
 
     SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
 

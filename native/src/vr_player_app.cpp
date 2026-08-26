@@ -288,9 +288,16 @@ Java_com_tucavr_VRActivity_nativeSetScrubOverlayVisible(JNIEnv* env, jobject thi
 // Solicitação explícita para acordar e manter o painel de UI visível (reset de m_uiIdleTime),
 // por exemplo ao abrir modais como o seletor de formato de tela (T3.4).
 static std::atomic<bool> g_requestUiPanelVisible{false};
+static std::atomic<bool> g_stopVideoRequested{false};
 static std::atomic<bool> g_modalPanelActive{false};
 static std::atomic<bool> g_modalPanelShowRequested{false};
 static std::atomic<bool> g_modalPanelHideRequested{false};
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeStopVideo(JNIEnv* env, jobject thiz) {
+    stop_video_playback();
+    g_stopVideoRequested.store(true);
+}
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeRequestUiPanelVisible(JNIEnv* env, jobject thiz) {
@@ -1009,10 +1016,11 @@ static const char* ScreenModeName(ScreenMode mode) {
 class VRPlayerApp : public OVRFW::XrApp {
 public:
     VRPlayerApp() : OVRFW::XrApp(), m_textureId(0), m_eglImage(EGL_NO_IMAGE_KHR), m_lastBuffer(nullptr),
+                    m_isVideoActive(false),
                     m_uiImageReader(nullptr), m_uiTextureId(0), m_uiEglImage(EGL_NO_IMAGE_KHR),
                     m_controlsImageReader(nullptr), m_controlsTextureId(0), m_controlsEglImage(EGL_NO_IMAGE_KHR),
                     m_modalImageReader(nullptr), m_modalTextureId(0), m_modalEglImage(EGL_NO_IMAGE_KHR),
-                    m_modalAlpha(0.0f), m_modalActive(false), m_modalYawCaptured(false) {
+                    m_modalAlpha(0.0f), m_modalActive(false) {
         // Ambiente "void": fundo totalmente preto, sem geometria de ambiente (T3.3)
         BackgroundColor = OVR::Vector4f(0.0f, 0.0f, 0.0f, 1.0f);
     }
@@ -1023,7 +1031,6 @@ public:
 
     void ShowModalPanel() {
         m_modalActive = true;
-        m_modalYawCaptured = false;
     }
 
     void HideModalPanel() {
@@ -1875,35 +1882,20 @@ public:
         OVR::Vector3f cPlaneCenter = worldControlsPos;
         OVR::Vector3f cPlaneNormal = OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(OVR::Matrix4f::RotationX(-0.3f).Transform(OVR::Vector3f(0, 0, 1)));
 
-        // Painel modal frontal flutuante (3o Quad)
+        // Painel modal frontal flutuante (3o Quad): alinhado com a tela de video no centro da cena
         if (g_modalPanelShowRequested.exchange(false)) {
             m_modalActive = true;
-            m_modalYawCaptured = false;
         }
         if (g_modalPanelHideRequested.exchange(false)) {
             m_modalActive = false;
         }
         g_modalPanelActive.store(m_modalActive);
 
-        if (m_modalActive && !m_modalYawCaptured) {
-            OVR::Vector3f fwd = in.HeadPose.Rotation.Rotate(OVR::Vector3f(0.0f, 0.0f, -1.0f));
-            fwd.y = 0.0f;
-            float fwdLen = sqrtf(fwd.x * fwd.x + fwd.z * fwd.z);
-            if (fwdLen > 1e-4f) {
-                fwd.x /= fwdLen;
-                fwd.z /= fwdLen;
-            } else {
-                fwd = OVR::Vector3f(0.0f, 0.0f, -1.0f);
-            }
-            m_modalYaw = atan2f(-fwd.x, -fwd.z);
-            m_modalPos = in.HeadPose.Translation + fwd * 1.3f;
-            m_modalPos.y -= 0.05f;
-            m_modalYawCaptured = true;
-        }
-
-        m_modalTransform = OVR::Matrix4f::Translation(m_modalPos) * OVR::Matrix4f::RotationY(m_modalYaw) * OVR::Matrix4f::Scaling(1.2f, 0.9f, 1.0f);
-        OVR::Vector3f modalPlaneCenter = m_modalPos;
-        OVR::Vector3f modalPlaneNormal = OVR::Matrix4f::RotationY(m_modalYaw).Transform(OVR::Vector3f(0, 0, 1));
+        OVR::Vector3f baseModalPos(0.0f, 1.35f, -1.35f);
+        OVR::Vector3f worldModalPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(baseModalPos);
+        m_modalTransform = OVR::Matrix4f::Translation(worldModalPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) * OVR::Matrix4f::Scaling(1.2f, 0.9f, 1.0f);
+        OVR::Vector3f modalPlaneCenter = worldModalPos;
+        OVR::Vector3f modalPlaneNormal = OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(OVR::Vector3f(0, 0, 1));
 
         // T1.4/T2: polling barato do modo 3D (o Rust bridge e quem guarda o
         // estado real — ver cycle_3d_mode/get_3d_mode). Os uniforms derivados
@@ -2416,6 +2408,20 @@ public:
         static PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR = 
             (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
 
+        if (g_stopVideoRequested.exchange(false)) {
+            LOGI("VRPlayerApp: parada solicitada — limpando buffers e encerrando renderizacao do video");
+            m_isVideoActive = false;
+            m_lastBuffer = nullptr;
+            m_msSinceLastVideoFrame = 0.0f;
+            m_videoStallLogged = false;
+            m_videoGapHistoryCount = 0;
+            m_videoFps = 0.0f;
+            m_videoJitterMs = 0.0f;
+            m_controlsAlpha = 0.0f;
+            m_controlsIdleTime = kUiAutoHideSeconds;
+            g_requestUiPanelVisible.store(true);
+        }
+
         if (buffer == nullptr && m_lastBuffer != nullptr) {
             LOGI("VRPlayerApp: video parou de produzir frames (get_current_video_frame() -> null) — mantendo ultimo frame na tela ate a proxima sessao (load/seek) produzir um novo");
             AHardwareBuffer* frozenBuffer = m_lastBuffer;
@@ -2451,6 +2457,7 @@ public:
                 }
             }
         } else if (buffer && buffer != m_lastBuffer) {
+            m_isVideoActive = true;
             // So loga a transicao null->frame (video comecou a produzir
             // frames), nao toda troca de buffer entre frames decodificados
             // (isso acontece a cada frame de video durante playback normal
@@ -2707,44 +2714,46 @@ public:
                      (int)m_screenMode, (int)sphereActive, m_scrubOverlayTextureId, m_screenScale.x, m_screenScale.y);
             }
         }
-        if (sphereActive) {
-            // T2.4/T2.5: m_sphereProgram agora sabe recortar por olho
-            // (uStereoLayout/uSwapEyes, setados em UpdateScreenModeUniforms)
-            // — ver o fragment shader em SessionInit() pra convencao exata
-            // de empacotamento (SBS/OU) e a ressalva honesta sobre Vr180SBS
-            // nunca ter sido validado contra um arquivo real.
-            m_sphereSurfaceDef.graphicsCommand.Textures[0].texture = m_textureId;
-            m_sphereSurfaceDef.graphicsCommand.BindUniformTextures();
-            out.Surfaces.push_back(OVRFW::ovrDrawSurface(m_sphereTransform, &m_sphereSurfaceDef));
-        } else if (flatStereoActive) {
-            // T1.1/T1.2/T1.5: separacao real de olho pro quad SBS/OU (half e
-            // full usam a MESMA matematica de UV — a diferenca entre half/full
-            // e so a densidade de pixels por olho na fonte, nao afeta o corte
-            // — ver T1.3 no doc). Mesma posicao/escala ajustavel do quad mono.
-            m_stereoFlatSurfaceDef.graphicsCommand.Textures[0].texture = m_textureId;
-            m_stereoFlatSurfaceDef.graphicsCommand.BindUniformTextures();
-            OVR::Vector3f worldScreenPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(m_screenPosition);
-            OVR::Matrix4f transform = OVR::Matrix4f::Translation(worldScreenPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) *
-                OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
-            out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_stereoFlatSurfaceDef));
-            if (m_scrubOverlayTextureId != 0 && g_scrubOverlayVisible.load()) {
-                m_scrubOverlaySurfaceDef.graphicsCommand.Textures[0].texture = m_scrubOverlayTextureId;
-                m_scrubOverlaySurfaceDef.graphicsCommand.BindUniformTextures();
-                out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_scrubOverlaySurfaceDef));
-            }
-        } else {
-            // Flat2D: quad mono normal, posicao/escala ajustaveis pelo
-            // usuario via thumbstick (T3.6).
-            OVR::Vector3f worldScreenPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(m_screenPosition);
-            OVR::Matrix4f transform = OVR::Matrix4f::Translation(worldScreenPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) *
-                OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
-            out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_surfaceDef));
-            // Preview de arrasto (T-seek-ux): mesmo transform do quad de
-            // video, so no modo plano (sphereActive ja exclui 360/180 acima).
-            if (m_scrubOverlayTextureId != 0 && g_scrubOverlayVisible.load()) {
-                m_scrubOverlaySurfaceDef.graphicsCommand.Textures[0].texture = m_scrubOverlayTextureId;
-                m_scrubOverlaySurfaceDef.graphicsCommand.BindUniformTextures();
-                out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_scrubOverlaySurfaceDef));
+        if (m_isVideoActive) {
+            if (sphereActive) {
+                // T2.4/T2.5: m_sphereProgram agora sabe recortar por olho
+                // (uStereoLayout/uSwapEyes, setados em UpdateScreenModeUniforms)
+                // — ver o fragment shader em SessionInit() pra convencao exata
+                // de empacotamento (SBS/OU) e a ressalva honesta sobre Vr180SBS
+                // nunca ter sido validado contra um arquivo real.
+                m_sphereSurfaceDef.graphicsCommand.Textures[0].texture = m_textureId;
+                m_sphereSurfaceDef.graphicsCommand.BindUniformTextures();
+                out.Surfaces.push_back(OVRFW::ovrDrawSurface(m_sphereTransform, &m_sphereSurfaceDef));
+            } else if (flatStereoActive) {
+                // T1.1/T1.2/T1.5: separacao real de olho pro quad SBS/OU (half e
+                // full usam a MESMA matematica de UV — a diferenca entre half/full
+                // e so a densidade de pixels por olho na fonte, nao afeta o corte
+                // — ver T1.3 no doc). Mesma posicao/escala ajustavel do quad mono.
+                m_stereoFlatSurfaceDef.graphicsCommand.Textures[0].texture = m_textureId;
+                m_stereoFlatSurfaceDef.graphicsCommand.BindUniformTextures();
+                OVR::Vector3f worldScreenPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(m_screenPosition);
+                OVR::Matrix4f transform = OVR::Matrix4f::Translation(worldScreenPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) *
+                    OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
+                out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_stereoFlatSurfaceDef));
+                if (m_scrubOverlayTextureId != 0 && g_scrubOverlayVisible.load()) {
+                    m_scrubOverlaySurfaceDef.graphicsCommand.Textures[0].texture = m_scrubOverlayTextureId;
+                    m_scrubOverlaySurfaceDef.graphicsCommand.BindUniformTextures();
+                    out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_scrubOverlaySurfaceDef));
+                }
+            } else {
+                // Flat2D: quad mono normal, posicao/escala ajustaveis pelo
+                // usuario via thumbstick (T3.6).
+                OVR::Vector3f worldScreenPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(m_screenPosition);
+                OVR::Matrix4f transform = OVR::Matrix4f::Translation(worldScreenPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) *
+                    OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
+                out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_surfaceDef));
+                // Preview de arrasto (T-seek-ux): mesmo transform do quad de
+                // video, so no modo plano (sphereActive ja exclui 360/180 acima).
+                if (m_scrubOverlayTextureId != 0 && g_scrubOverlayVisible.load()) {
+                    m_scrubOverlaySurfaceDef.graphicsCommand.Textures[0].texture = m_scrubOverlayTextureId;
+                    m_scrubOverlaySurfaceDef.graphicsCommand.BindUniformTextures();
+                    out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_scrubOverlaySurfaceDef));
+                }
             }
         }
 
@@ -2996,6 +3005,7 @@ private:
     GLuint m_textureId;
     EGLImageKHR m_eglImage;
     AHardwareBuffer* m_lastBuffer;
+    bool m_isVideoActive;
     std::unordered_map<AHardwareBuffer*, EGLImageKHR> m_eglImageCache;
     OVRFW::GlProgram m_program;
     OVRFW::ovrSurfaceDef m_surfaceDef;
@@ -3026,11 +3036,8 @@ private:
     EGLImageKHR m_modalEglImage;
     OVRFW::ovrSurfaceDef m_modalSurfaceDef;
     OVR::Matrix4f m_modalTransform;
-    OVR::Vector3f m_modalPos;
-    float m_modalYaw;
     float m_modalAlpha;
     bool m_modalActive;
-    bool m_modalYawCaptured;
 
     OVRFW::ovrBeamRenderer m_beamRenderer;
     OVRFW::ovrBeamRenderer::handle_t m_beamHandle{OVRFW::ovrBeamRenderer::INVALID_BEAM_HANDLE};

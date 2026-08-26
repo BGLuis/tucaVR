@@ -165,6 +165,7 @@ uint32_t g_scrubOverlayWidth = 0;
 uint32_t g_scrubOverlayHeight = 0;
 std::mutex g_scrubOverlayMutex;
 std::atomic<bool> g_requestUiPanelVisible{false};
+std::atomic<bool> g_stopVideoRequested{false};
 std::atomic<bool> g_modalPanelActive{false};
 std::atomic<bool> g_modalPanelShowRequested{false};
 std::atomic<bool> g_modalPanelHideRequested{false};
@@ -459,9 +460,6 @@ struct AppState {
     float modalAlpha = 0.0f;
     bool modalHasFrame = false;
     bool modalActive = false;
-    XrVector3f modalBasePos = {0.0f, 1.2f, -1.3f};
-    float modalYaw = 0.0f;
-    bool modalYawCaptured = false;
 
     // Preview de arrasto sobre o quad do video (T-seek-ux): reaproveita
     // uiPipeline/uiPipelineLayout/uiSampler (RGBA8 comum, sem YCbCr) — so
@@ -3637,6 +3635,21 @@ void PushVideoGapSample(AppState& state, float gapMs) {
 // Chamado uma vez por loop de frame, antes de RenderFrame.
 // Equivale ao bloco vr_player_app.cpp:1354-1400 (m_eglImageCache).
 void UpdateVideoFrame(AppState& state) {
+    if (g_stopVideoRequested.exchange(false)) {
+        LOGI("Video: parada solicitada — limpando frame ativo e encerrando renderizacao do video");
+        state.activeVideoFrame = nullptr;
+        state.lastVideoBuffer = nullptr;
+        state.msSinceLastVideoFrame = 0.0f;
+        state.videoStallLogged = false;
+        state.videoGapHistoryCount = 0;
+        state.videoFps = 0.0f;
+        state.videoJitterMs = 0.0f;
+        state.controlsAlpha = 0.0f;
+        state.controlsIdleTime = kUiAutoHideSeconds;
+        g_requestUiPanelVisible.store(true);
+        return;
+    }
+
     AHardwareBuffer* buffer = get_current_video_frame();
 
     if (buffer == nullptr) {
