@@ -40,6 +40,12 @@
     <!-- Configuracoes (SettingsScreen) -->
     <string name="settings_title">Configuracoes</string>
     <string name="settings_section_video">Video</string>
+    <string name="settings_upscaling_label">Upscaling de Video e Super Resolucao</string>
+    <string name="settings_upscaling_description">Aumenta a nitidez e a eficiencia da GPU via MQSR (Meta Quest Super Resolution) e processamento de shader Snapdragon GSR.</string>
+    <string name="settings_upscaling_mode_off">Desativado</string>
+    <string name="settings_upscaling_mode_quality">Qualidade (SGSR1)</string>
+    <string name="settings_upscaling_mode_performance">Desempenho (Render Scale 0.8x + MQSR)</string>
+    <string name="settings_upscaling_mode_auto">Automatico (Adaptativo)</string>
     <string name="settings_foveated_rendering_label">Foveated Rendering</string>
     <string name="settings_foveated_rendering_description">Reduz a carga da GPU diminuindo o detalhe na visao periferica. Pode reduzir levemente a nitidez das bordas. So no Vulkan.</string>
     <string name="settings_section_audio">Audio</string>

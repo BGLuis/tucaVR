@@ -95,6 +95,7 @@ class VRActivity : NativeActivity() {
     // playSmb, chamados via VRPresentation apos onCreate).
     val historyTracker: PlaybackHistoryTracker by lazy { PlaybackHistoryTracker(this) }
     val format3dStore: Format3DPreferenceStore by lazy { Format3DPreferenceStore(this) }
+    val upscalingStore: UpscalingModeStore by lazy { UpscalingModeStore(this) }
     val thermalMonitor: ThermalMonitor by lazy { ThermalMonitor(this) }
 
     private val thermalCallback: (ThermalMonitor.ThermalState) -> Unit = { state ->
@@ -104,6 +105,16 @@ class VRActivity : NativeActivity() {
     private fun onThermalStateChanged(state: ThermalMonitor.ThermalState) {
         nativeSetThermalLevel(state.level.rawLevel)
         controlsPresentation?.onThermalStateChanged(state)
+
+        if (state.actions.contains(ThermalMonitor.ThermalAction.SIMPLIFY_ENVIRONMENT) &&
+            state.level >= ThermalMonitor.ThermalLevel.SEVERE
+        ) {
+            // Em estresse térmico SEVERE, força temporariamente modo OFF para resfriamento da GPU
+            nativeSetUpscalingMode(UpscalingModeStore.Mode.OFF.id)
+        } else if (state.level <= ThermalMonitor.ThermalLevel.MODERATE) {
+            // Restaura o modo preferido quando a temperatura normaliza
+            nativeSetUpscalingMode(upscalingStore.get().id)
+        }
 
         if (state.actions.contains(ThermalMonitor.ThermalAction.PAUSE_PLAYBACK)) {
             // T14.1/T14.2: Em nível crítico/shutdown, pausa a reprodução imediatamente para resfriamento
@@ -321,6 +332,9 @@ class VRActivity : NativeActivity() {
             } catch (_: Exception) {}
             previousHandler?.uncaughtException(thread, throwable)
         }
+
+        // Upscaling de vídeo (Vulkan MQSR / SGSR1): empurra modo persistido pro nativo
+        nativeSetUpscalingMode(upscalingStore.get().id)
     }
 
     override fun onDestroy() {
@@ -1052,4 +1066,7 @@ class VRActivity : NativeActivity() {
 
     // N1: Propaga o identificador de sessão ativo para C++ e Rust
     external fun nativeSetSessionId(sessionId: String)
+
+    // Upscaling de vídeo (Vulkan MQSR / SGSR1): 0=OFF, 1=QUALITY, 2=PERFORMANCE, 3=AUTO
+    external fun nativeSetUpscalingMode(mode: Int)
 }

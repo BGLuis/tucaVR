@@ -241,6 +241,20 @@ pub extern "C" fn get_thermal_level() -> u32 {
     THERMAL_LEVEL.load(Ordering::Relaxed)
 }
 
+// Upscaling de vídeo (Vulkan-only, MQSR, SGSR1):
+// 0=OFF, 1=QUALITY, 2=PERFORMANCE, 3=AUTO
+static UPSCALING_MODE: AtomicU32 = AtomicU32::new(0);
+
+#[no_mangle]
+pub extern "C" fn set_upscaling_mode(mode: u32) {
+    UPSCALING_MODE.store(mode, Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_upscaling_mode() -> u32 {
+    UPSCALING_MODE.load(Ordering::Relaxed)
+}
+
 /// T1.4: avanca pro proximo modo do ciclo (chamado pelo botao "🧊" do painel
 /// de controles). Retorna o novo modo, pra o Kotlin nao precisar de uma
 /// chamada extra so pra ler de volta o que acabou de escrever.

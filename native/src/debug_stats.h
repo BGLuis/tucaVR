@@ -44,6 +44,11 @@ struct DebugStats {
     int audioTrackCount = 0;
     int subtitleTrackIndex = -1;
     int32_t subtitleOffsetMs = 0;
+    float gpuTimeMs = 0.0f;
+    float smoothedGpuTimeMs = 0.0f;
+    const char* upscalingMode = "OFF";
+    float upscalingSharpness = 0.0f;
+    int mqsrEnabled = 0;
 };
 
 // Serializa a struct em formato TSV estruturado (chave\tvalor\n).
@@ -68,6 +73,11 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         "seek_latency_ms\t%u\n"
         "smoothed_fps\t%.1f\n"
         "frame_time_ms\t%.1f\n"
+        "gpu_time_ms\t%.2f\n"
+        "smoothed_gpu_time_ms\t%.2f\n"
+        "upscaling_mode\t%s\n"
+        "upscaling_sharpness\t%.2f\n"
+        "mqsr_enabled\t%d\n"
         "stutter_count\t%d\n"
         "freeze_count\t%d\n"
         "thermal_level\t%u\n"
@@ -103,6 +113,11 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         s.seekLatencyMs,
         s.smoothedFps,
         s.lastFrameMs,
+        s.gpuTimeMs,
+        s.smoothedGpuTimeMs,
+        s.upscalingMode ? s.upscalingMode : "OFF",
+        s.upscalingSharpness,
+        s.mqsrEnabled,
         s.stutterCount,
         s.freezeCount,
         s.thermalLevel,

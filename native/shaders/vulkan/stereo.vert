@@ -1,26 +1,28 @@
 #version 450
 
-// Estagio 5 — vertex shader para quad SBS/OU e esfera 360/180.
-// Passa UV e o indice de olho (via push constant eyeIndex) para o
-// fragment shader recortar a metade correta do frame estereo.
+// Estagio 5 — vertex shader para quad SBS/OU e esfera 360/180 + Upscaling SGSR1.
+// Passa UV, indices de olho e parametros de nitidez/upscaling para o fragment shader.
 
 layout(location = 0) in vec3 inPosition;
 layout(location = 1) in vec2 inTexCoord;
 
 layout(push_constant) uniform PushConstants {
-    mat4 mvp;
-    int  eyeIndex;     // 0 = esquerdo, 1 = direito
-    int  swapEyes;     // 1 = inverte qual metade cada olho recebe
-    int  stereoLayout; // 0 = mono, 1 = SBS, 2 = OU
-    int  polar180;     // 0 = 360 completo, 1 = 180 hemisferio frontal
+    mat4  mvp;
+    int   eyeIndex;      // 0 = esquerdo, 1 = direito
+    int   swapEyes;      // 1 = inverte qual metade cada olho recebe
+    int   stereoLayout;  // 0 = mono, 1 = SBS, 2 = OU
+    int   polar180;      // 0 = 360 completo, 1 = 180 hemisferio frontal
+    float sharpness;     // 0.0 = amostragem direta, > 0.0 = forca do SGSR1
+    int   upscalingMode; // 0 = Off, 1 = Quality, 2 = Performance, 3 = Auto
 } pc;
 
 layout(location = 0) out vec2 vTexCoord;
-// Passa os uniforms necessarios ao fragment via flat (sem interpolacao)
 layout(location = 1) flat out int vEye;
 layout(location = 2) flat out int vSwapEyes;
 layout(location = 3) flat out int vStereoLayout;
 layout(location = 4) flat out int vPolar180;
+layout(location = 5) flat out float vSharpness;
+layout(location = 6) flat out int vUpscalingMode;
 
 void main() {
     gl_Position = pc.mvp * vec4(inPosition, 1.0);
@@ -29,4 +31,6 @@ void main() {
     vSwapEyes   = pc.swapEyes;
     vStereoLayout = pc.stereoLayout;
     vPolar180   = pc.polar180;
+    vSharpness  = pc.sharpness;
+    vUpscalingMode = pc.upscalingMode;
 }

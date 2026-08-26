@@ -54,6 +54,9 @@ extern "C" {
     // Fase 0.4 T5: Foveated Rendering (implementacao real em
     // vr_player_app_vulkan.cpp, ver ApplyFoveation).
     extern void set_foveation_enabled(uint32_t enabled);
+    // Upscaling de vídeo (Vulkan-only, MQSR & SGSR1)
+    extern void set_upscaling_mode(uint32_t mode);
+    extern uint32_t get_upscaling_mode();
     // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
     extern void set_thermal_level(uint32_t level);
     extern uint32_t get_thermal_level();
@@ -335,6 +338,11 @@ Java_com_tucavr_VRActivity_nativeSetKeyboardActive(JNIEnv*, jobject, jboolean ac
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetFoveationEnabled(JNIEnv*, jobject, jboolean enabled) {
     set_foveation_enabled(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetUpscalingMode(JNIEnv*, jobject, jint mode) {
+    set_upscaling_mode(static_cast<uint32_t>(mode < 0 ? 0 : mode));
 }
 
 extern "C" JNIEXPORT void JNICALL

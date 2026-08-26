@@ -6,20 +6,19 @@ import android.widget.CheckBox
 import android.widget.LinearLayout
 import com.tucavr.FeatureFlags
 import com.tucavr.R
+import com.tucavr.UpscalingModeStore
 import com.tucavr.VRActivity
+import com.tucavr.designsystem.VoidFilterChip
 import com.tucavr.designsystem.VoidPanelChrome
 import com.tucavr.designsystem.VoidText
 import com.tucavr.designsystem.VoidTheme
 
 /**
- * Tela de Configurações — hoje só a seção "Vídeo" com o toggle de Foveated
- * Rendering (fase 0.4 T5). Ponto de extensão para os próximos toggles
- * planejados (áudio multicanal, áudio espacial): cada um vira uma chamada a
- * mais de [buildFlagRow] dentro de [render].
+ * Tela de Configurações — Seções "Vídeo" (Upscaling MQSR/SGSR1 e Foveated Rendering),
+ * "Áudio" (Áudio Espacial e Head Tracking) e "Legendas".
  *
- * Ao mudar um toggle: persiste via [FeatureFlags.setEnabled] E empurra pro
- * nativo na hora (`activity.nativeSetXxx(...)`) — é isso que faz o toggle
- * ser de verdade "em runtime", não só "no próximo boot".
+ * Ao mudar um toggle ou modo: persiste via SharedPreferences E empurra pro
+ * nativo na hora (`activity.nativeSetXxx(...)`) para aplicação imediata em runtime.
  */
 class SettingsScreen(
     private val context: Context,
@@ -37,6 +36,8 @@ class SettingsScreen(
                 setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
             }
         )
+
+        root.addView(buildUpscalingRow())
 
         root.addView(
             buildFlagRow(
@@ -143,5 +144,66 @@ class SettingsScreen(
                 setPadding(VoidTheme.dpToPx(context, 4f), VoidTheme.dpToPx(context, 4f), 0, 0)
             }
         )
+    }
+
+    private fun buildUpscalingRow(): LinearLayout = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = VoidTheme.dpToPx(context, 16f) }
+
+        addView(
+            VoidText.title(context, context.getString(R.string.settings_upscaling_label), sizeSp = 16f).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+            }
+        )
+
+        addView(
+            VoidText.body(context, context.getString(R.string.settings_upscaling_description), sizeSp = 14f, secondary = true).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
+            }
+        )
+
+        val chipContainer = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        val modes = listOf(
+            UpscalingModeStore.Mode.OFF to R.string.settings_upscaling_mode_off,
+            UpscalingModeStore.Mode.QUALITY to R.string.settings_upscaling_mode_quality,
+            UpscalingModeStore.Mode.PERFORMANCE to R.string.settings_upscaling_mode_performance,
+            UpscalingModeStore.Mode.AUTO to R.string.settings_upscaling_mode_auto
+        )
+
+        val chips = mutableListOf<VoidFilterChip>()
+        val currentMode = activity.upscalingStore.get()
+
+        modes.forEach { (mode, labelRes) ->
+            val chip = VoidFilterChip(
+                context = context,
+                text = context.getString(labelRes),
+                isSelectedChip = (mode == currentMode)
+            ).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                ).apply {
+                    val margin = VoidTheme.dpToPx(context, 4f)
+                    setMargins(margin, 0, margin, 0)
+                }
+                setOnClickListener {
+                    chips.forEach { it.setSelectedState(false) }
+                    setSelectedState(true)
+                    activity.upscalingStore.set(mode)
+                    activity.nativeSetUpscalingMode(mode.id)
+                }
+            }
+            chips.add(chip)
+            chipContainer.addView(chip)
+        }
+
+        addView(chipContainer)
     }
 }

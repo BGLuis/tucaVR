@@ -604,6 +604,11 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         // HUD de debug (docs/DEBUGGING.md / docs/reports/DEBUG-STATS-MODAL.md)
         if (g_debugStatsEnabled.load(std::memory_order_relaxed)) {
             StereoParams spHud = GetStereoParams(state.screenMode, 0);
+            const char* upscaleStr = "OFF";
+            if (state.upscalingMode == 1) upscaleStr = "QUAL";
+            else if (state.upscalingMode == 2) upscaleStr = "PERF";
+            else if (state.upscalingMode == 3) upscaleStr = "AUTO";
+
             DebugStats stats;
             stats.backend = "VULKAN";
             stats.screenMode = ScreenModeName(state.screenMode);
@@ -622,6 +627,11 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             stats.seekLatencyMs = get_last_seek_latency_ms();
             stats.smoothedFps = state.smoothedFps;
             stats.lastFrameMs = state.lastFrameMs;
+            stats.gpuTimeMs = state.lastGpuTimeMs;
+            stats.smoothedGpuTimeMs = state.smoothedGpuTimeMs;
+            stats.upscalingMode = upscaleStr;
+            stats.upscalingSharpness = state.upscalingSharpness;
+            stats.mqsrEnabled = (int)(state.supportsMqsr && state.upscalingEnabled);
             stats.stutterCount = state.stutterCount;
             stats.freezeCount = state.freezeCount;
             stats.thermalLevel = state.thermalLevel;
