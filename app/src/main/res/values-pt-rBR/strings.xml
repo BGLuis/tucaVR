@@ -278,8 +278,7 @@
     <string name="player_controls_volume_format">%1$d%%</string>
     <string name="player_controls_speed_format">%1$.2fx</string>
 
-    <!-- T1.4/T2: modo de exibicao 3D (VRControlsPresentation) -->
-    <string name="player_btn_3d_mode_format">%1$s</string>
+    <!-- T1.4/T2: modo de exibicao 3D (VRControlsPresentation/ScreenFormatCatalog) -->
     <string name="player_mode_2d">2D</string>
     <string name="player_mode_sbs">SBS</string>
     <string name="player_mode_sbs_half">SBS (metade)</string>
@@ -292,6 +291,20 @@
     <string name="player_mode_180_sbs">180° SBS</string>
     <string name="player_btn_swap_eyes">Trocar olhos</string>
     <string name="player_btn_recenter">Recentralizar</string>
+
+    <!-- Seletor de Formato de Tela (ScreenFormatModal - T3.4) -->
+    <string name="format_modal_title">Formatos de Tela</string>
+    <string name="format_tab_auto">Automático</string>
+    <string name="format_tab_flat">Plano</string>
+    <string name="format_tab_360">360°</string>
+    <string name="format_tab_180">180°</string>
+    <string name="format_auto_detected_title">Formato Detectado</string>
+    <string name="format_auto_current_title">Modo Ativo Atual</string>
+    <string name="format_auto_btn_reset">Usar Detecção Automática</string>
+    <string name="format_auto_no_media">Nenhuma mídia ativa</string>
+    <string name="format_confidence_high">Alta confiança</string>
+    <string name="format_confidence_medium">Média confiança</string>
+    <string name="format_confidence_low">Estimado</string>
 
     <!-- Historico de reproducao (T9.3 prompt "Retomar?" / T9.4 "Continuar assistindo") -->
     <string name="history_resume_prompt_title">Continuar de onde parou?</string>

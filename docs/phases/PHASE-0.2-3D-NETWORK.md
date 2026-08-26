@@ -261,7 +261,7 @@ Detectar automaticamente se um arquivo é 2D, SBS, OU, 360°, ou 180° sem inter
     - Aspect ratio ~32:9 ou 4:1 → provavelmente Full SBS
     - Aspect ratio 2:1 e resolução ≥ 3840 → provavelmente 360° mono
     - Aspect ratio 1:1 e resolução ≥ 3840 → provavelmente 360° stereo OU
-- [ ] **T3.4** — UI de **confirmação/override**:
+- [x] **T3.4** — UI de **confirmação/override**:
     - Mostrar formato detectado: "Detectado como: 360° SBS"
     - Botão para mudar manualmente se detecção estiver errada
     - Salvar preferência por arquivo

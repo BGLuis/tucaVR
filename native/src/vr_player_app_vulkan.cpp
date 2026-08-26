@@ -133,6 +133,7 @@ std::vector<uint8_t> g_scrubOverlayRgba;
 uint32_t g_scrubOverlayWidth = 0;
 uint32_t g_scrubOverlayHeight = 0;
 std::mutex g_scrubOverlayMutex;
+std::atomic<bool> g_requestUiPanelVisible{false};
 
 namespace {
 

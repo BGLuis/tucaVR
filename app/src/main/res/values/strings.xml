@@ -291,11 +291,9 @@
     <string name="player_controls_volume_format">%1$d%%</string>
     <string name="player_controls_speed_format">%1$.2fx</string>
 
-    <!-- T1.4/T2: modo de exibicao 3D (VRControlsPresentation) — ciclo
-         2D -> SBS -> SBS(half) -> OU -> OU(half) -> 360 -> 180 -> 2D.
-         Ordem/indices DEVEM casar com ScreenMode em native/src/vr_player_app.cpp
+    <!-- T1.4/T2: modo de exibicao 3D (VRControlsPresentation/ScreenFormatCatalog) —
+         ordem/indices DEVEM casar com ScreenMode em native/src/vr_player_app.cpp
          e a codificacao numerica em rust/bridge/src/lib.rs (cycle_3d_mode). -->
-    <string name="player_btn_3d_mode_format">%1$s</string>
     <string name="player_mode_2d">2D</string>
     <string name="player_mode_sbs">SBS</string>
     <string name="player_mode_sbs_half">SBS (half)</string>
@@ -308,6 +306,20 @@
     <string name="player_mode_180_sbs">180° SBS</string>
     <string name="player_btn_swap_eyes">Swap eyes</string>
     <string name="player_btn_recenter">Recenter</string>
+
+    <!-- Seletor de Formato de Tela (ScreenFormatModal - T3.4) -->
+    <string name="format_modal_title">Screen Formats</string>
+    <string name="format_tab_auto">Auto</string>
+    <string name="format_tab_flat">Flat</string>
+    <string name="format_tab_360">360°</string>
+    <string name="format_tab_180">180°</string>
+    <string name="format_auto_detected_title">Detected Format</string>
+    <string name="format_auto_current_title">Current Active Mode</string>
+    <string name="format_auto_btn_reset">Use Auto Detection</string>
+    <string name="format_auto_no_media">No media active</string>
+    <string name="format_confidence_high">High confidence</string>
+    <string name="format_confidence_medium">Medium confidence</string>
+    <string name="format_confidence_low">Estimated</string>
 
     <!-- Historico de reproducao (T9.3 prompt "Retomar?" / T9.4 "Continue Watching") -->
     <string name="history_resume_prompt_title">Continue where you left off?</string>

@@ -30,11 +30,15 @@ import com.tucavr.screens.PlayerScreen
 import com.tucavr.screens.ResumePromptScreen
 import com.tucavr.screens.ScreenHost
 import com.tucavr.screens.SettingsScreen
+import com.tucavr.designsystem.ScreenFormatModal
 import com.tucavr.designsystem.VoidTheme
+import com.tucavr.filebrowser.MediaMetadataReader
+import com.tucavr.history.historyKey
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 /**
  * Fase 2 do redesign "Void": único quad/painel de UI além da tela de vídeo
@@ -413,6 +417,56 @@ class VRPresentation(
             if (appNav.back()) {
                 render()
             }
+        }
+    }
+
+    // ---- Modal de Formato de Tela (T3.4) ----
+
+    private var screenFormatModal: ScreenFormatModal? = null
+
+    /**
+     * Exibe o modal de seleção de formato de tela (2D/3D/Esférico) como overlay sobre o `screenHost`.
+     */
+    fun showScreenFormatModal() {
+        screenFormatModal?.let { host.hideOverlay(it) }
+
+        val currentSource = activity.currentPlaybackSource
+        val currentMode = activity.nativeGet3DMode()
+
+        scope.launch {
+            val meta = currentSource?.let { src ->
+                MediaMetadataReader.read(activity, src)
+            }
+            val detectedMode = meta?.format3dIndex
+            val confidence = meta?.detectionConfidence ?: 3
+
+            val modal = ScreenFormatModal(
+                context = context,
+                currentMode = currentMode,
+                detectedMode = detectedMode,
+                detectionConfidence = confidence,
+                onModeSelected = { mode ->
+                    activity.nativeSetScreenMode(mode)
+                    currentSource?.let { src ->
+                        activity.format3dStore.set(src.historyKey(), mode)
+                    }
+                },
+                onUseAutoDetection = {
+                    activity.nativeSetScreenModeOverride(-1)
+                    currentSource?.let { src ->
+                        activity.format3dStore.clear(src.historyKey())
+                    }
+                    if (detectedMode != null && detectedMode in 0..9) {
+                        activity.nativeSetScreenMode(detectedMode)
+                    }
+                },
+                onDismiss = {
+                    screenFormatModal?.let { host.hideOverlay(it) }
+                    screenFormatModal = null
+                }
+            )
+            screenFormatModal = modal
+            host.showOverlay(modal)
         }
     }
 }

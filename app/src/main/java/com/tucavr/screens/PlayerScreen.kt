@@ -35,19 +35,6 @@ private val TAG_LABEL_RES = mapOf(
     "comment" to R.string.file_detail_tag_comment
 )
 
-private val MODE_LABEL_RES_IDS = intArrayOf(
-    R.string.player_mode_2d,
-    R.string.player_mode_sbs,
-    R.string.player_mode_sbs_half,
-    R.string.player_mode_ou,
-    R.string.player_mode_ou_half,
-    R.string.player_mode_360,
-    R.string.player_mode_180,
-    R.string.player_mode_360_sbs,
-    R.string.player_mode_360_ou,
-    R.string.player_mode_180_sbs
-)
-
 /**
  * Tela unificada "Tocando Agora" (Now Playing Screen).
  * Combina informações detalhadas da mídia, metadados técnicos do container, seleção dinâmica de trilhas
@@ -202,8 +189,8 @@ class PlayerScreen(
             val mbps = meta.bitRate.toDouble() / 1_000_000.0
             addRow(section, context.getString(R.string.file_detail_label_bitrate), context.getString(R.string.file_detail_value_bitrate_format, mbps))
         }
-        if (meta.format3dIndex in MODE_LABEL_RES_IDS.indices) {
-            val modeLabel = context.getString(MODE_LABEL_RES_IDS[meta.format3dIndex])
+        if (meta.format3dIndex in 0..9) {
+            val modeLabel = context.getString(ScreenFormatCatalog.getLabelResId(meta.format3dIndex))
             val suffix = if (meta.detectionConfidence < 3) context.getString(R.string.file_detail_format3d_low_confidence_suffix) else ""
             addRow(section, context.getString(R.string.file_detail_label_format3d), modeLabel + suffix)
         }

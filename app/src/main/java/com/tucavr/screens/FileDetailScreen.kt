@@ -38,19 +38,6 @@ private val TAG_LABEL_RES = mapOf(
     "comment" to R.string.file_detail_tag_comment
 )
 
-private val MODE_LABEL_RES_IDS = intArrayOf(
-    R.string.player_mode_2d,
-    R.string.player_mode_sbs,
-    R.string.player_mode_sbs_half,
-    R.string.player_mode_ou,
-    R.string.player_mode_ou_half,
-    R.string.player_mode_360,
-    R.string.player_mode_180,
-    R.string.player_mode_360_sbs,
-    R.string.player_mode_360_ou,
-    R.string.player_mode_180_sbs,
-)
-
 /**
  * Tela de detalhe de arquivo (T13.2) -- thumbnail + metadados tecnicos +
  * lista de trilhas, compartilhada entre fonte local e de rede (SMB/FTP/SFTP/
@@ -201,7 +188,7 @@ class FileDetailScreen(
                 }
                 addRow(mediaSection, context.getString(R.string.file_detail_label_video_codec), video.codec)
             }
-            val modeResId = MODE_LABEL_RES_IDS.getOrElse(metadata.format3dIndex) { R.string.player_mode_2d }
+            val modeResId = ScreenFormatCatalog.getLabelResId(metadata.format3dIndex)
             val modeName = context.getString(modeResId)
             val format3dText = if (metadata.detectionConfidence >= 2 && metadata.format3dIndex != 0) {
                 modeName + context.getString(R.string.file_detail_format3d_low_confidence_suffix)

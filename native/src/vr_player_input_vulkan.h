@@ -6,6 +6,7 @@
 #include "vr_player_feedback_overlay.h"
 #include <math.h>
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 
 // Timings de auto-hide/recenter — mesmos valores do caminho GLES
@@ -372,6 +373,9 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                     state.screenScaleX, state.screenScaleY, su, sv,
                     state.lastRayOrigin, state.lastRayDir) > 0.0f;
     bool keyboardActive = get_keyboard_active() != 0;
+    if (::g_requestUiPanelVisible.exchange(false)) {
+        state.uiIdleTime = 0.0f;
+    }
 
     if (currentHitPanel == 1 || keyboardActive) {
         state.uiIdleTime = 0.0f;

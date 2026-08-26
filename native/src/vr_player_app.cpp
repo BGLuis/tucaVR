@@ -249,6 +249,15 @@ Java_com_tucavr_VRActivity_nativeSetScrubOverlayVisible(JNIEnv* env, jobject thi
     LOGI("nativeSetScrubOverlayVisible: %d", (int)(visible == JNI_TRUE));
 }
 
+// Solicitação explícita para acordar e manter o painel de UI visível (reset de m_uiIdleTime),
+// por exemplo ao abrir modais como o seletor de formato de tela (T3.4).
+static std::atomic<bool> g_requestUiPanelVisible{false};
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRequestUiPanelVisible(JNIEnv* env, jobject thiz) {
+    g_requestUiPanelVisible.store(true);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeRequestFrameCapture(JNIEnv* env, jobject thiz, jstring path) {
     const char* pathStr = env->GetStringUTFChars(path, nullptr);
@@ -1836,6 +1845,9 @@ public:
         // dois "e o painel certo" a cada chamada) enquanto o teclado estiver
         // ativo.
         bool keyboardActive = get_keyboard_active() != 0;
+        if (g_requestUiPanelVisible.exchange(false)) {
+            m_uiIdleTime = 0.0f;
+        }
         if (currentHitPanel == 1 || keyboardActive) {
             m_uiIdleTime = 0.0f;
         } else {

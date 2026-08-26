@@ -753,8 +753,19 @@ class VRActivity : NativeActivity() {
     external fun nativeSetScreenMode(mode: Int)
     external fun nativeSetScreenModeOverride(mode: Int)
     external fun nativeToggleSwapEyes(): Int
+    external fun nativeRequestUiPanelVisible()
     external fun nativeRequestFrameCapture(path: String)
     external fun nativeTakeLastPlaybackError(): String?
+
+    /**
+     * Acorda o quad de UI (VRPresentation) e exibe o modal de formato de tela (T3.4).
+     */
+    fun openScreenFormatModal() {
+        runOnUiThread {
+            nativeRequestUiPanelVisible()
+            presentation?.showScreenFormatModal()
+        }
+    }
 
     // T6.4: playback SMB (credenciais como parametros separados, ver playSmb()).
     external fun nativePlaySmb(

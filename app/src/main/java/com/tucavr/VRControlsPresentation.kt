@@ -23,6 +23,7 @@ import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ScrubStrip
 import com.tucavr.history.historyKey
 import com.tucavr.navigation.PlaybackSource
+import com.tucavr.screens.ScreenFormatCatalog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -44,6 +45,7 @@ class VRControlsPresentation(
     private val activity: VRActivity,
     private val onPlayPause: () -> Unit
 ) : Presentation(outerContext, display, android.R.style.Theme_NoTitleBar_Fullscreen) {
+
     fun updateTitle(title: String) {
         if (::titleLabel.isInitialized) {
             titleLabel.text = title
@@ -58,7 +60,6 @@ class VRControlsPresentation(
     private lateinit var thermalLabel: TextView
     private lateinit var clockLabel: TextView
     private lateinit var btnPlayPause: com.tucavr.designsystem.VoidIconButton
-    private lateinit var modeSelectionModal: FrameLayout
     private lateinit var subtitleSelectionModal: FrameLayout
     private var hudReceiver: android.content.BroadcastReceiver? = null
     private lateinit var timeLabel: TextView
@@ -87,32 +88,9 @@ class VRControlsPresentation(
     // depois que o usuario ja soltou o dedo.
     private var networkScrubJob: Job? = null
 
-    // T1.4/T2.4/T2.5: indices DEVEM casar com ScreenMode em
-    // native/src/vr_player_app.cpp e a codificacao numerica em
-    // rust/bridge/src/lib.rs (cycle_3d_mode) — 10 modos agora que a
-    // separacao real de olho (SBS/OU flat e esferico) esta implementada.
-    private val modeLabelResIds = intArrayOf(
-        R.string.player_mode_2d,
-        R.string.player_mode_sbs,
-        R.string.player_mode_sbs_half,
-        R.string.player_mode_ou,
-        R.string.player_mode_ou_half,
-        R.string.player_mode_360,
-        R.string.player_mode_180,
-        R.string.player_mode_360_sbs,
-        R.string.player_mode_360_ou,
-        R.string.player_mode_180_sbs,
-    )
-
-    private fun modeLabel(mode: Int): String {
-        val resId = modeLabelResIds.getOrElse(mode) { R.string.player_mode_2d }
-        return context.getString(R.string.player_btn_3d_mode_format, context.getString(resId))
-    }
-
-    // Indices 5-9 de modeLabelResIds acima (360/180 e variantes estereo) usam
-    // esfera, nao quad — o overlay de preview sobre o video (nativeUpdateScrubOverlay)
-    // so cobre modo plano (ver comentario em VRActivity.nativeUpdateScrubOverlay).
-    private fun isSphereMode(mode: Int) = mode >= 5
+    // Modos esféricos (360/180 e variantes estéreo) usam esfera, não quad —
+    // o overlay de preview sobre o vídeo (nativeUpdateScrubOverlay) só cobre modo plano.
+    private fun isSphereMode(mode: Int) = ScreenFormatCatalog.isSpherical(mode)
 
     // Resolucao pedida pro decode escalado de scrub local (ver updateScrubPreview) —
     // rapido o bastante pra acompanhar arrastos continuos, ainda reconhecivel.
@@ -133,13 +111,9 @@ class VRControlsPresentation(
             totalTimeLabel.text = formatTime(totalSec)
         }
 
-        // T9: cada novo playback (playFile/playSmb) reseta o modo 3D no lado
-        // Rust (ver reset_3d_mode em rust/bridge/src/lib.rs) pra nao vazar o
-        // modo do video anterior — resincroniza o texto do botao aqui, que
-        // ja e chamado ~10x/s durante playback (ver frameCount%6 em
-        // vr_player_app.cpp), em vez de adicionar um callback JNI dedicado
-        // so pra isto.
-
+        // Mantém lastKnownMode atualizado com o modo nativo para que
+        // a pré-visualização de scrub reconheça modos esféricos vs planos.
+        lastKnownMode = activity.nativeGet3DMode()
     }
 
     /**
@@ -524,35 +498,9 @@ class VRControlsPresentation(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-                val btnGlass = VoidIconButton(context, R.drawable.icon_vr_headset, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+        val btnGlass = VoidIconButton(context, R.drawable.icon_vr_headset, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
             setOnClickListener {
-                try {
-                    val currentMode = activity.nativeGet3DMode()
-                    val panel = modeSelectionModal.getChildAt(0) as LinearLayout
-                    val grid = panel.getChildAt(1) as LinearLayout
-                    for (r in 0 until grid.childCount) {
-                        val row = grid.getChildAt(r) as LinearLayout
-                        for (i in 0 until row.childCount) {
-                            val btnContainer = row.getChildAt(i) as? LinearLayout ?: continue
-                            if (btnContainer.childCount == 0) continue
-                            val btn = btnContainer.getChildAt(0) as? LinearLayout ?: continue
-                            val modeValue = btn.tag as? Int ?: -1
-                            if (modeValue == currentMode) {
-                                btn.background = android.graphics.drawable.GradientDrawable().apply {
-                                    setColor(com.tucavr.designsystem.VoidTheme.colorSurfaceAlt)
-                                    cornerRadius = com.tucavr.designsystem.VoidTheme.dp(context, 16f)
-                                    setStroke(com.tucavr.designsystem.VoidTheme.dpToPx(context, 2f), com.tucavr.designsystem.VoidTheme.colorAccent)
-                                }
-                            } else {
-                                btn.background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#33FFFFFF")), null, null)
-                            }
-                        }
-                    }
-                } catch (e: Exception) {
-                    android.util.Log.e("VRControls", "Error updating modal state", e)
-                } finally {
-                    modeSelectionModal.visibility = View.VISIBLE
-                }
+                activity.openScreenFormatModal()
             }
             layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
         }
@@ -739,140 +687,6 @@ class VRControlsPresentation(
             visibility = View.GONE
         }
         overlay.addView(scrubPreview, FrameLayout.LayoutParams(VoidTheme.dpToPx(context, 160f), VoidTheme.dpToPx(context, 90f), Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply { topMargin = VoidTheme.dpToPx(context, 8f) })
-
-        
-        // Modal de Selecao de Modo VR
-        modeSelectionModal = FrameLayout(context).apply {
-            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.MATCH_PARENT)
-            setBackgroundColor(android.graphics.Color.parseColor("#E6000000"))
-            visibility = View.GONE
-            isClickable = true
-            
-            setOnClickListener { modeSelectionModal.visibility = View.GONE }
-            
-            val panel = LinearLayout(context).apply {
-                orientation = LinearLayout.VERTICAL
-                layoutParams = android.widget.FrameLayout.LayoutParams(com.tucavr.designsystem.VoidTheme.dpToPx(context, 800f), android.widget.FrameLayout.LayoutParams.WRAP_CONTENT).apply {
-                    gravity = Gravity.CENTER
-                }
-                background = android.graphics.drawable.GradientDrawable().apply {
-                    setColor(com.tucavr.designsystem.VoidTheme.colorSurface)
-                    cornerRadius = com.tucavr.designsystem.VoidTheme.dp(context, 16f)
-                    setStroke(com.tucavr.designsystem.VoidTheme.dpToPx(context, com.tucavr.designsystem.VoidTheme.borderWidthDp), com.tucavr.designsystem.VoidTheme.colorBorder)
-                }
-                setPadding(com.tucavr.designsystem.VoidTheme.dpToPx(context, 24f), com.tucavr.designsystem.VoidTheme.dpToPx(context, 24f), com.tucavr.designsystem.VoidTheme.dpToPx(context, 24f), com.tucavr.designsystem.VoidTheme.dpToPx(context, 24f))
-                
-                val title = TextView(context).apply {
-                    text = "Formatos de Tela"
-                    typeface = com.tucavr.designsystem.VoidTheme.typefaceBody
-                    textSize = 24f
-                    setTextColor(com.tucavr.designsystem.VoidTheme.colorText)
-                    setPadding(0, 0, 0, com.tucavr.designsystem.VoidTheme.dpToPx(context, 24f))
-                    gravity = Gravity.CENTER
-                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                }
-                addView(title)
-                
-                val grid = LinearLayout(context).apply {
-                    orientation = LinearLayout.VERTICAL
-                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-                }
-                
-                val row1 = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                        bottomMargin = com.tucavr.designsystem.VoidTheme.dpToPx(context, 16f)
-                    }
-                }
-                val row2 = LinearLayout(context).apply {
-                    orientation = LinearLayout.HORIZONTAL
-                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
-                        bottomMargin = com.tucavr.designsystem.VoidTheme.dpToPx(context, 24f)
-                    }
-                }
-                
-                val flatModes = listOf(
-                    Triple(context.getString(modeLabelResIds[0]), R.drawable.icon_2d, 0),
-                    Triple(context.getString(modeLabelResIds[1]), R.drawable.icon_3d_sbs, 1),
-                    Triple(context.getString(modeLabelResIds[2]), R.drawable.icon_3d_sbs, 2),
-                    Triple(context.getString(modeLabelResIds[3]), R.drawable.icon_3d_ou, 3),
-                    Triple(context.getString(modeLabelResIds[4]), R.drawable.icon_3d_ou, 4),
-                )
-                val immersiveModes = listOf(
-                    Triple(context.getString(modeLabelResIds[5]), R.drawable.icon_360, 5),
-                    Triple(context.getString(modeLabelResIds[6]), R.drawable.icon_360, 6),
-                    Triple(context.getString(modeLabelResIds[7]), R.drawable.icon_360, 7),
-                    Triple(context.getString(modeLabelResIds[8]), R.drawable.icon_360, 8),
-                    Triple(context.getString(modeLabelResIds[9]), R.drawable.icon_360, 9),
-                )
-
-                fun addModeRow(targetRow: LinearLayout, modesList: List<Triple<String, Int, Int>>) {
-                    for (mode in modesList) {
-                        val btnContainer = LinearLayout(context).apply {
-                            orientation = LinearLayout.VERTICAL
-                            gravity = Gravity.CENTER
-                            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
-                                setMargins(VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f), 0)
-                            }
-                        }
-
-                        val btn = LinearLayout(context).apply {
-                            tag = mode.third
-                            orientation = LinearLayout.VERTICAL
-                            gravity = Gravity.CENTER
-                            background = android.graphics.drawable.RippleDrawable(android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#33FFFFFF")), null, null)
-                            setPadding(0, VoidTheme.dpToPx(context, 12f), 0, VoidTheme.dpToPx(context, 12f))
-                            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-
-                            val icon = ImageView(context).apply {
-                                setImageResource(mode.second)
-                                setColorFilter(VoidTheme.colorText)
-                                layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 40f), VoidTheme.dpToPx(context, 40f))
-                            }
-                            addView(icon)
-
-                            val label = TextView(context).apply {
-                                text = mode.first
-                                typeface = VoidTheme.typefaceBody
-                                textSize = 13f
-                                setTextColor(VoidTheme.colorText)
-                                setPadding(0, VoidTheme.dpToPx(context, 6f), 0, 0)
-                                gravity = Gravity.CENTER
-                            }
-                            addView(label)
-
-                            setOnClickListener {
-                                activity.nativeSetScreenMode(mode.third)
-                                activity.currentPlaybackSource?.let { src ->
-                                    activity.format3dStore.set(src.historyKey(), mode.third)
-                                }
-                                modeSelectionModal.visibility = View.GONE
-                            }
-                        }
-
-                        btnContainer.addView(btn)
-                        targetRow.addView(btnContainer)
-                    }
-                }
-
-                addModeRow(row1, flatModes)
-                addModeRow(row2, immersiveModes)
-
-                grid.addView(row1)
-                grid.addView(row2)
-                addView(grid)
-                
-                val closeBtn = com.tucavr.designsystem.VoidIconButton(context, R.drawable.icon_x, com.tucavr.designsystem.VoidButtonStyle.SECONDARY).apply {
-                    val p = LinearLayout.LayoutParams(com.tucavr.designsystem.VoidTheme.dpToPx(context, 64f), com.tucavr.designsystem.VoidTheme.dpToPx(context, 64f))
-                    p.gravity = Gravity.CENTER
-                    layoutParams = p
-                    setOnClickListener { modeSelectionModal.visibility = View.GONE }
-                }
-                addView(closeBtn)
-            }
-            addView(panel)
-        }
-        overlay.addView(modeSelectionModal)
 
         // Modal de Selecao e Sincronizacao de Legendas (T9.6)
         subtitleSelectionModal = FrameLayout(context).apply {
