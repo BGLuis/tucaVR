@@ -1841,7 +1841,13 @@ static void UpdatePanelSwapchainFromHwb(AppState& state, EyeSwapchain& panelChai
     submitInfo.pCommandBuffers = &state.uiCopyCmd;
     VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
 
-    // 4. Liberar swapchain para o compositor OpenXR (sem vkQueueWaitIdle!)
+    // D-01 fix: Aguardar conclusão da cópia GPU antes de liberar o swapchain
+    // para o compositor OpenXR. Sem este wait, o compositor pode ler a imagem
+    // parcialmente escrita, causando blocos visuais e desaparecimento dos painéis.
+    // Custo: ~0.1-0.5ms por frame (aceitável no budget de 11.1ms a 90Hz).
+    VKR(vkQueueWaitIdle(state.vkQueue));
+
+    // 4. Liberar swapchain para o compositor OpenXR
     XrSwapchainImageReleaseInfo relInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     OXR(xrReleaseSwapchainImage(panelChain.handle, &relInfo));
 }
@@ -3202,51 +3208,59 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
     // Beam (Laser) — so desenha com um controle de fato rastreado neste
     // frame (state.hasRay, setado por UpdateInteraction via xrLocateSpace).
     if (state.hasRay) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.beamPipeline);
-        vkCmdBindVertexBuffers(cmd, 0, 1, &state.beamVertexBuffer, &offset);
+        // D-02 fix: Quando o modal esta ativo e visivel, o beam e desenhado na
+        // camada de projecao (projectionLayer) mas o modal e um XrCompositionLayerQuad
+        // separado — nao ha depth test entre layers. Se o ray nao acertou o modal
+        // (lastHitDist < 0), escondemos o beam para evitar que ele apareca
+        // visualmente atravessando o modal.
+        bool skipBeam = state.modalActive && state.modalAlpha > 0.5f && state.lastHitDist < 0.0f;
+        if (!skipBeam) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.beamPipeline);
+            vkCmdBindVertexBuffers(cmd, 0, 1, &state.beamVertexBuffer, &offset);
 
-        // O beam em CreateBeamResources vai de (0,0,0) ate (0,0,-2) no eixo Z negativo.
-        XrVector3f up = {0.0f, 1.0f, 0.0f};
-        if (fabs(state.lastRayDir.y) > 0.99f) up = {1.0f, 0.0f, 0.0f};
-        
-        XrVector3f z = {-state.lastRayDir.x, -state.lastRayDir.y, -state.lastRayDir.z};
-        
-        XrVector3f x = {
-            up.y * z.z - up.z * z.y,
-            up.z * z.x - up.x * z.z,
-            up.x * z.y - up.y * z.x
-        };
-        float xLen = sqrtf(x.x*x.x + x.y*x.y + x.z*x.z);
-        if (xLen > 0.0001f) { x.x /= xLen; x.y /= xLen; x.z /= xLen; }
+            // O beam em CreateBeamResources vai de (0,0,0) ate (0,0,-2) no eixo Z negativo.
+            XrVector3f up = {0.0f, 1.0f, 0.0f};
+            if (fabs(state.lastRayDir.y) > 0.99f) up = {1.0f, 0.0f, 0.0f};
+            
+            XrVector3f z = {-state.lastRayDir.x, -state.lastRayDir.y, -state.lastRayDir.z};
+            
+            XrVector3f x = {
+                up.y * z.z - up.z * z.y,
+                up.z * z.x - up.x * z.z,
+                up.x * z.y - up.y * z.x
+            };
+            float xLen = sqrtf(x.x*x.x + x.y*x.y + x.z*x.z);
+            if (xLen > 0.0001f) { x.x /= xLen; x.y /= xLen; x.z /= xLen; }
 
-        XrVector3f y = {
-            z.y * x.z - z.z * x.y,
-            z.z * x.x - z.x * x.z,
-            z.x * x.y - z.y * x.x
-        };
+            XrVector3f y = {
+                z.y * x.z - z.z * x.y,
+                z.z * x.x - z.x * x.z,
+                z.x * x.y - z.y * x.x
+            };
 
-        float beamLength = 5.0f; // Default 5 meters if no hit
-        if (state.lastHitDist > 0.0f) {
-            beamLength = state.lastHitDist;
-        }
-        float zScale = beamLength;
+            float beamLength = 5.0f; // Default 5 meters if no hit
+            if (state.lastHitDist > 0.0f) {
+                beamLength = state.lastHitDist;
+            }
+            float zScale = beamLength;
 
-        Mat4 beamModel = {{
-            x.x, x.y, x.z, 0.0f,
-            y.x, y.y, y.z, 0.0f,
-            z.x * zScale, z.y * zScale, z.z * zScale, 0.0f,
-            state.lastRayOrigin.x, state.lastRayOrigin.y, state.lastRayOrigin.z, 1.0f
-        }};
+            Mat4 beamModel = {{
+                x.x, x.y, x.z, 0.0f,
+                y.x, y.y, y.z, 0.0f,
+                z.x * zScale, z.y * zScale, z.z * zScale, 0.0f,
+                state.lastRayOrigin.x, state.lastRayOrigin.y, state.lastRayOrigin.z, 1.0f
+            }};
 
-        BeamPushConstants beamPush{};
-        beamPush.mvp = Mat4Multiply(Mat4Multiply(proj, view), beamModel);
-        beamPush.color[0] = 0.0f; beamPush.color[1] = 0.5f; beamPush.color[2] = 1.0f; beamPush.color[3] = 1.0f;
+            BeamPushConstants beamPush{};
+            beamPush.mvp = Mat4Multiply(Mat4Multiply(proj, view), beamModel);
+            beamPush.color[0] = 0.0f; beamPush.color[1] = 0.5f; beamPush.color[2] = 1.0f; beamPush.color[3] = 1.0f;
 
-        vkCmdPushConstants(cmd, state.beamPipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(beamPush), &beamPush);
-        
-        vkCmdDraw(cmd, 2, 1, 0, 0); // 2 vertices para a linha
+            vkCmdPushConstants(cmd, state.beamPipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(beamPush), &beamPush);
+
+            vkCmdDraw(cmd, 2, 1, 0, 0); // 2 vertices para a linha
+        } // !skipBeam
     }
 
     // Posicao/orientacao da tela, mas sem a escala dela: o icone tem tamanho
@@ -4419,7 +4433,17 @@ void RenderFrame(AppState& state) {
         cursorQuad.subImage.imageRect.offset = {0, 0};
         cursorQuad.subImage.imageRect.extent = {64, 64};
         cursorQuad.pose.position = state.cursorDotPos;
-        cursorQuad.pose.orientation = QuatFromYaw(state.sceneYawOffset);
+        // D-03 fix: O cursor herda a orientação do painel que está sendo
+        // apontado. Sem isso, a orientação fixa (sceneYawOffset) diverge do
+        // billboard dinâmico (uiYaw) do painel Home, causando deformação
+        // perspectiva que estica o retículo verticalmente.
+        if (state.lastHoverPanel == 1) {
+            cursorQuad.pose.orientation = uiQuad.pose.orientation;
+        } else if (state.lastHoverPanel == 2) {
+            cursorQuad.pose.orientation = controlsQuad.pose.orientation;
+        } else {
+            cursorQuad.pose.orientation = QuatFromYaw(state.sceneYawOffset);
+        }
         cursorQuad.size = {0.025f, 0.025f}; // 2.5 cm diâmetro
 
         // MQSR Sharpening nos quads de UI para dobrar o ganho de nitidez nas fontes
