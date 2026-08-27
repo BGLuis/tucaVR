@@ -1,4 +1,4 @@
-# Status do Projeto VR Multimedia Player
+# Status do Projeto tucaVR
 
 Este documento consolida o estado atual do desenvolvimento do player de vídeo VR, focando na integração entre Android, Rust (Decodificação) e C++ (OpenXR).
 

@@ -44,7 +44,9 @@
 #include <vector>
 
 #include "vk_math.h"
+#include "screen_mode.h"
 #include "vr_player_feedback_overlay.h"
+#include "debug_stats.h"
 #include "quad.vert.h"
 #include "quad.frag.h"
 #include "video.vert.h"
@@ -53,10 +55,41 @@
 #include "ui.frag.h"
 #include "stereo.vert.h"
 #include "stereo.frag.h"
+#include "font_atlas_roboto.h"
+#include "subtitle.vert.h"
+#include "subtitle.frag.h"
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "VRPlayerAppVK", __VA_ARGS__)
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "VRPlayerAppVK", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VRPlayerAppVK", __VA_ARGS__)
+#ifndef XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME
+#define XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME "XR_FB_display_refresh_rate"
+#endif
+
+typedef XrResult (XRAPI_PTR *PFN_xrRequestDisplayRefreshRateFB)(XrSession session, float displayRefreshRate);
+
+std::atomic<bool> g_captureRequested{false};
+std::string g_capturePath;
+std::mutex g_capturePathMutex;
+std::string g_sessionId = "--------";
+std::mutex g_sessionIdMutex;
+
+static inline std::string get_current_session_id_vk_app() {
+    std::lock_guard<std::mutex> lock(g_sessionIdMutex);
+    return g_sessionId;
+}
+
+#define LOGI(fmt, ...) do { \
+    std::string _sId = get_current_session_id_vk_app(); \
+    __android_log_print(ANDROID_LOG_INFO, "VRPlayerAppVK", "[s:%s] " fmt, _sId.c_str(), ##__VA_ARGS__); \
+} while (0)
+
+#define LOGW(fmt, ...) do { \
+    std::string _sId = get_current_session_id_vk_app(); \
+    __android_log_print(ANDROID_LOG_WARN, "VRPlayerAppVK", "[s:%s] " fmt, _sId.c_str(), ##__VA_ARGS__); \
+} while (0)
+
+#define LOGE(fmt, ...) do { \
+    std::string _sId = get_current_session_id_vk_app(); \
+    __android_log_print(ANDROID_LOG_ERROR, "VRPlayerAppVK", "[s:%s] " fmt, _sId.c_str(), ##__VA_ARGS__); \
+} while (0)
 
 // Bridge Rust: fornece o AHardwareBuffer do frame de video atual e controle de 3D mode.
 extern "C" {
@@ -64,6 +97,22 @@ extern "C" {
     extern void get_video_progress(float* current, float* total);
     extern uint32_t get_3d_mode();
     extern uint32_t get_swap_eyes();
+    // Fase 0.4 T5: Foveated Rendering — ver ApplyFoveation abaixo.
+    extern uint32_t get_foveation_enabled();
+    // Upscaling de vídeo (Vulkan MQSR / SGSR1)
+    extern uint32_t get_upscaling_mode();
+    // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006)
+    extern uint32_t get_thermal_level();
+    // Rastreamento de cabeça para áudio espacial
+    extern void set_head_pose_orientation(float x, float y, float z, float w);
+    // Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
+    extern void set_subtitle_track(int32_t track_index);
+    extern int32_t get_subtitle_track();
+    extern void set_subtitle_offset_ms(int64_t offset_ms);
+    extern int64_t get_subtitle_offset_ms();
+    extern uint32_t load_external_subtitle(const char* path);
+    extern uint32_t get_subtitle_track_count();
+    extern uint32_t get_active_subtitle_text(char* out_buf, size_t max_len);
     extern void start_video_playback(const char* path, float startTimeSec);
     // Estagio 6 — paridade com o caminho GLES (play-pause, teclado nativo,
     // volume, seek).
@@ -95,6 +144,15 @@ extern "C" {
     // Overlay de feedback sobre a tela de video (ver vr_player_feedback_overlay.h):
     // sequencia nos 32 bits altos, FeedbackKind nos 32 baixos.
     extern uint64_t get_playback_feedback_event();
+    extern float get_last_av_drift_ms();
+    extern uint32_t get_foveation_enabled();
+    extern uint32_t get_spatial_audio_mode();
+    extern uint32_t get_spatial_audio_head_tracking();
+    extern float get_playback_speed();
+    extern uint32_t get_audio_track_count();
+    extern void reset_process_state();
+    extern void on_app_focus_lost();
+    extern void on_app_focus_gained();
 }
 
 // Preview de arrasto no seekbar renderizado sobre o quad do video
@@ -110,6 +168,29 @@ std::vector<uint8_t> g_scrubOverlayRgba;
 uint32_t g_scrubOverlayWidth = 0;
 uint32_t g_scrubOverlayHeight = 0;
 std::mutex g_scrubOverlayMutex;
+std::atomic<bool> g_requestUiPanelVisible{false};
+std::atomic<bool> g_requestControlsPanelVisible{false};
+std::atomic<bool> g_stopVideoRequested{false};
+std::atomic<bool> g_modalPanelActive{false};
+std::atomic<bool> g_modalPanelShowRequested{false};
+std::atomic<bool> g_modalPanelHideRequested{false};
+
+void ResetGlobalState() {
+    g_scrubOverlayDirty.store(false);
+    g_scrubOverlayVisible.store(false);
+    {
+        std::lock_guard<std::mutex> lock(g_scrubOverlayMutex);
+        g_scrubOverlayRgba.clear();
+        g_scrubOverlayWidth = 0;
+        g_scrubOverlayHeight = 0;
+    }
+    g_requestUiPanelVisible.store(false);
+    g_requestControlsPanelVisible.store(false);
+    g_stopVideoRequested.store(false);
+    g_modalPanelActive.store(false);
+    g_modalPanelShowRequested.store(false);
+    g_modalPanelHideRequested.store(false);
+}
 
 namespace {
 
@@ -126,74 +207,22 @@ constexpr size_t kVideoImageCacheLimit = 16;
 constexpr float kSphereRadius = 20.0f;
 
 // Dimensoes dos VirtualDisplay/AImageReader dos paineis de UI — precisam
-// bater exatamente com os multiplicadores hardcoded em
-// VRActivity.dispatchVRTouch/dispatchControlsVRTouch (x*1024f, y*768f e
-// x*1024f, y*384f) ou o Y do toque fica descalibrado.
+// bater exatamente com as constantes em
+// VRActivity.dispatchVRTouch/dispatchControlsVRTouch (1024x768 e 1582x800)
+// para que as coordenadas normalizadas do raycast casem com a janela Android.
 constexpr uint32_t kUiTexWidth = 1024;
 constexpr uint32_t kUiTexHeight = 768;
-constexpr uint32_t kControlsTexWidth = 1024;
-constexpr uint32_t kControlsTexHeight = 384;
+constexpr uint32_t kControlsTexWidth = 1582;
+constexpr uint32_t kControlsTexHeight = 800;
+constexpr uint32_t kModalTexWidth = 1024;
+constexpr uint32_t kModalTexHeight = 768;
 
 // Metricas de performance (debug, ver docs/DEBUGGING.md).
 constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz
 constexpr float kFreezeThresholdMs = 250.0f; // stall claro, nao so reprojection
 constexpr float kVideoStallThresholdMs = 500.0f; // decode/rede travado (ver AppState.msSinceLastVideoFrame)
 
-// ScreenMode espelha exatamente o enum do caminho GLES (vr_player_app.cpp:370-381)
-enum class ScreenMode : uint32_t {
-    Flat2D      = 0,
-    SBS         = 1,
-    SBSHalf     = 2,
-    OU          = 3,
-    OUHalf      = 4,
-    Sphere360   = 5,
-    Sphere180   = 6,
-    Sphere360SBS = 7,
-    Sphere360OU = 8,
-    Vr180SBS    = 9,
-};
-
-// Debug: nome legivel do ScreenMode pro logcat.
-static const char* ScreenModeName(ScreenMode mode) {
-    switch (mode) {
-        case ScreenMode::Flat2D: return "Flat2D";
-        case ScreenMode::SBS: return "SBS";
-        case ScreenMode::SBSHalf: return "SBSHalf";
-        case ScreenMode::OU: return "OU";
-        case ScreenMode::OUHalf: return "OUHalf";
-        case ScreenMode::Sphere360: return "Sphere360";
-        case ScreenMode::Sphere180: return "Sphere180";
-        case ScreenMode::Sphere360SBS: return "Sphere360SBS";
-        case ScreenMode::Sphere360OU: return "Sphere360OU";
-        case ScreenMode::Vr180SBS: return "Vr180SBS";
-        default: return "Desconhecido";
-    }
-}
-
-static bool IsSphereMode(ScreenMode mode) {
-    switch (mode) {
-        case ScreenMode::Sphere360:
-        case ScreenMode::Sphere180:
-        case ScreenMode::Sphere360SBS:
-        case ScreenMode::Sphere360OU:
-        case ScreenMode::Vr180SBS:
-            return true;
-        default:
-            return false;
-    }
-}
-
-static bool IsFlatStereoMode(ScreenMode mode) {
-    switch (mode) {
-        case ScreenMode::SBS:
-        case ScreenMode::SBSHalf:
-        case ScreenMode::OU:
-        case ScreenMode::OUHalf:
-            return true;
-        default:
-            return false;
-    }
-}
+// ScreenMode e helpers estao centralizados em screen_mode.h
 
 // Parâmetros de estereo para o push constant do stereo.vert/frag
 struct StereoParams {
@@ -282,6 +311,8 @@ struct VideoFrame {
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkImageView imageView = VK_NULL_HANDLE;
     VkDescriptorSet descriptorSet = VK_NULL_HANDLE; // alocado do pool
+    uint32_t width = 0;
+    uint32_t height = 0;
     // Carimbo de uso pra evicao LRU de verdade (ver AppState::videoFrameCacheClock
     // e GetOrImportVideoFrame) — a evicao anterior usava unordered_map::begin(),
     // que e um bucket arbitrario do hash, nao o mais antigo de verdade.
@@ -297,6 +328,20 @@ struct AppState {
     XrSpace localSpace = XR_NULL_HANDLE;
     std::array<EyeSwapchain, kEyeCount> eyes;
 
+    // Fase 0.4 T5: Foveated Rendering (XR_FB_foveation) — ver ApplyFoveation.
+    PFN_xrCreateFoveationProfileFB pfnCreateFoveationProfileFB = nullptr;
+    PFN_xrDestroyFoveationProfileFB pfnDestroyFoveationProfileFB = nullptr;
+    PFN_xrUpdateSwapchainFB pfnUpdateSwapchainFB = nullptr;
+    XrFoveationProfileFB foveationProfile = XR_NULL_HANDLE;
+    bool foveationCurrentlyApplied = false; // ultimo estado efetivamente aplicado aos swapchains
+
+    // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006)
+    PFN_xrRequestDisplayRefreshRateFB pfnRequestDisplayRefreshRateFB = nullptr;
+    uint32_t thermalLevel = 0;
+    float renderResolutionScale = 1.0f;
+    float thermalPollAccumMs = 0.0f;
+    static constexpr float kThermalPollIntervalMs = 1000.0f;
+
     VkInstance vkInstance = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT vkDebugMessenger = VK_NULL_HANDLE; // ver CreateVulkanInstanceAndDevice
     VkPhysicalDevice vkPhysicalDevice = VK_NULL_HANDLE;
@@ -304,8 +349,24 @@ struct AppState {
     uint32_t vkQueueFamilyIndex = UINT32_MAX;
     VkQueue vkQueue = VK_NULL_HANDLE;
     bool supportsAnisotropy = false; // ver CreateVulkanInstanceAndDevice
+    static constexpr uint32_t kMaxFramesInFlight = 2;
+    uint32_t currentFrameIndex = 0;
     VkCommandPool vkCommandPool = VK_NULL_HANDLE;
-    VkCommandBuffer vkCommandBuffer = VK_NULL_HANDLE;
+    VkCommandBuffer commandBuffers[kMaxFramesInFlight][kEyeCount] = {};
+    VkFence inFlightFences[kMaxFramesInFlight] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkQueryPool queryPool = VK_NULL_HANDLE;
+    float timestampPeriod = 0.0f;
+    float lastGpuTimeMs = 0.0f;
+    float smoothedGpuTimeMs = 0.0f;
+
+    // Upscaling de vídeo (Vulkan MQSR / SGSR1)
+    uint32_t upscalingMode = 0; // 0=Off, 1=Quality, 2=Performance, 3=Auto
+    float upscalingSharpness = 0.0f;
+    bool upscalingEnabled = false;
+    bool supportsMqsr = false;
+    bool supportsPerfMetrics = false;
+    uint32_t videoWidth = 0;
+    uint32_t videoHeight = 0;
     VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;
 
     // Estagio 2 — pipeline do quad estatico (fallback sem frame de video).
@@ -357,6 +418,28 @@ struct AppState {
     VkDescriptorSet controlsDescriptorSet = VK_NULL_HANDLE;
     float controlsAlpha = 1.0f;
     bool controlsHasFrame = false;
+
+    // Painel Modal frontal flutuante (3o Quad, kModalTexWidth x kModalTexHeight)
+    AImageReader* modalImageReader = nullptr;
+    VkImage modalImage = VK_NULL_HANDLE;
+    VkDeviceMemory modalImageMemory = VK_NULL_HANDLE;
+    VkImageView modalImageView = VK_NULL_HANDLE;
+    VkDescriptorSet modalDescriptorSet = VK_NULL_HANDLE;
+    float modalAlpha = 0.0f;
+    bool modalHasFrame = false;
+    bool modalActive = false;
+
+    // R-01 & R-06: Swapchains OpenXR dedicados para composição de painéis 2D como XrCompositionLayerQuad
+    struct ImportedUiHwb {
+        VkImage image = VK_NULL_HANDLE;
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+    };
+    std::unordered_map<AHardwareBuffer*, ImportedUiHwb> uiHwbCache;
+    EyeSwapchain uiPanelSwapchain;
+    EyeSwapchain controlsPanelSwapchain;
+    EyeSwapchain modalPanelSwapchain;
+    EyeSwapchain cursorSwapchain;
+    VkCommandBuffer uiCopyCmd = VK_NULL_HANDLE;
 
     // Preview de arrasto sobre o quad do video (T-seek-ux): reaproveita
     // uiPipeline/uiPipelineLayout/uiSampler (RGBA8 comum, sem YCbCr) — so
@@ -430,6 +513,25 @@ struct AppState {
     // Endpoint do beam: origem no controller, destino no alvo/quad
     float beamStart[3] = {0, 0, 0};
     float beamEnd[3]   = {0, 0, -2};
+
+    // Estagio 6 — pipeline de legendas MSDF (T9.3)
+    VkPipelineLayout subtitlePipelineLayout = VK_NULL_HANDLE;
+    VkPipeline subtitlePipeline = VK_NULL_HANDLE;
+    VkSampler subtitleSampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout subtitleDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool subtitleDescriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSet subtitleDescriptorSet = VK_NULL_HANDLE;
+    VkImage subtitleImage = VK_NULL_HANDLE;
+    VkDeviceMemory subtitleImageMemory = VK_NULL_HANDLE;
+    VkImageView subtitleImageView = VK_NULL_HANDLE;
+    VkBuffer subtitleVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory subtitleVertexMemory = VK_NULL_HANDLE;
+    VkBuffer subtitleIndexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory subtitleIndexMemory = VK_NULL_HANDLE;
+    uint32_t subtitleIndexCount = 0;
+    std::string lastSubtitleText = "";
+    float subtitleScale = 1.0f;
+    XrVector3f lazyFollowPos = {0.0f, 1.1f, -2.2f};
 
     // Overlay de feedback (paridade com o GLES): um unico vertex buffer com as
     // formas concatenadas, o desenho so escolhe o intervalo do kind ativo.
@@ -542,6 +644,13 @@ struct AppState {
     uint64_t lastDecodedFrameCount = 0;
     float decodedFps = 0.0f;
 
+    // Fase 0.4 T5: mesma cadencia ~1Hz acima, pra checar se
+    // get_foveation_enabled() mudou desde a ultima vez (ApplyFoveation, ver
+    // AppState.foveationCurrentlyApplied) — xrUpdateSwapchainFB nao e uma
+    // operacao de frame, checar a cada frame seria desperdicio.
+    static constexpr float kFoveationPollIntervalMs = 1000.0f;
+    float foveationPollAccumMs = 0.0f;
+
     // Instrumentacao adicional desta sessao (docs/NETWORK-IO-PERFORMANCE.md),
     // amostrada na MESMA janela de 1Hz que decodedFps acima. outputFps e o
     // ground truth do MediaCodec (TODO buffer de saida, nao so os
@@ -572,7 +681,9 @@ struct QuadPushConstants {
 };
 
 struct VideoPushConstants {
-    Mat4 mvp;
+    Mat4  mvp;
+    float sharpness;
+    int   upscalingMode;
 };
 
 // Estagio 4: push constant para UI (MVP + alpha)
@@ -582,13 +693,15 @@ struct UiPushConstants {
     float _pad[3];
 };
 
-// Estagio 5: push constant para estereo/esfera (MVP + parametros de olho)
+// Estagio 5: push constant para estereo/esfera (MVP + parametros de olho + upscaling)
 struct StereoPushConstants {
-    Mat4 mvp;
-    int  eyeIndex;
-    int  swapEyes;
-    int  stereoLayout;
-    int  polar180;
+    Mat4  mvp;
+    int   eyeIndex;
+    int   swapEyes;
+    int   stereoLayout;
+    int   polar180;
+    float sharpness;
+    int   upscalingMode;
 };
 
 struct BeamPushConstants {
@@ -616,19 +729,57 @@ void InitializeOpenXrLoader(AppState& state) {
 }
 
 void CreateXrInstance(AppState& state) {
-    const char* extensions[] = {XR_KHR_VULKAN_ENABLE_EXTENSION_NAME};
+    uint32_t extCount = 0;
+    OXR(xrEnumerateInstanceExtensionProperties(nullptr, 0, &extCount, nullptr));
+    std::vector<XrExtensionProperties> extProps(extCount, {XR_TYPE_EXTENSION_PROPERTIES});
+    OXR(xrEnumerateInstanceExtensionProperties(nullptr, extCount, &extCount, extProps.data()));
 
+    auto isExtensionSupported = [&](const char* name) {
+        for (const auto& prop : extProps) {
+            if (std::strcmp(prop.extensionName, name) == 0) return true;
+        }
+        return false;
+    };
+
+    std::vector<const char*> extensions;
+    extensions.push_back(XR_KHR_VULKAN_ENABLE_EXTENSION_NAME);
+    if (isExtensionSupported(XR_FB_FOVEATION_EXTENSION_NAME))
+        extensions.push_back(XR_FB_FOVEATION_EXTENSION_NAME);
+    if (isExtensionSupported(XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME))
+        extensions.push_back(XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME);
+    if (isExtensionSupported(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME))
+        extensions.push_back(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME);
+    if (isExtensionSupported(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME))
+        extensions.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+
+    // F2: Meta Quest Super Resolution (XR_FB_composition_layer_settings)
+    state.supportsMqsr = isExtensionSupported(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
+    if (state.supportsMqsr) {
+        extensions.push_back(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
+        LOGI("OpenXR: Extensão MQSR (XR_FB_composition_layer_settings) detectada e habilitada");
+    } else {
+        LOGI("OpenXR: Extensão MQSR nao encontrada neste runtime");
+    }
+
+    // F0: Performance Metrics
+    state.supportsPerfMetrics = isExtensionSupported(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME);
+    if (state.supportsPerfMetrics) {
+        extensions.push_back(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME);
+        LOGI("OpenXR: Extensão XR_META_performance_metrics detectada e habilitada");
+    }
+
+    // Este e o nome pelo qual o runtime OpenXR do Horizon OS conhece o app
     XrApplicationInfo appInfo{};
-    std::strncpy(appInfo.applicationName, "VRPlayerVulkanStage1", XR_MAX_APPLICATION_NAME_SIZE - 1);
+    std::strncpy(appInfo.applicationName, "tucaVR", XR_MAX_APPLICATION_NAME_SIZE - 1);
     appInfo.applicationVersion = 1;
-    std::strncpy(appInfo.engineName, "VRPlayer", XR_MAX_ENGINE_NAME_SIZE - 1);
+    std::strncpy(appInfo.engineName, "tucaVR", XR_MAX_ENGINE_NAME_SIZE - 1);
     appInfo.engineVersion = 1;
     appInfo.apiVersion = XR_CURRENT_API_VERSION;
 
     XrInstanceCreateInfo createInfo{XR_TYPE_INSTANCE_CREATE_INFO};
     createInfo.applicationInfo = appInfo;
-    createInfo.enabledExtensionCount = static_cast<uint32_t>(std::size(extensions));
-    createInfo.enabledExtensionNames = extensions;
+    createInfo.enabledExtensionCount = static_cast<uint32_t>(extensions.size());
+    createInfo.enabledExtensionNames = extensions.data();
 
     OXR(xrCreateInstance(&createInfo, &state.instance));
 }
@@ -702,12 +853,11 @@ void CreateVulkanInstanceAndDevice(AppState& state) {
     addIfMissing(instanceExtStrings, VK_KHR_EXTERNAL_MEMORY_CAPABILITIES_EXTENSION_NAME);
     addIfMissing(instanceExtStrings, VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME);
 
-    // Validation layers (opcional, ver docs/DEBUGGING.md) — o NDK nao vem
-    // com o .so (foi removido dos pacotes distribuidos ha um tempo);
-    // precisa ser colocado manualmente em
-    // app/src/main/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so.
-    // vkEnumerateInstanceLayerProperties torna isto um no-op silencioso —
-    // seguro chamar em qualquer device/build, com ou sem o .so presente.
+    std::vector<const char*> enabledLayers;
+    bool hasDebugUtils = false;
+#if defined(ENABLE_VK_VALIDATION_LAYERS)
+    // Validation layers (opcional, ver docs/DEBUGGING.md) — habilitado apenas
+    // via flag de build -PenableVulkanValidation=true.
     uint32_t layerCount = 0;
     vkEnumerateInstanceLayerProperties(&layerCount, nullptr);
     std::vector<VkLayerProperties> availableLayers(layerCount);
@@ -720,8 +870,6 @@ void CreateVulkanInstanceAndDevice(AppState& state) {
         }
     }
 
-    std::vector<const char*> enabledLayers;
-    bool hasDebugUtils = false;
     if (hasValidationLayer) {
         enabledLayers.push_back("VK_LAYER_KHRONOS_validation");
 
@@ -743,14 +891,18 @@ void CreateVulkanInstanceAndDevice(AppState& state) {
     } else {
         LOGI("Vulkan: VK_LAYER_KHRONOS_validation nao encontrada — sem validation layers (ver docs/DEBUGGING.md)");
     }
+#else
+    LOGI("Vulkan: Validation layers desabilitadas por configuracao de build (use -PenableVulkanValidation=true para ativar)");
+#endif
 
     std::vector<const char*> instanceExtPtrs;
     for (const auto& s : instanceExtStrings) instanceExtPtrs.push_back(s.c_str());
 
     VkApplicationInfo vkAppInfo{VK_STRUCTURE_TYPE_APPLICATION_INFO};
-    vkAppInfo.pApplicationName = "VRPlayerVulkanStage3";
+    // Idem: "VRPlayerVulkanStage3" era sobra do estagio 3 da migracao Vulkan.
+    vkAppInfo.pApplicationName = "tucaVR";
     vkAppInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
-    vkAppInfo.pEngineName = "VRPlayer";
+    vkAppInfo.pEngineName = "tucaVR";
     vkAppInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
     vkAppInfo.apiVersion = VK_API_VERSION_1_1;
 
@@ -784,6 +936,11 @@ void CreateVulkanInstanceAndDevice(AppState& state) {
     }
 
     OXR(pfnGetGraphicsDevice(state.instance, state.systemId, state.vkInstance, &state.vkPhysicalDevice));
+
+    VkPhysicalDeviceProperties physProps{};
+    vkGetPhysicalDeviceProperties(state.vkPhysicalDevice, &physProps);
+    state.timestampPeriod = physProps.limits.timestampPeriod;
+    LOGI("Vulkan: Dispositivo GPU '%s', timestampPeriod = %.3f ns", physProps.deviceName, state.timestampPeriod);
 
     uint32_t deviceExtSize = 0;
     OXR(pfnGetDeviceExtensions(state.instance, state.systemId, 0, &deviceExtSize, nullptr));
@@ -901,10 +1058,21 @@ void CreateSwapchains(AppState& state) {
     OXR(xrEnumerateSwapchainFormats(state.session, formatCount, &formatCount, formats.data()));
 
     int64_t chosenFormat = 0;
+    // R-05: xrEnumerateSwapchainFormats devolve a lista em ordem de preferência
+    // do runtime (Meta lista sRGB primeiro). Preferimos formatos sRGB, caindo
+    // para UNORM apenas como fallback.
     for (int64_t format : formats) {
-        if (format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_B8G8R8A8_UNORM) {
+        if (format == VK_FORMAT_R8G8B8A8_SRGB || format == VK_FORMAT_B8G8R8A8_SRGB) {
             chosenFormat = format;
             break;
+        }
+    }
+    if (chosenFormat == 0) {
+        for (int64_t format : formats) {
+            if (format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_B8G8R8A8_UNORM) {
+                chosenFormat = format;
+                break;
+            }
         }
     }
     if (chosenFormat == 0) chosenFormat = formats.front();
@@ -917,7 +1085,7 @@ void CreateSwapchains(AppState& state) {
         eyeChain.height = static_cast<int32_t>(views[eye].recommendedImageRectHeight);
 
         XrSwapchainCreateInfo createInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-        createInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+        createInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT | 0x00000008; // 0x8 = XR_SWAPCHAIN_USAGE_TRANSFER_SRC_BIT (para captura de frame N4)
         createInfo.format = chosenFormat;
         createInfo.sampleCount = 1;
         createInfo.width = static_cast<uint32_t>(eyeChain.width);
@@ -934,6 +1102,86 @@ void CreateSwapchains(AppState& state) {
             eyeChain.handle, imageCount, &imageCount,
             reinterpret_cast<XrSwapchainImageBaseHeader*>(eyeChain.images.data())));
     }
+
+    // R-01: Swapchains OpenXR dedicados para composição de painéis 2D como XrCompositionLayerQuad
+    auto createPanelChain = [&](EyeSwapchain& chain, uint32_t width, uint32_t height) {
+        chain.width = static_cast<int32_t>(width);
+        chain.height = static_cast<int32_t>(height);
+        XrSwapchainCreateInfo pInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+        pInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT |
+                           XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
+                           0x00000010; // XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT
+        pInfo.format = chosenFormat;
+        pInfo.sampleCount = 1;
+        pInfo.width = width;
+        pInfo.height = height;
+        pInfo.faceCount = 1;
+        pInfo.arraySize = 1;
+        pInfo.mipCount = 1;
+        OXR(xrCreateSwapchain(state.session, &pInfo, &chain.handle));
+
+        uint32_t imgCount = 0;
+        OXR(xrEnumerateSwapchainImages(chain.handle, 0, &imgCount, nullptr));
+        chain.images.assign(imgCount, XrSwapchainImageVulkanKHR{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
+        OXR(xrEnumerateSwapchainImages(
+            chain.handle, imgCount, &imgCount,
+            reinterpret_cast<XrSwapchainImageBaseHeader*>(chain.images.data())));
+    };
+
+    createPanelChain(state.uiPanelSwapchain, kUiTexWidth, kUiTexHeight);
+    createPanelChain(state.controlsPanelSwapchain, kControlsTexWidth, kControlsTexHeight);
+    createPanelChain(state.modalPanelSwapchain, kModalTexWidth, kModalTexHeight);
+    createPanelChain(state.cursorSwapchain, 64, 64);
+}
+
+// Fase 0.4 T5: Foveated Rendering fixo via XR_FB_foveation — NAO e Vulkan
+// VRS. E aplicado pelo COMPOSITOR do runtime OpenXR (ver aviso CAUTION da
+// secao 5 em docs/phases/PHASE-0.4-ADVANCED.md: foveacao manual no shader
+// causaria foveacao dupla). Chamada tanto na inicializacao quanto sempre que
+// get_foveation_enabled() muda de valor (polling de baixa frequencia no loop
+// principal — xrUpdateSwapchainFB troca estado do swapchain, nao e uma
+// operacao de frame). Nivel unico MEDIUM quando ligado, `dynamic =
+// LEVEL_ENABLED_FB` deixa o compositor ajustar a intensidade sozinho — nao
+// ha AdaptiveQualityManager/ThermalMonitor neste projeto ainda pra guiar
+// multiplos niveis (fase 0.2 secao 14, task separada).
+void ApplyFoveation(AppState& state, bool enabled) {
+    if (state.pfnCreateFoveationProfileFB == nullptr) {
+        state.pfnCreateFoveationProfileFB =
+            LoadXrFunction<PFN_xrCreateFoveationProfileFB>(state.instance, "xrCreateFoveationProfileFB");
+        state.pfnDestroyFoveationProfileFB =
+            LoadXrFunction<PFN_xrDestroyFoveationProfileFB>(state.instance, "xrDestroyFoveationProfileFB");
+        state.pfnUpdateSwapchainFB =
+            LoadXrFunction<PFN_xrUpdateSwapchainFB>(state.instance, "xrUpdateSwapchainFB");
+    }
+
+    XrFoveationLevelProfileCreateInfoFB levelInfo{XR_TYPE_FOVEATION_LEVEL_PROFILE_CREATE_INFO_FB};
+    levelInfo.level = enabled ? XR_FOVEATION_LEVEL_MEDIUM_FB : XR_FOVEATION_LEVEL_NONE_FB;
+    levelInfo.verticalOffset = 0.0f;
+    levelInfo.dynamic = XR_FOVEATION_DYNAMIC_LEVEL_ENABLED_FB;
+
+    XrFoveationProfileCreateInfoFB profileInfo{XR_TYPE_FOVEATION_PROFILE_CREATE_INFO_FB};
+    profileInfo.next = &levelInfo;
+
+    XrFoveationProfileFB newProfile = XR_NULL_HANDLE;
+    OXR(state.pfnCreateFoveationProfileFB(state.session, &profileInfo, &newProfile));
+
+    XrSwapchainStateFoveationFB swapchainState{XR_TYPE_SWAPCHAIN_STATE_FOVEATION_FB};
+    swapchainState.flags = 0;
+    swapchainState.profile = newProfile;
+    for (auto& eyeChain : state.eyes) {
+        OXR(state.pfnUpdateSwapchainFB(
+            eyeChain.handle, reinterpret_cast<XrSwapchainStateBaseHeaderFB*>(&swapchainState)));
+    }
+
+    // So destroi o profile ANTERIOR depois dos swapchains ja apontarem pro
+    // novo — nunca ha uma janela em que um swapchain referencia um profile
+    // destruido.
+    if (state.foveationProfile != XR_NULL_HANDLE) {
+        state.pfnDestroyFoveationProfileFB(state.foveationProfile);
+    }
+    state.foveationProfile = newProfile;
+    state.foveationCurrentlyApplied = enabled;
+    LOGI("Foveated Rendering: %s", enabled ? "ativado (MEDIUM, dynamic)" : "desativado");
 }
 
 // Um subpass, um color attachment (o proprio swapchain image), sem depth —
@@ -1283,7 +1531,7 @@ void CreateYcbcrAndVideoPipeline(AppState& state) {
 
     // --- Pipeline Layout (apenas push constant MVP, sem color) ---
     VkPushConstantRange videoPushRange{};
-    videoPushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    videoPushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     videoPushRange.offset = 0;
     videoPushRange.size = sizeof(VideoPushConstants);
 
@@ -1443,103 +1691,274 @@ static void CreateUiImage(AppState& state, uint32_t width, uint32_t height,
     VKR(vkCreateImageView(state.vkDevice, &viewInfo, nullptr, &outView));
 }
 
-// Atualiza uma VkImage de UI a partir de um AHardwareBuffer (RGBA8888).
-// Usa blit via staging buffer (a forma mais portavel — sem extensoes EGL).
-// Chamado a cada frame que um novo AImage esta disponivel via AImageReader.
-static void UpdateUiImageFromHwb(AppState& state, AHardwareBuffer* hwb, VkImage dstImage,
-                                  uint32_t width, uint32_t height) {
-    // Lockear o AHardwareBuffer para leitura da CPU
-    void* src = nullptr;
-    AHardwareBuffer_lock(hwb, AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, -1, nullptr, &src);
-    if (!src) return;
+// R-01 & R-06: Atualiza o swapchain OpenXR do painel a partir de um AHardwareBuffer
+// usando importacao direta como VkImage externa e copia por GPU (zero-copy),
+// eliminando lock de CPU, memcpy e vkQueueWaitIdle.
+static void UpdatePanelSwapchainFromHwb(AppState& state, EyeSwapchain& panelChain,
+                                       AHardwareBuffer* hwb, uint32_t width, uint32_t height) {
+    if (!hwb || panelChain.handle == XR_NULL_HANDLE || state.uiCopyCmd == VK_NULL_HANDLE) return;
 
-    AHardwareBuffer_Desc desc{};
-    AHardwareBuffer_describe(hwb, &desc);
-    const uint32_t rowBytes = desc.stride * 4; // RGBA8888
+    // 1. Obter ou importar VkImage vinculada ao AHardwareBuffer
+    auto it = state.uiHwbCache.find(hwb);
+    if (it == state.uiHwbCache.end()) {
+        auto pfnGetProperties = reinterpret_cast<PFN_vkGetAndroidHardwareBufferPropertiesANDROID>(
+            vkGetDeviceProcAddr(state.vkDevice, "vkGetAndroidHardwareBufferPropertiesANDROID"));
+        if (!pfnGetProperties) {
+            LOGE("vkGetAndroidHardwareBufferPropertiesANDROID nao disponivel para UI");
+            return;
+        }
 
-    // Criar staging buffer
-    const VkDeviceSize bufSize = (VkDeviceSize)rowBytes * height;
+        VkAndroidHardwareBufferFormatPropertiesANDROID formatProps{
+            VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_FORMAT_PROPERTIES_ANDROID};
+        VkAndroidHardwareBufferPropertiesANDROID hwbProps{
+            VK_STRUCTURE_TYPE_ANDROID_HARDWARE_BUFFER_PROPERTIES_ANDROID};
+        hwbProps.pNext = &formatProps;
+
+        if (pfnGetProperties(state.vkDevice, hwb, &hwbProps) != VK_SUCCESS) {
+            LOGE("vkGetAndroidHardwareBufferPropertiesANDROID falhou para UI");
+            return;
+        }
+
+        VkExternalMemoryImageCreateInfo extMemInfo{
+            VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
+        extMemInfo.handleTypes =
+            VK_EXTERNAL_MEMORY_HANDLE_TYPE_ANDROID_HARDWARE_BUFFER_BIT_ANDROID;
+
+        AHardwareBuffer_Desc hwbDesc{};
+        AHardwareBuffer_describe(hwb, &hwbDesc);
+
+        VkImageCreateInfo imgInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        imgInfo.pNext = &extMemInfo;
+        imgInfo.imageType = VK_IMAGE_TYPE_2D;
+        imgInfo.format = (formatProps.format != VK_FORMAT_UNDEFINED) ? formatProps.format : VK_FORMAT_R8G8B8A8_UNORM;
+        imgInfo.extent = {hwbDesc.width, hwbDesc.height, 1};
+        imgInfo.mipLevels = 1;
+        imgInfo.arrayLayers = 1;
+        imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+        imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+        AppState::ImportedUiHwb imported{};
+        if (vkCreateImage(state.vkDevice, &imgInfo, nullptr, &imported.image) != VK_SUCCESS) {
+            LOGE("vkCreateImage para UI AHardwareBuffer falhou");
+            return;
+        }
+
+        VkImportAndroidHardwareBufferInfoANDROID importInfo{
+            VK_STRUCTURE_TYPE_IMPORT_ANDROID_HARDWARE_BUFFER_INFO_ANDROID};
+        importInfo.buffer = hwb;
+
+        VkMemoryDedicatedAllocateInfo dedicatedAlloc{VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO};
+        dedicatedAlloc.pNext = &importInfo;
+        dedicatedAlloc.image = imported.image;
+
+        VkMemoryAllocateInfo memAlloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        memAlloc.pNext = &dedicatedAlloc;
+        memAlloc.allocationSize = hwbProps.allocationSize;
+        memAlloc.memoryTypeIndex = FindMemoryType(state, hwbProps.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+        if (vkAllocateMemory(state.vkDevice, &memAlloc, nullptr, &imported.memory) != VK_SUCCESS) {
+            LOGE("vkAllocateMemory para UI AHardwareBuffer falhou");
+            vkDestroyImage(state.vkDevice, imported.image, nullptr);
+            return;
+        }
+        vkBindImageMemory(state.vkDevice, imported.image, imported.memory, 0);
+        state.uiHwbCache[hwb] = imported;
+        it = state.uiHwbCache.find(hwb);
+    }
+
+    VkImage srcImage = it->second.image;
+
+    // 2. Adquirir próxima imagem do swapchain OpenXR do painel
+    XrSwapchainImageAcquireInfo acqInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    uint32_t imageIndex = 0;
+    if (xrAcquireSwapchainImage(panelChain.handle, &acqInfo, &imageIndex) != XR_SUCCESS) {
+        LOGE("xrAcquireSwapchainImage falhou para painel de UI");
+        return;
+    }
+
+    XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    waitInfo.timeout = XR_INFINITE_DURATION;
+    if (xrWaitSwapchainImage(panelChain.handle, &waitInfo) != XR_SUCCESS) {
+        LOGE("xrWaitSwapchainImage falhou para painel de UI");
+        return;
+    }
+
+    VkImage dstImage = panelChain.images[imageIndex].image;
+
+    // 3. Gravar cópia direta GPU -> GPU sem bloqueio de CPU (R-06)
+    VKR(vkResetCommandBuffer(state.uiCopyCmd, 0));
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VKR(vkBeginCommandBuffer(state.uiCopyCmd, &beginInfo));
+
+    VkImageMemoryBarrier barriers[2]{};
+    barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barriers[0].srcAccessMask = 0;
+    barriers[0].dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barriers[0].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barriers[0].newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barriers[0].image = srcImage;
+    barriers[0].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    barriers[1].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barriers[1].srcAccessMask = 0;
+    barriers[1].dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barriers[1].oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barriers[1].newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barriers[1].image = dstImage;
+    barriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    vkCmdPipelineBarrier(state.uiCopyCmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, barriers);
+
+    VkImageCopy region{};
+    region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.extent = {width, height, 1};
+    vkCmdCopyImage(state.uiCopyCmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                   dstImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    VkImageMemoryBarrier dstBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    dstBarrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    dstBarrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    dstBarrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+    dstBarrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    dstBarrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    dstBarrier.image = dstImage;
+    dstBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    vkCmdPipelineBarrier(state.uiCopyCmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &dstBarrier);
+
+    VKR(vkEndCommandBuffer(state.uiCopyCmd));
+
+    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &state.uiCopyCmd;
+    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
+
+    // D-01 fix: Aguardar conclusão da cópia GPU antes de liberar o swapchain
+    // para o compositor OpenXR. Sem este wait, o compositor pode ler a imagem
+    // parcialmente escrita, causando blocos visuais e desaparecimento dos painéis.
+    // Custo: ~0.1-0.5ms por frame (aceitável no budget de 11.1ms a 90Hz).
+    VKR(vkQueueWaitIdle(state.vkQueue));
+
+    // 4. Liberar swapchain para o compositor OpenXR
+    XrSwapchainImageReleaseInfo relInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    OXR(xrReleaseSwapchainImage(panelChain.handle, &relInfo));
+}
+
+// Inicializa a imagem do retículo laser uma única vez no swapchain dedicado
+static void InitCursorSwapchain(AppState& state) {
+    if (state.cursorSwapchain.handle == XR_NULL_HANDLE || state.uiCopyCmd == VK_NULL_HANDLE) return;
+
+    XrSwapchainImageAcquireInfo acq{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    uint32_t imgIndex = 0;
+    if (xrAcquireSwapchainImage(state.cursorSwapchain.handle, &acq, &imgIndex) != XR_SUCCESS) return;
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    wait.timeout = XR_INFINITE_DURATION;
+    if (xrWaitSwapchainImage(state.cursorSwapchain.handle, &wait) != XR_SUCCESS) return;
+
+    constexpr uint32_t kSize = 64;
+    std::vector<uint32_t> pixels(kSize * kSize, 0);
+    const float center = (kSize - 1) * 0.5f;
+    const float innerR = 8.0f;
+    const float ringR1 = 18.0f;
+    const float ringR2 = 24.0f;
+
+    for (uint32_t y = 0; y < kSize; y++) {
+        for (uint32_t x = 0; x < kSize; x++) {
+            float dx = static_cast<float>(x) - center;
+            float dy = static_cast<float>(y) - center;
+            float dist = sqrtf(dx * dx + dy * dy);
+
+            if (dist <= innerR) {
+                float a = (dist > (innerR - 1.0f)) ? (innerR - dist) : 1.0f;
+                uint8_t alpha = static_cast<uint8_t>(a * 255.0f);
+                pixels[y * kSize + x] = (alpha << 24) | (0xFF << 16) | (0xD0 << 8) | 0x00;
+            } else if (dist >= ringR1 && dist <= (ringR2 + 1.0f)) {
+                float a = 1.0f;
+                if (dist < (ringR1 + 1.0f)) a = dist - ringR1;
+                else if (dist > ringR2) a = (ringR2 + 1.0f) - dist;
+                float clamped = fmaxf(0.0f, fminf(1.0f, a));
+                uint8_t alpha = static_cast<uint8_t>(clamped * 230.0f);
+                pixels[y * kSize + x] = (alpha << 24) | (0xFF << 16) | (0xFF << 8) | 0xFF;
+            }
+        }
+    }
+
+    const VkDeviceSize bufSize = (VkDeviceSize)kSize * kSize * 4;
     VkBuffer stagingBuf;
     VkDeviceMemory stagingMem;
 
     VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    bufInfo.size  = bufSize;
+    bufInfo.size = bufSize;
     bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
     VKR(vkCreateBuffer(state.vkDevice, &bufInfo, nullptr, &stagingBuf));
 
     VkMemoryRequirements memReqs;
     vkGetBufferMemoryRequirements(state.vkDevice, stagingBuf, &memReqs);
-    VkPhysicalDeviceMemoryProperties memProps;
-    vkGetPhysicalDeviceMemoryProperties(state.vkPhysicalDevice, &memProps);
-    uint32_t memTypeIdx = UINT32_MAX;
-    const auto hostVisible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
-    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
-        if ((memReqs.memoryTypeBits & (1u << i)) &&
-            ((memProps.memoryTypes[i].propertyFlags & hostVisible) == hostVisible)) {
-            memTypeIdx = i; break;
-        }
-    }
+    uint32_t memTypeIdx = FindMemoryType(state, memReqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
     VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    allocInfo.allocationSize  = memReqs.size;
+    allocInfo.allocationSize = memReqs.size;
     allocInfo.memoryTypeIndex = memTypeIdx;
     VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &stagingMem));
     VKR(vkBindBufferMemory(state.vkDevice, stagingBuf, stagingMem, 0));
 
-    void* dst = nullptr;
-    VKR(vkMapMemory(state.vkDevice, stagingMem, 0, bufSize, 0, &dst));
-    memcpy(dst, src, (size_t)bufSize);
+    void* mapped = nullptr;
+    VKR(vkMapMemory(state.vkDevice, stagingMem, 0, bufSize, 0, &mapped));
+    memcpy(mapped, pixels.data(), (size_t)bufSize);
     vkUnmapMemory(state.vkDevice, stagingMem);
-    AHardwareBuffer_unlock(hwb, nullptr);
 
-    // Command buffer de upload (one-shot)
-    VkCommandBufferAllocateInfo cbAlloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    cbAlloc.commandPool        = state.vkCommandPool;
-    cbAlloc.level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    cbAlloc.commandBufferCount = 1;
-    VkCommandBuffer cmd;
-    VKR(vkAllocateCommandBuffers(state.vkDevice, &cbAlloc, &cmd));
-
+    VKR(vkResetCommandBuffer(state.uiCopyCmd, 0));
     VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    VKR(vkBeginCommandBuffer(cmd, &beginInfo));
+    VKR(vkBeginCommandBuffer(state.uiCopyCmd, &beginInfo));
 
-    // UNDEFINED -> TRANSFER_DST
+    VkImage cursorImg = state.cursorSwapchain.images[imgIndex].image;
+
     VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     barrier.srcAccessMask = 0;
     barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier.image = dstImage;
+    barrier.image = cursorImg;
     barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+    vkCmdPipelineBarrier(state.uiCopyCmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
     VkBufferImageCopy region{};
-    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    region.imageSubresource.layerCount = 1;
-    region.imageExtent = {width, height, 1};
-    region.bufferRowLength = desc.stride; // <--- VITAL: AHardwareBuffer can have padded stride!
-    vkCmdCopyBufferToImage(cmd, stagingBuf, dstImage,
-        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {kSize, kSize, 1};
+    vkCmdCopyBufferToImage(state.uiCopyCmd, stagingBuf, cursorImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    // TRANSFER_DST -> SHADER_READ_ONLY
     barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
     barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    vkCmdPipelineBarrier(state.uiCopyCmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
 
-    VKR(vkEndCommandBuffer(cmd));
+    VKR(vkEndCommandBuffer(state.uiCopyCmd));
+
     VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &cmd;
+    submitInfo.pCommandBuffers = &state.uiCopyCmd;
     VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
     VKR(vkQueueWaitIdle(state.vkQueue));
 
-    vkFreeCommandBuffers(state.vkDevice, state.vkCommandPool, 1, &cmd);
     vkDestroyBuffer(state.vkDevice, stagingBuf, nullptr);
     vkFreeMemory(state.vkDevice, stagingMem, nullptr);
+
+    XrSwapchainImageReleaseInfo rel{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    OXR(xrReleaseSwapchainImage(state.cursorSwapchain.handle, &rel));
 }
 
 // Mesma logica de UpdateUiImageFromHwb, mas a fonte e um buffer de bytes RGBA
@@ -1708,11 +2127,11 @@ void CreateUiPipeline(AppState& state, android_app* app) {
     dsLayout.pBindings    = &binding;
     VKR(vkCreateDescriptorSetLayout(state.vkDevice, &dsLayout, nullptr, &state.uiDescriptorSetLayout));
 
-    // Pool para 2 sets (ui + controls)
-    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    // Pool para 3 sets (ui + controls + modal)
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 3};
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
-    poolInfo.maxSets       = 2;
+    poolInfo.maxSets       = 3;
     poolInfo.poolSizeCount = 1;
     poolInfo.pPoolSizes    = &poolSize;
     VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.uiDescriptorPool));
@@ -1810,17 +2229,19 @@ void CreateUiPipeline(AppState& state, android_app* app) {
     vkDestroyShaderModule(state.vkDevice, vertMod, nullptr);
     vkDestroyShaderModule(state.vkDevice, fragMod, nullptr);
 
-    // Alocar VkImages para UI e controles
+    // Alocar VkImages para UI, controles e modal
     CreateUiImage(state, kUiTexWidth, kUiTexHeight, state.uiImage, state.uiImageMemory, state.uiImageView);
     CreateUiImage(state, kControlsTexWidth, kControlsTexHeight, state.controlsImage, state.controlsImageMemory, state.controlsImageView);
+    CreateUiImage(state, kModalTexWidth, kModalTexHeight, state.modalImage, state.modalImageMemory, state.modalImageView);
 
-    // Alocar descriptor sets para UI e controles
+    // Alocar descriptor sets para UI, controles e modal
     VkDescriptorSetAllocateInfo dsAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     dsAlloc.descriptorPool     = state.uiDescriptorPool;
     dsAlloc.descriptorSetCount = 1;
     dsAlloc.pSetLayouts        = &state.uiDescriptorSetLayout;
     VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.uiDescriptorSet));
     VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.controlsDescriptorSet));
+    VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.modalDescriptorSet));
 
     // Atualizar descriptor sets com as image views
     auto writeUiDs = [&](VkDescriptorSet ds, VkImageView view) {
@@ -1838,28 +2259,34 @@ void CreateUiPipeline(AppState& state, android_app* app) {
     };
     writeUiDs(state.uiDescriptorSet, state.uiImageView);
     writeUiDs(state.controlsDescriptorSet, state.controlsImageView);
+    writeUiDs(state.modalDescriptorSet, state.modalImageView);
 
     // Criar AImageReaders com flags GPU_COLOR_OUTPUT para que o VirtualDisplay
     // do Kotlin possa renderizar na Surface (equivale ao GLES: vr_player_app.cpp:870-913).
     // GPU_COLOR_OUTPUT: o Kotlin escreve na Surface via VirtualDisplay/Canvas.
     // GPU_SAMPLED_IMAGE: o shader Vulkan le a textura resultante.
-    // CPU_READ_RARELY: necessario para o UpdateUiImageFromHwb (staging via CPU).
+    // R-06: GPU_COLOR_OUTPUT para escrita do Canvas, GPU_SAMPLED_IMAGE para leitura GPU.
+    // Sem CPU_READ_RARELY para permitir layout nativo de alta performance na GPU.
     media_status_t uiStatus = AImageReader_newWithUsage(
         kUiTexWidth, kUiTexHeight, AIMAGE_FORMAT_RGBA_8888,
         AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
-        AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
-        AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2,
+        AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT, 2,
         &state.uiImageReader);
 
     media_status_t ctrlStatus = AImageReader_newWithUsage(
         kControlsTexWidth, kControlsTexHeight, AIMAGE_FORMAT_RGBA_8888,
         AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
-        AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT |
-        AHARDWAREBUFFER_USAGE_CPU_READ_RARELY, 2,
+        AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT, 2,
         &state.controlsImageReader);
 
+    media_status_t modalStatus = AImageReader_newWithUsage(
+        kModalTexWidth, kModalTexHeight, AIMAGE_FORMAT_RGBA_8888,
+        AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
+        AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT, 2,
+        &state.modalImageReader);
+
     // Wiring JNI: obter ANativeWindow de cada AImageReader, converter para
-    // Surface Java e chamar setupVirtualDisplay / setupControlsVirtualDisplay.
+    // Surface Java e chamar setupVirtualDisplay / setupControlsVirtualDisplay / setupModalVirtualDisplay.
     // Exatamente o mesmo padrao do caminho GLES (vr_player_app.cpp:878-934),
     // so que usando android_app->activity em vez de xrJava do OVRFW.
     if (app && app->activity && app->activity->vm) {
@@ -1883,7 +2310,7 @@ void CreateUiPipeline(AppState& state, android_app* app) {
                     jobject uiSurface = ANativeWindow_toSurface(env, uiWindow);
                     jmethodID setupUI = env->GetStaticMethodID(
                         vrActivityClass, "setupVirtualDisplay",
-                        "(Lcom/vrplayer/VRActivity;Landroid/view/Surface;II)V");
+                        "(Lcom/tucavr/VRActivity;Landroid/view/Surface;II)V");
                     if (setupUI) {
                         env->CallStaticVoidMethod(vrActivityClass, setupUI,
                             activityObj, uiSurface, (jint)kUiTexWidth, (jint)kUiTexHeight);
@@ -1907,7 +2334,7 @@ void CreateUiPipeline(AppState& state, android_app* app) {
                     jobject ctrlSurface = ANativeWindow_toSurface(env, ctrlWindow);
                     jmethodID setupCtrl = env->GetStaticMethodID(
                         vrActivityClass, "setupControlsVirtualDisplay",
-                        "(Lcom/vrplayer/VRActivity;Landroid/view/Surface;II)V");
+                        "(Lcom/tucavr/VRActivity;Landroid/view/Surface;II)V");
                     if (setupCtrl) {
                         env->CallStaticVoidMethod(vrActivityClass, setupCtrl,
                             activityObj, ctrlSurface, (jint)kControlsTexWidth, (jint)kControlsTexHeight);
@@ -1923,6 +2350,30 @@ void CreateUiPipeline(AppState& state, android_app* app) {
                 LOGE("Estagio 4: AImageReader_newWithUsage falhou para controles (status=%d)", ctrlStatus);
             }
 
+            // --- Modal (3o Quad frontal flutuante, kModalTexWidth x kModalTexHeight) ---
+            if (modalStatus == AMEDIA_OK && state.modalImageReader) {
+                ANativeWindow* modalWindow = nullptr;
+                AImageReader_getWindow(state.modalImageReader, &modalWindow);
+                if (modalWindow) {
+                    jobject modalSurface = ANativeWindow_toSurface(env, modalWindow);
+                    jmethodID setupModal = env->GetStaticMethodID(
+                        vrActivityClass, "setupModalVirtualDisplay",
+                        "(Lcom/tucavr/VRActivity;Landroid/view/Surface;II)V");
+                    if (setupModal) {
+                        env->CallStaticVoidMethod(vrActivityClass, setupModal,
+                            activityObj, modalSurface, (jint)kModalTexWidth, (jint)kModalTexHeight);
+                        LOGI("Estagio 4: setupModalVirtualDisplay (%ux%u) chamado com sucesso", kModalTexWidth, kModalTexHeight);
+                    } else {
+                        LOGE("Estagio 4: setupModalVirtualDisplay NAO ENCONTRADO");
+                    }
+                    env->DeleteLocalRef(modalSurface);
+                } else {
+                    LOGE("Estagio 4: AImageReader_getWindow retornou null para modal");
+                }
+            } else {
+                LOGE("Estagio 4: AImageReader_newWithUsage falhou para modal (status=%d)", modalStatus);
+            }
+
             env->DeleteLocalRef(vrActivityClass);
         }
 
@@ -1933,14 +2384,14 @@ void CreateUiPipeline(AppState& state, android_app* app) {
         LOGE("Estagio 4: android_app nulo — VirtualDisplay nao configurado");
     }
 
-    LOGI("Estagio 4: pipeline de UI/controles criado (%ux%u + %ux%u)",
-        kUiTexWidth, kUiTexHeight, kControlsTexWidth, kControlsTexHeight);
+    LOGI("Estagio 4: pipeline de UI/controles/modal criado (%ux%u + %ux%u + %ux%u)",
+        kUiTexWidth, kUiTexHeight, kControlsTexWidth, kControlsTexHeight, kModalTexWidth, kModalTexHeight);
 }
 
-// Atualiza texturas de UI/controles a partir dos AImageReaders.
+// Atualiza swapchains de UI/controles/modal a partir dos AImageReaders.
 // Chamado a cada frame antes de RenderFrame.
 void UpdateUiFrames(AppState& state) {
-    auto acquireAndUpdate = [&](AImageReader* reader, VkImage dst, bool& hasFrame,
+    auto acquireAndUpdate = [&](AImageReader* reader, EyeSwapchain& panelChain, bool& hasFrame,
                                  uint32_t w, uint32_t h) {
         if (!reader) return;
         AImage* image = nullptr;
@@ -1948,14 +2399,15 @@ void UpdateUiFrames(AppState& state) {
             AHardwareBuffer* hwb = nullptr;
             AImage_getHardwareBuffer(image, &hwb);
             if (hwb) {
-                UpdateUiImageFromHwb(state, hwb, dst, w, h);
+                UpdatePanelSwapchainFromHwb(state, panelChain, hwb, w, h);
                 hasFrame = true;
             }
             AImage_delete(image);
         }
     };
-    acquireAndUpdate(state.uiImageReader, state.uiImage, state.uiHasFrame, kUiTexWidth, kUiTexHeight);
-    acquireAndUpdate(state.controlsImageReader, state.controlsImage, state.controlsHasFrame, kControlsTexWidth, kControlsTexHeight);
+    acquireAndUpdate(state.uiImageReader, state.uiPanelSwapchain, state.uiHasFrame, kUiTexWidth, kUiTexHeight);
+    acquireAndUpdate(state.controlsImageReader, state.controlsPanelSwapchain, state.controlsHasFrame, kControlsTexWidth, kControlsTexHeight);
+    acquireAndUpdate(state.modalImageReader, state.modalPanelSwapchain, state.modalHasFrame, kModalTexWidth, kModalTexHeight);
 }
 
 // ===========================================================================
@@ -1994,7 +2446,9 @@ void CreateSphereGeometry(AppState& state) {
             // teste real de hardware ("180 nao aparece").
             float theta = 2.0f * M_PI * s / slices - (float)M_PI; // -PI..PI, uu=0.5 em -Z
             float uu    = (float)s / slices;
-            float x = -radius * sinf(phi) * sinf(theta); // invertido: camera dentro da esfera
+            // Posicao em X: positivo para theta > 0 (lado direito da textura, uu > 0.5, mapeando para +X / direita do usuario).
+            // Nao deve ter sinal negativo, caso contrario a imagem seria espelhada horizontalmente (leitura em espelho).
+            float x =  radius * sinf(phi) * sinf(theta);
             float y =  radius * cosf(phi);
             float z = -radius * sinf(phi) * cosf(theta);
             verts.push_back({x, y, z, uu, vv});
@@ -2356,17 +2810,382 @@ void CreateFeedbackResources(AppState& state) {
     LOGI("Overlay de feedback: pipeline criado (%zu vertices)", vertices.size() / 3);
 }
 
+// ============================================================================
+// Pipeline de Legendas MSDF (T9.3)
+// ============================================================================
+
+struct SubtitlePushConstants {
+    Mat4 mvp;
+    float textColor[4];
+    float outlineColor[4];
+    float textScale;
+    float outlineWidth;
+};
+
+struct SubtitleVertex {
+    float pos[3];
+    float uv[2];
+    float color[4];
+};
+
+void CreateSubtitlePipeline(AppState& state) {
+    // 1. Criar sampler linear para o atlas de fontes
+    VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    VKR(vkCreateSampler(state.vkDevice, &samplerInfo, nullptr, &state.subtitleSampler));
+
+    // 2. Descriptor set layout
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    binding.pImmutableSamplers = &state.subtitleSampler;
+
+    VkDescriptorSetLayoutCreateInfo dsLayout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    dsLayout.bindingCount = 1;
+    dsLayout.pBindings = &binding;
+    VKR(vkCreateDescriptorSetLayout(state.vkDevice, &dsLayout, nullptr, &state.subtitleDescriptorSetLayout));
+
+    // 3. Descriptor pool & set
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+    VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    poolInfo.maxSets = 1;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.subtitleDescriptorPool));
+
+    VkDescriptorSetAllocateInfo dsAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dsAlloc.descriptorPool = state.subtitleDescriptorPool;
+    dsAlloc.descriptorSetCount = 1;
+    dsAlloc.pSetLayouts = &state.subtitleDescriptorSetLayout;
+    VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.subtitleDescriptorSet));
+
+    // 4. Push constants e Pipeline layout
+    VkPushConstantRange pcRange{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(SubtitlePushConstants)};
+    VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &state.subtitleDescriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pcRange;
+    VKR(vkCreatePipelineLayout(state.vkDevice, &layoutInfo, nullptr, &state.subtitlePipelineLayout));
+
+    // 5. Shaders
+    VkShaderModule vertMod, fragMod;
+    VkShaderModuleCreateInfo smInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    smInfo.codeSize = sizeof(kSubtitleVertSpirv); smInfo.pCode = reinterpret_cast<const uint32_t*>(kSubtitleVertSpirv);
+    VKR(vkCreateShaderModule(state.vkDevice, &smInfo, nullptr, &vertMod));
+    smInfo.codeSize = sizeof(kSubtitleFragSpirv); smInfo.pCode = reinterpret_cast<const uint32_t*>(kSubtitleFragSpirv);
+    VKR(vkCreateShaderModule(state.vkDevice, &smInfo, nullptr, &fragMod));
+
+    VkPipelineShaderStageCreateInfo stages[2] = {};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT; stages[0].module = vertMod; stages[0].pName = "main";
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT; stages[1].module = fragMod; stages[1].pName = "main";
+
+    // 6. Vertex Input
+    VkVertexInputBindingDescription bindDesc{0, sizeof(SubtitleVertex), VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attrs[3] = {
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, offsetof(SubtitleVertex, pos)},
+        {1, 0, VK_FORMAT_R32G32_SFLOAT, offsetof(SubtitleVertex, uv)},
+        {2, 0, VK_FORMAT_R32G32B32A32_SFLOAT, offsetof(SubtitleVertex, color)},
+    };
+    VkPipelineVertexInputStateCreateInfo vtxInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vtxInput.vertexBindingDescriptionCount = 1; vtxInput.pVertexBindingDescriptions = &bindDesc;
+    vtxInput.vertexAttributeDescriptionCount = 3; vtxInput.pVertexAttributeDescriptions = attrs;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vp.viewportCount = 1; vp.scissorCount = 1;
+    VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dyn.dynamicStateCount = 2; dyn.pDynamicStates = dynStates;
+
+    VkPipelineRasterizationStateCreateInfo rast{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rast.polygonMode = VK_POLYGON_MODE_FILL; rast.cullMode = VK_CULL_MODE_NONE;
+    rast.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rast.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState blendAtt{};
+    blendAtt.blendEnable = VK_TRUE;
+    blendAtt.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAtt.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAtt.colorBlendOp = VK_BLEND_OP_ADD;
+    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAtt.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAtt.alphaBlendOp = VK_BLEND_OP_ADD;
+    blendAtt.colorWriteMask = 0xF;
+    VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    blend.attachmentCount = 1; blend.pAttachments = &blendAtt;
+
+    VkPipelineDepthStencilStateCreateInfo dsState{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    dsState.depthTestEnable = VK_FALSE; dsState.depthWriteEnable = VK_FALSE;
+
+    VkGraphicsPipelineCreateInfo pipeInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipeInfo.stageCount = 2; pipeInfo.pStages = stages;
+    pipeInfo.pVertexInputState = &vtxInput; pipeInfo.pInputAssemblyState = &ia;
+    pipeInfo.pViewportState = &vp; pipeInfo.pRasterizationState = &rast;
+    pipeInfo.pMultisampleState = &ms; pipeInfo.pColorBlendState = &blend;
+    pipeInfo.pDepthStencilState = &dsState; pipeInfo.pDynamicState = &dyn;
+    pipeInfo.layout = state.subtitlePipelineLayout; pipeInfo.renderPass = state.renderPass;
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.subtitlePipeline));
+
+    vkDestroyShaderModule(state.vkDevice, vertMod, nullptr);
+    vkDestroyShaderModule(state.vkDevice, fragMod, nullptr);
+
+    // 7. Criar e preencher a textura do atlas de fonte
+    CreateUiImage(state, vrplayer::kFontAtlasWidth, vrplayer::kFontAtlasHeight, state.subtitleImage, state.subtitleImageMemory, state.subtitleImageView);
+    std::vector<uint8_t> atlasBytes(vrplayer::kFontAtlasWidth * vrplayer::kFontAtlasHeight * 4);
+    vrplayer::GenerateFontAtlasBitmap(atlasBytes.data(), vrplayer::kFontAtlasWidth, vrplayer::kFontAtlasHeight);
+    UpdateUiImageFromBytes(state, atlasBytes.data(), vrplayer::kFontAtlasWidth, vrplayer::kFontAtlasHeight, state.subtitleImage);
+
+    // Atualizar descriptor set com a imagem do atlas
+    VkDescriptorImageInfo imgInfo{};
+    imgInfo.sampler = state.subtitleSampler;
+    imgInfo.imageView = state.subtitleImageView;
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = state.subtitleDescriptorSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imgInfo;
+    vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+
+    // 8. Alocar vertex buffer e index buffer dinâmicos para até 1024 caracteres
+    const size_t maxVerts = 4096;
+    const size_t maxIndices = 6144;
+    
+    VkBufferCreateInfo vbInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    vbInfo.size = maxVerts * sizeof(SubtitleVertex);
+    vbInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    VKR(vkCreateBuffer(state.vkDevice, &vbInfo, nullptr, &state.subtitleVertexBuffer));
+
+    VkMemoryRequirements vmr;
+    vkGetBufferMemoryRequirements(state.vkDevice, state.subtitleVertexBuffer, &vmr);
+    VkPhysicalDeviceMemoryProperties mp;
+    vkGetPhysicalDeviceMemoryProperties(state.vkPhysicalDevice, &mp);
+    uint32_t vmIdx = UINT32_MAX;
+    const auto hv = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+        if ((vmr.memoryTypeBits & (1u << i)) && ((mp.memoryTypes[i].propertyFlags & hv) == hv)) {
+            vmIdx = i; break;
+        }
+    }
+    VkMemoryAllocateInfo vai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    vai.allocationSize = vmr.size; vai.memoryTypeIndex = vmIdx;
+    VKR(vkAllocateMemory(state.vkDevice, &vai, nullptr, &state.subtitleVertexMemory));
+    VKR(vkBindBufferMemory(state.vkDevice, state.subtitleVertexBuffer, state.subtitleVertexMemory, 0));
+
+    VkBufferCreateInfo ibInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    ibInfo.size = maxIndices * sizeof(uint32_t);
+    ibInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    VKR(vkCreateBuffer(state.vkDevice, &ibInfo, nullptr, &state.subtitleIndexBuffer));
+
+    VkMemoryRequirements imr;
+    vkGetBufferMemoryRequirements(state.vkDevice, state.subtitleIndexBuffer, &imr);
+    uint32_t imIdx = UINT32_MAX;
+    for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+        if ((imr.memoryTypeBits & (1u << i)) && ((mp.memoryTypes[i].propertyFlags & hv) == hv)) {
+            imIdx = i; break;
+        }
+    }
+    VkMemoryAllocateInfo iai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    iai.allocationSize = imr.size; iai.memoryTypeIndex = imIdx;
+    VKR(vkAllocateMemory(state.vkDevice, &iai, nullptr, &state.subtitleIndexMemory));
+    VKR(vkBindBufferMemory(state.vkDevice, state.subtitleIndexBuffer, state.subtitleIndexMemory, 0));
+
+    LOGI("Estagio 6: pipeline de legendas MSDF criado com sucesso");
+}
+
+void UpdateSubtitleMesh(AppState& state, const char* text) {
+    if (!text || text[0] == '\0' || !state.subtitleVertexMemory) {
+        state.subtitleIndexCount = 0;
+        return;
+    }
+
+    std::vector<std::string> lines;
+    std::string currentLine;
+    for (const char* p = text; *p; ++p) {
+        if (*p == '\n') {
+            lines.push_back(currentLine);
+            currentLine.clear();
+        } else if (*p != '\r') {
+            currentLine.push_back(*p);
+        }
+    }
+    if (!currentLine.empty()) {
+        lines.push_back(currentLine);
+    }
+
+    if (lines.empty()) {
+        state.subtitleIndexCount = 0;
+        return;
+    }
+
+    std::vector<SubtitleVertex> vertices;
+    std::vector<uint32_t> indices;
+    vertices.reserve(lines.size() * 32 * 4);
+    indices.reserve(lines.size() * 32 * 6);
+
+    const float charScale = 0.08f; // Tamanho base da fonte no espaço 3D (em metros)
+    const float lineHeight = 0.11f;
+    float startY = ((float)lines.size() - 1.0f) * lineHeight * 0.5f;
+
+    for (size_t lineIdx = 0; lineIdx < lines.size(); ++lineIdx) {
+        const std::string& line = lines[lineIdx];
+        float lineWidth = 0.0f;
+        for (unsigned char c : line) {
+            const vrplayer::GlyphMetric* gm = vrplayer::FindGlyphMetric((uint32_t)c);
+            lineWidth += gm->advance * charScale;
+        }
+
+        float cursorX = -lineWidth * 0.5f;
+        float cursorY = startY - (float)lineIdx * lineHeight;
+
+        for (unsigned char c : line) {
+            const vrplayer::GlyphMetric* gm = vrplayer::FindGlyphMetric((uint32_t)c);
+            if (gm->width > 0.0f && gm->height > 0.0f) {
+                float x0 = cursorX + gm->bearingX * charScale;
+                float y0 = cursorY + gm->bearingY * charScale;
+                float x1 = x0 + gm->width * charScale;
+                float y1 = y0 - gm->height * charScale;
+
+                uint32_t baseIdx = (uint32_t)vertices.size();
+                // 4 vértices
+                vertices.push_back({{x0, y0, 0.0f}, {gm->u0, gm->v0}, {1.0f, 1.0f, 1.0f, 1.0f}});
+                vertices.push_back({{x1, y0, 0.0f}, {gm->u1, gm->v0}, {1.0f, 1.0f, 1.0f, 1.0f}});
+                vertices.push_back({{x1, y1, 0.0f}, {gm->u1, gm->v1}, {1.0f, 1.0f, 1.0f, 1.0f}});
+                vertices.push_back({{x0, y1, 0.0f}, {gm->u0, gm->v1}, {1.0f, 1.0f, 1.0f, 1.0f}});
+
+                // 6 índices (dois triângulos)
+                indices.push_back(baseIdx + 0);
+                indices.push_back(baseIdx + 1);
+                indices.push_back(baseIdx + 2);
+                indices.push_back(baseIdx + 2);
+                indices.push_back(baseIdx + 3);
+                indices.push_back(baseIdx + 0);
+            }
+            cursorX += gm->advance * charScale;
+        }
+    }
+
+    if (!vertices.empty() && vertices.size() <= 4096 && indices.size() <= 6144) {
+        void* vDst = nullptr;
+        vkMapMemory(state.vkDevice, state.subtitleVertexMemory, 0, vertices.size() * sizeof(SubtitleVertex), 0, &vDst);
+        memcpy(vDst, vertices.data(), vertices.size() * sizeof(SubtitleVertex));
+        vkUnmapMemory(state.vkDevice, state.subtitleVertexMemory);
+
+        void* iDst = nullptr;
+        vkMapMemory(state.vkDevice, state.subtitleIndexMemory, 0, indices.size() * sizeof(uint32_t), 0, &iDst);
+        memcpy(iDst, indices.data(), indices.size() * sizeof(uint32_t));
+        vkUnmapMemory(state.vkDevice, state.subtitleIndexMemory);
+
+        state.subtitleIndexCount = (uint32_t)indices.size();
+    } else {
+        state.subtitleIndexCount = 0;
+    }
+}
+
+static void DrawSubtitles(AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
+    if (!state.subtitlePipeline) return;
+
+    char subTextBuf[1024];
+    uint32_t subLen = get_active_subtitle_text(subTextBuf, sizeof(subTextBuf));
+
+    if (subLen > 0) {
+        if (state.lastSubtitleText != subTextBuf) {
+            UpdateSubtitleMesh(state, subTextBuf);
+            state.lastSubtitleText = subTextBuf;
+        }
+    } else if (!state.lastSubtitleText.empty()) {
+        state.subtitleIndexCount = 0;
+        state.lastSubtitleText.clear();
+    }
+
+    if (state.subtitleIndexCount == 0) return;
+
+    const bool sphereMode = IsSphereMode(state.screenMode);
+
+    Mat4 subModel;
+    if (sphereMode) {
+        // Modo esférico (360°/180°): Lazy Follow suave (~0.5s)
+        // Posicionado a 2.2m à frente e ligeiramente abaixo da linha de visão
+        Mat4 subTrans = Mat4Translation(headCenter.x, headCenter.y - 0.40f, headCenter.z - 2.2f);
+        subModel = Mat4Multiply(subTrans, Mat4Scale(state.subtitleScale, state.subtitleScale, 1.0f));
+    } else {
+        // Modo plano (2D, SBS, OU): posicionado na base da tela virtual
+        SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
+        float subYOffset = -state.screenScaleY * 0.42f;
+        Mat4 subTrans = Mat4Multiply(scene.screenModelNoScale, Mat4Translation(0.0f, subYOffset, 0.04f));
+        subModel = Mat4Multiply(subTrans, Mat4Scale(state.subtitleScale, state.subtitleScale, 1.0f));
+    }
+
+    Mat4 subMvp = Mat4Multiply(Mat4Multiply(proj, view), subModel);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.subtitlePipeline);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        state.subtitlePipelineLayout, 0, 1, &state.subtitleDescriptorSet, 0, nullptr);
+
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &state.subtitleVertexBuffer, &offset);
+    vkCmdBindIndexBuffer(cmd, state.subtitleIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+    SubtitlePushConstants spc{};
+    spc.mvp = subMvp;
+    spc.textColor[0] = 1.0f; spc.textColor[1] = 1.0f; spc.textColor[2] = 1.0f; spc.textColor[3] = 1.0f;
+    spc.outlineColor[0] = 0.0f; spc.outlineColor[1] = 0.0f; spc.outlineColor[2] = 0.0f; spc.outlineColor[3] = 1.0f;
+    spc.textScale = state.subtitleScale;
+    spc.outlineWidth = 0.12f;
+
+    vkCmdPushConstants(cmd, state.subtitlePipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        0, sizeof(spc), &spc);
+
+    vkCmdDrawIndexed(cmd, state.subtitleIndexCount, 1, 0, 0, 0);
+}
+
 void CreateCommandResources(AppState& state) {
     VkCommandPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO};
     poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
     poolInfo.queueFamilyIndex = state.vkQueueFamilyIndex;
     VKR(vkCreateCommandPool(state.vkDevice, &poolInfo, nullptr, &state.vkCommandPool));
 
-    VkCommandBufferAllocateInfo allocInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
-    allocInfo.commandPool = state.vkCommandPool;
-    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandBufferCount = 1;
-    VKR(vkAllocateCommandBuffers(state.vkDevice, &allocInfo, &state.vkCommandBuffer));
+    for (uint32_t f = 0; f < AppState::kMaxFramesInFlight; f++) {
+        VkCommandBufferAllocateInfo allocInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        allocInfo.commandPool = state.vkCommandPool;
+        allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        allocInfo.commandBufferCount = kEyeCount;
+        VKR(vkAllocateCommandBuffers(state.vkDevice, &allocInfo, state.commandBuffers[f]));
+
+        VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        VKR(vkCreateFence(state.vkDevice, &fenceInfo, nullptr, &state.inFlightFences[f]));
+    }
+
+    // Command buffer para cópia zero-copy de texturas de UI (R-06)
+    VkCommandBufferAllocateInfo copyAlloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    copyAlloc.commandPool = state.vkCommandPool;
+    copyAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    copyAlloc.commandBufferCount = 1;
+    VKR(vkAllocateCommandBuffers(state.vkDevice, &copyAlloc, &state.uiCopyCmd));
+
+    // F0: Query pool para timestamps de GPU (2 timestamps por olho por frame in flight)
+    VkQueryPoolCreateInfo queryPoolInfo{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};
+    queryPoolInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
+    queryPoolInfo.queryCount = AppState::kMaxFramesInFlight * kEyeCount * 2;
+    VKR(vkCreateQueryPool(state.vkDevice, &queryPoolInfo, nullptr, &state.queryPool));
 }
 
 // Estagio 2: limpa o fundo (mesmo azul do Estagio 1, por continuidade
@@ -2381,132 +3200,69 @@ void CreateCommandResources(AppState& state) {
 // aqui faz o billboard girar de forma diferente por olho (~6cm de diferenca
 // entre as posicoes), quebrando a disparidade estereo do painel (achado da
 // revisao pos-migracao Vulkan).
+// helper para desenhar elementos 3D na camada de projeção (laser e feedback).
+// Os painéis 2D (UI, Controles, Modal) e o retículo agora são submetidos diretamente
+// como XrCompositionLayerQuad no xrEndFrame (R-01) para máxima nitidez de texto.
 static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
-
     VkDeviceSize offset = 0;
-    // O UI Pipeline (Estagio 4) tem layout de vertices com UV (5 floats), portanto
-    // DEVE usar o videoVertexBuffer (que tem XYZ+UV) e nao o quadVertexBuffer (so XYZ)
-    vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
-
-    // Mesmas matrizes usadas pelo hit-test (UpdateInteraction) — antes cada
-    // um recalculava por conta propria e ja tinham divergido.
     SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
-    Mat4 uiModel = Mat4Multiply(scene.uiModelNoScale, Mat4Scale(kUiPanelScaleX, kUiPanelScaleY, 1.0f));
-    Mat4 uiMvp = Mat4Multiply(Mat4Multiply(proj, view), uiModel);
-
-    Mat4 controlsModel = Mat4Multiply(scene.controlsModelNoScale, Mat4Scale(kControlsPanelScaleX, kControlsPanelScaleY, 1.0f));
-    Mat4 controlsMvp = Mat4Multiply(Mat4Multiply(proj, view), controlsModel);
-
-    UiPushConstants push{};
-
-    // UI (File Browser) — auto-hide (Estagio 6): nao desenha quando totalmente
-    // esmaecido, mesma condicao usada pra gating de dispatch em UpdateInteraction.
-    if (state.uiHasFrame && state.uiAlpha > 0.0f) {
-        push.mvp = uiMvp;
-        push.alpha = state.uiAlpha;
-        vkCmdPushConstants(cmd, state.uiPipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(push), &push);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            state.uiPipelineLayout, 0, 1, &state.uiDescriptorSet, 0, nullptr);
-        vkCmdDraw(cmd, 4, 1, 0, 0);
-    }
-
-    // Controls
-    if (state.controlsHasFrame && state.controlsAlpha > 0.0f) {
-        push.mvp = controlsMvp;
-        push.alpha = state.controlsAlpha;
-        vkCmdPushConstants(cmd, state.uiPipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(push), &push);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            state.uiPipelineLayout, 0, 1, &state.controlsDescriptorSet, 0, nullptr);
-        vkCmdDraw(cmd, 4, 1, 0, 0);
-    }
 
     // Beam (Laser) — so desenha com um controle de fato rastreado neste
     // frame (state.hasRay, setado por UpdateInteraction via xrLocateSpace).
-    // `lastRayDir.z != 0.0f` (checagem anterior) e sempre verdadeiro, ja que
-    // lastRayDir comeca inicializado em {0,0,-1} — laser aparecia mesmo sem
-    // nenhum controle ligado/rastreado.
     if (state.hasRay) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.beamPipeline);
-        vkCmdBindVertexBuffers(cmd, 0, 1, &state.beamVertexBuffer, &offset);
+        // D-02 fix: Quando o modal esta ativo e visivel, o beam e desenhado na
+        // camada de projecao (projectionLayer) mas o modal e um XrCompositionLayerQuad
+        // separado — nao ha depth test entre layers. Se o ray nao acertou o modal
+        // (lastHitDist < 0), escondemos o beam para evitar que ele apareca
+        // visualmente atravessando o modal.
+        bool skipBeam = state.modalActive && state.modalAlpha > 0.5f && state.lastHitDist < 0.0f;
+        if (!skipBeam) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.beamPipeline);
+            vkCmdBindVertexBuffers(cmd, 0, 1, &state.beamVertexBuffer, &offset);
 
-        // O beam em CreateBeamResources vai de (0,0,0) ate (0,0,-2) no eixo Z negativo.
-        // Precisamos criar um model matrix que translada para a origem do raio e rotaciona para a direcao.
-        XrVector3f up = {0.0f, 1.0f, 0.0f};
-        if (fabs(state.lastRayDir.y) > 0.99f) up = {1.0f, 0.0f, 0.0f}; // fallback se olhando pra cima/baixo
-        
-        XrVector3f z = {-state.lastRayDir.x, -state.lastRayDir.y, -state.lastRayDir.z};
-        
-        XrVector3f x = {
-            up.y * z.z - up.z * z.y,
-            up.z * z.x - up.x * z.z,
-            up.x * z.y - up.y * z.x
-        };
-        float xLen = sqrtf(x.x*x.x + x.y*x.y + x.z*x.z);
-        if (xLen > 0.0001f) { x.x /= xLen; x.y /= xLen; x.z /= xLen; }
+            // O beam em CreateBeamResources vai de (0,0,0) ate (0,0,-2) no eixo Z negativo.
+            XrVector3f up = {0.0f, 1.0f, 0.0f};
+            if (fabs(state.lastRayDir.y) > 0.99f) up = {1.0f, 0.0f, 0.0f};
+            
+            XrVector3f z = {-state.lastRayDir.x, -state.lastRayDir.y, -state.lastRayDir.z};
+            
+            XrVector3f x = {
+                up.y * z.z - up.z * z.y,
+                up.z * z.x - up.x * z.z,
+                up.x * z.y - up.y * z.x
+            };
+            float xLen = sqrtf(x.x*x.x + x.y*x.y + x.z*x.z);
+            if (xLen > 0.0001f) { x.x /= xLen; x.y /= xLen; x.z /= xLen; }
 
-        XrVector3f y = {
-            z.y * x.z - z.z * x.y,
-            z.z * x.x - z.x * x.z,
-            z.x * x.y - z.y * x.x
-        };
+            XrVector3f y = {
+                z.y * x.z - z.z * x.y,
+                z.z * x.x - z.x * x.z,
+                z.x * x.y - z.y * x.x
+            };
 
-        float beamLength = 5.0f; // Default 5 meters if no hit
-        if (state.lastHitDist > 0.0f) {
-            beamLength = state.lastHitDist;
-        }
-        float zScale = beamLength / 2.0f; // Base geometry is 2.0m long
+            float beamLength = 5.0f; // Default 5 meters if no hit
+            if (state.lastHitDist > 0.0f) {
+                beamLength = state.lastHitDist;
+            }
+            float zScale = beamLength;
 
-        Mat4 beamModel = {{
-            x.x, x.y, x.z, 0.0f,
-            y.x, y.y, y.z, 0.0f,
-            z.x * zScale, z.y * zScale, z.z * zScale, 0.0f,
-            state.lastRayOrigin.x, state.lastRayOrigin.y, state.lastRayOrigin.z, 1.0f
-        }};
+            Mat4 beamModel = {{
+                x.x, x.y, x.z, 0.0f,
+                y.x, y.y, y.z, 0.0f,
+                z.x * zScale, z.y * zScale, z.z * zScale, 0.0f,
+                state.lastRayOrigin.x, state.lastRayOrigin.y, state.lastRayOrigin.z, 1.0f
+            }};
 
-        BeamPushConstants beamPush{};
-        beamPush.mvp = Mat4Multiply(Mat4Multiply(proj, view), beamModel);
-        beamPush.color[0] = 0.0f; beamPush.color[1] = 0.5f; beamPush.color[2] = 1.0f; beamPush.color[3] = 1.0f;
+            BeamPushConstants beamPush{};
+            beamPush.mvp = Mat4Multiply(Mat4Multiply(proj, view), beamModel);
+            beamPush.color[0] = 0.0f; beamPush.color[1] = 0.5f; beamPush.color[2] = 1.0f; beamPush.color[3] = 1.0f;
 
-        vkCmdPushConstants(cmd, state.beamPipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(beamPush), &beamPush);
-        
-        vkCmdDraw(cmd, 2, 1, 0, 0); // 2 vertices para a linha
-    }
+            vkCmdPushConstants(cmd, state.beamPipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                0, sizeof(beamPush), &beamPush);
 
-    // Cursor/reticulo no ponto de acerto (Estagio 6) — sem o disco laser sozinho
-    // termina "no vazio", dificultando mirar em botoes pequenos (mesmo motivo do
-    // GLES). Reusa o pipeline do beam com um segmento curto centrado em
-    // cursorDotPos ao longo do eixo Y do mundo; a base do beam vai de (0,0,0) a
-    // (0,0,-2) em espaco local, entao a coluna Z do model e escalada pra
-    // kDotHalfLength e a translacao deslocada +kDotHalfLength no Y pra centrar
-    // o segmento no ponto de impacto (start em +halfLength, end em -halfLength).
-    if (state.cursorDotVisible) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.beamPipeline);
-        vkCmdBindVertexBuffers(cmd, 0, 1, &state.beamVertexBuffer, &offset);
-
-        const float kDotHalfLength = 0.01f;
-        Mat4 dotModel = {{
-            1.0f, 0.0f, 0.0f, 0.0f,
-            0.0f, 0.0f, 1.0f, 0.0f,
-            0.0f, kDotHalfLength, 0.0f, 0.0f,
-            state.cursorDotPos.x, state.cursorDotPos.y + kDotHalfLength, state.cursorDotPos.z, 1.0f
-        }};
-
-        BeamPushConstants dotPush{};
-        dotPush.mvp = Mat4Multiply(Mat4Multiply(proj, view), dotModel);
-        dotPush.color[0] = 0.0f; dotPush.color[1] = 1.0f; dotPush.color[2] = 1.0f; dotPush.color[3] = 1.0f;
-
-        vkCmdPushConstants(cmd, state.beamPipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(dotPush), &dotPush);
-
-        vkCmdDraw(cmd, 2, 1, 0, 0);
+            vkCmdDraw(cmd, 2, 1, 0, 0); // 2 vertices para a linha
+        } // !skipBeam
     }
 
     // Posicao/orientacao da tela, mas sem a escala dela: o icone tem tamanho
@@ -2533,18 +3289,14 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
         vkCmdDraw(cmd, state.feedbackVertexCount[kindIndex], 1,
                   state.feedbackFirstVertex[kindIndex], 0);
     }
+
+    // Desenho de Legendas MSDF (T9.3)
+    DrawSubtitles(state, cmd, proj, view, headCenter);
 }
 
-void RecordAndSubmitQuad(
-    AppState& state, VkFramebuffer framebuffer, VkExtent2D extent, const Mat4& mvp,
+void RecordFallbackQuad(
+    AppState& state, VkCommandBuffer cmd, VkFramebuffer framebuffer, VkExtent2D extent, const Mat4& mvp,
     const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
-    VkCommandBuffer cmd = state.vkCommandBuffer;
-    VKR(vkResetCommandBuffer(cmd, 0));
-
-    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    VKR(vkBeginCommandBuffer(cmd, &beginInfo));
-
     VkClearValue clearValue{};
     clearValue.color = {{0.02f, 0.02f, 0.05f, 1.0f}}; // preto quase puro — ambiente escuro de cinema
 
@@ -2572,14 +3324,11 @@ void RecordAndSubmitQuad(
     VkDeviceSize offset = 0;
     vkCmdBindVertexBuffers(cmd, 0, 1, &state.quadVertexBuffer, &offset);
 
-    // Amarelo/ambar: contraste claro com o azul de fundo, para o quad se
-    // destacar na verificacao visual (docs/VULKAN-MIGRATION-PLAN.md,
-    // criterio de sucesso do Estagio 2).
     QuadPushConstants pushConstants{};
     pushConstants.mvp = mvp;
-    pushConstants.color[0] = 0.05f; // quad muito escuro, quase invisivel,
-    pushConstants.color[1] = 0.05f; // para nao competir visualmente com
-    pushConstants.color[2] = 0.08f; // os paineis de UI que flutuam na frente
+    pushConstants.color[0] = 0.05f; // quad muito escuro, quase invisivel
+    pushConstants.color[1] = 0.05f;
+    pushConstants.color[2] = 0.08f;
     pushConstants.color[3] = 1.0f;
     vkCmdPushConstants(
         cmd, state.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pushConstants),
@@ -2590,13 +3339,6 @@ void RecordAndSubmitQuad(
     DrawUiQuads(state, cmd, proj, view, headCenter);
 
     vkCmdEndRenderPass(cmd);
-    VKR(vkEndCommandBuffer(cmd));
-
-    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &cmd;
-    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
-    VKR(vkQueueWaitIdle(state.vkQueue));
 }
 
 // Estagio 3: importa um AHardwareBuffer como VkImage via
@@ -2692,6 +3434,10 @@ VideoFrame* GetOrImportVideoFrame(AppState& state, AHardwareBuffer* buffer) {
     imageCreateInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VideoFrame frame{};
+    frame.width = hwbDesc.width;
+    frame.height = hwbDesc.height;
+    state.videoWidth = hwbDesc.width;
+    state.videoHeight = hwbDesc.height;
     VkResult createResult =
         vkCreateImage(state.vkDevice, &imageCreateInfo, nullptr, &frame.image);
     if (createResult != VK_SUCCESS) {
@@ -2807,19 +3553,11 @@ VideoFrame* GetOrImportVideoFrame(AppState& state, AHardwareBuffer* buffer) {
     return &inserted->second;
 }
 
-// Estagio 3: submete o frame de video para a swapchain via o pipeline de
-// textura YCbCr. Se nao houver frame disponivel (activeVideoFrame == nullptr)
-// cai no RecordAndSubmitQuad (fallback de Estagio 2).
-void RecordAndSubmitVideo(
-    AppState& state, VkFramebuffer framebuffer, VkExtent2D extent,
+// Estagio 3: grava o frame de video Flat2D na swapchain via o pipeline de
+// textura YCbCr com suporte a upscaling SGSR1.
+void RecordVideoFlat(
+    AppState& state, VkCommandBuffer cmd, VkFramebuffer framebuffer, VkExtent2D extent,
     const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter, VideoFrame* videoFrame) {
-    VkCommandBuffer cmd = state.vkCommandBuffer;
-    VKR(vkResetCommandBuffer(cmd, 0));
-
-    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    VKR(vkBeginCommandBuffer(cmd, &beginInfo));
-
     // Transicionar a imagem de video para SHADER_READ_ONLY antes do render pass.
     // O AHardwareBuffer e preenchido pelo MediaCodec fora da fila Vulkan;
     // a barreira garante visibilidade para o fragment shader.
@@ -2873,8 +3611,11 @@ void RecordAndSubmitVideo(
 
     VideoPushConstants pc{};
     pc.mvp = mvp;
+    pc.sharpness = state.upscalingSharpness;
+    pc.upscalingMode = static_cast<int>(state.upscalingMode);
     vkCmdPushConstants(
-        cmd, state.videoPipelineLayout, VK_SHADER_STAGE_VERTEX_BIT,
+        cmd, state.videoPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(pc), &pc);
 
     vkCmdDraw(cmd, 4, 1, 0, 0);
@@ -2898,13 +3639,85 @@ void RecordAndSubmitVideo(
     DrawUiQuads(state, cmd, proj, view, headCenter);
 
     vkCmdEndRenderPass(cmd);
-    VKR(vkEndCommandBuffer(cmd));
+}
 
-    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &cmd;
-    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
-    VKR(vkQueueWaitIdle(state.vkQueue));
+// Estagio 5: grava o frame de video Estereo (SBS/OU) ou Esfera (360/180)
+void RecordStereoFrame(
+    AppState& state, VkCommandBuffer cmd, VkFramebuffer fb, VkExtent2D extent,
+    const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter,
+    bool sphereMode, const Mat4& sphereMvp, int eye, const StereoParams& sp) {
+    // Barreira de pipeline para o frame de video externo
+    VkImageMemoryBarrier imgBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    imgBarrier.srcAccessMask = VK_ACCESS_NONE;
+    imgBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    imgBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imgBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imgBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+    imgBarrier.dstQueueFamilyIndex = state.vkQueueFamilyIndex;
+    imgBarrier.image = state.activeVideoFrame->image;
+    imgBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &imgBarrier);
+
+    VkClearValue clearValue{};
+    VkRenderPassBeginInfo rpBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    rpBegin.renderPass = state.renderPass;
+    rpBegin.framebuffer = fb;
+    rpBegin.renderArea.extent = extent;
+    rpBegin.clearValueCount = 1; rpBegin.pClearValues = &clearValue;
+    vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport vp{0, 0, (float)extent.width, (float)extent.height, 0.0f, 1.0f};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    VkRect2D scissor{{0,0}, extent};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        sphereMode ? state.stereoPipeline : state.stereoFlatPipeline);
+
+    StereoPushConstants spc{};
+    spc.mvp          = sphereMode ? sphereMvp : mvp;
+    spc.eyeIndex     = sp.eyeIndex;
+    spc.swapEyes     = sp.swapEyes;
+    spc.stereoLayout = sp.stereoLayout;
+    spc.polar180     = sp.polar180;
+    spc.sharpness    = state.upscalingSharpness;
+    spc.upscalingMode = static_cast<int>(state.upscalingMode);
+    vkCmdPushConstants(cmd, state.stereoPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        0, sizeof(spc), &spc);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        state.stereoPipelineLayout, 0, 1,
+        &state.activeVideoFrame->descriptorSet, 0, nullptr);
+
+    if (sphereMode) {
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
+        vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, state.sphereIndexCount, 1, 0, 0, 0);
+    } else {
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
+        vkCmdDraw(cmd, 4, 1, 0, 0);
+
+        if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
+            VkDeviceSize ovOffset = 0;
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
+            vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &ovOffset);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                state.uiPipelineLayout, 0, 1, &state.scrubOverlayDescriptorSet, 0, nullptr);
+            UiPushConstants ovpc{};
+            ovpc.mvp = mvp;
+            ovpc.alpha = 1.0f;
+            vkCmdPushConstants(cmd, state.uiPipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
+            vkCmdDraw(cmd, 4, 1, 0, 0);
+        }
+    }
+
+    DrawUiQuads(state, cmd, proj, view, headCenter);
+
+    vkCmdEndRenderPass(cmd);
 }
 
 // Ver comentario no campo AppState.videoGapHistory — compara cada gap novo
@@ -2943,6 +3756,21 @@ void PushVideoGapSample(AppState& state, float gapMs) {
 // Chamado uma vez por loop de frame, antes de RenderFrame.
 // Equivale ao bloco vr_player_app.cpp:1354-1400 (m_eglImageCache).
 void UpdateVideoFrame(AppState& state) {
+    if (g_stopVideoRequested.exchange(false)) {
+        LOGI("Video: parada solicitada — limpando frame ativo e encerrando renderizacao do video");
+        state.activeVideoFrame = nullptr;
+        state.lastVideoBuffer = nullptr;
+        state.msSinceLastVideoFrame = 0.0f;
+        state.videoStallLogged = false;
+        state.videoGapHistoryCount = 0;
+        state.videoFps = 0.0f;
+        state.videoJitterMs = 0.0f;
+        state.controlsAlpha = 0.0f;
+        state.controlsIdleTime = kUiAutoHideSeconds;
+        g_requestUiPanelVisible.store(true);
+        return;
+    }
+
     AHardwareBuffer* buffer = get_current_video_frame();
 
     if (buffer == nullptr) {
@@ -2996,19 +3824,193 @@ void UpdateVideoFrame(AppState& state) {
     }
 }
 
+// Captura de frame no Vulkan (N4): readback da VkImage do swapchain para PPM.
+static void CaptureFramePpm(AppState& state, VkImage srcImage, uint32_t width, uint32_t height, int eye) {
+    std::string basePath;
+    {
+        std::lock_guard<std::mutex> lock(g_capturePathMutex);
+        basePath = g_capturePath;
+    }
+    if (basePath.empty()) return;
+
+    VkDeviceSize bufSize = static_cast<VkDeviceSize>(width) * height * 4;
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bufInfo.size = bufSize;
+    bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    VKR(vkCreateBuffer(state.vkDevice, &bufInfo, nullptr, &stagingBuf));
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(state.vkDevice, stagingBuf, &memReqs);
+    VkPhysicalDeviceMemoryProperties memProps;
+    vkGetPhysicalDeviceMemoryProperties(state.vkPhysicalDevice, &memProps);
+    uint32_t memTypeIdx = UINT32_MAX;
+    const auto hostVisible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        if ((memReqs.memoryTypeBits & (1u << i)) &&
+            ((memProps.memoryTypes[i].propertyFlags & hostVisible) == hostVisible)) {
+            memTypeIdx = i;
+            break;
+        }
+    }
+    if (memTypeIdx == UINT32_MAX) {
+        vkDestroyBuffer(state.vkDevice, stagingBuf, nullptr);
+        LOGE("CaptureFramePpm: host-visible memory type nao encontrada");
+        return;
+    }
+
+    VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = memTypeIdx;
+    VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &stagingMem));
+    VKR(vkBindBufferMemory(state.vkDevice, stagingBuf, stagingMem, 0));
+
+    VkCommandBufferAllocateInfo cbAlloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cbAlloc.commandPool = state.vkCommandPool;
+    cbAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbAlloc.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VKR(vkAllocateCommandBuffers(state.vkDevice, &cbAlloc, &cmd));
+
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VKR(vkBeginCommandBuffer(cmd, &beginInfo));
+
+    VkImageMemoryBarrier barrierToSrc{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrierToSrc.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrierToSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrierToSrc.oldLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrierToSrc.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrierToSrc.image = srcImage;
+    barrierToSrc.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrierToSrc);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    region.imageSubresource.layerCount = 1;
+    region.imageExtent = {width, height, 1};
+    vkCmdCopyImageToBuffer(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, stagingBuf, 1, &region);
+
+    VkImageMemoryBarrier barrierBack{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrierBack.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+    barrierBack.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+    barrierBack.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    barrierBack.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    barrierBack.image = srcImage;
+    barrierBack.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrierBack);
+
+    VKR(vkEndCommandBuffer(cmd));
+
+    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
+    VKR(vkQueueWaitIdle(state.vkQueue));
+    vkFreeCommandBuffers(state.vkDevice, state.vkCommandPool, 1, &cmd);
+
+    void* mapped = nullptr;
+    VKR(vkMapMemory(state.vkDevice, stagingMem, 0, bufSize, 0, &mapped));
+    if (mapped) {
+        const uint8_t* pixels = static_cast<const uint8_t*>(mapped);
+        std::string path = basePath + (eye == 0 ? ".left.ppm" : ".right.ppm");
+        FILE* f = fopen(path.c_str(), "wb");
+        if (f) {
+            fprintf(f, "P6\n%u %u\n255\n", width, height);
+            for (uint32_t y = 0; y < height; y++) {
+                for (uint32_t x = 0; x < width; x++) {
+                    fwrite(&pixels[(size_t)(y * width + x) * 4], 1, 3, f);
+                }
+            }
+            fclose(f);
+            LOGI("CaptureFramePpm: frame capturado em %s (%ux%u)", path.c_str(), width, height);
+        } else {
+            LOGE("CaptureFramePpm: falha ao abrir %s para escrita", path.c_str());
+        }
+        vkUnmapMemory(state.vkDevice, stagingMem);
+    }
+
+    vkDestroyBuffer(state.vkDevice, stagingBuf, nullptr);
+    vkFreeMemory(state.vkDevice, stagingMem, nullptr);
+
+    if (eye == 1) {
+        g_captureRequested.store(false);
+    }
+}
+
+void PollAndroidEvents(AppState& state);
+void PollXrEvents(AppState& state);
+
 void RenderFrame(AppState& state) {
-    // Metricas de performance (docs/DEBUGGING.md) — ver comentario no campo
-    // lastFrameTimestamp (AppState) sobre por que e wall-clock, nao
-    // predictedDisplayTime.
-    auto frameStart = std::chrono::steady_clock::now();
-    if (state.hasLastFrameTimestamp) {
-        float frameMs = std::chrono::duration<float, std::milli>(
-            frameStart - state.lastFrameTimestamp).count();
+    // Sincronizacao de frames em voo (F1)
+    // Timeout finito com re-bombeamento de eventos Android/OpenXR para evitar ANR
+    // na main thread caso a GPU demore ou ocorra transicao de ciclo de vida.
+    constexpr uint64_t kFenceTimeoutNs = 25'000'000ULL; // 25ms
+    VkResult waitRes = VK_TIMEOUT;
+    uint32_t waitAttempts = 0;
+    while (waitRes == VK_TIMEOUT) {
+        if (state.app->destroyRequested != 0 || state.requestExit || !state.sessionRunning) {
+            return;
+        }
+        waitRes = vkWaitForFences(state.vkDevice, 1, &state.inFlightFences[state.currentFrameIndex], VK_TRUE, kFenceTimeoutNs);
+        if (waitRes == VK_TIMEOUT) {
+            PollAndroidEvents(state);
+            PollXrEvents(state);
+            waitAttempts++;
+            if (waitAttempts % 40 == 0) { // a cada ~1s
+                LOGW("RenderFrame: aguardando fence do frame %d ha %u ms...", state.currentFrameIndex, waitAttempts * 25);
+            }
+        }
+    }
+
+    if (waitRes != VK_SUCCESS) {
+        LOGE("RenderFrame: vkWaitForFences falhou com codigo %d", waitRes);
+        return;
+    }
+
+    // Coleta dos timestamps da execucao anterior deste slot (F0)
+    if (state.queryPool != VK_NULL_HANDLE && state.timestampPeriod > 0.0f) {
+        uint64_t timestamps[4] = {0, 0, 0, 0};
+        VkResult qres = vkGetQueryPoolResults(
+            state.vkDevice, state.queryPool,
+            state.currentFrameIndex * 4, 4,
+            sizeof(timestamps), timestamps, sizeof(uint64_t),
+            VK_QUERY_RESULT_64_BIT);
+        if (qres == VK_SUCCESS && timestamps[1] > timestamps[0]) {
+            float eye0Ms = (timestamps[1] - timestamps[0]) * state.timestampPeriod * 1e-6f;
+            float eye1Ms = (timestamps[3] > timestamps[2]) ? ((timestamps[3] - timestamps[2]) * state.timestampPeriod * 1e-6f) : 0.0f;
+            state.lastGpuTimeMs = eye0Ms + eye1Ms;
+            if (state.smoothedGpuTimeMs <= 0.0f) {
+                state.smoothedGpuTimeMs = state.lastGpuTimeMs;
+            } else {
+                state.smoothedGpuTimeMs = state.smoothedGpuTimeMs * 0.9f + state.lastGpuTimeMs * 0.1f;
+            }
+        }
+    }
+
+    // vkResetFences movido para dentro de `if (shouldSubmitLayer)` antes de vkQueueSubmit
+    // para evitar que frames pulados (shouldRender=false por doff/perda de visibilidade)
+    // deixem as fences em estado permanentemente nao-sinalizado (deadlock).
+
+    XrFrameWaitInfo waitFrameInfo{XR_TYPE_FRAME_WAIT_INFO};
+    XrFrameState frameState{XR_TYPE_FRAME_STATE};
+    OXR(xrWaitFrame(state.session, &waitFrameInfo, &frameState));
+
+    // Metricas de performance baseadas no pacing real do compositor OpenXR
+    if (state.lastPredictedDisplayTime > 0) {
+        float frameMs = static_cast<float>(frameState.predictedDisplayTime - state.lastPredictedDisplayTime) * 1e-6f;
         state.lastFrameMs = frameMs;
         if (frameMs > 0.0f) {
             float instFps = 1000.0f / frameMs;
             state.smoothedFps = (state.smoothedFps <= 0.0f)
                 ? instFps : (state.smoothedFps * 0.9f + instFps * 0.1f);
+            if (state.smoothedFps > 90.0f) {
+                state.smoothedFps = 90.0f;
+            }
         }
         if (frameMs > kFreezeThresholdMs) {
             state.freezeCount++;
@@ -3018,50 +4020,48 @@ void RenderFrame(AppState& state) {
             LOGW("Video: stutter — frame levou %.1fms", frameMs);
         }
 
-        // Video "congelado" (mesmo frame repetido) e diferente de freeze do
-        // loop de render acima — ver comentario no campo
-        // AppState.msSinceLastVideoFrame. So loga uma vez por episodio,
-        // reseta quando um frame novo chega de fato (UpdateVideoFrame).
         state.msSinceLastVideoFrame += frameMs;
-        if (state.activeVideoFrame != nullptr && !state.videoStallLogged &&
-            state.msSinceLastVideoFrame > kVideoStallThresholdMs) {
-            state.videoStallLogged = true;
-            LOGW("Video: sem frame novo ha %.0fms (decode/rede travado? ou usuario pausou?)",
-                state.msSinceLastVideoFrame);
+        if (state.msSinceLastVideoFrame > kVideoStallThresholdMs) {
+            state.videoFps = 0.0f;
+            if (state.activeVideoFrame != nullptr && !state.videoStallLogged) {
+                state.videoStallLogged = true;
+                LOGW("Video: sem frame novo ha %.0fms (decode/rede travado? ou usuario pausou?)",
+                    state.msSinceLastVideoFrame);
+            }
         }
 
-        // decFps: taxa real de decode (Rust), amostrada a ~1Hz — ver
-        // comentario no campo AppState.decodedFps.
         state.decodedFpsPollAccumMs += frameMs;
-        if (state.decodedFpsPollAccumMs >= AppState::kDecodedFpsPollIntervalMs) {
+        if (state.decodedFpsPollAccumMs >= 1000.0f) {
             float pollSec = state.decodedFpsPollAccumMs / 1000.0f;
+            if (pollSec < 0.001f) pollSec = 0.001f;
 
-            uint64_t currentCount = get_video_frames_decoded_count();
-            uint64_t delta = currentCount - state.lastDecodedFrameCount; // wrap-safe (unsigned)
-            state.decodedFps = delta / pollSec;
-            state.lastDecodedFrameCount = currentCount;
+            uint64_t decodedCount = get_video_frames_decoded_count();
+            state.decodedFps = (decodedCount >= state.lastDecodedFrameCount)
+                ? ((decodedCount - state.lastDecodedFrameCount) / pollSec)
+                : 0.0f;
+            state.lastDecodedFrameCount = decodedCount;
 
             uint64_t outputCount = get_video_frames_output_count();
-            state.outputFps = (outputCount - state.lastOutputFrameCount) / pollSec;
+            state.outputFps = (outputCount >= state.lastOutputFrameCount)
+                ? ((outputCount - state.lastOutputFrameCount) / pollSec)
+                : 0.0f;
             state.lastOutputFrameCount = outputCount;
 
             uint64_t droppedCount = get_video_frames_dropped_count();
-            state.droppedFps = (droppedCount - state.lastDroppedFrameCount) / pollSec;
+            state.droppedFps = (droppedCount >= state.lastDroppedFrameCount)
+                ? ((droppedCount - state.lastDroppedFrameCount) / pollSec)
+                : 0.0f;
             state.lastDroppedFrameCount = droppedCount;
 
             uint64_t netBytes = get_network_bytes_read();
-            float netMB = (netBytes - state.lastNetworkBytes) / (1024.0f * 1024.0f);
+            float netMB = (netBytes >= state.lastNetworkBytes)
+                ? ((netBytes - state.lastNetworkBytes) / (1024.0f * 1024.0f))
+                : 0.0f;
             state.netMBs = netMB / pollSec;
             state.lastNetworkBytes = netBytes;
 
             state.videoQueueDepth = get_video_queue_depth();
 
-            // Diagnostico do gargalo de throughput (docs/NETWORK-IO-PERFORMANCE.md
-            // secao 7) — so pro logcat, nao vai pro HUD (ja denso o
-            // suficiente). blockFetchMs estavel proximo do esperado
-            // (~12MB/netMBs) = throughput realmente limitado; blockFetchMs
-            // com picos bem acima da media = stalls/retries pontuais
-            // derrubando a media, nao um teto constante.
             if (state.lastNetworkBytes > 0 || get_network_blocks_fetched() > 0) {
                 LOGI("net: %.2fMB/s blockFetchMs=%.0f blocksFetched=%llu blocksDiscarded=%llu q=%u",
                     state.netMBs, get_network_last_block_fetch_ms(),
@@ -3072,19 +4072,48 @@ void RenderFrame(AppState& state) {
 
             state.decodedFpsPollAccumMs = 0.0f;
         }
-    }
-    state.lastFrameTimestamp = frameStart;
-    state.hasLastFrameTimestamp = true;
 
-    XrFrameWaitInfo waitFrameInfo{XR_TYPE_FRAME_WAIT_INFO};
-    XrFrameState frameState{XR_TYPE_FRAME_STATE};
-    OXR(xrWaitFrame(state.session, &waitFrameInfo, &frameState));
+        // Fase 0.4 T5: mesma cadencia ~1Hz, checa se o usuario mudou o toggle de Foveated Rendering
+        state.foveationPollAccumMs += frameMs;
+        if (state.foveationPollAccumMs >= AppState::kFoveationPollIntervalMs) {
+            state.foveationPollAccumMs = 0.0f;
+            bool desired = get_foveation_enabled() != 0;
+            if (desired != state.foveationCurrentlyApplied) {
+                ApplyFoveation(state, desired);
+            }
+        }
+
+        // Fase 0.2 T14: mesma cadencia ~1Hz, checa se houve mudanca de status termico
+        state.thermalPollAccumMs += frameMs;
+        if (state.thermalPollAccumMs >= AppState::kThermalPollIntervalMs) {
+            state.thermalPollAccumMs = 0.0f;
+            uint32_t currentThermal = get_thermal_level();
+            if (currentThermal != state.thermalLevel) {
+                state.thermalLevel = currentThermal;
+
+                // T14.2 LIMIT_FPS: 72Hz em níveis térmicos elevados (SEVERE / CRITICAL)
+                if (state.pfnRequestDisplayRefreshRateFB != nullptr) {
+                    float targetFps = (state.thermalLevel >= 3) ? 72.0f : 90.0f;
+                    state.pfnRequestDisplayRefreshRateFB(state.session, targetFps);
+                    LOGI("VRPlayerAppVK: Thermal status %u, refresh rate %.0fHz",
+                        state.thermalLevel, targetFps);
+                } else {
+                    LOGI("VRPlayerAppVK: Thermal status %u", state.thermalLevel);
+                }
+            }
+        }
+    }
+    if (!frameState.shouldRender) {
+        state.lastPredictedDisplayTime = frameState.predictedDisplayTime;
+    }
 
     XrFrameBeginInfo beginFrameInfo{XR_TYPE_FRAME_BEGIN_INFO};
     OXR(xrBeginFrame(state.session, &beginFrameInfo));
 
     std::array<XrCompositionLayerProjectionView, kEyeCount> projectionViews{};
     const bool shouldSubmitLayer = frameState.shouldRender;
+    const XrCompositionLayerBaseHeader* layers[5]{};
+    uint32_t layerCount = 0;
 
     if (shouldSubmitLayer) {
         std::array<XrView, kEyeCount> views{};
@@ -3099,40 +4128,15 @@ void RenderFrame(AppState& state) {
         uint32_t viewCountOutput = 0;
         OXR(xrLocateViews(state.session, &locateInfo, &viewState, kEyeCount, &viewCountOutput, views.data()));
 
-        // Ponto medio dos dois olhos — usado (em vez da pose de um olho so)
-        // pra tudo que depende de "onde esta a cabeca": billboard da UI,
-        // hit-test, translacao da esfera 360. Usar views[eye].pose por olho
-        // fazia o billboard da UI girar de forma diferente pra cada olho
-        // (~6cm de separacao interpupilar), quebrando a disparidade estereo
-        // do painel — achado da revisao pos-migracao Vulkan.
         const XrVector3f headCenter = Vec3Scale(
             Vec3Add(views[0].pose.position, views[1].pose.position), 0.5f);
 
-        // Recenter — espelha o AppHandleEvent/Update() do caminho GLES
-        // (vr_player_app.cpp): recalibra sceneYawOffset/sceneTranslationOffset
-        // com a HeadPose fresca deste frame, nunca com uma pose antiga (por
-        // isso isso roda aqui e nao no handler do evento em PollXrEvents).
-        // Tambem dispara uma vez no 1o frame com pose valida, pra cena
-        // nascer na altura dos olhos sem exigir o long-press manual (Estagio 6).
-        // So calibra com pose de fato rastreada — nos primeiros frames de
-        // sessao a posicao/orientacao pode ainda nao estar valida, e
-        // calibrar com isso travaria a cena numa origem errada pro resto da
-        // sessao (sceneCalibrated so dispara uma vez). Sem tracking valido,
-        // tenta de novo no proximo frame.
         constexpr XrViewStateFlags kPoseValidFlags =
             XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT;
         bool poseValidForCalibration = (viewState.viewStateFlags & kPoseValidFlags) == kPoseValidFlags;
         if (poseValidForCalibration && (state.needsOsRecenter || !state.sceneCalibrated)) {
             Mat4 rot0 = Mat4FromXrPose(views[0].pose);
             XrVector3f fwd = {-rot0.m[8], -rot0.m[9], -rot0.m[10]};
-            // atan2f(fwd.x, -fwd.z) (formula original) rotaciona o conteudo
-            // 180° do lado errado: pra um usuario virado pra +X, isso
-            // colocava a tela atras dele em vez de na frente — bug
-            // reportado em teste real de hardware (paineis "longe demais"/
-            // serrilhados = visiveis so de raspao na borda do FOV; video
-            // 180° "nao tocando" = hemisferio frontal renderizado atras do
-            // usuario). Corrigido negando o argumento X do atan2 (equivale
-            // a inverter o sinal do angulo resultante).
             state.sceneYawOffset = atan2f(-fwd.x, -fwd.z);
             state.sceneTranslationOffset = headCenter;
             state.sceneTranslationOffset.y = headCenter.y - 1.5f;
@@ -3142,6 +4146,14 @@ void RenderFrame(AppState& state) {
 
         // Estagio 4/5: Processar interacoes apos obtermos a posicao da cabeca
         UpdateInteraction(state, frameState.predictedDisplayTime, headCenter, views[0].pose.orientation);
+
+        // Atualiza a orientação da cabeça para o pipeline de áudio espacial (Rust)
+        set_head_pose_orientation(
+            views[0].pose.orientation.x,
+            views[0].pose.orientation.y,
+            views[0].pose.orientation.z,
+            views[0].pose.orientation.w
+        );
 
         // Posicao/escala da tela virtual — mesma base do caminho GLES
         // (vr_player_app.cpp: m_screenPosition = {0, 1.5, -2},
@@ -3203,6 +4215,75 @@ void RenderFrame(AppState& state) {
             }
         }
 
+        // Avaliacao de Upscaling & Escala de Resolucao (F4 & F6)
+        state.upscalingMode = get_upscaling_mode();
+        float baseScale = 1.0f;
+        float targetSharpness = 0.0f;
+        bool enableMqsr = false;
+        bool enableSgsr = false;
+
+        const bool isSpherical = sphereMode;
+        const uint32_t videoMaxDim = std::max(state.videoWidth, state.videoHeight);
+
+        switch (state.upscalingMode) {
+            case 1: // Quality
+                baseScale = 1.0f;
+                targetSharpness = (state.thermalLevel >= 3) ? 0.2f : 0.5f;
+                enableMqsr = true;
+                enableSgsr = (state.thermalLevel < 3);
+                break;
+            case 2: // Performance
+                baseScale = 0.80f;
+                targetSharpness = 0.25f;
+                enableMqsr = true;
+                enableSgsr = false;
+                break;
+            case 3: // Auto
+                enableMqsr = true;
+                if (state.thermalLevel >= 3) {
+                    baseScale = 0.80f;
+                    targetSharpness = 0.0f;
+                    enableSgsr = false;
+                } else if (isSpherical && videoMaxDim >= 5000) {
+                    baseScale = 0.80f;
+                    targetSharpness = 0.15f;
+                    enableSgsr = false;
+                } else if (isSpherical) {
+                    baseScale = 0.90f;
+                    targetSharpness = 0.35f;
+                    enableSgsr = true;
+                } else if (videoMaxDim <= 1920) {
+                    baseScale = 1.0f;
+                    targetSharpness = 0.60f;
+                    enableSgsr = true;
+                } else {
+                    baseScale = 1.0f;
+                    targetSharpness = 0.35f;
+                    enableSgsr = true;
+                }
+                break;
+            case 0: // Off
+            default:
+                baseScale = 1.0f;
+                targetSharpness = 0.0f;
+                enableMqsr = false;
+                enableSgsr = false;
+                break;
+        }
+
+        // Piso térmico de proteção (RNF-PERF-006 / F4)
+        float thermalFloor = 1.0f;
+        if (state.thermalLevel >= 4) {
+            thermalFloor = 0.70f;
+        } else if (state.thermalLevel == 3) {
+            thermalFloor = 0.80f;
+        } else if (state.thermalLevel == 2) {
+            thermalFloor = 0.90f;
+        }
+        state.renderResolutionScale = std::min(baseScale, thermalFloor);
+        state.upscalingSharpness = enableSgsr ? targetSharpness : 0.0f;
+        state.upscalingEnabled = (state.upscalingMode != 0);
+
         for (int eye = 0; eye < kEyeCount; eye++) {
             EyeSwapchain& eyeChain = state.eyes[eye];
 
@@ -3218,128 +4299,58 @@ void RenderFrame(AppState& state) {
             const Mat4 proj = Mat4ProjectionFromFov(views[eye].fov, 0.05f, 100.0f);
             const Mat4 mvp  = Mat4Multiply(Mat4Multiply(proj, view), screenModel);
 
-            VkExtent2D extent{static_cast<uint32_t>(eyeChain.width), static_cast<uint32_t>(eyeChain.height)};
+            const int32_t renderW = static_cast<int32_t>(eyeChain.width * state.renderResolutionScale);
+            const int32_t renderH = static_cast<int32_t>(eyeChain.height * state.renderResolutionScale);
+            const VkExtent2D extent{static_cast<uint32_t>(renderW), static_cast<uint32_t>(renderH)};
             VkFramebuffer fb = eyeChain.framebuffers[imageIndex];
 
-            // ---------------------------------------------------------------
-            // Despacho de video por ScreenMode (Estagio 3/5)
-            // Estagio 5: ScreenMode SBS/OU/Sphere: usa pipeline estereo com
-            // os parametros de olho no push constant.
-            // Estagio 3: Flat2D com frame de video: usa pipeline de video.
-            // Fallback: quad solido (Estagio 2) quando sem frame.
-            // ---------------------------------------------------------------
+            VkCommandBuffer cmd = state.commandBuffers[state.currentFrameIndex][eye];
+            VKR(vkResetCommandBuffer(cmd, 0));
+            VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+            beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+            VKR(vkBeginCommandBuffer(cmd, &beginInfo));
+
+            const uint32_t queryStart = state.currentFrameIndex * 4 + eye * 2;
+            const uint32_t queryEnd = queryStart + 1;
+            if (state.queryPool != VK_NULL_HANDLE) {
+                vkCmdResetQueryPool(cmd, state.queryPool, queryStart, 2);
+                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, state.queryPool, queryStart);
+            }
+
             if (state.activeVideoFrame != nullptr) {
                 if (sphereMode || stereoFlat) {
-                    // Estagio 5: pipeline estereo/esfera
-                    // Esfera: acompanha a TRANSLACAO da cabeca (usuario sempre
-                    // no centro, mesmo andando fisicamente no espaco do
-                    // Guardian) e o yaw de recenter, mas NAO a rotacao da
-                    // cabeca (essa ja vem de graca via `view`) nem a escala da
-                    // tela plana — mesma logica do caminho GLES
-                    // (vr_player_app.cpp: m_sphereTransform). Sem a
-                    // translacao, o usuario saia de dentro da esfera ao
-                    // andar (achado da revisao pos-migracao Vulkan).
                     const Mat4 sphereModel = Mat4Multiply(
                         Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
                         Mat4RotationY(state.sceneYawOffset));
                     const Mat4 sphereMvp = Mat4Multiply(Mat4Multiply(proj, view), sphereModel);
                     StereoParams sp = GetStereoParams(state.screenMode, eye);
-
-                    VkCommandBuffer cmd = state.vkCommandBuffer;
-                    VKR(vkResetCommandBuffer(cmd, 0));
-                    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
-                    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-                    VKR(vkBeginCommandBuffer(cmd, &beginInfo));
-
-                    // Barreira de pipeline para o frame de video externo
-                    VkImageMemoryBarrier imgBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
-                    imgBarrier.srcAccessMask = VK_ACCESS_NONE;
-                    imgBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-                    imgBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-                    imgBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-                    imgBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
-                    imgBarrier.dstQueueFamilyIndex = state.vkQueueFamilyIndex;
-                    imgBarrier.image = state.activeVideoFrame->image;
-                    imgBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-                        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &imgBarrier);
-
-                    VkClearValue clearValue{};
-                    VkRenderPassBeginInfo rpBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
-                    rpBegin.renderPass = state.renderPass;
-                    rpBegin.framebuffer = fb;
-                    rpBegin.renderArea.extent = extent;
-                    rpBegin.clearValueCount = 1; rpBegin.pClearValues = &clearValue;
-                    vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
-
-                    VkViewport vp{0, 0, (float)extent.width, (float)extent.height, 0.0f, 1.0f};
-                    vkCmdSetViewport(cmd, 0, 1, &vp);
-                    VkRect2D scissor{{0,0}, extent};
-                    vkCmdSetScissor(cmd, 0, 1, &scissor);
-
-                    // Esfera (index draw) usa TRIANGLE_LIST; quad plano
-                    // SBS/OU (4 vertices, sem indices) usa TRIANGLE_STRIP —
-                    // ver comentario em CreateStereoPipeline.
-                    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        sphereMode ? state.stereoPipeline : state.stereoFlatPipeline);
-
-                    StereoPushConstants spc{};
-                    spc.mvp         = sphereMode ? sphereMvp : mvp;
-                    spc.eyeIndex    = sp.eyeIndex;
-                    spc.swapEyes    = sp.swapEyes;
-                    spc.stereoLayout = sp.stereoLayout;
-                    spc.polar180    = sp.polar180;
-                    vkCmdPushConstants(cmd, state.stereoPipelineLayout,
-                        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                        0, sizeof(spc), &spc);
-                    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        state.stereoPipelineLayout, 0, 1,
-                        &state.activeVideoFrame->descriptorSet, 0, nullptr);
-
-                    if (sphereMode) {
-                        // Index draw para a geometria da esfera
-                        VkDeviceSize offset = 0;
-                        vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
-                        vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-                        vkCmdDrawIndexed(cmd, state.sphereIndexCount, 1, 0, 0, 0);
-                    } else {
-                        // Quad plano SBS/OU: mesmo vertex buffer do video
-                        VkDeviceSize offset = 0;
-                        vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
-                        vkCmdDraw(cmd, 4, 1, 0, 0);
-
-                        // Preview de arrasto (T-seek-ux): mesmo transform do quad de
-                        // video, reaproveitando o pipeline de UI (RGBA8 simples).
-                        if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
-                            VkDeviceSize ovOffset = 0;
-                            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
-                            vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &ovOffset);
-                            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-                                state.uiPipelineLayout, 0, 1, &state.scrubOverlayDescriptorSet, 0, nullptr);
-                            UiPushConstants ovpc{};
-                            ovpc.mvp = mvp;
-                            ovpc.alpha = 1.0f;
-                            vkCmdPushConstants(cmd, state.uiPipelineLayout,
-                                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
-                            vkCmdDraw(cmd, 4, 1, 0, 0);
-                        }
-                    }
-
-                    DrawUiQuads(state, cmd, proj, view, headCenter);
-
-                    vkCmdEndRenderPass(cmd);
-                    VKR(vkEndCommandBuffer(cmd));
-                    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
-                    submitInfo.commandBufferCount = 1; submitInfo.pCommandBuffers = &cmd;
-                    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
-                    VKR(vkQueueWaitIdle(state.vkQueue));
+                    RecordStereoFrame(state, cmd, fb, extent, mvp, proj, view, headCenter, sphereMode, sphereMvp, eye, sp);
                 } else {
-                    // Estagio 3: Flat2D com textura de video
-                    RecordAndSubmitVideo(state, fb, extent, mvp, proj, view, headCenter, state.activeVideoFrame);
+                    RecordVideoFlat(state, cmd, fb, extent, mvp, proj, view, headCenter, state.activeVideoFrame);
                 }
             } else {
-                // Fallback: quad solido (Estagio 2)
-                RecordAndSubmitQuad(state, fb, extent, mvp, proj, view, headCenter);
+                RecordFallbackQuad(state, cmd, fb, extent, mvp, proj, view, headCenter);
+            }
+
+            if (state.queryPool != VK_NULL_HANDLE) {
+                vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, state.queryPool, queryEnd);
+            }
+
+            VKR(vkEndCommandBuffer(cmd));
+
+            VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+            submitInfo.commandBufferCount = 1;
+            submitInfo.pCommandBuffers = &cmd;
+            VkFence submitFence = VK_NULL_HANDLE;
+            if (eye == kEyeCount - 1) {
+                VKR(vkResetFences(state.vkDevice, 1, &state.inFlightFences[state.currentFrameIndex]));
+                submitFence = state.inFlightFences[state.currentFrameIndex];
+            }
+            VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, submitFence));
+
+            if (g_captureRequested.load()) {
+                CaptureFramePpm(state, eyeChain.images[imageIndex].image,
+                                static_cast<uint32_t>(renderW), static_cast<uint32_t>(renderH), eye);
             }
 
             XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
@@ -3350,23 +4361,130 @@ void RenderFrame(AppState& state) {
             projectionViews[eye].fov  = views[eye].fov;
             projectionViews[eye].subImage.swapchain = eyeChain.handle;
             projectionViews[eye].subImage.imageRect.offset = {0, 0};
-            projectionViews[eye].subImage.imageRect.extent = {eyeChain.width, eyeChain.height};
+            projectionViews[eye].subImage.imageRect.extent = {renderW, renderH};
+        }
+
+        XrCompositionLayerProjection projectionLayer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
+        projectionLayer.space     = state.localSpace;
+        projectionLayer.viewCount = kEyeCount;
+        projectionLayer.views     = projectionViews.data();
+
+        // F2: Meta Quest Super Resolution (XR_FB_composition_layer_settings)
+        XrCompositionLayerSettingsFB mqsrSettings{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
+        if (state.supportsMqsr) {
+            mqsrSettings.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
+            if (state.upscalingEnabled) {
+                mqsrSettings.layerFlags |= XR_COMPOSITION_LAYER_SETTINGS_AUTO_LAYER_FILTER_BIT_META;
+            }
+            projectionLayer.next = &mqsrSettings;
+        } else {
+            projectionLayer.next = nullptr;
+        }
+
+        // R-01: Submeter painéis 2D (UI, Controles, Modal) e o Cursor como XrCompositionLayerQuad
+        // para amostragem direta pelo hardware compositor da Meta (máxima nitidez de texto).
+        SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
+
+        // Painel 1: Home (UI / File Browser)
+        XrCompositionLayerQuad uiQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+        uiQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        uiQuad.space = state.localSpace;
+        uiQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        uiQuad.subImage.swapchain = state.uiPanelSwapchain.handle;
+        uiQuad.subImage.imageRect.offset = {0, 0};
+        uiQuad.subImage.imageRect.extent = {static_cast<int32_t>(kUiTexWidth), static_cast<int32_t>(kUiTexHeight)};
+        uiQuad.pose.position = scene.uiCenter;
+        XrVector3f toHead = Vec3Sub(headCenter, scene.uiCenter);
+        toHead.y = 0.0f;
+        float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
+        float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : 0.7f;
+        uiQuad.pose.orientation = QuatFromYaw(uiYaw);
+        uiQuad.size = {kUiPanelScaleX, kUiPanelScaleY};
+
+        // Painel 2: Controls
+        XrCompositionLayerQuad controlsQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+        controlsQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        controlsQuad.space = state.localSpace;
+        controlsQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        controlsQuad.subImage.swapchain = state.controlsPanelSwapchain.handle;
+        controlsQuad.subImage.imageRect.offset = {0, 0};
+        controlsQuad.subImage.imageRect.extent = {static_cast<int32_t>(kControlsTexWidth), static_cast<int32_t>(kControlsTexHeight)};
+        controlsQuad.pose.position = scene.controlsCenter;
+        Mat4 controlsRot = Mat4Multiply(Mat4RotationY(state.sceneYawOffset), Mat4RotationX(kControlsPitch));
+        controlsQuad.pose.orientation = QuatFromMat4(controlsRot);
+        controlsQuad.size = {kControlsPanelScaleX, kControlsPanelScaleY};
+
+        // Painel 3: Modal frontal (3o Quad flutuante)
+        XrCompositionLayerQuad modalQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+        modalQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        modalQuad.space = state.localSpace;
+        modalQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        modalQuad.subImage.swapchain = state.modalPanelSwapchain.handle;
+        modalQuad.subImage.imageRect.offset = {0, 0};
+        modalQuad.subImage.imageRect.extent = {static_cast<int32_t>(kModalTexWidth), static_cast<int32_t>(kModalTexHeight)};
+        modalQuad.pose.position = scene.modalCenter;
+        modalQuad.pose.orientation = QuatFromYaw(state.sceneYawOffset);
+        modalQuad.size = {kModalPanelScaleX, kModalPanelScaleY};
+
+        // Retículo do Laser no topo de todos os painéis
+        XrCompositionLayerQuad cursorQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+        cursorQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        cursorQuad.space = state.localSpace;
+        cursorQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        cursorQuad.subImage.swapchain = state.cursorSwapchain.handle;
+        cursorQuad.subImage.imageRect.offset = {0, 0};
+        cursorQuad.subImage.imageRect.extent = {64, 64};
+        cursorQuad.pose.position = state.cursorDotPos;
+        // D-03 fix: O cursor herda a orientação do painel que está sendo
+        // apontado. Sem isso, a orientação fixa (sceneYawOffset) diverge do
+        // billboard dinâmico (uiYaw) do painel Home, causando deformação
+        // perspectiva que estica o retículo verticalmente.
+        if (state.lastHoverPanel == 1) {
+            cursorQuad.pose.orientation = uiQuad.pose.orientation;
+        } else if (state.lastHoverPanel == 2) {
+            cursorQuad.pose.orientation = controlsQuad.pose.orientation;
+        } else {
+            cursorQuad.pose.orientation = QuatFromYaw(state.sceneYawOffset);
+        }
+        cursorQuad.size = {0.025f, 0.025f}; // 2.5 cm diâmetro
+
+        // MQSR Sharpening nos quads de UI para dobrar o ganho de nitidez nas fontes
+        XrCompositionLayerSettingsFB uiMqsr{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
+        XrCompositionLayerSettingsFB ctrlMqsr{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
+        XrCompositionLayerSettingsFB modalMqsr{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
+        if (state.supportsMqsr) {
+            uiMqsr.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
+            uiQuad.next = &uiMqsr;
+            ctrlMqsr.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
+            controlsQuad.next = &ctrlMqsr;
+            modalMqsr.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
+            modalQuad.next = &modalMqsr;
+        }
+
+        layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projectionLayer);
+
+        if (state.uiHasFrame && state.uiAlpha > 0.05f) {
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&uiQuad);
+        }
+        if (state.controlsHasFrame && state.controlsAlpha > 0.05f) {
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&controlsQuad);
+        }
+        if (state.modalHasFrame && state.modalAlpha > 0.05f) {
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&modalQuad);
+        }
+        if (state.cursorDotVisible && state.hasRay) {
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cursorQuad);
         }
     }
-
-    XrCompositionLayerProjection projectionLayer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
-    projectionLayer.space     = state.localSpace;
-    projectionLayer.viewCount = kEyeCount;
-    projectionLayer.views     = projectionViews.data();
-    const XrCompositionLayerBaseHeader* layers[1] = {
-        reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projectionLayer)};
 
     XrFrameEndInfo endFrameInfo{XR_TYPE_FRAME_END_INFO};
     endFrameInfo.displayTime           = frameState.predictedDisplayTime;
     endFrameInfo.environmentBlendMode  = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-    endFrameInfo.layerCount            = shouldSubmitLayer ? 1 : 0;
-    endFrameInfo.layers                = shouldSubmitLayer ? layers : nullptr;
+    endFrameInfo.layerCount            = layerCount;
+    endFrameInfo.layers                = layerCount > 0 ? layers : nullptr;
     OXR(xrEndFrame(state.session, &endFrameInfo));
+
+    state.currentFrameIndex = (state.currentFrameIndex + 1) % AppState::kMaxFramesInFlight;
 }
 
 void HandleAppCmd(android_app* app, int32_t cmd) {
@@ -3386,15 +4504,17 @@ void HandleAppCmd(android_app* app, int32_t cmd) {
     }
 }
 
-// Mesma logica de timeout do ALooper que o OVRFW usa (ActivityMainLoopContext
-// ::HandleOsEvents, XrApp.cpp:1453-1474): bloqueia indefinidamente enquanto a
-// activity nao esta resumed/com sessao ativa, para nao girar a CPU a toa.
+// C-05: Se a activity não está resumed, bloqueia indefinidamente (-1).
+// Se está resumed mas a sessão OpenXR ainda não está rodando, usa timeout moderado de 20ms
+// para não girar a CPU a 100% enquanto continua sondando eventos OpenXR.
+// Com sessão rodando, timeout 0 para processar eventos sem travar a renderização.
 void PollAndroidEvents(AppState& state) {
     for (;;) {
         int events = 0;
         android_poll_source* source = nullptr;
-        const int timeoutMs =
-            (!state.resumed && !state.sessionRunning && state.app->destroyRequested == 0) ? -1 : 0;
+        const int timeoutMs = (!state.resumed && state.app->destroyRequested == 0)
+            ? -1
+            : ((!state.sessionRunning && state.app->destroyRequested == 0) ? 20 : 0);
         if (ALooper_pollOnce(timeoutMs, nullptr, &events, reinterpret_cast<void**>(&source)) < 0) {
             break;
         }
@@ -3422,6 +4542,9 @@ void PollXrEvents(AppState& state) {
             LOGI("Estado da sessao OpenXR mudou para %d", event->state);
 
             switch (event->state) {
+                case XR_SESSION_STATE_FOCUSED:
+                    on_app_focus_gained();
+                    break;
                 case XR_SESSION_STATE_READY: {
                     XrSessionBeginInfo beginInfo{XR_TYPE_SESSION_BEGIN_INFO};
                     beginInfo.primaryViewConfigurationType = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
@@ -3431,6 +4554,8 @@ void PollXrEvents(AppState& state) {
                     break;
                 }
                 case XR_SESSION_STATE_STOPPING:
+                    // F0: Notifica a perda de foco ANTES de xrEndSession para pausar a reprodução
+                    on_app_focus_lost();
                     OXR(xrEndSession(state.session));
                     state.sessionRunning = false;
                     break;
@@ -3445,9 +4570,343 @@ void PollXrEvents(AppState& state) {
     }
 }
 
+// C-03: Desmonta ordenadamente todos os 41 recursos Vulkan filhos e os 3 AImageReaders
+void DestroyAppResources(AppState& state) {
+    if (state.vkDevice == VK_NULL_HANDLE) return;
+
+    // 1. Limpar cache de frames de vídeo (YCbCr)
+    for (auto& [buf, frame] : state.videoImageCache) {
+        if (frame.descriptorSet != VK_NULL_HANDLE && state.videoDescriptorPool != VK_NULL_HANDLE) {
+            vkFreeDescriptorSets(state.vkDevice, state.videoDescriptorPool, 1, &frame.descriptorSet);
+            frame.descriptorSet = VK_NULL_HANDLE;
+        }
+        if (frame.imageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(state.vkDevice, frame.imageView, nullptr);
+            frame.imageView = VK_NULL_HANDLE;
+        }
+        if (frame.image != VK_NULL_HANDLE) {
+            vkDestroyImage(state.vkDevice, frame.image, nullptr);
+            frame.image = VK_NULL_HANDLE;
+        }
+        if (frame.memory != VK_NULL_HANDLE) {
+            vkFreeMemory(state.vkDevice, frame.memory, nullptr);
+            frame.memory = VK_NULL_HANDLE;
+        }
+    }
+    state.videoImageCache.clear();
+
+    if (state.videoDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.videoDescriptorPool, nullptr);
+        state.videoDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (state.videoPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.videoPipeline, nullptr);
+        state.videoPipeline = VK_NULL_HANDLE;
+    }
+    if (state.videoPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.videoPipelineLayout, nullptr);
+        state.videoPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.videoDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(state.vkDevice, state.videoDescriptorSetLayout, nullptr);
+        state.videoDescriptorSetLayout = VK_NULL_HANDLE;
+    }
+    if (state.videoSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(state.vkDevice, state.videoSampler, nullptr);
+        state.videoSampler = VK_NULL_HANDLE;
+    }
+    if (state.ycbcrConversion != VK_NULL_HANDLE) {
+        auto pfnDestroyYcbcrConversion = reinterpret_cast<PFN_vkDestroySamplerYcbcrConversion>(
+            vkGetDeviceProcAddr(state.vkDevice, "vkDestroySamplerYcbcrConversion"));
+        if (pfnDestroyYcbcrConversion) {
+            pfnDestroyYcbcrConversion(state.vkDevice, state.ycbcrConversion, nullptr);
+        }
+        state.ycbcrConversion = VK_NULL_HANDLE;
+    }
+    if (state.videoVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.videoVertexBuffer, nullptr);
+        state.videoVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.videoVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.videoVertexMemory, nullptr);
+        state.videoVertexMemory = VK_NULL_HANDLE;
+    }
+
+    // 2. Recursos do Beam
+    if (state.beamPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.beamPipeline, nullptr);
+        state.beamPipeline = VK_NULL_HANDLE;
+    }
+    state.beamPipelineLayout = VK_NULL_HANDLE; // Reusa pipelineLayout, não destruir separadamente
+    if (state.beamVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.beamVertexBuffer, nullptr);
+        state.beamVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.beamVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.beamVertexMemory, nullptr);
+        state.beamVertexMemory = VK_NULL_HANDLE;
+    }
+
+    // 3. Feedback overlay
+    if (state.feedbackPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.feedbackPipeline, nullptr);
+        state.feedbackPipeline = VK_NULL_HANDLE;
+    }
+    if (state.feedbackVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.feedbackVertexBuffer, nullptr);
+        state.feedbackVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.feedbackVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.feedbackVertexMemory, nullptr);
+        state.feedbackVertexMemory = VK_NULL_HANDLE;
+    }
+
+    // 4. Scrub overlay
+    if (state.scrubOverlayDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.scrubOverlayDescriptorPool, nullptr);
+        state.scrubOverlayDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (state.scrubOverlayImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.scrubOverlayImageView, nullptr);
+        state.scrubOverlayImageView = VK_NULL_HANDLE;
+    }
+    if (state.scrubOverlayImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.scrubOverlayImage, nullptr);
+        state.scrubOverlayImage = VK_NULL_HANDLE;
+    }
+    if (state.scrubOverlayImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.scrubOverlayImageMemory, nullptr);
+        state.scrubOverlayImageMemory = VK_NULL_HANDLE;
+    }
+    state.scrubOverlayReady = false;
+
+    // 5. Legendas MSDF
+    if (state.subtitlePipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.subtitlePipeline, nullptr);
+        state.subtitlePipeline = VK_NULL_HANDLE;
+    }
+    if (state.subtitlePipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.subtitlePipelineLayout, nullptr);
+        state.subtitlePipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.subtitleDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.subtitleDescriptorPool, nullptr);
+        state.subtitleDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (state.subtitleDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(state.vkDevice, state.subtitleDescriptorSetLayout, nullptr);
+        state.subtitleDescriptorSetLayout = VK_NULL_HANDLE;
+    }
+    if (state.subtitleImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.subtitleImageView, nullptr);
+        state.subtitleImageView = VK_NULL_HANDLE;
+    }
+    if (state.subtitleImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.subtitleImage, nullptr);
+        state.subtitleImage = VK_NULL_HANDLE;
+    }
+    if (state.subtitleImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.subtitleImageMemory, nullptr);
+        state.subtitleImageMemory = VK_NULL_HANDLE;
+    }
+    if (state.subtitleSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(state.vkDevice, state.subtitleSampler, nullptr);
+        state.subtitleSampler = VK_NULL_HANDLE;
+    }
+    if (state.subtitleIndexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.subtitleIndexBuffer, nullptr);
+        state.subtitleIndexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.subtitleIndexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.subtitleIndexMemory, nullptr);
+        state.subtitleIndexMemory = VK_NULL_HANDLE;
+    }
+    if (state.subtitleVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.subtitleVertexBuffer, nullptr);
+        state.subtitleVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.subtitleVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.subtitleVertexMemory, nullptr);
+        state.subtitleVertexMemory = VK_NULL_HANDLE;
+    }
+
+    // 6. Pipelines estéreo e esfera 360/180
+    if (state.stereoFlatPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.stereoFlatPipeline, nullptr);
+        state.stereoFlatPipeline = VK_NULL_HANDLE;
+    }
+    if (state.stereoPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.stereoPipeline, nullptr);
+        state.stereoPipeline = VK_NULL_HANDLE;
+    }
+    if (state.stereoPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.stereoPipelineLayout, nullptr);
+        state.stereoPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.sphereIndexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.sphereIndexBuffer, nullptr);
+        state.sphereIndexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.sphereIndexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.sphereIndexMemory, nullptr);
+        state.sphereIndexMemory = VK_NULL_HANDLE;
+    }
+    if (state.sphereVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.sphereVertexBuffer, nullptr);
+        state.sphereVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.sphereVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.sphereVertexMemory, nullptr);
+        state.sphereVertexMemory = VK_NULL_HANDLE;
+    }
+
+    // 7. UI / Controles / Modal (Pipelines, descritores, imagens)
+    if (state.uiPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.uiPipeline, nullptr);
+        state.uiPipeline = VK_NULL_HANDLE;
+    }
+    if (state.uiPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.uiPipelineLayout, nullptr);
+        state.uiPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.uiDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.uiDescriptorPool, nullptr);
+        state.uiDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (state.uiDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(state.vkDevice, state.uiDescriptorSetLayout, nullptr);
+        state.uiDescriptorSetLayout = VK_NULL_HANDLE;
+    }
+    if (state.uiSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(state.vkDevice, state.uiSampler, nullptr);
+        state.uiSampler = VK_NULL_HANDLE;
+    }
+
+    if (state.uiImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.uiImageView, nullptr);
+        state.uiImageView = VK_NULL_HANDLE;
+    }
+    if (state.uiImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.uiImage, nullptr);
+        state.uiImage = VK_NULL_HANDLE;
+    }
+    if (state.uiImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.uiImageMemory, nullptr);
+        state.uiImageMemory = VK_NULL_HANDLE;
+    }
+
+    if (state.controlsImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.controlsImageView, nullptr);
+        state.controlsImageView = VK_NULL_HANDLE;
+    }
+    if (state.controlsImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.controlsImage, nullptr);
+        state.controlsImage = VK_NULL_HANDLE;
+    }
+    if (state.controlsImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.controlsImageMemory, nullptr);
+        state.controlsImageMemory = VK_NULL_HANDLE;
+    }
+
+    if (state.modalImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.modalImageView, nullptr);
+        state.modalImageView = VK_NULL_HANDLE;
+    }
+    if (state.modalImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.modalImage, nullptr);
+        state.modalImage = VK_NULL_HANDLE;
+    }
+    if (state.modalImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.modalImageMemory, nullptr);
+        state.modalImageMemory = VK_NULL_HANDLE;
+    }
+
+    // Limpar cache de AHardwareBuffers importados para UI (R-06)
+    for (auto& pair : state.uiHwbCache) {
+        if (pair.second.image != VK_NULL_HANDLE) vkDestroyImage(state.vkDevice, pair.second.image, nullptr);
+        if (pair.second.memory != VK_NULL_HANDLE) vkFreeMemory(state.vkDevice, pair.second.memory, nullptr);
+    }
+    state.uiHwbCache.clear();
+
+    // 8. Quad vertex buffer & Base pipeline
+    if (state.quadVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.quadVertexBuffer, nullptr);
+        state.quadVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.quadVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.quadVertexMemory, nullptr);
+        state.quadVertexMemory = VK_NULL_HANDLE;
+    }
+    if (state.pipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.pipeline, nullptr);
+        state.pipeline = VK_NULL_HANDLE;
+    }
+    if (state.pipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.pipelineLayout, nullptr);
+        state.pipelineLayout = VK_NULL_HANDLE;
+    }
+
+    // 9. Framebuffers e ImageViews dos olhos
+    for (auto& eyeChain : state.eyes) {
+        for (auto framebuffer : eyeChain.framebuffers) {
+            if (framebuffer != VK_NULL_HANDLE) {
+                vkDestroyFramebuffer(state.vkDevice, framebuffer, nullptr);
+            }
+        }
+        eyeChain.framebuffers.clear();
+        for (auto imageView : eyeChain.imageViews) {
+            if (imageView != VK_NULL_HANDLE) {
+                vkDestroyImageView(state.vkDevice, imageView, nullptr);
+            }
+        }
+        eyeChain.imageViews.clear();
+    }
+
+    if (state.queryPool != VK_NULL_HANDLE) {
+        vkDestroyQueryPool(state.vkDevice, state.queryPool, nullptr);
+        state.queryPool = VK_NULL_HANDLE;
+    }
+    for (uint32_t f = 0; f < AppState::kMaxFramesInFlight; f++) {
+        if (state.inFlightFences[f] != VK_NULL_HANDLE) {
+            vkDestroyFence(state.vkDevice, state.inFlightFences[f], nullptr);
+            state.inFlightFences[f] = VK_NULL_HANDLE;
+        }
+    }
+    if (state.renderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(state.vkDevice, state.renderPass, nullptr);
+        state.renderPass = VK_NULL_HANDLE;
+    }
+    if (state.vkCommandPool != VK_NULL_HANDLE) {
+        vkDestroyCommandPool(state.vkDevice, state.vkCommandPool, nullptr);
+        state.vkCommandPool = VK_NULL_HANDLE;
+    }
+    if (state.foveationProfile != XR_NULL_HANDLE && state.pfnDestroyFoveationProfileFB != nullptr) {
+        state.pfnDestroyFoveationProfileFB(state.foveationProfile);
+        state.foveationProfile = XR_NULL_HANDLE;
+    }
+
+    // 10. AImageReaders (NDK) - deletados após recursos Vulkan estarem desfeitos
+    if (state.uiImageReader != nullptr) {
+        AImageReader_delete(state.uiImageReader);
+        state.uiImageReader = nullptr;
+    }
+    if (state.controlsImageReader != nullptr) {
+        AImageReader_delete(state.controlsImageReader);
+        state.controlsImageReader = nullptr;
+    }
+    if (state.modalImageReader != nullptr) {
+        AImageReader_delete(state.modalImageReader);
+        state.modalImageReader = nullptr;
+    }
+}
+
 } // namespace
 
 void android_main(android_app* app) {
+    // C-04: Reset defensivo de estado global na inicialização (cold start ou reabertura de processo em cache)
+    reset_process_state();
+    ResetGlobalState();
+
     AppState state;
     state.app = app;
     app->userData = &state;
@@ -3475,8 +4934,20 @@ void android_main(android_app* app) {
     OXR(xrCreateSession(state.instance, &sessionCreateInfo, &state.session));
     SetupOpenXrInputs(state);
 
+    state.pfnRequestDisplayRefreshRateFB =
+        LoadXrFunction<PFN_xrRequestDisplayRefreshRateFB>(state.instance, "xrRequestDisplayRefreshRateFB");
+    if (state.pfnRequestDisplayRefreshRateFB != nullptr) {
+        state.pfnRequestDisplayRefreshRateFB(state.session, 90.0f);
+        LOGI("VRPlayerAppVK: Requested 90Hz refresh rate.");
+    } else {
+        LOGI("VRPlayerAppVK: xrRequestDisplayRefreshRateFB not available.");
+    }
+
     CreateReferenceSpace(state);
     CreateSwapchains(state);
+    // Fase 0.4 T5: estado inicial do toggle, persistido pelo Kotlin e
+    // empurrado no startup (VRActivity.onCreate -> nativeSetFoveationEnabled).
+    ApplyFoveation(state, get_foveation_enabled() != 0);
     CreateRenderPass(state);
     CreateFramebuffers(state);
     CreateGraphicsPipeline(state);
@@ -3487,11 +4958,14 @@ void android_main(android_app* app) {
     CreateVideoVertexBuffer(state);
     // Estagio 4: pipeline de UI/controles (RGBA8888 + AImageReader)
     CreateUiPipeline(state, app);
+    InitCursorSwapchain(state);
     // Estagio 5: geometria de esfera, pipeline estereo, beam cursor
     CreateSphereGeometry(state);
     CreateStereoPipeline(state);
     CreateBeamResources(state);
     CreateFeedbackResources(state);
+    // Estagio 6: pipeline de legendas MSDF (T9.3)
+    CreateSubtitlePipeline(state);
 
     // O video e iniciado via nativePlayVideo (JNI) quando o usuario seleciona
     // um arquivo no painel de UI — identico ao caminho GLES.
@@ -3514,93 +4988,37 @@ void android_main(android_app* app) {
     }
 
     LOGI("Encerrando: destruindo sessao/recursos Vulkan");
-    // Estagio 3: destruir cache de video antes de destruir sampler/conversion
-    for (auto& [buf, frame] : state.videoImageCache) {
-        if (frame.descriptorSet != VK_NULL_HANDLE) {
-            vkFreeDescriptorSets(
-                state.vkDevice, state.videoDescriptorPool, 1, &frame.descriptorSet);
-        }
-        if (frame.imageView != VK_NULL_HANDLE) {
-            vkDestroyImageView(state.vkDevice, frame.imageView, nullptr);
-        }
-        if (frame.image != VK_NULL_HANDLE) {
-            vkDestroyImage(state.vkDevice, frame.image, nullptr);
-        }
-        if (frame.memory != VK_NULL_HANDLE) {
-            vkFreeMemory(state.vkDevice, frame.memory, nullptr);
-        }
+
+    // C-02: Aguarda GPU terminar qualquer frame/comando em voo antes de desalocar
+    if (state.vkDevice != VK_NULL_HANDLE) {
+        VKR(vkDeviceWaitIdle(state.vkDevice));
     }
-    state.videoImageCache.clear();
-    if (state.videoDescriptorPool != VK_NULL_HANDLE) {
-        vkDestroyDescriptorPool(state.vkDevice, state.videoDescriptorPool, nullptr);
-    }
-    if (state.videoPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(state.vkDevice, state.videoPipeline, nullptr);
-    }
-    if (state.videoPipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(state.vkDevice, state.videoPipelineLayout, nullptr);
-    }
-    if (state.videoDescriptorSetLayout != VK_NULL_HANDLE) {
-        vkDestroyDescriptorSetLayout(state.vkDevice, state.videoDescriptorSetLayout, nullptr);
-    }
-    if (state.videoSampler != VK_NULL_HANDLE) {
-        vkDestroySampler(state.vkDevice, state.videoSampler, nullptr);
-    }
-    if (state.ycbcrConversion != VK_NULL_HANDLE) {
-        auto pfnDestroyYcbcrConversion =
-            reinterpret_cast<PFN_vkDestroySamplerYcbcrConversion>(
-                vkGetDeviceProcAddr(state.vkDevice, "vkDestroySamplerYcbcrConversion"));
-        if (pfnDestroyYcbcrConversion) {
-            pfnDestroyYcbcrConversion(state.vkDevice, state.ycbcrConversion, nullptr);
-        }
-    }
-    if (state.videoVertexBuffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(state.vkDevice, state.videoVertexBuffer, nullptr);
-    }
-    if (state.videoVertexMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(state.vkDevice, state.videoVertexMemory, nullptr);
-    }
-    if (state.quadVertexBuffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(state.vkDevice, state.quadVertexBuffer, nullptr);
-    }
-    if (state.quadVertexMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(state.vkDevice, state.quadVertexMemory, nullptr);
-    }
-    if (state.feedbackVertexBuffer != VK_NULL_HANDLE) {
-        vkDestroyBuffer(state.vkDevice, state.feedbackVertexBuffer, nullptr);
-    }
-    if (state.feedbackVertexMemory != VK_NULL_HANDLE) {
-        vkFreeMemory(state.vkDevice, state.feedbackVertexMemory, nullptr);
-    }
-    if (state.feedbackPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(state.vkDevice, state.feedbackPipeline, nullptr);
-    }
-    if (state.pipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(state.vkDevice, state.pipeline, nullptr);
-    }
-    if (state.pipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(state.vkDevice, state.pipelineLayout, nullptr);
-    }
-    for (auto& eyeChain : state.eyes) {
-        for (auto framebuffer : eyeChain.framebuffers) {
-            vkDestroyFramebuffer(state.vkDevice, framebuffer, nullptr);
-        }
-        for (auto imageView : eyeChain.imageViews) {
-            vkDestroyImageView(state.vkDevice, imageView, nullptr);
-        }
-    }
-    if (state.renderPass != VK_NULL_HANDLE) {
-        vkDestroyRenderPass(state.vkDevice, state.renderPass, nullptr);
-    }
-    if (state.vkCommandPool != VK_NULL_HANDLE) {
-        vkDestroyCommandPool(state.vkDevice, state.vkCommandPool, nullptr);
-    }
+
+    // C-03: Destruir ordenadamente todos os 41 recursos Vulkan e 3 AImageReaders
+    DestroyAppResources(state);
+
     for (auto& eye : state.eyes) {
         if (eye.handle != XR_NULL_HANDLE) xrDestroySwapchain(eye.handle);
     }
+    if (state.uiPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.uiPanelSwapchain.handle);
+    if (state.controlsPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.controlsPanelSwapchain.handle);
+    if (state.modalPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.modalPanelSwapchain.handle);
+    if (state.cursorSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.cursorSwapchain.handle);
     if (state.localSpace != XR_NULL_HANDLE) xrDestroySpace(state.localSpace);
     if (state.session != XR_NULL_HANDLE) xrDestroySession(state.session);
     if (state.vkDevice != VK_NULL_HANDLE) vkDestroyDevice(state.vkDevice, nullptr);
     if (state.vkInstance != VK_NULL_HANDLE) vkDestroyInstance(state.vkInstance, nullptr);
     if (state.instance != XR_NULL_HANDLE) xrDestroyInstance(state.instance);
+
+    // C-04: Limpa o estado global no fechamento para deixar o processo em cache limpo
+    reset_process_state();
+    ResetGlobalState();
+
+    // C-01: Desanexar thread nativa da JVM antes de retornar de android_main
+    if (app && app->activity && app->activity->vm) {
+        JNIEnv* env = nullptr;
+        if (app->activity->vm->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK) {
+            app->activity->vm->DetachCurrentThread();
+        }
+    }
 }

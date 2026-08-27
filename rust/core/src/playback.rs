@@ -5,7 +5,7 @@ use audio::output::AudioOutput;
 use crate::sync::SyncManager;
 use crate::texture::TextureOutput;
 use ndk::media::media_format::MediaFormat;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
@@ -123,6 +123,7 @@ pub struct PlaybackController {
     // seek() ja faz.
     desired_audio_track: usize,
     audio_track_count: usize,
+    detected_screen_mode: u32,
     auto_paused: bool,
     // Instrumentacao (docs/DEBUGGING.md), capturada em load_at() antes de
     // mover o Demuxer/HwDecoder pra dentro das threads de sessao — ver
@@ -136,6 +137,12 @@ pub struct PlaybackController {
     connection_cache: crate::demuxer::ConnectionCache,
     seek_started_at: Arc<Mutex<Option<Instant>>>,
     seek_latency_ms: Arc<AtomicU32>,
+    av_drift_ms: Arc<AtomicI32>,
+    // Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
+    subtitle_entries: Option<Vec<media_logic::subtitle::SubtitleEntry>>,
+    selected_subtitle_track: i32,
+    subtitle_offset_ms: i64,
+    available_subtitle_tracks: Vec<crate::subtitle_loader::SubtitleTrackInfo>,
 }
 
 impl PlaybackController {
@@ -144,7 +151,7 @@ impl PlaybackController {
         Self {
             texture_output: Arc::new(Mutex::new(TextureOutput::new())),
             audio_output: Arc::new(Mutex::new(None)),
-            sync_manager: Arc::new(SyncManager::new(speed_bits.clone())),
+            sync_manager: Arc::new(SyncManager::new(speed_bits.clone(), 0.0)),
             session: None,
             current_path: None,
             duration: 0.0,
@@ -152,6 +159,7 @@ impl PlaybackController {
             speed_bits,
             desired_audio_track: 0,
             audio_track_count: 0,
+            detected_screen_mode: 0,
             auto_paused: false,
             network_stats: None,
             video_queue: None,
@@ -160,6 +168,11 @@ impl PlaybackController {
             connection_cache: crate::demuxer::ConnectionCache::default(),
             seek_started_at: Arc::new(Mutex::new(None)),
             seek_latency_ms: Arc::new(AtomicU32::new(0)),
+            av_drift_ms: Arc::new(AtomicI32::new(0)),
+            subtitle_entries: None,
+            selected_subtitle_track: -1,
+            subtitle_offset_ms: 0,
+            available_subtitle_tracks: Vec::new(),
         }
     }
 
@@ -212,11 +225,7 @@ impl PlaybackController {
 
         self.current_path = Some(path.to_string());
         let mut demuxer = Demuxer::open(path, Some(&mut self.connection_cache)).map_err(|e| e.to_string())?;
-        unsafe {
-            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-            let msg = std::ffi::CString::new(format!("load_at: demux_open={}ms", load_started_at.elapsed().as_millis())).unwrap();
-            ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-        }
+        crate::log_info!("load_at: demux_open={}ms", load_started_at.elapsed().as_millis());
         self.network_stats = demuxer.network_stats.clone();
         demuxer.select_audio_track(self.desired_audio_track);
         self.audio_track_count = demuxer.audio_streams.len();
@@ -234,6 +243,35 @@ impl PlaybackController {
                     height = video_decoder_ctx.height() as u32;
                 }
             }
+        }
+
+        let (fmt3d, _) = crate::format3d_detect::detect(&demuxer, path, width, height);
+        self.detected_screen_mode = fmt3d.to_screen_mode_index();
+
+        // Descoberta de legendas sidecar (.srt/.vtt) e trilhas embutidas (T9.1, T9.6)
+        self.available_subtitle_tracks = crate::subtitle_loader::probe_sidecar_subtitles(path);
+        for (i, &stream_idx) in demuxer.subtitle_streams.iter().enumerate() {
+            let (lang, title) = if let Some(stream) = demuxer.input_context.stream(stream_idx) {
+                let meta = stream.metadata();
+                (
+                    meta.get("language").unwrap_or_default().to_string(),
+                    meta.get("title").unwrap_or_default().to_string(),
+                )
+            } else {
+                (String::new(), String::new())
+            };
+            self.available_subtitle_tracks.push(crate::subtitle_loader::SubtitleTrackInfo {
+                title: if title.is_empty() { format!("Track {}", i + 1) } else { title },
+                language: lang,
+                is_external: false,
+                source_path: None,
+                stream_index: Some(stream_idx),
+            });
+        }
+        if self.selected_subtitle_track >= 0 && (self.selected_subtitle_track as usize) < self.available_subtitle_tracks.len() {
+            self.load_subtitle_track(self.selected_subtitle_track as usize);
+        } else if !self.available_subtitle_tracks.is_empty() && self.selected_subtitle_track == 0 {
+            self.load_subtitle_track(0);
         }
 
         // O Quest 3 (MediaCodec) exige o mime correto do decoder de hardware;
@@ -263,11 +301,7 @@ impl PlaybackController {
         let (frames_output, frames_dropped) = video_decoder.metrics();
         self.frames_output = Some(frames_output);
         self.frames_dropped = Some(frames_dropped);
-        unsafe {
-            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-            let msg = std::ffi::CString::new(format!("load_at: decoder_ready={}ms", load_started_at.elapsed().as_millis())).unwrap();
-            ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-        }
+        crate::log_info!("load_at: decoder_ready={}ms", load_started_at.elapsed().as_millis());
 
         let mut sps_pps = None;
         if let Some(ed) = demuxer.get_video_extradata() {
@@ -292,11 +326,7 @@ impl PlaybackController {
                 audio_out = Some(out);
             }
         }
-        unsafe {
-            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-            let msg = std::ffi::CString::new(format!("load_at: audio_ready={}ms", load_started_at.elapsed().as_millis())).unwrap();
-            ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-        }
+        crate::log_info!("load_at: audio_ready={}ms", load_started_at.elapsed().as_millis());
 
         if let Ok(mut out_guard) = self.audio_output.lock() {
             // Reaplica o volume persistido (o AudioOutput e recriado a cada load).
@@ -327,7 +357,7 @@ impl PlaybackController {
         // e mais previsivel do que tentar "resetar" o anterior.
         // start() precisa de &mut, entao e chamado antes de mover o
         // SyncManager para dentro do Arc (compartilhado com as threads).
-        let mut sync_manager = SyncManager::new(self.speed_bits.clone());
+        let mut sync_manager = SyncManager::new(self.speed_bits.clone(), start_time);
         sync_manager.start();
         let sync_manager = Arc::new(sync_manager);
         self.sync_manager = sync_manager.clone();
@@ -355,6 +385,7 @@ impl PlaybackController {
 
         let seek_started_at_v = self.seek_started_at.clone();
         let seek_latency_v = self.seek_latency_ms.clone();
+        let av_drift_v = self.av_drift_ms.clone();
 
         // Flags desta geracao: nao sao compartilhadas com nenhuma
         // sessao anterior ou futura (ver media_logic::session::Generation e
@@ -365,7 +396,6 @@ impl PlaybackController {
 
         let is_playing_v = is_playing.clone();
         let is_playing_a = is_playing.clone();
-        let is_playing_d = is_playing.clone();
 
         let is_running_v = is_running.clone();
         let is_running_a = is_running.clone();
@@ -387,10 +417,7 @@ impl PlaybackController {
                     sync_d.update_master_clock(target_sec);
                 }
 
-                if !*is_playing_d.lock().unwrap() {
-                    std::thread::sleep(std::time::Duration::from_millis(50));
-                    continue;
-                }
+
 
                 let current_epoch = epoch_d.load(Ordering::SeqCst);
                 match demuxer.read_packet() {
@@ -414,11 +441,7 @@ impl PlaybackController {
                         // testado hoje pra "o AVFormatContext esta num
                         // estado de erro sticky, precisa recomecar" — so que
                         // agora loga em vez de esconder.
-                        unsafe {
-                            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-                            let msg = std::ffi::CString::new(format!("Demuxer: erro de leitura ({e}), reiniciando do inicio")).unwrap();
-                            ndk_sys::__android_log_print(5, tag.as_ptr(), msg.as_ptr()); // 5 = ANDROID_LOG_WARN
-                        }
+                        crate::log_warn!("Demuxer: erro de leitura ({e}), reiniciando do inicio");
                         let _ = demuxer.input_context.seek(0, 0..1);
                         sync_d.reset();
                     }
@@ -443,7 +466,7 @@ impl PlaybackController {
             loop {
                 if !*is_running_v.lock().unwrap() { break; }
 
-                if !*is_playing_v.lock().unwrap() {
+                if !*is_playing_v.lock().unwrap() && !preroll.is_awaiting_landing() {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                     continue;
                 }
@@ -471,11 +494,7 @@ impl PlaybackController {
                     let pts_sec = pts as f64 * video_time_base;
                     let lag = sync_v.get_master_clock() - pts_sec;
                     if !was_active && lag > CATCH_UP_SKIP_THRESHOLD_SEC && packet.is_key() {
-                        unsafe {
-                            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-                            let msg = std::ffi::CString::new(format!("Video catch-up: retomando decode na keyframe (lag era {lag:.2}s)")).unwrap();
-                            ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-                        }
+                        crate::log_info!("Video catch-up: retomando decode na keyframe (lag era {lag:.2}s)");
                     }
                     if preroll.should_skip_packet(packet.is_key(), lag, CATCH_UP_SKIP_THRESHOLD_SEC) {
                         continue;
@@ -503,6 +522,8 @@ impl PlaybackController {
                                 }
                                 let master_clock = sync_v.get_master_clock();
                                 let delay = pts_sec - master_clock;
+                                let drift_ms = (-delay * 1000.0).clamp(i32::MIN as f64, i32::MAX as f64) as i32;
+                                av_drift_v.store(drift_ms, Ordering::Relaxed);
                                 if delay > 0.0 && delay < 1.0 {
                                     std::thread::sleep(std::time::Duration::from_secs_f64(delay));
                                 }
@@ -519,11 +540,7 @@ impl PlaybackController {
                             if let Some(start) = seek_started_at_v.lock().unwrap().take() {
                                 let ms = start.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
                                 seek_latency_v.store(ms, Ordering::Relaxed);
-                                unsafe {
-                                    let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-                                    let msg = std::ffi::CString::new(format!("seek: landing={ms}ms catchup_packets={catchup_packets}")).unwrap();
-                                    ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-                                }
+                                crate::log_info!("seek: landing={ms}ms catchup_packets={catchup_packets}");
                             }
                             catchup_packets = 0;
                         }
@@ -532,14 +549,10 @@ impl PlaybackController {
                 Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
                     if let Some(t) = last_epoch_change_at {
                         if t.elapsed() < std::time::Duration::from_secs(3) {
-                            unsafe {
-                                let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-                                let msg = std::ffi::CString::new(format!(
-                                    "seek: fila de video vazia {}ms apos epoca mudar",
-                                    t.elapsed().as_millis()
-                                )).unwrap();
-                                ndk_sys::__android_log_print(5, tag.as_ptr(), msg.as_ptr()); // 5 = ANDROID_LOG_WARN
-                            }
+                            crate::log_warn!(
+                                "seek: fila de video vazia {}ms apos epoca mudar",
+                                t.elapsed().as_millis()
+                            );
                         }
                     }
                 }
@@ -561,6 +574,14 @@ impl PlaybackController {
 
         let audio_thread = thread::spawn(move || {
             let mut applied_speed = 1.0f32;
+            let layout = audio_decoder
+                .as_ref()
+                .map(|ad| ad.channel_layout())
+                .unwrap_or(media_logic::spatial_audio::AudioChannelLayout::Stereo);
+            let mut spatial_processor =
+                media_logic::spatial_audio::SpatialAudioProcessor::new(layout, 48000.0);
+            let mut binaural_buffer = Vec::with_capacity(4096);
+
             // Reconstruir o resampler descarta o historico interno do filtro
             // FIR, o que gera um pequeno estalo/transiente a cada troca. O
             // slider de velocidade dispara onProgressChanged (e portanto
@@ -603,8 +624,16 @@ impl PlaybackController {
                                 let pts_sec = pts as f64 * audio_time_base;
                                 sync_a.update_audio_pts(pts_sec);
 
+                                let head_rot = media_logic::spatial_audio::get_global_head_orientation();
+                                let spatial_mode = media_logic::spatial_audio::get_global_spatial_mode();
+                                let head_tracking = media_logic::spatial_audio::get_global_head_tracking_enabled();
+
+                                spatial_processor.set_mode(spatial_mode);
+                                spatial_processor.set_head_tracking_enabled(head_tracking);
+                                spatial_processor.process(&samples, head_rot, &mut binaural_buffer);
+
                                 if let Some(sender) = &audio_sender {
-                                    for &sample in &samples {
+                                    for &sample in &binaural_buffer {
                                         if !try_send_until_stopped(sender, sample, &is_running_a) {
                                             break;
                                         }
@@ -828,16 +857,17 @@ impl PlaybackController {
         self.seek_latency_ms.load(Ordering::Relaxed)
     }
 
+    // Drift A/V (master_clock - video_pts) do ultimo frame decodificado, em ms.
+    pub fn get_last_av_drift_ms(&self) -> f32 {
+        self.av_drift_ms.load(Ordering::Relaxed) as f32
+    }
+
     pub fn toggle_play_pause(&mut self) {
         let currently_playing = self.session.as_ref().map(|s| s.is_playing()).unwrap_or(false);
         let new_state = !currently_playing;
         self.set_playing(new_state);
 
-        unsafe {
-            let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-            let msg = std::ffi::CString::new(if new_state { "Resumed playback" } else { "Paused playback" }).unwrap();
-            ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-        }
+        crate::log_info!("{}", if new_state { "Resumed playback" } else { "Paused playback" });
     }
 
     /// Para a geracao atual de threads e espera (join) elas
@@ -854,9 +884,80 @@ impl PlaybackController {
         if let Some(mut output) = audio_output.take() {
             let _ = output.stop();
         }
+
+        if let Ok(mut tex) = self.texture_output.lock() {
+            tex.clear();
+        }
+        self.duration = 0.0;
+        self.current_path = None;
+        self.auto_paused = false;
     }
 
     pub fn get_progress(&self) -> (f64, f64) {
         (self.sync_manager.get_master_clock(), self.duration)
+    }
+
+    pub fn detected_screen_mode(&self) -> u32 {
+        self.detected_screen_mode
+    }
+
+    pub fn set_subtitle_track(&mut self, track: i32) {
+        self.selected_subtitle_track = track;
+        if track < 0 || (track as usize) >= self.available_subtitle_tracks.len() {
+            self.subtitle_entries = None;
+        } else {
+            self.load_subtitle_track(track as usize);
+        }
+    }
+
+    pub fn get_subtitle_track(&self) -> i32 {
+        self.selected_subtitle_track
+    }
+
+    pub fn set_subtitle_offset_ms(&mut self, offset_ms: i64) {
+        self.subtitle_offset_ms = offset_ms;
+    }
+
+    pub fn get_subtitle_offset_ms(&self) -> i64 {
+        self.subtitle_offset_ms
+    }
+
+    pub fn get_subtitle_track_count(&self) -> usize {
+        self.available_subtitle_tracks.len()
+    }
+
+    pub fn load_external_subtitle(&mut self, path: &str) -> Result<u32, String> {
+        let entries = crate::subtitle_loader::load_subtitle_from_path(path)?;
+        let count = entries.len() as u32;
+        self.subtitle_entries = Some(entries);
+        let idx = self.available_subtitle_tracks.len();
+        self.available_subtitle_tracks.push(crate::subtitle_loader::SubtitleTrackInfo {
+            title: std::path::Path::new(path).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "External".into()),
+            language: String::new(),
+            is_external: true,
+            source_path: Some(path.to_string()),
+            stream_index: None,
+        });
+        self.selected_subtitle_track = idx as i32;
+        Ok(count)
+    }
+
+    fn load_subtitle_track(&mut self, idx: usize) {
+        if let Some(track) = self.available_subtitle_tracks.get(idx) {
+            if track.is_external {
+                if let Some(path) = &track.source_path {
+                    if let Ok(entries) = crate::subtitle_loader::load_subtitle_from_path(path) {
+                        self.subtitle_entries = Some(entries);
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn get_active_subtitle_text(&self) -> Option<String> {
+        let entries = self.subtitle_entries.as_ref()?;
+        let current_pts_sec = self.sync_manager.get_master_clock();
+        let current_pts_ms = (current_pts_sec * 1000.0) as i64;
+        media_logic::subtitle::find_active_cue(entries, current_pts_ms, self.subtitle_offset_ms).map(|c| c.text.clone())
     }
 }

@@ -22,6 +22,10 @@ include_directories(include)
 # VULKAN = esqueleto do Estagio 1 do plano de migracao — caminho paralelo,
 # independente do OVRFW (que e GLES-only por construcao, ver o plano).
 set(VRPLAYER_GRAPHICS_API "GLES" CACHE STRING "Graphics API for VR rendering: GLES or VULKAN")
+option(ENABLE_VK_VALIDATION_LAYERS "Enable Vulkan validation layers" OFF)
+if(ENABLE_VK_VALIDATION_LAYERS)
+    add_compile_definitions(ENABLE_VK_VALIDATION_LAYERS=1)
+endif()
 
 # -----------------------------------------------------------------------------
 # Source Files
@@ -81,6 +85,9 @@ if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
     # Estagio 5: shaders estereo/esfera (SBS/OU/360/180) com CAS sharpening
     vrplayer_compile_shader(stereo.vert kStereoVertSpirv)
     vrplayer_compile_shader(stereo.frag kStereoFragSpirv)
+    # Estagio 6: shaders de legendas MSDF (T9.3)
+    vrplayer_compile_shader(subtitle.vert kSubtitleVertSpirv)
+    vrplayer_compile_shader(subtitle.frag kSubtitleFragSpirv)
 
     add_custom_target(vrplayer_shaders DEPENDS ${GENERATED_SHADER_HEADERS})
 endif()

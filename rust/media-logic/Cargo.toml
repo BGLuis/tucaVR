@@ -13,3 +13,5 @@ edition = "2021"
 # run under plain `cargo test` on a laptop has to live in a crate that
 # doesn't depend on `core` or `audio`.
 [dependencies]
+chardetng = "0.1"
+encoding_rs = "0.8"

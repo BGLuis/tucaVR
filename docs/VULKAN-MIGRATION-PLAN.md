@@ -105,7 +105,7 @@ Em vez de migrar `vr_player_app.cpp` in-place, o plano é:
   por ora. Para validar: ligar os controles, `adb install -r
   app/build/outputs/apk/debug/app-debug.apk` (buildado com
   `-PvrplayerGraphicsApi=VULKAN`), `adb shell am start -n
-  com.vrplayer/.VRActivity`, e checar `adb logcat -s VRPlayerAppVK:*` — a
+  com.tucavr/.VRActivity`, e checar `adb logcat -s VRPlayerAppVK:*` — a
   linha `"Estagio 2 (quad estatico Vulkan) inicializado"` (nome do log
   evoluiu junto com o estágio, ver Estágio 2 abaixo) seguida de mudanças de
   estado de sessão sem `OXR(...)`/`VKR(...)` abortando indica sucesso.
@@ -385,16 +385,16 @@ geometria vem de `OVRFW::BuildGlobe`, não reimplementada à mão):
   da esfera sem salto de interpolação (`s=0`/`s=slices`, mesma posição,
   `uu=0` vs `uu=1`) — com o deslocamento na posição em vez do UV, essa
   costura continua intacta, só que agora alinhada com a convenção correta.
-- **"Um dos modelos 360 ficou com o vídeo invertido"**: mesma causa raiz do
-  item acima — o deslocamento de meia volta na longitude afeta **todos** os
-  modos de esfera igualmente (a malha é compartilhada), então o conteúdo de
-  qualquer modo 360 aparecia com a frente/trás trocadas antes deste fix.
-  Não foi possível confirmar nesta revisão (sem headset) se algum problema
-  adicional específico de SBS vs. OU (ex.: troca de olho/inversão vertical)
-  sobrevive depois do fix de longitude — se a inversão persistir após esta
-  correção, é um bug diferente (não de longitude) e precisa de mais detalhe
-  (qual dos dois, SBS ou OU, e se "invertido" é cima/baixo, espelhado
-  esquerda/direita, ou profundidade estéreo trocada).
+- **"Um dos modelos 360 ficou com o vídeo invertido / textos lidos como em espelho"**:
+  além do deslocamento de longitude original (frente/trás), a fórmula de vértices
+  de `CreateSphereMesh` continha um sinal negativo indevido no cálculo da coordenada X:
+  `float x = -radius * sinf(phi) * sinf(theta)`. Com isso, qualquer ponto com $\theta > 0$
+  (lado direito da textura equirretangular, $uu > 0.5$) era projetado em $X < 0$
+  (lado esquerdo no espaço VR), invertendo horizontalmente a projeção (efeito espelho,
+  onde textos e detalhes da cena eram lidos ao contrário). Corrigido removendo o sinal
+  negativo (`float x = radius * sinf(phi) * sinf(theta)`), alinhando a malha com a
+  convenção do `BuildGlobeDescriptor` do GLES e validado com teste unitário automatizado
+  em `native/tests/test_vk_math.cpp` (`TestSphereMeshCoordinates`).
 
 Ver `docs/TESTING-PLAN.md` pro que mais exige headset físico e ainda não foi
 validado nesta revisão.

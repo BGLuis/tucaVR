@@ -1,10 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  O `package="..."` que existia aqui foi removido: com AGP 8 o application id
+  vem exclusivamente de `namespace`/`applicationId` no app/build.gradle.kts
+  (`com.tucavr`), e manter os dois lados duplicados so cria a chance de eles
+  divergirem numa proxima migracao de nome.
+-->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.vrplayer">
+    android:installLocation="auto">
 
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <!-- Teclado nativo do Meta Quest (VRActivity.showNativeKeyboardFor):
          diz ao Horizon OS que este app quer o teclado do sistema exibido
@@ -21,16 +30,29 @@
     <application
         android:allowBackup="true"
         android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true">
-        
+
         <!-- Dispositivos suportados e tela de carregamento nativa -->
         <meta-data android:name="com.oculus.supportedDevices" android:value="quest3|quest3s" />
         <meta-data android:name="com.oculus.ossplash" android:value="true" />
 
+        <!-- `excludeFromRecents="true"` e exigencia documentada da Meta pra
+             activity de lancamento de app imersivo ("Application Manifests for
+             Release Builds"), e faltava aqui. Sem ela a task do app entra na
+             lista de recents do Android — que, num app `vr_only` sem nenhuma
+             janela 2D e sem TaskDescription, e justamente a superficie que o
+             Horizon OS acaba desenhando sem nome/thumbnail ao sair do app.
+             Ver tambem `setTaskDescription` no onCreate da VRActivity, que
+             carimba nome+icone na task pra qualquer superficie que os leia. -->
         <activity
             android:name=".VRActivity"
             android:label="@string/app_name"
+            android:icon="@mipmap/ic_launcher"
+            android:roundIcon="@mipmap/ic_launcher_round"
             android:exported="true"
+            android:excludeFromRecents="true"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
             android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
             android:launchMode="singleTask"

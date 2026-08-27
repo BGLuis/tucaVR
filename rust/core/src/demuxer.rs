@@ -64,6 +64,7 @@ pub struct Demuxer {
     // stream index bruto do container.
     pub video_streams: Vec<usize>,
     pub audio_streams: Vec<usize>,
+    pub subtitle_streams: Vec<usize>,
     // Instrumentacao do PrefetchReader da fonte remota (docs/DEBUGGING.md) —
     // `None` para arquivo local ou `http://` puro (sem PrefetchReader
     // envolvido, ver roteamento em `new()`). Capturado ANTES de o
@@ -126,6 +127,16 @@ impl Demuxer {
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(&target.path), Some(fast_probe_options())).map_err(|e| e.to_string())?
+        } else if let Some(target) = protocols::nfs::NfsTarget::from_internal(path) {
+            let source = protocols::nfs::NfsFileSource::open(&target)?;
+            let reader = PrefetchReader::with_block_sizes(source, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);
+            network_stats = Some(reader.stats());
+            let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
+            ffmpeg::format::input_from_stream(stream_io, Some(&target.file_path), Some(fast_probe_options())).map_err(|e| e.to_string())?
+        } else if path.contains(".m3u8") || path.starts_with("hls://") {
+            let source = protocols::hls::HlsStreamSource::open(path)?;
+            let stream_io = StreamIo::from_read_seek(source).map_err(|e| e.to_string())?;
+            ffmpeg::format::input_from_stream(stream_io, Some(path), Some(fast_probe_options())).map_err(|e| e.to_string())?
         } else if path.starts_with("https://") {
             let shared = Self::https_source(path, cache)?;
             let reader = PrefetchReader::with_block_sizes(shared, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);
@@ -138,12 +149,14 @@ impl Demuxer {
 
         let mut video_streams = Vec::new();
         let mut audio_streams = Vec::new();
+        let mut subtitle_streams = Vec::new();
 
         for stream in ictx.streams() {
             let codec = stream.parameters();
             match codec.medium() {
                 ffmpeg::media::Type::Video => video_streams.push(stream.index()),
                 ffmpeg::media::Type::Audio => audio_streams.push(stream.index()),
+                ffmpeg::media::Type::Subtitle => subtitle_streams.push(stream.index()),
                 _ => {}
             }
         }
@@ -157,6 +170,7 @@ impl Demuxer {
             audio_stream_index,
             video_streams,
             audio_streams,
+            subtitle_streams,
             network_stats,
         })
     }

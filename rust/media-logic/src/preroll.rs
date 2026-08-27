@@ -14,6 +14,8 @@ impl PrerollState {
         self.catching_up = true;
     }
 
+    pub fn is_awaiting_landing(&self) -> bool { self.awaiting_landing }
+
     pub fn is_active(&self) -> bool {
         self.catching_up
     }

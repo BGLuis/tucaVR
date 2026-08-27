@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "VRPlayer"
+rootProject.name = "tucaVR"
 include(":app")

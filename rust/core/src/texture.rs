@@ -42,6 +42,11 @@ impl TextureOutput {
         Ok(())
     }
 
+    pub fn clear(&mut self) {
+        self.current_buffer = None;
+        self.current_image = None;
+    }
+
     pub fn get_window(&self) -> Option<NativeWindow> {
         self.reader.as_ref().and_then(|r| r.window().ok())
     }
@@ -63,11 +68,7 @@ impl TextureOutput {
                             self.frames_decoded = self.frames_decoded.wrapping_add(1);
                         }
                         Err(e) => {
-                            unsafe {
-                                let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-                                let msg = std::ffi::CString::new(format!("hardware_buffer error: {:?}", e)).unwrap();
-                                ndk_sys::__android_log_print(6, tag.as_ptr(), msg.as_ptr());
-                            }
+                            crate::log_error!("hardware_buffer error: {:?}", e);
                         }
                     }
                 }
@@ -75,11 +76,7 @@ impl TextureOutput {
                     // Normal, no image ready yet or max images reached
                 }
                 Err(e) => {
-                    unsafe {
-                        let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-                        let msg = std::ffi::CString::new(format!("acquire_latest_image error: {:?}", e)).unwrap();
-                        ndk_sys::__android_log_print(6, tag.as_ptr(), msg.as_ptr());
-                    }
+                    crate::log_error!("acquire_latest_image error: {:?}", e);
                 }
             }
         }

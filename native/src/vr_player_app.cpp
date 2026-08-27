@@ -25,13 +25,37 @@
 #include <atomic>
 #include <mutex>
 #include <string>
-#include <cstdio>
+#include "debug_stats.h"
+#include "screen_mode.h"
 
-#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, "VRPlayerApp", __VA_ARGS__)
-#define LOGW(...) __android_log_print(ANDROID_LOG_WARN, "VRPlayerApp", __VA_ARGS__)
-#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, "VRPlayerApp", __VA_ARGS__)
+static char g_sessionId[32] = "--------";
+static std::mutex g_sessionIdMutex;
+
+static inline void get_current_session_id(char* out, size_t maxLen) {
+    std::lock_guard<std::mutex> lock(g_sessionIdMutex);
+    snprintf(out, maxLen, "%s", g_sessionId);
+}
+
+#define LOGI(fmt, ...) do { \
+    char _sId[32]; \
+    get_current_session_id(_sId, sizeof(_sId)); \
+    __android_log_print(ANDROID_LOG_INFO, "VRPlayerApp", "[s:%s] " fmt, _sId, ##__VA_ARGS__); \
+} while (0)
+
+#define LOGW(fmt, ...) do { \
+    char _sId[32]; \
+    get_current_session_id(_sId, sizeof(_sId)); \
+    __android_log_print(ANDROID_LOG_WARN, "VRPlayerApp", "[s:%s] " fmt, _sId, ##__VA_ARGS__); \
+} while (0)
+
+#define LOGE(fmt, ...) do { \
+    char _sId[32]; \
+    get_current_session_id(_sId, sizeof(_sId)); \
+    __android_log_print(ANDROID_LOG_ERROR, "VRPlayerApp", "[s:%s] " fmt, _sId, ##__VA_ARGS__); \
+} while (0)
 
 extern "C" {
+    extern void set_session_id(const char* session_id);
     extern void start_video_playback(const char* path, float startTimeSec);
     extern void stop_video_playback();
     extern void toggle_play_pause();
@@ -55,6 +79,7 @@ extern "C" {
     extern void set_video_volume(float volume);
     extern float get_video_volume();
     extern void set_playback_speed(float speed);
+    extern float get_playback_speed();
     extern void cycle_audio_track();
     extern void seek_video_playback(float position);
     // UX de feedback (loading/play-pause) — ver comentario em
@@ -99,6 +124,23 @@ extern "C" {
     extern char* sftp_list_directory(const char* host, int32_t port, const char* username,
                                       const char* password, const char* private_key, const char* path);
 
+    // T5.1/T5.2/T5.4: NFS
+    extern void start_nfs_playback(const char* host, int32_t port, const char* export_path,
+                                    const char* file_path, int32_t version, float startTimeSec);
+    extern char* nfs_list_directory(const char* host, int32_t port, const char* export_path,
+                                     const char* dir_path, int32_t version);
+    extern char* nfs_list_exports(const char* host, int32_t port);
+
+    // T10.1: Descoberta Automática
+    extern char* discovery_scan_network(uint32_t timeout_ms);
+
+    // T7.2/T7.3: DLNA
+    extern char* dlna_get_device_description(const char* location);
+    extern char* dlna_browse_directory(const char* control_url, const char* object_id, uint32_t start_index, uint32_t max_count);
+
+    // T8.1/T8.6: HLS
+    extern char* hls_probe_variants(const char* url);
+
     // T9: thumbnails de rede — ver rust/bridge/src/lib.rs para o contrato
     // completo (RGBA cru exatamente max_width*max_height*4 bytes, ou nulo em
     // qualquer falha; o ponteiro retornado DEVE ser liberado com
@@ -106,15 +148,19 @@ extern "C" {
     extern uint8_t* smb_generate_thumbnail(const char* host, int32_t port, const char* username,
                                             const char* password, const char* domain, const char* share,
                                             const char* path, uint32_t max_width, uint32_t max_height,
+                                            uint64_t cancel_token,
                                             uint32_t* out_width, uint32_t* out_height, size_t* out_len);
     extern uint8_t* ftp_generate_thumbnail(const char* host, int32_t port, const char* username,
                                             const char* password, const char* path,
                                             uint32_t max_width, uint32_t max_height,
+                                            uint64_t cancel_token,
                                             uint32_t* out_width, uint32_t* out_height, size_t* out_len);
     extern uint8_t* sftp_generate_thumbnail(const char* host, int32_t port, const char* username,
                                              const char* password, const char* private_key, const char* path,
                                              uint32_t max_width, uint32_t max_height,
+                                             uint64_t cancel_token,
                                              uint32_t* out_width, uint32_t* out_height, size_t* out_len);
+    extern void cancel_thumbnail_generation(uint64_t cancel_token);
     extern void free_rust_thumbnail_buffer(uint8_t* ptr, size_t len);
 
     // Preview de arrasto no seekbar (T-seek-ux): trilha de thumbnails (N
@@ -147,6 +193,7 @@ extern "C" {
     extern uint32_t cycle_3d_mode();
     extern uint32_t get_3d_mode();
     extern void set_3d_mode(uint32_t mode);
+    extern void set_screen_mode_override(int32_t mode);
     extern uint32_t toggle_swap_eyes();
     extern uint32_t get_swap_eyes();
 
@@ -154,6 +201,47 @@ extern "C" {
     // completo em rust/bridge/src/lib.rs junto de KEYBOARD_ACTIVE.
     extern void set_keyboard_active(uint32_t active);
     extern uint32_t get_keyboard_active();
+
+    // Fase 0.4 T5: Foveated Rendering. So tem efeito real no caminho Vulkan
+    // (vr_player_jni_vulkan.cpp) — OVRFW::XrApp (usado neste caminho GLES)
+    // nao expoe o XrSwapchain necessario pra xrUpdateSwapchainFB. O valor e
+    // aceito e guardado no Rust mesmo assim (nao rejeita a chamada), so nao
+    // ha nada aqui que o leia.
+    extern void set_foveation_enabled(uint32_t enabled);
+    extern void set_pause_on_exit(uint32_t enabled);
+    // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
+    extern void set_thermal_level(uint32_t level);
+    extern uint32_t get_thermal_level();
+
+    // T13.1: metadados de midia (container/duracao/bitrate/trilhas) pra tela
+    // de detalhe do arquivo — ver rust/media_logic/src/metadata_wire.rs pra
+    // gramatica da string retornada. BLOQUEANTE (probe de container), mesmo
+    // contrato de erro/liberacao de smb_list_directory (free_rust_string).
+    extern char* read_media_metadata(const char* path);
+    extern char* smb_read_metadata(const char* host, int32_t port, const char* username,
+                                    const char* password, const char* domain, const char* share,
+                                    const char* path);
+    extern char* ftp_read_metadata(const char* host, int32_t port, const char* username,
+                                    const char* password, const char* path);
+    extern char* sftp_read_metadata(const char* host, int32_t port, const char* username,
+                                     const char* password, const char* private_key, const char* path);
+    // T13.2: seleciona a trilha de audio pro PROXIMO load_at() — chamar
+    // sempre antes de tocar (inclusive ordinal 0), ver rust/bridge/src/lib.rs.
+    extern void set_desired_audio_track(uint32_t ordinal);
+
+    // Rastreamento de cabeça e configuração de áudio espacial
+    extern void set_head_pose_orientation(float x, float y, float z, float w);
+    extern void set_spatial_audio_mode(uint32_t mode);
+    extern uint32_t get_spatial_audio_mode();
+    extern void set_spatial_audio_head_tracking(uint32_t enabled);
+    extern uint32_t get_spatial_audio_head_tracking();
+
+    // Debug Stats Modal (docs/reports/DEBUG-STATS-MODAL.md)
+    extern float get_last_av_drift_ms();
+    extern uint32_t get_foveation_enabled();
+    extern uint32_t get_audio_track_count();
+    extern int32_t get_subtitle_track();
+    extern int64_t get_subtitle_offset_ms();
 }
 
 // Debug: dump do olho esquerdo pra PPM sob demanda (ver nativeRequestFrameCapture)
@@ -174,7 +262,7 @@ static uint32_t g_scrubOverlayHeight = 0;
 static std::mutex g_scrubOverlayMutex;
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeUpdateScrubOverlay(JNIEnv* env, jobject thiz, jbyteArray rgba, jint width, jint height) {
+Java_com_tucavr_VRActivity_nativeUpdateScrubOverlay(JNIEnv* env, jobject thiz, jbyteArray rgba, jint width, jint height) {
     jsize len = env->GetArrayLength(rgba);
     std::vector<uint8_t> buf(static_cast<size_t>(len));
     env->GetByteArrayRegion(rgba, 0, len, reinterpret_cast<jbyte*>(buf.data()));
@@ -193,13 +281,53 @@ Java_com_vrplayer_VRActivity_nativeUpdateScrubOverlay(JNIEnv* env, jobject thiz,
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetScrubOverlayVisible(JNIEnv* env, jobject thiz, jboolean visible) {
+Java_com_tucavr_VRActivity_nativeSetScrubOverlayVisible(JNIEnv* env, jobject thiz, jboolean visible) {
     g_scrubOverlayVisible = (visible == JNI_TRUE);
     LOGI("nativeSetScrubOverlayVisible: %d", (int)(visible == JNI_TRUE));
 }
 
+// Solicitação explícita para acordar e manter o painel de UI visível (reset de m_uiIdleTime),
+// por exemplo ao abrir modais como o seletor de formato de tela (T3.4).
+static std::atomic<bool> g_requestUiPanelVisible{false};
+static std::atomic<bool> g_requestControlsPanelVisible{false};
+static std::atomic<bool> g_stopVideoRequested{false};
+static std::atomic<bool> g_modalPanelActive{false};
+static std::atomic<bool> g_modalPanelShowRequested{false};
+static std::atomic<bool> g_modalPanelHideRequested{false};
+
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeRequestFrameCapture(JNIEnv* env, jobject thiz, jstring path) {
+Java_com_tucavr_VRActivity_nativeStopVideo(JNIEnv* env, jobject thiz) {
+    stop_video_playback();
+    g_stopVideoRequested.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRequestUiPanelVisible(JNIEnv* env, jobject thiz) {
+    g_requestUiPanelVisible.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRequestControlsPanelVisible(JNIEnv* env, jobject thiz) {
+    g_requestControlsPanelVisible.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeShowModalPanel(JNIEnv* env, jobject thiz) {
+    g_modalPanelShowRequested.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeHideModalPanel(JNIEnv* env, jobject thiz) {
+    g_modalPanelHideRequested.store(true);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeIsModalActive(JNIEnv* env, jobject thiz) {
+    return g_modalPanelActive.load() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRequestFrameCapture(JNIEnv* env, jobject thiz, jstring path) {
     const char* pathStr = env->GetStringUTFChars(path, nullptr);
     {
         std::lock_guard<std::mutex> lock(g_capturePathMutex);
@@ -249,21 +377,42 @@ static jbyteArray RustThumbnailStripToJByteArrayAndFree(JNIEnv* env, uint8_t* da
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativePlayVideo(JNIEnv* env, jobject thiz, jstring path, jfloat startTimeSec) {
-    const char* pathStr = env->GetStringUTFChars(path, nullptr);
-    start_video_playback(pathStr, startTimeSec);
-    env->ReleaseStringUTFChars(path, pathStr);
+Java_com_tucavr_VRActivity_nativeSetSessionId(JNIEnv* env, jobject thiz, jstring jSessionId) {
+    if (jSessionId) {
+        const char* s = env->GetStringUTFChars(jSessionId, nullptr);
+        {
+            std::lock_guard<std::mutex> lock(g_sessionIdMutex);
+            snprintf(g_sessionId, sizeof(g_sessionId), "%s", (s && s[0] != '\0') ? s : "--------");
+        }
+        set_session_id(s);
+        env->ReleaseStringUTFChars(jSessionId, s);
+    } else {
+        {
+            std::lock_guard<std::mutex> lock(g_sessionIdMutex);
+            snprintf(g_sessionId, sizeof(g_sessionId), "--------");
+        }
+        set_session_id("");
+    }
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeTogglePlayPause(JNIEnv* env, jobject thiz) {
+Java_com_tucavr_VRActivity_nativePlayVideo(JNIEnv* env, jobject thiz, jstring path, jfloat startTimeSec) {
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+    start_video_playback(pathStr, startTimeSec);
+    env->ReleaseStringUTFChars(path, pathStr);
+    g_requestControlsPanelVisible.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeTogglePlayPause(JNIEnv* env, jobject thiz) {
     toggle_play_pause();
+    g_requestControlsPanelVisible.store(true);
 }
 
 // Kotlin faz polling disto (ver autoPlayHandler em VRActivity.kt) pra mostrar um Toast quando
 // controller.load() falha (ex.: codec nao suportado) — antes o erro so ia pro logcat.
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeTakeLastPlaybackError(JNIEnv* env, jobject thiz) {
+Java_com_tucavr_VRActivity_nativeTakeLastPlaybackError(JNIEnv* env, jobject thiz) {
     char* rustStr = take_last_playback_error();
     if (!rustStr) {
         return nullptr;
@@ -274,22 +423,23 @@ Java_com_vrplayer_VRActivity_nativeTakeLastPlaybackError(JNIEnv* env, jobject th
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSeekVideo(JNIEnv* env, jobject thiz, jfloat positionSeconds) {
+Java_com_tucavr_VRActivity_nativeSeekVideo(JNIEnv* env, jobject thiz, jfloat positionSeconds) {
     seek_video_playback(positionSeconds);
+    g_requestControlsPanelVisible.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetVolume(JNIEnv* env, jobject thiz, jfloat volume) {
+Java_com_tucavr_VRActivity_nativeSetVolume(JNIEnv* env, jobject thiz, jfloat volume) {
     set_video_volume(volume);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetSpeed(JNIEnv* env, jobject thiz, jfloat speed) {
+Java_com_tucavr_VRActivity_nativeSetSpeed(JNIEnv* env, jobject thiz, jfloat speed) {
     set_playback_speed(speed);
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeCycleAudioTrack(JNIEnv* env, jobject thiz) {
+Java_com_tucavr_VRActivity_nativeCycleAudioTrack(JNIEnv* env, jobject thiz) {
     cycle_audio_track();
 }
 
@@ -297,25 +447,30 @@ Java_com_vrplayer_VRActivity_nativeCycleAudioTrack(JNIEnv* env, jobject thiz) {
 // retorna o novo valor (0..6, ver ScreenMode/rust/bridge/src/lib.rs) pra o
 // Kotlin atualizar o texto do botao sem precisar de uma segunda chamada.
 extern "C" JNIEXPORT jint JNICALL
-Java_com_vrplayer_VRActivity_nativeCycle3DMode(JNIEnv* env, jobject thiz) {
+Java_com_tucavr_VRActivity_nativeCycle3DMode(JNIEnv* env, jobject thiz) {
     return (jint)cycle_3d_mode();
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_vrplayer_VRActivity_nativeGet3DMode(JNIEnv* env, jobject thiz) {
+Java_com_tucavr_VRActivity_nativeGet3DMode(JNIEnv* env, jobject thiz) {
     return (jint)get_3d_mode();
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetScreenMode(JNIEnv* env, jobject thiz, jint mode) {
+Java_com_tucavr_VRActivity_nativeSetScreenMode(JNIEnv* env, jobject thiz, jint mode) {
     set_3d_mode((uint32_t)mode);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetScreenModeOverride(JNIEnv* env, jobject thiz, jint mode) {
+    set_screen_mode_override((int32_t)mode);
 }
 
 // T1.5: botao "👁 Swap eyes" — inverte qual metade do frame SBS/OU (flat ou
 // esferico) vai pro olho esquerdo/direito (ver uSwapEyes nos shaders,
 // SessionInit()).
 extern "C" JNIEXPORT jint JNICALL
-Java_com_vrplayer_VRActivity_nativeToggleSwapEyes(JNIEnv* env, jobject thiz) {
+Java_com_tucavr_VRActivity_nativeToggleSwapEyes(JNIEnv* env, jobject thiz) {
     return (jint)toggle_swap_eyes();
 }
 
@@ -323,14 +478,44 @@ Java_com_vrplayer_VRActivity_nativeToggleSwapEyes(JNIEnv* env, jobject thiz) {
 // rust/bridge/src/lib.rs. Chamado por VRActivity.showNativeKeyboardFor/
 // hideNativeKeyboard exatamente quando o teclado nativo abre/fecha.
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeSetKeyboardActive(JNIEnv* env, jobject thiz, jboolean active) {
+Java_com_tucavr_VRActivity_nativeSetKeyboardActive(JNIEnv* env, jobject thiz, jboolean active) {
     set_keyboard_active(active ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetFoveationEnabled(JNIEnv* env, jobject thiz, jboolean enabled) {
+    set_foveation_enabled(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPauseOnExit(JNIEnv* env, jobject thiz, jboolean enabled) {
+    set_pause_on_exit(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetThermalLevel(JNIEnv* env, jobject thiz, jint level) {
+    set_thermal_level(static_cast<uint32_t>(level));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetSpatialAudioMode(JNIEnv* env, jobject thiz, jint mode) {
+    set_spatial_audio_mode((uint32_t)(mode < 0 ? 0 : mode));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetSpatialAudioHeadTracking(JNIEnv* env, jobject thiz, jboolean enabled) {
+    set_spatial_audio_head_tracking(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetDebugStatsEnabled(JNIEnv* env, jobject thiz, jboolean enabled) {
+    g_debugStatsEnabled.store(enabled, std::memory_order_relaxed);
 }
 
 // T6.4: inicia playback SMB. Ver nota acima de start_smb_playback sobre por
 // que as credenciais vao como parametros separados, nao uma URI.
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativePlaySmb(JNIEnv* env, jobject thiz, jstring host, jint port,
+Java_com_tucavr_VRActivity_nativePlaySmb(JNIEnv* env, jobject thiz, jstring host, jint port,
                                             jstring share, jstring path, jstring username,
                                             jstring password, jstring domain, jfloat startTimeSec) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
@@ -354,7 +539,7 @@ Java_com_vrplayer_VRActivity_nativePlaySmb(JNIEnv* env, jobject thiz, jstring ho
 // BLOQUEANTE (I/O de rede sincrono do lado Rust) — o Kotlin so deve chamar
 // isto de uma coroutine em Dispatchers.IO, nunca da UI thread.
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeSmbListShares(JNIEnv* env, jobject thiz, jstring host, jint port,
+Java_com_tucavr_VRActivity_nativeSmbListShares(JNIEnv* env, jobject thiz, jstring host, jint port,
                                                   jstring username, jstring password, jstring domain) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
     const char* userStr = env->GetStringUTFChars(username, nullptr);
@@ -374,7 +559,7 @@ Java_com_vrplayer_VRActivity_nativeSmbListShares(JNIEnv* env, jobject thiz, jstr
 // T6.1/T6.4: navega um diretorio dentro de um share. Mesma ressalva de
 // bloqueio da funcao acima.
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeSmbListDirectory(JNIEnv* env, jobject thiz, jstring host, jint port,
+Java_com_tucavr_VRActivity_nativeSmbListDirectory(JNIEnv* env, jobject thiz, jstring host, jint port,
                                                      jstring username, jstring password, jstring domain,
                                                      jstring share, jstring path) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
@@ -399,7 +584,7 @@ Java_com_vrplayer_VRActivity_nativeSmbListDirectory(JNIEnv* env, jobject thiz, j
 // T6.4: playback FTP. Ver nota acima de start_smb_playback sobre por que as
 // credenciais vao como parametros separados, nao uma URI.
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativePlayFtp(JNIEnv* env, jobject thiz, jstring host, jint port,
+Java_com_tucavr_VRActivity_nativePlayFtp(JNIEnv* env, jobject thiz, jstring host, jint port,
                                             jstring path, jstring username, jstring password, jfloat startTimeSec) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
     const char* pathStr = env->GetStringUTFChars(path, nullptr);
@@ -418,7 +603,7 @@ Java_com_vrplayer_VRActivity_nativePlayFtp(JNIEnv* env, jobject thiz, jstring ho
 // sincrono do lado Rust) — o Kotlin so deve chamar isto de uma coroutine em
 // Dispatchers.IO, nunca da UI thread.
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeFtpListDirectory(JNIEnv* env, jobject thiz, jstring host, jint port,
+Java_com_tucavr_VRActivity_nativeFtpListDirectory(JNIEnv* env, jobject thiz, jstring host, jint port,
                                                      jstring username, jstring password, jstring path) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
     const char* userStr = env->GetStringUTFChars(username, nullptr);
@@ -440,7 +625,7 @@ Java_com_vrplayer_VRActivity_nativeFtpListDirectory(JNIEnv* env, jobject thiz, j
 // e por senha — `start_sftp_playback` (Rust) ja trata string vazia como
 // "sem chave" (ver cstr_to_string + filter(!empty) em rust/bridge/src/lib.rs).
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativePlaySftp(JNIEnv* env, jobject thiz, jstring host, jint port,
+Java_com_tucavr_VRActivity_nativePlaySftp(JNIEnv* env, jobject thiz, jstring host, jint port,
                                              jstring path, jstring username, jstring password,
                                              jstring privateKey, jfloat startTimeSec) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
@@ -461,7 +646,7 @@ Java_com_vrplayer_VRActivity_nativePlaySftp(JNIEnv* env, jobject thiz, jstring h
 // T6.2/T6.4: navega um diretorio num servidor SFTP. BLOQUEANTE, mesma
 // ressalva de nativeFtpListDirectory.
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeSftpListDirectory(JNIEnv* env, jobject thiz, jstring host, jint port,
+Java_com_tucavr_VRActivity_nativeSftpListDirectory(JNIEnv* env, jobject thiz, jstring host, jint port,
                                                       jstring username, jstring password,
                                                       jstring privateKey, jstring path) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
@@ -481,13 +666,70 @@ Java_com_vrplayer_VRActivity_nativeSftpListDirectory(JNIEnv* env, jobject thiz, 
     return RustStringToJStringAndFree(env, result);
 }
 
+// T5.1/T5.4: Playback NFS
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativePlayNfs(JNIEnv* env, jobject thiz,
+                                            jstring host, jint port, jstring exportPath,
+                                            jstring filePath, jint version, jfloat startTimeSec) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* expStr = env->GetStringUTFChars(exportPath, nullptr);
+    const char* fileStr = env->GetStringUTFChars(filePath, nullptr);
+
+    start_nfs_playback(hostStr, (int32_t)port, expStr, fileStr, (int32_t)version, startTimeSec);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(exportPath, expStr);
+    env->ReleaseStringUTFChars(filePath, fileStr);
+}
+
+// T5.2/T5.4: Listagem de diretório NFS
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeNfsListDirectory(JNIEnv* env, jobject thiz,
+                                                     jstring host, jint port,
+                                                     jstring exportPath, jstring dirPath,
+                                                     jint version) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* expStr = env->GetStringUTFChars(exportPath, nullptr);
+    const char* dirStr = env->GetStringUTFChars(dirPath, nullptr);
+
+    char* result = nfs_list_directory(hostStr, (int32_t)port, expStr, dirStr, (int32_t)version);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(exportPath, expStr);
+    env->ReleaseStringUTFChars(dirPath, dirStr);
+
+    return RustStringToJStringAndFree(env, result);
+}
+
+// T5.2/T5.4: Listagem de exports NFS
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeNfsListExports(JNIEnv* env, jobject thiz,
+                                                  jstring host, jint port) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+
+    char* result = nfs_list_exports(hostStr, (int32_t)port);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+
+    return RustStringToJStringAndFree(env, result);
+}
+
+// T10.1: Descoberta Automática de Servidores
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeDiscoveryScan(JNIEnv* env, jobject thiz,
+                                                 jint timeoutMs) {
+    char* result = discovery_scan_network((uint32_t)timeoutMs);
+    return RustStringToJStringAndFree(env, result);
+}
+
 // T9: thumbnail de um video num share SMB. BLOQUEANTE (rede + decode
 // sincronos do lado Rust) — Kotlin SEMPRE de Dispatchers.IO (ver
 // NetworkThumbnailGenerator.kt).
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_vrplayer_VRActivity_nativeSmbGenerateThumbnail(JNIEnv* env, jobject thiz, jstring host, jint port,
+Java_com_tucavr_VRActivity_nativeSmbGenerateThumbnail(JNIEnv* env, jobject thiz, jstring host, jint port,
                                                          jstring username, jstring password, jstring domain,
-                                                         jstring share, jstring path, jint maxWidth, jint maxHeight) {
+                                                         jstring share, jstring path, jint maxWidth, jint maxHeight,
+                                                         jlong cancelToken) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
     const char* userStr = env->GetStringUTFChars(username, nullptr);
     const char* passStr = env->GetStringUTFChars(password, nullptr);
@@ -498,7 +740,8 @@ Java_com_vrplayer_VRActivity_nativeSmbGenerateThumbnail(JNIEnv* env, jobject thi
     uint32_t outWidth = 0, outHeight = 0;
     size_t outLen = 0;
     uint8_t* data = smb_generate_thumbnail(hostStr, (int32_t)port, userStr, passStr, domainStr, shareStr, pathStr,
-                                            (uint32_t)maxWidth, (uint32_t)maxHeight, &outWidth, &outHeight, &outLen);
+                                            (uint32_t)maxWidth, (uint32_t)maxHeight, (uint64_t)cancelToken,
+                                            &outWidth, &outHeight, &outLen);
 
     env->ReleaseStringUTFChars(host, hostStr);
     env->ReleaseStringUTFChars(username, userStr);
@@ -513,9 +756,10 @@ Java_com_vrplayer_VRActivity_nativeSmbGenerateThumbnail(JNIEnv* env, jobject thi
 // T9: mesma logica de nativeSmbGenerateThumbnail, para um arquivo num
 // servidor FTP.
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_vrplayer_VRActivity_nativeFtpGenerateThumbnail(JNIEnv* env, jobject thiz, jstring host, jint port,
+Java_com_tucavr_VRActivity_nativeFtpGenerateThumbnail(JNIEnv* env, jobject thiz, jstring host, jint port,
                                                          jstring username, jstring password, jstring path,
-                                                         jint maxWidth, jint maxHeight) {
+                                                         jint maxWidth, jint maxHeight,
+                                                         jlong cancelToken) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
     const char* userStr = env->GetStringUTFChars(username, nullptr);
     const char* passStr = env->GetStringUTFChars(password, nullptr);
@@ -524,7 +768,8 @@ Java_com_vrplayer_VRActivity_nativeFtpGenerateThumbnail(JNIEnv* env, jobject thi
     uint32_t outWidth = 0, outHeight = 0;
     size_t outLen = 0;
     uint8_t* data = ftp_generate_thumbnail(hostStr, (int32_t)port, userStr, passStr, pathStr,
-                                            (uint32_t)maxWidth, (uint32_t)maxHeight, &outWidth, &outHeight, &outLen);
+                                            (uint32_t)maxWidth, (uint32_t)maxHeight, (uint64_t)cancelToken,
+                                            &outWidth, &outHeight, &outLen);
 
     env->ReleaseStringUTFChars(host, hostStr);
     env->ReleaseStringUTFChars(username, userStr);
@@ -538,9 +783,10 @@ Java_com_vrplayer_VRActivity_nativeFtpGenerateThumbnail(JNIEnv* env, jobject thi
 // servidor SFTP. `privateKey` pode ser string vazia (autenticacao por
 // senha) — mesma convencao de nativePlaySftp.
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject thiz, jstring host, jint port,
+Java_com_tucavr_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject thiz, jstring host, jint port,
                                                           jstring username, jstring password, jstring privateKey,
-                                                          jstring path, jint maxWidth, jint maxHeight) {
+                                                          jstring path, jint maxWidth, jint maxHeight,
+                                                          jlong cancelToken) {
     const char* hostStr = env->GetStringUTFChars(host, nullptr);
     const char* userStr = env->GetStringUTFChars(username, nullptr);
     const char* passStr = env->GetStringUTFChars(password, nullptr);
@@ -550,7 +796,8 @@ Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject th
     uint32_t outWidth = 0, outHeight = 0;
     size_t outLen = 0;
     uint8_t* data = sftp_generate_thumbnail(hostStr, (int32_t)port, userStr, passStr, keyStr, pathStr,
-                                             (uint32_t)maxWidth, (uint32_t)maxHeight, &outWidth, &outHeight, &outLen);
+                                             (uint32_t)maxWidth, (uint32_t)maxHeight, (uint64_t)cancelToken,
+                                             &outWidth, &outHeight, &outLen);
 
     env->ReleaseStringUTFChars(host, hostStr);
     env->ReleaseStringUTFChars(username, userStr);
@@ -561,6 +808,11 @@ Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject th
     return RustThumbnailToJByteArrayAndFree(env, data, outLen);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeCancelThumbnailGeneration(JNIEnv* env, jobject, jlong cancelToken) {
+    cancel_thumbnail_generation((uint64_t)cancelToken);
+}
+
 // Preview de arrasto no seekbar (T-seek-ux): mesma logica de
 // nativeSmbGenerateThumbnail, so que devolve N frames concatenados em vez
 // de 1. outWidth/outHeight/outCount sao descartados aqui de proposito — o
@@ -568,7 +820,7 @@ Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject th
 // como byteArray.size / (width*height*4), entao nao precisa cruzar o JNI
 // de novo so pra confirmar o que ja mandou.
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_vrplayer_VRActivity_nativeSmbGenerateThumbnailStrip(JNIEnv* env, jobject thiz, jstring host, jint port,
+Java_com_tucavr_VRActivity_nativeSmbGenerateThumbnailStrip(JNIEnv* env, jobject thiz, jstring host, jint port,
                                                               jstring username, jstring password, jstring domain,
                                                               jstring share, jstring path, jfloat intervalSeconds,
                                                               jint maxWidth, jint maxHeight) {
@@ -598,7 +850,7 @@ Java_com_vrplayer_VRActivity_nativeSmbGenerateThumbnailStrip(JNIEnv* env, jobjec
 // Mesma logica de nativeSmbGenerateThumbnailStrip, para um arquivo num
 // servidor SFTP.
 extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnailStrip(JNIEnv* env, jobject thiz, jstring host, jint port,
+Java_com_tucavr_VRActivity_nativeSftpGenerateThumbnailStrip(JNIEnv* env, jobject thiz, jstring host, jint port,
                                                                jstring username, jstring password, jstring privateKey,
                                                                jstring path, jfloat intervalSeconds,
                                                                jint maxWidth, jint maxHeight) {
@@ -626,66 +878,150 @@ Java_com_vrplayer_VRActivity_nativeSftpGenerateThumbnailStrip(JNIEnv* env, jobje
 // Interrompe uma geracao de tira de scrub ja em andamento (chamadas acima sao
 // sincronas/bloqueantes — um Job.cancel() do lado Kotlin nao as interrompe).
 extern "C" JNIEXPORT void JNICALL
-Java_com_vrplayer_VRActivity_nativeCancelScrubStrip(JNIEnv* env, jobject thiz) {
+Java_com_tucavr_VRActivity_nativeCancelScrubStrip(JNIEnv* env, jobject thiz) {
     cancel_thumbnail_strip_generation();
 }
 
-// T7.1: probe HEAD-based de uma URL HTTP(S) (Accept-Ranges/tamanho) antes de
-// tocar, para a UI poder avisar se seek nao vai funcionar. Mesma ressalva de
-// bloqueio.
 extern "C" JNIEXPORT jstring JNICALL
-Java_com_vrplayer_VRActivity_nativeProbeHttpUrl(JNIEnv* env, jobject thiz, jstring url) {
+Java_com_tucavr_VRActivity_nativeProbeHttpUrl(JNIEnv* env, jobject thiz, jstring url) {
     const char* urlStr = env->GetStringUTFChars(url, nullptr);
     char* result = probe_http_url(urlStr);
     env->ReleaseStringUTFChars(url, urlStr);
     return RustStringToJStringAndFree(env, result);
 }
 
-// T1.4/T2: espelha 1:1 a codificacao numerica de rust/bridge/src/lib.rs
-// (SCREEN_MODE/cycle_3d_mode) — qualquer mudanca aqui exige a mudanca
-// correspondente la (e vice-versa), os dois lados nao compartilham um tipo.
-enum class ScreenMode : uint32_t {
-    Flat2D = 0,
-    SBS = 1,
-    SBSHalf = 2,
-    OU = 3,
-    OUHalf = 4,
-    Sphere360 = 5,
-    Sphere180 = 6,
-    Sphere360SBS = 7,
-    Sphere360OU = 8,
-    Vr180SBS = 9,
-};
-
-// Debug: nome legivel do ScreenMode pro logcat — ver comentario acima sobre
-// os 3 lugares que precisam ficar em sincronia se este enum mudar.
-static const char* ScreenModeName(ScreenMode mode) {
-    switch (mode) {
-        case ScreenMode::Flat2D: return "Flat2D";
-        case ScreenMode::SBS: return "SBS";
-        case ScreenMode::SBSHalf: return "SBSHalf";
-        case ScreenMode::OU: return "OU";
-        case ScreenMode::OUHalf: return "OUHalf";
-        case ScreenMode::Sphere360: return "Sphere360";
-        case ScreenMode::Sphere180: return "Sphere180";
-        case ScreenMode::Sphere360SBS: return "Sphere360SBS";
-        case ScreenMode::Sphere360OU: return "Sphere360OU";
-        case ScreenMode::Vr180SBS: return "Vr180SBS";
-        default: return "Desconhecido";
-    }
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeDlnaGetDevice(JNIEnv* env, jobject thiz, jstring location) {
+    const char* locStr = env->GetStringUTFChars(location, nullptr);
+    char* result = dlna_get_device_description(locStr);
+    env->ReleaseStringUTFChars(location, locStr);
+    return RustStringToJStringAndFree(env, result);
 }
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeDlnaBrowse(JNIEnv* env, jobject thiz, jstring controlUrl,
+                                              jstring objectId, jint startIndex, jint maxCount) {
+    const char* ctrlStr = env->GetStringUTFChars(controlUrl, nullptr);
+    const char* objStr = env->GetStringUTFChars(objectId, nullptr);
+
+    char* result = dlna_browse_directory(ctrlStr, objStr, (uint32_t)startIndex, (uint32_t)maxCount);
+
+    env->ReleaseStringUTFChars(controlUrl, ctrlStr);
+    env->ReleaseStringUTFChars(objectId, objStr);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeHlsProbeVariants(JNIEnv* env, jobject thiz, jstring url) {
+    const char* urlStr = env->GetStringUTFChars(url, nullptr);
+    char* result = hls_probe_variants(urlStr);
+    env->ReleaseStringUTFChars(url, urlStr);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeReadMediaMetadata(JNIEnv* env, jobject thiz, jstring path) {
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+    char* result = read_media_metadata(pathStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeSmbReadMetadata(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                                    jstring username, jstring password, jstring domain,
+                                                    jstring share, jstring path) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+    const char* domainStr = env->GetStringUTFChars(domain, nullptr);
+    const char* shareStr = env->GetStringUTFChars(share, nullptr);
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+
+    char* result = smb_read_metadata(hostStr, (int32_t)port, userStr, passStr, domainStr, shareStr, pathStr);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
+    env->ReleaseStringUTFChars(domain, domainStr);
+    env->ReleaseStringUTFChars(share, shareStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeFtpReadMetadata(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                                    jstring username, jstring password, jstring path) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+
+    char* result = ftp_read_metadata(hostStr, (int32_t)port, userStr, passStr, pathStr);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeSftpReadMetadata(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                                     jstring username, jstring password,
+                                                     jstring privateKey, jstring path) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+    const char* keyStr = env->GetStringUTFChars(privateKey, nullptr);
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+
+    char* result = sftp_read_metadata(hostStr, (int32_t)port, userStr, passStr, keyStr, pathStr);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
+    env->ReleaseStringUTFChars(privateKey, keyStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetAudioTrack(JNIEnv* env, jobject thiz, jint ordinal) {
+    set_desired_audio_track((uint32_t)(ordinal < 0 ? 0 : ordinal));
+}
+
+// ScreenMode e helpers estao centralizados em screen_mode.h
 
 class VRPlayerApp : public OVRFW::XrApp {
 public:
     VRPlayerApp() : OVRFW::XrApp(), m_textureId(0), m_eglImage(EGL_NO_IMAGE_KHR), m_lastBuffer(nullptr),
+                    m_isVideoActive(false),
                     m_uiImageReader(nullptr), m_uiTextureId(0), m_uiEglImage(EGL_NO_IMAGE_KHR),
-                    m_controlsImageReader(nullptr), m_controlsTextureId(0), m_controlsEglImage(EGL_NO_IMAGE_KHR) {
+                    m_controlsImageReader(nullptr), m_controlsTextureId(0), m_controlsEglImage(EGL_NO_IMAGE_KHR),
+                    m_modalImageReader(nullptr), m_modalTextureId(0), m_modalEglImage(EGL_NO_IMAGE_KHR),
+                    m_modalAlpha(0.0f), m_modalActive(false) {
         // Ambiente "void": fundo totalmente preto, sem geometria de ambiente (T3.3)
         BackgroundColor = OVR::Vector4f(0.0f, 0.0f, 0.0f, 1.0f);
     }
 
     void toggle_video_state() {
         ::toggle_play_pause();
+    }
+
+    void ShowModalPanel() {
+        m_modalActive = true;
+    }
+
+    void HideModalPanel() {
+        m_modalActive = false;
+    }
+
+    bool IsModalActive() const {
+        return m_modalActive;
     }
 
     void AppHandleEvent(XrEventDataBaseHeader* baseEventHeader) override {
@@ -873,10 +1209,9 @@ public:
     virtual bool SessionInit() override {
         LOGI("VRPlayerApp::SessionInit");
         
-        PFN_xrRequestDisplayRefreshRateFB pfnRequestDisplayRefreshRateFB = nullptr;
-        xrGetInstanceProcAddr(GetInstance(), "xrRequestDisplayRefreshRateFB", (PFN_xrVoidFunction*)&pfnRequestDisplayRefreshRateFB);
-        if (pfnRequestDisplayRefreshRateFB) {
-            pfnRequestDisplayRefreshRateFB(GetSession(), 90.0f);
+        xrGetInstanceProcAddr(GetInstance(), "xrRequestDisplayRefreshRateFB", (PFN_xrVoidFunction*)&m_pfnRequestDisplayRefreshRateFB);
+        if (m_pfnRequestDisplayRefreshRateFB) {
+            m_pfnRequestDisplayRefreshRateFB(GetSession(), 90.0f);
             LOGI("VRPlayerApp: Requested 90Hz refresh rate.");
         } else {
             LOGI("VRPlayerApp: xrRequestDisplayRefreshRateFB not found.");
@@ -1220,7 +1555,7 @@ public:
                 if (java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
                     jobject surfaceObj = ANativeWindow_toSurface(env, window);
                     jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
-                    jmethodID setupMethod = env->GetStaticMethodID(vrActivityClass, "setupVirtualDisplay", "(Lcom/vrplayer/VRActivity;Landroid/view/Surface;II)V");
+                    jmethodID setupMethod = env->GetStaticMethodID(vrActivityClass, "setupVirtualDisplay", "(Lcom/tucavr/VRActivity;Landroid/view/Surface;II)V");
                     if (setupMethod) {
                         env->CallStaticVoidMethod(vrActivityClass, setupMethod, java->ActivityObject, surfaceObj, 1024, 768);
                         LOGI("VRPlayerApp: setupVirtualDisplay called successfully!");
@@ -1246,7 +1581,7 @@ public:
         m_controlsSurfaceDef.graphicsCommand.GpuState.depthMaskEnable = false;
 
         media_status_t controlsStatus = AImageReader_newWithUsage(
-            1024, 384, AIMAGE_FORMAT_RGBA_8888,
+            1582, 800, AIMAGE_FORMAT_RGBA_8888,
             AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,
             2, &m_controlsImageReader);
             
@@ -1260,10 +1595,49 @@ public:
                 if (java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
                     jobject surfaceObj = ANativeWindow_toSurface(env, window);
                     jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
-                    jmethodID setupMethod = env->GetStaticMethodID(vrActivityClass, "setupControlsVirtualDisplay", "(Lcom/vrplayer/VRActivity;Landroid/view/Surface;II)V");
+                    jmethodID setupMethod = env->GetStaticMethodID(vrActivityClass, "setupControlsVirtualDisplay", "(Lcom/tucavr/VRActivity;Landroid/view/Surface;II)V");
                     if (setupMethod) {
-                        env->CallStaticVoidMethod(vrActivityClass, setupMethod, java->ActivityObject, surfaceObj, 1024, 384);
+                        env->CallStaticVoidMethod(vrActivityClass, setupMethod, java->ActivityObject, surfaceObj, 1582, 800);
                         LOGI("VRPlayerApp: setupControlsVirtualDisplay called successfully!");
+                    }
+                    env->DeleteLocalRef(surfaceObj);
+                    env->DeleteLocalRef(vrActivityClass);
+                }
+            }
+        }
+
+        // ------------------ INITIALIZE MODAL UI (3o Quad frontal) ------------------
+        m_modalSurfaceDef.geo = OVRFW::BuildTesselatedQuad(1, 1, false);
+        m_modalSurfaceDef.graphicsCommand.Program = m_program;
+        m_modalSurfaceDef.graphicsCommand.UniformData[1].Data = &m_modalAlpha;
+        m_modalSurfaceDef.graphicsCommand.GpuState.blendEnable = OVRFW::ovrGpuState::BLEND_ENABLE;
+        m_modalSurfaceDef.graphicsCommand.GpuState.blendSrc = OVRFW::ovrGpuState::kGL_SRC_ALPHA;
+        m_modalSurfaceDef.graphicsCommand.GpuState.blendDst = OVRFW::ovrGpuState::kGL_ONE_MINUS_SRC_ALPHA;
+        m_modalSurfaceDef.graphicsCommand.GpuState.blendSrcAlpha = OVRFW::ovrGpuState::kGL_SRC_ALPHA;
+        m_modalSurfaceDef.graphicsCommand.GpuState.blendDstAlpha = OVRFW::ovrGpuState::kGL_ONE_MINUS_SRC_ALPHA;
+        m_modalSurfaceDef.graphicsCommand.GpuState.depthMaskEnable = false;
+
+        media_status_t modalStatus = AImageReader_newWithUsage(
+            1024, 768, AIMAGE_FORMAT_RGBA_8888,
+            AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE | AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT | AHARDWAREBUFFER_USAGE_CPU_WRITE_OFTEN,
+            2, &m_modalImageReader);
+
+        if (modalStatus == AMEDIA_OK && m_modalImageReader) {
+            LOGI("VRPlayerApp: Modal ImageReader created successfully!");
+            ANativeWindow* window = nullptr;
+            AImageReader_getWindow(m_modalImageReader, &window);
+            if (window) {
+                const xrJava* java = GetContext();
+                JNIEnv* env = nullptr;
+                if (java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
+                    jobject surfaceObj = ANativeWindow_toSurface(env, window);
+                    jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
+                    jmethodID setupMethod = env->GetStaticMethodID(vrActivityClass, "setupModalVirtualDisplay", "(Lcom/tucavr/VRActivity;Landroid/view/Surface;II)V");
+                    if (setupMethod) {
+                        env->CallStaticVoidMethod(vrActivityClass, setupMethod, java->ActivityObject, surfaceObj, 1024, 768);
+                        LOGI("VRPlayerApp: setupModalVirtualDisplay called successfully!");
+                    } else {
+                        LOGI("VRPlayerApp: setupModalVirtualDisplay NOT FOUND!");
                     }
                     env->DeleteLocalRef(surfaceObj);
                     env->DeleteLocalRef(vrActivityClass);
@@ -1320,7 +1694,7 @@ public:
 
         // INICIAR VÍDEO DE TESTE AUTOMATICAMENTE
         LOGI("VRPlayerApp: Iniciando vídeo de teste automaticamente!");
-        start_video_playback("/sdcard/Android/data/com.vrplayer/files/test.mp4", 0.0f);
+        start_video_playback("/sdcard/Android/data/com.tucavr/files/test.mp4", 0.0f);
 
         return true;
     }
@@ -1337,6 +1711,9 @@ public:
             m_lastFrameMs = in.DeltaSeconds * 1000.0f;
             float instFps = 1.0f / in.DeltaSeconds;
             m_smoothedFps = (m_smoothedFps <= 0.0f) ? instFps : (m_smoothedFps * 0.9f + instFps * 0.1f);
+            if (m_smoothedFps > 90.0f) {
+                m_smoothedFps = 90.0f;
+            }
             if (m_lastFrameMs > kFreezeThresholdMs) {
                 m_freezeCount++;
                 LOGE("VRPlayerApp: FREEZE detectado — frame levou %.0fms", m_lastFrameMs);
@@ -1351,11 +1728,13 @@ public:
             // cada frame parado), reseta quando um frame novo chega de fato
             // (bloco de troca de buffer, mais abaixo nesta funcao).
             m_msSinceLastVideoFrame += m_lastFrameMs;
-            if (m_lastBuffer != nullptr && !m_videoStallLogged &&
-                m_msSinceLastVideoFrame > kVideoStallThresholdMs) {
-                m_videoStallLogged = true;
-                LOGW("VRPlayerApp: video sem frame novo ha %.0fms (decode/rede travado? "
-                     "ou usuario pausou?)", m_msSinceLastVideoFrame);
+            if (m_msSinceLastVideoFrame > kVideoStallThresholdMs) {
+                m_videoFps = 0.0f;
+                if (m_lastBuffer != nullptr && !m_videoStallLogged) {
+                    m_videoStallLogged = true;
+                    LOGW("VRPlayerApp: video sem frame novo ha %.0fms (decode/rede travado? "
+                         "ou usuario pausou?)", m_msSinceLastVideoFrame);
+                }
             }
 
             // decFps: taxa real de decode (Rust), amostrada a ~1Hz — ver
@@ -1363,22 +1742,30 @@ public:
             m_decodedFpsPollAccumMs += m_lastFrameMs;
             if (m_decodedFpsPollAccumMs >= kDecodedFpsPollIntervalMs) {
                 float pollSec = m_decodedFpsPollAccumMs / 1000.0f;
+                if (pollSec < 0.001f) pollSec = 0.001f;
 
                 uint64_t currentCount = get_video_frames_decoded_count();
-                uint64_t delta = currentCount - m_lastDecodedFrameCount; // wrap-safe (unsigned)
-                m_decodedFps = delta / pollSec;
+                m_decodedFps = (currentCount >= m_lastDecodedFrameCount)
+                    ? ((currentCount - m_lastDecodedFrameCount) / pollSec)
+                    : 0.0f;
                 m_lastDecodedFrameCount = currentCount;
 
                 uint64_t outputCount = get_video_frames_output_count();
-                m_outputFps = (outputCount - m_lastOutputFrameCount) / pollSec;
+                m_outputFps = (outputCount >= m_lastOutputFrameCount)
+                    ? ((outputCount - m_lastOutputFrameCount) / pollSec)
+                    : 0.0f;
                 m_lastOutputFrameCount = outputCount;
 
                 uint64_t droppedCount = get_video_frames_dropped_count();
-                m_droppedFps = (droppedCount - m_lastDroppedFrameCount) / pollSec;
+                m_droppedFps = (droppedCount >= m_lastDroppedFrameCount)
+                    ? ((droppedCount - m_lastDroppedFrameCount) / pollSec)
+                    : 0.0f;
                 m_lastDroppedFrameCount = droppedCount;
 
                 uint64_t netBytes = get_network_bytes_read();
-                float netMB = (netBytes - m_lastNetworkBytes) / (1024.0f * 1024.0f);
+                float netMB = (netBytes >= m_lastNetworkBytes)
+                    ? ((netBytes - m_lastNetworkBytes) / (1024.0f * 1024.0f))
+                    : 0.0f;
                 m_netMBs = netMB / pollSec;
                 m_lastNetworkBytes = netBytes;
 
@@ -1397,6 +1784,17 @@ public:
 
                 m_decodedFpsPollAccumMs = 0.0f;
             }
+
+            // T14.2: Polling de status térmico (~1Hz) para ajuste dinâmico de taxa de atualização
+            uint32_t currentThermal = get_thermal_level();
+            if (currentThermal != m_thermalLevel) {
+                m_thermalLevel = currentThermal;
+                if (m_pfnRequestDisplayRefreshRateFB) {
+                    float targetFps = (m_thermalLevel >= 3) ? 72.0f : 90.0f;
+                    m_pfnRequestDisplayRefreshRateFB(GetSession(), targetFps);
+                    LOGI("VRPlayerApp: Nível térmico alterado para %u -> refresh rate %.0fHz", m_thermalLevel, targetFps);
+                }
+            }
         }
 
         // Se o OS aplicou um recenter, calibra a altura da UI para os olhos na nova origem
@@ -1414,6 +1812,14 @@ public:
             m_sceneTranslationOffset.y = in.HeadPose.Translation.y - 1.5f;
             m_needsOsRecenter = false;
         }
+
+        // Rastreamento de cabeça para o processador de áudio espacial (Rust)
+        set_head_pose_orientation(
+            in.HeadPose.Rotation.x,
+            in.HeadPose.Rotation.y,
+            in.HeadPose.Rotation.z,
+            in.HeadPose.Rotation.w
+        );
 
         static bool prevA = false;
         static bool prevX = false;
@@ -1468,9 +1874,24 @@ public:
         // 2.667:1 da textura 1024x384 preservada: 1.2x0.45).
         OVR::Vector3f baseControlsPos(0.0f, 0.4f, -1.3f);
         OVR::Vector3f worldControlsPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(baseControlsPos);
-        m_controlsTransform = OVR::Matrix4f::Translation(worldControlsPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) * OVR::Matrix4f::RotationX(-0.3f) * OVR::Matrix4f::Scaling(1.2f, 0.45f, 1.0f);
+        m_controlsTransform = OVR::Matrix4f::Translation(worldControlsPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) * OVR::Matrix4f::RotationX(-0.3f) * OVR::Matrix4f::Scaling(1.582f, 0.8f, 1.0f);
         OVR::Vector3f cPlaneCenter = worldControlsPos;
         OVR::Vector3f cPlaneNormal = OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(OVR::Matrix4f::RotationX(-0.3f).Transform(OVR::Vector3f(0, 0, 1)));
+
+        // Painel modal frontal flutuante (3o Quad): alinhado com a tela de video no centro da cena
+        if (g_modalPanelShowRequested.exchange(false)) {
+            m_modalActive = true;
+        }
+        if (g_modalPanelHideRequested.exchange(false)) {
+            m_modalActive = false;
+        }
+        g_modalPanelActive.store(m_modalActive);
+
+        OVR::Vector3f baseModalPos(0.0f, 1.35f, -1.35f);
+        OVR::Vector3f worldModalPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(baseModalPos);
+        m_modalTransform = OVR::Matrix4f::Translation(worldModalPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) * OVR::Matrix4f::Scaling(1.2f, 0.9f, 1.0f);
+        OVR::Vector3f modalPlaneCenter = worldModalPos;
+        OVR::Vector3f modalPlaneNormal = OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(OVR::Vector3f(0, 0, 1));
 
         // T1.4/T2: polling barato do modo 3D (o Rust bridge e quem guarda o
         // estado real — ver cycle_3d_mode/get_3d_mode). Os uniforms derivados
@@ -1542,64 +1963,78 @@ public:
         float minT = 10.0f;
         float u = 0.0f, v = 0.0f;
 
-        float tUi = rayHitsQuad(m_uiTransform, uiPlaneNormal, uiPlaneCenter, u, v);
-        if (tUi > 0.0f && tUi < minT) {
-            currentHitPanel = 1;
-            minT = tUi;
-            pointerEnd = rayOrigin + rayDir * tUi;
-            lastUvX = u;
-            lastUvY = v;
+        float tModal = (m_modalAlpha > 0.01f) ? rayHitsQuad(m_modalTransform, modalPlaneNormal, modalPlaneCenter, u, v) : -1.0f;
+
+        // Foco exclusivo no modal se ativo e visivel
+        if (m_modalActive && m_modalAlpha > 0.5f) {
+            if (tModal > 0.0f && tModal < minT) {
+                currentHitPanel = 3;
+                minT = tModal;
+                pointerEnd = rayOrigin + rayDir * tModal;
+                lastUvX = u;
+                lastUvY = v;
+            } else {
+                currentHitPanel = 0;
+            }
+        } else {
+            float tUi = rayHitsQuad(m_uiTransform, uiPlaneNormal, uiPlaneCenter, u, v);
+            if (tUi > 0.0f && tUi < minT) {
+                currentHitPanel = 1;
+                minT = tUi;
+                pointerEnd = rayOrigin + rayDir * tUi;
+                lastUvX = u;
+                lastUvY = v;
+            }
+
+            float tControls = rayHitsQuad(m_controlsTransform, cPlaneNormal, cPlaneCenter, u, v);
+            if (tControls > 0.0f && tControls < minT) {
+                currentHitPanel = 2;
+                minT = tControls;
+                pointerEnd = rayOrigin + rayDir * tControls;
+                lastUvX = u;
+                lastUvY = v;
+            }
         }
 
-        float tControls = rayHitsQuad(m_controlsTransform, cPlaneNormal, cPlaneCenter, u, v);
-        if (tControls > 0.0f && tControls < minT) {
-            currentHitPanel = 2;
-            minT = tControls;
-            pointerEnd = rayOrigin + rayDir * tControls;
-            lastUvX = u;
-            lastUvY = v;
+        bool hitScreen = false;
+        bool hasRay = in.LeftRemoteTracked || in.RightRemoteTracked;
+        if (IsSphereMode(m_screenMode)) {
+            hitScreen = hasRay && (rayDir.z < -0.1f);
+        } else {
+            float screenU = 0.0f, screenV = 0.0f;
+            OVR::Vector3f screenNormal = OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(OVR::Vector3f(0, 0, 1));
+            hitScreen = rayHitsQuad(screenTransform, screenNormal, worldScreenPos, screenU, screenV) > 0.0f;
         }
-
-        float screenU = 0.0f, screenV = 0.0f;
-        OVR::Vector3f screenNormal = OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(OVR::Vector3f(0, 0, 1));
-        bool hitScreen = rayHitsQuad(screenTransform, screenNormal, worldScreenPos, screenU, screenV) > 0.0f;
 
         // --- T4.3: auto-hide dos paineis ---
-        // Aponta pro File Browser (Home/Arquivos/Rede/Player, tudo no mesmo quad
-        // desde a Fase 2) -> mantem ele visivel. Aponta pra tela ou pros
-        // controles -> mantem os controles visiveis. Sem atividade por 5s -> fade
-        // out. Com a fusao dos paineis Local/Rede num so quad, so sobram estes 2
-        // paineis de UI (fora a tela de video) — o timing de auto-hide abaixo
-        // (kUiAutoHideSeconds/kUiFadeDuration) nao mudou, mas vale re-validar em
-        // headset fisico agora que ha um painel a menos disputando atencao.
-        //
-        // Bug reportado em validacao real: com o teclado nativo aberto
-        // (VRActivity.showNativeKeyboardFor), o raio do controller aponta pro
-        // teclado (overlay do sistema, fora deste app), nao mais pro quad do
-        // painel — sem a checagem de `get_keyboard_active()` abaixo, isso
-        // contava como "usuario inativo" e o painel "Adicionar servidor"
-        // (ou qualquer outro com EditText focado) desaparecia no meio da
-        // digitacao. Suprime o auto-hide inteiro (nao so o do painel Home —
-        // um EditText SEMPRE vive dentro dele, nunca no painel de controles,
-        // mas manter os dois presos aqui e mais simples que decidir qual dos
-        // dois "e o painel certo" a cada chamada) enquanto o teclado estiver
-        // ativo.
         bool keyboardActive = get_keyboard_active() != 0;
+        if (g_requestUiPanelVisible.exchange(false)) {
+            m_uiIdleTime = 0.0f;
+        }
+        if (g_requestControlsPanelVisible.exchange(false)) {
+            m_controlsIdleTime = 0.0f;
+            m_controlsAlpha = 1.0f;
+        }
         if (currentHitPanel == 1 || keyboardActive) {
             m_uiIdleTime = 0.0f;
         } else {
             m_uiIdleTime += in.DeltaSeconds;
         }
-        if (currentHitPanel == 2 || hitScreen) {
+
+        bool isPlaying = get_playback_is_playing() != 0;
+        // Se o vídeo estiver pausado, o painel de controles e o botão de pause não devem sumir por auto-hide
+        if (currentHitPanel == 2 || hitScreen || !isPlaying) {
             m_controlsIdleTime = 0.0f;
         } else {
             m_controlsIdleTime += in.DeltaSeconds;
         }
         float uiTargetAlpha = (m_uiIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
         float controlsTargetAlpha = (m_controlsIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
+        float modalTargetAlpha = m_modalActive ? 1.0f : 0.0f;
         float fadeStep = in.DeltaSeconds / kUiFadeDuration;
         m_uiAlpha = MoveTowards(m_uiAlpha, uiTargetAlpha, fadeStep);
         m_controlsAlpha = MoveTowards(m_controlsAlpha, controlsTargetAlpha, fadeStep);
+        m_modalAlpha = MoveTowards(m_modalAlpha, modalTargetAlpha, fadeStep);
 
         // Mesmo fade dos paineis acima, so que o alvo cai sozinho por tempo.
         UpdateFeedbackOverlay(in.DeltaSeconds, fadeStep);
@@ -1609,8 +2044,11 @@ public:
         // geometrica acima continua sempre ativa para poder trazer o painel de volta.
         bool uiVisible = m_uiAlpha > 0.5f;
         bool controlsVisible = m_controlsAlpha > 0.5f;
+        bool modalVisible = m_modalAlpha > 0.5f;
         int dispatchHitPanel = 0;
-        if (currentHitPanel == 1 && uiVisible) {
+        if (currentHitPanel == 3 && modalVisible) {
+            dispatchHitPanel = 3;
+        } else if (currentHitPanel == 1 && uiVisible) {
             dispatchHitPanel = 1;
         } else if (currentHitPanel == 2 && controlsVisible) {
             dispatchHitPanel = 2;
@@ -1640,8 +2078,9 @@ public:
                 // sua UI agora mora dentro do mesmo quad do Home/File Browser
                 // (activePanel == 1), entao todo toque nesse painel (incluindo
                 // as telas de Rede) roteia por "dispatchVRTouch", igual antes.
-                const char* methodName = (activePanel == 1) ? "dispatchVRTouch" : "dispatchControlsVRTouch";
-                jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/vrplayer/VRActivity;FFI)V");
+                const char* methodName = (activePanel == 3) ? "dispatchModalVRTouch"
+                                       : ((activePanel == 1) ? "dispatchVRTouch" : "dispatchControlsVRTouch");
+                jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
                 if (touchMethod) {
                     env->CallStaticVoidMethod(vrActivityClass, touchMethod, java->ActivityObject, lastUvX, lastUvY, action);
                 }
@@ -1717,23 +2156,45 @@ public:
             m_cursorDotHandle2 = m_beamRenderer.AddBeam(in, kDotWidth, pointerEnd, nearEnd, OVR::Vector4f(0.0f, 1.0f, 1.0f, 1.0f));
         }
 
-        // T4.4: A (direita) ou X (esquerda) = Play/Pause. Trigger fora de qualquer
-        // painel visivel tambem funciona como atalho de play/pause.
-        if ((currA && !prevA) || (currX && !prevX) || (currTrigger && !prevTrigger && dispatchHitPanel == 0)) {
-            LOGI("USER PRESSED PLAY/PAUSE!");
-            toggle_video_state();
+        // Se o modal estiver ativo, fechar ao clicar fora ou apertar B/Y
+        if (m_modalActive) {
+            if (((currTrigger && !prevTrigger && dispatchHitPanel == 0) ||
+                 (currB && !prevB) || (currY && !prevY)) && !keyboardActive) {
+                m_modalActive = false;
+                g_modalPanelActive.store(false);
+                const xrJava* java = GetContext();
+                JNIEnv* env = nullptr;
+                if (java && java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
+                    jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
+                    jmethodID dismissMethod = env->GetStaticMethodID(vrActivityClass, "dismissModalFromNative", "(Lcom/tucavr/VRActivity;)V");
+                    if (dismissMethod) {
+                        env->CallStaticVoidMethod(vrActivityClass, dismissMethod, java->ActivityObject);
+                    }
+                    env->DeleteLocalRef(vrActivityClass);
+                }
+            }
+        } else {
+            // T4.4: A (direita) ou X (esquerda) = Play/Pause. Trigger fora de qualquer
+            // painel visivel tambem funciona como atalho de play/pause.
+            if (((currA && !prevA) || (currX && !prevX) || (currTrigger && !prevTrigger && dispatchHitPanel == 0)) && !keyboardActive) {
+                LOGI("USER PRESSED PLAY/PAUSE!");
+                toggle_video_state();
+                m_controlsIdleTime = 0.0f;
+                m_controlsAlpha = 1.0f;
+            }
+
+            // T4.4: B (direita) ou Y (esquerda) = Menu/Back -> alterna a visibilidade do
+            // painel do File Browser instantaneamente (sem esperar o auto-hide).
+            if ((currB && !prevB) || (currY && !prevY)) {
+                bool isCurrentlyVisible = m_uiIdleTime < kUiAutoHideSeconds;
+                m_uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
+                m_controlsIdleTime = 0.0f;
+            }
         }
 
         prevA = currA;
         prevX = currX;
         prevTrigger = currTrigger;
-
-        // T4.4: B (direita) ou Y (esquerda) = Menu/Back -> alterna a visibilidade do
-        // painel do File Browser instantaneamente (sem esperar o auto-hide).
-        if ((currB && !prevB) || (currY && !prevY)) {
-            bool isCurrentlyVisible = m_uiIdleTime < kUiAutoHideSeconds;
-            m_uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
-        }
         prevB = currB;
         prevY = currY;
 
@@ -1790,7 +2251,7 @@ public:
                 JNIEnv* env = nullptr;
                 if (java && java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
                     jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
-                    jmethodID updateMethod = env->GetStaticMethodID(vrActivityClass, "updateMediaProgress", "(Lcom/vrplayer/VRActivity;FF)V");
+                    jmethodID updateMethod = env->GetStaticMethodID(vrActivityClass, "updateMediaProgress", "(Lcom/tucavr/VRActivity;FF)V");
                     if (updateMethod) {
                         env->CallStaticVoidMethod(vrActivityClass, updateMethod, java->ActivityObject, m_lastKnownProgressCurrent, m_lastKnownProgressTotal);
                     }
@@ -1809,7 +2270,7 @@ public:
                 JNIEnv* env = nullptr;
                 if (java && java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
                     jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
-                    jmethodID stateMethod = env->GetStaticMethodID(vrActivityClass, "updateMediaState", "(Lcom/vrplayer/VRActivity;ZZ)V");
+                    jmethodID stateMethod = env->GetStaticMethodID(vrActivityClass, "updateMediaState", "(Lcom/tucavr/VRActivity;ZZ)V");
                     if (stateMethod) {
                         env->CallStaticVoidMethod(vrActivityClass, stateMethod, java->ActivityObject,
                             (jboolean)(isLoading != 0), (jboolean)(isPlaying != 0));
@@ -1818,26 +2279,55 @@ public:
                 }
             }
 
-            // HUD de debug (docs/DEBUGGING.md) — mesmo throttle acima (~10Hz).
-            // VRActivity.updateDebugHud descarta sem custo se o build nao for
-            // debuggable, entao computar/mandar isso sempre e mais simples
-            // que condicionar a compilacao nativa por build type.
-            {
-                char hud[448];
-                snprintf(hud, sizeof(hud),
-                    "GLES | %s | flat=%.0f esfera=%.0f polar180=%.0f swap=%.0f | video=%s vidGap=%.0fms vidFps=%.0f decFps=%.0f outFps=%.0f drop=%.0f jitter=%.0fms | net=%.1fMB/s q=%u seekMs=%u | %.0ffps %.1fms stutter=%d freeze=%d",
-                    ScreenModeName(m_screenMode), m_flatStereoLayout, m_sphereStereoLayout,
-                    m_uPolar180, m_swapEyesF, (m_lastBuffer != nullptr) ? "ativo" : "sem frame",
-                    m_msSinceLastVideoFrame, m_videoFps, m_decodedFps, m_outputFps, m_droppedFps, m_videoJitterMs,
-                    m_netMBs, m_videoQueueDepth, get_last_seek_latency_ms(),
-                    m_smoothedFps, m_lastFrameMs, m_stutterCount, m_freezeCount);
+            // HUD de debug (docs/DEBUGGING.md / docs/reports/DEBUG-STATS-MODAL.md)
+            if (g_debugStatsEnabled.load(std::memory_order_relaxed)) {
+                DebugStats stats;
+                stats.backend = "GLES";
+                stats.screenMode = ScreenModeName(m_screenMode);
+                stats.stereoLayout = (int)m_flatStereoLayout;
+                stats.polar180 = (int)m_uPolar180;
+                stats.swapEyes = (int)m_swapEyesF;
+                stats.hasActiveFrame = (m_lastBuffer != nullptr) ? 1 : 0;
+                stats.msSinceLastVideoFrame = m_msSinceLastVideoFrame;
+                stats.videoFps = m_videoFps;
+                stats.decodedFps = m_decodedFps;
+                stats.outputFps = m_outputFps;
+                stats.droppedFps = m_droppedFps;
+                stats.videoJitterMs = m_videoJitterMs;
+                stats.netMBs = m_netMBs;
+                stats.videoQueueDepth = m_videoQueueDepth;
+                stats.seekLatencyMs = get_last_seek_latency_ms();
+                stats.smoothedFps = m_smoothedFps;
+                stats.lastFrameMs = m_lastFrameMs;
+                stats.stutterCount = m_stutterCount;
+                stats.freezeCount = m_freezeCount;
+                stats.thermalLevel = m_thermalLevel;
+                stats.renderResolutionScale = 1.0f;
+                stats.displayRefreshRate = 90.0f;
+                stats.avDriftMs = get_last_av_drift_ms();
+                stats.netLastFetchMs = get_network_last_block_fetch_ms();
+                stats.netBlocksFetched = get_network_blocks_fetched();
+                stats.netBlocksDiscarded = get_network_blocks_discarded();
+                stats.foveationEnabled = (int)get_foveation_enabled();
+                stats.spatialAudioMode = (int)get_spatial_audio_mode();
+                stats.spatialHeadTracking = (int)get_spatial_audio_head_tracking();
+                stats.playbackSpeed = get_playback_speed();
+                stats.audioVolume = get_video_volume();
+                stats.audioTrackIndex = 0;
+                stats.audioTrackCount = (int)get_audio_track_count();
+                stats.subtitleTrackIndex = get_subtitle_track();
+                stats.subtitleOffsetMs = (int32_t)get_subtitle_offset_ms();
+
+                char hudBuffer[2048];
+                SerializeDebugStats(stats, hudBuffer, sizeof(hudBuffer));
+
                 const xrJava* java = GetContext();
                 JNIEnv* env = nullptr;
                 if (java && java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
                     jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
-                    jmethodID hudMethod = env->GetStaticMethodID(vrActivityClass, "updateDebugHud", "(Lcom/vrplayer/VRActivity;Ljava/lang/String;)V");
+                    jmethodID hudMethod = env->GetStaticMethodID(vrActivityClass, "updateDebugHud", "(Lcom/tucavr/VRActivity;Ljava/lang/String;)V");
                     if (hudMethod) {
-                        jstring hudStr = env->NewStringUTF(hud);
+                        jstring hudStr = env->NewStringUTF(hudBuffer);
                         env->CallStaticVoidMethod(vrActivityClass, hudMethod, java->ActivityObject, hudStr);
                         env->DeleteLocalRef(hudStr);
                     }
@@ -1911,6 +2401,20 @@ public:
         static PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR = 
             (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
 
+        if (g_stopVideoRequested.exchange(false)) {
+            LOGI("VRPlayerApp: parada solicitada — limpando buffers e encerrando renderizacao do video");
+            m_isVideoActive = false;
+            m_lastBuffer = nullptr;
+            m_msSinceLastVideoFrame = 0.0f;
+            m_videoStallLogged = false;
+            m_videoGapHistoryCount = 0;
+            m_videoFps = 0.0f;
+            m_videoJitterMs = 0.0f;
+            m_controlsAlpha = 0.0f;
+            m_controlsIdleTime = kUiAutoHideSeconds;
+            g_requestUiPanelVisible.store(true);
+        }
+
         if (buffer == nullptr && m_lastBuffer != nullptr) {
             LOGI("VRPlayerApp: video parou de produzir frames (get_current_video_frame() -> null) — mantendo ultimo frame na tela ate a proxima sessao (load/seek) produzir um novo");
             AHardwareBuffer* frozenBuffer = m_lastBuffer;
@@ -1946,6 +2450,7 @@ public:
                 }
             }
         } else if (buffer && buffer != m_lastBuffer) {
+            m_isVideoActive = true;
             // So loga a transicao null->frame (video comecou a produzir
             // frames), nao toda troca de buffer entre frames decodificados
             // (isso acontece a cada frame de video durante playback normal
@@ -2151,6 +2656,44 @@ public:
             }
         }
 
+        // --- PROCESS MODAL UI TEXTURE UPDATE (3o Quad) ---
+        if (m_modalImageReader) {
+            AImage* image = nullptr;
+            if (AImageReader_acquireLatestImage(m_modalImageReader, &image) == AMEDIA_OK && image) {
+                AHardwareBuffer* buffer = nullptr;
+                AImage_getHardwareBuffer(image, &buffer);
+                if (buffer) {
+                    static PFNEGLGETNATIVECLIENTBUFFERANDROIDPROC eglGetNativeClientBufferANDROID = (PFNEGLGETNATIVECLIENTBUFFERANDROIDPROC)eglGetProcAddress("eglGetNativeClientBufferANDROID");
+                    if (m_modalEglImage != EGL_NO_IMAGE_KHR) {
+                        static PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR = (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+                        if (eglDestroyImageKHR) eglDestroyImageKHR(eglGetCurrentDisplay(), m_modalEglImage);
+                        m_modalEglImage = EGL_NO_IMAGE_KHR;
+                    }
+                    EGLClientBuffer clientBuffer = eglGetNativeClientBufferANDROID(buffer);
+                    EGLint eglImageAttributes[] = { EGL_IMAGE_PRESERVED_KHR, EGL_TRUE, EGL_NONE };
+                    static PFNEGLCREATEIMAGEKHRPROC eglCreateImageKHR = (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
+                    if (eglCreateImageKHR) {
+                        m_modalEglImage = eglCreateImageKHR(eglGetCurrentDisplay(), EGL_NO_CONTEXT, EGL_NATIVE_BUFFER_ANDROID, clientBuffer, eglImageAttributes);
+                        if (m_modalEglImage != EGL_NO_IMAGE_KHR) {
+                            if (m_modalTextureId == 0) {
+                                glGenTextures(1, &m_modalTextureId);
+                                glBindTexture(GL_TEXTURE_EXTERNAL_OES, m_modalTextureId);
+                                glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                                glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                                glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                                glTexParameteri(GL_TEXTURE_EXTERNAL_OES, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                            }
+                            glBindTexture(GL_TEXTURE_EXTERNAL_OES, m_modalTextureId);
+                            static PFNGLEGLIMAGETARGETTEXTURE2DOESPROC glEGLImageTargetTexture2DOES = (PFNGLEGLIMAGETARGETTEXTURE2DOESPROC)eglGetProcAddress("glEGLImageTargetTexture2DOES");
+                            if (glEGLImageTargetTexture2DOES) glEGLImageTargetTexture2DOES(GL_TEXTURE_EXTERNAL_OES, m_modalEglImage);
+                            glBindTexture(GL_TEXTURE_EXTERNAL_OES, 0);
+                        }
+                    }
+                }
+                AImage_delete(image);
+            }
+        }
+
         // T2.7: "o conteudo 360 E o ambiente" — a esfera e a tela plana sao
         // mutuamente exclusivas, nunca as duas ao mesmo tempo. Entre os 3
         // programas (mono, estereo-flat, esfera-mono-ou-estereo) so um e
@@ -2164,44 +2707,46 @@ public:
                      (int)m_screenMode, (int)sphereActive, m_scrubOverlayTextureId, m_screenScale.x, m_screenScale.y);
             }
         }
-        if (sphereActive) {
-            // T2.4/T2.5: m_sphereProgram agora sabe recortar por olho
-            // (uStereoLayout/uSwapEyes, setados em UpdateScreenModeUniforms)
-            // — ver o fragment shader em SessionInit() pra convencao exata
-            // de empacotamento (SBS/OU) e a ressalva honesta sobre Vr180SBS
-            // nunca ter sido validado contra um arquivo real.
-            m_sphereSurfaceDef.graphicsCommand.Textures[0].texture = m_textureId;
-            m_sphereSurfaceDef.graphicsCommand.BindUniformTextures();
-            out.Surfaces.push_back(OVRFW::ovrDrawSurface(m_sphereTransform, &m_sphereSurfaceDef));
-        } else if (flatStereoActive) {
-            // T1.1/T1.2/T1.5: separacao real de olho pro quad SBS/OU (half e
-            // full usam a MESMA matematica de UV — a diferenca entre half/full
-            // e so a densidade de pixels por olho na fonte, nao afeta o corte
-            // — ver T1.3 no doc). Mesma posicao/escala ajustavel do quad mono.
-            m_stereoFlatSurfaceDef.graphicsCommand.Textures[0].texture = m_textureId;
-            m_stereoFlatSurfaceDef.graphicsCommand.BindUniformTextures();
-            OVR::Vector3f worldScreenPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(m_screenPosition);
-            OVR::Matrix4f transform = OVR::Matrix4f::Translation(worldScreenPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) *
-                OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
-            out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_stereoFlatSurfaceDef));
-            if (m_scrubOverlayTextureId != 0 && g_scrubOverlayVisible.load()) {
-                m_scrubOverlaySurfaceDef.graphicsCommand.Textures[0].texture = m_scrubOverlayTextureId;
-                m_scrubOverlaySurfaceDef.graphicsCommand.BindUniformTextures();
-                out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_scrubOverlaySurfaceDef));
-            }
-        } else {
-            // Flat2D: quad mono normal, posicao/escala ajustaveis pelo
-            // usuario via thumbstick (T3.6).
-            OVR::Vector3f worldScreenPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(m_screenPosition);
-            OVR::Matrix4f transform = OVR::Matrix4f::Translation(worldScreenPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) *
-                OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
-            out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_surfaceDef));
-            // Preview de arrasto (T-seek-ux): mesmo transform do quad de
-            // video, so no modo plano (sphereActive ja exclui 360/180 acima).
-            if (m_scrubOverlayTextureId != 0 && g_scrubOverlayVisible.load()) {
-                m_scrubOverlaySurfaceDef.graphicsCommand.Textures[0].texture = m_scrubOverlayTextureId;
-                m_scrubOverlaySurfaceDef.graphicsCommand.BindUniformTextures();
-                out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_scrubOverlaySurfaceDef));
+        if (m_isVideoActive) {
+            if (sphereActive) {
+                // T2.4/T2.5: m_sphereProgram agora sabe recortar por olho
+                // (uStereoLayout/uSwapEyes, setados em UpdateScreenModeUniforms)
+                // — ver o fragment shader em SessionInit() pra convencao exata
+                // de empacotamento (SBS/OU) e a ressalva honesta sobre Vr180SBS
+                // nunca ter sido validado contra um arquivo real.
+                m_sphereSurfaceDef.graphicsCommand.Textures[0].texture = m_textureId;
+                m_sphereSurfaceDef.graphicsCommand.BindUniformTextures();
+                out.Surfaces.push_back(OVRFW::ovrDrawSurface(m_sphereTransform, &m_sphereSurfaceDef));
+            } else if (flatStereoActive) {
+                // T1.1/T1.2/T1.5: separacao real de olho pro quad SBS/OU (half e
+                // full usam a MESMA matematica de UV — a diferenca entre half/full
+                // e so a densidade de pixels por olho na fonte, nao afeta o corte
+                // — ver T1.3 no doc). Mesma posicao/escala ajustavel do quad mono.
+                m_stereoFlatSurfaceDef.graphicsCommand.Textures[0].texture = m_textureId;
+                m_stereoFlatSurfaceDef.graphicsCommand.BindUniformTextures();
+                OVR::Vector3f worldScreenPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(m_screenPosition);
+                OVR::Matrix4f transform = OVR::Matrix4f::Translation(worldScreenPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) *
+                    OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
+                out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_stereoFlatSurfaceDef));
+                if (m_scrubOverlayTextureId != 0 && g_scrubOverlayVisible.load()) {
+                    m_scrubOverlaySurfaceDef.graphicsCommand.Textures[0].texture = m_scrubOverlayTextureId;
+                    m_scrubOverlaySurfaceDef.graphicsCommand.BindUniformTextures();
+                    out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_scrubOverlaySurfaceDef));
+                }
+            } else {
+                // Flat2D: quad mono normal, posicao/escala ajustaveis pelo
+                // usuario via thumbstick (T3.6).
+                OVR::Vector3f worldScreenPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(m_screenPosition);
+                OVR::Matrix4f transform = OVR::Matrix4f::Translation(worldScreenPos) * OVR::Matrix4f::RotationY(m_sceneYawOffset) *
+                    OVR::Matrix4f::Scaling(m_screenScale.x, m_screenScale.y, 1.0f);
+                out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_surfaceDef));
+                // Preview de arrasto (T-seek-ux): mesmo transform do quad de
+                // video, so no modo plano (sphereActive ja exclui 360/180 acima).
+                if (m_scrubOverlayTextureId != 0 && g_scrubOverlayVisible.load()) {
+                    m_scrubOverlaySurfaceDef.graphicsCommand.Textures[0].texture = m_scrubOverlayTextureId;
+                    m_scrubOverlaySurfaceDef.graphicsCommand.BindUniformTextures();
+                    out.Surfaces.push_back(OVRFW::ovrDrawSurface(transform, &m_scrubOverlaySurfaceDef));
+                }
             }
         }
 
@@ -2221,6 +2766,14 @@ public:
             m_controlsSurfaceDef.graphicsCommand.Textures[0].target = GL_TEXTURE_EXTERNAL_OES;
             m_controlsSurfaceDef.graphicsCommand.BindUniformTextures();
             out.Surfaces.push_back(OVRFW::ovrDrawSurface(m_controlsTransform, &m_controlsSurfaceDef));
+        }
+
+        // Painel Modal frontal flutuante (3o Quad)
+        if (m_modalTextureId != 0 && m_modalAlpha > 0.01f) {
+            m_modalSurfaceDef.graphicsCommand.Textures[0].texture = m_modalTextureId;
+            m_modalSurfaceDef.graphicsCommand.Textures[0].target = GL_TEXTURE_EXTERNAL_OES;
+            m_modalSurfaceDef.graphicsCommand.BindUniformTextures();
+            out.Surfaces.push_back(OVRFW::ovrDrawSurface(m_modalTransform, &m_modalSurfaceDef));
         }
 
         // Posicao/orientacao da tela, mas sem a escala dela: o icone tem
@@ -2320,6 +2873,8 @@ private:
     float m_swapEyesF = 0.0f; // T1.5: espelha get_swap_eyes(), compartilhado pelos 2 programas estereo
     float m_sharpness = 0.5f; // uniform CAS: 0=mais leve (peak -8), 1=mais forte (peak -5). So usado se kSharpenEnabled.
     float m_sceneYawOffset = 0.0f; // T4.3: recenter — offset de yaw aplicado a cena
+    PFN_xrRequestDisplayRefreshRateFB m_pfnRequestDisplayRefreshRateFB = nullptr;
+    uint32_t m_thermalLevel = 0;
     OVR::Vector3f m_sceneTranslationOffset = OVR::Vector3f(0.0f, 0.0f, 0.0f);
     OVR::Matrix4f m_sphereTransform;
 
@@ -2443,6 +2998,7 @@ private:
     GLuint m_textureId;
     EGLImageKHR m_eglImage;
     AHardwareBuffer* m_lastBuffer;
+    bool m_isVideoActive;
     std::unordered_map<AHardwareBuffer*, EGLImageKHR> m_eglImageCache;
     OVRFW::GlProgram m_program;
     OVRFW::ovrSurfaceDef m_surfaceDef;
@@ -2466,6 +3022,15 @@ private:
     GLuint m_controlsTextureId;
     EGLImageKHR m_controlsEglImage;
     OVRFW::ovrSurfaceDef m_controlsSurfaceDef;
+
+    // Modal UI System (3o Quad frontal flutuante)
+    AImageReader* m_modalImageReader;
+    GLuint m_modalTextureId;
+    EGLImageKHR m_modalEglImage;
+    OVRFW::ovrSurfaceDef m_modalSurfaceDef;
+    OVR::Matrix4f m_modalTransform;
+    float m_modalAlpha;
+    bool m_modalActive;
 
     OVRFW::ovrBeamRenderer m_beamRenderer;
     OVRFW::ovrBeamRenderer::handle_t m_beamHandle{OVRFW::ovrBeamRenderer::INVALID_BEAM_HANDLE};

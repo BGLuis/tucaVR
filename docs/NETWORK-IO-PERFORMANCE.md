@@ -412,7 +412,7 @@ native/src/vr_player_app_vulkan.cpp        (sessao seguinte: HUD novo, LRU real 
 native/src/vr_player_input_vulkan.h        (sessao seguinte: HUD novo)
 native/src/vr_player_app.cpp               (sessao seguinte: HUD novo, paridade GLES)
 rust/bridge/Cargo.toml                     (sessao seguinte: + log, pra AndroidLogger)
-app/src/main/java/com/vrplayer/VRPresentation.kt
+app/src/main/java/com/tucavr/VRPresentation.kt
                                             (sessao seguinte, achado durante o teste: as
                                              abas URL/SMB/FTP/SFTP de "Rede" nao tinham
                                              ScrollView — formulario de cadastro de servidor

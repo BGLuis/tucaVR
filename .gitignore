@@ -21,7 +21,7 @@ Cargo.lock
 # C++/CMake
 CMakeCache.txt
 CMakeFiles/
-Makefile
+!/Makefile
 cmake_install.cmake
 compile_commands.json
 build-*/
@@ -32,9 +32,10 @@ out/
 app/src/main/jniLibs/
 
 # Dependencias externas baixadas por scripts/setup-deps.sh (nao versionar SDKs de terceiros)
-/sdk/meta-openxr-sdk/
-/sdk/*.zip
+/sdk/
+sdk
 /ffmpeg-android-maker/
+ffmpeg-android-maker
 
 # Fixtures/certificados gerados por scripts/test-network-protocols.sh (T6/T7 integration tests)
 /docker/network-tests/fixtures/
@@ -45,3 +46,7 @@ app/src/main/jniLibs/
 
 # Clipe 4K sintetico gerado por scripts/generate-4k-test-clip.sh
 /testdata/
+
+# Relatórios e investigações técnicas locais
+/docs/reports/
+

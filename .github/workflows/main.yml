@@ -1,31 +1,66 @@
-name: VR Player CI
+name: tucaVR CI
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [ master, main, develop ]
+    paths-ignore:
+      - '**/*.md'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
   pull_request:
-    branches: [ master, main ]
+    branches: [ master, main, develop ]
+    paths-ignore:
+      - '**/*.md'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/PULL_REQUEST_TEMPLATE.md'
+  workflow_dispatch:
+    inputs:
+      build_apk:
+        description: 'Compilar APK completo (requer segredo do SDK)'
+        type: boolean
+        default: true
+
+# Cancela runs anteriores em branches de PR e develop para evitar gasto desnecessário de runners
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+# Privilégio mínimo por padrão (segurança supply-chain)
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: '17'
+  JAVA_DISTRO: 'temurin'
+  NDK_VERSION: '26.3.11579264'
 
 jobs:
   build-and-lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       
-      - name: Set up JDK 17
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4
         with:
-          java-version: '17'
-          distribution: 'temurin'
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRO }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
           
-      - name: Setup Rust
+      - name: Setup Rust (Host)
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-linux-android
           components: clippy, rustfmt
           
-      - name: Install cargo-ndk
-        run: cargo install cargo-ndk
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust -> rust/target"
         
       - name: Lint Rust (clippy)
         run: cd rust && cargo clippy -p protocols -p media-logic -- -D warnings
@@ -41,6 +76,14 @@ jobs:
       - name: Run Rust unit tests (host-testable crates)
         run: cd rust && cargo test -p protocols -p media-logic
 
+      - name: Install C++ Host Test Dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y --no-install-recommends libopenxr-dev
+
+      - name: Run C++ Host unit tests
+        run: ./scripts/test-native-host.sh
+
       - name: Lint Kotlin (ktlint)
         run: ./gradlew ktlintCheck || echo "ktlint not configured yet"
 
@@ -50,7 +93,102 @@ jobs:
       - name: Run Kotlin unit tests (JVM)
         run: ./gradlew testDebugUnitTest
 
-      # O build C++/Android completo no CI requer download do Meta OpenXR SDK e NDK configurado.
-      # Habilitar conforme a infraestrutura for configurada com os SDKs.
-      # - name: Build Unified Script
-      #   run: ./scripts/build.sh
+      - name: Upload Test Reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: app/build/reports/tests/testDebugUnitTest/
+          retention-days: 7
+
+  build-apk:
+    needs: build-and-lint
+    if: github.repository == 'BGLuis/vr-multmidia' && (inputs.build_apk == true || inputs.build_apk == null)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout Meta OpenXR SDK (Private Repo)
+        uses: actions/checkout@v4
+        with:
+          repository: BGLuis/meta-openxr-sdk-private
+          token: ${{ secrets.SDK_REPO_PAT }}
+          path: sdk/meta-openxr-sdk
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRO }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Setup Rust (Android)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+          
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust -> rust/target"
+          
+      - name: Cache cargo-ndk
+        id: cache-cargo-ndk
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: ${{ runner.os }}-cargo-ndk-bin-v1
+
+      - name: Install cargo-ndk
+        if: steps.cache-cargo-ndk.outputs.cache-hit != 'true'
+        run: cargo install cargo-ndk --locked
+        
+      - name: Cache Android NDK
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/android/sdk/ndk/26.3.11579264
+          key: ${{ runner.os }}-ndk-${{ env.NDK_VERSION }}
+
+      - name: Setup Android NDK
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;${{ env.NDK_VERSION }}"
+
+      - name: Configure Android NDK Environment
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+          echo "ANDROID_SDK_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+
+      - name: Cache FFmpeg Build
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: ffmpeg-android-maker
+          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('scripts/setup-deps.sh') }}-v2
+
+      - name: Setup and Compile FFmpeg
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          ./scripts/setup-deps.sh
+          cd ffmpeg-android-maker
+          export ANDROID_SDK_HOME=$ANDROID_HOME
+          export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}
+          ./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26
+
+      - name: Build Unified Script (Rust + C++ + Gradle)
+        run: ./scripts/build.sh
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+          ANDROID_SDK_HOME: ${{ env.ANDROID_SDK_HOME }}
+          PKG_CONFIG_PATH: ${{ github.workspace }}/ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/pkgconfig
+          BINDGEN_EXTRA_CLANG_ARGS: "-I${{ github.workspace }}/ffmpeg-android-maker/output/include/arm64-v8a -I${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: VR-Player-APK-${{ github.ref_name }}
+          path: app/build/outputs/apk/debug/app-debug.apk

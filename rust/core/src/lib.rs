@@ -9,3 +9,7 @@ pub mod hevc;
 pub mod av1;
 pub mod nal;
 pub mod thumbnail;
+pub mod metadata;
+pub mod format3d_detect;
+pub mod subtitle_loader;
+pub mod log;

@@ -1,0 +1,157 @@
+name: tucaVR Release (Auto & Manual)
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - 'v*' # Dispara também quando uma tag começar com 'v' (ex: v1.0.0, v1.0.0-beta)
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Nome da Tag (ex: v1.0.0)'
+        required: false
+        type: string
+      prerelease:
+        description: 'Marcar como pré-release'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false # Releases não devem ser abortadas se novos commits entrarem
+
+permissions:
+  contents: read
+
+env:
+  JAVA_VERSION: '17'
+  JAVA_DISTRO: 'temurin'
+  NDK_VERSION: '26.3.11579264'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: write # Estritamente necessário apenas para criar o release
+    
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Checkout Meta OpenXR SDK (Private Repo)
+        uses: actions/checkout@v4
+        with:
+          repository: BGLuis/meta-openxr-sdk-private
+          token: ${{ secrets.SDK_REPO_PAT }}
+          path: sdk/meta-openxr-sdk
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ env.JAVA_VERSION }}
+          distribution: ${{ env.JAVA_DISTRO }}
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Setup Rust (Android)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust -> rust/target"
+          
+      - name: Cache cargo-ndk
+        id: cache-cargo-ndk
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-ndk
+          key: ${{ runner.os }}-cargo-ndk-bin-v1
+
+      - name: Install cargo-ndk
+        if: steps.cache-cargo-ndk.outputs.cache-hit != 'true'
+        run: cargo install cargo-ndk --locked
+        
+      - name: Cache Android NDK
+        id: cache-ndk
+        uses: actions/cache@v4
+        with:
+          path: /usr/local/lib/android/sdk/ndk/26.3.11579264
+          key: ${{ runner.os }}-ndk-${{ env.NDK_VERSION }}
+
+      - name: Setup Android NDK
+        if: steps.cache-ndk.outputs.cache-hit != 'true'
+        run: |
+          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;${{ env.NDK_VERSION }}"
+
+      - name: Configure Android NDK Environment
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
+          echo "ANDROID_SDK_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+
+      - name: Cache FFmpeg Build
+        id: cache-ffmpeg
+        uses: actions/cache@v4
+        with:
+          path: ffmpeg-android-maker
+          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('scripts/setup-deps.sh') }}-v2
+
+      - name: Setup and Compile FFmpeg
+        if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        run: |
+          ./scripts/setup-deps.sh
+          cd ffmpeg-android-maker
+          export ANDROID_SDK_HOME=$ANDROID_HOME
+          export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}
+          ./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26
+
+      - name: Build Unified Script (Rust + C++ + Gradle)
+        run: ./scripts/build.sh
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+          ANDROID_SDK_HOME: ${{ env.ANDROID_SDK_HOME }}
+          PKG_CONFIG_PATH: ${{ github.workspace }}/ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/pkgconfig
+          BINDGEN_EXTRA_CLANG_ARGS: "-I${{ github.workspace }}/ffmpeg-android-maker/output/include/arm64-v8a -I${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+
+      - name: Determine Release Configuration
+        id: config
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+          REF: ${{ github.ref }}
+          RUN_NUMBER: ${{ github.run_number }}
+          INPUT_TAG: ${{ inputs.tag_name }}
+          INPUT_PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          if [[ -n "$INPUT_TAG" ]]; then
+            echo "rel_name=Release $INPUT_TAG" >> "$GITHUB_ENV"
+            echo "rel_tag=$INPUT_TAG" >> "$GITHUB_ENV"
+            echo "is_prerelease=$INPUT_PRERELEASE" >> "$GITHUB_ENV"
+          elif [[ "$REF_TYPE" == "tag" ]]; then
+            echo "rel_name=Release $REF_NAME" >> "$GITHUB_ENV"
+            echo "rel_tag=$REF_NAME" >> "$GITHUB_ENV"
+            if [[ "$REF" == *"-beta"* ]] || [[ "$REF" == *"-alpha"* ]]; then
+              echo "is_prerelease=true" >> "$GITHUB_ENV"
+            else
+              echo "is_prerelease=false" >> "$GITHUB_ENV"
+            fi
+          else
+            echo "rel_name=Auto-Build #$RUN_NUMBER" >> "$GITHUB_ENV"
+            echo "rel_tag=build-$RUN_NUMBER" >> "$GITHUB_ENV"
+            echo "is_prerelease=true" >> "$GITHUB_ENV"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: app/build/outputs/apk/debug/app-debug.apk
+          name: ${{ env.rel_name }}
+          tag_name: ${{ env.rel_tag }}
+          generate_release_notes: true
+          prerelease: ${{ env.is_prerelease == 'true' }}
+          draft: false

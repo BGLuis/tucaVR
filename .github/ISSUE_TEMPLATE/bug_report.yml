@@ -1,0 +1,112 @@
+name: 🐛 Bug Report
+description: Create a structured bug report to help us improve tucaVR
+title: "[BUG] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please provide the details below as clearly as possible.
+  - type: checkboxes
+    id: preflight
+    attributes:
+      label: Before you file
+      options:
+        - label: I searched the existing issues and this has not been reported yet.
+          required: true
+        - label: This is a bug report, not a setup/support question (those belong in Discussions).
+          required: true
+  - type: input
+    id: version
+    attributes:
+      label: App Version / Commit
+      description: On which version, commit, or branch did the issue occur?
+      placeholder: e.g. main, v1.0.0, commit 1234abc
+    validations:
+      required: true
+  - type: dropdown
+    id: headset
+    attributes:
+      label: VR Headset / Environment
+      description: On which device did the bug happen?
+      options:
+        - Meta Quest 3
+        - Meta Quest 3s
+        - Meta Quest 2
+        - Meta Quest Pro
+        - Emulator/Host only (Native C++/Rust tests)
+    validations:
+      required: true
+  - type: dropdown
+    id: graphics
+    attributes:
+      label: Graphics API
+      description: Which rendering mode was in use?
+      options:
+        - Vulkan (Default)
+        - GLES (Fallback)
+        - Unknown / Not Applicable
+  - type: dropdown
+    id: source
+    attributes:
+      label: Media Source
+      description: Where was the file being played from when the bug happened?
+      options:
+        - Local storage (on-device)
+        - SMB / CIFS
+        - NFS
+        - FTP
+        - SFTP
+        - DLNA / UPnP
+        - HTTP / HTTPS direct URL
+        - HLS stream
+        - Not applicable (UI, menus, startup)
+  - type: textarea
+    id: media
+    attributes:
+      label: Media Details
+      description: If the bug involves a specific file, describe it — this is usually the fastest path to a reproduction.
+      placeholder: |
+        Container: MKV
+        Video codec: HEVC 10-bit, 3840x2160, 60fps
+        Audio codec: AC3 5.1
+        3D layout: Side-by-Side (half)
+        Subtitles: external .srt
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce the problem step-by-step?
+      value: |
+        1. 
+        2. 
+        3. 
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Paste the relevant `adb logcat` output.
+        ⚠️ Please check it for server addresses, usernames or passwords (SMB/FTP/SFTP URIs) and redact them before pasting.
+      render: shell
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or Videos
+      description: Drag and drop screenshots or short clips recorded from the Quest here.

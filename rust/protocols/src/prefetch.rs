@@ -47,10 +47,23 @@
 
 use std::io::{self, Read, Seek, SeekFrom};
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
+
+/// Flag global de estresse térmico (T14.1/T14.2 `PAUSE_PREFETCH`).
+/// Quando ativada (nível MODERATE ou superior), pausa a pre-busca especulativa
+/// em segundo plano para aliviar CPU / tráfego de rede concorrente.
+static THERMAL_THROTTLE_ACTIVE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_thermal_throttle_active(active: bool) {
+    THERMAL_THROTTLE_ACTIVE.store(active, Ordering::Relaxed);
+}
+
+pub fn is_thermal_throttle_active() -> bool {
+    THERMAL_THROTTLE_ACTIVE.load(Ordering::Relaxed)
+}
 
 /// Contadores de instrumentacao do `PrefetchReader` (docs/DEBUGGING.md),
 /// expostos via `PrefetchReader::stats()` — quem pega o `Arc` pode fazer
@@ -186,6 +199,7 @@ pub struct PrefetchReader<S: RangeSource> {
     /// Quantos blocos especulativos seguidos ja foram pedidos desde o
     /// ultimo miss nao-sequencial — ver `next_ramp_size`.
     sequential_streak: u32,
+    thermal_throttled: Option<bool>,
     _source: PhantomData<S>,
 }
 
@@ -258,6 +272,7 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
             block_size,
             seek_block_size,
             sequential_streak: 0,
+            thermal_throttled: None,
             _source: PhantomData,
         };
         // Dispara a busca do primeiro bloco ja na construcao: o primeiro
@@ -268,6 +283,16 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
         // sequencial em regime permanente.
         this.kick_prefetch_sized(0, seek_block_size);
         this
+    }
+
+    /// Permite forçar localmente o estado de thermal throttle neste reader
+    /// (útil para testes unitários isolados de concorrência).
+    pub fn set_local_thermal_throttle(&mut self, active: bool) {
+        self.thermal_throttled = Some(active);
+    }
+
+    fn is_throttled(&self) -> bool {
+        self.thermal_throttled.unwrap_or_else(is_thermal_throttle_active)
     }
 
     fn cache_hit(&self, pos: u64) -> bool {
@@ -291,6 +316,10 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
     /// forte o bastante pra pagar o bloco inteiro se o acesso for so um
     /// pulo curto (ex.: keyframe seguinte de um GOP menor que o esperado).
     fn kick_prefetch(&mut self, offset: u64) {
+        if self.is_throttled() {
+            // T14.1/T14.2: Em estresse térmico, suspende read-ahead especulativo
+            return;
+        }
         let size = self.next_ramp_size();
         self.kick_prefetch_sized(offset, size);
     }
@@ -431,7 +460,7 @@ impl<S: RangeSource> Drop for PrefetchReader<S> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{mpsc as std_mpsc, Arc};
+    use std::sync::{mpsc as std_mpsc, Arc, Condvar};
     use std::time::{Duration, Instant};
 
     /// Fonte fake em memoria com atraso artificial configuravel por chamada
@@ -635,15 +664,27 @@ mod tests {
     /// Fonte fake que registra o TAMANHO de cada `read_range` pedido, para
     /// provar a rampa (T-seek-ux): o primeiro fetch pos-seek deve ser
     /// pequeno, os seguintes (leitura sequencial confirmada) devem voltar ao
-    /// tamanho cheio.
+    /// tamanho cheio. Sincronizada via `Condvar` para testes determinísticos sem `thread::sleep`.
     struct SizeTrackingSource {
         data: Vec<u8>,
-        requested_sizes: Arc<Mutex<Vec<usize>>>,
+        requested_sizes: Arc<(Mutex<Vec<usize>>, Condvar)>,
+    }
+
+    impl SizeTrackingSource {
+        fn new(data: Vec<u8>) -> (Self, Arc<(Mutex<Vec<usize>>, Condvar)>) {
+            let pair = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
+            (Self { data, requested_sizes: pair.clone() }, pair)
+        }
     }
 
     impl RangeSource for SizeTrackingSource {
         fn read_range(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-            self.requested_sizes.lock().unwrap().push(buf.len());
+            {
+                let (lock, cvar) = &*self.requested_sizes;
+                let mut sizes = lock.lock().unwrap();
+                sizes.push(buf.len());
+                cvar.notify_all();
+            }
             let offset = offset as usize;
             if offset >= self.data.len() {
                 return Ok(0);
@@ -658,20 +699,34 @@ mod tests {
         }
     }
 
+    fn wait_for_requests(pair: &Arc<(Mutex<Vec<usize>>, Condvar)>, min_count: usize) -> Vec<usize> {
+        let (lock, cvar) = &**pair;
+        let mut sizes = lock.lock().unwrap();
+        let deadline = std::time::Instant::now() + Duration::from_secs(2);
+        while sizes.len() < min_count {
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            let (guard, _) = cvar.wait_timeout(sizes, deadline - now).unwrap();
+            sizes = guard;
+        }
+        sizes.clone()
+    }
+
     #[test]
     fn fresh_open_fetches_small_first_block_instead_of_full_size() {
         let full_block = 8 * 1024 * 1024;
         let seek_block = 512 * 1024;
         let data: Vec<u8> = (0..255u8).cycle().take(full_block * 3).collect();
-        let sizes = Arc::new(Mutex::new(Vec::new()));
-        let source = SizeTrackingSource { data: data.clone(), requested_sizes: sizes.clone() };
+        let (source, sizes) = SizeTrackingSource::new(data.clone());
         let mut reader = PrefetchReader::with_block_sizes(source, full_block, seek_block);
 
         let mut buf = vec![0u8; 100];
         reader.read_exact(&mut buf).unwrap();
         assert_eq!(buf, data[..100]);
 
-        let requested = sizes.lock().unwrap();
+        let requested = wait_for_requests(&sizes, 1);
         assert_eq!(
             requested.first(),
             Some(&seek_block),
@@ -684,8 +739,7 @@ mod tests {
         let full_block = 8 * 1024 * 1024;
         let seek_block = 512 * 1024;
         let data: Vec<u8> = (0..255u8).cycle().take(full_block * 3).collect();
-        let sizes = Arc::new(Mutex::new(Vec::new()));
-        let source = SizeTrackingSource { data: data.clone(), requested_sizes: sizes.clone() };
+        let (source, sizes) = SizeTrackingSource::new(data.clone());
         let mut reader = PrefetchReader::with_block_sizes(source, full_block, seek_block);
 
         let jump_to = (full_block * 2) as u64;
@@ -695,7 +749,7 @@ mod tests {
         assert_eq!(buf, data[jump_to as usize..jump_to as usize + 100]);
 
         // O ultimo fetch e o que respondeu a leitura pos-seek.
-        let requested = sizes.lock().unwrap();
+        let requested = wait_for_requests(&sizes, 2);
         assert_eq!(
             requested.last(),
             Some(&seek_block),
@@ -707,17 +761,17 @@ mod tests {
     fn sequential_reads_after_seek_ramp_back_to_full_block_size() {
         let full_block = 4 * 1024 * 1024;
         let seek_block = 256 * 1024;
+        let medium_block = (seek_block * 4).min(full_block);
         let data: Vec<u8> = (0..255u8).cycle().take(full_block * 4).collect();
-        let sizes = Arc::new(Mutex::new(Vec::new()));
-        let source = SizeTrackingSource { data: data.clone(), requested_sizes: sizes.clone() };
+        let (source, sizes) = SizeTrackingSource::new(data.clone());
         let mut reader = PrefetchReader::with_block_sizes(source, full_block, seek_block);
 
         let jump_to = (full_block * 2) as u64;
         reader.seek(SeekFrom::Start(jump_to)).unwrap();
-        // Le em pedacos pequenos pra pos ficar estritamente dentro do bloco
-        // pos-seek, confirmando continuidade sequencial (dispara o proximo
-        // prefetch, ja de tamanho cheio).
-        let mut out = vec![0u8; seek_block + 4096];
+        // Lê através do bloco pós-seek e do bloco médio intermediário,
+        // confirmando continuidade sequencial para que a rampa alcance
+        // o prefetch de tamanho cheio (full_block).
+        let mut out = vec![0u8; seek_block + medium_block + 4096];
         let mut done = 0;
         while done < out.len() {
             let chunk = 4096.min(out.len() - done);
@@ -726,10 +780,8 @@ mod tests {
         }
         assert_eq!(out, data[jump_to as usize..jump_to as usize + out.len()]);
 
-        // De tempo para o prefetch especulativo (background) completar.
-        std::thread::sleep(Duration::from_millis(50));
-
-        let requested = sizes.lock().unwrap();
+        // Aguarda determinísticamente o prefetch especulativo do bloco cheio.
+        let requested = wait_for_requests(&sizes, 4);
         assert!(
             requested.contains(&full_block),
             "esperava a rampa voltar ao bloco cheio ({full_block}) apos leitura sequencial, fetches pedidos: {requested:?}"
@@ -742,8 +794,7 @@ mod tests {
         let seek_block = 512 * 1024;
         let medium_block = (seek_block * 4).min(full_block);
         let data: Vec<u8> = (0..255u8).cycle().take(full_block * 4).collect();
-        let sizes = Arc::new(Mutex::new(Vec::new()));
-        let source = SizeTrackingSource { data: data.clone(), requested_sizes: sizes.clone() };
+        let (source, sizes) = SizeTrackingSource::new(data.clone());
         let mut reader = PrefetchReader::with_block_sizes(source, full_block, seek_block);
 
         let jump_to = (full_block * 2) as u64;
@@ -760,14 +811,79 @@ mod tests {
         }
         assert_eq!(out, data[jump_to as usize..jump_to as usize + out.len()]);
 
-        std::thread::sleep(Duration::from_millis(50));
-
-        let requested = sizes.lock().unwrap();
+        // Aguarda determinísticamente os 3 passos da rampa
+        let requested = wait_for_requests(&sizes, 3);
         // `ends_with` (nao `==`): a construcao ja dispara um kick(0, seek_block)
         // proprio antes do seek acontecer, que tambem aparece na lista.
         assert!(
             requested.ends_with(&[seek_block, medium_block, full_block]),
             "esperava a rampa em 3 passos (seek -> medio -> cheio) no final, fetches pedidos: {requested:?}"
         );
+    }
+
+    #[test]
+    fn thermal_throttle_pauses_speculative_prefetch() {
+        let block_size = 64 * 1024;
+        let data: Vec<u8> = (0..255u8).cycle().take(block_size * 4).collect();
+        let (source, sizes) = SizeTrackingSource::new(data.clone());
+        let mut reader = PrefetchReader::with_block_size(source, block_size);
+        reader.set_local_thermal_throttle(true);
+
+        // O bloco inicial (0) é buscado na criação via kick_prefetch_sized
+        let requested = wait_for_requests(&sizes, 1);
+        assert_eq!(requested.len(), 1);
+
+        // Consome todo o bloco 0 sequencialmente
+        let mut out = vec![0u8; block_size];
+        reader.read_exact(&mut out).unwrap();
+        assert_eq!(out, data[0..block_size]);
+
+        // Com thermal throttle ativo, aguarda breve janela confirmando que nenhum novo prefetch ocorre
+        let (lock, cvar) = &*sizes;
+        let guard = lock.lock().unwrap();
+        let (guard_after, _) = cvar.wait_timeout(guard, Duration::from_millis(30)).unwrap();
+        assert_eq!(
+            guard_after.len(),
+            1,
+            "com thermal throttle ativo, nenhum prefetch especulativo deveria ter sido disparado: {:?}",
+            *guard_after
+        );
+    }
+
+    /// Fonte que simula entrega parcial de blocos (ex.: quando ocorre timeout de
+    /// rede / stall e a fonte entrega apenas o que conseguiu antes ou depois da retomada).
+    /// O PrefetchReader deve continuar lendo o fluxo completo sem perdas ou offsets desalinhados.
+    struct PartialDeliverySource {
+        data: Vec<u8>,
+        max_chunk: usize,
+    }
+
+    impl RangeSource for PartialDeliverySource {
+        fn read_range(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+            let offset = offset as usize;
+            if offset >= self.data.len() {
+                return Ok(0);
+            }
+            let n = (self.data.len() - offset).min(buf.len()).min(self.max_chunk);
+            buf[..n].copy_from_slice(&self.data[offset..offset + n]);
+            Ok(n)
+        }
+
+        fn len(&self) -> Option<u64> {
+            Some(self.data.len() as u64)
+        }
+    }
+
+    #[test]
+    fn partial_block_delivery_handled_correctly() {
+        let block_size = 4096;
+        let data: Vec<u8> = (0..255u8).cycle().take(block_size * 5).collect();
+        // Força cada read_range a entregar no máximo 1000 bytes (< block_size)
+        let source = PartialDeliverySource { data: data.clone(), max_chunk: 1000 };
+        let mut reader = PrefetchReader::with_block_size(source, block_size);
+
+        let mut out = vec![0u8; data.len()];
+        reader.read_exact(&mut out).expect("falha ao ler de fonte com entrega parcial");
+        assert_eq!(out, data, "dados lidos diferem do conteudo original sob entregas parciais");
     }
 }

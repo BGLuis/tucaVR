@@ -58,9 +58,9 @@ static CONTROLLER: Lazy<Arc<Mutex<PlaybackController>>> = Lazy::new(|| {
     Arc::new(Mutex::new(PlaybackController::new()))
 });
 
-// Erro do ultimo controller.load() que falhou (ex.: codec nao suportado). Antes so ia pro logcat,
-// sem nenhum feedback pro usuario. Kotlin consome via take_last_playback_error() (polling).
-static LAST_PLAYBACK_ERROR: Lazy<Mutex<Option<String>>> = Lazy::new(|| Mutex::new(None));
+// Anel circular de erros de reprodução (N6). Mantém histórico e preserva polling para Toast.
+static ERROR_RING: Lazy<media_logic::error_ring::ErrorRingBuffer> =
+    Lazy::new(|| media_logic::error_ring::ErrorRingBuffer::new(media_logic::error_ring::ErrorRingBuffer::DEFAULT_CAPACITY));
 
 // Contador (nao bool) porque duas chamadas de carregamento podem se
 // sobrepor (ex.: usuario solta o seek e arrasta de novo antes da primeira
@@ -200,6 +200,75 @@ pub extern "C" fn get_keyboard_active() -> u32 {
     KEYBOARD_ACTIVE.load(Ordering::Relaxed) as u32
 }
 
+// Fase 0.4 T5: Foveated Rendering (fixo, via extensao OpenXR XR_FB_foveation
+// no caminho Vulkan — ver native/src/vr_player_app_vulkan.cpp). Default OFF:
+// feature nunca validada em headset real nesta sessao, ligar e acao
+// explicita do usuario na tela de Configuracoes (Kotlin). So tem efeito real
+// no caminho Vulkan (padrao de build); no caminho GLES o valor e aceito e
+// guardado aqui, mas nada le/aplica — OVRFW::XrApp nao expoe o XrSwapchain
+// necessario pra xrUpdateSwapchainFB.
+static FOVEATION_ENABLED: AtomicBool = AtomicBool::new(false);
+
+#[no_mangle]
+pub extern "C" fn set_foveation_enabled(enabled: u32) {
+    FOVEATION_ENABLED.store(enabled != 0, Ordering::Relaxed);
+}
+
+/// Polling de baixa frequencia (~1x/s, nao a cada frame) pelo loop principal
+/// do caminho Vulkan — aplicar via xrUpdateSwapchainFB nao e uma operacao de
+/// frame, ver comentario em ApplyFoveation.
+#[no_mangle]
+pub extern "C" fn get_foveation_enabled() -> u32 {
+    FOVEATION_ENABLED.load(Ordering::Relaxed) as u32
+}
+
+/// Preferência do usuário para pausar automaticamente ao sair pro menu do sistema / passthrough.
+/// Ativada por padrão (true).
+static PAUSE_ON_EXIT: AtomicBool = AtomicBool::new(true);
+
+#[no_mangle]
+pub extern "C" fn set_pause_on_exit(enabled: u32) {
+    PAUSE_ON_EXIT.store(enabled != 0, Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_pause_on_exit() -> u32 {
+    PAUSE_ON_EXIT.load(Ordering::Relaxed) as u32
+}
+
+// Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
+// Guarda o nível térmico atual enviado pelo Kotlin ThermalMonitor (via JNI/C++).
+// 0=NORMAL, 1=LIGHT, 2=MODERATE, 3=SEVERE, 4=CRITICAL, 5=SHUTDOWN.
+// C++ Vulkan e GLES fazem polling (~1Hz) para aplicar ações no pipeline de render
+// (escala de resolução do viewport, refresh rate 72Hz, foveation boost).
+static THERMAL_LEVEL: AtomicU32 = AtomicU32::new(0);
+
+#[no_mangle]
+pub extern "C" fn set_thermal_level(level: u32) {
+    THERMAL_LEVEL.store(level, Ordering::Relaxed);
+    // Nível >= 2 (MODERATE) ativa mitigação no prefetch de rede (T14.1/T14.2 PAUSE_PREFETCH)
+    protocols::prefetch::set_thermal_throttle_active(level >= 2);
+}
+
+#[no_mangle]
+pub extern "C" fn get_thermal_level() -> u32 {
+    THERMAL_LEVEL.load(Ordering::Relaxed)
+}
+
+// Upscaling de vídeo (Vulkan-only, MQSR, SGSR1):
+// 0=OFF, 1=QUALITY, 2=PERFORMANCE, 3=AUTO
+static UPSCALING_MODE: AtomicU32 = AtomicU32::new(0);
+
+#[no_mangle]
+pub extern "C" fn set_upscaling_mode(mode: u32) {
+    UPSCALING_MODE.store(mode, Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_upscaling_mode() -> u32 {
+    UPSCALING_MODE.load(Ordering::Relaxed)
+}
+
 /// T1.4: avanca pro proximo modo do ciclo (chamado pelo botao "🧊" do painel
 /// de controles). Retorna o novo modo, pra o Kotlin nao precisar de uma
 /// chamada extra so pra ler de volta o que acabou de escrever.
@@ -222,6 +291,31 @@ pub extern "C" fn set_3d_mode(mode: u32) {
     if mode < SCREEN_MODE_COUNT {
         SCREEN_MODE.store(mode, Ordering::Relaxed);
     }
+}
+
+static SCREEN_MODE_OVERRIDE: AtomicU32 = AtomicU32::new(u32::MAX);
+
+/// Seta um override explicito para o modo 3D do proximo video (ou u32::MAX / valor negativo
+/// para "sem override / usar auto-deteccao"). Chamado pelo Kotlin ANTES de disparar o play.
+#[no_mangle]
+pub extern "C" fn set_screen_mode_override(mode: i32) {
+    if mode < 0 || mode >= SCREEN_MODE_COUNT as i32 {
+        SCREEN_MODE_OVERRIDE.store(u32::MAX, Ordering::Relaxed);
+    } else {
+        SCREEN_MODE_OVERRIDE.store(mode as u32, Ordering::Relaxed);
+    }
+}
+
+/// Aplica o modo 3D apos o carregamento de video: se houver override valido, usa-o;
+/// caso contrario, usa o modo detectado pelo controller.
+fn apply_screen_mode_after_load(controller: &core::playback::PlaybackController) {
+    let ovr = SCREEN_MODE_OVERRIDE.load(Ordering::Relaxed);
+    let final_mode = if ovr < SCREEN_MODE_COUNT {
+        ovr
+    } else {
+        controller.detected_screen_mode()
+    };
+    set_3d_mode(final_mode);
 }
 
 /// T9 (historico): ao carregar um arquivo novo, o modo 3D da reproducao
@@ -417,6 +511,15 @@ pub extern "C" fn get_last_seek_latency_ms() -> u32 {
     }
 }
 
+/// Debug (docs/DEBUGGING.md): desvio A/V instantaneo (master_clock - video_pts), em ms.
+#[no_mangle]
+pub extern "C" fn get_last_av_drift_ms() -> f32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_last_av_drift_ms(),
+        Err(_) => 0.0,
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn toggle_play_pause() {
     if let Ok(mut controller) = CONTROLLER.lock() {
@@ -431,6 +534,9 @@ pub extern "C" fn toggle_play_pause() {
 
 #[no_mangle]
 pub extern "C" fn on_app_focus_lost() {
+    if !PAUSE_ON_EXIT.load(Ordering::Relaxed) {
+        return;
+    }
     if let Ok(mut controller) = CONTROLLER.lock() {
         controller.on_focus_lost();
     }
@@ -443,10 +549,14 @@ pub extern "C" fn on_app_focus_gained() {
     }
 }
 
+#[no_mangle]
+pub extern "C" fn set_session_id(session_id: *const std::os::raw::c_char) {
+    let s = unsafe { cstr_to_string(session_id) };
+    core::log::set_session_id(s);
+}
+
 unsafe fn log(level: i32, msg: &str) {
-    let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-    let msg = std::ffi::CString::new(msg).unwrap();
-    ndk_sys::__android_log_print(level, tag.as_ptr(), msg.as_ptr());
+    core::log::log_android(level, msg);
 }
 
 /// Le uma `*const c_char` vinda do JNI. `None` so em ponteiro nulo ou UTF-8
@@ -472,10 +582,11 @@ fn string_to_c_char(s: String) -> *mut std::os::raw::c_char {
         .into_raw()
 }
 
-/// Libera uma string retornada por `smb_list_shares`, `smb_list_directory`
-/// ou `probe_http_url`. Toda `*mut c_char` que este bridge retorna (exceto
-/// via parametros `out`) precisa passar por aqui — sem isso, vaza memoria do
-/// lado Rust a cada chamada.
+/// Libera uma string retornada por `smb_list_shares`, `smb_list_directory`,
+/// `probe_http_url` ou `read_media_metadata`/`smb_read_metadata`/
+/// `ftp_read_metadata`/`sftp_read_metadata`. Toda `*mut c_char` que este
+/// bridge retorna (exceto via parametros `out`) precisa passar por aqui —
+/// sem isso, vaza memoria do lado Rust a cada chamada.
 #[no_mangle]
 pub extern "C" fn free_rust_string(ptr: *mut std::os::raw::c_char) {
     if ptr.is_null() {
@@ -487,9 +598,12 @@ pub extern "C" fn free_rust_string(ptr: *mut std::os::raw::c_char) {
 }
 
 fn set_last_playback_error(msg: String) {
-    if let Ok(mut slot) = LAST_PLAYBACK_ERROR.lock() {
-        *slot = Some(msg);
-    }
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let session_id = core::log::get_session_id();
+    ERROR_RING.push(msg, now_ms, session_id);
 }
 
 /// Consome (le e limpa) o erro do ultimo load() que falhou, ou nulo se nao houve nenhum desde
@@ -497,11 +611,16 @@ fn set_last_playback_error(msg: String) {
 /// Retorno (se nao nulo) precisa ser liberado com `free_rust_string`.
 #[no_mangle]
 pub extern "C" fn take_last_playback_error() -> *mut std::os::raw::c_char {
-    let taken = LAST_PLAYBACK_ERROR.lock().ok().and_then(|mut slot| slot.take());
-    match taken {
+    match ERROR_RING.take_latest_unconsumed() {
         Some(msg) => string_to_c_char(msg),
         None => std::ptr::null_mut(),
     }
+}
+
+/// Retorna o total de erros registrados no anel circular na sessão.
+#[no_mangle]
+pub extern "C" fn get_playback_error_count() -> i32 {
+    ERROR_RING.count() as i32
 }
 
 /// T6.4: inicia playback de um arquivo via SMB. Recebe host/share/caminho/
@@ -554,6 +673,7 @@ pub extern "C" fn start_smb_playback(
                 unsafe { log(6, &format!("Error loading SMB video: {:?}", e)); }
                 set_last_playback_error(format!("{:?}", e));
             } else {
+                apply_screen_mode_after_load(&controller);
                 unsafe { log(4, "SMB video loaded successfully!"); }
             }
         }
@@ -677,6 +797,7 @@ pub extern "C" fn start_ftp_playback(
                 unsafe { log(6, &format!("Error loading FTP video: {:?}", e)); }
                 set_last_playback_error(format!("{:?}", e));
             } else {
+                apply_screen_mode_after_load(&controller);
                 unsafe { log(4, "FTP video loaded successfully!"); }
             }
         }
@@ -768,6 +889,7 @@ pub extern "C" fn start_sftp_playback(
                 unsafe { log(6, &format!("Error loading SFTP video: {:?}", e)); }
                 set_last_playback_error(format!("{:?}", e));
             } else {
+                apply_screen_mode_after_load(&controller);
                 unsafe { log(4, "SFTP video loaded successfully!"); }
             }
         }
@@ -814,6 +936,198 @@ pub extern "C" fn sftp_list_directory(
             string_to_c_char(lines.join("\n"))
         }
         Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
+/// T5.1/T5.4: Inicia playback de vídeo a partir de um compartilhamento NFS.
+#[no_mangle]
+pub extern "C" fn start_nfs_playback(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    export_path: *const std::os::raw::c_char,
+    file_path: *const std::os::raw::c_char,
+    version: i32,
+    start_time_sec: f32,
+) {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return };
+        let export_path = match cstr_to_string(export_path) { Some(s) => s, None => return };
+        let file_path = match cstr_to_string(file_path) { Some(s) => s, None => return };
+        protocols::nfs::NfsTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            export_path,
+            file_path,
+            version: version.clamp(3, 4) as u8,
+        }
+    };
+
+    spawn_loading(move || {
+        let internal_uri = target.to_internal();
+        unsafe { log(4, &format!("Loading NFS video: {}", protocols::nfs::redact(&internal_uri))); }
+
+        reset_3d_mode();
+        if let Ok(mut controller) = CONTROLLER.lock() {
+            controller.stop();
+            if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
+                unsafe { log(6, &format!("Error loading NFS video: {:?}", e)); }
+                set_last_playback_error(format!("{:?}", e));
+            } else {
+                apply_screen_mode_after_load(&controller);
+                unsafe { log(4, "NFS video loaded successfully!"); }
+            }
+        }
+    });
+}
+
+/// T5.2/T5.4: Lista arquivos e pastas num servidor NFS. Chamada BLOQUEANTE.
+#[no_mangle]
+pub extern "C" fn nfs_list_directory(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    export_path: *const std::os::raw::c_char,
+    dir_path: *const std::os::raw::c_char,
+    version: i32,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
+        let export_path = match cstr_to_string(export_path) { Some(s) => s, None => return string_to_c_char("ERROR:export_path invalido".into()) };
+        protocols::nfs::NfsTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            export_path,
+            file_path: String::new(),
+            version: version.clamp(3, 4) as u8,
+        }
+    };
+    let dir_path = unsafe { cstr_to_string(dir_path).unwrap_or_default() };
+
+    match protocols::nfs::list_directory(&target, &dir_path) {
+        Ok(entries) => {
+            let lines: Vec<String> = entries
+                .into_iter()
+                .map(|e| format!("{}\t{}\t{}", e.name, if e.is_dir { 1 } else { 0 }, e.size))
+                .collect();
+            string_to_c_char(lines.join("\n"))
+        }
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
+/// T5.2/T5.4: Lista exports disponíveis num servidor NFS. Chamada BLOQUEANTE.
+#[no_mangle]
+pub extern "C" fn nfs_list_exports(
+    host: *const std::os::raw::c_char,
+    port: i32,
+) -> *mut std::os::raw::c_char {
+    let host = match unsafe { cstr_to_string(host) } {
+        Some(s) => s,
+        None => return string_to_c_char("ERROR:host invalido".into()),
+    };
+    let port = port.clamp(1, u16::MAX as i32) as u16;
+
+    match protocols::nfs::list_exports(&host, port) {
+        Ok(exports) => string_to_c_char(exports.join("\n")),
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
+/// T10.1: Varredura de servidores na rede local (mDNS + SSDP). Chamada BLOQUEANTE.
+/// Retorna linhas separadas por '\n': "PROTOCOL\tNAME\tHOST\tPORT\tPATH"
+#[no_mangle]
+pub extern "C" fn discovery_scan_network(timeout_ms: u32) -> *mut std::os::raw::c_char {
+    let servers = protocols::discovery::scan_local_network(timeout_ms as u64);
+    let lines: Vec<String> = servers
+        .into_iter()
+        .map(|s| format!("{}\t{}\t{}\t{}\t{}", s.protocol, s.name, s.host, s.port, s.path))
+        .collect();
+    string_to_c_char(lines.join("\n"))
+}
+
+/// T7.2: Obtém o Device Description XML de um servidor DLNA e retorna detalhes (friendlyName, controlURL, icon).
+/// Chamada BLOQUEANTE. Retorna "OK\t{friendlyName}\t{controlURL}\t{iconUrl}" ou "ERROR:<msg>".
+#[no_mangle]
+pub extern "C" fn dlna_get_device_description(location: *const std::os::raw::c_char) -> *mut std::os::raw::c_char {
+    let location_str = match unsafe { cstr_to_string(location) } {
+        Some(s) => s,
+        None => return string_to_c_char("ERROR:location invalida".into()),
+    };
+
+    match protocols::dlna::fetch_device_description(&location_str) {
+        Ok(dev) => {
+            string_to_c_char(format!(
+                "OK\t{}\t{}\t{}",
+                dev.friendly_name,
+                dev.control_url,
+                dev.icon_url.unwrap_or_default()
+            ))
+        }
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
+/// T7.3: Lista o conteúdo de um container DLNA via SOAP Browse.
+/// Chamada BLOQUEANTE. Retorna linhas separadas por '\n':
+/// "id\ttitle\t{is_container 0|1}\turl\tsize\tduration_sec\tresolution\tthumbnail_url"
+#[no_mangle]
+pub extern "C" fn dlna_browse_directory(
+    control_url: *const std::os::raw::c_char,
+    object_id: *const std::os::raw::c_char,
+    start_index: u32,
+    max_count: u32,
+) -> *mut std::os::raw::c_char {
+    let control_url = match unsafe { cstr_to_string(control_url) } {
+        Some(s) => s,
+        None => return string_to_c_char("ERROR:control_url invalida".into()),
+    };
+    let object_id = unsafe { cstr_to_string(object_id).unwrap_or_else(|| "0".to_string()) };
+
+    match protocols::dlna::browse_directory(&control_url, &object_id, start_index, max_count) {
+        Ok(items) => {
+            let lines: Vec<String> = items
+                .into_iter()
+                .map(|item| {
+                    format!(
+                        "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                        item.id,
+                        item.title,
+                        if item.is_container { 1 } else { 0 },
+                        item.res_url.unwrap_or_default(),
+                        item.size_bytes.map(|s| s as i64).unwrap_or(-1),
+                        item.duration_sec.map(|d| format!("{:.2}", d)).unwrap_or_default(),
+                        item.resolution.unwrap_or_default(),
+                        item.album_art_url.unwrap_or_default()
+                    )
+                })
+                .collect();
+            string_to_c_char(lines.join("\n"))
+        }
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
+/// T8.1/T8.6: Faz o probe de variantes de uma URL M3U8 Master Playlist.
+/// Chamada BLOQUEANTE. Retorna linhas separadas por '\n': "index\tbandwidth\twidthxheight\tcodecs\turl"
+#[no_mangle]
+pub extern "C" fn hls_probe_variants(url: *const std::os::raw::c_char) -> *mut std::os::raw::c_char {
+    let url_str = match unsafe { cstr_to_string(url) } {
+        Some(s) => s,
+        None => return string_to_c_char("ERROR:URL invalida".into()),
+    };
+
+    match protocols::hls::fetch_and_probe_variants(&url_str) {
+        Ok(variants) => {
+            let lines: Vec<String> = variants
+                .into_iter()
+                .enumerate()
+                .map(|(idx, v)| {
+                    let res_str = v.resolution.map(|(w, h)| format!("{w}x{h}")).unwrap_or_else(|| "auto".to_string());
+                    format!("{}\t{}\t{}\t{}\t{}", idx, v.bandwidth, res_str, v.codecs.unwrap_or_default(), v.url)
+                })
+                .collect();
+            string_to_c_char(lines.join("\n"))
+        }
+        Err(e) => string_to_c_char(format!("ERROR:{e}")),
     }
 }
 
@@ -871,6 +1185,7 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
                 unsafe { log(6, &format!("Error loading video: {:?}", e)); }
                 set_last_playback_error(format!("{:?}", e));
             } else {
+                apply_screen_mode_after_load(&controller);
                 unsafe { log(4, "Video loaded successfully!"); }
             }
         }
@@ -879,9 +1194,31 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
 
 #[no_mangle]
 pub extern "C" fn stop_video_playback() {
+    std::thread::spawn(|| {
+        if let Ok(mut controller) = CONTROLLER.lock() {
+            controller.stop();
+        }
+    });
+}
+
+/// C-04: Zera o estado global do processo para evitar que uma nova sessão
+/// herde modo de tela, contadores ou sessão anterior em processos em cache.
+#[no_mangle]
+pub extern "C" fn reset_process_state() {
     if let Ok(mut controller) = CONTROLLER.lock() {
         controller.stop();
     }
+    LOADING_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+    FEEDBACK_EVENT.store(0, std::sync::atomic::Ordering::SeqCst);
+    SCREEN_MODE.store(0, std::sync::atomic::Ordering::SeqCst);
+    SWAP_EYES.store(false, std::sync::atomic::Ordering::SeqCst);
+    KEYBOARD_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
+    SCREEN_MODE_OVERRIDE.store(u32::MAX, std::sync::atomic::Ordering::SeqCst);
+    LAST_FRAMES_DECODED.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_FRAMES_OUTPUT.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_FRAMES_DROPPED.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_NETWORK_BYTES.store(0, std::sync::atomic::Ordering::SeqCst);
+    ERROR_RING.clear();
 }
 
 #[no_mangle]
@@ -934,11 +1271,9 @@ pub extern "C" fn set_playback_speed(speed: f32) {
 
 #[no_mangle]
 pub extern "C" fn get_playback_speed() -> f32 {
-    if let Ok(controller) = CONTROLLER.lock() {
-        controller.get_speed()
-    } else {
-        1.0
-    }
+    // try_sample_or: chamada periodica do render loop (C++ HUD / telemetry a 90Hz).
+    // Se o lock estiver ocupado (load_at em background), devolve 1.0 sem bloquear a render thread.
+    media_logic::session::try_sample_or(&CONTROLLER, 1.0, |controller| controller.get_speed())
 }
 
 #[no_mangle]
@@ -952,11 +1287,52 @@ pub extern "C" fn cycle_audio_track() {
 
 #[no_mangle]
 pub extern "C" fn get_audio_track_count() -> u32 {
-    if let Ok(controller) = CONTROLLER.lock() {
-        controller.audio_track_count() as u32
-    } else {
-        0
+    // try_sample_or: chamada periodica do render loop (C++ HUD / telemetry a 90Hz).
+    // Se o lock estiver ocupado (load_at em background), devolve 0 sem bloquear a render thread.
+    media_logic::session::try_sample_or(&CONTROLLER, 0, |controller| controller.audio_track_count() as u32)
+}
+
+/// Seleciona a trilha de audio desejada pro PROXIMO `load_at()` — nao troca
+/// a trilha ao vivo (ver `PlaybackController::select_audio_track`). Uso
+/// pretendido: a tela de detalhe do arquivo chama isto antes de tocar.
+/// `desired_audio_track` e estado GLOBAL do controller — o chamador DEVE
+/// chamar isto sempre antes de tocar (inclusive `ordinal = 0`), senao a
+/// escolha feita num arquivo vaza silenciosamente pro proximo.
+#[no_mangle]
+pub extern "C" fn set_desired_audio_track(ordinal: u32) {
+    if let Ok(mut controller) = CONTROLLER.lock() {
+        controller.select_audio_track(ordinal as usize);
     }
+}
+
+/// Atualiza a orientação da cabeça (quaternion x, y, z, w) a cada frame do OpenXR (~90Hz).
+/// Lock-free, chamado diretamente pelo render loop C++.
+#[no_mangle]
+pub extern "C" fn set_head_pose_orientation(x: f32, y: f32, z: f32, w: f32) {
+    media_logic::spatial_audio::set_global_head_orientation(x, y, z, w);
+}
+
+/// Configura o modo de processamento espacial:
+/// 0 = DirectStereo (pass-through), 1 = VirtualizedBinaural (HRTF 3D), 2 = SimpleDownmix.
+#[no_mangle]
+pub extern "C" fn set_spatial_audio_mode(mode: u32) {
+    media_logic::spatial_audio::set_global_spatial_mode(media_logic::spatial_audio::SpatialAudioMode::from(mode));
+}
+
+#[no_mangle]
+pub extern "C" fn get_spatial_audio_mode() -> u32 {
+    media_logic::spatial_audio::get_global_spatial_mode() as u32
+}
+
+/// Ativa ou desativa rastreamento de cabeça (head tracking) no áudio espacial.
+#[no_mangle]
+pub extern "C" fn set_spatial_audio_head_tracking(enabled: u32) {
+    media_logic::spatial_audio::set_global_head_tracking_enabled(enabled != 0);
+}
+
+#[no_mangle]
+pub extern "C" fn get_spatial_audio_head_tracking() -> u32 {
+    media_logic::spatial_audio::get_global_head_tracking_enabled() as u32
 }
 
 /// Libera o buffer retornado por `smb_generate_thumbnail`/
@@ -1025,6 +1401,7 @@ pub extern "C" fn smb_generate_thumbnail(
     path: *const std::os::raw::c_char,
     max_width: u32,
     max_height: u32,
+    cancel_token: u64,
     out_width: *mut u32,
     out_height: *mut u32,
     out_len: *mut usize,
@@ -1047,7 +1424,7 @@ pub extern "C" fn smb_generate_thumbnail(
         }
     };
     let internal_uri = target.to_internal();
-    let image = core::thumbnail::generate(&internal_uri, max_width, max_height);
+    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
     write_thumbnail(image, out_width, out_height, out_len)
 }
 
@@ -1062,6 +1439,7 @@ pub extern "C" fn ftp_generate_thumbnail(
     path: *const std::os::raw::c_char,
     max_width: u32,
     max_height: u32,
+    cancel_token: u64,
     out_width: *mut u32,
     out_height: *mut u32,
     out_len: *mut usize,
@@ -1080,7 +1458,7 @@ pub extern "C" fn ftp_generate_thumbnail(
         }
     };
     let internal_uri = target.to_internal();
-    let image = core::thumbnail::generate(&internal_uri, max_width, max_height);
+    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
     write_thumbnail(image, out_width, out_height, out_len)
 }
 
@@ -1098,6 +1476,7 @@ pub extern "C" fn sftp_generate_thumbnail(
     path: *const std::os::raw::c_char,
     max_width: u32,
     max_height: u32,
+    cancel_token: u64,
     out_width: *mut u32,
     out_height: *mut u32,
     out_len: *mut usize,
@@ -1121,8 +1500,14 @@ pub extern "C" fn sftp_generate_thumbnail(
         return write_thumbnail(None, out_width, out_height, out_len);
     }
     let internal_uri = target.to_internal();
-    let image = core::thumbnail::generate(&internal_uri, max_width, max_height);
+    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
     write_thumbnail(image, out_width, out_height, out_len)
+}
+
+/// Cancela a geração de um thumbnail de listagem em andamento identificada por `cancel_token`.
+#[no_mangle]
+pub extern "C" fn cancel_thumbnail_generation(cancel_token: u64) {
+    core::thumbnail::cancel_thumbnail_generation(cancel_token);
 }
 
 /// Libera o buffer retornado por `smb_generate_thumbnail_strip`/
@@ -1278,6 +1663,125 @@ pub extern "C" fn cancel_thumbnail_strip_generation() {
     core::thumbnail::cancel_strip_generation();
 }
 
+/// Roda `core::metadata::extract` e serializa o resultado (ver
+/// `media_logic::metadata_wire`) numa string liberada com `free_rust_string`,
+/// ou `"ERROR:<msg>"` em qualquer falha — mesmo contrato de erro de
+/// `smb_list_directory`/`probe_http_url`. Reusado pelas 4 funcoes de
+/// metadados abaixo (local e as 3 de rede) — so o marshalling de credenciais
+/// difere entre elas, ver justificativa em `smb_generate_thumbnail`.
+fn metadata_to_c_char(internal_uri: &str) -> *mut std::os::raw::c_char {
+    match core::metadata::extract(internal_uri) {
+        Ok(meta) => string_to_c_char(media_logic::metadata_wire::encode(&meta)),
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace(['\n', '\t'], " "))),
+    }
+}
+
+/// T13.1: extrai metadados de midia (container, duracao, bitrate, trilhas)
+/// de um arquivo local ou de uma URL http(s):// direta — `core::metadata::extract`
+/// despacha por esquema do mesmo jeito que o playback, entao uma unica funcao
+/// cobre os dois casos. Chamada BLOQUEANTE (probe de container, sem decodificar
+/// frame nenhum) — Kotlin SEMPRE de `Dispatchers.IO`. Retorno DEVE ser
+/// liberado com `free_rust_string`.
+#[no_mangle]
+pub extern "C" fn read_media_metadata(path: *const std::os::raw::c_char) -> *mut std::os::raw::c_char {
+    let path = match unsafe { cstr_to_string(path) } {
+        Some(s) => s,
+        None => return string_to_c_char("ERROR:caminho invalido".to_string()),
+    };
+    metadata_to_c_char(&path)
+}
+
+/// Mesma logica de `read_media_metadata`, para um arquivo num share SMB —
+/// credenciais como parametros separados, mesma justificativa de
+/// `smb_generate_thumbnail`.
+#[no_mangle]
+pub extern "C" fn smb_read_metadata(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    domain: *const std::os::raw::c_char,
+    share: *const std::os::raw::c_char,
+    path: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".to_string()) };
+        let share = match cstr_to_string(share) { Some(s) => s, None => return string_to_c_char("ERROR:share invalido".to_string()) };
+        let path = match cstr_to_string(path) { Some(s) => s, None => return string_to_c_char("ERROR:caminho invalido".to_string()) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        let domain = cstr_to_string(domain).unwrap_or_default();
+        protocols::smb::SmbTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            share,
+            path,
+            username,
+            password,
+            domain,
+        }
+    };
+    metadata_to_c_char(&target.to_internal())
+}
+
+/// Mesma logica de `read_media_metadata`, para um arquivo num servidor FTP.
+#[no_mangle]
+pub extern "C" fn ftp_read_metadata(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    path: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".to_string()) };
+        let path = match cstr_to_string(path) { Some(s) => s, None => return string_to_c_char("ERROR:caminho invalido".to_string()) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        protocols::ftp::FtpTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            path,
+            username,
+            password,
+        }
+    };
+    metadata_to_c_char(&target.to_internal())
+}
+
+/// Mesma logica de `read_media_metadata`, para um arquivo num servidor SFTP.
+/// `private_key` e o CONTEUDO PEM (nao um caminho), mesma convencao de
+/// `sftp_generate_thumbnail`.
+#[no_mangle]
+pub extern "C" fn sftp_read_metadata(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    private_key: *const std::os::raw::c_char,
+    path: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".to_string()) };
+        let path = match cstr_to_string(path) { Some(s) => s, None => return string_to_c_char("ERROR:caminho invalido".to_string()) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        protocols::sftp::SftpTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            path,
+            username,
+            password,
+            private_key,
+        }
+    };
+    if target.validate().is_err() {
+        return string_to_c_char("ERROR:credenciais SFTP invalidas".to_string());
+    }
+    metadata_to_c_char(&target.to_internal())
+}
+
 #[no_mangle]
 pub extern "C" fn get_video_progress(current: *mut f32, total: *mut f32) {
     // try_lock — mesmo motivo de get_current_video_frame() acima (chamada
@@ -1296,5 +1800,85 @@ pub extern "C" fn get_video_progress(current: *mut f32, total: *mut f32) {
             }
         }
     }
+}
+
+// ============================================================================
+// Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
+// ============================================================================
+
+#[no_mangle]
+pub extern "C" fn set_subtitle_track(track_index: i32) {
+    if let Ok(mut controller) = CONTROLLER.lock() {
+        controller.set_subtitle_track(track_index);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_subtitle_track() -> i32 {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        controller.get_subtitle_track()
+    } else {
+        -1
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn set_subtitle_offset_ms(offset_ms: i64) {
+    if let Ok(mut controller) = CONTROLLER.lock() {
+        controller.set_subtitle_offset_ms(offset_ms);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_subtitle_offset_ms() -> i64 {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        controller.get_subtitle_offset_ms()
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn load_external_subtitle(path: *const std::os::raw::c_char) -> u32 {
+    let path_str = match unsafe { cstr_to_string(path) } {
+        Some(s) => s,
+        None => return 0,
+    };
+    if let Ok(mut controller) = CONTROLLER.lock() {
+        controller.load_external_subtitle(&path_str).unwrap_or(0)
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_subtitle_track_count() -> u32 {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        controller.get_subtitle_track_count() as u32
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_active_subtitle_text(out_buf: *mut std::os::raw::c_char, max_len: usize) -> u32 {
+    if out_buf.is_null() || max_len == 0 {
+        return 0;
+    }
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        if let Some(text) = controller.get_active_subtitle_text() {
+            let bytes = text.as_bytes();
+            let copy_len = bytes.len().min(max_len - 1);
+            unsafe {
+                std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_buf as *mut u8, copy_len);
+                *out_buf.add(copy_len) = 0;
+            }
+            return copy_len as u32;
+        }
+    }
+    unsafe {
+        *out_buf = 0;
+    }
+    0
 }
 

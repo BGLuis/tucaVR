@@ -90,13 +90,13 @@ pub struct SyncManager {
 }
 
 impl SyncManager {
-    pub fn new(speed_bits: Arc<AtomicU32>) -> Self {
-        Self::with_clock(speed_bits, Arc::new(SystemClock))
+    pub fn new(speed_bits: Arc<AtomicU32>, initial_pts: f64) -> Self {
+        Self::with_clock(speed_bits, initial_pts, Arc::new(SystemClock))
     }
 
-    pub fn with_clock(speed_bits: Arc<AtomicU32>, clock: Arc<dyn Clock>) -> Self {
+    pub fn with_clock(speed_bits: Arc<AtomicU32>, initial_pts: f64, clock: Arc<dyn Clock>) -> Self {
         Self {
-            audio_pts: Arc::new(Mutex::new(0.0)),
+            audio_pts: Arc::new(Mutex::new(initial_pts)),
             start_time: Arc::new(Mutex::new(None)),
             pause_start: Arc::new(Mutex::new(None)),
             speed_bits,
@@ -162,7 +162,10 @@ impl SyncManager {
                 if let Ok(st_lock) = self.start_time.lock() {
                     if let Some(st) = *st_lock {
                         let speed = f32::from_bits(self.speed_bits.load(Ordering::Relaxed)) as f64;
-                        return self.clock.now().saturating_duration_since(st).as_secs_f64() * speed;
+                        let now = if let Ok(pt_lock) = self.pause_start.lock() {
+                            if let Some(pt) = *pt_lock { pt } else { self.clock.now() }
+                        } else { self.clock.now() };
+                        return now.saturating_duration_since(st).as_secs_f64() * speed;
                     }
                 }
             }
@@ -184,7 +187,7 @@ mod tests {
     #[test]
     fn wall_clock_fallback_tracks_elapsed_time_at_normal_speed() {
         let clock = Arc::new(FakeClock::new());
-        let mut sync = SyncManager::with_clock(speed_bits(1.0), clock.clone());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 0.0, clock.clone());
         sync.start();
 
         clock.advance(Duration::from_millis(500));
@@ -195,7 +198,7 @@ mod tests {
     #[test]
     fn wall_clock_fallback_scales_by_playback_speed() {
         let clock = Arc::new(FakeClock::new());
-        let mut sync = SyncManager::with_clock(speed_bits(2.0), clock.clone());
+        let mut sync = SyncManager::with_clock(speed_bits(2.0), 0.0, clock.clone());
         sync.start();
 
         clock.advance(Duration::from_secs(1));
@@ -208,7 +211,7 @@ mod tests {
     #[test]
     fn audio_pts_overrides_wall_clock_fallback_once_present() {
         let clock = Arc::new(FakeClock::new());
-        let mut sync = SyncManager::with_clock(speed_bits(1.0), clock.clone());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 0.0, clock.clone());
         sync.start();
         clock.advance(Duration::from_secs(10));
 
@@ -223,7 +226,7 @@ mod tests {
     #[test]
     fn pause_then_resume_does_not_count_the_paused_interval() {
         let clock = Arc::new(FakeClock::new());
-        let mut sync = SyncManager::with_clock(speed_bits(1.0), clock.clone());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 0.0, clock.clone());
         sync.start();
 
         clock.advance(Duration::from_secs(2));
@@ -240,7 +243,7 @@ mod tests {
     #[test]
     fn resume_without_a_matching_pause_is_a_harmless_no_op() {
         let clock = Arc::new(FakeClock::new());
-        let mut sync = SyncManager::with_clock(speed_bits(1.0), clock.clone());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 0.0, clock.clone());
         sync.start();
         clock.advance(Duration::from_secs(1));
 
@@ -252,7 +255,7 @@ mod tests {
     #[test]
     fn reset_zeroes_audio_pts_and_restarts_wall_clock() {
         let clock = Arc::new(FakeClock::new());
-        let mut sync = SyncManager::with_clock(speed_bits(1.0), clock.clone());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 0.0, clock.clone());
         sync.start();
         sync.update_audio_pts(42.0);
         clock.advance(Duration::from_secs(3));
@@ -267,7 +270,7 @@ mod tests {
     #[test]
     fn multiple_pause_resume_cycles_accumulate_correctly() {
         let clock = Arc::new(FakeClock::new());
-        let mut sync = SyncManager::with_clock(speed_bits(1.0), clock.clone());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 0.0, clock.clone());
         sync.start();
 
         clock.advance(Duration::from_secs(1));

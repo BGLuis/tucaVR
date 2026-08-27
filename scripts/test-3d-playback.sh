@@ -6,7 +6,7 @@
 #          mono360 mono180 sbs360 ou360 sbs180
 set -euo pipefail
 
-PACKAGE="com.vrplayer"
+PACKAGE="com.tucavr"
 ACTIVITY=".VRActivity"
 DEVICE_PATH="/sdcard/Movies/vr-test-clip.mp4"
 WAIT_SEC=8
@@ -62,12 +62,23 @@ CAPTURE_LOCAL_PPM="$OUT_DIR/${TIMESTAMP}_mode${MODE}.ppm"
 CAPTURE_LOCAL_PNG="$OUT_DIR/${TIMESTAMP}_mode${MODE}.png"
 
 # screencap/screenrecord nao funcionam em vr_only (compositor OpenXR direto, sem
-# layer 2D capturavel) — usa o dump via glReadPixels (nativeRequestFrameCapture).
-"${ADB[@]}" shell rm -f "$CAPTURE_DEVICE"
+# layer 2D capturavel) — usa o dump nativo (nativeRequestFrameCapture).
+"${ADB[@]}" shell rm -f "$CAPTURE_DEVICE" "${CAPTURE_DEVICE}.left.ppm" "${CAPTURE_DEVICE}.right.ppm"
 "${ADB[@]}" shell am start -n "$PACKAGE/$ACTIVITY" -e capture_path "$CAPTURE_DEVICE"
 sleep 2
-"${ADB[@]}" pull "$CAPTURE_DEVICE" "$CAPTURE_LOCAL_PPM" >/dev/null
-"${ADB[@]}" shell rm -f "$CAPTURE_DEVICE"
+
+# Verifica se o arquivo foi gerado no dispositivo antes de tentar pull
+if "${ADB[@]}" shell test -f "${CAPTURE_DEVICE}.left.ppm"; then
+    "${ADB[@]}" pull "${CAPTURE_DEVICE}.left.ppm" "$CAPTURE_LOCAL_PPM" >/dev/null
+    "${ADB[@]}" shell rm -f "${CAPTURE_DEVICE}.left.ppm" "${CAPTURE_DEVICE}.right.ppm"
+elif "${ADB[@]}" shell test -f "$CAPTURE_DEVICE"; then
+    "${ADB[@]}" pull "$CAPTURE_DEVICE" "$CAPTURE_LOCAL_PPM" >/dev/null
+    "${ADB[@]}" shell rm -f "$CAPTURE_DEVICE"
+else
+    echo "❌ ERRO: Captura de frame falhou — nenhum arquivo gerado em $CAPTURE_DEVICE (.left.ppm) no dispositivo." >&2
+    echo "   Verifique se o player está reproduzindo vídeo e se o backend gráfico ativo suporta readback." >&2
+    exit 1
+fi
 
 if command -v ffmpeg >/dev/null 2>&1; then
     ffmpeg -y -hide_banner -loglevel error -i "$CAPTURE_LOCAL_PPM" "$CAPTURE_LOCAL_PNG"

@@ -1,10 +1,13 @@
 use ffmpeg_next as ffmpeg;
 use ffmpeg::format::Pixel;
 use ffmpeg::software::scaling::{context::Context as ScalingContext, flag::Flags};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use crate::decoder::{HwDecoder, RawFrame};
 use crate::demuxer::{Demuxer, ReadPacketOutcome};
+use media_logic::format3d::Format3D;
 use ndk::media::media_format::MediaFormat;
 
 // generate_strip()/generate_strip_hw() sao chamadas SINCRONAS e bloqueantes
@@ -18,6 +21,43 @@ static STRIP_CANCELLED: AtomicBool = AtomicBool::new(false);
 pub fn cancel_strip_generation() {
     STRIP_CANCELLED.store(true, Ordering::Relaxed);
 }
+
+// Cancelamento granular por token para miniaturas individuais de listagem (generate).
+// Evita decodificar vídeos de alta resolução que já saíram da tela durante o scroll.
+static CANCELLED_TOKENS: Mutex<Option<HashSet<u64>>> = Mutex::new(None);
+
+pub fn cancel_thumbnail_generation(token: u64) {
+    if token == 0 {
+        return;
+    }
+    if let Ok(mut guard) = CANCELLED_TOKENS.lock() {
+        guard.get_or_insert_with(HashSet::new).insert(token);
+    }
+}
+
+pub fn is_thumbnail_cancelled(token: u64) -> bool {
+    if token == 0 {
+        return false;
+    }
+    if let Ok(guard) = CANCELLED_TOKENS.lock() {
+        if let Some(set) = guard.as_ref() {
+            return set.contains(&token);
+        }
+    }
+    false
+}
+
+pub fn clear_cancelled_thumbnail(token: u64) {
+    if token == 0 {
+        return;
+    }
+    if let Ok(mut guard) = CANCELLED_TOKENS.lock() {
+        if let Some(set) = guard.as_mut() {
+            set.remove(&token);
+        }
+    }
+}
+
 
 pub struct ThumbnailImage {
     /// Pixels RGBA8 empacotados, `width * height * 4` bytes, sem padding de
@@ -35,12 +75,22 @@ pub struct ThumbnailImage {
 // Kotlin).
 const MAX_PACKETS_TRIED: u32 = 500;
 
-// Seek de 1s pra dentro do arquivo antes de decodificar: muitos videos tem
-// frame(s) preto(s)/fade-in logo no inicio, e um thumbnail totalmente preto
-// nao ajuda o usuario a reconhecer o arquivo. Best-effort: se o seek falhar
-// (formato/protocolo que nao suporta bem), decodifica a partir do que o
-// demuxer conseguir entregar mesmo assim.
-const SEEK_TARGET_US: i64 = 1_000_000;
+// T13.3: alvo primario e ~10% da duracao (doc da fase 0.2, secao 13) — melhor
+// heuristica que um instante fixo pra pular intros/fade-in em videos longos
+// (comum em VR180 8K, ver achado abaixo). Clampado em [1s, 30s]: sem isso um
+// clipe de 5s pediria seek pra 0.5s (quase nada) e um filme de 2h pediria
+// seek pra 12min (decode desnecessariamente longe do inicio so pra gerar
+// uma miniatura). Duracao desconhecida (`duration_us <= 0`, streams sem
+// duration confiavel) cai no fallback fixo de 1s de sempre.
+const MIN_SEEK_TARGET_US: i64 = 1_000_000;
+const MAX_SEEK_TARGET_US: i64 = 30_000_000;
+
+fn primary_seek_target_us(duration_us: i64) -> i64 {
+    if duration_us <= 0 {
+        return MIN_SEEK_TARGET_US;
+    }
+    (duration_us / 10).clamp(MIN_SEEK_TARGET_US, MAX_SEEK_TARGET_US)
+}
 
 // Achado real em producao (nao teorico): a maioria dos videos VR 180
 // 8K testados tem fade-in/intro preto de MAIS de 1s (comum pra nao ofuscar
@@ -80,23 +130,52 @@ fn is_effectively_black(rgba: &[u8]) -> bool {
 /// qualquer falha (sem faixa de video, decode falhou, arquivo inacessivel,
 /// etc.) — mesmo contrato de silencio do `ThumbnailGenerator` local: a UI so
 /// deixa de mostrar a miniatura, sem popup de erro.
-pub fn generate(path: &str, max_width: u32, max_height: u32) -> Option<ThumbnailImage> {
+pub fn generate(path: &str, max_width: u32, max_height: u32, cancel_token: u64) -> Option<ThumbnailImage> {
     if max_width == 0 || max_height == 0 {
         return None;
     }
+    if is_thumbnail_cancelled(cancel_token) {
+        clear_cancelled_thumbnail(cancel_token);
+        return None;
+    }
+
+    struct TokenGuard(u64);
+    impl Drop for TokenGuard {
+        fn drop(&mut self) {
+            clear_cancelled_thumbnail(self.0);
+        }
+    }
+    let _guard = TokenGuard(cancel_token);
 
     ffmpeg::init().ok()?;
     let mut demuxer = Demuxer::new(path).ok()?;
     let video_stream_index = demuxer.video_stream_index?;
 
     let stream = demuxer.input_context.stream(video_stream_index)?;
-    let codec_context = ffmpeg::codec::context::Context::from_parameters(stream.parameters()).ok()?;
+    let mut codec_context = ffmpeg::codec::context::Context::from_parameters(stream.parameters()).ok()?;
+    // Trabalho 3: thread_count = 1 elimina o pool de threads e DPB gigante do decoder
+    // por software em resoluções 8K/4K durante geração de miniaturas.
+    codec_context.set_threading(ffmpeg::threading::Config {
+        kind: ffmpeg::threading::Type::None,
+        count: 1,
+    });
     let mut decoder = codec_context.decoder().video().ok()?;
 
-    let _ = demuxer.input_context.seek(SEEK_TARGET_US, ..SEEK_TARGET_US);
-    let mut image = decode_and_scale(&mut demuxer, &mut decoder, video_stream_index, max_width, max_height);
+    if is_thumbnail_cancelled(cancel_token) {
+        return None;
+    }
+
+    // Trabalho 4: detecção 3D gratuita antes de borrows mutáveis do demuxer
+    let (format_3d, _) = crate::format3d_detect::detect(&demuxer, path, decoder.width(), decoder.height());
+
+    let primary_target_us = primary_seek_target_us(demuxer.input_context.duration());
+    let _ = demuxer.input_context.seek(primary_target_us, ..primary_target_us);
+    let mut image = decode_and_scale(&mut demuxer, &mut decoder, video_stream_index, max_width, max_height, format_3d, cancel_token);
 
     for &fallback_us in FALLBACK_SEEK_TARGETS_US.iter() {
+        if is_thumbnail_cancelled(cancel_token) {
+            return None;
+        }
         let is_useless = image.as_ref().map(|img| is_effectively_black(&img.rgba)).unwrap_or(true);
         if !is_useless {
             break;
@@ -108,7 +187,7 @@ pub fn generate(path: &str, max_width: u32, max_height: u32) -> Option<Thumbnail
         // generate_strip): sem isto o decoder tenta usar frames de
         // referencia de antes do seek, produzindo lixo em vez de so falhar.
         decoder.flush();
-        image = decode_and_scale(&mut demuxer, &mut decoder, video_stream_index, max_width, max_height);
+        image = decode_and_scale(&mut demuxer, &mut decoder, video_stream_index, max_width, max_height, format_3d, cancel_token);
     }
 
     image
@@ -123,12 +202,17 @@ fn decode_and_scale(
     video_stream_index: usize,
     max_width: u32,
     max_height: u32,
+    format_3d: Format3D,
+    cancel_token: u64,
 ) -> Option<ThumbnailImage> {
     let mut decoded = ffmpeg::frame::Video::empty();
     let mut got_frame = false;
     let mut tried = 0u32;
 
     while tried < MAX_PACKETS_TRIED {
+        if is_thumbnail_cancelled(cancel_token) {
+            return None;
+        }
         let (stream_index, packet) = match demuxer.read_packet() {
             ReadPacketOutcome::Packet(idx, packet) => (idx, packet),
             ReadPacketOutcome::Eof | ReadPacketOutcome::Error(_) => break,
@@ -145,7 +229,7 @@ fn decode_and_scale(
             break;
         }
     }
-    if !got_frame {
+    if !got_frame || is_thumbnail_cancelled(cancel_token) {
         return None;
     }
 
@@ -155,10 +239,18 @@ fn decode_and_scale(
         return None;
     }
 
+    // Trabalho 4: aplica recorte estereoscópico para formatos 3D (olho esquerdo para SBS,
+    // metade superior para Over/Under) antes de escalar e antes de checar is_effectively_black.
+    let crop_dims = format_3d.thumbnail_dimensions(src_w, src_h);
+    let crop_w = crop_dims.width.max(2);
+    let crop_h = crop_dims.height.max(2);
+    decoded.set_width(crop_w);
+    decoded.set_height(crop_h);
+
     let mut scaler = ScalingContext::get(
         decoded.format(),
-        src_w,
-        src_h,
+        crop_w,
+        crop_h,
         Pixel::RGBA,
         max_width,
         max_height,
@@ -212,20 +304,6 @@ pub struct ThumbnailStrip {
 /// posicao `(i+1)*interval_secs` valida pro chamador mesmo com falhas
 /// pontuais no meio, e casa com o contrato de silencio ja usado em
 /// `generate()` (falha pontual não vira popup de erro).
-// Decode de thumbnail e por SOFTWARE (sem MediaCodec, ver comentario em
-// `generate()`) e SEMPRE na resolucao NATIVA do frame — o downscale so
-// acontece DEPOIS, no sws_scale. Pra 1 chamada (generate()) isso e caro mas
-// tolneravel; `generate_strip()` repete esse decode caro dezenas/centenas
-// de vezes (uma por posicao da trilha). Em 8K (7680x4320) cada frame
-// decodificado por software fica na casa de dezenas de MB, e isso roda
-// CONCORRENTE com a reproducao de verdade (decode de HARDWARE) do mesmo
-// arquivo — bug real encontrado em hardware: app abortava (provavel OOM,
-// sem mensagem de panic limpa no logcat — condizente com falha de alocacao,
-// que aborta direto sem passar pelo panic hook) ao segurar/arrastar o
-// tracker num video SFTP 8K60. Corte defensivo: acima do limite, nao gera
-// trilha nenhuma (mesmo contrato de silencio do resto deste modulo) em vez
-// de arriscar o crash. 4K (3840x2160) cobre a esmagadora maioria dos casos
-// reais de uso deste player.
 const MAX_STRIP_SOURCE_PIXELS: u32 = 3840 * 2160;
 
 pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height: u32) -> Option<ThumbnailStrip> {
@@ -238,7 +316,11 @@ pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height
     let mut demuxer = Demuxer::new(path).ok()?;
     let video_stream_index = demuxer.video_stream_index?;
     let stream = demuxer.input_context.stream(video_stream_index)?;
-    let codec_context = ffmpeg::codec::context::Context::from_parameters(stream.parameters()).ok()?;
+    let mut codec_context = ffmpeg::codec::context::Context::from_parameters(stream.parameters()).ok()?;
+    codec_context.set_threading(ffmpeg::threading::Config {
+        kind: ffmpeg::threading::Type::None,
+        count: 1,
+    });
     let mut decoder = codec_context.decoder().video().ok()?;
 
     if decoder.width().saturating_mul(decoder.height()) > MAX_STRIP_SOURCE_PIXELS {
@@ -248,6 +330,8 @@ pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height
         // jeito que o software compete com a reproducao real concorrente.
         return generate_strip_hw(path, interval_secs, max_width, max_height);
     }
+
+    let (format_3d, _) = crate::format3d_detect::detect(&demuxer, path, decoder.width(), decoder.height());
 
     let duration_secs = demuxer.input_context.duration() as f64 / 1_000_000.0;
     let count = (duration_secs / interval_secs).floor() as usize;
@@ -272,9 +356,10 @@ pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height
         // falhar — `generate()` nunca precisou disto porque so faz UM seek
         // e decoder comeca zerado.
         decoder.flush();
-        if let Some(image) = decode_and_scale(&mut demuxer, &mut decoder, video_stream_index, max_width, max_height) {
+        if let Some(image) = decode_and_scale(&mut demuxer, &mut decoder, video_stream_index, max_width, max_height, format_3d, 0) {
             chunk.copy_from_slice(&image.rgba);
         }
+
         // Mitigacao de pico de memoria (nao tuning de performance): da espaco pra
         // reproducao de verdade antes do proximo decode caro de software.
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -384,14 +469,10 @@ fn generate_strip_hw(path: &str, interval_secs: f64, max_width: u32, max_height:
     }
 
     let cancelled = STRIP_CANCELLED.load(Ordering::Relaxed);
-    unsafe {
-        let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-        let msg = std::ffi::CString::new(format!(
-            "generate_strip_hw: {ok_count}/{count} posicoes com sucesso{}",
-            if cancelled { " (cancelada, nao sera cacheada)" } else { "" }
-        )).unwrap();
-        ndk_sys::__android_log_print(4, tag.as_ptr(), msg.as_ptr());
-    }
+    crate::log_info!(
+        "generate_strip_hw: {ok_count}/{count} posicoes com sucesso{}",
+        if cancelled { " (cancelada, nao sera cacheada)" } else { "" }
+    );
     // Ver comentario equivalente em generate_strip acima: nao cachear parcial.
     if cancelled {
         return None;
@@ -406,11 +487,7 @@ fn log_thumb_once(msg: &str) {
     if LOGGED.swap(true, Ordering::Relaxed) {
         return;
     }
-    unsafe {
-        let tag = std::ffi::CString::new("VRPlayer_Rust").unwrap();
-        let cmsg = std::ffi::CString::new(msg).unwrap();
-        ndk_sys::__android_log_print(5, tag.as_ptr(), cmsg.as_ptr());
-    }
+    crate::log_warn!("{}", msg);
 }
 
 /// Equivalente hardware de `decode_and_scale`: alimenta pacotes ate um

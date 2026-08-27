@@ -6,7 +6,10 @@
 #include "vr_player_feedback_overlay.h"
 #include <math.h>
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
+
+extern std::atomic<bool> g_requestControlsPanelVisible;
 
 // Timings de auto-hide/recenter — mesmos valores do caminho GLES
 // (vr_player_app.cpp: kUiAutoHideSeconds/kUiFadeDuration/kRecenterHoldSeconds).
@@ -42,18 +45,21 @@ inline void FireHaptic(AppState& state, XrPath hand, float amplitude, XrDuration
 // texto ficar legivel — bug reportado em teste real de hardware ("muito
 // longe, nao da pra ler o texto"). Agora ~1.64m de distancia, 50% maior,
 // mantendo a proporcao da textura (4:3 pro UI/kUiTexWidth/kUiTexHeight,
-// 2.667:1 pros controles/kControlsTexWidth/kControlsTexHeight).
+// 1582:800 pros controles/kControlsTexWidth/kControlsTexHeight).
 constexpr XrVector3f kBaseUiPos = {-1.3f, 1.5f, -1.0f};
 constexpr float kUiPanelScaleX = 1.2f;
 constexpr float kUiPanelScaleY = 0.9f;
 constexpr XrVector3f kBaseControlsPos = {0.0f, 0.4f, -1.3f};
 constexpr float kControlsPanelScaleX = 1.2f;
-constexpr float kControlsPanelScaleY = 0.45f;
+constexpr float kControlsPanelScaleY = 1.2f * (800.0f / 1582.0f); // ~0.607m (aspect ratio 1582:800)
 constexpr float kControlsPitch = -0.3f;
+constexpr XrVector3f kBaseModalPos = {0.0f, 1.35f, -1.35f};
+constexpr float kModalPanelScaleX = 1.2f;
+constexpr float kModalPanelScaleY = 0.9f;
 
 // Transforms de cena computados uma vez por frame e compartilhados entre
 // UpdateInteraction (hit-test) e DrawUiQuads (render) — antes cada um
-// recalculava isso de forma independente e ja tinha divergido (Estagio
+// recalculava isso de forma independente e ja tinham divergido (Estagio
 // Camera, achado da revisao pos-migracao). Os *ModelNoScale sao rigidos
 // (so rotacao+translacao) de proposito: Mat4RigidInverse usada no hit-test
 // assume isso, entao a escala visual e aplicada separadamente (na hora de
@@ -66,6 +72,10 @@ struct SceneTransforms {
     Mat4 controlsModelNoScale;
     XrVector3f controlsCenter;
     XrVector3f controlsNormal;
+
+    Mat4 modalModelNoScale;
+    XrVector3f modalCenter;
+    XrVector3f modalNormal;
 
     Mat4 screenModelNoScale;
     XrVector3f screenCenter;
@@ -95,6 +105,15 @@ inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVec
     // (ver convencao de Mat4RotationX em vk_math.h), depois rotacionado pelo yaw da cena.
     XrVector3f pitchedNormal = {0.0f, -sinf(kControlsPitch), cosf(kControlsPitch)};
     t.controlsNormal = Vec3RotateY(pitchedNormal, state.sceneYawOffset);
+
+    // Modal (3o Quad frontal): alinhado com a tela de video e controles no centro da cena
+    XrVector3f worldModalPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(kBaseModalPos, state.sceneYawOffset));
+    t.modalModelNoScale = Mat4Multiply(
+        Mat4Translation(worldModalPos.x, worldModalPos.y, worldModalPos.z),
+        Mat4RotationY(state.sceneYawOffset)
+    );
+    t.modalCenter = worldModalPos;
+    t.modalNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.sceneYawOffset);
 
     // Tela virtual: posicao/escala ajustaveis via thumbstick (Estagio 6).
     XrVector3f worldScreenPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(state.screenPosition, state.sceneYawOffset));
@@ -326,9 +345,17 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     bool prevTrigger = state.isTriggerPressed;
     state.isTriggerPressed = currTrigger;
 
+    if (::g_modalPanelShowRequested.exchange(false)) {
+        state.modalActive = true;
+    }
+    if (::g_modalPanelHideRequested.exchange(false)) {
+        state.modalActive = false;
+    }
+    ::g_modalPanelActive.store(state.modalActive);
+
     SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
 
-    float uu = 0, vu = 0, uc = 0, vc = 0;
+    float uu = 0, vu = 0, uc = 0, vc = 0, um = 0, vm = 0;
     float tUi = state.hasRay
         ? rayHitsQuad(scene.uiModelNoScale, scene.uiNormal, scene.uiCenter, kUiPanelScaleX, kUiPanelScaleY,
                       uu, vu, state.lastRayOrigin, state.lastRayDir)
@@ -337,17 +364,32 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         ? rayHitsQuad(scene.controlsModelNoScale, scene.controlsNormal, scene.controlsCenter,
                       kControlsPanelScaleX, kControlsPanelScaleY, uc, vc, state.lastRayOrigin, state.lastRayDir)
         : -1.0f;
+    float tModal = (state.hasRay && state.modalAlpha > 0.01f)
+        ? rayHitsQuad(scene.modalModelNoScale, scene.modalNormal, scene.modalCenter,
+                      kModalPanelScaleX, kModalPanelScaleY, um, vm, state.lastRayOrigin, state.lastRayDir)
+        : -1.0f;
 
-    int currentHitPanel = 0; // 0=none, 1=ui, 2=controls
+    int currentHitPanel = 0; // 0=none, 1=ui, 2=controls, 3=modal
     float hitU = 0, hitV = 0;
     state.lastHitDist = -1.0f;
 
-    if (tControls > 0.0f) {
-        currentHitPanel = 2; hitU = uc; hitV = vc;
-        state.lastHitDist = tControls;
-    } else if (tUi > 0.0f) {
-        currentHitPanel = 1; hitU = uu; hitV = vu;
-        state.lastHitDist = tUi;
+    // Foco exclusivo no modal se estiver ativo e visível
+    if (state.modalActive && state.modalAlpha > 0.5f) {
+        if (tModal > 0.0f) {
+            currentHitPanel = 3; hitU = um; hitV = vm;
+            state.lastHitDist = tModal;
+        } else {
+            currentHitPanel = 0;
+            state.lastHitDist = -1.0f;
+        }
+    } else {
+        if (tControls > 0.0f) {
+            currentHitPanel = 2; hitU = uc; hitV = vc;
+            state.lastHitDist = tControls;
+        } else if (tUi > 0.0f) {
+            currentHitPanel = 1; hitU = uu; hitV = vu;
+            state.lastHitDist = tUi;
+        }
     }
     // Delta de tempo entre frames — XrTime e nanosegundos desde uma epoca
     // arbitraria do runtime; convertido pra segundos pra alimentar o
@@ -367,27 +409,45 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     // teclado nativo estiver ativo — mesmo motivo do GLES: com o teclado
     // aberto o raio aponta pro overlay do sistema, nao mais pro quad.
     float su = 0, sv = 0;
-    bool hitScreen = state.hasRay &&
-        rayHitsQuad(scene.screenModelNoScale, scene.screenNormal, scene.screenCenter,
-                    state.screenScaleX, state.screenScaleY, su, sv,
-                    state.lastRayOrigin, state.lastRayDir) > 0.0f;
+    bool hitScreen = false;
+    if (IsSphereMode(state.screenMode)) {
+        // No modo esférico (180° SBS / 360°), qualquer raio do controle apontado para frente mantém os controles visíveis
+        hitScreen = state.hasRay && (state.lastRayDir.z < -0.1f);
+    } else {
+        hitScreen = state.hasRay &&
+            rayHitsQuad(scene.screenModelNoScale, scene.screenNormal, scene.screenCenter,
+                        state.screenScaleX, state.screenScaleY, su, sv,
+                        state.lastRayOrigin, state.lastRayDir) > 0.0f;
+    }
     bool keyboardActive = get_keyboard_active() != 0;
+    if (::g_requestUiPanelVisible.exchange(false)) {
+        state.uiIdleTime = 0.0f;
+    }
+    if (::g_requestControlsPanelVisible.exchange(false)) {
+        state.controlsIdleTime = 0.0f;
+        state.controlsAlpha = 1.0f;
+    }
 
     if (currentHitPanel == 1 || keyboardActive) {
         state.uiIdleTime = 0.0f;
     } else {
         state.uiIdleTime += dt;
     }
-    if (currentHitPanel == 2 || hitScreen) {
+
+    bool isPlaying = get_playback_is_playing() != 0;
+    // Se o vídeo estiver pausado, o painel de controles e o botão de pause não devem sumir por auto-hide
+    if (currentHitPanel == 2 || hitScreen || !isPlaying) {
         state.controlsIdleTime = 0.0f;
     } else {
         state.controlsIdleTime += dt;
     }
     float uiTargetAlpha = (state.uiIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
     float controlsTargetAlpha = (state.controlsIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
+    float modalTargetAlpha = state.modalActive ? 1.0f : 0.0f;
     float fadeStep = (kUiFadeDuration > 0.0f) ? dt / kUiFadeDuration : 1.0f;
     state.uiAlpha = MoveTowards(state.uiAlpha, uiTargetAlpha, fadeStep);
     state.controlsAlpha = MoveTowards(state.controlsAlpha, controlsTargetAlpha, fadeStep);
+    state.modalAlpha = MoveTowards(state.modalAlpha, modalTargetAlpha, fadeStep);
 
     // Overlay de feedback (paridade com o GLES): mesmo fade dos paineis acima,
     // so que o alvo cai sozinho por tempo. Qualquer mudanca na sequencia do
@@ -420,8 +480,11 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     // acima continua sempre ativa pra poder trazer o painel de volta.
     bool uiVisible = state.uiAlpha > 0.5f;
     bool controlsVisible = state.controlsAlpha > 0.5f;
+    bool modalVisible = state.modalAlpha > 0.5f;
     int dispatchHitPanel = 0;
-    if (currentHitPanel == 1 && uiVisible) {
+    if (currentHitPanel == 3 && modalVisible) {
+        dispatchHitPanel = 3;
+    } else if (currentHitPanel == 1 && uiVisible) {
         dispatchHitPanel = 1;
     } else if (currentHitPanel == 2 && controlsVisible) {
         dispatchHitPanel = 2;
@@ -447,8 +510,9 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         state.app->activity->vm->AttachCurrentThread(&env, nullptr);
         if (env) {
             jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
-            const char* methodName = (dispatchHitPanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch";
-            jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/vrplayer/VRActivity;FFI)V");
+            const char* methodName = (dispatchHitPanel == 3) ? "dispatchModalVRTouch"
+                                   : ((dispatchHitPanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch");
+            jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
             if (touchMethod) {
                 env->CallStaticVoidMethod(vrActivityClass, touchMethod, state.app->activity->clazz, hitU, hitV, action);
             }
@@ -513,21 +577,43 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     bool currY = yState.currentState == XR_TRUE;
     bool currMenu = menuState.currentState == XR_TRUE;
 
-    // A (direita) ou X (esquerda) = Play/Pause. Trigger fora de qualquer
-    // painel visivel tambem funciona como atalho.
-    if ((currA && !state.prevA) || (currX && !state.prevX) ||
-        (currTrigger && !prevTrigger && dispatchHitPanel == 0)) {
-        toggle_play_pause();
+    // Se o modal estiver ativo, fechar modal ao clicar fora ou ao pressionar B/Y
+    if (state.modalActive) {
+        if (((currTrigger && !prevTrigger && dispatchHitPanel == 0) ||
+             (currB && !state.prevB) || (currY && !state.prevY)) && !keyboardActive) {
+            state.modalActive = false;
+            ::g_modalPanelActive.store(false);
+            JNIEnv* env = nullptr;
+            state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+            if (env) {
+                jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+                jmethodID dismissMethod = env->GetStaticMethodID(vrActivityClass, "dismissModalFromNative", "(Lcom/tucavr/VRActivity;)V");
+                if (dismissMethod) {
+                    env->CallStaticVoidMethod(vrActivityClass, dismissMethod, state.app->activity->clazz);
+                }
+                env->DeleteLocalRef(vrActivityClass);
+            }
+        }
+    } else {
+        // A (direita) ou X (esquerda) = Play/Pause. Trigger fora de qualquer
+        // painel visivel tambem funciona como atalho.
+        if (((currA && !state.prevA) || (currX && !state.prevX) ||
+            (currTrigger && !prevTrigger && dispatchHitPanel == 0)) && !keyboardActive) {
+            toggle_play_pause();
+            state.controlsIdleTime = 0.0f;
+            state.controlsAlpha = 1.0f;
+        }
+
+        // B (direita) ou Y (esquerda) = alterna a visibilidade do painel Home
+        // instantaneamente (sem esperar o auto-hide).
+        if ((currB && !state.prevB) || (currY && !state.prevY)) {
+            bool isCurrentlyVisible = state.uiIdleTime < kUiAutoHideSeconds;
+            state.uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
+            state.controlsIdleTime = 0.0f;
+        }
     }
     state.prevA = currA;
     state.prevX = currX;
-
-    // B (direita) ou Y (esquerda) = alterna a visibilidade do painel Home
-    // instantaneamente (sem esperar o auto-hide).
-    if ((currB && !state.prevB) || (currY && !state.prevY)) {
-        bool isCurrentlyVisible = state.uiIdleTime < kUiAutoHideSeconds;
-        state.uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
-    }
     state.prevB = currB;
     state.prevY = currY;
 
@@ -568,7 +654,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             if (env) {
                 jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
                 jmethodID updateMethod = env->GetStaticMethodID(
-                    vrActivityClass, "updateMediaProgress", "(Lcom/vrplayer/VRActivity;FF)V");
+                    vrActivityClass, "updateMediaProgress", "(Lcom/tucavr/VRActivity;FF)V");
                 if (updateMethod) {
                     env->CallStaticVoidMethod(vrActivityClass, updateMethod, state.app->activity->clazz,
                         state.lastKnownProgressCurrent, state.lastKnownProgressTotal);
@@ -588,7 +674,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             if (env) {
                 jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
                 jmethodID stateMethod = env->GetStaticMethodID(
-                    vrActivityClass, "updateMediaState", "(Lcom/vrplayer/VRActivity;ZZ)V");
+                    vrActivityClass, "updateMediaState", "(Lcom/tucavr/VRActivity;ZZ)V");
                 if (stateMethod) {
                     env->CallStaticVoidMethod(vrActivityClass, stateMethod, state.app->activity->clazz,
                         (jboolean)(isLoading != 0), (jboolean)(isPlaying != 0));
@@ -597,28 +683,67 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             }
         }
 
-        // HUD de debug (docs/DEBUGGING.md) — mesmo throttle acima (~10Hz).
-        // VRActivity.updateDebugHud descarta sem custo se o build nao for
-        // debuggable, entao computar/mandar isso sempre e mais simples que
-        // condicionar a compilacao nativa por build type.
-        {
+        // HUD de debug (docs/DEBUGGING.md / docs/reports/DEBUG-STATS-MODAL.md)
+        if (g_debugStatsEnabled.load(std::memory_order_relaxed)) {
             StereoParams spHud = GetStereoParams(state.screenMode, 0);
-            char hud[448];
-            snprintf(hud, sizeof(hud),
-                "VULKAN | %s | stereoLayout=%d polar180=%d swap=%d | video=%s vidGap=%.0fms vidFps=%.0f decFps=%.0f outFps=%.0f drop=%.0f jitter=%.0fms | net=%.1fMB/s q=%u seekMs=%u | %.0ffps %.1fms stutter=%d freeze=%d",
-                ScreenModeName(state.screenMode), spHud.stereoLayout, spHud.polar180, spHud.swapEyes,
-                (state.activeVideoFrame != nullptr) ? "ativo" : "sem frame", state.msSinceLastVideoFrame,
-                state.videoFps, state.decodedFps, state.outputFps, state.droppedFps, state.videoJitterMs,
-                state.netMBs, state.videoQueueDepth, get_last_seek_latency_ms(),
-                state.smoothedFps, state.lastFrameMs, state.stutterCount, state.freezeCount);
+            const char* upscaleStr = "OFF";
+            if (state.upscalingMode == 1) upscaleStr = "QUAL";
+            else if (state.upscalingMode == 2) upscaleStr = "PERF";
+            else if (state.upscalingMode == 3) upscaleStr = "AUTO";
+
+            DebugStats stats;
+            stats.backend = "VULKAN";
+            stats.screenMode = ScreenModeName(state.screenMode);
+            stats.stereoLayout = spHud.stereoLayout;
+            stats.polar180 = spHud.polar180;
+            stats.swapEyes = spHud.swapEyes;
+            stats.hasActiveFrame = (state.activeVideoFrame != nullptr) ? 1 : 0;
+            stats.msSinceLastVideoFrame = state.msSinceLastVideoFrame;
+            stats.videoFps = state.videoFps;
+            stats.decodedFps = state.decodedFps;
+            stats.outputFps = state.outputFps;
+            stats.droppedFps = state.droppedFps;
+            stats.videoJitterMs = state.videoJitterMs;
+            stats.netMBs = state.netMBs;
+            stats.videoQueueDepth = state.videoQueueDepth;
+            stats.seekLatencyMs = get_last_seek_latency_ms();
+            stats.smoothedFps = state.smoothedFps;
+            stats.lastFrameMs = state.lastFrameMs;
+            stats.gpuTimeMs = state.lastGpuTimeMs;
+            stats.smoothedGpuTimeMs = state.smoothedGpuTimeMs;
+            stats.upscalingMode = upscaleStr;
+            stats.upscalingSharpness = state.upscalingSharpness;
+            stats.mqsrEnabled = (int)(state.supportsMqsr && state.upscalingEnabled);
+            stats.stutterCount = state.stutterCount;
+            stats.freezeCount = state.freezeCount;
+            stats.thermalLevel = state.thermalLevel;
+            stats.renderResolutionScale = state.renderResolutionScale;
+            stats.displayRefreshRate = 90.0f;
+            stats.avDriftMs = get_last_av_drift_ms();
+            stats.netLastFetchMs = get_network_last_block_fetch_ms();
+            stats.netBlocksFetched = get_network_blocks_fetched();
+            stats.netBlocksDiscarded = get_network_blocks_discarded();
+            stats.foveationEnabled = (int)get_foveation_enabled();
+            stats.spatialAudioMode = (int)get_spatial_audio_mode();
+            stats.spatialHeadTracking = (int)get_spatial_audio_head_tracking();
+            stats.playbackSpeed = get_playback_speed();
+            stats.audioVolume = get_video_volume();
+            stats.audioTrackIndex = 0;
+            stats.audioTrackCount = (int)get_audio_track_count();
+            stats.subtitleTrackIndex = get_subtitle_track();
+            stats.subtitleOffsetMs = (int32_t)get_subtitle_offset_ms();
+
+            char hudBuffer[2048];
+            SerializeDebugStats(stats, hudBuffer, sizeof(hudBuffer));
+
             JNIEnv* env = nullptr;
             state.app->activity->vm->AttachCurrentThread(&env, nullptr);
             if (env) {
                 jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
                 jmethodID hudMethod = env->GetStaticMethodID(
-                    vrActivityClass, "updateDebugHud", "(Lcom/vrplayer/VRActivity;Ljava/lang/String;)V");
+                    vrActivityClass, "updateDebugHud", "(Lcom/tucavr/VRActivity;Ljava/lang/String;)V");
                 if (hudMethod) {
-                    jstring hudStr = env->NewStringUTF(hud);
+                    jstring hudStr = env->NewStringUTF(hudBuffer);
                     env->CallStaticVoidMethod(vrActivityClass, hudMethod, state.app->activity->clazz, hudStr);
                     env->DeleteLocalRef(hudStr);
                 }

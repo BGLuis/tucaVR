@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Help, Questions & Setup
+    url: https://github.com/BGLuis/tucaVR/discussions
+    about: Please do not open issues for basic support requests. Use the Discussions area!
+  - name: Contributing Guide
+    url: https://github.com/BGLuis/tucaVR/blob/main/CONTRIBUTING.md
+    about: Build setup, which layer does what, style rules and the PR workflow.
+  - name: Requirements & Roadmap
+    url: https://github.com/BGLuis/tucaVR/blob/main/docs/REQUIREMENTS.md
+    about: Many features are already specified with a task ID and a target phase — check here before filing a request.
