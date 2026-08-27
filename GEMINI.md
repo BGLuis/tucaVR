@@ -191,6 +191,7 @@ The GitHub Actions workflow (`.github/workflows/main.yml`) runs the following st
 
 ## 8. Documentation Index (`docs/`)
 
+- [`docs/ARCHITECTURE.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/ARCHITECTURE.md): Canonical technical system architecture, tri-layer topology, Vulkan/GLES pipelines, and sequence diagrams.
 - [`docs/REQUIREMENTS.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/REQUIREMENTS.md): Core business requirements, architecture decisions (ADR-001 through ADR-005).
 - [`docs/TESTING-PLAN.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/TESTING-PLAN.md): Detailed testing isolation rationale and hardware test inventory.
 - [`docs/VULKAN-MIGRATION-PLAN.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/VULKAN-MIGRATION-PLAN.md): Architecture, migration stages, and Vulkan rendering pipeline.
