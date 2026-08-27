@@ -138,6 +138,53 @@ static void TestVec3Operations() {
     std::cout << "[PASS] TestVec3Operations\n";
 }
 
+static void TestSphereMeshCoordinates() {
+    // Valida a orientacao espacial da esfera para evitar regressao de espelhamento (video invertido em 360/180).
+    // Convencao do player:
+    // - Centro do video (uu = 0.5) fica diretamente a frente do usuario (-Z).
+    // - Lado direito do video (uu > 0.5) deve ficar a direita do usuario (+X).
+    // - Lado esquerdo do video (uu < 0.5) deve ficar a esquerda do usuario (-X).
+    constexpr float kRadius = 20.0f;
+    constexpr int kSlices = 128;
+    constexpr float kPhiEquator = 3.1415926535f * 0.5f; // Equador
+
+    auto computeVertex = [](float phi, float theta, float radius) {
+        float x = radius * sinf(phi) * sinf(theta);
+        float y = radius * cosf(phi);
+        float z = -radius * sinf(phi) * cosf(theta);
+        return XrVector3f{x, y, z};
+    };
+
+    // 1. Centro do video (s = slices / 2 => uu = 0.5, theta = 0)
+    float thetaCenter = 2.0f * 3.1415926535f * (kSlices / 2) / kSlices - 3.1415926535f;
+    XrVector3f vCenter = computeVertex(kPhiEquator, thetaCenter, kRadius);
+    assert(FloatNear(vCenter.x, 0.0f));
+    assert(FloatNear(vCenter.y, 0.0f));
+    assert(FloatNear(vCenter.z, -kRadius)); // Frente em -Z
+
+    // 2. Lado direito do video (s = 3 * slices / 4 => uu = 0.75, theta = +PI/2)
+    float thetaRight = 2.0f * 3.1415926535f * (3 * kSlices / 4) / kSlices - 3.1415926535f;
+    XrVector3f vRight = computeVertex(kPhiEquator, thetaRight, kRadius);
+    assert(vRight.x > 0.0f); // Deve ser estritamente positivo (direita)
+    assert(FloatNear(vRight.x, kRadius));
+    assert(FloatNear(vRight.z, 0.0f));
+
+    // 3. Lado esquerdo do video (s = slices / 4 => uu = 0.25, theta = -PI/2)
+    float thetaLeft = 2.0f * 3.1415926535f * (kSlices / 4) / kSlices - 3.1415926535f;
+    XrVector3f vLeft = computeVertex(kPhiEquator, thetaLeft, kRadius);
+    assert(vLeft.x < 0.0f); // Deve ser estritamente negativo (esquerda)
+    assert(FloatNear(vLeft.x, -kRadius));
+    assert(FloatNear(vLeft.z, 0.0f));
+
+    // 4. Borda/costura do video (s = 0 e s = slices => theta = -PI e +PI, z = +radius / atras)
+    float thetaBack0 = 2.0f * 3.1415926535f * 0 / kSlices - 3.1415926535f;
+    XrVector3f vBack0 = computeVertex(kPhiEquator, thetaBack0, kRadius);
+    assert(FloatNear(vBack0.x, 0.0f));
+    assert(FloatNear(vBack0.z, kRadius)); // Atras em +Z
+
+    std::cout << "[PASS] TestSphereMeshCoordinates\n";
+}
+
 int main() {
     std::cout << "--- Executando testes unitarios de vk_math.h ---\n";
     TestMat4Identity();
@@ -146,6 +193,7 @@ int main() {
     TestQuatFromYaw();
     TestQuatFromMat4();
     TestVec3Operations();
+    TestSphereMeshCoordinates();
     std::cout << "--- Todos os testes de vk_math.h passaram com sucesso! ---\n";
     return 0;
 }

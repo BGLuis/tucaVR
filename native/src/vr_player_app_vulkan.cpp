@@ -2446,7 +2446,9 @@ void CreateSphereGeometry(AppState& state) {
             // teste real de hardware ("180 nao aparece").
             float theta = 2.0f * M_PI * s / slices - (float)M_PI; // -PI..PI, uu=0.5 em -Z
             float uu    = (float)s / slices;
-            float x = -radius * sinf(phi) * sinf(theta); // invertido: camera dentro da esfera
+            // Posicao em X: positivo para theta > 0 (lado direito da textura, uu > 0.5, mapeando para +X / direita do usuario).
+            // Nao deve ter sinal negativo, caso contrario a imagem seria espelhada horizontalmente (leitura em espelho).
+            float x =  radius * sinf(phi) * sinf(theta);
             float y =  radius * cosf(phi);
             float z = -radius * sinf(phi) * cosf(theta);
             verts.push_back({x, y, z, uu, vv});
