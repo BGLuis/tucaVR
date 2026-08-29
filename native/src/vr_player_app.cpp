@@ -208,6 +208,14 @@ extern "C" {
     // aceito e guardado no Rust mesmo assim (nao rejeita a chamada), so nao
     // ha nada aqui que o leia.
     extern void set_foveation_enabled(uint32_t enabled);
+    // Fase 0.3 Seção 2: Passthrough / Mixed Reality. Feature Vulkan-only
+    // (ver vr_player_app_vulkan.cpp: SetupPassthrough). Aqui no caminho GLES
+    // os wrappers JNI existem só pra o símbolo não faltar se alguém compilar
+    // -PvrplayerGraphicsApi=GLES; get_passthrough_supported() sempre retorna
+    // 0 (nada neste caminho escreve o flag), então o botão da UI permanece
+    // desabilitado, que é o comportamento correto.
+    extern void set_passthrough_enabled(uint32_t enabled);
+    extern uint32_t get_passthrough_supported();
     extern void set_pause_on_exit(uint32_t enabled);
     // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
     extern void set_thermal_level(uint32_t level);
@@ -489,6 +497,18 @@ Java_com_tucavr_VRActivity_nativeSetKeyboardActive(JNIEnv* env, jobject thiz, jb
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetFoveationEnabled(JNIEnv* env, jobject thiz, jboolean enabled) {
     set_foveation_enabled(enabled ? 1 : 0);
+}
+
+// Fase 0.3 Seção 2: Passthrough / Mixed Reality (no-op efetivo no caminho GLES,
+// ver comentário no bloco extern acima).
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPassthroughEnabled(JNIEnv* env, jobject thiz, jboolean enabled) {
+    set_passthrough_enabled(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeIsPassthroughSupported(JNIEnv* env, jobject thiz) {
+    return get_passthrough_supported() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL

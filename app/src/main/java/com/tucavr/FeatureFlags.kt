@@ -33,6 +33,13 @@ object FeatureFlags {
         // Correto para conteúdo 2D — visível na UI apenas quando head tracking estiver ativo.
         SPATIAL_SCREEN_LOCKED("spatial_screen_locked", defaultEnabled = false),
 
+        // Fase 0.3 Seção 2: Passthrough / Mixed Reality (XR_FB_passthrough, só
+        // caminho Vulkan — ver vr_player_app_vulkan.cpp: SetupPassthrough).
+        // Desligado por padrão: além de nunca validado em headset, o botão da
+        // UI só habilita quando nativeIsPassthroughSupported() confirma a
+        // extensão. Persistir aqui mantém o estado entre sessões.
+        PASSTHROUGH("passthrough", defaultEnabled = false),
+
         // Fase 0.2 T9: Carregamento automático de legendas (.srt / .vtt)
         AUTO_LOAD_SUBTITLES("auto_load_subtitles", defaultEnabled = true),
 

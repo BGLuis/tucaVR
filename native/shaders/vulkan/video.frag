@@ -78,7 +78,10 @@ vec3 ApplySGSR1(vec2 uv, float sharpness) {
 
 void main() {
     if (vSharpness <= 0.01) {
-        outColor = texture(videoTexture, vTexCoord);
+        // alpha forcado a 1.0: video decodificado e sempre opaco, e com
+        // passthrough ativo (Fase 0.3 Seção 2) o eye buffer compoe pelo
+        // alpha — um alpha < 1 vindo do sampler deixaria o video traslucido.
+        outColor = vec4(texture(videoTexture, vTexCoord).rgb, 1.0);
     } else {
         outColor = vec4(ApplySGSR1(vTexCoord, vSharpness), 1.0);
     }

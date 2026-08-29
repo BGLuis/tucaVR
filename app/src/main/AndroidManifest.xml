@@ -24,6 +24,15 @@
          (o app so perderia o overlay automatico nesse caso, nao quebraria). -->
     <uses-feature android:name="oculus.software.overlay_keyboard" android:required="false" />
 
+    <!-- Fase 0.3 Seção 2: Passthrough / Mixed Reality (XR_FB_passthrough).
+         required=false pelo mesmo motivo do overlay_keyboard acima: o app
+         continua instalando/funcionando em runtimes sem o recurso; o botão
+         de passthrough na UI só sai de DISABLED quando o C++ confirma que a
+         extensão existe (ver AppState::supportsPassthrough em
+         vr_player_app_vulkan.cpp e get_passthrough_supported no bridge). -->
+    <uses-feature android:name="com.oculus.feature.PASSTHROUGH" android:required="false" />
+    <uses-permission android:name="com.oculus.permission.USE_SCENE" />
+
     <!-- Obrigatório para apps de Realidade Virtual Imersiva (6DoF) -->
     <uses-feature android:name="android.hardware.vr.headtracking" android:required="true" android:version="1" />
 

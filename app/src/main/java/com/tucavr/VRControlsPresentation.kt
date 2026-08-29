@@ -550,9 +550,33 @@ class VRControlsPresentation(
         }
         vrModesLayout.addView(btnSwapEyes)
 
-        val btnPassthrough = VoidIconButton(context, R.drawable.icon_eye_dashed, VoidButtonStyle.DISABLED, isCircular = true, isTransparent = true).apply {
+        // Fase 0.3 Seção 2: Passthrough / Mixed Reality. Só sai de DISABLED
+        // se o nativo (Vulkan) confirmar que a extensão XR_FB_passthrough
+        // existe neste runtime. Estado ON = VoidButtonStyle.ACTIVE.
+        val passthroughSupported = activity.nativeIsPassthroughSupported()
+        val passthroughInitiallyOn =
+            passthroughSupported && FeatureFlags.isEnabled(context, FeatureFlags.Flag.PASSTHROUGH)
+        val btnPassthrough = VoidIconButton(
+            context,
+            R.drawable.icon_eye_dashed,
+            when {
+                !passthroughSupported -> VoidButtonStyle.DISABLED
+                passthroughInitiallyOn -> VoidButtonStyle.ACTIVE
+                else -> VoidButtonStyle.SECONDARY
+            },
+            isCircular = true,
+            isTransparent = true,
+        ).apply {
             layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
                 leftMargin = VoidTheme.dpToPx(context, 8f)
+            }
+            if (passthroughSupported) {
+                setOnClickListener {
+                    val newState = !FeatureFlags.isEnabled(context, FeatureFlags.Flag.PASSTHROUGH)
+                    FeatureFlags.setEnabled(context, FeatureFlags.Flag.PASSTHROUGH, newState)
+                    activity.nativeSetPassthroughEnabled(newState)
+                    style = if (newState) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
+                }
             }
         }
         vrModesLayout.addView(btnPassthrough)

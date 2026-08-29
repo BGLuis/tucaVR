@@ -99,7 +99,9 @@ void main() {
     }
 
     if (vSharpness <= 0.01) {
-        outColor = texture(videoTexture, uv);
+        // alpha forcado a 1.0 (video sempre opaco) — ver nota em video.frag
+        // sobre composicao por alpha com passthrough ativo.
+        outColor = vec4(texture(videoTexture, uv).rgb, 1.0);
     } else {
         outColor = vec4(ApplySGSR1(uv, vSharpness), 1.0);
     }

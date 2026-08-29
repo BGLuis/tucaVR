@@ -325,6 +325,12 @@ class VRActivity : NativeActivity() {
         // Pausar ao sair: empurra preferência inicial de auto-pause para a camada nativa
         nativeSetPauseOnExit(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PAUSE_ON_EXIT))
 
+        // Fase 0.3 Seção 2: empurra o estado persistido do toggle de Passthrough.
+        // A capacidade real (extensão XR_FB_passthrough presente) só é conhecida
+        // depois que o C++ cria o XrInstance; o painel de controles consulta
+        // nativeIsPassthroughSupported() ao ser montado pra habilitar o botão.
+        nativeSetPassthroughEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PASSTHROUGH))
+
         // Fase 0.3 Seção 3/4: empurra valores persistidos de Áudio Espacial e Head Tracking pro nativo
         nativeSetSpatialAudioMode(FeatureFlags.getSpatialAudioMode(this))
         nativeSetSpatialAudioHeadTracking(FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_HEAD_TRACKING))
@@ -1262,6 +1268,9 @@ class VRActivity : NativeActivity() {
     // atomic no lado Rust), segura direto da UI thread.
     external fun nativeSetFoveationEnabled(enabled: Boolean)
     external fun nativeSetPauseOnExit(enabled: Boolean)
+    // Fase 0.3 Seção 2: Passthrough / Mixed Reality (Vulkan-only, XR_FB_passthrough).
+    external fun nativeSetPassthroughEnabled(enabled: Boolean)
+    external fun nativeIsPassthroughSupported(): Boolean
 
     // T13.1: metadados de midia (container/duracao/bitrate/trilhas) pra tela
     // de detalhe do arquivo — bloqueante (probe de container, rede se remoto),

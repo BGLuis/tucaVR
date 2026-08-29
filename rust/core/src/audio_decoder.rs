@@ -115,21 +115,32 @@ impl AudioDecoder {
 
         let channels = decoder.channels() as u32;
 
+        // Extradata do codec: ffmpeg-next 9 não expõe accessor seguro em
+        // `decoder::Audio` (não existe `Audio::extradata`), então lê direto do
+        // `AVCodecParameters` cru — mesmo padrão de `Demuxer::get_video_extradata`.
+        let extradata: Vec<u8> = unsafe {
+            let par = stream.parameters();
+            let p = par.as_ptr();
+            if !p.is_null() && !(*p).extradata.is_null() && (*p).extradata_size > 0 {
+                std::slice::from_raw_parts((*p).extradata, (*p).extradata_size as usize).to_vec()
+            } else {
+                Vec::new()
+            }
+        };
+
         // 1. Heurística de texto (rápida, compatível com todos os containers)
         let mut hint = detect_from_tags(&stream);
 
         // 2. Box SA3D (MP4/MOV) — decodificação estrutural, desbloqueia FuMa
         if !hint.ordering.is_some() {
-            let extradata = decoder.extradata().unwrap_or(&[]);
-            if let Some(sa3d_hint) = detect_from_sa3d_box(extradata) {
+            if let Some(sa3d_hint) = detect_from_sa3d_box(&extradata) {
                 hint = sa3d_hint;
             }
         }
 
         // 3. Tag AMBISONICS do codec private (MKV/WebM)
         if !hint.ordering.is_some() {
-            let extradata = decoder.extradata().unwrap_or(&[]);
-            if let Some(mkv_hint) = detect_from_mkv_ambisonics_tag(extradata) {
+            if let Some(mkv_hint) = detect_from_mkv_ambisonics_tag(&extradata) {
                 hint = mkv_hint;
             }
         }

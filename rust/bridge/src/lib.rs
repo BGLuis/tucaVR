@@ -222,6 +222,47 @@ pub extern "C" fn get_foveation_enabled() -> u32 {
     FOVEATION_ENABLED.load(Ordering::Relaxed) as u32
 }
 
+// Fase 0.3 Seção 2: Passthrough / Mixed Reality (XR_FB_passthrough, caminho
+// Vulkan — ver native/src/vr_player_app_vulkan.cpp: SetupPassthrough/
+// UpdatePassthrough). Mesmo padrao dos demais toggles de render: o bridge so
+// guarda o estado desejado (atomic), o render loop C++ faz polling ~1x/s e
+// aplica via xrPassthroughLayerResumeFB/PauseFB.
+//
+// PASSTHROUGH_ENABLED  — preferencia do usuario (botao da UI / FeatureFlags).
+// PASSTHROUGH_SUPPORTED — escrito pelo C++ apos checar a extensao na criacao
+//   da XrInstance; lido pelo Kotlin via JNI (nativeIsPassthroughSupported)
+//   pra decidir se o botao sai de DISABLED. Default false: em GLES nada
+//   escreve isso, entao o botao continua desabilitado, que e o correto
+//   (passthrough e Vulkan-only aqui).
+static PASSTHROUGH_ENABLED: AtomicBool = AtomicBool::new(false);
+static PASSTHROUGH_SUPPORTED: AtomicBool = AtomicBool::new(false);
+
+#[no_mangle]
+pub extern "C" fn set_passthrough_enabled(enabled: u32) {
+    PASSTHROUGH_ENABLED.store(enabled != 0, Ordering::Relaxed);
+}
+
+/// Polling de baixa frequencia (~1x/s) pelo render loop Vulkan — ver
+/// UpdatePassthrough.
+#[no_mangle]
+pub extern "C" fn get_passthrough_enabled() -> u32 {
+    PASSTHROUGH_ENABLED.load(Ordering::Relaxed) as u32
+}
+
+/// Chamado pelo C++ (Vulkan) na inicializacao, depois de descobrir se
+/// XR_FB_passthrough esta disponivel no runtime.
+#[no_mangle]
+pub extern "C" fn set_passthrough_supported(supported: u32) {
+    PASSTHROUGH_SUPPORTED.store(supported != 0, Ordering::Relaxed);
+}
+
+/// Lido pelo Kotlin (VRActivity.nativeIsPassthroughSupported) pra habilitar
+/// ou nao o botao de passthrough no painel de controles.
+#[no_mangle]
+pub extern "C" fn get_passthrough_supported() -> u32 {
+    PASSTHROUGH_SUPPORTED.load(Ordering::Relaxed) as u32
+}
+
 /// Preferência do usuário para pausar automaticamente ao sair pro menu do sistema / passthrough.
 /// Ativada por padrão (true).
 static PAUSE_ON_EXIT: AtomicBool = AtomicBool::new(true);

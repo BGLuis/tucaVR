@@ -153,6 +153,10 @@ extern "C" {
     extern void reset_process_state();
     extern void on_app_focus_lost();
     extern void on_app_focus_gained();
+    // Fase 0.3 Seção 2: Passthrough / Mixed Reality — estado desejado pelo
+    // usuario (get_) e capacidade do runtime (set_, escrito daqui).
+    extern uint32_t get_passthrough_enabled();
+    extern void set_passthrough_supported(uint32_t supported);
 }
 
 // Preview de arrasto no seekbar renderizado sobre o quad do video
@@ -334,6 +338,27 @@ struct AppState {
     PFN_xrUpdateSwapchainFB pfnUpdateSwapchainFB = nullptr;
     XrFoveationProfileFB foveationProfile = XR_NULL_HANDLE;
     bool foveationCurrentlyApplied = false; // ultimo estado efetivamente aplicado aos swapchains
+
+    // Fase 0.3 Seção 2: Passthrough / Mixed Reality (XR_FB_passthrough) —
+    // ver SetupPassthrough / UpdatePassthrough. supportsPassthrough e
+    // definido em CreateXrInstance (extensao presente no runtime) e
+    // propagado pro Kotlin via set_passthrough_supported (bridge Rust).
+    // passthroughActive e o estado EFETIVO da layer (resumed vs paused),
+    // que UpdatePassthrough sincroniza ~1x/s com get_passthrough_enabled().
+    bool supportsPassthrough = false;
+    bool passthroughActive = false;
+    float passthroughPollAccumMs = 0.0f;
+    static constexpr float kPassthroughPollIntervalMs = 500.0f;
+    PFN_xrCreatePassthroughFB pfnCreatePassthroughFB = nullptr;
+    PFN_xrDestroyPassthroughFB pfnDestroyPassthroughFB = nullptr;
+    PFN_xrPassthroughStartFB pfnPassthroughStartFB = nullptr;
+    PFN_xrPassthroughPauseFB pfnPassthroughPauseFB = nullptr;
+    PFN_xrCreatePassthroughLayerFB pfnCreatePassthroughLayerFB = nullptr;
+    PFN_xrDestroyPassthroughLayerFB pfnDestroyPassthroughLayerFB = nullptr;
+    PFN_xrPassthroughLayerPauseFB pfnPassthroughLayerPauseFB = nullptr;
+    PFN_xrPassthroughLayerResumeFB pfnPassthroughLayerResumeFB = nullptr;
+    XrPassthroughFB passthrough = XR_NULL_HANDLE;
+    XrPassthroughLayerFB passthroughLayer = XR_NULL_HANDLE;
 
     // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006)
     PFN_xrRequestDisplayRefreshRateFB pfnRequestDisplayRefreshRateFB = nullptr;
@@ -768,6 +793,19 @@ void CreateXrInstance(AppState& state) {
         LOGI("OpenXR: Extensão XR_META_performance_metrics detectada e habilitada");
     }
 
+    // Fase 0.3 Seção 2: Passthrough / Mixed Reality (XR_FB_passthrough).
+    // supportedDevices no manifest limita a quest3/quest3s, entao nao ha
+    // necessidade de tratar o passthrough monocromatico do Quest 2.
+    state.supportsPassthrough = isExtensionSupported(XR_FB_PASSTHROUGH_EXTENSION_NAME);
+    if (state.supportsPassthrough) {
+        extensions.push_back(XR_FB_PASSTHROUGH_EXTENSION_NAME);
+        LOGI("OpenXR: Extensão XR_FB_passthrough detectada e habilitada");
+    } else {
+        LOGI("OpenXR: Extensão XR_FB_passthrough nao encontrada — passthrough desabilitado");
+    }
+    // Propaga a capacidade pro Kotlin (botao da UI sai de DISABLED so se true).
+    set_passthrough_supported(state.supportsPassthrough ? 1u : 0u);
+
     // Este e o nome pelo qual o runtime OpenXR do Horizon OS conhece o app
     XrApplicationInfo appInfo{};
     std::strncpy(appInfo.applicationName, "tucaVR", XR_MAX_APPLICATION_NAME_SIZE - 1);
@@ -1144,6 +1182,127 @@ void CreateSwapchains(AppState& state) {
 // LEVEL_ENABLED_FB` deixa o compositor ajustar a intensidade sozinho — nao
 // ha AdaptiveQualityManager/ThermalMonitor neste projeto ainda pra guiar
 // multiplos niveis (fase 0.2 secao 14, task separada).
+// ============================================================================
+// Fase 0.3 Seção 2 — Passthrough / Mixed Reality (XR_FB_passthrough)
+// ============================================================================
+//
+// Ciclo de vida:
+//   SetupPassthrough   — 1x apos xrCreateSession: carrega PFNs, cria o
+//                        XrPassthroughFB e a XrPassthroughLayerFB (ambos
+//                        PAUSADOS — nao passamos IS_RUNNING_AT_CREATION_BIT).
+//   UpdatePassthrough  — polling ~2x/s no RenderFrame: sincroniza o estado
+//                        efetivo da layer (resume/pause) com o desejo do
+//                        usuario vindo do bridge Rust (get_passthrough_enabled).
+//   DestroyPassthrough — no teardown, ANTES de xrDestroySession.
+//
+// A composicao (inserir XrCompositionLayerPassthroughFB como layer 0 e marcar
+// o projection layer com BLEND_TEXTURE_SOURCE_ALPHA) e o clear com alpha 0
+// ficam no proprio RenderFrame/Record*, condicionados a state.passthroughActive.
+
+void SetupPassthrough(AppState& state) {
+    if (!state.supportsPassthrough) return;
+
+    state.pfnCreatePassthroughFB =
+        LoadXrFunction<PFN_xrCreatePassthroughFB>(state.instance, "xrCreatePassthroughFB");
+    state.pfnDestroyPassthroughFB =
+        LoadXrFunction<PFN_xrDestroyPassthroughFB>(state.instance, "xrDestroyPassthroughFB");
+    state.pfnPassthroughStartFB =
+        LoadXrFunction<PFN_xrPassthroughStartFB>(state.instance, "xrPassthroughStartFB");
+    state.pfnPassthroughPauseFB =
+        LoadXrFunction<PFN_xrPassthroughPauseFB>(state.instance, "xrPassthroughPauseFB");
+    state.pfnCreatePassthroughLayerFB =
+        LoadXrFunction<PFN_xrCreatePassthroughLayerFB>(state.instance, "xrCreatePassthroughLayerFB");
+    state.pfnDestroyPassthroughLayerFB =
+        LoadXrFunction<PFN_xrDestroyPassthroughLayerFB>(state.instance, "xrDestroyPassthroughLayerFB");
+    state.pfnPassthroughLayerPauseFB =
+        LoadXrFunction<PFN_xrPassthroughLayerPauseFB>(state.instance, "xrPassthroughLayerPauseFB");
+    state.pfnPassthroughLayerResumeFB =
+        LoadXrFunction<PFN_xrPassthroughLayerResumeFB>(state.instance, "xrPassthroughLayerResumeFB");
+
+    if (state.pfnCreatePassthroughFB == nullptr || state.pfnCreatePassthroughLayerFB == nullptr) {
+        LOGE("Passthrough: ponteiros de funcao ausentes apesar da extensao — desabilitando");
+        state.supportsPassthrough = false;
+        set_passthrough_supported(0u);
+        return;
+    }
+
+    XrPassthroughCreateInfoFB ptCreateInfo{XR_TYPE_PASSTHROUGH_CREATE_INFO_FB};
+    ptCreateInfo.flags = 0; // criado pausado; xrPassthroughStartFB no toggle
+    XrResult r = state.pfnCreatePassthroughFB(state.session, &ptCreateInfo, &state.passthrough);
+    if (XR_FAILED(r)) {
+        LOGE("Passthrough: xrCreatePassthroughFB falhou (%d) — desabilitando", r);
+        state.supportsPassthrough = false;
+        set_passthrough_supported(0u);
+        return;
+    }
+
+    XrPassthroughLayerCreateInfoFB layerCreateInfo{XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB};
+    layerCreateInfo.passthrough = state.passthrough;
+    layerCreateInfo.flags = 0; // idem: layer nasce pausada
+    layerCreateInfo.purpose = XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION_FB;
+    r = state.pfnCreatePassthroughLayerFB(state.session, &layerCreateInfo, &state.passthroughLayer);
+    if (XR_FAILED(r)) {
+        LOGE("Passthrough: xrCreatePassthroughLayerFB falhou (%d) — desabilitando", r);
+        state.pfnDestroyPassthroughFB(state.passthrough);
+        state.passthrough = XR_NULL_HANDLE;
+        state.supportsPassthrough = false;
+        set_passthrough_supported(0u);
+        return;
+    }
+
+    state.passthroughActive = false;
+    LOGI("Passthrough: XrPassthroughFB + layer criados (pausados)");
+}
+
+// Sincroniza o estado efetivo com get_passthrough_enabled(). Nao usa OXR()
+// (que aborta): start/resume/pause podem falhar transitoriamente numa
+// transicao de foco (sessao nao rodando) — logamos e tentamos de novo no
+// proximo poll.
+void UpdatePassthrough(AppState& state) {
+    if (!state.supportsPassthrough || state.passthroughLayer == XR_NULL_HANDLE) return;
+
+    const bool desired = get_passthrough_enabled() != 0;
+    if (desired == state.passthroughActive) return;
+
+    if (desired) {
+        XrResult rs = state.pfnPassthroughStartFB(state.passthrough);
+        XrResult rl = state.pfnPassthroughLayerResumeFB(state.passthroughLayer);
+        if (XR_FAILED(rs) || XR_FAILED(rl)) {
+            LOGW("Passthrough: falha ao ativar (start=%d resume=%d) — nova tentativa no proximo poll", rs, rl);
+            return;
+        }
+        state.passthroughActive = true;
+        LOGI("Passthrough: ATIVADO (mundo real visivel atras do video)");
+    } else {
+        XrResult rl = state.pfnPassthroughLayerPauseFB(state.passthroughLayer);
+        XrResult rs = state.pfnPassthroughPauseFB(state.passthrough);
+        if (XR_FAILED(rl) || XR_FAILED(rs)) {
+            LOGW("Passthrough: falha ao desativar (pauseLayer=%d pause=%d) — nova tentativa no proximo poll", rl, rs);
+            return;
+        }
+        state.passthroughActive = false;
+        LOGI("Passthrough: DESATIVADO (ambiente virtual)");
+    }
+}
+
+void DestroyPassthrough(AppState& state) {
+    if (state.passthroughLayer != XR_NULL_HANDLE && state.pfnDestroyPassthroughLayerFB != nullptr) {
+        if (state.passthroughActive && state.pfnPassthroughLayerPauseFB != nullptr) {
+            state.pfnPassthroughLayerPauseFB(state.passthroughLayer);
+        }
+        state.pfnDestroyPassthroughLayerFB(state.passthroughLayer);
+        state.passthroughLayer = XR_NULL_HANDLE;
+    }
+    if (state.passthrough != XR_NULL_HANDLE && state.pfnDestroyPassthroughFB != nullptr) {
+        if (state.passthroughActive && state.pfnPassthroughPauseFB != nullptr) {
+            state.pfnPassthroughPauseFB(state.passthrough);
+        }
+        state.pfnDestroyPassthroughFB(state.passthrough);
+        state.passthrough = XR_NULL_HANDLE;
+    }
+    state.passthroughActive = false;
+}
+
 void ApplyFoveation(AppState& state, bool enabled) {
     if (state.pfnCreateFoveationProfileFB == nullptr) {
         state.pfnCreateFoveationProfileFB =
@@ -3294,11 +3453,20 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
     DrawSubtitles(state, cmd, proj, view, headCenter);
 }
 
+// Fase 0.3 Seção 2: alpha do clear do eye buffer. Com passthrough ativo o
+// fundo (tudo que não é o quad/esfera de vídeo) precisa ser transparente
+// (alpha 0) pra o compositor revelar o mundo real atrás; sem passthrough,
+// alpha 1 (opaco), comportamento histórico.
+static inline float PassthroughEnvAlpha(const AppState& state) {
+    return state.passthroughActive ? 0.0f : 1.0f;
+}
+
 void RecordFallbackQuad(
     AppState& state, VkCommandBuffer cmd, VkFramebuffer framebuffer, VkExtent2D extent, const Mat4& mvp,
     const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
     VkClearValue clearValue{};
-    clearValue.color = {{0.02f, 0.02f, 0.05f, 1.0f}}; // preto quase puro — ambiente escuro de cinema
+    // preto quase puro — ambiente escuro de cinema (alpha 0 quando passthrough ativo)
+    clearValue.color = {{0.02f, 0.02f, 0.05f, PassthroughEnvAlpha(state)}};
 
     VkRenderPassBeginInfo renderPassBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     renderPassBegin.renderPass = state.renderPass;
@@ -3579,7 +3747,8 @@ void RecordVideoFlat(
         0, 0, nullptr, 0, nullptr, 1, &imgBarrier);
 
     VkClearValue clearValue{};
-    clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}}; // preto ao redor do video
+    // preto ao redor do video (alpha 0 quando passthrough ativo — revela o mundo real)
+    clearValue.color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
 
     VkRenderPassBeginInfo renderPassBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     renderPassBegin.renderPass = state.renderPass;
@@ -4083,6 +4252,16 @@ void RenderFrame(AppState& state) {
             }
         }
 
+        // Fase 0.3 Seção 2: cadencia ~2Hz, sincroniza passthrough com o toggle
+        // do usuario (barato quando nao muda: retorna cedo em UpdatePassthrough).
+        if (state.supportsPassthrough) {
+            state.passthroughPollAccumMs += frameMs;
+            if (state.passthroughPollAccumMs >= AppState::kPassthroughPollIntervalMs) {
+                state.passthroughPollAccumMs = 0.0f;
+                UpdatePassthrough(state);
+            }
+        }
+
         // Fase 0.2 T14: mesma cadencia ~1Hz, checa se houve mudanca de status termico
         state.thermalPollAccumMs += frameMs;
         if (state.thermalPollAccumMs >= AppState::kThermalPollIntervalMs) {
@@ -4112,8 +4291,15 @@ void RenderFrame(AppState& state) {
 
     std::array<XrCompositionLayerProjectionView, kEyeCount> projectionViews{};
     const bool shouldSubmitLayer = frameState.shouldRender;
-    const XrCompositionLayerBaseHeader* layers[5]{};
+    // [0]=passthrough (Fase 0.3 Seção 2, quando ativo) + projection + ui +
+    // controls + modal + cursor = 6. Passthrough SEMPRE vai no indice 0
+    // (fundo) e o projection layer passa a compor com o alpha do swapchain.
+    const XrCompositionLayerBaseHeader* layers[6]{};
     uint32_t layerCount = 0;
+    // Declarada aqui (mesmo escopo de `layers` e `endFrameInfo`) porque
+    // xrEndFrame roda FORA do `if (shouldSubmitLayer)` abaixo e le os
+    // ponteiros de `layers`.
+    XrCompositionLayerPassthroughFB passthroughLayerComp{XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB};
 
     if (shouldSubmitLayer) {
         std::array<XrView, kEyeCount> views{};
@@ -4381,6 +4567,16 @@ void RenderFrame(AppState& state) {
             projectionLayer.next = nullptr;
         }
 
+        // Fase 0.3 Seção 2: com passthrough ativo o projection layer precisa
+        // compor com o alpha do swapchain (senao o compositor ignora o alpha
+        // e o passthrough fica totalmente coberto pelo retangulo do eye buffer).
+        // O clear dos Record* passa a usar alpha 0 (ver PassthroughEnvAlpha),
+        // entao tudo que nao for desenhado (fundo ao redor do video 2D) revela
+        // o mundo real; o quad/esfera de video seguem opacos (alpha 1).
+        if (state.passthroughActive) {
+            projectionLayer.layerFlags |= XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        }
+
         // R-01: Submeter painéis 2D (UI, Controles, Modal) e o Cursor como XrCompositionLayerQuad
         // para amostragem direta pelo hardware compositor da Meta (máxima nitidez de texto).
         SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
@@ -4459,6 +4655,15 @@ void RenderFrame(AppState& state) {
             controlsQuad.next = &ctrlMqsr;
             modalMqsr.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
             modalQuad.next = &modalMqsr;
+        }
+
+        // Fase 0.3 Seção 2: passthrough é o PRIMEIRO layer (fundo), antes do
+        // projection. Só entra quando a layer está efetivamente resumed.
+        if (state.passthroughActive && state.passthroughLayer != XR_NULL_HANDLE) {
+            passthroughLayerComp.flags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+            passthroughLayerComp.space = XR_NULL_HANDLE; // não usado p/ RECONSTRUCTION
+            passthroughLayerComp.layerHandle = state.passthroughLayer;
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&passthroughLayerComp);
         }
 
         layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projectionLayer);
@@ -4948,6 +5153,11 @@ void android_main(android_app* app) {
     // Fase 0.4 T5: estado inicial do toggle, persistido pelo Kotlin e
     // empurrado no startup (VRActivity.onCreate -> nativeSetFoveationEnabled).
     ApplyFoveation(state, get_foveation_enabled() != 0);
+    // Fase 0.3 Seção 2: cria o XrPassthroughFB + layer (pausados). O toggle
+    // real acontece no RenderFrame via UpdatePassthrough (polling ~2x/s do
+    // estado persistido pelo Kotlin -> nativeSetPassthroughEnabled).
+    SetupPassthrough(state);
+    UpdatePassthrough(state); // aplica o estado inicial (normalmente OFF)
     CreateRenderPass(state);
     CreateFramebuffers(state);
     CreateGraphicsPipeline(state);
@@ -4996,6 +5206,9 @@ void android_main(android_app* app) {
 
     // C-03: Destruir ordenadamente todos os 41 recursos Vulkan e 3 AImageReaders
     DestroyAppResources(state);
+
+    // Fase 0.3 Seção 2: destruir passthrough ANTES de xrDestroySession.
+    DestroyPassthrough(state);
 
     for (auto& eye : state.eyes) {
         if (eye.handle != XR_NULL_HANDLE) xrDestroySwapchain(eye.handle);
