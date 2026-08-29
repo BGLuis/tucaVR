@@ -67,6 +67,10 @@ extern "C" {
     extern uint32_t get_spatial_audio_mode();
     extern void set_spatial_audio_head_tracking(uint32_t enabled);
     extern uint32_t get_spatial_audio_head_tracking();
+    // T4.4: Screen-locked audio — speakers fixos relativos à tela
+    extern void set_audio_screen_locked(uint32_t locked);
+    extern uint32_t get_audio_screen_locked();
+    extern void set_screen_orientation(float x, float y, float z, float w);
     // Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
     extern void set_subtitle_track(int32_t track_index);
     extern int32_t get_subtitle_track();
@@ -834,6 +838,11 @@ Java_com_tucavr_VRActivity_nativeSetSpatialAudioMode(JNIEnv* env, jobject, jint 
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetSpatialAudioHeadTracking(JNIEnv* env, jobject, jboolean enabled) {
     set_spatial_audio_head_tracking(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetAudioScreenLocked(JNIEnv* env, jobject, jboolean locked) {
+    set_audio_screen_locked(locked ? 1 : 0);
 }
 
 // ============================================================================

@@ -1335,6 +1335,27 @@ pub extern "C" fn get_spatial_audio_head_tracking() -> u32 {
     media_logic::spatial_audio::get_global_head_tracking_enabled() as u32
 }
 
+/// Ativa ou desativa o modo screen-locked para áudio espacial.
+///
+/// `locked = 1`: speakers ficam fixos relativos à tela (correto para conteúdo 2D).
+/// `locked = 0`: speakers ficam no espaço absoluto / world-locked (padrão).
+#[no_mangle]
+pub extern "C" fn set_audio_screen_locked(locked: u32) {
+    media_logic::spatial_audio::set_global_audio_screen_locked(locked != 0);
+}
+
+#[no_mangle]
+pub extern "C" fn get_audio_screen_locked() -> u32 {
+    media_logic::spatial_audio::get_global_audio_screen_locked() as u32
+}
+
+/// Atualiza a orientação do painel de vídeo 3D (quad) — usada no cálculo screen-locked.
+/// Deve ser chamada pelo render loop sempre que a pose do quad for atualizada.
+#[no_mangle]
+pub extern "C" fn set_screen_orientation(x: f32, y: f32, z: f32, w: f32) {
+    media_logic::spatial_audio::set_global_screen_orientation(x, y, z, w);
+}
+
 /// Libera o buffer retornado por `smb_generate_thumbnail`/
 /// `ftp_generate_thumbnail`/`sftp_generate_thumbnail`. `len` precisa ser
 /// exatamente o valor escrito em `out_len` por essas chamadas — o buffer foi

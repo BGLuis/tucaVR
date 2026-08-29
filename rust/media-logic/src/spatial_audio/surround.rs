@@ -114,7 +114,15 @@ impl SurroundVirtualizer {
             // Suaviza a rotação (slerp 0.5) em relação ao bloco anterior para evitar descontinuidades
             let smoothed = self.last_orientation.slerp(head_orientation, 0.5);
             self.last_orientation = smoothed;
-            smoothed
+
+            // Screen-locked: transforma a orientação para ser relativa à tela virtual.
+            // Fórmula: screen_inv * head — os speakers seguem o painel ao invés do espaço absoluto.
+            if crate::spatial_audio::get_global_audio_screen_locked() {
+                let screen = crate::spatial_audio::get_global_screen_orientation();
+                crate::spatial_audio::compute_screen_locked_orientation(smoothed, screen)
+            } else {
+                smoothed
+            }
         } else {
             Quat::IDENTITY
         };
@@ -249,6 +257,100 @@ mod tests {
 
         // Ao virar para a direita, a caixa central fica à esquerda do usuário -> ouvido esquerdo recebe mais energia
         assert!(rot_r_energy_l > rot_r_energy_r * 1.5, "Expected L > R when turned right: L={}, R={}", rot_r_energy_l, rot_r_energy_r);
+    }
+
+    /// Teste de cobertura 7.1: equivalente ao test_5_1_virtualizer_head_rotation
+    /// com 8 canais. Verifica que o canal Central (índice 2) também gira corretamente
+    /// no layout 7.1, que antes não tinha teste algum.
+    #[test]
+    fn test_7_1_virtualizer_head_rotation() {
+        let mut virt = SurroundVirtualizer::new_7_1(48000.0);
+
+        let block_len = 128;
+        let mut c_ch = vec![0.0f32; block_len];
+        c_ch[0] = 1.0; // Impulso no canal Central
+
+        let empty = vec![0.0f32; block_len];
+        // 7.1: FL, FR, C, LFE, SL, SR, BL, BR
+        let channels = [
+            &empty[..], &empty[..], &c_ch[..], &empty[..],
+            &empty[..], &empty[..], &empty[..], &empty[..],
+        ];
+
+        let mut out_l = vec![0.0f32; block_len];
+        let mut out_r = vec![0.0f32; block_len];
+
+        // Olhando para a frente: Centro é simétrico
+        virt.process_block(&channels, Quat::IDENTITY, &mut out_l, &mut out_r);
+        let el = out_l.iter().map(|&x| x * x).sum::<f32>();
+        let er = out_r.iter().map(|&x| x * x).sum::<f32>();
+        assert!((el - er).abs() < 0.05, "7.1 Center symmetry: L={}, R={}", el, er);
+
+        // Virando para a esquerda: centro vai para a direita
+        virt.reset();
+        let q_left_90 = Quat::from_axis_angle_y(std::f32::consts::FRAC_PI_2);
+        virt.process_block(&channels, q_left_90, &mut out_l, &mut out_r);
+        let el_rot = out_l.iter().map(|&x| x * x).sum::<f32>();
+        let er_rot = out_r.iter().map(|&x| x * x).sum::<f32>();
+        assert!(er_rot > el_rot * 1.5, "7.1 Expected R > L when turned left: L={}, R={}", el_rot, er_rot);
+
+        // Virando para a direita: centro vai para a esquerda
+        virt.reset();
+        let q_right_90 = Quat::from_axis_angle_y(-std::f32::consts::FRAC_PI_2);
+        virt.process_block(&channels, q_right_90, &mut out_l, &mut out_r);
+        let el_rot = out_l.iter().map(|&x| x * x).sum::<f32>();
+        let er_rot = out_r.iter().map(|&x| x * x).sum::<f32>();
+        assert!(el_rot > er_rot * 1.5, "7.1 Expected L > R when turned right: L={}, R={}", el_rot, er_rot);
+
+        // Surround traseiros (BL = ch6, BR = ch7) devem produzir energia na saída
+        let mut bl_ch = vec![0.0f32; block_len];
+        bl_ch[0] = 1.0;
+        let channels_bl = [
+            &empty[..], &empty[..], &empty[..], &empty[..],
+            &empty[..], &empty[..], &bl_ch[..], &empty[..],
+        ];
+        virt.reset();
+        virt.process_block(&channels_bl, Quat::IDENTITY, &mut out_l, &mut out_r);
+        let bl_energy = out_l.iter().chain(out_r.iter()).map(|&x| x * x).sum::<f32>();
+        assert!(bl_energy > 0.0, "7.1 Back Left channel deve produzir energia na saída binaural");
+    }
+
+    /// Garante que o canal LFE filtrado não vaza energia significativa acima de 120 Hz.
+    /// O filtro Butterworth de 120 Hz deve atenuar -40 dB em 480 Hz (~4× cutoff).
+    #[test]
+    fn test_lfe_does_not_leak_above_120hz() {
+        use crate::spatial_audio::biquad::BiquadFilter;
+
+        let sample_rate = 48000.0f32;
+        let cutoff_hz = 120.0f32;
+        let mut filter = BiquadFilter::lowpass_butterworth(cutoff_hz, sample_rate);
+
+        // Tom de 480 Hz (4× o cutoff) — deve ser fortemente atenuado
+        let freq_test = 480.0f32;
+        let num_samples = 4096usize;
+        let mut output_energy = 0.0f32;
+
+        for i in 0..num_samples {
+            let t = i as f32 / sample_rate;
+            let sample = (2.0 * std::f32::consts::PI * freq_test * t).sin();
+            let filtered = filter.process_sample(sample);
+            // Ignora os primeiros 512 samples (transiente de inicialização do filtro)
+            if i >= 512 {
+                output_energy += filtered * filtered;
+            }
+        }
+
+        // Energia de entrada normalizada (amplitude 1.0, num_samples - 512 amostras)
+        let input_energy = (num_samples - 512) as f32 * 0.5; // sin² médio = 0.5
+        let attenuation_ratio = output_energy / input_energy;
+
+        // Butterworth de 2ª ordem a 4× cutoff: ~40 dB ≈ fator 10000 de redução de energia.
+        // Verificação menos restrita: pelo menos 100× (20 dB) de atenuação de energia.
+        assert!(
+            attenuation_ratio < 0.01,
+            "LFE a 480 Hz não atenuado suficientemente: ratio={:.4} (esperado < 0.01)",
+            attenuation_ratio
+        );
     }
 
     #[test]

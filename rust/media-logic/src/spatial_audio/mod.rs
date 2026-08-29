@@ -39,16 +39,36 @@ impl AudioChannelLayout {
     }
 
     /// Identifica o layout com base na contagem de canais e pistas de tags de metadados.
+    ///
+    /// O parâmetro `ordering_hint` permite propagar o formato detectado (ACN ou FuMa) a
+    /// partir da box SA3D (MP4) ou da tag `AMBISONICS` do codec private (MKV).
+    /// Quando `None`, o layout é inferido apenas pela contagem de canais.
     pub fn from_channel_count_and_tags(channels: u32, is_ambisonics_hint: bool) -> Self {
+        Self::from_channel_count_tags_and_ordering(channels, is_ambisonics_hint, None, None)
+    }
+
+    /// Versão rica: aceita o ordering e normalização detectados diretamente dos metadados
+    /// do container (box SA3D / tag AMBISONICS). Use `from_channel_count_and_tags` quando
+    /// apenas a heurística de texto estiver disponível.
+    pub fn from_channel_count_tags_and_ordering(
+        channels: u32,
+        is_ambisonics_hint: bool,
+        ordering: Option<ChannelOrdering>,
+        normalization: Option<Normalization>,
+    ) -> Self {
         match channels {
             1 => AudioChannelLayout::Mono,
             2 => AudioChannelLayout::Stereo,
             4 => {
                 if is_ambisonics_hint {
-                    AudioChannelLayout::AmbisonicsFoa(ChannelOrdering::Acn, Normalization::Sn3d)
+                    // Usa ordering/norm detectados; padrão moderno AmbiX (ACN/SN3D) como fallback
+                    let ord = ordering.unwrap_or(ChannelOrdering::Acn);
+                    let norm = normalization.unwrap_or(Normalization::Sn3d);
+                    AudioChannelLayout::AmbisonicsFoa(ord, norm)
                 } else {
-                    // Sem tag específica, 4 canais pode ser quadrafônico ou Ambisonics padrão YouTube
-                    AudioChannelLayout::AmbisonicsFoa(ChannelOrdering::Acn, Normalization::Sn3d)
+                    // Sem tag explícita de Ambisonics: 4 canais tratado como desconhecido
+                    // (pode ser quadrafônico legítimo) — downmix seguro sem campo sonoro errado.
+                    AudioChannelLayout::Unknown(4)
                 }
             }
             6 => AudioChannelLayout::Surround5_1,
@@ -101,6 +121,17 @@ pub static GLOBAL_HEAD_ROT_W: AtomicU32 = AtomicU32::new(1065353216); // 1.0f32.
 
 pub static GLOBAL_SPATIAL_MODE: AtomicU32 = AtomicU32::new(1); // 1 = VirtualizedBinaural
 pub static GLOBAL_SPATIAL_HEAD_TRACKING: AtomicBool = AtomicBool::new(true);
+/// Modo screen-locked: quando `true`, os speakers virtuais são fixados relativos à
+/// tela (correto para conteúdo 2D); quando `false` (padrão), ficam fixos no espaço
+/// absoluto (world-locked). Ver T4.4 do relatório PHASE-0.3-04-AUDIO-MULTICANAL.md.
+pub static GLOBAL_AUDIO_SCREEN_LOCKED: AtomicBool = AtomicBool::new(false);
+
+// Orientação da tela virtual — necessária para o cálculo de screen-locked.
+// Escrita pelo render loop com a pose do quad da tela; quaternion identidade por padrão.
+pub static GLOBAL_SCREEN_ROT_X: AtomicU32 = AtomicU32::new(0);
+pub static GLOBAL_SCREEN_ROT_Y: AtomicU32 = AtomicU32::new(0);
+pub static GLOBAL_SCREEN_ROT_Z: AtomicU32 = AtomicU32::new(0);
+pub static GLOBAL_SCREEN_ROT_W: AtomicU32 = AtomicU32::new(1065353216); // 1.0f32.to_bits()
 
 /// Atualiza a orientação da cabeça a partir do render loop OpenXR (lock-free).
 pub fn set_global_head_orientation(x: f32, y: f32, z: f32, w: f32) {
@@ -108,6 +139,14 @@ pub fn set_global_head_orientation(x: f32, y: f32, z: f32, w: f32) {
     GLOBAL_HEAD_ROT_Y.store(y.to_bits(), Ordering::Relaxed);
     GLOBAL_HEAD_ROT_Z.store(z.to_bits(), Ordering::Relaxed);
     GLOBAL_HEAD_ROT_W.store(w.to_bits(), Ordering::Relaxed);
+}
+
+/// Atualiza a orientação da tela virtual (quad 3D) — usada no cálculo screen-locked.
+pub fn set_global_screen_orientation(x: f32, y: f32, z: f32, w: f32) {
+    GLOBAL_SCREEN_ROT_X.store(x.to_bits(), Ordering::Relaxed);
+    GLOBAL_SCREEN_ROT_Y.store(y.to_bits(), Ordering::Relaxed);
+    GLOBAL_SCREEN_ROT_Z.store(z.to_bits(), Ordering::Relaxed);
+    GLOBAL_SCREEN_ROT_W.store(w.to_bits(), Ordering::Relaxed);
 }
 
 /// Lê a orientação atual da cabeça sem locks.
@@ -118,6 +157,25 @@ pub fn get_global_head_orientation() -> Quat {
         f32::from_bits(GLOBAL_HEAD_ROT_Z.load(Ordering::Relaxed)),
         f32::from_bits(GLOBAL_HEAD_ROT_W.load(Ordering::Relaxed)),
     )
+}
+
+/// Lê a orientação atual da tela virtual sem locks.
+pub fn get_global_screen_orientation() -> Quat {
+    Quat::new(
+        f32::from_bits(GLOBAL_SCREEN_ROT_X.load(Ordering::Relaxed)),
+        f32::from_bits(GLOBAL_SCREEN_ROT_Y.load(Ordering::Relaxed)),
+        f32::from_bits(GLOBAL_SCREEN_ROT_Z.load(Ordering::Relaxed)),
+        f32::from_bits(GLOBAL_SCREEN_ROT_W.load(Ordering::Relaxed)),
+    )
+}
+
+/// Calcula a orientação efetiva da cabeça relativa à tela (screen-locked).
+///
+/// A fórmula é: `screen_orientation.inverse() * head_orientation`.
+/// Isso faz os speakers virtuais "viajarem" junto com a tela enquanto a
+/// cabeça gira, resultando em áudio fixo relativo ao painel de vídeo.
+pub fn compute_screen_locked_orientation(head: Quat, screen: Quat) -> Quat {
+    screen.conjugate() * head
 }
 
 pub fn set_global_spatial_mode(mode: SpatialAudioMode) {
@@ -134,6 +192,14 @@ pub fn set_global_head_tracking_enabled(enabled: bool) {
 
 pub fn get_global_head_tracking_enabled() -> bool {
     GLOBAL_SPATIAL_HEAD_TRACKING.load(Ordering::Relaxed)
+}
+
+pub fn set_global_audio_screen_locked(locked: bool) {
+    GLOBAL_AUDIO_SCREEN_LOCKED.store(locked, Ordering::Relaxed);
+}
+
+pub fn get_global_audio_screen_locked() -> bool {
+    GLOBAL_AUDIO_SCREEN_LOCKED.load(Ordering::Relaxed)
 }
 
 /// Processador central de áudio espacial para sessões de reprodução.
@@ -333,5 +399,109 @@ mod tests {
         let input_4ch = vec![0.2f32; 4 * 64];
         proc.process(&input_4ch, Quat::IDENTITY, &mut output);
         assert_eq!(output.len(), 64 * 2);
+    }
+
+    /// Testa que o modo SimpleDownmix produz saída estéreo não-zero a partir de
+    /// entrada 5.1 e que o processador não aloca/troca incorretamente entre modos.
+    #[test]
+    fn test_simple_downmix_mode_produces_output() {
+        let mut proc = SpatialAudioProcessor::new(AudioChannelLayout::Surround5_1, 48000.0);
+        proc.set_mode(SpatialAudioMode::SimpleDownmix);
+
+        // Sinal DC no canal Front Left
+        let mut input = vec![0.0f32; 6 * 64];
+        for frame in 0..64 {
+            input[frame * 6] = 1.0; // Front Left
+        }
+
+        let mut output = Vec::new();
+        proc.process(&input, Quat::IDENTITY, &mut output);
+
+        assert_eq!(output.len(), 64 * 2, "SimpleDownmix: saída deve ser 64 frames × 2ch");
+        let left_energy: f32 = output.iter().step_by(2).map(|&x| x * x).sum();
+        assert!(left_energy > 0.0, "SimpleDownmix: canal esquerdo deve ter energia");
+    }
+
+    /// Garante que ACN e FuMa produzem saídas DIFERENTES para a mesma entrada.
+    /// Regride contra o bug onde FuMa era inalcançável e sempre se executava como ACN.
+    #[test]
+    fn test_acn_and_fuma_produce_different_outputs() {
+        let block_len = 128;
+        // Entrada com valor não-nulo em canal que é interpretado diferentemente por ACN e FuMa.
+        // No ACN: ch0=W, ch1=Y, ch2=Z, ch3=X.
+        // No FuMa: ch0=W, ch1=X, ch2=Y, ch3=Z.
+        // Usar ch1 não-zero garante diferença de rotação.
+        let mut input = vec![0.0f32; 4 * block_len];
+        for frame in 0..block_len {
+            input[frame * 4] = 0.5;     // W (igual em ambos)
+            input[frame * 4 + 1] = 1.0; // ACN: Y direcional  /  FuMa: X direcional
+            input[frame * 4 + 3] = 0.5; // ACN: X direcional  /  FuMa: Z direcional
+        }
+
+        let mut proc_acn = SpatialAudioProcessor::new(
+            AudioChannelLayout::AmbisonicsFoa(ChannelOrdering::Acn, Normalization::Sn3d),
+            48000.0,
+        );
+        let mut proc_fuma = SpatialAudioProcessor::new(
+            AudioChannelLayout::AmbisonicsFoa(ChannelOrdering::FuMa, Normalization::FuMa),
+            48000.0,
+        );
+
+        // Orientação 45° de yaw para ampliar as diferenças de saída
+        let head = Quat::from_axis_angle_y(std::f32::consts::FRAC_PI_4);
+
+        let mut out_acn = Vec::new();
+        let mut out_fuma = Vec::new();
+
+        proc_acn.process(&input, head, &mut out_acn);
+        proc_fuma.process(&input, head, &mut out_fuma);
+
+        // Calcular diferença quadrática total entre as duas saídas
+        let diff: f32 = out_acn.iter().zip(out_fuma.iter()).map(|(&a, &b)| (a - b).powi(2)).sum();
+        assert!(
+            diff > 1e-4,
+            "ACN e FuMa devem produzir saídas diferentes para o mesmo input: diff={:.6}",
+            diff
+        );
+    }
+
+    /// Garante que 4 canais sem tag explícita de Ambisonics resulta em Unknown(4),
+    /// não em AmbisonicsFoa — evita o falso-positivo quadrafônico (T3.1).
+    #[test]
+    fn test_four_channels_without_tag_is_unknown() {
+        let layout = AudioChannelLayout::from_channel_count_and_tags(4, false);
+        assert_eq!(
+            layout,
+            AudioChannelLayout::Unknown(4),
+            "4 canais sem tag deve ser Unknown(4), não AmbisonicsFoa"
+        );
+    }
+
+    /// Garante que 4 canais COM tag Ambisonics resulta em AmbisonicsFoa.
+    #[test]
+    fn test_four_channels_with_ambisonics_tag_is_foa() {
+        let layout = AudioChannelLayout::from_channel_count_and_tags(4, true);
+        assert!(
+            matches!(layout, AudioChannelLayout::AmbisonicsFoa(..)),
+            "4 canais com tag deve ser AmbisonicsFoa, obtido: {:?}",
+            layout
+        );
+    }
+
+    /// Garante que FuMa é propagado corretamente quando a detecção de ordering for FuMa.
+    #[test]
+    fn test_fuma_ordering_propagated() {
+        let layout = AudioChannelLayout::from_channel_count_tags_and_ordering(
+            4,
+            true,
+            Some(ChannelOrdering::FuMa),
+            Some(Normalization::FuMa),
+        );
+        assert_eq!(
+            layout,
+            AudioChannelLayout::AmbisonicsFoa(ChannelOrdering::FuMa, Normalization::FuMa),
+            "FuMa deve ser propagado: {:?}",
+            layout
+        );
     }
 }

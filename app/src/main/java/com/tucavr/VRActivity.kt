@@ -119,6 +119,15 @@ class VRActivity : NativeActivity() {
             nativeSetUpscalingMode(upscalingStore.get().id)
         }
 
+        // T4.5 / Seção 11: Degradação automática do áudio espacial por nível térmico.
+        // MODERATE e acima → SimpleDownmix (modo 2) para reduzir carga de DSP.
+        // NORMAL → restaura o modo persistido pelo usuário.
+        if (state.level >= ThermalMonitor.ThermalLevel.MODERATE) {
+            nativeSetSpatialAudioMode(2) // SimpleDownmix — baixo custo
+        } else if (state.level == ThermalMonitor.ThermalLevel.NORMAL) {
+            nativeSetSpatialAudioMode(FeatureFlags.getSpatialAudioMode(this))
+        }
+
         if (state.actions.contains(ThermalMonitor.ThermalAction.PAUSE_PLAYBACK)) {
             // T14.1/T14.2: Em nível crítico/shutdown, pausa a reprodução imediatamente para resfriamento
             nativeTogglePlayPause()
@@ -317,9 +326,10 @@ class VRActivity : NativeActivity() {
         nativeSetPauseOnExit(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PAUSE_ON_EXIT))
 
         // Fase 0.3 Seção 3/4: empurra valores persistidos de Áudio Espacial e Head Tracking pro nativo
-        val spatialAudio = FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_AUDIO)
-        nativeSetSpatialAudioMode(if (spatialAudio) 1 else 0)
+        nativeSetSpatialAudioMode(FeatureFlags.getSpatialAudioMode(this))
         nativeSetSpatialAudioHeadTracking(FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_HEAD_TRACKING))
+        // T4.4: inicializa o modo screen-locked a partir da preferência persistida
+        nativeSetAudioScreenLocked(FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_SCREEN_LOCKED))
 
         // Painel de Estatísticas Técnicas / Stats for Nerds (docs/reports/DEBUG-STATS-MODAL.md)
         isDebugStatsEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.DEBUG_STATS_PANEL)
@@ -1288,6 +1298,8 @@ class VRActivity : NativeActivity() {
     external fun nativeSetAudioTrack(ordinal: Int)
     external fun nativeSetSpatialAudioMode(mode: Int)
     external fun nativeSetSpatialAudioHeadTracking(enabled: Boolean)
+    // T4.4: Modo screen-locked — speakers fixos relativos à tela em vez do espaço absoluto.
+    external fun nativeSetAudioScreenLocked(locked: Boolean)
 
     // Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
     external fun nativeSetSubtitleTrack(trackIndex: Int)

@@ -18,10 +18,15 @@ import com.tucavr.designsystem.VoidTheme
 
 /**
  * Tela de Configurações — Seções "Vídeo" (Upscaling MQSR/SGSR1 e Foveated Rendering),
- * "Áudio" (Áudio Espacial e Head Tracking) e "Legendas".
+ * "Áudio" (Áudio Espacial 3-estados, Head Tracking e Screen-locked) e "Legendas".
  *
  * Ao mudar um toggle ou modo: persiste via SharedPreferences E empurra pro
  * nativo na hora (`activity.nativeSetXxx(...)`) para aplicação imediata em runtime.
+ *
+ * T4.5: O modo de áudio espacial é exposto como seletor de 3 chips (Off / Binaural / Downmix)
+ * em vez do toggle booleano anterior, desbloqueia o modo SimpleDownmix (modo 2).
+ *
+ * T4.4: O toggle de screen-locked é exibido condicionalmente apenas quando head tracking está ativo.
  */
 class SettingsScreen(
     private val context: Context,
@@ -29,6 +34,9 @@ class SettingsScreen(
     private val host: ScreenHost,
     private val onBack: () -> Unit
 ) {
+    // Referências guardadas para atualizar visibilidade condicional entre callbacks
+    private var screenLockedRow: android.view.View? = null
+    private var headTrackingRow: android.view.View? = null
 
     fun render() {
         val root = VoidPanelChrome.newRoot(context)
@@ -77,23 +85,33 @@ class SettingsScreen(
             }
         )
 
-        content.addView(
-            buildFlagRow(
-                labelRes = R.string.settings_spatial_audio_label,
-                descriptionRes = R.string.settings_spatial_audio_description,
-                flag = FeatureFlags.Flag.SPATIAL_AUDIO,
-                onChanged = { enabled -> activity.nativeSetSpatialAudioMode(if (enabled) 1 else 0) }
-            )
-        )
+        content.addView(buildSpatialAudioModeRow())
 
         content.addView(
             buildFlagRow(
                 labelRes = R.string.settings_spatial_head_tracking_label,
                 descriptionRes = R.string.settings_spatial_head_tracking_description,
                 flag = FeatureFlags.Flag.SPATIAL_HEAD_TRACKING,
-                onChanged = { enabled -> activity.nativeSetSpatialAudioHeadTracking(enabled) }
-            )
+                onChanged = { enabled ->
+                    activity.nativeSetSpatialAudioHeadTracking(enabled)
+                    // Atualiza visibilidade do row de screen-locked
+                    screenLockedRow?.visibility = if (enabled) android.view.View.VISIBLE else android.view.View.GONE
+                }
+            ).also { row -> headTrackingRow = row }
         )
+
+        // Screen-locked: visível apenas quando head tracking estiver ativo
+        val headTrackingEnabled = FeatureFlags.isEnabled(context, FeatureFlags.Flag.SPATIAL_HEAD_TRACKING)
+        buildFlagRow(
+            labelRes = R.string.settings_spatial_screen_locked_label,
+            descriptionRes = R.string.settings_spatial_screen_locked_description,
+            flag = FeatureFlags.Flag.SPATIAL_SCREEN_LOCKED,
+            onChanged = { locked -> activity.nativeSetAudioScreenLocked(locked) }
+        ).also { row ->
+            screenLockedRow = row
+            row.visibility = if (headTrackingEnabled) android.view.View.VISIBLE else android.view.View.GONE
+            content.addView(row)
+        }
 
         // Seção Legendas (T9.6)
         content.addView(
@@ -191,6 +209,74 @@ class SettingsScreen(
             }
             addView(actionBtn)
         }
+    }
+
+    /**
+     * Constrói o seletor de modo de áudio espacial com 3 chips: Off / Binaural / Downmix.
+     *
+     * - **Off** (modo 0 = DirectStereo): pass-through estéreo sem processamento.
+     * - **Binaural** (modo 1 = VirtualizedBinaural): HRTF 3D completo com posicionamento espacial.
+     * - **Downmix** (modo 2 = SimpleDownmix): downmix matricial ITU-R de baixo custo — degrau
+     *   térmico manual (ver T4.5 do relatório PHASE-0.3-04-AUDIO-MULTICANAL.md).
+     */
+    private fun buildSpatialAudioModeRow(): LinearLayout = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = VoidTheme.dpToPx(context, 16f) }
+
+        addView(
+            VoidText.title(context, context.getString(R.string.settings_spatial_audio_label), sizeSp = 16f).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+            }
+        )
+
+        addView(
+            VoidText.body(context, context.getString(R.string.settings_spatial_audio_description), sizeSp = 14f, secondary = true).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
+            }
+        )
+
+        val chipContainer = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        val modes = listOf(
+            0 to R.string.settings_spatial_audio_mode_off,
+            1 to R.string.settings_spatial_audio_mode_binaural,
+            2 to R.string.settings_spatial_audio_mode_downmix,
+        )
+
+        val chips = mutableListOf<VoidFilterChip>()
+        val currentMode = FeatureFlags.getSpatialAudioMode(context)
+
+        modes.forEach { (mode, labelRes) ->
+            val chip = VoidFilterChip(
+                context = context,
+                text = context.getString(labelRes),
+                isSelectedChip = (mode == currentMode)
+            ).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                ).apply {
+                    val margin = VoidTheme.dpToPx(context, 4f)
+                    setMargins(margin, 0, margin, 0)
+                }
+                setOnClickListener {
+                    chips.forEach { it.setSelectedState(false) }
+                    setSelectedState(true)
+                    FeatureFlags.setSpatialAudioMode(context, mode)
+                    activity.nativeSetSpatialAudioMode(mode)
+                }
+            }
+            chips.add(chip)
+            chipContainer.addView(chip)
+        }
+
+        addView(chipContainer)
     }
 
     private fun buildUpscalingRow(): LinearLayout = LinearLayout(context).apply {

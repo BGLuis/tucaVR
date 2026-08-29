@@ -52,9 +52,14 @@
     <string name="settings_pause_on_exit_description">Pausa o video automaticamente ao voltar ao menu do sistema ou passthrough.</string>
     <string name="settings_section_audio">Audio</string>
     <string name="settings_spatial_audio_label">Audio Espacial e Surround 3D</string>
-    <string name="settings_spatial_audio_description">Habilita audio binaural 3D imersivo com virtualizacao HRTF para surround 5.1/7.1 e Ambisonics.</string>
+    <string name="settings_spatial_audio_description">Selecione o modo de processamento de audio para som binaural 3D imersivo com virtualizacao HRTF para surround 5.1/7.1 e Ambisonics.</string>
+    <string name="settings_spatial_audio_mode_off">Desligado</string>
+    <string name="settings_spatial_audio_mode_binaural">Binaural</string>
+    <string name="settings_spatial_audio_mode_downmix">Downmix</string>
     <string name="settings_spatial_head_tracking_label">Head Tracking no Audio</string>
     <string name="settings_spatial_head_tracking_description">Rotaciona as caixas acusticas virtuais e o palco sonoro ao virar a cabeca para realismo espacial.</string>
+    <string name="settings_spatial_screen_locked_label">Audio Fixo na Tela</string>
+    <string name="settings_spatial_screen_locked_description">Fixa as caixas virtuais relativas ao painel de video em vez do espaco absoluto. Recomendado para conteudo 2D — mantem o dialogo sempre a frente.</string>
 
     <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
     <string name="browser_title_local_files">Arquivos locais</string>

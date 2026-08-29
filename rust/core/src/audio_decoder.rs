@@ -2,9 +2,94 @@ use ffmpeg_next as ffmpeg;
 use ffmpeg_next::codec::decoder::Audio;
 use ffmpeg_next::format::context::Input;
 use ffmpeg_next::software::resampling::Context as Resampler;
-use media_logic::spatial_audio::AudioChannelLayout;
+use media_logic::spatial_audio::{AudioChannelLayout, ChannelOrdering, Normalization};
 
 const OUTPUT_SAMPLE_RATE: u32 = 48000;
+
+/// Resultado da detecção de metadados Ambisonics do container.
+#[derive(Debug, Default)]
+struct AmbisonicsHint {
+    is_ambisonics: bool,
+    ordering: Option<ChannelOrdering>,
+    normalization: Option<Normalization>,
+}
+
+/// Detecta metadados Ambisonics nas tags de texto do stream (heurística rápida).
+fn detect_from_tags(stream: &ffmpeg::format::stream::Stream) -> AmbisonicsHint {
+    let mut hint = AmbisonicsHint::default();
+    for (k, v) in stream.metadata().iter() {
+        let key = k.to_lowercase();
+        let val = v.to_lowercase();
+        if key.contains("ambisonic") || key.contains("spatial") || val.contains("ambisonic") {
+            hint.is_ambisonics = true;
+            // Tags do YouTube / GoPro: "SPATIAL-AUDIO-MODE" = "ambiX" (ACN/SN3D)
+            //                          "SPATIAL-AUDIO-FORMAT" = "FUMA" (FuMa)
+            if val.contains("fuma") || val.contains("foa_fuma") {
+                hint.ordering = Some(ChannelOrdering::FuMa);
+                hint.normalization = Some(Normalization::FuMa);
+            } else if val.contains("acn") || val.contains("ambix") || val.contains("ambi-x") {
+                hint.ordering = Some(ChannelOrdering::Acn);
+                hint.normalization = Some(Normalization::Sn3d);
+            }
+        }
+    }
+    hint
+}
+
+/// Detecta formato Ambisonics a partir da box SA3D (MP4/MOV) embutida nos extradata do codec.
+/// Formato: https://github.com/google/spatial-media/blob/master/docs/spatial-audio-rfc.md
+fn detect_from_sa3d_box(extradata: &[u8]) -> Option<AmbisonicsHint> {
+    // Busca a assinatura "SA3D" no bloco de extradata (atom MP4)
+    let fourcc = b"SA3D";
+    let pos = extradata.windows(4).position(|w| w == fourcc)?;
+    // Após a FourCC, o byte de versão (1 byte) e depois ambisonic_type (1 byte).
+    // ambisonic_type: 0 = FUMA, 1 = ACN (padrão YouTube/AmbiX)
+    let data_start = pos + 4;
+    if data_start + 1 >= extradata.len() {
+        return None;
+    }
+    let _version = extradata[data_start];
+    let ambisonic_type = extradata.get(data_start + 1).copied().unwrap_or(1);
+    Some(AmbisonicsHint {
+        is_ambisonics: true,
+        ordering: Some(if ambisonic_type == 0 {
+            ChannelOrdering::FuMa
+        } else {
+            ChannelOrdering::Acn
+        }),
+        normalization: Some(if ambisonic_type == 0 {
+            Normalization::FuMa
+        } else {
+            Normalization::Sn3d
+        }),
+    })
+}
+
+/// Detecta a tag `AMBISONICS` do codec private de streams Matroska (MKV/WebM).
+/// O Matroska codifica a tag como dados binários de codec private com a
+/// ID de elemento AMBISONICS (0xBB) na codec-private block.
+fn detect_from_mkv_ambisonics_tag(extradata: &[u8]) -> Option<AmbisonicsHint> {
+    // Busca pelo marcador binário da tag AMBISONICS do Matroska:
+    // O bloco tem a signature ASCII "AMBI" nos primeiros bytes de extensões customizadas
+    let marker = b"AMBI";
+    let pos = extradata.windows(4).position(|w| w == marker)?;
+    let data_start = pos + 4;
+    // Byte de formato: 0x00 = FuMa, 0x01 = ACN/SN3D
+    let fmt_byte = extradata.get(data_start).copied().unwrap_or(1);
+    Some(AmbisonicsHint {
+        is_ambisonics: true,
+        ordering: Some(if fmt_byte == 0x00 {
+            ChannelOrdering::FuMa
+        } else {
+            ChannelOrdering::Acn
+        }),
+        normalization: Some(if fmt_byte == 0x00 {
+            Normalization::FuMa
+        } else {
+            Normalization::Sn3d
+        }),
+    })
+}
 
 pub struct AudioDecoder {
     decoder: Audio,
@@ -30,18 +115,31 @@ impl AudioDecoder {
 
         let channels = decoder.channels() as u32;
 
-        // Verifica tags de metadados para detectar pistas de Ambisonics em vídeos 360°
-        let mut is_ambisonics = false;
-        for (k, v) in stream.metadata().iter() {
-            let key = k.to_lowercase();
-            let val = v.to_lowercase();
-            if key.contains("ambisonic") || key.contains("spatial") || val.contains("ambisonic") {
-                is_ambisonics = true;
-                break;
+        // 1. Heurística de texto (rápida, compatível com todos os containers)
+        let mut hint = detect_from_tags(&stream);
+
+        // 2. Box SA3D (MP4/MOV) — decodificação estrutural, desbloqueia FuMa
+        if !hint.ordering.is_some() {
+            let extradata = decoder.extradata().unwrap_or(&[]);
+            if let Some(sa3d_hint) = detect_from_sa3d_box(extradata) {
+                hint = sa3d_hint;
             }
         }
 
-        let channel_layout = AudioChannelLayout::from_channel_count_and_tags(channels, is_ambisonics);
+        // 3. Tag AMBISONICS do codec private (MKV/WebM)
+        if !hint.ordering.is_some() {
+            let extradata = decoder.extradata().unwrap_or(&[]);
+            if let Some(mkv_hint) = detect_from_mkv_ambisonics_tag(extradata) {
+                hint = mkv_hint;
+            }
+        }
+
+        let channel_layout = AudioChannelLayout::from_channel_count_tags_and_ordering(
+            channels,
+            hint.is_ambisonics,
+            hint.ordering,
+            hint.normalization,
+        );
 
         let resampler_layout = match channels {
             6 => ffmpeg::util::channel_layout::ChannelLayout::_5POINT1,

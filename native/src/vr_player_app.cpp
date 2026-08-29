@@ -235,6 +235,10 @@ extern "C" {
     extern uint32_t get_spatial_audio_mode();
     extern void set_spatial_audio_head_tracking(uint32_t enabled);
     extern uint32_t get_spatial_audio_head_tracking();
+    // T4.4: Screen-locked audio — speakers fixos relativos à tela
+    extern void set_audio_screen_locked(uint32_t locked);
+    extern uint32_t get_audio_screen_locked();
+    extern void set_screen_orientation(float x, float y, float z, float w);
 
     // Debug Stats Modal (docs/reports/DEBUG-STATS-MODAL.md)
     extern float get_last_av_drift_ms();
@@ -505,6 +509,11 @@ Java_com_tucavr_VRActivity_nativeSetSpatialAudioMode(JNIEnv* env, jobject thiz, 
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetSpatialAudioHeadTracking(JNIEnv* env, jobject thiz, jboolean enabled) {
     set_spatial_audio_head_tracking(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetAudioScreenLocked(JNIEnv* env, jobject thiz, jboolean locked) {
+    set_audio_screen_locked(locked ? 1 : 0);
 }
 
 extern "C" JNIEXPORT void JNICALL
