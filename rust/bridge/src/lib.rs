@@ -1913,6 +1913,17 @@ pub extern "C" fn load_external_subtitle(path: *const std::os::raw::c_char) -> u
     }
 }
 
+/// Define o idioma do sistema (ex.: `"pt-BR"`) para a auto-seleção de faixa de
+/// legenda embutida — T7.6. Deve ser chamado antes de `load_video_playback`
+/// para ter efeito no arquivo carregado a seguir.
+#[no_mangle]
+pub extern "C" fn set_preferred_subtitle_language(lang: *const std::os::raw::c_char) {
+    let lang_str = unsafe { cstr_to_string(lang) }.unwrap_or_default();
+    if let Ok(mut controller) = CONTROLLER.lock() {
+        controller.set_preferred_subtitle_language(&lang_str);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn get_subtitle_track_count() -> u32 {
     if let Ok(controller) = CONTROLLER.try_lock() {

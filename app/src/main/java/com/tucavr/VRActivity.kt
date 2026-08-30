@@ -832,6 +832,10 @@ class VRActivity : NativeActivity() {
         VRLog.activeSessionId = sessionId
         VRLog.i("Iniciando sessao de reproducao $sessionId para $source")
         nativeSetSessionId(sessionId)
+        // T7.6: informa o idioma do sistema para a auto-selecao de faixa de
+        // legenda embutida (aplicada no proximo load nativo, se o usuario nao
+        // tiver escolhido uma faixa manualmente).
+        nativeSetPreferredSubtitleLanguage(java.util.Locale.getDefault().toLanguageTag())
     }
 
     // T9.1-T9.3: os 3 entry points de playback (playFile/playUrl/playSmb) sao
@@ -1317,6 +1321,8 @@ class VRActivity : NativeActivity() {
     external fun nativeGetSubtitleOffsetMs(): Long
     external fun nativeLoadExternalSubtitle(path: String): Boolean
     external fun nativeGetSubtitleTrackCount(): Int
+    // T7.6: idioma do sistema para auto-selecao de faixa embutida.
+    external fun nativeSetPreferredSubtitleLanguage(lang: String)
 
     // T14.1/T14.2: Notifica o pipeline de render nativo (C++/Rust) sobre o nível térmico atual
     external fun nativeSetThermalLevel(level: Int)

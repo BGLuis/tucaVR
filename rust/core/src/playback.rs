@@ -143,6 +143,9 @@ pub struct PlaybackController {
     selected_subtitle_track: i32,
     subtitle_offset_ms: i64,
     available_subtitle_tracks: Vec<crate::subtitle_loader::SubtitleTrackInfo>,
+    // T7.6 — idioma do sistema (ex.: "pt-BR"), usado para auto-selecionar uma
+    // faixa embutida quando o usuário não escolheu nenhuma.
+    preferred_subtitle_language: Option<String>,
 }
 
 impl PlaybackController {
@@ -173,6 +176,7 @@ impl PlaybackController {
             selected_subtitle_track: -1,
             subtitle_offset_ms: 0,
             available_subtitle_tracks: Vec::new(),
+            preferred_subtitle_language: None,
         }
     }
 
@@ -268,10 +272,24 @@ impl PlaybackController {
                 stream_index: Some(stream_idx),
             });
         }
-        if self.selected_subtitle_track >= 0 && (self.selected_subtitle_track as usize) < self.available_subtitle_tracks.len() {
+        if self.selected_subtitle_track >= 0
+            && (self.selected_subtitle_track as usize) < self.available_subtitle_tracks.len()
+        {
             self.load_subtitle_track(self.selected_subtitle_track as usize);
-        } else if !self.available_subtitle_tracks.is_empty() && self.selected_subtitle_track == 0 {
-            self.load_subtitle_track(0);
+        } else if self.selected_subtitle_track < 0 && !self.available_subtitle_tracks.is_empty() {
+            // T7.6 — nenhuma faixa escolhida pelo usuário: auto-selecionar pela
+            // correspondência com o idioma do sistema, se houver.
+            if let Some(lang) = &self.preferred_subtitle_language {
+                let langs: Vec<String> = self
+                    .available_subtitle_tracks
+                    .iter()
+                    .map(|t| t.language.clone())
+                    .collect();
+                if let Some(idx) = media_logic::subtitle::match_subtitle_language(&langs, lang.as_str()) {
+                    self.selected_subtitle_track = idx as i32;
+                    self.load_subtitle_track(idx);
+                }
+            }
         }
 
         // O Quest 3 (MediaCodec) exige o mime correto do decoder de hardware;
@@ -942,13 +960,36 @@ impl PlaybackController {
         Ok(count)
     }
 
+    pub fn set_preferred_subtitle_language(&mut self, lang: &str) {
+        let lang = lang.trim();
+        self.preferred_subtitle_language =
+            if lang.is_empty() { None } else { Some(lang.to_string()) };
+    }
+
     fn load_subtitle_track(&mut self, idx: usize) {
-        if let Some(track) = self.available_subtitle_tracks.get(idx) {
-            if track.is_external {
-                if let Some(path) = &track.source_path {
-                    if let Ok(entries) = crate::subtitle_loader::load_subtitle_from_path(path) {
-                        self.subtitle_entries = Some(entries);
-                    }
+        let (is_external, source_path, stream_index) =
+            match self.available_subtitle_tracks.get(idx) {
+                Some(t) => (t.is_external, t.source_path.clone(), t.stream_index),
+                None => return,
+            };
+
+        if is_external {
+            let Some(path) = source_path else { return };
+            match crate::subtitle_loader::load_subtitle_from_path(&path) {
+                Ok(entries) => self.subtitle_entries = Some(entries),
+                Err(e) => {
+                    crate::log_info!("load_subtitle_track: faixa externa falhou: {e}");
+                    self.subtitle_entries = None;
+                }
+            }
+        } else if let (Some(stream_index), Some(path)) = (stream_index, self.current_path.clone()) {
+            // T7.5 — faixa embutida: antes era um no-op silencioso (o bug do
+            // relatório). Agora decodifica os pacotes do stream de legenda.
+            match crate::subtitle_loader::load_embedded_subtitle(&path, stream_index) {
+                Ok(entries) => self.subtitle_entries = Some(entries),
+                Err(e) => {
+                    crate::log_info!("load_subtitle_track: faixa embutida falhou: {e}");
+                    self.subtitle_entries = None;
                 }
             }
         }

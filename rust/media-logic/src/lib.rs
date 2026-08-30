@@ -26,6 +26,8 @@ pub mod preroll;
 pub mod session;
 pub mod spatial_audio;
 pub mod subtitle;
+pub mod subtitle_ass;
+pub mod subtitle_pgs;
 pub mod sync;
 pub mod telemetry;
 pub mod upscaling;

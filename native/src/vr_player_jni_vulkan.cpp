@@ -83,6 +83,7 @@ extern "C" {
     extern uint32_t load_external_subtitle(const char* path);
     extern uint32_t get_subtitle_track_count();
     extern uint32_t get_active_subtitle_text(char* out_buf, size_t max_len);
+    extern void set_preferred_subtitle_language(const char* lang); // T7.6
     extern char* take_last_playback_error();
     extern void free_rust_string(char* s);
     extern char* probe_http_url(const char* url);
@@ -896,4 +897,17 @@ Java_com_tucavr_VRActivity_nativeLoadExternalSubtitle(JNIEnv* env, jobject, jstr
 extern "C" JNIEXPORT jint JNICALL
 Java_com_tucavr_VRActivity_nativeGetSubtitleTrackCount(JNIEnv* env, jobject) {
     return (jint)get_subtitle_track_count();
+}
+
+// T7.6: idioma do sistema (BCP-47, ex.: "pt-BR") para auto-seleção de faixa
+// de legenda embutida no próximo load.
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPreferredSubtitleLanguage(JNIEnv* env, jobject, jstring lang) {
+    if (!lang) {
+        set_preferred_subtitle_language("");
+        return;
+    }
+    const char* l = env->GetStringUTFChars(lang, nullptr);
+    set_preferred_subtitle_language(l ? l : "");
+    if (l) env->ReleaseStringUTFChars(lang, l);
 }
