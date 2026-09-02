@@ -1,0 +1,474 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  T10.1 & T10.2 (docs/phases/PHASE-0.3-POLISH-AUDIO.md, secao 10): strings em
+  espanhol neutro (es).
+  Espelha a ordem exata das chaves de values/strings.xml e preserva todos os
+  placeholders posicionais (%1$s, %2$d, etc.).
+-->
+<resources>
+
+    <!-- App -->
+    <!-- Nome da marca: nao traduzir em nenhum locale (values-pt-rBR repete o
+         mesmo literal de proposito). -->
+    <string name="app_name" translatable="false">tucaVR</string>
+
+    <!-- Comum / reusado entre telas (VoidPanelChrome, listagens de arquivo) -->
+    <string name="common_btn_back">‹ Volver</string>
+    <string name="common_warning_format">%1$s</string>
+    <string name="common_row_dir_format">%1$s</string>
+    <string name="common_row_video_format">%1$s</string>
+
+    <!-- Acoes de texto / Menu de contexto / Validacao (VoidTextField, VoidContextMenu, VoidForm) -->
+    <string name="text_action_copy">Copiar</string>
+    <string name="text_action_cut">Cortar</string>
+    <string name="text_action_paste">Pegar</string>
+    <string name="text_action_select_all">Seleccionar todo</string>
+    <string name="text_action_clear">Limpiar</string>
+    <string name="text_action_reveal">Mostrar contraseña</string>
+    <string name="text_action_hide">Ocultar contraseña</string>
+    <string name="field_error_required">Este campo es obligatorio</string>
+    <string name="field_error_invalid_port">El puerto debe estar entre 1 y 65535</string>
+    <string name="field_error_invalid_url">Formato de URL inválido</string>
+
+    <!-- Home (VRPresentation.renderHome) -->
+    <string name="home_title">tucaVR</string>
+    <string name="home_btn_local_files"> Archivos locales</string>
+    <string name="home_btn_network"> Red</string>
+    <string name="home_btn_continue_watching"> Continuar viendo</string>
+    <string name="home_btn_settings"> Configuración</string>
+
+    <!-- Configuracoes (SettingsScreen) -->
+    <string name="settings_title">Configuración</string>
+    <string name="settings_section_video">Video</string>
+    <string name="settings_upscaling_label">Escalado de video y superresolución</string>
+    <string name="settings_upscaling_description">Mejora la nitidez del video y la eficiencia de la GPU mediante MQSR (Meta Quest Super Resolution) y procesamiento de shaders Snapdragon GSR.</string>
+    <string name="settings_upscaling_mode_off">Desactivado</string>
+    <string name="settings_upscaling_mode_quality">Calidad (SGSR1)</string>
+    <string name="settings_upscaling_mode_performance">Rendimiento (Render Scale 0.8x + MQSR)</string>
+    <string name="settings_upscaling_mode_auto">Automático (adaptativo)</string>
+    <string name="settings_foveated_rendering_label">Renderizado foveado</string>
+    <string name="settings_foveated_rendering_description">Reduce la carga de la GPU disminuyendo el detalle en la visión periférica. Seleccione una intensidad fija o Automático para control adaptativo. Solo Vulkan.</string>
+    <string name="settings_foveated_mode_off">Desactivado</string>
+    <string name="settings_foveated_mode_low">Bajo</string>
+    <string name="settings_foveated_mode_medium">Medio</string>
+    <string name="settings_foveated_mode_high">Alto</string>
+    <string name="settings_foveated_mode_auto">Automático (adaptativo)</string>
+    <string name="quality_warning_thermal">Límite térmico alcanzado: reduciendo calidad de renderizado para enfriar el dispositivo.</string>
+    <string name="quality_warning_8k60">El video 8K con alta tasa de cuadros puede experimentar caídas de cuadros en hardware móvil.</string>
+    <string name="settings_pause_on_exit_label">Pausar al salir</string>
+    <string name="settings_pause_on_exit_description">Pausa automáticamente la reproducción al volver al menú del sistema o passthrough.</string>
+    <string name="settings_section_audio">Audio</string>
+    <string name="settings_spatial_audio_label">Audio espacial y surround 3D</string>
+    <string name="settings_spatial_audio_description">Seleccione el modo de procesamiento de audio para sonido binaural 3D inmersivo con virtualización HRTF para surround 5.1/7.1 y Ambisonics.</string>
+    <string name="settings_spatial_audio_mode_off">Desactivado</string>
+    <string name="settings_spatial_audio_mode_binaural">Binaural</string>
+    <string name="settings_spatial_audio_mode_downmix">Downmix</string>
+    <string name="settings_spatial_head_tracking_label">Seguimiento de cabeza en audio</string>
+    <string name="settings_spatial_head_tracking_description">Gira los altavoces virtuales y el escenario sonoro al mover la cabeza para una inmersión espacial realista.</string>
+    <string name="settings_spatial_screen_locked_label">Audio fijado a la pantalla (Screen-locked)</string>
+    <string name="settings_spatial_screen_locked_description">Fija los altavoces virtuales a la pantalla de video en lugar del espacio del mundo. Recomendado para contenido 2D plano: mantiene los diálogos siempre al frente.</string>
+
+    <!-- Passthrough / Mixed Reality Settings & Modal (T2.4, T2.5) -->
+    <string name="passthrough_modal_title">Passthrough y realidad mixta</string>
+    <string name="passthrough_toggle_label">Activar passthrough</string>
+    <string name="passthrough_toggle_description">Muestra el mundo físico real como fondo mediante las cámaras del Quest 3.</string>
+    <string name="passthrough_state_on">ACTIVADO</string>
+    <string name="passthrough_state_off">DESACTIVADO</string>
+    <string name="passthrough_opacity_label">Opacidad del entorno</string>
+    <string name="passthrough_opacity_percent">%1$d%%</string>
+    <string name="passthrough_edge_rendering_label">Resaltado de bordes</string>
+    <string name="passthrough_edge_rendering_description">Resalta el contorno de los objetos físicos reales con bordes de alto contraste.</string>
+    <string name="passthrough_reset_screen_button">Restablecer posición de pantalla</string>
+    <string name="passthrough_reset_screen_description">Restaura la pantalla virtual a su posición frontal y escala predeterminadas.</string>
+    <string name="passthrough_grab_hint">Consejo: Apunte a la pantalla y mantenga presionado Grip para agarrarla y moverla en el espacio 3D.</string>
+    <string name="settings_passthrough_open_button">Ajustes</string>
+
+    <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
+    <string name="browser_title_local_files">Archivos locales</string>
+    <string name="browser_row_up">Subir un nivel</string>
+    <string name="browser_label_size_mb_format">%1$.1f MB</string>
+    <string name="browser_label_size_gb_format">%1$.2f GB</string>
+    <string name="browser_search_hint">Buscar archivos…</string>
+    <string name="browser_view_grid">Cuadrícula</string>
+    <string name="browser_view_list">Lista</string>
+    <string name="browser_sort_name">Nombre</string>
+    <string name="browser_sort_date">Fecha</string>
+    <string name="browser_sort_size">Tamaño</string>
+    <string name="browser_sort_type">Tipo</string>
+    <string name="browser_sort_last_played">Última reproducción</string>
+    <string name="browser_filter_all">Todos</string>
+    <string name="browser_filter_video">Videos</string>
+    <string name="browser_filter_audio">Audio</string>
+    <string name="browser_filter_image">Imágenes</string>
+    <string name="browser_filter_3d_all">3D: Todos</string>
+    <string name="browser_filter_3d_2d">2D</string>
+    <string name="browser_filter_3d_sbs">SBS</string>
+    <string name="browser_filter_3d_ou">OU</string>
+    <string name="browser_filter_3d_180">180°</string>
+    <string name="browser_filter_3d_360">360°</string>
+    <string name="browser_filter_date_all">Fecha: Todas</string>
+    <string name="browser_filter_date_recent">24 horas</string>
+    <string name="browser_filter_date_week">7 días</string>
+    <string name="browser_filter_date_month">30 días</string>
+    <string name="browser_results_count_format">Mostrando %1$d de %2$d elementos</string>
+    <string name="browser_empty_search">Ningún archivo coincide con los criterios de búsqueda</string>
+    <string name="browser_btn_clear_filters">Limpiar filtros</string>
+    <string name="browser_folder_summary_format">%1$s · %2$d elementos</string>
+    <string name="history_filter_resumable">En curso</string>
+    <string name="history_filter_all">Todo el historial</string>
+    <string name="player_now_playing_title">Reproduciendo ahora</string>
+
+
+    <!-- Detalhe de arquivo (FileDetailScreen) — tela intermediaria entre a
+         listagem (local ou de rede) e o Player: single-click num video
+         chega aqui (thumbnail + metadados + trilhas + botao Reproduzir);
+         double-click na listagem local continua tocando direto. -->
+    <string name="file_detail_row_format">%1$s: %2$s</string>
+    <string name="file_detail_label_size">Tamaño</string>
+    <string name="file_detail_label_modified">Modificado</string>
+    <string name="file_detail_label_duration">Duración</string>
+    <string name="file_detail_label_resolution">Resolución</string>
+    <string name="file_detail_label_path">Ruta</string>
+    <string name="file_detail_btn_play">Reproducir</string>
+    <string name="file_detail_section_file">Archivo</string>
+    <string name="file_detail_section_media">Multimedia</string>
+    <string name="file_detail_section_tags">Etiquetas</string>
+    <string name="file_detail_section_tracks">Pistas</string>
+    <string name="file_detail_label_container">Contenedor</string>
+    <string name="file_detail_label_bitrate">Tasa de bits</string>
+    <string name="file_detail_label_video_codec">Códec de video</string>
+    <string name="file_detail_label_decoder">Decodificador</string>
+    <string name="file_detail_label_audio_codec">Códec de audio</string>
+    <string name="file_detail_label_format3d">Formato 3D</string>
+    <string name="file_detail_format3d_low_confidence_suffix"> (estimado)</string>
+    <string name="file_detail_value_bitrate_format">%1$.1f Mbps</string>
+    <string name="file_detail_track_video_format">%1$d. Video — %2$s</string>
+    <string name="file_detail_track_audio_format">%1$d. Audio — %2$s</string>
+    <string name="file_detail_track_subtitle_format">%1$d. Subtítulo — %2$s</string>
+    <string name="file_detail_track_lang_unknown">Idioma desconocido</string>
+    <string name="file_detail_tracks_empty">No se encontraron pistas</string>
+    <string name="file_detail_tracks_subtitle_note">La renderización de subtítulos aún no está disponible</string>
+    <string name="file_detail_metadata_loading">Cargando información multimedia…</string>
+    <string name="file_detail_metadata_error">Información multimedia no disponible</string>
+    <string name="file_detail_subtitle_local">Local</string>
+    <string name="file_detail_subtitle_http">HTTP</string>
+    <string name="file_detail_subtitle_smb_format">SMB · %1$s</string>
+    <string name="file_detail_subtitle_ftp_format">FTP · %1$s</string>
+    <string name="file_detail_subtitle_sftp_format">SFTP · %1$s</string>
+    <string name="file_detail_tag_title">Título</string>
+    <string name="file_detail_tag_artist">Artista</string>
+    <string name="file_detail_tag_album">Álbum</string>
+    <string name="file_detail_tag_date">Fecha</string>
+    <string name="file_detail_tag_genre">Género</string>
+    <string name="file_detail_tag_comment">Comentario</string>
+
+    <!-- Rede: landing com abas URL / SMB / NFS / FTP / SFTP / Descoberta (VRPresentation.renderNetworkHome) -->
+    <string name="network_title">Red</string>
+    <string name="network_tab_discovery">Descubrimiento</string>
+    <string name="network_tab_dlna">DLNA</string>
+    <string name="network_tab_url">URL</string>
+    <string name="network_tab_smb">SMB</string>
+    <string name="network_tab_nfs">NFS</string>
+    <string name="network_tab_ftp">FTP</string>
+    <string name="network_tab_sftp">SFTP</string>
+
+    <!-- Rede: aba DLNA -->
+    <string name="network_dlna_header">Servidores UPnP / DLNA</string>
+    <string name="network_dlna_empty">(ningún servidor DLNA guardado o descubierto)</string>
+    <string name="network_dlna_loading">Explorando carpeta…</string>
+    <string name="network_dlna_no_items">(no se encontraron elementos multimedia en la carpeta)</string>
+    <string name="network_dlna_error_format">Error al explorar: %1$s</string>
+    <string name="network_dlna_folder_tag">Carpeta</string>
+
+    <!-- HLS Streaming -->
+    <string name="player_hls_quality_auto">Auto (%1$s)</string>
+    <string name="player_hls_quality_menu_title">Calidad de video</string>
+
+    <!-- Rede: aba URL (VRPresentation.buildNetworkUrlPage) -->
+    <string name="network_url_hint">http:// o https://...</string>
+    <string name="network_url_recent_header">Recientes</string>
+    <string name="network_url_recent_empty">(ninguna URL reproducida aún)</string>
+    <string name="network_url_recent_row_format">%1$s</string>
+    <string name="network_url_btn_paste">Pegar</string>
+    <string name="network_url_btn_play">Reproducir</string>
+    <string name="network_url_status_invalid">La URL debe comenzar con http:// o https://</string>
+    <string name="network_url_status_checking">Comprobando servidor…</string>
+    <string name="network_url_status_seekable">El servidor admite avance/retroceso (seek)</string>
+    <string name="network_url_status_not_seekable">El servidor NO admite avance/retroceso (falta Accept-Ranges)</string>
+
+    <!-- Rede: aba SMB — lista de servidores salvos (VRPresentation.buildNetworkSmbPage) -->
+    <string name="network_smb_saved_servers_header">Servidores guardados</string>
+    <string name="network_smb_empty">(ningún servidor guardado)</string>
+    <string name="network_smb_guest_label">invitado</string>
+    <string name="network_smb_row_label_format">%1$s</string>
+    <string name="network_smb_btn_add_server">+ Añadir servidor</string>
+
+    <!-- Rede: aba SMB — formulario de adicionar servidor (VRPresentation.buildAddServerForm) -->
+    <string name="network_smb_form_host_label">Host / IP</string>
+    <string name="network_smb_form_port_label">Puerto</string>
+    <string name="network_smb_form_share_label">Share</string>
+    <string name="network_smb_form_share_hint">Videos</string>
+    <string name="network_smb_form_guest_checkbox">Invitado / anónimo (sin usuario/contraseña)</string>
+    <string name="network_smb_form_user_label">Usuario</string>
+    <string name="network_smb_form_user_hint">usuario</string>
+    <string name="network_smb_form_pass_label">Contraseña</string>
+    <string name="network_smb_form_pass_hint">contraseña</string>
+    <string name="network_smb_form_domain_label">Dominio</string>
+    <string name="network_smb_form_domain_hint">(opcional)</string>
+    <string name="network_smb_btn_test_save">Probar y guardar</string>
+    <string name="network_smb_form_status_host_required">Host obligatorio</string>
+    <string name="network_smb_form_status_connecting">Conectando…</string>
+    <string name="network_smb_form_status_error_format">Error: %1$s</string>
+
+    <!-- Plural: T8.5 / nota do doc — resultado de smb_list_shares ao testar um
+         servidor ("N share(s) encontrado(s)"). -->
+    <plurals name="network_smb_form_status_connected">
+        <item quantity="one">Conectado (%1$d share encontrado)</item>
+        <item quantity="other">Conectado (%1$d shares encontrados)</item>
+    </plurals>
+
+    <!-- Rede: navegacao de diretorio SMB/FTP (VRPresentation.renderNetworkFiles/renderNetworkFtpFiles) -->
+    <string name="network_files_loading">Cargando…</string>
+    <string name="network_files_empty">(vacío)</string>
+
+    <!-- T6.4: Rede: aba FTP — lista de servidores salvos (VRPresentation.buildNetworkFtpPage),
+         espelha network_smb_* acima (mesmos textos onde o conceito e identico). -->
+    <string name="network_ftp_saved_servers_header">Servidores guardados</string>
+    <string name="network_ftp_empty">(ningún servidor guardado)</string>
+    <string name="network_ftp_anonymous_label">anónimo</string>
+    <string name="network_ftp_row_label_format">%1$s</string>
+    <string name="network_ftp_btn_add_server">+ Añadir servidor</string>
+
+    <!-- Rede: aba FTP — formulario de adicionar servidor (VRPresentation.buildAddFtpServerForm) -->
+    <string name="network_ftp_form_host_label">Host / IP</string>
+    <string name="network_ftp_form_port_label">Puerto</string>
+    <string name="network_ftp_form_anonymous_checkbox">Anónimo (sin usuario/contraseña)</string>
+    <string name="network_ftp_form_user_label">Usuario</string>
+    <string name="network_ftp_form_user_hint">usuario</string>
+    <string name="network_ftp_form_pass_label">Contraseña</string>
+    <string name="network_ftp_form_pass_hint">contraseña</string>
+    <string name="network_ftp_btn_test_save">Probar y guardar</string>
+    <string name="network_ftp_form_status_host_required">Host obligatorio</string>
+    <string name="network_ftp_form_status_connecting">Conectando…</string>
+    <string name="network_ftp_form_status_error_format">Error: %1$s</string>
+    <string name="network_ftp_form_status_connected">Conectado</string>
+
+    <!-- T6.4: Rede: aba SFTP — espelha network_ftp_* acima, com autenticacao
+         por chave privada (T6.2) no lugar de "anonimo" (SFTP nao tem). -->
+    <string name="network_sftp_saved_servers_header">Servidores guardados</string>
+    <string name="network_sftp_empty">(ningún servidor guardado)</string>
+    <string name="network_sftp_key_auth_label">clave</string>
+    <string name="network_sftp_row_label_format">%1$s</string>
+    <string name="network_sftp_btn_add_server">+ Añadir servidor</string>
+    <string name="network_sftp_form_host_label">Host / IP</string>
+    <string name="network_sftp_form_port_label">Puerto</string>
+    <string name="network_sftp_form_use_key_checkbox">Usar clave privada en lugar de contraseña</string>
+    <string name="network_sftp_form_user_label">Usuario</string>
+    <string name="network_sftp_form_user_hint">usuario</string>
+    <string name="network_sftp_form_pass_label">Contraseña</string>
+    <string name="network_sftp_form_pass_hint">contraseña</string>
+    <string name="network_sftp_form_key_label">Clave privada (PEM)</string>
+    <string name="network_sftp_form_key_hint">-----BEGIN OPENSSH PRIVATE KEY-----…</string>
+    <string name="network_sftp_form_btn_paste_key">Pegar clave</string>
+    <string name="network_sftp_btn_test_save">Probar y guardar</string>
+    <string name="network_sftp_form_status_host_required">Host obligatorio</string>
+    <string name="network_sftp_form_status_auth_required">Contraseña o clave privada obligatoria</string>
+    <string name="network_sftp_form_status_connecting">Conectando…</string>
+    <string name="network_sftp_form_status_error_format">Error: %1$s</string>
+    <string name="network_sftp_form_status_connected">Conectado</string>
+
+    <!-- T5.4: Rede: aba NFS -->
+    <string name="network_nfs_saved_servers_header">Servidores guardados</string>
+    <string name="network_nfs_empty">(ningún servidor guardado)</string>
+    <string name="network_nfs_row_label_format">%1$s</string>
+    <string name="network_nfs_btn_add_server">+ Añadir servidor</string>
+    <string name="network_nfs_form_host_label">Host / IP</string>
+    <string name="network_nfs_form_port_label">Puerto</string>
+    <string name="network_nfs_form_name_label">Nombre amigable</string>
+    <string name="network_nfs_form_name_hint">Mi NAS Linux</string>
+    <string name="network_nfs_form_export_label">Ruta de exportación</string>
+    <string name="network_nfs_form_export_hint">/volume1/media</string>
+    <string name="network_nfs_form_btn_find_exports">Explorar exportaciones</string>
+    <string name="network_nfs_btn_test_save">Probar y guardar</string>
+    <string name="network_nfs_form_status_host_required">Host obligatorio</string>
+    <string name="network_nfs_form_status_export_required">Ruta de exportación obligatoria</string>
+    <string name="network_nfs_form_status_connecting">Conectando…</string>
+    <string name="network_nfs_form_status_error_format">Error: %1$s</string>
+    <string name="network_nfs_form_status_connected">Conectado</string>
+
+    <!-- T10.4: Rede: aba Descoberta Automatica -->
+    <string name="network_discovery_header">Servidores descubiertos</string>
+    <string name="network_discovery_empty">(no se encontraron servidores en la red local)</string>
+    <string name="network_discovery_scanning">Buscando servidores SMB, NFS, FTP, SFTP y DLNA en la red local…</string>
+    <string name="network_discovery_btn_rescan">Escanear red</string>
+    <string name="network_discovery_action_connect">Conectar</string>
+    <string name="network_discovery_action_configure">Configurar</string>
+
+    <!-- Player: tela apos selecionar midia (VRPresentation.renderPlayer) -->
+    <string name="player_title">Reproduciendo</string>
+    <string name="player_label_controls_hint">Los controles de reproducción (reproducir/pausar/avance/volumen) aparecen al apuntar a la pantalla de video.</string>
+    <string name="player_label_smb_source_format">%1$s/%2$s</string>
+    <string name="player_label_ftp_source_format">%1$s/%2$s</string>
+    <string name="player_label_sftp_source_format">%1$s/%2$s</string>
+    <string name="player_label_nfs_source_format">%1$s:%2$s/%3$s</string>
+
+    <!-- Painel de controles de reproducao (VRControlsPresentation) -->
+    <string name="player_btn_play_pause">Reproducir / Pausar</string>
+    <string name="player_controls_time_format">%1$s / %2$s</string>
+    <string name="player_controls_volume_format">%1$d%%</string>
+    <string name="player_controls_speed_format">%1$.2fx</string>
+
+    <!-- T1.4/T2: modo de exibicao 3D (VRControlsPresentation/ScreenFormatCatalog) —
+         ordem/indices DEVEM casar com ScreenMode em native/src/vr_player_app.cpp
+         e a codificacao numerica em rust/bridge/src/lib.rs (cycle_3d_mode). -->
+    <string name="player_mode_2d">2D</string>
+    <string name="player_mode_sbs">SBS</string>
+    <string name="player_mode_sbs_half">SBS (mitad)</string>
+    <string name="player_mode_ou">OU</string>
+    <string name="player_mode_ou_half">OU (mitad)</string>
+    <string name="player_mode_360">360°</string>
+    <string name="player_mode_180">180°</string>
+    <string name="player_mode_360_sbs">360° SBS</string>
+    <string name="player_mode_360_ou">360° OU</string>
+    <string name="player_mode_180_sbs">180° SBS</string>
+    <string name="player_btn_swap_eyes">Invertir ojos</string>
+    <string name="player_btn_recenter">Recentrar</string>
+
+    <!-- Seletor de Formato de Tela (ScreenFormatModal - T3.4) -->
+    <string name="format_modal_title">Formatos de pantalla</string>
+    <string name="format_tab_auto">Auto</string>
+    <string name="format_tab_flat">Plano</string>
+    <string name="format_tab_360">360°</string>
+    <string name="format_tab_180">180°</string>
+    <string name="format_auto_detected_title">Formato detectado</string>
+    <string name="format_auto_current_title">Modo activo actual</string>
+    <string name="format_auto_btn_reset">Usar detección automática</string>
+    <string name="format_auto_no_media">Ningún medio activo</string>
+    <string name="format_confidence_high">Alta confianza</string>
+    <string name="format_confidence_medium">Confianza media</string>
+    <string name="format_confidence_low">Estimado</string>
+
+    <!-- Historico de reproducao (T9.3 prompt "Retomar?" / T9.4 "Continue Watching") -->
+    <string name="history_resume_prompt_title">¿Continuar donde lo dejaste?</string>
+    <string name="history_resume_prompt_watched_format">Visto %1$s de %2$s (%3$d%%)</string>
+    <string name="history_resume_prompt_btn_resume_format">Reanudar desde %1$s</string>
+    <string name="history_resume_prompt_btn_restart">Comenzar de nuevo</string>
+    <string name="history_resume_prompt_btn_cancel">Cancelar</string>
+    <string name="history_continue_watching_title">Continuar viendo</string>
+    <string name="history_empty">(aún no hay historial)</string>
+    <string name="history_row_http_format">%1$s</string>
+    <string name="history_row_ftp_format">%1$s</string>
+    <string name="history_row_sftp_format">%1$s</string>
+    <string name="history_row_meta_format">%1$s / %2$s · %3$d%%</string>
+
+    <!-- Monitoramento térmico (T14.1-T14.3) -->
+    <string name="thermal_warning_reducing_quality">Reduciendo calidad para evitar sobrecalentamiento</string>
+    <string name="thermal_critical_pause">Temperatura crítica detectada. Reproducción pausada para enfriar el dispositivo.</string>
+    <string name="thermal_level_normal">Normal</string>
+    <string name="thermal_level_moderate">Moderado</string>
+    <string name="thermal_level_severe">Grave</string>
+    <string name="thermal_level_critical">Crítico</string>
+
+    <!-- Audio Tracks -->
+    <string name="player_btn_audio">Pistas de audio</string>
+    <string name="audio_tracks_modal_title">Pistas de audio</string>
+    <string name="audio_tracks_empty">No se encontraron pistas de audio</string>
+    <string name="audio_tracks_active_badge">Activo</string>
+
+    <!-- Subtitles (T9.1-T9.6) -->
+    <string name="player_btn_subtitles">Subtítulos</string>
+    <string name="subtitles_modal_title">Subtítulos</string>
+    <string name="subtitles_option_off">Desactivado</string>
+    <string name="subtitles_track_format">Pista %1$d: %2$s</string>
+    <string name="subtitles_sync_label">Sincronización</string>
+    <string name="subtitles_sync_value_format">%1$+.1f s</string>
+    <string name="subtitles_sync_minus_500">–0.5s</string>
+    <string name="subtitles_sync_minus_100">–0.1s</string>
+    <string name="subtitles_sync_reset">Restablecer</string>
+    <string name="subtitles_sync_plus_100">+0.1s</string>
+    <string name="subtitles_sync_plus_500">+0.5s</string>
+    <string name="subtitles_size_label">Tamaño de fuente</string>
+    <string name="subtitles_size_small">Pequeño</string>
+    <string name="subtitles_size_medium">Medio</string>
+    <string name="subtitles_size_large">Grande</string>
+    <string name="settings_section_subtitles">Subtítulos</string>
+    <string name="settings_subtitles_auto_load_label">Cargar subtítulos automáticamente</string>
+    <string name="settings_subtitles_auto_load_description">Detecta y carga automáticamente archivos de subtítulos (.srt, .vtt) junto al video.</string>
+
+    <!-- Settings: Advanced -->
+    <string name="settings_section_advanced">Avanzado</string>
+    <string name="settings_debug_stats_label">Estadísticas técnicas (Stats for Nerds)</string>
+    <string name="settings_debug_stats_description">Muestra diagnósticos de reproducción en tiempo real, códecs, tasa de cuadros, métricas de búfer y estadísticas de hardware en el reproductor.</string>
+    <string name="settings_debug_stats_open_button">Abrir panel de estadísticas</string>
+    <string name="settings_telemetry_export_label">Exportar telemetría de depuración (CSV)</string>
+    <string name="settings_telemetry_export_description">Registra periódicamente series temporales de rendimiento (FPS, jitter, cola, temperatura) en archivos CSV de sesión en el almacenamiento de depuración.</string>
+
+    <!-- Debug Stats Modal -->
+    <string name="player_btn_debug_stats">Estadísticas técnicas</string>
+    <string name="debug_stats_modal_title">Estadísticas técnicas</string>
+    <string name="debug_stats_section_video_render">Video y renderizado</string>
+    <string name="debug_stats_section_audio_sync">Audio y sincronización</string>
+    <string name="debug_stats_section_network_buffer">Red y búfer</string>
+    <string name="debug_stats_section_system">Sistema y hardware</string>
+
+    <string name="debug_stats_label_resolution">Resolución / Códec</string>
+    <string name="debug_stats_label_fps">Tasa de cuadros / Pantalla</string>
+    <string name="debug_stats_label_dropped_frames">Cuadros descartados</string>
+    <string name="debug_stats_label_stutter_freeze">Stutter / Congelamiento</string>
+    <string name="debug_stats_label_video_jitter">Jitter de video</string>
+    <string name="debug_stats_label_stereo_mode">Modo de pantalla / Estéreo</string>
+    <string name="debug_stats_label_render_scale">Escala de renderizado / Foveation</string>
+    <string name="debug_stats_label_graphics_backend">Backend gráfico</string>
+    <string name="debug_stats_label_video_decoder">Decodificador de video</string>
+
+    <string name="debug_stats_label_audio_format">Códec de audio / Canales</string>
+    <string name="debug_stats_label_av_drift">Desfase A/V (Drift)</string>
+    <string name="debug_stats_label_spatial_audio">Audio espacial</string>
+    <string name="debug_stats_label_audio_track">Pista de audio</string>
+    <string name="debug_stats_label_subtitles">Subtítulos / Sincronía</string>
+
+    <string name="debug_stats_label_source">Origen / Protocolo</string>
+    <string name="debug_stats_label_network_speed">Rendimiento de red</string>
+    <string name="debug_stats_label_buffer_queue">Cola de búfer</string>
+    <string name="debug_stats_label_fetch_latency">Latencia de bloque</string>
+    <string name="debug_stats_label_blocks">Bloques obtenidos / descartados</string>
+    <string name="debug_stats_label_seek_latency">Latencia del último seek</string>
+
+    <string name="debug_stats_label_thermal">Estado térmico</string>
+    <string name="debug_stats_label_battery">Batería</string>
+    <string name="debug_stats_label_app_version">Versión de la app</string>
+
+    <!-- Codec capability & hardware acceleration (T6.1, T6.5) -->
+    <string name="codec_hw_unsupported_error">Este dispositivo no tiene soporte de hardware para este códec.</string>
+    <string name="codec_generic_unsupported_error">Este códec de video no es compatible con el reproductor.</string>
+    <string name="codec_badge_hw">Decodificador HW</string>
+    <string name="codec_badge_sw">Solo SW</string>
+    <string name="codec_badge_unsupported">No compatible</string>
+
+    <!-- Playlists (Fase 0.3 Seção 9) -->
+    <string name="home_btn_playlists"> Listas de reproducción</string>
+    <string name="playlists_title">Listas de reproducción</string>
+    <string name="playlists_new">Nueva lista de reproducción</string>
+    <string name="playlists_empty">No se han creado listas de reproducción</string>
+    <string name="playlists_create_dialog_title">Crear lista de reproducción</string>
+    <string name="playlists_name_hint">Nombre de la lista</string>
+    <string name="playlists_create_btn">Crear</string>
+    <string name="playlists_cancel_btn">Cancelar</string>
+    <string name="playlists_delete">Eliminar lista de reproducción</string>
+    <string name="playlists_delete_confirm">¿Seguro que deseas eliminar esta lista de reproducción?</string>
+    <string name="playlists_play_all">Reproducir todo</string>
+    <string name="playlists_item_count_singular">%1$d video</string>
+    <string name="playlists_item_count_plural">%1$d videos</string>
+    <string name="playlists_add_to_playlist">Añadir a lista de reproducción</string>
+    <string name="playlists_added_success">Añadido a la lista %1$s</string>
+    <string name="playlists_select_playlist">Selecciona una lista de reproducción</string>
+    <string name="playlists_detail_empty">Esta lista de reproducción está vacía</string>
+    <string name="playlists_mode_normal">Normal</string>
+    <string name="playlists_mode_repeat_all">Repetir todo</string>
+    <string name="playlists_mode_repeat_one">Repetir una</string>
+    <string name="playlists_mode_shuffle">Aleatorio</string>
+    <string name="playlists_queue_title">Cola de reproducción</string>
+    <string name="playlists_item_unavailable">El elemento %1$s no está disponible</string>
+    <string name="player_btn_playlist">Lista de reproducción</string>
+
+</resources>
