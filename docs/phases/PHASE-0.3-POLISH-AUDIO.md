@@ -923,11 +923,11 @@ Adicionar tradução para Espanhol como terceiro idioma.
 
 ### Tarefas
 
-- [ ] **T10.1** — Criar `res/values-es/strings.xml`
-- [ ] **T10.2** — Traduzir todas as strings existentes (PT-BR → ES)
-- [ ] **T10.3** — Revisar plurais e formatação específica do Espanhol
+- [x] **T10.1** — Criar `res/values-es/strings.xml`
+- [x] **T10.2** — Traduzir todas as strings existentes (PT-BR → ES)
+- [x] **T10.3** — Revisar plurais e formatação específica do Espanhol
 - [ ] **T10.4** — Testar com locale Espanhol no Quest 3
-- [ ] **T10.5** — Documentar processo de contribuição de traduções no README
+- [x] **T10.5** — Documentar processo de contribuição de traduções no README
 
 ### ⚠️ Cuidados e Armadilhas
 
