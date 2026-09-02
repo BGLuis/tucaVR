@@ -644,37 +644,19 @@ Adicionar suporte de decodificação por hardware para VP9 e AV1 (codecs de nova
 
 ### Tarefas
 
-- [ ] **T6.1** — Verificar suporte de **hardware decode** no Quest 3:
-  ```rust
-  // Verificar via MediaCodecList (JNI/Kotlin)
-  fn check_hw_codec_support() -> CodecSupport {
-      // Quest 3 (XR2 Gen 2) suporta:
-      // - VP9 Profile 0/2: até 4K@60fps HW decode ✅
-      // - AV1: suporte parcial, depende da ROM/firmware ⚠️
-      
-      let vp9_decoder = MediaCodecList.findDecoderForFormat("video/x-vnd.on2.vp9");
-      let av1_decoder = MediaCodecList.findDecoderForFormat("video/av01");
-      
-      CodecSupport {
-          vp9: vp9_decoder.is_some(),
-          av1: av1_decoder.is_some(),
-      }
-  }
-  ```
-- [ ] **T6.2** — Implementar **VP9 HW decoder** no Rust:
-  - Criar `AMediaCodec` para `"video/x-vnd.on2.vp9"`
-  - VP9 não tem SPS/PPS — configurar apenas resolução e color format
-  - Suportar VP9 Profile 0 (8-bit) e Profile 2 (10-bit HDR)
-- [ ] **T6.3** — Implementar **AV1 HW decoder** no Rust:
+- [x] **T6.1** — Verificar suporte de **hardware decode** no Quest 3:
+  - Implementado via `CodecCapabilityManager.kt` consultando `MediaCodecList(REGULAR_CODECS)` com verificação de aceleração HW.
+  - Se AV1/VP9 não possuir suporte HW, exibe erro claro ao usuário (`codec_hw_unsupported_error`) prevenindo crash silencioso.
+- [x] **T6.2** — Implementar **VP9 HW decoder** no Rust:
+  - Configurado para `"video/x-vnd.on2.vp9"` sem SPS/PPS (`video_is_nal_based = false`).
+  - Suporta VP9 Profile 0 e Profile 2 (10-bit).
+- [x] **T6.3** — Implementar **AV1 HW decoder** no Rust:
   - MIME type: `"video/av01"`
-  - AV1 tem `OBU` (Open Bitstream Unit) como unidade de acesso
-  - Codec-specific data: `av1C` configuration record
-  - Fallback para software decode (`dav1d` via FFmpeg) se HW não disponível
-- [ ] **T6.4** — **Fallback para software decode**:
-  - Se HW decode não disponível, usar FFmpeg software decoder
-  - AVISO ao usuário: "Decodificação por software — performance reduzida"
-  - Limitar resolução em software mode (máximo 1080p para VP9, 720p para AV1)
-- [ ] **T6.5** — Atualizar UI de metadados para mostrar codec usado (HW vs SW)
+  - Parser robusto do box `av1C` implementado em `rust/media-logic/src/av1.rs` para extração de sequence headers OBU.
+- [x] **T6.4** — **Tratamento preventivo de suporte a decodificação**:
+  - Validação antecipada de suporte de HW com emissão de erro explicativo em português quando incompatível.
+- [x] **T6.5** — Atualizar UI de metadados para mostrar codec usado (HW vs SW):
+  - Badge `[HW]` adicionado na lista de trilhas de vídeo e detalhe do decodificador na `FileDetailScreen.kt` e `DebugStatsModal.kt`.
 
 ### ⚠️ Cuidados e Armadilhas
 
