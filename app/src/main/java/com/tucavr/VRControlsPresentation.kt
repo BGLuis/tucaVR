@@ -676,6 +676,17 @@ class VRControlsPresentation(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
+        val btnPlaylist = VoidIconButton(context, R.drawable.ic_view_list, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
+                rightMargin = VoidTheme.dpToPx(context, 8f)
+            }
+            contentDescription = context.getString(R.string.player_btn_playlist)
+            setOnClickListener {
+                activity.openPlaylistModal()
+            }
+        }
+        utilsLayout.addView(btnPlaylist)
+
         val btnSubtitles = VoidIconButton(context, R.drawable.icon_subtitles, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
             layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
                 rightMargin = VoidTheme.dpToPx(context, 8f)

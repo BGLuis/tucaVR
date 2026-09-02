@@ -8,17 +8,26 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.tucavr.network.SavedServer
 import com.tucavr.network.SavedServerDao
+import com.tucavr.playlist.Playlist
+import com.tucavr.playlist.PlaylistDao
+import com.tucavr.playlist.PlaylistItem
 
 /**
  * Banco Room principal do aplicativo:
  * - Tabela `playback_history`: historico de reproducao (schema v1).
  * - Tabela `saved_servers`: servidores de rede salvos (schema v2, T11.1).
+ * - Tabelas `playlists` e `playlist_items`: listas de reproducao (schema v3, T9.1).
  */
-@Database(entities = [PlaybackHistory::class, SavedServer::class], version = 2, exportSchema = false)
+@Database(
+    entities = [PlaybackHistory::class, SavedServer::class, Playlist::class, PlaylistItem::class],
+    version = 3,
+    exportSchema = false
+)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun playbackHistoryDao(): PlaybackHistoryDao
     abstract fun savedServerDao(): SavedServerDao
+    abstract fun playlistDao(): PlaylistDao
 
     companion object {
         @Volatile
@@ -47,6 +56,38 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `playlists` (
+                        `id` TEXT NOT NULL PRIMARY KEY,
+                        `name` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `itemCount` INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `playlist_items` (
+                        `id` TEXT NOT NULL PRIMARY KEY,
+                        `playlistId` TEXT NOT NULL,
+                        `mediaUri` TEXT NOT NULL,
+                        `title` TEXT NOT NULL,
+                        `durationMs` INTEGER NOT NULL,
+                        `position` INTEGER NOT NULL,
+                        `sourceType` TEXT NOT NULL,
+                        FOREIGN KEY(`playlistId`) REFERENCES `playlists`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_playlist_items_playlistId` ON `playlist_items` (`playlistId`)"
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -54,7 +95,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "vrplayer_history.db"
                 )
-                    .addMigrations(MIGRATION_1_2)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .fallbackToDestructiveMigration()
                     .build()
                     .also { instance = it }
