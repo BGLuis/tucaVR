@@ -138,8 +138,10 @@ pub struct PlaybackController {
     seek_started_at: Arc<Mutex<Option<Instant>>>,
     seek_latency_ms: Arc<AtomicU32>,
     av_drift_ms: Arc<AtomicI32>,
-    // Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
+    // Legendas (SRT / WebVTT / ASS / PGS — Fase 0.2/0.3)
     subtitle_entries: Option<Vec<media_logic::subtitle::SubtitleEntry>>,
+    ass_subtitle: Option<media_logic::subtitle_ass::AssSubtitle>,
+    pgs_subtitles: Option<Vec<media_logic::subtitle_pgs::PgsSubtitle>>,
     selected_subtitle_track: i32,
     subtitle_offset_ms: i64,
     available_subtitle_tracks: Vec<crate::subtitle_loader::SubtitleTrackInfo>,
@@ -173,6 +175,8 @@ impl PlaybackController {
             seek_latency_ms: Arc::new(AtomicU32::new(0)),
             av_drift_ms: Arc::new(AtomicI32::new(0)),
             subtitle_entries: None,
+            ass_subtitle: None,
+            pgs_subtitles: None,
             selected_subtitle_track: -1,
             subtitle_offset_ms: 0,
             available_subtitle_tracks: Vec::new(),
@@ -948,6 +952,8 @@ impl PlaybackController {
         self.selected_subtitle_track = track;
         if track < 0 || (track as usize) >= self.available_subtitle_tracks.len() {
             self.subtitle_entries = None;
+            self.ass_subtitle = None;
+            self.pgs_subtitles = None;
         } else {
             self.load_subtitle_track(track as usize);
         }
@@ -970,9 +976,13 @@ impl PlaybackController {
     }
 
     pub fn load_external_subtitle(&mut self, path: &str) -> Result<u32, String> {
-        let entries = crate::subtitle_loader::load_subtitle_from_path(path)?;
-        let count = entries.len() as u32;
-        self.subtitle_entries = Some(entries);
+        let loaded = crate::subtitle_loader::load_subtitle_from_path(path)?;
+        let count = match &loaded {
+            crate::subtitle_loader::LoadedSubtitle::Text(entries) => entries.len() as u32,
+            crate::subtitle_loader::LoadedSubtitle::Ass(ass) => ass.events.len() as u32,
+            crate::subtitle_loader::LoadedSubtitle::Pgs(pgs) => pgs.len() as u32,
+        };
+        self.apply_loaded_subtitle(loaded);
         let idx = self.available_subtitle_tracks.len();
         self.available_subtitle_tracks.push(crate::subtitle_loader::SubtitleTrackInfo {
             title: std::path::Path::new(path).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "External".into()),
@@ -991,6 +1001,26 @@ impl PlaybackController {
             if lang.is_empty() { None } else { Some(lang.to_string()) };
     }
 
+    fn apply_loaded_subtitle(&mut self, loaded: crate::subtitle_loader::LoadedSubtitle) {
+        match loaded {
+            crate::subtitle_loader::LoadedSubtitle::Text(entries) => {
+                self.subtitle_entries = Some(entries);
+                self.ass_subtitle = None;
+                self.pgs_subtitles = None;
+            }
+            crate::subtitle_loader::LoadedSubtitle::Ass(ass) => {
+                self.subtitle_entries = Some(ass.to_subtitle_entries());
+                self.ass_subtitle = Some(ass);
+                self.pgs_subtitles = None;
+            }
+            crate::subtitle_loader::LoadedSubtitle::Pgs(pgs) => {
+                self.subtitle_entries = None;
+                self.ass_subtitle = None;
+                self.pgs_subtitles = Some(pgs);
+            }
+        }
+    }
+
     fn load_subtitle_track(&mut self, idx: usize) {
         let (is_external, source_path, stream_index) =
             match self.available_subtitle_tracks.get(idx) {
@@ -1001,20 +1031,22 @@ impl PlaybackController {
         if is_external {
             let Some(path) = source_path else { return };
             match crate::subtitle_loader::load_subtitle_from_path(&path) {
-                Ok(entries) => self.subtitle_entries = Some(entries),
+                Ok(loaded) => self.apply_loaded_subtitle(loaded),
                 Err(e) => {
                     crate::log_info!("load_subtitle_track: faixa externa falhou: {e}");
                     self.subtitle_entries = None;
+                    self.ass_subtitle = None;
+                    self.pgs_subtitles = None;
                 }
             }
         } else if let (Some(stream_index), Some(path)) = (stream_index, self.current_path.clone()) {
-            // T7.5 — faixa embutida: antes era um no-op silencioso (o bug do
-            // relatório). Agora decodifica os pacotes do stream de legenda.
             match crate::subtitle_loader::load_embedded_subtitle(&path, stream_index) {
-                Ok(entries) => self.subtitle_entries = Some(entries),
+                Ok(loaded) => self.apply_loaded_subtitle(loaded),
                 Err(e) => {
                     crate::log_info!("load_subtitle_track: faixa embutida falhou: {e}");
                     self.subtitle_entries = None;
+                    self.ass_subtitle = None;
+                    self.pgs_subtitles = None;
                 }
             }
         }
@@ -1025,5 +1057,20 @@ impl PlaybackController {
         let current_pts_sec = self.sync_manager.get_master_clock();
         let current_pts_ms = (current_pts_sec * 1000.0) as i64;
         media_logic::subtitle::find_active_cue(entries, current_pts_ms, self.subtitle_offset_ms).map(|c| c.text.clone())
+    }
+
+    pub fn get_active_pgs(&self) -> Option<&media_logic::subtitle_pgs::PgsSubtitle> {
+        let pgs = self.pgs_subtitles.as_ref()?;
+        let current_pts_sec = self.sync_manager.get_master_clock();
+        let current_pts_ms = (current_pts_sec * 1000.0) as i64;
+        media_logic::subtitle_pgs::find_active_pgs(pgs, current_pts_ms, self.subtitle_offset_ms)
+    }
+
+    pub fn get_active_ass_event(&self) -> Option<(&media_logic::subtitle_ass::AssEvent, &media_logic::subtitle_ass::AssScriptInfo)> {
+        let ass = self.ass_subtitle.as_ref()?;
+        let current_pts_sec = self.sync_manager.get_master_clock();
+        let current_pts_ms = (current_pts_sec * 1000.0) as i64;
+        let event = media_logic::subtitle_ass::find_active_ass_event(ass, current_pts_ms, self.subtitle_offset_ms)?;
+        Some((event, &ass.script_info))
     }
 }

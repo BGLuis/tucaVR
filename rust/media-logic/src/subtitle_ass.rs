@@ -230,6 +230,48 @@ impl AssSubtitle {
         }
         entries
     }
+
+    /// Busca os eventos ASS ativos no instante `pts_ms` (com `offset_ms` aplicado).
+    pub fn find_active_events(&self, pts_ms: i64, offset_ms: i64) -> Vec<&AssEvent> {
+        find_active_ass_events(self, pts_ms, offset_ms)
+    }
+
+    /// Busca o evento ASS ativo prioritário no instante `pts_ms` (com `offset_ms` aplicado).
+    pub fn find_active_event(&self, pts_ms: i64, offset_ms: i64) -> Option<&AssEvent> {
+        find_active_ass_event(self, pts_ms, offset_ms)
+    }
+}
+
+/// Busca os eventos ASS ativos no instante `pts_ms` (com `offset_ms` aplicado).
+/// Espelha o contrato de `subtitle::find_active_cue` e `subtitle_pgs::find_active_pgs`.
+pub fn find_active_ass_events(
+    doc: &AssSubtitle,
+    pts_ms: i64,
+    offset_ms: i64,
+) -> Vec<&AssEvent> {
+    let Some(effective) = pts_ms.checked_add(offset_ms) else {
+        return Vec::new();
+    };
+    if effective < 0 {
+        return Vec::new();
+    }
+    let target = effective as u64;
+    doc.events
+        .iter()
+        .filter(|e| target >= e.start_ms && target < e.end_ms && !e.text.trim().is_empty())
+        .collect()
+}
+
+/// Busca o evento ASS ativo no instante `pts_ms` (com `offset_ms` aplicado).
+/// Caso múltiplos eventos estejam ativos simultaneamente, prioriza o de maior `layer`
+/// e, em caso de empate, o com início mais recente (`start_ms`).
+pub fn find_active_ass_event(
+    doc: &AssSubtitle,
+    pts_ms: i64,
+    offset_ms: i64,
+) -> Option<&AssEvent> {
+    let events = find_active_ass_events(doc, pts_ms, offset_ms);
+    events.into_iter().max_by_key(|e| (e.layer, e.start_ms))
 }
 
 // ============================================================================
@@ -1132,4 +1174,51 @@ Dialogue: Marked=0,0:00:01.00,0:00:02.00,Default,,0,0,0,,legenda ssa
         assert_eq!(ass.styles.len(), 1);
         assert_eq!(ass.styles[0].name, "Default");
     }
+
+    #[test]
+    fn test_find_active_ass_events_and_event() {
+        let script = r#"
+[Script Info]
+Title: Test Active ASS
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,2,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,Primeira linha
+Dialogue: 1,0:00:02.00,0:00:04.00,Default,,0,0,0,,Segunda linha (layer 1)
+Dialogue: 0,0:00:05.00,0:00:06.00,Default,,0,0,0,,
+Dialogue: 0,0:00:06.00,0:00:08.00,Default,,0,0,0,,Terceira linha
+"#;
+        let doc = parse_ass(script);
+
+        // Antes de 1000ms: nenhum ativo
+        assert!(find_active_ass_events(&doc, 500, 0).is_empty());
+        assert!(find_active_ass_event(&doc, 500, 0).is_none());
+
+        // Em 1500ms: apenas a primeira linha
+        let evs = find_active_ass_events(&doc, 1500, 0);
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].text, "Primeira linha");
+        assert_eq!(find_active_ass_event(&doc, 1500, 0).unwrap().text, "Primeira linha");
+
+        // Em 2500ms: ambas as linhas ativas; find_active_ass_event prioriza layer 1
+        let evs = find_active_ass_events(&doc, 2500, 0);
+        assert_eq!(evs.len(), 2);
+        assert_eq!(find_active_ass_event(&doc, 2500, 0).unwrap().text, "Segunda linha (layer 1)");
+
+        // Teste de offset (+1000ms): em 500ms com offset 1000ms => tempo efetivo 1500ms
+        let evs = find_active_ass_events(&doc, 500, 1000);
+        assert_eq!(evs.len(), 1);
+        assert_eq!(evs[0].text, "Primeira linha");
+
+        // Evento vazio (em 5500ms) não é retornado
+        assert!(find_active_ass_events(&doc, 5500, 0).is_empty());
+
+        // Tempo negativo efetivo
+        assert!(find_active_ass_events(&doc, 500, -1000).is_empty());
+    }
 }
+
