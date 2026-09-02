@@ -7,9 +7,17 @@ use crate::demuxer::{Demuxer, ReadPacketOutcome};
 use ffmpeg_next as ffmpeg;
 use media_logic::subtitle::{detect_and_decode, parse_srt, parse_vtt, sanitize_subtitle_text, SubtitleEntry};
 use media_logic::subtitle_ass::{
-    ass_document_from_mkv_packets, parse_ass_to_entries, MkvAssPacket,
+    ass_document_from_mkv_packets, parse_ass, MkvAssPacket,
 };
+use media_logic::subtitle_pgs::{parse_pgs_packets, parse_pgs_sup, PgsPacket};
 use std::path::Path;
+
+#[derive(Debug, Clone)]
+pub enum LoadedSubtitle {
+    Text(Vec<SubtitleEntry>),
+    Ass(media_logic::subtitle_ass::AssSubtitle),
+    Pgs(Vec<media_logic::subtitle_pgs::PgsSubtitle>),
+}
 
 #[derive(Debug, Clone)]
 pub struct SubtitleTrackInfo {
@@ -20,30 +28,31 @@ pub struct SubtitleTrackInfo {
     pub stream_index: Option<usize>,
 }
 
-/// Carrega e analisa um arquivo de legenda externo (.srt ou .vtt) a partir de um caminho
+/// Carrega e analisa um arquivo de legenda externo (.srt, .vtt, .ass, .ssa ou .sup) a partir de um caminho
 /// local ou remoto suportado.
-pub fn load_subtitle_from_path(path: &str) -> Result<Vec<SubtitleEntry>, String> {
+pub fn load_subtitle_from_path(path: &str) -> Result<LoadedSubtitle, String> {
     let bytes = read_file_bytes(path)?;
     if bytes.is_empty() {
-        return Ok(Vec::new());
+        return Ok(LoadedSubtitle::Text(Vec::new()));
+    }
+
+    let lower = path.to_lowercase();
+    if lower.ends_with(".sup") {
+        let pgs = parse_pgs_sup(&bytes);
+        return Ok(LoadedSubtitle::Pgs(pgs));
     }
 
     let decoded_text = detect_and_decode(&bytes);
-    let lower = path.to_lowercase();
 
     // Identifica formato por extensão ou conteúdo inicial.
-    let entries = if lower.ends_with(".ass") || lower.ends_with(".ssa") {
-        parse_ass_to_entries(&decoded_text)
+    if lower.ends_with(".ass") || lower.ends_with(".ssa") || decoded_text.trim_start().starts_with("[Script Info]") {
+        let ass = parse_ass(&decoded_text);
+        Ok(LoadedSubtitle::Ass(ass))
     } else if lower.ends_with(".vtt") || decoded_text.trim_start().starts_with("WEBVTT") {
-        parse_vtt(&decoded_text)
-    } else if decoded_text.trim_start().starts_with("[Script Info]") {
-        // `.ass` sem a extensão correta.
-        parse_ass_to_entries(&decoded_text)
+        Ok(LoadedSubtitle::Text(parse_vtt(&decoded_text)))
     } else {
-        parse_srt(&decoded_text)
-    };
-
-    Ok(entries)
+        Ok(LoadedSubtitle::Text(parse_srt(&decoded_text)))
+    }
 }
 
 /// Carrega uma faixa de legenda **embutida** no container (T7.5 da Fase 0.3 §7).
@@ -63,7 +72,7 @@ pub fn load_subtitle_from_path(path: &str) -> Result<Vec<SubtitleEntry>, String>
 pub fn load_embedded_subtitle(
     path: &str,
     stream_index: usize,
-) -> Result<Vec<SubtitleEntry>, String> {
+) -> Result<LoadedSubtitle, String> {
     let mut demuxer = Demuxer::new(path).map_err(|e| format!("abrir demuxer: {e}"))?;
 
     let (codec_id, tb_num, tb_den, extradata) = {
@@ -103,6 +112,7 @@ pub fn load_embedded_subtitle(
         Text,
         MovText,
         Ass,
+        Pgs,
     }
     let kind = match codec_id {
         ffmpeg::codec::Id::SUBRIP | ffmpeg::codec::Id::TEXT | ffmpeg::codec::Id::WEBVTT => {
@@ -110,15 +120,17 @@ pub fn load_embedded_subtitle(
         }
         ffmpeg::codec::Id::MOV_TEXT => Kind::MovText,
         ffmpeg::codec::Id::ASS | ffmpeg::codec::Id::SSA => Kind::Ass,
+        ffmpeg::codec::Id::HDMV_PGS_SUBTITLE => Kind::Pgs,
         other => {
             return Err(format!(
-                "legenda embutida com codec '{}' ainda não suportada (bitmap PGS/DVD não tem render de textura)",
+                "legenda embutida com codec '{}' ainda não suportada",
                 other.name()
             ));
         }
     };
 
     let mut ass_packets: Vec<MkvAssPacket> = Vec::new();
+    let mut pgs_packets: Vec<PgsPacket> = Vec::new();
     let mut text_entries: Vec<SubtitleEntry> = Vec::new();
     let mut next_index: u32 = 1;
 
@@ -148,6 +160,12 @@ pub fn load_embedded_subtitle(
                     body: String::from_utf8_lossy(data)
                         .trim_end_matches('\0')
                         .to_string(),
+                });
+            }
+            Kind::Pgs => {
+                pgs_packets.push(PgsPacket {
+                    pts_ms: start_ms,
+                    data: data.to_vec(),
                 });
             }
             Kind::Text | Kind::MovText => {
@@ -180,14 +198,21 @@ pub fn load_embedded_subtitle(
         }
     }
 
-    let mut entries = if kind == Kind::Ass {
-        let doc = ass_document_from_mkv_packets(&extradata, &ass_packets);
-        parse_ass_to_entries(&doc)
-    } else {
-        text_entries
-    };
-    entries.sort_by_key(|e| e.start_ms);
-    Ok(entries)
+    match kind {
+        Kind::Ass => {
+            let doc = ass_document_from_mkv_packets(&extradata, &ass_packets);
+            let ass = parse_ass(&doc);
+            Ok(LoadedSubtitle::Ass(ass))
+        }
+        Kind::Pgs => {
+            let pgs = parse_pgs_packets(&pgs_packets);
+            Ok(LoadedSubtitle::Pgs(pgs))
+        }
+        Kind::Text | Kind::MovText => {
+            text_entries.sort_by_key(|e| e.start_ms);
+            Ok(LoadedSubtitle::Text(text_entries))
+        }
+    }
 }
 
 /// Lê o conteúdo bruto de um arquivo local ou remoto.
@@ -250,8 +275,8 @@ pub fn probe_sidecar_subtitles(video_path: &str) -> Vec<SubtitleTrackInfo> {
     if let (Some(parent), Some(stem)) = (p.parent(), p.file_stem()) {
         let stem_str = stem.to_string_lossy();
         let candidate_extensions = &[
-            "srt", "vtt", "ass", "ssa", "pt-BR.srt", "en.srt", "pt.srt", "es.srt", "pt-BR.ass",
-            "en.ass",
+            "srt", "vtt", "ass", "ssa", "sup", "pt-BR.srt", "en.srt", "pt.srt", "es.srt", "pt-BR.ass",
+            "en.ass", "pt-BR.sup", "en.sup",
         ];
 
         for ext in candidate_extensions {

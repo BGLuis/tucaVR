@@ -706,7 +706,7 @@ Suportar legendas estilizadas ASS/SSA (texto com posicionamento, cores, fontes, 
 
 ### Tarefas
 
-- [ ] **T7.1** — Implementar parser **ASS/SSA** no Rust:
+- [x] **T7.1** — Implementar parser **ASS/SSA** no Rust:
   ```rust
   struct AssSubtitle {
       script_info: AssScriptInfo,
@@ -742,13 +742,13 @@ Suportar legendas estilizadas ASS/SSA (texto com posicionamento, cores, fontes, 
       text: String,              // Com override tags: {\pos(x,y)\fad(in,out)}
   }
   ```
-- [ ] **T7.2** — Implementar renderizador **ASS** (C++):
+- [x] **T7.2** — Implementar renderizador **ASS** (C++):
   - Parsear override tags: `\pos`, `\an`, `\fad`, `\c`, `\fs`, `\b`, `\i`, `\move`
   - Posicionamento na tela baseado em alignment (1-9, estilo numpad)
   - Cores e estilos per-character
   - Usar SDF text rendering com suporte a múltiplas fontes
   - Tags avançadas para futura implementação: `\t` (animation), `\clip`, `\drawing`
-- [ ] **T7.3** — Implementar parser **PGS** (Presentation Graphic Stream):
+- [x] **T7.3** — Implementar parser **PGS** (Presentation Graphic Stream):
   ```rust
   // PGS são legendas bitmap (usadas em Blu-ray)
   // Formato: SUP container com segments
@@ -774,17 +774,17 @@ Suportar legendas estilizadas ASS/SSA (texto com posicionamento, cores, fontes, 
       palette: Vec<[u8; 4]>, // RGBA
   }
   ```
-- [ ] **T7.4** — Renderizar **PGS como textura** (C++):
+- [x] **T7.4** — Renderizar **PGS como textura** (C++):
   - Decodificar RLE do bitmap PGS
   - Aplicar paleta de cores
   - Criar textura GPU com o bitmap resultante
   - Posicionar como quad overlay na parte inferior da tela de vídeo
   - Escalar proporcionalmente ao tamanho da tela virtual
-- [ ] **T7.5** — Seleção de **track de legenda** (embedded):
+- [x] **T7.5** — Seleção de **track de legenda** (embedded):
   - Listar todos os subtitle tracks do container (MKV, MP4)
   - Mostrar idioma de cada track
   - Selecionar via UI de controles
-- [ ] **T7.6** — **Prioridade de carregamento** de legendas:
+- [x] **T7.6** — **Prioridade de carregamento** de legendas:
   1. Legenda externa selecionada pelo usuário
   2. Legenda embedded selecionada pelo usuário
   3. Auto-selecionar legenda no idioma do sistema

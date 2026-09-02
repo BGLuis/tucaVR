@@ -2141,3 +2141,185 @@ pub extern "C" fn get_active_subtitle_text(out_buf: *mut std::os::raw::c_char, m
     0
 }
 
+// ============================================================================
+// Legendas Avançadas ASS/SSA e PGS (Fase 0.3 Seção 7)
+// ============================================================================
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PgsSubtitleInfo {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    pub screen_width: u16,
+    pub screen_height: u16,
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AssSpanFfi {
+    pub char_offset: u32,
+    pub char_length: u32,
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+    pub bold: u8,
+    pub italic: u8,
+    pub _reserved: u16,
+    pub font_size: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AssSubtitleInfo {
+    pub alignment: u32,
+    pub has_pos: u32,
+    pub pos_x: f32,
+    pub pos_y: f32,
+    pub play_res_x: f32,
+    pub play_res_y: f32,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub span_count: u32,
+}
+
+#[no_mangle]
+pub extern "C" fn has_active_pgs() -> bool {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        controller.get_active_pgs().is_some()
+    } else {
+        false
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_active_pgs_info(
+    out_x: *mut u16,
+    out_y: *mut u16,
+    out_width: *mut u16,
+    out_height: *mut u16,
+    out_screen_w: *mut u16,
+    out_screen_h: *mut u16,
+) -> bool {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        if let Some(pgs) = controller.get_active_pgs() {
+            unsafe {
+                if !out_x.is_null() { *out_x = pgs.x; }
+                if !out_y.is_null() { *out_y = pgs.y; }
+                if !out_width.is_null() { *out_width = pgs.width; }
+                if !out_height.is_null() { *out_height = pgs.height; }
+                if !out_screen_w.is_null() { *out_screen_w = pgs.screen_width; }
+                if !out_screen_h.is_null() { *out_screen_h = pgs.screen_height; }
+            }
+            return true;
+        }
+    }
+    false
+}
+
+#[no_mangle]
+pub extern "C" fn get_active_pgs_id() -> u64 {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        if let Some(pgs) = controller.get_active_pgs() {
+            return pgs.start_ms;
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn copy_active_pgs_rgba(out_buf: *mut u8, max_len: usize) -> u32 {
+    if out_buf.is_null() || max_len == 0 {
+        return 0;
+    }
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        if let Some(pgs) = controller.get_active_pgs() {
+            let copy_len = pgs.rgba.len().min(max_len);
+            unsafe {
+                std::ptr::copy_nonoverlapping(pgs.rgba.as_ptr(), out_buf, copy_len);
+            }
+            return copy_len as u32;
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn has_active_ass() -> bool {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        controller.get_active_ass_event().is_some()
+    } else {
+        false
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_active_ass_info(
+    out_info: *mut AssSubtitleInfo,
+    out_text: *mut std::os::raw::c_char,
+    max_text_len: usize,
+    out_spans: *mut AssSpanFfi,
+    max_spans: usize,
+) -> bool {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        if let Some((event, script_info)) = controller.get_active_ass_event() {
+            if !out_info.is_null() {
+                let info = AssSubtitleInfo {
+                    alignment: event.alignment as u32,
+                    has_pos: if event.pos.is_some() { 1 } else { 0 },
+                    pos_x: event.pos.map(|p| p.0).unwrap_or(0.0),
+                    pos_y: event.pos.map(|p| p.1).unwrap_or(0.0),
+                    play_res_x: script_info.play_res_x as f32,
+                    play_res_y: script_info.play_res_y as f32,
+                    start_ms: event.start_ms,
+                    end_ms: event.end_ms,
+                    span_count: event.spans.len().min(max_spans) as u32,
+                };
+                unsafe { *out_info = info; }
+            }
+
+            if !out_text.is_null() && max_text_len > 0 {
+                let bytes = event.text.as_bytes();
+                let copy_len = bytes.len().min(max_text_len - 1);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_text as *mut u8, copy_len);
+                    *out_text.add(copy_len) = 0;
+                }
+            }
+
+            if !out_spans.is_null() && max_spans > 0 {
+                let count = event.spans.len().min(max_spans);
+                let mut current_offset: u32 = 0;
+                for i in 0..count {
+                    let span = &event.spans[i];
+                    let span_len = span.text.len() as u32;
+                    let ffi_span = AssSpanFfi {
+                        char_offset: current_offset,
+                        char_length: span_len,
+                        r: span.colour.r,
+                        g: span.colour.g,
+                        b: span.colour.b,
+                        a: span.colour.a,
+                        bold: if span.bold { 1 } else { 0 },
+                        italic: if span.italic { 1 } else { 0 },
+                        _reserved: 0,
+                        font_size: span.font_size,
+                    };
+                    unsafe {
+                        *out_spans.add(i) = ffi_span;
+                    }
+                    current_offset += span_len;
+                }
+            }
+
+            return true;
+        }
+    }
+    false
+}
+
+

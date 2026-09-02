@@ -58,6 +58,7 @@
 #include "font_atlas_roboto.h"
 #include "subtitle.vert.h"
 #include "subtitle.frag.h"
+#include "subtitle_layout.h"
 
 #ifndef XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME
 #define XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME "XR_FB_display_refresh_rate"
@@ -148,6 +149,19 @@ extern "C" {
     extern uint32_t load_external_subtitle(const char* path);
     extern uint32_t get_subtitle_track_count();
     extern uint32_t get_active_subtitle_text(char* out_buf, size_t max_len);
+    // Legendas Avançadas ASS/SSA e PGS (Fase 0.3 Seção 7)
+    extern bool has_active_pgs();
+    extern bool get_active_pgs_info(
+        uint16_t* out_x, uint16_t* out_y,
+        uint16_t* out_width, uint16_t* out_height,
+        uint16_t* out_screen_w, uint16_t* out_screen_h);
+    extern uint64_t get_active_pgs_id();
+    extern uint32_t copy_active_pgs_rgba(uint8_t* out_buf, size_t max_len);
+    extern bool has_active_ass();
+    extern bool get_active_ass_info(
+        vrplayer::AssSubtitleInfo* out_info,
+        char* out_text, size_t max_text_len,
+        vrplayer::AssSpanFfi* out_spans, size_t max_spans);
     extern void start_video_playback(const char* path, float startTimeSec);
     // Estagio 6 — paridade com o caminho GLES (play-pause, teclado nativo,
     // volume, seek).
@@ -605,6 +619,25 @@ struct AppState {
     uint32_t subtitleIndexCount = 0;
     std::string lastSubtitleText = "";
     float subtitleScale = 1.0f;
+    // Legendas PGS (Fase 0.3 T7.4)
+    VkDescriptorPool pgsSubtitleDescriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSet pgsSubtitleDescriptorSet = VK_NULL_HANDLE;
+    VkImage pgsSubtitleImage = VK_NULL_HANDLE;
+    VkDeviceMemory pgsSubtitleImageMemory = VK_NULL_HANDLE;
+    VkImageView pgsSubtitleImageView = VK_NULL_HANDLE;
+    uint32_t pgsSubtitleTexWidth = 0;
+    uint32_t pgsSubtitleTexHeight = 0;
+    bool pgsSubtitleReady = false;
+    uint64_t lastPgsId = 0;
+
+    // Legendas ASS (Fase 0.3 T7.2)
+    uint32_t currentAssAlignment = 2;
+    bool currentAssHasPos = false;
+    float currentAssPosX = 0.0f;
+    float currentAssPosY = 0.0f;
+    float currentAssPlayResX = 384.0f;
+    float currentAssPlayResY = 288.0f;
+    uint64_t lastSubtitleStartMs = 0;
     XrVector3f lazyFollowPos = {0.0f, 1.1f, -2.2f};
 
     // Overlay de feedback (paridade com o GLES): um unico vertex buffer com as
@@ -3283,24 +3316,148 @@ void CreateSubtitlePipeline(AppState& state) {
     LOGI("Estagio 6: pipeline de legendas MSDF criado com sucesso");
 }
 
-void UpdateSubtitleMesh(AppState& state, const char* text) {
+static void EnsurePgsSubtitleTexture(AppState& state, uint32_t width, uint32_t height) {
+    if (!state.pgsSubtitleReady || state.pgsSubtitleTexWidth != width || state.pgsSubtitleTexHeight != height) {
+        if (state.pgsSubtitleImageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(state.vkDevice, state.pgsSubtitleImageView, nullptr);
+            state.pgsSubtitleImageView = VK_NULL_HANDLE;
+        }
+        if (state.pgsSubtitleImage != VK_NULL_HANDLE) {
+            vkDestroyImage(state.vkDevice, state.pgsSubtitleImage, nullptr);
+            state.pgsSubtitleImage = VK_NULL_HANDLE;
+        }
+        if (state.pgsSubtitleImageMemory != VK_NULL_HANDLE) {
+            vkFreeMemory(state.vkDevice, state.pgsSubtitleImageMemory, nullptr);
+            state.pgsSubtitleImageMemory = VK_NULL_HANDLE;
+        }
+        CreateUiImage(state, width, height, state.pgsSubtitleImage, state.pgsSubtitleImageMemory, state.pgsSubtitleImageView);
+        state.pgsSubtitleTexWidth = width;
+        state.pgsSubtitleTexHeight = height;
+        state.pgsSubtitleReady = true;
+    }
+
+    if (state.pgsSubtitleDescriptorPool == VK_NULL_HANDLE) {
+        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+        VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        poolInfo.maxSets = 1;
+        poolInfo.poolSizeCount = 1;
+        poolInfo.pPoolSizes = &poolSize;
+        VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.pgsSubtitleDescriptorPool));
+
+        VkDescriptorSetAllocateInfo dsAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        dsAlloc.descriptorPool = state.pgsSubtitleDescriptorPool;
+        dsAlloc.descriptorSetCount = 1;
+        dsAlloc.pSetLayouts = &state.uiDescriptorSetLayout;
+        VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.pgsSubtitleDescriptorSet));
+    }
+
+    VkDescriptorImageInfo imgInfo{};
+    imgInfo.sampler = state.uiSampler;
+    imgInfo.imageView = state.pgsSubtitleImageView;
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = state.pgsSubtitleDescriptorSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imgInfo;
+    vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+}
+
+static bool DrawPgsSubtitle(AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
+    if (state.uiPipeline == VK_NULL_HANDLE || state.videoVertexBuffer == VK_NULL_HANDLE) {
+        return false;
+    }
+
+    vrplayer::PgsSubtitleInfo pgsInfo{};
+    if (!get_active_pgs_info(&pgsInfo.x, &pgsInfo.y, &pgsInfo.width, &pgsInfo.height,
+                             &pgsInfo.screen_width, &pgsInfo.screen_height)) {
+        state.lastPgsId = 0;
+        return false;
+    }
+
+    uint64_t currentPgsId = get_active_pgs_id();
+    if (currentPgsId != state.lastPgsId || !state.pgsSubtitleReady ||
+        state.pgsSubtitleTexWidth != pgsInfo.width || state.pgsSubtitleTexHeight != pgsInfo.height) {
+        EnsurePgsSubtitleTexture(state, pgsInfo.width, pgsInfo.height);
+        std::vector<uint8_t> pgsRgba(static_cast<size_t>(pgsInfo.width) * pgsInfo.height * 4);
+        uint32_t copied = copy_active_pgs_rgba(pgsRgba.data(), pgsRgba.size());
+        if (copied > 0) {
+            UpdateUiImageFromBytes(state, pgsRgba.data(), pgsInfo.width, pgsInfo.height, state.pgsSubtitleImage);
+            state.lastPgsId = currentPgsId;
+        }
+    }
+
+    if (!state.pgsSubtitleReady) {
+        return false;
+    }
+
+    const bool sphereMode = IsSphereMode(state.screenMode);
+    float quadPosX = 0.0f, quadPosY = 0.0f, quadScaleX = 0.0f, quadScaleY = 0.0f;
+    if (!vrplayer::ComputePgsQuadBounds(pgsInfo, state.screenScaleX, state.screenScaleY, sphereMode,
+                                       quadPosX, quadPosY, quadScaleX, quadScaleY)) {
+        return false;
+    }
+
+    Mat4 pgsModel;
+    if (sphereMode) {
+        Mat4 pgsTrans = Mat4Translation(headCenter.x + quadPosX, headCenter.y + quadPosY, headCenter.z - 2.2f);
+        pgsModel = Mat4Multiply(pgsTrans, Mat4Scale(quadScaleX * state.subtitleScale, quadScaleY * state.subtitleScale, 1.0f));
+    } else {
+        SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
+        Mat4 pgsTrans = Mat4Multiply(scene.screenModelNoScale, Mat4Translation(quadPosX, quadPosY, 0.04f));
+        pgsModel = Mat4Multiply(pgsTrans, Mat4Scale(quadScaleX * state.subtitleScale, quadScaleY * state.subtitleScale, 1.0f));
+    }
+
+    Mat4 pgsMvp = Mat4Multiply(Mat4Multiply(proj, view), pgsModel);
+
+    VkDeviceSize offset = 0;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
+    vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        state.uiPipelineLayout, 0, 1, &state.pgsSubtitleDescriptorSet, 0, nullptr);
+
+    UiPushConstants upc{};
+    upc.mvp = pgsMvp;
+    upc.alpha = 1.0f;
+    vkCmdPushConstants(cmd, state.uiPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(upc), &upc);
+    vkCmdDraw(cmd, 4, 1, 0, 0);
+
+    return true;
+}
+
+void UpdateSubtitleMesh(AppState& state, const char* text,
+                        const vrplayer::AssSpanFfi* spans = nullptr,
+                        uint32_t spanCount = 0,
+                        uint32_t alignment = 2) {
     if (!text || text[0] == '\0' || !state.subtitleVertexMemory) {
         state.subtitleIndexCount = 0;
         return;
     }
 
-    std::vector<std::string> lines;
+    struct LineSpan {
+        size_t startByte;
+        std::string content;
+    };
+
+    std::vector<LineSpan> lines;
     std::string currentLine;
-    for (const char* p = text; *p; ++p) {
+    size_t lineStartByte = 0;
+    size_t curByte = 0;
+
+    for (const char* p = text; *p; ++p, ++curByte) {
         if (*p == '\n') {
-            lines.push_back(currentLine);
+            lines.push_back({lineStartByte, currentLine});
             currentLine.clear();
+            lineStartByte = curByte + 1;
         } else if (*p != '\r') {
             currentLine.push_back(*p);
         }
     }
     if (!currentLine.empty()) {
-        lines.push_back(currentLine);
+        lines.push_back({lineStartByte, currentLine});
     }
 
     if (lines.empty()) {
@@ -3317,18 +3474,28 @@ void UpdateSubtitleMesh(AppState& state, const char* text) {
     const float lineHeight = 0.11f;
     float startY = ((float)lines.size() - 1.0f) * lineHeight * 0.5f;
 
+    // Calcular largura de cada linha e maxLineWidth
+    std::vector<float> lineWidths(lines.size(), 0.0f);
+    float maxLineWidth = 0.0f;
     for (size_t lineIdx = 0; lineIdx < lines.size(); ++lineIdx) {
-        const std::string& line = lines[lineIdx];
-        float lineWidth = 0.0f;
-        for (unsigned char c : line) {
+        float lw = 0.0f;
+        for (unsigned char c : lines[lineIdx].content) {
             const vrplayer::GlyphMetric* gm = vrplayer::FindGlyphMetric((uint32_t)c);
-            lineWidth += gm->advance * charScale;
+            lw += gm->advance * charScale;
         }
+        lineWidths[lineIdx] = lw;
+        if (lw > maxLineWidth) {
+            maxLineWidth = lw;
+        }
+    }
 
-        float cursorX = -lineWidth * 0.5f;
+    for (size_t lineIdx = 0; lineIdx < lines.size(); ++lineIdx) {
+        const auto& line = lines[lineIdx];
+        float cursorX = vrplayer::ComputeAssLineCursorX(alignment, lineWidths[lineIdx], maxLineWidth);
         float cursorY = startY - (float)lineIdx * lineHeight;
+        size_t charByteOffset = line.startByte;
 
-        for (unsigned char c : line) {
+        for (unsigned char c : line.content) {
             const vrplayer::GlyphMetric* gm = vrplayer::FindGlyphMetric((uint32_t)c);
             if (gm->width > 0.0f && gm->height > 0.0f) {
                 float x0 = cursorX + gm->bearingX * charScale;
@@ -3336,12 +3503,23 @@ void UpdateSubtitleMesh(AppState& state, const char* text) {
                 float x1 = x0 + gm->width * charScale;
                 float y1 = y0 - gm->height * charScale;
 
+                // Determinar cor do vértice pelo span correspondente (T7.2)
+                float vColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+                const vrplayer::AssSpanFfi* span = vrplayer::FindSpanForByteOffset(
+                    spans, spanCount, static_cast<uint32_t>(charByteOffset));
+                if (span) {
+                    vColor[0] = static_cast<float>(span->r) / 255.0f;
+                    vColor[1] = static_cast<float>(span->g) / 255.0f;
+                    vColor[2] = static_cast<float>(span->b) / 255.0f;
+                    vColor[3] = static_cast<float>(span->a) / 255.0f;
+                }
+
                 uint32_t baseIdx = (uint32_t)vertices.size();
                 // 4 vértices
-                vertices.push_back({{x0, y0, 0.0f}, {gm->u0, gm->v0}, {1.0f, 1.0f, 1.0f, 1.0f}});
-                vertices.push_back({{x1, y0, 0.0f}, {gm->u1, gm->v0}, {1.0f, 1.0f, 1.0f, 1.0f}});
-                vertices.push_back({{x1, y1, 0.0f}, {gm->u1, gm->v1}, {1.0f, 1.0f, 1.0f, 1.0f}});
-                vertices.push_back({{x0, y1, 0.0f}, {gm->u0, gm->v1}, {1.0f, 1.0f, 1.0f, 1.0f}});
+                vertices.push_back({{x0, y0, 0.0f}, {gm->u0, gm->v0}, {vColor[0], vColor[1], vColor[2], vColor[3]}});
+                vertices.push_back({{x1, y0, 0.0f}, {gm->u1, gm->v0}, {vColor[0], vColor[1], vColor[2], vColor[3]}});
+                vertices.push_back({{x1, y1, 0.0f}, {gm->u1, gm->v1}, {vColor[0], vColor[1], vColor[2], vColor[3]}});
+                vertices.push_back({{x0, y1, 0.0f}, {gm->u0, gm->v1}, {vColor[0], vColor[1], vColor[2], vColor[3]}});
 
                 // 6 índices (dois triângulos)
                 indices.push_back(baseIdx + 0);
@@ -3352,6 +3530,7 @@ void UpdateSubtitleMesh(AppState& state, const char* text) {
                 indices.push_back(baseIdx + 0);
             }
             cursorX += gm->advance * charScale;
+            charByteOffset++;
         }
     }
 
@@ -3373,36 +3552,81 @@ void UpdateSubtitleMesh(AppState& state, const char* text) {
 }
 
 static void DrawSubtitles(AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
+    // 1. T7.4: Se houver legenda PGS ativa, renderiza via quad de textura RGBA e encerra
+    if (DrawPgsSubtitle(state, cmd, proj, view, headCenter)) {
+        if (!state.lastSubtitleText.empty()) {
+            state.subtitleIndexCount = 0;
+            state.lastSubtitleText.clear();
+        }
+        return;
+    }
+
     if (!state.subtitlePipeline) return;
 
-    char subTextBuf[1024];
-    uint32_t subLen = get_active_subtitle_text(subTextBuf, sizeof(subTextBuf));
+    // 2. Consulta se há legenda ASS ou texto simples (T7.2)
+    vrplayer::AssSubtitleInfo assInfo{};
+    char subTextBuf[2048];
+    vrplayer::AssSpanFfi assSpans[64];
+    bool hasAss = get_active_ass_info(&assInfo, subTextBuf, sizeof(subTextBuf), assSpans, 64);
 
-    if (subLen > 0) {
-        if (state.lastSubtitleText != subTextBuf) {
-            UpdateSubtitleMesh(state, subTextBuf);
+    if (hasAss) {
+        bool needsMeshUpdate = (state.lastSubtitleText != subTextBuf ||
+                                state.lastSubtitleStartMs != assInfo.start_ms);
+        if (needsMeshUpdate) {
+            UpdateSubtitleMesh(state, subTextBuf, assSpans, assInfo.span_count, assInfo.alignment);
             state.lastSubtitleText = subTextBuf;
+            state.lastSubtitleStartMs = assInfo.start_ms;
+            state.currentAssAlignment = assInfo.alignment;
+            state.currentAssHasPos = (assInfo.has_pos != 0);
+            state.currentAssPosX = assInfo.pos_x;
+            state.currentAssPosY = assInfo.pos_y;
+            state.currentAssPlayResX = assInfo.play_res_x;
+            state.currentAssPlayResY = assInfo.play_res_y;
         }
-    } else if (!state.lastSubtitleText.empty()) {
-        state.subtitleIndexCount = 0;
-        state.lastSubtitleText.clear();
+    } else {
+        // Fallback para texto simples (SRT / WebVTT)
+        uint32_t subLen = get_active_subtitle_text(subTextBuf, sizeof(subTextBuf));
+        if (subLen > 0) {
+            if (state.lastSubtitleText != subTextBuf) {
+                UpdateSubtitleMesh(state, subTextBuf, nullptr, 0, 2);
+                state.lastSubtitleText = subTextBuf;
+                state.lastSubtitleStartMs = 0;
+                state.currentAssAlignment = 2;
+                state.currentAssHasPos = false;
+            }
+        } else if (!state.lastSubtitleText.empty()) {
+            state.subtitleIndexCount = 0;
+            state.lastSubtitleText.clear();
+            state.lastSubtitleStartMs = 0;
+        }
     }
 
     if (state.subtitleIndexCount == 0) return;
 
     const bool sphereMode = IsSphereMode(state.screenMode);
 
+    // Calcular deslocamento do modelo baseado em ASS (\pos ou \an) ou centro inferior para SRT
+    float subXOffset = 0.0f;
+    float subYOffset = 0.0f;
+    vrplayer::AssSubtitleInfo currentInfo{};
+    currentInfo.alignment = state.currentAssAlignment;
+    currentInfo.has_pos = state.currentAssHasPos ? 1 : 0;
+    currentInfo.pos_x = state.currentAssPosX;
+    currentInfo.pos_y = state.currentAssPosY;
+    currentInfo.play_res_x = state.currentAssPlayResX;
+    currentInfo.play_res_y = state.currentAssPlayResY;
+    vrplayer::ComputeAssOffsets(currentInfo, state.screenScaleX, state.screenScaleY, sphereMode,
+                                subXOffset, subYOffset);
+
     Mat4 subModel;
     if (sphereMode) {
         // Modo esférico (360°/180°): Lazy Follow suave (~0.5s)
-        // Posicionado a 2.2m à frente e ligeiramente abaixo da linha de visão
-        Mat4 subTrans = Mat4Translation(headCenter.x, headCenter.y - 0.40f, headCenter.z - 2.2f);
+        Mat4 subTrans = Mat4Translation(headCenter.x + subXOffset, headCenter.y + subYOffset, headCenter.z - 2.2f);
         subModel = Mat4Multiply(subTrans, Mat4Scale(state.subtitleScale, state.subtitleScale, 1.0f));
     } else {
-        // Modo plano (2D, SBS, OU): posicionado na base da tela virtual
+        // Modo plano (2D, SBS, OU): posicionado relativo à tela virtual
         SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
-        float subYOffset = -state.screenScaleY * 0.42f;
-        Mat4 subTrans = Mat4Multiply(scene.screenModelNoScale, Mat4Translation(0.0f, subYOffset, 0.04f));
+        Mat4 subTrans = Mat4Multiply(scene.screenModelNoScale, Mat4Translation(subXOffset, subYOffset, 0.04f));
         subModel = Mat4Multiply(subTrans, Mat4Scale(state.subtitleScale, state.subtitleScale, 1.0f));
     }
 
@@ -5044,6 +5268,26 @@ void DestroyAppResources(AppState& state) {
         vkFreeMemory(state.vkDevice, state.subtitleVertexMemory, nullptr);
         state.subtitleVertexMemory = VK_NULL_HANDLE;
     }
+
+    // 5.1 Legendas PGS (Fase 0.3 T7.4)
+    if (state.pgsSubtitleDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.pgsSubtitleDescriptorPool, nullptr);
+        state.pgsSubtitleDescriptorPool = VK_NULL_HANDLE;
+        state.pgsSubtitleDescriptorSet = VK_NULL_HANDLE;
+    }
+    if (state.pgsSubtitleImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.pgsSubtitleImageView, nullptr);
+        state.pgsSubtitleImageView = VK_NULL_HANDLE;
+    }
+    if (state.pgsSubtitleImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.pgsSubtitleImage, nullptr);
+        state.pgsSubtitleImage = VK_NULL_HANDLE;
+    }
+    if (state.pgsSubtitleImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.pgsSubtitleImageMemory, nullptr);
+        state.pgsSubtitleImageMemory = VK_NULL_HANDLE;
+    }
+    state.pgsSubtitleReady = false;
 
     // 6. Pipelines estéreo e esfera 360/180
     if (state.stereoFlatPipeline != VK_NULL_HANDLE) {
