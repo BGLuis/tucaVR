@@ -6,8 +6,11 @@ import android.view.ViewGroup
 import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Toast
 import com.tucavr.R
 import com.tucavr.VRActivity
+import com.tucavr.codec.CodecCapabilityManager
+import com.tucavr.codec.CodecSupportStatus
 import com.tucavr.designsystem.VoidButton
 import com.tucavr.designsystem.VoidButtonStyle
 import com.tucavr.designsystem.VoidListRow
@@ -63,6 +66,7 @@ class FileDetailScreen(
         val source = dest.source
         var selectedAudioOrdinal = 0
         var selectedSubtitleOrdinal = -1
+        var loadedMetadata: MediaMetadata? = null
 
         val root = VoidPanelChrome.newRoot(context)
         root.addView(
@@ -117,6 +121,17 @@ class FileDetailScreen(
             setIcon(R.drawable.ic_play_arrow)
             textSize = 22f
             setOnClickListener {
+                val currentMeta = loadedMetadata
+                val videoTrack = currentMeta?.videoTracks?.firstOrNull()
+                if (videoTrack != null) {
+                    val validation = CodecCapabilityManager.validatePlaybackSupport(videoTrack.codec)
+                    if (!validation.isPlayable) {
+                        val msg = validation.errorMessageResId?.let { context.getString(it) }
+                            ?: context.getString(R.string.codec_hw_unsupported_error)
+                        Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                        return@setOnClickListener
+                    }
+                }
                 activity.nativeSetAudioTrack(selectedAudioOrdinal)
                 activity.nativeSetSubtitleTrack(selectedSubtitleOrdinal)
                 onPlay(source)
@@ -176,6 +191,7 @@ class FileDetailScreen(
                 )
                 return@launch
             }
+            loadedMetadata = metadata
 
             addRow(mediaSection, context.getString(R.string.file_detail_label_duration), formatDurationMs(metadata.durationMs))
             addRow(mediaSection, context.getString(R.string.file_detail_label_container), metadata.containerLong.ifEmpty { metadata.container })
@@ -186,7 +202,21 @@ class FileDetailScreen(
                 if (video.width > 0 && video.height > 0) {
                     addRow(mediaSection, context.getString(R.string.file_detail_label_resolution), "${video.width}×${video.height}")
                 }
-                addRow(mediaSection, context.getString(R.string.file_detail_label_video_codec), video.codec)
+                addRow(mediaSection, context.getString(R.string.file_detail_label_video_codec), video.codec.uppercase())
+
+                val status = CodecCapabilityManager.getStatus(video.codec)
+                val badgeText = when (status) {
+                    is CodecSupportStatus.Supported -> {
+                        val decName = status.decoder.codecName
+                        context.getString(R.string.codec_badge_hw) + " ($decName)"
+                    }
+                    is CodecSupportStatus.SoftwareOnly -> {
+                        val decName = status.decoder.codecName
+                        context.getString(R.string.codec_badge_sw) + " ($decName)"
+                    }
+                    is CodecSupportStatus.Unsupported -> context.getString(R.string.codec_badge_unsupported)
+                }
+                addRow(mediaSection, context.getString(R.string.file_detail_label_decoder), badgeText)
             }
             val modeResId = ScreenFormatCatalog.getLabelResId(metadata.format3dIndex)
             val modeName = context.getString(modeResId)
@@ -237,7 +267,9 @@ class FileDetailScreen(
         VoidListRow(context).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
                 .also { it.bottomMargin = VoidTheme.dpToPx(context, 8f) }
-            val title = context.getString(R.string.file_detail_track_video_format, track.ordinal + 1, track.codec)
+            val status = CodecCapabilityManager.getStatus(track.codec)
+            val hwBadge = if (status.isHardwareAccelerated) " [HW]" else ""
+            val title = context.getString(R.string.file_detail_track_video_format, track.ordinal + 1, "${track.codec.uppercase()}$hwBadge")
             val meta = if (track.width > 0 && track.height > 0) {
                 "${track.width}×${track.height}" + if (track.fpsMilli > 0) " @ ${"%.2f".format(track.fpsMilli / 1000f)} fps" else ""
             } else null

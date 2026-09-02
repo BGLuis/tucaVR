@@ -11,6 +11,8 @@ import android.widget.ScrollView
 import android.widget.TextView
 import com.tucavr.BuildConfig
 import com.tucavr.R
+import com.tucavr.codec.CodecCapabilityManager
+import com.tucavr.codec.CodecSupportStatus
 import com.tucavr.debug.DebugStatsParser
 import com.tucavr.filebrowser.MediaMetadata
 import com.tucavr.navigation.PlaybackSource
@@ -114,6 +116,7 @@ class DebugStatsModal(
             context.getString(R.string.debug_stats_section_video_render),
             listOf(
                 "resolution" to context.getString(R.string.debug_stats_label_resolution),
+                "decoder" to context.getString(R.string.debug_stats_label_video_decoder),
                 "fps" to context.getString(R.string.debug_stats_label_fps),
                 "dropped_frames" to context.getString(R.string.debug_stats_label_dropped_frames),
                 "stutter_freeze" to context.getString(R.string.debug_stats_label_stutter_freeze),
@@ -252,6 +255,18 @@ class DebugStatsModal(
             "—"
         }
         debugStatValueViews["resolution"]?.text = resText
+
+        val videoCodec = videoTrack?.codec
+        val decoderText = if (!videoCodec.isNullOrBlank()) {
+            when (val status = CodecCapabilityManager.getStatus(videoCodec)) {
+                is CodecSupportStatus.Supported -> "${status.decoder.codecName} [HW]"
+                is CodecSupportStatus.SoftwareOnly -> "${status.decoder.codecName} [SW]"
+                is CodecSupportStatus.Unsupported -> context.getString(R.string.codec_badge_unsupported)
+            }
+        } else {
+            "—"
+        }
+        debugStatValueViews["decoder"]?.text = decoderText
 
         debugStatValueViews["fps"]?.text = String.format(
             Locale.US, "%.1f dec / %.1f out (%.0f Hz)",

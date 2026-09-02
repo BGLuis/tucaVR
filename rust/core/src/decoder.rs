@@ -24,10 +24,10 @@ static SESSION_SETUP_LOCK: Mutex<()> = Mutex::new(());
 /// novo for adicionado num lugar so.
 pub fn mime_for_codec_id(id: ffmpeg_next::codec::Id) -> Result<(&'static str, bool), String> {
     match id {
-        ffmpeg_next::codec::Id::H264 => Ok(("video/avc", true)),
-        ffmpeg_next::codec::Id::HEVC => Ok(("video/hevc", true)),
-        ffmpeg_next::codec::Id::VP9 => Ok(("video/x-vnd.on2.vp9", false)),
-        ffmpeg_next::codec::Id::AV1 => Ok(("video/av01", false)),
+        ffmpeg_next::codec::Id::H264 => Ok((media_logic::codec::MIME_H264, true)),
+        ffmpeg_next::codec::Id::HEVC => Ok((media_logic::codec::MIME_HEVC, true)),
+        ffmpeg_next::codec::Id::VP9 => Ok((media_logic::codec::MIME_VP9, false)),
+        ffmpeg_next::codec::Id::AV1 => Ok((media_logic::codec::MIME_AV1, false)),
         other => Err(format!(
             "Unsupported video codec: {:?} (H.264/H.265/VP9/AV1 sao suportados)",
             other
@@ -51,7 +51,13 @@ unsafe impl Sync for HwDecoder {}
 impl HwDecoder {
     pub fn new(mime: &str) -> Result<Self, String> {
         let codec = MediaCodec::from_decoder_type(mime)
-            .ok_or_else(|| format!("Failed to create MediaCodec for mime: {}", mime))?;
+            .ok_or_else(|| {
+                if mime == media_logic::codec::MIME_AV1 || mime == media_logic::codec::MIME_VP9 {
+                    format!("O dispositivo não possui suporte de hardware para este codec ({})", mime)
+                } else {
+                    format!("Failed to create MediaCodec for mime: {}", mime)
+                }
+            })?;
         Ok(Self { codec: Some(codec), frames_output: Arc::new(AtomicU64::new(0)), frames_dropped: Arc::new(AtomicU64::new(0)) })
     }
 

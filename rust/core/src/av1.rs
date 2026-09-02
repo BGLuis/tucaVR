@@ -1,14 +1,5 @@
 // Parser do box `av1C` (AV1 Codec ISO Media File Format Binding), extradata
-// que o FFmpeg expoe em AVCodecParameters.extradata para streams AV1
-// extraidos de MP4/MKV/WebM. Cabecalho fixo de 4 bytes seguido de
-// `configOBUs` (Sequence Header OBU + Metadata OBUs opcionais) — ja em
-// framing OBU nativo (cada OBU carrega seu proprio tamanho), sem NAL/Annex-B
-// como em h264.rs/hevc.rs.
-pub fn extract_config_obus(extradata: &[u8]) -> Option<Vec<u8>> {
-    const FIXED_HEADER_LEN: usize = 4;
-    if extradata.len() <= FIXED_HEADER_LEN || (extradata[0] >> 7) != 1 {
-        return None;
-    }
-    let obus = &extradata[FIXED_HEADER_LEN..];
-    if obus.is_empty() { None } else { Some(obus.to_vec()) }
-}
+// que o FFmpeg expõe em AVCodecParameters.extradata para streams AV1
+// extraídos de MP4/MKV/WebM. Reexporta a implementação pura de `media_logic::av1`
+// para manter compatibilidade e permitir testes unitários no host via `cargo test -p media-logic`.
+pub use media_logic::av1::extract_config_obus;
