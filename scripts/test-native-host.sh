@@ -52,5 +52,15 @@ echo "-> Compilando test_subtitle_layout..."
 echo "-> Executando test_subtitle_layout..."
 "$BUILD_DIR/test_subtitle_layout"
 
-echo "=== Todos os 4 binários de teste C++ passaram com sucesso! ==="
+# 5. Testes de Hand Tracking, Gestos e Raycasting (XR_EXT_hand_tracking - Fase 0.3 Seção 5)
+echo "-> Compilando test_hand_tracking..."
+"$CXX" -std=c++20 -O2 -Wall -Wextra -Werror \
+    -I native/include \
+    native/tests/test_hand_tracking.cpp \
+    -o "$BUILD_DIR/test_hand_tracking"
+
+echo "-> Executando test_hand_tracking..."
+"$BUILD_DIR/test_hand_tracking"
+
+echo "=== Todos os 5 binários de teste C++ passaram com sucesso! ==="
 rm -rf "$BUILD_DIR"

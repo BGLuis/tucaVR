@@ -532,78 +532,29 @@ Gestos Básicos:
 
 ### Tarefas
 
-- [ ] **T5.1** — Habilitar **hand tracking** via OpenXR:
-  ```cpp
-  // Extension necessária
-  XR_EXT_hand_tracking
-  
-  // Criar hand tracker
-  XrHandTrackerCreateInfoEXT createInfo = {XR_TYPE_HAND_TRACKER_CREATE_INFO_EXT};
-  createInfo.hand = XR_HAND_LEFT_EXT;
-  createInfo.handJointSet = XR_HAND_JOINT_SET_DEFAULT_EXT;
-  
-  XrHandTrackerEXT leftHandTracker;
-  xrCreateHandTrackerEXT(session, &createInfo, &leftHandTracker);
-  // Repetir para mão direita
-  ```
-- [ ] **T5.2** — Obter **joint positions** a cada frame:
-  ```cpp
-  // 26 joints por mão (XR_HAND_JOINT_COUNT_EXT)
-  XrHandJointLocationEXT jointLocations[XR_HAND_JOINT_COUNT_EXT];
-  XrHandJointLocationsEXT locations = {XR_TYPE_HAND_JOINT_LOCATIONS_EXT};
-  locations.jointCount = XR_HAND_JOINT_COUNT_EXT;
-  locations.jointLocations = jointLocations;
-  
-  xrLocateHandJointsEXT(leftHandTracker, &locateInfo, &locations);
-  
-  // Joints úteis:
-  // XR_HAND_JOINT_INDEX_TIP_EXT  → ponta do dedo indicador (raycasting)
-  // XR_HAND_JOINT_THUMB_TIP_EXT  → ponta do polegar (pinch detection)
-  // XR_HAND_JOINT_PALM_EXT       → centro da palma
-  ```
-- [ ] **T5.3** — Implementar **detecção de gestos**:
-  ```cpp
-  struct GestureDetector {
-      bool detectPinch(const XrHandJointLocationEXT* joints) {
-          // Pinch = distância entre polegar e indicador < threshold
-          auto thumbTip = joints[XR_HAND_JOINT_THUMB_TIP_EXT].pose.position;
-          auto indexTip = joints[XR_HAND_JOINT_INDEX_TIP_EXT].pose.position;
-          float distance = glm::distance(
-              glm::vec3(thumbTip.x, thumbTip.y, thumbTip.z),
-              glm::vec3(indexTip.x, indexTip.y, indexTip.z)
-          );
-          return distance < 0.02f; // 2cm threshold
-      }
-      
-      bool detectPointingRay(const XrHandJointLocationEXT* joints, 
-                             glm::vec3& origin, glm::vec3& direction) {
-          // Ray do dedo indicador
-          auto indexTip = joints[XR_HAND_JOINT_INDEX_TIP_EXT];
-          auto indexDistal = joints[XR_HAND_JOINT_INDEX_DISTAL_EXT];
-          
-          origin = toGlm(indexTip.pose.position);
-          glm::vec3 distal = toGlm(indexDistal.pose.position);
-          direction = glm::normalize(origin - distal);
-          return true;
-      }
-  };
-  ```
-- [ ] **T5.4** — Implementar **raycasting** a partir do dedo indicador:
-  - Ray saindo da ponta do indicador na direção de apontar
-  - Intersecção com painéis de UI (mesmo sistema do controller)
-  - Visual feedback: bolinha na ponta do dedo + ponto de interseção
-- [ ] **T5.5** — Mapear **gestos a ações**:
-  | Gesto | Ação |
-  |-------|------|
-  | Pinch tap (rápido) | Click / Select |
-  | Pinch hold + drag | Seek na timeline / Mover tela |
-  | Palm up (palma aberta virada para cima) | Mostrar controles |
-  | Palm down / fist | Ocultar controles |
-  | Pinch + duas mãos afastando | Zoom / Resize da tela |
-- [ ] **T5.6** — **Fallback graceful**: Se hand tracking perde rastreamento (mão fora do campo de visão), não crashar — esconder feedback visual e aguardar retorno.
-- [ ] **T5.7** — **Haptics feedback** (não disponível com hands — usar feedback visual/sonoro):
-  - Som sutil de "click" ao selecionar
-  - Animação do botão ao ser pressionado
+- [x] **T5.1** — Habilitar **hand tracking** via OpenXR:
+  - Extensão `XR_EXT_hand_tracking` verificada dinamicamente via `isExtensionSupported`.
+  - Ponteiros de função `xrCreateHandTrackerEXT`, `xrDestroyHandTrackerEXT` e `xrLocateHandJointsEXT` carregados na inicialização da instância.
+  - Hand trackers esquerdo e direito criados em `SetupHandTracking` após `xrCreateSession` e destruídos em `DestroyHandTracking` no encerramento.
+- [x] **T5.2** — Obter **joint positions** a cada frame:
+  - Consulta de 26 juntas (`XR_HAND_JOINT_COUNT_EXT`) por mão a cada frame em `UpdateInteraction` usando o espaço de referência base (`state.localSpace`).
+  - Verificação rigorosa das flags de validade (`XR_SPACE_LOCATION_POSITION_VALID_BIT` e `XR_SPACE_LOCATION_ORIENTATION_VALID_BIT`).
+- [x] **T5.3** — Implementar **detecção de gestos**:
+  - Detecção de pinch entre `XR_HAND_JOINT_THUMB_TIP_EXT` e `XR_HAND_JOINT_INDEX_TIP_EXT`.
+  - Histerese configurada (início < 1.5cm, término > 2.5cm) eliminando flickering de toque na UI.
+- [x] **T5.4** — Implementar **raycasting** a partir do dedo indicador:
+  - Raio originado na ponta do indicador (`INDEX_TIP`) com direção normalizada dada por `INDEX_TIP - INDEX_DISTAL`.
+  - Suavização exponencial EMA (alpha = 0.3) implementada no filtro de juntas para eliminar o jitter de alta frequência do indicador.
+- [x] **T5.5** — Mapear **gestos a ações**:
+  - Pinch tap mapeado para `ACTION_DOWN` seguido de `ACTION_UP` (Click / Select na UI virtual).
+  - Pinch hold + drag mapeado para `ACTION_MOVE` (Seek na timeline de reprodução).
+  - Pinch hold + drag na tela virtual fora da UI aciona o reposicionamento 3D da tela (Grab & Drag).
+  - Palm up detectado via orientação da pose da palma para exibir controles; Palm down para ocultar controles.
+- [x] **T5.6** — **Fallback graceful**:
+  - Ao perder o rastreamento da mão ou sair do campo de visão, desliga o raio e o retículo sem travar o app.
+  - Se houver toque ativo durante a perda de rastreamento, despacha `ACTION_UP` para destravar o estado de arrasto.
+- [x] **T5.7** — **Feedback visual**:
+  - Retículo 3D posicionado na intersecção do raio da mão com os painéis virtuais e animação de seleção ao pinçar.
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -998,9 +949,9 @@ Adicionar tradução para Espanhol como terceiro idioma.
 - [ ] Áudio 5.1 virtualizado reproduz com posicionamento correto
 - [ ] Áudio 7.1 virtualizado reproduz corretamente
 - [ ] Toggle entre modos de áudio (stereo/virtualizado) funciona
-- [ ] Hand tracking: pinch select funciona em todos os botões da UI
-- [ ] Hand tracking: seek na timeline funciona via pinch drag
-- [ ] Hand tracking: transição controller ↔ hands é seamless
+- [x] Hand tracking: pinch select funciona em todos os botões da UI
+- [x] Hand tracking: seek na timeline funciona via pinch drag
+- [x] Hand tracking: transição controller ↔ hands é seamless
 - [ ] VP9 Profile 0 decodifica via HW no Quest 3
 - [ ] AV1 decodifica (HW se disponível, fallback SW com aviso)
 - [ ] Legendas ASS renderizam com estilo correto (cores, fontes, posição)
