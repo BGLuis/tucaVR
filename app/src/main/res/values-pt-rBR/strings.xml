@@ -352,6 +352,7 @@
     <string name="history_empty">(nenhum historico ainda)</string>
     <string name="history_row_http_format">%1$s</string>
     <string name="history_row_ftp_format">%1$s</string>
+    <string name="history_row_sftp_format">%1$s</string>
     <string name="history_row_meta_format">%1$s / %2$s · %3$d%%</string>
 
     <!-- Monitoramento termico (T14.1-T14.3) -->

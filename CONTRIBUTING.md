@@ -93,7 +93,7 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 
 Changing one without the others produces a silently wrong projection, not a compile error.
 
-**i18n.** UI strings live in `app/src/main/res/values/strings.xml` (English, default) and `app/src/main/res/values-pt-rBR/strings.xml` (Portuguese, mirroring the key order exactly so the two diff side by side). Interpolated strings use positional placeholders (`%1$s`, `%1$d`) through `getString(R.string.xxx, arg1, …)` — **never** Kotlin string concatenation, so that argument order can change per locale. See `docs/i18n.md`, including the section on adding a new locale.
+**i18n.** UI strings live in `app/src/main/res/values/strings.xml` (English, default), `app/src/main/res/values-pt-rBR/strings.xml` (Portuguese), and `app/src/main/res/values-es/strings.xml` (Spanish), mirroring the key order exactly so they diff side by side. Key and placeholder parity across all three locales is enforced by `app/src/test/java/com/tucavr/I18nParityTest.kt` (`./gradlew testDebugUnitTest`). Interpolated strings use positional placeholders (`%1$s`, `%1$d`) through `getString(R.string.xxx, arg1, …)` — **never** Kotlin string concatenation, so that argument order can change per locale. See `docs/i18n.md`, including the section on adding a new locale.
 
 **Credentials.** Server passwords go through `EncryptedSharedPreferences` (see `app/src/main/java/com/tucavr/network/`). Never store or log a credential in plain text, and make sure URIs are redacted before they reach a log line.
 
