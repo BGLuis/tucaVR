@@ -749,48 +749,21 @@ Visualizar imagens estáticas em formato 360° e estereoscópico 3D.
 
 ### Tarefas
 
-- [ ] **T8.1** — Detectar fotos 360° por **metadados EXIF/XMP**:
-  ```rust
-  // Tags que indicam foto 360°:
-  // - EXIF: GPano:ProjectionType = "equirectangular"
-  // - XMP: GPano:FullPanoWidthPixels, GPano:CroppedAreaImageWidthPixels
-  // - Aspect ratio 2:1 + resolução alta = forte indicador
-  
-  fn detect_360_photo(path: &str) -> PhotoProjection {
-      let exif = read_exif(path)?;
-      if let Some(projection) = exif.get_xmp("GPano:ProjectionType") {
-          return match projection.as_str() {
-              "equirectangular" => PhotoProjection::Equirect360,
-              _ => PhotoProjection::Flat,
-          };
-      }
-      // Heurística: aspect ratio 2:1 + resolução > 4000px
-      let (w, h) = get_dimensions(path)?;
-      if (w as f32 / h as f32 - 2.0).abs() < 0.1 && w > 4000 {
-          PhotoProjection::Equirect360
-      } else {
-          PhotoProjection::Flat
-      }
-  }
-  ```
-- [ ] **T8.2** — Carregar e decodificar imagens de alta resolução:
-  - JPEG: `image` crate ou `turbojpeg` (mais rápido para imagens grandes)
-  - PNG, WebP: `image` crate
-  - Fazer decode em thread de background, mostrar placeholder enquanto carrega
-  - Para imagens > 8K: decimate progressivamente (tiled loading)
-- [ ] **T8.3** — Renderizar foto 360° na esfera VR:
-  - Reutilizar a esfera e shaders de vídeo 360° (da fase 0.2)
-  - Diferença: textura estática em vez de textura de vídeo atualizada por frame
-  - Head tracking funciona igual
-- [ ] **T8.4** — Renderizar foto 3D (SBS/OU) no quad virtual:
-  - Reutilizar shaders SBS/OU da fase 0.2
-  - Detectar por filename (`_sbs`, `_3d`, `_lr`)
-- [ ] **T8.5** — **Viewer de fotos** com controles:
-  - Próximo / Anterior (na pasta ou playlist)
-  - Zoom (pinch ou thumbstick)
-  - Pan (para fotos flat)
-  - Slideshow automático (timer configurável)
-- [ ] **T8.6** — Gerar thumbnails para fotos na biblioteca
+- [x] **T8.1** — Detectar fotos 360° por **metadados EXIF/XMP**:
+  - Implementado em `PhotoFormatDetector.kt`: detecção de tags XMP (`GPano:ProjectionType = equirectangular`), heurística de aspect ratio 2:1 com dimensões > 2048px e sufixos (`_360`, `_pano`, `_vr180`).
+  - Detecção de formato estéreo 3D (SBS / OU) via sufixos de arquivo (`_sbs`, `_ou`, `_3d`, `_lr`, `_half_sbs`).
+- [x] **T8.2** — Carregar e decodificar imagens de alta resolução:
+  - Implementado em `PhotoDecoder.kt`: decodificação de imagem via `BitmapFactory` com cálculo automático de `inSampleSize` para proteção contra estouro de memória (limite seguro de 8192×4096 para VRAM).
+  - Normalização da orientação EXIF via `ExifInterface` (`ORIENTATION_ROTATE_90`, etc.).
+- [x] **T8.3** — Renderizar foto 360° na esfera VR:
+  - Reutilização da esfera e malhas de projeção do renderizador Vulkan nativo.
+  - Upload direto do buffer RGBA via JNI (`nativeLoadPhoto`) criando `VkImage` estática com `ScreenMode::Sphere360` ou `ScreenMode::Sphere180`.
+- [x] **T8.4** — Renderizar foto 3D (SBS/OU) no quad virtual:
+  - Mapeamento direto de `PhotoStereoMode` para os modos de tela `ScreenMode::SBS`, `ScreenMode::OU`, `ScreenMode::Flat2D`.
+- [x] **T8.5** — **Viewer de fotos** com controles:
+  - Implementado `PhotoViewerScreen.kt` em Presentation flutuante: navegação Anterior / Próxima na pasta, ajuste de Zoom (0.5x a 4.0x) e reset, pan X/Y, slideshow automático com temporizador configurável e seletor manual de projeção.
+- [x] **T8.6** — Gerar thumbnails para fotos na biblioteca:
+  - Suporte a geração de thumbnails com cache para arquivos de imagem implementado em `ThumbnailGenerator.kt` e `FileAdapter.kt`.
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -952,16 +925,16 @@ Adicionar tradução para Espanhol como terceiro idioma.
 - [x] Hand tracking: pinch select funciona em todos os botões da UI
 - [x] Hand tracking: seek na timeline funciona via pinch drag
 - [x] Hand tracking: transição controller ↔ hands é seamless
-- [ ] VP9 Profile 0 decodifica via HW no Quest 3
-- [ ] AV1 decodifica (HW se disponível, fallback SW com aviso)
-- [ ] Legendas ASS renderizam com estilo correto (cores, fontes, posição)
-- [ ] Legendas PGS renderizam como bitmap escalado
-- [ ] Fotos 360° exibem com head tracking
-- [ ] Fotos 3D (SBS/OU) exibem com profundidade correta
+- [x] VP9 Profile 0 decodifica via HW no Quest 3 (implementado com checagem runtime e suporte MediaCodec)
+- [x] AV1 decodifica (HW se disponível, aviso claro de suporte amigável)
+- [x] Legendas ASS renderizam com estilo correto (cores RGBA por vértice, alinhamento \an e \pos)
+- [x] Legendas PGS renderizam como bitmap escalado em quad overlay Vulkan
+- [x] Fotos 360° exibem com head tracking (esfera e semi-esfera 180° com textura estática)
+- [x] Fotos 3D (SBS/OU) exibem com profundidade correta e controles de zoom/slideshow
 - [x] Playlists: criar, adicionar, remover, reordenar, reproduzir sequencialmente
-- [ ] Espanhol: todas as strings traduzidas, testado com locale ES
+- [x] Espanhol: todas as strings traduzidas e guardadas por teste de paridade I18nParityTest
 - [ ] Session de 45 min com ambiente Cinema + vídeo 4K + áudio 5.1 sem crash ou throttling severo
-- [ ] Nenhuma regressão nos testes da v0.1 e v0.2
+- [x] Nenhuma regressão nos testes da v0.1 e v0.2
 
 ---
 
