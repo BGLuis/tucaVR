@@ -438,4 +438,30 @@
     <string name="codec_badge_sw">Apenas SW</string>
     <string name="codec_badge_unsupported">Não suportado</string>
 
+    <!-- Playlists (Fase 0.3 Seção 9) -->
+    <string name="home_btn_playlists"> Playlists</string>
+    <string name="playlists_title">Playlists</string>
+    <string name="playlists_new">Nova Playlist</string>
+    <string name="playlists_empty">Nenhuma playlist criada</string>
+    <string name="playlists_create_dialog_title">Criar Playlist</string>
+    <string name="playlists_name_hint">Nome da playlist</string>
+    <string name="playlists_create_btn">Criar</string>
+    <string name="playlists_cancel_btn">Cancelar</string>
+    <string name="playlists_delete">Excluir Playlist</string>
+    <string name="playlists_delete_confirm">Tem certeza de que deseja excluir esta playlist?</string>
+    <string name="playlists_play_all">Reproduzir Tudo</string>
+    <string name="playlists_item_count_singular">%1$d vídeo</string>
+    <string name="playlists_item_count_plural">%1$d vídeos</string>
+    <string name="playlists_add_to_playlist">Adicionar à Playlist</string>
+    <string name="playlists_added_success">Adicionado à playlist %1$s</string>
+    <string name="playlists_select_playlist">Selecione uma Playlist</string>
+    <string name="playlists_detail_empty">Esta playlist está vazia</string>
+    <string name="playlists_mode_normal">Normal</string>
+    <string name="playlists_mode_repeat_all">Repetir Tudo</string>
+    <string name="playlists_mode_repeat_one">Repetir Uma</string>
+    <string name="playlists_mode_shuffle">Aleatório</string>
+    <string name="playlists_queue_title">Fila de Reprodução</string>
+    <string name="playlists_item_unavailable">Item %1$s indisponível</string>
+    <string name="player_btn_playlist">Playlist</string>
+
 </resources>

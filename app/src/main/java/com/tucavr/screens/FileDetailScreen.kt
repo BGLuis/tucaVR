@@ -27,8 +27,22 @@ import com.tucavr.filebrowser.TrackInfo
 import com.tucavr.history.formatDurationMs
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.view.Gravity
+import android.widget.FrameLayout
+import com.tucavr.designsystem.VoidFieldAction
+import com.tucavr.designsystem.VoidTextField
+import com.tucavr.history.AppDatabase
+import com.tucavr.playlist.Playlist
+import com.tucavr.playlist.PlaylistItem
+import com.tucavr.playlist.sourceTypeString
+import com.tucavr.playlist.toPlaylistItemUri
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.util.UUID
 
 // Tags do container repassadas pelo Rust (whitelist em rust/core/src/metadata.rs)
 // mapeadas pra rotulos localizados -- nao exibimos as chaves cruas do FFmpeg.
@@ -116,10 +130,20 @@ class FileDetailScreen(
         content.addView(tracksSectionTitle)
         content.addView(tracksSection)
 
+        var detectedDurationMs = 0L
+
+        val bottomActions = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).apply { topMargin = VoidTheme.dpToPx(context, 20f) }
+        }
+
         val btnPlay = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
             text = context.getString(R.string.file_detail_btn_play).trim()
             setIcon(R.drawable.ic_play_arrow)
-            textSize = 22f
+            textSize = 20f
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
             setOnClickListener {
                 val currentMeta = loadedMetadata
                 val videoTrack = currentMeta?.videoTracks?.firstOrNull()
@@ -137,9 +161,22 @@ class FileDetailScreen(
                 onPlay(source)
             }
         }
-        root.addView(btnPlay, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = VoidTheme.dpToPx(context, 20f) })
+
+        val btnAddToPlaylist = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+            text = context.getString(R.string.playlists_add_to_playlist).trim()
+            setIcon(R.drawable.ic_view_list)
+            textSize = 18f
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            ).also { it.marginStart = VoidTheme.dpToPx(context, 12f) }
+            setOnClickListener {
+                showAddToPlaylistDialog(dest, detectedDurationMs)
+            }
+        }
+
+        bottomActions.addView(btnPlay)
+        bottomActions.addView(btnAddToPlaylist)
+        root.addView(bottomActions)
 
         host.showScreen(root)
 
@@ -192,6 +229,7 @@ class FileDetailScreen(
                 return@launch
             }
             loadedMetadata = metadata
+            detectedDurationMs = metadata.durationMs
 
             addRow(mediaSection, context.getString(R.string.file_detail_label_duration), formatDurationMs(metadata.durationMs))
             addRow(mediaSection, context.getString(R.string.file_detail_label_container), metadata.containerLong.ifEmpty { metadata.container })
@@ -331,5 +369,231 @@ class FileDetailScreen(
     private fun formatBitrate(bitsPerSecond: Long): String {
         val mbps = bitsPerSecond / 1_000_000.0
         return context.getString(R.string.file_detail_value_bitrate_format, mbps)
+    }
+
+    private fun showAddToPlaylistDialog(dest: Destination.FileDetail, durationMs: Long) {
+        val playlistDao = AppDatabase.getInstance(context).playlistDao()
+        val overlay = FrameLayout(context).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(Color.argb(190, 0, 0, 0))
+            isClickable = true
+        }
+
+        val dialogCard = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            val w = VoidTheme.dpToPx(context, 540f)
+            layoutParams = FrameLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER)
+            background = GradientDrawable().apply {
+                setColor(VoidTheme.colorSurface)
+                cornerRadius = VoidTheme.dp(context, 16f)
+                setStroke(VoidTheme.dpToPx(context, VoidTheme.borderWidthDp), VoidTheme.colorBorder)
+            }
+            val pad = VoidTheme.dpToPx(context, 24f)
+            setPadding(pad, pad, pad, pad)
+            isClickable = true
+        }
+
+        val titleView = VoidText.title(context, context.getString(R.string.playlists_add_to_playlist), sizeSp = 22f)
+        dialogCard.addView(titleView)
+
+        val playlistsContainer = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).also { it.topMargin = VoidTheme.dpToPx(context, 16f) }
+        }
+
+        val scroller = ScrollView(context).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                VoidTheme.dpToPx(context, 240f)
+            )
+            addView(playlistsContainer)
+        }
+        dialogCard.addView(scroller)
+
+        val btnNewPlaylist = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+            text = "+ " + context.getString(R.string.playlists_new).trim()
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).also { it.topMargin = VoidTheme.dpToPx(context, 12f) }
+            setOnClickListener {
+                host.hideOverlay(overlay)
+                showCreateAndAddDialog(dest, durationMs)
+            }
+        }
+        dialogCard.addView(btnNewPlaylist)
+
+        val btnCancel = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+            text = context.getString(R.string.playlists_cancel_btn)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).also { it.topMargin = VoidTheme.dpToPx(context, 12f) }
+            setOnClickListener { host.hideOverlay(overlay) }
+        }
+        dialogCard.addView(btnCancel)
+
+        overlay.addView(dialogCard)
+        host.showOverlay(overlay)
+
+        scope.launch {
+            val playlists = withContext(Dispatchers.IO) {
+                playlistDao.getAllPlaylists()
+            }
+            playlistsContainer.removeAllViews()
+            if (playlists.isEmpty()) {
+                val emptyMsg = VoidText.body(
+                    context,
+                    context.getString(R.string.playlists_empty),
+                    sizeSp = 16f,
+                    secondary = true
+                ).apply {
+                    setPadding(0, VoidTheme.dpToPx(context, 24f), 0, VoidTheme.dpToPx(context, 24f))
+                    gravity = Gravity.CENTER
+                }
+                playlistsContainer.addView(emptyMsg)
+            } else {
+                playlists.forEach { pl ->
+                    val row = VoidListRow(context).apply {
+                        layoutParams = LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT
+                        ).also { it.bottomMargin = VoidTheme.dpToPx(context, 6f) }
+                        val metaText = if (pl.itemCount == 1) {
+                            context.getString(R.string.playlists_item_count_singular, pl.itemCount)
+                        } else {
+                            context.getString(R.string.playlists_item_count_plural, pl.itemCount)
+                        }
+                        bind(
+                            title = pl.name,
+                            meta = metaText,
+                            showThumbnailSlot = false,
+                            iconResId = R.drawable.ic_view_list
+                        )
+                        setOnClickListener {
+                            host.hideOverlay(overlay)
+                            addItemToPlaylist(pl, dest, durationMs)
+                        }
+                    }
+                    playlistsContainer.addView(row)
+                }
+            }
+        }
+    }
+
+    private fun showCreateAndAddDialog(dest: Destination.FileDetail, durationMs: Long) {
+        val overlay = FrameLayout(context).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(Color.argb(190, 0, 0, 0))
+            isClickable = true
+        }
+
+        val dialogCard = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            val w = VoidTheme.dpToPx(context, 500f)
+            layoutParams = FrameLayout.LayoutParams(w, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.CENTER)
+            background = GradientDrawable().apply {
+                setColor(VoidTheme.colorSurface)
+                cornerRadius = VoidTheme.dp(context, 16f)
+                setStroke(VoidTheme.dpToPx(context, VoidTheme.borderWidthDp), VoidTheme.colorBorder)
+            }
+            val pad = VoidTheme.dpToPx(context, 24f)
+            setPadding(pad, pad, pad, pad)
+            isClickable = true
+        }
+
+        val titleView = VoidText.title(context, context.getString(R.string.playlists_create_dialog_title), sizeSp = 22f)
+        dialogCard.addView(titleView)
+
+        val inputField = VoidTextField(
+            context = context,
+            host = host,
+            hint = context.getString(R.string.playlists_name_hint),
+            label = context.getString(R.string.playlists_name_hint),
+            actions = setOf(VoidFieldAction.CLEAR, VoidFieldAction.PASTE)
+        ).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).also {
+                it.topMargin = VoidTheme.dpToPx(context, 16f)
+                it.bottomMargin = VoidTheme.dpToPx(context, 24f)
+            }
+        }
+        dialogCard.addView(inputField)
+
+        val buttonsRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        val btnCancel = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+            text = context.getString(R.string.playlists_cancel_btn)
+            setOnClickListener { host.hideOverlay(overlay) }
+        }
+
+        val btnCreate = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+            text = context.getString(R.string.playlists_create_btn)
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+            ).also { it.marginStart = VoidTheme.dpToPx(context, 12f) }
+            setOnClickListener {
+                val name = inputField.getText().trim()
+                if (name.isNotEmpty()) {
+                    host.hideOverlay(overlay)
+                    scope.launch {
+                        val newPlaylist = Playlist(
+                            id = UUID.randomUUID().toString(),
+                            name = name,
+                            createdAt = System.currentTimeMillis(),
+                            itemCount = 0
+                        )
+                        withContext(Dispatchers.IO) {
+                            AppDatabase.getInstance(context).playlistDao().insertPlaylist(newPlaylist)
+                        }
+                        addItemToPlaylist(newPlaylist, dest, durationMs)
+                    }
+                }
+            }
+        }
+
+        buttonsRow.addView(btnCancel)
+        buttonsRow.addView(btnCreate)
+        dialogCard.addView(buttonsRow)
+
+        overlay.addView(dialogCard)
+        host.showOverlay(overlay)
+        inputField.editText.requestFocus()
+    }
+
+    private fun addItemToPlaylist(playlist: Playlist, dest: Destination.FileDetail, durationMs: Long) {
+        scope.launch {
+            val item = PlaylistItem(
+                id = UUID.randomUUID().toString(),
+                playlistId = playlist.id,
+                mediaUri = dest.source.toPlaylistItemUri(),
+                title = dest.displayName,
+                durationMs = durationMs,
+                position = playlist.itemCount,
+                sourceType = dest.source.sourceTypeString()
+            )
+            withContext(Dispatchers.IO) {
+                AppDatabase.getInstance(context).playlistDao().addItemToPlaylist(item)
+            }
+        }
     }
 }

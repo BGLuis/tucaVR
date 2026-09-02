@@ -90,6 +90,12 @@ sealed class Destination {
     /** Reproduzindo [source]. */
     data class Player(val source: PlaybackSource) : Destination()
 
+    /** T9.2: listagem de playlists criadas pelo usuário. */
+    object Playlists : Destination()
+
+    /** T9.2: detalhes da playlist [playlistId] com lista de itens e reordenação. */
+    data class PlaylistDetail(val playlistId: String) : Destination()
+
     /** Fase 0.4 T5: toggles de feature flags (Foveated Rendering, e futuros). */
     object Settings : Destination()
 }

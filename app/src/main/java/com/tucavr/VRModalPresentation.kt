@@ -279,6 +279,19 @@ class VRModalPresentation(
         showModal(modal)
     }
 
+    /**
+     * Prepara e exibe o modal de fila de reprodução e playlists ([PlaylistModal]).
+     */
+    fun showPlaylistModal(queueManager: com.tucavr.playlist.PlaylistQueueManager, onPlayIndex: (Int) -> Unit) {
+        val modal = com.tucavr.designsystem.PlaylistModal(
+            context = context,
+            queueManager = queueManager,
+            onPlayIndex = onPlayIndex,
+            onDismiss = { dismissModal() }
+        )
+        showModal(modal)
+    }
+
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         scope.cancel()

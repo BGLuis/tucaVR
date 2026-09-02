@@ -877,7 +877,7 @@ Permitir ao usuário criar listas de reprodução organizadas.
 
 ### Tarefas
 
-- [ ] **T9.1** — Criar tabela Room para playlists:
+- [x] **T9.1** — Criar tabela Room para playlists:
   ```kotlin
   @Entity
   data class Playlist(
@@ -906,20 +906,20 @@ Permitir ao usuário criar listas de reprodução organizadas.
       val sourceType: SourceType,
   )
   ```
-- [ ] **T9.2** — CRUD de playlists na UI:
+- [x] **T9.2** — CRUD de playlists na UI:
   - Criar playlist (nome)
   - Adicionar mídia a uma playlist (long press no file browser → "Adicionar a playlist")
   - Remover itens
   - Reordenar itens (drag and drop — simplificado: botões ↑↓)
   - Renomear / excluir playlist
-- [ ] **T9.3** — **Reprodução sequencial**:
+- [x] **T9.3** — **Reprodução sequencial**:
   - Ao terminar um item, iniciar o próximo automaticamente
   - Opções: repeat all, repeat one, shuffle
-- [ ] **T9.4** — UI de playlist durante reprodução:
+- [x] **T9.4** — UI de playlist durante reprodução:
   - Painel lateral com lista de itens
   - Highlight do item atual
   - Click para pular para item
-- [ ] **T9.5** — Playlist especial **"Continuar Assistindo"** (automática):
+- [x] **T9.5** — Playlist especial **"Continuar Assistindo"** (automática):
   - Itens com reprodução parcial (não completados)
   - Ordenados por `lastPlayedAt` decrescente
 
@@ -1025,7 +1025,7 @@ Adicionar tradução para Espanhol como terceiro idioma.
 - [ ] Legendas PGS renderizam como bitmap escalado
 - [ ] Fotos 360° exibem com head tracking
 - [ ] Fotos 3D (SBS/OU) exibem com profundidade correta
-- [ ] Playlists: criar, adicionar, remover, reordenar, reproduzir sequencialmente
+- [x] Playlists: criar, adicionar, remover, reordenar, reproduzir sequencialmente
 - [ ] Espanhol: todas as strings traduzidas, testado com locale ES
 - [ ] Session de 45 min com ambiente Cinema + vídeo 4K + áudio 5.1 sem crash ou throttling severo
 - [ ] Nenhuma regressão nos testes da v0.1 e v0.2

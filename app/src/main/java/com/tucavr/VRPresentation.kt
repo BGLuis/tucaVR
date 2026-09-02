@@ -27,6 +27,9 @@ import com.tucavr.screens.NetworkNfsScreen
 import com.tucavr.screens.NetworkSftpScreen
 import com.tucavr.screens.NetworkSmbScreen
 import com.tucavr.screens.PlayerScreen
+import com.tucavr.playlist.PlaylistDao
+import com.tucavr.screens.PlaylistsScreen
+import com.tucavr.screens.PlaylistDetailScreen
 import com.tucavr.screens.ResumePromptScreen
 import com.tucavr.screens.ScreenHost
 import com.tucavr.screens.SettingsScreen
@@ -146,8 +149,11 @@ class VRPresentation(
     private lateinit var playerScreen: PlayerScreen
     private lateinit var resumePromptScreen: ResumePromptScreen
     private lateinit var settingsScreen: SettingsScreen
+    private lateinit var playlistsScreen: PlaylistsScreen
+    private lateinit var playlistDetailScreen: PlaylistDetailScreen
     private lateinit var multicastLockManager: com.tucavr.network.MulticastLockManager
     private lateinit var savedServerDao: com.tucavr.network.SavedServerDao
+    private lateinit var playlistDao: PlaylistDao
 
     // ---- Ciclo de vida ----
 
@@ -156,6 +162,7 @@ class VRPresentation(
 
         val db          = com.tucavr.history.AppDatabase.getInstance(activity)
         savedServerDao  = db.savedServerDao()
+        playlistDao     = db.playlistDao()
         multicastLockManager = com.tucavr.network.MulticastLockManager(activity)
         smbCredentials  = SmbCredentialStore(activity)
         ftpCredentials  = FtpCredentialStore(activity)
@@ -338,6 +345,26 @@ class VRPresentation(
             host     = host,
             onBack   = { handleBack() }
         )
+
+        playlistsScreen = PlaylistsScreen(
+            context     = context,
+            host        = host,
+            scope       = scope,
+            playlistDao = playlistDao,
+            onNavigate  = { dest -> navigateTo(dest) },
+            onBack      = { handleBack() }
+        )
+
+        playlistDetailScreen = PlaylistDetailScreen(
+            context        = context,
+            host           = host,
+            scope          = scope,
+            playlistDao    = playlistDao,
+            onPlayPlaylist = { playlist, items, startIndex ->
+                activity.startPlaylist(playlist, items, startIndex)
+            },
+            onBack         = { handleBack() }
+        )
     }
 
     // ---- Máquina de telas ----
@@ -354,9 +381,15 @@ class VRPresentation(
             is Destination.NetworkFtpFiles  -> networkFtpScreen.renderFiles(destination.server)
             is Destination.NetworkSftpFiles -> networkSftpScreen.renderFiles(destination.server)
             is Destination.ContinueWatching -> continueWatchingScreen.render()
+            is Destination.Playlists        -> playlistsScreen.render()
+            is Destination.PlaylistDetail   -> playlistDetailScreen.render(destination.playlistId)
             is Destination.Player           -> playerScreen.render(destination.source)
             is Destination.Settings         -> settingsScreen.render()
         }
+    }
+
+    fun onNavigateToPlayer(source: PlaybackSource) {
+        navigateTo(Destination.Player(source))
     }
 
     private fun navigateTo(destination: Destination) {

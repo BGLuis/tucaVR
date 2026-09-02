@@ -35,11 +35,19 @@ import com.tucavr.history.PlaybackHistoryTracker
 import com.tucavr.history.historyKey
 import com.tucavr.navigation.PlaybackSource
 import com.tucavr.network.Format3DPreferenceStore
+import com.tucavr.network.FtpCredentialStore
 import com.tucavr.network.LegacyCredentialMigrator
 import com.tucavr.network.ServerCredentialStore
+import com.tucavr.network.SftpCredentialStore
+import com.tucavr.network.SmbCredentialStore
+import com.tucavr.playlist.Playlist
+import com.tucavr.playlist.PlaylistItem
+import com.tucavr.playlist.PlaylistQueueManager
+import com.tucavr.playlist.toPlaybackSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class VRActivity : NativeActivity() {
     private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
@@ -108,6 +116,7 @@ class VRActivity : NativeActivity() {
     // Activity ja existe (primeiro uso real e dentro de playFile/playUrl/
     // playSmb, chamados via VRPresentation apos onCreate).
     val historyTracker: PlaybackHistoryTracker by lazy { PlaybackHistoryTracker(this) }
+    val playlistQueueManager: PlaylistQueueManager by lazy { PlaylistQueueManager() }
     val format3dStore: Format3DPreferenceStore by lazy { Format3DPreferenceStore(this) }
     val upscalingStore: UpscalingModeStore by lazy { UpscalingModeStore(this) }
     val thermalMonitor: ThermalMonitor by lazy { ThermalMonitor(this) }
@@ -302,6 +311,10 @@ class VRActivity : NativeActivity() {
                 AppDatabase.getInstance(this@VRActivity).savedServerDao(),
                 ServerCredentialStore(this@VRActivity)
             ).migrateIfNeeded()
+        }
+
+        playlistQueueManager.onPlayItemRequested = { item ->
+            playPlaylistItem(item)
         }
 
         // Ver bloco de comentario acima de `nativeKeyboardProxy`.
@@ -780,6 +793,7 @@ class VRActivity : NativeActivity() {
                 // do tracker (throttle/`current`) single-threaded, evitando
                 // uma corrida de dados sem precisar de sincronizacao extra.
                 activity.historyTracker.onProgress(currentSec, totalSec)
+                activity.playlistQueueManager.onPlaybackProgress(currentSec, totalSec)
             }
         }
 
@@ -1120,6 +1134,63 @@ class VRActivity : NativeActivity() {
         runOnUiThread {
             nativeShowModalPanel()
             modalPresentation?.showResumePromptModal(entry, onResume, onRestart)
+        }
+    }
+
+    /**
+     * Exibe o modal de fila de reprodução / playlist no 3º Quad frontal (VRModalPresentation).
+     */
+    fun openPlaylistModal() {
+        runOnUiThread {
+            nativeShowModalPanel()
+            modalPresentation?.showPlaylistModal(playlistQueueManager) { index ->
+                playlistQueueManager.skipTo(index)
+            }
+        }
+    }
+
+    /**
+     * Inicia a reprodução sequencial de uma playlist.
+     */
+    fun startPlaylist(
+        playlist: Playlist,
+        items: List<PlaylistItem>,
+        startIndex: Int = 0
+    ) {
+        playlistQueueManager.startPlaylist(playlist, items, startIndex)
+    }
+
+    /**
+     * Toca um item da playlist na sessão OpenXR / Rust.
+     */
+    fun playPlaylistItem(item: PlaylistItem) {
+        CoroutineScope(Dispatchers.Main).launch {
+            val smbStore = SmbCredentialStore(this@VRActivity)
+            val ftpStore = FtpCredentialStore(this@VRActivity)
+            val sftpStore = SftpCredentialStore(this@VRActivity)
+            val savedServerDao = AppDatabase.getInstance(this@VRActivity).savedServerDao()
+            val source = withContext(Dispatchers.IO) {
+                item.toPlaybackSource(smbStore, ftpStore, sftpStore, savedServerDao)
+            }
+            if (source == null) {
+                // Item indisponível (servidor offline / desconhecido). Pular para o próximo sem crashar.
+                runOnUiThread {
+                    Toast.makeText(this@VRActivity, getString(R.string.playlists_item_unavailable, item.title), Toast.LENGTH_SHORT).show()
+                    playlistQueueManager.playNext()
+                }
+                return@launch
+            }
+
+            when (source) {
+                is PlaybackSource.LocalFile -> playFile(source.path, source.sizeBytes)
+                is PlaybackSource.Http      -> playUrl(source.url)
+                is PlaybackSource.Smb       -> playSmb(source.server, source.path, source.sizeBytes)
+                is PlaybackSource.Nfs       -> playNfs(source.server, source.path, source.sizeBytes)
+                is PlaybackSource.Dlna      -> playDlna(source.server, source.title, source.url, source.sizeBytes)
+                is PlaybackSource.Ftp       -> playFtp(source.server, source.path, source.sizeBytes)
+                is PlaybackSource.Sftp      -> playSftp(source.server, source.path, source.sizeBytes)
+            }
+            presentation?.onNavigateToPlayer(source)
         }
     }
 
