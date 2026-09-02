@@ -471,4 +471,25 @@
     <string name="playlists_item_unavailable">El elemento %1$s no está disponible</string>
     <string name="player_btn_playlist">Lista de reproducción</string>
 
+    <!-- Fotos 360° e 3D (Fase 0.3 Seção 8) -->
+    <string name="photo_viewer_title">Fotos</string>
+    <string name="photo_viewer_prev">Anterior</string>
+    <string name="photo_viewer_next">Siguiente</string>
+    <string name="photo_viewer_zoom_in">Zoom +</string>
+    <string name="photo_viewer_zoom_out">Zoom -</string>
+    <string name="photo_viewer_zoom_reset">1.0x</string>
+    <string name="photo_viewer_slideshow_start">Iniciar presentación</string>
+    <string name="photo_viewer_slideshow_stop">Pausar presentación</string>
+    <string name="photo_viewer_slideshow_interval_format">%1$ds</string>
+    <string name="photo_viewer_index_format">%1$d de %2$d</string>
+    <string name="photo_viewer_projection_flat">Plana 2D</string>
+    <string name="photo_viewer_projection_360">Esfera 360°</string>
+    <string name="photo_viewer_projection_180">RV 180°</string>
+    <string name="photo_viewer_stereo_mono">Mono</string>
+    <string name="photo_viewer_stereo_sbs">3D SBS</string>
+    <string name="photo_viewer_stereo_ou">3D OU</string>
+    <string name="photo_viewer_dimensions_format">%1$d × %2$d</string>
+    <string name="photo_viewer_loading">Cargando foto…</string>
+    <string name="photo_viewer_error">No se pudo cargar la foto</string>
+
 </resources>
