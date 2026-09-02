@@ -232,6 +232,60 @@ extern std::atomic<bool> g_modalPanelActive;
 extern std::atomic<bool> g_modalPanelShowRequested;
 extern std::atomic<bool> g_modalPanelHideRequested;
 
+// Fase 0.3 Seção 8: Fotos 360° e 3D estéreo (T8.3, T8.4)
+extern std::atomic<bool> g_photoDirty;
+extern std::atomic<bool> g_photoActive;
+extern std::vector<uint8_t> g_photoRgba;
+extern uint32_t g_photoWidth;
+extern uint32_t g_photoHeight;
+extern uint32_t g_photoScreenMode;
+extern std::atomic<float> g_photoZoom;
+extern std::atomic<float> g_photoPanX;
+extern std::atomic<float> g_photoPanY;
+extern std::mutex g_photoMutex;
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeLoadPhoto(JNIEnv* env, jobject, jbyteArray rgba, jint width, jint height, jint screenMode) {
+    jsize len = env->GetArrayLength(rgba);
+    std::vector<uint8_t> buf(static_cast<size_t>(len));
+    env->GetByteArrayRegion(rgba, 0, len, reinterpret_cast<jbyte*>(buf.data()));
+    {
+        std::lock_guard<std::mutex> lock(g_photoMutex);
+        g_photoRgba = std::move(buf);
+        g_photoWidth = static_cast<uint32_t>(width);
+        g_photoHeight = static_cast<uint32_t>(height);
+        g_photoScreenMode = static_cast<uint32_t>(screenMode);
+    }
+    g_photoActive.store(true);
+    g_photoDirty.store(true);
+    LOGI("nativeLoadPhoto: foto %dx%d carregada, screenMode=%d, %d bytes", width, height, screenMode, (int)len);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeClearPhoto(JNIEnv*, jobject) {
+    {
+        std::lock_guard<std::mutex> lock(g_photoMutex);
+        g_photoRgba.clear();
+        g_photoWidth = 0;
+        g_photoHeight = 0;
+        g_photoScreenMode = 0;
+    }
+    g_photoActive.store(false);
+    g_photoDirty.store(true);
+    LOGI("nativeClearPhoto: foto descarregada");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPhotoZoom(JNIEnv*, jobject, jfloat zoom) {
+    g_photoZoom.store(static_cast<float>(zoom));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPhotoPan(JNIEnv*, jobject, jfloat panX, jfloat panY) {
+    g_photoPanX.store(static_cast<float>(panX));
+    g_photoPanY.store(static_cast<float>(panY));
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeStopVideo(JNIEnv*, jobject) {
     stop_video_playback();

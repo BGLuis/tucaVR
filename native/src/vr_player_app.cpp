@@ -304,6 +304,19 @@ Java_com_tucavr_VRActivity_nativeSetScrubOverlayVisible(JNIEnv* env, jobject thi
     LOGI("nativeSetScrubOverlayVisible: %d", (int)(visible == JNI_TRUE));
 }
 
+// Fase 0.3 Seção 8: Fotos 360° e 3D estéreo (stubs para GLES)
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeLoadPhoto(JNIEnv*, jobject, jbyteArray, jint, jint, jint) {}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeClearPhoto(JNIEnv*, jobject) {}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPhotoZoom(JNIEnv*, jobject, jfloat) {}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPhotoPan(JNIEnv*, jobject, jfloat, jfloat) {}
+
 // Solicitação explícita para acordar e manter o painel de UI visível (reset de m_uiIdleTime),
 // por exemplo ao abrir modais como o seletor de formato de tela (T3.4).
 static std::atomic<bool> g_requestUiPanelVisible{false};

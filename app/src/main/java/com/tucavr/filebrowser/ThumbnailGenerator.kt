@@ -17,7 +17,7 @@ object ThumbnailGenerator {
     private const val CACHE_DIR_NAME = "thumbnails_v2"
 
     suspend fun getThumbnail(context: Context, entry: MediaEntry): Bitmap? {
-        if (entry.type != MediaType.VIDEO) return null
+        if (entry.type != MediaType.VIDEO && entry.type != MediaType.IMAGE) return null
 
         return withContext(Dispatchers.IO) {
             val cacheFile = cacheFileFor(context, entry)
@@ -25,7 +25,12 @@ object ThumbnailGenerator {
             val cached = if (cacheFile.exists()) BitmapFactory.decodeFile(cacheFile.absolutePath) else null
             if (cached != null) return@withContext cached
 
-            val bitmap = generateFrame(entry.path) ?: return@withContext null
+            val bitmap = when (entry.type) {
+                MediaType.VIDEO -> generateFrame(entry.path)
+                MediaType.IMAGE -> com.tucavr.photos.PhotoDecoder.decodeThumbnail(entry.path, THUMB_WIDTH, THUMB_HEIGHT)
+                else -> null
+            } ?: return@withContext null
+
             writeToCache(bitmap, cacheFile)
             bitmap
         }
