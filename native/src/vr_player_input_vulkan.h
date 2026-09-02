@@ -3,6 +3,7 @@
 #include <jni.h>
 #include <android_native_app_glue.h>
 #include "vk_math.h"
+#include "hand_tracking.h"
 #include "vr_player_feedback_overlay.h"
 #include <math.h>
 #include <algorithm>
@@ -328,23 +329,111 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     bool leftTracked = (locL.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
     bool rightTracked = (locR.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
 
-    // Mesma preferencia do caminho GLES (vr_player_app.cpp): usa a
-    // esquerda se ela estiver rastreada e (a direita nao estiver rastreada
-    // OU o trigger esquerdo estiver pressionado) — deixa o usuario apontar
-    // com a mao que estiver usando ativamente.
-    bool useLeft = leftTracked && (!rightTracked || triggerL.currentState == XR_TRUE);
-    const XrSpaceLocation& spaceLocation = useLeft ? locL : locR;
-    bool currTrigger = (useLeft ? triggerL.currentState : triggerR.currentState) == XR_TRUE;
+    bool controllerActive = leftTracked || rightTracked;
+    bool currTrigger = false;
 
-    state.hasRay = (spaceLocation.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
-    if (state.hasRay) {
-        state.lastRayOrigin = spaceLocation.pose.position;
-        Mat4 rot = Mat4FromXrPose(spaceLocation.pose);
-        state.lastRayDir = {-rot.m[8], -rot.m[9], -rot.m[10]}; // -Z axis
+    if (controllerActive) {
+        state.handTrackingActive = false;
+        // Mesma preferencia do caminho GLES (vr_player_app.cpp): usa a
+        // esquerda se ela estiver rastreada e (a direita nao estiver rastreada
+        // OU o trigger esquerdo estiver pressionado) — deixa o usuario apontar
+        // com a mao que estiver usando ativamente.
+        bool useLeft = leftTracked && (!rightTracked || triggerL.currentState == XR_TRUE);
+        const XrSpaceLocation& spaceLocation = useLeft ? locL : locR;
+        currTrigger = (useLeft ? triggerL.currentState : triggerR.currentState) == XR_TRUE;
+
+        state.hasRay = (spaceLocation.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0;
+        if (state.hasRay) {
+            state.lastRayOrigin = spaceLocation.pose.position;
+            Mat4 rot = Mat4FromXrPose(spaceLocation.pose);
+            state.lastRayDir = {-rot.m[8], -rot.m[9], -rot.m[10]}; // -Z axis
+        }
+    } else if (state.supportsHandTracking && state.pfnLocateHandJointsEXT != nullptr) {
+        // T5.2: Leitura de juntas das mãos via XR_EXT_hand_tracking a cada frame
+        XrHandJointLocationEXT jointLocationsL[XR_HAND_JOINT_COUNT_EXT];
+        XrHandJointLocationsEXT locationsL{XR_TYPE_HAND_JOINT_LOCATIONS_EXT};
+        locationsL.jointCount = XR_HAND_JOINT_COUNT_EXT;
+        locationsL.jointLocations = jointLocationsL;
+
+        XrHandJointLocationEXT jointLocationsR[XR_HAND_JOINT_COUNT_EXT];
+        XrHandJointLocationsEXT locationsR{XR_TYPE_HAND_JOINT_LOCATIONS_EXT};
+        locationsR.jointCount = XR_HAND_JOINT_COUNT_EXT;
+        locationsR.jointLocations = jointLocationsR;
+
+        XrHandJointsLocateInfoEXT locateInfo{XR_TYPE_HAND_JOINTS_LOCATE_INFO_EXT};
+        locateInfo.baseSpace = state.localSpace;
+        locateInfo.time = predictedDisplayTime;
+
+        if (state.leftHandTracker != XR_NULL_HANDLE) {
+            state.pfnLocateHandJointsEXT(state.leftHandTracker, &locateInfo, &locationsL);
+        }
+        if (state.rightHandTracker != XR_NULL_HANDLE) {
+            state.pfnLocateHandJointsEXT(state.rightHandTracker, &locateInfo, &locationsR);
+        }
+
+        vrplayer::HandGestureOutput handOutL{};
+        vrplayer::HandGestureOutput handOutR{};
+        bool validL = (locationsL.isActive == XR_TRUE) &&
+                      state.leftHandFilter.Process(jointLocationsL, locationsL.jointCount, handOutL);
+        bool validR = (locationsR.isActive == XR_TRUE) &&
+                      state.rightHandFilter.Process(jointLocationsR, locationsR.jointCount, handOutR);
+
+        if (validL || validR) {
+            state.handTrackingActive = true;
+            // Preferência pela mão direita, exceto se a esquerda estiver ativamente pinçando ou a direita não tiver raio
+            bool useLeftHand = validL && (!validR || handOutL.isPinching);
+            const auto& activeHandOut = useLeftHand ? handOutL : handOutR;
+
+            state.hasRay = activeHandOut.hasRay;
+            if (state.hasRay) {
+                state.lastRayOrigin = activeHandOut.rayOrigin;
+                state.lastRayDir = activeHandOut.rayDirection;
+            }
+            currTrigger = activeHandOut.isPinching;
+
+            // T5.5: Mapeamento de gestos de palma (Palm Up = mostrar controles, Palm Down = ocultar)
+            if (activeHandOut.isPalmUp) {
+                state.controlsIdleTime = 0.0f;
+                state.controlsAlpha = 1.0f;
+            } else if (activeHandOut.isPalmDown) {
+                if (state.controlsAlpha > 0.5f) {
+                    state.controlsIdleTime = kUiAutoHideSeconds;
+                }
+            }
+        } else {
+            // T5.6: Fallback graceful — mão fora do campo de visão ou sem tracking válido
+            state.handTrackingActive = false;
+            state.hasRay = false;
+            currTrigger = false;
+        }
+    } else {
+        state.handTrackingActive = false;
+        state.hasRay = false;
+        currTrigger = false;
     }
 
     bool prevTrigger = state.isTriggerPressed;
     state.isTriggerPressed = currTrigger;
+
+    // T5.6: Fallback graceful — se perdeu o raio enquanto segurava toque/pinch, soltar para evitar drag preso
+    if (!state.hasRay && state.isTouchDown) {
+        state.isTouchDown = false;
+        JNIEnv* env = nullptr;
+        state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+        if (env) {
+            jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+            const char* methodName = (state.activePanel == 3) ? "dispatchModalVRTouch"
+                                   : ((state.activePanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch");
+            jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
+            if (touchMethod) {
+                env->CallStaticVoidMethod(vrActivityClass, touchMethod, state.app->activity->clazz, state.lastUvX, state.lastUvY, 1 /* UP */);
+            }
+            env->DeleteLocalRef(vrActivityClass);
+        }
+    }
+    if (!state.hasRay) {
+        state.isScreenGrabbed = false;
+    }
 
     if (::g_modalPanelShowRequested.exchange(false)) {
         state.modalActive = true;
@@ -391,6 +480,10 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             currentHitPanel = 1; hitU = uu; hitV = vu;
             state.lastHitDist = tUi;
         }
+    }
+    if (currentHitPanel != 0) {
+        state.lastUvX = hitU;
+        state.lastUvY = hitV;
     }
     // Delta de tempo entre frames — XrTime e nanosegundos desde uma epoca
     // arbitraria do runtime; convertido pra segundos pra alimentar o
@@ -817,42 +910,62 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         float sy = (fabsf(rightStick.currentState.y) < kDeadzone) ? 0.0f : rightStick.currentState.y;
         bool gripHeld = squeezeState.currentState > 0.5f;
 
-        if (gripHeld && sy != 0.0f) {
-            state.isScreenGrabbed = false;
-            const float kResizeSpeedMetersPerSec = 1.0f;
-            float newWidth = state.screenScaleX + sy * kResizeSpeedMetersPerSec * dt;
-            newWidth = std::max(0.5f, std::min(newWidth, 6.0f));
-            state.screenScaleX = newWidth;
-            state.screenScaleY = newWidth * (9.0f / 16.0f);
-        } else if (!gripHeld && (sx != 0.0f || sy != 0.0f)) {
-            state.isScreenGrabbed = false;
-            const float kMoveSpeedMetersPerSec = 1.5f;
-            state.screenPosition.z -= sy * kMoveSpeedMetersPerSec * dt;
-            state.screenPosition.y += sx * kMoveSpeedMetersPerSec * dt;
-            // Limites de conforto: nunca deixar a tela grudada no rosto nem sumir no chao/teto.
-            state.screenPosition.z = std::min(-0.75f, std::max(state.screenPosition.z, -8.0f));
-            state.screenPosition.y = std::max(0.2f, std::min(state.screenPosition.y, 3.5f));
-            state.screenPosition.x = std::max(-4.0f, std::min(state.screenPosition.x, 4.0f));
-        } else if (gripHeld && !IsSphereMode(state.screenMode) && currentHitPanel == 0 && !state.modalActive) {
-            // T2.5: Grab & Drag direto no espaço 3D apontando o laser para a tela
-            if (!state.isScreenGrabbed && tScreen > 0.0f) {
+        if (state.handTrackingActive) {
+            // T5.5: Com Hand Tracking, pinch segurado apontando para a tela virtual (fora dos painéis de UI) faz Grab & Drag
+            bool pinchGrab = currTrigger && (currentHitPanel == 0) && !state.modalActive && !IsSphereMode(state.screenMode);
+            if (!state.isScreenGrabbed && pinchGrab && (tScreen > 0.0f)) {
                 state.isScreenGrabbed = true;
                 state.grabDistance = std::max(0.8f, std::min(tScreen, 8.0f));
-                FireHaptic(state, rightPath, 0.4f, 20000000 /* 20ms */);
+            } else if (state.isScreenGrabbed) {
+                if (currTrigger && state.hasRay) {
+                    XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.grabDistance));
+                    XrVector3f relPos = Vec3Sub(targetWorld, state.sceneTranslationOffset);
+                    state.screenPosition = Vec3RotateY(relPos, -state.sceneYawOffset);
+                    state.screenPosition.z = std::min(-0.75f, std::max(state.screenPosition.z, -8.0f));
+                    state.screenPosition.y = std::max(0.2f, std::min(state.screenPosition.y, 3.5f));
+                    state.screenPosition.x = std::max(-4.0f, std::min(state.screenPosition.x, 4.0f));
+                } else {
+                    state.isScreenGrabbed = false;
+                }
             }
-        }
-
-        if (state.isScreenGrabbed) {
-            if (gripHeld && state.hasRay) {
-                XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.grabDistance));
-                XrVector3f relPos = Vec3Sub(targetWorld, state.sceneTranslationOffset);
-                state.screenPosition = Vec3RotateY(relPos, -state.sceneYawOffset);
+        } else {
+            if (gripHeld && sy != 0.0f) {
+                state.isScreenGrabbed = false;
+                const float kResizeSpeedMetersPerSec = 1.0f;
+                float newWidth = state.screenScaleX + sy * kResizeSpeedMetersPerSec * dt;
+                newWidth = std::max(0.5f, std::min(newWidth, 6.0f));
+                state.screenScaleX = newWidth;
+                state.screenScaleY = newWidth * (9.0f / 16.0f);
+            } else if (!gripHeld && (sx != 0.0f || sy != 0.0f)) {
+                state.isScreenGrabbed = false;
+                const float kMoveSpeedMetersPerSec = 1.5f;
+                state.screenPosition.z -= sy * kMoveSpeedMetersPerSec * dt;
+                state.screenPosition.y += sx * kMoveSpeedMetersPerSec * dt;
+                // Limites de conforto: nunca deixar a tela grudada no rosto nem sumir no chao/teto.
                 state.screenPosition.z = std::min(-0.75f, std::max(state.screenPosition.z, -8.0f));
                 state.screenPosition.y = std::max(0.2f, std::min(state.screenPosition.y, 3.5f));
                 state.screenPosition.x = std::max(-4.0f, std::min(state.screenPosition.x, 4.0f));
-            } else {
-                state.isScreenGrabbed = false;
-                FireHaptic(state, rightPath, 0.2f, 15000000 /* 15ms */);
+            } else if (gripHeld && !IsSphereMode(state.screenMode) && currentHitPanel == 0 && !state.modalActive) {
+                // T2.5: Grab & Drag direto no espaço 3D apontando o laser para a tela
+                if (!state.isScreenGrabbed && tScreen > 0.0f) {
+                    state.isScreenGrabbed = true;
+                    state.grabDistance = std::max(0.8f, std::min(tScreen, 8.0f));
+                    FireHaptic(state, rightPath, 0.4f, 20000000 /* 20ms */);
+                }
+            }
+
+            if (state.isScreenGrabbed) {
+                if (gripHeld && state.hasRay) {
+                    XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.grabDistance));
+                    XrVector3f relPos = Vec3Sub(targetWorld, state.sceneTranslationOffset);
+                    state.screenPosition = Vec3RotateY(relPos, -state.sceneYawOffset);
+                    state.screenPosition.z = std::min(-0.75f, std::max(state.screenPosition.z, -8.0f));
+                    state.screenPosition.y = std::max(0.2f, std::min(state.screenPosition.y, 3.5f));
+                    state.screenPosition.x = std::max(-4.0f, std::min(state.screenPosition.x, 4.0f));
+                } else {
+                    state.isScreenGrabbed = false;
+                    FireHaptic(state, rightPath, 0.2f, 15000000 /* 15ms */);
+                }
             }
         }
     }

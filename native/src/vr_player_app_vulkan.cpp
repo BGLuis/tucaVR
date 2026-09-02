@@ -44,6 +44,7 @@
 #include <vector>
 
 #include "vk_math.h"
+#include "hand_tracking.h"
 #include "screen_mode.h"
 #include "vr_player_feedback_overlay.h"
 #include "debug_stats.h"
@@ -415,6 +416,17 @@ struct AppState {
     XrPassthroughLayerFB passthroughLayer = XR_NULL_HANDLE;
     float appliedPassthroughOpacity = -1.0f;
     uint32_t appliedPassthroughEdge = 0xFFFFFFFF;
+
+    // Fase 0.3 Seção 5: Hand Tracking (XR_EXT_hand_tracking) — ver SetupHandTracking / DestroyHandTracking
+    bool supportsHandTracking = false;
+    PFN_xrCreateHandTrackerEXT pfnCreateHandTrackerEXT = nullptr;
+    PFN_xrDestroyHandTrackerEXT pfnDestroyHandTrackerEXT = nullptr;
+    PFN_xrLocateHandJointsEXT pfnLocateHandJointsEXT = nullptr;
+    XrHandTrackerEXT leftHandTracker = XR_NULL_HANDLE;
+    XrHandTrackerEXT rightHandTracker = XR_NULL_HANDLE;
+    vrplayer::HandTrackingFilter leftHandFilter;
+    vrplayer::HandTrackingFilter rightHandFilter;
+    bool handTrackingActive = false;
 
     // Fase 0.2 T14 / Fase 0.4: Monitoramento Térmico e Qualidade Adaptativa (RNF-PERF-006)
     PFN_xrRequestDisplayRefreshRateFB pfnRequestDisplayRefreshRateFB = nullptr;
@@ -893,6 +905,15 @@ void CreateXrInstance(AppState& state) {
     // Propaga a capacidade pro Kotlin (botao da UI sai de DISABLED so se true).
     set_passthrough_supported(state.supportsPassthrough ? 1u : 0u);
 
+    // Fase 0.3 Seção 5: Hand Tracking (XR_EXT_hand_tracking) — T5.1
+    state.supportsHandTracking = isExtensionSupported(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+    if (state.supportsHandTracking) {
+        extensions.push_back(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+        LOGI("OpenXR: Extensão XR_EXT_hand_tracking detectada e habilitada");
+    } else {
+        LOGI("OpenXR: Extensão XR_EXT_hand_tracking nao encontrada neste runtime");
+    }
+
     // Este e o nome pelo qual o runtime OpenXR do Horizon OS conhece o app
     XrApplicationInfo appInfo{};
     std::strncpy(appInfo.applicationName, "tucaVR", XR_MAX_APPLICATION_NAME_SIZE - 1);
@@ -907,6 +928,16 @@ void CreateXrInstance(AppState& state) {
     createInfo.enabledExtensionNames = extensions.data();
 
     OXR(xrCreateInstance(&createInfo, &state.instance));
+
+    if (state.supportsHandTracking) {
+        state.pfnCreateHandTrackerEXT =
+            LoadXrFunction<PFN_xrCreateHandTrackerEXT>(state.instance, "xrCreateHandTrackerEXT");
+        state.pfnDestroyHandTrackerEXT =
+            LoadXrFunction<PFN_xrDestroyHandTrackerEXT>(state.instance, "xrDestroyHandTrackerEXT");
+        state.pfnLocateHandJointsEXT =
+            LoadXrFunction<PFN_xrLocateHandJointsEXT>(state.instance, "xrLocateHandJointsEXT");
+        LOGI("OpenXR: Ponteiros de XR_EXT_hand_tracking carregados com sucesso");
+    }
 }
 
 // Callback das Vulkan validation layers (VK_EXT_debug_utils) — ver
@@ -1418,6 +1449,49 @@ void DestroyPassthrough(AppState& state) {
         state.passthrough = XR_NULL_HANDLE;
     }
     state.passthroughActive = false;
+}
+
+// Fase 0.3 Seção 5: Setup e Cleanup de Hand Tracking (XR_EXT_hand_tracking)
+void SetupHandTracking(AppState& state) {
+    if (!state.supportsHandTracking || state.pfnCreateHandTrackerEXT == nullptr) return;
+
+    XrHandTrackerCreateInfoEXT createInfo{XR_TYPE_HAND_TRACKER_CREATE_INFO_EXT};
+    createInfo.handJointSet = XR_HAND_JOINT_SET_DEFAULT_EXT;
+
+    createInfo.hand = XR_HAND_LEFT_EXT;
+    XrResult resL = state.pfnCreateHandTrackerEXT(state.session, &createInfo, &state.leftHandTracker);
+    if (resL == XR_SUCCESS) {
+        LOGI("OpenXR: Hand tracker esquerdo criado com sucesso");
+    } else {
+        LOGE("OpenXR: Falha ao criar hand tracker esquerdo (res=%d)", (int)resL);
+        state.leftHandTracker = XR_NULL_HANDLE;
+    }
+
+    createInfo.hand = XR_HAND_RIGHT_EXT;
+    XrResult resR = state.pfnCreateHandTrackerEXT(state.session, &createInfo, &state.rightHandTracker);
+    if (resR == XR_SUCCESS) {
+        LOGI("OpenXR: Hand tracker direito criado com sucesso");
+    } else {
+        LOGE("OpenXR: Falha ao criar hand tracker direito (res=%d)", (int)resR);
+        state.rightHandTracker = XR_NULL_HANDLE;
+    }
+}
+
+void DestroyHandTracking(AppState& state) {
+    if (state.pfnDestroyHandTrackerEXT != nullptr) {
+        if (state.leftHandTracker != XR_NULL_HANDLE) {
+            state.pfnDestroyHandTrackerEXT(state.leftHandTracker);
+            state.leftHandTracker = XR_NULL_HANDLE;
+        }
+        if (state.rightHandTracker != XR_NULL_HANDLE) {
+            state.pfnDestroyHandTrackerEXT(state.rightHandTracker);
+            state.rightHandTracker = XR_NULL_HANDLE;
+        }
+    }
+    state.leftHandFilter.Reset();
+    state.rightHandFilter.Reset();
+    state.handTrackingActive = false;
+    LOGI("OpenXR: Hand trackers destruidos com sucesso");
 }
 
 void ApplyFoveation(AppState& state, uint32_t level, float verticalOffset) {
@@ -5492,6 +5566,7 @@ void android_main(android_app* app) {
     sessionCreateInfo.systemId = state.systemId;
     OXR(xrCreateSession(state.instance, &sessionCreateInfo, &state.session));
     SetupOpenXrInputs(state);
+    SetupHandTracking(state);
 
     state.pfnRequestDisplayRefreshRateFB =
         LoadXrFunction<PFN_xrRequestDisplayRefreshRateFB>(state.instance, "xrRequestDisplayRefreshRateFB");
@@ -5567,6 +5642,9 @@ void android_main(android_app* app) {
 
     // Fase 0.3 Seção 2: destruir passthrough ANTES de xrDestroySession.
     DestroyPassthrough(state);
+
+    // Fase 0.3 Seção 5: destruir hand trackers ANTES de xrDestroySession.
+    DestroyHandTracking(state);
 
     for (auto& eye : state.eyes) {
         if (eye.handle != XR_NULL_HANDLE) xrDestroySwapchain(eye.handle);

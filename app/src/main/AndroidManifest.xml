@@ -37,6 +37,7 @@
     <uses-feature android:name="android.hardware.vr.headtracking" android:required="true" android:version="1" />
     <!-- Suporte a Hand Tracking / Permite lançamento mesmo quando controles Touch estiverem em standby -->
     <uses-feature android:name="oculus.software.handtracking" android:required="false" />
+    <uses-permission android:name="com.oculus.permission.HAND_TRACKING" />
 
     <application
         android:allowBackup="true"
@@ -49,6 +50,7 @@
         <meta-data android:name="com.oculus.supportedDevices" android:value="quest3|quest3s" />
         <meta-data android:name="com.oculus.ossplash" android:value="true" />
         <meta-data android:name="com.oculus.handtracking.version" android:value="V2.0" />
+        <meta-data android:name="com.oculus.handtracking.frequency" android:value="HIGH" />
 
         <!-- `excludeFromRecents="true"` e exigencia documentada da Meta pra
              activity de lancamento de app imersivo ("Application Manifests for
