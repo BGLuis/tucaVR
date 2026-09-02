@@ -329,6 +329,10 @@ class VRActivity : NativeActivity() {
         // depois que o C++ cria o XrInstance; o painel de controles consulta
         // nativeIsPassthroughSupported() ao ser montado pra habilitar o botão.
         nativeSetPassthroughEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PASSTHROUGH))
+        nativeSetPassthroughStyle(
+            FeatureFlags.getPassthroughOpacity(this),
+            FeatureFlags.getPassthroughEdgeRendering(this)
+        )
 
         // Fase 0.3 Seção 3/4: empurra valores persistidos de Áudio Espacial e Head Tracking pro nativo
         nativeSetSpatialAudioMode(FeatureFlags.getSpatialAudioMode(this))
@@ -1034,6 +1038,16 @@ class VRActivity : NativeActivity() {
     }
 
     /**
+     * Exibe o modal de configurações e estilo do Passthrough no 3º Quad dedicado frontal (VRModalPresentation).
+     */
+    fun openPassthroughSettingsModal() {
+        runOnUiThread {
+            nativeShowModalPanel()
+            modalPresentation?.showPassthroughSettingsModal()
+        }
+    }
+
+    /**
      * Fecha o modal frontal flutuante (3º Quad).
      */
     fun dismissModalPanel() {
@@ -1283,6 +1297,10 @@ class VRActivity : NativeActivity() {
     // Fase 0.3 Seção 2: Passthrough / Mixed Reality (Vulkan-only, XR_FB_passthrough).
     external fun nativeSetPassthroughEnabled(enabled: Boolean)
     external fun nativeIsPassthroughSupported(): Boolean
+    external fun nativeSetPassthroughStyle(opacity: Float, edgeRendering: Boolean)
+    external fun nativeGetPassthroughOpacity(): Float
+    external fun nativeGetPassthroughEdgeRendering(): Boolean
+    external fun nativeResetScreenPosition()
 
     // T13.1: metadados de midia (container/duracao/bitrate/trilhas) pra tela
     // de detalhe do arquivo — bloqueante (probe de container, rede se remoto),

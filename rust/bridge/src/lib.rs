@@ -245,6 +245,8 @@ pub extern "C" fn get_foveation_enabled() -> u32 {
 //   (passthrough e Vulkan-only aqui).
 static PASSTHROUGH_ENABLED: AtomicBool = AtomicBool::new(false);
 static PASSTHROUGH_SUPPORTED: AtomicBool = AtomicBool::new(false);
+static PASSTHROUGH_OPACITY_BITS: AtomicU32 = AtomicU32::new(0x3F800000); // 1.0f32
+static PASSTHROUGH_EDGE_RENDERING: AtomicBool = AtomicBool::new(false);
 
 #[no_mangle]
 pub extern "C" fn set_passthrough_enabled(enabled: u32) {
@@ -270,6 +272,26 @@ pub extern "C" fn set_passthrough_supported(supported: u32) {
 #[no_mangle]
 pub extern "C" fn get_passthrough_supported() -> u32 {
     PASSTHROUGH_SUPPORTED.load(Ordering::Relaxed) as u32
+}
+
+#[no_mangle]
+pub extern "C" fn set_passthrough_opacity(opacity: f32) {
+    PASSTHROUGH_OPACITY_BITS.store(opacity.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_passthrough_opacity() -> f32 {
+    f32::from_bits(PASSTHROUGH_OPACITY_BITS.load(Ordering::Relaxed))
+}
+
+#[no_mangle]
+pub extern "C" fn set_passthrough_edge_rendering(enabled: u32) {
+    PASSTHROUGH_EDGE_RENDERING.store(enabled != 0, Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_passthrough_edge_rendering() -> u32 {
+    PASSTHROUGH_EDGE_RENDERING.load(Ordering::Relaxed) as u32
 }
 
 /// Preferência do usuário para pausar automaticamente ao sair pro menu do sistema / passthrough.

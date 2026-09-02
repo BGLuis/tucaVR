@@ -70,6 +70,19 @@ class SettingsScreen(
             )
         )
 
+        if (activity.nativeIsPassthroughSupported()) {
+            content.addView(
+                buildFlagRow(
+                    labelRes = R.string.passthrough_toggle_label,
+                    descriptionRes = R.string.passthrough_toggle_description,
+                    flag = FeatureFlags.Flag.PASSTHROUGH,
+                    actionButtonTextRes = R.string.settings_passthrough_open_button,
+                    onActionClicked = { activity.openPassthroughSettingsModal() },
+                    onChanged = { enabled -> activity.nativeSetPassthroughEnabled(enabled) }
+                )
+            )
+        }
+
         // Seção Áudio
         content.addView(
             VoidText.title(context, context.getString(R.string.settings_section_audio), sizeSp = 18f).apply {

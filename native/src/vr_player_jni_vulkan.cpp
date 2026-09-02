@@ -61,6 +61,10 @@ extern "C" {
     // vr_player_app_vulkan.cpp, ver SetupPassthrough/UpdatePassthrough).
     extern void set_passthrough_enabled(uint32_t enabled);
     extern uint32_t get_passthrough_supported();
+    extern void set_passthrough_opacity(float opacity);
+    extern float get_passthrough_opacity();
+    extern void set_passthrough_edge_rendering(uint32_t enabled);
+    extern uint32_t get_passthrough_edge_rendering();
     extern void set_pause_on_exit(uint32_t enabled);
     extern uint32_t get_pause_on_exit();
     // Upscaling de vídeo (Vulkan-only, MQSR & SGSR1)
@@ -402,6 +406,8 @@ Java_com_tucavr_VRActivity_nativeGetFoveationMode(JNIEnv*, jobject) {
     return static_cast<jint>(get_foveation_mode());
 }
 
+extern std::atomic<bool> g_resetScreenPositionRequested;
+
 // Fase 0.3 Seção 2: Passthrough / Mixed Reality.
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetPassthroughEnabled(JNIEnv*, jobject, jboolean enabled) {
@@ -411,6 +417,27 @@ Java_com_tucavr_VRActivity_nativeSetPassthroughEnabled(JNIEnv*, jobject, jboolea
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_tucavr_VRActivity_nativeIsPassthroughSupported(JNIEnv*, jobject) {
     return get_passthrough_supported() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPassthroughStyle(JNIEnv*, jobject, jfloat opacity, jboolean edgeRendering) {
+    set_passthrough_opacity(static_cast<float>(opacity));
+    set_passthrough_edge_rendering(edgeRendering ? 1 : 0);
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_tucavr_VRActivity_nativeGetPassthroughOpacity(JNIEnv*, jobject) {
+    return static_cast<jfloat>(get_passthrough_opacity());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetPassthroughEdgeRendering(JNIEnv*, jobject) {
+    return get_passthrough_edge_rendering() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeResetScreenPosition(JNIEnv*, jobject) {
+    g_resetScreenPositionRequested.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL

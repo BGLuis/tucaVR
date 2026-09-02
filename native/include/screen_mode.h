@@ -70,3 +70,25 @@ inline bool IsFlatStereoMode(ScreenMode mode) {
             return false;
     }
 }
+
+inline bool Is360Mode(ScreenMode mode) {
+    switch (mode) {
+        case ScreenMode::Sphere360:
+        case ScreenMode::Sphere360SBS:
+        case ScreenMode::Sphere360OU:
+            return true;
+        default:
+            return false;
+    }
+}
+
+inline bool Is180Mode(ScreenMode mode) {
+    switch (mode) {
+        case ScreenMode::Sphere180:
+        case ScreenMode::Vr180SBS:
+            return true;
+        default:
+            return false;
+    }
+}
+

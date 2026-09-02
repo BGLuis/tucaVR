@@ -623,6 +623,10 @@ class VRControlsPresentation(
                     activity.nativeSetPassthroughEnabled(newState)
                     style = if (newState) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
                 }
+                setOnLongClickListener {
+                    activity.openPassthroughSettingsModal()
+                    true
+                }
             }
         }
         vrModesLayout.addView(btnPassthrough)

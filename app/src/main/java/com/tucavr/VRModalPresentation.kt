@@ -11,6 +11,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import com.tucavr.designsystem.AudioTrackModal
 import com.tucavr.designsystem.DebugStatsModal
+import com.tucavr.designsystem.PassthroughSettingsModal
 import com.tucavr.designsystem.ResumePromptModal
 import com.tucavr.designsystem.ScreenFormatModal
 import com.tucavr.designsystem.SubtitleSelectionModal
@@ -239,6 +240,39 @@ class VRModalPresentation(
             onRestart = {
                 dismissModal()
                 onRestart()
+            },
+            onDismiss = { dismissModal() }
+        )
+        showModal(modal)
+    }
+
+    /**
+     * Prepara e exibe o modal de configurações e estilo do Passthrough ([PassthroughSettingsModal]).
+     */
+    fun showPassthroughSettingsModal() {
+        val isEnabled = FeatureFlags.isEnabled(context, FeatureFlags.Flag.PASSTHROUGH)
+        val opacity = FeatureFlags.getPassthroughOpacity(context)
+        val isEdgeEnabled = FeatureFlags.getPassthroughEdgeRendering(context)
+
+        val modal = PassthroughSettingsModal(
+            context = context,
+            isPassthroughEnabled = isEnabled,
+            currentOpacity = opacity,
+            isEdgeRenderingEnabled = isEdgeEnabled,
+            onTogglePassthrough = { enabled ->
+                FeatureFlags.setEnabled(context, FeatureFlags.Flag.PASSTHROUGH, enabled)
+                activity.nativeSetPassthroughEnabled(enabled)
+            },
+            onOpacityChanged = { newOpacity ->
+                FeatureFlags.setPassthroughOpacity(context, newOpacity)
+                activity.nativeSetPassthroughStyle(newOpacity, FeatureFlags.getPassthroughEdgeRendering(context))
+            },
+            onEdgeRenderingChanged = { edgeEnabled ->
+                FeatureFlags.setPassthroughEdgeRendering(context, edgeEnabled)
+                activity.nativeSetPassthroughStyle(FeatureFlags.getPassthroughOpacity(context), edgeEnabled)
+            },
+            onResetScreenPosition = {
+                activity.nativeResetScreenPosition()
             },
             onDismiss = { dismissModal() }
         )

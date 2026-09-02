@@ -218,6 +218,10 @@ extern "C" {
     // desabilitado, que é o comportamento correto.
     extern void set_passthrough_enabled(uint32_t enabled);
     extern uint32_t get_passthrough_supported();
+    extern void set_passthrough_opacity(float opacity);
+    extern float get_passthrough_opacity();
+    extern void set_passthrough_edge_rendering(uint32_t enabled);
+    extern uint32_t get_passthrough_edge_rendering();
     extern void set_pause_on_exit(uint32_t enabled);
     // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
     extern void set_thermal_level(uint32_t level);
@@ -521,6 +525,27 @@ Java_com_tucavr_VRActivity_nativeSetPassthroughEnabled(JNIEnv* env, jobject thiz
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_tucavr_VRActivity_nativeIsPassthroughSupported(JNIEnv* env, jobject thiz) {
     return get_passthrough_supported() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPassthroughStyle(JNIEnv* env, jobject thiz, jfloat opacity, jboolean edgeRendering) {
+    set_passthrough_opacity(static_cast<float>(opacity));
+    set_passthrough_edge_rendering(edgeRendering ? 1 : 0);
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_tucavr_VRActivity_nativeGetPassthroughOpacity(JNIEnv* env, jobject thiz) {
+    return static_cast<jfloat>(get_passthrough_opacity());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetPassthroughEdgeRendering(JNIEnv* env, jobject thiz) {
+    return get_passthrough_edge_rendering() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeResetScreenPosition(JNIEnv* env, jobject thiz) {
+    // No-op em GLES
 }
 
 extern "C" JNIEXPORT void JNICALL

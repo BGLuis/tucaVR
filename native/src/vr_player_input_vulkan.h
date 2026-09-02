@@ -10,6 +10,7 @@
 #include <cstdint>
 
 extern std::atomic<bool> g_requestControlsPanelVisible;
+extern std::atomic<bool> g_resetScreenPositionRequested;
 
 // Timings de auto-hide/recenter — mesmos valores do caminho GLES
 // (vr_player_app.cpp: kUiAutoHideSeconds/kUiFadeDuration/kRecenterHoldSeconds).
@@ -409,16 +410,20 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     // teclado nativo estiver ativo — mesmo motivo do GLES: com o teclado
     // aberto o raio aponta pro overlay do sistema, nao mais pro quad.
     float su = 0, sv = 0;
+    float tScreen = -1.0f;
     bool hitScreen = false;
     if (IsSphereMode(state.screenMode)) {
         // No modo esférico (180° SBS / 360°), qualquer raio do controle apontado para frente mantém os controles visíveis
         hitScreen = state.hasRay && (state.lastRayDir.z < -0.1f);
     } else {
-        hitScreen = state.hasRay &&
-            rayHitsQuad(scene.screenModelNoScale, scene.screenNormal, scene.screenCenter,
-                        state.screenScaleX, state.screenScaleY, su, sv,
-                        state.lastRayOrigin, state.lastRayDir) > 0.0f;
+        if (state.hasRay) {
+            tScreen = rayHitsQuad(scene.screenModelNoScale, scene.screenNormal, scene.screenCenter,
+                                  state.screenScaleX, state.screenScaleY, su, sv,
+                                  state.lastRayOrigin, state.lastRayDir);
+            hitScreen = (tScreen > 0.0f);
+        }
     }
+    state.isHoveringScreen = hitScreen && (currentHitPanel == 0) && !state.modalActive;
     bool keyboardActive = get_keyboard_active() != 0;
     if (::g_requestUiPanelVisible.exchange(false)) {
         state.uiIdleTime = 0.0f;
@@ -630,6 +635,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.sceneYawOffset = atan2f(-fwd.x, -fwd.z);
             state.sceneTranslationOffset = headCenter;
             state.sceneTranslationOffset.y = headCenter.y - 1.5f;
+            state.screenPosition = {0.0f, 1.5f, -2.0f};
+            state.isScreenGrabbed = false;
             state.recenterFiredThisHold = true;
             FireHaptic(state, rightPath, 0.5f, 30000000 /* 30ms */);
         }
@@ -794,8 +801,16 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     XrActionStateFloat squeezeState{XR_TYPE_ACTION_STATE_FLOAT};
     xrGetActionStateFloat(state.session, &squeezeInfo, &squeezeState);
 
-    // Thumbstick direito: sem grip move a tela (Y=frente/tras, X=cima/baixo);
-    // com grip redimensiona mantendo o aspect ratio 16:9.
+    // Redefinição de posição solicitada via JNI ou Reset
+    if (::g_resetScreenPositionRequested.exchange(false)) {
+        state.screenPosition = {0.0f, 1.5f, -2.0f};
+        state.screenScaleX = 1.6f;
+        state.screenScaleY = 0.9f;
+        state.isScreenGrabbed = false;
+        LOGI("Screen: posição e escala redefinidas para o padrão {0, 1.5, -2}");
+    }
+
+    // Thumbstick direito e Grab & Drag (T2.5)
     {
         const float kDeadzone = 0.15f;
         float sx = (fabsf(rightStick.currentState.x) < kDeadzone) ? 0.0f : rightStick.currentState.x;
@@ -803,19 +818,42 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         bool gripHeld = squeezeState.currentState > 0.5f;
 
         if (gripHeld && sy != 0.0f) {
+            state.isScreenGrabbed = false;
             const float kResizeSpeedMetersPerSec = 1.0f;
             float newWidth = state.screenScaleX + sy * kResizeSpeedMetersPerSec * dt;
             newWidth = std::max(0.5f, std::min(newWidth, 6.0f));
             state.screenScaleX = newWidth;
             state.screenScaleY = newWidth * (9.0f / 16.0f);
         } else if (!gripHeld && (sx != 0.0f || sy != 0.0f)) {
+            state.isScreenGrabbed = false;
             const float kMoveSpeedMetersPerSec = 1.5f;
             state.screenPosition.z -= sy * kMoveSpeedMetersPerSec * dt;
             state.screenPosition.y += sx * kMoveSpeedMetersPerSec * dt;
-            // Limites de conforto: nunca deixar a tela grudada no rosto nem
-            // sumir no chao/teto.
+            // Limites de conforto: nunca deixar a tela grudada no rosto nem sumir no chao/teto.
             state.screenPosition.z = std::min(-0.75f, std::max(state.screenPosition.z, -8.0f));
             state.screenPosition.y = std::max(0.2f, std::min(state.screenPosition.y, 3.5f));
+            state.screenPosition.x = std::max(-4.0f, std::min(state.screenPosition.x, 4.0f));
+        } else if (gripHeld && !IsSphereMode(state.screenMode) && currentHitPanel == 0 && !state.modalActive) {
+            // T2.5: Grab & Drag direto no espaço 3D apontando o laser para a tela
+            if (!state.isScreenGrabbed && tScreen > 0.0f) {
+                state.isScreenGrabbed = true;
+                state.grabDistance = std::max(0.8f, std::min(tScreen, 8.0f));
+                FireHaptic(state, rightPath, 0.4f, 20000000 /* 20ms */);
+            }
+        }
+
+        if (state.isScreenGrabbed) {
+            if (gripHeld && state.hasRay) {
+                XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.grabDistance));
+                XrVector3f relPos = Vec3Sub(targetWorld, state.sceneTranslationOffset);
+                state.screenPosition = Vec3RotateY(relPos, -state.sceneYawOffset);
+                state.screenPosition.z = std::min(-0.75f, std::max(state.screenPosition.z, -8.0f));
+                state.screenPosition.y = std::max(0.2f, std::min(state.screenPosition.y, 3.5f));
+                state.screenPosition.x = std::max(-4.0f, std::min(state.screenPosition.x, 4.0f));
+            } else {
+                state.isScreenGrabbed = false;
+                FireHaptic(state, rightPath, 0.2f, 15000000 /* 15ms */);
+            }
         }
     }
 

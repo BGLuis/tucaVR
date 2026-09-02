@@ -59,6 +59,12 @@ object FeatureFlags {
     /** Chave usada para persistir o modo de Foveated Rendering como Int (0=Off, 1=Low, 2=Med, 3=High, 4=Auto). */
     private const val KEY_FOVEATED_RENDERING_MODE = "foveated_rendering_mode"
 
+    /** Chave usada para persistir a opacidade do Passthrough (0.0f a 1.0f). */
+    private const val KEY_PASSTHROUGH_OPACITY = "passthrough_opacity"
+
+    /** Chave usada para persistir o modo de contorno (Edge Rendering) do Passthrough. */
+    private const val KEY_PASSTHROUGH_EDGE_RENDERING = "passthrough_edge_rendering"
+
     fun isEnabled(context: Context, flag: Flag): Boolean =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getBoolean(flag.key, flag.defaultEnabled)
@@ -96,6 +102,32 @@ object FeatureFlags {
             .edit()
             .putInt(KEY_FOVEATED_RENDERING_MODE, mode)
             .putBoolean(Flag.FOVEATED_RENDERING.key, mode != 0)
+            .apply()
+    }
+
+    /** Lê a opacidade do Passthrough (0.0f a 1.0f). Padrão: 1.0f (100%). */
+    fun getPassthroughOpacity(context: Context): Float =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getFloat(KEY_PASSTHROUGH_OPACITY, 1.0f)
+
+    /** Persiste a opacidade do Passthrough. */
+    fun setPassthroughOpacity(context: Context, opacity: Float) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putFloat(KEY_PASSTHROUGH_OPACITY, opacity.coerceIn(0.0f, 1.0f))
+            .apply()
+    }
+
+    /** Lê se o Edge Rendering do Passthrough está ativo. Padrão: false. */
+    fun getPassthroughEdgeRendering(context: Context): Boolean =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_PASSTHROUGH_EDGE_RENDERING, false)
+
+    /** Persiste o estado do Edge Rendering do Passthrough. */
+    fun setPassthroughEdgeRendering(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_PASSTHROUGH_EDGE_RENDERING, enabled)
             .apply()
     }
 }

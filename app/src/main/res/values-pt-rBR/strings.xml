@@ -65,8 +65,23 @@
     <string name="settings_spatial_audio_mode_downmix">Downmix</string>
     <string name="settings_spatial_head_tracking_label">Head Tracking no Audio</string>
     <string name="settings_spatial_head_tracking_description">Rotaciona as caixas acusticas virtuais e o palco sonoro ao virar a cabeca para realismo espacial.</string>
-    <string name="settings_spatial_screen_locked_label">Audio Fixo na Tela</string>
+    <string name="settings_spatial_screen_locked_label">Áudio fixo na tela (Screen-locked)</string>
     <string name="settings_spatial_screen_locked_description">Fixa as caixas virtuais relativas ao painel de video em vez do espaco absoluto. Recomendado para conteudo 2D — mantem o dialogo sempre a frente.</string>
+
+    <!-- Configurações e Modal de Passthrough / Mixed Reality (T2.4, T2.5) -->
+    <string name="passthrough_modal_title">Passthrough &amp; Realidade Mista</string>
+    <string name="passthrough_toggle_label">Habilitar Passthrough</string>
+    <string name="passthrough_toggle_description">Exibe o mundo físico real de fundo usando as câmeras do Quest 3.</string>
+    <string name="passthrough_state_on">LIGADO</string>
+    <string name="passthrough_state_off">DESLIGADO</string>
+    <string name="passthrough_opacity_label">Opacidade do Ambiente</string>
+    <string name="passthrough_opacity_percent">%1$d%%</string>
+    <string name="passthrough_edge_rendering_label">Destacar Contornos (Edge)</string>
+    <string name="passthrough_edge_rendering_description">Realça o contorno dos objetos reais do ambiente com bordas de alto contraste.</string>
+    <string name="passthrough_reset_screen_button">Redefinir Posição da Tela</string>
+    <string name="passthrough_reset_screen_description">Restaura a tela virtual para a posição frontal e escala padrão.</string>
+    <string name="passthrough_grab_hint">Dica: Aponte para o vídeo e segure o botão Grip para agarrar e mover a tela pelo espaço 3D.</string>
+    <string name="settings_passthrough_open_button">Ajustes</string>
 
     <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
     <string name="browser_title_local_files">Arquivos locais</string>

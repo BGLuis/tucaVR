@@ -48,5 +48,8 @@ class FeatureFlagsTest {
 
         // Pause on exit deve ser habilitado para pausar ao sair pro menu Meta / passthrough
         assertTrue("PAUSE_ON_EXIT deve vir habilitado por padrão", FeatureFlags.Flag.PAUSE_ON_EXIT.defaultEnabled)
+
+        // Passthrough inicia desabilitado até ativação explícita pelo usuário
+        org.junit.Assert.assertFalse("PASSTHROUGH deve iniciar desabilitado por padrão", FeatureFlags.Flag.PASSTHROUGH.defaultEnabled)
     }
 }

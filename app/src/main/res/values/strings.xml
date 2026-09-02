@@ -77,6 +77,21 @@
     <string name="settings_spatial_screen_locked_label">Screen-locked Audio</string>
     <string name="settings_spatial_screen_locked_description">Locks virtual speakers to the video screen instead of world space. Recommended for 2D flat content — keeps dialogue always in front.</string>
 
+    <!-- Passthrough / Mixed Reality Settings & Modal (T2.4, T2.5) -->
+    <string name="passthrough_modal_title">Passthrough &amp; Mixed Reality</string>
+    <string name="passthrough_toggle_label">Enable Passthrough</string>
+    <string name="passthrough_toggle_description">Shows the physical world as background via Quest 3 cameras.</string>
+    <string name="passthrough_state_on">ON</string>
+    <string name="passthrough_state_off">OFF</string>
+    <string name="passthrough_opacity_label">Environment Opacity</string>
+    <string name="passthrough_opacity_percent">%1$d%%</string>
+    <string name="passthrough_edge_rendering_label">Edge Rendering</string>
+    <string name="passthrough_edge_rendering_description">Highlights real-world physical object outlines with high-contrast borders.</string>
+    <string name="passthrough_reset_screen_button">Reset Screen Position</string>
+    <string name="passthrough_reset_screen_description">Restores the virtual screen to its default front position and scale.</string>
+    <string name="passthrough_grab_hint">Hint: Point at the screen and hold Grip to grab and reposition in 3D space.</string>
+    <string name="settings_passthrough_open_button">Settings</string>
+
     <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
     <string name="browser_title_local_files">Local Files</string>
     <string name="browser_row_up">Go up one level</string>

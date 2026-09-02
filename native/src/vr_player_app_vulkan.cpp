@@ -192,7 +192,11 @@ extern "C" {
     // usuario (get_) e capacidade do runtime (set_, escrito daqui).
     extern uint32_t get_passthrough_enabled();
     extern void set_passthrough_supported(uint32_t supported);
+    extern float get_passthrough_opacity();
+    extern uint32_t get_passthrough_edge_rendering();
 }
+
+std::atomic<bool> g_resetScreenPositionRequested{false};
 
 // Preview de arrasto no seekbar renderizado sobre o quad do video
 // (T-seek-ux) — escrito por nativeUpdateScrubOverlay/nativeSetScrubOverlayVisible
@@ -392,8 +396,11 @@ struct AppState {
     PFN_xrDestroyPassthroughLayerFB pfnDestroyPassthroughLayerFB = nullptr;
     PFN_xrPassthroughLayerPauseFB pfnPassthroughLayerPauseFB = nullptr;
     PFN_xrPassthroughLayerResumeFB pfnPassthroughLayerResumeFB = nullptr;
+    PFN_xrPassthroughLayerSetStyleFB pfnPassthroughLayerSetStyleFB = nullptr;
     XrPassthroughFB passthrough = XR_NULL_HANDLE;
     XrPassthroughLayerFB passthroughLayer = XR_NULL_HANDLE;
+    float appliedPassthroughOpacity = -1.0f;
+    uint32_t appliedPassthroughEdge = 0xFFFFFFFF;
 
     // Fase 0.2 T14 / Fase 0.4: Monitoramento Térmico e Qualidade Adaptativa (RNF-PERF-006)
     PFN_xrRequestDisplayRefreshRateFB pfnRequestDisplayRefreshRateFB = nullptr;
@@ -631,6 +638,11 @@ struct AppState {
     XrVector3f screenPosition = {0.0f, 1.5f, -2.0f};
     float screenScaleX = 1.6f;
     float screenScaleY = 0.9f;
+
+    // Fase 0.3 Seção 2: Grab & Drag da tela virtual (T2.5)
+    bool isScreenGrabbed = false;
+    float grabDistance = 2.0f;
+    bool isHoveringScreen = false;
 
     // Menu long-press = recenter manual (Etapa 6)
     float menuHoldTime = 0.0f;
@@ -1260,6 +1272,8 @@ void SetupPassthrough(AppState& state) {
         LoadXrFunction<PFN_xrPassthroughLayerPauseFB>(state.instance, "xrPassthroughLayerPauseFB");
     state.pfnPassthroughLayerResumeFB =
         LoadXrFunction<PFN_xrPassthroughLayerResumeFB>(state.instance, "xrPassthroughLayerResumeFB");
+    state.pfnPassthroughLayerSetStyleFB =
+        LoadXrFunction<PFN_xrPassthroughLayerSetStyleFB>(state.instance, "xrPassthroughLayerSetStyleFB");
 
     if (state.pfnCreatePassthroughFB == nullptr || state.pfnCreatePassthroughLayerFB == nullptr) {
         LOGE("Passthrough: ponteiros de funcao ausentes apesar da extensao — desabilitando");
@@ -1296,34 +1310,62 @@ void SetupPassthrough(AppState& state) {
     LOGI("Passthrough: XrPassthroughFB + layer criados (pausados)");
 }
 
-// Sincroniza o estado efetivo com get_passthrough_enabled(). Nao usa OXR()
-// (que aborta): start/resume/pause podem falhar transitoriamente numa
-// transicao de foco (sessao nao rodando) — logamos e tentamos de novo no
+// Sincroniza o estado efetivo com get_passthrough_enabled() e formato de tela.
+// Nao usa OXR() (que aborta): start/resume/pause podem falhar transitoriamente
+// numa transicao de foco (sessao nao rodando) — logamos e tentamos de novo no
 // proximo poll.
 void UpdatePassthrough(AppState& state) {
     if (!state.supportsPassthrough || state.passthroughLayer == XR_NULL_HANDLE) return;
 
-    const bool desired = get_passthrough_enabled() != 0;
-    if (desired == state.passthroughActive) return;
+    const bool userDesired = get_passthrough_enabled() != 0;
+    // Otimização de GPU (Phase 0.3 Seção 2): em modos 360° esféricos a geometria opaca
+    // cobre 100% do campo de visão, pausamos a camada para economizar 15-20% de GPU.
+    const bool desired = userDesired && !Is360Mode(state.screenMode);
 
-    if (desired) {
-        XrResult rs = state.pfnPassthroughStartFB(state.passthrough);
-        XrResult rl = state.pfnPassthroughLayerResumeFB(state.passthroughLayer);
-        if (XR_FAILED(rs) || XR_FAILED(rl)) {
-            LOGW("Passthrough: falha ao ativar (start=%d resume=%d) — nova tentativa no proximo poll", rs, rl);
-            return;
+    if (desired != state.passthroughActive) {
+        if (desired) {
+            XrResult rs = state.pfnPassthroughStartFB(state.passthrough);
+            XrResult rl = state.pfnPassthroughLayerResumeFB(state.passthroughLayer);
+            if (XR_FAILED(rs) || XR_FAILED(rl)) {
+                LOGW("Passthrough: falha ao ativar (start=%d resume=%d) — nova tentativa no proximo poll", rs, rl);
+                return;
+            }
+            state.passthroughActive = true;
+            state.appliedPassthroughOpacity = -1.0f; // Força reaplicação de estilo
+            state.appliedPassthroughEdge = 0xFFFFFFFF;
+            LOGI("Passthrough: ATIVADO (mundo real visivel atras do video)");
+        } else {
+            XrResult rl = state.pfnPassthroughLayerPauseFB(state.passthroughLayer);
+            XrResult rs = state.pfnPassthroughPauseFB(state.passthrough);
+            if (XR_FAILED(rl) || XR_FAILED(rs)) {
+                LOGW("Passthrough: falha ao desativar (pauseLayer=%d pause=%d) — nova tentativa no proximo poll", rl, rs);
+                return;
+            }
+            state.passthroughActive = false;
+            LOGI("Passthrough: DESATIVADO (ambiente virtual)");
         }
-        state.passthroughActive = true;
-        LOGI("Passthrough: ATIVADO (mundo real visivel atras do video)");
-    } else {
-        XrResult rl = state.pfnPassthroughLayerPauseFB(state.passthroughLayer);
-        XrResult rs = state.pfnPassthroughPauseFB(state.passthrough);
-        if (XR_FAILED(rl) || XR_FAILED(rs)) {
-            LOGW("Passthrough: falha ao desativar (pauseLayer=%d pause=%d) — nova tentativa no proximo poll", rl, rs);
-            return;
+    }
+
+    // T2.4: Aplicação de estilo/opacidade e edge rendering
+    if (state.passthroughActive && state.pfnPassthroughLayerSetStyleFB != nullptr) {
+        float opacity = get_passthrough_opacity();
+        uint32_t edge = get_passthrough_edge_rendering();
+        if (fabsf(opacity - state.appliedPassthroughOpacity) > 0.005f || edge != state.appliedPassthroughEdge) {
+            XrPassthroughStyleFB style{XR_TYPE_PASSTHROUGH_STYLE_FB};
+            style.next = nullptr;
+            style.textureOpacityFactor = std::max(0.0f, std::min(1.0f, opacity));
+            if (edge != 0) {
+                style.edgeColor = {0.0f, 0.8f, 1.0f, 1.0f}; // Ciano sutil de alto contraste
+            } else {
+                style.edgeColor = {0.0f, 0.0f, 0.0f, 0.0f};
+            }
+            XrResult r = state.pfnPassthroughLayerSetStyleFB(state.passthroughLayer, &style);
+            if (XR_SUCCEEDED(r)) {
+                state.appliedPassthroughOpacity = opacity;
+                state.appliedPassthroughEdge = edge;
+                LOGI("Passthrough: estilo atualizado (opacidade=%.2f, edge=%u)", opacity, edge);
+            }
         }
-        state.passthroughActive = false;
-        LOGI("Passthrough: DESATIVADO (ambiente virtual)");
     }
 }
 
