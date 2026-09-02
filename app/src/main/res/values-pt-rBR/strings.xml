@@ -47,7 +47,14 @@
     <string name="settings_upscaling_mode_performance">Desempenho (Render Scale 0.8x + MQSR)</string>
     <string name="settings_upscaling_mode_auto">Automatico (Adaptativo)</string>
     <string name="settings_foveated_rendering_label">Foveated Rendering</string>
-    <string name="settings_foveated_rendering_description">Reduz a carga da GPU diminuindo o detalhe na visao periferica. Pode reduzir levemente a nitidez das bordas. So no Vulkan.</string>
+    <string name="settings_foveated_rendering_description">Reduz a carga da GPU diminuindo o detalhe na visao periferica. Selecione intensidade fixa ou Automatico para controle adaptativo. So no Vulkan.</string>
+    <string name="settings_foveated_mode_off">Desligado</string>
+    <string name="settings_foveated_mode_low">Baixo</string>
+    <string name="settings_foveated_mode_medium">Medio</string>
+    <string name="settings_foveated_mode_high">Alto</string>
+    <string name="settings_foveated_mode_auto">Automatico (Adaptativo)</string>
+    <string name="quality_warning_thermal">Limite termico atingido: reduzindo qualidade para resfriar o dispositivo.</string>
+    <string name="quality_warning_8k60">Video 8K com alta taxa de quadros pode apresentar quedas em hardware movel.</string>
     <string name="settings_pause_on_exit_label">Pausar ao sair</string>
     <string name="settings_pause_on_exit_description">Pausa o video automaticamente ao voltar ao menu do sistema ou passthrough.</string>
     <string name="settings_section_audio">Audio</string>

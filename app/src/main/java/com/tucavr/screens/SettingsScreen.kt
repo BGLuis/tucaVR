@@ -59,15 +59,7 @@ class SettingsScreen(
         )
 
         content.addView(buildUpscalingRow())
-
-        content.addView(
-            buildFlagRow(
-                labelRes = R.string.settings_foveated_rendering_label,
-                descriptionRes = R.string.settings_foveated_rendering_description,
-                flag = FeatureFlags.Flag.FOVEATED_RENDERING,
-                onChanged = { enabled -> activity.nativeSetFoveationEnabled(enabled) }
-            )
-        )
+        content.addView(buildFoveationRow())
 
         content.addView(
             buildFlagRow(
@@ -331,6 +323,69 @@ class SettingsScreen(
                     setSelectedState(true)
                     activity.upscalingStore.set(mode)
                     activity.nativeSetUpscalingMode(mode.id)
+                }
+            }
+            chips.add(chip)
+            chipContainer.addView(chip)
+        }
+
+        addView(chipContainer)
+    }
+
+    private fun buildFoveationRow(): LinearLayout = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = VoidTheme.dpToPx(context, 16f) }
+
+        addView(
+            VoidText.title(context, context.getString(R.string.settings_foveated_rendering_label), sizeSp = 16f).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+            }
+        )
+
+        addView(
+            VoidText.body(context, context.getString(R.string.settings_foveated_rendering_description), sizeSp = 14f, secondary = true).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
+            }
+        )
+
+        val chipContainer = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        val modes = listOf(
+            0 to R.string.settings_foveated_mode_off,
+            1 to R.string.settings_foveated_mode_low,
+            2 to R.string.settings_foveated_mode_medium,
+            3 to R.string.settings_foveated_mode_high,
+            4 to R.string.settings_foveated_mode_auto
+        )
+
+        val chips = mutableListOf<VoidFilterChip>()
+        val currentMode = FeatureFlags.getFoveatedRenderingMode(context)
+
+        modes.forEach { (mode, labelRes) ->
+            val chip = VoidFilterChip(
+                context = context,
+                text = context.getString(labelRes),
+                isSelectedChip = (mode == currentMode)
+            ).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                ).apply {
+                    val margin = VoidTheme.dpToPx(context, 4f)
+                    setMargins(margin, 0, margin, 0)
+                }
+                setOnClickListener {
+                    chips.forEach { it.setSelectedState(false) }
+                    setSelectedState(true)
+                    FeatureFlags.setFoveatedRenderingMode(context, mode)
+                    activity.nativeSetFoveationMode(mode)
+                    activity.nativeSetFoveationEnabled(mode != 0)
                 }
             }
             chips.add(chip)

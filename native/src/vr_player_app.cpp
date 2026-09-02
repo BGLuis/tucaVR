@@ -208,6 +208,8 @@ extern "C" {
     // aceito e guardado no Rust mesmo assim (nao rejeita a chamada), so nao
     // ha nada aqui que o leia.
     extern void set_foveation_enabled(uint32_t enabled);
+    extern void set_foveation_mode(uint32_t mode);
+    extern uint32_t get_foveation_mode();
     // Fase 0.3 Seção 2: Passthrough / Mixed Reality. Feature Vulkan-only
     // (ver vr_player_app_vulkan.cpp: SetupPassthrough). Aqui no caminho GLES
     // os wrappers JNI existem só pra o símbolo não faltar se alguém compilar
@@ -497,6 +499,16 @@ Java_com_tucavr_VRActivity_nativeSetKeyboardActive(JNIEnv* env, jobject thiz, jb
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetFoveationEnabled(JNIEnv* env, jobject thiz, jboolean enabled) {
     set_foveation_enabled(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetFoveationMode(JNIEnv* env, jobject thiz, jint mode) {
+    set_foveation_mode(static_cast<uint32_t>(mode));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_VRActivity_nativeGetFoveationMode(JNIEnv* env, jobject thiz) {
+    return static_cast<jint>(get_foveation_mode());
 }
 
 // Fase 0.3 Seção 2: Passthrough / Mixed Reality (no-op efetivo no caminho GLES,

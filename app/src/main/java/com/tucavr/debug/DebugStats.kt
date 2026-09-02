@@ -39,7 +39,14 @@ data class NativeDebugStats(
     val audioTrackIndex: Int = 0,
     val audioTrackCount: Int = 0,
     val subtitleTrackIndex: Int = -1,
-    val subtitleOffsetMs: Int = 0
+    val subtitleOffsetMs: Int = 0,
+    val gpuTimeMs: Float = 0.0f,
+    val smoothedGpuTimeMs: Float = 0.0f,
+    val upscalingMode: String = "OFF",
+    val upscalingSharpness: Float = 0.0f,
+    val mqsrEnabled: Boolean = false,
+    val qualityLevel: String = "HIGH",
+    val qualityReason: String = "NONE"
 )
 
 /**
@@ -67,6 +74,13 @@ object DebugStatsParser {
         var seekLatencyMs = 0
         var smoothedFps = 0.0f
         var frameTimeMs = 0.0f
+        var gpuTimeMs = 0.0f
+        var smoothedGpuTimeMs = 0.0f
+        var upscalingMode = "OFF"
+        var upscalingSharpness = 0.0f
+        var mqsrEnabled = false
+        var qualityLevel = "HIGH"
+        var qualityReason = "NONE"
         var stutterCount = 0
         var freezeCount = 0
         var thermalLevel = 0
@@ -115,6 +129,13 @@ object DebugStatsParser {
                 "seek_latency_ms" -> { seekLatencyMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
                 "smoothed_fps" -> { smoothedFps = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
                 "frame_time_ms" -> { frameTimeMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
+                "gpu_time_ms" -> { gpuTimeMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
+                "smoothed_gpu_time_ms" -> { smoothedGpuTimeMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
+                "upscaling_mode" -> { upscalingMode = value; recognizedKeys++ }
+                "upscaling_sharpness" -> { upscalingSharpness = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
+                "mqsr_enabled" -> { mqsrEnabled = value == "1"; recognizedKeys++ }
+                "quality_level" -> { qualityLevel = value; recognizedKeys++ }
+                "quality_reason" -> { qualityReason = value; recognizedKeys++ }
                 "stutter_count" -> { stutterCount = value.toIntOrNull() ?: 0; recognizedKeys++ }
                 "freeze_count" -> { freezeCount = value.toIntOrNull() ?: 0; recognizedKeys++ }
                 "thermal_level" -> { thermalLevel = value.toIntOrNull() ?: 0; recognizedKeys++ }
@@ -173,7 +194,14 @@ object DebugStatsParser {
             audioTrackIndex = audioTrackIndex,
             audioTrackCount = audioTrackCount,
             subtitleTrackIndex = subtitleTrackIndex,
-            subtitleOffsetMs = subtitleOffsetMs
+            subtitleOffsetMs = subtitleOffsetMs,
+            gpuTimeMs = gpuTimeMs,
+            smoothedGpuTimeMs = smoothedGpuTimeMs,
+            upscalingMode = upscalingMode,
+            upscalingSharpness = upscalingSharpness,
+            mqsrEnabled = mqsrEnabled,
+            qualityLevel = qualityLevel,
+            qualityReason = qualityReason
         )
     }
 }

@@ -49,6 +49,8 @@ struct DebugStats {
     const char* upscalingMode = "OFF";
     float upscalingSharpness = 0.0f;
     int mqsrEnabled = 0;
+    const char* qualityLevel = "HIGH";
+    const char* qualityReason = "NONE";
 };
 
 // Serializa a struct em formato TSV estruturado (chave\tvalor\n).
@@ -78,6 +80,8 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         "upscaling_mode\t%s\n"
         "upscaling_sharpness\t%.2f\n"
         "mqsr_enabled\t%d\n"
+        "quality_level\t%s\n"
+        "quality_reason\t%s\n"
         "stutter_count\t%d\n"
         "freeze_count\t%d\n"
         "thermal_level\t%u\n"
@@ -118,6 +122,8 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         s.upscalingMode ? s.upscalingMode : "OFF",
         s.upscalingSharpness,
         s.mqsrEnabled,
+        s.qualityLevel ? s.qualityLevel : "HIGH",
+        s.qualityReason ? s.qualityReason : "NONE",
         s.stutterCount,
         s.freezeCount,
         s.thermalLevel,

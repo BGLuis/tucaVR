@@ -35,6 +35,8 @@
 
     <!-- Obrigatório para apps de Realidade Virtual Imersiva (6DoF) -->
     <uses-feature android:name="android.hardware.vr.headtracking" android:required="true" android:version="1" />
+    <!-- Suporte a Hand Tracking / Permite lançamento mesmo quando controles Touch estiverem em standby -->
+    <uses-feature android:name="oculus.software.handtracking" android:required="false" />
 
     <application
         android:allowBackup="true"
@@ -46,6 +48,7 @@
         <!-- Dispositivos suportados e tela de carregamento nativa -->
         <meta-data android:name="com.oculus.supportedDevices" android:value="quest3|quest3s" />
         <meta-data android:name="com.oculus.ossplash" android:value="true" />
+        <meta-data android:name="com.oculus.handtracking.version" android:value="V2.0" />
 
         <!-- `excludeFromRecents="true"` e exigencia documentada da Meta pra
              activity de lancamento de app imersivo ("Application Manifests for

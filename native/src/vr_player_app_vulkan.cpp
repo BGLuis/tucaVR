@@ -99,8 +99,43 @@ extern "C" {
     extern uint32_t get_swap_eyes();
     // Fase 0.4 T5: Foveated Rendering — ver ApplyFoveation abaixo.
     extern uint32_t get_foveation_enabled();
+    extern uint32_t get_foveation_mode();
     // Upscaling de vídeo (Vulkan MQSR / SGSR1)
     extern uint32_t get_upscaling_mode();
+    extern void evaluate_upscaling_ffi(
+        uint32_t mode,
+        uint32_t screen_mode,
+        uint32_t video_width,
+        uint32_t video_height,
+        uint32_t thermal_level,
+        float* out_render_scale,
+        float* out_sharpness,
+        uint32_t* out_enable_mqsr,
+        uint32_t* out_enable_sgsr
+    );
+    // Fase 0.4 F1/F2: Adaptive Quality Controller
+    extern void quality_controller_evaluate_and_resolve(
+        uint32_t thermal_level,
+        float smoothed_gpu_time_ms,
+        float frame_time_ms,
+        float dropped_fps,
+        float current_target_fps,
+        uint32_t upscaling_mode,
+        uint32_t screen_mode,
+        uint32_t video_width,
+        uint32_t video_height,
+        float* out_render_scale,
+        float* out_sharpness,
+        uint32_t* out_enable_mqsr,
+        uint32_t* out_enable_sgsr,
+        uint32_t* out_foveation_level,
+        float* out_foveation_vertical_offset,
+        float* out_target_fps,
+        uint32_t* out_quality_level,
+        uint32_t* out_transition_reason
+    );
+    extern uint32_t quality_controller_get_level();
+    extern uint32_t quality_controller_get_reason();
     // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006)
     extern uint32_t get_thermal_level();
     // Rastreamento de cabeça para áudio espacial
@@ -360,8 +395,15 @@ struct AppState {
     XrPassthroughFB passthrough = XR_NULL_HANDLE;
     XrPassthroughLayerFB passthroughLayer = XR_NULL_HANDLE;
 
-    // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006)
+    // Fase 0.2 T14 / Fase 0.4: Monitoramento Térmico e Qualidade Adaptativa (RNF-PERF-006)
     PFN_xrRequestDisplayRefreshRateFB pfnRequestDisplayRefreshRateFB = nullptr;
+    float displayRefreshRate = 90.0f;
+    uint32_t qualityLevel = 1; // 0=Ultra, 1=High, 2=Medium, 3=Low, 4=Emergency
+    uint32_t qualityReason = 0; // QualityTransitionReason
+    uint32_t activeFoveationLevel = 0;
+    float activeFoveationVerticalOffset = 0.0f;
+    uint32_t foveationCurrentlyAppliedLevel = 0;
+    float foveationCurrentlyAppliedOffset = 0.0f;
     uint32_t thermalLevel = 0;
     float renderResolutionScale = 1.0f;
     float thermalPollAccumMs = 0.0f;
@@ -1303,7 +1345,7 @@ void DestroyPassthrough(AppState& state) {
     state.passthroughActive = false;
 }
 
-void ApplyFoveation(AppState& state, bool enabled) {
+void ApplyFoveation(AppState& state, uint32_t level, float verticalOffset) {
     if (state.pfnCreateFoveationProfileFB == nullptr) {
         state.pfnCreateFoveationProfileFB =
             LoadXrFunction<PFN_xrCreateFoveationProfileFB>(state.instance, "xrCreateFoveationProfileFB");
@@ -1313,34 +1355,65 @@ void ApplyFoveation(AppState& state, bool enabled) {
             LoadXrFunction<PFN_xrUpdateSwapchainFB>(state.instance, "xrUpdateSwapchainFB");
     }
 
+    if (state.pfnCreateFoveationProfileFB == nullptr ||
+        state.pfnDestroyFoveationProfileFB == nullptr ||
+        state.pfnUpdateSwapchainFB == nullptr) {
+        LOGW("Foveated Rendering: funcoes de extensao nao disponiveis no runtime");
+        return;
+    }
+
+    XrFoveationLevelFB xrLevel = XR_FOVEATION_LEVEL_NONE_FB;
+    switch (level) {
+        case 1: xrLevel = XR_FOVEATION_LEVEL_LOW_FB; break;
+        case 2: xrLevel = XR_FOVEATION_LEVEL_MEDIUM_FB; break;
+        case 3: xrLevel = XR_FOVEATION_LEVEL_HIGH_FB; break;
+        case 0:
+        default:
+            xrLevel = XR_FOVEATION_LEVEL_NONE_FB;
+            break;
+    }
+
     XrFoveationLevelProfileCreateInfoFB levelInfo{XR_TYPE_FOVEATION_LEVEL_PROFILE_CREATE_INFO_FB};
-    levelInfo.level = enabled ? XR_FOVEATION_LEVEL_MEDIUM_FB : XR_FOVEATION_LEVEL_NONE_FB;
-    levelInfo.verticalOffset = 0.0f;
-    levelInfo.dynamic = XR_FOVEATION_DYNAMIC_LEVEL_ENABLED_FB;
+    levelInfo.level = xrLevel;
+    levelInfo.verticalOffset = verticalOffset;
+    levelInfo.dynamic = XR_FOVEATION_DYNAMIC_DISABLED_FB; // Níveis discretos gerenciados por QualityController (G2/G3)
 
     XrFoveationProfileCreateInfoFB profileInfo{XR_TYPE_FOVEATION_PROFILE_CREATE_INFO_FB};
     profileInfo.next = &levelInfo;
 
     XrFoveationProfileFB newProfile = XR_NULL_HANDLE;
-    OXR(state.pfnCreateFoveationProfileFB(state.session, &profileInfo, &newProfile));
+    XrResult createRes = state.pfnCreateFoveationProfileFB(state.session, &profileInfo, &newProfile);
+    if (XR_FAILED(createRes)) {
+        LOGW("Foveated Rendering: falha em xrCreateFoveationProfileFB (res=%d)", createRes);
+        return;
+    }
 
     XrSwapchainStateFoveationFB swapchainState{XR_TYPE_SWAPCHAIN_STATE_FOVEATION_FB};
     swapchainState.flags = 0;
     swapchainState.profile = newProfile;
+    bool updateFailed = false;
     for (auto& eyeChain : state.eyes) {
-        OXR(state.pfnUpdateSwapchainFB(
-            eyeChain.handle, reinterpret_cast<XrSwapchainStateBaseHeaderFB*>(&swapchainState)));
+        XrResult updateRes = state.pfnUpdateSwapchainFB(
+            eyeChain.handle, reinterpret_cast<XrSwapchainStateBaseHeaderFB*>(&swapchainState));
+        if (XR_FAILED(updateRes)) {
+            LOGW("Foveated Rendering: falha em xrUpdateSwapchainFB (res=%d)", updateRes);
+            updateFailed = true;
+        }
     }
 
-    // So destroi o profile ANTERIOR depois dos swapchains ja apontarem pro
-    // novo — nunca ha uma janela em que um swapchain referencia um profile
-    // destruido.
-    if (state.foveationProfile != XR_NULL_HANDLE) {
-        state.pfnDestroyFoveationProfileFB(state.foveationProfile);
+    if (!updateFailed) {
+        // So destroi o profile ANTERIOR depois dos swapchains ja apontarem pro novo
+        if (state.foveationProfile != XR_NULL_HANDLE) {
+            state.pfnDestroyFoveationProfileFB(state.foveationProfile);
+        }
+        state.foveationProfile = newProfile;
+        state.foveationCurrentlyApplied = (level != 0);
+        state.foveationCurrentlyAppliedLevel = level;
+        state.foveationCurrentlyAppliedOffset = verticalOffset;
+        LOGI("Foveated Rendering: aplicado nivel=%u offset=%.1f (discreto)", level, verticalOffset);
+    } else {
+        state.pfnDestroyFoveationProfileFB(newProfile);
     }
-    state.foveationProfile = newProfile;
-    state.foveationCurrentlyApplied = enabled;
-    LOGI("Foveated Rendering: %s", enabled ? "ativado (MEDIUM, dynamic)" : "desativado");
 }
 
 // Um subpass, um color attachment (o proprio swapchain image), sem depth —
@@ -4242,13 +4315,28 @@ void RenderFrame(AppState& state) {
             state.decodedFpsPollAccumMs = 0.0f;
         }
 
-        // Fase 0.4 T5: mesma cadencia ~1Hz, checa se o usuario mudou o toggle de Foveated Rendering
+        // Fase 0.4 T5 / G1-G3: checa modo de Foveated Rendering (0=Off, 1=Low, 2=Med, 3=High, 4=Auto)
         state.foveationPollAccumMs += frameMs;
         if (state.foveationPollAccumMs >= AppState::kFoveationPollIntervalMs) {
             state.foveationPollAccumMs = 0.0f;
-            bool desired = get_foveation_enabled() != 0;
-            if (desired != state.foveationCurrentlyApplied) {
-                ApplyFoveation(state, desired);
+            uint32_t fovMode = get_foveation_mode();
+            uint32_t targetLevel = 0;
+            float targetOffset = 0.0f;
+
+            if (fovMode == 4) { // Auto: guiado pelo QualityController
+                targetLevel = state.activeFoveationLevel;
+                targetOffset = state.activeFoveationVerticalOffset;
+            } else if (fovMode >= 1 && fovMode <= 3) { // Fixo: Low, Medium, High
+                targetLevel = fovMode;
+                targetOffset = 0.0f;
+            } else { // 0: Off
+                targetLevel = 0;
+                targetOffset = 0.0f;
+            }
+
+            if (targetLevel != state.foveationCurrentlyAppliedLevel ||
+                std::abs(targetOffset - state.foveationCurrentlyAppliedOffset) > 0.1f) {
+                ApplyFoveation(state, targetLevel, targetOffset);
             }
         }
 
@@ -4401,74 +4489,54 @@ void RenderFrame(AppState& state) {
             }
         }
 
-        // Avaliacao de Upscaling & Escala de Resolucao (F4 & F6)
+        // Avaliacao de Qualidade Adaptativa & Escala de Resolucao unificada via Rust media-logic (F1/F2)
         state.upscalingMode = get_upscaling_mode();
-        float baseScale = 1.0f;
-        float targetSharpness = 0.0f;
-        bool enableMqsr = false;
-        bool enableSgsr = false;
+        float renderScale = 1.0f;
+        float sharpness = 0.0f;
+        uint32_t enableMqsr = 0;
+        uint32_t enableSgsr = 0;
+        uint32_t foveationLevel = 0;
+        float foveationVerticalOffset = 0.0f;
+        float targetFps = 90.0f;
+        uint32_t qualityLevel = 1;
+        uint32_t transitionReason = 0;
 
-        const bool isSpherical = sphereMode;
-        const uint32_t videoMaxDim = std::max(state.videoWidth, state.videoHeight);
+        quality_controller_evaluate_and_resolve(
+            state.thermalLevel,
+            state.smoothedGpuTimeMs,
+            state.lastFrameMs,
+            state.droppedFps,
+            state.displayRefreshRate,
+            state.upscalingMode,
+            static_cast<uint32_t>(state.screenMode),
+            state.videoWidth,
+            state.videoHeight,
+            &renderScale,
+            &sharpness,
+            &enableMqsr,
+            &enableSgsr,
+            &foveationLevel,
+            &foveationVerticalOffset,
+            &targetFps,
+            &qualityLevel,
+            &transitionReason
+        );
 
-        switch (state.upscalingMode) {
-            case 1: // Quality
-                baseScale = 1.0f;
-                targetSharpness = (state.thermalLevel >= 3) ? 0.2f : 0.5f;
-                enableMqsr = true;
-                enableSgsr = (state.thermalLevel < 3);
-                break;
-            case 2: // Performance
-                baseScale = 0.80f;
-                targetSharpness = 0.25f;
-                enableMqsr = true;
-                enableSgsr = false;
-                break;
-            case 3: // Auto
-                enableMqsr = true;
-                if (state.thermalLevel >= 3) {
-                    baseScale = 0.80f;
-                    targetSharpness = 0.0f;
-                    enableSgsr = false;
-                } else if (isSpherical && videoMaxDim >= 5000) {
-                    baseScale = 0.80f;
-                    targetSharpness = 0.15f;
-                    enableSgsr = false;
-                } else if (isSpherical) {
-                    baseScale = 0.90f;
-                    targetSharpness = 0.35f;
-                    enableSgsr = true;
-                } else if (videoMaxDim <= 1920) {
-                    baseScale = 1.0f;
-                    targetSharpness = 0.60f;
-                    enableSgsr = true;
-                } else {
-                    baseScale = 1.0f;
-                    targetSharpness = 0.35f;
-                    enableSgsr = true;
-                }
-                break;
-            case 0: // Off
-            default:
-                baseScale = 1.0f;
-                targetSharpness = 0.0f;
-                enableMqsr = false;
-                enableSgsr = false;
-                break;
-        }
-
-        // Piso térmico de proteção (RNF-PERF-006 / F4)
-        float thermalFloor = 1.0f;
-        if (state.thermalLevel >= 4) {
-            thermalFloor = 0.70f;
-        } else if (state.thermalLevel == 3) {
-            thermalFloor = 0.80f;
-        } else if (state.thermalLevel == 2) {
-            thermalFloor = 0.90f;
-        }
-        state.renderResolutionScale = std::min(baseScale, thermalFloor);
-        state.upscalingSharpness = enableSgsr ? targetSharpness : 0.0f;
+        state.renderResolutionScale = renderScale;
+        state.upscalingSharpness = (enableSgsr != 0) ? sharpness : 0.0f;
         state.upscalingEnabled = (state.upscalingMode != 0);
+        state.qualityLevel = qualityLevel;
+        state.qualityReason = transitionReason;
+        state.activeFoveationLevel = foveationLevel;
+        state.activeFoveationVerticalOffset = foveationVerticalOffset;
+
+        // Se targetFps mudou e difere do displayRefreshRate atual, requisita ajuste ao compositor OpenXR
+        if (state.pfnRequestDisplayRefreshRateFB != nullptr && std::abs(targetFps - state.displayRefreshRate) > 1.0f) {
+            state.pfnRequestDisplayRefreshRateFB(state.session, targetFps);
+            state.displayRefreshRate = targetFps;
+            LOGI("VRPlayerAppVK: QualityController ajustou refresh rate para %.0fHz (motivo: %u)",
+                targetFps, transitionReason);
+        }
 
         for (int eye = 0; eye < kEyeCount; eye++) {
             EyeSwapchain& eyeChain = state.eyes[eye];
@@ -5150,9 +5218,13 @@ void android_main(android_app* app) {
 
     CreateReferenceSpace(state);
     CreateSwapchains(state);
-    // Fase 0.4 T5: estado inicial do toggle, persistido pelo Kotlin e
-    // empurrado no startup (VRActivity.onCreate -> nativeSetFoveationEnabled).
-    ApplyFoveation(state, get_foveation_enabled() != 0);
+    // Fase 0.4 T5: estado inicial do modo de foveação, persistido pelo Kotlin e
+    // empurrado no startup (VRActivity.onCreate -> nativeSetFoveationMode).
+    uint32_t startupFovMode = get_foveation_mode();
+    uint32_t startupLevel = (startupFovMode == 4) ? 1 : startupFovMode;
+    state.activeFoveationLevel = startupLevel;
+    state.activeFoveationVerticalOffset = 0.0f;
+    ApplyFoveation(state, startupLevel, 0.0f);
     // Fase 0.3 Seção 2: cria o XrPassthroughFB + layer (pausados). O toggle
     // real acontece no RenderFrame via UpdatePassthrough (polling ~2x/s do
     // estado persistido pelo Kotlin -> nativeSetPassthroughEnabled).

@@ -56,7 +56,14 @@
     <string name="settings_upscaling_mode_performance">Performance (Render Scale 0.8x + MQSR)</string>
     <string name="settings_upscaling_mode_auto">Auto (Adaptive)</string>
     <string name="settings_foveated_rendering_label">Foveated Rendering</string>
-    <string name="settings_foveated_rendering_description">Reduces GPU load by lowering detail in peripheral vision. May slightly reduce edge sharpness. Vulkan only.</string>
+    <string name="settings_foveated_rendering_description">Reduces GPU load by lowering detail in peripheral vision. Select a fixed intensity or Auto for adaptive control. Vulkan only.</string>
+    <string name="settings_foveated_mode_off">Off</string>
+    <string name="settings_foveated_mode_low">Low</string>
+    <string name="settings_foveated_mode_medium">Medium</string>
+    <string name="settings_foveated_mode_high">High</string>
+    <string name="settings_foveated_mode_auto">Auto (Adaptive)</string>
+    <string name="quality_warning_thermal">Thermal limit reached: reducing rendering quality to cool down device.</string>
+    <string name="quality_warning_8k60">High framerate 8K video may experience frame drops on mobile hardware.</string>
     <string name="settings_pause_on_exit_label">Pause on exit</string>
     <string name="settings_pause_on_exit_description">Automatically pause playback when returning to the system menu or passthrough.</string>
     <string name="settings_section_audio">Audio</string>

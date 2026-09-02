@@ -200,18 +200,27 @@ pub extern "C" fn get_keyboard_active() -> u32 {
     KEYBOARD_ACTIVE.load(Ordering::Relaxed) as u32
 }
 
-// Fase 0.4 T5: Foveated Rendering (fixo, via extensao OpenXR XR_FB_foveation
-// no caminho Vulkan — ver native/src/vr_player_app_vulkan.cpp). Default OFF:
-// feature nunca validada em headset real nesta sessao, ligar e acao
-// explicita do usuario na tela de Configuracoes (Kotlin). So tem efeito real
-// no caminho Vulkan (padrao de build); no caminho GLES o valor e aceito e
-// guardado aqui, mas nada le/aplica — OVRFW::XrApp nao expoe o XrSwapchain
-// necessario pra xrUpdateSwapchainFB.
+// Fase 0.4 T5: Foveated Rendering (via extensao OpenXR XR_FB_foveation
+// no caminho Vulkan — ver native/src/vr_player_app_vulkan.cpp).
+// 0=Off, 1=Low, 2=Medium, 3=High, 4=Auto
+static FOVEATION_MODE: AtomicU32 = AtomicU32::new(0);
 static FOVEATION_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[no_mangle]
+pub extern "C" fn set_foveation_mode(mode: u32) {
+    FOVEATION_MODE.store(mode, Ordering::Relaxed);
+    FOVEATION_ENABLED.store(mode != 0, Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_foveation_mode() -> u32 {
+    FOVEATION_MODE.load(Ordering::Relaxed)
+}
+
+#[no_mangle]
 pub extern "C" fn set_foveation_enabled(enabled: u32) {
-    FOVEATION_ENABLED.store(enabled != 0, Ordering::Relaxed);
+    let mode = if enabled != 0 { 4 } else { 0 }; // Default para Auto (4) quando ativado via toggle booleano
+    set_foveation_mode(mode);
 }
 
 /// Polling de baixa frequencia (~1x/s, nao a cada frame) pelo loop principal
@@ -308,6 +317,161 @@ pub extern "C" fn set_upscaling_mode(mode: u32) {
 #[no_mangle]
 pub extern "C" fn get_upscaling_mode() -> u32 {
     UPSCALING_MODE.load(Ordering::Relaxed)
+}
+
+/// F0: Avalia parâmetros de upscaling e escala de resolução via lógica pura de media-logic
+#[no_mangle]
+pub extern "C" fn evaluate_upscaling_ffi(
+    mode: u32,
+    screen_mode: u32,
+    video_width: u32,
+    video_height: u32,
+    thermal_level: u32,
+    out_render_scale: *mut f32,
+    out_sharpness: *mut f32,
+    out_enable_mqsr: *mut u32,
+    out_enable_sgsr: *mut u32,
+) {
+    let mode_enum = media_logic::upscaling::UpscalingMode::from_u32(mode);
+    let params = media_logic::upscaling::evaluate_upscaling(
+        mode_enum,
+        screen_mode,
+        video_width,
+        video_height,
+        thermal_level,
+    );
+    unsafe {
+        if !out_render_scale.is_null() {
+            *out_render_scale = params.render_scale;
+        }
+        if !out_sharpness.is_null() {
+            *out_sharpness = params.sharpness;
+        }
+        if !out_enable_mqsr.is_null() {
+            *out_enable_mqsr = params.enable_mqsr as u32;
+        }
+        if !out_enable_sgsr.is_null() {
+            *out_enable_sgsr = params.enable_shader_sgsr as u32;
+        }
+    }
+}
+
+// Fase 0.4 F1/F2: Instância global do QualityController
+static QUALITY_CONTROLLER: Lazy<Mutex<media_logic::quality::QualityController>> =
+    Lazy::new(|| Mutex::new(media_logic::quality::QualityController::new()));
+
+#[no_mangle]
+pub extern "C" fn quality_controller_set_enabled(enabled: u32) {
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        qc.set_enabled(enabled != 0);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn quality_controller_get_enabled() -> u32 {
+    if let Ok(qc) = QUALITY_CONTROLLER.lock() {
+        qc.is_enabled() as u32
+    } else {
+        1
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn quality_controller_set_manual_level(level: u32) {
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        qc.set_manual_level(media_logic::quality::QualityLevel::from_u32(level));
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn quality_controller_get_level() -> u32 {
+    if let Ok(qc) = QUALITY_CONTROLLER.lock() {
+        qc.current_level().as_u32()
+    } else {
+        1 // High
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn quality_controller_get_reason() -> u32 {
+    if let Ok(qc) = QUALITY_CONTROLLER.lock() {
+        qc.last_reason() as u32
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn quality_controller_evaluate_and_resolve(
+    thermal_level: u32,
+    smoothed_gpu_time_ms: f32,
+    frame_time_ms: f32,
+    dropped_fps: f32,
+    current_target_fps: f32,
+    upscaling_mode: u32,
+    screen_mode: u32,
+    video_width: u32,
+    video_height: u32,
+    out_render_scale: *mut f32,
+    out_sharpness: *mut f32,
+    out_enable_mqsr: *mut u32,
+    out_enable_sgsr: *mut u32,
+    out_foveation_level: *mut u32,
+    out_foveation_vertical_offset: *mut f32,
+    out_target_fps: *mut f32,
+    out_quality_level: *mut u32,
+    out_transition_reason: *mut u32,
+) {
+    let sample = media_logic::quality::QualitySample {
+        thermal_level,
+        smoothed_gpu_time_ms,
+        frame_time_ms,
+        dropped_fps,
+        target_fps: current_target_fps,
+    };
+
+    let base_mode = media_logic::upscaling::UpscalingMode::from_u32(upscaling_mode);
+
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        let _action = qc.evaluate(&sample);
+        let resolved = qc.resolve_params(
+            thermal_level,
+            base_mode,
+            screen_mode,
+            video_width,
+            video_height,
+        );
+
+        unsafe {
+            if !out_render_scale.is_null() {
+                *out_render_scale = resolved.render_scale;
+            }
+            if !out_sharpness.is_null() {
+                *out_sharpness = resolved.sharpness;
+            }
+            if !out_enable_mqsr.is_null() {
+                *out_enable_mqsr = resolved.enable_mqsr as u32;
+            }
+            if !out_enable_sgsr.is_null() {
+                *out_enable_sgsr = resolved.enable_shader_sgsr as u32;
+            }
+            if !out_foveation_level.is_null() {
+                *out_foveation_level = resolved.foveation_level;
+            }
+            if !out_foveation_vertical_offset.is_null() {
+                *out_foveation_vertical_offset = resolved.foveation_vertical_offset;
+            }
+            if !out_target_fps.is_null() {
+                *out_target_fps = resolved.target_fps;
+            }
+            if !out_quality_level.is_null() {
+                *out_quality_level = resolved.level.as_u32();
+            }
+            if !out_transition_reason.is_null() {
+                *out_transition_reason = resolved.last_reason as u32;
+            }
+        }
+    }
 }
 
 /// T1.4: avanca pro proximo modo do ciclo (chamado pelo botao "🧊" do painel

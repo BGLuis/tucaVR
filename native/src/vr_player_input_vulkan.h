@@ -714,11 +714,35 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             stats.upscalingMode = upscaleStr;
             stats.upscalingSharpness = state.upscalingSharpness;
             stats.mqsrEnabled = (int)(state.supportsMqsr && state.upscalingEnabled);
+
+            const char* qualityLevelStr = "HIGH";
+            switch (state.qualityLevel) {
+                case 0: qualityLevelStr = "ULTRA"; break;
+                case 1: qualityLevelStr = "HIGH"; break;
+                case 2: qualityLevelStr = "MEDIUM"; break;
+                case 3: qualityLevelStr = "LOW"; break;
+                case 4: qualityLevelStr = "EMERGENCY"; break;
+                default: qualityLevelStr = "HIGH"; break;
+            }
+            stats.qualityLevel = qualityLevelStr;
+
+            const char* qualityReasonStr = "NONE";
+            switch (state.qualityReason) {
+                case 1: qualityReasonStr = "THERMAL"; break;
+                case 2: qualityReasonStr = "GPU_OVERLOAD"; break;
+                case 3: qualityReasonStr = "PACING_LAG"; break;
+                case 4: qualityReasonStr = "DROPPED_FRAMES"; break;
+                case 5: qualityReasonStr = "RECOVERY"; break;
+                case 6: qualityReasonStr = "MANUAL"; break;
+                default: qualityReasonStr = "NONE"; break;
+            }
+            stats.qualityReason = qualityReasonStr;
+
             stats.stutterCount = state.stutterCount;
             stats.freezeCount = state.freezeCount;
             stats.thermalLevel = state.thermalLevel;
             stats.renderResolutionScale = state.renderResolutionScale;
-            stats.displayRefreshRate = 90.0f;
+            stats.displayRefreshRate = state.displayRefreshRate;
             stats.avDriftMs = get_last_av_drift_ms();
             stats.netLastFetchMs = get_network_last_block_fetch_ms();
             stats.netBlocksFetched = get_network_blocks_fetched();

@@ -239,8 +239,13 @@ impl PlaybackController {
         let mut width = 1920;
         let mut height = 1080;
         let mut codec_id = ffmpeg_next::codec::Id::None;
+        let mut video_fps = 0.0f32;
         if let Some(stream) = demuxer.input_context.stream(video_idx) {
             codec_id = stream.parameters().id();
+            let avg_fps = stream.avg_frame_rate();
+            if avg_fps.denominator() > 0 {
+                video_fps = avg_fps.numerator() as f32 / avg_fps.denominator() as f32;
+            }
             if let Ok(decoder) = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters()) {
                 if let Ok(video_decoder_ctx) = decoder.decoder().video() {
                     width = video_decoder_ctx.width() as u32;
@@ -314,6 +319,26 @@ impl PlaybackController {
         format.set_str("mime", mime);
         format.set_i32("width", width as i32);
         format.set_i32("height", height as i32);
+
+        // F3 (T1.1): max-input-size dimensionado para 8K/4K para evitar estouro de buffer de entrada
+        let max_dim = width.max(height);
+        let max_input_size = if max_dim >= 7000 {
+            4 * 1024 * 1024 // 4 MB para 8K
+        } else if max_dim >= 3800 {
+            2 * 1024 * 1024 // 2 MB para 4K
+        } else {
+            1024 * 1024 // 1 MB para 1080p
+        };
+        format.set_i32("max-input-size", max_input_size);
+        // Prioridade de decodificação realtime (0 = realtime / baixa latência)
+        format.set_i32("priority", 0);
+
+        if max_dim >= 7000 && video_fps > 30.0 {
+            crate::log_warn!(
+                "Aviso de capacidade 8K: Conteúdo {}x{} a {:.1} fps detectado. Hardware móvel XR2 opera no limite de throughput de decode.",
+                width, height, video_fps
+            );
+        }
 
         let video_decoder = HwDecoder::new_configured_and_started(mime, &format, window.as_ref()).map_err(|e| e.to_string())?;
         let (frames_output, frames_dropped) = video_decoder.metrics();

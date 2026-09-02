@@ -55,6 +55,8 @@ extern "C" {
     // Fase 0.4 T5: Foveated Rendering (implementacao real em
     // vr_player_app_vulkan.cpp, ver ApplyFoveation).
     extern void set_foveation_enabled(uint32_t enabled);
+    extern void set_foveation_mode(uint32_t mode);
+    extern uint32_t get_foveation_mode();
     // Fase 0.3 Seção 2: Passthrough / Mixed Reality (implementacao real em
     // vr_player_app_vulkan.cpp, ver SetupPassthrough/UpdatePassthrough).
     extern void set_passthrough_enabled(uint32_t enabled);
@@ -388,6 +390,16 @@ Java_com_tucavr_VRActivity_nativeSetKeyboardActive(JNIEnv*, jobject, jboolean ac
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetFoveationEnabled(JNIEnv*, jobject, jboolean enabled) {
     set_foveation_enabled(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetFoveationMode(JNIEnv*, jobject, jint mode) {
+    set_foveation_mode(static_cast<uint32_t>(mode));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_VRActivity_nativeGetFoveationMode(JNIEnv*, jobject) {
+    return static_cast<jint>(get_foveation_mode());
 }
 
 // Fase 0.3 Seção 2: Passthrough / Mixed Reality.

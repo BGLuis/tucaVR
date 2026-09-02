@@ -56,6 +56,9 @@ object FeatureFlags {
     /** Chave usada para persistir o modo de áudio espacial como Int (0/1/2). */
     private const val KEY_SPATIAL_AUDIO_MODE = "spatial_audio_mode"
 
+    /** Chave usada para persistir o modo de Foveated Rendering como Int (0=Off, 1=Low, 2=Med, 3=High, 4=Auto). */
+    private const val KEY_FOVEATED_RENDERING_MODE = "foveated_rendering_mode"
+
     fun isEnabled(context: Context, flag: Flag): Boolean =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getBoolean(flag.key, flag.defaultEnabled)
@@ -78,5 +81,21 @@ object FeatureFlags {
     fun setSpatialAudioMode(context: Context, mode: Int) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putInt(KEY_SPATIAL_AUDIO_MODE, mode).apply()
+    }
+
+    /**
+     * Lê o modo de Foveated Rendering persistido (0 = Off, 1 = Low, 2 = Medium, 3 = High, 4 = Auto).
+     */
+    fun getFoveatedRenderingMode(context: Context): Int =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getInt(KEY_FOVEATED_RENDERING_MODE, 0)
+
+    /** Persiste o modo de Foveated Rendering como Int (0 a 4) e sincroniza a flag legada. */
+    fun setFoveatedRenderingMode(context: Context, mode: Int) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putInt(KEY_FOVEATED_RENDERING_MODE, mode)
+            .putBoolean(Flag.FOVEATED_RENDERING.key, mode != 0)
+            .apply()
     }
 }

@@ -29,6 +29,13 @@ class DebugStatsParserTest {
             "seek_latency_ms\t45\n" +
             "smoothed_fps\t90.0\n" +
             "frame_time_ms\t11.1\n" +
+            "gpu_time_ms\t8.50\n" +
+            "smoothed_gpu_time_ms\t8.20\n" +
+            "upscaling_mode\tAUTO\n" +
+            "upscaling_sharpness\t0.35\n" +
+            "mqsr_enabled\t1\n" +
+            "quality_level\tHIGH\n" +
+            "quality_reason\tRECOVERY\n" +
             "stutter_count\t2\n" +
             "freeze_count\t0\n" +
             "thermal_level\t1\n" +
@@ -69,6 +76,13 @@ class DebugStatsParserTest {
         assertEquals(45, stats.seekLatencyMs)
         assertEquals(90.0f, stats.smoothedFps, 0.01f)
         assertEquals(11.1f, stats.frameTimeMs, 0.01f)
+        assertEquals(8.50f, stats.gpuTimeMs, 0.01f)
+        assertEquals(8.20f, stats.smoothedGpuTimeMs, 0.01f)
+        assertEquals("AUTO", stats.upscalingMode)
+        assertEquals(0.35f, stats.upscalingSharpness, 0.01f)
+        assertTrue(stats.mqsrEnabled)
+        assertEquals("HIGH", stats.qualityLevel)
+        assertEquals("RECOVERY", stats.qualityReason)
         assertEquals(2, stats.stutterCount)
         assertEquals(0, stats.freezeCount)
         assertEquals(1, stats.thermalLevel)

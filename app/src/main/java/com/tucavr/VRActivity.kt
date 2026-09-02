@@ -316,11 +316,10 @@ class VRActivity : NativeActivity() {
 
         registerDebugReceiverIfDebuggable()
 
-        // Fase 0.4 T5: empurra o valor persistido do toggle de Foveated
-        // Rendering pro Rust — o C++ (caminho Vulkan) le isso na
-        // inicializacao do XrInstance/swapchains. Trocas em runtime (tela de
-        // Configuracoes) empurram de novo na hora, ver SettingsScreen.kt.
-        nativeSetFoveationEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.FOVEATED_RENDERING))
+        // Fase 0.4 T5: empurra o modo persistido de Foveated Rendering pro Rust/C++
+        val fovMode = FeatureFlags.getFoveatedRenderingMode(this)
+        nativeSetFoveationMode(fovMode)
+        nativeSetFoveationEnabled(fovMode != 0)
 
         // Pausar ao sair: empurra preferência inicial de auto-pause para a camada nativa
         nativeSetPauseOnExit(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PAUSE_ON_EXIT))
@@ -802,6 +801,13 @@ class VRActivity : NativeActivity() {
                 )
             }
 
+            val parsedStats = com.tucavr.debug.DebugStatsParser.parse(text)
+            if (parsedStats != null) {
+                activity.runOnUiThread {
+                    activity.controlsPresentation?.updateQualityBadge(parsedStats.qualityLevel, parsedStats.qualityReason)
+                }
+            }
+
             if (!activity.isDebugStatsEnabled) return
             activity.runOnUiThread {
                 activity.modalPresentation?.updateDebugStats(text)
@@ -1271,6 +1277,8 @@ class VRActivity : NativeActivity() {
     // comentario em native/src/vr_player_app.cpp. Chamada barata (so um
     // atomic no lado Rust), segura direto da UI thread.
     external fun nativeSetFoveationEnabled(enabled: Boolean)
+    external fun nativeSetFoveationMode(mode: Int)
+    external fun nativeGetFoveationMode(): Int
     external fun nativeSetPauseOnExit(enabled: Boolean)
     // Fase 0.3 Seção 2: Passthrough / Mixed Reality (Vulkan-only, XR_FB_passthrough).
     external fun nativeSetPassthroughEnabled(enabled: Boolean)

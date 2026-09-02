@@ -77,6 +77,7 @@ class VRControlsPresentation(
     private lateinit var batteryLabel: TextView
     private lateinit var thermalIcon: ImageView
     private lateinit var thermalLabel: TextView
+    private lateinit var qualityBadge: TextView
     private lateinit var clockLabel: TextView
     private lateinit var btnPlayPause: com.tucavr.designsystem.VoidIconButton
     private var hudReceiver: android.content.BroadcastReceiver? = null
@@ -180,6 +181,36 @@ class VRControlsPresentation(
                 thermalLabel.visibility = View.VISIBLE
                 thermalLabel.text = context.getString(R.string.thermal_level_critical)
                 thermalLabel.setTextColor(color)
+            }
+        }
+    }
+
+    /**
+     * Fase 0.4 T1/T5: Atualiza o badge visual de qualidade adaptativa no header do player.
+     */
+    fun updateQualityBadge(level: String, reason: String) {
+        if (!::qualityBadge.isInitialized) return
+        when (level) {
+            "ULTRA", "HIGH" -> {
+                qualityBadge.visibility = View.GONE
+            }
+            "MEDIUM" -> {
+                qualityBadge.visibility = View.VISIBLE
+                qualityBadge.text = "AQ: MED"
+                qualityBadge.setTextColor(Color.parseColor("#FFCC00"))
+            }
+            "LOW" -> {
+                qualityBadge.visibility = View.VISIBLE
+                qualityBadge.text = if (reason != "NONE") "AQ: LOW ($reason)" else "AQ: LOW"
+                qualityBadge.setTextColor(Color.parseColor("#FF8800"))
+            }
+            "EMERGENCY" -> {
+                qualityBadge.visibility = View.VISIBLE
+                qualityBadge.text = if (reason != "NONE") "AQ: CRIT ($reason)" else "AQ: CRIT"
+                qualityBadge.setTextColor(Color.parseColor("#FF3333"))
+            }
+            else -> {
+                qualityBadge.visibility = View.GONE
             }
         }
     }
@@ -466,6 +497,21 @@ class VRControlsPresentation(
             visibility = View.GONE
         }
         statusBadge.addView(thermalLabel)
+
+        qualityBadge = TextView(context).apply {
+            text = ""
+            typeface = VoidTheme.typefaceMono
+            textSize = 28f
+            setTextColor(VoidTheme.colorTextSecondary)
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                leftMargin = VoidTheme.dpToPx(context, 16f)
+            }
+        }
+        statusBadge.addView(qualityBadge)
 
         headerRow.addView(statusBadge)
 
