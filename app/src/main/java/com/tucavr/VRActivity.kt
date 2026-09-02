@@ -87,7 +87,18 @@ class VRActivity : NativeActivity() {
     // Poll do erro de load() que falhou (codec nao suportado, etc.) — ver nativeTakeLastPlaybackError.
     private val playbackErrorPoll = object : Runnable {
         override fun run() {
-            nativeTakeLastPlaybackError()?.let { Toast.makeText(this@VRActivity, it, Toast.LENGTH_LONG).show() }
+            nativeTakeLastPlaybackError()?.let { rawError ->
+                val displayMsg = if (rawError.contains("video/av01", ignoreCase = true) ||
+                    rawError.contains("video/x-vnd.on2.vp9", ignoreCase = true) ||
+                    rawError.contains("não possui suporte de hardware", ignoreCase = true) ||
+                    rawError.contains("nao possui suporte de hardware", ignoreCase = true)
+                ) {
+                    getString(R.string.codec_hw_unsupported_error)
+                } else {
+                    rawError
+                }
+                Toast.makeText(this@VRActivity, displayMsg, Toast.LENGTH_LONG).show()
+            }
             autoPlayHandler.postDelayed(this, PLAYBACK_ERROR_POLL_MS)
         }
     }

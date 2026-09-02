@@ -134,6 +134,7 @@
     <string name="file_detail_label_container">Container</string>
     <string name="file_detail_label_bitrate">Bitrate</string>
     <string name="file_detail_label_video_codec">Codec de video</string>
+    <string name="file_detail_label_decoder">Decodificador</string>
     <string name="file_detail_label_audio_codec">Codec de audio</string>
     <string name="file_detail_label_format3d">Formato 3D</string>
     <string name="file_detail_format3d_low_confidence_suffix"> (estimado)</string>
@@ -411,6 +412,7 @@
     <string name="debug_stats_label_stereo_mode">Modo de Tela / Estéreo</string>
     <string name="debug_stats_label_render_scale">Escala de Resolução / Foveation</string>
     <string name="debug_stats_label_graphics_backend">Backend Gráfico</string>
+    <string name="debug_stats_label_video_decoder">Decodificador de Vídeo</string>
 
     <string name="debug_stats_label_audio_format">Codec de Áudio / Canais</string>
     <string name="debug_stats_label_av_drift">Desvio A/V (Drift)</string>
@@ -428,5 +430,12 @@
     <string name="debug_stats_label_thermal">Status Térmico</string>
     <string name="debug_stats_label_battery">Bateria</string>
     <string name="debug_stats_label_app_version">Versão do App</string>
+
+    <!-- Capacidade de codec e aceleracao por hardware (T6.1, T6.5) -->
+    <string name="codec_hw_unsupported_error">O dispositivo não possui suporte de hardware para este codec.</string>
+    <string name="codec_generic_unsupported_error">Este codec de vídeo não é suportado pelo reprodutor.</string>
+    <string name="codec_badge_hw">Decodificador HW</string>
+    <string name="codec_badge_sw">Apenas SW</string>
+    <string name="codec_badge_unsupported">Não suportado</string>
 
 </resources>
