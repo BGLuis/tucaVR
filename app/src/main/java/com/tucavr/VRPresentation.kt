@@ -151,6 +151,7 @@ class VRPresentation(
     private lateinit var settingsScreen: SettingsScreen
     private lateinit var playlistsScreen: PlaylistsScreen
     private lateinit var playlistDetailScreen: PlaylistDetailScreen
+    private lateinit var photoViewerScreen: com.tucavr.screens.PhotoViewerScreen
     private lateinit var multicastLockManager: com.tucavr.network.MulticastLockManager
     private lateinit var savedServerDao: com.tucavr.network.SavedServerDao
     private lateinit var playlistDao: PlaylistDao
@@ -217,7 +218,26 @@ class VRPresentation(
             dirNavigator  = dirNavigator,
             onNavigate    = { dest -> navigateTo(dest) },
             onBack        = { handleBack() },
-            onPlayLocalVideo = { entry -> playSource(PlaybackSource.LocalFile(entry.path, entry.sizeBytes)) }
+            onPlayLocalVideo = { entry ->
+                if (entry.type == com.tucavr.filebrowser.MediaType.IMAGE) {
+                    val dirFiles = dirNavigator.currentPath.listFiles()
+                        ?.filter { !it.isDirectory && com.tucavr.filebrowser.mediaTypeForExtension(it.extension) == com.tucavr.filebrowser.MediaType.IMAGE }
+                        ?.map {
+                            com.tucavr.filebrowser.MediaEntry(
+                                name = it.name,
+                                path = it.absolutePath,
+                                sizeBytes = it.length(),
+                                lastModified = it.lastModified(),
+                                type = com.tucavr.filebrowser.MediaType.IMAGE
+                            )
+                        }
+                    val allImages = if (!dirFiles.isNullOrEmpty()) dirFiles else listOf(entry)
+                    val idx = allImages.indexOfFirst { it.path == entry.path }.coerceAtLeast(0)
+                    navigateTo(Destination.PhotoViewer(entry, allImages, idx))
+                } else {
+                    playSource(PlaybackSource.LocalFile(entry.path, entry.sizeBytes))
+                }
+            }
         )
 
         fileDetailScreen = FileDetailScreen(
@@ -365,6 +385,14 @@ class VRPresentation(
             },
             onBack         = { handleBack() }
         )
+
+        photoViewerScreen = com.tucavr.screens.PhotoViewerScreen(
+            context  = context,
+            activity = activity,
+            host     = host,
+            scope    = scope,
+            onBack   = { handleBack() }
+        )
     }
 
     // ---- Máquina de telas ----
@@ -384,6 +412,7 @@ class VRPresentation(
             is Destination.Playlists        -> playlistsScreen.render()
             is Destination.PlaylistDetail   -> playlistDetailScreen.render(destination.playlistId)
             is Destination.Player           -> playerScreen.render(destination.source)
+            is Destination.PhotoViewer      -> photoViewerScreen.render(destination.initialEntry, destination.photoEntries, destination.initialIndex)
             is Destination.Settings         -> settingsScreen.render()
         }
     }

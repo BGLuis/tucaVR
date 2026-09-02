@@ -62,4 +62,27 @@ class ThumbnailGeneratorCacheKeyTest {
         assertEquals(64, key.length) // SHA-256 -> 32 bytes -> 64 hex chars
         assertTrue(key.all { it.isDigit() || it in 'a'..'f' })
     }
+
+    @Test
+    fun imageEntryProducesConsistentCacheKey() {
+        val imageEntry1 = MediaEntry(
+            name = "photo_360.jpg",
+            path = "/sdcard/Pictures/photo_360.jpg",
+            sizeBytes = 8_500_000L,
+            lastModified = 1_710_000_000L,
+            type = MediaType.IMAGE
+        )
+        val imageEntry2 = MediaEntry(
+            name = "photo_360.jpg",
+            path = "/sdcard/Pictures/photo_360.jpg",
+            sizeBytes = 8_500_000L,
+            lastModified = 1_710_000_000L,
+            type = MediaType.IMAGE
+        )
+        val modifiedImage = imageEntry1.copy(lastModified = 1_720_000_000L)
+
+        assertEquals(ThumbnailGenerator.cacheKeyFor(imageEntry1), ThumbnailGenerator.cacheKeyFor(imageEntry2))
+        assertNotEquals(ThumbnailGenerator.cacheKeyFor(imageEntry1), ThumbnailGenerator.cacheKeyFor(modifiedImage))
+        assertEquals(64, ThumbnailGenerator.cacheKeyFor(imageEntry1).length)
+    }
 }

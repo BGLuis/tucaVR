@@ -232,6 +232,18 @@ std::atomic<bool> g_modalPanelActive{false};
 std::atomic<bool> g_modalPanelShowRequested{false};
 std::atomic<bool> g_modalPanelHideRequested{false};
 
+// Fase 0.3 Seção 8: Fotos 360° e 3D estéreo (T8.3, T8.4)
+std::atomic<bool> g_photoDirty{false};
+std::atomic<bool> g_photoActive{false};
+std::vector<uint8_t> g_photoRgba;
+uint32_t g_photoWidth = 0;
+uint32_t g_photoHeight = 0;
+uint32_t g_photoScreenMode = 0;
+std::atomic<float> g_photoZoom{1.0f};
+std::atomic<float> g_photoPanX{0.0f};
+std::atomic<float> g_photoPanY{0.0f};
+std::mutex g_photoMutex;
+
 void ResetGlobalState() {
     g_scrubOverlayDirty.store(false);
     g_scrubOverlayVisible.store(false);
@@ -247,6 +259,19 @@ void ResetGlobalState() {
     g_modalPanelActive.store(false);
     g_modalPanelShowRequested.store(false);
     g_modalPanelHideRequested.store(false);
+
+    g_photoDirty.store(false);
+    g_photoActive.store(false);
+    {
+        std::lock_guard<std::mutex> lock(g_photoMutex);
+        g_photoRgba.clear();
+        g_photoWidth = 0;
+        g_photoHeight = 0;
+        g_photoScreenMode = 0;
+    }
+    g_photoZoom.store(1.0f);
+    g_photoPanX.store(0.0f);
+    g_photoPanY.store(0.0f);
 }
 
 namespace {
@@ -591,6 +616,22 @@ struct AppState {
     VkBuffer sphereIndexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory sphereIndexMemory = VK_NULL_HANDLE;
     uint32_t sphereIndexCount = 0;
+
+    // Fase 0.3 Seção 8 — Fotos 360° e Fotos 3D (T8.3, T8.4)
+    VkPipelineLayout photoPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline photoStereoPipeline = VK_NULL_HANDLE;     // TRIANGLE_LIST — esfera 360/180
+    VkPipeline photoStereoFlatPipeline = VK_NULL_HANDLE; // TRIANGLE_STRIP — quad plano SBS/OU/Flat
+    VkDescriptorSetLayout photoDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool photoDescriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSet photoDescriptorSet = VK_NULL_HANDLE;
+    VkImage photoImage = VK_NULL_HANDLE;
+    VkDeviceMemory photoImageMemory = VK_NULL_HANDLE;
+    VkImageView photoImageView = VK_NULL_HANDLE;
+    bool photoTextureReady = false;
+    bool photoActive = false;
+    uint32_t photoTexWidth = 0;
+    uint32_t photoTexHeight = 0;
+    ScreenMode photoScreenMode = ScreenMode::Flat2D;
 
     // Estagio 5 — BeamRenderer: linha simples de laser do controller.
     VkPipelineLayout beamPipelineLayout = VK_NULL_HANDLE;
@@ -2915,6 +2956,169 @@ void CreateStereoPipeline(AppState& state) {
     LOGI("Estagio 5: pipeline estereo/esfera criado");
 }
 
+// Fase 0.3 Seção 8: Fotos 360° e Fotos 3D estéreo (T8.3, T8.4)
+static void DestroyPhotoTexture(AppState& state) {
+    if (state.photoImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.photoImageView, nullptr);
+        state.photoImageView = VK_NULL_HANDLE;
+    }
+    if (state.photoImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.photoImage, nullptr);
+        state.photoImage = VK_NULL_HANDLE;
+    }
+    if (state.photoImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.photoImageMemory, nullptr);
+        state.photoImageMemory = VK_NULL_HANDLE;
+    }
+    state.photoTexWidth = 0;
+    state.photoTexHeight = 0;
+    state.photoTextureReady = false;
+}
+
+static void EnsurePhotoTexture(AppState& state, uint32_t width, uint32_t height) {
+    if (!state.photoTextureReady || state.photoTexWidth != width || state.photoTexHeight != height) {
+        DestroyPhotoTexture(state);
+        CreateUiImage(state, width, height, state.photoImage, state.photoImageMemory, state.photoImageView);
+        state.photoTexWidth = width;
+        state.photoTexHeight = height;
+        state.photoTextureReady = true;
+
+        VkDescriptorImageInfo imgInfo{};
+        imgInfo.sampler     = state.uiSampler;
+        imgInfo.imageView   = state.photoImageView;
+        imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet          = state.photoDescriptorSet;
+        write.dstBinding      = 0;
+        write.descriptorCount = 1;
+        write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo      = &imgInfo;
+        vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+    }
+}
+
+static void CreatePhotoPipeline(AppState& state) {
+    // Descriptor set layout com sampler imutável uiSampler (RGBA)
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding         = 0;
+    binding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    binding.pImmutableSamplers = &state.uiSampler;
+
+    VkDescriptorSetLayoutCreateInfo dsLayout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    dsLayout.bindingCount = 1;
+    dsLayout.pBindings    = &binding;
+    VKR(vkCreateDescriptorSetLayout(state.vkDevice, &dsLayout, nullptr, &state.photoDescriptorSetLayout));
+
+    // Descriptor Pool para foto
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    poolInfo.maxSets       = 2;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes    = &poolSize;
+    VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.photoDescriptorPool));
+
+    // Alocar descriptor set da foto
+    VkDescriptorSetAllocateInfo dsAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dsAlloc.descriptorPool     = state.photoDescriptorPool;
+    dsAlloc.descriptorSetCount = 1;
+    dsAlloc.pSetLayouts        = &state.photoDescriptorSetLayout;
+    VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.photoDescriptorSet));
+
+    // Pipeline Layout (mesma StereoPushConstants dos shaders stereo)
+    VkPushConstantRange pcRange{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(StereoPushConstants)};
+    VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.setLayoutCount         = 1;
+    layoutInfo.pSetLayouts            = &state.photoDescriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges    = &pcRange;
+    VKR(vkCreatePipelineLayout(state.vkDevice, &layoutInfo, nullptr, &state.photoPipelineLayout));
+
+    VkShaderModule vertMod, fragMod;
+    VkShaderModuleCreateInfo smInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    smInfo.codeSize = sizeof(kStereoVertSpirv); smInfo.pCode = reinterpret_cast<const uint32_t*>(kStereoVertSpirv);
+    VKR(vkCreateShaderModule(state.vkDevice, &smInfo, nullptr, &vertMod));
+    smInfo.codeSize = sizeof(kStereoFragSpirv); smInfo.pCode = reinterpret_cast<const uint32_t*>(kStereoFragSpirv);
+    VKR(vkCreateShaderModule(state.vkDevice, &smInfo, nullptr, &fragMod));
+
+    VkPipelineShaderStageCreateInfo stages[2] = {};
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertMod; stages[0].pName = "main";
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragMod; stages[1].pName = "main";
+
+    VkVertexInputBindingDescription bindDesc{0, 5 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attrs[2] = {
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
+        {1, 0, VK_FORMAT_R32G32_SFLOAT, 3 * sizeof(float)},
+    };
+    VkPipelineVertexInputStateCreateInfo vtxInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vtxInput.vertexBindingDescriptionCount   = 1;
+    vtxInput.pVertexBindingDescriptions      = &bindDesc;
+    vtxInput.vertexAttributeDescriptionCount = 2;
+    vtxInput.pVertexAttributeDescriptions    = attrs;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vp.viewportCount = 1; vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rast{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rast.polygonMode = VK_POLYGON_MODE_FILL;
+    rast.cullMode    = VK_CULL_MODE_FRONT_BIT; // Esfera vista de dentro
+    rast.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rast.lineWidth   = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState attState{};
+    attState.blendEnable         = VK_FALSE;
+    attState.colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                   VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    blend.attachmentCount = 1; blend.pAttachments = &attState;
+
+    VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dyn.dynamicStateCount = 2; dyn.pDynamicStates = dynStates;
+
+    VkPipelineDepthStencilStateCreateInfo dsState{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    dsState.depthTestEnable  = VK_FALSE;
+    dsState.depthWriteEnable = VK_FALSE;
+
+    VkGraphicsPipelineCreateInfo pipeInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipeInfo.stageCount          = 2;
+    pipeInfo.pStages             = stages;
+    pipeInfo.pVertexInputState   = &vtxInput;
+    pipeInfo.pInputAssemblyState = &ia;
+    pipeInfo.pViewportState      = &vp;
+    pipeInfo.pRasterizationState = &rast;
+    pipeInfo.pMultisampleState   = &ms;
+    pipeInfo.pColorBlendState    = &blend;
+    pipeInfo.pDepthStencilState  = &dsState;
+    pipeInfo.pDynamicState       = &dyn;
+    pipeInfo.layout              = state.photoPipelineLayout;
+    pipeInfo.renderPass          = state.renderPass;
+
+    // 1. Pipeline de foto para esfera 360/180
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.photoStereoPipeline));
+
+    // 2. Pipeline de foto para quad plano (TRIANGLE_STRIP, cull none para Flat/SBS/OU)
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+    rast.cullMode = VK_CULL_MODE_NONE;
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.photoStereoFlatPipeline));
+
+    vkDestroyShaderModule(state.vkDevice, vertMod, nullptr);
+    vkDestroyShaderModule(state.vkDevice, fragMod, nullptr);
+    LOGI("CreatePhotoPipeline: pipelines de foto estatica criados com sucesso");
+}
+
 // Cria um vertex buffer simples para o beam (2 vertices: inicio + fim).
 // O BeamRenderer original do OVRFW e muito dependente de GLES; esta versao
 // usa o pipeline do quad (quad.vert/frag) com primitiva LINES para um laser
@@ -4228,6 +4432,61 @@ void RecordStereoFrame(
     vkCmdEndRenderPass(cmd);
 }
 
+// Fase 0.3 Seção 8: Renderiza foto estática (360 na esfera ou Flat/SBS/OU no quad)
+void RecordPhotoFrame(
+    AppState& state, VkCommandBuffer cmd, VkFramebuffer fb, VkExtent2D extent,
+    const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter,
+    bool sphereMode, int eye, const StereoParams& sp) {
+
+    VkClearValue clearValue{};
+    clearValue.color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
+
+    VkRenderPassBeginInfo rpBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    rpBegin.renderPass = state.renderPass;
+    rpBegin.framebuffer = fb;
+    rpBegin.renderArea.extent = extent;
+    rpBegin.clearValueCount = 1; rpBegin.pClearValues = &clearValue;
+    vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport vp{0, 0, (float)extent.width, (float)extent.height, 0.0f, 1.0f};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    VkRect2D scissor{{0,0}, extent};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        sphereMode ? state.photoStereoPipeline : state.photoStereoFlatPipeline);
+
+    StereoPushConstants spc{};
+    spc.mvp          = mvp;
+    spc.eyeIndex     = sp.eyeIndex;
+    spc.swapEyes     = sp.swapEyes;
+    spc.stereoLayout = sp.stereoLayout;
+    spc.polar180     = sp.polar180;
+    spc.sharpness    = 0.0f;
+    spc.upscalingMode = 0;
+    vkCmdPushConstants(cmd, state.photoPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        0, sizeof(spc), &spc);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        state.photoPipelineLayout, 0, 1,
+        &state.photoDescriptorSet, 0, nullptr);
+
+    if (sphereMode) {
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
+        vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, state.sphereIndexCount, 1, 0, 0, 0);
+    } else {
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
+        vkCmdDraw(cmd, 4, 1, 0, 0);
+    }
+
+    DrawUiQuads(state, cmd, proj, view, headCenter);
+
+    vkCmdEndRenderPass(cmd);
+}
+
 // Ver comentario no campo AppState.videoGapHistory — compara cada gap novo
 // contra a media RECENTE (nao um limiar fixo) porque um video de 24fps tem
 // gaps ~41ms normalmente (nao e judder), enquanto o mesmo valor seria uma
@@ -4727,6 +4986,33 @@ void RenderFrame(AppState& state) {
             }
         }
 
+        // Processa upload ou limpeza de foto estática (Fase 0.3 Seção 8)
+        if (g_photoDirty.exchange(false)) {
+            bool active = g_photoActive.load();
+            if (active) {
+                std::vector<uint8_t> rgba;
+                uint32_t w = 0, h = 0, sm = 0;
+                {
+                    std::lock_guard<std::mutex> lock(g_photoMutex);
+                    rgba = g_photoRgba;
+                    w = g_photoWidth;
+                    h = g_photoHeight;
+                    sm = g_photoScreenMode;
+                }
+                if (!rgba.empty() && w > 0 && h > 0 && rgba.size() >= (size_t)w * h * 4) {
+                    EnsurePhotoTexture(state, w, h);
+                    UpdateUiImageFromBytes(state, rgba.data(), w, h, state.photoImage);
+                    state.photoActive = true;
+                    state.photoScreenMode = static_cast<ScreenMode>(sm);
+                    LOGI("Foto: textura carregada %ux%u no modo %s", w, h, ScreenModeName(state.photoScreenMode));
+                }
+            } else {
+                state.photoActive = false;
+                DestroyPhotoTexture(state);
+                LOGI("Foto: textura descarregada");
+            }
+        }
+
         // Preview de arrasto (T-seek-ff): processa upload pendente uma vez
         // por frame (nao por olho) — ver g_scrubOverlay* acima.
         if (g_scrubOverlayDirty.exchange(false)) {
@@ -4837,7 +5123,32 @@ void RenderFrame(AppState& state) {
                 vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, state.queryPool, queryStart);
             }
 
-            if (state.activeVideoFrame != nullptr) {
+            if (state.photoActive && state.photoTextureReady) {
+                const ScreenMode pMode = state.photoScreenMode;
+                const bool pSphere = IsSphereMode(pMode);
+                const StereoParams sp = GetStereoParams(pMode, eye);
+
+                Mat4 pScreenModel;
+                if (pSphere) {
+                    pScreenModel = Mat4Multiply(
+                        Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
+                        Mat4RotationY(state.sceneYawOffset));
+                } else {
+                    float z = g_photoZoom.load();
+                    if (z < 0.1f) z = 1.0f;
+                    float px = g_photoPanX.load();
+                    float py = g_photoPanY.load();
+                    pScreenModel = Mat4Multiply(
+                        sceneForScreen.screenModelNoScale,
+                        Mat4Multiply(
+                            Mat4Translation(px, py, 0.0f),
+                            Mat4Scale(state.screenScaleX * z, state.screenScaleY * z, 1.0f)
+                        )
+                    );
+                }
+                const Mat4 photoMvp = Mat4Multiply(Mat4Multiply(proj, view), pScreenModel);
+                RecordPhotoFrame(state, cmd, fb, extent, photoMvp, proj, view, headCenter, pSphere, eye, sp);
+            } else if (state.activeVideoFrame != nullptr) {
                 if (sphereMode || stereoFlat) {
                     const Mat4 sphereModel = Mat4Multiply(
                         Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
@@ -5302,6 +5613,28 @@ void DestroyAppResources(AppState& state) {
         vkDestroyPipelineLayout(state.vkDevice, state.stereoPipelineLayout, nullptr);
         state.stereoPipelineLayout = VK_NULL_HANDLE;
     }
+    // Fase 0.3 Seção 8: Pipelines e recursos de foto estática (T8.3, T8.4)
+    DestroyPhotoTexture(state);
+    if (state.photoStereoFlatPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.photoStereoFlatPipeline, nullptr);
+        state.photoStereoFlatPipeline = VK_NULL_HANDLE;
+    }
+    if (state.photoStereoPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.photoStereoPipeline, nullptr);
+        state.photoStereoPipeline = VK_NULL_HANDLE;
+    }
+    if (state.photoPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.photoPipelineLayout, nullptr);
+        state.photoPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.photoDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.photoDescriptorPool, nullptr);
+        state.photoDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (state.photoDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(state.vkDevice, state.photoDescriptorSetLayout, nullptr);
+        state.photoDescriptorSetLayout = VK_NULL_HANDLE;
+    }
     if (state.sphereIndexBuffer != VK_NULL_HANDLE) {
         vkDestroyBuffer(state.vkDevice, state.sphereIndexBuffer, nullptr);
         state.sphereIndexBuffer = VK_NULL_HANDLE;
@@ -5534,6 +5867,8 @@ void android_main(android_app* app) {
     CreateFeedbackResources(state);
     // Estagio 6: pipeline de legendas MSDF (T9.3)
     CreateSubtitlePipeline(state);
+    // Fase 0.3 Seção 8: pipeline de fotos estáticas 360/3D (T8.3, T8.4)
+    CreatePhotoPipeline(state);
 
     // O video e iniciado via nativePlayVideo (JNI) quando o usuario seleciona
     // um arquivo no painel de UI — identico ao caminho GLES.

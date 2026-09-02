@@ -1052,6 +1052,28 @@ class VRActivity : NativeActivity() {
     external fun nativeRequestFrameCapture(path: String)
     external fun nativeTakeLastPlaybackError(): String?
 
+    // Fase 0.3 Seção 8: Fotos 360° e Fotos 3D estéreo (T8.3, T8.4)
+    external fun nativeLoadPhoto(rgba: ByteArray, width: Int, height: Int, screenMode: Int)
+    external fun nativeClearPhoto()
+    external fun nativeSetPhotoZoom(zoom: Float)
+    external fun nativeSetPhotoPan(panX: Float, panY: Float)
+
+    fun loadPhoto(rgba: ByteArray, width: Int, height: Int, screenMode: Int) {
+        nativeLoadPhoto(rgba, width, height, screenMode)
+    }
+
+    fun clearPhoto() {
+        nativeClearPhoto()
+    }
+
+    fun setPhotoZoom(zoom: Float) {
+        nativeSetPhotoZoom(zoom)
+    }
+
+    fun setPhotoPan(panX: Float, panY: Float) {
+        nativeSetPhotoPan(panX, panY)
+    }
+
     /**
      * Exibe o modal de formato de tela no 3º Quad dedicado frontal (VRModalPresentation).
      */

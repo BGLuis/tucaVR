@@ -98,6 +98,13 @@ sealed class Destination {
 
     /** Fase 0.4 T5: toggles de feature flags (Foveated Rendering, e futuros). */
     object Settings : Destination()
+
+    /** Fase 0.3 Seção 8: visualizador de fotos 360 e 3D estéreo (T8.5). */
+    data class PhotoViewer(
+        val initialEntry: com.tucavr.filebrowser.MediaEntry,
+        val photoEntries: List<com.tucavr.filebrowser.MediaEntry>,
+        val initialIndex: Int = 0
+    ) : Destination()
 }
 
 /**

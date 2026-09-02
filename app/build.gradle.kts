@@ -97,6 +97,9 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
 
+    // T8.1 / T8.2: ExifInterface para metadados de fotos (orientação EXIF e XMP GPano 360)
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+
     // JVM unit tests (app/src/test) — logica pura do file browser
     // (MediaSorter, DirectoryNavigator, DirectoryLister, cache-key do
     // ThumbnailGenerator) roda direto na JVM, sem emulador/Robolectric,
