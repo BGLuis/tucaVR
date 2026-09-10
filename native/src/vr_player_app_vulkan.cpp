@@ -56,6 +56,8 @@
 #include "ui.frag.h"
 #include "stereo.vert.h"
 #include "stereo.frag.h"
+#include "stereo_cubemap.vert.h"
+#include "stereo_cubemap.frag.h"
 #include "font_atlas_roboto.h"
 #include "subtitle.vert.h"
 #include "subtitle.frag.h"
@@ -307,12 +309,14 @@ constexpr float kVideoStallThresholdMs = 500.0f; // decode/rede travado (ver App
 
 // ScreenMode e helpers estao centralizados em screen_mode.h
 
-// Parâmetros de estereo para o push constant do stereo.vert/frag
+// Parâmetros de estereo para o push constant do stereo.vert/frag e stereo_cubemap.vert/frag
 struct StereoParams {
-    int eyeIndex     = 0;
-    int swapEyes     = 0;
-    int stereoLayout = 0; // 0=mono, 1=SBS, 2=OU
-    int polar180     = 0;
+    int eyeIndex       = 0;
+    int swapEyes       = 0;
+    int stereoLayout   = 0; // 0=mono, 1=SBS, 2=OU
+    int polar180       = 0;
+    int cubemapLayout  = 0; // 0=3x2, 1=6x1, 2=Cross, 3=EAC 3x2
+    int projectionType = 0; // 0=Standard Cubemap, 1=EAC
 };
 
 StereoParams GetStereoParams(ScreenMode mode, int eye) {
@@ -331,6 +335,31 @@ StereoParams GetStereoParams(ScreenMode mode, int eye) {
         case ScreenMode::OUHalf:
         case ScreenMode::Sphere360OU:
             p.stereoLayout = 2; // OU
+            break;
+        case ScreenMode::Cubemap3x2SBS:
+            p.stereoLayout = 1; // SBS
+            p.cubemapLayout = 0; // 3x2
+            p.projectionType = 0; // Standard Cubemap
+            break;
+        case ScreenMode::EAC3x2SBS:
+            p.stereoLayout = 1; // SBS
+            p.cubemapLayout = 3; // EAC 3x2
+            p.projectionType = 1; // EAC
+            break;
+        case ScreenMode::Cubemap3x2:
+            p.stereoLayout = 0;
+            p.cubemapLayout = 0; // 3x2
+            p.projectionType = 0; // Standard Cubemap
+            break;
+        case ScreenMode::Cubemap6x1:
+            p.stereoLayout = 0;
+            p.cubemapLayout = 1; // 6x1
+            p.projectionType = 0; // Standard Cubemap
+            break;
+        case ScreenMode::EAC3x2:
+            p.stereoLayout = 0;
+            p.cubemapLayout = 3; // EAC 3x2
+            p.projectionType = 1; // EAC
             break;
         default:
             p.stereoLayout = 0;
@@ -620,8 +649,9 @@ struct AppState {
     // Estagio 5 — pipeline estereo/esfera (SBS/OU/360/180 com CAS sharpening).
     // Reusa o videoDescriptorSetLayout (mesmo sampler YCbCr) mas pipeline separado.
     VkPipelineLayout stereoPipelineLayout = VK_NULL_HANDLE;
-    VkPipeline stereoPipeline = VK_NULL_HANDLE;     // TRIANGLE_LIST — esfera, index draw
-    VkPipeline stereoFlatPipeline = VK_NULL_HANDLE; // TRIANGLE_STRIP — quad SBS/OU plano (4 vertices)
+    VkPipeline stereoPipeline = VK_NULL_HANDLE;        // TRIANGLE_LIST — esfera, index draw
+    VkPipeline stereoFlatPipeline = VK_NULL_HANDLE;    // TRIANGLE_STRIP — quad SBS/OU plano (4 vertices)
+    VkPipeline stereoCubemapPipeline = VK_NULL_HANDLE; // TRIANGLE_LIST — esfera, cubemap/EAC sampling
     // Geometria da esfera (BuildGlobe equivalente)
     VkBuffer sphereVertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory sphereVertexMemory = VK_NULL_HANDLE;
@@ -858,7 +888,7 @@ struct UiPushConstants {
     float _pad[3];
 };
 
-// Estagio 5: push constant para estereo/esfera (MVP + parametros de olho + upscaling)
+// Estagio 5: push constant para estereo/esfera (MVP + parametros de olho + upscaling + cubemap/EAC)
 struct StereoPushConstants {
     Mat4  mvp;
     int   eyeIndex;
@@ -867,6 +897,8 @@ struct StereoPushConstants {
     int   polar180;
     float sharpness;
     int   upscalingMode;
+    int   cubemapLayout;
+    int   projectionType;
 };
 
 struct BeamPushConstants {
@@ -3025,9 +3057,32 @@ void CreateStereoPipeline(AppState& state) {
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
     VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.stereoFlatPipeline));
 
+    // Terceiro pipeline: Cubemap / EAC na esfera (stereo_cubemap.vert/frag)
+    // Usa topologia TRIANGLE_LIST (index draw da esfera) e o mesmo stereoPipelineLayout.
+    VkShaderModule cubeVertMod, cubeFragMod;
+    smInfo.codeSize = sizeof(kStereoCubemapVertSpirv); smInfo.pCode = reinterpret_cast<const uint32_t*>(kStereoCubemapVertSpirv);
+    VKR(vkCreateShaderModule(state.vkDevice, &smInfo, nullptr, &cubeVertMod));
+    smInfo.codeSize = sizeof(kStereoCubemapFragSpirv); smInfo.pCode = reinterpret_cast<const uint32_t*>(kStereoCubemapFragSpirv);
+    VKR(vkCreateShaderModule(state.vkDevice, &smInfo, nullptr, &cubeFragMod));
+
+    VkPipelineShaderStageCreateInfo cubeStages[2] = {};
+    cubeStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    cubeStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    cubeStages[0].module = cubeVertMod; cubeStages[0].pName = "main";
+    cubeStages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    cubeStages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    cubeStages[1].module = cubeFragMod; cubeStages[1].pName = "main";
+
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    pipeInfo.pStages = cubeStages;
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.stereoCubemapPipeline));
+
+    vkDestroyShaderModule(state.vkDevice, cubeVertMod, nullptr);
+    vkDestroyShaderModule(state.vkDevice, cubeFragMod, nullptr);
+
     vkDestroyShaderModule(state.vkDevice, vertMod, nullptr);
     vkDestroyShaderModule(state.vkDevice, fragMod, nullptr);
-    LOGI("Estagio 5: pipeline estereo/esfera criado");
+    LOGI("Estagio 5: pipeline estereo/esfera e cubemap/EAC criados");
 }
 
 // Fase 0.3 Seção 8: Fotos 360° e Fotos 3D estéreo (T8.3, T8.4)
@@ -4458,17 +4513,21 @@ void RecordStereoFrame(
     VkRect2D scissor{{0,0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        sphereMode ? state.stereoPipeline : state.stereoFlatPipeline);
+    const bool cubemapMode = IsCubemapMode(state.screenMode);
+    VkPipeline targetPipeline = cubemapMode ? state.stereoCubemapPipeline
+                              : (sphereMode ? state.stereoPipeline : state.stereoFlatPipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, targetPipeline);
 
     StereoPushConstants spc{};
-    spc.mvp          = sphereMode ? sphereMvp : mvp;
-    spc.eyeIndex     = sp.eyeIndex;
-    spc.swapEyes     = sp.swapEyes;
-    spc.stereoLayout = sp.stereoLayout;
-    spc.polar180     = sp.polar180;
-    spc.sharpness    = state.upscalingSharpness;
-    spc.upscalingMode = static_cast<int>(state.upscalingMode);
+    spc.mvp            = sphereMode ? sphereMvp : mvp;
+    spc.eyeIndex       = sp.eyeIndex;
+    spc.swapEyes       = sp.swapEyes;
+    spc.stereoLayout   = sp.stereoLayout;
+    spc.polar180       = sp.polar180;
+    spc.sharpness      = state.upscalingSharpness;
+    spc.upscalingMode  = static_cast<int>(state.upscalingMode);
+    spc.cubemapLayout  = sp.cubemapLayout;
+    spc.projectionType = sp.projectionType;
     vkCmdPushConstants(cmd, state.stereoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(spc), &spc);
@@ -4533,11 +4592,13 @@ void RecordPhotoFrame(
     StereoPushConstants spc{};
     spc.mvp          = mvp;
     spc.eyeIndex     = sp.eyeIndex;
-    spc.swapEyes     = sp.swapEyes;
-    spc.stereoLayout = sp.stereoLayout;
-    spc.polar180     = sp.polar180;
-    spc.sharpness    = 0.0f;
-    spc.upscalingMode = 0;
+    spc.swapEyes       = sp.swapEyes;
+    spc.stereoLayout   = sp.stereoLayout;
+    spc.polar180       = sp.polar180;
+    spc.sharpness      = 0.0f;
+    spc.upscalingMode  = 0;
+    spc.cubemapLayout  = sp.cubemapLayout;
+    spc.projectionType = sp.projectionType;
     vkCmdPushConstants(cmd, state.photoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(spc), &spc);
@@ -5043,8 +5104,8 @@ void RenderFrame(AppState& state) {
             ScreenMode newMode = static_cast<ScreenMode>(get_3d_mode());
             if (newMode != state.screenMode) {
                 StereoParams spLog = GetStereoParams(newMode, 0);
-                LOGI("Video: ScreenMode -> %s (stereoLayout=%d, polar180=%d, swapEyes=%d)",
-                    ScreenModeName(newMode), spLog.stereoLayout, spLog.polar180, spLog.swapEyes);
+                LOGI("Video: ScreenMode -> %s (stereoLayout=%d, polar180=%d, swapEyes=%d, cubemapLayout=%d, projectionType=%d)",
+                    ScreenModeName(newMode), spLog.stereoLayout, spLog.polar180, spLog.swapEyes, spLog.cubemapLayout, spLog.projectionType);
             }
             state.screenMode = newMode;
         }
@@ -5674,7 +5735,11 @@ void DestroyAppResources(AppState& state) {
     }
     state.pgsSubtitleReady = false;
 
-    // 6. Pipelines estéreo e esfera 360/180
+    // 6. Pipelines estéreo, esfera 360/180 e cubemap/EAC
+    if (state.stereoCubemapPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.stereoCubemapPipeline, nullptr);
+        state.stereoCubemapPipeline = VK_NULL_HANDLE;
+    }
     if (state.stereoFlatPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(state.vkDevice, state.stereoFlatPipeline, nullptr);
         state.stereoFlatPipeline = VK_NULL_HANDLE;

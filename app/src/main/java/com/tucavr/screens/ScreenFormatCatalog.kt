@@ -8,16 +8,17 @@ import com.tucavr.R
 enum class ScreenFormatGroup {
     FLAT,
     SPHERICAL_360,
-    SPHERICAL_180
+    SPHERICAL_180,
+    CUBEMAP
 }
 
 /**
  * Representa uma entrada no catálogo de formatos de tela suportados pelo player.
  *
- * @property index Índice do modo (0..9), correspondente a `ScreenMode` no C++ e `SCREEN_MODE` no Rust.
+ * @property index Índice do modo (0..14), correspondente a `ScreenMode` no C++ e `SCREEN_MODE` no Rust.
  * @property labelResId Recurso de string com o nome legível do modo.
  * @property iconResId Recurso drawable com o ícone representativo do modo.
- * @property group Agrupamento temático do modo (Plano, 360° ou 180°).
+ * @property group Agrupamento temático do modo (Plano, 360°, 180° ou Cubemap).
  */
 data class ScreenFormatEntry(
     val index: Int,
@@ -27,7 +28,7 @@ data class ScreenFormatEntry(
 )
 
 /**
- * Catálogo centralizado dos 10 modos de tela do tucaVR.
+ * Catálogo centralizado dos 15 modos de tela do tucaVR.
  * Garante sincronia única entre UI, JNI e renderizadores C++/Rust.
  */
 object ScreenFormatCatalog {
@@ -41,8 +42,18 @@ object ScreenFormatCatalog {
         ScreenFormatEntry(6, R.string.player_mode_180, R.drawable.icon_180, ScreenFormatGroup.SPHERICAL_180),
         ScreenFormatEntry(7, R.string.player_mode_360_sbs, R.drawable.icon_360_sbs, ScreenFormatGroup.SPHERICAL_360),
         ScreenFormatEntry(8, R.string.player_mode_360_ou, R.drawable.icon_360_ou, ScreenFormatGroup.SPHERICAL_360),
-        ScreenFormatEntry(9, R.string.player_mode_180_sbs, R.drawable.icon_180_sbs, ScreenFormatGroup.SPHERICAL_180)
+        ScreenFormatEntry(9, R.string.player_mode_180_sbs, R.drawable.icon_180_sbs, ScreenFormatGroup.SPHERICAL_180),
+        ScreenFormatEntry(10, R.string.player_mode_cubemap_3x2, R.drawable.icon_cubemap_3x2, ScreenFormatGroup.CUBEMAP),
+        ScreenFormatEntry(11, R.string.player_mode_cubemap_6x1, R.drawable.icon_cubemap_6x1, ScreenFormatGroup.CUBEMAP),
+        ScreenFormatEntry(12, R.string.player_mode_eac_3x2, R.drawable.icon_eac_3x2, ScreenFormatGroup.CUBEMAP),
+        ScreenFormatEntry(13, R.string.player_mode_cubemap_3x2_sbs, R.drawable.icon_cubemap_sbs, ScreenFormatGroup.CUBEMAP),
+        ScreenFormatEntry(14, R.string.player_mode_eac_3x2_sbs, R.drawable.icon_eac_sbs, ScreenFormatGroup.CUBEMAP)
     )
+
+    /**
+     * Valida se um índice de modo está dentro do intervalo suportado.
+     */
+    fun isValid(index: Int): Boolean = index in entries.indices
 
     /**
      * Retorna a entrada para o índice especificado, com fallback seguro para 2D (índice 0).
@@ -66,7 +77,7 @@ object ScreenFormatCatalog {
         entries.filter { it.group == group }
 
     /**
-     * Indica se o modo é esférico (360° ou 180°).
+     * Indica se o modo é esférico / panorâmico (360°, 180° ou Cubemap).
      */
-    fun isSpherical(index: Int): Boolean = index >= 5
+    fun isSpherical(index: Int): Boolean = isValid(index) && get(index).group != ScreenFormatGroup.FLAT
 }

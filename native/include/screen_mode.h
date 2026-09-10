@@ -14,7 +14,12 @@ enum class ScreenMode : uint32_t {
     Sphere180    = 6,
     Sphere360SBS = 7,
     Sphere360OU  = 8,
-    Vr180SBS     = 9,
+    Vr180SBS      = 9,
+    Cubemap3x2    = 10,
+    Cubemap6x1    = 11,
+    EAC3x2        = 12,
+    Cubemap3x2SBS = 13,
+    EAC3x2SBS     = 14,
 };
 
 // Validacao em tempo de compilacao para garantir invariantes de contrato C-ABI
@@ -28,7 +33,12 @@ static_assert(static_cast<uint32_t>(ScreenMode::Sphere180) == 6, "Sphere180 deve
 static_assert(static_cast<uint32_t>(ScreenMode::Sphere360SBS) == 7, "Sphere360SBS deve ser 7");
 static_assert(static_cast<uint32_t>(ScreenMode::Sphere360OU) == 8, "Sphere360OU deve ser 8");
 static_assert(static_cast<uint32_t>(ScreenMode::Vr180SBS) == 9, "Vr180SBS deve ser 9");
-static_assert(static_cast<uint32_t>(ScreenMode::Vr180SBS) + 1 == 10, "Total de modos de tela deve ser exatamente 10");
+static_assert(static_cast<uint32_t>(ScreenMode::Cubemap3x2) == 10, "Cubemap3x2 deve ser 10");
+static_assert(static_cast<uint32_t>(ScreenMode::Cubemap6x1) == 11, "Cubemap6x1 deve ser 11");
+static_assert(static_cast<uint32_t>(ScreenMode::EAC3x2) == 12, "EAC3x2 deve ser 12");
+static_assert(static_cast<uint32_t>(ScreenMode::Cubemap3x2SBS) == 13, "Cubemap3x2SBS deve ser 13");
+static_assert(static_cast<uint32_t>(ScreenMode::EAC3x2SBS) == 14, "EAC3x2SBS deve ser 14");
+static_assert(static_cast<uint32_t>(ScreenMode::EAC3x2SBS) + 1 == 15, "Total de modos de tela deve ser exatamente 15");
 
 inline const char* ScreenModeName(ScreenMode mode) {
     switch (mode) {
@@ -42,11 +52,32 @@ inline const char* ScreenModeName(ScreenMode mode) {
         case ScreenMode::Sphere360SBS: return "Sphere360SBS";
         case ScreenMode::Sphere360OU: return "Sphere360OU";
         case ScreenMode::Vr180SBS: return "Vr180SBS";
+        case ScreenMode::Cubemap3x2: return "Cubemap3x2";
+        case ScreenMode::Cubemap6x1: return "Cubemap6x1";
+        case ScreenMode::EAC3x2: return "EAC3x2";
+        case ScreenMode::Cubemap3x2SBS: return "Cubemap3x2SBS";
+        case ScreenMode::EAC3x2SBS: return "EAC3x2SBS";
         default: return "Desconhecido";
     }
 }
 
+inline bool IsCubemapMode(ScreenMode mode) {
+    switch (mode) {
+        case ScreenMode::Cubemap3x2:
+        case ScreenMode::Cubemap6x1:
+        case ScreenMode::EAC3x2:
+        case ScreenMode::Cubemap3x2SBS:
+        case ScreenMode::EAC3x2SBS:
+            return true;
+        default:
+            return false;
+    }
+}
+
 inline bool IsSphereMode(ScreenMode mode) {
+    if (IsCubemapMode(mode)) {
+        return true;
+    }
     switch (mode) {
         case ScreenMode::Sphere360:
         case ScreenMode::Sphere180:

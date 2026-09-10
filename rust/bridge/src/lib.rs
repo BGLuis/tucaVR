@@ -157,11 +157,12 @@ pub extern "C" fn get_playback_feedback_event() -> u64 {
 // a cada frame, exatamente como ja faz com get_video_volume/get_playback_speed.
 //
 // Codificacao numerica (DEVE casar exatamente com `enum class ScreenMode` em
-// native/src/vr_player_app.cpp e com `modeLabelResIds` em
-// VRControlsPresentation.kt, que so faz um lookup posicional nesta lista sem
-// duplicar os nomes):
+// native/include/screen_mode.h, com `rust/media-logic/src/format3d.rs` e com
+// `ScreenFormatCatalog.kt` em Kotlin):
 //   0=2D, 1=SBS, 2=SBS half, 3=OU, 4=OU half,
-//   5=360 mono, 6=180 mono, 7=360 SBS, 8=360 OU, 9=180 SBS
+//   5=360 mono, 6=180 mono, 7=360 SBS, 8=360 OU, 9=180 SBS,
+//   10=Cubemap 3x2 mono, 11=Cubemap 6x1 mono, 12=EAC 3x2 mono,
+//   13=Cubemap 3x2 SBS, 14=EAC 3x2 SBS
 // T2.4/T2.5 (estereo 360/180): a pesquisa sobre como este pipeline OVRFW
 // sinaliza "qual olho" pro shader (ver vr_player_app.cpp) achou a resposta —
 // o framework ja seta um uniform `ViewID`/`VIEW_ID` (0/1) em toda chamada de
@@ -173,7 +174,7 @@ pub extern "C" fn get_playback_feedback_event() -> u64 {
 // trivial de acrescentar depois, o shader ja suporta via uStereoLayout=2 +
 // uPolar180=1 juntos).
 static SCREEN_MODE: AtomicU32 = AtomicU32::new(0);
-const SCREEN_MODE_COUNT: u32 = 10;
+const SCREEN_MODE_COUNT: u32 = 15;
 static SWAP_EYES: AtomicBool = AtomicBool::new(false);
 
 // Bug reportado em validacao real de headset: o painel "Adicionar servidor"

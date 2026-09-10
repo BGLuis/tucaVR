@@ -688,7 +688,7 @@ EAC: Otimizado por Google para YouTube VR, distribuição uniforme
 
 ### Tarefas
 
-- [ ] **T6.1** — Implementar renderização de **Cubemap projetado na esfera**:
+- [x] **T6.1** — Implementar renderização de **Cubemap projetado na esfera**:
   ```cpp
   // Cubemap layout: 6 faces organizadas em uma textura 2D
   // Layouts comuns:
@@ -721,7 +721,7 @@ EAC: Otimizado por Google para YouTube VR, distribuição uniforme
       }
   };
   ```
-- [ ] **T6.2** — Implementar shader **Cubemap sampling**:
+- [x] **T6.2** — Implementar shader **Cubemap sampling**:
   ```glsl
   // Fragment shader para cubemap projection
   uniform sampler2D videoTexture;  // Textura 2D com cubemap layout
@@ -759,7 +759,7 @@ EAC: Otimizado por Google para YouTube VR, distribuição uniforme
       fragColor = texture(videoTexture, texUV);
   }
   ```
-- [ ] **T6.3** — Implementar **EAC (Equi-Angular Cubemap)**:
+- [x] **T6.3** — Implementar **EAC (Equi-Angular Cubemap)**:
   ```glsl
   // EAC aplica uma curva tangente ao mapeamento UV para distribuir
   // pixels uniformemente angularmente (em vez de linearmente)
@@ -784,7 +784,7 @@ EAC: Otimizado por Google para YouTube VR, distribuição uniforme
   vec2 eacUV = eacInverseTransform(faceUV);
   vec2 texUV = mix(faceRect.xy, faceRect.zw, eacUV);
   ```
-- [ ] **T6.4** — Detectar tipo de **projeção por metadados**:
+- [x] **T6.4** — Detectar tipo de **projeção por metadados**:
   ```rust
   // MP4 sv3d box contém informação de projeção:
   // - Equirectangular: projection_type = 0
@@ -811,11 +811,11 @@ EAC: Otimizado por Google para YouTube VR, distribuição uniforme
       }
   }
   ```
-- [ ] **T6.5** — Suportar **cubemap stereo**:
+- [x] **T6.5** — Suportar **cubemap stereo**:
   - Cubemap SBS: 6 faces para olho esquerdo + 6 faces para olho direito (12 faces total)
   - Layout varia: pode ser 6x2 ou duas seções 3x2
   - Detectar por metadados + heurística de resolução
-- [ ] **T6.6** — UI para **seleção manual de projeção**:
+- [x] **T6.6** — UI para **seleção manual de projeção**:
   - Dropdown: Equirectangular / Cubemap 3x2 / Cubemap 6x1 / EAC / Flat
   - Override manual quando auto-detecção falha
   - Persistir escolha por arquivo
@@ -949,12 +949,12 @@ EAC: Otimizado por Google para YouTube VR, distribuição uniforme
 - [ ] Toggle on/off funciona no menu de configurações
 
 ### Projeções Avançadas
-- [ ] Cubemap 3x2 renderiza sem costuras visíveis
-- [ ] Cubemap 6x1 renderiza corretamente
-- [ ] EAC renderiza com distribuição angular correta
-- [ ] Auto-detecção de projeção acerta em ≥ 70% dos arquivos com metadados
-- [ ] Override manual de projeção funciona
-- [ ] Cubemap stereo (SBS) renderiza com profundidade correta
+- [x] Cubemap 3x2 renderiza sem costuras visíveis
+- [x] Cubemap 6x1 renderiza corretamente
+- [x] EAC renderiza com distribuição angular correta
+- [x] Auto-detecção de projeção acerta em ≥ 70% dos arquivos com metadados
+- [x] Override manual de projeção funciona
+- [x] Cubemap stereo (SBS) renderiza com profundidade correta
 
 ### Geral
 - [ ] Nenhuma regressão nos testes das fases 0.1, 0.2 e 0.3

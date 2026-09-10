@@ -186,7 +186,7 @@ class PlayerScreen(
             val mbps = meta.bitRate.toDouble() / 1_000_000.0
             addRow(section, context.getString(R.string.file_detail_label_bitrate), context.getString(R.string.file_detail_value_bitrate_format, mbps))
         }
-        if (meta.format3dIndex in 0..9) {
+        if (ScreenFormatCatalog.isValid(meta.format3dIndex)) {
             val modeLabel = context.getString(ScreenFormatCatalog.getLabelResId(meta.format3dIndex))
             val suffix = if (meta.detectionConfidence < 3) context.getString(R.string.file_detail_format3d_low_confidence_suffix) else ""
             addRow(section, context.getString(R.string.file_detail_label_format3d), modeLabel + suffix)

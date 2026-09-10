@@ -340,6 +340,11 @@
     <string name="player_mode_360_sbs">360° SBS</string>
     <string name="player_mode_360_ou">360° OU</string>
     <string name="player_mode_180_sbs">180° SBS</string>
+    <string name="player_mode_cubemap_3x2">Cubemap 3×2</string>
+    <string name="player_mode_cubemap_6x1">Cubemap 6×1</string>
+    <string name="player_mode_eac_3x2">EAC 3×2</string>
+    <string name="player_mode_cubemap_3x2_sbs">Cubemap 3×2 SBS</string>
+    <string name="player_mode_eac_3x2_sbs">EAC 3×2 SBS</string>
     <string name="player_btn_swap_eyes">Swap eyes</string>
     <string name="player_btn_recenter">Recenter</string>
 
@@ -349,6 +354,7 @@
     <string name="format_tab_flat">Flat</string>
     <string name="format_tab_360">360°</string>
     <string name="format_tab_180">180°</string>
+    <string name="format_tab_cubemap">Cubemap</string>
     <string name="format_auto_detected_title">Detected Format</string>
     <string name="format_auto_current_title">Current Active Mode</string>
     <string name="format_auto_btn_reset">Use Auto Detection</string>

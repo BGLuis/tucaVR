@@ -75,6 +75,24 @@ pub fn detect(
                     _ => {}
                 }
             }
+
+            // 3. Tags de projeção de container/stream (ex: MKV ProjectionType, YouTube/Google spherical)
+            if projection.is_none() {
+                let tag_candidate = meta
+                    .get("projection")
+                    .or_else(|| meta.get("projection_type"))
+                    .or_else(|| meta.get("spherical-video"));
+                if let Some(proj_str) = tag_candidate {
+                    let p_lower = proj_str.to_lowercase();
+                    if p_lower.contains("eac") || p_lower.contains("equiangular") {
+                        projection = Some(VideoProjection::EquiangularCubemap);
+                    } else if p_lower.contains("cubemap") || p_lower.contains("cube") {
+                        projection = Some(VideoProjection::Cubemap);
+                    } else if p_lower.contains("equirect") {
+                        projection = Some(VideoProjection::Equirectangular);
+                    }
+                }
+            }
         }
     }
 

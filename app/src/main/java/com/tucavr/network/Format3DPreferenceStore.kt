@@ -1,6 +1,7 @@
 package com.tucavr.network
 
 import android.content.Context
+import com.tucavr.screens.ScreenFormatCatalog
 
 /**
  * T3.4: Armazenamento de preferência de modo 3D por mídia (chave de histórico estável).
@@ -12,11 +13,11 @@ class Format3DPreferenceStore(context: Context) {
 
     fun get(historyKey: String): Int? {
         val v = prefs.getInt(historyKey, -1)
-        return if (v in 0..9) v else null
+        return if (ScreenFormatCatalog.isValid(v)) v else null
     }
 
     fun set(historyKey: String, mode: Int) {
-        if (mode in 0..9) {
+        if (ScreenFormatCatalog.isValid(mode)) {
             prefs.edit().putInt(historyKey, mode).apply()
         }
     }

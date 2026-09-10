@@ -14,6 +14,11 @@ static void TestScreenModeIndices() {
     assert(static_cast<uint32_t>(ScreenMode::Sphere360SBS) == 7);
     assert(static_cast<uint32_t>(ScreenMode::Sphere360OU) == 8);
     assert(static_cast<uint32_t>(ScreenMode::Vr180SBS) == 9);
+    assert(static_cast<uint32_t>(ScreenMode::Cubemap3x2) == 10);
+    assert(static_cast<uint32_t>(ScreenMode::Cubemap6x1) == 11);
+    assert(static_cast<uint32_t>(ScreenMode::EAC3x2) == 12);
+    assert(static_cast<uint32_t>(ScreenMode::Cubemap3x2SBS) == 13);
+    assert(static_cast<uint32_t>(ScreenMode::EAC3x2SBS) == 14);
     std::cout << "[PASS] TestScreenModeIndices\n";
 }
 
@@ -28,11 +33,16 @@ static void TestScreenModeNames() {
     assert(std::strcmp(ScreenModeName(ScreenMode::Sphere360SBS), "Sphere360SBS") == 0);
     assert(std::strcmp(ScreenModeName(ScreenMode::Sphere360OU), "Sphere360OU") == 0);
     assert(std::strcmp(ScreenModeName(ScreenMode::Vr180SBS), "Vr180SBS") == 0);
+    assert(std::strcmp(ScreenModeName(ScreenMode::Cubemap3x2), "Cubemap3x2") == 0);
+    assert(std::strcmp(ScreenModeName(ScreenMode::Cubemap6x1), "Cubemap6x1") == 0);
+    assert(std::strcmp(ScreenModeName(ScreenMode::EAC3x2), "EAC3x2") == 0);
+    assert(std::strcmp(ScreenModeName(ScreenMode::Cubemap3x2SBS), "Cubemap3x2SBS") == 0);
+    assert(std::strcmp(ScreenModeName(ScreenMode::EAC3x2SBS), "EAC3x2SBS") == 0);
     std::cout << "[PASS] TestScreenModeNames\n";
 }
 
 static void TestScreenModePredicates() {
-    for (uint32_t i = 0; i <= 9; i++) {
+    for (uint32_t i = 0; i <= 14; i++) {
         ScreenMode m = static_cast<ScreenMode>(i);
         if (i < 5) {
             assert(!IsSphereMode(m));
@@ -44,6 +54,12 @@ static void TestScreenModePredicates() {
             assert(IsFlatStereoMode(m));
         } else {
             assert(!IsFlatStereoMode(m));
+        }
+
+        if (i >= 10 && i <= 14) {
+            assert(IsCubemapMode(m));
+        } else {
+            assert(!IsCubemapMode(m));
         }
     }
     std::cout << "[PASS] TestScreenModePredicates\n";

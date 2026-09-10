@@ -1168,16 +1168,7 @@ public:
     // plano — usado tanto pro dispatch de desenho (Render()) quanto pro gate
     // do recenter (T4.3, so faz sentido com a esfera ativa).
     static bool IsSphereMode(ScreenMode mode) {
-        switch (mode) {
-            case ScreenMode::Sphere360:
-            case ScreenMode::Sphere180:
-            case ScreenMode::Sphere360SBS:
-            case ScreenMode::Sphere360OU:
-            case ScreenMode::Vr180SBS:
-                return true;
-            default:
-                return false;
-        }
+        return ::IsSphereMode(mode);
     }
 
     // T1/T2.4/T2.5: traduz o ScreenMode atual pros uniforms que os dois
@@ -1201,6 +1192,8 @@ public:
         switch (m_screenMode) {
             case ScreenMode::Sphere360SBS:
             case ScreenMode::Vr180SBS:
+            case ScreenMode::Cubemap3x2SBS:
+            case ScreenMode::EAC3x2SBS:
                 m_sphereStereoLayout = 1.0f; // SBS
                 break;
             case ScreenMode::Sphere360OU:

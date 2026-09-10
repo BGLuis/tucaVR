@@ -18,6 +18,7 @@ import com.tucavr.designsystem.SubtitleSelectionModal
 import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.history.PlaybackHistory
 import com.tucavr.history.historyKey
+import com.tucavr.screens.ScreenFormatCatalog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -163,7 +164,7 @@ class VRModalPresentation(
                     currentSource?.let { src ->
                         activity.format3dStore.clear(src.historyKey())
                     }
-                    if (detectedMode != null && detectedMode in 0..9) {
+                    if (detectedMode != null && ScreenFormatCatalog.isValid(detectedMode)) {
                         activity.nativeSetScreenMode(detectedMode)
                     }
                 },
