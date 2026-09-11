@@ -58,6 +58,12 @@ class HomeScreen(
             setIcon(R.drawable.ic_view_list)
             setOnClickListener { onNavigate(Destination.Playlists) }
         }
+        val btnDownloads = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+            text = context.getString(R.string.home_btn_downloads).trim()
+            textSize = 20f
+            setIcon(R.drawable.ic_download)
+            setOnClickListener { onNavigate(Destination.Downloads) }
+        }
         val btnSettings = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
             text = context.getString(R.string.home_btn_settings).trim()
             textSize = 18f
@@ -69,6 +75,7 @@ class HomeScreen(
         root.addView(btnNetwork, bigButtonParams)
         root.addView(btnContinueWatching, bigButtonParams)
         root.addView(btnPlaylists, bigButtonParams)
+        root.addView(btnDownloads, bigButtonParams)
         root.addView(btnSettings, bigButtonParams)
 
         host.showScreen(root)

@@ -524,4 +524,26 @@
     <string name="photo_viewer_loading">Cargando foto…</string>
     <string name="photo_viewer_error">No se pudo cargar la foto</string>
 
+    <!-- Descargas sin conexión (Fase 0.4 Sección 4) -->
+    <string name="home_btn_downloads">Descargas</string>
+    <string name="file_detail_btn_download">Descargar</string>
+    <string name="download_error_insufficient_space">Espacio de almacenamiento insuficiente</string>
+    <string name="download_started_toast">Descargando %1$s…</string>
+    <string name="downloads_title">Descargas</string>
+    <string name="downloads_notification_title">Descargas de tucaVR</string>
+    <string name="downloads_storage_format">%1$s libres de %2$s</string>
+    <string name="downloads_storage_low_warning">Advertencia: Poco espacio disponible (&lt; 2 GB restantes)</string>
+    <string name="downloads_empty">No hay descargas aún</string>
+    <string name="downloads_btn_clear_completed">Limpiar completadas</string>
+    <string name="downloads_status_queued">En cola</string>
+    <string name="downloads_status_downloading">Descargando</string>
+    <string name="downloads_status_paused">Pausado</string>
+    <string name="downloads_status_completed">Completado</string>
+    <string name="downloads_status_failed">Falló</string>
+    <string name="downloads_btn_pause">Pausar</string>
+    <string name="downloads_btn_resume">Reanudar</string>
+    <string name="downloads_btn_cancel">Cancelar</string>
+    <string name="downloads_btn_retry">Reintentar</string>
+    <string name="downloads_btn_play">Reproducir</string>
+
 </resources>

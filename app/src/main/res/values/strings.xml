@@ -533,4 +533,26 @@
     <string name="photo_viewer_loading">Loading photo…</string>
     <string name="photo_viewer_error">Unable to load photo</string>
 
+    <!-- Downloads Offline (Fase 0.4 Seção 4) -->
+    <string name="home_btn_downloads">Downloads</string>
+    <string name="file_detail_btn_download">Download</string>
+    <string name="download_error_insufficient_space">Insufficient storage space</string>
+    <string name="download_started_toast">Downloading %1$s…</string>
+    <string name="downloads_title">Downloads</string>
+    <string name="downloads_notification_title">tucaVR Downloads</string>
+    <string name="downloads_storage_format">%1$s free of %2$s</string>
+    <string name="downloads_storage_low_warning">Warning: Low storage space (&lt; 2 GB remaining)</string>
+    <string name="downloads_empty">No downloads yet</string>
+    <string name="downloads_btn_clear_completed">Clear Completed</string>
+    <string name="downloads_status_queued">Queued</string>
+    <string name="downloads_status_downloading">Downloading</string>
+    <string name="downloads_status_paused">Paused</string>
+    <string name="downloads_status_completed">Completed</string>
+    <string name="downloads_status_failed">Failed</string>
+    <string name="downloads_btn_pause">Pause</string>
+    <string name="downloads_btn_resume">Resume</string>
+    <string name="downloads_btn_cancel">Cancel</string>
+    <string name="downloads_btn_retry">Retry</string>
+    <string name="downloads_btn_play">Play</string>
+
 </resources>

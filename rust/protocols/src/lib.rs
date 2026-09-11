@@ -7,6 +7,7 @@ pub mod chunking;
 pub mod dash;
 pub mod discovery;
 pub mod dlna;
+pub mod download;
 pub mod ftp;
 pub mod hls;
 pub mod http;

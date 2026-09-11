@@ -391,7 +391,7 @@ Permitir ao usuário baixar mídia de servidores remotos para reprodução offli
 
 ### Tarefas
 
-- [ ] **T4.1** — Implementar **download manager** (Rust):
+- [x] **T4.1** — Implementar **download manager** (Rust):
   ```rust
   struct DownloadManager {
       active_downloads: Vec<DownloadTask>,
@@ -483,15 +483,15 @@ Permitir ao usuário baixar mídia de servidores remotos para reprodução offli
       }
   }
   ```
-- [ ] **T4.2** — Implementar **resumo de download interrompido**:
+- [x] **T4.2** — Implementar **resumo de download interrompido**:
   - Salvar progresso periodicamente (bytes baixados)
   - Se o app fechar/crashar, retomar do último byte ao reiniciar
   - Verificar integridade após download (comparar tamanho)
-- [ ] **T4.3** — Implementar **fila de downloads**:
+- [x] **T4.3** — Implementar **fila de downloads**:
   - Máximo 2-3 downloads simultâneos (economizar bandwidth para playback)
   - Prioridade: manual (drag to top) ou FIFO
   - Pausar/Retomar/Cancelar individual
-- [ ] **T4.4** — **Persistência** da fila de downloads:
+- [x] **T4.4** — **Persistência** da fila de downloads:
   ```kotlin
   @Entity
   data class Download(
@@ -508,16 +508,16 @@ Permitir ao usuário baixar mídia de servidores remotos para reprodução offli
       val serverInfo: String?,              // JSON com credenciais do servidor
   )
   ```
-- [ ] **T4.5** — UI de **gerenciador de downloads**:
+- [x] **T4.5** — UI de **gerenciador de downloads**:
   - Lista de downloads com progresso (%, MB baixados, velocidade, ETA)
   - Barra de progresso visual
   - Botões: Pausar, Retomar, Cancelar, Retry
   - Notificação quando download completa
-- [ ] **T4.6** — **Gestão de espaço em disco**:
+- [x] **T4.6** — **Gestão de espaço em disco**:
   - Mostrar espaço livre do Quest 3
   - Aviso quando espaço < 2GB
   - Opção de limpar downloads antigos
-- [ ] **T4.7** — Integrar downloads com **biblioteca**:
+- [x] **T4.7** — Integrar downloads com **biblioteca**:
   - Arquivos baixados aparecem automaticamente na biblioteca local
   - Link entre download e arquivo local (para saber a origem)
 
@@ -934,13 +934,13 @@ EAC: Otimizado por Google para YouTube VR, distribuição uniforme
 - [x] Credenciais salvas com criptografia
 
 ### Download Offline
-- [ ] Download de arquivo HTTP completa e é reproduzível
-- [ ] Download de arquivo SMB completa e é reproduzível
-- [ ] Pause/Resume de download funciona (não re-baixa dados existentes)
-- [ ] Fila de downloads respeita limite de concorrência
-- [ ] Download continua em background (com ForegroundService)
-- [ ] Aviso de espaço em disco antes de download que ultrapassaria limite
-- [ ] Arquivos baixados aparecem na biblioteca local automaticamente
+- [x] Download de arquivo HTTP completa e é reproduzível
+- [x] Download de arquivo SMB completa e é reproduzível
+- [x] Pause/Resume de download funciona (não re-baixa dados existentes)
+- [x] Fila de downloads respeita limite de concorrência
+- [x] Download continua em background (com ForegroundService)
+- [x] Aviso de espaço em disco antes de download que ultrapassaria limite
+- [x] Arquivos baixados aparecem na biblioteca local automaticamente
 
 ### Foveated Rendering
 - [ ] FFR nível LOW ativo sem artefatos visíveis no centro

@@ -34,6 +34,8 @@ import com.tucavr.screens.PlaylistsScreen
 import com.tucavr.screens.PlaylistDetailScreen
 import com.tucavr.screens.ResumePromptScreen
 import com.tucavr.screens.ScreenHost
+import com.tucavr.download.DownloadRepository
+import com.tucavr.screens.DownloadsScreen
 import com.tucavr.screens.SettingsScreen
 import com.tucavr.designsystem.VoidTheme
 import kotlinx.coroutines.CoroutineScope
@@ -155,6 +157,7 @@ class VRPresentation(
     private lateinit var playlistsScreen: PlaylistsScreen
     private lateinit var playlistDetailScreen: PlaylistDetailScreen
     private lateinit var photoViewerScreen: com.tucavr.screens.PhotoViewerScreen
+    private lateinit var downloadsScreen: DownloadsScreen
     private lateinit var multicastLockManager: com.tucavr.network.MulticastLockManager
     private lateinit var savedServerDao: com.tucavr.network.SavedServerDao
     private lateinit var playlistDao: PlaylistDao
@@ -413,6 +416,15 @@ class VRPresentation(
             scope    = scope,
             onBack   = { handleBack() }
         )
+
+        downloadsScreen = DownloadsScreen(
+            context    = context,
+            host       = host,
+            scope      = scope,
+            repository = DownloadRepository(context),
+            onNavigate = { dest -> navigateTo(dest) },
+            onBack     = { handleBack() }
+        )
     }
 
     // ---- Máquina de telas ----
@@ -434,6 +446,7 @@ class VRPresentation(
             is Destination.PlaylistDetail   -> playlistDetailScreen.render(destination.playlistId)
             is Destination.Player           -> playerScreen.render(destination.source)
             is Destination.PhotoViewer      -> photoViewerScreen.render(destination.initialEntry, destination.photoEntries, destination.initialIndex)
+            is Destination.Downloads        -> downloadsScreen.render()
             is Destination.Settings         -> settingsScreen.render()
         }
     }

@@ -153,6 +153,14 @@ extern "C" {
     // T2.1/T2.6: DASH
     extern char* dash_probe_representations(const char* url);
 
+    // Download Offline (Fase 0.4 Seção 4)
+    extern int32_t download_enqueue(const char* id, const char* source_uri, const char* destination_path);
+    extern int32_t download_pause(const char* id);
+    extern int32_t download_resume(const char* id);
+    extern int32_t download_cancel(const char* id);
+    extern int32_t download_get_stats(const char* id, uint64_t* out_downloaded, uint64_t* out_total, uint64_t* out_speed_bps, uint32_t* out_state);
+    extern void download_set_playback_active(uint32_t active);
+
     // T9: thumbnails de rede — ver rust/bridge/src/lib.rs para o contrato
     // completo (RGBA cru exatamente max_width*max_height*4 bytes, ou nulo em
     // qualquer falha; o ponteiro retornado DEVE ser liberado com
@@ -1138,6 +1146,80 @@ Java_com_tucavr_VRActivity_nativeSftpReadMetadata(JNIEnv* env, jobject thiz, jst
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetAudioTrack(JNIEnv* env, jobject thiz, jint ordinal) {
     set_desired_audio_track((uint32_t)(ordinal < 0 ? 0 : ordinal));
+}
+
+// =============================================================================
+// JNI: com.tucavr.download.DownloadBridge (Fase 0.4 Seção 4)
+// =============================================================================
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_download_DownloadBridge_nativeEnqueue(JNIEnv* env, jobject, jstring jId, jstring jUri, jstring jDest) {
+    if (!jId || !jUri || !jDest) return -1;
+    const char* idStr = env->GetStringUTFChars(jId, nullptr);
+    const char* uriStr = env->GetStringUTFChars(jUri, nullptr);
+    const char* destStr = env->GetStringUTFChars(jDest, nullptr);
+
+    int32_t ret = download_enqueue(idStr, uriStr, destStr);
+
+    env->ReleaseStringUTFChars(jId, idStr);
+    env->ReleaseStringUTFChars(jUri, uriStr);
+    env->ReleaseStringUTFChars(jDest, destStr);
+    return ret;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_download_DownloadBridge_nativePause(JNIEnv* env, jobject, jstring jId) {
+    if (!jId) return -1;
+    const char* idStr = env->GetStringUTFChars(jId, nullptr);
+    int32_t ret = download_pause(idStr);
+    env->ReleaseStringUTFChars(jId, idStr);
+    return ret;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_download_DownloadBridge_nativeResume(JNIEnv* env, jobject, jstring jId) {
+    if (!jId) return -1;
+    const char* idStr = env->GetStringUTFChars(jId, nullptr);
+    int32_t ret = download_resume(idStr);
+    env->ReleaseStringUTFChars(jId, idStr);
+    return ret;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_download_DownloadBridge_nativeCancel(JNIEnv* env, jobject, jstring jId) {
+    if (!jId) return -1;
+    const char* idStr = env->GetStringUTFChars(jId, nullptr);
+    int32_t ret = download_cancel(idStr);
+    env->ReleaseStringUTFChars(jId, idStr);
+    return ret;
+}
+
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_com_tucavr_download_DownloadBridge_nativeGetStats(JNIEnv* env, jobject, jstring jId) {
+    if (!jId) return nullptr;
+    const char* idStr = env->GetStringUTFChars(jId, nullptr);
+
+    uint64_t downloaded = 0;
+    uint64_t total = 0;
+    uint64_t speed = 0;
+    uint32_t state = 0;
+
+    int32_t ret = download_get_stats(idStr, &downloaded, &total, &speed, &state);
+    env->ReleaseStringUTFChars(jId, idStr);
+
+    if (ret != 0) return nullptr;
+
+    jlongArray array = env->NewLongArray(4);
+    if (!array) return nullptr;
+
+    jlong values[4] = { (jlong)downloaded, (jlong)total, (jlong)speed, (jlong)state };
+    env->SetLongArrayRegion(array, 0, 4, values);
+    return array;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_download_DownloadBridge_nativeSetPlaybackActive(JNIEnv*, jobject, jboolean active) {
+    download_set_playback_active(active ? 1 : 0);
 }
 
 // ScreenMode e helpers estao centralizados em screen_mode.h

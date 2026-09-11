@@ -62,6 +62,10 @@ static CONTROLLER: Lazy<Arc<Mutex<PlaybackController>>> = Lazy::new(|| {
 static ERROR_RING: Lazy<media_logic::error_ring::ErrorRingBuffer> =
     Lazy::new(|| media_logic::error_ring::ErrorRingBuffer::new(media_logic::error_ring::ErrorRingBuffer::DEFAULT_CAPACITY));
 
+// Gerenciador de downloads offline (Fase 0.4 Seção 4).
+static DOWNLOAD_MANAGER: Lazy<Arc<protocols::download::DownloadManager>> =
+    Lazy::new(|| Arc::new(protocols::download::DownloadManager::new(2)));
+
 // Contador (nao bool) porque duas chamadas de carregamento podem se
 // sobrepor (ex.: usuario solta o seek e arrasta de novo antes da primeira
 // terminar) — com um bool simples, a primeira terminando derrubaria a flag
@@ -895,6 +899,7 @@ pub extern "C" fn start_smb_playback(
         unsafe { log(4, &format!("Loading SMB video: {}", protocols::smb::redact(&internal_uri))); }
 
         reset_3d_mode();
+        DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
@@ -1019,6 +1024,7 @@ pub extern "C" fn start_ftp_playback(
         unsafe { log(4, &format!("Loading FTP video: {}", protocols::ftp::redact(&internal_uri))); }
 
         reset_3d_mode();
+        DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
@@ -1111,6 +1117,7 @@ pub extern "C" fn start_sftp_playback(
         unsafe { log(4, &format!("Loading SFTP video: {}", protocols::sftp::redact(&internal_uri))); }
 
         reset_3d_mode();
+        DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
@@ -1195,6 +1202,7 @@ pub extern "C" fn start_nfs_playback(
         unsafe { log(4, &format!("Loading NFS video: {}", protocols::nfs::redact(&internal_uri))); }
 
         reset_3d_mode();
+        DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
@@ -1296,6 +1304,7 @@ pub extern "C" fn start_webdav_playback(
         unsafe { log(4, &format!("Loading WebDAV video: {}", protocols::webdav::redact(&internal_uri))); }
 
         reset_3d_mode();
+        DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
@@ -1527,6 +1536,9 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
         unsafe { log(4, &format!("Loading video: {}", path_str)); }
 
         reset_3d_mode();
+        if path_str.starts_with("http://") || path_str.starts_with("https://") {
+            DOWNLOAD_MANAGER.set_playback_active(true);
+        }
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&path_str, f64::from(start_time_sec)) {
@@ -1542,6 +1554,7 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
 
 #[no_mangle]
 pub extern "C" fn stop_video_playback() {
+    DOWNLOAD_MANAGER.set_playback_active(false);
     std::thread::spawn(|| {
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
@@ -1553,6 +1566,7 @@ pub extern "C" fn stop_video_playback() {
 /// herde modo de tela, contadores ou sessão anterior em processos em cache.
 #[no_mangle]
 pub extern "C" fn reset_process_state() {
+    DOWNLOAD_MANAGER.set_playback_active(false);
     if let Ok(mut controller) = CONTROLLER.lock() {
         controller.stop();
     }
@@ -2441,6 +2455,104 @@ pub extern "C" fn get_active_ass_info(
         }
     }
     false
+}
+
+// =============================================================================
+// Download Offline (Fase 0.4 Seção 4 / T4.1-T4.3)
+// =============================================================================
+
+#[no_mangle]
+pub extern "C" fn download_enqueue(
+    id: *const std::os::raw::c_char,
+    source_uri: *const std::os::raw::c_char,
+    destination_path: *const std::os::raw::c_char,
+) -> i32 {
+    let id_str = match unsafe { cstr_to_string(id) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let uri_str = match unsafe { cstr_to_string(source_uri) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let dest_str = match unsafe { cstr_to_string(destination_path) } {
+        Some(s) => s,
+        None => return -1,
+    };
+
+    match DOWNLOAD_MANAGER.enqueue(&id_str, &uri_str, &dest_str) {
+        Ok(()) => 0,
+        Err(e) => {
+            unsafe { log(6, &format!("download_enqueue error: {e}")); }
+            -2
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn download_pause(id: *const std::os::raw::c_char) -> i32 {
+    let id_str = match unsafe { cstr_to_string(id) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    if DOWNLOAD_MANAGER.pause(&id_str) { 0 } else { -1 }
+}
+
+#[no_mangle]
+pub extern "C" fn download_resume(id: *const std::os::raw::c_char) -> i32 {
+    let id_str = match unsafe { cstr_to_string(id) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    if DOWNLOAD_MANAGER.resume(&id_str) { 0 } else { -1 }
+}
+
+#[no_mangle]
+pub extern "C" fn download_cancel(id: *const std::os::raw::c_char) -> i32 {
+    let id_str = match unsafe { cstr_to_string(id) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    if DOWNLOAD_MANAGER.cancel(&id_str) { 0 } else { -1 }
+}
+
+#[no_mangle]
+pub extern "C" fn download_get_stats(
+    id: *const std::os::raw::c_char,
+    out_downloaded: *mut u64,
+    out_total: *mut u64,
+    out_speed_bps: *mut u64,
+    out_state: *mut u32,
+) -> i32 {
+    let id_str = match unsafe { cstr_to_string(id) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let stats = match DOWNLOAD_MANAGER.get_stats(&id_str) {
+        Some(s) => s,
+        None => return -2,
+    };
+
+    unsafe {
+        if !out_downloaded.is_null() {
+            *out_downloaded = stats.downloaded_bytes;
+        }
+        if !out_total.is_null() {
+            *out_total = stats.total_bytes;
+        }
+        if !out_speed_bps.is_null() {
+            *out_speed_bps = stats.speed_bps;
+        }
+        if !out_state.is_null() {
+            *out_state = stats.state as u32;
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn download_set_playback_active(active: u32) {
+    DOWNLOAD_MANAGER.set_playback_active(active != 0);
 }
 
 

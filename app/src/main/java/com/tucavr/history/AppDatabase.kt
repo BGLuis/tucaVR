@@ -6,6 +6,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.tucavr.download.Download
+import com.tucavr.download.DownloadDao
 import com.tucavr.network.SavedServer
 import com.tucavr.network.SavedServerDao
 import com.tucavr.playlist.Playlist
@@ -17,10 +19,11 @@ import com.tucavr.playlist.PlaylistItem
  * - Tabela `playback_history`: historico de reproducao (schema v1).
  * - Tabela `saved_servers`: servidores de rede salvos (schema v2, T11.1).
  * - Tabelas `playlists` e `playlist_items`: listas de reproducao (schema v3, T9.1).
+ * - Tabela `downloads`: fila e historico de downloads offline (schema v4, Fase 0.4 Seção 4).
  */
 @Database(
-    entities = [PlaybackHistory::class, SavedServer::class, Playlist::class, PlaylistItem::class],
-    version = 3,
+    entities = [PlaybackHistory::class, SavedServer::class, Playlist::class, PlaylistItem::class, Download::class],
+    version = 4,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -28,6 +31,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun playbackHistoryDao(): PlaybackHistoryDao
     abstract fun savedServerDao(): SavedServerDao
     abstract fun playlistDao(): PlaylistDao
+    abstract fun downloadDao(): DownloadDao
 
     companion object {
         @Volatile
@@ -88,6 +92,32 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `downloads` (
+                        `id` TEXT NOT NULL PRIMARY KEY,
+                        `sourceUri` TEXT NOT NULL,
+                        `sourceType` TEXT NOT NULL,
+                        `destinationPath` TEXT NOT NULL,
+                        `displayName` TEXT NOT NULL,
+                        `totalBytes` INTEGER NOT NULL,
+                        `downloadedBytes` INTEGER NOT NULL,
+                        `state` TEXT NOT NULL,
+                        `createdAt` INTEGER NOT NULL,
+                        `completedAt` INTEGER,
+                        `errorMessage` TEXT,
+                        `serverId` TEXT
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_downloads_state` ON `downloads` (`state`)"
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -95,8 +125,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "vrplayer_history.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
-                    .fallbackToDestructiveMigration()
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                     .build()
                     .also { instance = it }
             }

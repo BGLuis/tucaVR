@@ -108,6 +108,9 @@ sealed class Destination {
         val photoEntries: List<com.tucavr.filebrowser.MediaEntry>,
         val initialIndex: Int = 0
     ) : Destination()
+
+    /** Fase 0.4 Seção 4: tela do gerenciador de downloads offline. */
+    object Downloads : Destination()
 }
 
 /**

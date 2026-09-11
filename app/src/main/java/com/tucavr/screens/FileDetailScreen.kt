@@ -176,6 +176,41 @@ class FileDetailScreen(
 
         bottomActions.addView(btnPlay)
         bottomActions.addView(btnAddToPlaylist)
+
+        if (source !is PlaybackSource.LocalFile) {
+            val btnDownload = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.file_detail_btn_download).trim()
+                setIcon(R.drawable.ic_download)
+                textSize = 18f
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT
+                ).also { it.marginStart = VoidTheme.dpToPx(context, 12f) }
+                setOnClickListener {
+                    scope.launch {
+                        val repo = com.tucavr.download.DownloadRepository(context)
+                        val result = repo.enqueue(source, dest.displayName, dest.sizeBytes)
+                        withContext(Dispatchers.Main) {
+                            result.onSuccess {
+                                Toast.makeText(
+                                    context,
+                                    context.getString(R.string.download_started_toast, dest.displayName),
+                                    Toast.LENGTH_SHORT
+                                ).show()
+                            }.onFailure { err ->
+                                val msg = if (err is com.tucavr.download.InsufficientSpaceException) {
+                                    context.getString(R.string.download_error_insufficient_space)
+                                } else {
+                                    err.message ?: "Falha ao iniciar download"
+                                }
+                                Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
+                            }
+                        }
+                    }
+                }
+            }
+            bottomActions.addView(btnDownload)
+        }
+
         root.addView(bottomActions)
 
         host.showScreen(root)
