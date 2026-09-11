@@ -140,6 +140,8 @@ extern "C" {
 
     // T8.1/T8.6: HLS
     extern char* hls_probe_variants(const char* url);
+    // T2.1/T2.6: DASH
+    extern char* dash_probe_representations(const char* url);
 
     // T9: thumbnails de rede — ver rust/bridge/src/lib.rs para o contrato
     // completo (RGBA cru exatamente max_width*max_height*4 bytes, ou nulo em
@@ -994,6 +996,14 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_tucavr_VRActivity_nativeHlsProbeVariants(JNIEnv* env, jobject thiz, jstring url) {
     const char* urlStr = env->GetStringUTFChars(url, nullptr);
     char* result = hls_probe_variants(urlStr);
+    env->ReleaseStringUTFChars(url, urlStr);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeDashProbeRepresentations(JNIEnv* env, jobject thiz, jstring url) {
+    const char* urlStr = env->GetStringUTFChars(url, nullptr);
+    char* result = dash_probe_representations(urlStr);
     env->ReleaseStringUTFChars(url, urlStr);
     return RustStringToJStringAndFree(env, result);
 }

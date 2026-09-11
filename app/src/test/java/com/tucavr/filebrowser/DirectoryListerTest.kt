@@ -24,6 +24,7 @@ class DirectoryListerTest {
     fun listsOnlyRecognizedMediaExtensionsAndDirectories() = runTest {
         val root = tempDir()
         file(root, "movie.mp4")
+        file(root, "stream.mpd")
         file(root, "song.mp3")
         file(root, "photo.jpg")
         file(root, "notes.txt") // unsupported extension, should be filtered out
@@ -32,13 +33,14 @@ class DirectoryListerTest {
 
         val entries = DirectoryLister.listMedia(root)
 
-        assertEquals(setOf("movie.mp4", "song.mp3", "photo.jpg", "subfolder"), entries.map { it.name }.toSet())
+        assertEquals(setOf("movie.mp4", "stream.mpd", "song.mp3", "photo.jpg", "subfolder"), entries.map { it.name }.toSet())
     }
 
     @Test
     fun classifiesEachEntryWithTheRightMediaType() = runTest {
         val root = tempDir()
         file(root, "movie.mkv")
+        file(root, "stream.mpd")
         file(root, "song.flac")
         file(root, "photo.png")
         File(root, "subfolder").mkdir()
@@ -46,6 +48,7 @@ class DirectoryListerTest {
         val entries = DirectoryLister.listMedia(root).associateBy { it.name }
 
         assertEquals(MediaType.VIDEO, entries.getValue("movie.mkv").type)
+        assertEquals(MediaType.VIDEO, entries.getValue("stream.mpd").type)
         assertEquals(MediaType.AUDIO, entries.getValue("song.flac").type)
         assertEquals(MediaType.IMAGE, entries.getValue("photo.png").type)
         assertEquals(MediaType.DIRECTORY, entries.getValue("subfolder").type)

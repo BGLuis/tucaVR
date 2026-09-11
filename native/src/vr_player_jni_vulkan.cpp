@@ -127,6 +127,8 @@ extern "C" {
     extern char* dlna_browse_directory(const char* control_url, const char* object_id, uint32_t start_index, uint32_t max_count);
     // HLS
     extern char* hls_probe_variants(const char* url);
+    // DASH
+    extern char* dash_probe_representations(const char* url);
     // Thumbnails de rede — mesmo contrato de vr_player_app.cpp.
     extern uint8_t* smb_generate_thumbnail(const char* host, int32_t port, const char* username,
                                             const char* password, const char* domain, const char* share,
@@ -864,6 +866,14 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_tucavr_VRActivity_nativeHlsProbeVariants(JNIEnv* env, jobject, jstring url) {
     const char* urlStr = env->GetStringUTFChars(url, nullptr);
     char* result = hls_probe_variants(urlStr);
+    env->ReleaseStringUTFChars(url, urlStr);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeDashProbeRepresentations(JNIEnv* env, jobject, jstring url) {
+    const char* urlStr = env->GetStringUTFChars(url, nullptr);
+    char* result = dash_probe_representations(urlStr);
     env->ReleaseStringUTFChars(url, urlStr);
     return RustStringToJStringAndFree(env, result);
 }

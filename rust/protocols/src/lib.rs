@@ -4,6 +4,7 @@
 //! implementacao real.
 
 pub mod chunking;
+pub mod dash;
 pub mod discovery;
 pub mod dlna;
 pub mod ftp;

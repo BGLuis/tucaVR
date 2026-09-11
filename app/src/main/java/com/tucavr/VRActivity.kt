@@ -1296,6 +1296,9 @@ class VRActivity : NativeActivity() {
     // T8.1/T8.6: Probe de variantes HLS (bloqueante — SEMPRE de Dispatchers.IO).
     external fun nativeHlsProbeVariants(url: String): String
 
+    // T2.1/T2.6: Probe de representações DASH (bloqueante — SEMPRE de Dispatchers.IO).
+    external fun nativeDashProbeRepresentations(url: String): String
+
     // T9: thumbnail de arquivo de video num share/servidor de rede — decode
     // de UM frame por software do lado Rust (core::thumbnail::generate, ver
     // rust/bridge/src/lib.rs). Bloqueante (rede + decode sincronos) — SEMPRE

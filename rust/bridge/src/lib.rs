@@ -1359,6 +1359,34 @@ pub extern "C" fn hls_probe_variants(url: *const std::os::raw::c_char) -> *mut s
     }
 }
 
+/// T2.1/T2.6: Faz o probe de representações de uma URL MPD (MPEG-DASH).
+/// Chamada BLOQUEANTE. Retorna linhas separadas por '\n': "index\tbandwidth\twidthxheight\tcodecs\tid"
+#[no_mangle]
+pub extern "C" fn dash_probe_representations(url: *const std::os::raw::c_char) -> *mut std::os::raw::c_char {
+    let url_str = match unsafe { cstr_to_string(url) } {
+        Some(s) => s,
+        None => return string_to_c_char("ERROR:URL invalida".into()),
+    };
+
+    match protocols::dash::fetch_and_probe_representations(&url_str) {
+        Ok(reps) => {
+            let lines: Vec<String> = reps
+                .into_iter()
+                .enumerate()
+                .map(|(idx, r)| {
+                    let res_str = match (r.width, r.height) {
+                        (Some(w), Some(h)) => format!("{w}x{h}"),
+                        _ => "auto".to_string(),
+                    };
+                    format!("{}\t{}\t{}\t{}\t{}", idx, r.bandwidth, res_str, r.codecs.unwrap_or_default(), r.id)
+                })
+                .collect();
+            string_to_c_char(lines.join("\n"))
+        }
+        Err(e) => string_to_c_char(format!("ERROR:{e}")),
+    }
+}
+
 /// T7.1: probe HEAD-based de uma URL HTTP(S) — descobre ANTES de tocar se o
 /// servidor suporta range requests (necessario pra seek) e o tamanho do
 /// arquivo, para a UI poder avisar o usuario (doc, secao 7, aviso

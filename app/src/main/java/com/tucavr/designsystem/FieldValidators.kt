@@ -46,7 +46,7 @@ object FieldValidators {
             errorMsg
         } else {
             val supportedSchemes = listOf(
-                "http://", "https://", "smb://", "ftp://", "sftp://", "nfs://", "rtsp://", "udp://", "hls://"
+                "http://", "https://", "smb://", "ftp://", "sftp://", "nfs://", "rtsp://", "udp://", "hls://", "dash://"
             )
             val lower = trimmed.lowercase()
             val hasValidScheme = supportedSchemes.any { lower.startsWith(it) }
