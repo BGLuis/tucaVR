@@ -15,6 +15,8 @@ import java.util.UUID
 
 class InsufficientSpaceException(message: String) : Exception(message)
 
+class UnsafeDestinationException(message: String) : Exception(message)
+
 data class DownloadStatsSnapshot(
     val downloadedBytes: Long,
     val totalBytes: Long,
@@ -74,6 +76,17 @@ class DownloadRepository(
         val id = UUID.randomUUID().toString()
         val destFile = File(destDir, sanitizeFilename(displayName))
 
+        // Defesa em profundidade contra path traversal: garante que o arquivo final
+        // continua sendo filho direto de destDir mesmo se sanitizeFilename regredir
+        // no futuro. Normalização puramente lexical (sem tocar o disco).
+        val destDirPath = destDir.toPath().toAbsolutePath().normalize()
+        val destFilePath = destFile.toPath().toAbsolutePath().normalize()
+        if (destFilePath.parent != destDirPath) {
+            return@withContext Result.failure(
+                UnsafeDestinationException("Nome de arquivo de destino inválido para $displayName")
+            )
+        }
+
         val download = Download(
             id = id,
             sourceUri = internalUri,
@@ -83,7 +96,8 @@ class DownloadRepository(
             totalBytes = sourceSize,
             downloadedBytes = 0L,
             state = DownloadStatus.QUEUED,
-            createdAt = System.currentTimeMillis()
+            createdAt = System.currentTimeMillis(),
+            serverId = source.toServerIdOrNull()
         )
 
         dao.upsert(download)
@@ -220,7 +234,16 @@ class DownloadRepository(
     }
 
     private fun sanitizeFilename(name: String): String {
-        return name.replace(Regex("[/\\\\?%*:|\"<>]"), "_")
+        val cleaned = name.replace(Regex("[/\\\\?%*:|\"<>]"), "_").trim()
+        // As barras já são neutralizadas acima, mas um displayName igual a
+        // exatamente "." ou ".." não contém nenhum caractere do regex e
+        // resolveria, via File(destDir, cleaned), para o próprio destDir ou
+        // para o diretório pai dele.
+        return if (cleaned.isEmpty() || cleaned == "." || cleaned == "..") {
+            "download_${UUID.randomUUID()}"
+        } else {
+            cleaned
+        }
     }
 }
 
@@ -280,5 +303,23 @@ fun PlaybackSource.toSourceTypeString(): String {
         is PlaybackSource.Webdav -> "WEBDAV"
         is PlaybackSource.Dlna -> "DLNA"
         is PlaybackSource.LocalFile -> "LOCAL"
+    }
+}
+
+/**
+ * ID do [com.tucavr.network.SavedServer]/servidor salvo de origem, quando o [PlaybackSource]
+ * vier de um protocolo de rede — usado para linkar o [Download] à sua origem (Fase 0.4 T4.7).
+ * `null` para fontes sem servidor (HTTP direto, arquivo local).
+ */
+fun PlaybackSource.toServerIdOrNull(): String? {
+    return when (this) {
+        is PlaybackSource.Smb -> server.id
+        is PlaybackSource.Ftp -> server.id
+        is PlaybackSource.Sftp -> server.id
+        is PlaybackSource.Nfs -> server.id
+        is PlaybackSource.Dlna -> server.id
+        is PlaybackSource.Webdav -> server.id
+        is PlaybackSource.Http -> null
+        is PlaybackSource.LocalFile -> null
     }
 }

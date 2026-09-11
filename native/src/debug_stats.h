@@ -51,6 +51,11 @@ struct DebugStats {
     int mqsrEnabled = 0;
     const char* qualityLevel = "HIGH";
     const char* qualityReason = "NONE";
+    // R-07 (docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): draw calls e triangulos do
+    // ultimo frame completo (ambos os olhos) — ver AppState.lastFrameDrawCallCount em
+    // vr_player_app_vulkan.cpp.
+    uint32_t drawCallCount = 0;
+    uint64_t triangleCount = 0;
 };
 
 // Serializa a struct em formato TSV estruturado (chave\tvalor\n).
@@ -82,6 +87,8 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         "mqsr_enabled\t%d\n"
         "quality_level\t%s\n"
         "quality_reason\t%s\n"
+        "draw_call_count\t%u\n"
+        "triangle_count\t%llu\n"
         "stutter_count\t%d\n"
         "freeze_count\t%d\n"
         "thermal_level\t%u\n"
@@ -124,6 +131,8 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         s.mqsrEnabled,
         s.qualityLevel ? s.qualityLevel : "HIGH",
         s.qualityReason ? s.qualityReason : "NONE",
+        s.drawCallCount,
+        (unsigned long long)s.triangleCount,
         s.stutterCount,
         s.freezeCount,
         s.thermalLevel,

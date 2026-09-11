@@ -626,9 +626,7 @@ Eye-Tracked Foveated Rendering: Centro segue o olhar (v0.5)
   > não é operação de frame, chamar a cada frame seria desperdício).
   > Build real validado: `cargo ndk build --release` + `nm -D` confirmando
   > os símbolos, `externalNativeBuildDebug` compilando e linkando nas DUAS
-  > variantes gráficas (Vulkan e GLES), `assembleDebug` completo. **Não
-- [x] **T5.1** — Habilitar **Fixed Foveated Rendering (FFR)** via Meta SDK:
-  - Implementado no caminho Vulkan (`native/src/vr_player_app_vulkan.cpp`, `ApplyFoveation`).
+  > variantes gráficas (Vulkan e GLES), `assembleDebug` completo.
   - Chamadas protegidas com fallbacks seguros e logging detalhado (`XR_FOVEATION_DYNAMIC_DISABLED_FB`).
 - [x] **T5.2** — Configurar **níveis de foveação** adaptáveis:
   - Mapeamento direto dos 4 enums suportados pela AAR OpenXR (`NONE`, `LOW`, `MEDIUM`, `HIGH`) e uso de `verticalOffset` positivo para nível crítico (`Emergency`).

@@ -6,6 +6,13 @@ interface NativeDownloadBridge {
     fun nativeResume(id: String): Int
     fun nativeCancel(id: String): Int
     fun nativeGetStats(id: String): LongArray?
+
+    /**
+     * Hoje sem call-site em Kotlin: a auto-pausa de downloads durante playback de rede já
+     * funciona porque `rust/bridge/src/lib.rs` chama `DOWNLOAD_MANAGER.set_playback_active(...)`
+     * diretamente nos pontos de abertura/fechamento de vídeo de rede. Esta ponte fica reservada
+     * para um controle manual futuro (ex.: pausar downloads a partir de uma tela de configurações).
+     */
     fun nativeSetPlaybackActive(active: Boolean)
 }
 

@@ -80,10 +80,10 @@ The Rust codebase is organized into modular crates to isolate Android NDK depend
 | `bridge` | C-ABI `extern "C"` (`cdylib` / `staticlib`) consumed by C++ (`vr_player_app.cpp` / `vr_player_app_vulkan.cpp`). | **NDK Only:** Links into the native shared library for Android. |
 
 ### Synchronization of the `ScreenMode` Enum
-Stereoscopic/projection mode representation (2D, Side-by-Side, Over-Under, 180°, 360°, etc.) is a numeric enum that **must remain strictly synchronized across 3 locations**:
+Stereoscopic/projection mode representation (2D, Side-by-Side, Over-Under, 180°, 360°, Cubemap, EAC, etc.) is a numeric enum that **must remain strictly synchronized across 3 locations**:
 1. `SCREEN_MODE` comments in `rust/bridge/src/lib.rs`.
-2. `enum class ScreenMode` in `native/src/vr_player_app.cpp` and `native/src/vr_player_app_vulkan.cpp`.
-3. Position lookup in `modeLabelResIds` in `VRControlsPresentation.kt`.
+2. `enum class ScreenMode` in `native/include/screen_mode.h`.
+3. The catalog in `ScreenFormatCatalog.kt`.
 
 ---
 

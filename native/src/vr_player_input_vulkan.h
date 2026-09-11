@@ -838,6 +838,9 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             }
             stats.qualityReason = qualityReasonStr;
 
+            stats.drawCallCount = state.lastFrameDrawCallCount;
+            stats.triangleCount = state.lastFrameTriangleCount;
+
             stats.stutterCount = state.stutterCount;
             stats.freezeCount = state.freezeCount;
             stats.thermalLevel = state.thermalLevel;

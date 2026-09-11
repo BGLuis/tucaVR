@@ -1,9 +1,10 @@
-# Ambiente de teste dos protocolos de rede (T6/T7)
+# Ambiente de teste dos protocolos de rede (T6/T7, Fase 0.4 Seções 2/3)
 
 Servidores reais (via Docker) para os protocolos que `rust/protocols` implementa,
 usados pelos testes de integração em `rust/protocols/tests/`. Existem para preencher
 a lacuna documentada em `docs/phases/PHASE-0.1-MVP.md` (T6.1/T6.3/T7.1: "nunca testado
-contra um servidor real").
+contra um servidor real") e, mais recentemente, o achado R-04 de
+`docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md` (DASH e WebDAV tinham a mesma lacuna).
 
 Não use manualmente — rode `./scripts/test-network-protocols.sh` na raiz do repo, que
 gera as fixtures, sobe os containers, roda os testes Rust e derruba tudo.
@@ -17,6 +18,8 @@ gera as fixtures, sobe os containers, roda os testes Rust e derruba tudo.
 | `https-test` | HTTPS com TLS auto-assinado (nginx) | 18443 | Certificado gerado em runtime, ver abaixo |
 | `ftp-test` | FTP (`delfer/alpine-ftp-server`, vsftpd) | 12121 (mapeada de 21) + 12100-12110 (passivo) | user `vruser` / senha `vrpass123`, home `/ftp/vruser` |
 | `sftp-test` | SFTP (`atmoz/sftp`, OpenSSH) | 12222 (mapeada de 22) | user `vruser` / senha `vrpass123` **ou** chave `ssh-keys/vrplayer_test_key` (as duas funcionam simultaneamente), home `/home/vruser`, fixture em `fixtures/` dentro do home |
+| `webdav-test` | WebDAV (`bytemark/webdav`, Apache + mod_dav_fs) | 18099 | user `vruser` / senha `vrpass123` (Basic), dados em `fixtures/webdav/` (diretório próprio, não compartilhado com os outros serviços) |
+| — (DASH) | MPD servido pelo próprio `http-test` | 18080 | Sem autenticação — `fixtures/dash/template/manifest.mpd` (SegmentTemplate) e `fixtures/dash/singlefile/manifest.mpd` (SegmentBase), gerados por ffmpeg a cada execução |
 
 Todos servem o conteúdo de `fixtures/` (gerado pelo script de setup — um arquivo
 binário aleatório, `testfile.bin`, com o `sha256` salvo ao lado).
@@ -111,6 +114,21 @@ O OpenSSL do Alpine, por padrão, marca certificados `-x509` auto-assinados como
 `reqwest` em `protocols::http`) rejeita como leaf/end-entity cert. Corrigido em
 `entrypoint.sh` com `-addext "basicConstraints=critical,CA:FALSE"` — se você
 editar a geração do certificado, não remova essa extensão.
+
+## Gotcha: manifesto DASH `SegmentBase` é escrito à mão, não gerado pelo ffmpeg
+
+`rust/protocols/src/dash` só entende `SegmentBase` com um `<Initialization range="...">` filho
+(um único segmento de mídia = o arquivo inteiro após o init) — **não** `SegmentList` (múltiplas
+`<SegmentURL>` explícitas), que é o que `ffmpeg -f dash -single_file 1` de fato produz. Em vez de
+depender do XML exato que uma versão específica de ffmpeg gera para `SegmentList` (frágil entre
+versões), `scripts/test-network-protocols.sh` concatena o init segment de vídeo
+(`template/init-0.m4s`) com todos os chunks de vídeo já gerados para o manifesto
+`SegmentTemplate` (`template/chunk-0-*.m4s`) num único arquivo fMP4 contínuo válido
+(`singlefile/video.mp4` — init+moof/mdat concatenados é exatamente o que um `SegmentBase` de
+arquivo único contém) e escreve `singlefile/manifest.mpd` à mão, com o byte-range do
+`Initialization` computado do tamanho real do init segment (`stat -c%s`). Isso garante um MPD
+`SegmentBase` sintaticamente correto independente da versão do ffmpeg instalada, testando o
+código de produção real (achado R-02/R-03) contra um arquivo de mídia genuíno.
 
 ## Sintaxe de share do `dperson/samba`
 

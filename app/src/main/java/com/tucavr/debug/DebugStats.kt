@@ -46,7 +46,9 @@ data class NativeDebugStats(
     val upscalingSharpness: Float = 0.0f,
     val mqsrEnabled: Boolean = false,
     val qualityLevel: String = "HIGH",
-    val qualityReason: String = "NONE"
+    val qualityReason: String = "NONE",
+    val drawCallCount: Int = 0,
+    val triangleCount: Long = 0L
 )
 
 /**
@@ -81,6 +83,8 @@ object DebugStatsParser {
         var mqsrEnabled = false
         var qualityLevel = "HIGH"
         var qualityReason = "NONE"
+        var drawCallCount = 0
+        var triangleCount = 0L
         var stutterCount = 0
         var freezeCount = 0
         var thermalLevel = 0
@@ -136,6 +140,8 @@ object DebugStatsParser {
                 "mqsr_enabled" -> { mqsrEnabled = value == "1"; recognizedKeys++ }
                 "quality_level" -> { qualityLevel = value; recognizedKeys++ }
                 "quality_reason" -> { qualityReason = value; recognizedKeys++ }
+                "draw_call_count" -> { drawCallCount = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "triangle_count" -> { triangleCount = value.toLongOrNull() ?: 0L; recognizedKeys++ }
                 "stutter_count" -> { stutterCount = value.toIntOrNull() ?: 0; recognizedKeys++ }
                 "freeze_count" -> { freezeCount = value.toIntOrNull() ?: 0; recognizedKeys++ }
                 "thermal_level" -> { thermalLevel = value.toIntOrNull() ?: 0; recognizedKeys++ }
@@ -201,7 +207,9 @@ object DebugStatsParser {
             upscalingSharpness = upscalingSharpness,
             mqsrEnabled = mqsrEnabled,
             qualityLevel = qualityLevel,
-            qualityReason = qualityReason
+            qualityReason = qualityReason,
+            drawCallCount = drawCallCount,
+            triangleCount = triangleCount
         )
     }
 }

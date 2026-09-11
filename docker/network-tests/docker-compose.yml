@@ -1,10 +1,11 @@
 # Ambiente de teste de protocolos de rede para o Fase 0.1 (T6/T7,
-# docs/phases/PHASE-0.1-MVP.md). Sobe um servidor real para cada protocolo
-# que o Demuxer (Rust) fala (rust/protocols/src): SMB2/3, HTTP puro e HTTPS
-# com TLS auto-assinado — para exercitar o codigo de producao
-# (protocols::smb, protocols::http) contra servidores de verdade em vez de
-# so mocks in-process. Nenhum destes servicos e exposto fora do host: as
-# portas mapeadas sao so para o teste local via scripts/test-network-protocols.sh.
+# docs/phases/PHASE-0.1-MVP.md) e Fase 0.4 (Secoes 2/3, achado R-04 de
+# docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md). Sobe um servidor real para cada
+# protocolo que o Demuxer (Rust) fala (rust/protocols/src): SMB2/3, HTTP puro, HTTPS
+# com TLS auto-assinado, DASH (MPD real servido pelo proprio http-test) e WebDAV — para
+# exercitar o codigo de producao contra servidores de verdade em vez de so mocks
+# in-process. Nenhum destes servicos e exposto fora do host: as portas mapeadas sao
+# so para o teste local via scripts/test-network-protocols.sh.
 #
 # Uso: ver scripts/test-network-protocols.sh (orquestra fixture + up + testes + down).
 
@@ -112,3 +113,22 @@ services:
       - ./ssh-keys/vrplayer_test_key.pub:/home/vruser/.ssh/keys/vrplayer_test_key.pub:ro
     ports:
       - "12222:22"
+
+  webdav-test:
+    # `bytemark/webdav` (Apache httpd + mod_dav_fs) — cobre R-04: PROPFIND (multistatus XML),
+    # auth Basic e GET com Range contra um servidor WebDAV de verdade. Validado manualmente
+    # nesta sessao com curl antes de escrever os testes Rust (PROPFIND 401 sem auth, 207 com
+    # auth, GET com Range devolvendo 206) — ver README.md deste diretorio.
+    image: bytemark/webdav:latest
+    container_name: vrplayer-webdav-test
+    environment:
+      - AUTH_TYPE=Basic
+      - USERNAME=vruser
+      - PASSWORD=vrpass123
+    volumes:
+      # Diretorio proprio (nao ./fixtures compartilhado com os outros servicos) — o entrypoint
+      # da imagem mexe em permissoes do proprio diretorio de dados, mesma cautela do gotcha do
+      # ftp-test acima.
+      - ./fixtures/webdav:/var/lib/dav/data
+    ports:
+      - "18099:80"

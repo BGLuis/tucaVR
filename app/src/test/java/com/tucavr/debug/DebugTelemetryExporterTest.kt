@@ -64,8 +64,12 @@ class DebugTelemetryExporterTest {
         assertEquals("1", cols[26]) // freeze_count
         assertEquals("2", cols[27]) // thermal_level
         assertEquals("0.85", cols[28]) // scale
-        assertEquals("Http", cols[43])
-        assertEquals("https://stream.local/live.m3u8", cols[44])
+        assertEquals("HIGH", cols[43]) // quality_level (default: HUD legado não emite quality_*)
+        assertEquals("NONE", cols[44]) // quality_reason
+        assertEquals("0", cols[45]) // draw_call_count (default: HUD legado não emite)
+        assertEquals("0", cols[46]) // triangle_count
+        assertEquals("Http", cols[47])
+        assertEquals("https://stream.local/live.m3u8", cols[48])
     }
 
     @Test
@@ -111,6 +115,10 @@ class DebugTelemetryExporterTest {
             audio_track_count	2
             sub_track	0
             sub_offset_ms	-100
+            quality_level	MEDIUM
+            quality_reason	GpuOverload
+            draw_call_count	9
+            triangle_count	12000
         """.trimIndent()
 
         val source = PlaybackSource.Sftp(
@@ -178,7 +186,11 @@ class DebugTelemetryExporterTest {
         assertEquals("2", cols[40])
         assertEquals("0", cols[41])
         assertEquals("-100", cols[42])
-        assertEquals("Sftp", cols[43])
+        assertEquals("MEDIUM", cols[43]) // quality_level
+        assertEquals("GpuOverload", cols[44]) // quality_reason
+        assertEquals("9", cols[45]) // draw_call_count
+        assertEquals("12000", cols[46]) // triangle_count
+        assertEquals("Sftp", cols[47])
     }
 
     @Test

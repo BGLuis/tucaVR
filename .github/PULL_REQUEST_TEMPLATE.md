@@ -44,7 +44,7 @@
 ### If applicable
 
 - [ ] Kotlin never calls Rust directly — the Kotlin → JNI → C++ → C ABI → Rust path is preserved (ADR-002).
-- [ ] I changed the screen/stereo mode enum and kept it in sync across **all three** places: `SCREEN_MODE` in `rust/bridge/src/lib.rs`, `enum class ScreenMode` in `native/src/vr_player_app.cpp`, and `modeLabelResIds` in `VRControlsPresentation.kt`.
+- [ ] I changed the screen/stereo mode enum and kept it in sync across **all three** places: `SCREEN_MODE` in `rust/bridge/src/lib.rs`, `enum class ScreenMode` in `native/include/screen_mode.h`, and the catalog in `ScreenFormatCatalog.kt`.
 - [ ] I added or changed user-facing strings and updated **both** `values/strings.xml` and `values-pt-rBR/strings.xml`, keeping the key order mirrored and using positional placeholders (`%1$s`).
 - [ ] Pure logic I added lives in `media-logic` (host-testable) rather than in `core`, where it could not be tested.
 - [ ] No credential is stored or logged in plain text.

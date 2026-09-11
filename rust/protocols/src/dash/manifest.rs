@@ -8,6 +8,34 @@ use crate::hls::abr::BitrateVariant;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
+/// Extrai a origem (`scheme://host[:port]`) de uma URL http(s) absoluta. `None` se `url` não
+/// tiver esquema (ex.: caminho relativo).
+fn url_origin(url: &str) -> Option<&str> {
+    let pos = url.find("://")?;
+    let after_scheme = &url[pos + 3..];
+    let host_end = after_scheme.find('/').unwrap_or(after_scheme.len());
+    Some(&url[..pos + 3 + host_end])
+}
+
+/// Resolve uma URL de `BaseURL`/segmento DASH contra `base`, restringindo o resultado à MESMA
+/// origem de `mpd_url` — mitiga SSRF via um manifesto MPD malicioso ou comprometido que aponte
+/// `BaseURL`/`SegmentTemplate` para um host arbitrário (achado R-01,
+/// `docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md`). `mpd_url` é sempre a URL originalmente
+/// solicitada pelo usuário/app — nunca um valor extraído do próprio documento — então usá-la
+/// como origem confiável é seguro. Sem essa checagem, `resolve_url` (compartilhada com o cliente
+/// DLNA, que não tem esse risco por ser descoberto via SSDP/LAN) retorna qualquer URL absoluta
+/// `http(s)://` do manifesto sem validação.
+pub fn resolve_dash_url(mpd_url: &str, base: &str, relative: &str) -> Result<String, String> {
+    let resolved = resolve_url(base, relative);
+    match (url_origin(mpd_url), url_origin(&resolved)) {
+        (Some(expected), Some(actual)) if expected == actual => Ok(resolved),
+        (Some(expected), Some(actual)) => Err(format!(
+            "URL DASH fora da origem do MPD bloqueada (SSRF): esperado '{expected}', recebido '{actual}' (relative='{relative}')"
+        )),
+        _ => Err(format!("URL DASH inválida ou sem esquema http(s): '{resolved}'")),
+    }
+}
+
 /// Converte durações ISO-8601 (ex.: "PT1H30M15.5S", "PT45S", "PT0H10M0.00S", "P1DT2H") para segundos.
 pub fn parse_iso8601_duration(s: &str) -> Option<f64> {
     let s = s.trim();
@@ -589,7 +617,7 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
             Ok(Event::Text(ref e)) => {
                 let text = e.unescape().unwrap_or_default().to_string();
                 if current_tag == "BaseURL" && !text.is_empty() {
-                    let resolved = resolve_url(mpd_url, &text);
+                    let resolved = resolve_dash_url(mpd_url, mpd_url, &text)?;
                     if let Some(ref mut rep) = current_rep {
                         rep.base_url = Some(resolved);
                     } else {
@@ -664,6 +692,54 @@ mod tests {
     use super::*;
     use crate::hls::abr::AdaptiveBitrateManager;
     use std::time::Duration;
+
+    #[test]
+    fn test_resolve_dash_url_allows_same_origin_and_blocks_cross_origin() {
+        let mpd_url = "https://stream.example.com/live/manifest.mpd";
+
+        // Caminho relativo resolvido contra o próprio MPD — sempre mesma origem, sempre Ok.
+        assert_eq!(
+            resolve_dash_url(mpd_url, mpd_url, "chunk-1.m4s").unwrap(),
+            "https://stream.example.com/live/chunk-1.m4s"
+        );
+
+        // Absoluta na MESMA origem (outro path) — permitida.
+        assert_eq!(
+            resolve_dash_url(mpd_url, mpd_url, "https://stream.example.com/cdn/chunk-1.m4s").unwrap(),
+            "https://stream.example.com/cdn/chunk-1.m4s"
+        );
+
+        // Absoluta em origem DIFERENTE (host distinto) — bloqueada (SSRF, R-01).
+        assert!(resolve_dash_url(mpd_url, mpd_url, "https://evil.example.net/chunk-1.m4s").is_err());
+
+        // Mesma host, esquema diferente (https -> http) — também bloqueada.
+        assert!(resolve_dash_url(mpd_url, mpd_url, "http://stream.example.com/chunk-1.m4s").is_err());
+
+        // Mesma host/esquema, porta diferente — também bloqueada.
+        assert!(resolve_dash_url(mpd_url, mpd_url, "https://stream.example.com:8443/chunk-1.m4s").is_err());
+    }
+
+    #[test]
+    fn test_parse_mpd_rejects_cross_origin_base_url() {
+        let xml = r#"<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" mediaPresentationDuration="PT30S" type="static">
+  <Period id="0">
+    <AdaptationSet mimeType="video/mp4" contentType="video">
+      <Representation id="rep_base" bandwidth="2500000" width="1920" height="1080">
+        <BaseURL>https://evil.example.net/video.mp4</BaseURL>
+        <SegmentBase indexRange="835-1500" timescale="90000">
+          <Initialization range="0-834" />
+        </SegmentBase>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#;
+
+        // Um MPD malicioso/comprometido apontando BaseURL para outra origem deve falhar o parse,
+        // não ser aceito silenciosamente — achado R-01 (SSRF), verificado nesta auditoria.
+        let result = parse_mpd(xml, "https://cdn.example.com/dash/manifest.mpd");
+        assert!(result.is_err(), "BaseURL cross-origin deveria ser bloqueada");
+    }
 
     #[test]
     fn test_parse_iso8601_duration() {

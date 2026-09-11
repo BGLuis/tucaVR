@@ -315,7 +315,7 @@ struct StereoParams {
     int swapEyes       = 0;
     int stereoLayout   = 0; // 0=mono, 1=SBS, 2=OU
     int polar180       = 0;
-    int cubemapLayout  = 0; // 0=3x2, 1=6x1, 2=Cross, 3=EAC 3x2
+    int cubemapLayout  = 0; // 0=3x2, 1=6x1, 2=EAC 3x2, 3=Cross
     int projectionType = 0; // 0=Standard Cubemap, 1=EAC
 };
 
@@ -343,7 +343,7 @@ StereoParams GetStereoParams(ScreenMode mode, int eye) {
             break;
         case ScreenMode::EAC3x2SBS:
             p.stereoLayout = 1; // SBS
-            p.cubemapLayout = 3; // EAC 3x2
+            p.cubemapLayout = 2; // EAC 3x2
             p.projectionType = 1; // EAC
             break;
         case ScreenMode::Cubemap3x2:
@@ -358,7 +358,7 @@ StereoParams GetStereoParams(ScreenMode mode, int eye) {
             break;
         case ScreenMode::EAC3x2:
             p.stereoLayout = 0;
-            p.cubemapLayout = 3; // EAC 3x2
+            p.cubemapLayout = 2; // EAC 3x2
             p.projectionType = 1; // EAC
             break;
         default:
@@ -366,6 +366,30 @@ StereoParams GetStereoParams(ScreenMode mode, int eye) {
             break;
     }
     return p;
+}
+
+// R-07 (docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): contadores de draw call e
+// triangulos do frame Vulkan em construcao — resetados uma vez por frame (antes do loop de
+// olhos) e somados em AppState.lastFrameDrawCallCount/lastFrameTriangleCount ao final do frame,
+// para alimentar o HUD/CSV de debug. Pre-requisito citado pelo relatorio transversal da Fase 0.4
+// para qualquer afirmacao de custo de GPU das projecoes Cubemap/EAC (Secao 6).
+uint32_t g_frameDrawCallCount = 0;
+uint64_t g_frameTriangleCount = 0;
+
+// vertexCount aproxima triangulos como topologia triangle-strip (N-2), que e a usada pelos
+// quads full-screen desta base (vkCmdDraw(cmd, 4, ...) = 1 quad = 2 triangulos).
+inline void CountDrawCall(uint32_t vertexCount) {
+    g_frameDrawCallCount++;
+    if (vertexCount >= 3) {
+        g_frameTriangleCount += (vertexCount - 2);
+    }
+}
+
+// indexCount aproxima triangulos como topologia triangle-list (indexCount/3), usada pela
+// geometria indexada desta base (esfera equirect/cubemap, legendas ASS/PGS).
+inline void CountDrawCallIndexed(uint32_t indexCount) {
+    g_frameDrawCallCount++;
+    g_frameTriangleCount += (indexCount / 3);
 }
 
 void CheckXrResult(XrResult result, const char* what) {
@@ -512,6 +536,10 @@ struct AppState {
     float timestampPeriod = 0.0f;
     float lastGpuTimeMs = 0.0f;
     float smoothedGpuTimeMs = 0.0f;
+    // R-07 (docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): draw calls e triangulos do
+    // ultimo frame completo (ambos os olhos), para o HUD de debug — ver g_frameDrawCallCount.
+    uint32_t lastFrameDrawCallCount = 0;
+    uint64_t lastFrameTriangleCount = 0;
 
     // Upscaling de vídeo (Vulkan MQSR / SGSR1)
     uint32_t upscalingMode = 0; // 0=Off, 1=Quality, 2=Performance, 3=Auto
@@ -3757,6 +3785,7 @@ static bool DrawPgsSubtitle(AppState& state, VkCommandBuffer cmd, const Mat4& pr
     vkCmdPushConstants(cmd, state.uiPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(upc), &upc);
     vkCmdDraw(cmd, 4, 1, 0, 0);
+    CountDrawCall(4);
 
     return true;
 }
@@ -3985,6 +4014,7 @@ static void DrawSubtitles(AppState& state, VkCommandBuffer cmd, const Mat4& proj
         0, sizeof(spc), &spc);
 
     vkCmdDrawIndexed(cmd, state.subtitleIndexCount, 1, 0, 0, 0);
+    CountDrawCallIndexed(state.subtitleIndexCount);
 }
 
 void CreateCommandResources(AppState& state) {
@@ -4093,6 +4123,7 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
                 0, sizeof(beamPush), &beamPush);
 
             vkCmdDraw(cmd, 2, 1, 0, 0); // 2 vertices para a linha
+            CountDrawCall(2);
         } // !skipBeam
     }
 
@@ -4119,6 +4150,7 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
 
         vkCmdDraw(cmd, state.feedbackVertexCount[kindIndex], 1,
                   state.feedbackFirstVertex[kindIndex], 0);
+        CountDrawCall(state.feedbackVertexCount[kindIndex]);
     }
 
     // Desenho de Legendas MSDF (T9.3)
@@ -4175,6 +4207,7 @@ void RecordFallbackQuad(
         &pushConstants);
 
     vkCmdDraw(cmd, 4, 1, 0, 0);
+    CountDrawCall(4);
 
     DrawUiQuads(state, cmd, proj, view, headCenter);
 
@@ -4460,6 +4493,7 @@ void RecordVideoFlat(
         0, sizeof(pc), &pc);
 
     vkCmdDraw(cmd, 4, 1, 0, 0);
+    CountDrawCall(4);
 
     // Preview de arrasto (T-seek-ux): mesmo transform do quad de video
     // (Flat2D), reaproveitando o pipeline de UI (RGBA8 simples, sem YCbCr).
@@ -4475,6 +4509,7 @@ void RecordVideoFlat(
         vkCmdPushConstants(cmd, state.uiPipelineLayout,
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
         vkCmdDraw(cmd, 4, 1, 0, 0);
+        CountDrawCall(4);
     }
 
     DrawUiQuads(state, cmd, proj, view, headCenter);
@@ -4540,10 +4575,12 @@ void RecordStereoFrame(
         vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
         vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cmd, state.sphereIndexCount, 1, 0, 0, 0);
+        CountDrawCallIndexed(state.sphereIndexCount);
     } else {
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
         vkCmdDraw(cmd, 4, 1, 0, 0);
+        CountDrawCall(4);
 
         if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
             VkDeviceSize ovOffset = 0;
@@ -4557,6 +4594,7 @@ void RecordStereoFrame(
             vkCmdPushConstants(cmd, state.uiPipelineLayout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
             vkCmdDraw(cmd, 4, 1, 0, 0);
+            CountDrawCall(4);
         }
     }
 
@@ -4611,10 +4649,12 @@ void RecordPhotoFrame(
         vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
         vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cmd, state.sphereIndexCount, 1, 0, 0, 0);
+        CountDrawCallIndexed(state.sphereIndexCount);
     } else {
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
         vkCmdDraw(cmd, 4, 1, 0, 0);
+        CountDrawCall(4);
     }
 
     DrawUiQuads(state, cmd, proj, view, headCenter);
@@ -5225,6 +5265,11 @@ void RenderFrame(AppState& state) {
                 targetFps, transitionReason);
         }
 
+        // R-07: reseta os contadores de draw call/triangulo uma vez por frame (nao por olho) —
+        // agregados em AppState.lastFrameDrawCallCount/lastFrameTriangleCount ao final do loop.
+        g_frameDrawCallCount = 0;
+        g_frameTriangleCount = 0;
+
         for (int eye = 0; eye < kEyeCount; eye++) {
             EyeSwapchain& eyeChain = state.eyes[eye];
 
@@ -5329,6 +5374,10 @@ void RenderFrame(AppState& state) {
             projectionViews[eye].subImage.imageRect.offset = {0, 0};
             projectionViews[eye].subImage.imageRect.extent = {renderW, renderH};
         }
+
+        // R-07: publica os contadores do frame completo (os dois olhos) para o HUD/CSV de debug.
+        state.lastFrameDrawCallCount = g_frameDrawCallCount;
+        state.lastFrameTriangleCount = g_frameTriangleCount;
 
         XrCompositionLayerProjection projectionLayer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
         projectionLayer.space     = state.localSpace;

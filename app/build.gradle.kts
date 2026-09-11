@@ -107,6 +107,12 @@ dependencies {
     // caminhos testados. Ver docs/TESTING-PLAN.md.
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+
+    // R-05 (PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): driver SQLite puro-JVM (sem dependencia
+    // Android) para exercitar o SQL bruto das migrations do Room (AppDatabase.MIGRATION_*_SQL)
+    // direto na JVM, sem Robolectric — mesma logica das outras testImplementation acima: roda
+    // sem emulador porque o SQL das migrations nao toca em nenhuma API Android real.
+    testImplementation("org.xerial:sqlite-jdbc:3.44.1.0")
 }
 
 // Placeholder for Rust integration (via Mozilla plugin or custom task)

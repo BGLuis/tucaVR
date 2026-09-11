@@ -36,6 +36,8 @@ class DebugStatsParserTest {
             "mqsr_enabled\t1\n" +
             "quality_level\tHIGH\n" +
             "quality_reason\tRECOVERY\n" +
+            "draw_call_count\t14\n" +
+            "triangle_count\t18432\n" +
             "stutter_count\t2\n" +
             "freeze_count\t0\n" +
             "thermal_level\t1\n" +
@@ -83,6 +85,8 @@ class DebugStatsParserTest {
         assertTrue(stats.mqsrEnabled)
         assertEquals("HIGH", stats.qualityLevel)
         assertEquals("RECOVERY", stats.qualityReason)
+        assertEquals(14, stats.drawCallCount)
+        assertEquals(18432L, stats.triangleCount)
         assertEquals(2, stats.stutterCount)
         assertEquals(0, stats.freezeCount)
         assertEquals(1, stats.thermalLevel)

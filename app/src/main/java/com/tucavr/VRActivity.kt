@@ -121,6 +121,11 @@ class VRActivity : NativeActivity() {
     val upscalingStore: UpscalingModeStore by lazy { UpscalingModeStore(this) }
     val thermalMonitor: ThermalMonitor by lazy { ThermalMonitor(this) }
 
+    // Último `quality_reason` visto em updateDebugHud (chamado ~10x/s pelo C++ via JNI) — usado
+    // para disparar o Toast de sobrecarga não-térmica só na transição de entrada em
+    // GpuOverload/FramePacingLag, não a cada poll (ver updateDebugHud/maybeWarnQualityOverload).
+    var lastQualityReasonSeen: String = "NONE"
+
     private val thermalCallback: (ThermalMonitor.ThermalState) -> Unit = { state ->
         onThermalStateChanged(state)
     }
@@ -154,6 +159,27 @@ class VRActivity : NativeActivity() {
             Toast.makeText(this, getString(R.string.thermal_critical_pause), Toast.LENGTH_LONG).show()
         } else if (state.actions.contains(ThermalMonitor.ThermalAction.WARN_USER) && state.level == ThermalMonitor.ThermalLevel.SEVERE) {
             Toast.makeText(this, getString(R.string.thermal_warning_reducing_quality), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * R-09 (PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): avisa o usuário quando o `QualityController`
+     * degrada por sobrecarga de GPU ou frame pacing — motivos não-térmicos que, ao contrário de
+     * [onThermalStateChanged], não tinham nenhum feedback fora do HUD de debug. Dispara só na
+     * transição de ENTRADA em cada motivo (não a cada chamada de `updateDebugHud`, ~10x/s),
+     * comparando contra [lastQualityReasonSeen].
+     */
+    private fun maybeWarnQualityOverload(qualityReason: String) {
+        if (qualityReason != lastQualityReasonSeen) {
+            val messageRes = when (qualityReason) {
+                "GpuOverload" -> R.string.quality_warning_gpu_overload
+                "FramePacingLag" -> R.string.quality_warning_frame_pacing_lag
+                else -> null
+            }
+            if (messageRes != null) {
+                Toast.makeText(this, getString(messageRes), Toast.LENGTH_SHORT).show()
+            }
+            lastQualityReasonSeen = qualityReason
         }
     }
 
@@ -834,6 +860,7 @@ class VRActivity : NativeActivity() {
             if (parsedStats != null) {
                 activity.runOnUiThread {
                     activity.controlsPresentation?.updateQualityBadge(parsedStats.qualityLevel, parsedStats.qualityReason)
+                    activity.maybeWarnQualityOverload(parsedStats.qualityReason)
                 }
             }
 

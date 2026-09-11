@@ -24,7 +24,7 @@ import java.util.Locale
  */
 object DebugTelemetryExporter {
     const val CSV_HEADER =
-        "timestamp_ms,session_id,elapsed_s,backend,screen_mode,stereo_layout,polar_180,swap_eyes,video_status,frame_gap_ms,video_fps,decoded_fps,output_fps,dropped_fps,jitter_ms,net_mbs,video_q_depth,seek_ms,smoothed_fps,frame_ms,gpu_time_ms,smoothed_gpu_time_ms,upscaling_mode,upscaling_sharpness,mqsr_enabled,stutter_count,freeze_count,thermal_level,scale,refresh_rate,av_drift_ms,net_last_fetch_ms,net_blocks_fetched,net_blocks_discarded,foveation,spatial_audio,head_tracking,speed,volume,audio_track,audio_track_count,sub_track,sub_offset_ms,source_type,source_redacted"
+        "timestamp_ms,session_id,elapsed_s,backend,screen_mode,stereo_layout,polar_180,swap_eyes,video_status,frame_gap_ms,video_fps,decoded_fps,output_fps,dropped_fps,jitter_ms,net_mbs,video_q_depth,seek_ms,smoothed_fps,frame_ms,gpu_time_ms,smoothed_gpu_time_ms,upscaling_mode,upscaling_sharpness,mqsr_enabled,stutter_count,freeze_count,thermal_level,scale,refresh_rate,av_drift_ms,net_last_fetch_ms,net_blocks_fetched,net_blocks_discarded,foveation,spatial_audio,head_tracking,speed,volume,audio_track,audio_track_count,sub_track,sub_offset_ms,quality_level,quality_reason,draw_call_count,triangle_count,source_type,source_redacted"
 
     private const val MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024L // 20 MB limite por arquivo
     private const val SAMPLE_INTERVAL_MS = 1000L // 1 Hz amostragem
@@ -161,6 +161,10 @@ object DebugTelemetryExporter {
         var audioTrackCount = 0
         var subTrack = -1
         var subOffsetMs = 0
+        var qualityLevel = "HIGH"
+        var qualityReason = "NONE"
+        var drawCallCount = 0
+        var triangleCount = 0L
 
         if (hudText.contains('\t')) {
             // Formato TSV estruturado emitido por SerializeDebugStats
@@ -210,6 +214,10 @@ object DebugTelemetryExporter {
                         "audio_track_count" -> audioTrackCount = value.toIntOrNull() ?: 0
                         "sub_track" -> subTrack = value.toIntOrNull() ?: -1
                         "sub_offset_ms" -> subOffsetMs = value.toIntOrNull() ?: 0
+                        "quality_level" -> qualityLevel = value
+                        "quality_reason" -> qualityReason = value
+                        "draw_call_count" -> drawCallCount = value.toIntOrNull() ?: 0
+                        "triangle_count" -> triangleCount = value.toLongOrNull() ?: 0L
                     }
                 }
             }
@@ -263,6 +271,8 @@ object DebugTelemetryExporter {
             "$netBlocksFetched,$netBlocksDiscarded,$foveation,$spatialAudio,$headTracking," +
             "${String.format(Locale.US, "%.2f", speed)},${String.format(Locale.US, "%.2f", volume)}," +
             "$audioTrack,$audioTrackCount,$subTrack,$subOffsetMs," +
+            "${sanitize(qualityLevel)},${sanitize(qualityReason)}," +
+            "$drawCallCount,$triangleCount," +
             "${sanitize(sourceType)},${sanitize(sourceRedacted)}"
     }
 

@@ -85,11 +85,11 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 
 ## Cross-cutting rules that are easy to get wrong
 
-**Screen/stereo mode enum.** The numeric encoding for 2D/SBS/OU/360/180 variants must stay in sync across **three** places:
+**Screen/stereo mode enum.** The numeric encoding for 2D/SBS/OU/360/180/Cubemap/EAC variants must stay in sync across **three** places:
 
 1. the `SCREEN_MODE` comments in `rust/bridge/src/lib.rs`
-2. `enum class ScreenMode` in `native/src/vr_player_app.cpp`
-3. the positional lookup in `modeLabelResIds` in `VRControlsPresentation.kt`
+2. `enum class ScreenMode` in `native/include/screen_mode.h`
+3. the catalog in `ScreenFormatCatalog.kt`
 
 Changing one without the others produces a silently wrong projection, not a compile error.
 

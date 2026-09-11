@@ -390,6 +390,8 @@
     <!-- Monitoramento termico (T14.1-T14.3) -->
     <string name="thermal_warning_reducing_quality">Reduzindo qualidade para evitar superaquecimento</string>
     <string name="thermal_critical_pause">Temperatura crítica detectada. Reprodução pausada para resfriamento.</string>
+    <string name="quality_warning_gpu_overload">Reduzindo qualidade devido à alta carga de GPU</string>
+    <string name="quality_warning_frame_pacing_lag">Reduzindo qualidade devido a instabilidade no ritmo de quadros</string>
     <string name="thermal_level_normal">Normal</string>
     <string name="thermal_level_moderate">Moderado</string>
     <string name="thermal_level_severe">Severo</string>

@@ -1,15 +1,20 @@
 //! Pipeline de streaming, download de segmentos e ABR para DASH (T2.2 - T2.5).
 
 use super::manifest::{
-    parse_mpd, resolve_template_url, DashManifest, DashRepresentation,
+    parse_mpd, resolve_dash_url, resolve_template_url, DashManifest, DashRepresentation,
 };
-use crate::dlna::resolve_url;
 use crate::hls::abr::AdaptiveBitrateManager;
 use crate::prefetch::RangeSource;
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+
+/// Tamanho de cada bloco de mídia baixado via Range para representações `SegmentBase` (R-02,
+/// docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md) — evita carregar o arquivo inteiro (GBs em
+/// 8K) de uma vez em memória; mesma ordem de grandeza do `REMOTE_PREFETCH_BLOCK_SIZE` usado
+/// pelos outros protocolos via `PrefetchReader` (`rust/core/src/demuxer.rs`).
+const DASH_SEGMENT_BASE_CHUNK_SIZE: u64 = 4 * 1024 * 1024;
 
 /// Normaliza URLs com esquemas DASH como `dash://` para `https://` (ou `http://`).
 pub fn normalize_dash_url(url: &str) -> String {
@@ -26,6 +31,10 @@ pub fn fetch_and_probe_representations(url: &str) -> Result<Vec<DashRepresentati
     let normalized = normalize_dash_url(url);
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(10))
+        // R-01: sem redirect automático — um redirecionamento HTTP 3xx da mesma origem já
+        // validada por `resolve_dash_url` poderia apontar para fora dela, contornando a
+        // checagem de origem só por string. Ver docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))?;
 
@@ -65,6 +74,12 @@ pub struct DashStreamSource {
     virtual_stream_position: u64,
     estimated_total_bytes: Option<u64>,
     has_delivered_init_for_active_rep: bool,
+    /// R-02: próximo byte a buscar para representações `SegmentBase` (sem segmentos numerados —
+    /// o arquivo inteiro após o segmento de inicialização é uma única mídia contínua).
+    segment_base_next_offset: u64,
+    /// R-02: fim do arquivo já alcançado numa representação `SegmentBase` (último bloco Range
+    /// veio menor que o pedido, ou vazio).
+    segment_base_eof: bool,
 }
 
 impl DashStreamSource {
@@ -72,6 +87,8 @@ impl DashStreamSource {
         let normalized = normalize_dash_url(url);
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(10))
+            // R-01: mesma razão do client de fetch_and_probe_representations acima.
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(|e| e.to_string())?;
 
@@ -119,12 +136,24 @@ impl DashStreamSource {
             virtual_stream_position: 0,
             estimated_total_bytes: estimated_bytes,
             has_delivered_init_for_active_rep: false,
+            segment_base_next_offset: Self::segment_base_start_offset(&active_rep),
+            segment_base_eof: false,
         };
 
         // Baixa o segmento de inicialização da representação ativa imediatamente
         source.load_init_segment_if_needed(&active_rep)?;
 
         Ok(source)
+    }
+
+    /// Primeiro byte de mídia de uma representação `SegmentBase` — logo após o segmento de
+    /// inicialização, ou 0 se não houver `Initialization range` (R-02).
+    fn segment_base_start_offset(rep: &DashRepresentation) -> u64 {
+        rep.segment_base
+            .as_ref()
+            .and_then(|sb| sb.initialization_range)
+            .map(|(offset, len)| offset + len)
+            .unwrap_or(0)
     }
 
     fn calculate_segment_params(rep: &DashRepresentation, manifest: &DashManifest) -> (u64, f64, Option<u64>) {
@@ -178,6 +207,8 @@ impl DashStreamSource {
             self.start_number = start_number;
             self.segment_duration_sec = seg_duration;
             self.total_segments = total_segs;
+            self.segment_base_next_offset = Self::segment_base_start_offset(&active_rep);
+            self.segment_base_eof = false;
             self.load_init_segment_if_needed(&active_rep)?;
         }
         Ok(())
@@ -194,7 +225,7 @@ impl DashStreamSource {
         if let Some(ref template) = rep.segment_template
             && let Some(ref init_rel) = template.initialization {
             let resolved_rel = resolve_template_url(init_rel, &rep.id, 0, 0);
-            let full_url = resolve_url(base, &resolved_rel);
+            let full_url = resolve_dash_url(&self.mpd_url, base, &resolved_rel)?;
 
             log::info!("DASH: Baixando init segment de {full_url}");
             let resp = self
@@ -266,6 +297,32 @@ impl DashStreamSource {
             self.buffer.clear();
             self.buffer_offset = 0;
             self.has_delivered_init_for_active_rep = false;
+        } else if active_rep.segment_base.is_some() {
+            // R-03: SegmentBase não tem segmentos numerados — aproxima o byte-alvo pela fração
+            // linear duração/tamanho estimado (mesma técnica já usada no fallback genérico de
+            // `io::Seek::seek` acima). Sem sidx parseado, não há como ser exato; documentado
+            // como aproximação em docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md (R-03).
+            let start_offset = Self::segment_base_start_offset(&active_rep);
+            let target_offset = match (self.estimated_total_bytes, self.manifest.duration_sec) {
+                (Some(total), Some(dur)) if total > 0 && dur > 0.0 => {
+                    let frac = (target_sec / dur).clamp(0.0, 1.0);
+                    (frac * total as f64) as u64
+                }
+                _ => start_offset,
+            };
+
+            log::info!(
+                "DASH Seek (SegmentBase): byte offset estimado {} (timestamp {:.2}s / total {:.2}s)",
+                target_offset,
+                target_sec,
+                self.manifest.duration_sec.unwrap_or(0.0)
+            );
+
+            self.segment_base_next_offset = target_offset.max(start_offset);
+            self.segment_base_eof = false;
+            self.buffer.clear();
+            self.buffer_offset = 0;
+            self.has_delivered_init_for_active_rep = false;
         }
 
         Ok(())
@@ -307,7 +364,7 @@ impl DashStreamSource {
             let time_units = (self.current_segment_num.saturating_sub(template.start_number)) * duration_units;
 
             let resolved_rel = resolve_template_url(media_rel, &active_rep.id, self.current_segment_num, time_units);
-            let full_url = resolve_url(base, &resolved_rel);
+            let full_url = resolve_dash_url(&self.mpd_url, base, &resolved_rel).map_err(io::Error::other)?;
 
                 let start_time = Instant::now();
                 let resp = self
@@ -335,7 +392,59 @@ impl DashStreamSource {
                 return Ok(true);
         }
 
+        // R-02: representação só com SegmentBase (sem SegmentTemplate) — sem segmentos
+        // numerados, o restante do arquivo é buscado em blocos fixos via Range.
+        if active_rep.segment_template.is_none() && active_rep.segment_base.is_some() {
+            let base = base.to_string();
+            return self.fetch_segment_base_chunk(&base);
+        }
+
         Ok(false)
+    }
+
+    /// Baixa o próximo bloco de mídia de uma representação `SegmentBase` (R-02). Diferente de
+    /// `SegmentTemplate`, não há segmentos numerados: o arquivo inteiro após o segmento de
+    /// inicialização é uma única mídia contínua, buscada em blocos de tamanho fixo via HTTP
+    /// Range para não carregar o arquivo inteiro (potencialmente GBs, em 8K) de uma vez em
+    /// memória. `base` já é uma URL absoluta validada (mesma origem do MPD — ver
+    /// `resolve_dash_url` em manifest.rs), então não precisa passar por ela de novo aqui.
+    fn fetch_segment_base_chunk(&mut self, base: &str) -> io::Result<bool> {
+        if self.segment_base_eof {
+            return Ok(false);
+        }
+
+        let start = self.segment_base_next_offset;
+        let end = start + DASH_SEGMENT_BASE_CHUNK_SIZE - 1;
+
+        let resp = self
+            .client
+            .get(base)
+            .header("Range", format!("bytes={start}-{end}"))
+            .send()
+            .map_err(|e| io::Error::other(format!("Falha ao baixar bloco SegmentBase DASH ({base}): {e}")))?;
+
+        if !resp.status().is_success() {
+            return Err(io::Error::other(format!(
+                "HTTP {} ao buscar bloco SegmentBase DASH (bytes={start}-{end})",
+                resp.status()
+            )));
+        }
+
+        let data = resp.bytes().map_err(io::Error::other)?.to_vec();
+        if data.is_empty() {
+            self.segment_base_eof = true;
+            return Ok(false);
+        }
+
+        let received = data.len() as u64;
+        if received < DASH_SEGMENT_BASE_CHUNK_SIZE {
+            // Resposta menor que o bloco pedido = fim do arquivo.
+            self.segment_base_eof = true;
+        }
+        self.segment_base_next_offset = start + received;
+        self.buffer = data;
+        self.buffer_offset = 0;
+        Ok(true)
     }
 }
 
@@ -491,5 +600,156 @@ mod tests {
         init_mock.assert();
         seg1_mock.assert();
         seg2_mock.assert();
+    }
+
+    #[test]
+    fn test_dash_stream_source_blocks_cross_origin_init_segment_ssrf() {
+        // R-01 (docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): um MPD malicioso com
+        // SegmentTemplate@initialization absoluto apontando para outra origem NÃO deve resultar
+        // em nenhuma requisição a esse host — `open()` deve falhar antes de tentar baixá-lo.
+        let evil_server = MockServer::start();
+        let evil_mock = evil_server.mock(|when, then| {
+            when.method(GET).path("/init.m4s");
+            then.status(200).body(b"SHOULD_NEVER_BE_FETCHED");
+        });
+
+        let legit_server = MockServer::start();
+        let evil_init_url = evil_server.url("/init.m4s");
+        let mpd_xml = format!(
+            r#"<?xml version="1.0" encoding="utf-8"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
+     mediaPresentationDuration="PT6S"
+     type="static">
+  <Period id="1">
+    <AdaptationSet mimeType="video/mp4" contentType="video">
+      <SegmentTemplate timescale="1000"
+                       duration="2000"
+                       initialization="{evil_init_url}"
+                       media="segment_$Number$.m4s"
+                       startNumber="1" />
+      <Representation id="v1" bandwidth="1000000" width="1280" height="720" />
+    </AdaptationSet>
+  </Period>
+</MPD>"#
+        );
+
+        let mpd_mock = legit_server.mock(|when, then| {
+            when.method(GET).path("/manifest.mpd");
+            then.status(200)
+                .header("Content-Type", "application/dash+xml")
+                .body(&mpd_xml);
+        });
+
+        let mpd_url = legit_server.url("/manifest.mpd");
+        let result = DashStreamSource::open(&mpd_url);
+
+        assert!(result.is_err(), "open() deveria falhar ao detectar init segment cross-origin");
+        mpd_mock.assert();
+        evil_mock.assert_calls(0);
+    }
+
+    #[test]
+    fn test_dash_stream_source_segment_base_downloads_media_after_init() {
+        // R-02 (docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): antes deste fix,
+        // representações só-SegmentBase baixavam o segmento de inicialização e paravam — nenhum
+        // dado de mídia era buscado. Este teste prova que a segunda leitura (o bloco de mídia)
+        // agora dispara uma segunda requisição HTTP real.
+        let server = MockServer::start();
+
+        let mpd_xml = r#"<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" mediaPresentationDuration="PT6S" type="static">
+  <Period id="0">
+    <AdaptationSet mimeType="video/mp4" contentType="video">
+      <Representation id="rep_base" bandwidth="1000000" width="1280" height="720">
+        <BaseURL>video.mp4</BaseURL>
+        <SegmentBase indexRange="835-1500" timescale="90000">
+          <Initialization range="0-834" />
+        </SegmentBase>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#;
+
+        let mpd_mock = server.mock(|when, then| {
+            when.method(GET).path("/manifest.mpd");
+            then.status(200)
+                .header("Content-Type", "application/dash+xml")
+                .body(mpd_xml);
+        });
+
+        // Um único mock cobre tanto o segmento de inicialização (Range 0-834) quanto o bloco de
+        // mídia (Range 835-...) — ambos batem no mesmo `BaseURL`/arquivo, como o próprio DASH
+        // SegmentBase prevê. O que importa aqui é o NÚMERO de chamadas, não o corpo exato.
+        let media_mock = server.mock(|when, then| {
+            when.method(GET).path("/video.mp4");
+            then.status(200).body(b"MEDIA_DATA_AFTER_INIT_HEADER");
+        });
+
+        let mpd_url = server.url("/manifest.mpd");
+        let mut source = DashStreamSource::open(&mpd_url).expect("open deve ter sucesso (SegmentBase)");
+
+        let mut init_buf = vec![0u8; 64];
+        let n_init = source.read(&mut init_buf).expect("read init segment");
+        assert!(n_init > 0);
+
+        let mut media_buf = vec![0u8; 64];
+        let n_media = source.read(&mut media_buf).expect("read media chunk (SegmentBase)");
+        assert_eq!(&media_buf[..n_media], b"MEDIA_DATA_AFTER_INIT_HEADER");
+
+        // O bloco recebido é menor que DASH_SEGMENT_BASE_CHUNK_SIZE (4 MB) — fim do arquivo.
+        let mut eof_buf = vec![0u8; 8];
+        let n_eof = source.read(&mut eof_buf).expect("read at eof");
+        assert_eq!(n_eof, 0);
+
+        mpd_mock.assert();
+        media_mock.assert_calls(2); // init (Range 0-834) + 1 bloco de mídia (Range 835-...)
+    }
+
+    #[test]
+    fn test_seek_to_timestamp_on_segment_base_estimates_byte_offset() {
+        // R-03: antes deste fix, seek_to_timestamp não fazia nada para representações
+        // SegmentBase (só o branch SegmentTemplate existia).
+        let server = MockServer::start();
+
+        let mpd_xml = r#"<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" mediaPresentationDuration="PT10S" type="static">
+  <Period id="0">
+    <AdaptationSet mimeType="video/mp4" contentType="video">
+      <Representation id="rep_base" bandwidth="8000000" width="1920" height="1080">
+        <BaseURL>video.mp4</BaseURL>
+        <SegmentBase indexRange="835-1500" timescale="90000">
+          <Initialization range="0-834" />
+        </SegmentBase>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#;
+
+        let mpd_mock = server.mock(|when, then| {
+            when.method(GET).path("/manifest.mpd");
+            then.status(200)
+                .header("Content-Type", "application/dash+xml")
+                .body(mpd_xml);
+        });
+        let media_mock = server.mock(|when, then| {
+            when.method(GET).path("/video.mp4");
+            then.status(200).body(vec![0u8; 64].as_slice());
+        });
+
+        let mpd_url = server.url("/manifest.mpd");
+        let mut source = DashStreamSource::open(&mpd_url).expect("open deve ter sucesso");
+
+        // bandwidth=8_000_000 bps, duração=10s => estimated_total_bytes = 8_000_000*10/8 = 10_000_000
+        let total_bytes = source.estimated_total_bytes.expect("deveria estimar tamanho total");
+        source.seek_to_timestamp(5.0).expect("seek deve funcionar em SegmentBase");
+
+        // Timestamp na metade da duração => offset-alvo na metade do tamanho estimado.
+        let expected = (0.5 * total_bytes as f64) as u64;
+        assert_eq!(source.segment_base_next_offset, expected);
+        assert!(!source.segment_base_eof);
+        assert!(!source.has_delivered_init_for_active_rep, "seek deve reenviar o init segment");
+
+        mpd_mock.assert();
+        media_mock.assert();
     }
 }
