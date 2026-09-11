@@ -14,3 +14,4 @@ pub mod nfs;
 pub mod prefetch;
 pub mod sftp;
 pub mod smb;
+pub mod webdav;

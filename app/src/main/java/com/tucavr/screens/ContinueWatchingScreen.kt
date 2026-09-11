@@ -200,6 +200,20 @@ class ContinueWatchingScreen(
                 activity.playDlna(server, entry.title, entry.mediaPath, resumeAtMs = entry.positionMs)
                 onNavigate(Destination.Player(source))
             }
+            HistorySourceType.WEBDAV -> {
+                val server = resolveServer(entry.serverInfo) { id ->
+                    kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                        try {
+                            com.tucavr.history.AppDatabase.getInstance(context).savedServerDao().getById(id)
+                        } catch (e: Exception) {
+                            null
+                        }
+                    }
+                } ?: return
+                val source = PlaybackSource.Webdav(server, entry.mediaPath)
+                activity.playWebdav(server, entry.mediaPath, resumeAtMs = entry.positionMs)
+                onNavigate(Destination.Player(source))
+            }
         }
     }
 

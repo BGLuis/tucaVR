@@ -171,6 +171,7 @@
     <string name="network_tab_nfs">NFS</string>
     <string name="network_tab_ftp">FTP</string>
     <string name="network_tab_sftp">SFTP</string>
+    <string name="network_tab_webdav">WebDAV</string>
 
     <!-- Rede: aba DLNA -->
     <string name="network_dlna_header">Servidores UPnP / DLNA</string>
@@ -296,6 +297,30 @@
     <string name="network_nfs_form_status_error_format">Error: %1$s</string>
     <string name="network_nfs_form_status_connected">Conectado</string>
 
+    <!-- T3.4: Rede: aba WebDAV -->
+    <string name="network_webdav_saved_servers_header">Servidores guardados</string>
+    <string name="network_webdav_empty">(ningún servidor WebDAV guardado)</string>
+    <string name="network_webdav_row_label_format">%1$s</string>
+    <string name="network_webdav_btn_add_server">+ Añadir servidor</string>
+    <string name="network_webdav_form_host_label">Host / IP</string>
+    <string name="network_webdav_form_port_label">Puerto</string>
+    <string name="network_webdav_form_name_label">Nombre descriptivo</string>
+    <string name="network_webdav_form_name_hint">Mi Nextcloud / NAS</string>
+    <string name="network_webdav_form_base_path_label">Ruta base</string>
+    <string name="network_webdav_form_base_path_hint">/webdav o /remote.php/dav/files/user</string>
+    <string name="network_webdav_form_https_toggle">Usar HTTPS (SSL/TLS)</string>
+    <string name="network_webdav_form_self_signed_toggle">Aceptar certificado autofirmado (omitir verificación TLS)</string>
+    <string name="network_webdav_form_self_signed_warning">Advertencia: Los certificados autofirmados omiten las comprobaciones de autenticidad TLS. Habilitar solo para redes locales confiables.</string>
+    <string name="network_webdav_form_user_label">Usuario</string>
+    <string name="network_webdav_form_user_hint">usuario (opcional)</string>
+    <string name="network_webdav_form_pass_label">Contraseña</string>
+    <string name="network_webdav_form_pass_hint">contraseña (opcional)</string>
+    <string name="network_webdav_btn_test_save">Probar y guardar</string>
+    <string name="network_webdav_form_status_host_required">Host requerido</string>
+    <string name="network_webdav_form_status_connecting">Conectando…</string>
+    <string name="network_webdav_form_status_error_format">Error: %1$s</string>
+    <string name="network_webdav_form_status_connected">Conectado</string>
+
     <!-- T10.4: Rede: aba Descoberta Automatica -->
     <string name="network_discovery_header">Servidores descubiertos</string>
     <string name="network_discovery_empty">(no se encontraron servidores en la red local)</string>
@@ -311,6 +336,7 @@
     <string name="player_label_ftp_source_format">%1$s/%2$s</string>
     <string name="player_label_sftp_source_format">%1$s/%2$s</string>
     <string name="player_label_nfs_source_format">%1$s:%2$s/%3$s</string>
+    <string name="player_label_webdav_source_format">%1$s/%2$s</string>
 
     <!-- Painel de controles de reproducao (VRControlsPresentation) -->
     <string name="player_btn_play_pause">Reproducir / Pausar</string>

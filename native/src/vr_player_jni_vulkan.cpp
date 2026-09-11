@@ -120,6 +120,15 @@ extern "C" {
     extern char* nfs_list_directory(const char* host, int32_t port, const char* export_path,
                                      const char* dir_path, int32_t version);
     extern char* nfs_list_exports(const char* host, int32_t port);
+    // WebDAV
+    extern void start_webdav_playback(const char* host, int32_t port, const char* base_path,
+                                      const char* file_path, const char* username,
+                                      const char* password, int32_t use_https,
+                                      int32_t accept_invalid_certs, float startTimeSec);
+    extern char* webdav_list_directory(const char* host, int32_t port, const char* base_path,
+                                       const char* dir_path, const char* username,
+                                       const char* password, int32_t use_https,
+                                       int32_t accept_invalid_certs);
     // Descoberta Automática (mDNS + SSDP)
     extern char* discovery_scan_network(uint32_t timeout_ms);
     // DLNA
@@ -678,6 +687,46 @@ Java_com_tucavr_VRActivity_nativeNfsListExports(JNIEnv* env, jobject,
     const char* h = env->GetStringUTFChars(host, nullptr);
     char* result = nfs_list_exports(h, (int32_t)port);
     env->ReleaseStringUTFChars(host, h);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativePlayWebdav(JNIEnv* env, jobject,
+                                             jstring host, jint port, jstring basePath,
+                                             jstring filePath, jstring username, jstring password,
+                                             jboolean useHttps, jboolean acceptInvalidCerts, jfloat startTimeSec) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* bp = env->GetStringUTFChars(basePath, nullptr);
+    const char* fp = env->GetStringUTFChars(filePath, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    start_webdav_playback(h, (int32_t)port, bp, fp, u, pw,
+                          useHttps ? 1 : 0, acceptInvalidCerts ? 1 : 0, startTimeSec);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(basePath, bp);
+    env->ReleaseStringUTFChars(filePath, fp);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeWebdavListDirectory(JNIEnv* env, jobject,
+                                                      jstring host, jint port,
+                                                      jstring basePath, jstring dirPath,
+                                                      jstring username, jstring password,
+                                                      jboolean useHttps, jboolean acceptInvalidCerts) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* bp = env->GetStringUTFChars(basePath, nullptr);
+    const char* dp = env->GetStringUTFChars(dirPath, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    char* result = webdav_list_directory(h, (int32_t)port, bp, dp, u, pw,
+                                        useHttps ? 1 : 0, acceptInvalidCerts ? 1 : 0);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(basePath, bp);
+    env->ReleaseStringUTFChars(dirPath, dp);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
     return RustStringToJStringAndFree(env, result);
 }
 

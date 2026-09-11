@@ -88,6 +88,15 @@ class PlaybackHistoryMappingTest {
         assertEquals(HistorySourceType.SMB, PlaybackSource.Smb(smbServer(), "a").historySourceType())
         val dlnaServer = com.tucavr.network.SavedServer(name = "Plex", protocol = com.tucavr.network.ServerProtocol.DLNA, host = "192.168.1.5", port = 32469, path = "http://192.168.1.5:32469/control/ContentDirectory")
         assertEquals(HistorySourceType.DLNA, PlaybackSource.Dlna(dlnaServer, "Movie", "http://192.168.1.5:32469/media/1.mp4").historySourceType())
+        val webdavServer = com.tucavr.network.SavedServer(name = "Nextcloud", protocol = com.tucavr.network.ServerProtocol.WEBDAV, host = "cloud.example.com", port = 443, path = "/remote.php/webdav")
+        assertEquals(HistorySourceType.WEBDAV, PlaybackSource.Webdav(webdavServer, "Videos/nature.mp4", 1000L).historySourceType())
+    }
+
+    @Test
+    fun `webdav key includes server name, path and size`() {
+        val server = com.tucavr.network.SavedServer(id = "srv-wd", name = "MyCloud", protocol = com.tucavr.network.ServerProtocol.WEBDAV, host = "192.168.1.50", port = 8080, path = "/webdav")
+        val key = PlaybackSource.Webdav(server, "Movies/sample.mkv", 54321L).historyKey()
+        assertEquals("webdav|MyCloud|/webdav|Movies/sample.mkv|54321", key)
     }
 
     @Test
@@ -97,6 +106,8 @@ class PlaybackHistoryMappingTest {
         assertEquals("Filmes/foo.mkv", PlaybackSource.Smb(smbServer(), "Filmes/foo.mkv", 100L).mediaPath())
         val dlnaServer = com.tucavr.network.SavedServer(name = "Plex", protocol = com.tucavr.network.ServerProtocol.DLNA, host = "192.168.1.5", port = 32469, path = "http://192.168.1.5:32469/control/ContentDirectory")
         assertEquals("http://192.168.1.5:32469/media/1.mp4", PlaybackSource.Dlna(dlnaServer, "Movie", "http://192.168.1.5:32469/media/1.mp4").mediaPath())
+        val webdavServer = com.tucavr.network.SavedServer(name = "Nextcloud", protocol = com.tucavr.network.ServerProtocol.WEBDAV, host = "cloud.example.com", port = 443, path = "/remote.php/webdav")
+        assertEquals("Videos/nature.mp4", PlaybackSource.Webdav(webdavServer, "Videos/nature.mp4", 1000L).mediaPath())
     }
 
     // ---------- isResumable ----------

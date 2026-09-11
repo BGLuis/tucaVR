@@ -100,6 +100,7 @@ object DebugTelemetryExporter {
         is PlaybackSource.Sftp -> "Sftp" to "sftp://${source.server.host}:${source.server.port}/${source.path}"
         is PlaybackSource.Nfs -> "Nfs" to "nfs://${source.server.host}:${source.server.port}/${source.path}"
         is PlaybackSource.Dlna -> "Dlna" to redactSource(source.url)
+        is PlaybackSource.Webdav -> "Webdav" to "webdav://${source.server.host}:${source.server.port}${source.server.path}/${source.path}"
         null -> "Unknown" to ""
     }
 

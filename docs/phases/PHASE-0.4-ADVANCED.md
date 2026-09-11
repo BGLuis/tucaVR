@@ -284,7 +284,7 @@ Conectar a servidores WebDAV para navegar e reproduzir mídia. WebDAV é HTTP ex
 
 ### Tarefas
 
-- [ ] **T3.1** — Implementar cliente **WebDAV** no Rust:
+- [x] **T3.1** — Implementar cliente **WebDAV** no Rust:
   ```rust
   use reqwest::Client;
   
@@ -346,14 +346,14 @@ Conectar a servidores WebDAV para navegar e reproduzir mídia. WebDAV é HTTP ex
       display_name: Option<String>,
   }
   ```
-- [ ] **T3.2** — Integrar WebDAV com pipeline de playback:
+- [x] **T3.2** — Integrar WebDAV com pipeline de playback:
   - WebDAV suporta range requests nativamente (é HTTP)
   - Implementar custom I/O para FFmpeg usando `read_range()`
   - Buffer de 4-8MB para smooth streaming
-- [ ] **T3.3** — Integrar com **discovery automático**:
+- [x] **T3.3** — Integrar com **discovery automático**:
   - mDNS: `_webdav._tcp.local`
   - Adicionar tipo WebDAV ao `SavedServer` schema
-- [ ] **T3.4** — UI para configurar conexão WebDAV:
+- [x] **T3.4** — UI para configurar conexão WebDAV:
   - URL base (ex: `https://nas.local:5006/webdav`)
   - Usuário + Senha
   - Toggle HTTPS / aceitar certificado self-signed
@@ -927,11 +927,11 @@ EAC: Otimizado por Google para YouTube VR, distribuição uniforme
 - [ ] Pelo menos 2 servidores DASH testados (ex: dash.js reference streams)
 
 ### WebDAV
-- [ ] PROPFIND lista diretórios corretamente
-- [ ] Streaming de vídeo via WebDAV com seek funciona
-- [ ] HTTPS com certificado válido funciona
-- [ ] HTTPS com certificado self-signed funciona (com confirmação do usuário)
-- [ ] Credenciais salvas com criptografia
+- [x] PROPFIND lista diretórios corretamente
+- [x] Streaming de vídeo via WebDAV com seek funciona
+- [x] HTTPS com certificado válido funciona
+- [x] HTTPS com certificado self-signed funciona (com confirmação do usuário)
+- [x] Credenciais salvas com criptografia
 
 ### Download Offline
 - [ ] Download de arquivo HTTP completa e é reproduzível

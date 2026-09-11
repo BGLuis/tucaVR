@@ -51,6 +51,7 @@ pub enum ConnectionCache {
     Sftp(String, Arc<Mutex<protocols::sftp::SftpFileSource>>),
     Smb(String, Arc<Mutex<protocols::smb::SmbFileSource>>),
     Https(String, Arc<Mutex<protocols::http::HttpsRangeSource>>),
+    Webdav(String, Arc<Mutex<protocols::webdav::WebdavFileSource>>),
 }
 
 pub struct Demuxer {
@@ -130,6 +131,12 @@ impl Demuxer {
         } else if let Some(target) = protocols::nfs::NfsTarget::from_internal(path) {
             let source = protocols::nfs::NfsFileSource::open(&target)?;
             let reader = PrefetchReader::with_block_sizes(source, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);
+            network_stats = Some(reader.stats());
+            let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
+            ffmpeg::format::input_from_stream(stream_io, Some(&target.file_path), Some(fast_probe_options())).map_err(|e| e.to_string())?
+        } else if let Some(target) = protocols::webdav::WebdavTarget::from_internal(path) {
+            let shared = Self::webdav_source(path, &target, cache)?;
+            let reader = PrefetchReader::with_block_sizes(shared, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(&target.file_path), Some(fast_probe_options())).map_err(|e| e.to_string())?
@@ -242,6 +249,26 @@ impl Demuxer {
         }
         let conn = Arc::new(Mutex::new(protocols::http::HttpsRangeSource::new(path)?));
         *cache = ConnectionCache::Https(path.to_string(), conn.clone());
+        Ok(SharedRangeSource::new(conn))
+    }
+
+    /// Gerenciamento de cache e instanciação de WebdavFileSource para Demuxer.
+    fn webdav_source(
+        path: &str,
+        target: &protocols::webdav::WebdavTarget,
+        cache: Option<&mut ConnectionCache>,
+    ) -> Result<SharedRangeSource<protocols::webdav::WebdavFileSource>, String> {
+        let Some(cache) = cache else {
+            let source = protocols::webdav::WebdavFileSource::open(target)?;
+            return Ok(SharedRangeSource::new(Arc::new(Mutex::new(source))));
+        };
+        if let ConnectionCache::Webdav(cached_path, conn) = cache {
+            if cached_path.as_str() == path {
+                return Ok(SharedRangeSource::new(conn.clone()));
+            }
+        }
+        let conn = Arc::new(Mutex::new(protocols::webdav::WebdavFileSource::open(target)?));
+        *cache = ConnectionCache::Webdav(path.to_string(), conn.clone());
         Ok(SharedRangeSource::new(conn))
     }
 

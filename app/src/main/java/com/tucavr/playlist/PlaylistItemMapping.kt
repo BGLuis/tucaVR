@@ -17,6 +17,7 @@ fun PlaybackSource.toPlaylistItemUri(): String = when (this) {
     is PlaybackSource.Sftp -> "${server.id}|$path"
     is PlaybackSource.Nfs -> "${server.id}|$path"
     is PlaybackSource.Dlna -> "${server.id}|$url"
+    is PlaybackSource.Webdav -> "${server.id}|$path"
 }
 
 fun PlaybackSource.sourceTypeString(): String = when (this) {
@@ -27,6 +28,7 @@ fun PlaybackSource.sourceTypeString(): String = when (this) {
     is PlaybackSource.Sftp -> "SFTP"
     is PlaybackSource.Nfs -> "NFS"
     is PlaybackSource.Dlna -> "DLNA"
+    is PlaybackSource.Webdav -> "WEBDAV"
 }
 
 /**
@@ -81,6 +83,14 @@ suspend fun PlaylistItem.toPlaybackSource(
             val url = parts[1]
             val server = savedServerDao?.getById(serverId) ?: return null
             PlaybackSource.Dlna(server, title, url)
+        }
+        "WEBDAV" -> {
+            val parts = mediaUri.split("|", limit = 2)
+            if (parts.size != 2) return null
+            val serverId = parts[0]
+            val path = parts[1]
+            val server = savedServerDao?.getById(serverId) ?: return null
+            PlaybackSource.Webdav(server, path)
         }
         else -> null
     }

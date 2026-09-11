@@ -1260,6 +1260,98 @@ pub extern "C" fn nfs_list_exports(
     }
 }
 
+/// T3.1/T3.2: Inicia playback de vídeo a partir de um servidor WebDAV.
+#[no_mangle]
+pub extern "C" fn start_webdav_playback(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    base_path: *const std::os::raw::c_char,
+    file_path: *const std::os::raw::c_char,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    use_https: i32,
+    accept_invalid_certs: i32,
+    start_time_sec: f32,
+) {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return };
+        let base_path = match cstr_to_string(base_path) { Some(s) => s, None => return };
+        let file_path = match cstr_to_string(file_path) { Some(s) => s, None => return };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        protocols::webdav::WebdavTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            base_path,
+            file_path,
+            username,
+            password,
+            use_https: use_https != 0,
+            accept_invalid_certs: accept_invalid_certs != 0,
+        }
+    };
+
+    spawn_loading(move || {
+        let internal_uri = target.to_internal();
+        unsafe { log(4, &format!("Loading WebDAV video: {}", protocols::webdav::redact(&internal_uri))); }
+
+        reset_3d_mode();
+        if let Ok(mut controller) = CONTROLLER.lock() {
+            controller.stop();
+            if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
+                unsafe { log(6, &format!("Error loading WebDAV video: {:?}", e)); }
+                set_last_playback_error(format!("{:?}", e));
+            } else {
+                apply_screen_mode_after_load(&controller);
+                unsafe { log(4, "WebDAV video loaded successfully!"); }
+            }
+        }
+    });
+}
+
+/// T3.1: Lista arquivos e pastas num servidor WebDAV via PROPFIND Depth: 1. Chamada BLOQUEANTE.
+#[no_mangle]
+pub extern "C" fn webdav_list_directory(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    base_path: *const std::os::raw::c_char,
+    dir_path: *const std::os::raw::c_char,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    use_https: i32,
+    accept_invalid_certs: i32,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
+        let base_path = match cstr_to_string(base_path) { Some(s) => s, None => return string_to_c_char("ERROR:base_path invalido".into()) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        protocols::webdav::WebdavTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            base_path,
+            file_path: String::new(),
+            username,
+            password,
+            use_https: use_https != 0,
+            accept_invalid_certs: accept_invalid_certs != 0,
+        }
+    };
+    let dir_path = unsafe { cstr_to_string(dir_path).unwrap_or_default() };
+
+    match protocols::webdav::list_directory(&target, &dir_path) {
+        Ok(entries) => {
+            let lines: Vec<String> = entries
+                .into_iter()
+                .map(|e| format!("{}\t{}\t{}", e.name, if e.is_dir { 1 } else { 0 }, e.size))
+                .collect();
+            string_to_c_char(lines.join("\n"))
+        }
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
+
 /// T10.1: Varredura de servidores na rede local (mDNS + SSDP). Chamada BLOQUEANTE.
 /// Retorna linhas separadas por '\n': "PROTOCOL\tNAME\tHOST\tPORT\tPATH"
 #[no_mangle]

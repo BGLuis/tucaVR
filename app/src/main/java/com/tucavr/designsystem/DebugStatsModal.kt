@@ -332,6 +332,7 @@ class DebugStatsModal(
             is PlaybackSource.Sftp -> "SFTP (${source.server.host})"
             is PlaybackSource.Nfs -> "NFS (${source.server.host})"
             is PlaybackSource.Dlna -> "DLNA (${source.server.name})"
+            is PlaybackSource.Webdav -> "WebDAV (${source.server.host})"
             null -> "None"
         }
         debugStatValueViews["source"]?.text = srcText

@@ -12,6 +12,7 @@ import com.tucavr.navigation.AppNavigator
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
 import com.tucavr.network.FtpCredentialStore
+import com.tucavr.network.ServerCredentialStore
 import com.tucavr.network.SftpCredentialStore
 import com.tucavr.network.SmbCredentialStore
 import com.tucavr.network.UrlHistoryStore
@@ -26,6 +27,7 @@ import com.tucavr.screens.NetworkHomeScreen
 import com.tucavr.screens.NetworkNfsScreen
 import com.tucavr.screens.NetworkSftpScreen
 import com.tucavr.screens.NetworkSmbScreen
+import com.tucavr.screens.NetworkWebdavScreen
 import com.tucavr.screens.PlayerScreen
 import com.tucavr.playlist.PlaylistDao
 import com.tucavr.screens.PlaylistsScreen
@@ -145,6 +147,7 @@ class VRPresentation(
     private lateinit var networkDlnaScreen: NetworkDlnaScreen
     private lateinit var networkDiscoveryScreen: NetworkDiscoveryScreen
     private lateinit var networkHomeScreen: NetworkHomeScreen
+    private lateinit var networkWebdavScreen: NetworkWebdavScreen
     private lateinit var continueWatchingScreen: ContinueWatchingScreen
     private lateinit var playerScreen: PlayerScreen
     private lateinit var resumePromptScreen: ResumePromptScreen
@@ -155,6 +158,7 @@ class VRPresentation(
     private lateinit var multicastLockManager: com.tucavr.network.MulticastLockManager
     private lateinit var savedServerDao: com.tucavr.network.SavedServerDao
     private lateinit var playlistDao: PlaylistDao
+    private lateinit var serverCredentials: ServerCredentialStore
 
     // ---- Ciclo de vida ----
 
@@ -168,6 +172,7 @@ class VRPresentation(
         smbCredentials  = SmbCredentialStore(activity)
         ftpCredentials  = FtpCredentialStore(activity)
         sftpCredentials = SftpCredentialStore(activity)
+        serverCredentials = ServerCredentialStore(activity)
         urlHistory      = UrlHistoryStore(activity)
 
         screenHost = FrameLayout(context).apply {
@@ -317,10 +322,24 @@ class VRPresentation(
                     com.tucavr.network.ServerProtocol.NFS  -> networkHomeScreen.activeTabIndex = 4
                     com.tucavr.network.ServerProtocol.FTP  -> networkHomeScreen.activeTabIndex = 5
                     com.tucavr.network.ServerProtocol.SFTP -> networkHomeScreen.activeTabIndex = 6
-                    else -> networkHomeScreen.activeTabIndex = 2
+                    com.tucavr.network.ServerProtocol.WEBDAV -> {
+                        networkHomeScreen.activeTabIndex = 7
+                        networkWebdavScreen.prefill(hostStr, portNum, nameStr, pathStr)
+                    }
                 }
                 render()
             }
+        )
+
+        networkWebdavScreen = NetworkWebdavScreen(
+            context         = context,
+            activity        = activity,
+            host            = host,
+            scope           = scope,
+            savedServerDao  = savedServerDao,
+            credentialStore = serverCredentials,
+            onNavigate      = { dest -> navigateTo(dest) },
+            onBack          = { handleBack() }
         )
 
         networkHomeScreen = NetworkHomeScreen(
@@ -335,6 +354,7 @@ class VRPresentation(
             nfsPageBuilder        = { networkNfsScreen.buildPage() },
             ftpPageBuilder        = { networkFtpScreen.buildPage() },
             sftpPageBuilder       = { networkSftpScreen.buildPage() },
+            webdavPageBuilder     = { networkWebdavScreen.buildPage() },
             onNavigate            = { dest -> navigateTo(dest) },
             onBack                = { handleBack() }
         )
@@ -408,6 +428,7 @@ class VRPresentation(
             is Destination.NetworkDlnaFiles -> networkDlnaScreen.renderFiles(destination.server, destination.objectId)
             is Destination.NetworkFtpFiles  -> networkFtpScreen.renderFiles(destination.server)
             is Destination.NetworkSftpFiles -> networkSftpScreen.renderFiles(destination.server)
+            is Destination.NetworkWebdavFiles -> networkWebdavScreen.renderFiles(destination.server, destination.path)
             is Destination.ContinueWatching -> continueWatchingScreen.render()
             is Destination.Playlists        -> playlistsScreen.render()
             is Destination.PlaylistDetail   -> playlistDetailScreen.render(destination.playlistId)
@@ -442,6 +463,7 @@ class VRPresentation(
                 is PlaybackSource.Dlna      -> activity.playDlna(source.server, source.title, source.url, source.sizeBytes, resumeAtMs)
                 is PlaybackSource.Ftp       -> activity.playFtp(source.server, source.path, source.sizeBytes, resumeAtMs)
                 is PlaybackSource.Sftp      -> activity.playSftp(source.server, source.path, source.sizeBytes, resumeAtMs)
+                is PlaybackSource.Webdav    -> activity.playWebdav(source.server, source.path, source.sizeBytes, resumeAtMs)
             }
             navigateTo(Destination.Player(source))
         }
@@ -465,6 +487,7 @@ class VRPresentation(
             }
             current is Destination.NetworkFtpFiles  -> networkFtpScreen.handleBack(current.server)
             current is Destination.NetworkSftpFiles -> networkSftpScreen.handleBack(current.server)
+            current is Destination.NetworkWebdavFiles -> networkWebdavScreen.handleBack(current.server)
             current is Destination.NetworkHome      -> {
                 appNav.navigateTo(Destination.Home)
                 render()

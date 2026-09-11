@@ -898,6 +898,7 @@ class VRActivity : NativeActivity() {
         is PlaybackSource.Sftp -> src.path.substringAfterLast("/")
         is PlaybackSource.Nfs -> src.path.substringAfterLast("/")
         is PlaybackSource.Dlna -> src.title
+        is PlaybackSource.Webdav -> src.path.substringAfterLast("/")
     }
 
     fun playFile(filePath: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
@@ -980,6 +981,41 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayVideo(url, (resumeAtMs ?: 0L) / 1000f)
+    }
+
+    // T3.2/T3.4: playback WebDAV
+    fun playWebdav(server: com.tucavr.network.SavedServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
+        val source = PlaybackSource.Webdav(server, path, sizeBytes)
+        updateCurrentPlaybackSource(source)
+        startSession(source)
+        historyTracker.startTracking(source, title = path.substringAfterLast('/'))
+        controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
+        applyFormat3dOverride(source)
+
+        val password = com.tucavr.network.ServerCredentialStore(this).getPassword(server.id)
+        var useHttps = false
+        var acceptInvalidCerts = false
+        if (!server.extraJson.isNullOrEmpty()) {
+            try {
+                val json = org.json.JSONObject(server.extraJson)
+                useHttps = json.optBoolean("useHttps", false)
+                acceptInvalidCerts = json.optBoolean("acceptInvalidCerts", false)
+            } catch (e: Exception) {
+                // Ignora erro de parse, usa defaults
+            }
+        }
+
+        nativePlayWebdav(
+            server.host,
+            server.port,
+            server.path,
+            path,
+            server.username,
+            password,
+            useHttps,
+            acceptInvalidCerts,
+            (resumeAtMs ?: 0L) / 1000f
+        )
     }
 
     private fun processVideoUri(uri: Uri) {
@@ -1211,6 +1247,7 @@ class VRActivity : NativeActivity() {
                 is PlaybackSource.Dlna      -> playDlna(source.server, source.title, source.url, source.sizeBytes)
                 is PlaybackSource.Ftp       -> playFtp(source.server, source.path, source.sizeBytes)
                 is PlaybackSource.Sftp      -> playSftp(source.server, source.path, source.sizeBytes)
+                is PlaybackSource.Webdav    -> playWebdav(source.server, source.path, source.sizeBytes)
             }
             presentation?.onNavigateToPlayer(source)
         }
@@ -1282,6 +1319,31 @@ class VRActivity : NativeActivity() {
 
     // T5.2/T5.4: listagem de exports NFS (bloqueante — SEMPRE de Dispatchers.IO).
     external fun nativeNfsListExports(host: String, port: Int): String
+
+    // T3.1/T3.2: playback WebDAV
+    external fun nativePlayWebdav(
+        host: String,
+        port: Int,
+        basePath: String,
+        filePath: String,
+        username: String,
+        password: String,
+        useHttps: Boolean,
+        acceptInvalidCerts: Boolean,
+        startTimeSec: Float
+    )
+
+    // T3.1: listagem de diretório WebDAV (bloqueante — SEMPRE de Dispatchers.IO)
+    external fun nativeWebdavListDirectory(
+        host: String,
+        port: Int,
+        basePath: String,
+        dirPath: String,
+        username: String,
+        password: String,
+        useHttps: Boolean,
+        acceptInvalidCerts: Boolean
+    ): String
 
     // T10.1: Varredura de servidores na rede local (bloqueante — SEMPRE de Dispatchers.IO).
     // Retorno: linhas separadas por \n, cada uma com "PROTOCOL\tNAME\tHOST\tPORT\tPATH"

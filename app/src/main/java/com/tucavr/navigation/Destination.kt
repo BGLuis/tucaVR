@@ -87,6 +87,9 @@ sealed class Destination {
     /** T7.5: listagem de um container num servidor DLNA ja conectado. */
     data class NetworkDlnaFiles(val server: SavedServer, val objectId: String, val folderName: String) : Destination()
 
+    /** T3.1/T3.4: listagem de um diretório num servidor WebDAV já conectado. */
+    data class NetworkWebdavFiles(val server: SavedServer, val path: String) : Destination()
+
     /** Reproduzindo [source]. */
     data class Player(val source: PlaybackSource) : Destination()
 
@@ -132,4 +135,6 @@ sealed class PlaybackSource {
     data class Nfs(val server: SavedServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
     /** T7.4: playback DLNA a partir de um [SavedServer]. */
     data class Dlna(val server: SavedServer, val title: String, val url: String, val sizeBytes: Long = 0L) : PlaybackSource()
+    /** T3.2/T3.4: playback WebDAV a partir de um [SavedServer]. */
+    data class Webdav(val server: SavedServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
 }

@@ -50,6 +50,7 @@ fun PlaybackSource.historyKey(): String = when (this) {
     is PlaybackSource.Sftp -> "sftp|${server.name}|$path|$sizeBytes"
     is PlaybackSource.Nfs -> "nfs|${server.name}|${server.path}|$path|$sizeBytes"
     is PlaybackSource.Dlna -> "dlna|${server.name}|$url|$sizeBytes"
+    is PlaybackSource.Webdav -> "webdav|${server.name}|${server.path}|$path|$sizeBytes"
 }
 
 /** Ver [PlaybackHistory.mediaPath]. */
@@ -61,6 +62,7 @@ fun PlaybackSource.mediaPath(): String = when (this) {
     is PlaybackSource.Sftp -> path
     is PlaybackSource.Nfs -> path
     is PlaybackSource.Dlna -> url
+    is PlaybackSource.Webdav -> path
 }
 
 fun PlaybackSource.historySourceType(): HistorySourceType = when (this) {
@@ -71,6 +73,7 @@ fun PlaybackSource.historySourceType(): HistorySourceType = when (this) {
     is PlaybackSource.Sftp -> HistorySourceType.SFTP
     is PlaybackSource.Nfs -> HistorySourceType.NFS
     is PlaybackSource.Dlna -> HistorySourceType.DLNA
+    is PlaybackSource.Webdav -> HistorySourceType.WEBDAV
 }
 
 /** Titulo padrao (usado quando quem chama nao tem um titulo melhor a mao). */
@@ -82,6 +85,7 @@ fun PlaybackSource.defaultHistoryTitle(): String = when (this) {
     is PlaybackSource.Sftp -> path.substringAfterLast('/')
     is PlaybackSource.Nfs -> path.substringAfterLast('/')
     is PlaybackSource.Dlna -> title
+    is PlaybackSource.Webdav -> path.substringAfterLast('/')
 }
 
 /**
@@ -122,6 +126,16 @@ fun PlaybackSource.serverInfoJson(): String? = when (this) {
         put("host", server.host)
         put("port", server.port)
         put("controlUrl", server.path)
+    }.toString()
+    is PlaybackSource.Webdav -> JSONObject().apply {
+        put("serverId", server.id)
+        put("name", server.name)
+        put("host", server.host)
+        put("port", server.port)
+        put("basePath", server.path)
+        if (!server.extraJson.isNullOrEmpty()) {
+            put("extraJson", server.extraJson)
+        }
     }.toString()
     else -> null
 }

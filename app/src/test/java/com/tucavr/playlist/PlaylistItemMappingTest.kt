@@ -76,4 +76,39 @@ class PlaylistItemMappingTest {
         val restored = item.toPlaybackSource(smbCredentials = null)
         assertNull(restored)
     }
+
+    @Test
+    fun `test mapping webdav source to playlist item`() = runBlocking {
+        val server = SavedServer(id = "srv_wd_1", name = "WebdavServer", protocol = ServerProtocol.WEBDAV, host = "nas.local", port = 5005, path = "/dav")
+        val source = PlaybackSource.Webdav(server, "Movies/beach.mp4", 2048L)
+        val uri = source.toPlaylistItemUri()
+        val type = source.sourceTypeString()
+
+        assertEquals("srv_wd_1|Movies/beach.mp4", uri)
+        assertEquals("WEBDAV", type)
+
+        val item = PlaylistItem(
+            id = "item_wd",
+            playlistId = "pl_1",
+            mediaUri = uri,
+            title = "beach.mp4",
+            durationMs = 15000L,
+            position = 3,
+            sourceType = type
+        )
+
+        val dao = object : com.tucavr.network.SavedServerDao {
+            override suspend fun insert(server: SavedServer) {}
+            override suspend fun update(server: SavedServer) {}
+            override suspend fun delete(id: String) {}
+            override suspend fun updateLastConnected(id: String, timestamp: Long) {}
+            override suspend fun getAll(): List<SavedServer> = listOf(server)
+            override suspend fun getByProtocol(protocol: ServerProtocol): List<SavedServer> = listOf(server)
+            override suspend fun getById(id: String): SavedServer? = if (id == server.id) server else null
+        }
+
+        val restored = item.toPlaybackSource(savedServerDao = dao)
+        assertNotNull(restored)
+        assertEquals(PlaybackSource.Webdav(server, "Movies/beach.mp4"), restored)
+    }
 }

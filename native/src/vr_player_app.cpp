@@ -131,6 +131,16 @@ extern "C" {
                                      const char* dir_path, int32_t version);
     extern char* nfs_list_exports(const char* host, int32_t port);
 
+    // WebDAV
+    extern void start_webdav_playback(const char* host, int32_t port, const char* base_path,
+                                      const char* file_path, const char* username,
+                                      const char* password, int32_t use_https,
+                                      int32_t accept_invalid_certs, float startTimeSec);
+    extern char* webdav_list_directory(const char* host, int32_t port, const char* base_path,
+                                       const char* dir_path, const char* username,
+                                       const char* password, int32_t use_https,
+                                       int32_t accept_invalid_certs);
+
     // T10.1: Descoberta Automática
     extern char* discovery_scan_network(uint32_t timeout_ms);
 
@@ -791,6 +801,53 @@ Java_com_tucavr_VRActivity_nativeNfsListExports(JNIEnv* env, jobject thiz,
     char* result = nfs_list_exports(hostStr, (int32_t)port);
 
     env->ReleaseStringUTFChars(host, hostStr);
+
+    return RustStringToJStringAndFree(env, result);
+}
+
+// T3.1/T3.2: Playback WebDAV
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativePlayWebdav(JNIEnv* env, jobject thiz,
+                                             jstring host, jint port, jstring basePath,
+                                             jstring filePath, jstring username, jstring password,
+                                             jboolean useHttps, jboolean acceptInvalidCerts, jfloat startTimeSec) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* baseStr = env->GetStringUTFChars(basePath, nullptr);
+    const char* fileStr = env->GetStringUTFChars(filePath, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+
+    start_webdav_playback(hostStr, (int32_t)port, baseStr, fileStr, userStr, passStr,
+                          useHttps ? 1 : 0, acceptInvalidCerts ? 1 : 0, startTimeSec);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(basePath, baseStr);
+    env->ReleaseStringUTFChars(filePath, fileStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
+}
+
+// T3.1: Listagem de diretório WebDAV
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeWebdavListDirectory(JNIEnv* env, jobject thiz,
+                                                      jstring host, jint port,
+                                                      jstring basePath, jstring dirPath,
+                                                      jstring username, jstring password,
+                                                      jboolean useHttps, jboolean acceptInvalidCerts) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* baseStr = env->GetStringUTFChars(basePath, nullptr);
+    const char* dirStr = env->GetStringUTFChars(dirPath, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+
+    char* result = webdav_list_directory(hostStr, (int32_t)port, baseStr, dirStr, userStr, passStr,
+                                        useHttps ? 1 : 0, acceptInvalidCerts ? 1 : 0);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(basePath, baseStr);
+    env->ReleaseStringUTFChars(dirPath, dirStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
 
     return RustStringToJStringAndFree(env, result);
 }
