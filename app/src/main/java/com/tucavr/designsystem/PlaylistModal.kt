@@ -84,12 +84,16 @@ class PlaylistModal(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
             ).also { it.marginEnd = VoidTheme.dpToPx(context, 12f) }
-            updateModeText(queueManager.playbackMode)
             setOnClickListener {
                 val nextMode = queueManager.cyclePlaybackMode()
                 updateModeText(nextMode)
             }
         }
+        // Precisa vir depois da atribuicao acima: updateModeText() le o campo
+        // `btnMode` da classe, que ainda esta null enquanto o `.apply{}` do
+        // proprio construtor de btnMode esta rodando (NPE em setText —
+        // "leak" do this antes da inicializacao terminar).
+        updateModeText(queueManager.playbackMode)
         header.addView(btnMode)
 
         val closeBtn = VoidIconButton(
