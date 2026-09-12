@@ -151,6 +151,27 @@ pub extern "C" fn get_playback_feedback_event() -> u64 {
     FEEDBACK_EVENT.load(Ordering::Relaxed)
 }
 
+// P-05 (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md): tid das 3 threads do pipeline de
+// reproducao (rust/core/src/playback.rs), pra C++ registrar como thread critica ao runtime XR
+// via xrSetAndroidApplicationThreadKHR — so C++ tem o XrSession, entao o registro em si
+// acontece la; aqui so expomos os tids publicados pelas proprias threads (mesmo idioma de
+// polling de estatica atomica usado por get_playback_feedback_event/get_video_progress acima).
+// 0 = a thread ainda nao subiu nesta sessao de reproducao.
+#[no_mangle]
+pub extern "C" fn get_demux_thread_tid() -> i32 {
+    core::playback::DEMUX_THREAD_TID.load(Ordering::Relaxed)
+}
+
+#[no_mangle]
+pub extern "C" fn get_video_thread_tid() -> i32 {
+    core::playback::VIDEO_THREAD_TID.load(Ordering::Relaxed)
+}
+
+#[no_mangle]
+pub extern "C" fn get_audio_thread_tid() -> i32 {
+    core::playback::AUDIO_THREAD_TID.load(Ordering::Relaxed)
+}
+
 // T1.4/T1.5/T2: modo de exibicao 3D (2D/SBS/OU/360/180) e swap-eyes. Isto e
 // puro ESTADO DE APRESENTACAO — nao afeta o Demuxer/PlaybackController (o
 // video decodificado e sempre o mesmo frame RGBA; o que muda e SO como

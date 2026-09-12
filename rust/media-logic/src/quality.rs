@@ -171,6 +171,11 @@ pub struct QualityResolvedParams {
 pub struct QualityController {
     current_level: QualityLevel,
     last_reason: QualityTransitionReason,
+    /// Amostras consecutivas com dropped_fps acima do limiar (ver
+    /// docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md, P-03 — antes desta correção, um
+    /// unico pico isolado degradava o nivel imediatamente e podia travar o app em um nivel
+    /// baixo pelo resto da sessao).
+    dropped_fps_stress_count: u32,
     /// Amostras consecutivas com estresse de GPU.
     gpu_stress_count: u32,
     /// Amostras consecutivas com atraso de frame pacing.
@@ -194,13 +199,18 @@ impl QualityController {
     pub const GPU_STRESS_THRESHOLD_SAMPLES: u32 = 2;
     /// Amostras consecutivas de frame pacing lag para disparar degradação.
     pub const PACING_STRESS_THRESHOLD_SAMPLES: u32 = 2;
-    /// Limiar de dropped FPS para degradação imediata em 1 amostra.
+    /// Limiar de dropped FPS considerado estresse.
     pub const DROPPED_FPS_STRESS_THRESHOLD: f32 = 3.0f32;
+    /// Amostras consecutivas de dropped FPS acima do limiar para disparar degradação — antes
+    /// desta constante, uma única amostra degradava na hora (ver
+    /// docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md, P-03).
+    pub const DROPPED_FPS_STRESS_THRESHOLD_SAMPLES: u32 = 2;
 
     pub fn new() -> Self {
         Self {
             current_level: QualityLevel::High,
             last_reason: QualityTransitionReason::None,
+            dropped_fps_stress_count: 0,
             gpu_stress_count: 0,
             pacing_stress_count: 0,
             stable_healthy_samples: 0,
@@ -223,6 +233,7 @@ impl QualityController {
     pub fn set_enabled(&mut self, enabled: bool) {
         self.enabled = enabled;
         if !enabled {
+            self.dropped_fps_stress_count = 0;
             self.gpu_stress_count = 0;
             self.pacing_stress_count = 0;
             self.stable_healthy_samples = 0;
@@ -232,6 +243,7 @@ impl QualityController {
     pub fn set_manual_level(&mut self, level: QualityLevel) {
         self.current_level = level;
         self.last_reason = QualityTransitionReason::ManualOverride;
+        self.dropped_fps_stress_count = 0;
         self.gpu_stress_count = 0;
         self.pacing_stress_count = 0;
         self.stable_healthy_samples = 0;
@@ -275,14 +287,20 @@ impl QualityController {
         }
 
         // 2. Verificação de Descarte Severo de Frames:
-        if sample.dropped_fps >= Self::DROPPED_FPS_STRESS_THRESHOLD
-            && self.current_level < QualityLevel::Emergency
-        {
-            let next_level = self.current_level.step_down();
-            self.current_level = next_level;
-            self.last_reason = QualityTransitionReason::DroppedFrames;
-            self.reset_counters();
-            return QualityAction::Degrade(self.current_level, self.last_reason);
+        if sample.dropped_fps >= Self::DROPPED_FPS_STRESS_THRESHOLD {
+            self.dropped_fps_stress_count += 1;
+            self.stable_healthy_samples = 0;
+            if self.dropped_fps_stress_count >= Self::DROPPED_FPS_STRESS_THRESHOLD_SAMPLES
+                && self.current_level < QualityLevel::Emergency
+            {
+                let next_level = self.current_level.step_down();
+                self.current_level = next_level;
+                self.last_reason = QualityTransitionReason::DroppedFrames;
+                self.reset_counters();
+                return QualityAction::Degrade(self.current_level, self.last_reason);
+            }
+        } else {
+            self.dropped_fps_stress_count = 0;
         }
 
         // 3. Verificação de Sobrecarga de GPU:
@@ -355,6 +373,7 @@ impl QualityController {
     }
 
     fn reset_counters(&mut self) {
+        self.dropped_fps_stress_count = 0;
         self.gpu_stress_count = 0;
         self.pacing_stress_count = 0;
         self.stable_healthy_samples = 0;
@@ -509,7 +528,11 @@ mod tests {
     }
 
     #[test]
-    fn test_dropped_fps_triggers_fast_degradation() {
+    fn test_dropped_fps_degrades_after_two_samples() {
+        // Auditoria pos-reinicio (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md, P-03):
+        // antes desta correcao, uma unica amostra ja degradava — igual as regras de GPU/pacing
+        // (ver test_gpu_overload_degrades_after_two_samples), agora exige 2 amostras
+        // consecutivas de estresse.
         let mut controller = QualityController::new();
         assert_eq!(controller.current_level(), QualityLevel::High);
 
@@ -520,12 +543,72 @@ mod tests {
             dropped_fps: 4.5,
             target_fps: 90.0,
         };
-        let action = controller.evaluate(&sample_drop);
+
+        // 1ª amostra: detecta estresse, mas não degrada ainda
+        let action1 = controller.evaluate(&sample_drop);
+        assert_eq!(action1, QualityAction::Maintain);
+        assert_eq!(controller.current_level(), QualityLevel::High);
+
+        // 2ª amostra consecutiva: degrada para Medium
+        let action2 = controller.evaluate(&sample_drop);
         assert_eq!(
-            action,
+            action2,
             QualityAction::Degrade(QualityLevel::Medium, QualityTransitionReason::DroppedFrames)
         );
         assert_eq!(controller.current_level(), QualityLevel::Medium);
+    }
+
+    #[test]
+    fn test_dropped_fps_isolated_spike_does_not_degrade() {
+        // Este e o teste que prova a correcao do bug real observado em producao (ver secao 9.1
+        // do relatorio): uma unica amostra com pico de dropped_fps, cercada de amostras
+        // saudaveis antes e depois, nao deve degradar nada — o contador nunca chega ao limiar
+        // porque a amostra saudavel seguinte o zera de novo.
+        let mut controller = QualityController::new();
+        assert_eq!(controller.current_level(), QualityLevel::High);
+
+        let sample_healthy = QualitySample {
+            thermal_level: 0,
+            smoothed_gpu_time_ms: 6.0,
+            frame_time_ms: 11.0,
+            dropped_fps: 0.0,
+            target_fps: 90.0,
+        };
+        let sample_spike = QualitySample {
+            dropped_fps: 56.0,
+            ..sample_healthy
+        };
+
+        assert_eq!(controller.evaluate(&sample_healthy), QualityAction::Maintain);
+        assert_eq!(controller.evaluate(&sample_spike), QualityAction::Maintain);
+        assert_eq!(controller.evaluate(&sample_healthy), QualityAction::Maintain);
+        assert_eq!(controller.current_level(), QualityLevel::High);
+    }
+
+    #[test]
+    fn test_dropped_fps_sustained_stress_degrades_far_less_than_once_per_sample() {
+        // Critério de aceite do relatório (seção 7, P-03): alimentar dropped_fps=5.0 repetido
+        // não deve degradar uma vez por amostra (o bug original degradava Ultra->Emergency em
+        // 3 chamadas). Com o contador de 2 amostras, o mesmo estresse sustentado por 10
+        // amostras degrada no máximo 3 vezes (High->Medium->Low->Emergency), nunca 10.
+        let mut controller = QualityController::new();
+        let sample_drop = QualitySample {
+            thermal_level: 0,
+            smoothed_gpu_time_ms: 6.0,
+            frame_time_ms: 11.0,
+            dropped_fps: 5.0,
+            target_fps: 90.0,
+        };
+
+        let degrade_count = (0..10)
+            .filter(|_| matches!(controller.evaluate(&sample_drop), QualityAction::Degrade(..)))
+            .count();
+
+        assert!(
+            degrade_count < 10,
+            "esperado muito menos de 10 degradacoes para 10 amostras, obteve {degrade_count}"
+        );
+        assert_eq!(controller.current_level(), QualityLevel::Emergency);
     }
 
     #[test]

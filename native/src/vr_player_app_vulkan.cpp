@@ -31,6 +31,7 @@
 #include <media/NdkImage.h>
 #include <media/NdkImageReader.h>
 #include <math.h>
+#include <unistd.h>
 
 #include <array>
 #include <atomic>
@@ -140,6 +141,12 @@ extern "C" {
     );
     extern uint32_t quality_controller_get_level();
     extern uint32_t quality_controller_get_reason();
+    // P-05 (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md): tid das 3 threads do
+    // pipeline Rust, pra registro via xrSetAndroidApplicationThreadKHR. Retornam 0 enquanto a
+    // thread correspondente ainda nao subiu.
+    extern int32_t get_demux_thread_tid();
+    extern int32_t get_video_thread_tid();
+    extern int32_t get_audio_thread_tid();
     // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006)
     extern uint32_t get_thermal_level();
     // Rastreamento de cabeça para áudio espacial
@@ -415,6 +422,17 @@ PFN LoadXrFunction(XrInstance instance, const char* name) {
     return fn;
 }
 
+// Forward declaration — struct AppState so e definida mais abaixo neste arquivo.
+struct AppState;
+
+// Auditoria pos-reinicio (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md, P-01/P-04/P-06):
+// unico ponto que deve escrever em state.displayRefreshRate depois da sessao criada. Pede a
+// taxa e SO atualiza o campo a partir de uma leitura confirmada via xrGetDisplayRefreshRateFB —
+// nunca a partir do valor pedido, que pode ser rejeitado silenciosamente pelo runtime. E
+// best-effort de proposito: XR_ERROR_DISPLAY_REFRESH_RATE_UNSUPPORTED_FB e um resultado valido
+// do runtime, entao nao pode passar por OXR(...) (que aborta o processo em qualquer falha).
+void RequestAndConfirmDisplayRefreshRate(AppState& state, float requestedHz);
+
 // xrGetVulkanInstanceExtensionsKHR/DeviceExtensionsKHR devolvem uma unica
 // string com nomes separados por espaco (convencao do KHR_vulkan_enable).
 std::vector<std::string> SplitBySpace(const std::string& s) {
@@ -508,6 +526,11 @@ struct AppState {
 
     // Fase 0.2 T14 / Fase 0.4: Monitoramento Térmico e Qualidade Adaptativa (RNF-PERF-006)
     PFN_xrRequestDisplayRefreshRateFB pfnRequestDisplayRefreshRateFB = nullptr;
+    // Auditoria pos-reinicio (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md, P-01/P-06):
+    // a taxa real so pode ser conhecida via enumeracao + leitura confirmada do runtime — nunca
+    // assumir o valor pedido. Ver RequestAndConfirmDisplayRefreshRate().
+    PFN_xrEnumerateDisplayRefreshRatesFB pfnEnumerateDisplayRefreshRatesFB = nullptr;
+    PFN_xrGetDisplayRefreshRateFB pfnGetDisplayRefreshRateFB = nullptr;
     float displayRefreshRate = 90.0f;
     uint32_t qualityLevel = 1; // 0=Ultra, 1=High, 2=Medium, 3=Low, 4=Emergency
     uint32_t qualityReason = 0; // QualityTransitionReason
@@ -519,6 +542,21 @@ struct AppState {
     float renderResolutionScale = 1.0f;
     float thermalPollAccumMs = 0.0f;
     static constexpr float kThermalPollIntervalMs = 1000.0f;
+    // P-02/P-03: o QualityController foi desenhado para amostragem ~1Hz (ver doc do
+    // QualitySample em rust/media-logic/src/quality.rs) — sem este acumulador ele era avaliado
+    // a ~90Hz, causando cascata de degradacao em dezenas de ms.
+    float qualityPollAccumMs = 0.0f;
+    static constexpr float kQualityPollIntervalMs = 1000.0f;
+
+    // P-05: registrar as threads criticas ao runtime XR (XR_KHR_android_thread_settings).
+    bool supportsAndroidThreadSettings = false;
+    PFN_xrSetAndroidApplicationThreadKHR pfnSetAndroidApplicationThreadKHR = nullptr;
+    // Cache do ultimo tid registrado por thread do pipeline Rust — cada novo video reinicia as
+    // 3 threads (tids novos), entao o registro precisa se repetir, nao rodar so uma vez por
+    // processo. 0 = ainda nao registrado nesta execucao.
+    int32_t lastRegisteredDemuxTid = 0;
+    int32_t lastRegisteredVideoTid = 0;
+    int32_t lastRegisteredAudioTid = 0;
 
     VkInstance vkInstance = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT vkDebugMessenger = VK_NULL_HANDLE; // ver CreateVulkanInstanceAndDevice
@@ -896,6 +934,29 @@ struct AppState {
     bool requestExit = false;
 };
 
+void RequestAndConfirmDisplayRefreshRate(AppState& state, float requestedHz) {
+    if (state.pfnRequestDisplayRefreshRateFB == nullptr) {
+        return;
+    }
+    XrResult result = state.pfnRequestDisplayRefreshRateFB(state.session, requestedHz);
+    if (XR_FAILED(result)) {
+        LOGW("VRPlayerAppVK: xrRequestDisplayRefreshRateFB(%.1fHz) falhou: %d", requestedHz, result);
+    }
+    if (state.pfnGetDisplayRefreshRateFB == nullptr) {
+        // Runtime sem a funcao de leitura — nao ha como confirmar, entao nao assume o valor
+        // pedido (ver P-01). state.displayRefreshRate fica com o ultimo valor confirmado.
+        return;
+    }
+    float confirmedHz = 0.0f;
+    XrResult readResult = state.pfnGetDisplayRefreshRateFB(state.session, &confirmedHz);
+    if (XR_FAILED(readResult)) {
+        LOGW("VRPlayerAppVK: xrGetDisplayRefreshRateFB falhou: %d", readResult);
+        return;
+    }
+    state.displayRefreshRate = confirmedHz;
+    LOGI("VRPlayerAppVK: refresh rate pedido=%.1fHz confirmado=%.1fHz", requestedHz, confirmedHz);
+}
+
 #include "vr_player_input_vulkan.h"
 
 struct QuadPushConstants {
@@ -1013,6 +1074,17 @@ void CreateXrInstance(AppState& state) {
         LOGI("OpenXR: Extensão XR_EXT_hand_tracking detectada e habilitada");
     } else {
         LOGI("OpenXR: Extensão XR_EXT_hand_tracking nao encontrada neste runtime");
+    }
+
+    // Auditoria pos-reinicio (P-05): declara as threads do app como criticas ao runtime XR,
+    // pra evitar que o escalonador do Android as coloque em nucleos pequenos entre um boot e
+    // outro (ver docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+    state.supportsAndroidThreadSettings = isExtensionSupported(XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME);
+    if (state.supportsAndroidThreadSettings) {
+        extensions.push_back(XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME);
+        LOGI("OpenXR: Extensão XR_KHR_android_thread_settings detectada e habilitada");
+    } else {
+        LOGI("OpenXR: Extensão XR_KHR_android_thread_settings nao encontrada neste runtime");
     }
 
     // Este e o nome pelo qual o runtime OpenXR do Horizon OS conhece o app
@@ -4950,8 +5022,11 @@ void RenderFrame(AppState& state) {
             float instFps = 1000.0f / frameMs;
             state.smoothedFps = (state.smoothedFps <= 0.0f)
                 ? instFps : (state.smoothedFps * 0.9f + instFps * 0.1f);
-            if (state.smoothedFps > 90.0f) {
-                state.smoothedFps = 90.0f;
+            // P-06: cap contra a taxa real (nao 90 fixo) — acima de 90Hz (taxas estendidas do
+            // Horizon OS >= v2.7) o cap fixo saturava errado, e abaixo de 90 (72Hz) mentia pra
+            // cima (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+            if (state.smoothedFps > state.displayRefreshRate) {
+                state.smoothedFps = state.displayRefreshRate;
             }
         }
         if (frameMs > kFreezeThresholdMs) {
@@ -5057,16 +5132,41 @@ void RenderFrame(AppState& state) {
             uint32_t currentThermal = get_thermal_level();
             if (currentThermal != state.thermalLevel) {
                 state.thermalLevel = currentThermal;
+                LOGI("VRPlayerAppVK: Thermal status %u", state.thermalLevel);
+                // P-04: nao pede taxa de atualizacao aqui. A regra 1 do QualityController ja
+                // mapeia thermal_level>=3 para o nivel Low (target_fps=72), e o bloco de
+                // avaliacao de qualidade abaixo e o unico que chama
+                // RequestAndConfirmDisplayRefreshRate — dono unico da escrita de
+                // state.displayRefreshRate (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+            }
+        }
 
-                // T14.2 LIMIT_FPS: 72Hz em níveis térmicos elevados (SEVERE / CRITICAL)
-                if (state.pfnRequestDisplayRefreshRateFB != nullptr) {
-                    float targetFps = (state.thermalLevel >= 3) ? 72.0f : 90.0f;
-                    state.pfnRequestDisplayRefreshRateFB(state.session, targetFps);
-                    LOGI("VRPlayerAppVK: Thermal status %u, refresh rate %.0fHz",
-                        state.thermalLevel, targetFps);
-                } else {
-                    LOGI("VRPlayerAppVK: Thermal status %u", state.thermalLevel);
-                }
+        // P-05: registra as 3 threads do pipeline Rust (demux/video/audio) como criticas ao
+        // runtime XR — poll simples, mesmo idioma de get_playback_feedback_event/
+        // get_video_progress (bridge nao tem callback-pra-Rust). Compara contra o ultimo tid
+        // registrado (nao contra "ja registrou alguma vez") porque cada novo video reinicia as
+        // 3 threads com tids novos.
+        if (state.supportsAndroidThreadSettings && state.pfnSetAndroidApplicationThreadKHR != nullptr) {
+            int32_t videoTid = get_video_thread_tid();
+            if (videoTid != 0 && videoTid != state.lastRegisteredVideoTid) {
+                XrResult r = state.pfnSetAndroidApplicationThreadKHR(
+                    state.session, XR_ANDROID_THREAD_TYPE_RENDERER_WORKER_KHR, static_cast<uint32_t>(videoTid));
+                state.lastRegisteredVideoTid = videoTid;
+                LOGI("VRPlayerAppVK: thread de video (tid=%d) registrada como RENDERER_WORKER (result=%d)", videoTid, r);
+            }
+            int32_t demuxTid = get_demux_thread_tid();
+            if (demuxTid != 0 && demuxTid != state.lastRegisteredDemuxTid) {
+                XrResult r = state.pfnSetAndroidApplicationThreadKHR(
+                    state.session, XR_ANDROID_THREAD_TYPE_APPLICATION_WORKER_KHR, static_cast<uint32_t>(demuxTid));
+                state.lastRegisteredDemuxTid = demuxTid;
+                LOGI("VRPlayerAppVK: thread de demux (tid=%d) registrada como APPLICATION_WORKER (result=%d)", demuxTid, r);
+            }
+            int32_t audioTid = get_audio_thread_tid();
+            if (audioTid != 0 && audioTid != state.lastRegisteredAudioTid) {
+                XrResult r = state.pfnSetAndroidApplicationThreadKHR(
+                    state.session, XR_ANDROID_THREAD_TYPE_APPLICATION_WORKER_KHR, static_cast<uint32_t>(audioTid));
+                state.lastRegisteredAudioTid = audioTid;
+                LOGI("VRPlayerAppVK: thread de audio (tid=%d) registrada como APPLICATION_WORKER (result=%d)", audioTid, r);
             }
         }
     }
@@ -5217,52 +5317,71 @@ void RenderFrame(AppState& state) {
         }
 
         // Avaliacao de Qualidade Adaptativa & Escala de Resolucao unificada via Rust media-logic (F1/F2)
-        state.upscalingMode = get_upscaling_mode();
-        float renderScale = 1.0f;
-        float sharpness = 0.0f;
-        uint32_t enableMqsr = 0;
-        uint32_t enableSgsr = 0;
-        uint32_t foveationLevel = 0;
-        float foveationVerticalOffset = 0.0f;
-        float targetFps = 90.0f;
-        uint32_t qualityLevel = 1;
-        uint32_t transitionReason = 0;
+        //
+        // P-02 (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md): QualitySample foi
+        // desenhado para amostragem ~1Hz (ver doc do struct em
+        // rust/media-logic/src/quality.rs) mas era avaliado a cada frame renderizado
+        // (~90Hz) — a historese das regras vira uma cascata de dezenas de ms em vez de
+        // segundos. state.renderResolutionScale/qualityLevel/etc. sao campos de AppState
+        // que persistem entre frames, entao so o CALL precisa ser throttled — o valor
+        // resolvido continua sendo aplicado todo frame a partir do cache implicito nesses
+        // campos.
+        // state.lastFrameMs (nao a local frameMs, fora de escopo aqui) — ver linha ~5020,
+        // onde e escrita a partir do mesmo delta de pacing do compositor.
+        state.qualityPollAccumMs += state.lastFrameMs;
+        if (state.qualityPollAccumMs >= AppState::kQualityPollIntervalMs) {
+            state.qualityPollAccumMs = 0.0f;
 
-        quality_controller_evaluate_and_resolve(
-            state.thermalLevel,
-            state.smoothedGpuTimeMs,
-            state.lastFrameMs,
-            state.droppedFps,
-            state.displayRefreshRate,
-            state.upscalingMode,
-            static_cast<uint32_t>(state.screenMode),
-            state.videoWidth,
-            state.videoHeight,
-            &renderScale,
-            &sharpness,
-            &enableMqsr,
-            &enableSgsr,
-            &foveationLevel,
-            &foveationVerticalOffset,
-            &targetFps,
-            &qualityLevel,
-            &transitionReason
-        );
+            state.upscalingMode = get_upscaling_mode();
+            float renderScale = 1.0f;
+            float sharpness = 0.0f;
+            uint32_t enableMqsr = 0;
+            uint32_t enableSgsr = 0;
+            uint32_t foveationLevel = 0;
+            float foveationVerticalOffset = 0.0f;
+            float targetFps = 90.0f;
+            uint32_t qualityLevel = 1;
+            uint32_t transitionReason = 0;
 
-        state.renderResolutionScale = renderScale;
-        state.upscalingSharpness = (enableSgsr != 0) ? sharpness : 0.0f;
-        state.upscalingEnabled = (state.upscalingMode != 0);
-        state.qualityLevel = qualityLevel;
-        state.qualityReason = transitionReason;
-        state.activeFoveationLevel = foveationLevel;
-        state.activeFoveationVerticalOffset = foveationVerticalOffset;
+            quality_controller_evaluate_and_resolve(
+                state.thermalLevel,
+                state.smoothedGpuTimeMs,
+                state.lastFrameMs,
+                state.droppedFps,
+                state.displayRefreshRate,
+                state.upscalingMode,
+                static_cast<uint32_t>(state.screenMode),
+                state.videoWidth,
+                state.videoHeight,
+                &renderScale,
+                &sharpness,
+                &enableMqsr,
+                &enableSgsr,
+                &foveationLevel,
+                &foveationVerticalOffset,
+                &targetFps,
+                &qualityLevel,
+                &transitionReason
+            );
 
-        // Se targetFps mudou e difere do displayRefreshRate atual, requisita ajuste ao compositor OpenXR
-        if (state.pfnRequestDisplayRefreshRateFB != nullptr && std::abs(targetFps - state.displayRefreshRate) > 1.0f) {
-            state.pfnRequestDisplayRefreshRateFB(state.session, targetFps);
-            state.displayRefreshRate = targetFps;
-            LOGI("VRPlayerAppVK: QualityController ajustou refresh rate para %.0fHz (motivo: %u)",
-                targetFps, transitionReason);
+            state.renderResolutionScale = renderScale;
+            state.upscalingSharpness = (enableSgsr != 0) ? sharpness : 0.0f;
+            state.upscalingEnabled = (state.upscalingMode != 0);
+            state.qualityLevel = qualityLevel;
+            state.qualityReason = transitionReason;
+            state.activeFoveationLevel = foveationLevel;
+            state.activeFoveationVerticalOffset = foveationVerticalOffset;
+
+            // Se targetFps mudou e difere do displayRefreshRate atual, requisita ajuste ao
+            // compositor OpenXR. P-01/P-04: unico caminho que escreve state.displayRefreshRate
+            // a partir de uma requisicao — e RequestAndConfirmDisplayRefreshRate so atualiza o
+            // campo a partir da leitura confirmada via xrGetDisplayRefreshRateFB, nunca do
+            // valor pedido.
+            if (state.pfnRequestDisplayRefreshRateFB != nullptr && std::abs(targetFps - state.displayRefreshRate) > 1.0f) {
+                LOGI("VRPlayerAppVK: QualityController ajustando refresh rate para %.0fHz (motivo: %u)",
+                    targetFps, transitionReason);
+                RequestAndConfirmDisplayRefreshRate(state, targetFps);
+            }
         }
 
         // R-07: reseta os contadores de draw call/triangulo uma vez por frame (nao por olho) —
@@ -5600,6 +5719,14 @@ void PollXrEvents(AppState& state) {
                 default:
                     break;
             }
+        } else if (eventBuffer.type == XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB) {
+            // P-01: mudanca de taxa iniciada pelo sistema (fora de qualquer pedido do app) —
+            // sem este ramo o app nunca ficava sabendo (docs/reports/
+            // TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+            const auto* event = reinterpret_cast<const XrEventDataDisplayRefreshRateChangedFB*>(&eventBuffer);
+            state.displayRefreshRate = event->toDisplayRefreshRate;
+            LOGI("VRPlayerAppVK: refresh rate mudou (evento do sistema) %.1fHz -> %.1fHz",
+                event->fromDisplayRefreshRate, event->toDisplayRefreshRate);
         }
     }
 }
@@ -6015,11 +6142,60 @@ void android_main(android_app* app) {
     SetupOpenXrInputs(state);
     SetupHandTracking(state);
 
+    // P-05: registra a thread principal (unica thread nativa do app — nao ha render thread
+    // separada, ver docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md) como critica ao
+    // runtime XR, antes de qualquer outra configuracao — best-effort, nao aborta em falha.
+    if (state.supportsAndroidThreadSettings) {
+        state.pfnSetAndroidApplicationThreadKHR =
+            LoadXrFunction<PFN_xrSetAndroidApplicationThreadKHR>(state.instance, "xrSetAndroidApplicationThreadKHR");
+        if (state.pfnSetAndroidApplicationThreadKHR != nullptr) {
+            uint32_t mainTid = static_cast<uint32_t>(gettid());
+            XrResult r1 = state.pfnSetAndroidApplicationThreadKHR(
+                state.session, XR_ANDROID_THREAD_TYPE_APPLICATION_MAIN_KHR, mainTid);
+            XrResult r2 = state.pfnSetAndroidApplicationThreadKHR(
+                state.session, XR_ANDROID_THREAD_TYPE_RENDERER_MAIN_KHR, mainTid);
+            if (XR_FAILED(r1) || XR_FAILED(r2)) {
+                LOGW("VRPlayerAppVK: xrSetAndroidApplicationThreadKHR (main/render) falhou: %d/%d", r1, r2);
+            } else {
+                LOGI("VRPlayerAppVK: thread principal (tid=%u) registrada como APPLICATION_MAIN+RENDERER_MAIN", mainTid);
+            }
+        }
+    }
+
     state.pfnRequestDisplayRefreshRateFB =
         LoadXrFunction<PFN_xrRequestDisplayRefreshRateFB>(state.instance, "xrRequestDisplayRefreshRateFB");
+    state.pfnEnumerateDisplayRefreshRatesFB =
+        LoadXrFunction<PFN_xrEnumerateDisplayRefreshRatesFB>(state.instance, "xrEnumerateDisplayRefreshRatesFB");
+    state.pfnGetDisplayRefreshRateFB =
+        LoadXrFunction<PFN_xrGetDisplayRefreshRateFB>(state.instance, "xrGetDisplayRefreshRateFB");
+
     if (state.pfnRequestDisplayRefreshRateFB != nullptr) {
-        state.pfnRequestDisplayRefreshRateFB(state.session, 90.0f);
-        LOGI("VRPlayerAppVK: Requested 90Hz refresh rate.");
+        // P-01: enumera as taxas realmente suportadas pelo runtime em vez de assumir 90Hz —
+        // Meta orienta explicitamente a nao assumir e a cair para uma taxa da lista quando o
+        // pedido preferido nao tiver sucesso (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md,
+        // secao 5).
+        float chosenHz = 90.0f;
+        if (state.pfnEnumerateDisplayRefreshRatesFB != nullptr) {
+            uint32_t rateCount = 0;
+            state.pfnEnumerateDisplayRefreshRatesFB(state.session, 0, &rateCount, nullptr);
+            if (rateCount > 0) {
+                std::vector<float> rates(rateCount);
+                XrResult enumResult = state.pfnEnumerateDisplayRefreshRatesFB(
+                    state.session, rateCount, &rateCount, rates.data());
+                if (!XR_FAILED(enumResult) && !rates.empty()) {
+                    float bestAtOrBelow = -1.0f;
+                    float lowestAbove = -1.0f;
+                    for (float hz : rates) {
+                        if (hz <= 90.0f && hz > bestAtOrBelow) bestAtOrBelow = hz;
+                        if (hz > 90.0f && (lowestAbove < 0.0f || hz < lowestAbove)) lowestAbove = hz;
+                    }
+                    chosenHz = (bestAtOrBelow > 0.0f) ? bestAtOrBelow : lowestAbove;
+                    LOGI("VRPlayerAppVK: %u taxas de atualizacao suportadas pelo runtime, escolhida=%.1fHz",
+                        rateCount, chosenHz);
+                }
+            }
+        }
+        RequestAndConfirmDisplayRefreshRate(state, chosenHz);
     } else {
         LOGI("VRPlayerAppVK: xrRequestDisplayRefreshRateFB not available.");
     }

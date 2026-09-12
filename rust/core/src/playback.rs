@@ -10,6 +10,15 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Instant;
 
+// P-05 (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md): tid das 3 threads do pipeline,
+// reportado pra C++ registrar como thread critica ao runtime XR via
+// xrSetAndroidApplicationThreadKHR (rust/bridge/src/lib.rs expoe getters que leem estas
+// estaticas — C++ e o unico com acesso ao XrSession, entao o registro em si acontece la; aqui
+// so publicamos o tid). 0 = a thread ainda nao subiu.
+pub static DEMUX_THREAD_TID: AtomicI32 = AtomicI32::new(0);
+pub static VIDEO_THREAD_TID: AtomicI32 = AtomicI32::new(0);
+pub static AUDIO_THREAD_TID: AtomicI32 = AtomicI32::new(0);
+
 const LATE_FRAME_RENDER_SKIP_SEC: f64 = 0.1;
 
 /// Quando o proximo pacote de video ja nasce mais atrasado que isto em
@@ -451,6 +460,7 @@ impl PlaybackController {
         // Thread 1: Demuxer
         let sync_d = sync_manager.clone();
         let demux_thread = thread::spawn(move || {
+            DEMUX_THREAD_TID.store(unsafe { libc::gettid() }, Ordering::Relaxed);
             loop {
                 if !*is_running_d.lock().unwrap() { break; }
 
@@ -499,6 +509,7 @@ impl PlaybackController {
         // Thread 2: Video Decoder
         let sync_v = sync_manager.clone();
         let video_thread = thread::spawn(move || {
+            VIDEO_THREAD_TID.store(unsafe { libc::gettid() }, Ordering::Relaxed);
             if let Some(sps) = sps_pps {
                 let _ = video_decoder.decode_packet(&sps, 0, 2, |_| true, || {}, || true);
             }
@@ -620,6 +631,7 @@ impl PlaybackController {
         }
 
         let audio_thread = thread::spawn(move || {
+            AUDIO_THREAD_TID.store(unsafe { libc::gettid() }, Ordering::Relaxed);
             let mut applied_speed = 1.0f32;
             let layout = audio_decoder
                 .as_ref()
