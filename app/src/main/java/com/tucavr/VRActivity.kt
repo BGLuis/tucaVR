@@ -253,6 +253,29 @@ class VRActivity : NativeActivity() {
                         val status = intent.getIntExtra(EXTRA_THERMAL_STATUS, -1)
                         if (status >= 0) thermalMonitor.simulateThermalStatus(status)
                     }
+                    // Dispara playback SFTP direto via adb, sem navegar a UI nem
+                    // colocar o headset na cabeca — mesmo espirito do EXTRA_AUTO_PLAY_PATH
+                    // (ver DEBUGGING.md secao 2 / scripts/soak-test.sh), mas para uma fonte
+                    // de rede em vez de arquivo local, ja que EXTRA_AUTO_PLAY_PATH so chama
+                    // playFile() (PlaybackSource.LocalFile). Util pra reproduzir sozinho um
+                    // cenario de stall de rede (ex: docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md)
+                    // de forma automatizada/repetivel.
+                    ACTION_DEBUG_PLAY_SFTP -> {
+                        val host = intent.getStringExtra(EXTRA_SFTP_HOST)
+                        val path = intent.getStringExtra(EXTRA_SFTP_PATH)
+                        if (!host.isNullOrBlank() && !path.isNullOrBlank()) {
+                            val server = com.tucavr.network.SftpServer(
+                                id = "debug-broadcast",
+                                name = "debug-broadcast",
+                                host = host,
+                                port = intent.getIntExtra(EXTRA_SFTP_PORT, 22),
+                                username = intent.getStringExtra(EXTRA_SFTP_USER) ?: "",
+                                password = intent.getStringExtra(EXTRA_SFTP_PASSWORD) ?: "",
+                                privateKey = null
+                            )
+                            playSftp(server, path)
+                        }
+                    }
                 }
             }
         }
@@ -260,6 +283,7 @@ class VRActivity : NativeActivity() {
             addAction(ACTION_DEBUG_SET_SCREEN_MODE)
             addAction(ACTION_DEBUG_CYCLE_SCREEN_MODE)
             addAction(ACTION_DEBUG_SET_THERMAL_STATUS)
+            addAction(ACTION_DEBUG_PLAY_SFTP)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
@@ -624,6 +648,14 @@ class VRActivity : NativeActivity() {
         const val ACTION_DEBUG_CYCLE_SCREEN_MODE = "com.tucavr.debug.CYCLE_SCREEN_MODE"
         const val ACTION_DEBUG_SET_THERMAL_STATUS = "com.tucavr.debug.SET_THERMAL_STATUS"
         const val EXTRA_THERMAL_STATUS = "status"
+        // Ver ACTION_DEBUG_PLAY_SFTP em registerDebugReceiverIfDebuggable — playback SFTP
+        // automatizado via adb, sem depender do headset estar sendo usado.
+        const val ACTION_DEBUG_PLAY_SFTP = "com.tucavr.debug.PLAY_SFTP"
+        const val EXTRA_SFTP_HOST = "host"
+        const val EXTRA_SFTP_PORT = "port"
+        const val EXTRA_SFTP_PATH = "path"
+        const val EXTRA_SFTP_USER = "user"
+        const val EXTRA_SFTP_PASSWORD = "password"
         private const val AUTO_PLAY_DELAY_MS = 3000L
         private const val PLAYBACK_ERROR_POLL_MS = 1000L
 
