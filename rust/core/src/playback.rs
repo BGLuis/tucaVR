@@ -8,7 +8,7 @@ use ndk::media::media_format::MediaFormat;
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 // P-05 (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md): tid das 3 threads do pipeline,
 // reportado pra C++ registrar como thread critica ao runtime XR via
@@ -29,6 +29,33 @@ const LATE_FRAME_RENDER_SKIP_SEC: f64 = 0.1;
 /// LATE_FRAME_RENDER_SKIP_SEC so descarta no render, sem reduzir o backlog,
 /// entao o atraso so cresce e trava no ultimo frame renderizado pra sempre.
 const CATCH_UP_SKIP_THRESHOLD_SEC: f64 = 0.5;
+
+/// Quantas vezes seguidas a thread de demux tenta retomar perto da ultima
+/// posicao de video conhecida (em vez de reiniciar do byte 0 do arquivo)
+/// apos um erro de leitura, antes de cair pro ultimo recurso (seek pro
+/// inicio). Achado desta sessao (analise de sessoes de telemetria com
+/// stalls de dezenas de segundos via SFTP, docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md):
+/// o codigo anterior reiniciava do ZERO em QUALQUER erro de leitura —
+/// inclusive um soluco transitorio de rede plenamente normal (confirmado
+/// via rust/protocols/src/bin/speed_test.rs: o link real oscila mas nunca
+/// fica parado por segundos numa leitura sequencial simples) — e o loop da
+/// thread de demux nao tinha backoff nenhum, entao uma rede ruim persistente
+/// virava "reinicia do zero -> falha nas mesmas condicoes -> reinicia do
+/// zero de novo" repetidamente, cada volta custando ate ~20s so no retry
+/// interno do cliente SFTP (ver SFTP_READ_TIMEOUT/SFTP_CONNECT_TIMEOUT em
+/// rust/protocols/src/sftp/mod.rs). Alem do freeze, isso fazia o video
+/// voltar pro comeco de forma invisivel na telemetria (o seek(0,..) direto
+/// no AVFormatContext nao passa pelo canal DemuxCommand::SeekTo, entao nem
+/// seek_latency_ms nem a epoch da sessao refletiam o que aconteceu).
+const READ_ERROR_MAX_RESUME_ATTEMPTS: u32 = 3;
+
+/// Pausa entre tentativas de retomada apos erro de leitura. O cliente de
+/// rede (SFTP/SMB/etc.) ja tem seu proprio retry/reconnect interno com
+/// timeouts de varios segundos (ver comentario acima) — este backoff extra
+/// e so uma protecao barata contra um erro que por algum outro motivo volte
+/// instantaneamente (ex.: arquivo local corrompido), pra nao girar a thread
+/// de demux num loop apertado sem ceder CPU.
+const READ_ERROR_RETRY_BACKOFF: Duration = Duration::from_millis(400);
 
 /// Envia `item` no canal com timeout, checando `is_running` entre
 /// tentativas — evita bloquear para sempre se o consumidor parou de
@@ -493,6 +520,12 @@ impl PlaybackController {
         let sync_d = sync_manager.clone();
         let demux_thread = thread::spawn(move || {
             DEMUX_THREAD_TID.store(unsafe { libc::gettid() }, Ordering::Relaxed);
+            // Ultima posicao de video (em segundos) que efetivamente saiu do
+            // demuxer com sucesso — alvo da retomada apos erro de leitura
+            // (ver READ_ERROR_MAX_RESUME_ATTEMPTS). Comeca em start_time
+            // porque e de la que esta sessao de fato partiu.
+            let mut last_good_pos_sec: f64 = start_time.max(0.0);
+            let mut consecutive_read_errors: u32 = 0;
             loop {
                 if !*is_running_d.lock().unwrap() { break; }
 
@@ -504,6 +537,12 @@ impl PlaybackController {
                     // clock pra posicao real (ver PrerollState::take_landing) — so
                     // evita a barra de progresso piscar um valor velho nesse meio-tempo.
                     sync_d.update_master_clock(target_sec);
+                    // Seek deliberado do usuario: a posicao de retomada apos um
+                    // eventual erro de leitura passa a ser aqui, nao onde a sessao
+                    // estava antes, e o orcamento de tentativas "perto da posicao
+                    // atual" recomeca do zero.
+                    last_good_pos_sec = target_sec.max(0.0);
+                    consecutive_read_errors = 0;
                 }
 
 
@@ -511,7 +550,11 @@ impl PlaybackController {
                 let current_epoch = epoch_d.load(Ordering::SeqCst);
                 match demuxer.read_packet() {
                     crate::demuxer::ReadPacketOutcome::Packet(idx, packet) => {
+                        consecutive_read_errors = 0;
                         if idx == video_idx {
+                            if let Some(pts) = packet.pts() {
+                                last_good_pos_sec = (pts as f64 * video_time_base).max(0.0);
+                            }
                             if !try_send_until_stopped(&video_tx, TaggedPacket { epoch: current_epoch, packet }, &is_running_d) { break; }
                         } else if demuxer.audio_stream_index == Some(idx) {
                             if !try_send_until_stopped(&audio_tx, TaggedPacket { epoch: current_epoch, packet }, &is_running_d) { break; }
@@ -520,19 +563,42 @@ impl PlaybackController {
                     crate::demuxer::ReadPacketOutcome::Eof => {
                         let _ = demuxer.input_context.seek(0, 0..1);
                         sync_d.reset();
+                        last_good_pos_sec = 0.0;
+                        consecutive_read_errors = 0;
                     }
                     crate::demuxer::ReadPacketOutcome::Error(e) => {
                         // Distinguido de EOF nesta sessao
-                        // (docs/NETWORK-IO-PERFORMANCE.md) — antes disto uma
-                        // falha de rede virava um restart silencioso e
-                        // indistinguivel de EOF. Mantem a mesma recuperacao
-                        // (seek pro inicio) por ora: e o unico caminho
-                        // testado hoje pra "o AVFormatContext esta num
-                        // estado de erro sticky, precisa recomecar" — so que
-                        // agora loga em vez de esconder.
-                        crate::log_warn!("Demuxer: erro de leitura ({e}), reiniciando do inicio");
-                        let _ = demuxer.input_context.seek(0, 0..1);
-                        sync_d.reset();
+                        // (docs/NETWORK-IO-PERFORMANCE.md). O AVFormatContext
+                        // realmente parece entrar num estado de erro "sticky"
+                        // apos uma falha de I/O — um seek (pra qualquer lugar)
+                        // e o jeito testado de desempacar isso, entao mantemos
+                        // o seek, mas agora tentamos retomar PERTO de onde a
+                        // sessao estava (last_good_pos_sec) em vez de sempre
+                        // saltar pro byte 0 — ver READ_ERROR_MAX_RESUME_ATTEMPTS
+                        // sobre por que reiniciar do zero em QUALQUER soluco de
+                        // rede transitorio era o comportamento anterior (achado
+                        // desta sessao, confirmado com rust/protocols/src/bin/speed_test.rs).
+                        consecutive_read_errors += 1;
+                        if consecutive_read_errors <= READ_ERROR_MAX_RESUME_ATTEMPTS {
+                            crate::log_warn!(
+                                "Demuxer: erro de leitura ({e}), retomando perto de {:.1}s (tentativa {}/{})",
+                                last_good_pos_sec, consecutive_read_errors, READ_ERROR_MAX_RESUME_ATTEMPTS
+                            );
+                            let target_ts = (last_good_pos_sec * 1_000_000.0) as i64;
+                            let _ = demuxer.input_context.seek(target_ts, ..);
+                            epoch_d.fetch_add(1, Ordering::SeqCst);
+                            sync_d.update_master_clock(last_good_pos_sec);
+                            thread::sleep(READ_ERROR_RETRY_BACKOFF);
+                        } else {
+                            crate::log_warn!(
+                                "Demuxer: erro de leitura persistente apos {consecutive_read_errors} tentativas ({e}), reiniciando do inicio"
+                            );
+                            let _ = demuxer.input_context.seek(0, 0..1);
+                            epoch_d.fetch_add(1, Ordering::SeqCst);
+                            sync_d.reset();
+                            last_good_pos_sec = 0.0;
+                            consecutive_read_errors = 0;
+                        }
                     }
                 }
             }
