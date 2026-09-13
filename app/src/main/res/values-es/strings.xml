@@ -445,6 +445,7 @@
     <string name="debug_stats_section_network_buffer">Red y búfer</string>
     <string name="debug_stats_section_system">Sistema y hardware</string>
 
+    <string name="debug_stats_label_bottleneck">Etapa del cuello de botella</string>
     <string name="debug_stats_label_resolution">Resolución / Códec</string>
     <string name="debug_stats_label_fps">Tasa de cuadros / Pantalla</string>
     <string name="debug_stats_label_dropped_frames">Cuadros descartados</string>
@@ -454,6 +455,17 @@
     <string name="debug_stats_label_render_scale">Escala de renderizado / Foveation</string>
     <string name="debug_stats_label_graphics_backend">Backend gráfico</string>
     <string name="debug_stats_label_video_decoder">Decodificador de video</string>
+    <string name="debug_stats_label_gpu_time">Tiempo de GPU</string>
+    <string name="debug_stats_label_quality">Calidad adaptativa</string>
+    <string name="debug_stats_label_upscaling">Upscaling</string>
+    <string name="debug_stats_label_drawcalls">Draw calls / Triángulos</string>
+
+    <string name="debug_stats_section_charts">Gráficos</string>
+    <string name="debug_stats_chart_g1_title">Etapa del pipeline (60s)</string>
+    <string name="debug_stats_chart_g2_title">Histograma de frame time (buckets: &lt;11,1/16,7/20/33,3/50/100/250/≥250ms)</string>
+    <string name="debug_stats_chart_g3_title">Salud del búfer (s) / Red (MB/s)</string>
+    <string name="debug_stats_chart_g4_title">Drift A/V (ms)</string>
+    <string name="debug_stats_chart_g5_title">Tiempo de GPU vs. presupuesto (ms)</string>
 
     <string name="debug_stats_label_audio_format">Códec de audio / Canales</string>
     <string name="debug_stats_label_av_drift">Desfase A/V (Drift)</string>

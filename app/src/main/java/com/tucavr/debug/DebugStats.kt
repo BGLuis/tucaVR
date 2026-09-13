@@ -48,7 +48,35 @@ data class NativeDebugStats(
     val qualityLevel: String = "HIGH",
     val qualityReason: String = "NONE",
     val drawCallCount: Int = 0,
-    val triangleCount: Long = 0L
+    val triangleCount: Long = 0L,
+    val videoStallCount: Int = 0,
+    val videoStatsAgeMs: Int = 0,
+    val networkStatsAgeMs: Int = 0,
+    val audioStatsAgeMs: Int = 0,
+    val renderStatsAgeMs: Int = 0,
+    val networkFetchFailures: Long = 0L,
+    val networkSequentialStreak: Int = 0,
+    val networkThrottled: Boolean = false,
+    val audioQueueDepth: Int = 0,
+    val decodeErrorCount: Long = 0L,
+    val demuxCorruptPacketCount: Long = 0L,
+    val audioUnderrunCount: Long = 0L,
+    val loadPhaseDemuxOpenMs: Int = 0,
+    val loadPhaseDecoderReadyMs: Int = 0,
+    val loadPhaseAudioReadyMs: Int = 0,
+    val perfMetricsValidMask: Int = 0,
+    val perfAppCpuFrametimeMs: Float = 0.0f,
+    val perfAppGpuFrametimeMs: Float = 0.0f,
+    val perfMotionToPhotonLatencyMs: Float = 0.0f,
+    val perfCompositorCpuFrametimeMs: Float = 0.0f,
+    val perfCompositorGpuFrametimeMs: Float = 0.0f,
+    val perfCompositorDroppedFrameCount: Int = 0,
+    val perfCompositorSpacewarpMode: Int = 0,
+    val perfDeviceCpuUtilAverage: Float = 0.0f,
+    val perfDeviceCpuUtilWorst: Float = 0.0f,
+    val perfDeviceGpuUtil: Float = 0.0f,
+    // List (não IntArray): igualdade estrutural de graça no data class gerado.
+    val histBuckets: List<Int> = List(8) { 0 }
 )
 
 /**
@@ -85,6 +113,33 @@ object DebugStatsParser {
         var qualityReason = "NONE"
         var drawCallCount = 0
         var triangleCount = 0L
+        var videoStallCount = 0
+        var videoStatsAgeMs = 0
+        var networkStatsAgeMs = 0
+        var audioStatsAgeMs = 0
+        var renderStatsAgeMs = 0
+        var networkFetchFailures = 0L
+        var networkSequentialStreak = 0
+        var networkThrottled = false
+        var audioQueueDepth = 0
+        var decodeErrorCount = 0L
+        var demuxCorruptPacketCount = 0L
+        var audioUnderrunCount = 0L
+        var loadPhaseDemuxOpenMs = 0
+        var loadPhaseDecoderReadyMs = 0
+        var loadPhaseAudioReadyMs = 0
+        var perfMetricsValidMask = 0
+        var perfAppCpuFrametimeMs = 0.0f
+        var perfAppGpuFrametimeMs = 0.0f
+        var perfMotionToPhotonLatencyMs = 0.0f
+        var perfCompositorCpuFrametimeMs = 0.0f
+        var perfCompositorGpuFrametimeMs = 0.0f
+        var perfCompositorDroppedFrameCount = 0
+        var perfCompositorSpacewarpMode = 0
+        var perfDeviceCpuUtilAverage = 0.0f
+        var perfDeviceCpuUtilWorst = 0.0f
+        var perfDeviceGpuUtil = 0.0f
+        val histBuckets = IntArray(8)
         var stutterCount = 0
         var freezeCount = 0
         var thermalLevel = 0
@@ -160,6 +215,40 @@ object DebugStatsParser {
                 "audio_track_count" -> { audioTrackCount = value.toIntOrNull() ?: 0; recognizedKeys++ }
                 "sub_track" -> { subtitleTrackIndex = value.toIntOrNull() ?: -1; recognizedKeys++ }
                 "sub_offset_ms" -> { subtitleOffsetMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "video_stall_count" -> { videoStallCount = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "video_stats_age_ms" -> { videoStatsAgeMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "network_stats_age_ms" -> { networkStatsAgeMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "audio_stats_age_ms" -> { audioStatsAgeMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "render_stats_age_ms" -> { renderStatsAgeMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "network_fetch_failures" -> { networkFetchFailures = value.toLongOrNull() ?: 0L; recognizedKeys++ }
+                "network_sequential_streak" -> { networkSequentialStreak = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "network_throttled" -> { networkThrottled = value == "1"; recognizedKeys++ }
+                "audio_queue_depth" -> { audioQueueDepth = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "decode_error_count" -> { decodeErrorCount = value.toLongOrNull() ?: 0L; recognizedKeys++ }
+                "demux_corrupt_packet_count" -> { demuxCorruptPacketCount = value.toLongOrNull() ?: 0L; recognizedKeys++ }
+                "audio_underrun_count" -> { audioUnderrunCount = value.toLongOrNull() ?: 0L; recognizedKeys++ }
+                "load_phase_demux_open_ms" -> { loadPhaseDemuxOpenMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "load_phase_decoder_ready_ms" -> { loadPhaseDecoderReadyMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "load_phase_audio_ready_ms" -> { loadPhaseAudioReadyMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "perf_metrics_valid_mask" -> { perfMetricsValidMask = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "perf_app_cpu_frametime_ms" -> { perfAppCpuFrametimeMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
+                "perf_app_gpu_frametime_ms" -> { perfAppGpuFrametimeMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
+                "perf_motion_to_photon_latency_ms" -> { perfMotionToPhotonLatencyMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
+                "perf_compositor_cpu_frametime_ms" -> { perfCompositorCpuFrametimeMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
+                "perf_compositor_gpu_frametime_ms" -> { perfCompositorGpuFrametimeMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
+                "perf_compositor_dropped_frame_count" -> { perfCompositorDroppedFrameCount = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "perf_compositor_spacewarp_mode" -> { perfCompositorSpacewarpMode = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "perf_device_cpu_util_average" -> { perfDeviceCpuUtilAverage = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
+                "perf_device_cpu_util_worst" -> { perfDeviceCpuUtilWorst = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
+                "perf_device_gpu_util" -> { perfDeviceGpuUtil = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
+                "hist_bucket_0" -> { histBuckets[0] = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "hist_bucket_1" -> { histBuckets[1] = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "hist_bucket_2" -> { histBuckets[2] = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "hist_bucket_3" -> { histBuckets[3] = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "hist_bucket_4" -> { histBuckets[4] = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "hist_bucket_5" -> { histBuckets[5] = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "hist_bucket_6" -> { histBuckets[6] = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "hist_bucket_7" -> { histBuckets[7] = value.toIntOrNull() ?: 0; recognizedKeys++ }
             }
         }
 
@@ -209,7 +298,34 @@ object DebugStatsParser {
             qualityLevel = qualityLevel,
             qualityReason = qualityReason,
             drawCallCount = drawCallCount,
-            triangleCount = triangleCount
+            triangleCount = triangleCount,
+            videoStallCount = videoStallCount,
+            videoStatsAgeMs = videoStatsAgeMs,
+            networkStatsAgeMs = networkStatsAgeMs,
+            audioStatsAgeMs = audioStatsAgeMs,
+            renderStatsAgeMs = renderStatsAgeMs,
+            networkFetchFailures = networkFetchFailures,
+            networkSequentialStreak = networkSequentialStreak,
+            networkThrottled = networkThrottled,
+            audioQueueDepth = audioQueueDepth,
+            decodeErrorCount = decodeErrorCount,
+            demuxCorruptPacketCount = demuxCorruptPacketCount,
+            audioUnderrunCount = audioUnderrunCount,
+            loadPhaseDemuxOpenMs = loadPhaseDemuxOpenMs,
+            loadPhaseDecoderReadyMs = loadPhaseDecoderReadyMs,
+            loadPhaseAudioReadyMs = loadPhaseAudioReadyMs,
+            perfMetricsValidMask = perfMetricsValidMask,
+            perfAppCpuFrametimeMs = perfAppCpuFrametimeMs,
+            perfAppGpuFrametimeMs = perfAppGpuFrametimeMs,
+            perfMotionToPhotonLatencyMs = perfMotionToPhotonLatencyMs,
+            perfCompositorCpuFrametimeMs = perfCompositorCpuFrametimeMs,
+            perfCompositorGpuFrametimeMs = perfCompositorGpuFrametimeMs,
+            perfCompositorDroppedFrameCount = perfCompositorDroppedFrameCount,
+            perfCompositorSpacewarpMode = perfCompositorSpacewarpMode,
+            perfDeviceCpuUtilAverage = perfDeviceCpuUtilAverage,
+            perfDeviceCpuUtilWorst = perfDeviceCpuUtilWorst,
+            perfDeviceGpuUtil = perfDeviceGpuUtil,
+            histBuckets = histBuckets.toList()
         )
     }
 }

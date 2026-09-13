@@ -13,10 +13,14 @@ import com.tucavr.BuildConfig
 import com.tucavr.R
 import com.tucavr.codec.CodecCapabilityManager
 import com.tucavr.codec.CodecSupportStatus
+import com.tucavr.debug.BottleneckStage
+import com.tucavr.debug.BottleneckStageAnalyzer
 import com.tucavr.debug.DebugStatsParser
+import com.tucavr.debug.NativeDebugStats
 import com.tucavr.filebrowser.MediaMetadata
 import com.tucavr.navigation.PlaybackSource
 import java.util.Locale
+import kotlin.math.max
 
 /**
  * Modal flutuante de Estatísticas Técnicas ("Stats for Nerds") exibido no 3º Quad frontal independente.
@@ -30,6 +34,33 @@ class DebugStatsModal(
 ) : FrameLayout(context) {
 
     private val debugStatValueViews = mutableMapOf<String, TextView>()
+    private val charts = mutableMapOf<String, VoidChart>()
+
+    // F5 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): histórico rolante em memória para
+    // G1/G3/G4/G5 — acumulado a partir das amostras de ~10Hz que já chegam via updateStats,
+    // sem alargar o wire (2.5 do relatório). G2 usa os contadores cumulativos direto do wire,
+    // sem histórico próprio.
+    private val bottleneckHistory = ArrayDeque<BottleneckStage>()
+    private val bufferHealthHistory = ArrayDeque<Float>()
+    private val netMbsHistory = ArrayDeque<Float>()
+    private val avDriftHistory = ArrayDeque<Float>()
+    private val gpuTimeHistory = ArrayDeque<Float>()
+
+    companion object {
+        // D-04 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): valor com idade acima de
+        // ~2 amostras (HUD atualiza a ~10Hz, ver DebugTelemetryExporter) aparece esmaecido
+        // com a idade ao lado, em vez de mentir sendo exibido como corrente — ver os 34
+        // exemplos de valor congelado por 34 amostras seguidas na sessão real do relatório.
+        private const val STALE_THRESHOLD_MS = 200
+
+        // 60s a ~10Hz (relatório 2.5, G1: "faixas por estágio, 60s").
+        private const val HISTORY_MAX_SAMPLES = 600
+    }
+
+    private fun <T> ArrayDeque<T>.pushCapped(value: T, maxSize: Int = HISTORY_MAX_SAMPLES) {
+        addLast(value)
+        while (size > maxSize) removeFirst()
+    }
 
     init {
         layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
@@ -115,6 +146,10 @@ class DebugStatsModal(
         buildStatSection(
             context.getString(R.string.debug_stats_section_video_render),
             listOf(
+                // F5 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): bottleneck_stage como
+                // primeira linha do painel (secao 2.3) — responde "onde travou" sem
+                // reconstruir a leitura a mao.
+                "bottleneck" to context.getString(R.string.debug_stats_label_bottleneck),
                 "resolution" to context.getString(R.string.debug_stats_label_resolution),
                 "decoder" to context.getString(R.string.debug_stats_label_video_decoder),
                 "fps" to context.getString(R.string.debug_stats_label_fps),
@@ -123,7 +158,14 @@ class DebugStatsModal(
                 "jitter" to context.getString(R.string.debug_stats_label_video_jitter),
                 "stereo" to context.getString(R.string.debug_stats_label_stereo_mode),
                 "render_scale" to context.getString(R.string.debug_stats_label_render_scale),
-                "backend" to context.getString(R.string.debug_stats_label_graphics_backend)
+                "backend" to context.getString(R.string.debug_stats_label_graphics_backend),
+                // F5 G5: 7 campos ja coletados e nunca exibidos (draw_call_count/
+                // triangle_count/gpu_time_ms/quality_level/quality_reason/upscaling_mode/
+                // mqsr_enabled) — zero coleta nova, so exibicao.
+                "gpu_time" to context.getString(R.string.debug_stats_label_gpu_time),
+                "quality" to context.getString(R.string.debug_stats_label_quality),
+                "upscaling" to context.getString(R.string.debug_stats_label_upscaling),
+                "drawcalls" to context.getString(R.string.debug_stats_label_drawcalls)
             ),
             contentContainer
         )
@@ -162,6 +204,8 @@ class DebugStatsModal(
             ),
             contentContainer
         )
+
+        buildChartsSection(contentContainer)
 
         scrollView.addView(contentContainer)
         panel.addView(scrollView)
@@ -231,6 +275,66 @@ class DebugStatsModal(
     }
 
     /**
+     * F5 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, seção 2.5): os 5 gráficos, cada um
+     * com uma legenda curta acima. Alturas em dp (60dp) — ver aviso de densidade em
+     * [VoidChart]; legibilidade real só confirmável no headset.
+     */
+    private fun buildChartsSection(container: LinearLayout) {
+        val sectionHeader = VoidText.title(context, context.getString(R.string.debug_stats_section_charts), sizeSp = 16f).apply {
+            setPadding(0, VoidTheme.dpToPx(context, 10f), 0, VoidTheme.dpToPx(context, 6f))
+        }
+        container.addView(sectionHeader)
+
+        fun addChart(key: String, titleRes: Int): VoidChart {
+            val caption = TextView(context).apply {
+                text = context.getString(titleRes)
+                textSize = 12f
+                typeface = VoidTheme.typefaceBody
+                setTextColor(VoidTheme.colorTextSecondary)
+                setPadding(0, VoidTheme.dpToPx(context, 6f), 0, VoidTheme.dpToPx(context, 2f))
+            }
+            container.addView(caption)
+
+            val chart = VoidChart(context).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    VoidTheme.dpToPx(context, 60f)
+                )
+                background = GradientDrawable().apply {
+                    setColor(VoidTheme.colorSurfaceAlt)
+                    cornerRadius = VoidTheme.dp(context, 6f)
+                }
+            }
+            container.addView(chart)
+            charts[key] = chart
+            return chart
+        }
+
+        addChart("g1", R.string.debug_stats_chart_g1_title)
+        addChart("g2", R.string.debug_stats_chart_g2_title)
+        addChart("g3", R.string.debug_stats_chart_g3_title)
+        addChart("g4", R.string.debug_stats_chart_g4_title)
+        addChart("g5", R.string.debug_stats_chart_g5_title)
+    }
+
+    /**
+     * Escreve o valor de uma linha, esmaecendo-o e anexando a idade quando o grupo
+     * correspondente (D-04) está obsoleto — em vez de exibir um dado congelado como se
+     * fosse uma leitura atual. `ageMs == null` = campo sem grupo de frescor (estado local,
+     * não telemetria amostrada — ex.: faixa de áudio selecionada, versão do app).
+     */
+    private fun setValue(key: String, text: String, ageMs: Int? = null) {
+        val view = debugStatValueViews[key] ?: return
+        if (ageMs != null && ageMs > STALE_THRESHOLD_MS) {
+            view.text = "$text (${ageMs}ms atrás)"
+            view.setTextColor(VoidTheme.colorTextSecondary)
+        } else {
+            view.text = text
+            view.setTextColor(VoidTheme.colorText)
+        }
+    }
+
+    /**
      * Atualiza as métricas com o conteúdo do wire TSV recebido do native loop.
      */
     fun updateStats(
@@ -247,6 +351,13 @@ class DebugStatsModal(
         val audioTrack = meta?.audioTracks?.firstOrNull()
 
         // 1. Vídeo & Renderização
+        val bottleneckText = when (BottleneckStageAnalyzer.analyze(stats)) {
+            BottleneckStage.NONE -> "—"
+            BottleneckStage.NETWORK -> "NETWORK"
+            BottleneckStage.PRESENTATION -> "PRESENTATION"
+        }
+        debugStatValueViews["bottleneck"]?.text = bottleneckText
+
         val resText = if (videoTrack != null && videoTrack.width > 0) {
             "${videoTrack.width}x${videoTrack.height} (${videoTrack.codec.uppercase()})"
         } else if (meta != null && meta.container.isNotEmpty()) {
@@ -268,15 +379,18 @@ class DebugStatsModal(
         }
         debugStatValueViews["decoder"]?.text = decoderText
 
-        debugStatValueViews["fps"]?.text = String.format(
-            Locale.US, "%.1f dec / %.1f out (%.0f Hz)",
-            stats.decodedFps, stats.outputFps, stats.refreshRate
+        setValue(
+            "fps",
+            String.format(Locale.US, "%.1f dec / %.1f out (%.0f Hz)", stats.decodedFps, stats.outputFps, stats.refreshRate),
+            stats.videoStatsAgeMs
         )
 
         val totalFrames = stats.decodedFps + stats.droppedFps
         val dropPct = if (totalFrames > 0f) (stats.droppedFps / totalFrames) * 100f else 0f
-        debugStatValueViews["dropped_frames"]?.text = String.format(
-            Locale.US, "%.0f fps (%.1f%%)", stats.droppedFps, dropPct
+        setValue(
+            "dropped_frames",
+            String.format(Locale.US, "%.0f fps (%.1f%%)", stats.droppedFps, dropPct),
+            stats.videoStatsAgeMs
         )
 
         debugStatValueViews["stutter_freeze"]?.text = "${stats.stutterCount} / ${stats.freezeCount}"
@@ -295,6 +409,13 @@ class DebugStatsModal(
 
         debugStatValueViews["backend"]?.text = stats.backend
 
+        // F5 G5: campos ja coletados e nunca exibidos (relatorio 2.5) — zero coleta nova.
+        setValue("gpu_time", String.format(Locale.US, "%.2f / %.2f ms", stats.gpuTimeMs, stats.smoothedGpuTimeMs), stats.renderStatsAgeMs)
+        debugStatValueViews["quality"]?.text = "${stats.qualityLevel} (${stats.qualityReason})"
+        val mqsrStr = if (stats.mqsrEnabled) " [MQSR]" else ""
+        debugStatValueViews["upscaling"]?.text = String.format(Locale.US, "%s %.2f%s", stats.upscalingMode, stats.upscalingSharpness, mqsrStr)
+        debugStatValueViews["drawcalls"]?.text = "${stats.drawCallCount} / ${stats.triangleCount}"
+
         // 2. Áudio & Sincronização
         val audioCodecStr = if (audioTrack != null && audioTrack.codec.isNotEmpty()) {
             "${audioTrack.codec.uppercase()} (${audioTrack.channels}ch, ${audioTrack.sampleRate / 1000}kHz)"
@@ -304,7 +425,7 @@ class DebugStatsModal(
         debugStatValueViews["audio_codec"]?.text = audioCodecStr
 
         val driftSign = if (stats.avDriftMs >= 0) "+" else ""
-        debugStatValueViews["av_drift"]?.text = String.format(Locale.US, "%s%.1f ms", driftSign, stats.avDriftMs)
+        setValue("av_drift", String.format(Locale.US, "%s%.1f ms", driftSign, stats.avDriftMs), stats.videoStatsAgeMs)
 
         val spatialName = when (stats.spatialAudioMode) {
             1 -> "Binaural (5.1/7.1)"
@@ -337,10 +458,10 @@ class DebugStatsModal(
         }
         debugStatValueViews["source"]?.text = srcText
 
-        debugStatValueViews["net_speed"]?.text = String.format(Locale.US, "%.2f MB/s", stats.netMBs)
-        debugStatValueViews["buffer_queue"]?.text = "${stats.queueDepth} packets"
-        debugStatValueViews["fetch_latency"]?.text = String.format(Locale.US, "%.1f ms", stats.netLastFetchMs)
-        debugStatValueViews["blocks"]?.text = "${stats.netBlocksFetched} / ${stats.netBlocksDiscarded}"
+        setValue("net_speed", String.format(Locale.US, "%.2f MB/s", stats.netMBs), stats.networkStatsAgeMs)
+        setValue("buffer_queue", "${stats.queueDepth} packets", stats.networkStatsAgeMs)
+        setValue("fetch_latency", String.format(Locale.US, "%.1f ms", stats.netLastFetchMs), stats.networkStatsAgeMs)
+        setValue("blocks", "${stats.netBlocksFetched} / ${stats.netBlocksDiscarded}", stats.networkStatsAgeMs)
         debugStatValueViews["seek_latency"]?.text = "${stats.seekLatencyMs} ms"
 
         // 4. Sistema & Hardware
@@ -357,5 +478,63 @@ class DebugStatsModal(
         val chargingStr = if (isCharging) " [Charging]" else ""
         debugStatValueViews["battery"]?.text = "$batteryPercent%$chargingStr"
         debugStatValueViews["app_version"]?.text = "${BuildConfig.VERSION_NAME} (${if (isDebuggable) "Debug" else "Release"})"
+
+        updateCharts(stats)
+    }
+
+    /**
+     * F5: acumula a amostra corrente nos históricos rolantes e redesenha os 5 gráficos.
+     */
+    private fun updateCharts(stats: NativeDebugStats) {
+        val bufferHealthSeconds = if (stats.videoFps > 0f) stats.queueDepth / stats.videoFps else 0f
+
+        bottleneckHistory.pushCapped(BottleneckStageAnalyzer.analyze(stats))
+        bufferHealthHistory.pushCapped(bufferHealthSeconds)
+        netMbsHistory.pushCapped(stats.netMBs)
+        avDriftHistory.pushCapped(stats.avDriftMs)
+        gpuTimeHistory.pushCapped(stats.smoothedGpuTimeMs)
+
+        charts["g1"]?.timeline = bottleneckHistory.map { TimelineSample(it) }
+
+        charts["g2"]?.let { chart ->
+            chart.yMax = (stats.histBuckets.maxOrNull()?.takeIf { it > 0 } ?: 1).toFloat()
+            chart.series = listOf(
+                ChartSeries(stats.histBuckets.map { it.toFloat() }, VoidChart.COLOR_NETWORK, SeriesStyle.BARS)
+            )
+        }
+
+        charts["g3"]?.let { chart ->
+            chart.yMin = 0f
+            chart.yMax = 1f // ignorado: as duas séries usam min/maxValueOverride próprios
+            val bufferMax = (bufferHealthHistory.maxOrNull()?.takeIf { it > 0f } ?: 1f)
+            val netMax = (netMbsHistory.maxOrNull()?.takeIf { it > 0f } ?: 1f)
+            chart.series = listOf(
+                ChartSeries(bufferHealthHistory.toList(), VoidChart.COLOR_HEALTHY, SeriesStyle.AREA, 0f, bufferMax),
+                ChartSeries(netMbsHistory.toList(), VoidChart.COLOR_SECONDARY_LINE, SeriesStyle.LINE, 0f, netMax)
+            )
+        }
+
+        charts["g4"]?.let { chart ->
+            val bound = max(40f, avDriftHistory.maxOfOrNull { kotlin.math.abs(it) } ?: 40f)
+            chart.yMin = -bound
+            chart.yMax = bound
+            chart.showZeroLine = true
+            chart.series = listOf(ChartSeries(avDriftHistory.toList(), VoidChart.COLOR_PRESENTATION, SeriesStyle.LINE))
+            chart.markers = listOf(
+                ChartMarker(40f, "+40ms", VoidTheme.colorTextSecondary),
+                ChartMarker(-40f, "-40ms", VoidTheme.colorTextSecondary)
+            )
+        }
+
+        charts["g5"]?.let { chart ->
+            // Mesma formula de gpu_budget_ms do QualityController (rust/media-logic/src/quality.rs)
+            // — frame_interval_ms * 0.85 — pra mostrar a mesma linha de orcamento que rege a malha.
+            val frameIntervalMs = if (stats.refreshRate > 0f) 1000f / stats.refreshRate else 11.1f
+            val budgetMs = frameIntervalMs * 0.85f
+            chart.yMin = 0f
+            chart.yMax = max(budgetMs * 1.5f, gpuTimeHistory.maxOrNull() ?: budgetMs)
+            chart.series = listOf(ChartSeries(gpuTimeHistory.toList(), VoidChart.COLOR_NETWORK, SeriesStyle.LINE))
+            chart.markers = listOf(ChartMarker(budgetMs, "budget", VoidTheme.colorAccent))
+        }
     }
 }

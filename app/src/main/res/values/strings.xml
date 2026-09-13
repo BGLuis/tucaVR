@@ -454,6 +454,7 @@
     <string name="debug_stats_section_network_buffer">Network &amp; Buffer</string>
     <string name="debug_stats_section_system">System &amp; Hardware</string>
 
+    <string name="debug_stats_label_bottleneck">Bottleneck Stage</string>
     <string name="debug_stats_label_resolution">Resolution / Codec</string>
     <string name="debug_stats_label_fps">Framerate / Display</string>
     <string name="debug_stats_label_dropped_frames">Dropped Frames</string>
@@ -463,6 +464,17 @@
     <string name="debug_stats_label_render_scale">Render Scale / Foveation</string>
     <string name="debug_stats_label_graphics_backend">Graphics Backend</string>
     <string name="debug_stats_label_video_decoder">Video Decoder</string>
+    <string name="debug_stats_label_gpu_time">GPU Time</string>
+    <string name="debug_stats_label_quality">Adaptive Quality</string>
+    <string name="debug_stats_label_upscaling">Upscaling</string>
+    <string name="debug_stats_label_drawcalls">Draw Calls / Triangles</string>
+
+    <string name="debug_stats_section_charts">Charts</string>
+    <string name="debug_stats_chart_g1_title">Pipeline stage (60s)</string>
+    <string name="debug_stats_chart_g2_title">Frame time histogram (buckets: &lt;11.1/16.7/20/33.3/50/100/250/≥250ms)</string>
+    <string name="debug_stats_chart_g3_title">Buffer health (s) / Network (MB/s)</string>
+    <string name="debug_stats_chart_g4_title">A/V drift (ms)</string>
+    <string name="debug_stats_chart_g5_title">GPU time vs. budget (ms)</string>
 
     <string name="debug_stats_label_audio_format">Audio Codec / Channels</string>
     <string name="debug_stats_label_av_drift">A/V Drift</string>

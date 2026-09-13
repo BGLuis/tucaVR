@@ -1,6 +1,7 @@
 use ffmpeg_next as ffmpeg;
 use ffmpeg::format::context::{Input, StreamIo};
 use protocols::prefetch::{PrefetchReader, PrefetchStats, SharedRangeSource};
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
 // 12MB em vez do default 4MB: a 8K/60fps HEVC (~63Mbps / 7.85MB/s), 4MB cobre só ~0.5s por bloco.
@@ -71,6 +72,9 @@ pub struct Demuxer {
     // envolvido, ver roteamento em `new()`). Capturado ANTES de o
     // PrefetchReader ser engolido pelo `StreamIo` opaco do ffmpeg-next.
     pub network_stats: Option<Arc<PrefetchStats>>,
+    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): pacotes corrompidos/invalidos
+    // descartados silenciosamente por read_packet() abaixo — antes disto, invisivel.
+    pub corrupt_packets: Arc<AtomicU64>,
 }
 
 impl Demuxer {
@@ -183,6 +187,7 @@ impl Demuxer {
             audio_streams,
             subtitle_streams,
             network_stats,
+            corrupt_packets: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -309,7 +314,10 @@ impl Demuxer {
                 Err(ffmpeg::Error::Eof) => return ReadPacketOutcome::Eof,
                 // Pacote corrompido isolado — o demuxer consegue
                 // resincronizar (mesmo comportamento do PacketIter interno).
-                Err(ffmpeg::Error::InvalidData) => continue,
+                Err(ffmpeg::Error::InvalidData) => {
+                    self.corrupt_packets.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    continue;
+                }
                 Err(e) => return ReadPacketOutcome::Error(e.to_string()),
             }
         }

@@ -91,13 +91,22 @@ else
 fi
 echo "graphics_backend_effective: $GRAPHICS_BACKEND" >> "$MANIFEST_FILE"
 
-# 3. Telemetria e Crashes salvos no app
-echo "Puxando séries temporais CSV e relatórios de crash..."
+# 3. Telemetria, log de eventos (F6) e relatórios de crash salvos no app — um único pull
+# recursivo já traz os CSVs de série temporal, os session-*-events.log (F6) e os crash-*.txt,
+# todos no mesmo diretório remoto.
+echo "Puxando séries temporais CSV, log de eventos e relatórios de crash..."
 REMOTE_DEBUG_DIR="/sdcard/Android/data/$PACKAGE/files/debug"
 mkdir -p "$OUT_DIR/telemetry"
 if "${ADB[@]}" shell test -d "$REMOTE_DEBUG_DIR" 2>/dev/null; then
     "${ADB[@]}" pull "$REMOTE_DEBUG_DIR" "$OUT_DIR/telemetry/" >/dev/null 2>&1 || true
     echo "  Arquivos de telemetria transferidos com sucesso."
+
+    # D-05/F0: schema_version é a 1ª coluna de cada CSV — registra o(s) valor(es) encontrado(s)
+    # no manifesto, e quantos arquivos de log de eventos (F6) vieram junto.
+    SCHEMA_VERSIONS=$(find "$OUT_DIR/telemetry" -iname "session-*.csv" -exec sh -c 'head -1 "$1" | cut -d, -f1' _ {} \; 2>/dev/null | sort -u | paste -sd, -)
+    EVENT_LOG_COUNT=$(find "$OUT_DIR/telemetry" -iname "session-*-events.log" 2>/dev/null | wc -l | tr -d ' ')
+    echo "csv_schema_versions: ${SCHEMA_VERSIONS:-nenhum_csv_encontrado}" >> "$MANIFEST_FILE"
+    echo "event_log_files: $EVENT_LOG_COUNT" >> "$MANIFEST_FILE"
 else
     echo "  Pasta de telemetria remota vazia ou inexistente."
 fi

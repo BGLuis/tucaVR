@@ -755,6 +755,96 @@ pub extern "C" fn get_network_blocks_discarded() -> u64 {
     }
 }
 
+/// F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): falhas de fetch de rede — antes so
+/// visiveis no logcat.
+#[no_mangle]
+pub extern "C" fn get_network_fetch_failures() -> u64 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_network_fetch_failures(),
+        Err(_) => 0,
+    }
+}
+
+/// F4: blocos especulativos consecutivos desde o ultimo seek nao-sequencial.
+#[no_mangle]
+pub extern "C" fn get_network_sequential_streak() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_network_sequential_streak(),
+        Err(_) => 0,
+    }
+}
+
+/// F4: 1 se o read-ahead especulativo esta suspenso por throttle termico, 0 caso contrario.
+#[no_mangle]
+pub extern "C" fn get_network_throttled() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_network_throttled(),
+        Err(_) => 0,
+    }
+}
+
+/// F4: profundidade da fila de audio entre demux e decode — espelho de
+/// get_video_queue_depth() acima, antes invisivel de fora.
+#[no_mangle]
+pub extern "C" fn get_audio_queue_depth() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_audio_queue_depth(),
+        Err(_) => 0,
+    }
+}
+
+/// F4: contador de erros de decode de video (ver HwDecoder::decode_packet), por sessao.
+#[no_mangle]
+pub extern "C" fn get_decode_error_count() -> u64 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_decode_error_count(),
+        Err(_) => 0,
+    }
+}
+
+/// F4: contador de pacotes corrompidos descartados pelo demuxer, por sessao.
+#[no_mangle]
+pub extern "C" fn get_demux_corrupt_packet_count() -> u64 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_demux_corrupt_packet_count(),
+        Err(_) => 0,
+    }
+}
+
+/// F4: contador cumulativo de underruns de audio (canal vazio quando o Oboe pediu amostras).
+#[no_mangle]
+pub extern "C" fn get_audio_underrun_count() -> u64 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_audio_underrun_count(),
+        Err(_) => 0,
+    }
+}
+
+/// F4: fases do load_at() — antes so no logcat, agora consultaveis. 0 antes do primeiro load.
+#[no_mangle]
+pub extern "C" fn get_load_phase_demux_open_ms() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_load_phase_demux_open_ms(),
+        Err(_) => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_load_phase_decoder_ready_ms() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_load_phase_decoder_ready_ms(),
+        Err(_) => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_load_phase_audio_ready_ms() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_load_phase_audio_ready_ms(),
+        Err(_) => 0,
+    }
+}
+
 // Debug (docs/DEBUGGING.md): duracao do ultimo seek concluido, em ms.
 #[no_mangle]
 pub extern "C" fn get_last_seek_latency_ms() -> u32 {
@@ -874,6 +964,15 @@ pub extern "C" fn take_last_playback_error() -> *mut std::os::raw::c_char {
 #[no_mangle]
 pub extern "C" fn get_playback_error_count() -> i32 {
     ERROR_RING.count() as i32
+}
+
+/// F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): todos os erros do anel circular (não
+/// destrutivo, ao contrário de `take_last_playback_error`), serializados como TSV — uma linha
+/// por erro, ver `ErrorRingBuffer::all_as_tsv`. Retorna string vazia (nunca nulo) se não há
+/// erros. Retorno precisa ser liberado com `free_rust_string`.
+#[no_mangle]
+pub extern "C" fn get_all_playback_errors() -> *mut std::os::raw::c_char {
+    string_to_c_char(ERROR_RING.all_as_tsv())
 }
 
 /// T6.4: inicia playback de um arquivo via SMB. Recebe host/share/caminho/

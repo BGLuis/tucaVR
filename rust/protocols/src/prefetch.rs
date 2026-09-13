@@ -47,7 +47,7 @@
 
 use std::io::{self, Read, Seek, SeekFrom};
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -83,6 +83,16 @@ pub struct PrefetchStats {
     /// Quantos prefetches em voo foram descartados por um seek real (ver
     /// ensure_cache) — alto = padrao de acesso pouco sequencial.
     pub blocks_discarded: AtomicU64,
+    /// F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): falhas de fetch
+    /// (io::Error do RangeSource) — antes so logadas (log::warn!), nunca contadas.
+    pub fetch_failures: AtomicU64,
+    /// F4: espelho de PrefetchReader::sequential_streak (campo privado, single-thread na
+    /// thread de demux) para leitura externa via bridge/C++ — alto = leitura sequencial
+    /// confirmada, 0 = acabou de sofrer um seek nao-sequencial.
+    pub sequential_streak: AtomicU32,
+    /// F4: espelho de PrefetchReader::is_throttled() (0/1) — throttle termico suspende
+    /// read-ahead especulativo (T14.1/T14.2).
+    pub throttled: AtomicU32,
 }
 
 /// Melhor esforco pra elevar a prioridade da thread de I/O de rede acima do
@@ -245,6 +255,7 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
                                 worker_stats.blocks_fetched.fetch_add(1, Ordering::Relaxed);
                                 worker_stats.last_fetch_us.store(fetch_start.elapsed().as_micros() as u64, Ordering::Relaxed);
                             } else if let Err(ref e) = result {
+                                worker_stats.fetch_failures.fetch_add(1, Ordering::Relaxed);
                                 log::warn!("vrplayer-prefetch-io: falha ao buscar bloco offset={offset}: {e}");
                             }
                             if result_tx.send(result).is_err() {
@@ -292,7 +303,10 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
     }
 
     fn is_throttled(&self) -> bool {
-        self.thermal_throttled.unwrap_or_else(is_thermal_throttle_active)
+        let throttled = self.thermal_throttled.unwrap_or_else(is_thermal_throttle_active);
+        // F4: espelha pra leitura externa (bridge/C++) — ver PrefetchStats::throttled.
+        self.stats.throttled.store(throttled as u32, Ordering::Relaxed);
+        throttled
     }
 
     fn cache_hit(&self, pos: u64) -> bool {
@@ -331,6 +345,8 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
             self.block_size
         };
         self.sequential_streak = self.sequential_streak.saturating_add(1);
+        // F4: espelha pra leitura externa (bridge/C++) — ver PrefetchStats::sequential_streak.
+        self.stats.sequential_streak.store(self.sequential_streak, Ordering::Relaxed);
         size
     }
 
@@ -389,6 +405,7 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
                 let _ = self.result_rx.recv();
             }
             self.sequential_streak = 0;
+            self.stats.sequential_streak.store(0, Ordering::Relaxed);
             self.cmd_tx.send(Command::Fetch(pos, self.seek_block_size)).map_err(|_| worker_gone_err())?;
             let result = self.result_rx.recv().map_err(|_| worker_gone_err())?;
             self.install(result?);

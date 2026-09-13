@@ -394,6 +394,14 @@ class VRActivity : NativeActivity() {
         isDebugStatsEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.DEBUG_STATS_PANEL)
         nativeSetDebugStatsEnabled(isDebugStatsEnabled)
 
+        // F8 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): ANR e crash nativo (inclusive o
+        // abort do ART no teardown Vulkan) não deixam rastro no handler de exceções da JVM
+        // abaixo — ApplicationExitInfo é a única fonte pra essas duas classes de morte do
+        // processo. Custo: uma leitura no arranque, zero em runtime.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            com.tucavr.debug.ApplicationExitInfoReporter.checkAndReport(this)
+        }
+
         // N6: Captura de crashes não tratados para arquivo de diagnóstico com session ID
         val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { thread, throwable ->
@@ -409,7 +417,13 @@ class VRActivity : NativeActivity() {
                         writer.println("Session ID: $sid")
                         writer.println("Timestamp: ${System.currentTimeMillis()}")
                         writer.println("Thread: ${thread.name} (ID: ${thread.id})")
-                        writer.println("Current Source: $currentPlaybackSource")
+                        // D-03 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): NUNCA interpolar
+                        // currentPlaybackSource diretamente — o toString() sintetizado da data
+                        // class de servidor (Smb/Ftp/Sftp/etc.) inclui o campo `password` em
+                        // claro, e este arquivo sai do device via scripts/collect-debug.sh.
+                        val (sourceType, sourceRedacted) = com.tucavr.debug.DebugTelemetryExporter
+                            .extractSourceInfo(currentPlaybackSource)
+                        writer.println("Current Source: $sourceType $sourceRedacted")
                         writer.println("StackTrace:")
                         throwable.printStackTrace(writer)
                     }
@@ -427,6 +441,7 @@ class VRActivity : NativeActivity() {
         stopPlayback()
 
         DebugTelemetryExporter.onSessionEnded()
+        debugEventLogWriter.close()
         debugReceiver?.let { unregisterReceiver(it) }
         debugReceiver = null
 
@@ -858,6 +873,9 @@ class VRActivity : NativeActivity() {
 
             val parsedStats = com.tucavr.debug.DebugStatsParser.parse(text)
             if (parsedStats != null) {
+                if (sid != null) {
+                    activity.debugEventLogWriter.recordSample(sid, parsedStats, System.currentTimeMillis())
+                }
                 activity.runOnUiThread {
                     activity.controlsPresentation?.updateQualityBadge(parsedStats.qualityLevel, parsedStats.qualityReason)
                     activity.maybeWarnQualityOverload(parsedStats.qualityReason)
@@ -886,6 +904,10 @@ class VRActivity : NativeActivity() {
 
     @Volatile
     private var sessionStartRealtimeMs: Long = 0L
+
+    // F6 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): log de eventos por sessão — ver
+    // com.tucavr.debug.DebugEventLog.
+    private val debugEventLogWriter by lazy { com.tucavr.debug.DebugEventLogWriter(this) }
 
     private fun startSession(source: PlaybackSource) {
         val sessionId = java.util.UUID.randomUUID().toString().replace("-", "").take(8)
@@ -1078,6 +1100,7 @@ class VRActivity : NativeActivity() {
             sessionStartRealtimeMs = 0L
             VRLog.activeSessionId = null
             DebugTelemetryExporter.onSessionEnded()
+        debugEventLogWriter.close()
             lastMediaProgressCurrent = 0f
             lastMediaProgressTotal = 0f
             nativeStopVideo()

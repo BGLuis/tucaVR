@@ -89,43 +89,69 @@ num APK de release, então não é uma superfície de ataque nesse caso.
 
 ## 3. Modal de Estatísticas Técnicas ("Stats for Nerds")
 
-O app possui um modal completo de diagnóstico em tempo real ("Stats for Nerds"), acessível através do botão de estatísticas na barra de controles do player quando ativado em **Configurações > Avançado > Estatísticas Técnicas**.
+O app possui um modal completo de diagnóstico em tempo real ("Stats for Nerds"), acessível através do botão de estatísticas na barra de controles do player quando ativado em **Configurações > Avançado > Estatísticas Técnicas**. Esta seção foi reescrita após a triagem de
+`docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md` (fases F0–F8): contrato único
+de campos, frescor por grupo, atribuição de estágio, 5 gráficos e log de
+eventos.
 
 ### Ativação e Zero Overhead
 - **Configurações**: O toggle `DEBUG_STATS_PANEL` persiste a preferência do usuário e notifica instantaneamente o motor nativo via JNI (`nativeSetDebugStatsEnabled`).
 - **Zero Overhead**: Quando desativado, o motor nativo (C++/Rust) realiza early-exit com flag atômica (`g_debugStatsEnabled`), eliminando chamadas JNI periódicas, alocações de string e coletas de métricas no loop de render.
 
+### Contrato único de campos (F0)
+
+Cada campo do wire tem exatamente **2** pontos de definição — não mais:
+1. **`native/src/debug_stats.h`** (`struct DebugStats` + `SerializeDebugStats`) — dono da forma do wire TSV (`chave\tvalor`), populado em `native/src/vr_player_input_vulkan.h` (caminho Vulkan; o caminho GLES em `vr_player_app.cpp` não recebe campos novos — ver "O que não fazer" abaixo).
+2. **`app/.../debug/DebugStats.kt`** (`DebugStatsParser`) — único parser do TSV; `NativeDebugStats` é a representação estruturada usada por `DebugTelemetryExporter` (CSV) e `DebugStatsModal` (UI). Não existe mais um segundo `when(key)` reimplementando o parsing no exportador.
+
+Para adicionar um campo novo: uma entrada em `DebugStats` (native), uma linha em `SerializeDebugStats`, um campo em `NativeDebugStats` + um `when` em `DebugStatsParser`, e (se for para o CSV) uma posição em `CSV_HEADER` — bump o `SCHEMA_VERSION` sempre que a forma do CSV mudar (D-05).
+
+### Frescor por grupo (D-04)
+
+Quatro campos (`video_stats_age_ms`, `network_stats_age_ms`, `audio_stats_age_ms`, `render_stats_age_ms`) dizem há quanto tempo o grupo correspondente não recebe um dado genuinamente novo — `render` é sempre 0 (computado a cada frame no próprio loop de render). No modal, um valor com idade acima de ~2 amostras (~200ms a 10Hz) aparece esmaecido com a idade ao lado, em vez de parecer uma leitura atual quando não é.
+
 ### Seções e Métricas Disponíveis
 
-1. **Vídeo & Renderização**:
-   - **Resolução / Codec**: Resolução nativa do vídeo e codec decodificado (ex.: `3840x2160 (HEVC)`).
-   - **Taxa de Quadros / Display**: `decoded_fps` (taxa de decodificação real na thread Rust) / `output_fps` (taxa de entrega no compositor) e taxa de atualização do headset (`90 Hz`).
-   - **Quadros Descartados**: FPS e percentual de frames descartados (`dropped_fps`).
-   - **Stutter / Freeze**: Contadores cumulativos de stutters (>20ms) e freezes (>250ms) no loop de render.
-   - **Jitter de Vídeo**: Variação do intervalo entre quadros (`jitter_ms`) e tempo decorrido desde a última mudança do buffer (`frame_gap_ms`).
-   - **Modo de Tela / Estéreo**: Projeção e layout 3D (ex.: `Sphere180`, `OverUnder [Swap]`).
-   - **Escala de Resolução / Foveation**: Fator de escala da viewport e status de Foveated Rendering.
-   - **Backend Gráfico**: Backend ativo (`VULKAN` ou `GLES`).
+1. **Vídeo & Renderização** (`DebugStatsModal.kt`, seção `debug_stats_section_video_render`):
+   - **Estágio do Gargalo** (`bottleneck` — F5, primeira linha do painel): `NONE`/`NETWORK`/`PRESENTATION`, derivado de `frame_gap_ms` + `video_q_depth` (ver [`BottleneckStageAnalyzer`](../app/src/main/java/com/tucavr/debug/BottleneckStageAnalyzer.kt)) — responde "onde travou" sem reconstruir a leitura à mão.
+   - **Resolução / Codec**, **Decodificador de Vídeo**, **Modo de Tela / Estéreo**, **Backend Gráfico**: metadados estáticos da sessão.
+   - **Framerate / Display** e **Quadros Descartados**: `decoded_fps` / `output_fps` / `dropped_fps`, com idade do grupo vídeo.
+   - **Stutter / Freeze**: contadores cumulativos do **loop de render** (>20ms / >250ms) — não confundir com stall de vídeo (D-02, ver Log de Eventos abaixo), que mede a apresentação de frames de vídeo, não o loop.
+   - **Jitter de Vídeo**, **Escala de Resolução / Foveation**.
+   - **Tempo de GPU**, **Qualidade Adaptativa**, **Upscaling**, **Draw Calls / Triângulos** (F5 G5): 7 campos que já eram coletados e trafegavam no wire, mas nunca apareciam no modal antes de F5.
 
-2. **Áudio & Sincronização**:
-   - **Codec de Áudio / Canais**: Formato de áudio e configuração de canais (ex.: `AAC (6ch, 48kHz)`).
-   - **Desvio A/V (Drift)**: Diferença de sincronização entre áudio e vídeo em milissegundos (`av_drift_ms`).
-   - **Áudio Espacial**: Modo de espacialização (`Binaural (5.1/7.1)`, `Ambisonics`, `Off`) e rastreamento de cabeça (`HeadTrack`).
-   - **Faixa de Áudio**: Índice da faixa ativa e total de faixas disponíveis.
-   - **Legendas / Sincronia**: Faixa de legenda ativa e offset de sincronização aplicado.
+2. **Áudio & Sincronização**: codec/canais, **Desvio A/V** (`av_drift_ms`, agora EMA — ver F4 abaixo), áudio espacial, faixa e legendas.
 
-3. **Rede & Buffer**:
-   - **Origem / Protocolo**: Tipo de fonte (`Local Storage`, `SMB`, `FTP`, `SFTP`, `NFS`, `DLNA`, `HTTP(S)`).
-   - **Taxa de Rede**: Throughput recente de leitura em MB/s (`net_mbs`).
-   - **Fila de Buffer**: Quantidade de pacotes/blocos na fila de decodificação (`queue_depth`).
-   - **Latência por Bloco**: Tempo de busca do último bloco em milissegundos (`net_last_fetch_ms`).
-   - **Blocos**: Total de blocos de rede buscados e descartados após seeks (`net_blocks_fetched` / `net_blocks_discarded`).
-   - **Latência do Último Seek**: Tempo total medido no último seek (`seek_latency_ms`).
+3. **Rede & Buffer**: origem/protocolo, taxa de rede, fila de buffer, latência por bloco, blocos buscados/descartados, latência do último seek.
 
-4. **Sistema & Hardware**:
-   - **Status Térmico**: Nível de estresse térmico reportado pelo sistema (`Normal`, `Light`, `Moderate`, `Severe`, `Critical`).
-   - **Bateria**: Nível de carga percentual e status de carregamento.
-   - **Versão do App**: Versão do aplicativo e tipo de build (`Debug` / `Release`).
+4. **Sistema & Hardware**: status térmico, bateria, versão do app.
+
+5. **Gráficos** (F5 — `debug_stats_section_charts`, primeiro `View` com `onDraw` customizado do projeto, ver [`VoidChart.kt`](../app/src/main/java/com/tucavr/designsystem/VoidChart.kt)):
+
+   | # | Gráfico | Responde | Fonte |
+   |---|---|---|---|
+   | G1 | Estágio do pipeline (60s) | Faixas coloridas por `bottleneck_stage`, histórico rolante acumulado em `DebugStatsModal` a partir das amostras de ~10Hz — nenhum campo novo no wire. | Verde=saudável, azul=`NETWORK`, vermelho=`PRESENTATION`. |
+   | G2 | Histograma de frame time | 8 buckets cumulativos (`hist_bucket_0..7`, bordas em 11.1/16.7/20/33.3/50/100/250ms) acumulados a cada frame no loop de render — captura a distribuição a 90Hz sem transportar 90 amostras/s. | `native/src/vr_player_app_vulkan.cpp` (`kFrameTimeHistogramEdgesMs`). |
+   | G3 | Saúde do buffer (s) / Rede (MB/s) | `video_q_depth / video_fps` (derivado no cliente) sobreposto a `net_mbs` — paridade com o "segundos de buffer" de players convencionais; `queue_depth` em pacotes não dizia nada por si só. | Kotlin (`DebugStatsModal.updateCharts`). |
+   | G4 | Drift A/V (ms) | `av_drift_ms` com banda de referência ±40ms. | Wire (EMA, ver F4). |
+   | G5 | GPU time vs. orçamento (ms) | `smoothed_gpu_time_ms` contra a mesma fórmula de orçamento do `QualityController` (`frame_interval_ms × 0.85`, `rust/media-logic/src/quality.rs`). | Wire + fórmula espelhada no cliente. |
+
+   Reprodutível offline (sem headset) a partir de qualquer CSV coletado: `scripts/plot-session.py` gera os mesmos 5 gráficos no PC (ver seção 6).
+
+### Log de Eventos (F6)
+
+Além da série a 1Hz do CSV (que não vê um stutter de 20ms — são 90 frames por amostra), cada sessão grava `session-<id>-events.log` em paralelo ao CSV, com uma linha por episódio: `STUTTER`, `FREEZE`, `VIDEO_STALL_ENDED` (D-02 — duração aproximada pelo pico de `frame_gap_ms` da amostra anterior ao fim do stall) e `QUALITY_TRANSITION` (nível anterior/novo + motivo), cada um com o `bottleneck_stage` e um snapshot do pipeline (`frame_ms`, `gpu_ms`, `queue`, `net_mbs`, `drift_ms`, `quality`, `scale`) no momento detectado. Lógica pura e testável em [`DebugEventLog.kt`](../app/src/main/java/com/tucavr/debug/DebugEventLog.kt) (`detectEvents`/`formatEventLine`); a escrita em arquivo fica em `DebugEventLogWriter`, acionado do mesmo `updateDebugHud` que já alimenta o CSV.
+
+### Fluxo de triagem recomendado
+
+1. Cheque **Estágio do Gargalo** primeiro — se `NETWORK`/`PRESENTATION` aparecer com frequência, já aponta o lado certo do pipeline.
+2. Vá ao gráfico correspondente: G1 para ver quando/quanto tempo cada estágio dominou; G2 se a suspeita é uma cauda de frame time (não a média); G3/G4/G5 para os sinais clássicos de rede/sync/GPU.
+3. Consulte o log de eventos (`session-<id>-events.log`) para o snapshot exato do pipeline no início/fim de cada episódio — é o que permite reconstruir "o que estava acontecendo quando travou" sem grep manual no logcat.
+
+### O que não fazer (ver relatório, seção 2.6)
+- Não instrumentar o caminho GLES (`vr_player_app.cpp`) — backend congelado até 1.0, já falsifica `renderResolutionScale`/`displayRefreshRate` e não tem GPU timing.
+- Não portar o painel para C++ — já é Kotlin ponta a ponta, e o custo de composição do quad é o mesmo.
+- Não realimentar o `QualityController` com os contadores de `XR_META_performance_metrics` (seção 10) — a especificação Khronos proíbe isso explicitamente; são diagnóstico, nunca entrada de controle.
 
 Implementação: `native/src/vr_player_app.cpp` / `vr_player_input_vulkan.h`
 chamam `VRActivity.updateDebugHud(texto)` via JNI no mesmo throttle que já
@@ -179,9 +205,13 @@ O aplicativo suporta gravação periódica de métricas de desempenho em arquivo
 - Os arquivos são gravados em `/sdcard/Android/data/com.tucavr/files/debug/session-<sessionId>-<timestamp>.csv`.
 
 ### Formato do Arquivo CSV
+
+A 1ª coluna é sempre `schema_version` (D-05) — incrementada sempre que o formato muda de forma incompatível; ver `DebugTelemetryExporter.SCHEMA_VERSION` para o histórico de versões e o que cada uma adicionou. Cabeçalho completo (versão atual):
 ```csv
-timestamp_ms,session_id,elapsed_s,backend,screen_mode,video_status,video_fps,decoded_fps,output_fps,dropped_fps,jitter_ms,net_mbs,video_q_depth,seek_ms,smoothed_fps,frame_ms,stutter_count,freeze_count,thermal_level,scale,source_type,source_redacted
+schema_version,timestamp_ms,session_id,elapsed_s,backend,screen_mode,stereo_layout,polar_180,swap_eyes,video_status,frame_gap_ms,video_fps,decoded_fps,output_fps,dropped_fps,jitter_ms,net_mbs,video_q_depth,seek_ms,smoothed_fps,frame_ms,gpu_time_ms,smoothed_gpu_time_ms,upscaling_mode,upscaling_sharpness,mqsr_enabled,stutter_count,freeze_count,thermal_level,scale,refresh_rate,av_drift_ms,net_last_fetch_ms,net_blocks_fetched,net_blocks_discarded,foveation,spatial_audio,head_tracking,speed,volume,audio_track,audio_track_count,sub_track,sub_offset_ms,quality_level,quality_reason,draw_call_count,triangle_count,video_stall_count,video_stats_age_ms,network_stats_age_ms,audio_stats_age_ms,render_stats_age_ms,network_fetch_failures,network_sequential_streak,network_throttled,audio_queue_depth,decode_error_count,demux_corrupt_packet_count,audio_underrun_count,load_phase_demux_open_ms,load_phase_decoder_ready_ms,load_phase_audio_ready_ms,perf_metrics_valid_mask,perf_app_cpu_frametime_ms,perf_app_gpu_frametime_ms,perf_motion_to_photon_latency_ms,perf_compositor_cpu_frametime_ms,perf_compositor_gpu_frametime_ms,perf_compositor_dropped_frame_count,perf_compositor_spacewarp_mode,perf_device_cpu_util_average,perf_device_cpu_util_worst,perf_device_gpu_util,hist_bucket_0,hist_bucket_1,hist_bucket_2,hist_bucket_3,hist_bucket_4,hist_bucket_5,hist_bucket_6,hist_bucket_7,source_type,source_redacted
 ```
+
+Ao lado de cada CSV, a mesma sessão grava `session-<id>-events.log` (seção 3, Log de Eventos) — ver `scripts/plot-session.py` para regenerar os 5 gráficos do modal a partir do CSV, no PC, sem headset.
 
 > [!IMPORTANT]
 > **Privacidade:** Senhas e tokens em URLs de rede (SMB, FTP, SFTP, HTTP) são sanitizados automaticamente (`redactSource`) antes da gravação no CSV ou logcat.
@@ -238,3 +268,19 @@ adb logcat -d -b main -b crash -s \
 - `VUID-vkDestroyDevice-device-05137` / `VUID-vkDestroyCommandPool-...`: Objetos Vulkan destruídos fora de ordem ou após o `VkDevice` (**C-03**).
 - `WindowLeaked` com `VRPresentation`: `Presentation` ou `VirtualDisplay` não foram liberadas no `onDestroy` da Activity (**R-01**).
 - Comportamento de reabertura suja (ex: tocar mídia anterior ou nascer em 3D incorreto): Variáveis estáticas retidas no processo em cache sem reset na reinicialização (**C-04**). Consulte [`docs/reports/CICLO-DE-VIDA-CRASH-FECHAMENTO.md`](./reports/CICLO-DE-VIDA-CRASH-FECHAMENTO.md) para a análise detalhada.
+
+## 10. `XR_META_performance_metrics` (F3)
+
+Extensão OpenXR habilitada em `CreateVulkanInstanceAndDevice` (`state.supportsPerfMetrics`), com o **sistema** de métricas habilitado separadamente logo após a criação da sessão (`SetupPerformanceMetrics`, `vr_player_app_vulkan.cpp`) via `xrSetPerformanceMetricsStateMETA` — habilitar só a extensão não é suficiente; sem essa segunda chamada, `xrQueryPerformanceMetricsCounterMETA` devolve `XR_ERROR_VALIDATION_FAILURE` para qualquer contador.
+
+10 contadores amostrados a ~1Hz (`PollPerformanceMetrics`, mesma cadência do poll de FPS/rede): `app/cpu_frametime`, `app/gpu_frametime`, `app/motion_to_photon_latency`, `compositor/cpu_frametime`, `compositor/gpu_frametime`, `compositor/dropped_frame_count`, `compositor/spacewarp_mode`, `device/cpu_utilization_average`, `device/cpu_utilization_worst`, `device/gpu_utilization` — per-core (`device/cpuN_utilization`) deliberadamente fora de escopo (custaria um campo por núcleo do XR2 Gen 2 pelo mesmo diagnóstico já coberto pelos agregados average/worst).
+
+`perf_metrics_valid_mask` no wire/CSV é um bitmask — bit N = 1 quando o contador N trouxe um valor válido nesta amostra. Um contador "não suportado" ou momentaneamente indisponível fica com o bit **zerado**, nunca aparece como "0" ambíguo (D-04). `compositor/spacewarp_mode` é o contador de maior valor para stalls de vídeo com o loop de render aparentemente saudável: se o compositor estava reprojetando, o `frame_ms` do app não mostra isso.
+
+**Restrição da especificação**: estes contadores são diagnóstico — nunca devem alimentar o `QualityController`. Os intervalos de amostragem são definidos pelo runtime, não pelo app.
+
+## 11. `ApplicationExitInfo`, Thermal Headroom e ADPF (F8)
+
+- **`ApplicationExitInfo`** ([`ApplicationExitInfoReporter.kt`](../app/src/main/java/com/tucavr/debug/ApplicationExitInfoReporter.kt)): lido uma vez no arranque (`VRActivity.onCreate`, API 30+). Cobre `REASON_ANR` e `REASON_CRASH_NATIVE` — as duas classes de morte do processo que o `UncaughtExceptionHandler` da JVM (seção 5) não vê, por serem falhas fora do runtime Java. Grava `exit-info-<timestamp>.txt` em `getExternalFilesDir("debug")` e, a partir da API 31, o tombstone bruto em protobuf (`.pb`, não parseado — usar ferramenta externa). Deduplica via `SharedPreferences` (só reporta eventos mais recentes que o último processado).
+- **Thermal Headroom contínuo**: `ThermalMonitor.getThermalHeadroom(forecastSeconds)` (API 30+) complementa o nível térmico discreto 0–5 já existente com uma previsão de 0.0 (sem throttle) a 1.0 (limiar SEVERE). Devolve `null` se chamado mais rápido que ~1Hz (a própria API devolve `NaN` nesse caso) — não pollar por frame.
+- **ADPF** (`SetupAdpfSession`/`ReportAdpfWorkDuration`, `vr_player_app_vulkan.cpp`, API 33+): diferente dos itens acima, é uma API de **escrita** — o app declara a duração de frame alvo e reporta a real a cada frame; o sistema ajusta escalonamento/frequência de CPU/GPU. Os símbolos `APerformanceHint_*` são resolvidos via `dlopen("libandroid.so")`/`dlsym` (não chamada direta: o clang do NDK recusa compilar uma chamada direta a um símbolo `__INTRODUCED_IN(33)` com `minSdk=26`, mesmo dentro de um `if` checando a API em runtime — mesmo padrão já usado neste arquivo para funções de extensão OpenXR via `xrGetInstanceProcAddr`). Sessão criada na mesma thread já registrada como crítica ao runtime XR (`xrSetAndroidApplicationThreadKHR`) — este app não tem uma render thread separada.

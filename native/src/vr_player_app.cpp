@@ -2539,7 +2539,9 @@ public:
                 stats.subtitleTrackIndex = get_subtitle_track();
                 stats.subtitleOffsetMs = (int32_t)get_subtitle_offset_ms();
 
-                char hudBuffer[2048];
+                // Mantido em paridade de tamanho com o caminho Vulkan (vr_player_input_vulkan.h)
+                // apenas por segurança de buffer — GLES não recebe campos novos (backend congelado).
+                char hudBuffer[4096];
                 SerializeDebugStats(stats, hudBuffer, sizeof(hudBuffer));
 
                 const xrJava* java = GetContext();

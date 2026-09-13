@@ -139,13 +139,31 @@ pub struct PlaybackController {
     // getters no fim do impl. `None`/valores zerados antes do primeiro load.
     network_stats: Option<Arc<protocols::prefetch::PrefetchStats>>,
     video_queue: Option<crossbeam_channel::Sender<TaggedPacket>>,
+    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): audio_tx sempre existiu (ver
+    // load_at), mas so video_queue guardava o clone pra observabilidade — a fila de audio
+    // era invisivel de fora, sem jeito de saber se o gargalo era decode/consumo de audio.
+    audio_queue: Option<crossbeam_channel::Sender<TaggedPacket>>,
     frames_output: Option<Arc<std::sync::atomic::AtomicU64>>,
     frames_dropped: Option<Arc<std::sync::atomic::AtomicU64>>,
+    // F4: decode_packet() descartava o Result inteiro (`let _ = ...`) — sem isto, um erro de
+    // decode persistente era indistinguivel de "sem erro nenhum" na telemetria. Mesmo padrao
+    // de frames_output/frames_dropped acima: vem de HwDecoder::metrics(), reatribuido a cada
+    // load_at() (contador por sessao, nao cumulativo entre arquivos).
+    decode_errors: Option<Arc<std::sync::atomic::AtomicU64>>,
+    // F4: pacote corrompido/invalido descartado silenciosamente pelo demuxer (ver demuxer.rs).
+    // Mesmo padrao de network_stats acima: vem de Demuxer::corrupt_packets, por sessao.
+    demux_corrupt_packets: Option<Arc<std::sync::atomic::AtomicU64>>,
     // Conexao de rede reaproveitavel entre seeks no mesmo path (so SFTP por
     // enquanto) — ver `crate::demuxer::ConnectionCache`.
     connection_cache: crate::demuxer::ConnectionCache,
     seek_started_at: Arc<Mutex<Option<Instant>>>,
     seek_latency_ms: Arc<AtomicU32>,
+    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): fases do load_at() — antes so
+    // logadas (log_info!), agora tambem consultaveis sem grep no logcat. Mesmo padrao de
+    // seek_latency_ms acima: sobrevivem a troca de sessao, sobrescritas a cada load_at().
+    load_phase_demux_open_ms: Arc<AtomicU32>,
+    load_phase_decoder_ready_ms: Arc<AtomicU32>,
+    load_phase_audio_ready_ms: Arc<AtomicU32>,
     av_drift_ms: Arc<AtomicI32>,
     // Legendas (SRT / WebVTT / ASS / PGS — Fase 0.2/0.3)
     subtitle_entries: Option<Vec<media_logic::subtitle::SubtitleEntry>>,
@@ -177,11 +195,17 @@ impl PlaybackController {
             auto_paused: false,
             network_stats: None,
             video_queue: None,
+            audio_queue: None,
             frames_output: None,
             frames_dropped: None,
+            decode_errors: None,
+            demux_corrupt_packets: None,
             connection_cache: crate::demuxer::ConnectionCache::default(),
             seek_started_at: Arc::new(Mutex::new(None)),
             seek_latency_ms: Arc::new(AtomicU32::new(0)),
+            load_phase_demux_open_ms: Arc::new(AtomicU32::new(0)),
+            load_phase_decoder_ready_ms: Arc::new(AtomicU32::new(0)),
+            load_phase_audio_ready_ms: Arc::new(AtomicU32::new(0)),
             av_drift_ms: Arc::new(AtomicI32::new(0)),
             subtitle_entries: None,
             ass_subtitle: None,
@@ -243,7 +267,9 @@ impl PlaybackController {
         self.current_path = Some(path.to_string());
         let mut demuxer = Demuxer::open(path, Some(&mut self.connection_cache)).map_err(|e| e.to_string())?;
         crate::log_info!("load_at: demux_open={}ms", load_started_at.elapsed().as_millis());
+        self.load_phase_demux_open_ms.store(load_started_at.elapsed().as_millis().min(u128::from(u32::MAX)) as u32, Ordering::Relaxed);
         self.network_stats = demuxer.network_stats.clone();
+        self.demux_corrupt_packets = Some(demuxer.corrupt_packets.clone());
         demuxer.select_audio_track(self.desired_audio_track);
         self.audio_track_count = demuxer.audio_streams.len();
         self.duration = demuxer.input_context.duration() as f64 / 1_000_000.0;
@@ -354,10 +380,12 @@ impl PlaybackController {
         }
 
         let video_decoder = HwDecoder::new_configured_and_started(mime, &format, window.as_ref()).map_err(|e| e.to_string())?;
-        let (frames_output, frames_dropped) = video_decoder.metrics();
+        let (frames_output, frames_dropped, decode_errors) = video_decoder.metrics();
         self.frames_output = Some(frames_output);
         self.frames_dropped = Some(frames_dropped);
+        self.decode_errors = Some(decode_errors);
         crate::log_info!("load_at: decoder_ready={}ms", load_started_at.elapsed().as_millis());
+        self.load_phase_decoder_ready_ms.store(load_started_at.elapsed().as_millis().min(u128::from(u32::MAX)) as u32, Ordering::Relaxed);
 
         let mut sps_pps = None;
         if let Some(ed) = demuxer.get_video_extradata() {
@@ -383,6 +411,7 @@ impl PlaybackController {
             }
         }
         crate::log_info!("load_at: audio_ready={}ms", load_started_at.elapsed().as_millis());
+        self.load_phase_audio_ready_ms.store(load_started_at.elapsed().as_millis().min(u128::from(u32::MAX)) as u32, Ordering::Relaxed);
 
         if let Ok(mut out_guard) = self.audio_output.lock() {
             // Reaplica o volume persistido (o AudioOutput e recriado a cada load).
@@ -428,6 +457,9 @@ impl PlaybackController {
         // fora da thread de demux — nao envia nada por este handle, ver
         // get_video_queue_depth().
         self.video_queue = Some(video_tx.clone());
+        // F4: mesmo motivo do video_queue acima — a fila de audio era invisivel de fora
+        // antes disto, ver get_audio_queue_depth().
+        self.audio_queue = Some(audio_tx.clone());
 
         let (command_tx, command_rx) = crossbeam_channel::unbounded::<DemuxCommand>();
 
@@ -564,6 +596,9 @@ impl PlaybackController {
                         } else {
                             data.to_vec()
                         };
+                        // F4: erros de decode ja incrementam decode_errors DENTRO de
+                        // decode_packet (ver HwDecoder) — o Result aqui so controla o fluxo
+                        // (released_any), como antes; o `let _` nao esconde mais um contador.
                         let _ = video_decoder.decode_packet(
                             &frame_data,
                             pts,
@@ -580,8 +615,19 @@ impl PlaybackController {
                                 }
                                 let master_clock = sync_v.get_master_clock();
                                 let delay = pts_sec - master_clock;
-                                let drift_ms = (-delay * 1000.0).clamp(i32::MIN as f64, i32::MAX as f64) as i32;
-                                av_drift_v.store(drift_ms, Ordering::Relaxed);
+                                let inst_drift_ms = (-delay * 1000.0).clamp(i32::MIN as f64, i32::MAX as f64);
+                                // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): EMA em vez de
+                                // sobrescrita crua — mesmo fator 0.9/0.1 usado por smoothedFps/
+                                // smoothedGpuTimeMs no lado C++, reduz ruido quadro-a-quadro sem
+                                // esconder uma tendencia real de dessincronia. A idade do valor (se
+                                // o decode parou de vez) e responsabilidade de F1 (videoStatsAgeMs),
+                                // nao desta media.
+                                let prev_drift_ms = av_drift_v.load(Ordering::Relaxed) as f64;
+                                let smoothed_drift_ms = prev_drift_ms * 0.9 + inst_drift_ms * 0.1;
+                                av_drift_v.store(
+                                    smoothed_drift_ms.clamp(i32::MIN as f64, i32::MAX as f64) as i32,
+                                    Ordering::Relaxed
+                                );
                                 if delay > 0.0 && delay < 1.0 {
                                     std::thread::sleep(std::time::Duration::from_secs_f64(delay));
                                 }
@@ -766,6 +812,17 @@ impl PlaybackController {
         }
     }
 
+    /// F4: contador cumulativo de underruns de audio (ver AudioOutput::get_underrun_count) —
+    /// 0 se ainda nao ha AudioOutput (antes do primeiro load_at(), ou lock contestado).
+    pub fn get_audio_underrun_count(&self) -> u64 {
+        if let Ok(ao) = self.audio_output.lock() {
+            if let Some(audio) = ao.as_ref() {
+                return audio.get_underrun_count();
+            }
+        }
+        0
+    }
+
     pub fn get_volume(&self) -> f32 {
         self.volume
     }
@@ -881,6 +938,30 @@ impl PlaybackController {
         self.video_queue.as_ref().map(|s| s.len() as u32).unwrap_or(0)
     }
 
+    /// F4: espelho de get_video_queue_depth() para a fila de áudio — antes invisível de
+    /// fora (só video_queue guardava o clone do Sender pra observabilidade).
+    pub fn get_audio_queue_depth(&self) -> u32 {
+        self.audio_queue.as_ref().map(|s| s.len() as u32).unwrap_or(0)
+    }
+
+    /// F4: contador de erros de decode (ver HwDecoder::decode_packet) — por sessão, 0 antes
+    /// do primeiro load_at().
+    pub fn get_decode_error_count(&self) -> u64 {
+        self.decode_errors
+            .as_ref()
+            .map(|c| c.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
+    /// F4: contador de pacotes corrompidos descartados pelo demuxer (ver Demuxer::read_packet)
+    /// — por sessão, 0 antes do primeiro load_at().
+    pub fn get_demux_corrupt_packet_count(&self) -> u64 {
+        self.demux_corrupt_packets
+            .as_ref()
+            .map(|c| c.load(Ordering::Relaxed))
+            .unwrap_or(0)
+    }
+
     /// Debug (docs/DEBUGGING.md) — bytes recebidos da rede pelo
     /// PrefetchReader da fonte atual, soma cumulativa. 0 para arquivo local
     /// ou `http://` puro (sem PrefetchReader envolvido). O C++ amostra isto
@@ -911,9 +992,39 @@ impl PlaybackController {
         self.network_stats.as_ref().map(|s| s.blocks_discarded.load(Ordering::Relaxed)).unwrap_or(0)
     }
 
+    /// F4: falhas de fetch do PrefetchReader (io::Error do RangeSource) — antes so logadas.
+    pub fn get_network_fetch_failures(&self) -> u64 {
+        self.network_stats.as_ref().map(|s| s.fetch_failures.load(Ordering::Relaxed)).unwrap_or(0)
+    }
+
+    /// F4: blocos especulativos consecutivos desde o ultimo seek nao-sequencial — alto = leitura
+    /// sequencial confirmada, 0 = acabou de sofrer um seek (ver PrefetchReader::sequential_streak).
+    pub fn get_network_sequential_streak(&self) -> u32 {
+        self.network_stats.as_ref().map(|s| s.sequential_streak.load(Ordering::Relaxed)).unwrap_or(0)
+    }
+
+    /// F4: 1 se o read-ahead especulativo esta suspenso por throttle termico (T14.1/T14.2), 0
+    /// caso contrario ou antes do primeiro load_at().
+    pub fn get_network_throttled(&self) -> u32 {
+        self.network_stats.as_ref().map(|s| s.throttled.load(Ordering::Relaxed)).unwrap_or(0)
+    }
+
     // Duracao do ultimo seek concluido (pedido -> pre-roll terminou), em ms. 0 antes do primeiro.
     pub fn get_last_seek_latency_ms(&self) -> u32 {
         self.seek_latency_ms.load(Ordering::Relaxed)
+    }
+
+    /// F4: fases do load_at() — ver comentario no campo. Todos 0 antes do primeiro load_at().
+    pub fn get_load_phase_demux_open_ms(&self) -> u32 {
+        self.load_phase_demux_open_ms.load(Ordering::Relaxed)
+    }
+
+    pub fn get_load_phase_decoder_ready_ms(&self) -> u32 {
+        self.load_phase_decoder_ready_ms.load(Ordering::Relaxed)
+    }
+
+    pub fn get_load_phase_audio_ready_ms(&self) -> u32 {
+        self.load_phase_audio_ready_ms.load(Ordering::Relaxed)
     }
 
     // Drift A/V (master_clock - video_pts) do ultimo frame decodificado, em ms.

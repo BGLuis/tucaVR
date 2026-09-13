@@ -266,7 +266,15 @@ impl QualityController {
         let pacing_budget_ms = frame_interval_ms * 1.20f32;
         let gpu_budget_ms = frame_interval_ms * 0.85f32;
         let gpu_healthy_ms = frame_interval_ms * 0.65f32;
-        let pacing_healthy_ms = frame_interval_ms * 0.95f32;
+        // D-01 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): um frame perfeitamente pago
+        // mede EXATAMENTE frame_interval_ms (delta de predictedDisplayTime — ver
+        // vr_player_app_vulkan.cpp:5018-5020), nunca menos. Um limiar abaixo de 1.0x
+        // (era 0.95) tornava `sample.frame_time_ms < pacing_healthy_ms` sempre falso em
+        // produção, zerando `stable_healthy_samples` a cada amostra saudável e impedindo
+        // qualquer promoção de qualidade depois de uma degradação. A folga fica do lado do
+        // estresse (pacing_budget_ms, acima); aqui só uma margem de arredondamento de ponto
+        // flutuante acima de 1.0x.
+        let pacing_healthy_ms = frame_interval_ms * 1.05f32;
 
         // 1. Verificação Térmica Direta (Hard Thermal Constraints):
         if sample.thermal_level >= 4 && self.current_level < QualityLevel::Emergency {
@@ -703,6 +711,41 @@ mod tests {
             QualityAction::Upgrade(QualityLevel::High, QualityTransitionReason::StableRecovery)
         );
         assert_eq!(controller.current_level(), QualityLevel::High);
+    }
+
+    #[test]
+    fn test_exact_cadence_frame_time_classifies_as_healthy_and_upgrades() {
+        // D-01: um frame medido EXATAMENTE em 1000/target_fps (o caso real de produção — ver
+        // vr_player_app_vulkan.cpp:5018-5020) precisa contar como saudável, não só um valor
+        // artificialmente baixo como o `frame_time_ms: 10.0` do teste acima. Sem a correção
+        // (pacing_healthy_ms = 0.95x), esta amostra nunca promovia e `quality_level` ficava
+        // travado após qualquer degradação — exatamente o que a telemetria real mostrou
+        // (frame_ms = 11.1 em 100% das amostras, MEDIUM por 49.6s de uma sessão de 52.76s).
+        for target_fps in [72.0f32, 90.0f32, 120.0f32] {
+            let mut controller = QualityController::new();
+            controller.set_manual_level(QualityLevel::Medium);
+
+            let exact_cadence_sample = QualitySample {
+                thermal_level: 0,
+                smoothed_gpu_time_ms: 1.0,
+                frame_time_ms: 1000.0 / target_fps,
+                dropped_fps: 0.0,
+                target_fps,
+            };
+
+            let mut last_action = QualityAction::Maintain;
+            for _ in 0..QualityController::UPGRADE_STABILITY_REQUIRED_SAMPLES {
+                last_action = controller.evaluate(&exact_cadence_sample);
+            }
+
+            assert_eq!(
+                last_action,
+                QualityAction::Upgrade(QualityLevel::High, QualityTransitionReason::StableRecovery),
+                "frame_time_ms == 1000/{target_fps} deveria promover apos {} amostras saudaveis",
+                QualityController::UPGRADE_STABILITY_REQUIRED_SAMPLES
+            );
+            assert_eq!(controller.current_level(), QualityLevel::High);
+        }
     }
 
     #[test]

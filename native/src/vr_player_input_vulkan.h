@@ -860,7 +860,55 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             stats.subtitleTrackIndex = get_subtitle_track();
             stats.subtitleOffsetMs = (int32_t)get_subtitle_offset_ms();
 
-            char hudBuffer[2048];
+            // F1 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): D-02 e D-04.
+            stats.videoStallCount = state.videoStallCount;
+            auto freshnessNow = std::chrono::steady_clock::now();
+            stats.videoStatsAgeMs = state.videoFreshness.UpdateAndGetAgeMs(state.lastDecodedFrameCount, freshnessNow);
+            stats.networkStatsAgeMs = state.networkFreshness.UpdateAndGetAgeMs(stats.netBlocksFetched, freshnessNow);
+            // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): coleta nova na origem.
+            stats.networkFetchFailures = get_network_fetch_failures();
+            stats.networkSequentialStreak = get_network_sequential_streak();
+            stats.networkThrottled = get_network_throttled();
+            stats.audioQueueDepth = get_audio_queue_depth();
+            stats.decodeErrorCount = get_decode_error_count();
+            stats.demuxCorruptPacketCount = get_demux_corrupt_packet_count();
+            stats.audioUnderrunCount = get_audio_underrun_count();
+            stats.loadPhaseDemuxOpenMs = get_load_phase_demux_open_ms();
+            stats.loadPhaseDecoderReadyMs = get_load_phase_decoder_ready_ms();
+            stats.loadPhaseAudioReadyMs = get_load_phase_audio_ready_ms();
+
+            // F3: XR_META_performance_metrics — amostrado a 1Hz por PollPerformanceMetrics
+            // (chamado no mesmo bloco de RenderFrame), lido aqui a cada populate do HUD.
+            stats.perfMetricsValidMask = state.perfMetricsValidMask;
+            stats.perfAppCpuFrametimeMs = state.perfAppCpuFrametimeMs;
+            stats.perfAppGpuFrametimeMs = state.perfAppGpuFrametimeMs;
+            stats.perfMotionToPhotonLatencyMs = state.perfMotionToPhotonLatencyMs;
+            stats.perfCompositorCpuFrametimeMs = state.perfCompositorCpuFrametimeMs;
+            stats.perfCompositorGpuFrametimeMs = state.perfCompositorGpuFrametimeMs;
+            stats.perfCompositorDroppedFrameCount = state.perfCompositorDroppedFrameCount;
+            stats.perfCompositorSpacewarpMode = state.perfCompositorSpacewarpMode;
+            stats.perfDeviceCpuUtilAverage = state.perfDeviceCpuUtilAverage;
+            stats.perfDeviceCpuUtilWorst = state.perfDeviceCpuUtilWorst;
+            stats.perfDeviceGpuUtil = state.perfDeviceGpuUtil;
+
+            // F5 G2: histograma de frame time (contadores cumulativos desde o inicio da sessao).
+            stats.histBucket0 = state.frameTimeHistogram[0];
+            stats.histBucket1 = state.frameTimeHistogram[1];
+            stats.histBucket2 = state.frameTimeHistogram[2];
+            stats.histBucket3 = state.frameTimeHistogram[3];
+            stats.histBucket4 = state.frameTimeHistogram[4];
+            stats.histBucket5 = state.frameTimeHistogram[5];
+            stats.histBucket6 = state.frameTimeHistogram[6];
+            stats.histBucket7 = state.frameTimeHistogram[7];
+            // audioUnderrunCount NAO serve de sinal de frescor (zero avancos e o caminho
+            // saudavel esperado, ao contrario de netBlocksFetched/frames decodificados) —
+            // continua 0 ate um contador de audio genuinamente continuo existir no wire.
+            stats.audioStatsAgeMs = 0;
+            stats.renderStatsAgeMs = 0; // computado a cada frame no loop de render — sempre atual
+
+            // 4096 (era 2048): F1/F3/F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md) somam
+            // ~20 campos aos 44 atuais; ver g_debugStatsTruncated em debug_stats.h.
+            char hudBuffer[4096];
             SerializeDebugStats(stats, hudBuffer, sizeof(hudBuffer));
 
             JNIEnv* env = nullptr;

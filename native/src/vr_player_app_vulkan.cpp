@@ -32,6 +32,9 @@
 #include <media/NdkImageReader.h>
 #include <math.h>
 #include <unistd.h>
+#include <dlfcn.h>
+#include <android/api-level.h>
+#include <android/performance_hint.h>
 
 #include <array>
 #include <atomic>
@@ -196,6 +199,18 @@ extern "C" {
     extern uint64_t get_network_blocks_fetched();
     extern uint64_t get_network_blocks_discarded();
     extern uint32_t get_last_seek_latency_ms(); // debug, ver docs/DEBUGGING.md
+    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): coleta nova na origem — contadores
+    // que ja existiam no lado Rust mas nao tinham exposicao FFI nem campo no wire.
+    extern uint64_t get_network_fetch_failures();
+    extern uint32_t get_network_sequential_streak();
+    extern uint32_t get_network_throttled();
+    extern uint32_t get_audio_queue_depth();
+    extern uint64_t get_decode_error_count();
+    extern uint64_t get_demux_corrupt_packet_count();
+    extern uint64_t get_audio_underrun_count();
+    extern uint32_t get_load_phase_demux_open_ms();
+    extern uint32_t get_load_phase_decoder_ready_ms();
+    extern uint32_t get_load_phase_audio_ready_ms();
     // UX de feedback (loading/play-pause), paridade com o caminho GLES —
     // ver comentario em rust/bridge/src/lib.rs sobre spawn_loading.
     extern uint32_t get_playback_is_loading();
@@ -312,6 +327,15 @@ constexpr uint32_t kModalTexHeight = 768;
 // Metricas de performance (debug, ver docs/DEBUGGING.md).
 constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz
 constexpr float kFreezeThresholdMs = 250.0f; // stall claro, nao so reprojection
+
+// F5 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md), G2: bordas do histograma de frame
+// time. 11.1 = cadencia alvo a 90Hz, 20 = kStutterThresholdMs, 250 = kFreezeThresholdMs —
+// os tres marcos que o relatorio pede desenhados no grafico; os demais so dao granularidade
+// na faixa intermediaria. 7 bordas -> 8 buckets (o ultimo pega tudo acima de 250ms).
+constexpr int kFrameTimeHistogramBucketCount = 8;
+constexpr float kFrameTimeHistogramEdgesMs[kFrameTimeHistogramBucketCount - 1] = {
+    11.1f, 16.7f, 20.0f, 33.3f, 50.0f, 100.0f, 250.0f
+};
 constexpr float kVideoStallThresholdMs = 500.0f; // decode/rede travado (ver AppState.msSinceLastVideoFrame)
 
 // ScreenMode e helpers estao centralizados em screen_mode.h
@@ -473,6 +497,30 @@ struct VideoFrame {
     uint64_t lastUsedFrame = 0;
 };
 
+// D-04 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): sinal de frescor por grupo de campos.
+// Em vez de assumir que uma leitura e "atual" so porque foi buscada agora, rastreia a ultima
+// vez que um contador MONOTONICO do grupo de fato mudou de valor — se `net_blocks_fetched`
+// (por exemplo) fica parado por varias amostras, isso significa "sem dado novo ha Xms",
+// independente da causa (contencao de lock no Rust ou o pipeline de fato ter parado). Sem
+// isto, um valor congelado (visto na telemetria real: jitter_ms/av_drift_ms/net_last_fetch_ms
+// identicos por 34 amostras seguidas) parece uma medicao atual quando nao e.
+struct FreshnessTracker {
+    uint64_t lastValue = 0;
+    std::chrono::steady_clock::time_point lastChangeTs{};
+    bool initialized = false;
+
+    uint32_t UpdateAndGetAgeMs(uint64_t currentValue, std::chrono::steady_clock::time_point now) {
+        if (!initialized || currentValue != lastValue) {
+            lastValue = currentValue;
+            lastChangeTs = now;
+            initialized = true;
+            return 0;
+        }
+        auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastChangeTs).count();
+        return (uint32_t)std::max<int64_t>(0, ageMs);
+    }
+};
+
 struct AppState {
     android_app* app = nullptr;
 
@@ -585,6 +633,64 @@ struct AppState {
     bool upscalingEnabled = false;
     bool supportsMqsr = false;
     bool supportsPerfMetrics = false;
+    // F3 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): XR_META_performance_metrics.
+    // `supportsPerfMetrics` acima so significa que a EXTENSAO foi habilitada — o SISTEMA de
+    // metricas precisa ser habilitado a parte via xrSetPerformanceMetricsStateMETA (ver
+    // SetupPerformanceMetrics), ou toda query devolve XR_ERROR_VALIDATION_FAILURE.
+    PFN_xrSetPerformanceMetricsStateMETA pfnSetPerformanceMetricsStateMETA = nullptr;
+    PFN_xrQueryPerformanceMetricsCounterMETA pfnQueryPerformanceMetricsCounterMETA = nullptr;
+    bool perfMetricsStateEnabled = false;
+    // XrPath resolvidos uma vez em SetupPerformanceMetrics (xrStringToPath), reusados a cada
+    // query a 1Hz — ver PollPerformanceMetrics.
+    XrPath perfPathAppCpuFrametime = XR_NULL_PATH;
+    XrPath perfPathAppGpuFrametime = XR_NULL_PATH;
+    XrPath perfPathMotionToPhotonLatency = XR_NULL_PATH;
+    XrPath perfPathCompositorCpuFrametime = XR_NULL_PATH;
+    XrPath perfPathCompositorGpuFrametime = XR_NULL_PATH;
+    XrPath perfPathCompositorDroppedFrameCount = XR_NULL_PATH;
+    XrPath perfPathCompositorSpacewarpMode = XR_NULL_PATH;
+    XrPath perfPathDeviceCpuUtilAverage = XR_NULL_PATH;
+    XrPath perfPathDeviceCpuUtilWorst = XR_NULL_PATH;
+    XrPath perfPathDeviceGpuUtil = XR_NULL_PATH;
+    // Resultados da ultima query bem-sucedida (1Hz, ver PollPerformanceMetrics) + bitmask de
+    // validade (D-04: "nao suportado" tem que ser distinto de zero — bit 0 = contador nao
+    // trouxe nenhum valor valido nesta amostra, nao "o valor e zero"). Especificacao PROIBE
+    // usar estes contadores para governar comportamento (ver 8.1 do relatorio) — diagnostico
+    // apenas, nunca entrada do QualityController.
+    uint32_t perfMetricsValidMask = 0;
+    float perfAppCpuFrametimeMs = 0.0f;
+    float perfAppGpuFrametimeMs = 0.0f;
+    float perfMotionToPhotonLatencyMs = 0.0f;
+    float perfCompositorCpuFrametimeMs = 0.0f;
+    float perfCompositorGpuFrametimeMs = 0.0f;
+    uint32_t perfCompositorDroppedFrameCount = 0;
+    uint32_t perfCompositorSpacewarpMode = 0;
+    float perfDeviceCpuUtilAverage = 0.0f;
+    float perfDeviceCpuUtilWorst = 0.0f;
+    float perfDeviceGpuUtil = 0.0f;
+
+    // F8 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, 8.2): ADPF — API 33+
+    // (android_get_device_api_level(), verificado em runtime; NAO e telemetria, e uma API de
+    // ESCRITA: o app declara a duracao de frame alvo e reporta a real, o sistema ajusta
+    // escalonamento/frequencia de CPU/GPU. Ao contrario dos contadores de XR_META_performance_
+    // metrics (8.1), esta e FEITA para governar comportamento do SO — nao confundir as duas.
+    APerformanceHintManager* adpfManager = nullptr;
+    APerformanceHintSession* adpfSession = nullptr;
+    bool supportsAdpf = false;
+    float adpfLastTargetRefreshRate = 0.0f;
+    // Resolvidos via dlopen/dlsym (nao chamada direta): o header declara o prototipo, mas o
+    // simbolo so existe em libandroid.so a partir da API 33 — chamar direto faz o clang do NDK
+    // recusar compilar com minSdk 26 (marca "unavailable"), mesmo dentro de um if() em
+    // runtime. Mesmo padrao ja usado neste arquivo para funcoes de extensao OpenXR
+    // (LoadXrFunction/xrGetInstanceProcAddr), so que aqui a fonte e libandroid.so via dlsym.
+    using PFN_APerformanceHint_getManager = APerformanceHintManager* (*)();
+    using PFN_APerformanceHint_createSession = APerformanceHintSession* (*)(APerformanceHintManager*, const pid_t*, size_t, int64_t);
+    using PFN_APerformanceHint_updateTargetWorkDuration = int (*)(APerformanceHintSession*, int64_t);
+    using PFN_APerformanceHint_reportActualWorkDuration = int (*)(APerformanceHintSession*, int64_t);
+    PFN_APerformanceHint_getManager adpfGetManager = nullptr;
+    PFN_APerformanceHint_createSession adpfCreateSession = nullptr;
+    PFN_APerformanceHint_updateTargetWorkDuration adpfUpdateTargetWorkDuration = nullptr;
+    PFN_APerformanceHint_reportActualWorkDuration adpfReportActualWorkDuration = nullptr;
     uint32_t videoWidth = 0;
     uint32_t videoHeight = 0;
     VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;
@@ -867,6 +973,9 @@ struct AppState {
     float lastFrameMs = 0.0f;
     int stutterCount = 0;
     int freezeCount = 0;
+    // F5 G2: contagens cumulativas por bucket (ver kFrameTimeHistogramEdgesMs) — acumulado a
+    // cada frame no proprio loop de render, exportado no wire so a 10Hz do HUD.
+    uint32_t frameTimeHistogram[kFrameTimeHistogramBucketCount] = {};
     std::chrono::steady_clock::time_point lastFrameTimestamp{};
     bool hasLastFrameTimestamp = false;
 
@@ -879,6 +988,19 @@ struct AppState {
     // decode/rede, nao na renderizacao.
     float msSinceLastVideoFrame = 0.0f;
     bool videoStallLogged = false;
+
+    // D-02 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): contador cumulativo de episodios
+    // de stall de video JA CONCLUIDOS (msSinceLastVideoFrame excedeu kVideoStallThresholdMs e
+    // um novo frame chegou depois). Distinto de stutterCount/freezeCount acima, que medem o
+    // LOOP DE RENDER — um stall de video pode ficar invisivel atras de um loop "saudavel" a
+    // 90fps redesenhando o ultimo frame (ver UpdateVideoFrame, onde isto incrementa).
+    uint32_t videoStallCount = 0;
+
+    // D-04: frescor por grupo — video usa state.lastDecodedFrameCount (contador monotonico
+    // do lado Rust, ja buscado a 1Hz pelo poll de decodedFps abaixo); rede usa
+    // stats.netBlocksFetched (buscado a cada populate do HUD, ver vr_player_input_vulkan.h).
+    FreshnessTracker videoFreshness;
+    FreshnessTracker networkFreshness;
 
     // Judder de video: msSinceLastVideoFrame (acima) so mostra o gap ATUAL,
     // amostrado no HUD a ~10Hz — um video pode nunca passar de, digamos,
@@ -1051,7 +1173,12 @@ void CreateXrInstance(AppState& state) {
     state.supportsPerfMetrics = isExtensionSupported(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME);
     if (state.supportsPerfMetrics) {
         extensions.push_back(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME);
-        LOGI("OpenXR: Extensão XR_META_performance_metrics detectada e habilitada");
+        // F3 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): mensagem corrigida — isto so diz
+        // que a EXTENSAO foi negociada com o runtime. O SISTEMA de metricas em si so liga
+        // depois de xrSetPerformanceMetricsStateMETA (ver SetupPerformanceMetrics, chamado
+        // apos a sessao existir); antes a mensagem "detectada e habilitada" sugeria as duas
+        // coisas juntas, quando nenhuma query jamais era feita.
+        LOGI("OpenXR: Extensão XR_META_performance_metrics detectada (sistema de métricas habilitado separadamente após a criação da sessão)");
     }
 
     // Fase 0.3 Seção 2: Passthrough / Mixed Reality (XR_FB_passthrough).
@@ -1545,6 +1672,163 @@ void SetupPassthrough(AppState& state) {
 
     state.passthroughActive = false;
     LOGI("Passthrough: XrPassthroughFB + layer criados (pausados)");
+}
+
+// F3 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): resolve os function pointers e os
+// XrPath dos 11 contadores (secao 8.1 do relatorio; per-core cpuN_utilization deliberadamente
+// fora — custaria mais um campo por nucleo do XR2 Gen 2 pelo mesmo diagnostico ja coberto por
+// cpu_utilization_average/worst), e habilita o SISTEMA de metricas via
+// xrSetPerformanceMetricsStateMETA (distinto de so ter a extensao negociada — ver o log
+// corrigido acima). Chamado uma vez, depois que a XrSession existe.
+void SetupPerformanceMetrics(AppState& state) {
+    if (!state.supportsPerfMetrics) return;
+
+    state.pfnSetPerformanceMetricsStateMETA =
+        LoadXrFunction<PFN_xrSetPerformanceMetricsStateMETA>(state.instance, "xrSetPerformanceMetricsStateMETA");
+    state.pfnQueryPerformanceMetricsCounterMETA =
+        LoadXrFunction<PFN_xrQueryPerformanceMetricsCounterMETA>(state.instance, "xrQueryPerformanceMetricsCounterMETA");
+
+    if (state.pfnSetPerformanceMetricsStateMETA == nullptr || state.pfnQueryPerformanceMetricsCounterMETA == nullptr) {
+        LOGE("PerfMetrics: falha ao resolver xrSetPerformanceMetricsStateMETA/xrQueryPerformanceMetricsCounterMETA — desabilitando");
+        state.supportsPerfMetrics = false;
+        return;
+    }
+
+    xrStringToPath(state.instance, "/app/cpu_frametime", &state.perfPathAppCpuFrametime);
+    xrStringToPath(state.instance, "/app/gpu_frametime", &state.perfPathAppGpuFrametime);
+    xrStringToPath(state.instance, "/app/motion_to_photon_latency", &state.perfPathMotionToPhotonLatency);
+    xrStringToPath(state.instance, "/compositor/cpu_frametime", &state.perfPathCompositorCpuFrametime);
+    xrStringToPath(state.instance, "/compositor/gpu_frametime", &state.perfPathCompositorGpuFrametime);
+    xrStringToPath(state.instance, "/compositor/dropped_frame_count", &state.perfPathCompositorDroppedFrameCount);
+    xrStringToPath(state.instance, "/compositor/spacewarp_mode", &state.perfPathCompositorSpacewarpMode);
+    xrStringToPath(state.instance, "/device/cpu_utilization_average", &state.perfPathDeviceCpuUtilAverage);
+    xrStringToPath(state.instance, "/device/cpu_utilization_worst", &state.perfPathDeviceCpuUtilWorst);
+    xrStringToPath(state.instance, "/device/gpu_utilization", &state.perfPathDeviceGpuUtil);
+
+    XrPerformanceMetricsStateMETA enableState{XR_TYPE_PERFORMANCE_METRICS_STATE_META};
+    enableState.enabled = XR_TRUE;
+    XrResult r = state.pfnSetPerformanceMetricsStateMETA(state.session, &enableState);
+    if (XR_FAILED(r)) {
+        LOGE("PerfMetrics: xrSetPerformanceMetricsStateMETA falhou (%d) — contadores ficarao invalidos", r);
+        state.perfMetricsStateEnabled = false;
+        return;
+    }
+    state.perfMetricsStateEnabled = true;
+    LOGI("PerfMetrics: sistema de metricas habilitado via xrSetPerformanceMetricsStateMETA");
+}
+
+// Consulta um contador e devolve true (setando out_value) se o runtime devolveu um valor
+// valido nesta amostra — ver XR_PERFORMANCE_METRICS_COUNTER_*_VALUE_VALID_BIT_META. "Nao
+// suportado"/sem dado precisa ficar distinto de zero (D-04); o chamador usa o retorno pra
+// setar/limpar o bit correspondente em AppState::perfMetricsValidMask.
+static bool QueryPerfCounterFloat(AppState& state, XrPath path, float& out_value) {
+    if (path == XR_NULL_PATH) return false;
+    XrPerformanceMetricsCounterMETA counter{XR_TYPE_PERFORMANCE_METRICS_COUNTER_META};
+    if (XR_FAILED(state.pfnQueryPerformanceMetricsCounterMETA(state.session, path, &counter))) return false;
+    if (!(counter.counterFlags & XR_PERFORMANCE_METRICS_COUNTER_FLOAT_VALUE_VALID_BIT_META)) return false;
+    out_value = counter.floatValue;
+    return true;
+}
+
+static bool QueryPerfCounterUint(AppState& state, XrPath path, uint32_t& out_value) {
+    if (path == XR_NULL_PATH) return false;
+    XrPerformanceMetricsCounterMETA counter{XR_TYPE_PERFORMANCE_METRICS_COUNTER_META};
+    if (XR_FAILED(state.pfnQueryPerformanceMetricsCounterMETA(state.session, path, &counter))) return false;
+    if (!(counter.counterFlags & XR_PERFORMANCE_METRICS_COUNTER_UINT_VALUE_VALID_BIT_META)) return false;
+    out_value = counter.uintValue;
+    return true;
+}
+
+// Amostrado a ~1Hz (ver chamada dentro do bloco decodedFpsPollAccumMs em RenderFrame) — a
+// especificacao define o intervalo de medicao como responsabilidade do runtime, entao
+// consultar a cada frame nao traria dado mais fresco, so mais chamadas. IMPORTANTE (8.1 do
+// relatorio): estes 11 contadores sao SOMENTE DIAGNOSTICO — a especificacao proibe usa-los
+// para governar comportamento do app. NUNCA alimentar QualityController com estes valores.
+void PollPerformanceMetrics(AppState& state) {
+    if (!state.supportsPerfMetrics || !state.perfMetricsStateEnabled) return;
+
+    uint32_t mask = 0;
+    if (QueryPerfCounterFloat(state, state.perfPathAppCpuFrametime, state.perfAppCpuFrametimeMs)) mask |= (1u << 0);
+    if (QueryPerfCounterFloat(state, state.perfPathAppGpuFrametime, state.perfAppGpuFrametimeMs)) mask |= (1u << 1);
+    if (QueryPerfCounterFloat(state, state.perfPathMotionToPhotonLatency, state.perfMotionToPhotonLatencyMs)) mask |= (1u << 2);
+    if (QueryPerfCounterFloat(state, state.perfPathCompositorCpuFrametime, state.perfCompositorCpuFrametimeMs)) mask |= (1u << 3);
+    if (QueryPerfCounterFloat(state, state.perfPathCompositorGpuFrametime, state.perfCompositorGpuFrametimeMs)) mask |= (1u << 4);
+    if (QueryPerfCounterUint(state, state.perfPathCompositorDroppedFrameCount, state.perfCompositorDroppedFrameCount)) mask |= (1u << 5);
+    if (QueryPerfCounterUint(state, state.perfPathCompositorSpacewarpMode, state.perfCompositorSpacewarpMode)) mask |= (1u << 6);
+    if (QueryPerfCounterFloat(state, state.perfPathDeviceCpuUtilAverage, state.perfDeviceCpuUtilAverage)) mask |= (1u << 7);
+    if (QueryPerfCounterFloat(state, state.perfPathDeviceCpuUtilWorst, state.perfDeviceCpuUtilWorst)) mask |= (1u << 8);
+    if (QueryPerfCounterFloat(state, state.perfPathDeviceGpuUtil, state.perfDeviceGpuUtil)) mask |= (1u << 9);
+    state.perfMetricsValidMask = mask;
+}
+
+// F8 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, 8.2): declara à ADPF a duração de frame
+// alvo e a thread que faz o trabalho critico — mesma thread ja registrada via
+// xrSetAndroidApplicationThreadKHR logo antes desta chamada (ver comentario la: "unica thread
+// nativa do app"). API 33+; checa a versao do SISTEMA em runtime (nao so a de compilacao),
+// porque o app roda em minSdk 26 mesmo com o manifest limitando supportedDevices a quest3/
+// quest3s (que reportam API 34 — ver relatorio 8.2 — mas o build nao pode assumir isso).
+void SetupAdpfSession(AppState& state) {
+    if (android_get_device_api_level() < 33) {
+        LOGI("ADPF: API do dispositivo < 33 — sessao nao criada");
+        return;
+    }
+    void* lib = dlopen("libandroid.so", RTLD_NOW);
+    if (lib == nullptr) {
+        LOGW("ADPF: dlopen(libandroid.so) falhou");
+        return;
+    }
+    state.adpfGetManager = reinterpret_cast<AppState::PFN_APerformanceHint_getManager>(
+        dlsym(lib, "APerformanceHint_getManager"));
+    state.adpfCreateSession = reinterpret_cast<AppState::PFN_APerformanceHint_createSession>(
+        dlsym(lib, "APerformanceHint_createSession"));
+    state.adpfUpdateTargetWorkDuration = reinterpret_cast<AppState::PFN_APerformanceHint_updateTargetWorkDuration>(
+        dlsym(lib, "APerformanceHint_updateTargetWorkDuration"));
+    state.adpfReportActualWorkDuration = reinterpret_cast<AppState::PFN_APerformanceHint_reportActualWorkDuration>(
+        dlsym(lib, "APerformanceHint_reportActualWorkDuration"));
+
+    if (state.adpfGetManager == nullptr || state.adpfCreateSession == nullptr ||
+        state.adpfUpdateTargetWorkDuration == nullptr || state.adpfReportActualWorkDuration == nullptr) {
+        LOGW("ADPF: dlsym falhou para um ou mais simbolos — indisponivel neste runtime");
+        return;
+    }
+
+    APerformanceHintManager* manager = state.adpfGetManager();
+    if (manager == nullptr) {
+        LOGW("ADPF: APerformanceHint_getManager() devolveu nulo — indisponivel neste runtime");
+        return;
+    }
+    float refreshRate = (state.displayRefreshRate > 0.0f) ? state.displayRefreshRate : 90.0f;
+    int64_t targetNs = static_cast<int64_t>((1000.0f / refreshRate) * 1e6f);
+    pid_t tid = gettid();
+    APerformanceHintSession* session = state.adpfCreateSession(manager, &tid, 1, targetNs);
+    if (session == nullptr) {
+        LOGW("ADPF: APerformanceHint_createSession falhou");
+        return;
+    }
+    state.adpfManager = manager;
+    state.adpfSession = session;
+    state.adpfLastTargetRefreshRate = refreshRate;
+    state.supportsAdpf = true;
+    LOGI("ADPF: sessao criada (tid=%d, target=%.2fHz/%lldns)", (int)tid, refreshRate, (long long)targetNs);
+}
+
+// Chamado uma vez por frame, junto da medicao de frameMs (RenderFrame) — reporta ao SO quanto
+// tempo o frame realmente levou, pra ele ajustar escalonamento/frequencia de CPU/GPU pro
+// proximo. Atualiza o alvo declarado so quando a taxa de atualizacao muda (troca de 72/90/
+//120Hz), nao a cada frame.
+void ReportAdpfWorkDuration(AppState& state, float frameMs) {
+    if (!state.supportsAdpf || state.adpfSession == nullptr) return;
+
+    if (state.displayRefreshRate > 0.0f && state.displayRefreshRate != state.adpfLastTargetRefreshRate) {
+        int64_t targetNs = static_cast<int64_t>((1000.0f / state.displayRefreshRate) * 1e6f);
+        state.adpfUpdateTargetWorkDuration(state.adpfSession, targetNs);
+        state.adpfLastTargetRefreshRate = state.displayRefreshRate;
+    }
+
+    int64_t actualNs = static_cast<int64_t>(frameMs * 1e6f);
+    if (actualNs > 0) {
+        state.adpfReportActualWorkDuration(state.adpfSession, actualNs);
+    }
 }
 
 // Sincroniza o estado efetivo com get_passthrough_enabled() e formato de tela.
@@ -4827,6 +5111,13 @@ void UpdateVideoFrame(AppState& state) {
         // So conta como amostra de cadencia se ja havia um frame antes (nao
         // a latencia de startup do 1o frame, categoria diferente).
         PushVideoGapSample(state, state.msSinceLastVideoFrame);
+
+        // D-02: `videoStallLogged` so fica true se o gap que está terminando agora
+        // excedeu kVideoStallThresholdMs em algum momento (ver populate do log em
+        // RenderFrame) — ou seja, um episodio de stall de verdade acabou de se resolver.
+        if (state.videoStallLogged) {
+            state.videoStallCount++;
+        }
     }
 
     state.lastVideoBuffer = buffer;
@@ -5018,6 +5309,14 @@ void RenderFrame(AppState& state) {
     if (state.lastPredictedDisplayTime > 0) {
         float frameMs = static_cast<float>(frameState.predictedDisplayTime - state.lastPredictedDisplayTime) * 1e-6f;
         state.lastFrameMs = frameMs;
+        {
+            int bucket = kFrameTimeHistogramBucketCount - 1;
+            for (int i = 0; i < kFrameTimeHistogramBucketCount - 1; ++i) {
+                if (frameMs < kFrameTimeHistogramEdgesMs[i]) { bucket = i; break; }
+            }
+            state.frameTimeHistogram[bucket]++;
+        }
+        ReportAdpfWorkDuration(state, frameMs); // F8: declara ao SO a duracao real deste frame
         if (frameMs > 0.0f) {
             float instFps = 1000.0f / frameMs;
             state.smoothedFps = (state.smoothedFps <= 0.0f)
@@ -5086,6 +5385,8 @@ void RenderFrame(AppState& state) {
                     (unsigned long long)get_network_blocks_discarded(),
                     state.videoQueueDepth);
             }
+
+            PollPerformanceMetrics(state); // F3: mesma cadencia de 1Hz dos demais pollers acima
 
             state.decodedFpsPollAccumMs = 0.0f;
         }
@@ -6162,6 +6463,8 @@ void android_main(android_app* app) {
         }
     }
 
+    SetupAdpfSession(state); // F8: mesma thread acima, ja registrada como critica ao runtime XR
+
     state.pfnRequestDisplayRefreshRateFB =
         LoadXrFunction<PFN_xrRequestDisplayRefreshRateFB>(state.instance, "xrRequestDisplayRefreshRateFB");
     state.pfnEnumerateDisplayRefreshRatesFB =
@@ -6214,6 +6517,7 @@ void android_main(android_app* app) {
     // estado persistido pelo Kotlin -> nativeSetPassthroughEnabled).
     SetupPassthrough(state);
     UpdatePassthrough(state); // aplica o estado inicial (normalmente OFF)
+    SetupPerformanceMetrics(state); // F3: habilita XR_META_performance_metrics (se suportado)
     CreateRenderPass(state);
     CreateFramebuffers(state);
     CreateGraphicsPipeline(state);

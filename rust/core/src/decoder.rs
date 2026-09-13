@@ -43,6 +43,10 @@ pub struct HwDecoder {
     // estes valores de fora sem lock. Ver metrics().
     frames_output: Arc<AtomicU64>,
     frames_dropped: Arc<AtomicU64>,
+    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): decode_packet() abaixo retorna
+    // Result, mas o chamador em playback.rs descartava com `let _ = ...` — sem contador, um
+    // erro de decode persistente era indistinguivel de "sem erro nenhum" na telemetria.
+    decode_errors: Arc<AtomicU64>,
 }
 
 unsafe impl Send for HwDecoder {}
@@ -58,7 +62,12 @@ impl HwDecoder {
                     format!("Failed to create MediaCodec for mime: {}", mime)
                 }
             })?;
-        Ok(Self { codec: Some(codec), frames_output: Arc::new(AtomicU64::new(0)), frames_dropped: Arc::new(AtomicU64::new(0)) })
+        Ok(Self {
+            codec: Some(codec),
+            frames_output: Arc::new(AtomicU64::new(0)),
+            frames_dropped: Arc::new(AtomicU64::new(0)),
+            decode_errors: Arc::new(AtomicU64::new(0)),
+        })
     }
 
     /// Clones dos contadores de saida real do MediaCodec — `frames_output`
@@ -69,8 +78,10 @@ impl HwDecoder {
     /// so conta frames RENDERIZADOS — bom pra comparar contra o vidFps do
     /// C++, mas inutil pra saber se o decoder em si esta produzindo no
     /// ritmo certo quando o gargalo esta a montante (rede/demux).
-    pub fn metrics(&self) -> (Arc<AtomicU64>, Arc<AtomicU64>) {
-        (self.frames_output.clone(), self.frames_dropped.clone())
+    /// `decode_errors` (F4): incrementado por `decode_packet` em qualquer um dos seus
+    /// caminhos de erro (codec nao inicializado, queue/dequeue de buffer falhando).
+    pub fn metrics(&self) -> (Arc<AtomicU64>, Arc<AtomicU64>, Arc<AtomicU64>) {
+        (self.frames_output.clone(), self.frames_dropped.clone(), self.decode_errors.clone())
     }
 
     /// new()+configure()+start() atomicamente sob SESSION_SETUP_LOCK — ver
@@ -138,7 +149,10 @@ impl HwDecoder {
         A: FnMut(),
         S: Fn() -> bool,
     {
-        let codec = self.codec.as_ref().ok_or("Codec not initialized")?;
+        let codec = self.codec.as_ref().ok_or_else(|| {
+            self.decode_errors.fetch_add(1, Ordering::Relaxed);
+            "Codec not initialized".to_string()
+        })?;
         let mut released_any = false;
 
         loop {
@@ -154,8 +168,11 @@ impl HwDecoder {
                     }
                     
                     codec.queue_input_buffer(buf, 0, len, pts as u64, flags)
-                        .map_err(|e| format!("queue_input_buffer failed: {:?}", e))?;
-                        
+                        .map_err(|e| {
+                            self.decode_errors.fetch_add(1, Ordering::Relaxed);
+                            format!("queue_input_buffer failed: {:?}", e)
+                        })?;
+
                     if self.release_output_frames_with_sync(&mut sync_callback, &mut after_release) {
                         released_any = true;
                     }
@@ -171,6 +188,7 @@ impl HwDecoder {
                     }
                 }
                 Err(e) => {
+                    self.decode_errors.fetch_add(1, Ordering::Relaxed);
                     return Err(format!("dequeue_input_buffer error: {:?}", e));
                 }
             }

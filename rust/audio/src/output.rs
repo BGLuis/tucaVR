@@ -4,13 +4,17 @@ use oboe::{
 };
 use crossbeam_channel::{Receiver, Sender, bounded};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 pub struct AudioPlayerCallback {
     receiver: Receiver<f32>,
     // f32 armazenado como bits para poder ser lido sem lock no callback
     // de audio em tempo real (chamado pelo Oboe, nao deve bloquear).
     volume_bits: Arc<AtomicU32>,
+    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): incrementado sempre que o canal
+    // esta vazio no momento em que o callback do Oboe pede amostras — antes disto, o fill de
+    // silencio abaixo (`unwrap_or(0.0)`) era um underrun completamente invisivel na telemetria.
+    underrun_count: Arc<AtomicU64>,
 }
 
 impl AudioOutputCallback for AudioPlayerCallback {
@@ -27,7 +31,13 @@ impl AudioOutputCallback for AudioPlayerCallback {
 
         let volume = f32::from_bits(self.volume_bits.load(Ordering::Relaxed));
         for sample in slice.iter_mut() {
-            *sample = self.receiver.try_recv().unwrap_or(0.0) * volume;
+            *sample = match self.receiver.try_recv() {
+                Ok(s) => s,
+                Err(_) => {
+                    self.underrun_count.fetch_add(1, Ordering::Relaxed);
+                    0.0
+                }
+            } * volume;
         }
 
         DataCallbackResult::Continue
@@ -38,13 +48,19 @@ pub struct AudioOutput {
     stream: AudioStreamAsync<Output, AudioPlayerCallback>,
     sender: Sender<f32>,
     volume_bits: Arc<AtomicU32>,
+    underrun_count: Arc<AtomicU64>,
 }
 
 impl AudioOutput {
     pub fn new() -> Result<Self, oboe::Error> {
         let (sender, receiver) = bounded(48000); // 0.5 sec of stereo audio buffer
         let volume_bits = Arc::new(AtomicU32::new(1.0f32.to_bits()));
-        let callback = AudioPlayerCallback { receiver, volume_bits: volume_bits.clone() };
+        let underrun_count = Arc::new(AtomicU64::new(0));
+        let callback = AudioPlayerCallback {
+            receiver,
+            volume_bits: volume_bits.clone(),
+            underrun_count: underrun_count.clone(),
+        };
 
         let builder = AudioStreamBuilder::default();
         let stream = builder
@@ -59,7 +75,7 @@ impl AudioOutput {
             .set_callback(callback)
             .open_stream()?;
 
-        Ok(Self { stream, sender, volume_bits })
+        Ok(Self { stream, sender, volume_bits, underrun_count })
     }
 
     pub fn push_samples(&mut self, samples: &[f32]) {
@@ -78,6 +94,11 @@ impl AudioOutput {
 
     pub fn get_volume(&self) -> f32 {
         f32::from_bits(self.volume_bits.load(Ordering::Relaxed))
+    }
+
+    /// F4: contador cumulativo de underruns (canal vazio quando o Oboe pediu amostras).
+    pub fn get_underrun_count(&self) -> u64 {
+        self.underrun_count.load(Ordering::Relaxed)
     }
 
     pub fn start(&mut self) -> Result<(), oboe::Error> {
