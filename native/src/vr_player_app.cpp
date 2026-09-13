@@ -1948,13 +1948,21 @@ public:
             // m_msSinceLastVideoFrame. So loga uma vez por episodio (nao a
             // cada frame parado), reseta quando um frame novo chega de fato
             // (bloco de troca de buffer, mais abaixo nesta funcao).
-            m_msSinceLastVideoFrame += m_lastFrameMs;
-            if (m_msSinceLastVideoFrame > kVideoStallThresholdMs) {
-                m_videoFps = 0.0f;
-                if (m_lastBuffer != nullptr && !m_videoStallLogged) {
-                    m_videoStallLogged = true;
-                    LOGW("VRPlayerApp: video sem frame novo ha %.0fms (decode/rede travado? "
-                         "ou usuario pausou?)", m_msSinceLastVideoFrame);
+            //
+            // So acumula com o playback tocando: com o video pausado
+            // (get_playback_is_playing() == 0) o decoder Rust legitimamente para de
+            // produzir frames novos — isso NAO e um stall de decode/rede. Sem este
+            // guard, qualquer pausa mais longa que kVideoStallThresholdMs virava um
+            // falso positivo em videoStallCount/video_status ao retomar.
+            if (get_playback_is_playing() != 0) {
+                m_msSinceLastVideoFrame += m_lastFrameMs;
+                if (m_msSinceLastVideoFrame > kVideoStallThresholdMs) {
+                    m_videoFps = 0.0f;
+                    if (m_lastBuffer != nullptr && !m_videoStallLogged) {
+                        m_videoStallLogged = true;
+                        LOGW("VRPlayerApp: video sem frame novo ha %.0fms (decode/rede travado)",
+                             m_msSinceLastVideoFrame);
+                    }
                 }
             }
 

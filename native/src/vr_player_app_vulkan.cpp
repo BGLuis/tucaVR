@@ -5336,13 +5336,20 @@ void RenderFrame(AppState& state) {
             LOGW("Video: stutter — frame levou %.1fms", frameMs);
         }
 
-        state.msSinceLastVideoFrame += frameMs;
-        if (state.msSinceLastVideoFrame > kVideoStallThresholdMs) {
-            state.videoFps = 0.0f;
-            if (state.activeVideoFrame != nullptr && !state.videoStallLogged) {
-                state.videoStallLogged = true;
-                LOGW("Video: sem frame novo ha %.0fms (decode/rede travado? ou usuario pausou?)",
-                    state.msSinceLastVideoFrame);
+        // So acumula com o playback tocando: com o video pausado
+        // (get_playback_is_playing() == 0) o decoder Rust legitimamente para de
+        // produzir frames novos — isso NAO e um stall de decode/rede. Sem este
+        // guard, qualquer pausa mais longa que kVideoStallThresholdMs virava um
+        // falso positivo em videoStallCount/video_status ao retomar.
+        if (get_playback_is_playing() != 0) {
+            state.msSinceLastVideoFrame += frameMs;
+            if (state.msSinceLastVideoFrame > kVideoStallThresholdMs) {
+                state.videoFps = 0.0f;
+                if (state.activeVideoFrame != nullptr && !state.videoStallLogged) {
+                    state.videoStallLogged = true;
+                    LOGW("Video: sem frame novo ha %.0fms (decode/rede travado)",
+                        state.msSinceLastVideoFrame);
+                }
             }
         }
 
