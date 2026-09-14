@@ -390,6 +390,18 @@ class VRActivity : NativeActivity() {
 
         registerDebugReceiverIfDebuggable()
 
+        // "Buffer estilo YouTube" (ver media_logic::buffer_gate no lado
+        // Rust): reporta a RAM total do aparelho uma vez no startup, pra o
+        // teto do buffer profundo pausado escalar pelo dispositivo real em
+        // vez de um número fixo cravado pro Quest 3 — um eventual aparelho
+        // com menos RAM recebe um teto proporcionalmente menor, um com mais
+        // RAM fica limitado pelo teto máximo do buffer_gate (mais RAM não
+        // significa "guarde dezenas de segundos de vídeo", o compositor VR
+        // também disputa essa memória).
+        val memoryInfo = ActivityManager.MemoryInfo()
+        (getSystemService(ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(memoryInfo)
+        nativeSetDeviceTotalMemoryBytes(memoryInfo.totalMem)
+
         // Fase 0.4 T5: empurra o modo persistido de Foveated Rendering pro Rust/C++
         val fovMode = FeatureFlags.getFoveatedRenderingMode(this)
         nativeSetFoveationMode(fovMode)
@@ -867,6 +879,20 @@ class VRActivity : NativeActivity() {
                 // uma corrida de dados sem precisar de sincronizacao extra.
                 activity.historyTracker.onProgress(currentSec, totalSec)
                 activity.playlistQueueManager.onPlaybackProgress(currentSec, totalSec)
+            }
+        }
+
+        /**
+         * "Buffer estilo YouTube" (ver media_logic::buffer_gate no lado
+         * Rust): segundos de video ja bufferizados a frente do ponteiro de
+         * reproducao, chamado na mesma cadencia de updateMediaProgress
+         * (~10x/s). Alimenta a barra cinza (secondaryProgress) do SeekBar em
+         * VRControlsPresentation — mesmo indicador que o YouTube usa.
+         */
+        @JvmStatic
+        fun updateBufferedProgress(activity: VRActivity, bufferedAheadSec: Float) {
+            activity.runOnUiThread {
+                activity.controlsPresentation?.updateBufferedProgress(bufferedAheadSec)
             }
         }
 
@@ -1603,6 +1629,12 @@ class VRActivity : NativeActivity() {
 
     // T14.1/T14.2: Notifica o pipeline de render nativo (C++/Rust) sobre o nível térmico atual
     external fun nativeSetThermalLevel(level: Int)
+
+    // "Buffer estilo YouTube" (ver media_logic::buffer_gate no lado Rust):
+    // RAM total do aparelho, chamado uma vez no startup — escala o teto do
+    // buffer profundo pausado pelo dispositivo real em vez de um número
+    // fixo cravado pro Quest 3.
+    external fun nativeSetDeviceTotalMemoryBytes(bytes: Long)
 
     // Painel de Estatísticas Técnicas / Stats for Nerds (docs/reports/DEBUG-STATS-MODAL.md)
     external fun nativeSetDebugStatsEnabled(enabled: Boolean)

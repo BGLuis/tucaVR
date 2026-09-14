@@ -353,6 +353,20 @@ pub extern "C" fn get_thermal_level() -> u32 {
     THERMAL_LEVEL.load(Ordering::Relaxed)
 }
 
+/// RAM total do aparelho em bytes, reportada uma vez pelo Kotlin
+/// (`ActivityManager.MemoryInfo.totalMem`, ver `VRActivity.onCreate`) —
+/// escala o teto do buffer profundo pausado (ver
+/// `media_logic::buffer_gate::paused_byte_ceiling_for_device`) pela RAM real
+/// do aparelho em vez de um numero fixo cravado pro Quest 3, entao um
+/// aparelho futuro com menos ou mais memoria recebe automaticamente um teto
+/// proporcional (dentro dos limites min/max do buffer_gate). Chamada uma vez
+/// no startup; nao ha problema em nao receber isso antes do primeiro
+/// load_at() — o buffer_gate cai no valor fixo pre-existente nesse meio-tempo.
+#[no_mangle]
+pub extern "C" fn set_device_total_memory_bytes(bytes: u64) {
+    core::playback::DEVICE_TOTAL_MEMORY_BYTES.store(bytes, Ordering::Relaxed);
+}
+
 // Upscaling de vídeo (Vulkan-only, MQSR, SGSR1):
 // 0=OFF, 1=QUALITY, 2=PERFORMANCE, 3=AUTO
 static UPSCALING_MODE: AtomicU32 = AtomicU32::new(0);
@@ -790,6 +804,20 @@ pub extern "C" fn get_audio_queue_depth() -> u32 {
     match CONTROLLER.try_lock() {
         Ok(controller) => controller.get_audio_queue_depth(),
         Err(_) => 0,
+    }
+}
+
+/// "Buffer estilo YouTube": segundos de video ja bufferizados a frente do
+/// ponteiro de reproducao (ver PlaybackController::get_buffered_ahead_sec e
+/// media_logic::buffer_gate) — alimenta o indicador visual de buffer
+/// (secondaryProgress do SeekBar, ver VRControlsPresentation.kt). Sem
+/// cache-on-contencao: um valor levemente atrasado nao produz artefato
+/// (nao e usado em calculo de delta), mesmo padrao dos getters de rede acima.
+#[no_mangle]
+pub extern "C" fn get_buffered_ahead_sec() -> f32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_buffered_ahead_sec(),
+        Err(_) => 0.0,
     }
 }
 

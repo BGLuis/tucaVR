@@ -13,6 +13,7 @@ pub mod hls;
 pub mod http;
 pub mod nfs;
 pub mod prefetch;
+mod retry;
 pub mod sftp;
 pub mod smb;
 pub mod webdav;

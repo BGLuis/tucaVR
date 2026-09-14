@@ -19,6 +19,18 @@ pub static DEMUX_THREAD_TID: AtomicI32 = AtomicI32::new(0);
 pub static VIDEO_THREAD_TID: AtomicI32 = AtomicI32::new(0);
 pub static AUDIO_THREAD_TID: AtomicI32 = AtomicI32::new(0);
 
+/// RAM total do dispositivo em bytes, reportada uma vez pelo lado Kotlin
+/// (`ActivityManager.MemoryInfo.totalMem`, ver `set_device_total_memory_bytes`
+/// na bridge) — usada pelo `buffer_gate` para escalar o teto do buffer
+/// profundo pausado (ver `media_logic::buffer_gate::paused_byte_ceiling_for_device`)
+/// em vez de um numero fixo, entao um aparelho futuro com menos/mais RAM que o Quest 3
+/// recebe automaticamente um teto proporcionalmente menor/maior (dentro dos
+/// limites min/max do `buffer_gate`). `0` = ainda nao reportado (ex.: um
+/// load_at() disparado antes do primeiro report, ou plataforma nao-Android
+/// nos testes) — `paused_byte_ceiling_for_device` trata isso caindo no valor
+/// fixo pre-existente.
+pub static DEVICE_TOTAL_MEMORY_BYTES: AtomicU64 = AtomicU64::new(0);
+
 const LATE_FRAME_RENDER_SKIP_SEC: f64 = 0.1;
 
 /// Quando o proximo pacote de video ja nasce mais atrasado que isto em
@@ -49,13 +61,38 @@ const CATCH_UP_SKIP_THRESHOLD_SEC: f64 = 0.5;
 /// seek_latency_ms nem a epoch da sessao refletiam o que aconteceu).
 const READ_ERROR_MAX_RESUME_ATTEMPTS: u32 = 3;
 
-/// Pausa entre tentativas de retomada apos erro de leitura. O cliente de
-/// rede (SFTP/SMB/etc.) ja tem seu proprio retry/reconnect interno com
-/// timeouts de varios segundos (ver comentario acima) — este backoff extra
-/// e so uma protecao barata contra um erro que por algum outro motivo volte
-/// instantaneamente (ex.: arquivo local corrompido), pra nao girar a thread
-/// de demux num loop apertado sem ceder CPU.
-const READ_ERROR_RETRY_BACKOFF: Duration = Duration::from_millis(400);
+/// Base e teto do backoff com jitter entre tentativas de retomada apos erro
+/// de leitura (ver `media_logic::retry_backoff::backoff_with_jitter`). O
+/// cliente de rede (SFTP/SMB/etc.) ja tem seu proprio retry/reconnect
+/// interno com timeouts de varios segundos (ver comentario acima) — este
+/// backoff extra e so uma protecao barata contra um erro que por algum
+/// outro motivo volte instantaneamente (ex.: arquivo local corrompido), pra
+/// nao girar a thread de demux num loop apertado sem ceder CPU. Substituiu
+/// o antigo delay fixo de 400ms: sem jitter, sessoes diferentes se
+/// recuperando do mesmo problema de rede (ex.: Wi-Fi caiu pra varios
+/// clientes juntos) tendem a re-tentar em uníssono.
+const READ_ERROR_BACKOFF_BASE: Duration = Duration::from_millis(400);
+const READ_ERROR_BACKOFF_CAP: Duration = Duration::from_secs(5);
+
+/// Alvos do buffer "estilo YouTube" (ver
+/// `media_logic::buffer_gate::BufferTargets`) — valores aprovados para o
+/// rollout inicial; ajustar depois com telemetria real de device (o CSV ja
+/// expõe `video_q_depth`/`net_mbs`, ver `docs/DEBUGGING.md`).
+const BUFFER_TARGETS: media_logic::buffer_gate::BufferTargets = media_logic::buffer_gate::BufferTargets {
+    playing_local_sec: 2.0,
+    playing_network_sec: 8.0,
+    paused_target_sec: 25.0,
+    resume_hysteresis: 0.8,
+};
+
+// Teto de bytes do buffer profundo pausado: nao e mais uma constante fixa
+// aqui — ver `media_logic::buffer_gate::paused_byte_ceiling_for_device`,
+// chamada no ponto de uso (dentro de `load_at`) com `DEVICE_TOTAL_MEMORY_BYTES`,
+// pra escalar pela RAM real do aparelho em vez de um numero cravado pro
+// Quest 3. So se aplica pausado (tocando, os alvos em segundos do
+// BUFFER_TARGETS acima já mantêm o consumo de memória pequeno o bastante
+// pra não precisar de teto separado): em conteúdo 8K/360° (100-150Mbps), os
+// 25s de `paused_target_sec` cheios passariam de 300-450MB sem este teto.
 
 /// Envia `item` no canal com timeout, checando `is_running` entre
 /// tentativas — evita bloquear para sempre se o consumidor parou de
@@ -77,6 +114,38 @@ fn try_send_until_stopped<T>(
                 }
             }
             Err(crossbeam_channel::SendTimeoutError::Disconnected(_)) => return false,
+        }
+    }
+}
+
+/// Fonte de aleatoriedade barata para o jitter do backoff (ver
+/// `media_logic::retry_backoff::backoff_with_jitter`) — não precisa
+/// qualidade criptográfica, só evitar que sessões diferentes se recuperando
+/// do mesmo problema de rede retentem exatamente no mesmo instante. Evita
+/// puxar a crate `rand`, que não existe em nenhum `Cargo.toml` do workspace
+/// hoje.
+fn cheap_rand_unit() -> f64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    (nanos % 1_000_000_000) as f64 / 1_000_000_000.0
+}
+
+/// Subtrai `amount` de `counter` sem estourar por baixo (satura em 0) —
+/// usado pelos contadores de bytes enfileirados (`video_bytes_queued`/
+/// `audio_bytes_queued`, ver buffer_gate em `load_at`). Um `fetch_sub` cru
+/// faria wraparound silencioso pra perto de `u64::MAX` se o consumidor
+/// descontasse mais do que o produtor somou (ex.: corrida entre reset de
+/// sessão e uma última leitura em voo) — um teto de bytes lido como
+/// "quase infinito" travaria o gate de buffer pra sempre.
+fn saturating_sub_u64(counter: &AtomicU64, amount: u64) {
+    let mut current = counter.load(Ordering::Relaxed);
+    loop {
+        let new = current.saturating_sub(amount);
+        match counter.compare_exchange_weak(current, new, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => break,
+            Err(actual) => current = actual,
         }
     }
 }
@@ -192,6 +261,25 @@ pub struct PlaybackController {
     load_phase_decoder_ready_ms: Arc<AtomicU32>,
     load_phase_audio_ready_ms: Arc<AtomicU32>,
     av_drift_ms: Arc<AtomicI32>,
+    // "Buffer estilo YouTube" (ver rust/media-logic/src/buffer_gate.rs): DTS
+    // (bits de f64, convertido em segundos) do ultimo pacote de video que a
+    // thread de demux enfileirou com sucesso, publicado a cada pacote — DTS
+    // e nao PTS de proposito, porque pacotes saem do demuxer em ORDEM DE
+    // DECODE e com B-frames o PTS nao e monotonico nessa ordem (ver
+    // comentario no ponto de escrita, dentro de load_at). Usado tanto pelo
+    // proprio gate (calcular buffered_sec) quanto pelo getter exposto na
+    // bridge (get_buffered_ahead_sec). Resetado em load_at()/seek()/EOF/
+    // erro pra posicao de destino, senao um valor de sessao/epoca anterior
+    // faria o gate achar (por um instante) que ja ha buffer de sobra e
+    // travar a leitura logo apos abrir/buscar/perder-e-retomar.
+    last_enqueued_video_dts_bits: Arc<AtomicU64>,
+    // Bytes fisicamente enfileirados (pacotes comprimidos, pre-decode) nos
+    // canais video_tx/audio_tx agora — teto independente do alvo em
+    // segundos do buffer_gate (ver paused_byte_ceiling_for_device, escalado
+    // por DEVICE_TOTAL_MEMORY_BYTES), pra nao estourar memoria em conteudo
+    // 8K/360 mesmo bufferizando bem a frente pausado.
+    video_bytes_queued: Arc<AtomicU64>,
+    audio_bytes_queued: Arc<AtomicU64>,
     // Legendas (SRT / WebVTT / ASS / PGS — Fase 0.2/0.3)
     subtitle_entries: Option<Vec<media_logic::subtitle::SubtitleEntry>>,
     ass_subtitle: Option<media_logic::subtitle_ass::AssSubtitle>,
@@ -234,6 +322,9 @@ impl PlaybackController {
             load_phase_decoder_ready_ms: Arc::new(AtomicU32::new(0)),
             load_phase_audio_ready_ms: Arc::new(AtomicU32::new(0)),
             av_drift_ms: Arc::new(AtomicI32::new(0)),
+            last_enqueued_video_dts_bits: Arc::new(AtomicU64::new(0.0f64.to_bits())),
+            video_bytes_queued: Arc::new(AtomicU64::new(0)),
+            audio_bytes_queued: Arc::new(AtomicU64::new(0)),
             subtitle_entries: None,
             ass_subtitle: None,
             pgs_subtitles: None,
@@ -476,10 +567,21 @@ impl PlaybackController {
         if start_time > 0.0 {
             self.sync_manager.update_master_clock(start_time);
         }
+        // Reseta o estado do buffer_gate para o novo ponto de partida —
+        // sem isso, um PTS/contador de bytes deixado pela sessao anterior
+        // faria o gate (calculado a partir de last_enqueued_video_dts_bits)
+        // achar que ja ha buffer de sobra e travar a demux logo na abertura.
+        self.last_enqueued_video_dts_bits.store(start_time.to_bits(), Ordering::Relaxed);
+        self.video_bytes_queued.store(0, Ordering::Relaxed);
+        self.audio_bytes_queued.store(0, Ordering::Relaxed);
 
-        // 90 (~1.5s a 60fps) em vez de 30 (~0.5s): absorve stalls de rede maiores antes de faltar pacote pro decoder.
-        let (video_tx, video_rx) = crossbeam_channel::bounded::<TaggedPacket>(90);
-        let (audio_tx, audio_rx) = crossbeam_channel::bounded::<TaggedPacket>(100);
+        // Backstop de seguranca, nao mais o mecanismo principal de controle de
+        // buffer (isso agora e o buffer_gate por duracao/bytes, ver abaixo) —
+        // so evita que um bug no gate consuma memoria sem limite. Dimensionado
+        // generosamente (~5s a 60fps) pra nao ser o fator limitante antes do
+        // teto de bytes (paused_byte_ceiling_for_device) entrar em acao.
+        let (video_tx, video_rx) = crossbeam_channel::bounded::<TaggedPacket>(300);
+        let (audio_tx, audio_rx) = crossbeam_channel::bounded::<TaggedPacket>(300);
         // Clone do Sender so pra poder consultar profundidade (`len()`) de
         // fora da thread de demux — nao envia nada por este handle, ver
         // get_video_queue_depth().
@@ -501,6 +603,11 @@ impl PlaybackController {
         let seek_started_at_v = self.seek_started_at.clone();
         let seek_latency_v = self.seek_latency_ms.clone();
         let av_drift_v = self.av_drift_ms.clone();
+        let last_enqueued_video_dts_bits_d = self.last_enqueued_video_dts_bits.clone();
+        let video_bytes_queued_d = self.video_bytes_queued.clone();
+        let video_bytes_queued_v = self.video_bytes_queued.clone();
+        let audio_bytes_queued_d = self.audio_bytes_queued.clone();
+        let audio_bytes_queued_a = self.audio_bytes_queued.clone();
 
         // Flags desta geracao: nao sao compartilhadas com nenhuma
         // sessao anterior ou futura (ver media_logic::session::Generation e
@@ -511,6 +618,7 @@ impl PlaybackController {
 
         let is_playing_v = is_playing.clone();
         let is_playing_a = is_playing.clone();
+        let is_playing_d = is_playing.clone();
 
         let is_running_v = is_running.clone();
         let is_running_a = is_running.clone();
@@ -526,6 +634,11 @@ impl PlaybackController {
             // porque e de la que esta sessao de fato partiu.
             let mut last_good_pos_sec: f64 = start_time.max(0.0);
             let mut consecutive_read_errors: u32 = 0;
+            // Fonte de rede (PrefetchReader por tras) vs. local/http:// puro —
+            // decide qual alvo do BUFFER_TARGETS o gate usa (ver
+            // media_logic::buffer_gate::BufferTargets).
+            let is_network_source = demuxer.network_stats.is_some();
+            let mut buffer_gate_state = media_logic::buffer_gate::GateState::Read;
             loop {
                 if !*is_running_d.lock().unwrap() { break; }
 
@@ -543,20 +656,81 @@ impl PlaybackController {
                     // atual" recomeca do zero.
                     last_good_pos_sec = target_sec.max(0.0);
                     consecutive_read_errors = 0;
+                    // Sem isto, buffered_seconds() compararia o PTS bufferizado
+                    // ANTES do seek com a posicao nova — apos um seek pra tras,
+                    // pareceria que ja ha buffer de sobra e o gate travaria a
+                    // leitura bem na hora em que precisa de pacotes novos.
+                    last_enqueued_video_dts_bits_d.store(target_sec.to_bits(), Ordering::Relaxed);
+                    buffer_gate_state = media_logic::buffer_gate::GateState::Read;
                 }
 
-
+                let buffered_sec = media_logic::buffer_gate::buffered_seconds(
+                    f64::from_bits(last_enqueued_video_dts_bits_d.load(Ordering::Relaxed)),
+                    sync_d.get_master_clock(),
+                );
+                let bytes_queued = video_bytes_queued_d.load(Ordering::Relaxed)
+                    + audio_bytes_queued_d.load(Ordering::Relaxed);
+                let is_paused = !*is_playing_d.lock().unwrap();
+                let byte_ceiling = if is_paused {
+                    media_logic::buffer_gate::paused_byte_ceiling_for_device(
+                        DEVICE_TOTAL_MEMORY_BYTES.load(Ordering::Relaxed),
+                    )
+                } else {
+                    u64::MAX
+                };
+                buffer_gate_state = media_logic::buffer_gate::next_gate_state(
+                    buffer_gate_state,
+                    buffered_sec,
+                    bytes_queued,
+                    &BUFFER_TARGETS,
+                    byte_ceiling,
+                    is_paused,
+                    is_network_source,
+                );
+                if buffer_gate_state == media_logic::buffer_gate::GateState::Wait {
+                    // Nao consome CPU/rede à toa: o PrefetchReader por tras do
+                    // demuxer.read_packet() so avanca quando este chega a ser
+                    // chamado, entao esperar aqui tambem pausa o read-ahead de
+                    // rede de fato, nao so o empacotamento.
+                    thread::sleep(std::time::Duration::from_millis(50));
+                    continue;
+                }
 
                 let current_epoch = epoch_d.load(Ordering::SeqCst);
                 match demuxer.read_packet() {
                     crate::demuxer::ReadPacketOutcome::Packet(idx, packet) => {
                         consecutive_read_errors = 0;
+                        let packet_len = packet.data().map(|d| d.len()).unwrap_or(0) as u64;
                         if idx == video_idx {
                             if let Some(pts) = packet.pts() {
                                 last_good_pos_sec = (pts as f64 * video_time_base).max(0.0);
                             }
+                            // DTS, nao PTS: pacotes saem do demuxer em ORDEM DE
+                            // DECODE, e com B-frames o PTS de pacotes sucessivos
+                            // NAO e monotonico nessa ordem (ex.: I,P,B,B em
+                            // ordem de decode tem PTS fora de ordem — o P vem
+                            // antes dos B na fila mas sua PTS e posterior). Usar
+                            // PTS aqui fazia buffered_seconds() oscilar
+                            // erraticamente (ora parecendo que ja ha buffer de
+                            // sobra, ora que nao ha nada), o gate abrir/fechar
+                            // sem previsibilidade, e o playback engasgar e
+                            // "pular" tentando se recuperar (ver
+                            // CATCH_UP_SKIP_THRESHOLD_SEC) — bug real observado
+                            // em video com B-frames apos o rollout do buffer_gate.
+                            // DTS e monotonico na mesma ordem em que os pacotes
+                            // de fato atravessam a fila, entao mede
+                            // corretamente "quanto ja foi demuxado a frente do
+                            // consumo". Cai para PTS so se o container nao
+                            // populou DTS (streams sem B-frames costumam ter
+                            // DTS==PTS de qualquer forma).
+                            if let Some(dts) = packet.dts().or_else(|| packet.pts()) {
+                                let buffer_pos_sec = (dts as f64 * video_time_base).max(0.0);
+                                last_enqueued_video_dts_bits_d.store(buffer_pos_sec.to_bits(), Ordering::Relaxed);
+                            }
+                            video_bytes_queued_d.fetch_add(packet_len, Ordering::Relaxed);
                             if !try_send_until_stopped(&video_tx, TaggedPacket { epoch: current_epoch, packet }, &is_running_d) { break; }
                         } else if demuxer.audio_stream_index == Some(idx) {
+                            audio_bytes_queued_d.fetch_add(packet_len, Ordering::Relaxed);
                             if !try_send_until_stopped(&audio_tx, TaggedPacket { epoch: current_epoch, packet }, &is_running_d) { break; }
                         }
                     }
@@ -565,6 +739,8 @@ impl PlaybackController {
                         sync_d.reset();
                         last_good_pos_sec = 0.0;
                         consecutive_read_errors = 0;
+                        last_enqueued_video_dts_bits_d.store(0.0f64.to_bits(), Ordering::Relaxed);
+                        buffer_gate_state = media_logic::buffer_gate::GateState::Read;
                     }
                     crate::demuxer::ReadPacketOutcome::Error(e) => {
                         // Distinguido de EOF nesta sessao
@@ -588,7 +764,14 @@ impl PlaybackController {
                             let _ = demuxer.input_context.seek(target_ts, ..);
                             epoch_d.fetch_add(1, Ordering::SeqCst);
                             sync_d.update_master_clock(last_good_pos_sec);
-                            thread::sleep(READ_ERROR_RETRY_BACKOFF);
+                            last_enqueued_video_dts_bits_d.store(last_good_pos_sec.to_bits(), Ordering::Relaxed);
+                            buffer_gate_state = media_logic::buffer_gate::GateState::Read;
+                            thread::sleep(media_logic::retry_backoff::backoff_with_jitter(
+                                consecutive_read_errors,
+                                READ_ERROR_BACKOFF_BASE,
+                                READ_ERROR_BACKOFF_CAP,
+                                cheap_rand_unit(),
+                            ));
                         } else {
                             crate::log_warn!(
                                 "Demuxer: erro de leitura persistente apos {consecutive_read_errors} tentativas ({e}), reiniciando do inicio"
@@ -598,6 +781,8 @@ impl PlaybackController {
                             sync_d.reset();
                             last_good_pos_sec = 0.0;
                             consecutive_read_errors = 0;
+                            last_enqueued_video_dts_bits_d.store(0.0f64.to_bits(), Ordering::Relaxed);
+                            buffer_gate_state = media_logic::buffer_gate::GateState::Read;
                         }
                     }
                 }
@@ -629,6 +814,12 @@ impl PlaybackController {
 
                 match video_rx.recv_timeout(std::time::Duration::from_millis(50)) {
                 Ok(tagged) => {
+                    // Descontado incondicionalmente, mesmo se o pacote for de
+                    // uma epoca velha e descartado logo abaixo — ele saiu
+                    // fisicamente do canal de qualquer jeito, entao o gate de
+                    // buffer (rodando na thread de demux) precisa saber.
+                    let packet_len = tagged.packet.data().map(|d| d.len()).unwrap_or(0) as u64;
+                    saturating_sub_u64(&video_bytes_queued_v, packet_len);
                     let latest_epoch = epoch_v.load(Ordering::SeqCst);
                     if tagged.epoch < latest_epoch {
                         continue;
@@ -773,6 +964,8 @@ impl PlaybackController {
                 }
 
                 if let Ok(tagged) = audio_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                    let packet_len = tagged.packet.data().map(|d| d.len()).unwrap_or(0) as u64;
+                    saturating_sub_u64(&audio_bytes_queued_a, packet_len);
                     if tagged.epoch < epoch_a.load(Ordering::SeqCst) {
                         continue;
                     }
@@ -1008,6 +1201,20 @@ impl PlaybackController {
     /// fora (só video_queue guardava o clone do Sender pra observabilidade).
     pub fn get_audio_queue_depth(&self) -> u32 {
         self.audio_queue.as_ref().map(|s| s.len() as u32).unwrap_or(0)
+    }
+
+    /// "Buffer estilo YouTube" — segundos de vídeo já enfileirados à frente
+    /// do ponteiro de reprodução real (relógio mestre do `SyncManager`), a
+    /// mesma grandeza que o `buffer_gate` usa internamente pra decidir
+    /// quando parar de ler. Exposto pra alimentar o indicador visual
+    /// (`secondaryProgress` do `SeekBar`, ver `VRControlsPresentation.kt`) —
+    /// 0.0 antes do primeiro `load_at()` ou logo após um seek, até o
+    /// primeiro pacote pousar.
+    pub fn get_buffered_ahead_sec(&self) -> f32 {
+        media_logic::buffer_gate::buffered_seconds(
+            f64::from_bits(self.last_enqueued_video_dts_bits.load(Ordering::Relaxed)),
+            self.sync_manager.get_master_clock(),
+        ) as f32
     }
 
     /// F4: contador de erros de decode (ver HwDecoder::decode_packet) — por sessão, 0 antes

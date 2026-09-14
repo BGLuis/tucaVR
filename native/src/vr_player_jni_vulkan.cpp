@@ -73,6 +73,10 @@ extern "C" {
     // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
     extern void set_thermal_level(uint32_t level);
     extern uint32_t get_thermal_level();
+    // "Buffer estilo YouTube" (ver media_logic::buffer_gate): RAM total do
+    // aparelho, pra escalar o teto do buffer profundo pausado por dispositivo
+    // em vez de um numero fixo cravado pro Quest 3.
+    extern void set_device_total_memory_bytes(uint64_t bytes);
     extern void set_spatial_audio_mode(uint32_t mode);
     extern uint32_t get_spatial_audio_mode();
     extern void set_spatial_audio_head_tracking(uint32_t enabled);
@@ -525,6 +529,11 @@ Java_com_tucavr_VRActivity_nativeSetUpscalingMode(JNIEnv*, jobject, jint mode) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetThermalLevel(JNIEnv*, jobject, jint level) {
     set_thermal_level(static_cast<uint32_t>(level));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetDeviceTotalMemoryBytes(JNIEnv*, jobject, jlong bytes) {
+    set_device_total_memory_bytes(static_cast<uint64_t>(bytes));
 }
 
 extern "C" JNIEXPORT void JNICALL

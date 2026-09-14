@@ -54,6 +54,18 @@ use suppaftp::{FtpStream, Mode};
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 
+/// Paridade com `SFTP_CHUNK_RETRY_ATTEMPTS`/`SMB_CHUNK_RETRY_ATTEMPTS`/
+/// `HTTP_CHUNK_RETRY_ATTEMPTS` (ver `crate::sftp`/`crate::smb`/`crate::http`) —
+/// mas aqui vira "retry da leitura inteira apos reconectar", nao "retry de um
+/// sub-chunk": FTP não tem sub-leituras concorrentes, é um único stream RETR
+/// sequencial (ver comentário no topo do arquivo), então não há chunks
+/// paralelos pra retentar individualmente. Antes disto, `read_range` so
+/// tentava reconectar e reler UMA vez, sem nenhum backoff entre as duas
+/// tentativas; agora usa o mesmo orçamento/jitter dos outros três protocolos.
+const FTP_CHUNK_RETRY_ATTEMPTS: u32 = 2;
+const FTP_CHUNK_RETRY_BACKOFF_BASE: Duration = Duration::from_millis(200);
+const FTP_CHUNK_RETRY_BACKOFF_CAP: Duration = Duration::from_secs(2);
+
 /// Login anonimo (T6.1 "login... + anonymous"): convencao padrao do
 /// protocolo (RFC 1635) e usar o usuario literal `anonymous` com uma senha
 /// "email-like" qualquer — muitos servidores nem validam o valor da senha,
@@ -250,17 +262,34 @@ impl FtpFileSource {
 
 impl RangeSource for FtpFileSource {
     fn read_range(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
-        match self.try_read_range(offset, buf) {
-            Ok(n) => Ok(n),
-            Err(_first_err) => {
-                // Conexao provavelmente caiu (timeout/idle do servidor, doc
-                // secao 6) — reconecta do zero uma vez e tenta a MESMA
-                // leitura de novo antes de propagar o erro pro Demuxer.
-                // Mesmo padrao de `SftpFileSource::read_range` (sftp/mod.rs).
-                self.reconnect().map_err(io::Error::other)?;
-                self.try_read_range(offset, buf)
+        // Conexao provavelmente caiu (timeout/idle do servidor, doc secao 6)
+        // — reconecta do zero e tenta a MESMA leitura de novo, com backoff
+        // com jitter entre tentativas (ver FTP_CHUNK_RETRY_ATTEMPTS acima)
+        // em vez de um unico retry instantaneo como antes.
+        let mut last_err = match self.try_read_range(offset, buf) {
+            Ok(n) => return Ok(n),
+            Err(e) => e,
+        };
+        for attempt in 1..=FTP_CHUNK_RETRY_ATTEMPTS {
+            log::warn!(
+                "FTP: leitura falhou ({last_err}), reconectando e retentando (tentativa {attempt}/{FTP_CHUNK_RETRY_ATTEMPTS})"
+            );
+            std::thread::sleep(media_logic::retry_backoff::backoff_with_jitter(
+                attempt,
+                FTP_CHUNK_RETRY_BACKOFF_BASE,
+                FTP_CHUNK_RETRY_BACKOFF_CAP,
+                crate::retry::cheap_rand_unit(),
+            ));
+            if let Err(e) = self.reconnect() {
+                last_err = io::Error::other(e);
+                continue;
+            }
+            match self.try_read_range(offset, buf) {
+                Ok(n) => return Ok(n),
+                Err(e) => last_err = e,
             }
         }
+        Err(last_err)
     }
 
     fn len(&self) -> Option<u64> {

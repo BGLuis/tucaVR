@@ -61,8 +61,12 @@ class VRControlsPresentation(
         if (::timeLabel.isInitialized) timeLabel.text = "00:00"
         if (::totalTimeLabel.isInitialized) totalTimeLabel.text = "00:00"
         if (::titleLabel.isInitialized) titleLabel.text = ""
-        if (::seekBar.isInitialized) seekBar.progress = 0
+        if (::seekBar.isInitialized) {
+            seekBar.progress = 0
+            seekBar.secondaryProgress = 0
+        }
         totalDuration = 0f
+        lastKnownCurrentSec = 0f
         if (::btnPlayPause.isInitialized) {
             btnPlayPause.setImageResource(R.drawable.icon_play)
         }
@@ -121,9 +125,14 @@ class VRControlsPresentation(
     }
 
     private var lastKnownMode = 0
+    // Posicao atual, guardada so pra updateBufferedProgress poder calcular
+    // o fim do trecho bufferizado (currentSec + bufferedAheadSec) sem
+    // precisar que o C++ mande a posicao de novo numa segunda chamada JNI.
+    private var lastKnownCurrentSec = 0f
 
     fun updateProgress(currentSec: Float, totalSec: Float) {
         totalDuration = totalSec
+        lastKnownCurrentSec = currentSec
         if (!isDragging && totalSec > 0 && (System.currentTimeMillis() - lastSeekTime > 800)) {
             seekBar.progress = ((currentSec / totalSec) * 100).toInt()
             timeLabel.text = formatTime(currentSec)
@@ -135,6 +144,19 @@ class VRControlsPresentation(
         // Mantém lastKnownMode atualizado com o modo nativo para que
         // a pré-visualização de scrub reconheça modos esféricos vs planos.
         lastKnownMode = activity.nativeGet3DMode()
+    }
+
+    /**
+     * "Buffer estilo YouTube": pinta o segmento cinza padrão do [SeekBar]
+     * (`secondaryProgress`) até `currentSec + bufferedAheadSec` — mesmo
+     * indicador visual que o YouTube usa pra mostrar quanto já foi
+     * carregado à frente do ponteiro, tocando ou pausado (ver
+     * `media_logic::buffer_gate` no lado Rust).
+     */
+    fun updateBufferedProgress(bufferedAheadSec: Float) {
+        if (!::seekBar.isInitialized || totalDuration <= 0f) return
+        val bufferedEndSec = (lastKnownCurrentSec + bufferedAheadSec).coerceAtMost(totalDuration)
+        seekBar.secondaryProgress = ((bufferedEndSec / totalDuration) * 100).toInt().coerceIn(0, 100)
     }
 
     /**

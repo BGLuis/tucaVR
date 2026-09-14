@@ -763,6 +763,27 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             }
         }
 
+        // "Buffer estilo YouTube" (ver media_logic::buffer_gate): segundos
+        // ja bufferizados a frente do ponteiro, pro indicador visual
+        // (secondaryProgress do SeekBar). Chamada JNI separada em vez de
+        // ampliar a assinatura de updateMediaProgress acima — nao mexe no
+        // metodo existente nem no call site dele.
+        {
+            float bufferedAheadSec = get_buffered_ahead_sec();
+            JNIEnv* env = nullptr;
+            state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+            if (env) {
+                jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+                jmethodID bufferedMethod = env->GetStaticMethodID(
+                    vrActivityClass, "updateBufferedProgress", "(Lcom/tucavr/VRActivity;F)V");
+                if (bufferedMethod) {
+                    env->CallStaticVoidMethod(vrActivityClass, bufferedMethod, state.app->activity->clazz,
+                        bufferedAheadSec);
+                }
+                env->DeleteLocalRef(vrActivityClass);
+            }
+        }
+
         // Feedback de loading/play-pause (T-seek-ux), paridade com o
         // caminho GLES — NAO gated por progressTotal>0: precisa disparar
         // ja no primeiro load, antes de qualquer duracao ser conhecida.

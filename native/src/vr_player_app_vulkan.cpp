@@ -205,6 +205,10 @@ extern "C" {
     extern uint32_t get_network_sequential_streak();
     extern uint32_t get_network_throttled();
     extern uint32_t get_audio_queue_depth();
+    // "Buffer estilo YouTube" (ver media_logic::buffer_gate): segundos de
+    // video ja bufferizados a frente do ponteiro de reproducao, alimenta o
+    // indicador visual de buffer (secondaryProgress do SeekBar).
+    extern float get_buffered_ahead_sec();
     extern uint64_t get_decode_error_count();
     extern uint64_t get_demux_corrupt_packet_count();
     extern uint64_t get_audio_underrun_count();
