@@ -27,6 +27,7 @@ class DebugTelemetryExporterTest {
         jitter_ms	1.1
         net_mbs	24.50
         queue_depth	88
+        presentation_pending	5
         seek_latency_ms	150
         smoothed_fps	90.0
         frame_time_ms	11.1
@@ -132,70 +133,71 @@ class DebugTelemetryExporterTest {
         assertEquals("1.1", cols[15])
         assertEquals("24.50", cols[16])
         assertEquals("88", cols[17])
-        assertEquals("150", cols[18])
-        assertEquals("90.0", cols[19])
-        assertEquals("11.1", cols[20])
-        assertEquals("4.25", cols[21])
-        assertEquals("4.10", cols[22])
-        assertEquals("QUAL", cols[23])
-        assertEquals("0.75", cols[24])
-        assertEquals("1", cols[25]) // mqsr_enabled
-        assertEquals("2", cols[26]) // stutter_count
-        assertEquals("0", cols[27]) // freeze_count
-        assertEquals("1", cols[28]) // thermal_level
-        assertEquals("1.00", cols[29]) // scale
-        assertEquals("90.0", cols[30]) // refresh_rate
-        assertEquals("12.5", cols[31]) // av_drift_ms
-        assertEquals("8.0", cols[32]) // net_last_fetch_ms
-        assertEquals("1240", cols[33])
-        assertEquals("5", cols[34])
-        assertEquals("1", cols[35]) // foveation
-        assertEquals("2", cols[36]) // spatial_audio
-        assertEquals("1", cols[37]) // head_tracking
-        assertEquals("1.00", cols[38]) // speed
-        assertEquals("0.80", cols[39]) // volume
-        assertEquals("1", cols[40]) // audio_track
-        assertEquals("2", cols[41]) // audio_track_count
-        assertEquals("0", cols[42]) // sub_track
-        assertEquals("-100", cols[43]) // sub_offset_ms
-        assertEquals("MEDIUM", cols[44]) // quality_level
-        assertEquals("GpuOverload", cols[45]) // quality_reason
-        assertEquals("9", cols[46]) // draw_call_count
-        assertEquals("12000", cols[47]) // triangle_count
+        assertEquals("5", cols[18]) // presentation_pending
+        assertEquals("150", cols[19])
+        assertEquals("90.0", cols[20])
+        assertEquals("11.1", cols[21])
+        assertEquals("4.25", cols[22])
+        assertEquals("4.10", cols[23])
+        assertEquals("QUAL", cols[24])
+        assertEquals("0.75", cols[25])
+        assertEquals("1", cols[26]) // mqsr_enabled
+        assertEquals("2", cols[27]) // stutter_count
+        assertEquals("0", cols[28]) // freeze_count
+        assertEquals("1", cols[29]) // thermal_level
+        assertEquals("1.00", cols[30]) // scale
+        assertEquals("90.0", cols[31]) // refresh_rate
+        assertEquals("12.5", cols[32]) // av_drift_ms
+        assertEquals("8.0", cols[33]) // net_last_fetch_ms
+        assertEquals("1240", cols[34])
+        assertEquals("5", cols[35])
+        assertEquals("1", cols[36]) // foveation
+        assertEquals("2", cols[37]) // spatial_audio
+        assertEquals("1", cols[38]) // head_tracking
+        assertEquals("1.00", cols[39]) // speed
+        assertEquals("0.80", cols[40]) // volume
+        assertEquals("1", cols[41]) // audio_track
+        assertEquals("2", cols[42]) // audio_track_count
+        assertEquals("0", cols[43]) // sub_track
+        assertEquals("-100", cols[44]) // sub_offset_ms
+        assertEquals("MEDIUM", cols[45]) // quality_level
+        assertEquals("GpuOverload", cols[46]) // quality_reason
+        assertEquals("9", cols[47]) // draw_call_count
+        assertEquals("12000", cols[48]) // triangle_count
         // F1: tsvHud não emite video_stall_count/*_stats_age_ms — devem cair nos defaults.
-        assertEquals("0", cols[48]) // video_stall_count
-        assertEquals("0", cols[49]) // video_stats_age_ms
-        assertEquals("0", cols[50]) // network_stats_age_ms
-        assertEquals("0", cols[51]) // audio_stats_age_ms
-        assertEquals("0", cols[52]) // render_stats_age_ms
+        assertEquals("0", cols[49]) // video_stall_count
+        assertEquals("0", cols[50]) // video_stats_age_ms
+        assertEquals("0", cols[51]) // network_stats_age_ms
+        assertEquals("0", cols[52]) // audio_stats_age_ms
+        assertEquals("0", cols[53]) // render_stats_age_ms
         // F4: tsvHud não emite os 7 campos novos de coleta na origem — defaults.
-        assertEquals("0", cols[53]) // network_fetch_failures
-        assertEquals("0", cols[54]) // network_sequential_streak
-        assertEquals("0", cols[55]) // network_throttled
-        assertEquals("0", cols[56]) // audio_queue_depth
-        assertEquals("0", cols[57]) // decode_error_count
-        assertEquals("0", cols[58]) // demux_corrupt_packet_count
-        assertEquals("0", cols[59]) // audio_underrun_count
-        assertEquals("0", cols[60]) // load_phase_demux_open_ms
-        assertEquals("0", cols[61]) // load_phase_decoder_ready_ms
-        assertEquals("0", cols[62]) // load_phase_audio_ready_ms
+        assertEquals("0", cols[54]) // network_fetch_failures
+        assertEquals("0", cols[55]) // network_sequential_streak
+        assertEquals("0", cols[56]) // network_throttled
+        assertEquals("0", cols[57]) // audio_queue_depth
+        assertEquals("0", cols[58]) // decode_error_count
+        assertEquals("0", cols[59]) // demux_corrupt_packet_count
+        assertEquals("0", cols[60]) // audio_underrun_count
+        assertEquals("0", cols[61]) // load_phase_demux_open_ms
+        assertEquals("0", cols[62]) // load_phase_decoder_ready_ms
+        assertEquals("0", cols[63]) // load_phase_audio_ready_ms
         // F3: tsvHud não emite os campos de XR_META_performance_metrics — defaults.
-        assertEquals("0", cols[63]) // perf_metrics_valid_mask
-        assertEquals("0.00", cols[64]) // perf_app_cpu_frametime_ms
-        assertEquals("0.00", cols[65]) // perf_app_gpu_frametime_ms
-        assertEquals("0.00", cols[66]) // perf_motion_to_photon_latency_ms
-        assertEquals("0.00", cols[67]) // perf_compositor_cpu_frametime_ms
-        assertEquals("0.00", cols[68]) // perf_compositor_gpu_frametime_ms
-        assertEquals("0", cols[69]) // perf_compositor_dropped_frame_count
-        assertEquals("0", cols[70]) // perf_compositor_spacewarp_mode
-        assertEquals("0.00", cols[71]) // perf_device_cpu_util_average
-        assertEquals("0.00", cols[72]) // perf_device_cpu_util_worst
-        assertEquals("0.00", cols[73]) // perf_device_gpu_util
+        assertEquals("0", cols[64]) // perf_metrics_valid_mask
+        assertEquals("0.00", cols[65]) // perf_app_cpu_frametime_ms
+        assertEquals("0.00", cols[66]) // perf_app_gpu_frametime_ms
+        assertEquals("0.00", cols[67]) // perf_motion_to_photon_latency_ms
+        assertEquals("0.00", cols[68]) // perf_compositor_cpu_frametime_ms
+        assertEquals("0.00", cols[69]) // perf_compositor_gpu_frametime_ms
+        assertEquals("0", cols[70]) // perf_compositor_dropped_frame_count
+        assertEquals("0", cols[71]) // perf_compositor_spacewarp_mode
+        assertEquals("0.00", cols[72]) // perf_device_cpu_util_average
+        assertEquals("0.00", cols[73]) // perf_device_cpu_util_worst
+        assertEquals("0.00", cols[74]) // perf_device_gpu_util
         // F5 G2: tsvHud não emite os buckets de histograma — defaults.
-        for (i in 74..81) {
-            assertEquals("0", cols[i]) // hist_bucket_${i - 74}
+        for (i in 75..82) {
+            assertEquals("0", cols[i]) // hist_bucket_${i - 75}
         }
-        assertEquals("Sftp", cols[82])
+        assertEquals("Sftp", cols[83])
     }
 
     @Test
@@ -214,11 +216,11 @@ class DebugTelemetryExporterTest {
             source = null
         )
         val cols = row.split(',')
-        assertEquals("3", cols[48]) // video_stall_count
-        assertEquals("1200", cols[49]) // video_stats_age_ms
-        assertEquals("340", cols[50]) // network_stats_age_ms
-        assertEquals("0", cols[51]) // audio_stats_age_ms
-        assertEquals("0", cols[52]) // render_stats_age_ms
+        assertEquals("3", cols[49]) // video_stall_count
+        assertEquals("1200", cols[50]) // video_stats_age_ms
+        assertEquals("340", cols[51]) // network_stats_age_ms
+        assertEquals("0", cols[52]) // audio_stats_age_ms
+        assertEquals("0", cols[53]) // render_stats_age_ms
     }
 
     @Test
@@ -239,13 +241,13 @@ class DebugTelemetryExporterTest {
             source = null
         )
         val cols = row.split(',')
-        assertEquals("2", cols[53]) // network_fetch_failures
-        assertEquals("5", cols[54]) // network_sequential_streak
-        assertEquals("1", cols[55]) // network_throttled
-        assertEquals("40", cols[56]) // audio_queue_depth
-        assertEquals("1", cols[57]) // decode_error_count
-        assertEquals("7", cols[58]) // demux_corrupt_packet_count
-        assertEquals("9", cols[59]) // audio_underrun_count
+        assertEquals("2", cols[54]) // network_fetch_failures
+        assertEquals("5", cols[55]) // network_sequential_streak
+        assertEquals("1", cols[56]) // network_throttled
+        assertEquals("40", cols[57]) // audio_queue_depth
+        assertEquals("1", cols[58]) // decode_error_count
+        assertEquals("7", cols[59]) // demux_corrupt_packet_count
+        assertEquals("9", cols[60]) // audio_underrun_count
     }
 
     @Test
@@ -262,9 +264,9 @@ class DebugTelemetryExporterTest {
             source = null
         )
         val cols = row.split(',')
-        assertEquals("12", cols[60]) // load_phase_demux_open_ms
-        assertEquals("45", cols[61]) // load_phase_decoder_ready_ms
-        assertEquals("60", cols[62]) // load_phase_audio_ready_ms
+        assertEquals("12", cols[61]) // load_phase_demux_open_ms
+        assertEquals("45", cols[62]) // load_phase_decoder_ready_ms
+        assertEquals("60", cols[63]) // load_phase_audio_ready_ms
     }
 
     @Test
@@ -289,17 +291,17 @@ class DebugTelemetryExporterTest {
             source = null
         )
         val cols = row.split(',')
-        assertEquals("1023", cols[63]) // perf_metrics_valid_mask
-        assertEquals("3.10", cols[64]) // perf_app_cpu_frametime_ms
-        assertEquals("4.20", cols[65]) // perf_app_gpu_frametime_ms
-        assertEquals("18.50", cols[66]) // perf_motion_to_photon_latency_ms
-        assertEquals("2.00", cols[67]) // perf_compositor_cpu_frametime_ms
-        assertEquals("2.50", cols[68]) // perf_compositor_gpu_frametime_ms
-        assertEquals("3", cols[69]) // perf_compositor_dropped_frame_count
-        assertEquals("1", cols[70]) // perf_compositor_spacewarp_mode
-        assertEquals("45.00", cols[71]) // perf_device_cpu_util_average
-        assertEquals("80.00", cols[72]) // perf_device_cpu_util_worst
-        assertEquals("60.00", cols[73]) // perf_device_gpu_util
+        assertEquals("1023", cols[64]) // perf_metrics_valid_mask
+        assertEquals("3.10", cols[65]) // perf_app_cpu_frametime_ms
+        assertEquals("4.20", cols[66]) // perf_app_gpu_frametime_ms
+        assertEquals("18.50", cols[67]) // perf_motion_to_photon_latency_ms
+        assertEquals("2.00", cols[68]) // perf_compositor_cpu_frametime_ms
+        assertEquals("2.50", cols[69]) // perf_compositor_gpu_frametime_ms
+        assertEquals("3", cols[70]) // perf_compositor_dropped_frame_count
+        assertEquals("1", cols[71]) // perf_compositor_spacewarp_mode
+        assertEquals("45.00", cols[72]) // perf_device_cpu_util_average
+        assertEquals("80.00", cols[73]) // perf_device_cpu_util_worst
+        assertEquals("60.00", cols[74]) // perf_device_gpu_util
     }
 
     @Test
@@ -323,7 +325,7 @@ class DebugTelemetryExporterTest {
         val cols = row.split(',')
         val expected = listOf("100", "50", "20", "10", "5", "3", "2", "1")
         for (i in expected.indices) {
-            assertEquals(expected[i], cols[74 + i]) // hist_bucket_$i
+            assertEquals(expected[i], cols[75 + i]) // hist_bucket_$i
         }
     }
 

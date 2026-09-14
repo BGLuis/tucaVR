@@ -188,6 +188,7 @@ class DebugStatsModal(
                 "source" to context.getString(R.string.debug_stats_label_source),
                 "net_speed" to context.getString(R.string.debug_stats_label_network_speed),
                 "buffer_queue" to context.getString(R.string.debug_stats_label_buffer_queue),
+                "presentation_pending" to context.getString(R.string.debug_stats_label_presentation_pending),
                 "fetch_latency" to context.getString(R.string.debug_stats_label_fetch_latency),
                 "blocks" to context.getString(R.string.debug_stats_label_blocks),
                 "seek_latency" to context.getString(R.string.debug_stats_label_seek_latency)
@@ -460,6 +461,7 @@ class DebugStatsModal(
 
         setValue("net_speed", String.format(Locale.US, "%.2f MB/s", stats.netMBs), stats.networkStatsAgeMs)
         setValue("buffer_queue", "${stats.queueDepth} packets", stats.networkStatsAgeMs)
+        setValue("presentation_pending", "${stats.presentationPending} frames", stats.networkStatsAgeMs)
         setValue("fetch_latency", String.format(Locale.US, "%.1f ms", stats.netLastFetchMs), stats.networkStatsAgeMs)
         setValue("blocks", "${stats.netBlocksFetched} / ${stats.netBlocksDiscarded}", stats.networkStatsAgeMs)
         debugStatValueViews["seek_latency"]?.text = "${stats.seekLatencyMs} ms"

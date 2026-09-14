@@ -28,6 +28,11 @@ struct DebugStats {
     float videoJitterMs = 0.0f;
     float netMBs = 0.0f;
     uint32_t videoQueueDepth = 0;
+    // T-decode-present-split: frames decodificados-mas-nao-liberados na
+    // video_thread agora (ver get_video_presentation_pending no bridge).
+    // So populado no backend Vulkan; fica 0 no GLES (congelado, sem essa
+    // reestruturacao de decode/apresentacao).
+    uint32_t videoPresentationPending = 0;
     uint32_t seekLatencyMs = 0;
     float smoothedFps = 0.0f;
     float lastFrameMs = 0.0f;
@@ -141,6 +146,7 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         "jitter_ms\t%.1f\n"
         "net_mbs\t%.2f\n"
         "queue_depth\t%u\n"
+        "presentation_pending\t%u\n"
         "seek_latency_ms\t%u\n"
         "smoothed_fps\t%.1f\n"
         "frame_time_ms\t%.1f\n"
@@ -219,6 +225,7 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         s.videoJitterMs,
         s.netMBs,
         s.videoQueueDepth,
+        s.videoPresentationPending,
         s.seekLatencyMs,
         s.smoothedFps,
         s.lastFrameMs,

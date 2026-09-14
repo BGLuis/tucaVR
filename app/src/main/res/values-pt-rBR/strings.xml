@@ -470,6 +470,7 @@
     <string name="debug_stats_label_source">Origem / Protocolo</string>
     <string name="debug_stats_label_network_speed">Taxa de Rede</string>
     <string name="debug_stats_label_buffer_queue">Fila de Buffer</string>
+    <string name="debug_stats_label_presentation_pending">Frames Aguardando Exibição</string>
     <string name="debug_stats_label_fetch_latency">Latência por Bloco</string>
     <string name="debug_stats_label_blocks">Blocos Buscados / Descartados</string>
     <string name="debug_stats_label_seek_latency">Latência do Último Seek</string>

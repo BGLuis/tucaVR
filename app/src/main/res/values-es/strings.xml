@@ -476,6 +476,7 @@
     <string name="debug_stats_label_source">Origen / Protocolo</string>
     <string name="debug_stats_label_network_speed">Rendimiento de red</string>
     <string name="debug_stats_label_buffer_queue">Cola de búfer</string>
+    <string name="debug_stats_label_presentation_pending">Fotogramas pendientes de mostrar</string>
     <string name="debug_stats_label_fetch_latency">Latencia de bloque</string>
     <string name="debug_stats_label_blocks">Bloques obtenidos / descartados</string>
     <string name="debug_stats_label_seek_latency">Latencia del último seek</string>

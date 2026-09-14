@@ -19,6 +19,7 @@ data class NativeDebugStats(
     val jitterMs: Float = 0.0f,
     val netMBs: Float = 0.0f,
     val queueDepth: Int = 0,
+    val presentationPending: Int = 0,
     val seekLatencyMs: Int = 0,
     val smoothedFps: Float = 0.0f,
     val frameTimeMs: Float = 0.0f,
@@ -101,6 +102,7 @@ object DebugStatsParser {
         var jitterMs = 0.0f
         var netMBs = 0.0f
         var queueDepth = 0
+        var presentationPending = 0
         var seekLatencyMs = 0
         var smoothedFps = 0.0f
         var frameTimeMs = 0.0f
@@ -185,6 +187,7 @@ object DebugStatsParser {
                 "jitter_ms" -> { jitterMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
                 "net_mbs" -> { netMBs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
                 "queue_depth" -> { queueDepth = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "presentation_pending" -> { presentationPending = value.toIntOrNull() ?: 0; recognizedKeys++ }
                 "seek_latency_ms" -> { seekLatencyMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
                 "smoothed_fps" -> { smoothedFps = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
                 "frame_time_ms" -> { frameTimeMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
@@ -269,6 +272,7 @@ object DebugStatsParser {
             jitterMs = jitterMs,
             netMBs = netMBs,
             queueDepth = queueDepth,
+            presentationPending = presentationPending,
             seekLatencyMs = seekLatencyMs,
             smoothedFps = smoothedFps,
             frameTimeMs = frameTimeMs,

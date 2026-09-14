@@ -485,6 +485,7 @@
     <string name="debug_stats_label_source">Source / Protocol</string>
     <string name="debug_stats_label_network_speed">Network Throughput</string>
     <string name="debug_stats_label_buffer_queue">Buffer Queue</string>
+    <string name="debug_stats_label_presentation_pending">Frames Pending Display</string>
     <string name="debug_stats_label_fetch_latency">Block Fetch Latency</string>
     <string name="debug_stats_label_blocks">Blocks Fetched / Discarded</string>
     <string name="debug_stats_label_seek_latency">Last Seek Latency</string>

@@ -190,6 +190,7 @@ extern "C" {
     extern uint64_t get_video_frames_output_count();
     extern uint64_t get_video_frames_dropped_count();
     extern uint32_t get_video_queue_depth();
+    extern uint32_t get_video_presentation_pending();
     extern uint64_t get_network_bytes_read();
     // Diagnostico do gargalo de throughput (docs/NETWORK-IO-PERFORMANCE.md
     // secao 7): latencia do ULTIMO fetch de bloco completo do PrefetchReader
@@ -1062,6 +1063,10 @@ struct AppState {
     uint64_t lastNetworkBytes = 0;
     float netMBs = 0.0f;
     uint32_t videoQueueDepth = 0;
+    // T-decode-present-split: profundidade da fila local de frames
+    // decodificados-mas-nao-liberados na video_thread (ver
+    // get_video_presentation_pending no bridge) — debug/HUD.
+    uint32_t videoPresentationPending = 0;
 
     bool resumed = false;
     bool sessionRunning = false;
@@ -5410,6 +5415,7 @@ void RenderFrame(AppState& state) {
             state.lastNetworkBytes = netBytes;
 
             state.videoQueueDepth = get_video_queue_depth();
+            state.videoPresentationPending = get_video_presentation_pending();
 
             if (state.lastNetworkBytes > 0 || get_network_blocks_fetched() > 0) {
                 LOGI("net: %.2fMB/s blockFetchMs=%.0f blocksFetched=%llu blocksDiscarded=%llu q=%u",
