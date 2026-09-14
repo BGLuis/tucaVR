@@ -228,6 +228,10 @@ extern "C" {
     extern uint32_t get_spatial_audio_head_tracking();
     extern float get_playback_speed();
     extern uint32_t get_audio_track_count();
+    // T-HDR: 1 se o video atual foi detectado como HDR (PQ/HLG, ver
+    // media_logic::color) — usado pra escolher o pipeline de cor do shader
+    // de video (tonemap HDR->SDR) e o modelo YCbCr certo.
+    extern uint32_t get_video_is_hdr();
     extern void reset_process_state();
     extern void on_app_focus_lost();
     extern void on_app_focus_gained();
@@ -913,6 +917,10 @@ struct AppState {
 
     // Estado de ScreenMode (lido do bridge Rust a cada frame)
     ScreenMode screenMode = ScreenMode::Flat2D;
+    // T-HDR: detectado uma vez por load (ver get_video_is_hdr), lido a
+    // cada frame junto com screenMode — usado pelo shader de video pra
+    // decidir se aplica o tonemap HDR->SDR.
+    bool isHdr = false;
 
     // Estado de cena / recenter — espelha m_sceneYawOffset/m_sceneTranslationOffset
     // do caminho GLES (vr_player_app.cpp). Toda a UI/controles/tela/esfera sao
@@ -1094,6 +1102,9 @@ struct VideoPushConstants {
     Mat4  mvp;
     float sharpness;
     int   upscalingMode;
+    // T-HDR: 1 se o video atual e HDR (PQ/HLG) — o fragment shader aplica
+    // tonemap HDR->SDR quando isto e nao-zero, ver video.frag.
+    int   isHdr;
 };
 
 // Estagio 4: push constant para UI (MVP + alpha)
@@ -1114,6 +1125,10 @@ struct StereoPushConstants {
     int   upscalingMode;
     int   cubemapLayout;
     int   projectionType;
+    // T-HDR: mesmo significado de VideoPushConstants::isHdr, ver stereo.frag/
+    // stereo_cubemap.frag. Sempre 0 no pipeline de foto (photoPipelineLayout,
+    // ver ponto de uso) — nao existe decode HDR de foto estatica.
+    int   isHdr;
 };
 
 struct BeamPushConstants {
@@ -2309,7 +2324,10 @@ void CreateYcbcrAndVideoPipeline(AppState& state) {
         VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO};
     ycbcrInfo.pNext = &externalFormat;
     ycbcrInfo.format = VK_FORMAT_UNDEFINED; // formato externo via AHardwareBuffer
-    ycbcrInfo.ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_601;
+    // BT.709 e a matriz correta para o conteudo HD/4K/8K que o app foi feito
+    // para tocar (BT.601 e SD e desloca cor perceptivelmente, sobretudo em
+    // tons de pele/vermelhos).
+    ycbcrInfo.ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_709;
     ycbcrInfo.ycbcrRange = VK_SAMPLER_YCBCR_RANGE_ITU_NARROW;
     ycbcrInfo.components = {
         VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
@@ -4847,6 +4865,7 @@ void RecordVideoFlat(
     pc.mvp = mvp;
     pc.sharpness = state.upscalingSharpness;
     pc.upscalingMode = static_cast<int>(state.upscalingMode);
+    pc.isHdr = state.isHdr ? 1 : 0;
     vkCmdPushConstants(
         cmd, state.videoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -4923,6 +4942,7 @@ void RecordStereoFrame(
     spc.upscalingMode  = static_cast<int>(state.upscalingMode);
     spc.cubemapLayout  = sp.cubemapLayout;
     spc.projectionType = sp.projectionType;
+    spc.isHdr          = state.isHdr ? 1 : 0;
     vkCmdPushConstants(cmd, state.stereoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(spc), &spc);
@@ -4997,6 +5017,8 @@ void RecordPhotoFrame(
     spc.upscalingMode  = 0;
     spc.cubemapLayout  = sp.cubemapLayout;
     spc.projectionType = sp.projectionType;
+    // Sem decode HDR de foto estatica — sempre SDR.
+    spc.isHdr          = 0;
     vkCmdPushConstants(cmd, state.photoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(spc), &spc);
@@ -5561,6 +5583,8 @@ void RenderFrame(AppState& state) {
             }
             state.screenMode = newMode;
         }
+        // T-HDR: mesma cadencia de leitura por frame que screenMode acima.
+        state.isHdr = get_video_is_hdr() != 0;
         const bool sphereMode = IsSphereMode(state.screenMode);
         const bool stereoFlat = IsFlatStereoMode(state.screenMode);
 

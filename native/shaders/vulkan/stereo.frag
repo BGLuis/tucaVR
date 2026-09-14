@@ -13,8 +13,29 @@ layout(location = 3) flat in int vStereoLayout;
 layout(location = 4) flat in int vPolar180;
 layout(location = 5) flat in float vSharpness;
 layout(location = 6) flat in int vUpscalingMode;
+layout(location = 7) flat in int vIsHdr;
 
 layout(location = 0) out vec4 outColor;
+
+// T-HDR (Fase 2, primeira versao) — ver o comentario completo em video.frag.
+vec3 PqEotf(vec3 pq) {
+    const float m1 = 0.1593017578125;
+    const float m2 = 78.84375;
+    const float c1 = 0.8359375;
+    const float c2 = 18.8515625;
+    const float c3 = 18.6875;
+    vec3 p = pow(clamp(pq, 0.0, 1.0), vec3(1.0 / m2));
+    vec3 num = max(p - c1, 0.0);
+    vec3 den = max(c2 - c3 * p, 1e-6);
+    return pow(num / den, vec3(1.0 / m1));
+}
+
+vec3 TonemapHdrToSdr(vec3 hdrColor) {
+    vec3 nits = PqEotf(hdrColor) * 10000.0;
+    vec3 scene = nits / 100.0;
+    vec3 tonemapped = scene / (1.0 + scene);
+    return pow(clamp(tonemapped, 0.0, 1.0), vec3(1.0 / 2.2));
+}
 
 vec3 ApplySGSR1(vec2 uv, float sharpness) {
     vec2 texelSize = 1.0 / vec2(textureSize(videoTexture, 0));
@@ -98,11 +119,13 @@ void main() {
         uv.x = uv.x * 0.5 + float(eye) * 0.5;
     }
 
-    if (vSharpness <= 0.01) {
-        // alpha forcado a 1.0 (video sempre opaco) — ver nota em video.frag
-        // sobre composicao por alpha com passthrough ativo.
-        outColor = vec4(texture(videoTexture, uv).rgb, 1.0);
-    } else {
-        outColor = vec4(ApplySGSR1(uv, vSharpness), 1.0);
+    // alpha forcado a 1.0 (video sempre opaco) — ver nota em video.frag
+    // sobre composicao por alpha com passthrough ativo.
+    vec3 color = (vSharpness <= 0.01)
+        ? texture(videoTexture, uv).rgb
+        : ApplySGSR1(uv, vSharpness);
+    if (vIsHdr != 0) {
+        color = TonemapHdrToSdr(color);
     }
+    outColor = vec4(color, 1.0);
 }

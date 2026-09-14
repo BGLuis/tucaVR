@@ -229,6 +229,13 @@ pub struct PlaybackController {
     desired_audio_track: usize,
     audio_track_count: usize,
     detected_screen_mode: u32,
+    // T-HDR: transfer characteristic (EOTF) do stream de video atual,
+    // detectada uma vez em load_at() a partir do que o FFmpeg reporta (ver
+    // media_logic::color) — exposta pro C++ (bridge) escolher o pipeline
+    // Vulkan certo (BT.709/SDR vs. BT.2020+tonemap pra PQ/HLG). SDR e o
+    // default seguro antes do primeiro load_at() ou se o container nao
+    // informa nada (mesma suposicao implicita que o pipeline sempre teve).
+    is_hdr: bool,
     auto_paused: bool,
     // Instrumentacao (docs/DEBUGGING.md), capturada em load_at() antes de
     // mover o Demuxer/HwDecoder pra dentro das threads de sessao — ver
@@ -280,6 +287,13 @@ pub struct PlaybackController {
     // 8K/360 mesmo bufferizando bem a frente pausado.
     video_bytes_queued: Arc<AtomicU64>,
     audio_bytes_queued: Arc<AtomicU64>,
+    // T-decode-present-split: quantos frames o MediaCodec ja decodificou
+    // mas a video_thread ainda nao liberou/mostrou (fila `pending` local
+    // ao loop, ver comentario la) — publicado a cada volta do loop, so
+    // pra debug (docs/DEBUGGING.md). Pendurando perto do maximo do pool de
+    // output buffers do hardware de forma sustentada = apresentacao nao
+    // esta acompanhando o decode.
+    video_present_pending: Arc<AtomicU32>,
     // Legendas (SRT / WebVTT / ASS / PGS — Fase 0.2/0.3)
     subtitle_entries: Option<Vec<media_logic::subtitle::SubtitleEntry>>,
     ass_subtitle: Option<media_logic::subtitle_ass::AssSubtitle>,
@@ -307,6 +321,7 @@ impl PlaybackController {
             desired_audio_track: 0,
             audio_track_count: 0,
             detected_screen_mode: 0,
+            is_hdr: false,
             auto_paused: false,
             network_stats: None,
             video_queue: None,
@@ -325,6 +340,7 @@ impl PlaybackController {
             last_enqueued_video_dts_bits: Arc::new(AtomicU64::new(0.0f64.to_bits())),
             video_bytes_queued: Arc::new(AtomicU64::new(0)),
             audio_bytes_queued: Arc::new(AtomicU64::new(0)),
+            video_present_pending: Arc::new(AtomicU32::new(0)),
             subtitle_entries: None,
             ass_subtitle: None,
             pgs_subtitles: None,
@@ -397,6 +413,7 @@ impl PlaybackController {
         let mut height = 1080;
         let mut codec_id = ffmpeg_next::codec::Id::None;
         let mut video_fps = 0.0f32;
+        let mut transfer_function = media_logic::color::TransferFunction::Sdr;
         if let Some(stream) = demuxer.input_context.stream(video_idx) {
             codec_id = stream.parameters().id();
             let avg_fps = stream.avg_frame_rate();
@@ -407,9 +424,17 @@ impl PlaybackController {
                 if let Ok(video_decoder_ctx) = decoder.decoder().video() {
                     width = video_decoder_ctx.width() as u32;
                     height = video_decoder_ctx.height() as u32;
+                    // T-HDR: le a transfer characteristic (EOTF) que o
+                    // container/codec declarou pra este stream — ver
+                    // media_logic::color pro porque do numero cru em vez
+                    // do tipo do ffmpeg-next (media-logic nao depende dele).
+                    let trc: ffmpeg_next::ffi::AVColorTransferCharacteristic =
+                        video_decoder_ctx.color_transfer_characteristic().into();
+                    transfer_function = media_logic::color::from_avcol_trc(trc as i32);
                 }
             }
         }
+        self.is_hdr = transfer_function.is_hdr();
 
         let (fmt3d, _) = crate::format3d_detect::detect(&demuxer, path, width, height);
         self.detected_screen_mode = fmt3d.to_screen_mode_index();
@@ -489,6 +514,31 @@ impl PlaybackController {
         format.set_i32("max-input-size", max_input_size);
         // Prioridade de decodificação realtime (0 = realtime / baixa latência)
         format.set_i32("priority", 0);
+
+        // Torna explicito pro MediaCodec o espaco de cor do conteudo SDR
+        // que este app foi feito pra tocar (HD/4K/8K reais sao BT.709, nao
+        // BT.601 de SD) — antes disso a plataforma tinha que adivinhar, e o
+        // caminho Vulkan (CreateYcbcrAndVideoPipeline) tinha essa mesma
+        // suposicao errada hardcoded como BT.601 (ver commit que trocou pra
+        // BT.709 la). Valores de android.media.MediaFormat:
+        // COLOR_STANDARD_BT709=1, COLOR_STANDARD_BT2020=6,
+        // COLOR_RANGE_LIMITED=2, COLOR_TRANSFER_SDR_VIDEO=3,
+        // COLOR_TRANSFER_ST2084=6, COLOR_TRANSFER_HLG=7.
+        format.set_i32("color-range", 2);
+        match transfer_function {
+            media_logic::color::TransferFunction::Sdr => {
+                format.set_i32("color-standard", 1);
+                format.set_i32("color-transfer", 3);
+            }
+            media_logic::color::TransferFunction::Pq => {
+                format.set_i32("color-standard", 6);
+                format.set_i32("color-transfer", 6);
+            }
+            media_logic::color::TransferFunction::Hlg => {
+                format.set_i32("color-standard", 6);
+                format.set_i32("color-transfer", 7);
+            }
+        }
 
         if max_dim >= 7000 && video_fps > 30.0 {
             crate::log_warn!(
@@ -791,6 +841,7 @@ impl PlaybackController {
 
         // Thread 2: Video Decoder
         let sync_v = sync_manager.clone();
+        let video_present_pending_v = self.video_present_pending.clone();
         let video_thread = thread::spawn(move || {
             VIDEO_THREAD_TID.store(unsafe { libc::gettid() }, Ordering::Relaxed);
             if let Some(sps) = sps_pps {
@@ -803,6 +854,46 @@ impl PlaybackController {
             let mut catchup_packets: u32 = 0;
             // Marca troca de epoca (seek) pra detectar fila de video vazia logo em seguida (rede lenta).
             let mut last_epoch_change_at: Option<std::time::Instant> = None;
+            // Frames que o MediaCodec ja decodificou mas ainda NAO foram
+            // liberados/mostrados — seguram lugar no proprio pool de
+            // buffers de saida do codec (nao sao copias). Existir isto e o
+            // que permite continuar alimentando o proximo pacote de
+            // entrada (abaixo) em vez de ficar preso num sleep unico
+            // esperando a hora de mostrar o frame anterior — o sleep de
+            // sincronismo (passo 2) agora so espera em fatias curtas
+            // (PRESENT_WAIT_SLICE), voltando sempre pro passo de
+            // alimentar entrada/drenar mais saida. Sempre tratada em
+            // ordem FIFO, igual a ordem de apresentacao que o proprio
+            // MediaCodec ja garante.
+            let mut pending: std::collections::VecDeque<ndk::media::media_codec::OutputBuffer<'_>> =
+                std::collections::VecDeque::new();
+            const PRESENT_WAIT_SLICE: std::time::Duration = std::time::Duration::from_millis(10);
+
+            // Libera (mostrando ou descartando) o frame mais antigo
+            // pendente, atualizando a mesma telemetria (av_drift_ms,
+            // acquire_latest_buffer) que o caminho antigo atualizava
+            // inline no sync_callback.
+            macro_rules! release_pending_front {
+                ($render:expr) => {
+                    if let Some(buf) = pending.pop_front() {
+                        let pts_sec = buf.info().presentation_time_us() as f64 * video_time_base;
+                        let _ = video_decoder.release_output(buf, $render);
+                        if $render {
+                            if let Ok(mut tex) = texture_output_clone.lock() {
+                                let _ = tex.acquire_latest_buffer();
+                            }
+                        }
+                        let master_clock = sync_v.get_master_clock();
+                        let inst_drift_ms = ((master_clock - pts_sec) * 1000.0).clamp(i32::MIN as f64, i32::MAX as f64);
+                        let prev_drift_ms = av_drift_v.load(Ordering::Relaxed) as f64;
+                        let smoothed_drift_ms = prev_drift_ms * 0.9 + inst_drift_ms * 0.1;
+                        av_drift_v.store(
+                            smoothed_drift_ms.clamp(i32::MIN as f64, i32::MAX as f64) as i32,
+                            Ordering::Relaxed
+                        );
+                    }
+                };
+            }
 
             loop {
                 if !*is_running_v.lock().unwrap() { break; }
@@ -812,7 +903,55 @@ impl PlaybackController {
                     continue;
                 }
 
-                match video_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                // 1. Drena tudo que o MediaCodec ja tiver pronto na saida,
+                //    sem liberar nada ainda (try_dequeue_output nao
+                //    bloqueia; para sozinho quando nao ha mais nada pronto
+                //    agora — o teto de profundidade vem so do pool de
+                //    buffers de saida do proprio hardware).
+                while let Some(buf) = video_decoder.try_dequeue_output() {
+                    pending.push_back(buf);
+                }
+                video_present_pending_v.store(pending.len() as u32, Ordering::Relaxed);
+
+                // 2. Decide o que fazer com o frame mais antigo pendente,
+                //    sem travar o loop nisso: so espera em fatias curtas
+                //    (volta sempre pro passo 3 pra manter o decode
+                //    avancando em vez de dormir o atraso inteiro de uma
+                //    vez so).
+                if let Some(front) = pending.front() {
+                    let pts_sec = front.info().presentation_time_us() as f64 * video_time_base;
+                    let is_landing = preroll.is_awaiting_landing();
+                    let master_clock = sync_v.get_master_clock();
+                    match media_logic::frame_timing::decide_frame_action(
+                        pts_sec, master_clock, is_landing, LATE_FRAME_RENDER_SKIP_SEC,
+                    ) {
+                        media_logic::frame_timing::FrameAction::WaitThenRender(d) => {
+                            std::thread::sleep(d.min(PRESENT_WAIT_SLICE));
+                        }
+                        media_logic::frame_timing::FrameAction::Land => {
+                            preroll.take_landing();
+                            sync_v.update_master_clock(pts_sec);
+                            release_pending_front!(true);
+                        }
+                        media_logic::frame_timing::FrameAction::RenderNow => {
+                            release_pending_front!(true);
+                        }
+                        media_logic::frame_timing::FrameAction::Drop => {
+                            release_pending_front!(false);
+                        }
+                    }
+                }
+
+                // 3. Alimenta o proximo pacote de entrada — timeout curto
+                //    se ja ha algo pendente aguardando a hora certa, pra
+                //    voltar logo ao passo 2; timeout normal (50ms) se nao
+                //    ha nada pendente (nada a perder esperando mais).
+                let recv_timeout = if pending.is_empty() {
+                    std::time::Duration::from_millis(50)
+                } else {
+                    std::time::Duration::from_millis(5)
+                };
+                match video_rx.recv_timeout(recv_timeout) {
                 Ok(tagged) => {
                     // Descontado incondicionalmente, mesmo se o pacote for de
                     // uma epoca velha e descartado logo abaixo — ele saiu
@@ -827,6 +966,13 @@ impl PlaybackController {
                     if tagged.epoch != current_epoch {
                         current_epoch = tagged.epoch;
                         let _ = video_decoder.flush();
+                        // Pos-flush, qualquer OutputBuffer ainda pendente
+                        // aponta pra um indice que o MediaCodec ja
+                        // invalidou/reclamou internamente — descartar SEM
+                        // chamar release_output neles (seria usar um
+                        // handle morto; flush() ja cuida de liberar esses
+                        // slots do lado do codec).
+                        pending.clear();
                         preroll.begin();
                         last_epoch_change_at = Some(std::time::Instant::now());
                     }
@@ -854,47 +1000,20 @@ impl PlaybackController {
                             data.to_vec()
                         };
                         // F4: erros de decode ja incrementam decode_errors DENTRO de
-                        // decode_packet (ver HwDecoder) — o Result aqui so controla o fluxo
-                        // (released_any), como antes; o `let _` nao esconde mais um contador.
-                        let _ = video_decoder.decode_packet(
+                        // feed_input (ver HwDecoder) — o Result aqui so controla o fluxo,
+                        // como antes; o `let _` nao esconde mais um contador.
+                        let _ = video_decoder.feed_input(
                             &frame_data,
                             pts,
                             0,
-                            |out_pts| {
-                                let pts_sec = out_pts as f64 * video_time_base;
-                                // Quadro de pouso do seek (T-seek-ux): mostra na hora, na posicao
-                                // real onde caiu (pode ser ate um GOP antes do alvo pedido) em vez
-                                // de esperar decodificar ate a posicao exata — troca precisao por
-                                // resposta instantanea (mesmo comportamento do 4XVR/concorrentes).
-                                if preroll.take_landing() {
-                                    sync_v.update_master_clock(pts_sec);
-                                    return true;
-                                }
-                                let master_clock = sync_v.get_master_clock();
-                                let delay = pts_sec - master_clock;
-                                let inst_drift_ms = (-delay * 1000.0).clamp(i32::MIN as f64, i32::MAX as f64);
-                                // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): EMA em vez de
-                                // sobrescrita crua — mesmo fator 0.9/0.1 usado por smoothedFps/
-                                // smoothedGpuTimeMs no lado C++, reduz ruido quadro-a-quadro sem
-                                // esconder uma tendencia real de dessincronia. A idade do valor (se
-                                // o decode parou de vez) e responsabilidade de F1 (videoStatsAgeMs),
-                                // nao desta media.
-                                let prev_drift_ms = av_drift_v.load(Ordering::Relaxed) as f64;
-                                let smoothed_drift_ms = prev_drift_ms * 0.9 + inst_drift_ms * 0.1;
-                                av_drift_v.store(
-                                    smoothed_drift_ms.clamp(i32::MIN as f64, i32::MAX as f64) as i32,
-                                    Ordering::Relaxed
-                                );
-                                if delay > 0.0 && delay < 1.0 {
-                                    std::thread::sleep(std::time::Duration::from_secs_f64(delay));
-                                }
-                                delay > -LATE_FRAME_RENDER_SKIP_SEC
-                            },
-                            || {
-                                if let Ok(mut tex) = texture_output_clone.lock() {
-                                    let _ = tex.acquire_latest_buffer();
-                                }
-                            },
+                            // Sob pressao (entrada cheia porque estamos
+                            // segurando saida pendente demais): libera o
+                            // mais antigo cedo como valvula de alivio, em
+                            // vez de deixar o decode travar de verdade.
+                            // Substitui o antigo
+                            // `release_output_frames_with_sync` chamado
+                            // aqui pelo mesmo motivo.
+                            || release_pending_front!(true),
                             || *is_running_v.lock().unwrap()
                         );
                         if was_active && !preroll.is_active() {
@@ -1197,6 +1316,15 @@ impl PlaybackController {
         self.video_queue.as_ref().map(|s| s.len() as u32).unwrap_or(0)
     }
 
+    /// Debug (docs/DEBUGGING.md) — quantos frames o MediaCodec ja
+    /// decodificou mas a video_thread ainda nao liberou/mostrou (ver
+    /// comentario em `video_present_pending`). Pendurando perto do maximo
+    /// do pool de output buffers do hardware de forma sustentada =
+    /// apresentacao nao esta acompanhando o decode.
+    pub fn get_video_presentation_pending(&self) -> u32 {
+        self.video_present_pending.load(Ordering::Relaxed)
+    }
+
     /// F4: espelho de get_video_queue_depth() para a fila de áudio — antes invisível de
     /// fora (só video_queue guardava o clone do Sender pra observabilidade).
     pub fn get_audio_queue_depth(&self) -> u32 {
@@ -1342,6 +1470,14 @@ impl PlaybackController {
 
     pub fn detected_screen_mode(&self) -> u32 {
         self.detected_screen_mode
+    }
+
+    /// T-HDR: true se o video atual foi detectado como PQ/HLG (ver
+    /// media_logic::color) — consumido pelo C++ (bridge) pra escolher o
+    /// pipeline de cor Vulkan certo. false antes do primeiro load_at() ou
+    /// para conteudo SDR comum.
+    pub fn is_hdr(&self) -> bool {
+        self.is_hdr
     }
 
     pub fn set_subtitle_track(&mut self, track: i32) {

@@ -4,6 +4,11 @@
 
 // Codificacao numerica (DEVE casar exatamente com SCREEN_MODE em
 // rust/bridge/src/lib.rs, rust/media-logic/src/format3d.rs e ScreenFormatCatalog.kt).
+//
+// Puramente projecao/layout — ortogonal a espaco de cor/HDR (ver
+// media_logic::color::TransferFunction e get_video_is_hdr() no bridge).
+// Nao adicionar um eixo de cor aqui: HDR e uma flag separada, valida para
+// qualquer um destes modos.
 enum class ScreenMode : uint32_t {
     Flat2D       = 0,
     SBS          = 1,

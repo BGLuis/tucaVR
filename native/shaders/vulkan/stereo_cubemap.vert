@@ -17,6 +17,7 @@ layout(push_constant) uniform PushConstants {
     int   upscalingMode; // 0 = Off, 1 = Quality, 2 = Performance, 3 = Auto
     int   cubemapLayout; // 0 = 3x2, 1 = 6x1, 2 = EAC 3x2, 3 = cross
     int   projectionType;// 0 = Linear Cubemap, 1 = EAC
+    int   isHdr;         // T-HDR: 1 = fonte PQ/HLG, aplicar tonemap no fragment shader
 } pc;
 
 layout(location = 0) out vec2 vTexCoord;
@@ -28,6 +29,7 @@ layout(location = 5) flat out int vUpscalingMode;
 layout(location = 6) flat out int vCubemapLayout;
 layout(location = 7) flat out int vProjectionType;
 layout(location = 8) out vec3 vWorldDirection;
+layout(location = 9) flat out int vIsHdr;
 
 void main() {
     gl_Position       = pc.mvp * vec4(inPosition, 1.0);
@@ -40,4 +42,5 @@ void main() {
     vCubemapLayout    = pc.cubemapLayout;
     vProjectionType   = pc.projectionType;
     vWorldDirection   = inPosition;
+    vIsHdr            = pc.isHdr;
 }

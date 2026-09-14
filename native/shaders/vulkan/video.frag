@@ -10,8 +10,38 @@ layout(set = 0, binding = 0) uniform sampler2D videoTexture;
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 1) flat in float vSharpness;
 layout(location = 2) flat in int vUpscalingMode;
+layout(location = 3) flat in int vIsHdr;
 
 layout(location = 0) out vec4 outColor;
+
+// T-HDR (Fase 2, primeira versao — ver docs/phases/PHASE-0.3-POLISH-AUDIO.md
+// T6.2): tonemap HDR->SDR pra exibir PQ/HLG no display SDR do Quest 3.
+// Pipeline: linearizar a EOTF PQ (ST 2084) -> nits absolutos -> normalizar
+// pelo branco de referencia SDR nominal (100 nits) -> Reinhard em luz
+// linear -> gamma de saida aproximado (mesmo espaco "pronto pra exibir" que
+// o passthrough SDR abaixo ja assume). Aproximacao deliberada pra uma
+// primeira versao: nao le metadado estatico HDR (MaxCLL/MaxFALL), e trata
+// HLG com a mesma curva de PQ apos a normalizacao (ambas convergem pra
+// resultado proximo no branco de referencia) — Hable/ACES e leitura de
+// metadado ficam pra uma iteracao futura (ver plano).
+vec3 PqEotf(vec3 pq) {
+    const float m1 = 0.1593017578125;
+    const float m2 = 78.84375;
+    const float c1 = 0.8359375;
+    const float c2 = 18.8515625;
+    const float c3 = 18.6875;
+    vec3 p = pow(clamp(pq, 0.0, 1.0), vec3(1.0 / m2));
+    vec3 num = max(p - c1, 0.0);
+    vec3 den = max(c2 - c3 * p, 1e-6);
+    return pow(num / den, vec3(1.0 / m1));
+}
+
+vec3 TonemapHdrToSdr(vec3 hdrColor) {
+    vec3 nits = PqEotf(hdrColor) * 10000.0;
+    vec3 scene = nits / 100.0;
+    vec3 tonemapped = scene / (1.0 + scene);
+    return pow(clamp(tonemapped, 0.0, 1.0), vec3(1.0 / 2.2));
+}
 
 // Kernel SGSR1 (Snapdragon Game Super Resolution v1 / 12-tap edge-aware)
 vec3 ApplySGSR1(vec2 uv, float sharpness) {
@@ -77,12 +107,14 @@ vec3 ApplySGSR1(vec2 uv, float sharpness) {
 }
 
 void main() {
-    if (vSharpness <= 0.01) {
-        // alpha forcado a 1.0: video decodificado e sempre opaco, e com
-        // passthrough ativo (Fase 0.3 Seção 2) o eye buffer compoe pelo
-        // alpha — um alpha < 1 vindo do sampler deixaria o video traslucido.
-        outColor = vec4(texture(videoTexture, vTexCoord).rgb, 1.0);
-    } else {
-        outColor = vec4(ApplySGSR1(vTexCoord, vSharpness), 1.0);
+    // alpha forcado a 1.0: video decodificado e sempre opaco, e com
+    // passthrough ativo (Fase 0.3 Seção 2) o eye buffer compoe pelo
+    // alpha — um alpha < 1 vindo do sampler deixaria o video traslucido.
+    vec3 color = (vSharpness <= 0.01)
+        ? texture(videoTexture, vTexCoord).rgb
+        : ApplySGSR1(vTexCoord, vSharpness);
+    if (vIsHdr != 0) {
+        color = TonemapHdrToSdr(color);
     }
+    outColor = vec4(color, 1.0);
 }

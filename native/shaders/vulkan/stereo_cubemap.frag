@@ -16,10 +16,31 @@ layout(location = 5) flat in int vUpscalingMode;
 layout(location = 6) flat in int vCubemapLayout;
 layout(location = 7) flat in int vProjectionType;
 layout(location = 8) in vec3 vWorldDirection;
+layout(location = 9) flat in int vIsHdr;
 
 layout(location = 0) out vec4 outColor;
 
 const float PI = 3.14159265358979323846;
+
+// T-HDR (Fase 2, primeira versao) — ver o comentario completo em video.frag.
+vec3 PqEotf(vec3 pq) {
+    const float m1 = 0.1593017578125;
+    const float m2 = 78.84375;
+    const float c1 = 0.8359375;
+    const float c2 = 18.8515625;
+    const float c3 = 18.6875;
+    vec3 p = pow(clamp(pq, 0.0, 1.0), vec3(1.0 / m2));
+    vec3 num = max(p - c1, 0.0);
+    vec3 den = max(c2 - c3 * p, 1e-6);
+    return pow(num / den, vec3(1.0 / m1));
+}
+
+vec3 TonemapHdrToSdr(vec3 hdrColor) {
+    vec3 nits = PqEotf(hdrColor) * 10000.0;
+    vec3 scene = nits / 100.0;
+    vec3 tonemapped = scene / (1.0 + scene);
+    return pow(clamp(tonemapped, 0.0, 1.0), vec3(1.0 / 2.2));
+}
 
 // Kernel adaptativo SGSR1 para upscaling e nitidez de vídeo
 vec3 ApplySGSR1(vec2 uv, float sharpness) {
@@ -228,9 +249,11 @@ void main() {
         texUV.y = texUV.y * 0.5 + float(eye) * 0.5;
     }
 
-    if (vSharpness <= 0.01) {
-        outColor = vec4(texture(videoTexture, texUV).rgb, 1.0);
-    } else {
-        outColor = vec4(ApplySGSR1(texUV, vSharpness), 1.0);
+    vec3 color = (vSharpness <= 0.01)
+        ? texture(videoTexture, texUV).rgb
+        : ApplySGSR1(texUV, vSharpness);
+    if (vIsHdr != 0) {
+        color = TonemapHdrToSdr(color);
     }
+    outColor = vec4(color, 1.0);
 }

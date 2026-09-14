@@ -1,4 +1,4 @@
-use ndk::media::media_codec::{MediaCodec, MediaCodecDirection, DequeuedInputBufferResult, DequeuedOutputBufferInfoResult};
+use ndk::media::media_codec::{MediaCodec, MediaCodecDirection, DequeuedInputBufferResult, DequeuedOutputBufferInfoResult, OutputBuffer};
 use ndk::media::media_format::MediaFormat;
 use ndk::native_window::NativeWindow;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -229,6 +229,107 @@ impl HwDecoder {
 
     pub fn release_output_frames(&self) {
         self.release_output_frames_with_sync(|_| true, || {});
+    }
+
+    /// Enfileira UM pacote de entrada, com o mesmo retry de
+    /// `decode_packet` quando o MediaCodec esta com a entrada cheia — mas,
+    /// diferente de `decode_packet`, NAO drena nem decide nada sobre a
+    /// saida: isso fica por conta de `try_dequeue_output`/`release_output`,
+    /// chamados separadamente por quem usa isto (ver o loop de video em
+    /// `playback.rs`). Essa separacao e o que permite continuar
+    /// alimentando o proximo pacote em vez de ficar preso num sleep unico
+    /// esperando a hora de mostrar o frame anterior.
+    ///
+    /// `on_stalled` e chamado a cada retry enquanto a entrada estiver
+    /// cheia (TryAgainLater) — o codigo antigo, nesse caso, chamava
+    /// `release_output_frames_with_sync` pra tentar abrir espaco liberando
+    /// saida pendente; aqui isso vira responsabilidade de quem chama (via
+    /// este hook), porque agora e quem chama que sabe quais frames ja
+    /// decodificados estao pendentes de apresentacao e pode decidir
+    /// liberar o mais antigo cedo (aceitando pequena imprecisao de sync)
+    /// como valvula de alivio antes de travar de verdade.
+    pub fn feed_input(
+        &self,
+        data: &[u8],
+        pts: i64,
+        flags: u32,
+        mut on_stalled: impl FnMut(),
+        should_continue: impl Fn() -> bool,
+    ) -> Result<(), String> {
+        let codec = self.codec.as_ref().ok_or_else(|| {
+            self.decode_errors.fetch_add(1, Ordering::Relaxed);
+            "Codec not initialized".to_string()
+        })?;
+
+        loop {
+            if !should_continue() {
+                return Ok(());
+            }
+            match codec.dequeue_input_buffer(Duration::from_millis(5)) {
+                Ok(DequeuedInputBufferResult::Buffer(mut buf)) => {
+                    let slice = buf.buffer_mut();
+                    let len = data.len().min(slice.len());
+                    for i in 0..len {
+                        slice[i].write(data[i]);
+                    }
+
+                    codec.queue_input_buffer(buf, 0, len, pts as u64, flags)
+                        .map_err(|e| {
+                            self.decode_errors.fetch_add(1, Ordering::Relaxed);
+                            format!("queue_input_buffer failed: {:?}", e)
+                        })?;
+                    return Ok(());
+                }
+                Ok(DequeuedInputBufferResult::TryAgainLater) => {
+                    on_stalled();
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                Err(e) => {
+                    self.decode_errors.fetch_add(1, Ordering::Relaxed);
+                    return Err(format!("dequeue_input_buffer error: {:?}", e));
+                }
+            }
+        }
+    }
+
+    /// Tenta pegar UM frame de saida pronto, SEM liberar — nao bloqueia
+    /// (timeout 0). `OutputFormatChanged`/`OutputBuffersChanged` sao
+    /// absorvidos aqui (chamando dequeue de novo), como o loop antigo de
+    /// `release_output_frames_with_sync` ja fazia; so `TryAgainLater`
+    /// (nada pronto agora) ou erro devolvem `None`. O frame devolvido fica
+    /// seguro no proprio pool de buffers de saida do MediaCodec ate quem
+    /// chamou decidir a hora certa de liberar via `release_output` — nao e
+    /// copiado, entao a profundidade de quantos ficam pendentes de fora e
+    /// naturalmente limitada por esse pool (`dequeue_input_buffer` comeca
+    /// a bloquear quando ele se esgota), sem precisar de um teto proprio.
+    pub fn try_dequeue_output(&self) -> Option<OutputBuffer<'_>> {
+        let codec = self.codec.as_ref()?;
+        loop {
+            match codec.dequeue_output_buffer(Duration::from_millis(0)) {
+                Ok(DequeuedOutputBufferInfoResult::Buffer(buf)) => {
+                    self.frames_output.fetch_add(1, Ordering::Relaxed);
+                    return Some(buf);
+                }
+                Ok(DequeuedOutputBufferInfoResult::TryAgainLater) => return None,
+                Ok(_) => continue,
+                Err(_) => return None,
+            }
+        }
+    }
+
+    /// Libera (mostrando ou descartando) um frame previamente obtido por
+    /// `try_dequeue_output`, na hora decidida por quem chama (ver
+    /// `media_logic::frame_timing` e o loop de video em `playback.rs`).
+    /// `render=false` conta em `frames_dropped`, como o caminho antigo em
+    /// `release_output_frames_with_sync`.
+    pub fn release_output(&self, buf: OutputBuffer<'_>, render: bool) -> Result<(), String> {
+        let codec = self.codec.as_ref().ok_or("Codec not initialized")?;
+        codec.release_output_buffer(buf, render)
+            .map_err(|e| format!("release_output_buffer failed: {:?}", e))?;
+        if !render {
+            self.frames_dropped.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(())
     }
 
     /// Enfileira `data` e tenta pegar UM frame de saida cru (YUV, sem

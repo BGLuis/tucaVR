@@ -724,6 +724,28 @@ pub extern "C" fn get_video_queue_depth() -> u32 {
     }
 }
 
+/// Debug (docs/DEBUGGING.md): frames que o MediaCodec ja decodificou mas a
+/// video_thread ainda nao liberou/mostrou — ver PlaybackController::get_video_presentation_pending.
+#[no_mangle]
+pub extern "C" fn get_video_presentation_pending() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_video_presentation_pending(),
+        Err(_) => 0,
+    }
+}
+
+/// T-HDR: 1 se o video atual foi detectado como HDR (PQ/HLG, ver
+/// media_logic::color), 0 caso contrario (inclui antes do primeiro load).
+/// O C++ consulta isto pra escolher o pipeline de cor Vulkan certo
+/// (BT.709/SDR vs. BT.2020 + tonemap).
+#[no_mangle]
+pub extern "C" fn get_video_is_hdr() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.is_hdr() as u32,
+        Err(_) => 0,
+    }
+}
+
 /// Debug (docs/DEBUGGING.md): bytes recebidos da rede pelo PrefetchReader da
 /// fonte atual, soma cumulativa (0 para arquivo local/`http://` puro). O C++
 /// amostra isto ao longo do tempo e calcula MB/s, mesmo padrao de decFps.
