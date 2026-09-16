@@ -83,6 +83,20 @@
     <string name="passthrough_grab_hint">Dica: Aponte para o vídeo e segure o botão Grip para agarrar e mover a tela pelo espaço 3D.</string>
     <string name="settings_passthrough_open_button">Ajustes</string>
 
+    <!-- Ambientes Virtuais (Fase 0.3 §1 e Fase 0.5 §3) -->
+    <string name="environments_modal_title">Ambientes Virtuais</string>
+    <string name="env_void_title">Void</string>
+    <string name="env_void_desc">Fundo preto puro minimalista com consumo zero de GPU.</string>
+    <string name="env_space_title">Espaço Cósmico</string>
+    <string name="env_space_desc">Plataforma orbital flutuando no cosmos com nebulosa e poeira estelar.</string>
+    <string name="env_cinema_title">Cinema IMAX</string>
+    <string name="env_cinema_desc">Grande sala de cinema com poltronas e tela gigante ancorada.</string>
+    <string name="env_living_room_title">Sala de Estar</string>
+    <string name="env_living_room_desc">Ambiente residencial aconchegante com tela na parede.</string>
+    <string name="env_passthrough_title">Passthrough (MR)</string>
+    <string name="env_passthrough_desc">Realidade Mista exibindo o ambiente real ao seu redor.</string>
+    <string name="env_reset_anchor_button">Redefinir para Âncora do Ambiente</string>
+
     <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
     <string name="browser_title_local_files">Arquivos locais</string>
     <string name="browser_row_up">Subir um nivel</string>

@@ -646,6 +646,24 @@ class VRControlsPresentation(
             }
         }
         vrModesLayout.addView(btnPassthrough)
+
+        // Ambientes Virtuais 3D (Fase 0.3 §1 e Fase 0.5 §3)
+        val btnEnvironment = VoidIconButton(
+            context,
+            R.drawable.icon_environment,
+            VoidButtonStyle.SECONDARY,
+            isCircular = true,
+            isTransparent = true,
+        ).apply {
+            layoutParams = LinearLayout.LayoutParams(secondaryIconPx, secondaryIconPx).apply {
+                leftMargin = VoidTheme.dpToPx(context, 8f)
+            }
+            setOnClickListener {
+                activity.openEnvironmentSelectorModal()
+            }
+        }
+        vrModesLayout.addView(btnEnvironment)
+
         rightZone.addView(vrModesLayout)
         headerRow.addView(rightZone)
 

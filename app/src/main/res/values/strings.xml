@@ -92,6 +92,20 @@
     <string name="passthrough_grab_hint">Hint: Point at the screen and hold Grip to grab and reposition in 3D space.</string>
     <string name="settings_passthrough_open_button">Settings</string>
 
+    <!-- Virtual Environments (Phase 0.3 §1 & Phase 0.5 §3) -->
+    <string name="environments_modal_title">Virtual Environments</string>
+    <string name="env_void_title">Void</string>
+    <string name="env_void_desc">Pure pitch-black background with zero GPU overhead.</string>
+    <string name="env_space_title">Cosmic Space</string>
+    <string name="env_space_desc">Orbital platform floating in space with nebula and stardust.</string>
+    <string name="env_cinema_title">Cinema IMAX</string>
+    <string name="env_cinema_desc">Grand theater hall with cushioned seats and giant anchored screen.</string>
+    <string name="env_living_room_title">Living Room</string>
+    <string name="env_living_room_desc">Cozy home interior with screen anchored to the wall.</string>
+    <string name="env_passthrough_title">Passthrough (MR)</string>
+    <string name="env_passthrough_desc">Mixed Reality displaying your physical room as background.</string>
+    <string name="env_reset_anchor_button">Reset to Environment Anchor</string>
+
     <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
     <string name="browser_title_local_files">Local Files</string>
     <string name="browser_row_up">Go up one level</string>

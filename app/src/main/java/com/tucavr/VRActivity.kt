@@ -120,6 +120,13 @@ class VRActivity : NativeActivity() {
     val format3dStore: Format3DPreferenceStore by lazy { Format3DPreferenceStore(this) }
     val upscalingStore: UpscalingModeStore by lazy { UpscalingModeStore(this) }
     val thermalMonitor: ThermalMonitor by lazy { ThermalMonitor(this) }
+    val screenTransformStore: ScreenTransformStore by lazy { ScreenTransformStore(this) }
+    val environmentStore: EnvironmentStore by lazy { EnvironmentStore(this) }
+
+    fun applySavedScreenTransform() {
+        val t = screenTransformStore.get()
+        nativeSetScreenTransform(t.posX, t.posY, t.posZ, t.scaleX, t.scaleY)
+    }
 
     // Último `quality_reason` visto em updateDebugHud (chamado ~10x/s pelo C++ via JNI) — usado
     // para disparar o Toast de sobrecarga não-térmica só na transição de entrada em
@@ -617,6 +624,7 @@ class VRActivity : NativeActivity() {
 
     override fun onResume() {
         super.onResume()
+        applySavedScreenTransform()
         presentation?.loadFiles()
         thermalMonitor.startMonitoring(callback = thermalCallback)
         pendingAutoPlayPath?.let { path ->
@@ -645,6 +653,20 @@ class VRActivity : NativeActivity() {
     companion object {
         init {
             System.loadLibrary("vrplayer_native")
+        }
+
+        @JvmStatic
+        fun onNativeScreenTransformChanged(
+            activity: VRActivity,
+            posX: Float,
+            posY: Float,
+            posZ: Float,
+            scaleX: Float,
+            scaleY: Float,
+        ) {
+            activity.runOnUiThread {
+                activity.screenTransformStore.save(posX, posY, posZ, scaleX, scaleY)
+            }
         }
 
         private const val PICK_VIDEO_REQUEST_CODE = 1001
@@ -974,6 +996,7 @@ class VRActivity : NativeActivity() {
         VRLog.activeSessionId = sessionId
         VRLog.i("Iniciando sessao de reproducao $sessionId para $source")
         nativeSetSessionId(sessionId)
+        ambientAudioManager.setDucked(true)
         // T7.6: informa o idioma do sistema para a auto-selecao de faixa de
         // legenda embutida (aplicada no proximo load nativo, se o usuario nao
         // tiver escolhido uma faixa manualmente).
@@ -1149,6 +1172,7 @@ class VRActivity : NativeActivity() {
      */
     fun stopPlayback() {
         runOnUiThread {
+            ambientAudioManager.setDucked(false)
             currentPlaybackSource?.let {
                 historyTracker.flushProgress(lastMediaProgressCurrent, lastMediaProgressTotal)
             }
@@ -1236,6 +1260,45 @@ class VRActivity : NativeActivity() {
             nativeShowModalPanel()
             modalPresentation?.showPassthroughSettingsModal()
         }
+    }
+
+    /**
+     * Exibe o modal de seleção de Ambientes Virtuais 3D no 3º Quad dedicado frontal (VRModalPresentation).
+     */
+    fun openEnvironmentSelectorModal() {
+        runOnUiThread {
+            nativeShowModalPanel()
+            modalPresentation?.showEnvironmentSelectorModal()
+        }
+    }
+
+    val ambientAudioManager: AmbientAudioManager by lazy { AmbientAudioManager(this) }
+
+    fun setVirtualEnvironment(environmentId: String) {
+        environmentStore.setActiveEnvironment(environmentId)
+        if (environmentId == EnvironmentStore.ENV_PASSTHROUGH) {
+            nativeSetPassthroughEnabled(true)
+            ambientAudioManager.stopAmbient()
+        } else {
+            if (nativeIsPassthroughSupported()) {
+                nativeSetPassthroughEnabled(false)
+            }
+            val volume = when (environmentId) {
+                EnvironmentStore.ENV_SPACE -> 0.25f
+                EnvironmentStore.ENV_CINEMA -> 0.15f
+                else -> 0.0f
+            }
+            if (volume > 0.0f) {
+                ambientAudioManager.playAmbient(environmentId, volume)
+            } else {
+                ambientAudioManager.stopAmbient()
+            }
+        }
+    }
+
+    fun resetScreenPosition() {
+        screenTransformStore.reset()
+        nativeResetScreenPosition()
     }
 
     /**
@@ -1578,6 +1641,7 @@ class VRActivity : NativeActivity() {
     external fun nativeGetPassthroughOpacity(): Float
     external fun nativeGetPassthroughEdgeRendering(): Boolean
     external fun nativeResetScreenPosition()
+    external fun nativeSetScreenTransform(posX: Float, posY: Float, posZ: Float, scaleX: Float, scaleY: Float)
 
     // T13.1: metadados de midia (container/duracao/bitrate/trilhas) pra tela
     // de detalhe do arquivo — bloqueante (probe de container, rede se remoto),

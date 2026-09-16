@@ -91,6 +91,11 @@ if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
     # Fase 0.4 Seção 6: shaders de projeções avançadas Cubemap e EAC
     vrplayer_compile_shader(stereo_cubemap.vert kStereoCubemapVertSpirv)
     vrplayer_compile_shader(stereo_cubemap.frag kStereoCubemapFragSpirv)
+    # Ambientes Virtuais 3D & Skybox Cósmico
+    vrplayer_compile_shader(environment.vert kEnvironmentVertSpirv)
+    vrplayer_compile_shader(environment.frag kEnvironmentFragSpirv)
+    vrplayer_compile_shader(skybox.vert kSkyboxVertSpirv)
+    vrplayer_compile_shader(skybox.frag kSkyboxFragSpirv)
 
     add_custom_target(vrplayer_shaders DEPENDS ${GENERATED_SHADER_HEADERS})
 endif()

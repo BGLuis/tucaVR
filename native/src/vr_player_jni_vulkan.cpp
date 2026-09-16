@@ -483,6 +483,12 @@ Java_com_tucavr_VRActivity_nativeGetFoveationMode(JNIEnv*, jobject) {
 }
 
 extern std::atomic<bool> g_resetScreenPositionRequested;
+extern std::atomic<bool> g_setScreenTransformRequested;
+extern std::atomic<float> g_requestedScreenPosX;
+extern std::atomic<float> g_requestedScreenPosY;
+extern std::atomic<float> g_requestedScreenPosZ;
+extern std::atomic<float> g_requestedScreenScaleX;
+extern std::atomic<float> g_requestedScreenScaleY;
 
 // Fase 0.3 Seção 2: Passthrough / Mixed Reality.
 extern "C" JNIEXPORT void JNICALL
@@ -514,6 +520,17 @@ Java_com_tucavr_VRActivity_nativeGetPassthroughEdgeRendering(JNIEnv*, jobject) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeResetScreenPosition(JNIEnv*, jobject) {
     g_resetScreenPositionRequested.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetScreenTransform(
+    JNIEnv*, jobject, jfloat posX, jfloat posY, jfloat posZ, jfloat scaleX, jfloat scaleY) {
+    g_requestedScreenPosX.store(static_cast<float>(posX));
+    g_requestedScreenPosY.store(static_cast<float>(posY));
+    g_requestedScreenPosZ.store(static_cast<float>(posZ));
+    g_requestedScreenScaleX.store(static_cast<float>(scaleX));
+    g_requestedScreenScaleY.store(static_cast<float>(scaleY));
+    g_setScreenTransformRequested.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL

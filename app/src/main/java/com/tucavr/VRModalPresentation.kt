@@ -293,6 +293,25 @@ class VRModalPresentation(
         showModal(modal)
     }
 
+    /**
+     * Prepara e exibe o modal de seleção de Ambientes Virtuais 3D ([com.tucavr.designsystem.EnvironmentSelectorModal]).
+     */
+    fun showEnvironmentSelectorModal() {
+        val activeEnv = activity.environmentStore.getActiveEnvironment()
+        val modal = com.tucavr.designsystem.EnvironmentSelectorModal(
+            context = context,
+            activeEnvironmentId = activeEnv,
+            onEnvironmentSelected = { envId ->
+                activity.setVirtualEnvironment(envId)
+            },
+            onResetAnchor = {
+                activity.resetScreenPosition()
+            },
+            onDismiss = { dismissModal() }
+        )
+        showModal(modal)
+    }
+
     override fun onDetachedFromWindow() {
         super.onDetachedFromWindow()
         scope.cancel()

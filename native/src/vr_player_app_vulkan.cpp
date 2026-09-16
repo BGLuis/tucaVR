@@ -245,6 +245,12 @@ extern "C" {
 }
 
 std::atomic<bool> g_resetScreenPositionRequested{false};
+std::atomic<bool> g_setScreenTransformRequested{false};
+std::atomic<float> g_requestedScreenPosX{0.0f};
+std::atomic<float> g_requestedScreenPosY{1.5f};
+std::atomic<float> g_requestedScreenPosZ{-2.4f};
+std::atomic<float> g_requestedScreenScaleX{2.8f};
+std::atomic<float> g_requestedScreenScaleY{1.575f};
 
 // Preview de arrasto no seekbar renderizado sobre o quad do video
 // (T-seek-ux) — escrito por nativeUpdateScrubOverlay/nativeSetScrubOverlayVisible
@@ -936,9 +942,9 @@ struct AppState {
 
     // Tela virtual ajustavel via thumbstick (Etapa 6) — posicao/escala em
     // espaco "base" (antes do offset de cena acima).
-    XrVector3f screenPosition = {0.0f, 1.5f, -2.0f};
-    float screenScaleX = 1.6f;
-    float screenScaleY = 0.9f;
+    XrVector3f screenPosition = {0.0f, 1.5f, -2.4f};
+    float screenScaleX = 2.8f;
+    float screenScaleY = 1.575f;
 
     // Fase 0.3 Seção 2: Grab & Drag da tela virtual (T2.5)
     bool isScreenGrabbed = false;

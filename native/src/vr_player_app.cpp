@@ -582,6 +582,12 @@ Java_com_tucavr_VRActivity_nativeResetScreenPosition(JNIEnv* env, jobject thiz) 
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetScreenTransform(
+    JNIEnv* env, jobject thiz, jfloat posX, jfloat posY, jfloat posZ, jfloat scaleX, jfloat scaleY) {
+    // No-op em GLES
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetPauseOnExit(JNIEnv* env, jobject thiz, jboolean enabled) {
     set_pause_on_exit(enabled ? 1 : 0);
 }
@@ -2567,10 +2573,9 @@ public:
             }
         }
 
-        // --- MOVER/REDIMENSIONAR A TELA VIRTUAL (T3.6) ---
-        // Sem grip: thumbstick direito move a tela (Y do stick = frente/tras,
-        // X do stick = cima/baixo). Com grip: thumbstick redimensiona,
-        // mantendo o aspect ratio 16:9.
+        // --- MOVER/REDIMENSIONAR A TELA VIRTUAL (T3.6 - Corrigido com trava de intenção) ---
+        // Exige intenção explícita: só redimensiona ou move se o Grip estiver pressionado.
+        // Sem grip: o thumbstick direito NUNCA move a tela acidentalmente.
         {
             const float kDeadzone = 0.15f;
             OVR::Vector2f stick = in.RightRemoteJoystick;
@@ -2578,21 +2583,24 @@ public:
             if (fabsf(stick.y) < kDeadzone) stick.y = 0.0f;
 
             bool gripHeld = in.RightRemoteGripTrigger > 0.5f;
+            bool triggerHeld = in.RightRemoteIndexTrigger > 0.5f;
 
-            if (gripHeld && stick.y != 0.0f) {
-                const float kResizeSpeedMetersPerSec = 1.0f;
-                float newWidth = m_screenScale.x + stick.y * kResizeSpeedMetersPerSec * in.DeltaSeconds;
-                newWidth = std::max(0.5f, std::min(newWidth, 6.0f));
-                m_screenScale.x = newWidth;
-                m_screenScale.y = newWidth * (9.0f / 16.0f);
-            } else if (!gripHeld && (stick.x != 0.0f || stick.y != 0.0f)) {
-                const float kMoveSpeedMetersPerSec = 1.5f;
-                m_screenPosition.z -= stick.y * kMoveSpeedMetersPerSec * in.DeltaSeconds;
-                m_screenPosition.y += stick.x * kMoveSpeedMetersPerSec * in.DeltaSeconds;
-                // Limites de conforto: nunca deixar a tela grudada no rosto
-                // nem sumir no chao/teto.
-                m_screenPosition.z = std::min(-0.75f, std::max(m_screenPosition.z, -8.0f));
-                m_screenPosition.y = std::max(0.2f, std::min(m_screenPosition.y, 3.5f));
+            if (gripHeld) {
+                if (triggerHeld && (stick.x != 0.0f || stick.y != 0.0f)) {
+                    // Modo ajuste de posição direto (Grip + Trigger)
+                    const float kMoveSpeedMetersPerSec = 1.5f;
+                    m_screenPosition.z -= stick.y * kMoveSpeedMetersPerSec * in.DeltaSeconds;
+                    m_screenPosition.y += stick.x * kMoveSpeedMetersPerSec * in.DeltaSeconds;
+                    m_screenPosition.z = std::min(-0.8f, std::max(m_screenPosition.z, -10.0f));
+                    m_screenPosition.y = std::max(0.3f, std::min(m_screenPosition.y, 3.5f));
+                } else if (stick.y != 0.0f) {
+                    // Redimensionamento (Grip + Stick Y)
+                    const float kResizeSpeedMetersPerSec = 1.2f;
+                    float newWidth = m_screenScale.x + stick.y * kResizeSpeedMetersPerSec * in.DeltaSeconds;
+                    newWidth = std::max(0.8f, std::min(newWidth, 8.0f));
+                    m_screenScale.x = newWidth;
+                    m_screenScale.y = newWidth * (9.0f / 16.0f);
+                }
             }
         }
 
@@ -3073,9 +3081,9 @@ private:
     float m_feedbackHoldTime = 0.0f;
     float m_feedbackAlpha = 0.0f;
 
-    // Posicao/tamanho da tela virtual, ajustaveis em runtime (T3.6)
-    OVR::Vector3f m_screenPosition = OVR::Vector3f(0.0f, 1.5f, -2.0f);
-    OVR::Vector2f m_screenScale = OVR::Vector2f(1.6f, 0.9f);
+    // Posicao/tamanho da tela virtual, ajustaveis em runtime (T3.6 - Padrão Cinematográfico)
+    OVR::Vector3f m_screenPosition = OVR::Vector3f(0.0f, 1.5f, -2.4f);
+    OVR::Vector2f m_screenScale = OVR::Vector2f(2.8f, 1.575f);
 
     // T1.1/T1.2/T1.5: quad SBS/OU com separacao real de olho — programa e
     // geometria proprios, separados de m_program (que continua servindo o
