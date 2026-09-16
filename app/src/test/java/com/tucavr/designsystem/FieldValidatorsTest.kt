@@ -72,6 +72,8 @@ class FieldValidatorsTest {
         assertNull(validator("rtsp://stream.local:554/live"))
         assertNull(validator("udp://@239.0.0.1:1234"))
         assertNull(validator("hls://example.com/live.m3u8"))
+        assertNull(validator("dash://example.com/manifest.mpd"))
+        assertNull(validator("https://example.com/video.mpd"))
 
         assertEquals("URL invalida", validator(""))
         assertEquals("URL invalida", validator("   "))

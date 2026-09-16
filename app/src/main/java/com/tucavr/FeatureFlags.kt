@@ -23,10 +23,22 @@ object FeatureFlags {
         FOVEATED_RENDERING("foveated_rendering", defaultEnabled = false),
 
         // Fase 0.3 Seção 3/4: Áudio Espacial 3D (HRTF Binaural para 5.1/7.1 e Ambisonics).
+        // Mantido para backward-compat; o modo granular usa SPATIAL_AUDIO_MODE.
         SPATIAL_AUDIO("spatial_audio", defaultEnabled = true),
 
         // Fase 0.3 Seção 3/4: Rastreamento de cabeça (Head Tracking) no áudio espacial.
         SPATIAL_HEAD_TRACKING("spatial_head_tracking", defaultEnabled = true),
+
+        // Fase 0.3 T4.4: Speakers fixos relativos à tela (screen-locked) em vez do mundo.
+        // Correto para conteúdo 2D — visível na UI apenas quando head tracking estiver ativo.
+        SPATIAL_SCREEN_LOCKED("spatial_screen_locked", defaultEnabled = false),
+
+        // Fase 0.3 Seção 2: Passthrough / Mixed Reality (XR_FB_passthrough, só
+        // caminho Vulkan — ver vr_player_app_vulkan.cpp: SetupPassthrough).
+        // Desligado por padrão: além de nunca validado em headset, o botão da
+        // UI só habilita quando nativeIsPassthroughSupported() confirma a
+        // extensão. Persistir aqui mantém o estado entre sessões.
+        PASSTHROUGH("passthrough", defaultEnabled = false),
 
         // Fase 0.2 T9: Carregamento automático de legendas (.srt / .vtt)
         AUTO_LOAD_SUBTITLES("auto_load_subtitles", defaultEnabled = true),
@@ -41,6 +53,18 @@ object FeatureFlags {
         PAUSE_ON_EXIT("pause_on_exit", defaultEnabled = true),
     }
 
+    /** Chave usada para persistir o modo de áudio espacial como Int (0/1/2). */
+    private const val KEY_SPATIAL_AUDIO_MODE = "spatial_audio_mode"
+
+    /** Chave usada para persistir o modo de Foveated Rendering como Int (0=Off, 1=Low, 2=Med, 3=High, 4=Auto). */
+    private const val KEY_FOVEATED_RENDERING_MODE = "foveated_rendering_mode"
+
+    /** Chave usada para persistir a opacidade do Passthrough (0.0f a 1.0f). */
+    private const val KEY_PASSTHROUGH_OPACITY = "passthrough_opacity"
+
+    /** Chave usada para persistir o modo de contorno (Edge Rendering) do Passthrough. */
+    private const val KEY_PASSTHROUGH_EDGE_RENDERING = "passthrough_edge_rendering"
+
     fun isEnabled(context: Context, flag: Flag): Boolean =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getBoolean(flag.key, flag.defaultEnabled)
@@ -48,5 +72,62 @@ object FeatureFlags {
     fun setEnabled(context: Context, flag: Flag, enabled: Boolean) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(flag.key, enabled).apply()
+    }
+
+    /**
+     * Lê o modo de áudio espacial persistido (0 = DirectStereo, 1 = VirtualizedBinaural,
+     * 2 = SimpleDownmix). O valor padrão (1) corresponde ao comportamento histórico do
+     * toggle booleano `SPATIAL_AUDIO` ligado.
+     */
+    fun getSpatialAudioMode(context: Context): Int =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getInt(KEY_SPATIAL_AUDIO_MODE, 1)
+
+    /** Persiste o modo de áudio espacial como Int (0/1/2). */
+    fun setSpatialAudioMode(context: Context, mode: Int) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putInt(KEY_SPATIAL_AUDIO_MODE, mode).apply()
+    }
+
+    /**
+     * Lê o modo de Foveated Rendering persistido (0 = Off, 1 = Low, 2 = Medium, 3 = High, 4 = Auto).
+     */
+    fun getFoveatedRenderingMode(context: Context): Int =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getInt(KEY_FOVEATED_RENDERING_MODE, 0)
+
+    /** Persiste o modo de Foveated Rendering como Int (0 a 4) e sincroniza a flag legada. */
+    fun setFoveatedRenderingMode(context: Context, mode: Int) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putInt(KEY_FOVEATED_RENDERING_MODE, mode)
+            .putBoolean(Flag.FOVEATED_RENDERING.key, mode != 0)
+            .apply()
+    }
+
+    /** Lê a opacidade do Passthrough (0.0f a 1.0f). Padrão: 1.0f (100%). */
+    fun getPassthroughOpacity(context: Context): Float =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getFloat(KEY_PASSTHROUGH_OPACITY, 1.0f)
+
+    /** Persiste a opacidade do Passthrough. */
+    fun setPassthroughOpacity(context: Context, opacity: Float) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putFloat(KEY_PASSTHROUGH_OPACITY, opacity.coerceIn(0.0f, 1.0f))
+            .apply()
+    }
+
+    /** Lê se o Edge Rendering do Passthrough está ativo. Padrão: false. */
+    fun getPassthroughEdgeRendering(context: Context): Boolean =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_PASSTHROUGH_EDGE_RENDERING, false)
+
+    /** Persiste o estado do Edge Rendering do Passthrough. */
+    fun setPassthroughEdgeRendering(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_PASSTHROUGH_EDGE_RENDERING, enabled)
+            .apply()
     }
 }

@@ -186,7 +186,7 @@ class PlayerScreen(
             val mbps = meta.bitRate.toDouble() / 1_000_000.0
             addRow(section, context.getString(R.string.file_detail_label_bitrate), context.getString(R.string.file_detail_value_bitrate_format, mbps))
         }
-        if (meta.format3dIndex in 0..9) {
+        if (ScreenFormatCatalog.isValid(meta.format3dIndex)) {
             val modeLabel = context.getString(ScreenFormatCatalog.getLabelResId(meta.format3dIndex))
             val suffix = if (meta.detectionConfidence < 3) context.getString(R.string.file_detail_format3d_low_confidence_suffix) else ""
             addRow(section, context.getString(R.string.file_detail_label_format3d), modeLabel + suffix)
@@ -300,6 +300,7 @@ class PlayerScreen(
         is PlaybackSource.Sftp -> source.path.substringAfterLast('/')
         is PlaybackSource.Nfs -> source.path.substringAfterLast('/')
         is PlaybackSource.Dlna -> source.title
+        is PlaybackSource.Webdav -> source.path.substringAfterLast('/')
     }
 
     private fun resolveSubtitle(source: PlaybackSource): String = when (source) {
@@ -310,6 +311,7 @@ class PlayerScreen(
         is PlaybackSource.Sftp -> context.getString(R.string.file_detail_subtitle_sftp_format, source.server.name)
         is PlaybackSource.Nfs -> "${source.server.name} (${source.server.host})"
         is PlaybackSource.Dlna -> "${source.server.name} (DLNA)"
+        is PlaybackSource.Webdav -> "${source.server.name} (WebDAV)"
     }
 
     private fun pathFor(source: PlaybackSource): String = when (source) {
@@ -320,6 +322,7 @@ class PlayerScreen(
         is PlaybackSource.Sftp -> source.path
         is PlaybackSource.Nfs -> "${source.server.path}/${source.path}"
         is PlaybackSource.Dlna -> source.url
+        is PlaybackSource.Webdav -> "${source.server.name}:${source.path}"
     }
 
     private fun sizeBytesFor(source: PlaybackSource): Long = when (source) {
@@ -329,6 +332,7 @@ class PlayerScreen(
         is PlaybackSource.Sftp -> source.sizeBytes
         is PlaybackSource.Nfs -> source.sizeBytes
         is PlaybackSource.Dlna -> source.sizeBytes
+        is PlaybackSource.Webdav -> source.sizeBytes
         is PlaybackSource.Http -> 0L
     }
 }

@@ -8,7 +8,7 @@ pub mod playlist;
 pub mod segment;
 pub mod stream;
 
-pub use abr::AdaptiveBitrateManager;
+pub use abr::{AdaptiveBitrateManager, BitrateVariant};
 pub use playlist::{
     fetch_and_probe_variants, parse_playlist, HlsKey, HlsMasterPlaylist, HlsMediaPlaylist, HlsPlaylist, HlsSegment,
     HlsVariant,

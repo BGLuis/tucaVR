@@ -17,16 +17,24 @@
 //! instantly on any machine. `core` depends on this crate and re-exports/
 //! delegates to it instead of reimplementing the same logic.
 pub mod audio_resample;
+pub mod av1;
+pub mod buffer_gate;
+pub mod codec;
+pub mod color;
 pub mod error_ring;
 pub mod focus_pause;
 pub mod format3d;
+pub mod frame_timing;
 pub mod metadata_wire;
 pub mod playback_params;
 pub mod preroll;
+pub mod quality;
+pub mod retry_backoff;
 pub mod session;
 pub mod spatial_audio;
 pub mod subtitle;
+pub mod subtitle_ass;
+pub mod subtitle_pgs;
 pub mod sync;
-pub mod telemetry;
 pub mod upscaling;
 pub mod yuv_convert;

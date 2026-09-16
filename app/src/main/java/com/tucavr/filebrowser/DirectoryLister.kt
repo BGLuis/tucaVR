@@ -5,7 +5,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 
 val VIDEO_EXTENSIONS = setOf(
-    "mp4", "mkv", "avi", "mov", "webm", "flv", "ts", "m3u8", "3gp", "wmv", "mpg", "mpeg"
+    "mp4", "mkv", "avi", "mov", "webm", "flv", "ts", "m3u8", "mpd", "3gp", "wmv", "mpg", "mpeg"
 )
 
 val AUDIO_EXTENSIONS = setOf(

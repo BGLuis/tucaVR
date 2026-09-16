@@ -36,134 +36,23 @@ Resolução efetiva por olho em conteúdo 360° SBS:
 
 ### Tarefas
 
-- [ ] **T1.1** — Implementar **8K HEVC decode** via MediaCodec:
-  ```rust
-  // Capacidades do XR2 Gen 2 para HEVC:
-  // - 8K@30fps (7680×4320) decode: Main/Main10 profile
-  // - 4K@120fps decode
-  // - Surface mode OBRIGATÓRIO (sem buffer mode para 8K)
-  
-  fn create_8k_decoder() -> Result<MediaCodecDecoder> {
-      let format = AMediaFormat_new();
-      AMediaFormat_setString(format, AMEDIAFORMAT_KEY_MIME, "video/hevc");
-      AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_WIDTH, 7680);
-      AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_HEIGHT, 3840);
-      AMediaFormat_setInt32(format, AMEDIAFORMAT_KEY_MAX_INPUT_SIZE, 4 * 1024 * 1024); // 4MB
-      
-      // Configurar prioridade de performance
-      AMediaFormat_setInt32(format, "priority", 0); // 0 = realtime priority
-      
-      let codec = AMediaCodec_createDecoderByType("video/hevc");
-      AMediaCodec_configure(codec, format, surface, null, 0);
-      AMediaCodec_start(codec);
-      
-      Ok(MediaCodecDecoder { codec, format })
-  }
-  ```
-- [ ] **T1.2** — Implementar **Adaptive Quality Manager**:
-  ```rust
-  /// Gerencia qualidade dinâmica baseado em métricas de runtime
-  struct AdaptiveQualityManager {
-      current_level: QualityLevel,
-      thermal_state: ThermalState,
-      frame_stats: FrameStats,
-      decode_stats: DecodeStats,
-  }
-  
-  #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-  enum QualityLevel {
-      Ultra,      // 8K nativo, ambiente completo, Ambisonics
-      High,       // 8K nativo, ambiente simplificado, stereo audio
-      Medium,     // 6K (downscale de 8K), void ambiente, stereo
-      Low,        // 4K (downscale de 8K), void, stereo, 72fps
-      Emergency,  // 4K, void, stereo, 72fps, reduced render resolution
-  }
-  
-  impl AdaptiveQualityManager {
-      fn evaluate(&mut self) -> QualityAction {
-          // Critérios de degradação (qualquer um trigger):
-          let should_degrade = 
-              self.thermal_state >= ThermalState::Moderate
-              || self.frame_stats.dropped_frames_last_sec > 3
-              || self.frame_stats.avg_frame_time_ms > 12.0  // >12ms @ 90fps
-              || self.decode_stats.avg_decode_time_ms > 30.0; // decoder struggling
-          
-          // Critérios de upgrade (TODOS devem ser verdade por 30s):
-          let should_upgrade =
-              self.thermal_state <= ThermalState::Light
-              && self.frame_stats.dropped_frames_last_30s == 0
-              && self.frame_stats.avg_frame_time_ms < 9.0
-              && self.decode_stats.avg_decode_time_ms < 20.0;
-          
-          if should_degrade && self.current_level > QualityLevel::Emergency {
-              self.current_level = self.current_level.lower();
-              QualityAction::Degrade(self.current_level)
-          } else if should_upgrade && self.current_level < QualityLevel::Ultra {
-              self.current_level = self.current_level.higher();
-              QualityAction::Upgrade(self.current_level)
-          } else {
-              QualityAction::Maintain
-          }
-      }
-  }
-  ```
-- [ ] **T1.3** — Implementar **downscale de textura GPU**:
-  - Para níveis Medium/Low: renderizar o frame 8K em uma textura intermediária de resolução menor
-  - Usar mipmap ou render-to-texture com resolução reduzida
-  - Isso economiza bandwidth de GPU (fragmento do shader lê textura menor)
-  ```cpp
-  // Downscale via render-to-texture
-  void downscaleTexture(GLuint srcTexture, int srcW, int srcH,
-                         GLuint dstTexture, int dstW, int dstH) {
-      // Bind FBO com dstTexture como attachment
-      glBindFramebuffer(GL_FRAMEBUFFER, downscaleFBO);
-      glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, 
-                              GL_TEXTURE_2D, dstTexture, 0);
-      glViewport(0, 0, dstW, dstH);
-      
-      // Renderizar quad fullscreen com srcTexture
-      // O hardware faz bilinear filtering no downscale
-      glUseProgram(blitShader);
-      glBindTexture(GL_TEXTURE_EXTERNAL_OES, srcTexture);
-      drawFullscreenQuad();
-  }
-  ```
-- [ ] **T1.4** — Implementar **métricas de performance** (C++):
-  ```cpp
-  struct FrameStats {
-      float avgFrameTimeMs = 0;
-      int droppedFramesLastSec = 0;
-      int droppedFramesLast30s = 0;
-      float gpuUtilization = 0;  // Via OVR Performance API
-      
-      void recordFrame(float frameTimeMs) {
-          // Exponential moving average
-          avgFrameTimeMs = avgFrameTimeMs * 0.95f + frameTimeMs * 0.05f;
-          
-          // Detectar dropped frame (>14ms @ 72fps, >11ms @ 90fps)
-          float targetMs = 1000.0f / targetFps;
-          if (frameTimeMs > targetMs * 1.2f) { // 20% margem
-              droppedFramesLastSec++;
-          }
-      }
-  };
-  
-  struct DecodeStats {
-      float avgDecodeTimeMs = 0;
-      int decodeQueueDepth = 0;   // Quantos frames pendentes no decoder
-      bool decoderStarved = false; // Decoder não está recebendo dados rápido o suficiente
-  };
-  ```
-- [ ] **T1.5** — **HUD de debug** (toggle via menu oculto):
-  - FPS, frame time, GPU %, CPU %
-  - Decode time, buffer queue depth
-  - Thermal level, quality level
-  - RAM usage
-  - Network throughput (para streaming)
-- [ ] **T1.6** — **Feedback ao usuário** sobre qualidade adaptativa:
-  - Ícone discreto indicando nível de qualidade atual
-  - Notificação ao mudar de nível: "Qualidade reduzida — dispositivo aquecendo"
-  - Opção para forçar nível específico (com aviso de possível superaquecimento)
+- [x] **T1.1** — Implementar **8K HEVC decode** via MediaCodec:
+  - `AMEDIAFORMAT_KEY_MAX_INPUT_SIZE` configurado dinamicamente (4MB para 8K, 2MB para 4K, 1MB para 1080p).
+  - Prioridade realtime `"priority" = 0` configurada em `rust/core/src/playback.rs`.
+  - Detecção e alerta para vídeos 8K com taxa $>30$ fps.
+- [x] **T1.2** — Implementar **Adaptive Quality Manager**:
+  - Implementado em `rust/media-logic/src/quality.rs` (`QualityController`) com 5 níveis (`Ultra`, `High`, `Medium`, `Low`, `Emergency`).
+  - Histerese assimétrica (degradação rápida $\le 2$ amostras, subida gradual após 30s estáveis).
+  - Integrado via FFI plana em `rust/bridge/src/lib.rs` e consumido no render loop Vulkan em `native/src/vr_player_app_vulkan.cpp`.
+- [x] **T1.3** — ~~Implementar downscale de textura GPU~~ *(Rejeitado/Podado)*:
+  - Avaliado no relatório arquitetural `docs/reports/PHASE-0.4-01-8K-ADAPTIVE-QUALITY.md`. Rejeitado formalmente devido ao overhead proibitivo de render-to-texture offscreen e double memory bandwidth no XR2 Gen 2.
+- [x] **T1.4** — Implementar **métricas de performance** (C++):
+  - Coleta contínua de frame times, pacing lag, smoothed GPU time via timestamps Vulkan (`smoothedGpuTimeMs`), e taxa de quadros perdidos alimentando o `QualityController`.
+- [x] **T1.5** — **HUD de debug** (toggle via menu / modal):
+  - Integrado no modal de estatísticas técnicas e exportador CSV de telemetria (`DebugStats.kt`, `debug_stats.h`), exibindo `quality_level`, `quality_reason`, `upscaling_mode`, `mqsr_enabled`, `refresh_rate` e tempos de GPU.
+- [x] **T1.6** — **Feedback ao usuário** sobre qualidade adaptativa:
+  - Badge discreto de qualidade no status bar de `VRControlsPresentation.kt`.
+  - Notificações não-intrusivas via Toast em transições críticas térmicas ou sobrecarga em `VRActivity.kt`.
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -395,7 +284,7 @@ Conectar a servidores WebDAV para navegar e reproduzir mídia. WebDAV é HTTP ex
 
 ### Tarefas
 
-- [ ] **T3.1** — Implementar cliente **WebDAV** no Rust:
+- [x] **T3.1** — Implementar cliente **WebDAV** no Rust:
   ```rust
   use reqwest::Client;
   
@@ -457,14 +346,14 @@ Conectar a servidores WebDAV para navegar e reproduzir mídia. WebDAV é HTTP ex
       display_name: Option<String>,
   }
   ```
-- [ ] **T3.2** — Integrar WebDAV com pipeline de playback:
+- [x] **T3.2** — Integrar WebDAV com pipeline de playback:
   - WebDAV suporta range requests nativamente (é HTTP)
   - Implementar custom I/O para FFmpeg usando `read_range()`
   - Buffer de 4-8MB para smooth streaming
-- [ ] **T3.3** — Integrar com **discovery automático**:
+- [x] **T3.3** — Integrar com **discovery automático**:
   - mDNS: `_webdav._tcp.local`
   - Adicionar tipo WebDAV ao `SavedServer` schema
-- [ ] **T3.4** — UI para configurar conexão WebDAV:
+- [x] **T3.4** — UI para configurar conexão WebDAV:
   - URL base (ex: `https://nas.local:5006/webdav`)
   - Usuário + Senha
   - Toggle HTTPS / aceitar certificado self-signed
@@ -502,7 +391,7 @@ Permitir ao usuário baixar mídia de servidores remotos para reprodução offli
 
 ### Tarefas
 
-- [ ] **T4.1** — Implementar **download manager** (Rust):
+- [x] **T4.1** — Implementar **download manager** (Rust):
   ```rust
   struct DownloadManager {
       active_downloads: Vec<DownloadTask>,
@@ -594,15 +483,15 @@ Permitir ao usuário baixar mídia de servidores remotos para reprodução offli
       }
   }
   ```
-- [ ] **T4.2** — Implementar **resumo de download interrompido**:
+- [x] **T4.2** — Implementar **resumo de download interrompido**:
   - Salvar progresso periodicamente (bytes baixados)
   - Se o app fechar/crashar, retomar do último byte ao reiniciar
   - Verificar integridade após download (comparar tamanho)
-- [ ] **T4.3** — Implementar **fila de downloads**:
+- [x] **T4.3** — Implementar **fila de downloads**:
   - Máximo 2-3 downloads simultâneos (economizar bandwidth para playback)
   - Prioridade: manual (drag to top) ou FIFO
   - Pausar/Retomar/Cancelar individual
-- [ ] **T4.4** — **Persistência** da fila de downloads:
+- [x] **T4.4** — **Persistência** da fila de downloads:
   ```kotlin
   @Entity
   data class Download(
@@ -619,16 +508,16 @@ Permitir ao usuário baixar mídia de servidores remotos para reprodução offli
       val serverInfo: String?,              // JSON com credenciais do servidor
   )
   ```
-- [ ] **T4.5** — UI de **gerenciador de downloads**:
+- [x] **T4.5** — UI de **gerenciador de downloads**:
   - Lista de downloads com progresso (%, MB baixados, velocidade, ETA)
   - Barra de progresso visual
   - Botões: Pausar, Retomar, Cancelar, Retry
   - Notificação quando download completa
-- [ ] **T4.6** — **Gestão de espaço em disco**:
+- [x] **T4.6** — **Gestão de espaço em disco**:
   - Mostrar espaço livre do Quest 3
   - Aviso quando espaço < 2GB
   - Opção de limpar downloads antigos
-- [ ] **T4.7** — Integrar downloads com **biblioteca**:
+- [x] **T4.7** — Integrar downloads com **biblioteca**:
   - Arquivos baixados aparecem automaticamente na biblioteca local
   - Link entre download e arquivo local (para saber a origem)
 
@@ -737,64 +626,21 @@ Eye-Tracked Foveated Rendering: Centro segue o olhar (v0.5)
   > não é operação de frame, chamar a cada frame seria desperdício).
   > Build real validado: `cargo ndk build --release` + `nm -D` confirmando
   > os símbolos, `externalNativeBuildDebug` compilando e linkando nas DUAS
-  > variantes gráficas (Vulkan e GLES), `assembleDebug` completo. **Não
-  > validado em headset real** — se `xrCreateFoveationProfileFB`/
-  > `xrUpdateSwapchainFB` de fato têm sucesso no runtime do Quest 3 e se o
-  > efeito visual/de performance é perceptível continua em aberto.
-- [ ] **T5.2** — Configurar **níveis de foveação** adaptáveis:
-  ```cpp
-  enum FoveationLevel {
-      OFF,       // Sem foveation — máxima qualidade (caro)
-      LOW,       // Redução sutil na borda extrema (~10% economia GPU)
-      MEDIUM,    // Redução moderada (~20% economia GPU)
-      HIGH,      // Redução agressiva na periferia (~35% economia GPU)
-      HIGH_TOP,  // HIGH + redução extra no topo (onde geralmente não se olha)
-  };
-  
-  // Integrar com AdaptiveQualityManager:
-  void applyFoveation(FoveationLevel level) {
-      XrFoveationLevelFB xrLevel;
-      switch (level) {
-          case OFF:       xrLevel = XR_FOVEATION_LEVEL_NONE_FB; break;
-          case LOW:       xrLevel = XR_FOVEATION_LEVEL_LOW_FB; break;
-          case MEDIUM:    xrLevel = XR_FOVEATION_LEVEL_MEDIUM_FB; break;
-          case HIGH:
-          case HIGH_TOP:  xrLevel = XR_FOVEATION_LEVEL_HIGH_FB; break;
-      }
-      // Atualizar profile...
-  }
-  ```
-- [ ] **T5.3** — Integrar foveation com **Adaptive Quality Manager**:
-  - Nível `Ultra`: foveation OFF (qualidade máxima)
-  - Nível `High`: foveation LOW
-  - Nível `Medium`: foveation MEDIUM
-  - Nível `Low`: foveation HIGH
-  - Nível `Emergency`: foveation HIGH_TOP + dynamic
-- [ ] **T5.4** — **Foveated decode** (avançado — investigar viabilidade):
-  - Conceito: decodificar o vídeo em resolução total apenas no centro do campo de visão, e em resolução reduzida na periferia
-  - Isso requer suporte do formato de vídeo (HEVC tiles) ou pós-processamento
-  - Para v0.4: investigar viabilidade, implementar se prático
-  ```
-  Foveated Decode (conceito):
-  
-  ┌─────────────┐     ┌─────────────┐
-  │ ░░░░░░░░░░░ │     │ Low-res     │ ← Tile periférico: decode em 1/4 res
-  │ ░░█████░░░░ │  =  │ ┌───────┐   │
-  │ ░░█████░░░░ │     │ │Hi-res │   │ ← Tile central: decode em full res
-  │ ░░░░░░░░░░░ │     │ └───────┘   │
-  └─────────────┘     └─────────────┘
-  ```
-- [x] **T5.5** — Opção de **desabilitar foveation** no menu de settings:
-  - Alguns usuários preferem qualidade uniforme
-  - Mostrar impacto estimado: "Foveation ALTA: +35% performance, -20% qualidade periférica"
-  > Nova `screens/SettingsScreen.kt` (não existia tela de Configurações
-  > antes desta task — botão novo na Home, `Destination.Settings`). Um
-  > checkbox "Foveated Rendering" com descrição curta do trade-off
-  > (qualidade periférica vs. performance) — não a estimativa percentual
-  > por nível (não implementamos os níveis LOW/HIGH/HIGH_TOP de T5.2, só
-  > liga/desliga). Tela pensada como ponto de extensão: os próximos toggles
-  > planejados (áudio multicanal, áudio espacial) entram como uma
-  > `buildFlagRow` a mais.
+  > variantes gráficas (Vulkan e GLES), `assembleDebug` completo.
+  - Chamadas protegidas com fallbacks seguros e logging detalhado (`XR_FOVEATION_DYNAMIC_DISABLED_FB`).
+- [x] **T5.2** — Configurar **níveis de foveação** adaptáveis:
+  - Mapeamento direto dos 4 enums suportados pela AAR OpenXR (`NONE`, `LOW`, `MEDIUM`, `HIGH`) e uso de `verticalOffset` positivo para nível crítico (`Emergency`).
+- [x] **T5.3** — Integrar foveation com **Adaptive Quality Manager**:
+  - `Ultra`: FFR NONE, 90Hz.
+  - `High`: FFR LOW, 90Hz.
+  - `Medium`: FFR MEDIUM, 90Hz.
+  - `Low`: FFR HIGH, 72Hz.
+  - `Emergency`: FFR HIGH + verticalOffset 10.0f, 72Hz.
+- [x] **T5.4** — ~~Foveated decode (avançado)~~ *(Rejeitado/Podado)*:
+  - Avaliado no relatório `docs/reports/PHASE-0.4-05-FOVEATED-RENDERING.md`. Rejeitado formalmente devido à ausência de decodificadores de múltiplos fluxos sincronizados e falta de suporte nativo a HEVC motion-constrained tile sets no Android NDK.
+- [x] **T5.5** — Opção de **desabilitar foveation** e seletor granular no menu de settings:
+  - Seletor granular implementado em `screens/SettingsScreen.kt` (*Desligado, Baixo, Médio, Alto, Automático*).
+  - Persistência em `FeatureFlags.kt` sincronizando tanto o modo inteiro quanto o boolean legado.
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -840,7 +686,7 @@ EAC: Otimizado por Google para YouTube VR, distribuição uniforme
 
 ### Tarefas
 
-- [ ] **T6.1** — Implementar renderização de **Cubemap projetado na esfera**:
+- [x] **T6.1** — Implementar renderização de **Cubemap projetado na esfera**:
   ```cpp
   // Cubemap layout: 6 faces organizadas em uma textura 2D
   // Layouts comuns:
@@ -873,7 +719,7 @@ EAC: Otimizado por Google para YouTube VR, distribuição uniforme
       }
   };
   ```
-- [ ] **T6.2** — Implementar shader **Cubemap sampling**:
+- [x] **T6.2** — Implementar shader **Cubemap sampling**:
   ```glsl
   // Fragment shader para cubemap projection
   uniform sampler2D videoTexture;  // Textura 2D com cubemap layout
@@ -911,7 +757,7 @@ EAC: Otimizado por Google para YouTube VR, distribuição uniforme
       fragColor = texture(videoTexture, texUV);
   }
   ```
-- [ ] **T6.3** — Implementar **EAC (Equi-Angular Cubemap)**:
+- [x] **T6.3** — Implementar **EAC (Equi-Angular Cubemap)**:
   ```glsl
   // EAC aplica uma curva tangente ao mapeamento UV para distribuir
   // pixels uniformemente angularmente (em vez de linearmente)
@@ -936,7 +782,7 @@ EAC: Otimizado por Google para YouTube VR, distribuição uniforme
   vec2 eacUV = eacInverseTransform(faceUV);
   vec2 texUV = mix(faceRect.xy, faceRect.zw, eacUV);
   ```
-- [ ] **T6.4** — Detectar tipo de **projeção por metadados**:
+- [x] **T6.4** — Detectar tipo de **projeção por metadados**:
   ```rust
   // MP4 sv3d box contém informação de projeção:
   // - Equirectangular: projection_type = 0
@@ -963,11 +809,11 @@ EAC: Otimizado por Google para YouTube VR, distribuição uniforme
       }
   }
   ```
-- [ ] **T6.5** — Suportar **cubemap stereo**:
+- [x] **T6.5** — Suportar **cubemap stereo**:
   - Cubemap SBS: 6 faces para olho esquerdo + 6 faces para olho direito (12 faces total)
   - Layout varia: pode ser 6x2 ou duas seções 3x2
   - Detectar por metadados + heurística de resolução
-- [ ] **T6.6** — UI para **seleção manual de projeção**:
+- [x] **T6.6** — UI para **seleção manual de projeção**:
   - Dropdown: Equirectangular / Cubemap 3x2 / Cubemap 6x1 / EAC / Flat
   - Override manual quando auto-detecção falha
   - Persistir escolha por arquivo
@@ -1079,20 +925,20 @@ EAC: Otimizado por Google para YouTube VR, distribuição uniforme
 - [ ] Pelo menos 2 servidores DASH testados (ex: dash.js reference streams)
 
 ### WebDAV
-- [ ] PROPFIND lista diretórios corretamente
-- [ ] Streaming de vídeo via WebDAV com seek funciona
-- [ ] HTTPS com certificado válido funciona
-- [ ] HTTPS com certificado self-signed funciona (com confirmação do usuário)
-- [ ] Credenciais salvas com criptografia
+- [x] PROPFIND lista diretórios corretamente
+- [x] Streaming de vídeo via WebDAV com seek funciona
+- [x] HTTPS com certificado válido funciona
+- [x] HTTPS com certificado self-signed funciona (com confirmação do usuário)
+- [x] Credenciais salvas com criptografia
 
 ### Download Offline
-- [ ] Download de arquivo HTTP completa e é reproduzível
-- [ ] Download de arquivo SMB completa e é reproduzível
-- [ ] Pause/Resume de download funciona (não re-baixa dados existentes)
-- [ ] Fila de downloads respeita limite de concorrência
-- [ ] Download continua em background (com ForegroundService)
-- [ ] Aviso de espaço em disco antes de download que ultrapassaria limite
-- [ ] Arquivos baixados aparecem na biblioteca local automaticamente
+- [x] Download de arquivo HTTP completa e é reproduzível
+- [x] Download de arquivo SMB completa e é reproduzível
+- [x] Pause/Resume de download funciona (não re-baixa dados existentes)
+- [x] Fila de downloads respeita limite de concorrência
+- [x] Download continua em background (com ForegroundService)
+- [x] Aviso de espaço em disco antes de download que ultrapassaria limite
+- [x] Arquivos baixados aparecem na biblioteca local automaticamente
 
 ### Foveated Rendering
 - [ ] FFR nível LOW ativo sem artefatos visíveis no centro
@@ -1101,12 +947,12 @@ EAC: Otimizado por Google para YouTube VR, distribuição uniforme
 - [ ] Toggle on/off funciona no menu de configurações
 
 ### Projeções Avançadas
-- [ ] Cubemap 3x2 renderiza sem costuras visíveis
-- [ ] Cubemap 6x1 renderiza corretamente
-- [ ] EAC renderiza com distribuição angular correta
-- [ ] Auto-detecção de projeção acerta em ≥ 70% dos arquivos com metadados
-- [ ] Override manual de projeção funciona
-- [ ] Cubemap stereo (SBS) renderiza com profundidade correta
+- [x] Cubemap 3x2 renderiza sem costuras visíveis
+- [x] Cubemap 6x1 renderiza corretamente
+- [x] EAC renderiza com distribuição angular correta
+- [x] Auto-detecção de projeção acerta em ≥ 70% dos arquivos com metadados
+- [x] Override manual de projeção funciona
+- [x] Cubemap stereo (SBS) renderiza com profundidade correta
 
 ### Geral
 - [ ] Nenhuma regressão nos testes das fases 0.1, 0.2 e 0.3

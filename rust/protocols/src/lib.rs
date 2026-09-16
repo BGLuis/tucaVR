@@ -4,12 +4,16 @@
 //! implementacao real.
 
 pub mod chunking;
+pub mod dash;
 pub mod discovery;
 pub mod dlna;
+pub mod download;
 pub mod ftp;
 pub mod hls;
 pub mod http;
 pub mod nfs;
 pub mod prefetch;
+mod retry;
 pub mod sftp;
 pub mod smb;
+pub mod webdav;

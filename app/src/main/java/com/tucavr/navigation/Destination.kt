@@ -87,11 +87,30 @@ sealed class Destination {
     /** T7.5: listagem de um container num servidor DLNA ja conectado. */
     data class NetworkDlnaFiles(val server: SavedServer, val objectId: String, val folderName: String) : Destination()
 
+    /** T3.1/T3.4: listagem de um diretório num servidor WebDAV já conectado. */
+    data class NetworkWebdavFiles(val server: SavedServer, val path: String) : Destination()
+
     /** Reproduzindo [source]. */
     data class Player(val source: PlaybackSource) : Destination()
 
+    /** T9.2: listagem de playlists criadas pelo usuário. */
+    object Playlists : Destination()
+
+    /** T9.2: detalhes da playlist [playlistId] com lista de itens e reordenação. */
+    data class PlaylistDetail(val playlistId: String) : Destination()
+
     /** Fase 0.4 T5: toggles de feature flags (Foveated Rendering, e futuros). */
     object Settings : Destination()
+
+    /** Fase 0.3 Seção 8: visualizador de fotos 360 e 3D estéreo (T8.5). */
+    data class PhotoViewer(
+        val initialEntry: com.tucavr.filebrowser.MediaEntry,
+        val photoEntries: List<com.tucavr.filebrowser.MediaEntry>,
+        val initialIndex: Int = 0
+    ) : Destination()
+
+    /** Fase 0.4 Seção 4: tela do gerenciador de downloads offline. */
+    object Downloads : Destination()
 }
 
 /**
@@ -119,4 +138,6 @@ sealed class PlaybackSource {
     data class Nfs(val server: SavedServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
     /** T7.4: playback DLNA a partir de um [SavedServer]. */
     data class Dlna(val server: SavedServer, val title: String, val url: String, val sizeBytes: Long = 0L) : PlaybackSource()
+    /** T3.2/T3.4: playback WebDAV a partir de um [SavedServer]. */
+    data class Webdav(val server: SavedServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
 }

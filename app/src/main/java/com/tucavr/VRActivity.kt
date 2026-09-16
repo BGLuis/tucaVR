@@ -35,11 +35,19 @@ import com.tucavr.history.PlaybackHistoryTracker
 import com.tucavr.history.historyKey
 import com.tucavr.navigation.PlaybackSource
 import com.tucavr.network.Format3DPreferenceStore
+import com.tucavr.network.FtpCredentialStore
 import com.tucavr.network.LegacyCredentialMigrator
 import com.tucavr.network.ServerCredentialStore
+import com.tucavr.network.SftpCredentialStore
+import com.tucavr.network.SmbCredentialStore
+import com.tucavr.playlist.Playlist
+import com.tucavr.playlist.PlaylistItem
+import com.tucavr.playlist.PlaylistQueueManager
+import com.tucavr.playlist.toPlaybackSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class VRActivity : NativeActivity() {
     private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
@@ -87,7 +95,18 @@ class VRActivity : NativeActivity() {
     // Poll do erro de load() que falhou (codec nao suportado, etc.) — ver nativeTakeLastPlaybackError.
     private val playbackErrorPoll = object : Runnable {
         override fun run() {
-            nativeTakeLastPlaybackError()?.let { Toast.makeText(this@VRActivity, it, Toast.LENGTH_LONG).show() }
+            nativeTakeLastPlaybackError()?.let { rawError ->
+                val displayMsg = if (rawError.contains("video/av01", ignoreCase = true) ||
+                    rawError.contains("video/x-vnd.on2.vp9", ignoreCase = true) ||
+                    rawError.contains("não possui suporte de hardware", ignoreCase = true) ||
+                    rawError.contains("nao possui suporte de hardware", ignoreCase = true)
+                ) {
+                    getString(R.string.codec_hw_unsupported_error)
+                } else {
+                    rawError
+                }
+                Toast.makeText(this@VRActivity, displayMsg, Toast.LENGTH_LONG).show()
+            }
             autoPlayHandler.postDelayed(this, PLAYBACK_ERROR_POLL_MS)
         }
     }
@@ -97,9 +116,15 @@ class VRActivity : NativeActivity() {
     // Activity ja existe (primeiro uso real e dentro de playFile/playUrl/
     // playSmb, chamados via VRPresentation apos onCreate).
     val historyTracker: PlaybackHistoryTracker by lazy { PlaybackHistoryTracker(this) }
+    val playlistQueueManager: PlaylistQueueManager by lazy { PlaylistQueueManager() }
     val format3dStore: Format3DPreferenceStore by lazy { Format3DPreferenceStore(this) }
     val upscalingStore: UpscalingModeStore by lazy { UpscalingModeStore(this) }
     val thermalMonitor: ThermalMonitor by lazy { ThermalMonitor(this) }
+
+    // Último `quality_reason` visto em updateDebugHud (chamado ~10x/s pelo C++ via JNI) — usado
+    // para disparar o Toast de sobrecarga não-térmica só na transição de entrada em
+    // GpuOverload/FramePacingLag, não a cada poll (ver updateDebugHud/maybeWarnQualityOverload).
+    var lastQualityReasonSeen: String = "NONE"
 
     private val thermalCallback: (ThermalMonitor.ThermalState) -> Unit = { state ->
         onThermalStateChanged(state)
@@ -119,12 +144,42 @@ class VRActivity : NativeActivity() {
             nativeSetUpscalingMode(upscalingStore.get().id)
         }
 
+        // T4.5 / Seção 11: Degradação automática do áudio espacial por nível térmico.
+        // MODERATE e acima → SimpleDownmix (modo 2) para reduzir carga de DSP.
+        // NORMAL → restaura o modo persistido pelo usuário.
+        if (state.level >= ThermalMonitor.ThermalLevel.MODERATE) {
+            nativeSetSpatialAudioMode(2) // SimpleDownmix — baixo custo
+        } else if (state.level == ThermalMonitor.ThermalLevel.NORMAL) {
+            nativeSetSpatialAudioMode(FeatureFlags.getSpatialAudioMode(this))
+        }
+
         if (state.actions.contains(ThermalMonitor.ThermalAction.PAUSE_PLAYBACK)) {
             // T14.1/T14.2: Em nível crítico/shutdown, pausa a reprodução imediatamente para resfriamento
             nativeTogglePlayPause()
             Toast.makeText(this, getString(R.string.thermal_critical_pause), Toast.LENGTH_LONG).show()
         } else if (state.actions.contains(ThermalMonitor.ThermalAction.WARN_USER) && state.level == ThermalMonitor.ThermalLevel.SEVERE) {
             Toast.makeText(this, getString(R.string.thermal_warning_reducing_quality), Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    /**
+     * R-09 (PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): avisa o usuário quando o `QualityController`
+     * degrada por sobrecarga de GPU ou frame pacing — motivos não-térmicos que, ao contrário de
+     * [onThermalStateChanged], não tinham nenhum feedback fora do HUD de debug. Dispara só na
+     * transição de ENTRADA em cada motivo (não a cada chamada de `updateDebugHud`, ~10x/s),
+     * comparando contra [lastQualityReasonSeen].
+     */
+    private fun maybeWarnQualityOverload(qualityReason: String) {
+        if (qualityReason != lastQualityReasonSeen) {
+            val messageRes = when (qualityReason) {
+                "GpuOverload" -> R.string.quality_warning_gpu_overload
+                "FramePacingLag" -> R.string.quality_warning_frame_pacing_lag
+                else -> null
+            }
+            if (messageRes != null) {
+                Toast.makeText(this, getString(messageRes), Toast.LENGTH_SHORT).show()
+            }
+            lastQualityReasonSeen = qualityReason
         }
     }
 
@@ -198,6 +253,29 @@ class VRActivity : NativeActivity() {
                         val status = intent.getIntExtra(EXTRA_THERMAL_STATUS, -1)
                         if (status >= 0) thermalMonitor.simulateThermalStatus(status)
                     }
+                    // Dispara playback SFTP direto via adb, sem navegar a UI nem
+                    // colocar o headset na cabeca — mesmo espirito do EXTRA_AUTO_PLAY_PATH
+                    // (ver DEBUGGING.md secao 2 / scripts/soak-test.sh), mas para uma fonte
+                    // de rede em vez de arquivo local, ja que EXTRA_AUTO_PLAY_PATH so chama
+                    // playFile() (PlaybackSource.LocalFile). Util pra reproduzir sozinho um
+                    // cenario de stall de rede (ex: docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md)
+                    // de forma automatizada/repetivel.
+                    ACTION_DEBUG_PLAY_SFTP -> {
+                        val host = intent.getStringExtra(EXTRA_SFTP_HOST)
+                        val path = intent.getStringExtra(EXTRA_SFTP_PATH)
+                        if (!host.isNullOrBlank() && !path.isNullOrBlank()) {
+                            val server = com.tucavr.network.SftpServer(
+                                id = "debug-broadcast",
+                                name = "debug-broadcast",
+                                host = host,
+                                port = intent.getIntExtra(EXTRA_SFTP_PORT, 22),
+                                username = intent.getStringExtra(EXTRA_SFTP_USER) ?: "",
+                                password = intent.getStringExtra(EXTRA_SFTP_PASSWORD) ?: "",
+                                privateKey = null
+                            )
+                            playSftp(server, path)
+                        }
+                    }
                 }
             }
         }
@@ -205,6 +283,7 @@ class VRActivity : NativeActivity() {
             addAction(ACTION_DEBUG_SET_SCREEN_MODE)
             addAction(ACTION_DEBUG_CYCLE_SCREEN_MODE)
             addAction(ACTION_DEBUG_SET_THERMAL_STATUS)
+            addAction(ACTION_DEBUG_PLAY_SFTP)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
@@ -284,6 +363,10 @@ class VRActivity : NativeActivity() {
             ).migrateIfNeeded()
         }
 
+        playlistQueueManager.onPlayItemRequested = { item ->
+            playPlaylistItem(item)
+        }
+
         // Ver bloco de comentario acima de `nativeKeyboardProxy`.
         nativeKeyboardProxy = EditText(this)
         addContentView(nativeKeyboardProxy, ViewGroup.LayoutParams(
@@ -307,23 +390,53 @@ class VRActivity : NativeActivity() {
 
         registerDebugReceiverIfDebuggable()
 
-        // Fase 0.4 T5: empurra o valor persistido do toggle de Foveated
-        // Rendering pro Rust — o C++ (caminho Vulkan) le isso na
-        // inicializacao do XrInstance/swapchains. Trocas em runtime (tela de
-        // Configuracoes) empurram de novo na hora, ver SettingsScreen.kt.
-        nativeSetFoveationEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.FOVEATED_RENDERING))
+        // "Buffer estilo YouTube" (ver media_logic::buffer_gate no lado
+        // Rust): reporta a RAM total do aparelho uma vez no startup, pra o
+        // teto do buffer profundo pausado escalar pelo dispositivo real em
+        // vez de um número fixo cravado pro Quest 3 — um eventual aparelho
+        // com menos RAM recebe um teto proporcionalmente menor, um com mais
+        // RAM fica limitado pelo teto máximo do buffer_gate (mais RAM não
+        // significa "guarde dezenas de segundos de vídeo", o compositor VR
+        // também disputa essa memória).
+        val memoryInfo = ActivityManager.MemoryInfo()
+        (getSystemService(ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(memoryInfo)
+        nativeSetDeviceTotalMemoryBytes(memoryInfo.totalMem)
+
+        // Fase 0.4 T5: empurra o modo persistido de Foveated Rendering pro Rust/C++
+        val fovMode = FeatureFlags.getFoveatedRenderingMode(this)
+        nativeSetFoveationMode(fovMode)
+        nativeSetFoveationEnabled(fovMode != 0)
 
         // Pausar ao sair: empurra preferência inicial de auto-pause para a camada nativa
         nativeSetPauseOnExit(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PAUSE_ON_EXIT))
 
+        // Fase 0.3 Seção 2: empurra o estado persistido do toggle de Passthrough.
+        // A capacidade real (extensão XR_FB_passthrough presente) só é conhecida
+        // depois que o C++ cria o XrInstance; o painel de controles consulta
+        // nativeIsPassthroughSupported() ao ser montado pra habilitar o botão.
+        nativeSetPassthroughEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PASSTHROUGH))
+        nativeSetPassthroughStyle(
+            FeatureFlags.getPassthroughOpacity(this),
+            FeatureFlags.getPassthroughEdgeRendering(this)
+        )
+
         // Fase 0.3 Seção 3/4: empurra valores persistidos de Áudio Espacial e Head Tracking pro nativo
-        val spatialAudio = FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_AUDIO)
-        nativeSetSpatialAudioMode(if (spatialAudio) 1 else 0)
+        nativeSetSpatialAudioMode(FeatureFlags.getSpatialAudioMode(this))
         nativeSetSpatialAudioHeadTracking(FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_HEAD_TRACKING))
+        // T4.4: inicializa o modo screen-locked a partir da preferência persistida
+        nativeSetAudioScreenLocked(FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_SCREEN_LOCKED))
 
         // Painel de Estatísticas Técnicas / Stats for Nerds (docs/reports/DEBUG-STATS-MODAL.md)
         isDebugStatsEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.DEBUG_STATS_PANEL)
         nativeSetDebugStatsEnabled(isDebugStatsEnabled)
+
+        // F8 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): ANR e crash nativo (inclusive o
+        // abort do ART no teardown Vulkan) não deixam rastro no handler de exceções da JVM
+        // abaixo — ApplicationExitInfo é a única fonte pra essas duas classes de morte do
+        // processo. Custo: uma leitura no arranque, zero em runtime.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            com.tucavr.debug.ApplicationExitInfoReporter.checkAndReport(this)
+        }
 
         // N6: Captura de crashes não tratados para arquivo de diagnóstico com session ID
         val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
@@ -340,7 +453,13 @@ class VRActivity : NativeActivity() {
                         writer.println("Session ID: $sid")
                         writer.println("Timestamp: ${System.currentTimeMillis()}")
                         writer.println("Thread: ${thread.name} (ID: ${thread.id})")
-                        writer.println("Current Source: $currentPlaybackSource")
+                        // D-03 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): NUNCA interpolar
+                        // currentPlaybackSource diretamente — o toString() sintetizado da data
+                        // class de servidor (Smb/Ftp/Sftp/etc.) inclui o campo `password` em
+                        // claro, e este arquivo sai do device via scripts/collect-debug.sh.
+                        val (sourceType, sourceRedacted) = com.tucavr.debug.DebugTelemetryExporter
+                            .extractSourceInfo(currentPlaybackSource)
+                        writer.println("Current Source: $sourceType $sourceRedacted")
                         writer.println("StackTrace:")
                         throwable.printStackTrace(writer)
                     }
@@ -358,6 +477,7 @@ class VRActivity : NativeActivity() {
         stopPlayback()
 
         DebugTelemetryExporter.onSessionEnded()
+        debugEventLogWriter.close()
         debugReceiver?.let { unregisterReceiver(it) }
         debugReceiver = null
 
@@ -540,6 +660,14 @@ class VRActivity : NativeActivity() {
         const val ACTION_DEBUG_CYCLE_SCREEN_MODE = "com.tucavr.debug.CYCLE_SCREEN_MODE"
         const val ACTION_DEBUG_SET_THERMAL_STATUS = "com.tucavr.debug.SET_THERMAL_STATUS"
         const val EXTRA_THERMAL_STATUS = "status"
+        // Ver ACTION_DEBUG_PLAY_SFTP em registerDebugReceiverIfDebuggable — playback SFTP
+        // automatizado via adb, sem depender do headset estar sendo usado.
+        const val ACTION_DEBUG_PLAY_SFTP = "com.tucavr.debug.PLAY_SFTP"
+        const val EXTRA_SFTP_HOST = "host"
+        const val EXTRA_SFTP_PORT = "port"
+        const val EXTRA_SFTP_PATH = "path"
+        const val EXTRA_SFTP_USER = "user"
+        const val EXTRA_SFTP_PASSWORD = "password"
         private const val AUTO_PLAY_DELAY_MS = 3000L
         private const val PLAYBACK_ERROR_POLL_MS = 1000L
 
@@ -750,6 +878,21 @@ class VRActivity : NativeActivity() {
                 // do tracker (throttle/`current`) single-threaded, evitando
                 // uma corrida de dados sem precisar de sincronizacao extra.
                 activity.historyTracker.onProgress(currentSec, totalSec)
+                activity.playlistQueueManager.onPlaybackProgress(currentSec, totalSec)
+            }
+        }
+
+        /**
+         * "Buffer estilo YouTube" (ver media_logic::buffer_gate no lado
+         * Rust): segundos de video ja bufferizados a frente do ponteiro de
+         * reproducao, chamado na mesma cadencia de updateMediaProgress
+         * (~10x/s). Alimenta a barra cinza (secondaryProgress) do SeekBar em
+         * VRControlsPresentation — mesmo indicador que o YouTube usa.
+         */
+        @JvmStatic
+        fun updateBufferedProgress(activity: VRActivity, bufferedAheadSec: Float) {
+            activity.runOnUiThread {
+                activity.controlsPresentation?.updateBufferedProgress(bufferedAheadSec)
             }
         }
 
@@ -786,6 +929,17 @@ class VRActivity : NativeActivity() {
                 )
             }
 
+            val parsedStats = com.tucavr.debug.DebugStatsParser.parse(text)
+            if (parsedStats != null) {
+                if (sid != null) {
+                    activity.debugEventLogWriter.recordSample(sid, parsedStats, System.currentTimeMillis())
+                }
+                activity.runOnUiThread {
+                    activity.controlsPresentation?.updateQualityBadge(parsedStats.qualityLevel, parsedStats.qualityReason)
+                    activity.maybeWarnQualityOverload(parsedStats.qualityReason)
+                }
+            }
+
             if (!activity.isDebugStatsEnabled) return
             activity.runOnUiThread {
                 activity.modalPresentation?.updateDebugStats(text)
@@ -809,6 +963,10 @@ class VRActivity : NativeActivity() {
     @Volatile
     private var sessionStartRealtimeMs: Long = 0L
 
+    // F6 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): log de eventos por sessão — ver
+    // com.tucavr.debug.DebugEventLog.
+    private val debugEventLogWriter by lazy { com.tucavr.debug.DebugEventLogWriter(this) }
+
     private fun startSession(source: PlaybackSource) {
         val sessionId = java.util.UUID.randomUUID().toString().replace("-", "").take(8)
         currentSessionId = sessionId
@@ -816,6 +974,10 @@ class VRActivity : NativeActivity() {
         VRLog.activeSessionId = sessionId
         VRLog.i("Iniciando sessao de reproducao $sessionId para $source")
         nativeSetSessionId(sessionId)
+        // T7.6: informa o idioma do sistema para a auto-selecao de faixa de
+        // legenda embutida (aplicada no proximo load nativo, se o usuario nao
+        // tiver escolhido uma faixa manualmente).
+        nativeSetPreferredSubtitleLanguage(java.util.Locale.getDefault().toLanguageTag())
     }
 
     // T9.1-T9.3: os 3 entry points de playback (playFile/playUrl/playSmb) sao
@@ -843,6 +1005,7 @@ class VRActivity : NativeActivity() {
         is PlaybackSource.Sftp -> src.path.substringAfterLast("/")
         is PlaybackSource.Nfs -> src.path.substringAfterLast("/")
         is PlaybackSource.Dlna -> src.title
+        is PlaybackSource.Webdav -> src.path.substringAfterLast("/")
     }
 
     fun playFile(filePath: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
@@ -927,6 +1090,41 @@ class VRActivity : NativeActivity() {
         nativePlayVideo(url, (resumeAtMs ?: 0L) / 1000f)
     }
 
+    // T3.2/T3.4: playback WebDAV
+    fun playWebdav(server: com.tucavr.network.SavedServer, path: String, sizeBytes: Long = 0L, resumeAtMs: Long? = null) {
+        val source = PlaybackSource.Webdav(server, path, sizeBytes)
+        updateCurrentPlaybackSource(source)
+        startSession(source)
+        historyTracker.startTracking(source, title = path.substringAfterLast('/'))
+        controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
+        applyFormat3dOverride(source)
+
+        val password = com.tucavr.network.ServerCredentialStore(this).getPassword(server.id)
+        var useHttps = false
+        var acceptInvalidCerts = false
+        if (!server.extraJson.isNullOrEmpty()) {
+            try {
+                val json = org.json.JSONObject(server.extraJson)
+                useHttps = json.optBoolean("useHttps", false)
+                acceptInvalidCerts = json.optBoolean("acceptInvalidCerts", false)
+            } catch (e: Exception) {
+                // Ignora erro de parse, usa defaults
+            }
+        }
+
+        nativePlayWebdav(
+            server.host,
+            server.port,
+            server.path,
+            path,
+            server.username,
+            password,
+            useHttps,
+            acceptInvalidCerts,
+            (resumeAtMs ?: 0L) / 1000f
+        )
+    }
+
     private fun processVideoUri(uri: Uri) {
         try {
             val pfd = contentResolver.openFileDescriptor(uri, "r")
@@ -960,6 +1158,7 @@ class VRActivity : NativeActivity() {
             sessionStartRealtimeMs = 0L
             VRLog.activeSessionId = null
             DebugTelemetryExporter.onSessionEnded()
+        debugEventLogWriter.close()
             lastMediaProgressCurrent = 0f
             lastMediaProgressTotal = 0f
             nativeStopVideo()
@@ -997,6 +1196,28 @@ class VRActivity : NativeActivity() {
     external fun nativeRequestFrameCapture(path: String)
     external fun nativeTakeLastPlaybackError(): String?
 
+    // Fase 0.3 Seção 8: Fotos 360° e Fotos 3D estéreo (T8.3, T8.4)
+    external fun nativeLoadPhoto(rgba: ByteArray, width: Int, height: Int, screenMode: Int)
+    external fun nativeClearPhoto()
+    external fun nativeSetPhotoZoom(zoom: Float)
+    external fun nativeSetPhotoPan(panX: Float, panY: Float)
+
+    fun loadPhoto(rgba: ByteArray, width: Int, height: Int, screenMode: Int) {
+        nativeLoadPhoto(rgba, width, height, screenMode)
+    }
+
+    fun clearPhoto() {
+        nativeClearPhoto()
+    }
+
+    fun setPhotoZoom(zoom: Float) {
+        nativeSetPhotoZoom(zoom)
+    }
+
+    fun setPhotoPan(panX: Float, panY: Float) {
+        nativeSetPhotoPan(panX, panY)
+    }
+
     /**
      * Exibe o modal de formato de tela no 3º Quad dedicado frontal (VRModalPresentation).
      */
@@ -1004,6 +1225,16 @@ class VRActivity : NativeActivity() {
         runOnUiThread {
             nativeShowModalPanel()
             modalPresentation?.showScreenFormatModal()
+        }
+    }
+
+    /**
+     * Exibe o modal de configurações e estilo do Passthrough no 3º Quad dedicado frontal (VRModalPresentation).
+     */
+    fun openPassthroughSettingsModal() {
+        runOnUiThread {
+            nativeShowModalPanel()
+            modalPresentation?.showPassthroughSettingsModal()
         }
     }
 
@@ -1069,6 +1300,64 @@ class VRActivity : NativeActivity() {
         runOnUiThread {
             nativeShowModalPanel()
             modalPresentation?.showResumePromptModal(entry, onResume, onRestart)
+        }
+    }
+
+    /**
+     * Exibe o modal de fila de reprodução / playlist no 3º Quad frontal (VRModalPresentation).
+     */
+    fun openPlaylistModal() {
+        runOnUiThread {
+            nativeShowModalPanel()
+            modalPresentation?.showPlaylistModal(playlistQueueManager) { index ->
+                playlistQueueManager.skipTo(index)
+            }
+        }
+    }
+
+    /**
+     * Inicia a reprodução sequencial de uma playlist.
+     */
+    fun startPlaylist(
+        playlist: Playlist,
+        items: List<PlaylistItem>,
+        startIndex: Int = 0
+    ) {
+        playlistQueueManager.startPlaylist(playlist, items, startIndex)
+    }
+
+    /**
+     * Toca um item da playlist na sessão OpenXR / Rust.
+     */
+    fun playPlaylistItem(item: PlaylistItem) {
+        CoroutineScope(Dispatchers.Main).launch {
+            val smbStore = SmbCredentialStore(this@VRActivity)
+            val ftpStore = FtpCredentialStore(this@VRActivity)
+            val sftpStore = SftpCredentialStore(this@VRActivity)
+            val savedServerDao = AppDatabase.getInstance(this@VRActivity).savedServerDao()
+            val source = withContext(Dispatchers.IO) {
+                item.toPlaybackSource(smbStore, ftpStore, sftpStore, savedServerDao)
+            }
+            if (source == null) {
+                // Item indisponível (servidor offline / desconhecido). Pular para o próximo sem crashar.
+                runOnUiThread {
+                    Toast.makeText(this@VRActivity, getString(R.string.playlists_item_unavailable, item.title), Toast.LENGTH_SHORT).show()
+                    playlistQueueManager.playNext()
+                }
+                return@launch
+            }
+
+            when (source) {
+                is PlaybackSource.LocalFile -> playFile(source.path, source.sizeBytes)
+                is PlaybackSource.Http      -> playUrl(source.url)
+                is PlaybackSource.Smb       -> playSmb(source.server, source.path, source.sizeBytes)
+                is PlaybackSource.Nfs       -> playNfs(source.server, source.path, source.sizeBytes)
+                is PlaybackSource.Dlna      -> playDlna(source.server, source.title, source.url, source.sizeBytes)
+                is PlaybackSource.Ftp       -> playFtp(source.server, source.path, source.sizeBytes)
+                is PlaybackSource.Sftp      -> playSftp(source.server, source.path, source.sizeBytes)
+                is PlaybackSource.Webdav    -> playWebdav(source.server, source.path, source.sizeBytes)
+            }
+            presentation?.onNavigateToPlayer(source)
         }
     }
 
@@ -1139,6 +1428,31 @@ class VRActivity : NativeActivity() {
     // T5.2/T5.4: listagem de exports NFS (bloqueante — SEMPRE de Dispatchers.IO).
     external fun nativeNfsListExports(host: String, port: Int): String
 
+    // T3.1/T3.2: playback WebDAV
+    external fun nativePlayWebdav(
+        host: String,
+        port: Int,
+        basePath: String,
+        filePath: String,
+        username: String,
+        password: String,
+        useHttps: Boolean,
+        acceptInvalidCerts: Boolean,
+        startTimeSec: Float
+    )
+
+    // T3.1: listagem de diretório WebDAV (bloqueante — SEMPRE de Dispatchers.IO)
+    external fun nativeWebdavListDirectory(
+        host: String,
+        port: Int,
+        basePath: String,
+        dirPath: String,
+        username: String,
+        password: String,
+        useHttps: Boolean,
+        acceptInvalidCerts: Boolean
+    ): String
+
     // T10.1: Varredura de servidores na rede local (bloqueante — SEMPRE de Dispatchers.IO).
     // Retorno: linhas separadas por \n, cada uma com "PROTOCOL\tNAME\tHOST\tPORT\tPATH"
     external fun nativeDiscoveryScan(timeoutMs: Int): String
@@ -1151,6 +1465,9 @@ class VRActivity : NativeActivity() {
 
     // T8.1/T8.6: Probe de variantes HLS (bloqueante — SEMPRE de Dispatchers.IO).
     external fun nativeHlsProbeVariants(url: String): String
+
+    // T2.1/T2.6: Probe de representações DASH (bloqueante — SEMPRE de Dispatchers.IO).
+    external fun nativeDashProbeRepresentations(url: String): String
 
     // T9: thumbnail de arquivo de video num share/servidor de rede — decode
     // de UM frame por software do lado Rust (core::thumbnail::generate, ver
@@ -1251,7 +1568,16 @@ class VRActivity : NativeActivity() {
     // comentario em native/src/vr_player_app.cpp. Chamada barata (so um
     // atomic no lado Rust), segura direto da UI thread.
     external fun nativeSetFoveationEnabled(enabled: Boolean)
+    external fun nativeSetFoveationMode(mode: Int)
+    external fun nativeGetFoveationMode(): Int
     external fun nativeSetPauseOnExit(enabled: Boolean)
+    // Fase 0.3 Seção 2: Passthrough / Mixed Reality (Vulkan-only, XR_FB_passthrough).
+    external fun nativeSetPassthroughEnabled(enabled: Boolean)
+    external fun nativeIsPassthroughSupported(): Boolean
+    external fun nativeSetPassthroughStyle(opacity: Float, edgeRendering: Boolean)
+    external fun nativeGetPassthroughOpacity(): Float
+    external fun nativeGetPassthroughEdgeRendering(): Boolean
+    external fun nativeResetScreenPosition()
 
     // T13.1: metadados de midia (container/duracao/bitrate/trilhas) pra tela
     // de detalhe do arquivo — bloqueante (probe de container, rede se remoto),
@@ -1288,6 +1614,8 @@ class VRActivity : NativeActivity() {
     external fun nativeSetAudioTrack(ordinal: Int)
     external fun nativeSetSpatialAudioMode(mode: Int)
     external fun nativeSetSpatialAudioHeadTracking(enabled: Boolean)
+    // T4.4: Modo screen-locked — speakers fixos relativos à tela em vez do espaço absoluto.
+    external fun nativeSetAudioScreenLocked(locked: Boolean)
 
     // Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
     external fun nativeSetSubtitleTrack(trackIndex: Int)
@@ -1296,9 +1624,17 @@ class VRActivity : NativeActivity() {
     external fun nativeGetSubtitleOffsetMs(): Long
     external fun nativeLoadExternalSubtitle(path: String): Boolean
     external fun nativeGetSubtitleTrackCount(): Int
+    // T7.6: idioma do sistema para auto-selecao de faixa embutida.
+    external fun nativeSetPreferredSubtitleLanguage(lang: String)
 
     // T14.1/T14.2: Notifica o pipeline de render nativo (C++/Rust) sobre o nível térmico atual
     external fun nativeSetThermalLevel(level: Int)
+
+    // "Buffer estilo YouTube" (ver media_logic::buffer_gate no lado Rust):
+    // RAM total do aparelho, chamado uma vez no startup — escala o teto do
+    // buffer profundo pausado pelo dispositivo real em vez de um número
+    // fixo cravado pro Quest 3.
+    external fun nativeSetDeviceTotalMemoryBytes(bytes: Long)
 
     // Painel de Estatísticas Técnicas / Stats for Nerds (docs/reports/DEBUG-STATS-MODAL.md)
     external fun nativeSetDebugStatsEnabled(enabled: Boolean)

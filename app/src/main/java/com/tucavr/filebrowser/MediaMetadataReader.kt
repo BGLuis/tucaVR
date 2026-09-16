@@ -59,7 +59,7 @@ object MediaMetadataReader {
                     source.server.host, source.server.port, source.server.username, source.server.password,
                     source.server.privateKey ?: "", source.path
                 )
-                is PlaybackSource.Nfs -> null
+                is PlaybackSource.Nfs, is PlaybackSource.Webdav -> null
             }
             if (wire == null) return@withContext null
             parse(wire)

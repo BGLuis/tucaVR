@@ -1,9 +1,24 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     // T9.1: Room usa KSP em vez de kapt (ver justificativa no build.gradle.kts raiz).
     id("com.google.devtools.ksp")
 }
+
+// Sincronização de versão do sistema com version.properties na raiz
+val versionPropsFile = rootProject.file("version.properties")
+val versionProps = Properties().apply {
+    if (versionPropsFile.exists()) {
+        versionPropsFile.inputStream().use { load(it) }
+    }
+}
+val defaultVersionName = versionProps.getProperty("versionName", "0.4.7")
+val defaultVersionCode = versionProps.getProperty("versionCode", "470").toIntOrNull() ?: 470
+
+val appVersionName = (project.findProperty("appVersionName") as? String)?.takeIf { it.isNotBlank() } ?: defaultVersionName
+val appVersionCode = (project.findProperty("appVersionCode") as? String)?.toIntOrNull() ?: defaultVersionCode
 
 android {
     namespace = "com.tucavr"
@@ -18,8 +33,8 @@ android {
         applicationId = "com.tucavr"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         externalNativeBuild {
             cmake {
@@ -97,6 +112,9 @@ dependencies {
     implementation("androidx.room:room-ktx:2.6.1")
     ksp("androidx.room:room-compiler:2.6.1")
 
+    // T8.1 / T8.2: ExifInterface para metadados de fotos (orientação EXIF e XMP GPano 360)
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
+
     // JVM unit tests (app/src/test) — logica pura do file browser
     // (MediaSorter, DirectoryNavigator, DirectoryLister, cache-key do
     // ThumbnailGenerator) roda direto na JVM, sem emulador/Robolectric,
@@ -104,6 +122,12 @@ dependencies {
     // caminhos testados. Ver docs/TESTING-PLAN.md.
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+
+    // R-05 (PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): driver SQLite puro-JVM (sem dependencia
+    // Android) para exercitar o SQL bruto das migrations do Room (AppDatabase.MIGRATION_*_SQL)
+    // direto na JVM, sem Robolectric — mesma logica das outras testImplementation acima: roda
+    // sem emulador porque o SQL das migrations nao toca em nenhuma API Android real.
+    testImplementation("org.xerial:sqlite-jdbc:3.44.1.0")
 }
 
 // Placeholder for Rust integration (via Mozilla plugin or custom task)

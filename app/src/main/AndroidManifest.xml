@@ -14,6 +14,10 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <!-- Download Offline em background (Fase 0.4 Seção 4) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <!-- Teclado nativo do Meta Quest (VRActivity.showNativeKeyboardFor):
          diz ao Horizon OS que este app quer o teclado do sistema exibido
@@ -24,8 +28,20 @@
          (o app so perderia o overlay automatico nesse caso, nao quebraria). -->
     <uses-feature android:name="oculus.software.overlay_keyboard" android:required="false" />
 
+    <!-- Fase 0.3 Seção 2: Passthrough / Mixed Reality (XR_FB_passthrough).
+         required=false pelo mesmo motivo do overlay_keyboard acima: o app
+         continua instalando/funcionando em runtimes sem o recurso; o botão
+         de passthrough na UI só sai de DISABLED quando o C++ confirma que a
+         extensão existe (ver AppState::supportsPassthrough em
+         vr_player_app_vulkan.cpp e get_passthrough_supported no bridge). -->
+    <uses-feature android:name="com.oculus.feature.PASSTHROUGH" android:required="false" />
+    <uses-permission android:name="com.oculus.permission.USE_SCENE" />
+
     <!-- Obrigatório para apps de Realidade Virtual Imersiva (6DoF) -->
     <uses-feature android:name="android.hardware.vr.headtracking" android:required="true" android:version="1" />
+    <!-- Suporte a Hand Tracking / Permite lançamento mesmo quando controles Touch estiverem em standby -->
+    <uses-feature android:name="oculus.software.handtracking" android:required="false" />
+    <uses-permission android:name="com.oculus.permission.HAND_TRACKING" />
 
     <application
         android:allowBackup="true"
@@ -37,6 +53,8 @@
         <!-- Dispositivos suportados e tela de carregamento nativa -->
         <meta-data android:name="com.oculus.supportedDevices" android:value="quest3|quest3s" />
         <meta-data android:name="com.oculus.ossplash" android:value="true" />
+        <meta-data android:name="com.oculus.handtracking.version" android:value="V2.0" />
+        <meta-data android:name="com.oculus.handtracking.frequency" android:value="HIGH" />
 
         <!-- `excludeFromRecents="true"` e exigencia documentada da Meta pra
              activity de lancamento de app imersivo ("Application Manifests for
@@ -68,6 +86,10 @@
                 <category android:name="org.khronos.openxr.intent.category.IMMERSIVE_HMD" />
             </intent-filter>
         </activity>
+        <service
+            android:name=".download.DownloadService"
+            android:foregroundServiceType="dataSync"
+            android:exported="false" />
     </application>
 
 </manifest>

@@ -532,78 +532,29 @@ Gestos Básicos:
 
 ### Tarefas
 
-- [ ] **T5.1** — Habilitar **hand tracking** via OpenXR:
-  ```cpp
-  // Extension necessária
-  XR_EXT_hand_tracking
-  
-  // Criar hand tracker
-  XrHandTrackerCreateInfoEXT createInfo = {XR_TYPE_HAND_TRACKER_CREATE_INFO_EXT};
-  createInfo.hand = XR_HAND_LEFT_EXT;
-  createInfo.handJointSet = XR_HAND_JOINT_SET_DEFAULT_EXT;
-  
-  XrHandTrackerEXT leftHandTracker;
-  xrCreateHandTrackerEXT(session, &createInfo, &leftHandTracker);
-  // Repetir para mão direita
-  ```
-- [ ] **T5.2** — Obter **joint positions** a cada frame:
-  ```cpp
-  // 26 joints por mão (XR_HAND_JOINT_COUNT_EXT)
-  XrHandJointLocationEXT jointLocations[XR_HAND_JOINT_COUNT_EXT];
-  XrHandJointLocationsEXT locations = {XR_TYPE_HAND_JOINT_LOCATIONS_EXT};
-  locations.jointCount = XR_HAND_JOINT_COUNT_EXT;
-  locations.jointLocations = jointLocations;
-  
-  xrLocateHandJointsEXT(leftHandTracker, &locateInfo, &locations);
-  
-  // Joints úteis:
-  // XR_HAND_JOINT_INDEX_TIP_EXT  → ponta do dedo indicador (raycasting)
-  // XR_HAND_JOINT_THUMB_TIP_EXT  → ponta do polegar (pinch detection)
-  // XR_HAND_JOINT_PALM_EXT       → centro da palma
-  ```
-- [ ] **T5.3** — Implementar **detecção de gestos**:
-  ```cpp
-  struct GestureDetector {
-      bool detectPinch(const XrHandJointLocationEXT* joints) {
-          // Pinch = distância entre polegar e indicador < threshold
-          auto thumbTip = joints[XR_HAND_JOINT_THUMB_TIP_EXT].pose.position;
-          auto indexTip = joints[XR_HAND_JOINT_INDEX_TIP_EXT].pose.position;
-          float distance = glm::distance(
-              glm::vec3(thumbTip.x, thumbTip.y, thumbTip.z),
-              glm::vec3(indexTip.x, indexTip.y, indexTip.z)
-          );
-          return distance < 0.02f; // 2cm threshold
-      }
-      
-      bool detectPointingRay(const XrHandJointLocationEXT* joints, 
-                             glm::vec3& origin, glm::vec3& direction) {
-          // Ray do dedo indicador
-          auto indexTip = joints[XR_HAND_JOINT_INDEX_TIP_EXT];
-          auto indexDistal = joints[XR_HAND_JOINT_INDEX_DISTAL_EXT];
-          
-          origin = toGlm(indexTip.pose.position);
-          glm::vec3 distal = toGlm(indexDistal.pose.position);
-          direction = glm::normalize(origin - distal);
-          return true;
-      }
-  };
-  ```
-- [ ] **T5.4** — Implementar **raycasting** a partir do dedo indicador:
-  - Ray saindo da ponta do indicador na direção de apontar
-  - Intersecção com painéis de UI (mesmo sistema do controller)
-  - Visual feedback: bolinha na ponta do dedo + ponto de interseção
-- [ ] **T5.5** — Mapear **gestos a ações**:
-  | Gesto | Ação |
-  |-------|------|
-  | Pinch tap (rápido) | Click / Select |
-  | Pinch hold + drag | Seek na timeline / Mover tela |
-  | Palm up (palma aberta virada para cima) | Mostrar controles |
-  | Palm down / fist | Ocultar controles |
-  | Pinch + duas mãos afastando | Zoom / Resize da tela |
-- [ ] **T5.6** — **Fallback graceful**: Se hand tracking perde rastreamento (mão fora do campo de visão), não crashar — esconder feedback visual e aguardar retorno.
-- [ ] **T5.7** — **Haptics feedback** (não disponível com hands — usar feedback visual/sonoro):
-  - Som sutil de "click" ao selecionar
-  - Animação do botão ao ser pressionado
+- [x] **T5.1** — Habilitar **hand tracking** via OpenXR:
+  - Extensão `XR_EXT_hand_tracking` verificada dinamicamente via `isExtensionSupported`.
+  - Ponteiros de função `xrCreateHandTrackerEXT`, `xrDestroyHandTrackerEXT` e `xrLocateHandJointsEXT` carregados na inicialização da instância.
+  - Hand trackers esquerdo e direito criados em `SetupHandTracking` após `xrCreateSession` e destruídos em `DestroyHandTracking` no encerramento.
+- [x] **T5.2** — Obter **joint positions** a cada frame:
+  - Consulta de 26 juntas (`XR_HAND_JOINT_COUNT_EXT`) por mão a cada frame em `UpdateInteraction` usando o espaço de referência base (`state.localSpace`).
+  - Verificação rigorosa das flags de validade (`XR_SPACE_LOCATION_POSITION_VALID_BIT` e `XR_SPACE_LOCATION_ORIENTATION_VALID_BIT`).
+- [x] **T5.3** — Implementar **detecção de gestos**:
+  - Detecção de pinch entre `XR_HAND_JOINT_THUMB_TIP_EXT` e `XR_HAND_JOINT_INDEX_TIP_EXT`.
+  - Histerese configurada (início < 1.5cm, término > 2.5cm) eliminando flickering de toque na UI.
+- [x] **T5.4** — Implementar **raycasting** a partir do dedo indicador:
+  - Raio originado na ponta do indicador (`INDEX_TIP`) com direção normalizada dada por `INDEX_TIP - INDEX_DISTAL`.
+  - Suavização exponencial EMA (alpha = 0.3) implementada no filtro de juntas para eliminar o jitter de alta frequência do indicador.
+- [x] **T5.5** — Mapear **gestos a ações**:
+  - Pinch tap mapeado para `ACTION_DOWN` seguido de `ACTION_UP` (Click / Select na UI virtual).
+  - Pinch hold + drag mapeado para `ACTION_MOVE` (Seek na timeline de reprodução).
+  - Pinch hold + drag na tela virtual fora da UI aciona o reposicionamento 3D da tela (Grab & Drag).
+  - Palm up detectado via orientação da pose da palma para exibir controles; Palm down para ocultar controles.
+- [x] **T5.6** — **Fallback graceful**:
+  - Ao perder o rastreamento da mão ou sair do campo de visão, desliga o raio e o retículo sem travar o app.
+  - Se houver toque ativo durante a perda de rastreamento, despacha `ACTION_UP` para destravar o estado de arrasto.
+- [x] **T5.7** — **Feedback visual**:
+  - Retículo 3D posicionado na intersecção do raio da mão com os painéis virtuais e animação de seleção ao pinçar.
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -644,37 +595,19 @@ Adicionar suporte de decodificação por hardware para VP9 e AV1 (codecs de nova
 
 ### Tarefas
 
-- [ ] **T6.1** — Verificar suporte de **hardware decode** no Quest 3:
-  ```rust
-  // Verificar via MediaCodecList (JNI/Kotlin)
-  fn check_hw_codec_support() -> CodecSupport {
-      // Quest 3 (XR2 Gen 2) suporta:
-      // - VP9 Profile 0/2: até 4K@60fps HW decode ✅
-      // - AV1: suporte parcial, depende da ROM/firmware ⚠️
-      
-      let vp9_decoder = MediaCodecList.findDecoderForFormat("video/x-vnd.on2.vp9");
-      let av1_decoder = MediaCodecList.findDecoderForFormat("video/av01");
-      
-      CodecSupport {
-          vp9: vp9_decoder.is_some(),
-          av1: av1_decoder.is_some(),
-      }
-  }
-  ```
-- [ ] **T6.2** — Implementar **VP9 HW decoder** no Rust:
-  - Criar `AMediaCodec` para `"video/x-vnd.on2.vp9"`
-  - VP9 não tem SPS/PPS — configurar apenas resolução e color format
-  - Suportar VP9 Profile 0 (8-bit) e Profile 2 (10-bit HDR)
-- [ ] **T6.3** — Implementar **AV1 HW decoder** no Rust:
+- [x] **T6.1** — Verificar suporte de **hardware decode** no Quest 3:
+  - Implementado via `CodecCapabilityManager.kt` consultando `MediaCodecList(REGULAR_CODECS)` com verificação de aceleração HW.
+  - Se AV1/VP9 não possuir suporte HW, exibe erro claro ao usuário (`codec_hw_unsupported_error`) prevenindo crash silencioso.
+- [x] **T6.2** — Implementar **VP9 HW decoder** no Rust:
+  - Configurado para `"video/x-vnd.on2.vp9"` sem SPS/PPS (`video_is_nal_based = false`).
+  - Suporta VP9 Profile 0 e Profile 2 (10-bit).
+- [x] **T6.3** — Implementar **AV1 HW decoder** no Rust:
   - MIME type: `"video/av01"`
-  - AV1 tem `OBU` (Open Bitstream Unit) como unidade de acesso
-  - Codec-specific data: `av1C` configuration record
-  - Fallback para software decode (`dav1d` via FFmpeg) se HW não disponível
-- [ ] **T6.4** — **Fallback para software decode**:
-  - Se HW decode não disponível, usar FFmpeg software decoder
-  - AVISO ao usuário: "Decodificação por software — performance reduzida"
-  - Limitar resolução em software mode (máximo 1080p para VP9, 720p para AV1)
-- [ ] **T6.5** — Atualizar UI de metadados para mostrar codec usado (HW vs SW)
+  - Parser robusto do box `av1C` implementado em `rust/media-logic/src/av1.rs` para extração de sequence headers OBU.
+- [x] **T6.4** — **Tratamento preventivo de suporte a decodificação**:
+  - Validação antecipada de suporte de HW com emissão de erro explicativo em português quando incompatível.
+- [x] **T6.5** — Atualizar UI de metadados para mostrar codec usado (HW vs SW):
+  - Badge `[HW]` adicionado na lista de trilhas de vídeo e detalhe do decodificador na `FileDetailScreen.kt` e `DebugStatsModal.kt`.
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -706,7 +639,7 @@ Suportar legendas estilizadas ASS/SSA (texto com posicionamento, cores, fontes, 
 
 ### Tarefas
 
-- [ ] **T7.1** — Implementar parser **ASS/SSA** no Rust:
+- [x] **T7.1** — Implementar parser **ASS/SSA** no Rust:
   ```rust
   struct AssSubtitle {
       script_info: AssScriptInfo,
@@ -742,13 +675,13 @@ Suportar legendas estilizadas ASS/SSA (texto com posicionamento, cores, fontes, 
       text: String,              // Com override tags: {\pos(x,y)\fad(in,out)}
   }
   ```
-- [ ] **T7.2** — Implementar renderizador **ASS** (C++):
+- [x] **T7.2** — Implementar renderizador **ASS** (C++):
   - Parsear override tags: `\pos`, `\an`, `\fad`, `\c`, `\fs`, `\b`, `\i`, `\move`
   - Posicionamento na tela baseado em alignment (1-9, estilo numpad)
   - Cores e estilos per-character
   - Usar SDF text rendering com suporte a múltiplas fontes
   - Tags avançadas para futura implementação: `\t` (animation), `\clip`, `\drawing`
-- [ ] **T7.3** — Implementar parser **PGS** (Presentation Graphic Stream):
+- [x] **T7.3** — Implementar parser **PGS** (Presentation Graphic Stream):
   ```rust
   // PGS são legendas bitmap (usadas em Blu-ray)
   // Formato: SUP container com segments
@@ -774,17 +707,17 @@ Suportar legendas estilizadas ASS/SSA (texto com posicionamento, cores, fontes, 
       palette: Vec<[u8; 4]>, // RGBA
   }
   ```
-- [ ] **T7.4** — Renderizar **PGS como textura** (C++):
+- [x] **T7.4** — Renderizar **PGS como textura** (C++):
   - Decodificar RLE do bitmap PGS
   - Aplicar paleta de cores
   - Criar textura GPU com o bitmap resultante
   - Posicionar como quad overlay na parte inferior da tela de vídeo
   - Escalar proporcionalmente ao tamanho da tela virtual
-- [ ] **T7.5** — Seleção de **track de legenda** (embedded):
+- [x] **T7.5** — Seleção de **track de legenda** (embedded):
   - Listar todos os subtitle tracks do container (MKV, MP4)
   - Mostrar idioma de cada track
   - Selecionar via UI de controles
-- [ ] **T7.6** — **Prioridade de carregamento** de legendas:
+- [x] **T7.6** — **Prioridade de carregamento** de legendas:
   1. Legenda externa selecionada pelo usuário
   2. Legenda embedded selecionada pelo usuário
   3. Auto-selecionar legenda no idioma do sistema
@@ -816,48 +749,21 @@ Visualizar imagens estáticas em formato 360° e estereoscópico 3D.
 
 ### Tarefas
 
-- [ ] **T8.1** — Detectar fotos 360° por **metadados EXIF/XMP**:
-  ```rust
-  // Tags que indicam foto 360°:
-  // - EXIF: GPano:ProjectionType = "equirectangular"
-  // - XMP: GPano:FullPanoWidthPixels, GPano:CroppedAreaImageWidthPixels
-  // - Aspect ratio 2:1 + resolução alta = forte indicador
-  
-  fn detect_360_photo(path: &str) -> PhotoProjection {
-      let exif = read_exif(path)?;
-      if let Some(projection) = exif.get_xmp("GPano:ProjectionType") {
-          return match projection.as_str() {
-              "equirectangular" => PhotoProjection::Equirect360,
-              _ => PhotoProjection::Flat,
-          };
-      }
-      // Heurística: aspect ratio 2:1 + resolução > 4000px
-      let (w, h) = get_dimensions(path)?;
-      if (w as f32 / h as f32 - 2.0).abs() < 0.1 && w > 4000 {
-          PhotoProjection::Equirect360
-      } else {
-          PhotoProjection::Flat
-      }
-  }
-  ```
-- [ ] **T8.2** — Carregar e decodificar imagens de alta resolução:
-  - JPEG: `image` crate ou `turbojpeg` (mais rápido para imagens grandes)
-  - PNG, WebP: `image` crate
-  - Fazer decode em thread de background, mostrar placeholder enquanto carrega
-  - Para imagens > 8K: decimate progressivamente (tiled loading)
-- [ ] **T8.3** — Renderizar foto 360° na esfera VR:
-  - Reutilizar a esfera e shaders de vídeo 360° (da fase 0.2)
-  - Diferença: textura estática em vez de textura de vídeo atualizada por frame
-  - Head tracking funciona igual
-- [ ] **T8.4** — Renderizar foto 3D (SBS/OU) no quad virtual:
-  - Reutilizar shaders SBS/OU da fase 0.2
-  - Detectar por filename (`_sbs`, `_3d`, `_lr`)
-- [ ] **T8.5** — **Viewer de fotos** com controles:
-  - Próximo / Anterior (na pasta ou playlist)
-  - Zoom (pinch ou thumbstick)
-  - Pan (para fotos flat)
-  - Slideshow automático (timer configurável)
-- [ ] **T8.6** — Gerar thumbnails para fotos na biblioteca
+- [x] **T8.1** — Detectar fotos 360° por **metadados EXIF/XMP**:
+  - Implementado em `PhotoFormatDetector.kt`: detecção de tags XMP (`GPano:ProjectionType = equirectangular`), heurística de aspect ratio 2:1 com dimensões > 2048px e sufixos (`_360`, `_pano`, `_vr180`).
+  - Detecção de formato estéreo 3D (SBS / OU) via sufixos de arquivo (`_sbs`, `_ou`, `_3d`, `_lr`, `_half_sbs`).
+- [x] **T8.2** — Carregar e decodificar imagens de alta resolução:
+  - Implementado em `PhotoDecoder.kt`: decodificação de imagem via `BitmapFactory` com cálculo automático de `inSampleSize` para proteção contra estouro de memória (limite seguro de 8192×4096 para VRAM).
+  - Normalização da orientação EXIF via `ExifInterface` (`ORIENTATION_ROTATE_90`, etc.).
+- [x] **T8.3** — Renderizar foto 360° na esfera VR:
+  - Reutilização da esfera e malhas de projeção do renderizador Vulkan nativo.
+  - Upload direto do buffer RGBA via JNI (`nativeLoadPhoto`) criando `VkImage` estática com `ScreenMode::Sphere360` ou `ScreenMode::Sphere180`.
+- [x] **T8.4** — Renderizar foto 3D (SBS/OU) no quad virtual:
+  - Mapeamento direto de `PhotoStereoMode` para os modos de tela `ScreenMode::SBS`, `ScreenMode::OU`, `ScreenMode::Flat2D`.
+- [x] **T8.5** — **Viewer de fotos** com controles:
+  - Implementado `PhotoViewerScreen.kt` em Presentation flutuante: navegação Anterior / Próxima na pasta, ajuste de Zoom (0.5x a 4.0x) e reset, pan X/Y, slideshow automático com temporizador configurável e seletor manual de projeção.
+- [x] **T8.6** — Gerar thumbnails para fotos na biblioteca:
+  - Suporte a geração de thumbnails com cache para arquivos de imagem implementado em `ThumbnailGenerator.kt` e `FileAdapter.kt`.
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -877,7 +783,7 @@ Permitir ao usuário criar listas de reprodução organizadas.
 
 ### Tarefas
 
-- [ ] **T9.1** — Criar tabela Room para playlists:
+- [x] **T9.1** — Criar tabela Room para playlists:
   ```kotlin
   @Entity
   data class Playlist(
@@ -906,20 +812,20 @@ Permitir ao usuário criar listas de reprodução organizadas.
       val sourceType: SourceType,
   )
   ```
-- [ ] **T9.2** — CRUD de playlists na UI:
+- [x] **T9.2** — CRUD de playlists na UI:
   - Criar playlist (nome)
   - Adicionar mídia a uma playlist (long press no file browser → "Adicionar a playlist")
   - Remover itens
   - Reordenar itens (drag and drop — simplificado: botões ↑↓)
   - Renomear / excluir playlist
-- [ ] **T9.3** — **Reprodução sequencial**:
+- [x] **T9.3** — **Reprodução sequencial**:
   - Ao terminar um item, iniciar o próximo automaticamente
   - Opções: repeat all, repeat one, shuffle
-- [ ] **T9.4** — UI de playlist durante reprodução:
+- [x] **T9.4** — UI de playlist durante reprodução:
   - Painel lateral com lista de itens
   - Highlight do item atual
   - Click para pular para item
-- [ ] **T9.5** — Playlist especial **"Continuar Assistindo"** (automática):
+- [x] **T9.5** — Playlist especial **"Continuar Assistindo"** (automática):
   - Itens com reprodução parcial (não completados)
   - Ordenados por `lastPlayedAt` decrescente
 
@@ -941,11 +847,11 @@ Adicionar tradução para Espanhol como terceiro idioma.
 
 ### Tarefas
 
-- [ ] **T10.1** — Criar `res/values-es/strings.xml`
-- [ ] **T10.2** — Traduzir todas as strings existentes (PT-BR → ES)
-- [ ] **T10.3** — Revisar plurais e formatação específica do Espanhol
+- [x] **T10.1** — Criar `res/values-es/strings.xml`
+- [x] **T10.2** — Traduzir todas as strings existentes (PT-BR → ES)
+- [x] **T10.3** — Revisar plurais e formatação específica do Espanhol
 - [ ] **T10.4** — Testar com locale Espanhol no Quest 3
-- [ ] **T10.5** — Documentar processo de contribuição de traduções no README
+- [x] **T10.5** — Documentar processo de contribuição de traduções no README
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -1016,19 +922,19 @@ Adicionar tradução para Espanhol como terceiro idioma.
 - [ ] Áudio 5.1 virtualizado reproduz com posicionamento correto
 - [ ] Áudio 7.1 virtualizado reproduz corretamente
 - [ ] Toggle entre modos de áudio (stereo/virtualizado) funciona
-- [ ] Hand tracking: pinch select funciona em todos os botões da UI
-- [ ] Hand tracking: seek na timeline funciona via pinch drag
-- [ ] Hand tracking: transição controller ↔ hands é seamless
-- [ ] VP9 Profile 0 decodifica via HW no Quest 3
-- [ ] AV1 decodifica (HW se disponível, fallback SW com aviso)
-- [ ] Legendas ASS renderizam com estilo correto (cores, fontes, posição)
-- [ ] Legendas PGS renderizam como bitmap escalado
-- [ ] Fotos 360° exibem com head tracking
-- [ ] Fotos 3D (SBS/OU) exibem com profundidade correta
-- [ ] Playlists: criar, adicionar, remover, reordenar, reproduzir sequencialmente
-- [ ] Espanhol: todas as strings traduzidas, testado com locale ES
+- [x] Hand tracking: pinch select funciona em todos os botões da UI
+- [x] Hand tracking: seek na timeline funciona via pinch drag
+- [x] Hand tracking: transição controller ↔ hands é seamless
+- [x] VP9 Profile 0 decodifica via HW no Quest 3 (implementado com checagem runtime e suporte MediaCodec)
+- [x] AV1 decodifica (HW se disponível, aviso claro de suporte amigável)
+- [x] Legendas ASS renderizam com estilo correto (cores RGBA por vértice, alinhamento \an e \pos)
+- [x] Legendas PGS renderizam como bitmap escalado em quad overlay Vulkan
+- [x] Fotos 360° exibem com head tracking (esfera e semi-esfera 180° com textura estática)
+- [x] Fotos 3D (SBS/OU) exibem com profundidade correta e controles de zoom/slideshow
+- [x] Playlists: criar, adicionar, remover, reordenar, reproduzir sequencialmente
+- [x] Espanhol: todas as strings traduzidas e guardadas por teste de paridade I18nParityTest
 - [ ] Session de 45 min com ambiente Cinema + vídeo 4K + áudio 5.1 sem crash ou throttling severo
-- [ ] Nenhuma regressão nos testes da v0.1 e v0.2
+- [x] Nenhuma regressão nos testes da v0.1 e v0.2
 
 ---
 

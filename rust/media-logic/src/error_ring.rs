@@ -72,6 +72,26 @@ impl ErrorRingBuffer {
         self.errors.lock().map(|lock| lock.iter().cloned().collect()).unwrap_or_default()
     }
 
+    /// F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): `all()` serializado como TSV
+    /// (uma linha por erro: `timestamp_ms\tsession_id\tmessage`, campo vazio quando
+    /// `session_id` é `None`) — mesma convenção de `debug_stats.h::SerializeDebugStats`,
+    /// pra cruzar a fronteira FFI sem expor `Vec<PlaybackError>` pelo C ABI. Quebras de
+    /// linha dentro de `message` são substituídas por espaço (separador de registro é `\n`).
+    pub fn all_as_tsv(&self) -> String {
+        self.all()
+            .iter()
+            .map(|e| {
+                format!(
+                    "{}\t{}\t{}",
+                    e.timestamp_ms,
+                    e.session_id.as_deref().unwrap_or(""),
+                    e.message.replace(['\n', '\r'], " ")
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     /// Limpa todo o histórico de erros.
     pub fn clear(&self) {
         if let Ok(mut lock) = self.errors.lock() {
@@ -140,6 +160,25 @@ mod tests {
         assert_eq!(ring.take_latest_unconsumed(), Some("Erro B".into()));
         assert_eq!(ring.take_latest_unconsumed(), None);
         assert_eq!(ring.count(), 2);
+    }
+
+    #[test]
+    fn test_all_as_tsv_serializes_one_line_per_error_and_escapes_newlines() {
+        let ring = ErrorRingBuffer::new(5);
+        ring.push("Erro simples".into(), 100, Some("sess1".into()));
+        ring.push("Erro\ncom\nquebras".into(), 200, None);
+
+        let tsv = ring.all_as_tsv();
+        let lines: Vec<&str> = tsv.split('\n').collect();
+        assert_eq!(lines.len(), 2, "uma linha por erro, sem quebras internas vazando registros");
+        assert_eq!(lines[0], "100\tsess1\tErro simples");
+        assert_eq!(lines[1], "200\t\tErro com quebras");
+    }
+
+    #[test]
+    fn test_all_as_tsv_empty_ring_is_empty_string() {
+        let ring = ErrorRingBuffer::new(5);
+        assert_eq!(ring.all_as_tsv(), "");
     }
 
     #[test]

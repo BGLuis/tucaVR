@@ -62,6 +62,10 @@ static CONTROLLER: Lazy<Arc<Mutex<PlaybackController>>> = Lazy::new(|| {
 static ERROR_RING: Lazy<media_logic::error_ring::ErrorRingBuffer> =
     Lazy::new(|| media_logic::error_ring::ErrorRingBuffer::new(media_logic::error_ring::ErrorRingBuffer::DEFAULT_CAPACITY));
 
+// Gerenciador de downloads offline (Fase 0.4 Seção 4).
+static DOWNLOAD_MANAGER: Lazy<Arc<protocols::download::DownloadManager>> =
+    Lazy::new(|| Arc::new(protocols::download::DownloadManager::new(2)));
+
 // Contador (nao bool) porque duas chamadas de carregamento podem se
 // sobrepor (ex.: usuario solta o seek e arrasta de novo antes da primeira
 // terminar) — com um bool simples, a primeira terminando derrubaria a flag
@@ -147,6 +151,27 @@ pub extern "C" fn get_playback_feedback_event() -> u64 {
     FEEDBACK_EVENT.load(Ordering::Relaxed)
 }
 
+// P-05 (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md): tid das 3 threads do pipeline de
+// reproducao (rust/core/src/playback.rs), pra C++ registrar como thread critica ao runtime XR
+// via xrSetAndroidApplicationThreadKHR — so C++ tem o XrSession, entao o registro em si
+// acontece la; aqui so expomos os tids publicados pelas proprias threads (mesmo idioma de
+// polling de estatica atomica usado por get_playback_feedback_event/get_video_progress acima).
+// 0 = a thread ainda nao subiu nesta sessao de reproducao.
+#[no_mangle]
+pub extern "C" fn get_demux_thread_tid() -> i32 {
+    core::playback::DEMUX_THREAD_TID.load(Ordering::Relaxed)
+}
+
+#[no_mangle]
+pub extern "C" fn get_video_thread_tid() -> i32 {
+    core::playback::VIDEO_THREAD_TID.load(Ordering::Relaxed)
+}
+
+#[no_mangle]
+pub extern "C" fn get_audio_thread_tid() -> i32 {
+    core::playback::AUDIO_THREAD_TID.load(Ordering::Relaxed)
+}
+
 // T1.4/T1.5/T2: modo de exibicao 3D (2D/SBS/OU/360/180) e swap-eyes. Isto e
 // puro ESTADO DE APRESENTACAO — nao afeta o Demuxer/PlaybackController (o
 // video decodificado e sempre o mesmo frame RGBA; o que muda e SO como
@@ -157,11 +182,12 @@ pub extern "C" fn get_playback_feedback_event() -> u64 {
 // a cada frame, exatamente como ja faz com get_video_volume/get_playback_speed.
 //
 // Codificacao numerica (DEVE casar exatamente com `enum class ScreenMode` em
-// native/src/vr_player_app.cpp e com `modeLabelResIds` em
-// VRControlsPresentation.kt, que so faz um lookup posicional nesta lista sem
-// duplicar os nomes):
+// native/include/screen_mode.h, com `rust/media-logic/src/format3d.rs` e com
+// `ScreenFormatCatalog.kt` em Kotlin):
 //   0=2D, 1=SBS, 2=SBS half, 3=OU, 4=OU half,
-//   5=360 mono, 6=180 mono, 7=360 SBS, 8=360 OU, 9=180 SBS
+//   5=360 mono, 6=180 mono, 7=360 SBS, 8=360 OU, 9=180 SBS,
+//   10=Cubemap 3x2 mono, 11=Cubemap 6x1 mono, 12=EAC 3x2 mono,
+//   13=Cubemap 3x2 SBS, 14=EAC 3x2 SBS
 // T2.4/T2.5 (estereo 360/180): a pesquisa sobre como este pipeline OVRFW
 // sinaliza "qual olho" pro shader (ver vr_player_app.cpp) achou a resposta —
 // o framework ja seta um uniform `ViewID`/`VIEW_ID` (0/1) em toda chamada de
@@ -173,7 +199,7 @@ pub extern "C" fn get_playback_feedback_event() -> u64 {
 // trivial de acrescentar depois, o shader ja suporta via uStereoLayout=2 +
 // uPolar180=1 juntos).
 static SCREEN_MODE: AtomicU32 = AtomicU32::new(0);
-const SCREEN_MODE_COUNT: u32 = 10;
+const SCREEN_MODE_COUNT: u32 = 15;
 static SWAP_EYES: AtomicBool = AtomicBool::new(false);
 
 // Bug reportado em validacao real de headset: o painel "Adicionar servidor"
@@ -200,18 +226,27 @@ pub extern "C" fn get_keyboard_active() -> u32 {
     KEYBOARD_ACTIVE.load(Ordering::Relaxed) as u32
 }
 
-// Fase 0.4 T5: Foveated Rendering (fixo, via extensao OpenXR XR_FB_foveation
-// no caminho Vulkan — ver native/src/vr_player_app_vulkan.cpp). Default OFF:
-// feature nunca validada em headset real nesta sessao, ligar e acao
-// explicita do usuario na tela de Configuracoes (Kotlin). So tem efeito real
-// no caminho Vulkan (padrao de build); no caminho GLES o valor e aceito e
-// guardado aqui, mas nada le/aplica — OVRFW::XrApp nao expoe o XrSwapchain
-// necessario pra xrUpdateSwapchainFB.
+// Fase 0.4 T5: Foveated Rendering (via extensao OpenXR XR_FB_foveation
+// no caminho Vulkan — ver native/src/vr_player_app_vulkan.cpp).
+// 0=Off, 1=Low, 2=Medium, 3=High, 4=Auto
+static FOVEATION_MODE: AtomicU32 = AtomicU32::new(0);
 static FOVEATION_ENABLED: AtomicBool = AtomicBool::new(false);
 
 #[no_mangle]
+pub extern "C" fn set_foveation_mode(mode: u32) {
+    FOVEATION_MODE.store(mode, Ordering::Relaxed);
+    FOVEATION_ENABLED.store(mode != 0, Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_foveation_mode() -> u32 {
+    FOVEATION_MODE.load(Ordering::Relaxed)
+}
+
+#[no_mangle]
 pub extern "C" fn set_foveation_enabled(enabled: u32) {
-    FOVEATION_ENABLED.store(enabled != 0, Ordering::Relaxed);
+    let mode = if enabled != 0 { 4 } else { 0 }; // Default para Auto (4) quando ativado via toggle booleano
+    set_foveation_mode(mode);
 }
 
 /// Polling de baixa frequencia (~1x/s, nao a cada frame) pelo loop principal
@@ -220,6 +255,69 @@ pub extern "C" fn set_foveation_enabled(enabled: u32) {
 #[no_mangle]
 pub extern "C" fn get_foveation_enabled() -> u32 {
     FOVEATION_ENABLED.load(Ordering::Relaxed) as u32
+}
+
+// Fase 0.3 Seção 2: Passthrough / Mixed Reality (XR_FB_passthrough, caminho
+// Vulkan — ver native/src/vr_player_app_vulkan.cpp: SetupPassthrough/
+// UpdatePassthrough). Mesmo padrao dos demais toggles de render: o bridge so
+// guarda o estado desejado (atomic), o render loop C++ faz polling ~1x/s e
+// aplica via xrPassthroughLayerResumeFB/PauseFB.
+//
+// PASSTHROUGH_ENABLED  — preferencia do usuario (botao da UI / FeatureFlags).
+// PASSTHROUGH_SUPPORTED — escrito pelo C++ apos checar a extensao na criacao
+//   da XrInstance; lido pelo Kotlin via JNI (nativeIsPassthroughSupported)
+//   pra decidir se o botao sai de DISABLED. Default false: em GLES nada
+//   escreve isso, entao o botao continua desabilitado, que e o correto
+//   (passthrough e Vulkan-only aqui).
+static PASSTHROUGH_ENABLED: AtomicBool = AtomicBool::new(false);
+static PASSTHROUGH_SUPPORTED: AtomicBool = AtomicBool::new(false);
+static PASSTHROUGH_OPACITY_BITS: AtomicU32 = AtomicU32::new(0x3F800000); // 1.0f32
+static PASSTHROUGH_EDGE_RENDERING: AtomicBool = AtomicBool::new(false);
+
+#[no_mangle]
+pub extern "C" fn set_passthrough_enabled(enabled: u32) {
+    PASSTHROUGH_ENABLED.store(enabled != 0, Ordering::Relaxed);
+}
+
+/// Polling de baixa frequencia (~1x/s) pelo render loop Vulkan — ver
+/// UpdatePassthrough.
+#[no_mangle]
+pub extern "C" fn get_passthrough_enabled() -> u32 {
+    PASSTHROUGH_ENABLED.load(Ordering::Relaxed) as u32
+}
+
+/// Chamado pelo C++ (Vulkan) na inicializacao, depois de descobrir se
+/// XR_FB_passthrough esta disponivel no runtime.
+#[no_mangle]
+pub extern "C" fn set_passthrough_supported(supported: u32) {
+    PASSTHROUGH_SUPPORTED.store(supported != 0, Ordering::Relaxed);
+}
+
+/// Lido pelo Kotlin (VRActivity.nativeIsPassthroughSupported) pra habilitar
+/// ou nao o botao de passthrough no painel de controles.
+#[no_mangle]
+pub extern "C" fn get_passthrough_supported() -> u32 {
+    PASSTHROUGH_SUPPORTED.load(Ordering::Relaxed) as u32
+}
+
+#[no_mangle]
+pub extern "C" fn set_passthrough_opacity(opacity: f32) {
+    PASSTHROUGH_OPACITY_BITS.store(opacity.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_passthrough_opacity() -> f32 {
+    f32::from_bits(PASSTHROUGH_OPACITY_BITS.load(Ordering::Relaxed))
+}
+
+#[no_mangle]
+pub extern "C" fn set_passthrough_edge_rendering(enabled: u32) {
+    PASSTHROUGH_EDGE_RENDERING.store(enabled != 0, Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_passthrough_edge_rendering() -> u32 {
+    PASSTHROUGH_EDGE_RENDERING.load(Ordering::Relaxed) as u32
 }
 
 /// Preferência do usuário para pausar automaticamente ao sair pro menu do sistema / passthrough.
@@ -255,6 +353,20 @@ pub extern "C" fn get_thermal_level() -> u32 {
     THERMAL_LEVEL.load(Ordering::Relaxed)
 }
 
+/// RAM total do aparelho em bytes, reportada uma vez pelo Kotlin
+/// (`ActivityManager.MemoryInfo.totalMem`, ver `VRActivity.onCreate`) —
+/// escala o teto do buffer profundo pausado (ver
+/// `media_logic::buffer_gate::paused_byte_ceiling_for_device`) pela RAM real
+/// do aparelho em vez de um numero fixo cravado pro Quest 3, entao um
+/// aparelho futuro com menos ou mais memoria recebe automaticamente um teto
+/// proporcional (dentro dos limites min/max do buffer_gate). Chamada uma vez
+/// no startup; nao ha problema em nao receber isso antes do primeiro
+/// load_at() — o buffer_gate cai no valor fixo pre-existente nesse meio-tempo.
+#[no_mangle]
+pub extern "C" fn set_device_total_memory_bytes(bytes: u64) {
+    core::playback::DEVICE_TOTAL_MEMORY_BYTES.store(bytes, Ordering::Relaxed);
+}
+
 // Upscaling de vídeo (Vulkan-only, MQSR, SGSR1):
 // 0=OFF, 1=QUALITY, 2=PERFORMANCE, 3=AUTO
 static UPSCALING_MODE: AtomicU32 = AtomicU32::new(0);
@@ -267,6 +379,161 @@ pub extern "C" fn set_upscaling_mode(mode: u32) {
 #[no_mangle]
 pub extern "C" fn get_upscaling_mode() -> u32 {
     UPSCALING_MODE.load(Ordering::Relaxed)
+}
+
+/// F0: Avalia parâmetros de upscaling e escala de resolução via lógica pura de media-logic
+#[no_mangle]
+pub extern "C" fn evaluate_upscaling_ffi(
+    mode: u32,
+    screen_mode: u32,
+    video_width: u32,
+    video_height: u32,
+    thermal_level: u32,
+    out_render_scale: *mut f32,
+    out_sharpness: *mut f32,
+    out_enable_mqsr: *mut u32,
+    out_enable_sgsr: *mut u32,
+) {
+    let mode_enum = media_logic::upscaling::UpscalingMode::from_u32(mode);
+    let params = media_logic::upscaling::evaluate_upscaling(
+        mode_enum,
+        screen_mode,
+        video_width,
+        video_height,
+        thermal_level,
+    );
+    unsafe {
+        if !out_render_scale.is_null() {
+            *out_render_scale = params.render_scale;
+        }
+        if !out_sharpness.is_null() {
+            *out_sharpness = params.sharpness;
+        }
+        if !out_enable_mqsr.is_null() {
+            *out_enable_mqsr = params.enable_mqsr as u32;
+        }
+        if !out_enable_sgsr.is_null() {
+            *out_enable_sgsr = params.enable_shader_sgsr as u32;
+        }
+    }
+}
+
+// Fase 0.4 F1/F2: Instância global do QualityController
+static QUALITY_CONTROLLER: Lazy<Mutex<media_logic::quality::QualityController>> =
+    Lazy::new(|| Mutex::new(media_logic::quality::QualityController::new()));
+
+#[no_mangle]
+pub extern "C" fn quality_controller_set_enabled(enabled: u32) {
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        qc.set_enabled(enabled != 0);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn quality_controller_get_enabled() -> u32 {
+    if let Ok(qc) = QUALITY_CONTROLLER.lock() {
+        qc.is_enabled() as u32
+    } else {
+        1
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn quality_controller_set_manual_level(level: u32) {
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        qc.set_manual_level(media_logic::quality::QualityLevel::from_u32(level));
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn quality_controller_get_level() -> u32 {
+    if let Ok(qc) = QUALITY_CONTROLLER.lock() {
+        qc.current_level().as_u32()
+    } else {
+        1 // High
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn quality_controller_get_reason() -> u32 {
+    if let Ok(qc) = QUALITY_CONTROLLER.lock() {
+        qc.last_reason() as u32
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn quality_controller_evaluate_and_resolve(
+    thermal_level: u32,
+    smoothed_gpu_time_ms: f32,
+    frame_time_ms: f32,
+    dropped_fps: f32,
+    current_target_fps: f32,
+    upscaling_mode: u32,
+    screen_mode: u32,
+    video_width: u32,
+    video_height: u32,
+    out_render_scale: *mut f32,
+    out_sharpness: *mut f32,
+    out_enable_mqsr: *mut u32,
+    out_enable_sgsr: *mut u32,
+    out_foveation_level: *mut u32,
+    out_foveation_vertical_offset: *mut f32,
+    out_target_fps: *mut f32,
+    out_quality_level: *mut u32,
+    out_transition_reason: *mut u32,
+) {
+    let sample = media_logic::quality::QualitySample {
+        thermal_level,
+        smoothed_gpu_time_ms,
+        frame_time_ms,
+        dropped_fps,
+        target_fps: current_target_fps,
+    };
+
+    let base_mode = media_logic::upscaling::UpscalingMode::from_u32(upscaling_mode);
+
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        let _action = qc.evaluate(&sample);
+        let resolved = qc.resolve_params(
+            thermal_level,
+            base_mode,
+            screen_mode,
+            video_width,
+            video_height,
+        );
+
+        unsafe {
+            if !out_render_scale.is_null() {
+                *out_render_scale = resolved.render_scale;
+            }
+            if !out_sharpness.is_null() {
+                *out_sharpness = resolved.sharpness;
+            }
+            if !out_enable_mqsr.is_null() {
+                *out_enable_mqsr = resolved.enable_mqsr as u32;
+            }
+            if !out_enable_sgsr.is_null() {
+                *out_enable_sgsr = resolved.enable_shader_sgsr as u32;
+            }
+            if !out_foveation_level.is_null() {
+                *out_foveation_level = resolved.foveation_level;
+            }
+            if !out_foveation_vertical_offset.is_null() {
+                *out_foveation_vertical_offset = resolved.foveation_vertical_offset;
+            }
+            if !out_target_fps.is_null() {
+                *out_target_fps = resolved.target_fps;
+            }
+            if !out_quality_level.is_null() {
+                *out_quality_level = resolved.level.as_u32();
+            }
+            if !out_transition_reason.is_null() {
+                *out_transition_reason = resolved.last_reason as u32;
+            }
+        }
+    }
 }
 
 /// T1.4: avanca pro proximo modo do ciclo (chamado pelo botao "🧊" do painel
@@ -457,6 +724,28 @@ pub extern "C" fn get_video_queue_depth() -> u32 {
     }
 }
 
+/// Debug (docs/DEBUGGING.md): frames que o MediaCodec ja decodificou mas a
+/// video_thread ainda nao liberou/mostrou — ver PlaybackController::get_video_presentation_pending.
+#[no_mangle]
+pub extern "C" fn get_video_presentation_pending() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_video_presentation_pending(),
+        Err(_) => 0,
+    }
+}
+
+/// T-HDR: 1 se o video atual foi detectado como HDR (PQ/HLG, ver
+/// media_logic::color), 0 caso contrario (inclui antes do primeiro load).
+/// O C++ consulta isto pra escolher o pipeline de cor Vulkan certo
+/// (BT.709/SDR vs. BT.2020 + tonemap).
+#[no_mangle]
+pub extern "C" fn get_video_is_hdr() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.is_hdr() as u32,
+        Err(_) => 0,
+    }
+}
+
 /// Debug (docs/DEBUGGING.md): bytes recebidos da rede pelo PrefetchReader da
 /// fonte atual, soma cumulativa (0 para arquivo local/`http://` puro). O C++
 /// amostra isto ao longo do tempo e calcula MB/s, mesmo padrao de decFps.
@@ -498,6 +787,110 @@ pub extern "C" fn get_network_blocks_fetched() -> u64 {
 pub extern "C" fn get_network_blocks_discarded() -> u64 {
     match CONTROLLER.try_lock() {
         Ok(controller) => controller.get_network_blocks_discarded(),
+        Err(_) => 0,
+    }
+}
+
+/// F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): falhas de fetch de rede — antes so
+/// visiveis no logcat.
+#[no_mangle]
+pub extern "C" fn get_network_fetch_failures() -> u64 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_network_fetch_failures(),
+        Err(_) => 0,
+    }
+}
+
+/// F4: blocos especulativos consecutivos desde o ultimo seek nao-sequencial.
+#[no_mangle]
+pub extern "C" fn get_network_sequential_streak() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_network_sequential_streak(),
+        Err(_) => 0,
+    }
+}
+
+/// F4: 1 se o read-ahead especulativo esta suspenso por throttle termico, 0 caso contrario.
+#[no_mangle]
+pub extern "C" fn get_network_throttled() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_network_throttled(),
+        Err(_) => 0,
+    }
+}
+
+/// F4: profundidade da fila de audio entre demux e decode — espelho de
+/// get_video_queue_depth() acima, antes invisivel de fora.
+#[no_mangle]
+pub extern "C" fn get_audio_queue_depth() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_audio_queue_depth(),
+        Err(_) => 0,
+    }
+}
+
+/// "Buffer estilo YouTube": segundos de video ja bufferizados a frente do
+/// ponteiro de reproducao (ver PlaybackController::get_buffered_ahead_sec e
+/// media_logic::buffer_gate) — alimenta o indicador visual de buffer
+/// (secondaryProgress do SeekBar, ver VRControlsPresentation.kt). Sem
+/// cache-on-contencao: um valor levemente atrasado nao produz artefato
+/// (nao e usado em calculo de delta), mesmo padrao dos getters de rede acima.
+#[no_mangle]
+pub extern "C" fn get_buffered_ahead_sec() -> f32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_buffered_ahead_sec(),
+        Err(_) => 0.0,
+    }
+}
+
+/// F4: contador de erros de decode de video (ver HwDecoder::decode_packet), por sessao.
+#[no_mangle]
+pub extern "C" fn get_decode_error_count() -> u64 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_decode_error_count(),
+        Err(_) => 0,
+    }
+}
+
+/// F4: contador de pacotes corrompidos descartados pelo demuxer, por sessao.
+#[no_mangle]
+pub extern "C" fn get_demux_corrupt_packet_count() -> u64 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_demux_corrupt_packet_count(),
+        Err(_) => 0,
+    }
+}
+
+/// F4: contador cumulativo de underruns de audio (canal vazio quando o Oboe pediu amostras).
+#[no_mangle]
+pub extern "C" fn get_audio_underrun_count() -> u64 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_audio_underrun_count(),
+        Err(_) => 0,
+    }
+}
+
+/// F4: fases do load_at() — antes so no logcat, agora consultaveis. 0 antes do primeiro load.
+#[no_mangle]
+pub extern "C" fn get_load_phase_demux_open_ms() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_load_phase_demux_open_ms(),
+        Err(_) => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_load_phase_decoder_ready_ms() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_load_phase_decoder_ready_ms(),
+        Err(_) => 0,
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_load_phase_audio_ready_ms() -> u32 {
+    match CONTROLLER.try_lock() {
+        Ok(controller) => controller.get_load_phase_audio_ready_ms(),
         Err(_) => 0,
     }
 }
@@ -623,6 +1016,15 @@ pub extern "C" fn get_playback_error_count() -> i32 {
     ERROR_RING.count() as i32
 }
 
+/// F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): todos os erros do anel circular (não
+/// destrutivo, ao contrário de `take_last_playback_error`), serializados como TSV — uma linha
+/// por erro, ver `ErrorRingBuffer::all_as_tsv`. Retorna string vazia (nunca nulo) se não há
+/// erros. Retorno precisa ser liberado com `free_rust_string`.
+#[no_mangle]
+pub extern "C" fn get_all_playback_errors() -> *mut std::os::raw::c_char {
+    string_to_c_char(ERROR_RING.all_as_tsv())
+}
+
 /// T6.4: inicia playback de um arquivo via SMB. Recebe host/share/caminho/
 /// credenciais como parametros SEPARADOS (nunca uma URI unica com a senha
 /// embutida cruzando a fronteira JNI) — o Kotlin resolve as credenciais
@@ -667,6 +1069,7 @@ pub extern "C" fn start_smb_playback(
         unsafe { log(4, &format!("Loading SMB video: {}", protocols::smb::redact(&internal_uri))); }
 
         reset_3d_mode();
+        DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
@@ -791,6 +1194,7 @@ pub extern "C" fn start_ftp_playback(
         unsafe { log(4, &format!("Loading FTP video: {}", protocols::ftp::redact(&internal_uri))); }
 
         reset_3d_mode();
+        DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
@@ -883,6 +1287,7 @@ pub extern "C" fn start_sftp_playback(
         unsafe { log(4, &format!("Loading SFTP video: {}", protocols::sftp::redact(&internal_uri))); }
 
         reset_3d_mode();
+        DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
@@ -967,6 +1372,7 @@ pub extern "C" fn start_nfs_playback(
         unsafe { log(4, &format!("Loading NFS video: {}", protocols::nfs::redact(&internal_uri))); }
 
         reset_3d_mode();
+        DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
@@ -1031,6 +1437,99 @@ pub extern "C" fn nfs_list_exports(
         Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
     }
 }
+
+/// T3.1/T3.2: Inicia playback de vídeo a partir de um servidor WebDAV.
+#[no_mangle]
+pub extern "C" fn start_webdav_playback(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    base_path: *const std::os::raw::c_char,
+    file_path: *const std::os::raw::c_char,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    use_https: i32,
+    accept_invalid_certs: i32,
+    start_time_sec: f32,
+) {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return };
+        let base_path = match cstr_to_string(base_path) { Some(s) => s, None => return };
+        let file_path = match cstr_to_string(file_path) { Some(s) => s, None => return };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        protocols::webdav::WebdavTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            base_path,
+            file_path,
+            username,
+            password,
+            use_https: use_https != 0,
+            accept_invalid_certs: accept_invalid_certs != 0,
+        }
+    };
+
+    spawn_loading(move || {
+        let internal_uri = target.to_internal();
+        unsafe { log(4, &format!("Loading WebDAV video: {}", protocols::webdav::redact(&internal_uri))); }
+
+        reset_3d_mode();
+        DOWNLOAD_MANAGER.set_playback_active(true);
+        if let Ok(mut controller) = CONTROLLER.lock() {
+            controller.stop();
+            if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
+                unsafe { log(6, &format!("Error loading WebDAV video: {:?}", e)); }
+                set_last_playback_error(format!("{:?}", e));
+            } else {
+                apply_screen_mode_after_load(&controller);
+                unsafe { log(4, "WebDAV video loaded successfully!"); }
+            }
+        }
+    });
+}
+
+/// T3.1: Lista arquivos e pastas num servidor WebDAV via PROPFIND Depth: 1. Chamada BLOQUEANTE.
+#[no_mangle]
+pub extern "C" fn webdav_list_directory(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    base_path: *const std::os::raw::c_char,
+    dir_path: *const std::os::raw::c_char,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    use_https: i32,
+    accept_invalid_certs: i32,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
+        let base_path = match cstr_to_string(base_path) { Some(s) => s, None => return string_to_c_char("ERROR:base_path invalido".into()) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        protocols::webdav::WebdavTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            base_path,
+            file_path: String::new(),
+            username,
+            password,
+            use_https: use_https != 0,
+            accept_invalid_certs: accept_invalid_certs != 0,
+        }
+    };
+    let dir_path = unsafe { cstr_to_string(dir_path).unwrap_or_default() };
+
+    match protocols::webdav::list_directory(&target, &dir_path) {
+        Ok(entries) => {
+            let lines: Vec<String> = entries
+                .into_iter()
+                .map(|e| format!("{}\t{}\t{}", e.name, if e.is_dir { 1 } else { 0 }, e.size))
+                .collect();
+            string_to_c_char(lines.join("\n"))
+        }
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
 
 /// T10.1: Varredura de servidores na rede local (mDNS + SSDP). Chamada BLOQUEANTE.
 /// Retorna linhas separadas por '\n': "PROTOCOL\tNAME\tHOST\tPORT\tPATH"
@@ -1131,6 +1630,34 @@ pub extern "C" fn hls_probe_variants(url: *const std::os::raw::c_char) -> *mut s
     }
 }
 
+/// T2.1/T2.6: Faz o probe de representações de uma URL MPD (MPEG-DASH).
+/// Chamada BLOQUEANTE. Retorna linhas separadas por '\n': "index\tbandwidth\twidthxheight\tcodecs\tid"
+#[no_mangle]
+pub extern "C" fn dash_probe_representations(url: *const std::os::raw::c_char) -> *mut std::os::raw::c_char {
+    let url_str = match unsafe { cstr_to_string(url) } {
+        Some(s) => s,
+        None => return string_to_c_char("ERROR:URL invalida".into()),
+    };
+
+    match protocols::dash::fetch_and_probe_representations(&url_str) {
+        Ok(reps) => {
+            let lines: Vec<String> = reps
+                .into_iter()
+                .enumerate()
+                .map(|(idx, r)| {
+                    let res_str = match (r.width, r.height) {
+                        (Some(w), Some(h)) => format!("{w}x{h}"),
+                        _ => "auto".to_string(),
+                    };
+                    format!("{}\t{}\t{}\t{}\t{}", idx, r.bandwidth, res_str, r.codecs.unwrap_or_default(), r.id)
+                })
+                .collect();
+            string_to_c_char(lines.join("\n"))
+        }
+        Err(e) => string_to_c_char(format!("ERROR:{e}")),
+    }
+}
+
 /// T7.1: probe HEAD-based de uma URL HTTP(S) — descobre ANTES de tocar se o
 /// servidor suporta range requests (necessario pra seek) e o tamanho do
 /// arquivo, para a UI poder avisar o usuario (doc, secao 7, aviso
@@ -1179,6 +1706,9 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
         unsafe { log(4, &format!("Loading video: {}", path_str)); }
 
         reset_3d_mode();
+        if path_str.starts_with("http://") || path_str.starts_with("https://") {
+            DOWNLOAD_MANAGER.set_playback_active(true);
+        }
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&path_str, f64::from(start_time_sec)) {
@@ -1194,6 +1724,7 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
 
 #[no_mangle]
 pub extern "C" fn stop_video_playback() {
+    DOWNLOAD_MANAGER.set_playback_active(false);
     std::thread::spawn(|| {
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
@@ -1205,6 +1736,7 @@ pub extern "C" fn stop_video_playback() {
 /// herde modo de tela, contadores ou sessão anterior em processos em cache.
 #[no_mangle]
 pub extern "C" fn reset_process_state() {
+    DOWNLOAD_MANAGER.set_playback_active(false);
     if let Ok(mut controller) = CONTROLLER.lock() {
         controller.stop();
     }
@@ -1333,6 +1865,27 @@ pub extern "C" fn set_spatial_audio_head_tracking(enabled: u32) {
 #[no_mangle]
 pub extern "C" fn get_spatial_audio_head_tracking() -> u32 {
     media_logic::spatial_audio::get_global_head_tracking_enabled() as u32
+}
+
+/// Ativa ou desativa o modo screen-locked para áudio espacial.
+///
+/// `locked = 1`: speakers ficam fixos relativos à tela (correto para conteúdo 2D).
+/// `locked = 0`: speakers ficam no espaço absoluto / world-locked (padrão).
+#[no_mangle]
+pub extern "C" fn set_audio_screen_locked(locked: u32) {
+    media_logic::spatial_audio::set_global_audio_screen_locked(locked != 0);
+}
+
+#[no_mangle]
+pub extern "C" fn get_audio_screen_locked() -> u32 {
+    media_logic::spatial_audio::get_global_audio_screen_locked() as u32
+}
+
+/// Atualiza a orientação do painel de vídeo 3D (quad) — usada no cálculo screen-locked.
+/// Deve ser chamada pelo render loop sempre que a pose do quad for atualizada.
+#[no_mangle]
+pub extern "C" fn set_screen_orientation(x: f32, y: f32, z: f32, w: f32) {
+    media_logic::spatial_audio::set_global_screen_orientation(x, y, z, w);
 }
 
 /// Libera o buffer retornado por `smb_generate_thumbnail`/
@@ -1851,6 +2404,17 @@ pub extern "C" fn load_external_subtitle(path: *const std::os::raw::c_char) -> u
     }
 }
 
+/// Define o idioma do sistema (ex.: `"pt-BR"`) para a auto-seleção de faixa de
+/// legenda embutida — T7.6. Deve ser chamado antes de `load_video_playback`
+/// para ter efeito no arquivo carregado a seguir.
+#[no_mangle]
+pub extern "C" fn set_preferred_subtitle_language(lang: *const std::os::raw::c_char) {
+    let lang_str = unsafe { cstr_to_string(lang) }.unwrap_or_default();
+    if let Ok(mut controller) = CONTROLLER.lock() {
+        controller.set_preferred_subtitle_language(&lang_str);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn get_subtitle_track_count() -> u32 {
     if let Ok(controller) = CONTROLLER.try_lock() {
@@ -1881,4 +2445,284 @@ pub extern "C" fn get_active_subtitle_text(out_buf: *mut std::os::raw::c_char, m
     }
     0
 }
+
+// ============================================================================
+// Legendas Avançadas ASS/SSA e PGS (Fase 0.3 Seção 7)
+// ============================================================================
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct PgsSubtitleInfo {
+    pub x: u16,
+    pub y: u16,
+    pub width: u16,
+    pub height: u16,
+    pub screen_width: u16,
+    pub screen_height: u16,
+    pub start_ms: u64,
+    pub end_ms: u64,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AssSpanFfi {
+    pub char_offset: u32,
+    pub char_length: u32,
+    pub r: u8,
+    pub g: u8,
+    pub b: u8,
+    pub a: u8,
+    pub bold: u8,
+    pub italic: u8,
+    pub _reserved: u16,
+    pub font_size: f32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AssSubtitleInfo {
+    pub alignment: u32,
+    pub has_pos: u32,
+    pub pos_x: f32,
+    pub pos_y: f32,
+    pub play_res_x: f32,
+    pub play_res_y: f32,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub span_count: u32,
+}
+
+#[no_mangle]
+pub extern "C" fn has_active_pgs() -> bool {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        controller.get_active_pgs().is_some()
+    } else {
+        false
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_active_pgs_info(
+    out_x: *mut u16,
+    out_y: *mut u16,
+    out_width: *mut u16,
+    out_height: *mut u16,
+    out_screen_w: *mut u16,
+    out_screen_h: *mut u16,
+) -> bool {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        if let Some(pgs) = controller.get_active_pgs() {
+            unsafe {
+                if !out_x.is_null() { *out_x = pgs.x; }
+                if !out_y.is_null() { *out_y = pgs.y; }
+                if !out_width.is_null() { *out_width = pgs.width; }
+                if !out_height.is_null() { *out_height = pgs.height; }
+                if !out_screen_w.is_null() { *out_screen_w = pgs.screen_width; }
+                if !out_screen_h.is_null() { *out_screen_h = pgs.screen_height; }
+            }
+            return true;
+        }
+    }
+    false
+}
+
+#[no_mangle]
+pub extern "C" fn get_active_pgs_id() -> u64 {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        if let Some(pgs) = controller.get_active_pgs() {
+            return pgs.start_ms;
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn copy_active_pgs_rgba(out_buf: *mut u8, max_len: usize) -> u32 {
+    if out_buf.is_null() || max_len == 0 {
+        return 0;
+    }
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        if let Some(pgs) = controller.get_active_pgs() {
+            let copy_len = pgs.rgba.len().min(max_len);
+            unsafe {
+                std::ptr::copy_nonoverlapping(pgs.rgba.as_ptr(), out_buf, copy_len);
+            }
+            return copy_len as u32;
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn has_active_ass() -> bool {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        controller.get_active_ass_event().is_some()
+    } else {
+        false
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_active_ass_info(
+    out_info: *mut AssSubtitleInfo,
+    out_text: *mut std::os::raw::c_char,
+    max_text_len: usize,
+    out_spans: *mut AssSpanFfi,
+    max_spans: usize,
+) -> bool {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        if let Some((event, script_info)) = controller.get_active_ass_event() {
+            if !out_info.is_null() {
+                let info = AssSubtitleInfo {
+                    alignment: event.alignment as u32,
+                    has_pos: if event.pos.is_some() { 1 } else { 0 },
+                    pos_x: event.pos.map(|p| p.0).unwrap_or(0.0),
+                    pos_y: event.pos.map(|p| p.1).unwrap_or(0.0),
+                    play_res_x: script_info.play_res_x as f32,
+                    play_res_y: script_info.play_res_y as f32,
+                    start_ms: event.start_ms,
+                    end_ms: event.end_ms,
+                    span_count: event.spans.len().min(max_spans) as u32,
+                };
+                unsafe { *out_info = info; }
+            }
+
+            if !out_text.is_null() && max_text_len > 0 {
+                let bytes = event.text.as_bytes();
+                let copy_len = bytes.len().min(max_text_len - 1);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), out_text as *mut u8, copy_len);
+                    *out_text.add(copy_len) = 0;
+                }
+            }
+
+            if !out_spans.is_null() && max_spans > 0 {
+                let count = event.spans.len().min(max_spans);
+                let mut current_offset: u32 = 0;
+                for i in 0..count {
+                    let span = &event.spans[i];
+                    let span_len = span.text.len() as u32;
+                    let ffi_span = AssSpanFfi {
+                        char_offset: current_offset,
+                        char_length: span_len,
+                        r: span.colour.r,
+                        g: span.colour.g,
+                        b: span.colour.b,
+                        a: span.colour.a,
+                        bold: if span.bold { 1 } else { 0 },
+                        italic: if span.italic { 1 } else { 0 },
+                        _reserved: 0,
+                        font_size: span.font_size,
+                    };
+                    unsafe {
+                        *out_spans.add(i) = ffi_span;
+                    }
+                    current_offset += span_len;
+                }
+            }
+
+            return true;
+        }
+    }
+    false
+}
+
+// =============================================================================
+// Download Offline (Fase 0.4 Seção 4 / T4.1-T4.3)
+// =============================================================================
+
+#[no_mangle]
+pub extern "C" fn download_enqueue(
+    id: *const std::os::raw::c_char,
+    source_uri: *const std::os::raw::c_char,
+    destination_path: *const std::os::raw::c_char,
+) -> i32 {
+    let id_str = match unsafe { cstr_to_string(id) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let uri_str = match unsafe { cstr_to_string(source_uri) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let dest_str = match unsafe { cstr_to_string(destination_path) } {
+        Some(s) => s,
+        None => return -1,
+    };
+
+    match DOWNLOAD_MANAGER.enqueue(&id_str, &uri_str, &dest_str) {
+        Ok(()) => 0,
+        Err(e) => {
+            unsafe { log(6, &format!("download_enqueue error: {e}")); }
+            -2
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn download_pause(id: *const std::os::raw::c_char) -> i32 {
+    let id_str = match unsafe { cstr_to_string(id) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    if DOWNLOAD_MANAGER.pause(&id_str) { 0 } else { -1 }
+}
+
+#[no_mangle]
+pub extern "C" fn download_resume(id: *const std::os::raw::c_char) -> i32 {
+    let id_str = match unsafe { cstr_to_string(id) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    if DOWNLOAD_MANAGER.resume(&id_str) { 0 } else { -1 }
+}
+
+#[no_mangle]
+pub extern "C" fn download_cancel(id: *const std::os::raw::c_char) -> i32 {
+    let id_str = match unsafe { cstr_to_string(id) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    if DOWNLOAD_MANAGER.cancel(&id_str) { 0 } else { -1 }
+}
+
+#[no_mangle]
+pub extern "C" fn download_get_stats(
+    id: *const std::os::raw::c_char,
+    out_downloaded: *mut u64,
+    out_total: *mut u64,
+    out_speed_bps: *mut u64,
+    out_state: *mut u32,
+) -> i32 {
+    let id_str = match unsafe { cstr_to_string(id) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let stats = match DOWNLOAD_MANAGER.get_stats(&id_str) {
+        Some(s) => s,
+        None => return -2,
+    };
+
+    unsafe {
+        if !out_downloaded.is_null() {
+            *out_downloaded = stats.downloaded_bytes;
+        }
+        if !out_total.is_null() {
+            *out_total = stats.total_bytes;
+        }
+        if !out_speed_bps.is_null() {
+            *out_speed_bps = stats.speed_bps;
+        }
+        if !out_state.is_null() {
+            *out_state = stats.state as u32;
+        }
+    }
+    0
+}
+
+#[no_mangle]
+pub extern "C" fn download_set_playback_active(active: u32) {
+    DOWNLOAD_MANAGER.set_playback_active(active != 0);
+}
+
 

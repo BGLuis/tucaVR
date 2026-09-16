@@ -31,6 +31,10 @@
 #include <media/NdkImage.h>
 #include <media/NdkImageReader.h>
 #include <math.h>
+#include <unistd.h>
+#include <dlfcn.h>
+#include <android/api-level.h>
+#include <android/performance_hint.h>
 
 #include <array>
 #include <atomic>
@@ -44,6 +48,7 @@
 #include <vector>
 
 #include "vk_math.h"
+#include "hand_tracking.h"
 #include "screen_mode.h"
 #include "vr_player_feedback_overlay.h"
 #include "debug_stats.h"
@@ -55,9 +60,12 @@
 #include "ui.frag.h"
 #include "stereo.vert.h"
 #include "stereo.frag.h"
+#include "stereo_cubemap.vert.h"
+#include "stereo_cubemap.frag.h"
 #include "font_atlas_roboto.h"
 #include "subtitle.vert.h"
 #include "subtitle.frag.h"
+#include "subtitle_layout.h"
 
 #ifndef XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME
 #define XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME "XR_FB_display_refresh_rate"
@@ -99,8 +107,49 @@ extern "C" {
     extern uint32_t get_swap_eyes();
     // Fase 0.4 T5: Foveated Rendering — ver ApplyFoveation abaixo.
     extern uint32_t get_foveation_enabled();
+    extern uint32_t get_foveation_mode();
     // Upscaling de vídeo (Vulkan MQSR / SGSR1)
     extern uint32_t get_upscaling_mode();
+    extern void evaluate_upscaling_ffi(
+        uint32_t mode,
+        uint32_t screen_mode,
+        uint32_t video_width,
+        uint32_t video_height,
+        uint32_t thermal_level,
+        float* out_render_scale,
+        float* out_sharpness,
+        uint32_t* out_enable_mqsr,
+        uint32_t* out_enable_sgsr
+    );
+    // Fase 0.4 F1/F2: Adaptive Quality Controller
+    extern void quality_controller_evaluate_and_resolve(
+        uint32_t thermal_level,
+        float smoothed_gpu_time_ms,
+        float frame_time_ms,
+        float dropped_fps,
+        float current_target_fps,
+        uint32_t upscaling_mode,
+        uint32_t screen_mode,
+        uint32_t video_width,
+        uint32_t video_height,
+        float* out_render_scale,
+        float* out_sharpness,
+        uint32_t* out_enable_mqsr,
+        uint32_t* out_enable_sgsr,
+        uint32_t* out_foveation_level,
+        float* out_foveation_vertical_offset,
+        float* out_target_fps,
+        uint32_t* out_quality_level,
+        uint32_t* out_transition_reason
+    );
+    extern uint32_t quality_controller_get_level();
+    extern uint32_t quality_controller_get_reason();
+    // P-05 (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md): tid das 3 threads do
+    // pipeline Rust, pra registro via xrSetAndroidApplicationThreadKHR. Retornam 0 enquanto a
+    // thread correspondente ainda nao subiu.
+    extern int32_t get_demux_thread_tid();
+    extern int32_t get_video_thread_tid();
+    extern int32_t get_audio_thread_tid();
     // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006)
     extern uint32_t get_thermal_level();
     // Rastreamento de cabeça para áudio espacial
@@ -113,6 +162,19 @@ extern "C" {
     extern uint32_t load_external_subtitle(const char* path);
     extern uint32_t get_subtitle_track_count();
     extern uint32_t get_active_subtitle_text(char* out_buf, size_t max_len);
+    // Legendas Avançadas ASS/SSA e PGS (Fase 0.3 Seção 7)
+    extern bool has_active_pgs();
+    extern bool get_active_pgs_info(
+        uint16_t* out_x, uint16_t* out_y,
+        uint16_t* out_width, uint16_t* out_height,
+        uint16_t* out_screen_w, uint16_t* out_screen_h);
+    extern uint64_t get_active_pgs_id();
+    extern uint32_t copy_active_pgs_rgba(uint8_t* out_buf, size_t max_len);
+    extern bool has_active_ass();
+    extern bool get_active_ass_info(
+        vrplayer::AssSubtitleInfo* out_info,
+        char* out_text, size_t max_text_len,
+        vrplayer::AssSpanFfi* out_spans, size_t max_spans);
     extern void start_video_playback(const char* path, float startTimeSec);
     // Estagio 6 — paridade com o caminho GLES (play-pause, teclado nativo,
     // volume, seek).
@@ -128,6 +190,7 @@ extern "C" {
     extern uint64_t get_video_frames_output_count();
     extern uint64_t get_video_frames_dropped_count();
     extern uint32_t get_video_queue_depth();
+    extern uint32_t get_video_presentation_pending();
     extern uint64_t get_network_bytes_read();
     // Diagnostico do gargalo de throughput (docs/NETWORK-IO-PERFORMANCE.md
     // secao 7): latencia do ULTIMO fetch de bloco completo do PrefetchReader
@@ -137,6 +200,22 @@ extern "C" {
     extern uint64_t get_network_blocks_fetched();
     extern uint64_t get_network_blocks_discarded();
     extern uint32_t get_last_seek_latency_ms(); // debug, ver docs/DEBUGGING.md
+    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): coleta nova na origem — contadores
+    // que ja existiam no lado Rust mas nao tinham exposicao FFI nem campo no wire.
+    extern uint64_t get_network_fetch_failures();
+    extern uint32_t get_network_sequential_streak();
+    extern uint32_t get_network_throttled();
+    extern uint32_t get_audio_queue_depth();
+    // "Buffer estilo YouTube" (ver media_logic::buffer_gate): segundos de
+    // video ja bufferizados a frente do ponteiro de reproducao, alimenta o
+    // indicador visual de buffer (secondaryProgress do SeekBar).
+    extern float get_buffered_ahead_sec();
+    extern uint64_t get_decode_error_count();
+    extern uint64_t get_demux_corrupt_packet_count();
+    extern uint64_t get_audio_underrun_count();
+    extern uint32_t get_load_phase_demux_open_ms();
+    extern uint32_t get_load_phase_decoder_ready_ms();
+    extern uint32_t get_load_phase_audio_ready_ms();
     // UX de feedback (loading/play-pause), paridade com o caminho GLES —
     // ver comentario em rust/bridge/src/lib.rs sobre spawn_loading.
     extern uint32_t get_playback_is_loading();
@@ -150,10 +229,22 @@ extern "C" {
     extern uint32_t get_spatial_audio_head_tracking();
     extern float get_playback_speed();
     extern uint32_t get_audio_track_count();
+    // T-HDR: 1 se o video atual foi detectado como HDR (PQ/HLG, ver
+    // media_logic::color) — usado pra escolher o pipeline de cor do shader
+    // de video (tonemap HDR->SDR) e o modelo YCbCr certo.
+    extern uint32_t get_video_is_hdr();
     extern void reset_process_state();
     extern void on_app_focus_lost();
     extern void on_app_focus_gained();
+    // Fase 0.3 Seção 2: Passthrough / Mixed Reality — estado desejado pelo
+    // usuario (get_) e capacidade do runtime (set_, escrito daqui).
+    extern uint32_t get_passthrough_enabled();
+    extern void set_passthrough_supported(uint32_t supported);
+    extern float get_passthrough_opacity();
+    extern uint32_t get_passthrough_edge_rendering();
 }
+
+std::atomic<bool> g_resetScreenPositionRequested{false};
 
 // Preview de arrasto no seekbar renderizado sobre o quad do video
 // (T-seek-ux) — escrito por nativeUpdateScrubOverlay/nativeSetScrubOverlayVisible
@@ -175,6 +266,18 @@ std::atomic<bool> g_modalPanelActive{false};
 std::atomic<bool> g_modalPanelShowRequested{false};
 std::atomic<bool> g_modalPanelHideRequested{false};
 
+// Fase 0.3 Seção 8: Fotos 360° e 3D estéreo (T8.3, T8.4)
+std::atomic<bool> g_photoDirty{false};
+std::atomic<bool> g_photoActive{false};
+std::vector<uint8_t> g_photoRgba;
+uint32_t g_photoWidth = 0;
+uint32_t g_photoHeight = 0;
+uint32_t g_photoScreenMode = 0;
+std::atomic<float> g_photoZoom{1.0f};
+std::atomic<float> g_photoPanX{0.0f};
+std::atomic<float> g_photoPanY{0.0f};
+std::mutex g_photoMutex;
+
 void ResetGlobalState() {
     g_scrubOverlayDirty.store(false);
     g_scrubOverlayVisible.store(false);
@@ -190,6 +293,19 @@ void ResetGlobalState() {
     g_modalPanelActive.store(false);
     g_modalPanelShowRequested.store(false);
     g_modalPanelHideRequested.store(false);
+
+    g_photoDirty.store(false);
+    g_photoActive.store(false);
+    {
+        std::lock_guard<std::mutex> lock(g_photoMutex);
+        g_photoRgba.clear();
+        g_photoWidth = 0;
+        g_photoHeight = 0;
+        g_photoScreenMode = 0;
+    }
+    g_photoZoom.store(1.0f);
+    g_photoPanX.store(0.0f);
+    g_photoPanY.store(0.0f);
 }
 
 namespace {
@@ -220,16 +336,27 @@ constexpr uint32_t kModalTexHeight = 768;
 // Metricas de performance (debug, ver docs/DEBUGGING.md).
 constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz
 constexpr float kFreezeThresholdMs = 250.0f; // stall claro, nao so reprojection
+
+// F5 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md), G2: bordas do histograma de frame
+// time. 11.1 = cadencia alvo a 90Hz, 20 = kStutterThresholdMs, 250 = kFreezeThresholdMs —
+// os tres marcos que o relatorio pede desenhados no grafico; os demais so dao granularidade
+// na faixa intermediaria. 7 bordas -> 8 buckets (o ultimo pega tudo acima de 250ms).
+constexpr int kFrameTimeHistogramBucketCount = 8;
+constexpr float kFrameTimeHistogramEdgesMs[kFrameTimeHistogramBucketCount - 1] = {
+    11.1f, 16.7f, 20.0f, 33.3f, 50.0f, 100.0f, 250.0f
+};
 constexpr float kVideoStallThresholdMs = 500.0f; // decode/rede travado (ver AppState.msSinceLastVideoFrame)
 
 // ScreenMode e helpers estao centralizados em screen_mode.h
 
-// Parâmetros de estereo para o push constant do stereo.vert/frag
+// Parâmetros de estereo para o push constant do stereo.vert/frag e stereo_cubemap.vert/frag
 struct StereoParams {
-    int eyeIndex     = 0;
-    int swapEyes     = 0;
-    int stereoLayout = 0; // 0=mono, 1=SBS, 2=OU
-    int polar180     = 0;
+    int eyeIndex       = 0;
+    int swapEyes       = 0;
+    int stereoLayout   = 0; // 0=mono, 1=SBS, 2=OU
+    int polar180       = 0;
+    int cubemapLayout  = 0; // 0=3x2, 1=6x1, 2=EAC 3x2, 3=Cross
+    int projectionType = 0; // 0=Standard Cubemap, 1=EAC
 };
 
 StereoParams GetStereoParams(ScreenMode mode, int eye) {
@@ -249,11 +376,60 @@ StereoParams GetStereoParams(ScreenMode mode, int eye) {
         case ScreenMode::Sphere360OU:
             p.stereoLayout = 2; // OU
             break;
+        case ScreenMode::Cubemap3x2SBS:
+            p.stereoLayout = 1; // SBS
+            p.cubemapLayout = 0; // 3x2
+            p.projectionType = 0; // Standard Cubemap
+            break;
+        case ScreenMode::EAC3x2SBS:
+            p.stereoLayout = 1; // SBS
+            p.cubemapLayout = 2; // EAC 3x2
+            p.projectionType = 1; // EAC
+            break;
+        case ScreenMode::Cubemap3x2:
+            p.stereoLayout = 0;
+            p.cubemapLayout = 0; // 3x2
+            p.projectionType = 0; // Standard Cubemap
+            break;
+        case ScreenMode::Cubemap6x1:
+            p.stereoLayout = 0;
+            p.cubemapLayout = 1; // 6x1
+            p.projectionType = 0; // Standard Cubemap
+            break;
+        case ScreenMode::EAC3x2:
+            p.stereoLayout = 0;
+            p.cubemapLayout = 2; // EAC 3x2
+            p.projectionType = 1; // EAC
+            break;
         default:
             p.stereoLayout = 0;
             break;
     }
     return p;
+}
+
+// R-07 (docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): contadores de draw call e
+// triangulos do frame Vulkan em construcao — resetados uma vez por frame (antes do loop de
+// olhos) e somados em AppState.lastFrameDrawCallCount/lastFrameTriangleCount ao final do frame,
+// para alimentar o HUD/CSV de debug. Pre-requisito citado pelo relatorio transversal da Fase 0.4
+// para qualquer afirmacao de custo de GPU das projecoes Cubemap/EAC (Secao 6).
+uint32_t g_frameDrawCallCount = 0;
+uint64_t g_frameTriangleCount = 0;
+
+// vertexCount aproxima triangulos como topologia triangle-strip (N-2), que e a usada pelos
+// quads full-screen desta base (vkCmdDraw(cmd, 4, ...) = 1 quad = 2 triangulos).
+inline void CountDrawCall(uint32_t vertexCount) {
+    g_frameDrawCallCount++;
+    if (vertexCount >= 3) {
+        g_frameTriangleCount += (vertexCount - 2);
+    }
+}
+
+// indexCount aproxima triangulos como topologia triangle-list (indexCount/3), usada pela
+// geometria indexada desta base (esfera equirect/cubemap, legendas ASS/PGS).
+inline void CountDrawCallIndexed(uint32_t indexCount) {
+    g_frameDrawCallCount++;
+    g_frameTriangleCount += (indexCount / 3);
 }
 
 void CheckXrResult(XrResult result, const char* what) {
@@ -278,6 +454,17 @@ PFN LoadXrFunction(XrInstance instance, const char* name) {
     OXR(xrGetInstanceProcAddr(instance, name, reinterpret_cast<PFN_xrVoidFunction*>(&fn)));
     return fn;
 }
+
+// Forward declaration — struct AppState so e definida mais abaixo neste arquivo.
+struct AppState;
+
+// Auditoria pos-reinicio (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md, P-01/P-04/P-06):
+// unico ponto que deve escrever em state.displayRefreshRate depois da sessao criada. Pede a
+// taxa e SO atualiza o campo a partir de uma leitura confirmada via xrGetDisplayRefreshRateFB —
+// nunca a partir do valor pedido, que pode ser rejeitado silenciosamente pelo runtime. E
+// best-effort de proposito: XR_ERROR_DISPLAY_REFRESH_RATE_UNSUPPORTED_FB e um resultado valido
+// do runtime, entao nao pode passar por OXR(...) (que aborta o processo em qualquer falha).
+void RequestAndConfirmDisplayRefreshRate(AppState& state, float requestedHz);
 
 // xrGetVulkanInstanceExtensionsKHR/DeviceExtensionsKHR devolvem uma unica
 // string com nomes separados por espaco (convencao do KHR_vulkan_enable).
@@ -319,6 +506,30 @@ struct VideoFrame {
     uint64_t lastUsedFrame = 0;
 };
 
+// D-04 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): sinal de frescor por grupo de campos.
+// Em vez de assumir que uma leitura e "atual" so porque foi buscada agora, rastreia a ultima
+// vez que um contador MONOTONICO do grupo de fato mudou de valor — se `net_blocks_fetched`
+// (por exemplo) fica parado por varias amostras, isso significa "sem dado novo ha Xms",
+// independente da causa (contencao de lock no Rust ou o pipeline de fato ter parado). Sem
+// isto, um valor congelado (visto na telemetria real: jitter_ms/av_drift_ms/net_last_fetch_ms
+// identicos por 34 amostras seguidas) parece uma medicao atual quando nao e.
+struct FreshnessTracker {
+    uint64_t lastValue = 0;
+    std::chrono::steady_clock::time_point lastChangeTs{};
+    bool initialized = false;
+
+    uint32_t UpdateAndGetAgeMs(uint64_t currentValue, std::chrono::steady_clock::time_point now) {
+        if (!initialized || currentValue != lastValue) {
+            lastValue = currentValue;
+            lastChangeTs = now;
+            initialized = true;
+            return 0;
+        }
+        auto ageMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastChangeTs).count();
+        return (uint32_t)std::max<int64_t>(0, ageMs);
+    }
+};
+
 struct AppState {
     android_app* app = nullptr;
 
@@ -335,12 +546,74 @@ struct AppState {
     XrFoveationProfileFB foveationProfile = XR_NULL_HANDLE;
     bool foveationCurrentlyApplied = false; // ultimo estado efetivamente aplicado aos swapchains
 
-    // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006)
+    // Fase 0.3 Seção 2: Passthrough / Mixed Reality (XR_FB_passthrough) —
+    // ver SetupPassthrough / UpdatePassthrough. supportsPassthrough e
+    // definido em CreateXrInstance (extensao presente no runtime) e
+    // propagado pro Kotlin via set_passthrough_supported (bridge Rust).
+    // passthroughActive e o estado EFETIVO da layer (resumed vs paused),
+    // que UpdatePassthrough sincroniza ~1x/s com get_passthrough_enabled().
+    bool supportsPassthrough = false;
+    bool passthroughActive = false;
+    float passthroughPollAccumMs = 0.0f;
+    static constexpr float kPassthroughPollIntervalMs = 500.0f;
+    PFN_xrCreatePassthroughFB pfnCreatePassthroughFB = nullptr;
+    PFN_xrDestroyPassthroughFB pfnDestroyPassthroughFB = nullptr;
+    PFN_xrPassthroughStartFB pfnPassthroughStartFB = nullptr;
+    PFN_xrPassthroughPauseFB pfnPassthroughPauseFB = nullptr;
+    PFN_xrCreatePassthroughLayerFB pfnCreatePassthroughLayerFB = nullptr;
+    PFN_xrDestroyPassthroughLayerFB pfnDestroyPassthroughLayerFB = nullptr;
+    PFN_xrPassthroughLayerPauseFB pfnPassthroughLayerPauseFB = nullptr;
+    PFN_xrPassthroughLayerResumeFB pfnPassthroughLayerResumeFB = nullptr;
+    PFN_xrPassthroughLayerSetStyleFB pfnPassthroughLayerSetStyleFB = nullptr;
+    XrPassthroughFB passthrough = XR_NULL_HANDLE;
+    XrPassthroughLayerFB passthroughLayer = XR_NULL_HANDLE;
+    float appliedPassthroughOpacity = -1.0f;
+    uint32_t appliedPassthroughEdge = 0xFFFFFFFF;
+
+    // Fase 0.3 Seção 5: Hand Tracking (XR_EXT_hand_tracking) — ver SetupHandTracking / DestroyHandTracking
+    bool supportsHandTracking = false;
+    PFN_xrCreateHandTrackerEXT pfnCreateHandTrackerEXT = nullptr;
+    PFN_xrDestroyHandTrackerEXT pfnDestroyHandTrackerEXT = nullptr;
+    PFN_xrLocateHandJointsEXT pfnLocateHandJointsEXT = nullptr;
+    XrHandTrackerEXT leftHandTracker = XR_NULL_HANDLE;
+    XrHandTrackerEXT rightHandTracker = XR_NULL_HANDLE;
+    vrplayer::HandTrackingFilter leftHandFilter;
+    vrplayer::HandTrackingFilter rightHandFilter;
+    bool handTrackingActive = false;
+
+    // Fase 0.2 T14 / Fase 0.4: Monitoramento Térmico e Qualidade Adaptativa (RNF-PERF-006)
     PFN_xrRequestDisplayRefreshRateFB pfnRequestDisplayRefreshRateFB = nullptr;
+    // Auditoria pos-reinicio (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md, P-01/P-06):
+    // a taxa real so pode ser conhecida via enumeracao + leitura confirmada do runtime — nunca
+    // assumir o valor pedido. Ver RequestAndConfirmDisplayRefreshRate().
+    PFN_xrEnumerateDisplayRefreshRatesFB pfnEnumerateDisplayRefreshRatesFB = nullptr;
+    PFN_xrGetDisplayRefreshRateFB pfnGetDisplayRefreshRateFB = nullptr;
+    float displayRefreshRate = 90.0f;
+    uint32_t qualityLevel = 1; // 0=Ultra, 1=High, 2=Medium, 3=Low, 4=Emergency
+    uint32_t qualityReason = 0; // QualityTransitionReason
+    uint32_t activeFoveationLevel = 0;
+    float activeFoveationVerticalOffset = 0.0f;
+    uint32_t foveationCurrentlyAppliedLevel = 0;
+    float foveationCurrentlyAppliedOffset = 0.0f;
     uint32_t thermalLevel = 0;
     float renderResolutionScale = 1.0f;
     float thermalPollAccumMs = 0.0f;
     static constexpr float kThermalPollIntervalMs = 1000.0f;
+    // P-02/P-03: o QualityController foi desenhado para amostragem ~1Hz (ver doc do
+    // QualitySample em rust/media-logic/src/quality.rs) — sem este acumulador ele era avaliado
+    // a ~90Hz, causando cascata de degradacao em dezenas de ms.
+    float qualityPollAccumMs = 0.0f;
+    static constexpr float kQualityPollIntervalMs = 1000.0f;
+
+    // P-05: registrar as threads criticas ao runtime XR (XR_KHR_android_thread_settings).
+    bool supportsAndroidThreadSettings = false;
+    PFN_xrSetAndroidApplicationThreadKHR pfnSetAndroidApplicationThreadKHR = nullptr;
+    // Cache do ultimo tid registrado por thread do pipeline Rust — cada novo video reinicia as
+    // 3 threads (tids novos), entao o registro precisa se repetir, nao rodar so uma vez por
+    // processo. 0 = ainda nao registrado nesta execucao.
+    int32_t lastRegisteredDemuxTid = 0;
+    int32_t lastRegisteredVideoTid = 0;
+    int32_t lastRegisteredAudioTid = 0;
 
     VkInstance vkInstance = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT vkDebugMessenger = VK_NULL_HANDLE; // ver CreateVulkanInstanceAndDevice
@@ -358,6 +631,10 @@ struct AppState {
     float timestampPeriod = 0.0f;
     float lastGpuTimeMs = 0.0f;
     float smoothedGpuTimeMs = 0.0f;
+    // R-07 (docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): draw calls e triangulos do
+    // ultimo frame completo (ambos os olhos), para o HUD de debug — ver g_frameDrawCallCount.
+    uint32_t lastFrameDrawCallCount = 0;
+    uint64_t lastFrameTriangleCount = 0;
 
     // Upscaling de vídeo (Vulkan MQSR / SGSR1)
     uint32_t upscalingMode = 0; // 0=Off, 1=Quality, 2=Performance, 3=Auto
@@ -365,6 +642,64 @@ struct AppState {
     bool upscalingEnabled = false;
     bool supportsMqsr = false;
     bool supportsPerfMetrics = false;
+    // F3 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): XR_META_performance_metrics.
+    // `supportsPerfMetrics` acima so significa que a EXTENSAO foi habilitada — o SISTEMA de
+    // metricas precisa ser habilitado a parte via xrSetPerformanceMetricsStateMETA (ver
+    // SetupPerformanceMetrics), ou toda query devolve XR_ERROR_VALIDATION_FAILURE.
+    PFN_xrSetPerformanceMetricsStateMETA pfnSetPerformanceMetricsStateMETA = nullptr;
+    PFN_xrQueryPerformanceMetricsCounterMETA pfnQueryPerformanceMetricsCounterMETA = nullptr;
+    bool perfMetricsStateEnabled = false;
+    // XrPath resolvidos uma vez em SetupPerformanceMetrics (xrStringToPath), reusados a cada
+    // query a 1Hz — ver PollPerformanceMetrics.
+    XrPath perfPathAppCpuFrametime = XR_NULL_PATH;
+    XrPath perfPathAppGpuFrametime = XR_NULL_PATH;
+    XrPath perfPathMotionToPhotonLatency = XR_NULL_PATH;
+    XrPath perfPathCompositorCpuFrametime = XR_NULL_PATH;
+    XrPath perfPathCompositorGpuFrametime = XR_NULL_PATH;
+    XrPath perfPathCompositorDroppedFrameCount = XR_NULL_PATH;
+    XrPath perfPathCompositorSpacewarpMode = XR_NULL_PATH;
+    XrPath perfPathDeviceCpuUtilAverage = XR_NULL_PATH;
+    XrPath perfPathDeviceCpuUtilWorst = XR_NULL_PATH;
+    XrPath perfPathDeviceGpuUtil = XR_NULL_PATH;
+    // Resultados da ultima query bem-sucedida (1Hz, ver PollPerformanceMetrics) + bitmask de
+    // validade (D-04: "nao suportado" tem que ser distinto de zero — bit 0 = contador nao
+    // trouxe nenhum valor valido nesta amostra, nao "o valor e zero"). Especificacao PROIBE
+    // usar estes contadores para governar comportamento (ver 8.1 do relatorio) — diagnostico
+    // apenas, nunca entrada do QualityController.
+    uint32_t perfMetricsValidMask = 0;
+    float perfAppCpuFrametimeMs = 0.0f;
+    float perfAppGpuFrametimeMs = 0.0f;
+    float perfMotionToPhotonLatencyMs = 0.0f;
+    float perfCompositorCpuFrametimeMs = 0.0f;
+    float perfCompositorGpuFrametimeMs = 0.0f;
+    uint32_t perfCompositorDroppedFrameCount = 0;
+    uint32_t perfCompositorSpacewarpMode = 0;
+    float perfDeviceCpuUtilAverage = 0.0f;
+    float perfDeviceCpuUtilWorst = 0.0f;
+    float perfDeviceGpuUtil = 0.0f;
+
+    // F8 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, 8.2): ADPF — API 33+
+    // (android_get_device_api_level(), verificado em runtime; NAO e telemetria, e uma API de
+    // ESCRITA: o app declara a duracao de frame alvo e reporta a real, o sistema ajusta
+    // escalonamento/frequencia de CPU/GPU. Ao contrario dos contadores de XR_META_performance_
+    // metrics (8.1), esta e FEITA para governar comportamento do SO — nao confundir as duas.
+    APerformanceHintManager* adpfManager = nullptr;
+    APerformanceHintSession* adpfSession = nullptr;
+    bool supportsAdpf = false;
+    float adpfLastTargetRefreshRate = 0.0f;
+    // Resolvidos via dlopen/dlsym (nao chamada direta): o header declara o prototipo, mas o
+    // simbolo so existe em libandroid.so a partir da API 33 — chamar direto faz o clang do NDK
+    // recusar compilar com minSdk 26 (marca "unavailable"), mesmo dentro de um if() em
+    // runtime. Mesmo padrao ja usado neste arquivo para funcoes de extensao OpenXR
+    // (LoadXrFunction/xrGetInstanceProcAddr), so que aqui a fonte e libandroid.so via dlsym.
+    using PFN_APerformanceHint_getManager = APerformanceHintManager* (*)();
+    using PFN_APerformanceHint_createSession = APerformanceHintSession* (*)(APerformanceHintManager*, const pid_t*, size_t, int64_t);
+    using PFN_APerformanceHint_updateTargetWorkDuration = int (*)(APerformanceHintSession*, int64_t);
+    using PFN_APerformanceHint_reportActualWorkDuration = int (*)(APerformanceHintSession*, int64_t);
+    PFN_APerformanceHint_getManager adpfGetManager = nullptr;
+    PFN_APerformanceHint_createSession adpfCreateSession = nullptr;
+    PFN_APerformanceHint_updateTargetWorkDuration adpfUpdateTargetWorkDuration = nullptr;
+    PFN_APerformanceHint_reportActualWorkDuration adpfReportActualWorkDuration = nullptr;
     uint32_t videoWidth = 0;
     uint32_t videoHeight = 0;
     VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;
@@ -495,14 +830,31 @@ struct AppState {
     // Estagio 5 — pipeline estereo/esfera (SBS/OU/360/180 com CAS sharpening).
     // Reusa o videoDescriptorSetLayout (mesmo sampler YCbCr) mas pipeline separado.
     VkPipelineLayout stereoPipelineLayout = VK_NULL_HANDLE;
-    VkPipeline stereoPipeline = VK_NULL_HANDLE;     // TRIANGLE_LIST — esfera, index draw
-    VkPipeline stereoFlatPipeline = VK_NULL_HANDLE; // TRIANGLE_STRIP — quad SBS/OU plano (4 vertices)
+    VkPipeline stereoPipeline = VK_NULL_HANDLE;        // TRIANGLE_LIST — esfera, index draw
+    VkPipeline stereoFlatPipeline = VK_NULL_HANDLE;    // TRIANGLE_STRIP — quad SBS/OU plano (4 vertices)
+    VkPipeline stereoCubemapPipeline = VK_NULL_HANDLE; // TRIANGLE_LIST — esfera, cubemap/EAC sampling
     // Geometria da esfera (BuildGlobe equivalente)
     VkBuffer sphereVertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory sphereVertexMemory = VK_NULL_HANDLE;
     VkBuffer sphereIndexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory sphereIndexMemory = VK_NULL_HANDLE;
     uint32_t sphereIndexCount = 0;
+
+    // Fase 0.3 Seção 8 — Fotos 360° e Fotos 3D (T8.3, T8.4)
+    VkPipelineLayout photoPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline photoStereoPipeline = VK_NULL_HANDLE;     // TRIANGLE_LIST — esfera 360/180
+    VkPipeline photoStereoFlatPipeline = VK_NULL_HANDLE; // TRIANGLE_STRIP — quad plano SBS/OU/Flat
+    VkDescriptorSetLayout photoDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool photoDescriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSet photoDescriptorSet = VK_NULL_HANDLE;
+    VkImage photoImage = VK_NULL_HANDLE;
+    VkDeviceMemory photoImageMemory = VK_NULL_HANDLE;
+    VkImageView photoImageView = VK_NULL_HANDLE;
+    bool photoTextureReady = false;
+    bool photoActive = false;
+    uint32_t photoTexWidth = 0;
+    uint32_t photoTexHeight = 0;
+    ScreenMode photoScreenMode = ScreenMode::Flat2D;
 
     // Estagio 5 — BeamRenderer: linha simples de laser do controller.
     VkPipelineLayout beamPipelineLayout = VK_NULL_HANDLE;
@@ -531,6 +883,25 @@ struct AppState {
     uint32_t subtitleIndexCount = 0;
     std::string lastSubtitleText = "";
     float subtitleScale = 1.0f;
+    // Legendas PGS (Fase 0.3 T7.4)
+    VkDescriptorPool pgsSubtitleDescriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSet pgsSubtitleDescriptorSet = VK_NULL_HANDLE;
+    VkImage pgsSubtitleImage = VK_NULL_HANDLE;
+    VkDeviceMemory pgsSubtitleImageMemory = VK_NULL_HANDLE;
+    VkImageView pgsSubtitleImageView = VK_NULL_HANDLE;
+    uint32_t pgsSubtitleTexWidth = 0;
+    uint32_t pgsSubtitleTexHeight = 0;
+    bool pgsSubtitleReady = false;
+    uint64_t lastPgsId = 0;
+
+    // Legendas ASS (Fase 0.3 T7.2)
+    uint32_t currentAssAlignment = 2;
+    bool currentAssHasPos = false;
+    float currentAssPosX = 0.0f;
+    float currentAssPosY = 0.0f;
+    float currentAssPlayResX = 384.0f;
+    float currentAssPlayResY = 288.0f;
+    uint64_t lastSubtitleStartMs = 0;
     XrVector3f lazyFollowPos = {0.0f, 1.1f, -2.2f};
 
     // Overlay de feedback (paridade com o GLES): um unico vertex buffer com as
@@ -547,6 +918,10 @@ struct AppState {
 
     // Estado de ScreenMode (lido do bridge Rust a cada frame)
     ScreenMode screenMode = ScreenMode::Flat2D;
+    // T-HDR: detectado uma vez por load (ver get_video_is_hdr), lido a
+    // cada frame junto com screenMode — usado pelo shader de video pra
+    // decidir se aplica o tonemap HDR->SDR.
+    bool isHdr = false;
 
     // Estado de cena / recenter — espelha m_sceneYawOffset/m_sceneTranslationOffset
     // do caminho GLES (vr_player_app.cpp). Toda a UI/controles/tela/esfera sao
@@ -564,6 +939,11 @@ struct AppState {
     XrVector3f screenPosition = {0.0f, 1.5f, -2.0f};
     float screenScaleX = 1.6f;
     float screenScaleY = 0.9f;
+
+    // Fase 0.3 Seção 2: Grab & Drag da tela virtual (T2.5)
+    bool isScreenGrabbed = false;
+    float grabDistance = 2.0f;
+    bool isHoveringScreen = false;
 
     // Menu long-press = recenter manual (Etapa 6)
     float menuHoldTime = 0.0f;
@@ -606,6 +986,9 @@ struct AppState {
     float lastFrameMs = 0.0f;
     int stutterCount = 0;
     int freezeCount = 0;
+    // F5 G2: contagens cumulativas por bucket (ver kFrameTimeHistogramEdgesMs) — acumulado a
+    // cada frame no proprio loop de render, exportado no wire so a 10Hz do HUD.
+    uint32_t frameTimeHistogram[kFrameTimeHistogramBucketCount] = {};
     std::chrono::steady_clock::time_point lastFrameTimestamp{};
     bool hasLastFrameTimestamp = false;
 
@@ -618,6 +1001,19 @@ struct AppState {
     // decode/rede, nao na renderizacao.
     float msSinceLastVideoFrame = 0.0f;
     bool videoStallLogged = false;
+
+    // D-02 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): contador cumulativo de episodios
+    // de stall de video JA CONCLUIDOS (msSinceLastVideoFrame excedeu kVideoStallThresholdMs e
+    // um novo frame chegou depois). Distinto de stutterCount/freezeCount acima, que medem o
+    // LOOP DE RENDER — um stall de video pode ficar invisivel atras de um loop "saudavel" a
+    // 90fps redesenhando o ultimo frame (ver UpdateVideoFrame, onde isto incrementa).
+    uint32_t videoStallCount = 0;
+
+    // D-04: frescor por grupo — video usa state.lastDecodedFrameCount (contador monotonico
+    // do lado Rust, ja buscado a 1Hz pelo poll de decodedFps abaixo); rede usa
+    // stats.netBlocksFetched (buscado a cada populate do HUD, ver vr_player_input_vulkan.h).
+    FreshnessTracker videoFreshness;
+    FreshnessTracker networkFreshness;
 
     // Judder de video: msSinceLastVideoFrame (acima) so mostra o gap ATUAL,
     // amostrado no HUD a ~10Hz — um video pode nunca passar de, digamos,
@@ -667,11 +1063,38 @@ struct AppState {
     uint64_t lastNetworkBytes = 0;
     float netMBs = 0.0f;
     uint32_t videoQueueDepth = 0;
+    // T-decode-present-split: profundidade da fila local de frames
+    // decodificados-mas-nao-liberados na video_thread (ver
+    // get_video_presentation_pending no bridge) — debug/HUD.
+    uint32_t videoPresentationPending = 0;
 
     bool resumed = false;
     bool sessionRunning = false;
     bool requestExit = false;
 };
+
+void RequestAndConfirmDisplayRefreshRate(AppState& state, float requestedHz) {
+    if (state.pfnRequestDisplayRefreshRateFB == nullptr) {
+        return;
+    }
+    XrResult result = state.pfnRequestDisplayRefreshRateFB(state.session, requestedHz);
+    if (XR_FAILED(result)) {
+        LOGW("VRPlayerAppVK: xrRequestDisplayRefreshRateFB(%.1fHz) falhou: %d", requestedHz, result);
+    }
+    if (state.pfnGetDisplayRefreshRateFB == nullptr) {
+        // Runtime sem a funcao de leitura — nao ha como confirmar, entao nao assume o valor
+        // pedido (ver P-01). state.displayRefreshRate fica com o ultimo valor confirmado.
+        return;
+    }
+    float confirmedHz = 0.0f;
+    XrResult readResult = state.pfnGetDisplayRefreshRateFB(state.session, &confirmedHz);
+    if (XR_FAILED(readResult)) {
+        LOGW("VRPlayerAppVK: xrGetDisplayRefreshRateFB falhou: %d", readResult);
+        return;
+    }
+    state.displayRefreshRate = confirmedHz;
+    LOGI("VRPlayerAppVK: refresh rate pedido=%.1fHz confirmado=%.1fHz", requestedHz, confirmedHz);
+}
 
 #include "vr_player_input_vulkan.h"
 
@@ -684,6 +1107,9 @@ struct VideoPushConstants {
     Mat4  mvp;
     float sharpness;
     int   upscalingMode;
+    // T-HDR: 1 se o video atual e HDR (PQ/HLG) — o fragment shader aplica
+    // tonemap HDR->SDR quando isto e nao-zero, ver video.frag.
+    int   isHdr;
 };
 
 // Estagio 4: push constant para UI (MVP + alpha)
@@ -693,7 +1119,7 @@ struct UiPushConstants {
     float _pad[3];
 };
 
-// Estagio 5: push constant para estereo/esfera (MVP + parametros de olho + upscaling)
+// Estagio 5: push constant para estereo/esfera (MVP + parametros de olho + upscaling + cubemap/EAC)
 struct StereoPushConstants {
     Mat4  mvp;
     int   eyeIndex;
@@ -702,6 +1128,12 @@ struct StereoPushConstants {
     int   polar180;
     float sharpness;
     int   upscalingMode;
+    int   cubemapLayout;
+    int   projectionType;
+    // T-HDR: mesmo significado de VideoPushConstants::isHdr, ver stereo.frag/
+    // stereo_cubemap.frag. Sempre 0 no pipeline de foto (photoPipelineLayout,
+    // ver ponto de uso) — nao existe decode HDR de foto estatica.
+    int   isHdr;
 };
 
 struct BeamPushConstants {
@@ -765,7 +1197,45 @@ void CreateXrInstance(AppState& state) {
     state.supportsPerfMetrics = isExtensionSupported(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME);
     if (state.supportsPerfMetrics) {
         extensions.push_back(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME);
-        LOGI("OpenXR: Extensão XR_META_performance_metrics detectada e habilitada");
+        // F3 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): mensagem corrigida — isto so diz
+        // que a EXTENSAO foi negociada com o runtime. O SISTEMA de metricas em si so liga
+        // depois de xrSetPerformanceMetricsStateMETA (ver SetupPerformanceMetrics, chamado
+        // apos a sessao existir); antes a mensagem "detectada e habilitada" sugeria as duas
+        // coisas juntas, quando nenhuma query jamais era feita.
+        LOGI("OpenXR: Extensão XR_META_performance_metrics detectada (sistema de métricas habilitado separadamente após a criação da sessão)");
+    }
+
+    // Fase 0.3 Seção 2: Passthrough / Mixed Reality (XR_FB_passthrough).
+    // supportedDevices no manifest limita a quest3/quest3s, entao nao ha
+    // necessidade de tratar o passthrough monocromatico do Quest 2.
+    state.supportsPassthrough = isExtensionSupported(XR_FB_PASSTHROUGH_EXTENSION_NAME);
+    if (state.supportsPassthrough) {
+        extensions.push_back(XR_FB_PASSTHROUGH_EXTENSION_NAME);
+        LOGI("OpenXR: Extensão XR_FB_passthrough detectada e habilitada");
+    } else {
+        LOGI("OpenXR: Extensão XR_FB_passthrough nao encontrada — passthrough desabilitado");
+    }
+    // Propaga a capacidade pro Kotlin (botao da UI sai de DISABLED so se true).
+    set_passthrough_supported(state.supportsPassthrough ? 1u : 0u);
+
+    // Fase 0.3 Seção 5: Hand Tracking (XR_EXT_hand_tracking) — T5.1
+    state.supportsHandTracking = isExtensionSupported(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+    if (state.supportsHandTracking) {
+        extensions.push_back(XR_EXT_HAND_TRACKING_EXTENSION_NAME);
+        LOGI("OpenXR: Extensão XR_EXT_hand_tracking detectada e habilitada");
+    } else {
+        LOGI("OpenXR: Extensão XR_EXT_hand_tracking nao encontrada neste runtime");
+    }
+
+    // Auditoria pos-reinicio (P-05): declara as threads do app como criticas ao runtime XR,
+    // pra evitar que o escalonador do Android as coloque em nucleos pequenos entre um boot e
+    // outro (ver docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+    state.supportsAndroidThreadSettings = isExtensionSupported(XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME);
+    if (state.supportsAndroidThreadSettings) {
+        extensions.push_back(XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME);
+        LOGI("OpenXR: Extensão XR_KHR_android_thread_settings detectada e habilitada");
+    } else {
+        LOGI("OpenXR: Extensão XR_KHR_android_thread_settings nao encontrada neste runtime");
     }
 
     // Este e o nome pelo qual o runtime OpenXR do Horizon OS conhece o app
@@ -782,6 +1252,16 @@ void CreateXrInstance(AppState& state) {
     createInfo.enabledExtensionNames = extensions.data();
 
     OXR(xrCreateInstance(&createInfo, &state.instance));
+
+    if (state.supportsHandTracking) {
+        state.pfnCreateHandTrackerEXT =
+            LoadXrFunction<PFN_xrCreateHandTrackerEXT>(state.instance, "xrCreateHandTrackerEXT");
+        state.pfnDestroyHandTrackerEXT =
+            LoadXrFunction<PFN_xrDestroyHandTrackerEXT>(state.instance, "xrDestroyHandTrackerEXT");
+        state.pfnLocateHandJointsEXT =
+            LoadXrFunction<PFN_xrLocateHandJointsEXT>(state.instance, "xrLocateHandJointsEXT");
+        LOGI("OpenXR: Ponteiros de XR_EXT_hand_tracking carregados com sucesso");
+    }
 }
 
 // Callback das Vulkan validation layers (VK_EXT_debug_utils) — ver
@@ -1144,7 +1624,358 @@ void CreateSwapchains(AppState& state) {
 // LEVEL_ENABLED_FB` deixa o compositor ajustar a intensidade sozinho — nao
 // ha AdaptiveQualityManager/ThermalMonitor neste projeto ainda pra guiar
 // multiplos niveis (fase 0.2 secao 14, task separada).
-void ApplyFoveation(AppState& state, bool enabled) {
+// ============================================================================
+// Fase 0.3 Seção 2 — Passthrough / Mixed Reality (XR_FB_passthrough)
+// ============================================================================
+//
+// Ciclo de vida:
+//   SetupPassthrough   — 1x apos xrCreateSession: carrega PFNs, cria o
+//                        XrPassthroughFB e a XrPassthroughLayerFB (ambos
+//                        PAUSADOS — nao passamos IS_RUNNING_AT_CREATION_BIT).
+//   UpdatePassthrough  — polling ~2x/s no RenderFrame: sincroniza o estado
+//                        efetivo da layer (resume/pause) com o desejo do
+//                        usuario vindo do bridge Rust (get_passthrough_enabled).
+//   DestroyPassthrough — no teardown, ANTES de xrDestroySession.
+//
+// A composicao (inserir XrCompositionLayerPassthroughFB como layer 0 e marcar
+// o projection layer com BLEND_TEXTURE_SOURCE_ALPHA) e o clear com alpha 0
+// ficam no proprio RenderFrame/Record*, condicionados a state.passthroughActive.
+
+void SetupPassthrough(AppState& state) {
+    if (!state.supportsPassthrough) return;
+
+    state.pfnCreatePassthroughFB =
+        LoadXrFunction<PFN_xrCreatePassthroughFB>(state.instance, "xrCreatePassthroughFB");
+    state.pfnDestroyPassthroughFB =
+        LoadXrFunction<PFN_xrDestroyPassthroughFB>(state.instance, "xrDestroyPassthroughFB");
+    state.pfnPassthroughStartFB =
+        LoadXrFunction<PFN_xrPassthroughStartFB>(state.instance, "xrPassthroughStartFB");
+    state.pfnPassthroughPauseFB =
+        LoadXrFunction<PFN_xrPassthroughPauseFB>(state.instance, "xrPassthroughPauseFB");
+    state.pfnCreatePassthroughLayerFB =
+        LoadXrFunction<PFN_xrCreatePassthroughLayerFB>(state.instance, "xrCreatePassthroughLayerFB");
+    state.pfnDestroyPassthroughLayerFB =
+        LoadXrFunction<PFN_xrDestroyPassthroughLayerFB>(state.instance, "xrDestroyPassthroughLayerFB");
+    state.pfnPassthroughLayerPauseFB =
+        LoadXrFunction<PFN_xrPassthroughLayerPauseFB>(state.instance, "xrPassthroughLayerPauseFB");
+    state.pfnPassthroughLayerResumeFB =
+        LoadXrFunction<PFN_xrPassthroughLayerResumeFB>(state.instance, "xrPassthroughLayerResumeFB");
+    state.pfnPassthroughLayerSetStyleFB =
+        LoadXrFunction<PFN_xrPassthroughLayerSetStyleFB>(state.instance, "xrPassthroughLayerSetStyleFB");
+
+    if (state.pfnCreatePassthroughFB == nullptr || state.pfnCreatePassthroughLayerFB == nullptr) {
+        LOGE("Passthrough: ponteiros de funcao ausentes apesar da extensao — desabilitando");
+        state.supportsPassthrough = false;
+        set_passthrough_supported(0u);
+        return;
+    }
+
+    XrPassthroughCreateInfoFB ptCreateInfo{XR_TYPE_PASSTHROUGH_CREATE_INFO_FB};
+    ptCreateInfo.flags = 0; // criado pausado; xrPassthroughStartFB no toggle
+    XrResult r = state.pfnCreatePassthroughFB(state.session, &ptCreateInfo, &state.passthrough);
+    if (XR_FAILED(r)) {
+        LOGE("Passthrough: xrCreatePassthroughFB falhou (%d) — desabilitando", r);
+        state.supportsPassthrough = false;
+        set_passthrough_supported(0u);
+        return;
+    }
+
+    XrPassthroughLayerCreateInfoFB layerCreateInfo{XR_TYPE_PASSTHROUGH_LAYER_CREATE_INFO_FB};
+    layerCreateInfo.passthrough = state.passthrough;
+    layerCreateInfo.flags = 0; // idem: layer nasce pausada
+    layerCreateInfo.purpose = XR_PASSTHROUGH_LAYER_PURPOSE_RECONSTRUCTION_FB;
+    r = state.pfnCreatePassthroughLayerFB(state.session, &layerCreateInfo, &state.passthroughLayer);
+    if (XR_FAILED(r)) {
+        LOGE("Passthrough: xrCreatePassthroughLayerFB falhou (%d) — desabilitando", r);
+        state.pfnDestroyPassthroughFB(state.passthrough);
+        state.passthrough = XR_NULL_HANDLE;
+        state.supportsPassthrough = false;
+        set_passthrough_supported(0u);
+        return;
+    }
+
+    state.passthroughActive = false;
+    LOGI("Passthrough: XrPassthroughFB + layer criados (pausados)");
+}
+
+// F3 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): resolve os function pointers e os
+// XrPath dos 11 contadores (secao 8.1 do relatorio; per-core cpuN_utilization deliberadamente
+// fora — custaria mais um campo por nucleo do XR2 Gen 2 pelo mesmo diagnostico ja coberto por
+// cpu_utilization_average/worst), e habilita o SISTEMA de metricas via
+// xrSetPerformanceMetricsStateMETA (distinto de so ter a extensao negociada — ver o log
+// corrigido acima). Chamado uma vez, depois que a XrSession existe.
+void SetupPerformanceMetrics(AppState& state) {
+    if (!state.supportsPerfMetrics) return;
+
+    state.pfnSetPerformanceMetricsStateMETA =
+        LoadXrFunction<PFN_xrSetPerformanceMetricsStateMETA>(state.instance, "xrSetPerformanceMetricsStateMETA");
+    state.pfnQueryPerformanceMetricsCounterMETA =
+        LoadXrFunction<PFN_xrQueryPerformanceMetricsCounterMETA>(state.instance, "xrQueryPerformanceMetricsCounterMETA");
+
+    if (state.pfnSetPerformanceMetricsStateMETA == nullptr || state.pfnQueryPerformanceMetricsCounterMETA == nullptr) {
+        LOGE("PerfMetrics: falha ao resolver xrSetPerformanceMetricsStateMETA/xrQueryPerformanceMetricsCounterMETA — desabilitando");
+        state.supportsPerfMetrics = false;
+        return;
+    }
+
+    xrStringToPath(state.instance, "/app/cpu_frametime", &state.perfPathAppCpuFrametime);
+    xrStringToPath(state.instance, "/app/gpu_frametime", &state.perfPathAppGpuFrametime);
+    xrStringToPath(state.instance, "/app/motion_to_photon_latency", &state.perfPathMotionToPhotonLatency);
+    xrStringToPath(state.instance, "/compositor/cpu_frametime", &state.perfPathCompositorCpuFrametime);
+    xrStringToPath(state.instance, "/compositor/gpu_frametime", &state.perfPathCompositorGpuFrametime);
+    xrStringToPath(state.instance, "/compositor/dropped_frame_count", &state.perfPathCompositorDroppedFrameCount);
+    xrStringToPath(state.instance, "/compositor/spacewarp_mode", &state.perfPathCompositorSpacewarpMode);
+    xrStringToPath(state.instance, "/device/cpu_utilization_average", &state.perfPathDeviceCpuUtilAverage);
+    xrStringToPath(state.instance, "/device/cpu_utilization_worst", &state.perfPathDeviceCpuUtilWorst);
+    xrStringToPath(state.instance, "/device/gpu_utilization", &state.perfPathDeviceGpuUtil);
+
+    XrPerformanceMetricsStateMETA enableState{XR_TYPE_PERFORMANCE_METRICS_STATE_META};
+    enableState.enabled = XR_TRUE;
+    XrResult r = state.pfnSetPerformanceMetricsStateMETA(state.session, &enableState);
+    if (XR_FAILED(r)) {
+        LOGE("PerfMetrics: xrSetPerformanceMetricsStateMETA falhou (%d) — contadores ficarao invalidos", r);
+        state.perfMetricsStateEnabled = false;
+        return;
+    }
+    state.perfMetricsStateEnabled = true;
+    LOGI("PerfMetrics: sistema de metricas habilitado via xrSetPerformanceMetricsStateMETA");
+}
+
+// Consulta um contador e devolve true (setando out_value) se o runtime devolveu um valor
+// valido nesta amostra — ver XR_PERFORMANCE_METRICS_COUNTER_*_VALUE_VALID_BIT_META. "Nao
+// suportado"/sem dado precisa ficar distinto de zero (D-04); o chamador usa o retorno pra
+// setar/limpar o bit correspondente em AppState::perfMetricsValidMask.
+static bool QueryPerfCounterFloat(AppState& state, XrPath path, float& out_value) {
+    if (path == XR_NULL_PATH) return false;
+    XrPerformanceMetricsCounterMETA counter{XR_TYPE_PERFORMANCE_METRICS_COUNTER_META};
+    if (XR_FAILED(state.pfnQueryPerformanceMetricsCounterMETA(state.session, path, &counter))) return false;
+    if (!(counter.counterFlags & XR_PERFORMANCE_METRICS_COUNTER_FLOAT_VALUE_VALID_BIT_META)) return false;
+    out_value = counter.floatValue;
+    return true;
+}
+
+static bool QueryPerfCounterUint(AppState& state, XrPath path, uint32_t& out_value) {
+    if (path == XR_NULL_PATH) return false;
+    XrPerformanceMetricsCounterMETA counter{XR_TYPE_PERFORMANCE_METRICS_COUNTER_META};
+    if (XR_FAILED(state.pfnQueryPerformanceMetricsCounterMETA(state.session, path, &counter))) return false;
+    if (!(counter.counterFlags & XR_PERFORMANCE_METRICS_COUNTER_UINT_VALUE_VALID_BIT_META)) return false;
+    out_value = counter.uintValue;
+    return true;
+}
+
+// Amostrado a ~1Hz (ver chamada dentro do bloco decodedFpsPollAccumMs em RenderFrame) — a
+// especificacao define o intervalo de medicao como responsabilidade do runtime, entao
+// consultar a cada frame nao traria dado mais fresco, so mais chamadas. IMPORTANTE (8.1 do
+// relatorio): estes 11 contadores sao SOMENTE DIAGNOSTICO — a especificacao proibe usa-los
+// para governar comportamento do app. NUNCA alimentar QualityController com estes valores.
+void PollPerformanceMetrics(AppState& state) {
+    if (!state.supportsPerfMetrics || !state.perfMetricsStateEnabled) return;
+
+    uint32_t mask = 0;
+    if (QueryPerfCounterFloat(state, state.perfPathAppCpuFrametime, state.perfAppCpuFrametimeMs)) mask |= (1u << 0);
+    if (QueryPerfCounterFloat(state, state.perfPathAppGpuFrametime, state.perfAppGpuFrametimeMs)) mask |= (1u << 1);
+    if (QueryPerfCounterFloat(state, state.perfPathMotionToPhotonLatency, state.perfMotionToPhotonLatencyMs)) mask |= (1u << 2);
+    if (QueryPerfCounterFloat(state, state.perfPathCompositorCpuFrametime, state.perfCompositorCpuFrametimeMs)) mask |= (1u << 3);
+    if (QueryPerfCounterFloat(state, state.perfPathCompositorGpuFrametime, state.perfCompositorGpuFrametimeMs)) mask |= (1u << 4);
+    if (QueryPerfCounterUint(state, state.perfPathCompositorDroppedFrameCount, state.perfCompositorDroppedFrameCount)) mask |= (1u << 5);
+    if (QueryPerfCounterUint(state, state.perfPathCompositorSpacewarpMode, state.perfCompositorSpacewarpMode)) mask |= (1u << 6);
+    if (QueryPerfCounterFloat(state, state.perfPathDeviceCpuUtilAverage, state.perfDeviceCpuUtilAverage)) mask |= (1u << 7);
+    if (QueryPerfCounterFloat(state, state.perfPathDeviceCpuUtilWorst, state.perfDeviceCpuUtilWorst)) mask |= (1u << 8);
+    if (QueryPerfCounterFloat(state, state.perfPathDeviceGpuUtil, state.perfDeviceGpuUtil)) mask |= (1u << 9);
+    state.perfMetricsValidMask = mask;
+}
+
+// F8 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, 8.2): declara à ADPF a duração de frame
+// alvo e a thread que faz o trabalho critico — mesma thread ja registrada via
+// xrSetAndroidApplicationThreadKHR logo antes desta chamada (ver comentario la: "unica thread
+// nativa do app"). API 33+; checa a versao do SISTEMA em runtime (nao so a de compilacao),
+// porque o app roda em minSdk 26 mesmo com o manifest limitando supportedDevices a quest3/
+// quest3s (que reportam API 34 — ver relatorio 8.2 — mas o build nao pode assumir isso).
+void SetupAdpfSession(AppState& state) {
+    if (android_get_device_api_level() < 33) {
+        LOGI("ADPF: API do dispositivo < 33 — sessao nao criada");
+        return;
+    }
+    void* lib = dlopen("libandroid.so", RTLD_NOW);
+    if (lib == nullptr) {
+        LOGW("ADPF: dlopen(libandroid.so) falhou");
+        return;
+    }
+    state.adpfGetManager = reinterpret_cast<AppState::PFN_APerformanceHint_getManager>(
+        dlsym(lib, "APerformanceHint_getManager"));
+    state.adpfCreateSession = reinterpret_cast<AppState::PFN_APerformanceHint_createSession>(
+        dlsym(lib, "APerformanceHint_createSession"));
+    state.adpfUpdateTargetWorkDuration = reinterpret_cast<AppState::PFN_APerformanceHint_updateTargetWorkDuration>(
+        dlsym(lib, "APerformanceHint_updateTargetWorkDuration"));
+    state.adpfReportActualWorkDuration = reinterpret_cast<AppState::PFN_APerformanceHint_reportActualWorkDuration>(
+        dlsym(lib, "APerformanceHint_reportActualWorkDuration"));
+
+    if (state.adpfGetManager == nullptr || state.adpfCreateSession == nullptr ||
+        state.adpfUpdateTargetWorkDuration == nullptr || state.adpfReportActualWorkDuration == nullptr) {
+        LOGW("ADPF: dlsym falhou para um ou mais simbolos — indisponivel neste runtime");
+        return;
+    }
+
+    APerformanceHintManager* manager = state.adpfGetManager();
+    if (manager == nullptr) {
+        LOGW("ADPF: APerformanceHint_getManager() devolveu nulo — indisponivel neste runtime");
+        return;
+    }
+    float refreshRate = (state.displayRefreshRate > 0.0f) ? state.displayRefreshRate : 90.0f;
+    int64_t targetNs = static_cast<int64_t>((1000.0f / refreshRate) * 1e6f);
+    pid_t tid = gettid();
+    APerformanceHintSession* session = state.adpfCreateSession(manager, &tid, 1, targetNs);
+    if (session == nullptr) {
+        LOGW("ADPF: APerformanceHint_createSession falhou");
+        return;
+    }
+    state.adpfManager = manager;
+    state.adpfSession = session;
+    state.adpfLastTargetRefreshRate = refreshRate;
+    state.supportsAdpf = true;
+    LOGI("ADPF: sessao criada (tid=%d, target=%.2fHz/%lldns)", (int)tid, refreshRate, (long long)targetNs);
+}
+
+// Chamado uma vez por frame, junto da medicao de frameMs (RenderFrame) — reporta ao SO quanto
+// tempo o frame realmente levou, pra ele ajustar escalonamento/frequencia de CPU/GPU pro
+// proximo. Atualiza o alvo declarado so quando a taxa de atualizacao muda (troca de 72/90/
+//120Hz), nao a cada frame.
+void ReportAdpfWorkDuration(AppState& state, float frameMs) {
+    if (!state.supportsAdpf || state.adpfSession == nullptr) return;
+
+    if (state.displayRefreshRate > 0.0f && state.displayRefreshRate != state.adpfLastTargetRefreshRate) {
+        int64_t targetNs = static_cast<int64_t>((1000.0f / state.displayRefreshRate) * 1e6f);
+        state.adpfUpdateTargetWorkDuration(state.adpfSession, targetNs);
+        state.adpfLastTargetRefreshRate = state.displayRefreshRate;
+    }
+
+    int64_t actualNs = static_cast<int64_t>(frameMs * 1e6f);
+    if (actualNs > 0) {
+        state.adpfReportActualWorkDuration(state.adpfSession, actualNs);
+    }
+}
+
+// Sincroniza o estado efetivo com get_passthrough_enabled() e formato de tela.
+// Nao usa OXR() (que aborta): start/resume/pause podem falhar transitoriamente
+// numa transicao de foco (sessao nao rodando) — logamos e tentamos de novo no
+// proximo poll.
+void UpdatePassthrough(AppState& state) {
+    if (!state.supportsPassthrough || state.passthroughLayer == XR_NULL_HANDLE) return;
+
+    const bool userDesired = get_passthrough_enabled() != 0;
+    // Otimização de GPU (Phase 0.3 Seção 2): em modos 360° esféricos a geometria opaca
+    // cobre 100% do campo de visão, pausamos a camada para economizar 15-20% de GPU.
+    const bool desired = userDesired && !Is360Mode(state.screenMode);
+
+    if (desired != state.passthroughActive) {
+        if (desired) {
+            XrResult rs = state.pfnPassthroughStartFB(state.passthrough);
+            XrResult rl = state.pfnPassthroughLayerResumeFB(state.passthroughLayer);
+            if (XR_FAILED(rs) || XR_FAILED(rl)) {
+                LOGW("Passthrough: falha ao ativar (start=%d resume=%d) — nova tentativa no proximo poll", rs, rl);
+                return;
+            }
+            state.passthroughActive = true;
+            state.appliedPassthroughOpacity = -1.0f; // Força reaplicação de estilo
+            state.appliedPassthroughEdge = 0xFFFFFFFF;
+            LOGI("Passthrough: ATIVADO (mundo real visivel atras do video)");
+        } else {
+            XrResult rl = state.pfnPassthroughLayerPauseFB(state.passthroughLayer);
+            XrResult rs = state.pfnPassthroughPauseFB(state.passthrough);
+            if (XR_FAILED(rl) || XR_FAILED(rs)) {
+                LOGW("Passthrough: falha ao desativar (pauseLayer=%d pause=%d) — nova tentativa no proximo poll", rl, rs);
+                return;
+            }
+            state.passthroughActive = false;
+            LOGI("Passthrough: DESATIVADO (ambiente virtual)");
+        }
+    }
+
+    // T2.4: Aplicação de estilo/opacidade e edge rendering
+    if (state.passthroughActive && state.pfnPassthroughLayerSetStyleFB != nullptr) {
+        float opacity = get_passthrough_opacity();
+        uint32_t edge = get_passthrough_edge_rendering();
+        if (fabsf(opacity - state.appliedPassthroughOpacity) > 0.005f || edge != state.appliedPassthroughEdge) {
+            XrPassthroughStyleFB style{XR_TYPE_PASSTHROUGH_STYLE_FB};
+            style.next = nullptr;
+            style.textureOpacityFactor = std::max(0.0f, std::min(1.0f, opacity));
+            if (edge != 0) {
+                style.edgeColor = {0.0f, 0.8f, 1.0f, 1.0f}; // Ciano sutil de alto contraste
+            } else {
+                style.edgeColor = {0.0f, 0.0f, 0.0f, 0.0f};
+            }
+            XrResult r = state.pfnPassthroughLayerSetStyleFB(state.passthroughLayer, &style);
+            if (XR_SUCCEEDED(r)) {
+                state.appliedPassthroughOpacity = opacity;
+                state.appliedPassthroughEdge = edge;
+                LOGI("Passthrough: estilo atualizado (opacidade=%.2f, edge=%u)", opacity, edge);
+            }
+        }
+    }
+}
+
+void DestroyPassthrough(AppState& state) {
+    if (state.passthroughLayer != XR_NULL_HANDLE && state.pfnDestroyPassthroughLayerFB != nullptr) {
+        if (state.passthroughActive && state.pfnPassthroughLayerPauseFB != nullptr) {
+            state.pfnPassthroughLayerPauseFB(state.passthroughLayer);
+        }
+        state.pfnDestroyPassthroughLayerFB(state.passthroughLayer);
+        state.passthroughLayer = XR_NULL_HANDLE;
+    }
+    if (state.passthrough != XR_NULL_HANDLE && state.pfnDestroyPassthroughFB != nullptr) {
+        if (state.passthroughActive && state.pfnPassthroughPauseFB != nullptr) {
+            state.pfnPassthroughPauseFB(state.passthrough);
+        }
+        state.pfnDestroyPassthroughFB(state.passthrough);
+        state.passthrough = XR_NULL_HANDLE;
+    }
+    state.passthroughActive = false;
+}
+
+// Fase 0.3 Seção 5: Setup e Cleanup de Hand Tracking (XR_EXT_hand_tracking)
+void SetupHandTracking(AppState& state) {
+    if (!state.supportsHandTracking || state.pfnCreateHandTrackerEXT == nullptr) return;
+
+    XrHandTrackerCreateInfoEXT createInfo{XR_TYPE_HAND_TRACKER_CREATE_INFO_EXT};
+    createInfo.handJointSet = XR_HAND_JOINT_SET_DEFAULT_EXT;
+
+    createInfo.hand = XR_HAND_LEFT_EXT;
+    XrResult resL = state.pfnCreateHandTrackerEXT(state.session, &createInfo, &state.leftHandTracker);
+    if (resL == XR_SUCCESS) {
+        LOGI("OpenXR: Hand tracker esquerdo criado com sucesso");
+    } else {
+        LOGE("OpenXR: Falha ao criar hand tracker esquerdo (res=%d)", (int)resL);
+        state.leftHandTracker = XR_NULL_HANDLE;
+    }
+
+    createInfo.hand = XR_HAND_RIGHT_EXT;
+    XrResult resR = state.pfnCreateHandTrackerEXT(state.session, &createInfo, &state.rightHandTracker);
+    if (resR == XR_SUCCESS) {
+        LOGI("OpenXR: Hand tracker direito criado com sucesso");
+    } else {
+        LOGE("OpenXR: Falha ao criar hand tracker direito (res=%d)", (int)resR);
+        state.rightHandTracker = XR_NULL_HANDLE;
+    }
+}
+
+void DestroyHandTracking(AppState& state) {
+    if (state.pfnDestroyHandTrackerEXT != nullptr) {
+        if (state.leftHandTracker != XR_NULL_HANDLE) {
+            state.pfnDestroyHandTrackerEXT(state.leftHandTracker);
+            state.leftHandTracker = XR_NULL_HANDLE;
+        }
+        if (state.rightHandTracker != XR_NULL_HANDLE) {
+            state.pfnDestroyHandTrackerEXT(state.rightHandTracker);
+            state.rightHandTracker = XR_NULL_HANDLE;
+        }
+    }
+    state.leftHandFilter.Reset();
+    state.rightHandFilter.Reset();
+    state.handTrackingActive = false;
+    LOGI("OpenXR: Hand trackers destruidos com sucesso");
+}
+
+void ApplyFoveation(AppState& state, uint32_t level, float verticalOffset) {
     if (state.pfnCreateFoveationProfileFB == nullptr) {
         state.pfnCreateFoveationProfileFB =
             LoadXrFunction<PFN_xrCreateFoveationProfileFB>(state.instance, "xrCreateFoveationProfileFB");
@@ -1154,34 +1985,65 @@ void ApplyFoveation(AppState& state, bool enabled) {
             LoadXrFunction<PFN_xrUpdateSwapchainFB>(state.instance, "xrUpdateSwapchainFB");
     }
 
+    if (state.pfnCreateFoveationProfileFB == nullptr ||
+        state.pfnDestroyFoveationProfileFB == nullptr ||
+        state.pfnUpdateSwapchainFB == nullptr) {
+        LOGW("Foveated Rendering: funcoes de extensao nao disponiveis no runtime");
+        return;
+    }
+
+    XrFoveationLevelFB xrLevel = XR_FOVEATION_LEVEL_NONE_FB;
+    switch (level) {
+        case 1: xrLevel = XR_FOVEATION_LEVEL_LOW_FB; break;
+        case 2: xrLevel = XR_FOVEATION_LEVEL_MEDIUM_FB; break;
+        case 3: xrLevel = XR_FOVEATION_LEVEL_HIGH_FB; break;
+        case 0:
+        default:
+            xrLevel = XR_FOVEATION_LEVEL_NONE_FB;
+            break;
+    }
+
     XrFoveationLevelProfileCreateInfoFB levelInfo{XR_TYPE_FOVEATION_LEVEL_PROFILE_CREATE_INFO_FB};
-    levelInfo.level = enabled ? XR_FOVEATION_LEVEL_MEDIUM_FB : XR_FOVEATION_LEVEL_NONE_FB;
-    levelInfo.verticalOffset = 0.0f;
-    levelInfo.dynamic = XR_FOVEATION_DYNAMIC_LEVEL_ENABLED_FB;
+    levelInfo.level = xrLevel;
+    levelInfo.verticalOffset = verticalOffset;
+    levelInfo.dynamic = XR_FOVEATION_DYNAMIC_DISABLED_FB; // Níveis discretos gerenciados por QualityController (G2/G3)
 
     XrFoveationProfileCreateInfoFB profileInfo{XR_TYPE_FOVEATION_PROFILE_CREATE_INFO_FB};
     profileInfo.next = &levelInfo;
 
     XrFoveationProfileFB newProfile = XR_NULL_HANDLE;
-    OXR(state.pfnCreateFoveationProfileFB(state.session, &profileInfo, &newProfile));
+    XrResult createRes = state.pfnCreateFoveationProfileFB(state.session, &profileInfo, &newProfile);
+    if (XR_FAILED(createRes)) {
+        LOGW("Foveated Rendering: falha em xrCreateFoveationProfileFB (res=%d)", createRes);
+        return;
+    }
 
     XrSwapchainStateFoveationFB swapchainState{XR_TYPE_SWAPCHAIN_STATE_FOVEATION_FB};
     swapchainState.flags = 0;
     swapchainState.profile = newProfile;
+    bool updateFailed = false;
     for (auto& eyeChain : state.eyes) {
-        OXR(state.pfnUpdateSwapchainFB(
-            eyeChain.handle, reinterpret_cast<XrSwapchainStateBaseHeaderFB*>(&swapchainState)));
+        XrResult updateRes = state.pfnUpdateSwapchainFB(
+            eyeChain.handle, reinterpret_cast<XrSwapchainStateBaseHeaderFB*>(&swapchainState));
+        if (XR_FAILED(updateRes)) {
+            LOGW("Foveated Rendering: falha em xrUpdateSwapchainFB (res=%d)", updateRes);
+            updateFailed = true;
+        }
     }
 
-    // So destroi o profile ANTERIOR depois dos swapchains ja apontarem pro
-    // novo — nunca ha uma janela em que um swapchain referencia um profile
-    // destruido.
-    if (state.foveationProfile != XR_NULL_HANDLE) {
-        state.pfnDestroyFoveationProfileFB(state.foveationProfile);
+    if (!updateFailed) {
+        // So destroi o profile ANTERIOR depois dos swapchains ja apontarem pro novo
+        if (state.foveationProfile != XR_NULL_HANDLE) {
+            state.pfnDestroyFoveationProfileFB(state.foveationProfile);
+        }
+        state.foveationProfile = newProfile;
+        state.foveationCurrentlyApplied = (level != 0);
+        state.foveationCurrentlyAppliedLevel = level;
+        state.foveationCurrentlyAppliedOffset = verticalOffset;
+        LOGI("Foveated Rendering: aplicado nivel=%u offset=%.1f (discreto)", level, verticalOffset);
+    } else {
+        state.pfnDestroyFoveationProfileFB(newProfile);
     }
-    state.foveationProfile = newProfile;
-    state.foveationCurrentlyApplied = enabled;
-    LOGI("Foveated Rendering: %s", enabled ? "ativado (MEDIUM, dynamic)" : "desativado");
 }
 
 // Um subpass, um color attachment (o proprio swapchain image), sem depth —
@@ -1467,7 +2329,10 @@ void CreateYcbcrAndVideoPipeline(AppState& state) {
         VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO};
     ycbcrInfo.pNext = &externalFormat;
     ycbcrInfo.format = VK_FORMAT_UNDEFINED; // formato externo via AHardwareBuffer
-    ycbcrInfo.ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_601;
+    // BT.709 e a matriz correta para o conteudo HD/4K/8K que o app foi feito
+    // para tocar (BT.601 e SD e desloca cor perceptivelmente, sobretudo em
+    // tons de pele/vermelhos).
+    ycbcrInfo.ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_709;
     ycbcrInfo.ycbcrRange = VK_SAMPLER_YCBCR_RANGE_ITU_NARROW;
     ycbcrInfo.components = {
         VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
@@ -2603,9 +3468,195 @@ void CreateStereoPipeline(AppState& state) {
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
     VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.stereoFlatPipeline));
 
+    // Terceiro pipeline: Cubemap / EAC na esfera (stereo_cubemap.vert/frag)
+    // Usa topologia TRIANGLE_LIST (index draw da esfera) e o mesmo stereoPipelineLayout.
+    VkShaderModule cubeVertMod, cubeFragMod;
+    smInfo.codeSize = sizeof(kStereoCubemapVertSpirv); smInfo.pCode = reinterpret_cast<const uint32_t*>(kStereoCubemapVertSpirv);
+    VKR(vkCreateShaderModule(state.vkDevice, &smInfo, nullptr, &cubeVertMod));
+    smInfo.codeSize = sizeof(kStereoCubemapFragSpirv); smInfo.pCode = reinterpret_cast<const uint32_t*>(kStereoCubemapFragSpirv);
+    VKR(vkCreateShaderModule(state.vkDevice, &smInfo, nullptr, &cubeFragMod));
+
+    VkPipelineShaderStageCreateInfo cubeStages[2] = {};
+    cubeStages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    cubeStages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    cubeStages[0].module = cubeVertMod; cubeStages[0].pName = "main";
+    cubeStages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    cubeStages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    cubeStages[1].module = cubeFragMod; cubeStages[1].pName = "main";
+
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    pipeInfo.pStages = cubeStages;
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.stereoCubemapPipeline));
+
+    vkDestroyShaderModule(state.vkDevice, cubeVertMod, nullptr);
+    vkDestroyShaderModule(state.vkDevice, cubeFragMod, nullptr);
+
     vkDestroyShaderModule(state.vkDevice, vertMod, nullptr);
     vkDestroyShaderModule(state.vkDevice, fragMod, nullptr);
-    LOGI("Estagio 5: pipeline estereo/esfera criado");
+    LOGI("Estagio 5: pipeline estereo/esfera e cubemap/EAC criados");
+}
+
+// Fase 0.3 Seção 8: Fotos 360° e Fotos 3D estéreo (T8.3, T8.4)
+static void DestroyPhotoTexture(AppState& state) {
+    if (state.photoImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.photoImageView, nullptr);
+        state.photoImageView = VK_NULL_HANDLE;
+    }
+    if (state.photoImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.photoImage, nullptr);
+        state.photoImage = VK_NULL_HANDLE;
+    }
+    if (state.photoImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.photoImageMemory, nullptr);
+        state.photoImageMemory = VK_NULL_HANDLE;
+    }
+    state.photoTexWidth = 0;
+    state.photoTexHeight = 0;
+    state.photoTextureReady = false;
+}
+
+static void EnsurePhotoTexture(AppState& state, uint32_t width, uint32_t height) {
+    if (!state.photoTextureReady || state.photoTexWidth != width || state.photoTexHeight != height) {
+        DestroyPhotoTexture(state);
+        CreateUiImage(state, width, height, state.photoImage, state.photoImageMemory, state.photoImageView);
+        state.photoTexWidth = width;
+        state.photoTexHeight = height;
+        state.photoTextureReady = true;
+
+        VkDescriptorImageInfo imgInfo{};
+        imgInfo.sampler     = state.uiSampler;
+        imgInfo.imageView   = state.photoImageView;
+        imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet          = state.photoDescriptorSet;
+        write.dstBinding      = 0;
+        write.descriptorCount = 1;
+        write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo      = &imgInfo;
+        vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+    }
+}
+
+static void CreatePhotoPipeline(AppState& state) {
+    // Descriptor set layout com sampler imutável uiSampler (RGBA)
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding         = 0;
+    binding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    binding.pImmutableSamplers = &state.uiSampler;
+
+    VkDescriptorSetLayoutCreateInfo dsLayout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    dsLayout.bindingCount = 1;
+    dsLayout.pBindings    = &binding;
+    VKR(vkCreateDescriptorSetLayout(state.vkDevice, &dsLayout, nullptr, &state.photoDescriptorSetLayout));
+
+    // Descriptor Pool para foto
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    poolInfo.maxSets       = 2;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes    = &poolSize;
+    VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.photoDescriptorPool));
+
+    // Alocar descriptor set da foto
+    VkDescriptorSetAllocateInfo dsAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dsAlloc.descriptorPool     = state.photoDescriptorPool;
+    dsAlloc.descriptorSetCount = 1;
+    dsAlloc.pSetLayouts        = &state.photoDescriptorSetLayout;
+    VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.photoDescriptorSet));
+
+    // Pipeline Layout (mesma StereoPushConstants dos shaders stereo)
+    VkPushConstantRange pcRange{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(StereoPushConstants)};
+    VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.setLayoutCount         = 1;
+    layoutInfo.pSetLayouts            = &state.photoDescriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges    = &pcRange;
+    VKR(vkCreatePipelineLayout(state.vkDevice, &layoutInfo, nullptr, &state.photoPipelineLayout));
+
+    VkShaderModule vertMod, fragMod;
+    VkShaderModuleCreateInfo smInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
+    smInfo.codeSize = sizeof(kStereoVertSpirv); smInfo.pCode = reinterpret_cast<const uint32_t*>(kStereoVertSpirv);
+    VKR(vkCreateShaderModule(state.vkDevice, &smInfo, nullptr, &vertMod));
+    smInfo.codeSize = sizeof(kStereoFragSpirv); smInfo.pCode = reinterpret_cast<const uint32_t*>(kStereoFragSpirv);
+    VKR(vkCreateShaderModule(state.vkDevice, &smInfo, nullptr, &fragMod));
+
+    VkPipelineShaderStageCreateInfo stages[2] = {};
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertMod; stages[0].pName = "main";
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragMod; stages[1].pName = "main";
+
+    VkVertexInputBindingDescription bindDesc{0, 5 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attrs[2] = {
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
+        {1, 0, VK_FORMAT_R32G32_SFLOAT, 3 * sizeof(float)},
+    };
+    VkPipelineVertexInputStateCreateInfo vtxInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vtxInput.vertexBindingDescriptionCount   = 1;
+    vtxInput.pVertexBindingDescriptions      = &bindDesc;
+    vtxInput.vertexAttributeDescriptionCount = 2;
+    vtxInput.pVertexAttributeDescriptions    = attrs;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vp.viewportCount = 1; vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rast{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rast.polygonMode = VK_POLYGON_MODE_FILL;
+    rast.cullMode    = VK_CULL_MODE_FRONT_BIT; // Esfera vista de dentro
+    rast.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rast.lineWidth   = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState attState{};
+    attState.blendEnable         = VK_FALSE;
+    attState.colorWriteMask      = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                   VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo blend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    blend.attachmentCount = 1; blend.pAttachments = &attState;
+
+    VkDynamicState dynStates[2] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dyn.dynamicStateCount = 2; dyn.pDynamicStates = dynStates;
+
+    VkPipelineDepthStencilStateCreateInfo dsState{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    dsState.depthTestEnable  = VK_FALSE;
+    dsState.depthWriteEnable = VK_FALSE;
+
+    VkGraphicsPipelineCreateInfo pipeInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipeInfo.stageCount          = 2;
+    pipeInfo.pStages             = stages;
+    pipeInfo.pVertexInputState   = &vtxInput;
+    pipeInfo.pInputAssemblyState = &ia;
+    pipeInfo.pViewportState      = &vp;
+    pipeInfo.pRasterizationState = &rast;
+    pipeInfo.pMultisampleState   = &ms;
+    pipeInfo.pColorBlendState    = &blend;
+    pipeInfo.pDepthStencilState  = &dsState;
+    pipeInfo.pDynamicState       = &dyn;
+    pipeInfo.layout              = state.photoPipelineLayout;
+    pipeInfo.renderPass          = state.renderPass;
+
+    // 1. Pipeline de foto para esfera 360/180
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.photoStereoPipeline));
+
+    // 2. Pipeline de foto para quad plano (TRIANGLE_STRIP, cull none para Flat/SBS/OU)
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+    rast.cullMode = VK_CULL_MODE_NONE;
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.photoStereoFlatPipeline));
+
+    vkDestroyShaderModule(state.vkDevice, vertMod, nullptr);
+    vkDestroyShaderModule(state.vkDevice, fragMod, nullptr);
+    LOGI("CreatePhotoPipeline: pipelines de foto estatica criados com sucesso");
 }
 
 // Cria um vertex buffer simples para o beam (2 vertices: inicio + fim).
@@ -3009,24 +4060,149 @@ void CreateSubtitlePipeline(AppState& state) {
     LOGI("Estagio 6: pipeline de legendas MSDF criado com sucesso");
 }
 
-void UpdateSubtitleMesh(AppState& state, const char* text) {
+static void EnsurePgsSubtitleTexture(AppState& state, uint32_t width, uint32_t height) {
+    if (!state.pgsSubtitleReady || state.pgsSubtitleTexWidth != width || state.pgsSubtitleTexHeight != height) {
+        if (state.pgsSubtitleImageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(state.vkDevice, state.pgsSubtitleImageView, nullptr);
+            state.pgsSubtitleImageView = VK_NULL_HANDLE;
+        }
+        if (state.pgsSubtitleImage != VK_NULL_HANDLE) {
+            vkDestroyImage(state.vkDevice, state.pgsSubtitleImage, nullptr);
+            state.pgsSubtitleImage = VK_NULL_HANDLE;
+        }
+        if (state.pgsSubtitleImageMemory != VK_NULL_HANDLE) {
+            vkFreeMemory(state.vkDevice, state.pgsSubtitleImageMemory, nullptr);
+            state.pgsSubtitleImageMemory = VK_NULL_HANDLE;
+        }
+        CreateUiImage(state, width, height, state.pgsSubtitleImage, state.pgsSubtitleImageMemory, state.pgsSubtitleImageView);
+        state.pgsSubtitleTexWidth = width;
+        state.pgsSubtitleTexHeight = height;
+        state.pgsSubtitleReady = true;
+    }
+
+    if (state.pgsSubtitleDescriptorPool == VK_NULL_HANDLE) {
+        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1};
+        VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+        poolInfo.maxSets = 1;
+        poolInfo.poolSizeCount = 1;
+        poolInfo.pPoolSizes = &poolSize;
+        VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.pgsSubtitleDescriptorPool));
+
+        VkDescriptorSetAllocateInfo dsAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        dsAlloc.descriptorPool = state.pgsSubtitleDescriptorPool;
+        dsAlloc.descriptorSetCount = 1;
+        dsAlloc.pSetLayouts = &state.uiDescriptorSetLayout;
+        VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.pgsSubtitleDescriptorSet));
+    }
+
+    VkDescriptorImageInfo imgInfo{};
+    imgInfo.sampler = state.uiSampler;
+    imgInfo.imageView = state.pgsSubtitleImageView;
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = state.pgsSubtitleDescriptorSet;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imgInfo;
+    vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+}
+
+static bool DrawPgsSubtitle(AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
+    if (state.uiPipeline == VK_NULL_HANDLE || state.videoVertexBuffer == VK_NULL_HANDLE) {
+        return false;
+    }
+
+    vrplayer::PgsSubtitleInfo pgsInfo{};
+    if (!get_active_pgs_info(&pgsInfo.x, &pgsInfo.y, &pgsInfo.width, &pgsInfo.height,
+                             &pgsInfo.screen_width, &pgsInfo.screen_height)) {
+        state.lastPgsId = 0;
+        return false;
+    }
+
+    uint64_t currentPgsId = get_active_pgs_id();
+    if (currentPgsId != state.lastPgsId || !state.pgsSubtitleReady ||
+        state.pgsSubtitleTexWidth != pgsInfo.width || state.pgsSubtitleTexHeight != pgsInfo.height) {
+        EnsurePgsSubtitleTexture(state, pgsInfo.width, pgsInfo.height);
+        std::vector<uint8_t> pgsRgba(static_cast<size_t>(pgsInfo.width) * pgsInfo.height * 4);
+        uint32_t copied = copy_active_pgs_rgba(pgsRgba.data(), pgsRgba.size());
+        if (copied > 0) {
+            UpdateUiImageFromBytes(state, pgsRgba.data(), pgsInfo.width, pgsInfo.height, state.pgsSubtitleImage);
+            state.lastPgsId = currentPgsId;
+        }
+    }
+
+    if (!state.pgsSubtitleReady) {
+        return false;
+    }
+
+    const bool sphereMode = IsSphereMode(state.screenMode);
+    float quadPosX = 0.0f, quadPosY = 0.0f, quadScaleX = 0.0f, quadScaleY = 0.0f;
+    if (!vrplayer::ComputePgsQuadBounds(pgsInfo, state.screenScaleX, state.screenScaleY, sphereMode,
+                                       quadPosX, quadPosY, quadScaleX, quadScaleY)) {
+        return false;
+    }
+
+    Mat4 pgsModel;
+    if (sphereMode) {
+        Mat4 pgsTrans = Mat4Translation(headCenter.x + quadPosX, headCenter.y + quadPosY, headCenter.z - 2.2f);
+        pgsModel = Mat4Multiply(pgsTrans, Mat4Scale(quadScaleX * state.subtitleScale, quadScaleY * state.subtitleScale, 1.0f));
+    } else {
+        SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
+        Mat4 pgsTrans = Mat4Multiply(scene.screenModelNoScale, Mat4Translation(quadPosX, quadPosY, 0.04f));
+        pgsModel = Mat4Multiply(pgsTrans, Mat4Scale(quadScaleX * state.subtitleScale, quadScaleY * state.subtitleScale, 1.0f));
+    }
+
+    Mat4 pgsMvp = Mat4Multiply(Mat4Multiply(proj, view), pgsModel);
+
+    VkDeviceSize offset = 0;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
+    vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        state.uiPipelineLayout, 0, 1, &state.pgsSubtitleDescriptorSet, 0, nullptr);
+
+    UiPushConstants upc{};
+    upc.mvp = pgsMvp;
+    upc.alpha = 1.0f;
+    vkCmdPushConstants(cmd, state.uiPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(upc), &upc);
+    vkCmdDraw(cmd, 4, 1, 0, 0);
+    CountDrawCall(4);
+
+    return true;
+}
+
+void UpdateSubtitleMesh(AppState& state, const char* text,
+                        const vrplayer::AssSpanFfi* spans = nullptr,
+                        uint32_t spanCount = 0,
+                        uint32_t alignment = 2) {
     if (!text || text[0] == '\0' || !state.subtitleVertexMemory) {
         state.subtitleIndexCount = 0;
         return;
     }
 
-    std::vector<std::string> lines;
+    struct LineSpan {
+        size_t startByte;
+        std::string content;
+    };
+
+    std::vector<LineSpan> lines;
     std::string currentLine;
-    for (const char* p = text; *p; ++p) {
+    size_t lineStartByte = 0;
+    size_t curByte = 0;
+
+    for (const char* p = text; *p; ++p, ++curByte) {
         if (*p == '\n') {
-            lines.push_back(currentLine);
+            lines.push_back({lineStartByte, currentLine});
             currentLine.clear();
+            lineStartByte = curByte + 1;
         } else if (*p != '\r') {
             currentLine.push_back(*p);
         }
     }
     if (!currentLine.empty()) {
-        lines.push_back(currentLine);
+        lines.push_back({lineStartByte, currentLine});
     }
 
     if (lines.empty()) {
@@ -3043,18 +4219,28 @@ void UpdateSubtitleMesh(AppState& state, const char* text) {
     const float lineHeight = 0.11f;
     float startY = ((float)lines.size() - 1.0f) * lineHeight * 0.5f;
 
+    // Calcular largura de cada linha e maxLineWidth
+    std::vector<float> lineWidths(lines.size(), 0.0f);
+    float maxLineWidth = 0.0f;
     for (size_t lineIdx = 0; lineIdx < lines.size(); ++lineIdx) {
-        const std::string& line = lines[lineIdx];
-        float lineWidth = 0.0f;
-        for (unsigned char c : line) {
+        float lw = 0.0f;
+        for (unsigned char c : lines[lineIdx].content) {
             const vrplayer::GlyphMetric* gm = vrplayer::FindGlyphMetric((uint32_t)c);
-            lineWidth += gm->advance * charScale;
+            lw += gm->advance * charScale;
         }
+        lineWidths[lineIdx] = lw;
+        if (lw > maxLineWidth) {
+            maxLineWidth = lw;
+        }
+    }
 
-        float cursorX = -lineWidth * 0.5f;
+    for (size_t lineIdx = 0; lineIdx < lines.size(); ++lineIdx) {
+        const auto& line = lines[lineIdx];
+        float cursorX = vrplayer::ComputeAssLineCursorX(alignment, lineWidths[lineIdx], maxLineWidth);
         float cursorY = startY - (float)lineIdx * lineHeight;
+        size_t charByteOffset = line.startByte;
 
-        for (unsigned char c : line) {
+        for (unsigned char c : line.content) {
             const vrplayer::GlyphMetric* gm = vrplayer::FindGlyphMetric((uint32_t)c);
             if (gm->width > 0.0f && gm->height > 0.0f) {
                 float x0 = cursorX + gm->bearingX * charScale;
@@ -3062,12 +4248,23 @@ void UpdateSubtitleMesh(AppState& state, const char* text) {
                 float x1 = x0 + gm->width * charScale;
                 float y1 = y0 - gm->height * charScale;
 
+                // Determinar cor do vértice pelo span correspondente (T7.2)
+                float vColor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+                const vrplayer::AssSpanFfi* span = vrplayer::FindSpanForByteOffset(
+                    spans, spanCount, static_cast<uint32_t>(charByteOffset));
+                if (span) {
+                    vColor[0] = static_cast<float>(span->r) / 255.0f;
+                    vColor[1] = static_cast<float>(span->g) / 255.0f;
+                    vColor[2] = static_cast<float>(span->b) / 255.0f;
+                    vColor[3] = static_cast<float>(span->a) / 255.0f;
+                }
+
                 uint32_t baseIdx = (uint32_t)vertices.size();
                 // 4 vértices
-                vertices.push_back({{x0, y0, 0.0f}, {gm->u0, gm->v0}, {1.0f, 1.0f, 1.0f, 1.0f}});
-                vertices.push_back({{x1, y0, 0.0f}, {gm->u1, gm->v0}, {1.0f, 1.0f, 1.0f, 1.0f}});
-                vertices.push_back({{x1, y1, 0.0f}, {gm->u1, gm->v1}, {1.0f, 1.0f, 1.0f, 1.0f}});
-                vertices.push_back({{x0, y1, 0.0f}, {gm->u0, gm->v1}, {1.0f, 1.0f, 1.0f, 1.0f}});
+                vertices.push_back({{x0, y0, 0.0f}, {gm->u0, gm->v0}, {vColor[0], vColor[1], vColor[2], vColor[3]}});
+                vertices.push_back({{x1, y0, 0.0f}, {gm->u1, gm->v0}, {vColor[0], vColor[1], vColor[2], vColor[3]}});
+                vertices.push_back({{x1, y1, 0.0f}, {gm->u1, gm->v1}, {vColor[0], vColor[1], vColor[2], vColor[3]}});
+                vertices.push_back({{x0, y1, 0.0f}, {gm->u0, gm->v1}, {vColor[0], vColor[1], vColor[2], vColor[3]}});
 
                 // 6 índices (dois triângulos)
                 indices.push_back(baseIdx + 0);
@@ -3078,6 +4275,7 @@ void UpdateSubtitleMesh(AppState& state, const char* text) {
                 indices.push_back(baseIdx + 0);
             }
             cursorX += gm->advance * charScale;
+            charByteOffset++;
         }
     }
 
@@ -3099,36 +4297,81 @@ void UpdateSubtitleMesh(AppState& state, const char* text) {
 }
 
 static void DrawSubtitles(AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
+    // 1. T7.4: Se houver legenda PGS ativa, renderiza via quad de textura RGBA e encerra
+    if (DrawPgsSubtitle(state, cmd, proj, view, headCenter)) {
+        if (!state.lastSubtitleText.empty()) {
+            state.subtitleIndexCount = 0;
+            state.lastSubtitleText.clear();
+        }
+        return;
+    }
+
     if (!state.subtitlePipeline) return;
 
-    char subTextBuf[1024];
-    uint32_t subLen = get_active_subtitle_text(subTextBuf, sizeof(subTextBuf));
+    // 2. Consulta se há legenda ASS ou texto simples (T7.2)
+    vrplayer::AssSubtitleInfo assInfo{};
+    char subTextBuf[2048];
+    vrplayer::AssSpanFfi assSpans[64];
+    bool hasAss = get_active_ass_info(&assInfo, subTextBuf, sizeof(subTextBuf), assSpans, 64);
 
-    if (subLen > 0) {
-        if (state.lastSubtitleText != subTextBuf) {
-            UpdateSubtitleMesh(state, subTextBuf);
+    if (hasAss) {
+        bool needsMeshUpdate = (state.lastSubtitleText != subTextBuf ||
+                                state.lastSubtitleStartMs != assInfo.start_ms);
+        if (needsMeshUpdate) {
+            UpdateSubtitleMesh(state, subTextBuf, assSpans, assInfo.span_count, assInfo.alignment);
             state.lastSubtitleText = subTextBuf;
+            state.lastSubtitleStartMs = assInfo.start_ms;
+            state.currentAssAlignment = assInfo.alignment;
+            state.currentAssHasPos = (assInfo.has_pos != 0);
+            state.currentAssPosX = assInfo.pos_x;
+            state.currentAssPosY = assInfo.pos_y;
+            state.currentAssPlayResX = assInfo.play_res_x;
+            state.currentAssPlayResY = assInfo.play_res_y;
         }
-    } else if (!state.lastSubtitleText.empty()) {
-        state.subtitleIndexCount = 0;
-        state.lastSubtitleText.clear();
+    } else {
+        // Fallback para texto simples (SRT / WebVTT)
+        uint32_t subLen = get_active_subtitle_text(subTextBuf, sizeof(subTextBuf));
+        if (subLen > 0) {
+            if (state.lastSubtitleText != subTextBuf) {
+                UpdateSubtitleMesh(state, subTextBuf, nullptr, 0, 2);
+                state.lastSubtitleText = subTextBuf;
+                state.lastSubtitleStartMs = 0;
+                state.currentAssAlignment = 2;
+                state.currentAssHasPos = false;
+            }
+        } else if (!state.lastSubtitleText.empty()) {
+            state.subtitleIndexCount = 0;
+            state.lastSubtitleText.clear();
+            state.lastSubtitleStartMs = 0;
+        }
     }
 
     if (state.subtitleIndexCount == 0) return;
 
     const bool sphereMode = IsSphereMode(state.screenMode);
 
+    // Calcular deslocamento do modelo baseado em ASS (\pos ou \an) ou centro inferior para SRT
+    float subXOffset = 0.0f;
+    float subYOffset = 0.0f;
+    vrplayer::AssSubtitleInfo currentInfo{};
+    currentInfo.alignment = state.currentAssAlignment;
+    currentInfo.has_pos = state.currentAssHasPos ? 1 : 0;
+    currentInfo.pos_x = state.currentAssPosX;
+    currentInfo.pos_y = state.currentAssPosY;
+    currentInfo.play_res_x = state.currentAssPlayResX;
+    currentInfo.play_res_y = state.currentAssPlayResY;
+    vrplayer::ComputeAssOffsets(currentInfo, state.screenScaleX, state.screenScaleY, sphereMode,
+                                subXOffset, subYOffset);
+
     Mat4 subModel;
     if (sphereMode) {
         // Modo esférico (360°/180°): Lazy Follow suave (~0.5s)
-        // Posicionado a 2.2m à frente e ligeiramente abaixo da linha de visão
-        Mat4 subTrans = Mat4Translation(headCenter.x, headCenter.y - 0.40f, headCenter.z - 2.2f);
+        Mat4 subTrans = Mat4Translation(headCenter.x + subXOffset, headCenter.y + subYOffset, headCenter.z - 2.2f);
         subModel = Mat4Multiply(subTrans, Mat4Scale(state.subtitleScale, state.subtitleScale, 1.0f));
     } else {
-        // Modo plano (2D, SBS, OU): posicionado na base da tela virtual
+        // Modo plano (2D, SBS, OU): posicionado relativo à tela virtual
         SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
-        float subYOffset = -state.screenScaleY * 0.42f;
-        Mat4 subTrans = Mat4Multiply(scene.screenModelNoScale, Mat4Translation(0.0f, subYOffset, 0.04f));
+        Mat4 subTrans = Mat4Multiply(scene.screenModelNoScale, Mat4Translation(subXOffset, subYOffset, 0.04f));
         subModel = Mat4Multiply(subTrans, Mat4Scale(state.subtitleScale, state.subtitleScale, 1.0f));
     }
 
@@ -3154,6 +4397,7 @@ static void DrawSubtitles(AppState& state, VkCommandBuffer cmd, const Mat4& proj
         0, sizeof(spc), &spc);
 
     vkCmdDrawIndexed(cmd, state.subtitleIndexCount, 1, 0, 0, 0);
+    CountDrawCallIndexed(state.subtitleIndexCount);
 }
 
 void CreateCommandResources(AppState& state) {
@@ -3262,6 +4506,7 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
                 0, sizeof(beamPush), &beamPush);
 
             vkCmdDraw(cmd, 2, 1, 0, 0); // 2 vertices para a linha
+            CountDrawCall(2);
         } // !skipBeam
     }
 
@@ -3288,17 +4533,27 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
 
         vkCmdDraw(cmd, state.feedbackVertexCount[kindIndex], 1,
                   state.feedbackFirstVertex[kindIndex], 0);
+        CountDrawCall(state.feedbackVertexCount[kindIndex]);
     }
 
     // Desenho de Legendas MSDF (T9.3)
     DrawSubtitles(state, cmd, proj, view, headCenter);
 }
 
+// Fase 0.3 Seção 2: alpha do clear do eye buffer. Com passthrough ativo o
+// fundo (tudo que não é o quad/esfera de vídeo) precisa ser transparente
+// (alpha 0) pra o compositor revelar o mundo real atrás; sem passthrough,
+// alpha 1 (opaco), comportamento histórico.
+static inline float PassthroughEnvAlpha(const AppState& state) {
+    return state.passthroughActive ? 0.0f : 1.0f;
+}
+
 void RecordFallbackQuad(
     AppState& state, VkCommandBuffer cmd, VkFramebuffer framebuffer, VkExtent2D extent, const Mat4& mvp,
     const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
     VkClearValue clearValue{};
-    clearValue.color = {{0.02f, 0.02f, 0.05f, 1.0f}}; // preto quase puro — ambiente escuro de cinema
+    // preto quase puro — ambiente escuro de cinema (alpha 0 quando passthrough ativo)
+    clearValue.color = {{0.02f, 0.02f, 0.05f, PassthroughEnvAlpha(state)}};
 
     VkRenderPassBeginInfo renderPassBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     renderPassBegin.renderPass = state.renderPass;
@@ -3335,6 +4590,7 @@ void RecordFallbackQuad(
         &pushConstants);
 
     vkCmdDraw(cmd, 4, 1, 0, 0);
+    CountDrawCall(4);
 
     DrawUiQuads(state, cmd, proj, view, headCenter);
 
@@ -3579,7 +4835,8 @@ void RecordVideoFlat(
         0, 0, nullptr, 0, nullptr, 1, &imgBarrier);
 
     VkClearValue clearValue{};
-    clearValue.color = {{0.0f, 0.0f, 0.0f, 1.0f}}; // preto ao redor do video
+    // preto ao redor do video (alpha 0 quando passthrough ativo — revela o mundo real)
+    clearValue.color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
 
     VkRenderPassBeginInfo renderPassBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     renderPassBegin.renderPass = state.renderPass;
@@ -3613,12 +4870,14 @@ void RecordVideoFlat(
     pc.mvp = mvp;
     pc.sharpness = state.upscalingSharpness;
     pc.upscalingMode = static_cast<int>(state.upscalingMode);
+    pc.isHdr = state.isHdr ? 1 : 0;
     vkCmdPushConstants(
         cmd, state.videoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(pc), &pc);
 
     vkCmdDraw(cmd, 4, 1, 0, 0);
+    CountDrawCall(4);
 
     // Preview de arrasto (T-seek-ux): mesmo transform do quad de video
     // (Flat2D), reaproveitando o pipeline de UI (RGBA8 simples, sem YCbCr).
@@ -3634,6 +4893,7 @@ void RecordVideoFlat(
         vkCmdPushConstants(cmd, state.uiPipelineLayout,
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
         vkCmdDraw(cmd, 4, 1, 0, 0);
+        CountDrawCall(4);
     }
 
     DrawUiQuads(state, cmd, proj, view, headCenter);
@@ -3672,17 +4932,22 @@ void RecordStereoFrame(
     VkRect2D scissor{{0,0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-        sphereMode ? state.stereoPipeline : state.stereoFlatPipeline);
+    const bool cubemapMode = IsCubemapMode(state.screenMode);
+    VkPipeline targetPipeline = cubemapMode ? state.stereoCubemapPipeline
+                              : (sphereMode ? state.stereoPipeline : state.stereoFlatPipeline);
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, targetPipeline);
 
     StereoPushConstants spc{};
-    spc.mvp          = sphereMode ? sphereMvp : mvp;
-    spc.eyeIndex     = sp.eyeIndex;
-    spc.swapEyes     = sp.swapEyes;
-    spc.stereoLayout = sp.stereoLayout;
-    spc.polar180     = sp.polar180;
-    spc.sharpness    = state.upscalingSharpness;
-    spc.upscalingMode = static_cast<int>(state.upscalingMode);
+    spc.mvp            = sphereMode ? sphereMvp : mvp;
+    spc.eyeIndex       = sp.eyeIndex;
+    spc.swapEyes       = sp.swapEyes;
+    spc.stereoLayout   = sp.stereoLayout;
+    spc.polar180       = sp.polar180;
+    spc.sharpness      = state.upscalingSharpness;
+    spc.upscalingMode  = static_cast<int>(state.upscalingMode);
+    spc.cubemapLayout  = sp.cubemapLayout;
+    spc.projectionType = sp.projectionType;
+    spc.isHdr          = state.isHdr ? 1 : 0;
     vkCmdPushConstants(cmd, state.stereoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(spc), &spc);
@@ -3695,10 +4960,12 @@ void RecordStereoFrame(
         vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
         vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
         vkCmdDrawIndexed(cmd, state.sphereIndexCount, 1, 0, 0, 0);
+        CountDrawCallIndexed(state.sphereIndexCount);
     } else {
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
         vkCmdDraw(cmd, 4, 1, 0, 0);
+        CountDrawCall(4);
 
         if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
             VkDeviceSize ovOffset = 0;
@@ -3712,7 +4979,69 @@ void RecordStereoFrame(
             vkCmdPushConstants(cmd, state.uiPipelineLayout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
             vkCmdDraw(cmd, 4, 1, 0, 0);
+            CountDrawCall(4);
         }
+    }
+
+    DrawUiQuads(state, cmd, proj, view, headCenter);
+
+    vkCmdEndRenderPass(cmd);
+}
+
+// Fase 0.3 Seção 8: Renderiza foto estática (360 na esfera ou Flat/SBS/OU no quad)
+void RecordPhotoFrame(
+    AppState& state, VkCommandBuffer cmd, VkFramebuffer fb, VkExtent2D extent,
+    const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter,
+    bool sphereMode, int eye, const StereoParams& sp) {
+
+    VkClearValue clearValue{};
+    clearValue.color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
+
+    VkRenderPassBeginInfo rpBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    rpBegin.renderPass = state.renderPass;
+    rpBegin.framebuffer = fb;
+    rpBegin.renderArea.extent = extent;
+    rpBegin.clearValueCount = 1; rpBegin.pClearValues = &clearValue;
+    vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport vp{0, 0, (float)extent.width, (float)extent.height, 0.0f, 1.0f};
+    vkCmdSetViewport(cmd, 0, 1, &vp);
+    VkRect2D scissor{{0,0}, extent};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        sphereMode ? state.photoStereoPipeline : state.photoStereoFlatPipeline);
+
+    StereoPushConstants spc{};
+    spc.mvp          = mvp;
+    spc.eyeIndex     = sp.eyeIndex;
+    spc.swapEyes       = sp.swapEyes;
+    spc.stereoLayout   = sp.stereoLayout;
+    spc.polar180       = sp.polar180;
+    spc.sharpness      = 0.0f;
+    spc.upscalingMode  = 0;
+    spc.cubemapLayout  = sp.cubemapLayout;
+    spc.projectionType = sp.projectionType;
+    // Sem decode HDR de foto estatica — sempre SDR.
+    spc.isHdr          = 0;
+    vkCmdPushConstants(cmd, state.photoPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        0, sizeof(spc), &spc);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+        state.photoPipelineLayout, 0, 1,
+        &state.photoDescriptorSet, 0, nullptr);
+
+    if (sphereMode) {
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
+        vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+        vkCmdDrawIndexed(cmd, state.sphereIndexCount, 1, 0, 0, 0);
+        CountDrawCallIndexed(state.sphereIndexCount);
+    } else {
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
+        vkCmdDraw(cmd, 4, 1, 0, 0);
+        CountDrawCall(4);
     }
 
     DrawUiQuads(state, cmd, proj, view, headCenter);
@@ -3813,6 +5142,13 @@ void UpdateVideoFrame(AppState& state) {
         // So conta como amostra de cadencia se ja havia um frame antes (nao
         // a latencia de startup do 1o frame, categoria diferente).
         PushVideoGapSample(state, state.msSinceLastVideoFrame);
+
+        // D-02: `videoStallLogged` so fica true se o gap que está terminando agora
+        // excedeu kVideoStallThresholdMs em algum momento (ver populate do log em
+        // RenderFrame) — ou seja, um episodio de stall de verdade acabou de se resolver.
+        if (state.videoStallLogged) {
+            state.videoStallCount++;
+        }
     }
 
     state.lastVideoBuffer = buffer;
@@ -4004,12 +5340,23 @@ void RenderFrame(AppState& state) {
     if (state.lastPredictedDisplayTime > 0) {
         float frameMs = static_cast<float>(frameState.predictedDisplayTime - state.lastPredictedDisplayTime) * 1e-6f;
         state.lastFrameMs = frameMs;
+        {
+            int bucket = kFrameTimeHistogramBucketCount - 1;
+            for (int i = 0; i < kFrameTimeHistogramBucketCount - 1; ++i) {
+                if (frameMs < kFrameTimeHistogramEdgesMs[i]) { bucket = i; break; }
+            }
+            state.frameTimeHistogram[bucket]++;
+        }
+        ReportAdpfWorkDuration(state, frameMs); // F8: declara ao SO a duracao real deste frame
         if (frameMs > 0.0f) {
             float instFps = 1000.0f / frameMs;
             state.smoothedFps = (state.smoothedFps <= 0.0f)
                 ? instFps : (state.smoothedFps * 0.9f + instFps * 0.1f);
-            if (state.smoothedFps > 90.0f) {
-                state.smoothedFps = 90.0f;
+            // P-06: cap contra a taxa real (nao 90 fixo) — acima de 90Hz (taxas estendidas do
+            // Horizon OS >= v2.7) o cap fixo saturava errado, e abaixo de 90 (72Hz) mentia pra
+            // cima (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+            if (state.smoothedFps > state.displayRefreshRate) {
+                state.smoothedFps = state.displayRefreshRate;
             }
         }
         if (frameMs > kFreezeThresholdMs) {
@@ -4020,13 +5367,20 @@ void RenderFrame(AppState& state) {
             LOGW("Video: stutter — frame levou %.1fms", frameMs);
         }
 
-        state.msSinceLastVideoFrame += frameMs;
-        if (state.msSinceLastVideoFrame > kVideoStallThresholdMs) {
-            state.videoFps = 0.0f;
-            if (state.activeVideoFrame != nullptr && !state.videoStallLogged) {
-                state.videoStallLogged = true;
-                LOGW("Video: sem frame novo ha %.0fms (decode/rede travado? ou usuario pausou?)",
-                    state.msSinceLastVideoFrame);
+        // So acumula com o playback tocando: com o video pausado
+        // (get_playback_is_playing() == 0) o decoder Rust legitimamente para de
+        // produzir frames novos — isso NAO e um stall de decode/rede. Sem este
+        // guard, qualquer pausa mais longa que kVideoStallThresholdMs virava um
+        // falso positivo em videoStallCount/video_status ao retomar.
+        if (get_playback_is_playing() != 0) {
+            state.msSinceLastVideoFrame += frameMs;
+            if (state.msSinceLastVideoFrame > kVideoStallThresholdMs) {
+                state.videoFps = 0.0f;
+                if (state.activeVideoFrame != nullptr && !state.videoStallLogged) {
+                    state.videoStallLogged = true;
+                    LOGW("Video: sem frame novo ha %.0fms (decode/rede travado)",
+                        state.msSinceLastVideoFrame);
+                }
             }
         }
 
@@ -4061,6 +5415,7 @@ void RenderFrame(AppState& state) {
             state.lastNetworkBytes = netBytes;
 
             state.videoQueueDepth = get_video_queue_depth();
+            state.videoPresentationPending = get_video_presentation_pending();
 
             if (state.lastNetworkBytes > 0 || get_network_blocks_fetched() > 0) {
                 LOGI("net: %.2fMB/s blockFetchMs=%.0f blocksFetched=%llu blocksDiscarded=%llu q=%u",
@@ -4070,16 +5425,43 @@ void RenderFrame(AppState& state) {
                     state.videoQueueDepth);
             }
 
+            PollPerformanceMetrics(state); // F3: mesma cadencia de 1Hz dos demais pollers acima
+
             state.decodedFpsPollAccumMs = 0.0f;
         }
 
-        // Fase 0.4 T5: mesma cadencia ~1Hz, checa se o usuario mudou o toggle de Foveated Rendering
+        // Fase 0.4 T5 / G1-G3: checa modo de Foveated Rendering (0=Off, 1=Low, 2=Med, 3=High, 4=Auto)
         state.foveationPollAccumMs += frameMs;
         if (state.foveationPollAccumMs >= AppState::kFoveationPollIntervalMs) {
             state.foveationPollAccumMs = 0.0f;
-            bool desired = get_foveation_enabled() != 0;
-            if (desired != state.foveationCurrentlyApplied) {
-                ApplyFoveation(state, desired);
+            uint32_t fovMode = get_foveation_mode();
+            uint32_t targetLevel = 0;
+            float targetOffset = 0.0f;
+
+            if (fovMode == 4) { // Auto: guiado pelo QualityController
+                targetLevel = state.activeFoveationLevel;
+                targetOffset = state.activeFoveationVerticalOffset;
+            } else if (fovMode >= 1 && fovMode <= 3) { // Fixo: Low, Medium, High
+                targetLevel = fovMode;
+                targetOffset = 0.0f;
+            } else { // 0: Off
+                targetLevel = 0;
+                targetOffset = 0.0f;
+            }
+
+            if (targetLevel != state.foveationCurrentlyAppliedLevel ||
+                std::abs(targetOffset - state.foveationCurrentlyAppliedOffset) > 0.1f) {
+                ApplyFoveation(state, targetLevel, targetOffset);
+            }
+        }
+
+        // Fase 0.3 Seção 2: cadencia ~2Hz, sincroniza passthrough com o toggle
+        // do usuario (barato quando nao muda: retorna cedo em UpdatePassthrough).
+        if (state.supportsPassthrough) {
+            state.passthroughPollAccumMs += frameMs;
+            if (state.passthroughPollAccumMs >= AppState::kPassthroughPollIntervalMs) {
+                state.passthroughPollAccumMs = 0.0f;
+                UpdatePassthrough(state);
             }
         }
 
@@ -4090,16 +5472,41 @@ void RenderFrame(AppState& state) {
             uint32_t currentThermal = get_thermal_level();
             if (currentThermal != state.thermalLevel) {
                 state.thermalLevel = currentThermal;
+                LOGI("VRPlayerAppVK: Thermal status %u", state.thermalLevel);
+                // P-04: nao pede taxa de atualizacao aqui. A regra 1 do QualityController ja
+                // mapeia thermal_level>=3 para o nivel Low (target_fps=72), e o bloco de
+                // avaliacao de qualidade abaixo e o unico que chama
+                // RequestAndConfirmDisplayRefreshRate — dono unico da escrita de
+                // state.displayRefreshRate (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+            }
+        }
 
-                // T14.2 LIMIT_FPS: 72Hz em níveis térmicos elevados (SEVERE / CRITICAL)
-                if (state.pfnRequestDisplayRefreshRateFB != nullptr) {
-                    float targetFps = (state.thermalLevel >= 3) ? 72.0f : 90.0f;
-                    state.pfnRequestDisplayRefreshRateFB(state.session, targetFps);
-                    LOGI("VRPlayerAppVK: Thermal status %u, refresh rate %.0fHz",
-                        state.thermalLevel, targetFps);
-                } else {
-                    LOGI("VRPlayerAppVK: Thermal status %u", state.thermalLevel);
-                }
+        // P-05: registra as 3 threads do pipeline Rust (demux/video/audio) como criticas ao
+        // runtime XR — poll simples, mesmo idioma de get_playback_feedback_event/
+        // get_video_progress (bridge nao tem callback-pra-Rust). Compara contra o ultimo tid
+        // registrado (nao contra "ja registrou alguma vez") porque cada novo video reinicia as
+        // 3 threads com tids novos.
+        if (state.supportsAndroidThreadSettings && state.pfnSetAndroidApplicationThreadKHR != nullptr) {
+            int32_t videoTid = get_video_thread_tid();
+            if (videoTid != 0 && videoTid != state.lastRegisteredVideoTid) {
+                XrResult r = state.pfnSetAndroidApplicationThreadKHR(
+                    state.session, XR_ANDROID_THREAD_TYPE_RENDERER_WORKER_KHR, static_cast<uint32_t>(videoTid));
+                state.lastRegisteredVideoTid = videoTid;
+                LOGI("VRPlayerAppVK: thread de video (tid=%d) registrada como RENDERER_WORKER (result=%d)", videoTid, r);
+            }
+            int32_t demuxTid = get_demux_thread_tid();
+            if (demuxTid != 0 && demuxTid != state.lastRegisteredDemuxTid) {
+                XrResult r = state.pfnSetAndroidApplicationThreadKHR(
+                    state.session, XR_ANDROID_THREAD_TYPE_APPLICATION_WORKER_KHR, static_cast<uint32_t>(demuxTid));
+                state.lastRegisteredDemuxTid = demuxTid;
+                LOGI("VRPlayerAppVK: thread de demux (tid=%d) registrada como APPLICATION_WORKER (result=%d)", demuxTid, r);
+            }
+            int32_t audioTid = get_audio_thread_tid();
+            if (audioTid != 0 && audioTid != state.lastRegisteredAudioTid) {
+                XrResult r = state.pfnSetAndroidApplicationThreadKHR(
+                    state.session, XR_ANDROID_THREAD_TYPE_APPLICATION_WORKER_KHR, static_cast<uint32_t>(audioTid));
+                state.lastRegisteredAudioTid = audioTid;
+                LOGI("VRPlayerAppVK: thread de audio (tid=%d) registrada como APPLICATION_WORKER (result=%d)", audioTid, r);
             }
         }
     }
@@ -4112,8 +5519,15 @@ void RenderFrame(AppState& state) {
 
     std::array<XrCompositionLayerProjectionView, kEyeCount> projectionViews{};
     const bool shouldSubmitLayer = frameState.shouldRender;
-    const XrCompositionLayerBaseHeader* layers[5]{};
+    // [0]=passthrough (Fase 0.3 Seção 2, quando ativo) + projection + ui +
+    // controls + modal + cursor = 6. Passthrough SEMPRE vai no indice 0
+    // (fundo) e o projection layer passa a compor com o alpha do swapchain.
+    const XrCompositionLayerBaseHeader* layers[6]{};
     uint32_t layerCount = 0;
+    // Declarada aqui (mesmo escopo de `layers` e `endFrameInfo`) porque
+    // xrEndFrame roda FORA do `if (shouldSubmitLayer)` abaixo e le os
+    // ponteiros de `layers`.
+    XrCompositionLayerPassthroughFB passthroughLayerComp{XR_TYPE_COMPOSITION_LAYER_PASSTHROUGH_FB};
 
     if (shouldSubmitLayer) {
         std::array<XrView, kEyeCount> views{};
@@ -4170,11 +5584,13 @@ void RenderFrame(AppState& state) {
             ScreenMode newMode = static_cast<ScreenMode>(get_3d_mode());
             if (newMode != state.screenMode) {
                 StereoParams spLog = GetStereoParams(newMode, 0);
-                LOGI("Video: ScreenMode -> %s (stereoLayout=%d, polar180=%d, swapEyes=%d)",
-                    ScreenModeName(newMode), spLog.stereoLayout, spLog.polar180, spLog.swapEyes);
+                LOGI("Video: ScreenMode -> %s (stereoLayout=%d, polar180=%d, swapEyes=%d, cubemapLayout=%d, projectionType=%d)",
+                    ScreenModeName(newMode), spLog.stereoLayout, spLog.polar180, spLog.swapEyes, spLog.cubemapLayout, spLog.projectionType);
             }
             state.screenMode = newMode;
         }
+        // T-HDR: mesma cadencia de leitura por frame que screenMode acima.
+        state.isHdr = get_video_is_hdr() != 0;
         const bool sphereMode = IsSphereMode(state.screenMode);
         const bool stereoFlat = IsFlatStereoMode(state.screenMode);
 
@@ -4184,6 +5600,33 @@ void RenderFrame(AppState& state) {
                 LOGI("scrub overlay debug: mode=%d sphereMode=%d ready=%d hasVideoFrame=%d",
                      (int)state.screenMode, (int)sphereMode, (int)state.scrubOverlayReady,
                      (int)(state.activeVideoFrame != nullptr));
+            }
+        }
+
+        // Processa upload ou limpeza de foto estática (Fase 0.3 Seção 8)
+        if (g_photoDirty.exchange(false)) {
+            bool active = g_photoActive.load();
+            if (active) {
+                std::vector<uint8_t> rgba;
+                uint32_t w = 0, h = 0, sm = 0;
+                {
+                    std::lock_guard<std::mutex> lock(g_photoMutex);
+                    rgba = g_photoRgba;
+                    w = g_photoWidth;
+                    h = g_photoHeight;
+                    sm = g_photoScreenMode;
+                }
+                if (!rgba.empty() && w > 0 && h > 0 && rgba.size() >= (size_t)w * h * 4) {
+                    EnsurePhotoTexture(state, w, h);
+                    UpdateUiImageFromBytes(state, rgba.data(), w, h, state.photoImage);
+                    state.photoActive = true;
+                    state.photoScreenMode = static_cast<ScreenMode>(sm);
+                    LOGI("Foto: textura carregada %ux%u no modo %s", w, h, ScreenModeName(state.photoScreenMode));
+                }
+            } else {
+                state.photoActive = false;
+                DestroyPhotoTexture(state);
+                LOGI("Foto: textura descarregada");
             }
         }
 
@@ -4215,74 +5658,78 @@ void RenderFrame(AppState& state) {
             }
         }
 
-        // Avaliacao de Upscaling & Escala de Resolucao (F4 & F6)
-        state.upscalingMode = get_upscaling_mode();
-        float baseScale = 1.0f;
-        float targetSharpness = 0.0f;
-        bool enableMqsr = false;
-        bool enableSgsr = false;
+        // Avaliacao de Qualidade Adaptativa & Escala de Resolucao unificada via Rust media-logic (F1/F2)
+        //
+        // P-02 (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md): QualitySample foi
+        // desenhado para amostragem ~1Hz (ver doc do struct em
+        // rust/media-logic/src/quality.rs) mas era avaliado a cada frame renderizado
+        // (~90Hz) — a historese das regras vira uma cascata de dezenas de ms em vez de
+        // segundos. state.renderResolutionScale/qualityLevel/etc. sao campos de AppState
+        // que persistem entre frames, entao so o CALL precisa ser throttled — o valor
+        // resolvido continua sendo aplicado todo frame a partir do cache implicito nesses
+        // campos.
+        // state.lastFrameMs (nao a local frameMs, fora de escopo aqui) — ver linha ~5020,
+        // onde e escrita a partir do mesmo delta de pacing do compositor.
+        state.qualityPollAccumMs += state.lastFrameMs;
+        if (state.qualityPollAccumMs >= AppState::kQualityPollIntervalMs) {
+            state.qualityPollAccumMs = 0.0f;
 
-        const bool isSpherical = sphereMode;
-        const uint32_t videoMaxDim = std::max(state.videoWidth, state.videoHeight);
+            state.upscalingMode = get_upscaling_mode();
+            float renderScale = 1.0f;
+            float sharpness = 0.0f;
+            uint32_t enableMqsr = 0;
+            uint32_t enableSgsr = 0;
+            uint32_t foveationLevel = 0;
+            float foveationVerticalOffset = 0.0f;
+            float targetFps = 90.0f;
+            uint32_t qualityLevel = 1;
+            uint32_t transitionReason = 0;
 
-        switch (state.upscalingMode) {
-            case 1: // Quality
-                baseScale = 1.0f;
-                targetSharpness = (state.thermalLevel >= 3) ? 0.2f : 0.5f;
-                enableMqsr = true;
-                enableSgsr = (state.thermalLevel < 3);
-                break;
-            case 2: // Performance
-                baseScale = 0.80f;
-                targetSharpness = 0.25f;
-                enableMqsr = true;
-                enableSgsr = false;
-                break;
-            case 3: // Auto
-                enableMqsr = true;
-                if (state.thermalLevel >= 3) {
-                    baseScale = 0.80f;
-                    targetSharpness = 0.0f;
-                    enableSgsr = false;
-                } else if (isSpherical && videoMaxDim >= 5000) {
-                    baseScale = 0.80f;
-                    targetSharpness = 0.15f;
-                    enableSgsr = false;
-                } else if (isSpherical) {
-                    baseScale = 0.90f;
-                    targetSharpness = 0.35f;
-                    enableSgsr = true;
-                } else if (videoMaxDim <= 1920) {
-                    baseScale = 1.0f;
-                    targetSharpness = 0.60f;
-                    enableSgsr = true;
-                } else {
-                    baseScale = 1.0f;
-                    targetSharpness = 0.35f;
-                    enableSgsr = true;
-                }
-                break;
-            case 0: // Off
-            default:
-                baseScale = 1.0f;
-                targetSharpness = 0.0f;
-                enableMqsr = false;
-                enableSgsr = false;
-                break;
+            quality_controller_evaluate_and_resolve(
+                state.thermalLevel,
+                state.smoothedGpuTimeMs,
+                state.lastFrameMs,
+                state.droppedFps,
+                state.displayRefreshRate,
+                state.upscalingMode,
+                static_cast<uint32_t>(state.screenMode),
+                state.videoWidth,
+                state.videoHeight,
+                &renderScale,
+                &sharpness,
+                &enableMqsr,
+                &enableSgsr,
+                &foveationLevel,
+                &foveationVerticalOffset,
+                &targetFps,
+                &qualityLevel,
+                &transitionReason
+            );
+
+            state.renderResolutionScale = renderScale;
+            state.upscalingSharpness = (enableSgsr != 0) ? sharpness : 0.0f;
+            state.upscalingEnabled = (state.upscalingMode != 0);
+            state.qualityLevel = qualityLevel;
+            state.qualityReason = transitionReason;
+            state.activeFoveationLevel = foveationLevel;
+            state.activeFoveationVerticalOffset = foveationVerticalOffset;
+
+            // Se targetFps mudou e difere do displayRefreshRate atual, requisita ajuste ao
+            // compositor OpenXR. P-01/P-04: unico caminho que escreve state.displayRefreshRate
+            // a partir de uma requisicao — e RequestAndConfirmDisplayRefreshRate so atualiza o
+            // campo a partir da leitura confirmada via xrGetDisplayRefreshRateFB, nunca do
+            // valor pedido.
+            if (state.pfnRequestDisplayRefreshRateFB != nullptr && std::abs(targetFps - state.displayRefreshRate) > 1.0f) {
+                LOGI("VRPlayerAppVK: QualityController ajustando refresh rate para %.0fHz (motivo: %u)",
+                    targetFps, transitionReason);
+                RequestAndConfirmDisplayRefreshRate(state, targetFps);
+            }
         }
 
-        // Piso térmico de proteção (RNF-PERF-006 / F4)
-        float thermalFloor = 1.0f;
-        if (state.thermalLevel >= 4) {
-            thermalFloor = 0.70f;
-        } else if (state.thermalLevel == 3) {
-            thermalFloor = 0.80f;
-        } else if (state.thermalLevel == 2) {
-            thermalFloor = 0.90f;
-        }
-        state.renderResolutionScale = std::min(baseScale, thermalFloor);
-        state.upscalingSharpness = enableSgsr ? targetSharpness : 0.0f;
-        state.upscalingEnabled = (state.upscalingMode != 0);
+        // R-07: reseta os contadores de draw call/triangulo uma vez por frame (nao por olho) —
+        // agregados em AppState.lastFrameDrawCallCount/lastFrameTriangleCount ao final do loop.
+        g_frameDrawCallCount = 0;
+        g_frameTriangleCount = 0;
 
         for (int eye = 0; eye < kEyeCount; eye++) {
             EyeSwapchain& eyeChain = state.eyes[eye];
@@ -4317,7 +5764,32 @@ void RenderFrame(AppState& state) {
                 vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, state.queryPool, queryStart);
             }
 
-            if (state.activeVideoFrame != nullptr) {
+            if (state.photoActive && state.photoTextureReady) {
+                const ScreenMode pMode = state.photoScreenMode;
+                const bool pSphere = IsSphereMode(pMode);
+                const StereoParams sp = GetStereoParams(pMode, eye);
+
+                Mat4 pScreenModel;
+                if (pSphere) {
+                    pScreenModel = Mat4Multiply(
+                        Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
+                        Mat4RotationY(state.sceneYawOffset));
+                } else {
+                    float z = g_photoZoom.load();
+                    if (z < 0.1f) z = 1.0f;
+                    float px = g_photoPanX.load();
+                    float py = g_photoPanY.load();
+                    pScreenModel = Mat4Multiply(
+                        sceneForScreen.screenModelNoScale,
+                        Mat4Multiply(
+                            Mat4Translation(px, py, 0.0f),
+                            Mat4Scale(state.screenScaleX * z, state.screenScaleY * z, 1.0f)
+                        )
+                    );
+                }
+                const Mat4 photoMvp = Mat4Multiply(Mat4Multiply(proj, view), pScreenModel);
+                RecordPhotoFrame(state, cmd, fb, extent, photoMvp, proj, view, headCenter, pSphere, eye, sp);
+            } else if (state.activeVideoFrame != nullptr) {
                 if (sphereMode || stereoFlat) {
                     const Mat4 sphereModel = Mat4Multiply(
                         Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
@@ -4364,6 +5836,10 @@ void RenderFrame(AppState& state) {
             projectionViews[eye].subImage.imageRect.extent = {renderW, renderH};
         }
 
+        // R-07: publica os contadores do frame completo (os dois olhos) para o HUD/CSV de debug.
+        state.lastFrameDrawCallCount = g_frameDrawCallCount;
+        state.lastFrameTriangleCount = g_frameTriangleCount;
+
         XrCompositionLayerProjection projectionLayer{XR_TYPE_COMPOSITION_LAYER_PROJECTION};
         projectionLayer.space     = state.localSpace;
         projectionLayer.viewCount = kEyeCount;
@@ -4379,6 +5855,16 @@ void RenderFrame(AppState& state) {
             projectionLayer.next = &mqsrSettings;
         } else {
             projectionLayer.next = nullptr;
+        }
+
+        // Fase 0.3 Seção 2: com passthrough ativo o projection layer precisa
+        // compor com o alpha do swapchain (senao o compositor ignora o alpha
+        // e o passthrough fica totalmente coberto pelo retangulo do eye buffer).
+        // O clear dos Record* passa a usar alpha 0 (ver PassthroughEnvAlpha),
+        // entao tudo que nao for desenhado (fundo ao redor do video 2D) revela
+        // o mundo real; o quad/esfera de video seguem opacos (alpha 1).
+        if (state.passthroughActive) {
+            projectionLayer.layerFlags |= XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
         }
 
         // R-01: Submeter painéis 2D (UI, Controles, Modal) e o Cursor como XrCompositionLayerQuad
@@ -4459,6 +5945,15 @@ void RenderFrame(AppState& state) {
             controlsQuad.next = &ctrlMqsr;
             modalMqsr.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
             modalQuad.next = &modalMqsr;
+        }
+
+        // Fase 0.3 Seção 2: passthrough é o PRIMEIRO layer (fundo), antes do
+        // projection. Só entra quando a layer está efetivamente resumed.
+        if (state.passthroughActive && state.passthroughLayer != XR_NULL_HANDLE) {
+            passthroughLayerComp.flags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+            passthroughLayerComp.space = XR_NULL_HANDLE; // não usado p/ RECONSTRUCTION
+            passthroughLayerComp.layerHandle = state.passthroughLayer;
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&passthroughLayerComp);
         }
 
         layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projectionLayer);
@@ -4566,6 +6061,14 @@ void PollXrEvents(AppState& state) {
                 default:
                     break;
             }
+        } else if (eventBuffer.type == XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB) {
+            // P-01: mudanca de taxa iniciada pelo sistema (fora de qualquer pedido do app) —
+            // sem este ramo o app nunca ficava sabendo (docs/reports/
+            // TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+            const auto* event = reinterpret_cast<const XrEventDataDisplayRefreshRateChangedFB*>(&eventBuffer);
+            state.displayRefreshRate = event->toDisplayRefreshRate;
+            LOGI("VRPlayerAppVK: refresh rate mudou (evento do sistema) %.1fHz -> %.1fHz",
+                event->fromDisplayRefreshRate, event->toDisplayRefreshRate);
         }
     }
 }
@@ -4730,7 +6233,31 @@ void DestroyAppResources(AppState& state) {
         state.subtitleVertexMemory = VK_NULL_HANDLE;
     }
 
-    // 6. Pipelines estéreo e esfera 360/180
+    // 5.1 Legendas PGS (Fase 0.3 T7.4)
+    if (state.pgsSubtitleDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.pgsSubtitleDescriptorPool, nullptr);
+        state.pgsSubtitleDescriptorPool = VK_NULL_HANDLE;
+        state.pgsSubtitleDescriptorSet = VK_NULL_HANDLE;
+    }
+    if (state.pgsSubtitleImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.pgsSubtitleImageView, nullptr);
+        state.pgsSubtitleImageView = VK_NULL_HANDLE;
+    }
+    if (state.pgsSubtitleImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.pgsSubtitleImage, nullptr);
+        state.pgsSubtitleImage = VK_NULL_HANDLE;
+    }
+    if (state.pgsSubtitleImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.pgsSubtitleImageMemory, nullptr);
+        state.pgsSubtitleImageMemory = VK_NULL_HANDLE;
+    }
+    state.pgsSubtitleReady = false;
+
+    // 6. Pipelines estéreo, esfera 360/180 e cubemap/EAC
+    if (state.stereoCubemapPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.stereoCubemapPipeline, nullptr);
+        state.stereoCubemapPipeline = VK_NULL_HANDLE;
+    }
     if (state.stereoFlatPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(state.vkDevice, state.stereoFlatPipeline, nullptr);
         state.stereoFlatPipeline = VK_NULL_HANDLE;
@@ -4742,6 +6269,28 @@ void DestroyAppResources(AppState& state) {
     if (state.stereoPipelineLayout != VK_NULL_HANDLE) {
         vkDestroyPipelineLayout(state.vkDevice, state.stereoPipelineLayout, nullptr);
         state.stereoPipelineLayout = VK_NULL_HANDLE;
+    }
+    // Fase 0.3 Seção 8: Pipelines e recursos de foto estática (T8.3, T8.4)
+    DestroyPhotoTexture(state);
+    if (state.photoStereoFlatPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.photoStereoFlatPipeline, nullptr);
+        state.photoStereoFlatPipeline = VK_NULL_HANDLE;
+    }
+    if (state.photoStereoPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.photoStereoPipeline, nullptr);
+        state.photoStereoPipeline = VK_NULL_HANDLE;
+    }
+    if (state.photoPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.photoPipelineLayout, nullptr);
+        state.photoPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.photoDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.photoDescriptorPool, nullptr);
+        state.photoDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (state.photoDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(state.vkDevice, state.photoDescriptorSetLayout, nullptr);
+        state.photoDescriptorSetLayout = VK_NULL_HANDLE;
     }
     if (state.sphereIndexBuffer != VK_NULL_HANDLE) {
         vkDestroyBuffer(state.vkDevice, state.sphereIndexBuffer, nullptr);
@@ -4933,21 +6482,83 @@ void android_main(android_app* app) {
     sessionCreateInfo.systemId = state.systemId;
     OXR(xrCreateSession(state.instance, &sessionCreateInfo, &state.session));
     SetupOpenXrInputs(state);
+    SetupHandTracking(state);
+
+    // P-05: registra a thread principal (unica thread nativa do app — nao ha render thread
+    // separada, ver docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md) como critica ao
+    // runtime XR, antes de qualquer outra configuracao — best-effort, nao aborta em falha.
+    if (state.supportsAndroidThreadSettings) {
+        state.pfnSetAndroidApplicationThreadKHR =
+            LoadXrFunction<PFN_xrSetAndroidApplicationThreadKHR>(state.instance, "xrSetAndroidApplicationThreadKHR");
+        if (state.pfnSetAndroidApplicationThreadKHR != nullptr) {
+            uint32_t mainTid = static_cast<uint32_t>(gettid());
+            XrResult r1 = state.pfnSetAndroidApplicationThreadKHR(
+                state.session, XR_ANDROID_THREAD_TYPE_APPLICATION_MAIN_KHR, mainTid);
+            XrResult r2 = state.pfnSetAndroidApplicationThreadKHR(
+                state.session, XR_ANDROID_THREAD_TYPE_RENDERER_MAIN_KHR, mainTid);
+            if (XR_FAILED(r1) || XR_FAILED(r2)) {
+                LOGW("VRPlayerAppVK: xrSetAndroidApplicationThreadKHR (main/render) falhou: %d/%d", r1, r2);
+            } else {
+                LOGI("VRPlayerAppVK: thread principal (tid=%u) registrada como APPLICATION_MAIN+RENDERER_MAIN", mainTid);
+            }
+        }
+    }
+
+    SetupAdpfSession(state); // F8: mesma thread acima, ja registrada como critica ao runtime XR
 
     state.pfnRequestDisplayRefreshRateFB =
         LoadXrFunction<PFN_xrRequestDisplayRefreshRateFB>(state.instance, "xrRequestDisplayRefreshRateFB");
+    state.pfnEnumerateDisplayRefreshRatesFB =
+        LoadXrFunction<PFN_xrEnumerateDisplayRefreshRatesFB>(state.instance, "xrEnumerateDisplayRefreshRatesFB");
+    state.pfnGetDisplayRefreshRateFB =
+        LoadXrFunction<PFN_xrGetDisplayRefreshRateFB>(state.instance, "xrGetDisplayRefreshRateFB");
+
     if (state.pfnRequestDisplayRefreshRateFB != nullptr) {
-        state.pfnRequestDisplayRefreshRateFB(state.session, 90.0f);
-        LOGI("VRPlayerAppVK: Requested 90Hz refresh rate.");
+        // P-01: enumera as taxas realmente suportadas pelo runtime em vez de assumir 90Hz —
+        // Meta orienta explicitamente a nao assumir e a cair para uma taxa da lista quando o
+        // pedido preferido nao tiver sucesso (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md,
+        // secao 5).
+        float chosenHz = 90.0f;
+        if (state.pfnEnumerateDisplayRefreshRatesFB != nullptr) {
+            uint32_t rateCount = 0;
+            state.pfnEnumerateDisplayRefreshRatesFB(state.session, 0, &rateCount, nullptr);
+            if (rateCount > 0) {
+                std::vector<float> rates(rateCount);
+                XrResult enumResult = state.pfnEnumerateDisplayRefreshRatesFB(
+                    state.session, rateCount, &rateCount, rates.data());
+                if (!XR_FAILED(enumResult) && !rates.empty()) {
+                    float bestAtOrBelow = -1.0f;
+                    float lowestAbove = -1.0f;
+                    for (float hz : rates) {
+                        if (hz <= 90.0f && hz > bestAtOrBelow) bestAtOrBelow = hz;
+                        if (hz > 90.0f && (lowestAbove < 0.0f || hz < lowestAbove)) lowestAbove = hz;
+                    }
+                    chosenHz = (bestAtOrBelow > 0.0f) ? bestAtOrBelow : lowestAbove;
+                    LOGI("VRPlayerAppVK: %u taxas de atualizacao suportadas pelo runtime, escolhida=%.1fHz",
+                        rateCount, chosenHz);
+                }
+            }
+        }
+        RequestAndConfirmDisplayRefreshRate(state, chosenHz);
     } else {
         LOGI("VRPlayerAppVK: xrRequestDisplayRefreshRateFB not available.");
     }
 
     CreateReferenceSpace(state);
     CreateSwapchains(state);
-    // Fase 0.4 T5: estado inicial do toggle, persistido pelo Kotlin e
-    // empurrado no startup (VRActivity.onCreate -> nativeSetFoveationEnabled).
-    ApplyFoveation(state, get_foveation_enabled() != 0);
+    // Fase 0.4 T5: estado inicial do modo de foveação, persistido pelo Kotlin e
+    // empurrado no startup (VRActivity.onCreate -> nativeSetFoveationMode).
+    uint32_t startupFovMode = get_foveation_mode();
+    uint32_t startupLevel = (startupFovMode == 4) ? 1 : startupFovMode;
+    state.activeFoveationLevel = startupLevel;
+    state.activeFoveationVerticalOffset = 0.0f;
+    ApplyFoveation(state, startupLevel, 0.0f);
+    // Fase 0.3 Seção 2: cria o XrPassthroughFB + layer (pausados). O toggle
+    // real acontece no RenderFrame via UpdatePassthrough (polling ~2x/s do
+    // estado persistido pelo Kotlin -> nativeSetPassthroughEnabled).
+    SetupPassthrough(state);
+    UpdatePassthrough(state); // aplica o estado inicial (normalmente OFF)
+    SetupPerformanceMetrics(state); // F3: habilita XR_META_performance_metrics (se suportado)
     CreateRenderPass(state);
     CreateFramebuffers(state);
     CreateGraphicsPipeline(state);
@@ -4966,6 +6577,8 @@ void android_main(android_app* app) {
     CreateFeedbackResources(state);
     // Estagio 6: pipeline de legendas MSDF (T9.3)
     CreateSubtitlePipeline(state);
+    // Fase 0.3 Seção 8: pipeline de fotos estáticas 360/3D (T8.3, T8.4)
+    CreatePhotoPipeline(state);
 
     // O video e iniciado via nativePlayVideo (JNI) quando o usuario seleciona
     // um arquivo no painel de UI — identico ao caminho GLES.
@@ -4996,6 +6609,12 @@ void android_main(android_app* app) {
 
     // C-03: Destruir ordenadamente todos os 41 recursos Vulkan e 3 AImageReaders
     DestroyAppResources(state);
+
+    // Fase 0.3 Seção 2: destruir passthrough ANTES de xrDestroySession.
+    DestroyPassthrough(state);
+
+    // Fase 0.3 Seção 5: destruir hand trackers ANTES de xrDestroySession.
+    DestroyHandTracking(state);
 
     for (auto& eye : state.eyes) {
         if (eye.handle != XR_NULL_HANDLE) xrDestroySwapchain(eye.handle);

@@ -129,7 +129,7 @@ object NetworkThumbnailGenerator {
                 source.server.host, source.server.port, source.server.username, source.server.password,
                 source.server.privateKey ?: "", source.path, THUMB_WIDTH, THUMB_HEIGHT, cancelToken
             )
-            is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Dlna -> null
+            is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Dlna, is PlaybackSource.Webdav -> null
         }
     }
 
@@ -167,7 +167,7 @@ object NetworkThumbnailGenerator {
                 "sftp|${source.server.host}|${source.server.port}|${source.path}|${source.sizeBytes}"
             is PlaybackSource.Dlna ->
                 "dlna|${source.server.host}|${source.url}|${source.sizeBytes}"
-            is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs ->
+            is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Webdav ->
                 throw IllegalArgumentException("NetworkThumbnailGenerator nao suporta $source")
         }
         return sha256(raw)
@@ -238,7 +238,7 @@ object NetworkThumbnailGenerator {
                 source.server.privateKey ?: "", source.path,
                 SCRUB_INTERVAL_SECONDS, SCRUB_WIDTH, SCRUB_HEIGHT
             )
-            is PlaybackSource.Ftp, is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Dlna -> null
+            is PlaybackSource.Ftp, is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Dlna, is PlaybackSource.Webdav -> null
         }
     }
 

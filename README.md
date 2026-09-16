@@ -76,7 +76,7 @@ Remote reads go through a prefetching, chunked reader that issues concurrent ran
 
 ### Quality of life
 
-Playback history with "continue watching" and resume prompts, generated thumbnails for local and network files, encrypted credential storage (`EncryptedSharedPreferences`), saved servers, sorting and filtering in the file browser, thermal monitoring, and a fully localized UI (English and Portuguese-BR).
+Playback history with "continue watching" and resume prompts, generated thumbnails for local and network files, encrypted credential storage (`EncryptedSharedPreferences`), saved servers, sorting and filtering in the file browser, thermal monitoring, and a fully localized UI (English, Portuguese-BR, and Spanish; see [`docs/i18n.md`](docs/i18n.md) for translation contribution guidelines).
 
 # 📋 Motivation
 

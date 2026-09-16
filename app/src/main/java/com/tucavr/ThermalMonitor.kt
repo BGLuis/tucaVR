@@ -169,6 +169,25 @@ class ThermalMonitor(
     }
 
     /**
+     * F8 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, 8.2): previsão contínua de 0.0
+     * (nenhum throttle) a 1.0 (limiar SEVERE) para [forecastSeconds] à frente — granularidade
+     * que o nível discreto 0-5 acima não tem. `null` se indisponível (API < 30) ou se vier
+     * NaN — a própria API devolve NaN quando chamada mais rápido que ~1Hz, então o chamador
+     * não deve pollar isto por frame.
+     */
+    @RequiresApi(Build.VERSION_CODES.R)
+    fun getThermalHeadroom(forecastSeconds: Int): Float? {
+        if (powerManager == null) return null
+        return try {
+            val headroom = powerManager.getThermalHeadroom(forecastSeconds)
+            if (headroom.isNaN()) null else headroom
+        } catch (e: Exception) {
+            Log.w(TAG, "Falha ao obter thermal headroom: ${e.message}")
+            null
+        }
+    }
+
+    /**
      * Permite simular ou forçar um status térmico para fins de depuração/testes (ex.: broadcast ADB).
      */
     fun simulateThermalStatus(status: Int) {

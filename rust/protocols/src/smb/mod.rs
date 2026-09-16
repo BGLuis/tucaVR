@@ -57,6 +57,15 @@ const SMB_MAX_CONCURRENT_CHUNKS: usize = 4;
 /// Teto por lote de leitura — mesmo risco e mesmo valor do `SFTP_READ_TIMEOUT` (`crate::sftp`): sem isto, um `read_at` sem resposta trava `block_on` pra sempre e prende `seek()`/`stop()` no `join()` da thread.
 const SMB_READ_TIMEOUT: Duration = Duration::from_secs(20);
 
+/// Paridade com `SFTP_CHUNK_RETRY_ATTEMPTS` (`crate::sftp`): repete SO os
+/// chunks que falharam com um erro de verdade antes de desistir do lote
+/// inteiro. A conexao ja tem `auto_reconnect` (ver `client_config`), entao um
+/// retry aqui cobre o caso mais barato — um unico `read_at` falhando por
+/// soluco transitorio sem precisar recriar a sessao inteira.
+const SMB_CHUNK_RETRY_ATTEMPTS: u32 = 2;
+const SMB_CHUNK_RETRY_BACKOFF_BASE: Duration = Duration::from_millis(200);
+const SMB_CHUNK_RETRY_BACKOFF_CAP: Duration = Duration::from_secs(2);
+
 fn new_runtime() -> io::Result<Runtime> {
     tokio::runtime::Builder::new_current_thread().enable_all().build()
 }
@@ -150,7 +159,7 @@ impl RangeSource for SmbFileSource {
         let mut total = 0usize;
         'batches: for batch in chunks.chunks(SMB_MAX_CONCURRENT_CHUNKS) {
             // tokio::time::timeout registra o timer na construcao, entao precisa rodar dentro do block_on.
-            let results = match self.runtime.block_on(async {
+            let mut results = match self.runtime.block_on(async {
                 tokio::time::timeout(
                     SMB_READ_TIMEOUT,
                     join_all(batch.iter().map(|&(chunk_offset, chunk_len)| reader.read_at(chunk_offset, chunk_len as u64))),
@@ -165,6 +174,39 @@ impl RangeSource for SmbFileSource {
                     ));
                 }
             };
+
+            for attempt in 1..=SMB_CHUNK_RETRY_ATTEMPTS {
+                let retry_slots: Vec<usize> =
+                    results.iter().enumerate().filter_map(|(i, r)| if r.is_err() { Some(i) } else { None }).collect();
+                if retry_slots.is_empty() {
+                    break;
+                }
+                log::warn!("SMB: retentando {} chunk(s) falhos (tentativa {attempt}/{SMB_CHUNK_RETRY_ATTEMPTS})", retry_slots.len());
+                std::thread::sleep(media_logic::retry_backoff::backoff_with_jitter(
+                    attempt,
+                    SMB_CHUNK_RETRY_BACKOFF_BASE,
+                    SMB_CHUNK_RETRY_BACKOFF_CAP,
+                    crate::retry::cheap_rand_unit(),
+                ));
+                let retried = match self.runtime.block_on(async {
+                    tokio::time::timeout(
+                        SMB_READ_TIMEOUT,
+                        join_all(retry_slots.iter().map(|&i| {
+                            let (chunk_offset, chunk_len) = batch[i];
+                            reader.read_at(chunk_offset, chunk_len as u64)
+                        })),
+                    )
+                    .await
+                }) {
+                    Ok(retried) => retried,
+                    // Timeout no proprio retry: desiste de repetir e deixa o
+                    // erro original de cada slot aparecer no map_err abaixo.
+                    Err(_elapsed) => break,
+                };
+                for (slot, result) in retry_slots.into_iter().zip(retried) {
+                    results[slot] = result;
+                }
+            }
 
             for (idx, result) in results.into_iter().enumerate() {
                 let data = result.map_err(|e| io::Error::other(e.to_string()))?;

@@ -363,6 +363,60 @@ pub fn find_active_cue(
     None
 }
 
+/// Normaliza um código de idioma para o subtag primário em minúsculas,
+/// convertendo ISO 639-2 (3 letras) para ISO 639-1 (2 letras) nos idiomas mais
+/// comuns. `"pt-BR"` -> `"pt"`, `"por"` -> `"pt"`, `"eng"` -> `"en"`,
+/// `"jpn"` -> `"ja"`. Códigos desconhecidos são devolvidos como o primeiro
+/// subtag em minúsculas, sem tradução.
+pub fn normalize_language_code(code: &str) -> String {
+    let primary = code
+        .trim()
+        .split(['-', '_'])
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    match primary.as_str() {
+        "por" => "pt",
+        "eng" => "en",
+        "spa" => "es",
+        "fra" | "fre" => "fr",
+        "deu" | "ger" => "de",
+        "ita" => "it",
+        "jpn" => "ja",
+        "kor" => "ko",
+        "zho" | "chi" => "zh",
+        "rus" => "ru",
+        "ara" => "ar",
+        "nld" | "dut" => "nl",
+        "pol" => "pl",
+        "swe" => "sv",
+        "tur" => "tr",
+        other => other,
+    }
+    .to_string()
+}
+
+/// T7.6 — auto-seleção de faixa de legenda pelo idioma do sistema.
+///
+/// `track_languages` são os códigos de idioma das faixas disponíveis, na ordem
+/// em que aparecem (como vêm dos metadados do container: `"por"`, `"eng"`,
+/// `"jpn"`, ...). `system_language` costuma ser `Locale.getDefault()` do Android
+/// (`"pt-BR"`, `"en"`, ...).
+///
+/// Retorna o índice da primeira faixa cujo idioma coincide após normalização, ou
+/// `None` se nenhuma coincidir — nesse caso o chamador aplica a regra anterior
+/// da cadeia de prioridade ("primeira faixa disponível").
+pub fn match_subtitle_language(track_languages: &[String], system_language: &str) -> Option<usize> {
+    let target = normalize_language_code(system_language);
+    if target.is_empty() {
+        return None;
+    }
+    track_languages
+        .iter()
+        .position(|lang| normalize_language_code(lang) == target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -490,5 +544,40 @@ Segunda linha WebVTT
         let latin1_bytes = vec![0x41, 0xE7, 0xE3, 0x6F];
         let decoded_latin1 = detect_and_decode(&latin1_bytes);
         assert_eq!(decoded_latin1, "Ação");
+    }
+
+    #[test]
+    fn test_normalize_language_code() {
+        assert_eq!(normalize_language_code("pt-BR"), "pt");
+        assert_eq!(normalize_language_code("pt_BR"), "pt");
+        assert_eq!(normalize_language_code("por"), "pt");
+        assert_eq!(normalize_language_code("POR"), "pt");
+        assert_eq!(normalize_language_code("eng"), "en");
+        assert_eq!(normalize_language_code("jpn"), "ja");
+        assert_eq!(normalize_language_code("en"), "en");
+        assert_eq!(normalize_language_code("  fre  "), "fr");
+        assert_eq!(normalize_language_code("xyz"), "xyz");
+        assert_eq!(normalize_language_code(""), "");
+    }
+
+    #[test]
+    fn test_match_subtitle_language_t76() {
+        let tracks = vec![
+            "por".to_string(),
+            "eng".to_string(),
+            "jpn".to_string(),
+        ];
+        assert_eq!(match_subtitle_language(&tracks, "pt-BR"), Some(0));
+        assert_eq!(match_subtitle_language(&tracks, "en"), Some(1));
+        assert_eq!(match_subtitle_language(&tracks, "ja"), Some(2));
+        assert_eq!(match_subtitle_language(&tracks, "de"), None);
+        assert_eq!(match_subtitle_language(&tracks, ""), None);
+
+        // Primeira faixa que coincide vence quando há duplicatas de idioma.
+        let dup = vec!["eng".to_string(), "en".to_string(), "pt".to_string()];
+        assert_eq!(match_subtitle_language(&dup, "en-US"), Some(0));
+
+        // Lista vazia.
+        assert_eq!(match_subtitle_language(&[], "pt"), None);
     }
 }

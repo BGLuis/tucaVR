@@ -15,6 +15,8 @@ import com.tucavr.R
  */
 object VoidPanelChrome {
 
+    val ID_SUBTITLE = android.view.View.generateViewId()
+
     fun newRoot(context: Context): LinearLayout = LinearLayout(context).apply {
         orientation = LinearLayout.VERTICAL
         gravity = Gravity.CENTER
@@ -62,6 +64,7 @@ object VoidPanelChrome {
         titleColumn.addView(VoidText.title(context, title, sizeSp = 28f))
         if (subtitle != null) {
             titleColumn.addView(VoidText.mono(context, subtitle, sizeSp = 14f).apply {
+                id = ID_SUBTITLE
                 setPadding(0, VoidTheme.dpToPx(context, 4f), 0, 0)
             })
         }

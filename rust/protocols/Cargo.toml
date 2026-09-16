@@ -48,6 +48,12 @@ mdns-sd = "0.21"
 quick-xml = "0.37"
 # Descriptografia HLS AES-128 (T8.1)
 aes = "0.8"
+# Codificação de paths para WebDAV (T3.1)
+percent-encoding = "2.3"
+# Backoff com jitter compartilhado entre demux (core) e retry por chunk
+# (SMB/HTTP/FTP aqui) — logica pura, zero dependencia de Android/rede, ver
+# rust/media-logic/src/retry_backoff.rs.
+media-logic = { path = "../media-logic" }
 
 [dev-dependencies]
 httpmock = "0.8.3"

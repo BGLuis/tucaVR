@@ -38,6 +38,16 @@ const HTTP_CONCURRENT_CHUNK_SIZE: u32 = 2 * 1024 * 1024;
 /// que o servidor/roteador domestico nao necessariamente aguenta bem.
 const HTTP_MAX_CONCURRENT_CHUNKS: usize = 4;
 
+/// Paridade com `SFTP_CHUNK_RETRY_ATTEMPTS` (`crate::sftp`)/`SMB_CHUNK_RETRY_ATTEMPTS`
+/// (`crate::smb`): repete SO os chunks que falharam com um erro de verdade
+/// antes de desistir do lote inteiro — uma unica GET falhando (soluco
+/// transitorio de rede/servidor) nao precisa mais derrubar o `read_range`
+/// inteiro, que ate aqui era o unico dos tres protocolos sem essa rede de
+/// seguranca.
+const HTTP_CHUNK_RETRY_ATTEMPTS: u32 = 2;
+const HTTP_CHUNK_RETRY_BACKOFF_BASE: Duration = Duration::from_millis(200);
+const HTTP_CHUNK_RETRY_BACKOFF_CAP: Duration = Duration::from_secs(2);
+
 #[derive(Debug, Clone)]
 pub struct HttpCapabilities {
     pub reachable: bool,
@@ -219,6 +229,39 @@ impl RangeSource for HttpsRangeSource {
                     results.push(handle.join().unwrap_or_else(|_| Err(io::Error::other("thread de leitura HTTP entrou em panico"))));
                 }
             });
+
+            for attempt in 1..=HTTP_CHUNK_RETRY_ATTEMPTS {
+                let retry_slots: Vec<usize> =
+                    results.iter().enumerate().filter_map(|(i, r)| if r.is_err() { Some(i) } else { None }).collect();
+                if retry_slots.is_empty() {
+                    break;
+                }
+                log::warn!("HTTP: retentando {} chunk(s) falhos (tentativa {attempt}/{HTTP_CHUNK_RETRY_ATTEMPTS})", retry_slots.len());
+                std::thread::sleep(media_logic::retry_backoff::backoff_with_jitter(
+                    attempt,
+                    HTTP_CHUNK_RETRY_BACKOFF_BASE,
+                    HTTP_CHUNK_RETRY_BACKOFF_CAP,
+                    crate::retry::cheap_rand_unit(),
+                ));
+                let retried: Vec<io::Result<Vec<u8>>> = std::thread::scope(|scope| {
+                    let handles: Vec<_> = retry_slots
+                        .iter()
+                        .map(|&i| {
+                            let (chunk_offset, chunk_len) = batch[i];
+                            let client = self.client.clone();
+                            let url = self.url.clone();
+                            scope.spawn(move || fetch_range(&client, &url, chunk_offset, chunk_len))
+                        })
+                        .collect();
+                    handles
+                        .into_iter()
+                        .map(|h| h.join().unwrap_or_else(|_| Err(io::Error::other("thread de leitura HTTP entrou em panico"))))
+                        .collect()
+                });
+                for (slot, result) in retry_slots.into_iter().zip(retried) {
+                    results[slot] = result;
+                }
+            }
 
             for (idx, result) in results.into_iter().enumerate() {
                 let data = result?;

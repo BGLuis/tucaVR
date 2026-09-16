@@ -22,3 +22,8 @@ protocols = { path = "../protocols" }
 # no host — ver rust/media-logic/src/lib.rs. sync.rs e parte de
 # audio_decoder.rs delegam para ca em vez de reimplementar a mesma logica.
 media-logic = { path = "../media-logic" }
+# gettid() para reportar o tid das threads de demux/video/audio ao registro
+# XR_KHR_android_thread_settings feito pelo C++ (ver playback.rs) — ja estava no
+# Cargo.lock transitivamente (ndk/tokio), entao nao adiciona arvore de dependencia
+# nova (mesma justificativa usada em rust/protocols/Cargo.toml).
+libc = "0.2"

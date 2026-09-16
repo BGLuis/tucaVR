@@ -56,14 +56,41 @@
     <string name="settings_upscaling_mode_performance">Performance (Render Scale 0.8x + MQSR)</string>
     <string name="settings_upscaling_mode_auto">Auto (Adaptive)</string>
     <string name="settings_foveated_rendering_label">Foveated Rendering</string>
-    <string name="settings_foveated_rendering_description">Reduces GPU load by lowering detail in peripheral vision. May slightly reduce edge sharpness. Vulkan only.</string>
+    <string name="settings_foveated_rendering_description">Reduces GPU load by lowering detail in peripheral vision. Select a fixed intensity or Auto for adaptive control. Vulkan only.</string>
+    <string name="settings_foveated_mode_off">Off</string>
+    <string name="settings_foveated_mode_low">Low</string>
+    <string name="settings_foveated_mode_medium">Medium</string>
+    <string name="settings_foveated_mode_high">High</string>
+    <string name="settings_foveated_mode_auto">Auto (Adaptive)</string>
+    <string name="quality_warning_thermal">Thermal limit reached: reducing rendering quality to cool down device.</string>
+    <string name="quality_warning_8k60">High framerate 8K video may experience frame drops on mobile hardware.</string>
     <string name="settings_pause_on_exit_label">Pause on exit</string>
     <string name="settings_pause_on_exit_description">Automatically pause playback when returning to the system menu or passthrough.</string>
     <string name="settings_section_audio">Audio</string>
     <string name="settings_spatial_audio_label">Spatial Audio &amp; Surround 3D</string>
-    <string name="settings_spatial_audio_description">Enables immersive 3D binaural audio with HRTF virtualization for 5.1/7.1 surround sound and Ambisonics.</string>
+    <string name="settings_spatial_audio_description">Select the audio processing mode for immersive 3D binaural audio with HRTF virtualization for 5.1/7.1 surround and Ambisonics.</string>
+    <string name="settings_spatial_audio_mode_off">Off</string>
+    <string name="settings_spatial_audio_mode_binaural">Binaural</string>
+    <string name="settings_spatial_audio_mode_downmix">Downmix</string>
     <string name="settings_spatial_head_tracking_label">Audio Head Tracking</string>
     <string name="settings_spatial_head_tracking_description">Rotates virtual speakers and soundstage when you turn your head for realistic spatial immersion.</string>
+    <string name="settings_spatial_screen_locked_label">Screen-locked Audio</string>
+    <string name="settings_spatial_screen_locked_description">Locks virtual speakers to the video screen instead of world space. Recommended for 2D flat content — keeps dialogue always in front.</string>
+
+    <!-- Passthrough / Mixed Reality Settings & Modal (T2.4, T2.5) -->
+    <string name="passthrough_modal_title">Passthrough &amp; Mixed Reality</string>
+    <string name="passthrough_toggle_label">Enable Passthrough</string>
+    <string name="passthrough_toggle_description">Shows the physical world as background via Quest 3 cameras.</string>
+    <string name="passthrough_state_on">ON</string>
+    <string name="passthrough_state_off">OFF</string>
+    <string name="passthrough_opacity_label">Environment Opacity</string>
+    <string name="passthrough_opacity_percent">%1$d%%</string>
+    <string name="passthrough_edge_rendering_label">Edge Rendering</string>
+    <string name="passthrough_edge_rendering_description">Highlights real-world physical object outlines with high-contrast borders.</string>
+    <string name="passthrough_reset_screen_button">Reset Screen Position</string>
+    <string name="passthrough_reset_screen_description">Restores the virtual screen to its default front position and scale.</string>
+    <string name="passthrough_grab_hint">Hint: Point at the screen and hold Grip to grab and reposition in 3D space.</string>
+    <string name="settings_passthrough_open_button">Settings</string>
 
     <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
     <string name="browser_title_local_files">Local Files</string>
@@ -119,6 +146,7 @@
     <string name="file_detail_label_container">Container</string>
     <string name="file_detail_label_bitrate">Bitrate</string>
     <string name="file_detail_label_video_codec">Video codec</string>
+    <string name="file_detail_label_decoder">Decoder</string>
     <string name="file_detail_label_audio_codec">Audio codec</string>
     <string name="file_detail_label_format3d">3D Format</string>
     <string name="file_detail_format3d_low_confidence_suffix"> (estimated)</string>
@@ -152,6 +180,7 @@
     <string name="network_tab_nfs">NFS</string>
     <string name="network_tab_ftp">FTP</string>
     <string name="network_tab_sftp">SFTP</string>
+    <string name="network_tab_webdav">WebDAV</string>
 
     <!-- Rede: aba DLNA -->
     <string name="network_dlna_header">UPnP / DLNA Servers</string>
@@ -277,6 +306,30 @@
     <string name="network_nfs_form_status_error_format">Failed: %1$s</string>
     <string name="network_nfs_form_status_connected">Connected</string>
 
+    <!-- T3.4: Rede: aba WebDAV -->
+    <string name="network_webdav_saved_servers_header">Saved servers</string>
+    <string name="network_webdav_empty">(no WebDAV server saved)</string>
+    <string name="network_webdav_row_label_format">%1$s</string>
+    <string name="network_webdav_btn_add_server">+ Add server</string>
+    <string name="network_webdav_form_host_label">Host / IP</string>
+    <string name="network_webdav_form_port_label">Port</string>
+    <string name="network_webdav_form_name_label">Friendly Name</string>
+    <string name="network_webdav_form_name_hint">My Nextcloud / NAS</string>
+    <string name="network_webdav_form_base_path_label">Base Path</string>
+    <string name="network_webdav_form_base_path_hint">/webdav or /remote.php/dav/files/user</string>
+    <string name="network_webdav_form_https_toggle">Use HTTPS (SSL/TLS)</string>
+    <string name="network_webdav_form_self_signed_toggle">Accept self-signed certificate (skip TLS verification)</string>
+    <string name="network_webdav_form_self_signed_warning">Warning: Self-signed certificates bypass TLS authenticity checks. Enable only for trusted local networks.</string>
+    <string name="network_webdav_form_user_label">Username</string>
+    <string name="network_webdav_form_user_hint">username (optional)</string>
+    <string name="network_webdav_form_pass_label">Password</string>
+    <string name="network_webdav_form_pass_hint">password (optional)</string>
+    <string name="network_webdav_btn_test_save">Test and save</string>
+    <string name="network_webdav_form_status_host_required">Host required</string>
+    <string name="network_webdav_form_status_connecting">Connecting…</string>
+    <string name="network_webdav_form_status_error_format">Failed: %1$s</string>
+    <string name="network_webdav_form_status_connected">Connected</string>
+
     <!-- T10.4: Rede: aba Descoberta Automatica -->
     <string name="network_discovery_header">Discovered Servers</string>
     <string name="network_discovery_empty">(no servers found on local network)</string>
@@ -292,6 +345,7 @@
     <string name="player_label_ftp_source_format">%1$s/%2$s</string>
     <string name="player_label_sftp_source_format">%1$s/%2$s</string>
     <string name="player_label_nfs_source_format">%1$s:%2$s/%3$s</string>
+    <string name="player_label_webdav_source_format">%1$s/%2$s</string>
 
     <!-- Painel de controles de reproducao (VRControlsPresentation) -->
     <string name="player_btn_play_pause">Play / Pause</string>
@@ -312,6 +366,11 @@
     <string name="player_mode_360_sbs">360° SBS</string>
     <string name="player_mode_360_ou">360° OU</string>
     <string name="player_mode_180_sbs">180° SBS</string>
+    <string name="player_mode_cubemap_3x2">Cubemap 3×2</string>
+    <string name="player_mode_cubemap_6x1">Cubemap 6×1</string>
+    <string name="player_mode_eac_3x2">EAC 3×2</string>
+    <string name="player_mode_cubemap_3x2_sbs">Cubemap 3×2 SBS</string>
+    <string name="player_mode_eac_3x2_sbs">EAC 3×2 SBS</string>
     <string name="player_btn_swap_eyes">Swap eyes</string>
     <string name="player_btn_recenter">Recenter</string>
 
@@ -321,6 +380,7 @@
     <string name="format_tab_flat">Flat</string>
     <string name="format_tab_360">360°</string>
     <string name="format_tab_180">180°</string>
+    <string name="format_tab_cubemap">Cubemap</string>
     <string name="format_auto_detected_title">Detected Format</string>
     <string name="format_auto_current_title">Current Active Mode</string>
     <string name="format_auto_btn_reset">Use Auto Detection</string>
@@ -345,6 +405,8 @@
     <!-- Monitoramento térmico (T14.1-T14.3) -->
     <string name="thermal_warning_reducing_quality">Reducing quality to prevent overheating</string>
     <string name="thermal_critical_pause">Critical temperature detected. Playback paused for cooling.</string>
+    <string name="quality_warning_gpu_overload">Reducing quality due to high GPU load</string>
+    <string name="quality_warning_frame_pacing_lag">Reducing quality due to frame pacing issues</string>
     <string name="thermal_level_normal">Normal</string>
     <string name="thermal_level_moderate">Moderate</string>
     <string name="thermal_level_severe">Severe</string>
@@ -392,6 +454,7 @@
     <string name="debug_stats_section_network_buffer">Network &amp; Buffer</string>
     <string name="debug_stats_section_system">System &amp; Hardware</string>
 
+    <string name="debug_stats_label_bottleneck">Bottleneck Stage</string>
     <string name="debug_stats_label_resolution">Resolution / Codec</string>
     <string name="debug_stats_label_fps">Framerate / Display</string>
     <string name="debug_stats_label_dropped_frames">Dropped Frames</string>
@@ -400,6 +463,18 @@
     <string name="debug_stats_label_stereo_mode">Screen / Stereo Mode</string>
     <string name="debug_stats_label_render_scale">Render Scale / Foveation</string>
     <string name="debug_stats_label_graphics_backend">Graphics Backend</string>
+    <string name="debug_stats_label_video_decoder">Video Decoder</string>
+    <string name="debug_stats_label_gpu_time">GPU Time</string>
+    <string name="debug_stats_label_quality">Adaptive Quality</string>
+    <string name="debug_stats_label_upscaling">Upscaling</string>
+    <string name="debug_stats_label_drawcalls">Draw Calls / Triangles</string>
+
+    <string name="debug_stats_section_charts">Charts</string>
+    <string name="debug_stats_chart_g1_title">Pipeline stage (60s)</string>
+    <string name="debug_stats_chart_g2_title">Frame time histogram (buckets: &lt;11.1/16.7/20/33.3/50/100/250/≥250ms)</string>
+    <string name="debug_stats_chart_g3_title">Buffer health (s) / Network (MB/s)</string>
+    <string name="debug_stats_chart_g4_title">A/V drift (ms)</string>
+    <string name="debug_stats_chart_g5_title">GPU time vs. budget (ms)</string>
 
     <string name="debug_stats_label_audio_format">Audio Codec / Channels</string>
     <string name="debug_stats_label_av_drift">A/V Drift</string>
@@ -410,6 +485,7 @@
     <string name="debug_stats_label_source">Source / Protocol</string>
     <string name="debug_stats_label_network_speed">Network Throughput</string>
     <string name="debug_stats_label_buffer_queue">Buffer Queue</string>
+    <string name="debug_stats_label_presentation_pending">Frames Pending Display</string>
     <string name="debug_stats_label_fetch_latency">Block Fetch Latency</string>
     <string name="debug_stats_label_blocks">Blocks Fetched / Discarded</string>
     <string name="debug_stats_label_seek_latency">Last Seek Latency</string>
@@ -417,5 +493,81 @@
     <string name="debug_stats_label_thermal">Thermal Status</string>
     <string name="debug_stats_label_battery">Battery</string>
     <string name="debug_stats_label_app_version">App Version</string>
+
+    <!-- Codec capability & hardware acceleration (T6.1, T6.5) -->
+    <string name="codec_hw_unsupported_error">This device does not have hardware support for this codec.</string>
+    <string name="codec_generic_unsupported_error">This video codec is not supported by the player.</string>
+    <string name="codec_badge_hw">HW Decoder</string>
+    <string name="codec_badge_sw">SW Only</string>
+    <string name="codec_badge_unsupported">Unsupported</string>
+
+    <!-- Playlists (Fase 0.3 Seção 9) -->
+    <string name="home_btn_playlists"> Playlists</string>
+    <string name="playlists_title">Playlists</string>
+    <string name="playlists_new">New Playlist</string>
+    <string name="playlists_empty">No playlists created</string>
+    <string name="playlists_create_dialog_title">Create Playlist</string>
+    <string name="playlists_name_hint">Playlist name</string>
+    <string name="playlists_create_btn">Create</string>
+    <string name="playlists_cancel_btn">Cancel</string>
+    <string name="playlists_delete">Delete Playlist</string>
+    <string name="playlists_delete_confirm">Are you sure you want to delete this playlist?</string>
+    <string name="playlists_play_all">Play All</string>
+    <string name="playlists_item_count_singular">%1$d video</string>
+    <string name="playlists_item_count_plural">%1$d videos</string>
+    <string name="playlists_add_to_playlist">Add to Playlist</string>
+    <string name="playlists_added_success">Added to playlist %1$s</string>
+    <string name="playlists_select_playlist">Select Playlist</string>
+    <string name="playlists_detail_empty">This playlist is empty</string>
+    <string name="playlists_mode_normal">Normal</string>
+    <string name="playlists_mode_repeat_all">Repeat All</string>
+    <string name="playlists_mode_repeat_one">Repeat One</string>
+    <string name="playlists_mode_shuffle">Shuffle</string>
+    <string name="playlists_queue_title">Play Queue</string>
+    <string name="playlists_item_unavailable">Item %1$s is unavailable</string>
+    <string name="player_btn_playlist">Playlist</string>
+
+    <!-- Fotos 360° e 3D (Fase 0.3 Seção 8) -->
+    <string name="photo_viewer_title">Photos</string>
+    <string name="photo_viewer_prev">Previous</string>
+    <string name="photo_viewer_next">Next</string>
+    <string name="photo_viewer_zoom_in">Zoom +</string>
+    <string name="photo_viewer_zoom_out">Zoom -</string>
+    <string name="photo_viewer_zoom_reset">1.0x</string>
+    <string name="photo_viewer_slideshow_start">Start Slideshow</string>
+    <string name="photo_viewer_slideshow_stop">Pause Slideshow</string>
+    <string name="photo_viewer_slideshow_interval_format">%1$ds</string>
+    <string name="photo_viewer_index_format">%1$d of %2$d</string>
+    <string name="photo_viewer_projection_flat">2D Flat</string>
+    <string name="photo_viewer_projection_360">360° Sphere</string>
+    <string name="photo_viewer_projection_180">180° VR</string>
+    <string name="photo_viewer_stereo_mono">Mono</string>
+    <string name="photo_viewer_stereo_sbs">3D SBS</string>
+    <string name="photo_viewer_stereo_ou">3D OU</string>
+    <string name="photo_viewer_dimensions_format">%1$d × %2$d</string>
+    <string name="photo_viewer_loading">Loading photo…</string>
+    <string name="photo_viewer_error">Unable to load photo</string>
+
+    <!-- Downloads Offline (Fase 0.4 Seção 4) -->
+    <string name="home_btn_downloads">Downloads</string>
+    <string name="file_detail_btn_download">Download</string>
+    <string name="download_error_insufficient_space">Insufficient storage space</string>
+    <string name="download_started_toast">Downloading %1$s…</string>
+    <string name="downloads_title">Downloads</string>
+    <string name="downloads_notification_title">tucaVR Downloads</string>
+    <string name="downloads_storage_format">%1$s free of %2$s</string>
+    <string name="downloads_storage_low_warning">Warning: Low storage space (&lt; 2 GB remaining)</string>
+    <string name="downloads_empty">No downloads yet</string>
+    <string name="downloads_btn_clear_completed">Clear Completed</string>
+    <string name="downloads_status_queued">Queued</string>
+    <string name="downloads_status_downloading">Downloading</string>
+    <string name="downloads_status_paused">Paused</string>
+    <string name="downloads_status_completed">Completed</string>
+    <string name="downloads_status_failed">Failed</string>
+    <string name="downloads_btn_pause">Pause</string>
+    <string name="downloads_btn_resume">Resume</string>
+    <string name="downloads_btn_cancel">Cancel</string>
+    <string name="downloads_btn_retry">Retry</string>
+    <string name="downloads_btn_play">Play</string>
 
 </resources>

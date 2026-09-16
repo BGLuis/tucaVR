@@ -108,6 +108,16 @@ pub enum Format3D {
     /// documented on [`detect_from_filename`]) — there is deliberately no
     /// `Vr180OverUnder*` variant.
     Vr180Sbs,
+    /// Cubemap 3x2, mono (6 faces: Right, Left, Top, Bottom, Front, Back).
+    Cubemap3x2Mono,
+    /// Cubemap 6x1, mono (horizontal strip de 6 faces).
+    Cubemap6x1Mono,
+    /// Equi-Angular Cubemap (EAC) 3x2, mono (distribuição angular uniforme, YouTube VR).
+    Eac3x2Mono,
+    /// Cubemap 3x2, stereo SBS (12 faces, 3x2 por olho).
+    Cubemap3x2Sbs,
+    /// Equi-Angular Cubemap (EAC) 3x2, stereo SBS.
+    Eac3x2Sbs,
 }
 
 impl Format3D {
@@ -130,6 +140,8 @@ impl Format3D {
             Format3D::Spherical360OverUnderHalf => true,
             Format3D::Vr180Mono => false,
             Format3D::Vr180Sbs => true,
+            Format3D::Cubemap3x2Mono | Format3D::Cubemap6x1Mono | Format3D::Eac3x2Mono => false,
+            Format3D::Cubemap3x2Sbs | Format3D::Eac3x2Sbs => true,
         }
     }
 
@@ -153,20 +165,18 @@ impl Format3D {
             Format3D::Spherical360OverUnderHalf => true,
             Format3D::Vr180Mono => true,
             Format3D::Vr180Sbs => true,
+            Format3D::Cubemap3x2Mono
+            | Format3D::Cubemap6x1Mono
+            | Format3D::Eac3x2Mono
+            | Format3D::Cubemap3x2Sbs
+            | Format3D::Eac3x2Sbs => true,
         }
     }
 
-    /// Índice numérico do `enum class ScreenMode` nativo (0-9) — precisa
-    /// ficar em sincronia com `native/src/vr_player_app.cpp`,
-    /// `native/src/vr_player_app_vulkan.cpp` e `modeLabelResIds` em
-    /// `VRControlsPresentation.kt` (ver CLAUDE.md). O `ScreenMode` nativo
-    /// tem só 10 valores contra os 12 daqui — `Spherical360SbsHalf`/
-    /// `Spherical360OverUnderHalf` colapsam nos mesmos índices de suas
-    /// contrapartes "full" (a geometria da esfera não muda entre full/half,
-    /// só a resolução efetiva por olho — diferente do caso plano, onde
-    /// full/half tem aspect ratio de quad diferente e por isso tem índices
-    /// próprios). `Vr180Mono` usa o mesmo índice de `Sphere180` (não existe
-    /// um "VR180 mono" separado no nativo). Match exaustivo — adicionar uma
+    /// Índice numérico do `enum class ScreenMode` nativo (0-14) — precisa
+    /// ficar em sincronia com `native/include/screen_mode.h`,
+    /// `rust/bridge/src/lib.rs` e `ScreenFormatCatalog.kt`
+    /// (ver CLAUDE.md / GEMINI.md). Match exaustivo — adicionar uma
     /// variante nova em `Format3D` é erro de compilação aqui até decidir
     /// pra qual índice ela mapeia.
     pub fn to_screen_mode_index(self) -> u32 {
@@ -183,20 +193,32 @@ impl Format3D {
             Format3D::Spherical360OverUnderFull => 8,
             Format3D::Spherical360OverUnderHalf => 8,
             Format3D::Vr180Sbs => 9,
+            Format3D::Cubemap3x2Mono => 10,
+            Format3D::Cubemap6x1Mono => 11,
+            Format3D::Eac3x2Mono => 12,
+            Format3D::Cubemap3x2Sbs => 13,
+            Format3D::Eac3x2Sbs => 14,
         }
     }
 
     /// Determina a região de corte do thumbnail para este formato estereoscópico.
     pub fn thumbnail_crop_region(&self) -> ThumbnailCropRegion {
         match self {
-            Format3D::Flat2D | Format3D::Spherical360Mono | Format3D::Vr180Mono => {
+            Format3D::Flat2D
+            | Format3D::Spherical360Mono
+            | Format3D::Vr180Mono
+            | Format3D::Cubemap3x2Mono
+            | Format3D::Cubemap6x1Mono
+            | Format3D::Eac3x2Mono => {
                 ThumbnailCropRegion::None
             }
             Format3D::SbsFull
             | Format3D::SbsHalf
             | Format3D::Spherical360SbsFull
             | Format3D::Spherical360SbsHalf
-            | Format3D::Vr180Sbs => ThumbnailCropRegion::LeftHalf,
+            | Format3D::Vr180Sbs
+            | Format3D::Cubemap3x2Sbs
+            | Format3D::Eac3x2Sbs => ThumbnailCropRegion::LeftHalf,
             Format3D::OverUnderFull
             | Format3D::OverUnderHalf
             | Format3D::Spherical360OverUnderFull
@@ -293,8 +315,18 @@ pub fn resolve_container_hint(
         } else {
             Format3D::Spherical360OverUnderHalf
         }),
-        // Cubemap/EAC/fisheye/etc: fora da taxonomia deste app — sem sinal
-        // utilizavel, deixa pra filename/resolucao decidirem.
+        Some(VideoProjection::Cubemap) => Some(if is_stereo {
+            Format3D::Cubemap3x2Sbs
+        } else if aspect >= 5.0 {
+            Format3D::Cubemap6x1Mono
+        } else {
+            Format3D::Cubemap3x2Mono
+        }),
+        Some(VideoProjection::EquiangularCubemap) => Some(if is_stereo {
+            Format3D::Eac3x2Sbs
+        } else {
+            Format3D::Eac3x2Mono
+        }),
         Some(_) => None,
         None if is_stereo && is_sbs => {
             Some(if is_full_packing(true, aspect) { Format3D::SbsFull } else { Format3D::SbsHalf })
@@ -323,9 +355,7 @@ pub enum DetectionConfidence {
     /// ratio + resolution. The T3.3 "último recurso" tier; easy to fool
     /// (e.g. an unusually-cropped flat 21:9 video near 32:9).
     FromHeuristic,
-    /// Nothing matched anything. Conservative fallback: [`Format3D::Flat2D`]
-    /// only, per the module-level CAUTION note — never a stereo/spherical
-    /// guess with zero supporting signal.
+    /// No signal whatsoever — defaulted to flat 2D.
     Default,
 }
 
@@ -349,6 +379,12 @@ enum FilenameProjection {
     Vr180Generic,
     /// `_360` or `_360x180`.
     Spherical360,
+    /// Cubemap 3x2 / generic cubemap marker (`_cubemap`, `-cubemap`, `_cube`).
+    Cubemap,
+    /// Cubemap 6x1 (`_6x1`, `cubemap_6x1`).
+    Cubemap6x1,
+    /// EAC / Equi-Angular Cubemap marker (`_eac`, `-eac`).
+    Eac,
 }
 
 /// Detect [`Format3D`] from a filename, per T3.2's pattern table
@@ -356,54 +392,12 @@ enum FilenameProjection {
 /// the name matches any known convention, so callers can fall through to
 /// [`detect_from_resolution`].
 ///
-/// ## Priority order (deliberate, not accidental — see tests below)
-///
-/// Filenames can carry *two* independent signals at once: a stereo layout
-/// (SBS/OU, full/half) and a projection/extent (flat/180°/360°). This
-/// function extracts both independently, then combines them, instead of
-/// returning on the first pattern match in table order like the doc's
-/// literal T3.2 sample — the sample's flat placeholder `Format3D` enum
-/// (`Format3D::SBS`, `Format3D::Spherical360`, ...) can't represent a
-/// filename like `movie_360_sbs.mp4` (stereo 360° SBS) as a single value,
-/// but our richer enum can and does (`Spherical360SbsFull`), so we resolve
-/// the combination rather than picking whichever pattern happens to appear
-/// first in a fixed list.
-///
-/// Layout extraction order (half before full):
-/// `_half_sbs` contains `_sbs` as a literal substring ("...alf**_sbs**"),
-/// so checking the generic SBS patterns first would misclassify every
-/// half-SBS file as full-SBS. Half markers are therefore always checked
-/// first. `_hsbs`/`_hou` don't actually collide with `_sbs`/`_ou` this way
-/// (the `h` breaks underscore-adjacency), but are checked first anyway for
-/// symmetry and so this ordering keeps holding if patterns are ever added.
-///
 /// Projection extraction order (VR180-specific before generic `_180`):
 /// `_vr180` and `_180x180` both contain `_180` as a substring, so the
 /// specific markers are checked first — both this function's current
 /// mapping and a plain substring-first check happen to agree here, but
 /// checking the specific patterns first keeps that an explicit choice
 /// rather than a coincidence.
-///
-/// Judgment calls (locked in by the ambiguous-case tests below):
-/// - `_vr180` / `_180x180` / `_vr_` -> [`Format3D::Vr180Sbs`] unconditionally.
-///   VR180 is a de-facto SBS-only format in consumer camera output (Insta360,
-///   Vecnos/Kandao rigs, YouTube VR180 uploads); a bare VR180 marker with no
-///   further signal is far more likely to be mislabeled-as-mono SBS content
-///   than genuine mono 180° footage.
-/// - Bare `_180` (no VR180-specific marker) -> [`Format3D::Vr180Mono`] unless
-///   an explicit stereo layout marker is *also* present elsewhere in the
-///   name, in which case it resolves to [`Format3D::Vr180Sbs`]. Unlike
-///   `_vr180`, a bare `_180` alone is not a strong enough stereo signal on
-///   its own (per the module-level CAUTION: don't guess stereo without
-///   support), but an explicit `_sbs`/`_ou` marker in the same name *is*
-///   support.
-/// - `_360x180` -> kept as [`Format3D::Spherical360Mono`] (absent an
-///   accompanying stereo marker) per the task brief — no more specific
-///   real-world convention for that exact token was found.
-/// - `_360` + an SBS/OU marker anywhere else in the name -> the matching
-///   stereo 360° variant (e.g. `Spherical360SbsHalf`), never flat SBS/OU.
-///   A 360° marker is strong, explicit evidence that the SBS/OU marker
-///   describes the *sphere's* packing, not a flat video's.
 pub fn detect_from_filename(name: &str) -> Option<Format3D> {
     let lower = name.to_lowercase();
 
@@ -430,6 +424,12 @@ pub fn detect_from_filename(name: &str) -> Option<Format3D> {
         Some(FilenameProjection::Spherical360)
     } else if lower.contains("_180") {
         Some(FilenameProjection::Vr180Generic)
+    } else if lower.contains("_eac") || lower.contains("-eac") {
+        Some(FilenameProjection::Eac)
+    } else if lower.contains("6x1") && (lower.contains("cube") || lower.contains("360")) {
+        Some(FilenameProjection::Cubemap6x1)
+    } else if lower.contains("_cubemap") || lower.contains("-cubemap") || lower.contains("_cube") {
+        Some(FilenameProjection::Cubemap)
     } else {
         None
     };
@@ -454,6 +454,19 @@ pub fn detect_from_filename(name: &str) -> Option<Format3D> {
         Some(FilenameProjection::Vr180Generic) => Some(match stereo_layout {
             None => Format3D::Vr180Mono,
             Some(_) => Format3D::Vr180Sbs,
+        }),
+        Some(FilenameProjection::Eac) => Some(match stereo_layout {
+            Some(FilenameStereoLayout::SbsFull) | Some(FilenameStereoLayout::SbsHalf) => {
+                Format3D::Eac3x2Sbs
+            }
+            _ => Format3D::Eac3x2Mono,
+        }),
+        Some(FilenameProjection::Cubemap6x1) => Some(Format3D::Cubemap6x1Mono),
+        Some(FilenameProjection::Cubemap) => Some(match stereo_layout {
+            Some(FilenameStereoLayout::SbsFull) | Some(FilenameStereoLayout::SbsHalf) => {
+                Format3D::Cubemap3x2Sbs
+            }
+            _ => Format3D::Cubemap3x2Mono,
         }),
     }
 }
@@ -505,6 +518,16 @@ pub fn detect_from_resolution(width: u32, height: u32) -> Option<Format3D> {
     // equirect eyes collapse to a roughly square frame).
     if close_to(aspect, 1.0) && max_dim >= 3840 {
         return Some(Format3D::Spherical360OverUnderFull);
+    }
+
+    // ~6:1 at >= 3K -> faixa horizontal de 6 faces cubemap mono (6x1)
+    if close_to(aspect, 6.0) && max_dim >= 3000 {
+        return Some(Format3D::Cubemap6x1Mono);
+    }
+
+    // ~3:1 at >= 3840 -> cubemap stereo SBS (duas metades 3x2 lado a lado)
+    if close_to(aspect, 3.0) && max_dim >= 3840 {
+        return Some(Format3D::Cubemap3x2Sbs);
     }
 
     None
@@ -1058,12 +1081,36 @@ mod tests {
     }
 
     #[test]
-    fn resolve_container_hint_unsupported_or_empty_returns_none() {
-        // Cubemap -> None
+    fn resolve_container_hint_cubemap_and_eac() {
+        // Cubemap mono
         assert_eq!(
             resolve_container_hint(None, Some(VideoProjection::Cubemap), 1920, 1080),
-            None
+            Some(Format3D::Cubemap3x2Mono)
         );
+        // Cubemap 6x1 (aspect >= 5.0)
+        assert_eq!(
+            resolve_container_hint(None, Some(VideoProjection::Cubemap), 6000, 1000),
+            Some(Format3D::Cubemap6x1Mono)
+        );
+        // Cubemap stereo SBS
+        assert_eq!(
+            resolve_container_hint(Some(VideoStereoMode::SideBySideLeft), Some(VideoProjection::Cubemap), 3840, 1280),
+            Some(Format3D::Cubemap3x2Sbs)
+        );
+        // EAC mono
+        assert_eq!(
+            resolve_container_hint(None, Some(VideoProjection::EquiangularCubemap), 1920, 1080),
+            Some(Format3D::Eac3x2Mono)
+        );
+        // EAC stereo SBS
+        assert_eq!(
+            resolve_container_hint(Some(VideoStereoMode::SideBySideLeft), Some(VideoProjection::EquiangularCubemap), 3840, 1280),
+            Some(Format3D::Eac3x2Sbs)
+        );
+    }
+
+    #[test]
+    fn resolve_container_hint_unsupported_or_empty_returns_none() {
         // Mono sem projeção -> None (fica pra filename/resolução decidirem)
         assert_eq!(
             resolve_container_hint(Some(VideoStereoMode::Mono), None, 1920, 1080),
@@ -1088,6 +1135,9 @@ mod tests {
         );
         assert_eq!(Format3D::Spherical360Mono.thumbnail_crop_region(), ThumbnailCropRegion::None);
         assert_eq!(Format3D::Vr180Mono.thumbnail_crop_region(), ThumbnailCropRegion::None);
+        assert_eq!(Format3D::Cubemap3x2Mono.thumbnail_crop_region(), ThumbnailCropRegion::None);
+        assert_eq!(Format3D::Cubemap6x1Mono.thumbnail_crop_region(), ThumbnailCropRegion::None);
+        assert_eq!(Format3D::Eac3x2Mono.thumbnail_crop_region(), ThumbnailCropRegion::None);
 
         // SBS corta metade esquerda (com alinhamento par)
         assert_eq!(Format3D::SbsFull.thumbnail_crop_region(), ThumbnailCropRegion::LeftHalf);
@@ -1105,6 +1155,8 @@ mod tests {
             Format3D::Vr180Sbs.thumbnail_dimensions(7680, 3840),
             ThumbnailDimensions { width: 3840, height: 3840 }
         );
+        assert_eq!(Format3D::Cubemap3x2Sbs.thumbnail_crop_region(), ThumbnailCropRegion::LeftHalf);
+        assert_eq!(Format3D::Eac3x2Sbs.thumbnail_crop_region(), ThumbnailCropRegion::LeftHalf);
 
         // Over/Under corta metade superior
         assert_eq!(Format3D::OverUnderFull.thumbnail_crop_region(), ThumbnailCropRegion::TopHalf);
@@ -1131,7 +1183,7 @@ mod tests {
 
     #[test]
     fn test_screen_mode_contract_indices() {
-        // Invariante de contrato: to_screen_mode_index deve mapear estritamente para 0..=9,
+        // Invariante de contrato: to_screen_mode_index deve mapear estritamente para 0..=14,
         // casando com screen_mode.h no C++ e ScreenFormatCatalog.kt no Kotlin.
         assert_eq!(Format3D::Flat2D.to_screen_mode_index(), 0);
         assert_eq!(Format3D::SbsFull.to_screen_mode_index(), 1);
@@ -1145,8 +1197,13 @@ mod tests {
         assert_eq!(Format3D::Spherical360OverUnderFull.to_screen_mode_index(), 8);
         assert_eq!(Format3D::Spherical360OverUnderHalf.to_screen_mode_index(), 8);
         assert_eq!(Format3D::Vr180Sbs.to_screen_mode_index(), 9);
+        assert_eq!(Format3D::Cubemap3x2Mono.to_screen_mode_index(), 10);
+        assert_eq!(Format3D::Cubemap6x1Mono.to_screen_mode_index(), 11);
+        assert_eq!(Format3D::Eac3x2Mono.to_screen_mode_index(), 12);
+        assert_eq!(Format3D::Cubemap3x2Sbs.to_screen_mode_index(), 13);
+        assert_eq!(Format3D::Eac3x2Sbs.to_screen_mode_index(), 14);
 
-        // Nenhuma variante pode mapear para índice >= 10
+        // Todas as variantes válidas (0..=14)
         let all_variants = [
             Format3D::Flat2D,
             Format3D::SbsFull,
@@ -1160,9 +1217,14 @@ mod tests {
             Format3D::Spherical360OverUnderFull,
             Format3D::Spherical360OverUnderHalf,
             Format3D::Vr180Sbs,
+            Format3D::Cubemap3x2Mono,
+            Format3D::Cubemap6x1Mono,
+            Format3D::Eac3x2Mono,
+            Format3D::Cubemap3x2Sbs,
+            Format3D::Eac3x2Sbs,
         ];
         for v in all_variants {
-            assert!(v.to_screen_mode_index() <= 9);
+            assert!(v.to_screen_mode_index() <= 14);
         }
     }
 }

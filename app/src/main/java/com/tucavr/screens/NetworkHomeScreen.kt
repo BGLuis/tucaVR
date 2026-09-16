@@ -53,9 +53,10 @@ class NetworkHomeScreen(
     private val nfsPageBuilder: () -> View,
     private val ftpPageBuilder: () -> View,
     private val sftpPageBuilder: () -> View,
+    private val webdavPageBuilder: () -> View,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
-    /** Índice da aba ativa (Discovery=0 / DLNA=1 / URL=2 / SMB=3 / NFS=4 / FTP=5 / SFTP=6). */
+    /** Índice da aba ativa (Discovery=0 / DLNA=1 / URL=2 / SMB=3 / NFS=4 / FTP=5 / SFTP=6 / WebDAV=7). */
     var activeTabIndex: Int = 0
 ) {
 
@@ -79,7 +80,8 @@ class NetworkHomeScreen(
         val nfsPage       = nfsPageBuilder()
         val ftpPage       = ftpPageBuilder()
         val sftpPage      = sftpPageBuilder()
-        val pages = listOf(discoveryPage, dlnaPage, urlPage, smbPage, nfsPage, ftpPage, sftpPage)
+        val webdavPage    = webdavPageBuilder()
+        val pages = listOf(discoveryPage, dlnaPage, urlPage, smbPage, nfsPage, ftpPage, sftpPage, webdavPage)
 
         pages.forEachIndexed { index, page ->
             page.visibility = if (index == activeTabIndex) View.VISIBLE else View.GONE
@@ -93,7 +95,8 @@ class NetworkHomeScreen(
             R.drawable.ic_storage,
             R.drawable.ic_storage,
             R.drawable.ic_broadcast,
-            R.drawable.ic_lock
+            R.drawable.ic_lock,
+            R.drawable.ic_network
         )
         val tabRow = VoidTabRow(
             context,
@@ -104,7 +107,8 @@ class NetworkHomeScreen(
                 context.getString(R.string.network_tab_smb).trim(),
                 context.getString(R.string.network_tab_nfs).trim(),
                 context.getString(R.string.network_tab_ftp).trim(),
-                context.getString(R.string.network_tab_sftp).trim()
+                context.getString(R.string.network_tab_sftp).trim(),
+                context.getString(R.string.network_tab_webdav).trim()
             ),
             iconResIds = tabIcons
         ) { index ->

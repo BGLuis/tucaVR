@@ -97,13 +97,15 @@ class ScreenFormatModal(
             context.getString(R.string.format_tab_auto),
             context.getString(R.string.format_tab_flat),
             context.getString(R.string.format_tab_360),
-            context.getString(R.string.format_tab_180)
+            context.getString(R.string.format_tab_180),
+            context.getString(R.string.format_tab_cubemap)
         )
         val tabIcons = listOf(
             R.drawable.icon_gauge,
             R.drawable.icon_2d,
             R.drawable.icon_360,
-            R.drawable.icon_180
+            R.drawable.icon_180,
+            R.drawable.icon_cubemap_3x2
         )
 
         val contentHost = FrameLayout(context).apply {
@@ -118,11 +120,13 @@ class ScreenFormatModal(
         val flatPage = buildGroupPage(ScreenFormatGroup.FLAT)
         val s360Page = buildGroupPage(ScreenFormatGroup.SPHERICAL_360)
         val s180Page = buildGroupPage(ScreenFormatGroup.SPHERICAL_180)
+        val cubemapPage = buildGroupPage(ScreenFormatGroup.CUBEMAP)
 
         tabPages.add(autoPage)
         tabPages.add(flatPage)
         tabPages.add(s360Page)
         tabPages.add(s180Page)
+        tabPages.add(cubemapPage)
 
         tabPages.forEach { page ->
             contentHost.addView(page, LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT))
@@ -141,6 +145,7 @@ class ScreenFormatModal(
             currentMode in 0..4 -> 1
             currentMode in listOf(5, 7, 8) -> 2
             currentMode in listOf(6, 9) -> 3
+            currentMode in 10..14 -> 4
             else -> 0
         }
         tabRow.setActiveIndex(initialTab, notify = false)
@@ -166,7 +171,7 @@ class ScreenFormatModal(
             }
         }
 
-        val detectedModeName = if (detectedMode != null && detectedMode in 0..9) {
+        val detectedModeName = if (detectedMode != null && ScreenFormatCatalog.isValid(detectedMode)) {
             val name = context.getString(ScreenFormatCatalog.getLabelResId(detectedMode))
             val confidenceSuffix = when {
                 detectionConfidence >= 3 -> " (${context.getString(R.string.format_confidence_high)})"

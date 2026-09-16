@@ -55,6 +55,16 @@ extern "C" {
     // Fase 0.4 T5: Foveated Rendering (implementacao real em
     // vr_player_app_vulkan.cpp, ver ApplyFoveation).
     extern void set_foveation_enabled(uint32_t enabled);
+    extern void set_foveation_mode(uint32_t mode);
+    extern uint32_t get_foveation_mode();
+    // Fase 0.3 Seção 2: Passthrough / Mixed Reality (implementacao real em
+    // vr_player_app_vulkan.cpp, ver SetupPassthrough/UpdatePassthrough).
+    extern void set_passthrough_enabled(uint32_t enabled);
+    extern uint32_t get_passthrough_supported();
+    extern void set_passthrough_opacity(float opacity);
+    extern float get_passthrough_opacity();
+    extern void set_passthrough_edge_rendering(uint32_t enabled);
+    extern uint32_t get_passthrough_edge_rendering();
     extern void set_pause_on_exit(uint32_t enabled);
     extern uint32_t get_pause_on_exit();
     // Upscaling de vídeo (Vulkan-only, MQSR & SGSR1)
@@ -63,10 +73,18 @@ extern "C" {
     // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
     extern void set_thermal_level(uint32_t level);
     extern uint32_t get_thermal_level();
+    // "Buffer estilo YouTube" (ver media_logic::buffer_gate): RAM total do
+    // aparelho, pra escalar o teto do buffer profundo pausado por dispositivo
+    // em vez de um numero fixo cravado pro Quest 3.
+    extern void set_device_total_memory_bytes(uint64_t bytes);
     extern void set_spatial_audio_mode(uint32_t mode);
     extern uint32_t get_spatial_audio_mode();
     extern void set_spatial_audio_head_tracking(uint32_t enabled);
     extern uint32_t get_spatial_audio_head_tracking();
+    // T4.4: Screen-locked audio — speakers fixos relativos à tela
+    extern void set_audio_screen_locked(uint32_t locked);
+    extern uint32_t get_audio_screen_locked();
+    extern void set_screen_orientation(float x, float y, float z, float w);
     // Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
     extern void set_subtitle_track(int32_t track_index);
     extern int32_t get_subtitle_track();
@@ -75,9 +93,17 @@ extern "C" {
     extern uint32_t load_external_subtitle(const char* path);
     extern uint32_t get_subtitle_track_count();
     extern uint32_t get_active_subtitle_text(char* out_buf, size_t max_len);
+    extern void set_preferred_subtitle_language(const char* lang); // T7.6
     extern char* take_last_playback_error();
     extern void free_rust_string(char* s);
     extern char* probe_http_url(const char* url);
+    // Download Offline (Fase 0.4 Seção 4)
+    extern int32_t download_enqueue(const char* id, const char* source_uri, const char* destination_path);
+    extern int32_t download_pause(const char* id);
+    extern int32_t download_resume(const char* id);
+    extern int32_t download_cancel(const char* id);
+    extern int32_t download_get_stats(const char* id, uint64_t* out_downloaded, uint64_t* out_total, uint64_t* out_speed_bps, uint32_t* out_state);
+    extern void download_set_playback_active(uint32_t active);
     // SMB
     extern void start_smb_playback(const char* host, int32_t port, const char* share,
                                     const char* path, const char* username,
@@ -105,6 +131,15 @@ extern "C" {
     extern char* nfs_list_directory(const char* host, int32_t port, const char* export_path,
                                      const char* dir_path, int32_t version);
     extern char* nfs_list_exports(const char* host, int32_t port);
+    // WebDAV
+    extern void start_webdav_playback(const char* host, int32_t port, const char* base_path,
+                                      const char* file_path, const char* username,
+                                      const char* password, int32_t use_https,
+                                      int32_t accept_invalid_certs, float startTimeSec);
+    extern char* webdav_list_directory(const char* host, int32_t port, const char* base_path,
+                                       const char* dir_path, const char* username,
+                                       const char* password, int32_t use_https,
+                                       int32_t accept_invalid_certs);
     // Descoberta Automática (mDNS + SSDP)
     extern char* discovery_scan_network(uint32_t timeout_ms);
     // DLNA
@@ -112,6 +147,8 @@ extern "C" {
     extern char* dlna_browse_directory(const char* control_url, const char* object_id, uint32_t start_index, uint32_t max_count);
     // HLS
     extern char* hls_probe_variants(const char* url);
+    // DASH
+    extern char* dash_probe_representations(const char* url);
     // Thumbnails de rede — mesmo contrato de vr_player_app.cpp.
     extern uint8_t* smb_generate_thumbnail(const char* host, int32_t port, const char* username,
                                             const char* password, const char* domain, const char* share,
@@ -216,6 +253,60 @@ extern std::atomic<bool> g_stopVideoRequested;
 extern std::atomic<bool> g_modalPanelActive;
 extern std::atomic<bool> g_modalPanelShowRequested;
 extern std::atomic<bool> g_modalPanelHideRequested;
+
+// Fase 0.3 Seção 8: Fotos 360° e 3D estéreo (T8.3, T8.4)
+extern std::atomic<bool> g_photoDirty;
+extern std::atomic<bool> g_photoActive;
+extern std::vector<uint8_t> g_photoRgba;
+extern uint32_t g_photoWidth;
+extern uint32_t g_photoHeight;
+extern uint32_t g_photoScreenMode;
+extern std::atomic<float> g_photoZoom;
+extern std::atomic<float> g_photoPanX;
+extern std::atomic<float> g_photoPanY;
+extern std::mutex g_photoMutex;
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeLoadPhoto(JNIEnv* env, jobject, jbyteArray rgba, jint width, jint height, jint screenMode) {
+    jsize len = env->GetArrayLength(rgba);
+    std::vector<uint8_t> buf(static_cast<size_t>(len));
+    env->GetByteArrayRegion(rgba, 0, len, reinterpret_cast<jbyte*>(buf.data()));
+    {
+        std::lock_guard<std::mutex> lock(g_photoMutex);
+        g_photoRgba = std::move(buf);
+        g_photoWidth = static_cast<uint32_t>(width);
+        g_photoHeight = static_cast<uint32_t>(height);
+        g_photoScreenMode = static_cast<uint32_t>(screenMode);
+    }
+    g_photoActive.store(true);
+    g_photoDirty.store(true);
+    LOGI("nativeLoadPhoto: foto %dx%d carregada, screenMode=%d, %d bytes", width, height, screenMode, (int)len);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeClearPhoto(JNIEnv*, jobject) {
+    {
+        std::lock_guard<std::mutex> lock(g_photoMutex);
+        g_photoRgba.clear();
+        g_photoWidth = 0;
+        g_photoHeight = 0;
+        g_photoScreenMode = 0;
+    }
+    g_photoActive.store(false);
+    g_photoDirty.store(true);
+    LOGI("nativeClearPhoto: foto descarregada");
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPhotoZoom(JNIEnv*, jobject, jfloat zoom) {
+    g_photoZoom.store(static_cast<float>(zoom));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPhotoPan(JNIEnv*, jobject, jfloat panX, jfloat panY) {
+    g_photoPanX.store(static_cast<float>(panX));
+    g_photoPanY.store(static_cast<float>(panY));
+}
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeStopVideo(JNIEnv*, jobject) {
@@ -382,6 +473,50 @@ Java_com_tucavr_VRActivity_nativeSetFoveationEnabled(JNIEnv*, jobject, jboolean 
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetFoveationMode(JNIEnv*, jobject, jint mode) {
+    set_foveation_mode(static_cast<uint32_t>(mode));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_VRActivity_nativeGetFoveationMode(JNIEnv*, jobject) {
+    return static_cast<jint>(get_foveation_mode());
+}
+
+extern std::atomic<bool> g_resetScreenPositionRequested;
+
+// Fase 0.3 Seção 2: Passthrough / Mixed Reality.
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPassthroughEnabled(JNIEnv*, jobject, jboolean enabled) {
+    set_passthrough_enabled(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeIsPassthroughSupported(JNIEnv*, jobject) {
+    return get_passthrough_supported() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPassthroughStyle(JNIEnv*, jobject, jfloat opacity, jboolean edgeRendering) {
+    set_passthrough_opacity(static_cast<float>(opacity));
+    set_passthrough_edge_rendering(edgeRendering ? 1 : 0);
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_tucavr_VRActivity_nativeGetPassthroughOpacity(JNIEnv*, jobject) {
+    return static_cast<jfloat>(get_passthrough_opacity());
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetPassthroughEdgeRendering(JNIEnv*, jobject) {
+    return get_passthrough_edge_rendering() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeResetScreenPosition(JNIEnv*, jobject) {
+    g_resetScreenPositionRequested.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetPauseOnExit(JNIEnv*, jobject, jboolean enabled) {
     set_pause_on_exit(enabled ? 1 : 0);
 }
@@ -394,6 +529,11 @@ Java_com_tucavr_VRActivity_nativeSetUpscalingMode(JNIEnv*, jobject, jint mode) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetThermalLevel(JNIEnv*, jobject, jint level) {
     set_thermal_level(static_cast<uint32_t>(level));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetDeviceTotalMemoryBytes(JNIEnv*, jobject, jlong bytes) {
+    set_device_total_memory_bytes(static_cast<uint64_t>(bytes));
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -563,6 +703,46 @@ Java_com_tucavr_VRActivity_nativeNfsListExports(JNIEnv* env, jobject,
     const char* h = env->GetStringUTFChars(host, nullptr);
     char* result = nfs_list_exports(h, (int32_t)port);
     env->ReleaseStringUTFChars(host, h);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativePlayWebdav(JNIEnv* env, jobject,
+                                             jstring host, jint port, jstring basePath,
+                                             jstring filePath, jstring username, jstring password,
+                                             jboolean useHttps, jboolean acceptInvalidCerts, jfloat startTimeSec) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* bp = env->GetStringUTFChars(basePath, nullptr);
+    const char* fp = env->GetStringUTFChars(filePath, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    start_webdav_playback(h, (int32_t)port, bp, fp, u, pw,
+                          useHttps ? 1 : 0, acceptInvalidCerts ? 1 : 0, startTimeSec);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(basePath, bp);
+    env->ReleaseStringUTFChars(filePath, fp);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeWebdavListDirectory(JNIEnv* env, jobject,
+                                                      jstring host, jint port,
+                                                      jstring basePath, jstring dirPath,
+                                                      jstring username, jstring password,
+                                                      jboolean useHttps, jboolean acceptInvalidCerts) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* bp = env->GetStringUTFChars(basePath, nullptr);
+    const char* dp = env->GetStringUTFChars(dirPath, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    char* result = webdav_list_directory(h, (int32_t)port, bp, dp, u, pw,
+                                        useHttps ? 1 : 0, acceptInvalidCerts ? 1 : 0);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(basePath, bp);
+    env->ReleaseStringUTFChars(dirPath, dp);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
     return RustStringToJStringAndFree(env, result);
 }
 
@@ -756,6 +936,14 @@ Java_com_tucavr_VRActivity_nativeHlsProbeVariants(JNIEnv* env, jobject, jstring 
 }
 
 extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeDashProbeRepresentations(JNIEnv* env, jobject, jstring url) {
+    const char* urlStr = env->GetStringUTFChars(url, nullptr);
+    char* result = dash_probe_representations(urlStr);
+    env->ReleaseStringUTFChars(url, urlStr);
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
 Java_com_tucavr_VRActivity_nativeReadMediaMetadata(JNIEnv* env, jobject, jstring path) {
     const char* p = env->GetStringUTFChars(path, nullptr);
     char* result = read_media_metadata(p);
@@ -836,6 +1024,11 @@ Java_com_tucavr_VRActivity_nativeSetSpatialAudioHeadTracking(JNIEnv* env, jobjec
     set_spatial_audio_head_tracking(enabled ? 1 : 0);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetAudioScreenLocked(JNIEnv* env, jobject, jboolean locked) {
+    set_audio_screen_locked(locked ? 1 : 0);
+}
+
 // ============================================================================
 // Métodos JNI de Legendas (SRT / WebVTT — Fase 0.2 T9.1-T9.6)
 // ============================================================================
@@ -872,4 +1065,91 @@ Java_com_tucavr_VRActivity_nativeLoadExternalSubtitle(JNIEnv* env, jobject, jstr
 extern "C" JNIEXPORT jint JNICALL
 Java_com_tucavr_VRActivity_nativeGetSubtitleTrackCount(JNIEnv* env, jobject) {
     return (jint)get_subtitle_track_count();
+}
+
+// T7.6: idioma do sistema (BCP-47, ex.: "pt-BR") para auto-seleção de faixa
+// de legenda embutida no próximo load.
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetPreferredSubtitleLanguage(JNIEnv* env, jobject, jstring lang) {
+    if (!lang) {
+        set_preferred_subtitle_language("");
+        return;
+    }
+    const char* l = env->GetStringUTFChars(lang, nullptr);
+    set_preferred_subtitle_language(l ? l : "");
+    if (l) env->ReleaseStringUTFChars(lang, l);
+}
+
+// =============================================================================
+// JNI: com.tucavr.download.DownloadBridge (Fase 0.4 Seção 4)
+// =============================================================================
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_download_DownloadBridge_nativeEnqueue(JNIEnv* env, jobject, jstring jId, jstring jUri, jstring jDest) {
+    if (!jId || !jUri || !jDest) return -1;
+    const char* idStr = env->GetStringUTFChars(jId, nullptr);
+    const char* uriStr = env->GetStringUTFChars(jUri, nullptr);
+    const char* destStr = env->GetStringUTFChars(jDest, nullptr);
+
+    int32_t ret = download_enqueue(idStr, uriStr, destStr);
+
+    env->ReleaseStringUTFChars(jId, idStr);
+    env->ReleaseStringUTFChars(jUri, uriStr);
+    env->ReleaseStringUTFChars(jDest, destStr);
+    return ret;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_download_DownloadBridge_nativePause(JNIEnv* env, jobject, jstring jId) {
+    if (!jId) return -1;
+    const char* idStr = env->GetStringUTFChars(jId, nullptr);
+    int32_t ret = download_pause(idStr);
+    env->ReleaseStringUTFChars(jId, idStr);
+    return ret;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_download_DownloadBridge_nativeResume(JNIEnv* env, jobject, jstring jId) {
+    if (!jId) return -1;
+    const char* idStr = env->GetStringUTFChars(jId, nullptr);
+    int32_t ret = download_resume(idStr);
+    env->ReleaseStringUTFChars(jId, idStr);
+    return ret;
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_download_DownloadBridge_nativeCancel(JNIEnv* env, jobject, jstring jId) {
+    if (!jId) return -1;
+    const char* idStr = env->GetStringUTFChars(jId, nullptr);
+    int32_t ret = download_cancel(idStr);
+    env->ReleaseStringUTFChars(jId, idStr);
+    return ret;
+}
+
+extern "C" JNIEXPORT jlongArray JNICALL
+Java_com_tucavr_download_DownloadBridge_nativeGetStats(JNIEnv* env, jobject, jstring jId) {
+    if (!jId) return nullptr;
+    const char* idStr = env->GetStringUTFChars(jId, nullptr);
+
+    uint64_t downloaded = 0;
+    uint64_t total = 0;
+    uint64_t speed = 0;
+    uint32_t state = 0;
+
+    int32_t ret = download_get_stats(idStr, &downloaded, &total, &speed, &state);
+    env->ReleaseStringUTFChars(jId, idStr);
+
+    if (ret != 0) return nullptr;
+
+    jlongArray array = env->NewLongArray(4);
+    if (!array) return nullptr;
+
+    jlong values[4] = { (jlong)downloaded, (jlong)total, (jlong)speed, (jlong)state };
+    env->SetLongArrayRegion(array, 0, 4, values);
+    return array;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_download_DownloadBridge_nativeSetPlaybackActive(JNIEnv*, jobject, jboolean active) {
+    download_set_playback_active(active ? 1 : 0);
 }

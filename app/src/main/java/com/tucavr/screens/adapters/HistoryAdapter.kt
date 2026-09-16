@@ -84,6 +84,7 @@ class HistoryAdapter(
             HistorySourceType.SFTP  -> context.getString(R.string.history_row_sftp_format, entry.title).trim()
             HistorySourceType.NFS   -> context.getString(R.string.network_nfs_row_label_format, entry.title).trim()
             HistorySourceType.DLNA  -> entry.title
+            HistorySourceType.WEBDAV -> context.getString(R.string.network_webdav_row_label_format, entry.title).trim()
         }
         val iconRes = when (entry.sourceType) {
             HistorySourceType.LOCAL -> R.drawable.ic_movie
@@ -93,6 +94,7 @@ class HistoryAdapter(
             HistorySourceType.SFTP  -> R.drawable.ic_lock
             HistorySourceType.NFS   -> R.drawable.ic_storage
             HistorySourceType.DLNA  -> R.drawable.ic_movie
+            HistorySourceType.WEBDAV -> R.drawable.ic_link
         }
         val meta = context.getString(
             R.string.history_row_meta_format,

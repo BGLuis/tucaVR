@@ -1,7 +1,10 @@
-//! Decodificador Ambisonics B-format (1ª Ordem FOA / 2ª Ordem SOA) — PHASE-0.3, Seção 3.
+//! Decodificador Ambisonics B-format — 1ª Ordem FOA (First Order Ambisonics) — PHASE-0.3, Seção 3.
 //!
 //! Converte campos sonoros esféricos Ambisonics (comuns em vídeos 360° do YouTube e VR180)
 //! em áudio binaural estéreo imersivo com rotação tridimensional por rastreamento de cabeça.
+//!
+//! **Nota:** Apenas FOA (4 canais) está implementado. SOA (2ª Ordem, 9 canais) e TOA
+//! (3ª Ordem, 16 canais) estão fora do escopo da v0.3 (ver `AudioChannelLayout::Unknown`).
 
 use crate::spatial_audio::hrtf::{FirConvolver, HrtfDataset};
 use crate::spatial_audio::quaternion::{Quat, Vec3};

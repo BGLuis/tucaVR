@@ -61,8 +61,12 @@ class VRControlsPresentation(
         if (::timeLabel.isInitialized) timeLabel.text = "00:00"
         if (::totalTimeLabel.isInitialized) totalTimeLabel.text = "00:00"
         if (::titleLabel.isInitialized) titleLabel.text = ""
-        if (::seekBar.isInitialized) seekBar.progress = 0
+        if (::seekBar.isInitialized) {
+            seekBar.progress = 0
+            seekBar.secondaryProgress = 0
+        }
         totalDuration = 0f
+        lastKnownCurrentSec = 0f
         if (::btnPlayPause.isInitialized) {
             btnPlayPause.setImageResource(R.drawable.icon_play)
         }
@@ -77,6 +81,7 @@ class VRControlsPresentation(
     private lateinit var batteryLabel: TextView
     private lateinit var thermalIcon: ImageView
     private lateinit var thermalLabel: TextView
+    private lateinit var qualityBadge: TextView
     private lateinit var clockLabel: TextView
     private lateinit var btnPlayPause: com.tucavr.designsystem.VoidIconButton
     private var hudReceiver: android.content.BroadcastReceiver? = null
@@ -120,9 +125,14 @@ class VRControlsPresentation(
     }
 
     private var lastKnownMode = 0
+    // Posicao atual, guardada so pra updateBufferedProgress poder calcular
+    // o fim do trecho bufferizado (currentSec + bufferedAheadSec) sem
+    // precisar que o C++ mande a posicao de novo numa segunda chamada JNI.
+    private var lastKnownCurrentSec = 0f
 
     fun updateProgress(currentSec: Float, totalSec: Float) {
         totalDuration = totalSec
+        lastKnownCurrentSec = currentSec
         if (!isDragging && totalSec > 0 && (System.currentTimeMillis() - lastSeekTime > 800)) {
             seekBar.progress = ((currentSec / totalSec) * 100).toInt()
             timeLabel.text = formatTime(currentSec)
@@ -134,6 +144,19 @@ class VRControlsPresentation(
         // Mantém lastKnownMode atualizado com o modo nativo para que
         // a pré-visualização de scrub reconheça modos esféricos vs planos.
         lastKnownMode = activity.nativeGet3DMode()
+    }
+
+    /**
+     * "Buffer estilo YouTube": pinta o segmento cinza padrão do [SeekBar]
+     * (`secondaryProgress`) até `currentSec + bufferedAheadSec` — mesmo
+     * indicador visual que o YouTube usa pra mostrar quanto já foi
+     * carregado à frente do ponteiro, tocando ou pausado (ver
+     * `media_logic::buffer_gate` no lado Rust).
+     */
+    fun updateBufferedProgress(bufferedAheadSec: Float) {
+        if (!::seekBar.isInitialized || totalDuration <= 0f) return
+        val bufferedEndSec = (lastKnownCurrentSec + bufferedAheadSec).coerceAtMost(totalDuration)
+        seekBar.secondaryProgress = ((bufferedEndSec / totalDuration) * 100).toInt().coerceIn(0, 100)
     }
 
     /**
@@ -180,6 +203,36 @@ class VRControlsPresentation(
                 thermalLabel.visibility = View.VISIBLE
                 thermalLabel.text = context.getString(R.string.thermal_level_critical)
                 thermalLabel.setTextColor(color)
+            }
+        }
+    }
+
+    /**
+     * Fase 0.4 T1/T5: Atualiza o badge visual de qualidade adaptativa no header do player.
+     */
+    fun updateQualityBadge(level: String, reason: String) {
+        if (!::qualityBadge.isInitialized) return
+        when (level) {
+            "ULTRA", "HIGH" -> {
+                qualityBadge.visibility = View.GONE
+            }
+            "MEDIUM" -> {
+                qualityBadge.visibility = View.VISIBLE
+                qualityBadge.text = "AQ: MED"
+                qualityBadge.setTextColor(Color.parseColor("#FFCC00"))
+            }
+            "LOW" -> {
+                qualityBadge.visibility = View.VISIBLE
+                qualityBadge.text = if (reason != "NONE") "AQ: LOW ($reason)" else "AQ: LOW"
+                qualityBadge.setTextColor(Color.parseColor("#FF8800"))
+            }
+            "EMERGENCY" -> {
+                qualityBadge.visibility = View.VISIBLE
+                qualityBadge.text = if (reason != "NONE") "AQ: CRIT ($reason)" else "AQ: CRIT"
+                qualityBadge.setTextColor(Color.parseColor("#FF3333"))
+            }
+            else -> {
+                qualityBadge.visibility = View.GONE
             }
         }
     }
@@ -392,13 +445,29 @@ class VRControlsPresentation(
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         }
 
+        // Tamanho reduzido para os icones secundarios (formato/olhos/passthrough,
+        // legendas/audio/stats) — usados bem menos vezes por sessao do que
+        // play/seek, que mantem o alvo de toque grande original (ver comentario
+        // em VoidButton sobre precisao de raycast em VR).
+        val secondaryIconPx = VoidTheme.dpToPx(context, 72f)
+
+        // Zona esquerda e direita do cabecalho com o MESMO peso (1f) — e' isso
+        // que garante o statusBadge (bateria/relogio) sempre centralizado,
+        // mesmo que um lado tenha mais botoes/largura que o outro. Um espacador
+        // fixo dos dois lados quebraria a centralizacao sempre que os grupos de
+        // botoes tivessem larguras diferentes (foi o que aconteceu ao mover os
+        // modos VR pra ca: o grupo da direita ficou mais largo que o X sozinho).
+        val leftZone = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL or Gravity.START
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        }
         val btnClose = VoidIconButton(context, R.drawable.icon_x, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
             setOnClickListener { activity.stopPlayback() }
             layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
         }
-        headerRow.addView(btnClose)
-
-        headerRow.addView(View(context).apply { layoutParams = LinearLayout.LayoutParams(0, 0, 1.0f) })
+        leftZone.addView(btnClose)
+        headerRow.addView(leftZone)
 
         val statusBadge = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -467,14 +536,118 @@ class VRControlsPresentation(
         }
         statusBadge.addView(thermalLabel)
 
+        qualityBadge = TextView(context).apply {
+            text = ""
+            typeface = VoidTheme.typefaceMono
+            textSize = 28f
+            setTextColor(VoidTheme.colorTextSecondary)
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                leftMargin = VoidTheme.dpToPx(context, 16f)
+            }
+        }
+        statusBadge.addView(qualityBadge)
+
         headerRow.addView(statusBadge)
 
-        headerRow.addView(View(context).apply { layoutParams = LinearLayout.LayoutParams(0, 0, 1.0f) })
-
-        val btnSettings = VoidIconButton(context, R.drawable.icon_settings, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
-            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
+        val rightZone = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL or Gravity.END
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
-        headerRow.addView(btnSettings)
+
+        // Modos VR (movidos do rodape pro cabecalho: formato de tela, inverter
+        // olhos e passthrough sao ajustados no maximo uma vez por video, nao a
+        // cada poucos segundos como play/seek, entao nao precisam competir por
+        // espaco na fila principal de controles. A engrenagem que ficava aqui
+        // nao tinha nenhuma acao ligada e foi removida.
+        val vrModesLayout = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            // Fundo solido igual ao resto do player (colorBackground, #121212)
+            // — no cabecalho o fundo e transparente (ve passthrough/video por
+            // tras), entao estes icones (isTransparent=true, sem pill propria)
+            // ficam invisiveis sem essa base, igual o statusBadge ao lado.
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(VoidTheme.colorBackground)
+                cornerRadius = VoidTheme.dp(context, 18f)
+            }
+            val padH = VoidTheme.dpToPx(context, 12f)
+            val padV = VoidTheme.dpToPx(context, 8f)
+            setPadding(padH, padV, padH, padV)
+        }
+        val btnGlass = VoidIconButton(context, R.drawable.icon_vr_headset, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+            setOnClickListener {
+                activity.openScreenFormatModal()
+            }
+            layoutParams = LinearLayout.LayoutParams(secondaryIconPx, secondaryIconPx)
+        }
+        vrModesLayout.addView(btnGlass)
+
+        val btnSwapEyes = VoidIconButton(context, R.drawable.icon_glasses, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+            setOnClickListener {
+                activity.nativeToggleSwapEyes()
+                // Efeito visual de confirmacao rapida
+                background = android.graphics.drawable.GradientDrawable().apply {
+                    setColor(com.tucavr.designsystem.VoidTheme.colorSurfaceAlt)
+                    cornerRadius = com.tucavr.designsystem.VoidTheme.dp(context, 200f)
+                    setStroke(com.tucavr.designsystem.VoidTheme.dpToPx(context, 2f), com.tucavr.designsystem.VoidTheme.colorAccent)
+                }
+                postDelayed({
+                    background = android.graphics.drawable.RippleDrawable(
+                        android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#33FFFFFF")),
+                        android.graphics.drawable.GradientDrawable().apply {
+                            setColor(android.graphics.Color.TRANSPARENT)
+                            cornerRadius = com.tucavr.designsystem.VoidTheme.dp(context, 200f)
+                        }, null
+                    )
+                }, 300)
+            }
+            layoutParams = LinearLayout.LayoutParams(secondaryIconPx, secondaryIconPx).apply {
+                leftMargin = VoidTheme.dpToPx(context, 8f)
+            }
+        }
+        vrModesLayout.addView(btnSwapEyes)
+
+        // Fase 0.3 Seção 2: Passthrough / Mixed Reality. Só sai de DISABLED
+        // se o nativo (Vulkan) confirmar que a extensão XR_FB_passthrough
+        // existe neste runtime. Estado ON = VoidButtonStyle.ACTIVE.
+        val passthroughSupported = activity.nativeIsPassthroughSupported()
+        val passthroughInitiallyOn =
+            passthroughSupported && FeatureFlags.isEnabled(context, FeatureFlags.Flag.PASSTHROUGH)
+        val btnPassthrough = VoidIconButton(
+            context,
+            R.drawable.icon_eye_dashed,
+            when {
+                !passthroughSupported -> VoidButtonStyle.DISABLED
+                passthroughInitiallyOn -> VoidButtonStyle.ACTIVE
+                else -> VoidButtonStyle.SECONDARY
+            },
+            isCircular = true,
+            isTransparent = true,
+        ).apply {
+            layoutParams = LinearLayout.LayoutParams(secondaryIconPx, secondaryIconPx).apply {
+                leftMargin = VoidTheme.dpToPx(context, 8f)
+            }
+            if (passthroughSupported) {
+                setOnClickListener {
+                    val newState = !FeatureFlags.isEnabled(context, FeatureFlags.Flag.PASSTHROUGH)
+                    FeatureFlags.setEnabled(context, FeatureFlags.Flag.PASSTHROUGH, newState)
+                    activity.nativeSetPassthroughEnabled(newState)
+                    style = if (newState) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
+                }
+                setOnLongClickListener {
+                    activity.openPassthroughSettingsModal()
+                    true
+                }
+            }
+        }
+        vrModesLayout.addView(btnPassthrough)
+        rightZone.addView(vrModesLayout)
+        headerRow.addView(rightZone)
 
         root.addView(headerRow)
 
@@ -512,51 +685,31 @@ class VRControlsPresentation(
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
         }
 
-        // Esquerda: Modos VR
-        val vrModesLayout = LinearLayout(context).apply {
+        // Esquerda: utilitarios de conteudo (Playlist, Legendas)
+        val leftUtilsLayout = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val btnGlass = VoidIconButton(context, R.drawable.icon_vr_headset, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+        val btnPlaylist = VoidIconButton(context, R.drawable.ic_view_list, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+            layoutParams = LinearLayout.LayoutParams(secondaryIconPx, secondaryIconPx).apply {
+                rightMargin = VoidTheme.dpToPx(context, 8f)
+            }
+            contentDescription = context.getString(R.string.player_btn_playlist)
             setOnClickListener {
-                activity.openScreenFormatModal()
+                activity.openPlaylistModal()
             }
-            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
         }
-        vrModesLayout.addView(btnGlass)
+        leftUtilsLayout.addView(btnPlaylist)
 
-        val btnSwapEyes = VoidIconButton(context, R.drawable.icon_glasses, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+        val btnSubtitles = VoidIconButton(context, R.drawable.icon_subtitles, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+            layoutParams = LinearLayout.LayoutParams(secondaryIconPx, secondaryIconPx)
+            contentDescription = context.getString(R.string.player_btn_subtitles)
             setOnClickListener {
-                activity.nativeToggleSwapEyes()
-                // Efeito visual de confirmacao rapida
-                background = android.graphics.drawable.GradientDrawable().apply {
-                    setColor(com.tucavr.designsystem.VoidTheme.colorSurfaceAlt)
-                    cornerRadius = com.tucavr.designsystem.VoidTheme.dp(context, 200f)
-                    setStroke(com.tucavr.designsystem.VoidTheme.dpToPx(context, 2f), com.tucavr.designsystem.VoidTheme.colorAccent)
-                }
-                postDelayed({
-                    background = android.graphics.drawable.RippleDrawable(
-                        android.content.res.ColorStateList.valueOf(android.graphics.Color.parseColor("#33FFFFFF")),
-                        android.graphics.drawable.GradientDrawable().apply {
-                            setColor(android.graphics.Color.TRANSPARENT)
-                            cornerRadius = com.tucavr.designsystem.VoidTheme.dp(context, 200f)
-                        }, null
-                    )
-                }, 300)
-            }
-            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
-                leftMargin = VoidTheme.dpToPx(context, 8f)
+                activity.openSubtitlesModal()
             }
         }
-        vrModesLayout.addView(btnSwapEyes)
-
-        val btnPassthrough = VoidIconButton(context, R.drawable.icon_eye_dashed, VoidButtonStyle.DISABLED, isCircular = true, isTransparent = true).apply {
-            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
-                leftMargin = VoidTheme.dpToPx(context, 8f)
-            }
-        }
-        vrModesLayout.addView(btnPassthrough)
-        controlsRow.addView(vrModesLayout)
+        leftUtilsLayout.addView(btnSubtitles)
+        controlsRow.addView(leftUtilsLayout)
 
         controlsRow.addView(View(context).apply { layoutParams = LinearLayout.LayoutParams(0, 0, 1.0f) })
 
@@ -577,8 +730,8 @@ class VRControlsPresentation(
 
         btnPlayPause = VoidIconButton(context, R.drawable.icon_pause, VoidButtonStyle.PRIMARY, isCircular = true, isTransparent = true).apply {
             layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
-                leftMargin = VoidTheme.dpToPx(context, 97f)
-                rightMargin = VoidTheme.dpToPx(context, 97f)
+                leftMargin = VoidTheme.dpToPx(context, 24f)
+                rightMargin = VoidTheme.dpToPx(context, 24f)
             }
             setOnClickListener { onPlayPause() }
         }
@@ -597,24 +750,16 @@ class VRControlsPresentation(
 
         controlsRow.addView(View(context).apply { layoutParams = LinearLayout.LayoutParams(0, 0, 1.0f) })
 
-        // Direita: Utilitarios (Apenas os icones para bater com o Figma)
-        val utilsLayout = LinearLayout(context).apply {
+        // Direita: utilitarios secundarios (Audio, Stats de depuracao).
+        // Volume e Velocidade saíram daqui: eram placeholders sem nenhuma
+        // acao ligada (ver auditoria de botoes do player) — voltam quando
+        // tiverem logica real implementada.
+        val rightUtilsLayout = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        val btnSubtitles = VoidIconButton(context, R.drawable.icon_subtitles, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
-            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
-                rightMargin = VoidTheme.dpToPx(context, 8f)
-            }
-            contentDescription = context.getString(R.string.player_btn_subtitles)
-            setOnClickListener {
-                activity.openSubtitlesModal()
-            }
-        }
-        utilsLayout.addView(btnSubtitles)
-
         val btnAudio = VoidIconButton(context, R.drawable.ic_audio, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
-            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
+            layoutParams = LinearLayout.LayoutParams(secondaryIconPx, secondaryIconPx).apply {
                 rightMargin = VoidTheme.dpToPx(context, 8f)
             }
             contentDescription = context.getString(R.string.player_btn_audio)
@@ -622,31 +767,19 @@ class VRControlsPresentation(
                 activity.openAudioTracksModal()
             }
         }
-        utilsLayout.addView(btnAudio)
-
-        val btnVolume = VoidIconButton(context, R.drawable.icon_volume_2, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
-            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
-        }
-        utilsLayout.addView(btnVolume)
-        
-        val btnSpeed = VoidIconButton(context, R.drawable.icon_gauge, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
-            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
-        }
-        utilsLayout.addView(btnSpeed)
+        rightUtilsLayout.addView(btnAudio)
 
         btnDebugStats = VoidIconButton(context, R.drawable.icon_stats, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
-            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
-                leftMargin = VoidTheme.dpToPx(context, 8f)
-            }
+            layoutParams = LinearLayout.LayoutParams(secondaryIconPx, secondaryIconPx)
             contentDescription = context.getString(R.string.player_btn_debug_stats)
             visibility = if (activity.isDebugStatsEnabled) View.VISIBLE else View.GONE
             setOnClickListener {
                 activity.openDebugStatsModal()
             }
         }
-        utilsLayout.addView(btnDebugStats)
+        rightUtilsLayout.addView(btnDebugStats)
 
-        controlsRow.addView(utilsLayout)
+        controlsRow.addView(rightUtilsLayout)
         bottomPanel.addView(controlsRow)
 
         // Linha da Timeline

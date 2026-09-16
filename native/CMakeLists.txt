@@ -88,6 +88,9 @@ if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
     # Estagio 6: shaders de legendas MSDF (T9.3)
     vrplayer_compile_shader(subtitle.vert kSubtitleVertSpirv)
     vrplayer_compile_shader(subtitle.frag kSubtitleFragSpirv)
+    # Fase 0.4 Seção 6: shaders de projeções avançadas Cubemap e EAC
+    vrplayer_compile_shader(stereo_cubemap.vert kStereoCubemapVertSpirv)
+    vrplayer_compile_shader(stereo_cubemap.frag kStereoCubemapFragSpirv)
 
     add_custom_target(vrplayer_shaders DEPENDS ${GENERATED_SHADER_HEADERS})
 endif()

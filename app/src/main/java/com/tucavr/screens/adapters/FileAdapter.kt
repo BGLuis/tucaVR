@@ -149,6 +149,7 @@ class FileAdapter(
     private fun bindItemRow(holder: ViewHolder, entry: MediaEntry, position: Int) {
         val isDir = entry.type == MediaType.DIRECTORY
         val isVideo = entry.type == MediaType.VIDEO
+        val isImage = entry.type == MediaType.IMAGE
 
         // Highlight no nome se houver busca ativa
         val displayName = buildHighlightedText(entry.name, currentSearchQuery)
@@ -172,7 +173,7 @@ class FileAdapter(
             holder.view.bind(
                 title = displayName.toString(),
                 meta = meta,
-                showThumbnailSlot = isVideo || isDir,
+                showThumbnailSlot = isVideo || isDir || isImage,
                 iconResId = iconRes
             )
             holder.view.titleView.text = displayName
@@ -226,14 +227,18 @@ class FileAdapter(
                     }
                 }
             }
-        } else if (isVideo) {
+        } else if (isVideo || isImage) {
             holder.boundEntry = entry
-            holder.itemView.setOnTouchListener { _, event ->
-                holder.gestureDetector.onTouchEvent(event)
-                true
+            if (isVideo) {
+                holder.itemView.setOnTouchListener { _, event ->
+                    holder.gestureDetector.onTouchEvent(event)
+                    true
+                }
+            } else {
+                holder.itemView.setOnClickListener { onVideoClick(entry) }
             }
 
-            // Carregamento de miniatura do vídeo
+            // Carregamento de miniatura da mídia (vídeo ou imagem)
             holder.thumbnailJob = scope.launch {
                 val bitmap = if (thumbnailLoader != null) {
                     thumbnailLoader.invoke(entry)
@@ -251,7 +256,7 @@ class FileAdapter(
                 }
             }
         } else {
-            // Áudio ou Imagem
+            // Áudio
             holder.itemView.setOnClickListener { onVideoClick(entry) }
         }
     }

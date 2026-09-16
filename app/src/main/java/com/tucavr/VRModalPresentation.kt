@@ -11,12 +11,14 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import com.tucavr.designsystem.AudioTrackModal
 import com.tucavr.designsystem.DebugStatsModal
+import com.tucavr.designsystem.PassthroughSettingsModal
 import com.tucavr.designsystem.ResumePromptModal
 import com.tucavr.designsystem.ScreenFormatModal
 import com.tucavr.designsystem.SubtitleSelectionModal
 import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.history.PlaybackHistory
 import com.tucavr.history.historyKey
+import com.tucavr.screens.ScreenFormatCatalog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -162,7 +164,7 @@ class VRModalPresentation(
                     currentSource?.let { src ->
                         activity.format3dStore.clear(src.historyKey())
                     }
-                    if (detectedMode != null && detectedMode in 0..9) {
+                    if (detectedMode != null && ScreenFormatCatalog.isValid(detectedMode)) {
                         activity.nativeSetScreenMode(detectedMode)
                     }
                 },
@@ -240,6 +242,52 @@ class VRModalPresentation(
                 dismissModal()
                 onRestart()
             },
+            onDismiss = { dismissModal() }
+        )
+        showModal(modal)
+    }
+
+    /**
+     * Prepara e exibe o modal de configurações e estilo do Passthrough ([PassthroughSettingsModal]).
+     */
+    fun showPassthroughSettingsModal() {
+        val isEnabled = FeatureFlags.isEnabled(context, FeatureFlags.Flag.PASSTHROUGH)
+        val opacity = FeatureFlags.getPassthroughOpacity(context)
+        val isEdgeEnabled = FeatureFlags.getPassthroughEdgeRendering(context)
+
+        val modal = PassthroughSettingsModal(
+            context = context,
+            isPassthroughEnabled = isEnabled,
+            currentOpacity = opacity,
+            isEdgeRenderingEnabled = isEdgeEnabled,
+            onTogglePassthrough = { enabled ->
+                FeatureFlags.setEnabled(context, FeatureFlags.Flag.PASSTHROUGH, enabled)
+                activity.nativeSetPassthroughEnabled(enabled)
+            },
+            onOpacityChanged = { newOpacity ->
+                FeatureFlags.setPassthroughOpacity(context, newOpacity)
+                activity.nativeSetPassthroughStyle(newOpacity, FeatureFlags.getPassthroughEdgeRendering(context))
+            },
+            onEdgeRenderingChanged = { edgeEnabled ->
+                FeatureFlags.setPassthroughEdgeRendering(context, edgeEnabled)
+                activity.nativeSetPassthroughStyle(FeatureFlags.getPassthroughOpacity(context), edgeEnabled)
+            },
+            onResetScreenPosition = {
+                activity.nativeResetScreenPosition()
+            },
+            onDismiss = { dismissModal() }
+        )
+        showModal(modal)
+    }
+
+    /**
+     * Prepara e exibe o modal de fila de reprodução e playlists ([PlaylistModal]).
+     */
+    fun showPlaylistModal(queueManager: com.tucavr.playlist.PlaylistQueueManager, onPlayIndex: (Int) -> Unit) {
+        val modal = com.tucavr.designsystem.PlaylistModal(
+            context = context,
+            queueManager = queueManager,
+            onPlayIndex = onPlayIndex,
             onDismiss = { dismissModal() }
         )
         showModal(modal)

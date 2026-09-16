@@ -74,7 +74,7 @@ As leituras remotas passam por um leitor com prefetch e chunking, que dispara *r
 
 ### Qualidade de vida
 
-Histórico de reprodução com "continuar assistindo" e prompt de retomada, thumbnails geradas para arquivos locais e de rede, armazenamento criptografado de credenciais (`EncryptedSharedPreferences`), servidores salvos, ordenação e filtros no navegador de arquivos, monitoramento térmico e uma UI totalmente localizada (inglês e português-BR).
+Histórico de reprodução com "continuar assistindo" e prompt de retomada, thumbnails geradas para arquivos locais e de rede, armazenamento criptografado de credenciais (`EncryptedSharedPreferences`), servidores salvos, ordenação e filtros no navegador de arquivos, monitoramento térmico e uma UI totalmente localizada (inglês, português-BR e espanhol; veja [`docs/i18n.md`](docs/i18n.md) para diretrizes de contribuição de tradução).
 
 # 📋 Motivo
 

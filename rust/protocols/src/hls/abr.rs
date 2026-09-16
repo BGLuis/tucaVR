@@ -3,9 +3,20 @@
 use super::playlist::HlsVariant;
 use std::time::Duration;
 
+/// Trait para variantes de bitrate (HLS ou DASH) consumidas pelo ABR.
+pub trait BitrateVariant: Clone {
+    fn bandwidth(&self) -> u64;
+}
+
+impl BitrateVariant for HlsVariant {
+    fn bandwidth(&self) -> u64 {
+        self.bandwidth
+    }
+}
+
 #[derive(Debug, Clone)]
-pub struct AdaptiveBitrateManager {
-    variants: Vec<HlsVariant>,
+pub struct AdaptiveBitrateManager<V: BitrateVariant = HlsVariant> {
+    variants: Vec<V>,
     current_index: usize,
     manual_override: Option<usize>,
     consecutive_slow_count: usize,
@@ -14,8 +25,8 @@ pub struct AdaptiveBitrateManager {
     last_measured_bandwidth: u64, // bits/s
 }
 
-impl AdaptiveBitrateManager {
-    pub fn new(variants: Vec<HlsVariant>) -> Self {
+impl<V: BitrateVariant> AdaptiveBitrateManager<V> {
+    pub fn new(variants: Vec<V>) -> Self {
         let initial_index = if variants.len() > 1 {
             // Inicia na variante do meio ou 720p para começar rápido sem estourar banda
             variants.len() / 2
@@ -34,7 +45,7 @@ impl AdaptiveBitrateManager {
         }
     }
 
-    pub fn variants(&self) -> &[HlsVariant] {
+    pub fn variants(&self) -> &[V] {
         &self.variants
     }
 
@@ -42,7 +53,7 @@ impl AdaptiveBitrateManager {
         self.manual_override.unwrap_or(self.current_index)
     }
 
-    pub fn current_variant(&self) -> Option<&HlsVariant> {
+    pub fn current_variant(&self) -> Option<&V> {
         let idx = self.current_variant_index();
         self.variants.get(idx)
     }
@@ -97,7 +108,7 @@ impl AdaptiveBitrateManager {
                 self.current_index -= 1;
                 self.consecutive_slow_count = 0;
                 log::info!(
-                    "HLS ABR: Reduzindo qualidade para variante {} (banda estimada: {} kbps)",
+                    "ABR: Reduzindo qualidade para variante {} (banda estimada: {} kbps)",
                     self.current_index,
                     measured_bps / 1000
                 );
@@ -114,11 +125,11 @@ impl AdaptiveBitrateManager {
             {
                 let next_variant = &self.variants[self.current_index + 1];
                 // Só sobe se a banda medida cobrir a taxa necessária da próxima variante com margem (1.3x)
-                if measured_bps > (next_variant.bandwidth as f64 * 1.3) as u64 {
+                if measured_bps > (next_variant.bandwidth() as f64 * 1.3) as u64 {
                     self.current_index += 1;
                     self.consecutive_fast_count = 0;
                     log::info!(
-                        "HLS ABR: Aumentando qualidade para variante {} (banda estimada: {} kbps)",
+                        "ABR: Aumentando qualidade para variante {} (banda estimada: {} kbps)",
                         self.current_index,
                         measured_bps / 1000
                     );

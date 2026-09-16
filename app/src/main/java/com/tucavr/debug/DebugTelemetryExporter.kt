@@ -23,8 +23,25 @@ import java.util.Locale
  * obrigatória de credenciais.
  */
 object DebugTelemetryExporter {
+    // Versão do schema do CSV (D-05): incrementar sempre que CSV_HEADER mudar de forma
+    // incompatível (coluna adicionada/removida/reordenada). Sem isto, esquemas antigos e
+    // novos convivem em disco sem nenhum jeito de uma ferramenta de análise distingui-los.
+    // v2 (F1): + video_stall_count, video_stats_age_ms, network_stats_age_ms,
+    // audio_stats_age_ms, render_stats_age_ms (D-02/D-04).
+    // v3 (F4): + network_fetch_failures, network_sequential_streak, network_throttled,
+    // audio_queue_depth, decode_error_count, demux_corrupt_packet_count, audio_underrun_count,
+    // load_phase_demux_open_ms, load_phase_decoder_ready_ms, load_phase_audio_ready_ms.
+    // v4 (F3): + perf_metrics_valid_mask e os 10 contadores XR_META_performance_metrics
+    // (diagnostico apenas — NUNCA usar para governar QualityController, ver 8.1 do relatorio).
+    // v5 (F5 G2): + hist_bucket_0..7 (histograma cumulativo de frame time, ver
+    // kFrameTimeHistogramEdgesMs em vr_player_app_vulkan.cpp).
+    // v6 (T-decode-present-split): + video_presentation_pending (profundidade da fila local
+    // de frames decodificados-mas-nao-liberados na video_thread, ver HwDecoder::try_dequeue_output
+    // em rust/core/src/decoder.rs). So populado no backend Vulkan; 0 no GLES.
+    const val SCHEMA_VERSION = 6
+
     const val CSV_HEADER =
-        "timestamp_ms,session_id,elapsed_s,backend,screen_mode,stereo_layout,polar_180,swap_eyes,video_status,frame_gap_ms,video_fps,decoded_fps,output_fps,dropped_fps,jitter_ms,net_mbs,video_q_depth,seek_ms,smoothed_fps,frame_ms,gpu_time_ms,smoothed_gpu_time_ms,upscaling_mode,upscaling_sharpness,mqsr_enabled,stutter_count,freeze_count,thermal_level,scale,refresh_rate,av_drift_ms,net_last_fetch_ms,net_blocks_fetched,net_blocks_discarded,foveation,spatial_audio,head_tracking,speed,volume,audio_track,audio_track_count,sub_track,sub_offset_ms,source_type,source_redacted"
+        "schema_version,timestamp_ms,session_id,elapsed_s,backend,screen_mode,stereo_layout,polar_180,swap_eyes,video_status,frame_gap_ms,video_fps,decoded_fps,output_fps,dropped_fps,jitter_ms,net_mbs,video_q_depth,video_presentation_pending,seek_ms,smoothed_fps,frame_ms,gpu_time_ms,smoothed_gpu_time_ms,upscaling_mode,upscaling_sharpness,mqsr_enabled,stutter_count,freeze_count,thermal_level,scale,refresh_rate,av_drift_ms,net_last_fetch_ms,net_blocks_fetched,net_blocks_discarded,foveation,spatial_audio,head_tracking,speed,volume,audio_track,audio_track_count,sub_track,sub_offset_ms,quality_level,quality_reason,draw_call_count,triangle_count,video_stall_count,video_stats_age_ms,network_stats_age_ms,audio_stats_age_ms,render_stats_age_ms,network_fetch_failures,network_sequential_streak,network_throttled,audio_queue_depth,decode_error_count,demux_corrupt_packet_count,audio_underrun_count,load_phase_demux_open_ms,load_phase_decoder_ready_ms,load_phase_audio_ready_ms,perf_metrics_valid_mask,perf_app_cpu_frametime_ms,perf_app_gpu_frametime_ms,perf_motion_to_photon_latency_ms,perf_compositor_cpu_frametime_ms,perf_compositor_gpu_frametime_ms,perf_compositor_dropped_frame_count,perf_compositor_spacewarp_mode,perf_device_cpu_util_average,perf_device_cpu_util_worst,perf_device_gpu_util,hist_bucket_0,hist_bucket_1,hist_bucket_2,hist_bucket_3,hist_bucket_4,hist_bucket_5,hist_bucket_6,hist_bucket_7,source_type,source_redacted"
 
     private const val MAX_FILE_SIZE_BYTES = 20 * 1024 * 1024L // 20 MB limite por arquivo
     private const val SAMPLE_INTERVAL_MS = 1000L // 1 Hz amostragem
@@ -90,21 +107,32 @@ object DebugTelemetryExporter {
     }
 
     /**
-     * Extrai tipo e caminho redigido a partir do [PlaybackSource].
+     * Extrai tipo e caminho redigido a partir do [PlaybackSource]. Toda saída desta função é
+     * destinada a artefatos que saem do device (CSV de telemetria, relatório de crash — ver
+     * D-03 em docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md) — por isso os 5 ramos de rede
+     * abaixo passam pela mesma [redactSource] usada por Http/Dlna, em vez de montar a URL
+     * manualmente sem redação (o bug original: uma coluna chamada "source_redacted" que não
+     * redigia nada nesses 5 ramos). Nenhum destes ramos referencia `server.password` — a
+     * senha nunca passa por aqui; o vazamento de D-03 estava em VRActivity.kt interpolando o
+     * data class inteiro diretamente, sem nunca chamar esta função.
      */
     fun extractSourceInfo(source: PlaybackSource?): Pair<String, String> = when (source) {
         is PlaybackSource.LocalFile -> "LocalFile" to source.path
         is PlaybackSource.Http -> "Http" to redactSource(source.url)
-        is PlaybackSource.Smb -> "Smb" to "smb://${source.server.host}:${source.server.port}/${source.server.share}/${source.path}"
-        is PlaybackSource.Ftp -> "Ftp" to "ftp://${source.server.host}:${source.server.port}/${source.path}"
-        is PlaybackSource.Sftp -> "Sftp" to "sftp://${source.server.host}:${source.server.port}/${source.path}"
-        is PlaybackSource.Nfs -> "Nfs" to "nfs://${source.server.host}:${source.server.port}/${source.path}"
+        is PlaybackSource.Smb -> "Smb" to redactSource("smb://${source.server.host}:${source.server.port}/${source.server.share}/${source.path}")
+        is PlaybackSource.Ftp -> "Ftp" to redactSource("ftp://${source.server.host}:${source.server.port}/${source.path}")
+        is PlaybackSource.Sftp -> "Sftp" to redactSource("sftp://${source.server.host}:${source.server.port}/${source.path}")
+        is PlaybackSource.Nfs -> "Nfs" to redactSource("nfs://${source.server.host}:${source.server.port}/${source.path}")
         is PlaybackSource.Dlna -> "Dlna" to redactSource(source.url)
+        is PlaybackSource.Webdav -> "Webdav" to redactSource("webdav://${source.server.host}:${source.server.port}${source.server.path}/${source.path}")
         null -> "Unknown" to ""
     }
 
     /**
-     * Converte o texto do HUD (TSV moderno ou pipe-separated legado) em uma linha formatada de CSV.
+     * Converte o texto do HUD (TSV emitido por `SerializeDebugStats`) em uma linha formatada
+     * de CSV. Única fonte de parsing é [DebugStatsParser] (F0): não há mais um `when(key)`
+     * paralelo aqui — quem quiser mudar o contrato de um campo mexe em [DebugStatsParser] e
+     * em `native/src/debug_stats.h`, só.
      */
     fun parseHudToCsvRow(
         hudText: String,
@@ -114,155 +142,97 @@ object DebugTelemetryExporter {
         elapsedSeconds: Float = 0f
     ): String {
         val (sourceType, sourceRedacted) = extractSourceInfo(source)
+        val stats = DebugStatsParser.parse(hudText) ?: NativeDebugStats()
 
         fun sanitize(s: String): String =
             if (s.contains(',') || s.contains('"') || s.contains('\n') || s.contains('\r')) {
                 "\"${s.replace("\"", "\"\"")}\""
             } else s
 
-        var backend = "UNKNOWN"
-        var screenMode = "UNKNOWN"
-        var stereoLayout = 0
-        var polar180 = 0
-        var swapEyes = 0
-        var videoStatus = "ativo"
-        var frameGapMs = 0f
-        var videoFps = 0f
-        var decodedFps = 0f
-        var outputFps = 0f
-        var droppedFps = 0f
-        var jitterMs = 0f
-        var netMbs = 0f
-        var videoQueueDepth = 0
-        var seekMs = 0
-        var smoothedFps = 0f
-        var frameMs = 0f
-        var gpuTimeMs = 0f
-        var smoothedGpuTimeMs = 0f
-        var upscalingMode = "OFF"
-        var upscalingSharpness = 0f
-        var mqsrEnabled = 0
-        var stutterCount = 0
-        var freezeCount = 0
-        var thermalLevel = 0
-        var scale = 1.0f
-        var refreshRate = 90.0f
-        var avDriftMs = 0f
-        var netLastFetchMs = 0f
-        var netBlocksFetched = 0L
-        var netBlocksDiscarded = 0L
-        var foveation = 0
-        var spatialAudio = 0
-        var headTracking = 0
-        var speed = 1.0f
-        var volume = 1.0f
-        var audioTrack = 0
-        var audioTrackCount = 0
-        var subTrack = -1
-        var subOffsetMs = 0
+        fun f1(v: Float) = String.format(Locale.US, "%.1f", v)
+        fun f2(v: Float) = String.format(Locale.US, "%.2f", v)
+        fun b(v: Boolean) = if (v) 1 else 0
 
-        if (hudText.contains('\t')) {
-            // Formato TSV estruturado emitido por SerializeDebugStats
-            hudText.lineSequence().forEach { line ->
-                val tabIdx = line.indexOf('\t')
-                if (tabIdx != -1) {
-                    val key = line.substring(0, tabIdx).trim()
-                    val value = line.substring(tabIdx + 1).trim()
-                    when (key) {
-                        "backend" -> backend = value
-                        "screen_mode" -> screenMode = value
-                        "stereo_layout" -> stereoLayout = value.toIntOrNull() ?: 0
-                        "polar_180" -> polar180 = value.toIntOrNull() ?: 0
-                        "swap_eyes" -> swapEyes = value.toIntOrNull() ?: 0
-                        "has_frame" -> videoStatus = if (value == "1") "ativo" else "inativo"
-                        "frame_gap_ms" -> frameGapMs = value.toFloatOrNull() ?: 0f
-                        "video_fps" -> videoFps = value.toFloatOrNull() ?: 0f
-                        "decoded_fps" -> decodedFps = value.toFloatOrNull() ?: 0f
-                        "output_fps" -> outputFps = value.toFloatOrNull() ?: 0f
-                        "dropped_fps" -> droppedFps = value.toFloatOrNull() ?: 0f
-                        "jitter_ms" -> jitterMs = value.toFloatOrNull() ?: 0f
-                        "net_mbs" -> netMbs = value.toFloatOrNull() ?: 0f
-                        "queue_depth" -> videoQueueDepth = value.toIntOrNull() ?: 0
-                        "seek_latency_ms" -> seekMs = value.toIntOrNull() ?: 0
-                        "smoothed_fps" -> smoothedFps = value.toFloatOrNull() ?: 0f
-                        "frame_time_ms" -> frameMs = value.toFloatOrNull() ?: 0f
-                        "gpu_time_ms" -> gpuTimeMs = value.toFloatOrNull() ?: 0f
-                        "smoothed_gpu_time_ms" -> smoothedGpuTimeMs = value.toFloatOrNull() ?: 0f
-                        "upscaling_mode" -> upscalingMode = value
-                        "upscaling_sharpness" -> upscalingSharpness = value.toFloatOrNull() ?: 0f
-                        "mqsr_enabled" -> mqsrEnabled = value.toIntOrNull() ?: 0
-                        "stutter_count" -> stutterCount = value.toIntOrNull() ?: 0
-                        "freeze_count" -> freezeCount = value.toIntOrNull() ?: 0
-                        "thermal_level" -> thermalLevel = value.toIntOrNull() ?: 0
-                        "render_scale" -> scale = value.toFloatOrNull() ?: 1.0f
-                        "refresh_rate" -> refreshRate = value.toFloatOrNull() ?: 90.0f
-                        "av_drift_ms" -> avDriftMs = value.toFloatOrNull() ?: 0f
-                        "net_last_fetch_ms" -> netLastFetchMs = value.toFloatOrNull() ?: 0f
-                        "net_blocks_fetched" -> netBlocksFetched = value.toLongOrNull() ?: 0L
-                        "net_blocks_discarded" -> netBlocksDiscarded = value.toLongOrNull() ?: 0L
-                        "foveation" -> foveation = value.toIntOrNull() ?: 0
-                        "spatial_audio" -> spatialAudio = value.toIntOrNull() ?: 0
-                        "head_tracking" -> headTracking = value.toIntOrNull() ?: 0
-                        "speed" -> speed = value.toFloatOrNull() ?: 1.0f
-                        "volume" -> volume = value.toFloatOrNull() ?: 1.0f
-                        "audio_track" -> audioTrack = value.toIntOrNull() ?: 0
-                        "audio_track_count" -> audioTrackCount = value.toIntOrNull() ?: 0
-                        "sub_track" -> subTrack = value.toIntOrNull() ?: -1
-                        "sub_offset_ms" -> subOffsetMs = value.toIntOrNull() ?: 0
-                    }
-                }
-            }
-        } else {
-            // Formato legado delimitado por '|' (preservado para compatibilidade retroativa)
-            val sections = hudText.split('|').map { it.trim() }
-            backend = sections.getOrNull(0) ?: "UNKNOWN"
-            screenMode = sections.getOrNull(1) ?: "UNKNOWN"
-
-            for (sec in sections) {
-                val tokens = sec.split(Regex("\\s+"))
-                for (token in tokens) {
-                    when {
-                        token.startsWith("stereoLayout=") -> stereoLayout = token.removePrefix("stereoLayout=").toIntOrNull() ?: 0
-                        token.startsWith("polar180=") -> polar180 = token.removePrefix("polar180=").toIntOrNull() ?: 0
-                        token.startsWith("swap=") -> swapEyes = token.removePrefix("swap=").toIntOrNull() ?: 0
-                        token.startsWith("swapEyes=") -> swapEyes = token.removePrefix("swapEyes=").toIntOrNull() ?: 0
-                        token.startsWith("video=") -> videoStatus = token.removePrefix("video=")
-                        token.startsWith("vidGap=") -> frameGapMs = token.removePrefix("vidGap=").removeSuffix("ms").toFloatOrNull() ?: 0f
-                        token.startsWith("vidFps=") -> videoFps = token.removePrefix("vidFps=").toFloatOrNull() ?: 0f
-                        token.startsWith("decFps=") -> decodedFps = token.removePrefix("decFps=").toFloatOrNull() ?: 0f
-                        token.startsWith("outFps=") -> outputFps = token.removePrefix("outFps=").toFloatOrNull() ?: 0f
-                        token.startsWith("drop=") -> droppedFps = token.removePrefix("drop=").toFloatOrNull() ?: 0f
-                        token.startsWith("jitter=") -> jitterMs = token.removePrefix("jitter=").removeSuffix("ms").toFloatOrNull() ?: 0f
-                        token.startsWith("net=") -> netMbs = token.removePrefix("net=").removeSuffix("MB/s").toFloatOrNull() ?: 0f
-                        token.startsWith("q=") -> videoQueueDepth = token.removePrefix("q=").toIntOrNull() ?: 0
-                        token.startsWith("seekMs=") -> seekMs = token.removePrefix("seekMs=").toIntOrNull() ?: 0
-                        token.startsWith("stutter=") -> stutterCount = token.removePrefix("stutter=").toIntOrNull() ?: 0
-                        token.startsWith("freeze=") -> freezeCount = token.removePrefix("freeze=").toIntOrNull() ?: 0
-                        token.startsWith("thermal=") -> thermalLevel = token.removePrefix("thermal=").toIntOrNull() ?: 0
-                        token.startsWith("scale=") -> scale = token.removePrefix("scale=").toFloatOrNull() ?: 1.0f
-                        token.endsWith("fps") && !token.contains('=') -> smoothedFps = token.removeSuffix("fps").toFloatOrNull() ?: 0f
-                        token.endsWith("ms") && !token.contains('=') -> frameMs = token.removeSuffix("ms").toFloatOrNull() ?: 0f
-                    }
-                }
-            }
-        }
-
-        return "$timestampMs,${sanitize(sessionId)},${String.format(Locale.US, "%.2f", elapsedSeconds)}," +
-            "${sanitize(backend)},${sanitize(screenMode)},$stereoLayout,$polar180,$swapEyes," +
-            "${sanitize(videoStatus)},${String.format(Locale.US, "%.1f", frameGapMs)}," +
-            "${String.format(Locale.US, "%.1f", videoFps)},${String.format(Locale.US, "%.1f", decodedFps)}," +
-            "${String.format(Locale.US, "%.1f", outputFps)},${String.format(Locale.US, "%.1f", droppedFps)}," +
-            "${String.format(Locale.US, "%.1f", jitterMs)},${String.format(Locale.US, "%.2f", netMbs)}," +
-            "$videoQueueDepth,$seekMs,${String.format(Locale.US, "%.1f", smoothedFps)}," +
-            "${String.format(Locale.US, "%.1f", frameMs)},${String.format(Locale.US, "%.2f", gpuTimeMs)}," +
-            "${String.format(Locale.US, "%.2f", smoothedGpuTimeMs)},${sanitize(upscalingMode)}," +
-            "${String.format(Locale.US, "%.2f", upscalingSharpness)},$mqsrEnabled,$stutterCount,$freezeCount," +
-            "$thermalLevel,${String.format(Locale.US, "%.2f", scale)},${String.format(Locale.US, "%.1f", refreshRate)}," +
-            "${String.format(Locale.US, "%.1f", avDriftMs)},${String.format(Locale.US, "%.1f", netLastFetchMs)}," +
-            "$netBlocksFetched,$netBlocksDiscarded,$foveation,$spatialAudio,$headTracking," +
-            "${String.format(Locale.US, "%.2f", speed)},${String.format(Locale.US, "%.2f", volume)}," +
-            "$audioTrack,$audioTrackCount,$subTrack,$subOffsetMs," +
-            "${sanitize(sourceType)},${sanitize(sourceRedacted)}"
+        return listOf(
+            SCHEMA_VERSION.toString(),
+            timestampMs.toString(),
+            sanitize(sessionId),
+            String.format(Locale.US, "%.2f", elapsedSeconds),
+            sanitize(stats.backend),
+            sanitize(stats.screenMode),
+            stats.stereoLayout.toString(),
+            stats.polar180.toString(),
+            stats.swapEyes.toString(),
+            if (stats.hasFrame) "ativo" else "inativo",
+            f1(stats.frameGapMs),
+            f1(stats.videoFps),
+            f1(stats.decodedFps),
+            f1(stats.outputFps),
+            f1(stats.droppedFps),
+            f1(stats.jitterMs),
+            f2(stats.netMBs),
+            stats.queueDepth.toString(),
+            stats.presentationPending.toString(),
+            stats.seekLatencyMs.toString(),
+            f1(stats.smoothedFps),
+            f1(stats.frameTimeMs),
+            f2(stats.gpuTimeMs),
+            f2(stats.smoothedGpuTimeMs),
+            sanitize(stats.upscalingMode),
+            f2(stats.upscalingSharpness),
+            b(stats.mqsrEnabled).toString(),
+            stats.stutterCount.toString(),
+            stats.freezeCount.toString(),
+            stats.thermalLevel.toString(),
+            f2(stats.renderScale),
+            f1(stats.refreshRate),
+            f1(stats.avDriftMs),
+            f1(stats.netLastFetchMs),
+            stats.netBlocksFetched.toString(),
+            stats.netBlocksDiscarded.toString(),
+            b(stats.foveationEnabled).toString(),
+            stats.spatialAudioMode.toString(),
+            b(stats.spatialHeadTracking).toString(),
+            f2(stats.playbackSpeed),
+            f2(stats.audioVolume),
+            stats.audioTrackIndex.toString(),
+            stats.audioTrackCount.toString(),
+            stats.subtitleTrackIndex.toString(),
+            stats.subtitleOffsetMs.toString(),
+            sanitize(stats.qualityLevel),
+            sanitize(stats.qualityReason),
+            stats.drawCallCount.toString(),
+            stats.triangleCount.toString(),
+            stats.videoStallCount.toString(),
+            stats.videoStatsAgeMs.toString(),
+            stats.networkStatsAgeMs.toString(),
+            stats.audioStatsAgeMs.toString(),
+            stats.renderStatsAgeMs.toString(),
+            stats.networkFetchFailures.toString(),
+            stats.networkSequentialStreak.toString(),
+            b(stats.networkThrottled).toString(),
+            stats.audioQueueDepth.toString(),
+            stats.decodeErrorCount.toString(),
+            stats.demuxCorruptPacketCount.toString(),
+            stats.audioUnderrunCount.toString(),
+            stats.loadPhaseDemuxOpenMs.toString(),
+            stats.loadPhaseDecoderReadyMs.toString(),
+            stats.loadPhaseAudioReadyMs.toString(),
+            stats.perfMetricsValidMask.toString(),
+            f2(stats.perfAppCpuFrametimeMs),
+            f2(stats.perfAppGpuFrametimeMs),
+            f2(stats.perfMotionToPhotonLatencyMs),
+            f2(stats.perfCompositorCpuFrametimeMs),
+            f2(stats.perfCompositorGpuFrametimeMs),
+            stats.perfCompositorDroppedFrameCount.toString(),
+            stats.perfCompositorSpacewarpMode.toString(),
+            f2(stats.perfDeviceCpuUtilAverage),
+            f2(stats.perfDeviceCpuUtilWorst),
+            f2(stats.perfDeviceGpuUtil),
+            *stats.histBuckets.map { it.toString() }.toTypedArray(),
+            sanitize(sourceType),
+            sanitize(sourceRedacted)
+        ).joinToString(",")
     }
 
     /**

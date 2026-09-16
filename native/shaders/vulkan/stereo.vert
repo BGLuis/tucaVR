@@ -14,6 +14,14 @@ layout(push_constant) uniform PushConstants {
     int   polar180;      // 0 = 360 completo, 1 = 180 hemisferio frontal
     float sharpness;     // 0.0 = amostragem direta, > 0.0 = forca do SGSR1
     int   upscalingMode; // 0 = Off, 1 = Quality, 2 = Performance, 3 = Auto
+    // cubemapLayout/projectionType nao sao usados por este shader (so pelo
+    // par stereo_cubemap), mas precisam ficar declarados aqui pra manter o
+    // mesmo layout de offsets do push constant que StereoPushConstants no
+    // C++ (vkCmdPushConstants manda o struct inteiro pra qualquer um dos
+    // pipelines estereo) — sem isso, isHdr logo abaixo leria o byte errado.
+    int   cubemapLayout;
+    int   projectionType;
+    int   isHdr;         // T-HDR: 1 = fonte PQ/HLG, aplicar tonemap no fragment shader
 } pc;
 
 layout(location = 0) out vec2 vTexCoord;
@@ -23,6 +31,7 @@ layout(location = 3) flat out int vStereoLayout;
 layout(location = 4) flat out int vPolar180;
 layout(location = 5) flat out float vSharpness;
 layout(location = 6) flat out int vUpscalingMode;
+layout(location = 7) flat out int vIsHdr;
 
 void main() {
     gl_Position = pc.mvp * vec4(inPosition, 1.0);
@@ -33,4 +42,5 @@ void main() {
     vPolar180   = pc.polar180;
     vSharpness  = pc.sharpness;
     vUpscalingMode = pc.upscalingMode;
+    vIsHdr = pc.isHdr;
 }
