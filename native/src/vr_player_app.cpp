@@ -588,6 +588,12 @@ Java_com_tucavr_VRActivity_nativeSetScreenTransform(
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetEnvironment(
+    JNIEnv* env, jobject thiz, jstring environmentId) {
+    // No-op em GLES
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetPauseOnExit(JNIEnv* env, jobject thiz, jboolean enabled) {
     set_pause_on_exit(enabled ? 1 : 0);
 }

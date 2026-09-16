@@ -87,6 +87,19 @@ O receiver só é registrado se `ApplicationInfo.FLAG_DEBUGGABLE` estiver
 setada (verdadeiro pro build `debug` do Gradle por padrão) — nunca existe
 num APK de release, então não é uma superfície de ataque nesse caso.
 
+### Trocar Ambiente Virtual via ADB (build debuggable)
+
+Permite trocar o ambiente 3D (e reancorar a tela virtual) a qualquer momento:
+
+```bash
+# cinema, living_room, space, void ou passthrough
+adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id cinema
+adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id living_room
+adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id space
+adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id void
+```
+
+
 ## 3. Modal de Estatísticas Técnicas ("Stats for Nerds")
 
 O app possui um modal completo de diagnóstico em tempo real ("Stats for Nerds"), acessível através do botão de estatísticas na barra de controles do player quando ativado em **Configurações > Avançado > Estatísticas Técnicas**. Esta seção foi reescrita após a triagem de

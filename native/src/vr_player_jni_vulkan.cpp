@@ -491,6 +491,9 @@ extern std::atomic<float> g_requestedScreenPosY;
 extern std::atomic<float> g_requestedScreenPosZ;
 extern std::atomic<float> g_requestedScreenScaleX;
 extern std::atomic<float> g_requestedScreenScaleY;
+extern std::atomic<bool> g_environmentChangeRequested;
+extern char g_requestedEnvironmentId[64];
+extern std::mutex g_environmentMutex;
 
 // Fase 0.3 Seção 2: Passthrough / Mixed Reality.
 extern "C" JNIEXPORT void JNICALL
@@ -533,6 +536,21 @@ Java_com_tucavr_VRActivity_nativeSetScreenTransform(
     g_requestedScreenScaleX.store(static_cast<float>(scaleX));
     g_requestedScreenScaleY.store(static_cast<float>(scaleY));
     g_setScreenTransformRequested.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetEnvironment(JNIEnv* env, jobject, jstring environmentId) {
+    if (!environmentId) return;
+    const char* envStr = env->GetStringUTFChars(environmentId, nullptr);
+    if (envStr) {
+        {
+            std::lock_guard<std::mutex> lock(g_environmentMutex);
+            strncpy(g_requestedEnvironmentId, envStr, sizeof(g_requestedEnvironmentId) - 1);
+            g_requestedEnvironmentId[sizeof(g_requestedEnvironmentId) - 1] = '\0';
+        }
+        env->ReleaseStringUTFChars(environmentId, envStr);
+        g_environmentChangeRequested.store(true);
+    }
 }
 
 extern "C" JNIEXPORT void JNICALL

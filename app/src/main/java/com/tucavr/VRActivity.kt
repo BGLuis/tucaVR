@@ -260,6 +260,12 @@ class VRActivity : NativeActivity() {
                         val status = intent.getIntExtra(EXTRA_THERMAL_STATUS, -1)
                         if (status >= 0) thermalMonitor.simulateThermalStatus(status)
                     }
+                    ACTION_DEBUG_SET_ENVIRONMENT -> {
+                        val envId = intent.getStringExtra(EXTRA_ENVIRONMENT_ID)
+                        if (!envId.isNullOrBlank()) {
+                            setVirtualEnvironment(envId)
+                        }
+                    }
                     // Dispara playback SFTP direto via adb, sem navegar a UI nem
                     // colocar o headset na cabeca — mesmo espirito do EXTRA_AUTO_PLAY_PATH
                     // (ver DEBUGGING.md secao 2 / scripts/soak-test.sh), mas para uma fonte
@@ -290,6 +296,7 @@ class VRActivity : NativeActivity() {
             addAction(ACTION_DEBUG_SET_SCREEN_MODE)
             addAction(ACTION_DEBUG_CYCLE_SCREEN_MODE)
             addAction(ACTION_DEBUG_SET_THERMAL_STATUS)
+            addAction(ACTION_DEBUG_SET_ENVIRONMENT)
             addAction(ACTION_DEBUG_PLAY_SFTP)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -625,6 +632,10 @@ class VRActivity : NativeActivity() {
     override fun onResume() {
         super.onResume()
         applySavedScreenTransform()
+        val activeEnv = environmentStore.getActiveEnvironment()
+        if (activeEnv != EnvironmentStore.ENV_PASSTHROUGH) {
+            nativeSetEnvironment(activeEnv)
+        }
         presentation?.loadFiles()
         thermalMonitor.startMonitoring(callback = thermalCallback)
         pendingAutoPlayPath?.let { path ->
@@ -682,6 +693,8 @@ class VRActivity : NativeActivity() {
         const val ACTION_DEBUG_CYCLE_SCREEN_MODE = "com.tucavr.debug.CYCLE_SCREEN_MODE"
         const val ACTION_DEBUG_SET_THERMAL_STATUS = "com.tucavr.debug.SET_THERMAL_STATUS"
         const val EXTRA_THERMAL_STATUS = "status"
+        const val ACTION_DEBUG_SET_ENVIRONMENT = "com.tucavr.debug.SET_ENVIRONMENT"
+        const val EXTRA_ENVIRONMENT_ID = "environment_id"
         // Ver ACTION_DEBUG_PLAY_SFTP em registerDebugReceiverIfDebuggable — playback SFTP
         // automatizado via adb, sem depender do headset estar sendo usado.
         const val ACTION_DEBUG_PLAY_SFTP = "com.tucavr.debug.PLAY_SFTP"
@@ -1278,11 +1291,34 @@ class VRActivity : NativeActivity() {
         environmentStore.setActiveEnvironment(environmentId)
         if (environmentId == EnvironmentStore.ENV_PASSTHROUGH) {
             nativeSetPassthroughEnabled(true)
+            nativeSetEnvironment(EnvironmentStore.ENV_VOID)
             ambientAudioManager.stopAmbient()
         } else {
             if (nativeIsPassthroughSupported()) {
                 nativeSetPassthroughEnabled(false)
             }
+            nativeSetEnvironment(environmentId)
+
+            // Reancoragem da tela virtual de acordo com o ambiente (T1.6)
+            when (environmentId) {
+                EnvironmentStore.ENV_CINEMA -> {
+                    screenTransformStore.save(0.0f, 2.2f, -7.5f, 6.0f, 3.375f)
+                    nativeSetScreenTransform(0.0f, 2.2f, -7.5f, 6.0f, 3.375f)
+                }
+                EnvironmentStore.ENV_LIVING_ROOM -> {
+                    screenTransformStore.save(0.0f, 1.5f, -2.8f, 2.4f, 1.35f)
+                    nativeSetScreenTransform(0.0f, 1.5f, -2.8f, 2.4f, 1.35f)
+                }
+                EnvironmentStore.ENV_SPACE -> {
+                    screenTransformStore.save(0.0f, 1.8f, -3.2f, 3.8f, 2.1375f)
+                    nativeSetScreenTransform(0.0f, 1.8f, -3.2f, 3.8f, 2.1375f)
+                }
+                EnvironmentStore.ENV_VOID -> {
+                    screenTransformStore.save(0.0f, 1.5f, -2.4f, 2.8f, 1.575f)
+                    nativeSetScreenTransform(0.0f, 1.5f, -2.4f, 2.8f, 1.575f)
+                }
+            }
+
             val volume = when (environmentId) {
                 EnvironmentStore.ENV_SPACE -> 0.25f
                 EnvironmentStore.ENV_CINEMA -> 0.15f
@@ -1642,6 +1678,7 @@ class VRActivity : NativeActivity() {
     external fun nativeGetPassthroughEdgeRendering(): Boolean
     external fun nativeResetScreenPosition()
     external fun nativeSetScreenTransform(posX: Float, posY: Float, posZ: Float, scaleX: Float, scaleY: Float)
+    external fun nativeSetEnvironment(environmentId: String)
 
     // T13.1: metadados de midia (container/duracao/bitrate/trilhas) pra tela
     // de detalhe do arquivo — bloqueante (probe de container, rede se remoto),

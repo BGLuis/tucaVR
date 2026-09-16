@@ -66,6 +66,12 @@
 #include "subtitle.vert.h"
 #include "subtitle.frag.h"
 #include "subtitle_layout.h"
+#include "environment.vert.h"
+#include "environment.frag.h"
+#include "environment_config.h"
+#define CGLTF_IMPLEMENTATION
+#include "cgltf.h"
+#include <android/asset_manager.h>
 
 #ifndef XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME
 #define XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME "XR_FB_display_refresh_rate"
@@ -251,6 +257,9 @@ std::atomic<float> g_requestedScreenPosY{1.5f};
 std::atomic<float> g_requestedScreenPosZ{-2.4f};
 std::atomic<float> g_requestedScreenScaleX{2.8f};
 std::atomic<float> g_requestedScreenScaleY{1.575f};
+std::atomic<bool> g_environmentChangeRequested{false};
+char g_requestedEnvironmentId[64] = "void";
+std::mutex g_environmentMutex;
 
 // Preview de arrasto no seekbar renderizado sobre o quad do video
 // (T-seek-ux) — escrito por nativeUpdateScrubOverlay/nativeSetScrubOverlayVisible
@@ -795,6 +804,17 @@ struct AppState {
     uint32_t scrubOverlayTexWidth = 0;
     uint32_t scrubOverlayTexHeight = 0;
     bool scrubOverlayReady = false;
+
+    // Ambientes Virtuais 3D (Fase 0.3 §1 / Fase 0.5 §3)
+    VkPipeline envPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout envPipelineLayout = VK_NULL_HANDLE;
+    VkBuffer envVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory envVertexMemory = VK_NULL_HANDLE;
+    VkBuffer envIndexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory envIndexMemory = VK_NULL_HANDLE;
+    uint32_t envIndexCount = 0;
+    bool envMeshLoaded = false;
+    std::string currentEnvironmentId = "void";
 
     // OpenXR Actions
     // xrAttachSessionActionSets so pode ser chamada 1x por XrSession (spec) —
@@ -4553,6 +4573,326 @@ static inline float PassthroughEnvAlpha(const AppState& state) {
     return state.passthroughActive ? 0.0f : 1.0f;
 }
 
+// Ambientes Virtuais 3D (Fase 0.3 §1 / Fase 0.5 §3)
+struct EnvironmentVertex {
+    float pos[3];
+    float normal[3];
+    float color[4];
+};
+
+struct EnvironmentPushConstants {
+    Mat4 mvp;
+    XrVector4f tintColor;
+};
+
+static void CreateEnvironmentPipeline(AppState& state) {
+    VkShaderModule vertModule = CreateShaderModule(state, kEnvironmentVertSpirv, kEnvironmentVertSpirv_size);
+    VkShaderModule fragModule = CreateShaderModule(state, kEnvironmentFragSpirv, kEnvironmentFragSpirv_size);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName = "main";
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName = "main";
+
+    VkVertexInputBindingDescription bindingDesc{};
+    bindingDesc.binding = 0;
+    bindingDesc.stride = sizeof(EnvironmentVertex);
+    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attrDesc[3]{};
+    attrDesc[0].location = 0;
+    attrDesc[0].binding = 0;
+    attrDesc[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attrDesc[0].offset = offsetof(EnvironmentVertex, pos);
+
+    attrDesc[1].location = 1;
+    attrDesc[1].binding = 0;
+    attrDesc[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attrDesc[1].offset = offsetof(EnvironmentVertex, normal);
+
+    attrDesc[2].location = 2;
+    attrDesc[2].binding = 0;
+    attrDesc[2].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attrDesc[2].offset = offsetof(EnvironmentVertex, color);
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &bindingDesc;
+    vertexInput.vertexAttributeDescriptionCount = 3;
+    vertexInput.pVertexAttributeDescriptions = attrDesc;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.blendEnable = VK_FALSE;
+    colorBlendAttachment.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dynamicState.dynamicStateCount = 2;
+    dynamicState.pDynamicStates = dynamicStates;
+
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(EnvironmentPushConstants);
+
+    VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushConstantRange;
+
+    VKR(vkCreatePipelineLayout(state.vkDevice, &layoutInfo, nullptr, &state.envPipelineLayout));
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = state.envPipelineLayout;
+    pipelineInfo.renderPass = state.renderPass;
+    pipelineInfo.subpass = 0;
+
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &state.envPipeline));
+
+    vkDestroyShaderModule(state.vkDevice, fragModule, nullptr);
+    vkDestroyShaderModule(state.vkDevice, vertModule, nullptr);
+
+    LOGI("Ambiente: pipeline Vulkan de ambiente 3D criado com sucesso");
+}
+
+static bool LoadEnvironmentMesh(AppState& state, const std::string& envId) {
+    if (state.envVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.envVertexBuffer, nullptr);
+        state.envVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.envVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.envVertexMemory, nullptr);
+        state.envVertexMemory = VK_NULL_HANDLE;
+    }
+    if (state.envIndexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.envIndexBuffer, nullptr);
+        state.envIndexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.envIndexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.envIndexMemory, nullptr);
+        state.envIndexMemory = VK_NULL_HANDLE;
+    }
+    state.envIndexCount = 0;
+    state.envMeshLoaded = false;
+    state.currentEnvironmentId = envId;
+
+    if (envId == "void" || envId.empty()) {
+        LOGI("Ambiente: Modo Void selecionado (sem geometria 3D)");
+        return true;
+    }
+
+    if (!state.app || !state.app->activity || !state.app->activity->assetManager) {
+        LOGE("Ambiente: AAssetManager nao disponivel");
+        return false;
+    }
+
+    std::string assetPath = "environments/" + envId + "/model.glb";
+    AAsset* asset = AAssetManager_open(state.app->activity->assetManager, assetPath.c_str(), AASSET_MODE_BUFFER);
+    if (!asset) {
+        LOGE("Ambiente: Falha ao abrir asset '%s'", assetPath.c_str());
+        return false;
+    }
+
+    size_t assetSize = static_cast<size_t>(AAsset_getLength(asset));
+    const void* assetBuffer = AAsset_getBuffer(asset);
+    if (!assetBuffer || assetSize == 0) {
+        AAsset_close(asset);
+        LOGE("Ambiente: Buffer de asset invalido para '%s'", assetPath.c_str());
+        return false;
+    }
+
+    cgltf_options options{};
+    cgltf_data* data = nullptr;
+    cgltf_result res = cgltf_parse(&options, assetBuffer, assetSize, &data);
+    if (res != cgltf_result_success || !data) {
+        AAsset_close(asset);
+        LOGE("Ambiente: Falha ao parsear GLB '%s' (erro %d)", assetPath.c_str(), static_cast<int>(res));
+        return false;
+    }
+
+    res = cgltf_load_buffers(&options, data, nullptr);
+    if (res != cgltf_result_success) {
+        cgltf_free(data);
+        AAsset_close(asset);
+        LOGE("Ambiente: Falha ao carregar buffers de '%s'", assetPath.c_str());
+        return false;
+    }
+
+    std::vector<EnvironmentVertex> vertices;
+    std::vector<uint32_t> indices;
+
+    for (size_t m = 0; m < data->meshes_count; ++m) {
+        const auto& mesh = data->meshes[m];
+        for (size_t p = 0; p < mesh.primitives_count; ++p) {
+            const auto& prim = mesh.primitives[p];
+            if (prim.type != cgltf_primitive_type_triangles) continue;
+
+            uint32_t vertexBase = static_cast<uint32_t>(vertices.size());
+            cgltf_accessor* posAcc = nullptr;
+            cgltf_accessor* normAcc = nullptr;
+            cgltf_accessor* colorAcc = nullptr;
+
+            for (size_t a = 0; a < prim.attributes_count; ++a) {
+                if (prim.attributes[a].type == cgltf_attribute_type_position) posAcc = prim.attributes[a].data;
+                else if (prim.attributes[a].type == cgltf_attribute_type_normal) normAcc = prim.attributes[a].data;
+                else if (prim.attributes[a].type == cgltf_attribute_type_color) colorAcc = prim.attributes[a].data;
+            }
+
+            if (!posAcc) continue;
+
+            size_t count = posAcc->count;
+            for (size_t i = 0; i < count; ++i) {
+                EnvironmentVertex v{};
+                v.pos[0] = v.pos[1] = v.pos[2] = 0.0f;
+                v.normal[0] = 0.0f; v.normal[1] = 1.0f; v.normal[2] = 0.0f;
+                v.color[0] = v.color[1] = v.color[2] = v.color[3] = 1.0f;
+
+                cgltf_accessor_read_float(posAcc, i, v.pos, 3);
+                if (normAcc) cgltf_accessor_read_float(normAcc, i, v.normal, 3);
+                if (colorAcc) {
+                    float c[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+                    cgltf_accessor_read_float(colorAcc, i, c, colorAcc->type == cgltf_type_vec4 ? 4 : 3);
+                    v.color[0] = c[0]; v.color[1] = c[1]; v.color[2] = c[2]; v.color[3] = c[3];
+                }
+                vertices.push_back(v);
+            }
+
+            if (prim.indices) {
+                size_t icount = prim.indices->count;
+                for (size_t i = 0; i < icount; ++i) {
+                    indices.push_back(vertexBase + static_cast<uint32_t>(cgltf_accessor_read_index(prim.indices, i)));
+                }
+            } else {
+                for (size_t i = 0; i < count; ++i) {
+                    indices.push_back(vertexBase + static_cast<uint32_t>(i));
+                }
+            }
+        }
+    }
+
+    cgltf_free(data);
+    AAsset_close(asset);
+
+    if (vertices.empty() || indices.empty()) {
+        LOGE("Ambiente: Nenhuma geometria util encontrada em '%s'", assetPath.c_str());
+        return false;
+    }
+
+    // Criar Vertex Buffer
+    VkBufferCreateInfo vbInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    vbInfo.size = vertices.size() * sizeof(EnvironmentVertex);
+    vbInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    vbInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VKR(vkCreateBuffer(state.vkDevice, &vbInfo, nullptr, &state.envVertexBuffer));
+
+    VkMemoryRequirements vmr{};
+    vkGetBufferMemoryRequirements(state.vkDevice, state.envVertexBuffer, &vmr);
+    VkMemoryAllocateInfo vai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    vai.allocationSize = vmr.size;
+    vai.memoryTypeIndex = FindMemoryType(
+        state, vmr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VKR(vkAllocateMemory(state.vkDevice, &vai, nullptr, &state.envVertexMemory));
+    VKR(vkBindBufferMemory(state.vkDevice, state.envVertexBuffer, state.envVertexMemory, 0));
+
+    void* mappedVerts = nullptr;
+    VKR(vkMapMemory(state.vkDevice, state.envVertexMemory, 0, vbInfo.size, 0, &mappedVerts));
+    std::memcpy(mappedVerts, vertices.data(), vbInfo.size);
+    vkUnmapMemory(state.vkDevice, state.envVertexMemory);
+
+    // Criar Index Buffer
+    VkBufferCreateInfo ibInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    ibInfo.size = indices.size() * sizeof(uint32_t);
+    ibInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    ibInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VKR(vkCreateBuffer(state.vkDevice, &ibInfo, nullptr, &state.envIndexBuffer));
+
+    VkMemoryRequirements imr{};
+    vkGetBufferMemoryRequirements(state.vkDevice, state.envIndexBuffer, &imr);
+    VkMemoryAllocateInfo iai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    iai.allocationSize = imr.size;
+    iai.memoryTypeIndex = FindMemoryType(
+        state, imr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VKR(vkAllocateMemory(state.vkDevice, &iai, nullptr, &state.envIndexMemory));
+    VKR(vkBindBufferMemory(state.vkDevice, state.envIndexBuffer, state.envIndexMemory, 0));
+
+    void* mappedIndices = nullptr;
+    VKR(vkMapMemory(state.vkDevice, state.envIndexMemory, 0, ibInfo.size, 0, &mappedIndices));
+    std::memcpy(mappedIndices, indices.data(), ibInfo.size);
+    vkUnmapMemory(state.vkDevice, state.envIndexMemory);
+
+    state.envIndexCount = static_cast<uint32_t>(indices.size());
+    state.envMeshLoaded = true;
+    LOGI("Ambiente: '%s' carregado com sucesso (%zu vertices, %u indices, %zu bytes)",
+         envId.c_str(), vertices.size(), state.envIndexCount, vbInfo.size + ibInfo.size);
+    return true;
+}
+
+static void DrawEnvironmentIfLoaded(
+    AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view) {
+    if (!state.envMeshLoaded || state.envPipeline == VK_NULL_HANDLE ||
+        state.envVertexBuffer == VK_NULL_HANDLE || state.passthroughActive) {
+        return;
+    }
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.envPipeline);
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &state.envVertexBuffer, &offset);
+    vkCmdBindIndexBuffer(cmd, state.envIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+    EnvironmentPushConstants envPc{};
+    Mat4 envModel = Mat4Multiply(
+        Mat4Translation(state.sceneTranslationOffset.x, state.sceneTranslationOffset.y, state.sceneTranslationOffset.z),
+        Mat4RotationY(state.sceneYawOffset)
+    );
+    envPc.mvp = Mat4Multiply(Mat4Multiply(proj, view), envModel);
+    envPc.tintColor = {1.0f, 1.0f, 1.0f, 1.0f};
+
+    vkCmdPushConstants(
+        cmd, state.envPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT,
+        0, sizeof(envPc), &envPc);
+
+    vkCmdDrawIndexed(cmd, state.envIndexCount, 1, 0, 0, 0);
+    CountDrawCall(state.envIndexCount);
+}
+
 void RecordFallbackQuad(
     AppState& state, VkCommandBuffer cmd, VkFramebuffer framebuffer, VkExtent2D extent, const Mat4& mvp,
     const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
@@ -4578,6 +4918,8 @@ void RecordFallbackQuad(
 
     VkRect2D scissor{{0, 0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    DrawEnvironmentIfLoaded(state, cmd, proj, view);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline);
 
@@ -4889,6 +5231,8 @@ void RecordVideoFlat(
     VkRect2D scissor{{0, 0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
+    DrawEnvironmentIfLoaded(state, cmd, proj, view);
+
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.videoPipeline);
 
     VkDeviceSize offset = 0;
@@ -4965,6 +5309,10 @@ void RecordStereoFrame(
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     const bool cubemapMode = IsCubemapMode(state.screenMode);
+    if (!sphereMode && !cubemapMode) {
+        DrawEnvironmentIfLoaded(state, cmd, proj, view);
+    }
+
     VkPipeline targetPipeline = cubemapMode ? state.stereoCubemapPipeline
                               : (sphereMode ? state.stereoPipeline : state.stereoFlatPipeline);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, targetPipeline);
@@ -5040,6 +5388,10 @@ void RecordPhotoFrame(
     vkCmdSetViewport(cmd, 0, 1, &vp);
     VkRect2D scissor{{0,0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    if (!sphereMode) {
+        DrawEnvironmentIfLoaded(state, cmd, proj, view);
+    }
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         sphereMode ? state.photoStereoPipeline : state.photoStereoFlatPipeline);
@@ -5594,6 +5946,19 @@ void RenderFrame(AppState& state) {
             state.sceneTranslationOffset.y = headCenter.y - 1.5f;
             state.needsOsRecenter = false;
             state.sceneCalibrated = true;
+        }
+
+        // Processa troca pendente de ambiente virtual 3D
+        if (g_environmentChangeRequested.exchange(false)) {
+            std::string targetEnv;
+            {
+                std::lock_guard<std::mutex> lock(g_environmentMutex);
+                targetEnv = g_requestedEnvironmentId;
+            }
+            if (targetEnv != state.currentEnvironmentId) {
+                vkDeviceWaitIdle(state.vkDevice);
+                LoadEnvironmentMesh(state, targetEnv);
+            }
         }
 
         // Estagio 4/5: Processar interacoes apos obtermos a posicao da cabeca
@@ -6431,6 +6796,34 @@ void DestroyAppResources(AppState& state) {
         eyeChain.imageViews.clear();
     }
 
+    // 10. Recursos de Ambiente Virtual 3D
+    if (state.envPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.envPipeline, nullptr);
+        state.envPipeline = VK_NULL_HANDLE;
+    }
+    if (state.envPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.envPipelineLayout, nullptr);
+        state.envPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.envVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.envVertexBuffer, nullptr);
+        state.envVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.envVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.envVertexMemory, nullptr);
+        state.envVertexMemory = VK_NULL_HANDLE;
+    }
+    if (state.envIndexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.envIndexBuffer, nullptr);
+        state.envIndexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.envIndexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.envIndexMemory, nullptr);
+        state.envIndexMemory = VK_NULL_HANDLE;
+    }
+    state.envIndexCount = 0;
+    state.envMeshLoaded = false;
+
     if (state.queryPool != VK_NULL_HANDLE) {
         vkDestroyQueryPool(state.vkDevice, state.queryPool, nullptr);
         state.queryPool = VK_NULL_HANDLE;
@@ -6599,6 +6992,8 @@ void android_main(android_app* app) {
     CreateSubtitlePipeline(state);
     // Fase 0.3 Seção 8: pipeline de fotos estáticas 360/3D (T8.3, T8.4)
     CreatePhotoPipeline(state);
+    // Ambientes Virtuais 3D (Fase 0.3 §1 / Fase 0.5 §3)
+    CreateEnvironmentPipeline(state);
 
     // O video e iniciado via nativePlayVideo (JNI) quando o usuario seleciona
     // um arquivo no painel de UI — identico ao caminho GLES.
