@@ -110,14 +110,6 @@ jobs:
           export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}
           ./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26
 
-      - name: Build Unified Script (Rust + C++ + Gradle)
-        run: ./scripts/build.sh
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
-          ANDROID_SDK_HOME: ${{ env.ANDROID_SDK_HOME }}
-          PKG_CONFIG_PATH: ${{ github.workspace }}/ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/pkgconfig
-          BINDGEN_EXTRA_CLANG_ARGS: "-I${{ github.workspace }}/ffmpeg-android-maker/output/include/arm64-v8a -I${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-
       - name: Determine Release Configuration
         id: config
         env:
@@ -128,11 +120,25 @@ jobs:
           INPUT_TAG: ${{ inputs.tag_name }}
           INPUT_PRERELEASE: ${{ inputs.prerelease }}
         run: |
+          # Carregar versão oficial do sistema a partir de version.properties
+          SYS_VERSION=$(grep -E '^versionName=' version.properties | cut -d'=' -f2 | tr -d '[:space:]')
+          if [[ -z "$SYS_VERSION" ]]; then
+            SYS_VERSION="0.4.7"
+          fi
+          SYS_CODE=$(grep -E '^versionCode=' version.properties | cut -d'=' -f2 | tr -d '[:space:]')
+          if [[ -z "$SYS_CODE" ]]; then
+            SYS_CODE="470"
+          fi
+
           if [[ -n "$INPUT_TAG" ]]; then
+            CLEAN_VERSION="${INPUT_TAG#v}"
             echo "rel_name=Release $INPUT_TAG" >> "$GITHUB_ENV"
             echo "rel_tag=$INPUT_TAG" >> "$GITHUB_ENV"
             echo "is_prerelease=$INPUT_PRERELEASE" >> "$GITHUB_ENV"
+            echo "APP_VERSION_NAME=$CLEAN_VERSION" >> "$GITHUB_ENV"
+            echo "APP_VERSION_CODE=$SYS_CODE" >> "$GITHUB_ENV"
           elif [[ "$REF_TYPE" == "tag" ]]; then
+            CLEAN_VERSION="${REF_NAME#v}"
             echo "rel_name=Release $REF_NAME" >> "$GITHUB_ENV"
             echo "rel_tag=$REF_NAME" >> "$GITHUB_ENV"
             if [[ "$REF" == *"-beta"* ]] || [[ "$REF" == *"-alpha"* ]]; then
@@ -140,16 +146,37 @@ jobs:
             else
               echo "is_prerelease=false" >> "$GITHUB_ENV"
             fi
+            echo "APP_VERSION_NAME=$CLEAN_VERSION" >> "$GITHUB_ENV"
+            echo "APP_VERSION_CODE=$SYS_CODE" >> "$GITHUB_ENV"
           else
-            echo "rel_name=Auto-Build #$RUN_NUMBER" >> "$GITHUB_ENV"
-            echo "rel_tag=build-$RUN_NUMBER" >> "$GITHUB_ENV"
+            # Push na branch main: utiliza a versão do sistema com número da build
+            echo "rel_name=Release v${SYS_VERSION} (Build #${RUN_NUMBER})" >> "$GITHUB_ENV"
+            echo "rel_tag=v${SYS_VERSION}-build.${RUN_NUMBER}" >> "$GITHUB_ENV"
             echo "is_prerelease=true" >> "$GITHUB_ENV"
+            echo "APP_VERSION_NAME=${SYS_VERSION}-build.${RUN_NUMBER}" >> "$GITHUB_ENV"
+            echo "APP_VERSION_CODE=$SYS_CODE" >> "$GITHUB_ENV"
           fi
+
+      - name: Build Unified Script (Rust + C++ + Gradle)
+        run: ./scripts/build.sh
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+          ANDROID_SDK_HOME: ${{ env.ANDROID_SDK_HOME }}
+          PKG_CONFIG_PATH: ${{ github.workspace }}/ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/pkgconfig
+          BINDGEN_EXTRA_CLANG_ARGS: "-I${{ github.workspace }}/ffmpeg-android-maker/output/include/arm64-v8a -I${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          APP_VERSION_NAME: ${{ env.APP_VERSION_NAME }}
+          APP_VERSION_CODE: ${{ env.APP_VERSION_CODE }}
+
+      - name: Prepare Release Artifacts
+        run: |
+          cp app/build/outputs/apk/debug/app-debug.apk "tucaVR-${{ env.rel_tag }}.apk"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: app/build/outputs/apk/debug/app-debug.apk
+          files: |
+            tucaVR-${{ env.rel_tag }}.apk
+            app/build/outputs/apk/debug/app-debug.apk
           name: ${{ env.rel_name }}
           tag_name: ${{ env.rel_tag }}
           generate_release_notes: true

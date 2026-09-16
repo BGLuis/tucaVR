@@ -1,9 +1,24 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     // T9.1: Room usa KSP em vez de kapt (ver justificativa no build.gradle.kts raiz).
     id("com.google.devtools.ksp")
 }
+
+// Sincronização de versão do sistema com version.properties na raiz
+val versionPropsFile = rootProject.file("version.properties")
+val versionProps = Properties().apply {
+    if (versionPropsFile.exists()) {
+        versionPropsFile.inputStream().use { load(it) }
+    }
+}
+val defaultVersionName = versionProps.getProperty("versionName", "0.4.7")
+val defaultVersionCode = versionProps.getProperty("versionCode", "470").toIntOrNull() ?: 470
+
+val appVersionName = (project.findProperty("appVersionName") as? String)?.takeIf { it.isNotBlank() } ?: defaultVersionName
+val appVersionCode = (project.findProperty("appVersionCode") as? String)?.toIntOrNull() ?: defaultVersionCode
 
 android {
     namespace = "com.tucavr"
@@ -18,8 +33,8 @@ android {
         applicationId = "com.tucavr"
         minSdk = 26
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         externalNativeBuild {
             cmake {

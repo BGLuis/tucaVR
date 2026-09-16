@@ -25,6 +25,14 @@ cd ..
 
 # 2. Invocar Gradle Build
 echo "🤖 Compilando Android App..."
-./gradlew assembleDebug
+GRADLE_ARGS=()
+if [ -n "$APP_VERSION_NAME" ]; then
+    GRADLE_ARGS+=("-PappVersionName=$APP_VERSION_NAME")
+fi
+if [ -n "$APP_VERSION_CODE" ]; then
+    GRADLE_ARGS+=("-PappVersionCode=$APP_VERSION_CODE")
+fi
+
+./gradlew assembleDebug "${GRADLE_ARGS[@]}"
 
 echo "✅ Build concluído com sucesso!"
