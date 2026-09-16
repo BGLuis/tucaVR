@@ -11,56 +11,51 @@ mkdir -p "$BUILD_DIR"
 echo "=== Compilando e Executando Testes Unitários Nativos C++ (Host) ==="
 
 CXX="${CXX:-g++}"
+# ccache acelera recompilações quando disponível no PATH (ex.: CI com ccache-action).
+if command -v ccache >/dev/null 2>&1 && [ "$CXX" = "g++" ]; then
+    CXX="ccache g++"
+fi
 
-# 1. Testes de Álgebra 3D e Quaternions (vk_math.h)
-echo "-> Compilando test_vk_math..."
-"$CXX" -std=c++20 -O2 -Wall -Wextra -Werror \
-    -I native/include \
-    native/tests/test_vk_math.cpp \
-    -o "$BUILD_DIR/test_vk_math"
+TESTS=(
+    "test_vk_math"
+    "test_input_fsm"
+    "test_screen_mode"
+    "test_subtitle_layout"
+    "test_hand_tracking"
+    "test_environment_config"
+)
 
-echo "-> Executando test_vk_math..."
-"$BUILD_DIR/test_vk_math"
+compile_test() {
+    local name="$1"
+    $CXX -std=c++20 -O2 -Wall -Wextra -Werror \
+        -I native/include \
+        "native/tests/${name}.cpp" \
+        -o "$BUILD_DIR/${name}"
+}
 
-# 2. Testes da Máquina de Estados de Input / Debounce (C-01)
-echo "-> Compilando test_input_fsm..."
-"$CXX" -std=c++20 -O2 -Wall -Wextra -Werror \
-    -I native/include \
-    native/tests/test_input_fsm.cpp \
-    -o "$BUILD_DIR/test_input_fsm"
+echo "-> Compilando os ${#TESTS[@]} binários de teste em paralelo..."
+PIDS=()
+for name in "${TESTS[@]}"; do
+    compile_test "$name" &
+    PIDS+=("$!")
+done
 
-echo "-> Executando test_input_fsm..."
-"$BUILD_DIR/test_input_fsm"
+FAILED=0
+for pid in "${PIDS[@]}"; do
+    if ! wait "$pid"; then
+        FAILED=1
+    fi
+done
 
-# 3. Testes do Contrato ScreenMode
-echo "-> Compilando test_screen_mode..."
-"$CXX" -std=c++20 -O2 -Wall -Wextra -Werror \
-    -I native/include \
-    native/tests/test_screen_mode.cpp \
-    -o "$BUILD_DIR/test_screen_mode"
+if [ "$FAILED" -ne 0 ]; then
+    echo "❌ Falha ao compilar um ou mais binários de teste." >&2
+    exit 1
+fi
 
-echo "-> Executando test_screen_mode..."
-"$BUILD_DIR/test_screen_mode"
+for name in "${TESTS[@]}"; do
+    echo "-> Executando ${name}..."
+    "$BUILD_DIR/${name}"
+done
 
-# 4. Testes de Layout e Posicionamento de Legendas (ASS / PGS - Fase 0.3 Seção 7)
-echo "-> Compilando test_subtitle_layout..."
-"$CXX" -std=c++20 -O2 -Wall -Wextra -Werror \
-    -I native/include \
-    native/tests/test_subtitle_layout.cpp \
-    -o "$BUILD_DIR/test_subtitle_layout"
-
-echo "-> Executando test_subtitle_layout..."
-"$BUILD_DIR/test_subtitle_layout"
-
-# 5. Testes de Hand Tracking, Gestos e Raycasting (XR_EXT_hand_tracking - Fase 0.3 Seção 5)
-echo "-> Compilando test_hand_tracking..."
-"$CXX" -std=c++20 -O2 -Wall -Wextra -Werror \
-    -I native/include \
-    native/tests/test_hand_tracking.cpp \
-    -o "$BUILD_DIR/test_hand_tracking"
-
-echo "-> Executando test_hand_tracking..."
-"$BUILD_DIR/test_hand_tracking"
-
-echo "=== Todos os 5 binários de teste C++ passaram com sucesso! ==="
+echo "=== Todos os ${#TESTS[@]} binários de teste C++ passaram com sucesso! ==="
 rm -rf "$BUILD_DIR"

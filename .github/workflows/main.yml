@@ -77,9 +77,16 @@ jobs:
         run: cd rust && cargo test -p protocols -p media-logic
 
       - name: Install C++ Host Test Dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends libopenxr-dev
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libopenxr-dev
+          version: 1.0
+
+      - name: Cache ccache (host C++ tests)
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: host-tests-${{ runner.os }}
+          max-size: 200M
 
       - name: Run C++ Host unit tests
         run: ./scripts/test-native-host.sh
@@ -129,12 +136,24 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-          
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "rust -> rust/target"
-          
+
+      # Complementa o Rust Cache acima: quando o Cargo.lock muda e invalida o cache de
+      # target/, o sccache ainda reaproveita objetos ja compilados (util para o build.rs
+      # do ffmpeg-next e o C++ nativo do oboe-sys).
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Cache ccache (native C++ build)
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: native-build-${{ runner.os }}
+          max-size: 500M
+
       - name: Cache cargo-ndk
         id: cache-cargo-ndk
         uses: actions/cache@v4
@@ -186,6 +205,8 @@ jobs:
           ANDROID_SDK_HOME: ${{ env.ANDROID_SDK_HOME }}
           PKG_CONFIG_PATH: ${{ github.workspace }}/ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/pkgconfig
           BINDGEN_EXTRA_CLANG_ARGS: "-I${{ github.workspace }}/ffmpeg-android-maker/output/include/arm64-v8a -I${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          RUSTC_WRAPPER: sccache
+          SCCACHE_GHA_ENABLED: "true"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

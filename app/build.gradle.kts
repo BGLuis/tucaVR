@@ -1,3 +1,4 @@
+import java.io.File
 import java.util.Properties
 
 plugins {
@@ -19,6 +20,14 @@ val defaultVersionCode = versionProps.getProperty("versionCode", "470").toIntOrN
 
 val appVersionName = (project.findProperty("appVersionName") as? String)?.takeIf { it.isNotBlank() } ?: defaultVersionName
 val appVersionCode = (project.findProperty("appVersionCode") as? String)?.toIntOrNull() ?: defaultVersionCode
+
+// ccache acelera recompilacoes do build nativo (CMake/NDK) quando disponivel no PATH
+// (ex.: hendrikmuhs/ccache-action no CI). Deteccao automatica em vez de flag manual —
+// nao afeta devs locais sem ccache instalado.
+val ccachePath = System.getenv("PATH")
+    ?.split(File.pathSeparator)
+    ?.map { File(it, "ccache") }
+    ?.firstOrNull { it.canExecute() }
 
 android {
     namespace = "com.tucavr"
@@ -49,6 +58,11 @@ android {
                 arguments += "-DVRPLAYER_GRAPHICS_API=${project.findProperty("vrplayerGraphicsApi") ?: "VULKAN"}"
                 if (project.findProperty("enableVulkanValidation") == "true") {
                     arguments += "-DENABLE_VK_VALIDATION_LAYERS=ON"
+                }
+                // Acelera rebuilds do build nativo (CI: hendrikmuhs/ccache-action popula o PATH).
+                if (ccachePath != null) {
+                    arguments += "-DCMAKE_C_COMPILER_LAUNCHER=${ccachePath.absolutePath}"
+                    arguments += "-DCMAKE_CXX_COMPILER_LAUNCHER=${ccachePath.absolutePath}"
                 }
             }
         }
