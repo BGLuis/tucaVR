@@ -248,10 +248,13 @@ impl HwDecoder {
     /// decodificados estao pendentes de apresentacao e pode decidir
     /// liberar o mais antigo cedo (aceitando pequena imprecisao de sync)
     /// como valvula de alivio antes de travar de verdade.
+    ///
+    /// `pts_us`: timestamp de apresentacao estritamente em MICROSSEGUNDOS (us),
+    /// conforme exigido pelo `AMediaCodec_queueInputBuffer` do Android NDK.
     pub fn feed_input(
         &self,
         data: &[u8],
-        pts: i64,
+        pts_us: i64,
         flags: u32,
         mut on_stalled: impl FnMut(),
         should_continue: impl Fn() -> bool,
@@ -273,7 +276,7 @@ impl HwDecoder {
                         slice[i].write(data[i]);
                     }
 
-                    codec.queue_input_buffer(buf, 0, len, pts as u64, flags)
+                    codec.queue_input_buffer(buf, 0, len, pts_us as u64, flags)
                         .map_err(|e| {
                             self.decode_errors.fetch_add(1, Ordering::Relaxed);
                             format!("queue_input_buffer failed: {:?}", e)

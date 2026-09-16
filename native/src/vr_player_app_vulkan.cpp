@@ -268,6 +268,7 @@ std::mutex g_scrubOverlayMutex;
 std::atomic<bool> g_requestUiPanelVisible{false};
 std::atomic<bool> g_requestControlsPanelVisible{false};
 std::atomic<bool> g_stopVideoRequested{false};
+std::atomic<bool> g_newVideoSessionRequested{false};
 std::atomic<bool> g_modalPanelActive{false};
 std::atomic<bool> g_modalPanelShowRequested{false};
 std::atomic<bool> g_modalPanelHideRequested{false};
@@ -296,6 +297,7 @@ void ResetGlobalState() {
     g_requestUiPanelVisible.store(false);
     g_requestControlsPanelVisible.store(false);
     g_stopVideoRequested.store(false);
+    g_newVideoSessionRequested.store(false);
     g_modalPanelActive.store(false);
     g_modalPanelShowRequested.store(false);
     g_modalPanelHideRequested.store(false);
@@ -317,14 +319,11 @@ void ResetGlobalState() {
 namespace {
 
 constexpr int kEyeCount = 2;
-// Limite de entradas no cache de VkImage por AHardwareBuffer. Era 6
-// (herdado do m_eglImageCache do caminho GLES) — logcat de hardware desta
-// sessao (docs/NETWORK-IO-PERFORMANCE.md) mostrou evicao em TODO frame
-// (~10 ponteiros de AHardwareBuffer distintos circulando contra um limite
-// de 6), o que reimporta a VkImage/aloca descriptor set do zero a cada
-// frame em vez de reaproveitar. Subido pra folga real acima do numero de
-// buffers que o MediaCodec/ImageReader mantem em voo.
-constexpr size_t kVideoImageCacheLimit = 16;
+// Limite de entradas no cache de VkImage por AHardwareBuffer. Subido para 32
+// para acomodar com folga os 21-24 buffers de saida alocados pelo decodificador
+// Qualcomm C2 em 1080p (Snapdragon XR2 Gen 2) e evitar eviccoes sincronas no loop
+// de renderizacao OpenXR. Em 8K60, o hardware aloca apenas 6-8 buffers.
+constexpr size_t kVideoImageCacheLimit = 32;
 // Raio da esfera 360 (20m, mesmo do caminho GLES: kSphereRadius em vr_player_app.cpp:1604)
 constexpr float kSphereRadius = 20.0f;
 
@@ -4603,6 +4602,33 @@ void RecordFallbackQuad(
     vkCmdEndRenderPass(cmd);
 }
 
+// Libera todos os recursos Vulkan (VkImage, VkDeviceMemory, VkImageView, descriptor sets)
+// associados aos AHardwareBuffers em cache. Chamado ao parar a reproducao, ao iniciar uma nova
+// sessao de video, ou durante o shutdown do aplicativo.
+void ClearVideoImageCache(AppState& state) {
+    if (state.vkDevice == VK_NULL_HANDLE || state.videoImageCache.empty()) return;
+    LOGI("Cache de video: liberando %zu imagens da GPU", state.videoImageCache.size());
+    for (auto& [buf, frame] : state.videoImageCache) {
+        if (frame.descriptorSet != VK_NULL_HANDLE && state.videoDescriptorPool != VK_NULL_HANDLE) {
+            vkFreeDescriptorSets(state.vkDevice, state.videoDescriptorPool, 1, &frame.descriptorSet);
+            frame.descriptorSet = VK_NULL_HANDLE;
+        }
+        if (frame.imageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(state.vkDevice, frame.imageView, nullptr);
+            frame.imageView = VK_NULL_HANDLE;
+        }
+        if (frame.image != VK_NULL_HANDLE) {
+            vkDestroyImage(state.vkDevice, frame.image, nullptr);
+            frame.image = VK_NULL_HANDLE;
+        }
+        if (frame.memory != VK_NULL_HANDLE) {
+            vkFreeMemory(state.vkDevice, frame.memory, nullptr);
+            frame.memory = VK_NULL_HANDLE;
+        }
+    }
+    state.videoImageCache.clear();
+}
+
 // Estagio 3: importa um AHardwareBuffer como VkImage via
 // VK_ANDROID_external_memory_android_hardware_buffer, cria ImageView e
 // aloca um descriptor set para ele. O resultado e armazenado no cache
@@ -5091,8 +5117,11 @@ void PushVideoGapSample(AppState& state, float gapMs) {
 // Chamado uma vez por loop de frame, antes de RenderFrame.
 // Equivale ao bloco vr_player_app.cpp:1354-1400 (m_eglImageCache).
 void UpdateVideoFrame(AppState& state) {
-    if (g_stopVideoRequested.exchange(false)) {
-        LOGI("Video: parada solicitada — limpando frame ativo e encerrando renderizacao do video");
+    bool stopRequested = g_stopVideoRequested.exchange(false);
+    bool newSessionRequested = g_newVideoSessionRequested.exchange(false);
+    if (stopRequested || newSessionRequested) {
+        LOGI("Video: %s — limpando frame ativo e cache Vulkan",
+             stopRequested ? "parada solicitada" : "nova sessao de video iniciada");
         state.activeVideoFrame = nullptr;
         state.lastVideoBuffer = nullptr;
         state.msSinceLastVideoFrame = 0.0f;
@@ -5102,8 +5131,11 @@ void UpdateVideoFrame(AppState& state) {
         state.videoJitterMs = 0.0f;
         state.controlsAlpha = 0.0f;
         state.controlsIdleTime = kUiAutoHideSeconds;
-        g_requestUiPanelVisible.store(true);
-        return;
+        ClearVideoImageCache(state);
+        if (stopRequested) {
+            g_requestUiPanelVisible.store(true);
+            return;
+        }
     }
 
     AHardwareBuffer* buffer = get_current_video_frame();
@@ -6084,25 +6116,7 @@ void DestroyAppResources(AppState& state) {
     if (state.vkDevice == VK_NULL_HANDLE) return;
 
     // 1. Limpar cache de frames de vídeo (YCbCr)
-    for (auto& [buf, frame] : state.videoImageCache) {
-        if (frame.descriptorSet != VK_NULL_HANDLE && state.videoDescriptorPool != VK_NULL_HANDLE) {
-            vkFreeDescriptorSets(state.vkDevice, state.videoDescriptorPool, 1, &frame.descriptorSet);
-            frame.descriptorSet = VK_NULL_HANDLE;
-        }
-        if (frame.imageView != VK_NULL_HANDLE) {
-            vkDestroyImageView(state.vkDevice, frame.imageView, nullptr);
-            frame.imageView = VK_NULL_HANDLE;
-        }
-        if (frame.image != VK_NULL_HANDLE) {
-            vkDestroyImage(state.vkDevice, frame.image, nullptr);
-            frame.image = VK_NULL_HANDLE;
-        }
-        if (frame.memory != VK_NULL_HANDLE) {
-            vkFreeMemory(state.vkDevice, frame.memory, nullptr);
-            frame.memory = VK_NULL_HANDLE;
-        }
-    }
-    state.videoImageCache.clear();
+    ClearVideoImageCache(state);
 
     if (state.videoDescriptorPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(state.vkDevice, state.videoDescriptorPool, nullptr);

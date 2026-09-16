@@ -93,6 +93,9 @@ pub struct PrefetchStats {
     /// F4: espelho de PrefetchReader::is_throttled() (0/1) — throttle termico suspende
     /// read-ahead especulativo (T14.1/T14.2).
     pub throttled: AtomicU32,
+    /// Tamanho de bloco alvo dinamico configuravel (ex.: 4MB para 1080p, 12MB para 4K/8K).
+    /// Se 0 ou menor que 64KB, o prefetch reader mantem o `block_size` padrao.
+    pub target_block_size: AtomicU64,
 }
 
 /// Melhor esforco pra elevar a prioridade da thread de I/O de rede acima do
@@ -339,10 +342,16 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
     }
 
     fn next_ramp_size(&mut self) -> usize {
-        let size = if self.sequential_streak == 0 {
-            (self.seek_block_size * 4).min(self.block_size)
+        let target = self.stats.target_block_size.load(Ordering::Relaxed) as usize;
+        let effective_block_size = if target >= 64 * 1024 {
+            target
         } else {
             self.block_size
+        };
+        let size = if self.sequential_streak == 0 {
+            (self.seek_block_size * 4).min(effective_block_size)
+        } else {
+            effective_block_size
         };
         self.sequential_streak = self.sequential_streak.saturating_add(1);
         // F4: espelha pra leitura externa (bridge/C++) — ver PrefetchStats::sequential_streak.
@@ -902,5 +911,40 @@ mod tests {
         let mut out = vec![0u8; data.len()];
         reader.read_exact(&mut out).expect("falha ao ler de fonte com entrega parcial");
         assert_eq!(out, data, "dados lidos diferem do conteudo original sob entregas parciais");
+    }
+
+    #[test]
+    fn dynamic_target_block_size_overrides_default_block_size() {
+        let full_block = 12 * 1024 * 1024;
+        let seek_block = 512 * 1024;
+        let target_override = 4 * 1024 * 1024;
+        let data: Vec<u8> = (0..255u8).cycle().take(full_block * 3).collect();
+        let (source, sizes) = SizeTrackingSource::new(data.clone());
+        let mut reader = PrefetchReader::with_block_sizes(source, full_block, seek_block);
+
+        // Configura target_block_size dinamicamente
+        reader.stats().target_block_size.store(target_override as u64, Ordering::Relaxed);
+
+        let jump_to = full_block as u64;
+        reader.seek(SeekFrom::Start(jump_to)).unwrap();
+        // Consome bloco do seek + bloco intermediario
+        let medium_block = (seek_block * 4).min(target_override);
+        let mut out = vec![0u8; seek_block + medium_block + 4096];
+        let mut done = 0;
+        while done < out.len() {
+            let chunk = 4096.min(out.len() - done);
+            reader.read_exact(&mut out[done..done + chunk]).unwrap();
+            done += chunk;
+        }
+
+        let requested = wait_for_requests(&sizes, 4);
+        assert!(
+            requested.contains(&target_override),
+            "esperava fetch respeitar target_block_size ({target_override}), fetches: {requested:?}"
+        );
+        assert!(
+            !requested.contains(&full_block),
+            "bloco default original ({full_block}) nao deveria ter sido requisitado apos override, fetches: {requested:?}"
+        );
     }
 }

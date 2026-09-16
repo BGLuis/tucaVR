@@ -1,7 +1,7 @@
 use ffmpeg_next as ffmpeg;
 use ffmpeg::format::context::{Input, StreamIo};
 use protocols::prefetch::{PrefetchReader, PrefetchStats, SharedRangeSource};
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 // 12MB em vez do default 4MB: a 8K/60fps HEVC (~63Mbps / 7.85MB/s), 4MB cobre só ~0.5s por bloco.
@@ -178,6 +178,25 @@ impl Demuxer {
 
         let video_stream_index = video_streams.first().copied();
         let audio_stream_index = audio_streams.first().copied();
+
+        // Ajuste dinamico do prefetch: se o video for 1080p ou menor, reduzimos
+        // o bloco alvo para 4MB (evita RTT alto por bloco e oscilacao do buffer_gate).
+        // Para 4K/8K mantem o padrao de 12MB.
+        if let (Some(ref stats), Some(idx)) = (&network_stats, video_stream_index) {
+            if let Some(stream) = ictx.stream(idx) {
+                let params = stream.parameters();
+                let (width, height) = unsafe {
+                    let p = params.as_ptr();
+                    ((*p).width as u32, (*p).height as u32)
+                };
+                if width > 0 && height > 0 && width <= 1920 && height <= 1080 {
+                    crate::log_info!("vrplayer-demuxer: video 1080p ou menor detectado ({width}x{height}), ajustando prefetch para 4MB");
+                    stats.target_block_size.store(4 * 1024 * 1024, Ordering::Relaxed);
+                } else if width > 0 && height > 0 {
+                    crate::log_info!("vrplayer-demuxer: video alta resolucao detectado ({width}x{height}), mantendo prefetch padrao (12MB)");
+                }
+            }
+        }
 
         Ok(Self {
             input_context: ictx,

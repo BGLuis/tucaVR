@@ -250,6 +250,7 @@ extern std::mutex g_scrubOverlayMutex;
 extern std::atomic<bool> g_requestUiPanelVisible;
 extern std::atomic<bool> g_requestControlsPanelVisible;
 extern std::atomic<bool> g_stopVideoRequested;
+extern std::atomic<bool> g_newVideoSessionRequested;
 extern std::atomic<bool> g_modalPanelActive;
 extern std::atomic<bool> g_modalPanelShowRequested;
 extern std::atomic<bool> g_modalPanelHideRequested;
@@ -399,6 +400,7 @@ Java_com_tucavr_VRActivity_nativePlayVideo(JNIEnv* env, jobject, jstring path, j
     start_video_playback(pathStr, startTimeSec);
     env->ReleaseStringUTFChars(path, pathStr);
     g_requestControlsPanelVisible.store(true);
+    g_newVideoSessionRequested.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL

@@ -876,7 +876,7 @@ impl PlaybackController {
             macro_rules! release_pending_front {
                 ($render:expr) => {
                     if let Some(buf) = pending.pop_front() {
-                        let pts_sec = buf.info().presentation_time_us() as f64 * video_time_base;
+                        let pts_sec = buf.info().presentation_time_us() as f64 / 1_000_000.0;
                         let _ = video_decoder.release_output(buf, $render);
                         if $render {
                             if let Ok(mut tex) = texture_output_clone.lock() {
@@ -919,7 +919,7 @@ impl PlaybackController {
                 //    avancando em vez de dormir o atraso inteiro de uma
                 //    vez so).
                 if let Some(front) = pending.front() {
-                    let pts_sec = front.info().presentation_time_us() as f64 * video_time_base;
+                    let pts_sec = front.info().presentation_time_us() as f64 / 1_000_000.0;
                     let is_landing = preroll.is_awaiting_landing();
                     let master_clock = sync_v.get_master_clock();
                     match media_logic::frame_timing::decide_frame_action(
@@ -999,12 +999,14 @@ impl PlaybackController {
                         } else {
                             data.to_vec()
                         };
-                        // F4: erros de decode ja incrementam decode_errors DENTRO de
-                        // feed_input (ver HwDecoder) — o Result aqui so controla o fluxo,
-                        // como antes; o `let _` nao esconde mais um contador.
+                        // MediaCodec espera presentationTimeUs expressamente em MICROSSEGUNDOS (us).
+                        // Em conteineres como Matroska (MKV), video_time_base e 1/1000 (ms).
+                        // Converter pts para microssegundos reais evita que drivers como Qualcomm C2
+                        // interpretem o delta de ~42ms como 42us e superestimem o framerate para 23809 fps.
+                        let pts_us = (pts_sec * 1_000_000.0).max(0.0) as i64;
                         let _ = video_decoder.feed_input(
                             &frame_data,
-                            pts,
+                            pts_us,
                             0,
                             // Sob pressao (entrada cheia porque estamos
                             // segurando saida pendente demais): libera o

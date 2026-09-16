@@ -27,15 +27,9 @@ pub enum FrameAction {
 
 /// `pts_sec`/`master_clock` em segundos; `late_skip_sec` e a tolerancia
 /// (`LATE_FRAME_RENDER_SKIP_SEC` em playback.rs) abaixo da qual um frame
+/// `pts_sec`/`master_clock` em segundos; `late_skip_sec` e a tolerancia
+/// (`LATE_FRAME_RENDER_SKIP_SEC` em playback.rs) abaixo da qual um frame
 /// atrasado ainda e mostrado em vez de descartado.
-///
-/// Replica fielmente a arvore que existia inline no `sync_callback` de
-/// `video_thread` (playback.rs): se `is_landing_frame`, poe na tela
-/// incondicionalmente; senao calcula `delay = pts_sec - master_clock` e,
-/// **so se `0.0 < delay < 1.0`**, manda esperar esse tanto — um `delay >=
-/// 1.0s` PULA a espera e cai direto no teste de late-skip abaixo (esse
-/// comportamento already existia no codigo original e e preservado aqui de
-/// proposito, ver o teste `frame_far_in_the_future_skips_the_wait_but_still_renders`).
 pub fn decide_frame_action(
     pts_sec: f64,
     master_clock: f64,
@@ -46,8 +40,11 @@ pub fn decide_frame_action(
         return FrameAction::Land;
     }
     let delay = pts_sec - master_clock;
-    if delay > 0.0 && delay < 1.0 {
-        return FrameAction::WaitThenRender(Duration::from_secs_f64(delay));
+    if delay > 0.0 {
+        // Frame adiantado: aguarda o tempo restante. Limitado a 1.0s para
+        // que o consumidor durma em fatias curtas (PRESENT_WAIT_SLICE de 10ms)
+        // sem travar a thread de decode nem despejar frames futuros a 90 FPS.
+        return FrameAction::WaitThenRender(Duration::from_secs_f64(delay.min(1.0)));
     }
     if delay > -late_skip_sec {
         FrameAction::RenderNow
@@ -108,14 +105,11 @@ mod tests {
     }
 
     #[test]
-    fn frame_far_in_the_future_skips_the_wait_but_still_renders() {
-        // Comportamento preservado do codigo original (playback.rs): um
-        // delay >= 1.0s NAO gera WaitThenRender (evita dormir 1.5s de uma
-        // vez) — cai direto no teste de late-skip, que aqui da RenderNow
-        // porque o delay e positivo (bem longe de ficar abaixo de
-        // -late_skip_sec). Uma regressao aqui faria o pipeline voltar a
-        // dormir por segundos inteiros de uma vez.
+    fn frame_far_in_the_future_waits_instead_of_dumping() {
+        // Frames adiantados (delay >= 1.0s) aguardam com teto de 1.0s em vez de
+        // serem despejados prematuramente com RenderNow, evitando que o buffer
+        // se esgote a 90 FPS em conteudos 24fps.
         let action = decide_frame_action(2.5, 1.0, false, LATE_SKIP);
-        assert_eq!(action, FrameAction::RenderNow);
+        assert_eq!(action, FrameAction::WaitThenRender(Duration::from_secs_f64(1.0)));
     }
 }
