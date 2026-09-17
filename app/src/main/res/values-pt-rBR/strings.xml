@@ -83,6 +83,46 @@
     <string name="passthrough_grab_hint">Dica: Aponte para o vídeo e segure o botão Grip para agarrar e mover a tela pelo espaço 3D.</string>
     <string name="settings_passthrough_open_button">Ajustes</string>
 
+    <!-- Modos de Máscara do Passthrough (Chroma Key & Packed Alpha) -->
+    <string name="mask_mode_section_title">Máscara e Recorte de Fundo</string>
+    <string name="mask_mode_label">Modo de Máscara</string>
+    <string name="mask_mode_description">Escolha como o fundo é removido para o Passthrough (Packed Alpha ou Chroma Key).</string>
+    <string name="mask_mode_off">Desativado</string>
+    <string name="mask_mode_packed_alpha">Packed Alpha</string>
+    <string name="mask_mode_chroma_key">Chroma Key</string>
+    <string name="mask_mode_packed_alpha_detected">✨ Formato DeoVR / HereSphere Packed Alpha detectado neste vídeo.</string>
+    <string name="mask_mode_packed_alpha_info">Desempacotamento em tempo real da máscara de 6 segmentos embutida nas bordas do vídeo.</string>
+    <string name="packed_alpha_opacity_multiplier_label">Reforço de Opacidade (Cabelos e Bordas)</string>
+    <string name="packed_alpha_opacity_multiplier_value">%1$.1fx</string>
+    <string name="packed_alpha_black_cutoff_label">Corte de Fundo (Preto)</string>
+    <string name="packed_alpha_black_cutoff_percent">%1$d%%</string>
+    <string name="packed_alpha_choke_label">Desbaste de Borda (Elimina Halo Cinza)</string>
+    <string name="packed_alpha_choke_percent">%1$d%%</string>
+
+    <!-- Chroma Key (Recorte de Fundo para Passthrough) -->
+    <string name="chroma_key_section_title">Chroma Key (Recorte de Fundo)</string>
+    <string name="chroma_key_toggle_label">Ativar Chroma Key</string>
+    <string name="chroma_key_toggle_description">Remove fundo homogêneo (verde ou azul) para projetar pessoas e objetos 3D na sua sala.</string>
+    <string name="chroma_key_auto_detect_button">Auto Detectar Fundo</string>
+    <string name="chroma_key_auto_detect_status_detecting">Analisando quadro do vídeo…</string>
+    <string name="chroma_key_auto_detect_status_success">Cor detectada: %1$s</string>
+    <string name="chroma_key_auto_detect_status_failed">Não foi possível detectar o fundo automaticamente</string>
+    <string name="chroma_key_color_label">Cor Chave</string>
+    <string name="chroma_key_color_green">Verde</string>
+    <string name="chroma_key_color_blue">Azul</string>
+    <string name="chroma_key_color_red">Vermelho</string>
+    <string name="chroma_key_color_gray">Cinza</string>
+    <string name="chroma_key_color_black">Preto</string>
+    <string name="chroma_key_color_white">Branco</string>
+    <string name="chroma_key_custom_color_title">Ajuste Fino de Cor (RGB)</string>
+    <string name="chroma_key_channel_r">R: %1$d</string>
+    <string name="chroma_key_channel_g">G: %1$d</string>
+    <string name="chroma_key_channel_b">B: %1$d</string>
+    <string name="chroma_key_similarity_label">Tolerância de Recorte</string>
+    <string name="chroma_key_similarity_percent">%1$d%%</string>
+    <string name="chroma_key_smoothness_label">Suavidade de Borda</string>
+    <string name="chroma_key_smoothness_percent">%1$d%%</string>
+
     <!-- Ambientes Virtuais (Fase 0.3 §1 e Fase 0.5 §3) -->
     <string name="environments_modal_title">Ambientes Virtuais</string>
     <string name="env_void_title">Void</string>

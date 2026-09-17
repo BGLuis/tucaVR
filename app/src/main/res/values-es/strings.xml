@@ -83,6 +83,46 @@
     <string name="passthrough_grab_hint">Consejo: Apunte a la pantalla y mantenga presionado Grip para agarrarla y moverla en el espacio 3D.</string>
     <string name="settings_passthrough_open_button">Ajustes</string>
 
+    <!-- Modos de Máscara del Passthrough (Chroma Key & Packed Alpha) -->
+    <string name="mask_mode_section_title">Máscara y Eliminación de Fondo</string>
+    <string name="mask_mode_label">Modo de Máscara</string>
+    <string name="mask_mode_description">Elija cómo se elimina el fondo para Passthrough (Packed Alpha o Chroma Key).</string>
+    <string name="mask_mode_off">Desactivado</string>
+    <string name="mask_mode_packed_alpha">Packed Alpha</string>
+    <string name="mask_mode_chroma_key">Chroma Key</string>
+    <string name="mask_mode_packed_alpha_detected">✨ Formato DeoVR / HereSphere Packed Alpha detectado en este video.</string>
+    <string name="mask_mode_packed_alpha_info">Desempaquetado en tiempo real de la máscara de 6 segmentos embutida en los bordes del video.</string>
+    <string name="packed_alpha_opacity_multiplier_label">Refuerzo de Opacidad (Cabello y Bordes)</string>
+    <string name="packed_alpha_opacity_multiplier_value">%1$.1fx</string>
+    <string name="packed_alpha_black_cutoff_label">Corte de Fondo (Negro)</string>
+    <string name="packed_alpha_black_cutoff_percent">%1$d%%</string>
+    <string name="packed_alpha_choke_label">Recorte de Borde (Eliminar Halo Gris)</string>
+    <string name="packed_alpha_choke_percent">%1$d%%</string>
+
+    <!-- Chroma Key (Eliminación de fondo para Passthrough) -->
+    <string name="chroma_key_section_title">Chroma Key (Eliminación de Fondo)</string>
+    <string name="chroma_key_toggle_label">Activar Chroma Key</string>
+    <string name="chroma_key_toggle_description">Elimina el fondo sólido (verde o azul) para integrar personas y objetos 3D en su habitación.</string>
+    <string name="chroma_key_auto_detect_button">Detectar Fondo Automático</string>
+    <string name="chroma_key_auto_detect_status_detecting">Analizando fotograma…</string>
+    <string name="chroma_key_auto_detect_status_success">Color detectado: %1$s</string>
+    <string name="chroma_key_auto_detect_status_failed">No se pudo detectar el fondo automáticamente</string>
+    <string name="chroma_key_color_label">Color Clave</string>
+    <string name="chroma_key_color_green">Verde</string>
+    <string name="chroma_key_color_blue">Azul</string>
+    <string name="chroma_key_color_red">Rojo</string>
+    <string name="chroma_key_color_gray">Gris</string>
+    <string name="chroma_key_color_black">Negro</string>
+    <string name="chroma_key_color_white">Blanco</string>
+    <string name="chroma_key_custom_color_title">Ajuste Fino de Color (RGB)</string>
+    <string name="chroma_key_channel_r">R: %1$d</string>
+    <string name="chroma_key_channel_g">G: %1$d</string>
+    <string name="chroma_key_channel_b">B: %1$d</string>
+    <string name="chroma_key_similarity_label">Tolerancia de Recorte</string>
+    <string name="chroma_key_similarity_percent">%1$d%%</string>
+    <string name="chroma_key_smoothness_label">Suavidad de Borde</string>
+    <string name="chroma_key_smoothness_percent">%1$d%%</string>
+
     <!-- Virtual Environments (Phase 0.3 §1 & Phase 0.5 §3) -->
     <string name="environments_modal_title">Entornos virtuales</string>
     <string name="env_void_title">Vacío</string>

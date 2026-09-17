@@ -51,6 +51,9 @@ object FeatureFlags {
 
         // Pausar ao sair: pausa a reprodução ao sair pro menu do sistema ou passthrough
         PAUSE_ON_EXIT("pause_on_exit", defaultEnabled = true),
+
+        // Chroma Key: recorte de fundo (verde/azul) para vídeos 3D/2D em Passthrough
+        CHROMA_KEY("chroma_key", defaultEnabled = false),
     }
 
     /** Chave usada para persistir o modo de áudio espacial como Int (0/1/2). */
@@ -64,6 +67,27 @@ object FeatureFlags {
 
     /** Chave usada para persistir o modo de contorno (Edge Rendering) do Passthrough. */
     private const val KEY_PASSTHROUGH_EDGE_RENDERING = "passthrough_edge_rendering"
+
+    /** Chave usada para persistir a cor chave do Chroma Key como Int (0xRRGGBB). Padrão: 0x00FF00 (verde). */
+    private const val KEY_CHROMA_KEY_COLOR = "chroma_key_color"
+
+    /** Chave usada para persistir a tolerância de corte do Chroma Key (0.01f a 1.0f). Padrão: 0.35f. */
+    private const val KEY_CHROMA_KEY_SIMILARITY = "chroma_key_similarity"
+
+    /** Chave usada para persistir a suavidade de borda do Chroma Key (0.001f a 0.5f). Padrão: 0.10f. */
+    private const val KEY_CHROMA_KEY_SMOOTHNESS = "chroma_key_smoothness"
+
+    /** Chave usada para persistir o modo de máscara do Passthrough (0=Off, 1=ChromaKey, 2=PackedAlpha). */
+    private const val KEY_PASSTHROUGH_MASK_MODE = "passthrough_mask_mode"
+
+    /** Chave usada para persistir o multiplicador de opacidade do Packed Alpha (1.0f a 2.5f). Padrão: 1.5f. */
+    private const val KEY_PACKED_ALPHA_OPACITY_MULTIPLIER = "packed_alpha_opacity_multiplier"
+
+    /** Chave usada para persistir o corte de fundo preto (Black Cutoff) do Packed Alpha (0.005f a 0.25f). Padrão: 0.06f (6%). */
+    private const val KEY_PACKED_ALPHA_CUTOFF = "packed_alpha_cutoff"
+
+    /** Chave usada para persistir o desbaste de borda (Matte Choke) do Packed Alpha (0 a 100%). Padrão: 65%. */
+    private const val KEY_PACKED_ALPHA_CHOKE = "packed_alpha_choke"
 
     fun isEnabled(context: Context, flag: Flag): Boolean =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -128,6 +152,102 @@ object FeatureFlags {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(KEY_PASSTHROUGH_EDGE_RENDERING, enabled)
+            .apply()
+    }
+
+    /** Lê a cor do Chroma Key (RGB). Padrão: 0x00FF00 (verde). */
+    fun getChromaKeyColor(context: Context): Int =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getInt(KEY_CHROMA_KEY_COLOR, 0x00FF00)
+
+    /** Persiste a cor do Chroma Key. */
+    fun setChromaKeyColor(context: Context, color: Int) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putInt(KEY_CHROMA_KEY_COLOR, color and 0x00FFFFFF)
+            .apply()
+    }
+
+    /** Lê a tolerância de corte do Chroma Key (0.01f a 1.0f). Padrão: 0.35f (35%). */
+    fun getChromaKeySimilarity(context: Context): Float =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getFloat(KEY_CHROMA_KEY_SIMILARITY, 0.35f)
+
+    /** Persiste a tolerância de corte do Chroma Key. */
+    fun setChromaKeySimilarity(context: Context, similarity: Float) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putFloat(KEY_CHROMA_KEY_SIMILARITY, similarity.coerceIn(0.01f, 1.0f))
+            .apply()
+    }
+
+    /** Lê a suavidade de borda do Chroma Key (0.001f a 0.5f). Padrão: 0.10f (10%). */
+    fun getChromaKeySmoothness(context: Context): Float =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getFloat(KEY_CHROMA_KEY_SMOOTHNESS, 0.10f)
+
+    /** Persiste a suavidade de borda do Chroma Key. */
+    fun setChromaKeySmoothness(context: Context, smoothness: Float) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putFloat(KEY_CHROMA_KEY_SMOOTHNESS, smoothness.coerceIn(0.001f, 0.5f))
+            .apply()
+    }
+
+    /** Lê o modo de máscara do Passthrough (0=Off, 1=ChromaKey, 2=PackedAlpha). */
+    fun getPassthroughMaskMode(context: Context): Int {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.contains(KEY_PASSTHROUGH_MASK_MODE)) {
+            return prefs.getInt(KEY_PASSTHROUGH_MASK_MODE, 0)
+        }
+        return if (isEnabled(context, Flag.CHROMA_KEY)) 1 else 0
+    }
+
+    /** Persiste o modo de máscara do Passthrough. */
+    fun setPassthroughMaskMode(context: Context, mode: Int) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putInt(KEY_PASSTHROUGH_MASK_MODE, mode)
+            .putBoolean(Flag.CHROMA_KEY.key, mode != 0)
+            .apply()
+    }
+
+    /** Lê o multiplicador de opacidade do Packed Alpha (1.0f a 2.5f). Padrão: 1.5f (HereSphere/DeoVR). */
+    fun getPackedAlphaOpacityMultiplier(context: Context): Float =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getFloat(KEY_PACKED_ALPHA_OPACITY_MULTIPLIER, 1.5f)
+
+    /** Persiste o multiplicador de opacidade do Packed Alpha. */
+    fun setPackedAlphaOpacityMultiplier(context: Context, multiplier: Float) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putFloat(KEY_PACKED_ALPHA_OPACITY_MULTIPLIER, multiplier.coerceIn(1.0f, 2.5f))
+            .apply()
+    }
+
+    /** Lê o corte de fundo preto (Black Cutoff) do Packed Alpha (0.005f a 0.25f). Padrão: 0.06f (6%). */
+    fun getPackedAlphaCutoff(context: Context): Float =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getFloat(KEY_PACKED_ALPHA_CUTOFF, 0.06f)
+
+    /** Persiste o corte de fundo preto do Packed Alpha. */
+    fun setPackedAlphaCutoff(context: Context, cutoff: Float) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putFloat(KEY_PACKED_ALPHA_CUTOFF, cutoff.coerceIn(0.005f, 0.25f))
+            .apply()
+    }
+
+    /** Lê o desbaste de borda (Matte Choke) do Packed Alpha (0 a 100%). Padrão: 65%. */
+    fun getPackedAlphaChoke(context: Context): Int =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getInt(KEY_PACKED_ALPHA_CHOKE, 65)
+
+    /** Persiste o desbaste de borda do Packed Alpha. */
+    fun setPackedAlphaChoke(context: Context, choke: Int) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putInt(KEY_PACKED_ALPHA_CHOKE, choke.coerceIn(0, 100))
             .apply()
     }
 }

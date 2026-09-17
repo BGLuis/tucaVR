@@ -242,6 +242,14 @@ extern "C" {
     extern float get_passthrough_opacity();
     extern void set_passthrough_edge_rendering(uint32_t enabled);
     extern uint32_t get_passthrough_edge_rendering();
+    extern void set_chroma_key_enabled(uint32_t enabled);
+    extern uint32_t get_chroma_key_enabled();
+    extern void set_chroma_key_color(uint32_t color);
+    extern uint32_t get_chroma_key_color();
+    extern void set_chroma_key_similarity(float sim);
+    extern float get_chroma_key_similarity();
+    extern void set_chroma_key_smoothness(float smooth);
+    extern float get_chroma_key_smoothness();
     extern void set_pause_on_exit(uint32_t enabled);
     // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
     extern void set_thermal_level(uint32_t level);
@@ -574,6 +582,63 @@ Java_com_tucavr_VRActivity_nativeGetPassthroughOpacity(JNIEnv* env, jobject thiz
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_tucavr_VRActivity_nativeGetPassthroughEdgeRendering(JNIEnv* env, jobject thiz) {
     return get_passthrough_edge_rendering() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetChromaKeyEnabled(JNIEnv*, jobject, jboolean enabled) {
+    if (enabled) {
+        // Preserva o modo 2 (Packed Alpha) caso já esteja ativo, evitando sobrescrita indevida
+        if (get_chroma_key_enabled() != 2) {
+            set_chroma_key_enabled(1);
+        }
+    } else {
+        set_chroma_key_enabled(0);
+    }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetChromaKeyEnabled(JNIEnv*, jobject) {
+    return get_chroma_key_enabled() != 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetChromaKeyMode(JNIEnv*, jobject, jint mode) {
+    set_chroma_key_enabled(static_cast<uint32_t>(mode));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_VRActivity_nativeGetChromaKeyMode(JNIEnv*, jobject) {
+    return static_cast<jint>(get_chroma_key_enabled());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetChromaKeyColor(JNIEnv*, jobject, jint color) {
+    set_chroma_key_color(static_cast<uint32_t>(color));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_VRActivity_nativeGetChromaKeyColor(JNIEnv*, jobject) {
+    return static_cast<jint>(get_chroma_key_color());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetChromaKeySimilarity(JNIEnv*, jobject, jfloat similarity) {
+    set_chroma_key_similarity(static_cast<float>(similarity));
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_tucavr_VRActivity_nativeGetChromaKeySimilarity(JNIEnv*, jobject) {
+    return static_cast<jfloat>(get_chroma_key_similarity());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetChromaKeySmoothness(JNIEnv*, jobject, jfloat smoothness) {
+    set_chroma_key_smoothness(static_cast<float>(smoothness));
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_tucavr_VRActivity_nativeGetChromaKeySmoothness(JNIEnv*, jobject) {
+    return static_cast<jfloat>(get_chroma_key_smoothness());
 }
 
 extern "C" JNIEXPORT void JNICALL

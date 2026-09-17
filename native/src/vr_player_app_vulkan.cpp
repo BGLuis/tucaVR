@@ -259,6 +259,15 @@ extern "C" {
     extern void set_passthrough_supported(uint32_t supported);
     extern float get_passthrough_opacity();
     extern uint32_t get_passthrough_edge_rendering();
+    // Suporte a Chroma Key em tempo real para vídeos 3D / 2D com Passthrough
+    extern uint32_t get_chroma_key_enabled();
+    extern void set_chroma_key_enabled(uint32_t enabled);
+    extern uint32_t get_chroma_key_color();
+    extern void set_chroma_key_color(uint32_t color);
+    extern float get_chroma_key_similarity();
+    extern void set_chroma_key_similarity(float sim);
+    extern float get_chroma_key_smoothness();
+    extern void set_chroma_key_smoothness(float smooth);
 }
 
 std::atomic<bool> g_resetScreenPositionRequested{false};
@@ -1165,6 +1174,10 @@ struct VideoPushConstants {
     int   isHdr;
     float texelWidth;
     float texelHeight;
+    int   chromaKeyEnabled;
+    uint32_t chromaColorRgb;
+    float chromaSimilarity;
+    float chromaSmoothness;
 };
 
 // Estagio 4: push constant para UI (MVP + alpha)
@@ -1191,6 +1204,10 @@ struct StereoPushConstants {
     int   isHdr;
     float texelWidth;
     float texelHeight;
+    int   chromaKeyEnabled;
+    uint32_t chromaColorRgb;
+    float chromaSimilarity;
+    float chromaSmoothness;
 };
 
 struct BeamPushConstants {
@@ -1920,9 +1937,11 @@ void UpdatePassthrough(AppState& state) {
     if (!state.supportsPassthrough || state.passthroughLayer == XR_NULL_HANDLE) return;
 
     const bool userDesired = get_passthrough_enabled() != 0;
+    const bool chromaKeyActive = get_chroma_key_enabled() != 0;
     // Otimização de GPU (Phase 0.3 Seção 2): em modos 360° esféricos a geometria opaca
-    // cobre 100% do campo de visão, pausamos a camada para economizar 15-20% de GPU.
-    const bool desired = userDesired && !Is360Mode(state.screenMode);
+    // cobre 100% do campo de visão, pausamos a camada para economizar 15-20% de GPU,
+    // a menos que o Chroma Key esteja ativo (onde o fundo 360 é recortado para o passthrough).
+    const bool desired = userDesired && (!Is360Mode(state.screenMode) || chromaKeyActive);
 
     if (desired != state.passthroughActive) {
         if (desired) {
@@ -5755,6 +5774,10 @@ void RecordVideoFlat(
     float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1080.0f;
     pc.texelWidth = 1.0f / vw;
     pc.texelHeight = 1.0f / vh;
+    pc.chromaKeyEnabled = static_cast<int>(get_chroma_key_enabled());
+    pc.chromaColorRgb = get_chroma_key_color();
+    pc.chromaSimilarity = get_chroma_key_similarity();
+    pc.chromaSmoothness = get_chroma_key_smoothness();
     vkCmdPushConstants(
         cmd, state.videoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -5846,6 +5869,10 @@ void RecordStereoFrame(
     float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1920.0f;
     spc.texelWidth     = 1.0f / vw;
     spc.texelHeight    = 1.0f / vh;
+    spc.chromaKeyEnabled = static_cast<int>(get_chroma_key_enabled());
+    spc.chromaColorRgb = get_chroma_key_color();
+    spc.chromaSimilarity = get_chroma_key_similarity();
+    spc.chromaSmoothness = get_chroma_key_smoothness();
     vkCmdPushConstants(cmd, state.stereoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(spc), &spc);
@@ -5932,6 +5959,10 @@ void RecordPhotoFrame(
     spc.isHdr          = 0;
     spc.texelWidth     = 0.0f;
     spc.texelHeight    = 0.0f;
+    spc.chromaKeyEnabled = static_cast<int>(get_chroma_key_enabled());
+    spc.chromaColorRgb = get_chroma_key_color();
+    spc.chromaSimilarity = get_chroma_key_similarity();
+    spc.chromaSmoothness = get_chroma_key_smoothness();
     vkCmdPushConstants(cmd, state.photoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(spc), &spc);

@@ -24,6 +24,10 @@ layout(push_constant) uniform PushConstants {
     int   isHdr;         // T-HDR: 1 = fonte PQ/HLG, aplicar tonemap no fragment shader
     float texelWidth;    // 1.0 / videoWidth
     float texelHeight;   // 1.0 / videoHeight
+    int   chromaKeyEnabled; // 0 = desligado, 1 = ativo
+    uint  chromaColorRgb;   // 0xRRGGBB (ex: 0x00FF00)
+    float chromaSimilarity; // corte de distancia cromatica (ex: 0.35)
+    float chromaSmoothness; // suavidade da transicao de borda (ex: 0.10)
 } pc;
 
 layout(location = 0) out vec2 vTexCoord;
@@ -35,6 +39,10 @@ layout(location = 5) flat out float vSharpness;
 layout(location = 6) flat out int vUpscalingMode;
 layout(location = 7) flat out int vIsHdr;
 layout(location = 8) flat out vec2 vTexelSize;
+layout(location = 9) flat out int vChromaKeyEnabled;
+layout(location = 10) flat out uint vChromaColorRgb;
+layout(location = 11) flat out float vChromaSimilarity;
+layout(location = 12) flat out float vChromaSmoothness;
 
 void main() {
     gl_Position = pc.mvp * vec4(inPosition, 1.0);
@@ -47,4 +55,8 @@ void main() {
     vUpscalingMode = pc.upscalingMode;
     vIsHdr = pc.isHdr;
     vTexelSize  = vec2(pc.texelWidth, pc.texelHeight);
+    vChromaKeyEnabled = pc.chromaKeyEnabled;
+    vChromaColorRgb = pc.chromaColorRgb;
+    vChromaSimilarity = pc.chromaSimilarity;
+    vChromaSmoothness = pc.chromaSmoothness;
 }

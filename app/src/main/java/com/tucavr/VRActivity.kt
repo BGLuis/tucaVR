@@ -40,6 +40,8 @@ import com.tucavr.network.LegacyCredentialMigrator
 import com.tucavr.network.ServerCredentialStore
 import com.tucavr.network.SftpCredentialStore
 import com.tucavr.network.SmbCredentialStore
+import com.tucavr.chroma.PackedAlphaDetector
+import com.tucavr.chroma.PassthroughMaskMode
 import com.tucavr.playlist.Playlist
 import com.tucavr.playlist.PlaylistItem
 import com.tucavr.playlist.PlaylistQueueManager
@@ -447,6 +449,17 @@ class VRActivity : NativeActivity() {
             FeatureFlags.getPassthroughOpacity(this),
             FeatureFlags.getPassthroughEdgeRendering(this)
         )
+        val initialMaskMode = FeatureFlags.getPassthroughMaskMode(this)
+        nativeSetChromaKeyMode(initialMaskMode)
+        if (initialMaskMode == PassthroughMaskMode.PACKED_ALPHA.id) {
+            nativeSetChromaKeySimilarity(FeatureFlags.getPackedAlphaOpacityMultiplier(this))
+            nativeSetChromaKeySmoothness(FeatureFlags.getPackedAlphaCutoff(this))
+            nativeSetChromaKeyColor(FeatureFlags.getPackedAlphaChoke(this))
+        } else {
+            nativeSetChromaKeyColor(FeatureFlags.getChromaKeyColor(this))
+            nativeSetChromaKeySimilarity(FeatureFlags.getChromaKeySimilarity(this))
+            nativeSetChromaKeySmoothness(FeatureFlags.getChromaKeySmoothness(this))
+        }
 
         // Fase 0.3 Seção 3/4: empurra valores persistidos de Áudio Espacial e Head Tracking pro nativo
         nativeSetSpatialAudioMode(FeatureFlags.getSpatialAudioMode(this))
@@ -1056,9 +1069,38 @@ class VRActivity : NativeActivity() {
     private fun applyFormat3dOverride(source: PlaybackSource) {
         val cached = format3dStore.get(source.historyKey())
         nativeSetScreenModeOverride(cached ?: -1)
+        applyPassthroughMaskForSource(source)
     }
 
-    private fun resolveSourceTitle(src: PlaybackSource): String = when (src) {
+    private fun applyPassthroughMaskForSource(source: PlaybackSource) {
+        val title = resolveSourceTitle(source)
+        if (PackedAlphaDetector.isPackedAlpha(title)) {
+            // Se o arquivo contiver _alpha (DeoVR/HereSphere), ativa Packed Alpha (modo 2)
+            nativeSetChromaKeyMode(PassthroughMaskMode.PACKED_ALPHA.id)
+            nativeSetChromaKeySimilarity(FeatureFlags.getPackedAlphaOpacityMultiplier(this))
+            nativeSetChromaKeySmoothness(FeatureFlags.getPackedAlphaCutoff(this))
+            nativeSetChromaKeyColor(FeatureFlags.getPackedAlphaChoke(this))
+        } else {
+            val userMode = FeatureFlags.getPassthroughMaskMode(this)
+            nativeSetChromaKeyMode(userMode)
+            if (userMode == PassthroughMaskMode.PACKED_ALPHA.id) {
+                nativeSetChromaKeySimilarity(FeatureFlags.getPackedAlphaOpacityMultiplier(this))
+                nativeSetChromaKeySmoothness(FeatureFlags.getPackedAlphaCutoff(this))
+                nativeSetChromaKeyColor(FeatureFlags.getPackedAlphaChoke(this))
+            } else {
+                nativeSetChromaKeyColor(FeatureFlags.getChromaKeyColor(this))
+                nativeSetChromaKeySimilarity(FeatureFlags.getChromaKeySimilarity(this))
+                nativeSetChromaKeySmoothness(FeatureFlags.getChromaKeySmoothness(this))
+            }
+        }
+    }
+
+    fun isCurrentVideoPackedAlpha(): Boolean =
+        currentPlaybackSource?.let { src ->
+            PackedAlphaDetector.isPackedAlpha(resolveSourceTitle(src))
+        } ?: false
+
+    internal fun resolveSourceTitle(src: PlaybackSource): String = when (src) {
         is PlaybackSource.LocalFile -> File(src.path).name
         is PlaybackSource.Http -> src.url
         is PlaybackSource.Smb -> src.path.substringAfterLast("/")
@@ -1298,6 +1340,53 @@ class VRActivity : NativeActivity() {
         runOnUiThread {
             nativeShowModalPanel()
             modalPresentation?.showPassthroughSettingsModal()
+        }
+    }
+
+    /**
+     * Executa a auto-detecção da cor de fundo de chroma key para o vídeo em reprodução.
+     * Extrai um frame leve via [android.media.MediaMetadataRetriever] de forma assíncrona e analisa
+     * as bordas perimétricas com [com.tucavr.chroma.ChromaColorDetector].
+     */
+    fun detectCurrentVideoChromaKey(onResult: (com.tucavr.chroma.ChromaDetectionResult?) -> Unit) {
+        val source = currentPlaybackSource
+        if (source == null) {
+            onResult(null)
+            return
+        }
+        val currentSec = lastMediaProgressCurrent
+        val timeUs = (currentSec * 1_000_000L).toLong().coerceAtLeast(0L)
+        val currentScreenMode = nativeGet3DMode()
+
+        CoroutineScope(Dispatchers.IO).launch {
+            var result: com.tucavr.chroma.ChromaDetectionResult? = null
+            val retriever = android.media.MediaMetadataRetriever()
+            try {
+                when (source) {
+                    is PlaybackSource.LocalFile -> retriever.setDataSource(source.path)
+                    is PlaybackSource.Http -> retriever.setDataSource(source.url, emptyMap())
+                    is PlaybackSource.Dlna -> retriever.setDataSource(source.url, emptyMap())
+                    else -> {
+                        // Protocolos customizados de rede sem endpoint MediaMetadataRetriever nativo
+                    }
+                }
+                val bitmap = retriever.getScaledFrameAtTime(timeUs, android.media.MediaMetadataRetriever.OPTION_CLOSEST, 320, 180)
+                    ?: retriever.getScaledFrameAtTime(timeUs, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 320, 180)
+                    ?: retriever.frameAtTime
+
+                if (bitmap != null) {
+                    result = com.tucavr.chroma.ChromaColorDetector.detectFromBitmap(bitmap, currentScreenMode)
+                }
+            } catch (e: Exception) {
+                VRLog.e("VRActivity: Erro na auto-deteccao de chroma", e)
+            } finally {
+                try {
+                    retriever.release()
+                } catch (_: Exception) {}
+            }
+            withContext(Dispatchers.Main) {
+                onResult(result)
+            }
         }
     }
 
@@ -1702,6 +1791,17 @@ class VRActivity : NativeActivity() {
     external fun nativeSetPassthroughStyle(opacity: Float, edgeRendering: Boolean)
     external fun nativeGetPassthroughOpacity(): Float
     external fun nativeGetPassthroughEdgeRendering(): Boolean
+    // Chroma Key e Packed Alpha: recorte de fundo para Passthrough
+    external fun nativeSetChromaKeyEnabled(enabled: Boolean)
+    external fun nativeGetChromaKeyEnabled(): Boolean
+    external fun nativeSetChromaKeyMode(mode: Int)
+    external fun nativeGetChromaKeyMode(): Int
+    external fun nativeSetChromaKeyColor(color: Int)
+    external fun nativeGetChromaKeyColor(): Int
+    external fun nativeSetChromaKeySimilarity(similarity: Float)
+    external fun nativeGetChromaKeySimilarity(): Float
+    external fun nativeSetChromaKeySmoothness(smoothness: Float)
+    external fun nativeGetChromaKeySmoothness(): Float
     external fun nativeResetScreenPosition()
     external fun nativeSetScreenTransform(posX: Float, posY: Float, posZ: Float, scaleX: Float, scaleY: Float)
     external fun nativeSetEnvironment(environmentId: String)

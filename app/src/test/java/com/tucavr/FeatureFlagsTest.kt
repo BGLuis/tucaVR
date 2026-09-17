@@ -51,5 +51,8 @@ class FeatureFlagsTest {
 
         // Passthrough inicia desabilitado até ativação explícita pelo usuário
         org.junit.Assert.assertFalse("PASSTHROUGH deve iniciar desabilitado por padrão", FeatureFlags.Flag.PASSTHROUGH.defaultEnabled)
+
+        // Chroma Key inicia desabilitado até ativação explícita pelo usuário
+        org.junit.Assert.assertFalse("CHROMA_KEY deve iniciar desabilitado por padrão", FeatureFlags.Flag.CHROMA_KEY.defaultEnabled)
     }
 }

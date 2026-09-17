@@ -92,6 +92,46 @@
     <string name="passthrough_grab_hint">Hint: Point at the screen and hold Grip to grab and reposition in 3D space.</string>
     <string name="settings_passthrough_open_button">Settings</string>
 
+    <!-- Passthrough Mask Modes (Chroma Key & Packed Alpha) -->
+    <string name="mask_mode_section_title">Mask &amp; Background Removal</string>
+    <string name="mask_mode_label">Mask Mode</string>
+    <string name="mask_mode_description">Choose how background is removed for Passthrough (Packed Alpha or Chroma Key).</string>
+    <string name="mask_mode_off">Off</string>
+    <string name="mask_mode_packed_alpha">Packed Alpha</string>
+    <string name="mask_mode_chroma_key">Chroma Key</string>
+    <string name="mask_mode_packed_alpha_detected">✨ DeoVR / HereSphere Packed Alpha format detected in this video.</string>
+    <string name="mask_mode_packed_alpha_info">Real-time unpacking of the 6-segment transparency mask embedded in the video margins.</string>
+    <string name="packed_alpha_opacity_multiplier_label">Opacity Boost (Hair &amp; Edges)</string>
+    <string name="packed_alpha_opacity_multiplier_value">%1$.1fx</string>
+    <string name="packed_alpha_black_cutoff_label">Black Cutoff (Background)</string>
+    <string name="packed_alpha_black_cutoff_percent">%1$d%%</string>
+    <string name="packed_alpha_choke_label">Edge Choke (Remove Fringe)</string>
+    <string name="packed_alpha_choke_percent">%1$d%%</string>
+
+    <!-- Chroma Key (Background Removal for Passthrough) -->
+    <string name="chroma_key_section_title">Chroma Key (Background Removal)</string>
+    <string name="chroma_key_toggle_label">Enable Chroma Key</string>
+    <string name="chroma_key_toggle_description">Removes solid background (green/blue screen) to blend 3D actors into your room.</string>
+    <string name="chroma_key_auto_detect_button">Auto Detect Background</string>
+    <string name="chroma_key_auto_detect_status_detecting">Analyzing video frame…</string>
+    <string name="chroma_key_auto_detect_status_success">Detected color: %1$s</string>
+    <string name="chroma_key_auto_detect_status_failed">Could not detect background automatically</string>
+    <string name="chroma_key_color_label">Key Color</string>
+    <string name="chroma_key_color_green">Green</string>
+    <string name="chroma_key_color_blue">Blue</string>
+    <string name="chroma_key_color_red">Red</string>
+    <string name="chroma_key_color_gray">Gray</string>
+    <string name="chroma_key_color_black">Black</string>
+    <string name="chroma_key_color_white">White</string>
+    <string name="chroma_key_custom_color_title">Fine-tune Color (RGB)</string>
+    <string name="chroma_key_channel_r">R: %1$d</string>
+    <string name="chroma_key_channel_g">G: %1$d</string>
+    <string name="chroma_key_channel_b">B: %1$d</string>
+    <string name="chroma_key_similarity_label">Color Tolerance</string>
+    <string name="chroma_key_similarity_percent">%1$d%%</string>
+    <string name="chroma_key_smoothness_label">Edge Softness</string>
+    <string name="chroma_key_smoothness_percent">%1$d%%</string>
+
     <!-- Virtual Environments (Phase 0.3 §1 & Phase 0.5 §3) -->
     <string name="environments_modal_title">Virtual Environments</string>
     <string name="env_void_title">Void</string>

@@ -320,6 +320,63 @@ pub extern "C" fn get_passthrough_edge_rendering() -> u32 {
     PASSTHROUGH_EDGE_RENDERING.load(Ordering::Relaxed) as u32
 }
 
+// Suporte a Chroma Key e Packed Alpha (DeoVR/HereSphere) em tempo real para vídeos 3D / 2D com Passthrough
+// 0 = Desativado, 1 = Chroma Key (cor YCbCr), 2 = DeoVR/HereSphere 6-Segment Packed Alpha
+static CHROMA_KEY_MODE: AtomicU32 = AtomicU32::new(0);
+static CHROMA_KEY_COLOR: AtomicU32 = AtomicU32::new(0x00FF00); // Verde padrão (#00FF00)
+static CHROMA_KEY_SIMILARITY_BITS: AtomicU32 = AtomicU32::new(0x3EB33333); // 0.35f32
+static CHROMA_KEY_SMOOTHNESS_BITS: AtomicU32 = AtomicU32::new(0x3DCCCCCD); // 0.10f32
+
+#[no_mangle]
+pub extern "C" fn set_chroma_key_enabled(mode: u32) {
+    CHROMA_KEY_MODE.store(mode, Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_chroma_key_enabled() -> u32 {
+    CHROMA_KEY_MODE.load(Ordering::Relaxed)
+}
+
+#[no_mangle]
+pub extern "C" fn set_chroma_key_mode(mode: u32) {
+    CHROMA_KEY_MODE.store(mode, Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_chroma_key_mode() -> u32 {
+    CHROMA_KEY_MODE.load(Ordering::Relaxed)
+}
+
+#[no_mangle]
+pub extern "C" fn set_chroma_key_color(color: u32) {
+    CHROMA_KEY_COLOR.store(color & 0x00FFFFFF, Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_chroma_key_color() -> u32 {
+    CHROMA_KEY_COLOR.load(Ordering::Relaxed)
+}
+
+#[no_mangle]
+pub extern "C" fn set_chroma_key_similarity(sim: f32) {
+    CHROMA_KEY_SIMILARITY_BITS.store(sim.clamp(0.01, 1.0).to_bits(), Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_chroma_key_similarity() -> f32 {
+    f32::from_bits(CHROMA_KEY_SIMILARITY_BITS.load(Ordering::Relaxed))
+}
+
+#[no_mangle]
+pub extern "C" fn set_chroma_key_smoothness(smooth: f32) {
+    CHROMA_KEY_SMOOTHNESS_BITS.store(smooth.clamp(0.001, 0.5).to_bits(), Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_chroma_key_smoothness() -> f32 {
+    f32::from_bits(CHROMA_KEY_SMOOTHNESS_BITS.load(Ordering::Relaxed))
+}
+
 /// Preferência do usuário para pausar automaticamente ao sair pro menu do sistema / passthrough.
 /// Ativada por padrão (true).
 static PAUSE_ON_EXIT: AtomicBool = AtomicBool::new(true);

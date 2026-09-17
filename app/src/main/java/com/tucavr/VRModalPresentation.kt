@@ -254,12 +254,31 @@ class VRModalPresentation(
         val isEnabled = FeatureFlags.isEnabled(context, FeatureFlags.Flag.PASSTHROUGH)
         val opacity = FeatureFlags.getPassthroughOpacity(context)
         val isEdgeEnabled = FeatureFlags.getPassthroughEdgeRendering(context)
+        val isChromaEnabled = FeatureFlags.isEnabled(context, FeatureFlags.Flag.CHROMA_KEY)
+        val chromaColor = FeatureFlags.getChromaKeyColor(context)
+        val chromaSimilarity = FeatureFlags.getChromaKeySimilarity(context)
+        val chromaSmoothness = FeatureFlags.getChromaKeySmoothness(context)
+
+        val currentMaskMode = activity.nativeGetChromaKeyMode()
+        val isDetectedAlpha = activity.isCurrentVideoPackedAlpha()
+        val packedAlphaOpacity = FeatureFlags.getPackedAlphaOpacityMultiplier(context)
+        val packedAlphaCutoff = FeatureFlags.getPackedAlphaCutoff(context)
+        val packedAlphaChoke = FeatureFlags.getPackedAlphaChoke(context)
 
         val modal = PassthroughSettingsModal(
             context = context,
             isPassthroughEnabled = isEnabled,
             currentOpacity = opacity,
             isEdgeRenderingEnabled = isEdgeEnabled,
+            currentMaskMode = currentMaskMode,
+            isDetectedPackedAlpha = isDetectedAlpha,
+            isChromaKeyEnabled = isChromaEnabled,
+            currentChromaColor = chromaColor,
+            currentChromaSimilarity = chromaSimilarity,
+            currentChromaSmoothness = chromaSmoothness,
+            currentPackedAlphaOpacityMultiplier = packedAlphaOpacity,
+            currentPackedAlphaCutoff = packedAlphaCutoff,
+            currentPackedAlphaChoke = packedAlphaChoke,
             onTogglePassthrough = { enabled ->
                 FeatureFlags.setEnabled(context, FeatureFlags.Flag.PASSTHROUGH, enabled)
                 activity.nativeSetPassthroughEnabled(enabled)
@@ -271,6 +290,68 @@ class VRModalPresentation(
             onEdgeRenderingChanged = { edgeEnabled ->
                 FeatureFlags.setPassthroughEdgeRendering(context, edgeEnabled)
                 activity.nativeSetPassthroughStyle(FeatureFlags.getPassthroughOpacity(context), edgeEnabled)
+            },
+            onMaskModeChanged = { mode ->
+                FeatureFlags.setPassthroughMaskMode(context, mode)
+                activity.nativeSetChromaKeyMode(mode)
+                if (mode == 2) {
+                    val opacityMult = FeatureFlags.getPackedAlphaOpacityMultiplier(context)
+                    val cutoff = FeatureFlags.getPackedAlphaCutoff(context)
+                    val choke = FeatureFlags.getPackedAlphaChoke(context)
+                    activity.nativeSetChromaKeySimilarity(opacityMult)
+                    activity.nativeSetChromaKeySmoothness(cutoff)
+                    activity.nativeSetChromaKeyColor(choke)
+                } else if (mode == 1) {
+                    val sim = FeatureFlags.getChromaKeySimilarity(context)
+                    val smooth = FeatureFlags.getChromaKeySmoothness(context)
+                    val color = FeatureFlags.getChromaKeyColor(context)
+                    activity.nativeSetChromaKeySimilarity(sim)
+                    activity.nativeSetChromaKeySmoothness(smooth)
+                    activity.nativeSetChromaKeyColor(color)
+                }
+            },
+            onToggleChromaKey = { enabled ->
+                FeatureFlags.setEnabled(context, FeatureFlags.Flag.CHROMA_KEY, enabled)
+                activity.nativeSetChromaKeyEnabled(enabled)
+            },
+            onChromaColorChanged = { color ->
+                FeatureFlags.setChromaKeyColor(context, color)
+                if (activity.nativeGetChromaKeyMode() == 1) {
+                    activity.nativeSetChromaKeyColor(color)
+                }
+            },
+            onChromaSimilarityChanged = { sim ->
+                FeatureFlags.setChromaKeySimilarity(context, sim)
+                if (activity.nativeGetChromaKeyMode() == 1) {
+                    activity.nativeSetChromaKeySimilarity(sim)
+                }
+            },
+            onChromaSmoothnessChanged = { smooth ->
+                FeatureFlags.setChromaKeySmoothness(context, smooth)
+                if (activity.nativeGetChromaKeyMode() == 1) {
+                    activity.nativeSetChromaKeySmoothness(smooth)
+                }
+            },
+            onPackedAlphaOpacityChanged = { mult ->
+                FeatureFlags.setPackedAlphaOpacityMultiplier(context, mult)
+                if (activity.nativeGetChromaKeyMode() == 2) {
+                    activity.nativeSetChromaKeySimilarity(mult)
+                }
+            },
+            onPackedAlphaCutoffChanged = { cutoff ->
+                FeatureFlags.setPackedAlphaCutoff(context, cutoff)
+                if (activity.nativeGetChromaKeyMode() == 2) {
+                    activity.nativeSetChromaKeySmoothness(cutoff)
+                }
+            },
+            onPackedAlphaChokeChanged = { choke ->
+                FeatureFlags.setPackedAlphaChoke(context, choke)
+                if (activity.nativeGetChromaKeyMode() == 2) {
+                    activity.nativeSetChromaKeyColor(choke)
+                }
+            },
+            onAutoDetectChroma = { callback ->
+                activity.detectCurrentVideoChromaKey(callback)
             },
             onResetScreenPosition = {
                 activity.nativeResetScreenPosition()
