@@ -266,6 +266,10 @@ class VRActivity : NativeActivity() {
                             setVirtualEnvironment(envId)
                         }
                     }
+                    ACTION_DEBUG_CAPTURE_FRAME -> {
+                        val path = intent.getStringExtra(EXTRA_CAPTURE_PATH) ?: "/sdcard/vr-frame-capture.ppm"
+                        nativeRequestFrameCapture(path)
+                    }
                     // Dispara playback SFTP direto via adb, sem navegar a UI nem
                     // colocar o headset na cabeca — mesmo espirito do EXTRA_AUTO_PLAY_PATH
                     // (ver DEBUGGING.md secao 2 / scripts/soak-test.sh), mas para uma fonte
@@ -297,6 +301,7 @@ class VRActivity : NativeActivity() {
             addAction(ACTION_DEBUG_CYCLE_SCREEN_MODE)
             addAction(ACTION_DEBUG_SET_THERMAL_STATUS)
             addAction(ACTION_DEBUG_SET_ENVIRONMENT)
+            addAction(ACTION_DEBUG_CAPTURE_FRAME)
             addAction(ACTION_DEBUG_PLAY_SFTP)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -695,6 +700,7 @@ class VRActivity : NativeActivity() {
         const val EXTRA_THERMAL_STATUS = "status"
         const val ACTION_DEBUG_SET_ENVIRONMENT = "com.tucavr.debug.SET_ENVIRONMENT"
         const val EXTRA_ENVIRONMENT_ID = "environment_id"
+        const val ACTION_DEBUG_CAPTURE_FRAME = "com.tucavr.debug.CAPTURE_FRAME"
         // Ver ACTION_DEBUG_PLAY_SFTP em registerDebugReceiverIfDebuggable — playback SFTP
         // automatizado via adb, sem depender do headset estar sendo usado.
         const val ACTION_DEBUG_PLAY_SFTP = "com.tucavr.debug.PLAY_SFTP"

@@ -99,6 +99,32 @@ adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id s
 adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id void
 ```
 
+### Visualização e Espelhamento na Tela do PC
+
+O projeto inclui três utilitários para visualizar o aplicativo e inspecionar os ambientes 3D diretamente no computador:
+
+1. **Visualizador 3D Desktop/Web (100% Offline / Sem Headset):**
+   Abre um visualizador WebGL (Three.js) interativo no navegador do PC para inspecionar os ambientes 3D, navegar em primeira pessoa (WASD + mouse), testar a tela virtual ancorada e o áudio ambiente:
+   ```bash
+   ./scripts/preview-environment.py
+   ```
+
+2. **Espelhamento em Tempo Real via USB (com o Quest 3):**
+   Utiliza o `scrcpy` com parâmetros otimizados para o Quest 3 (recorte do olho direito, 90 FPS e baixa latência de ~20ms):
+   ```bash
+   ./scripts/quest-mirror.sh
+   # Opções: --right-eye (padrão), --left-eye, --full (ambos os olhos)
+   ```
+
+3. **Captura Instantânea de Frame Vulkan via ADB:**
+   Dispara a captura de framebuffer direto do motor gráfico do Quest 3, transfere para a pasta `captures/` do PC em PNG e abre no visualizador de imagens:
+   ```bash
+   ./scripts/capture-screen.sh
+   # Ou via broadcast manual:
+   adb shell am broadcast -a com.tucavr.debug.CAPTURE_FRAME --es capture_path /sdcard/vr-frame-capture.ppm
+   ```
+
+
 
 ## 3. Modal de Estatísticas Técnicas ("Stats for Nerds")
 

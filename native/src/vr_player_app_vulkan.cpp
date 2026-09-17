@@ -5644,18 +5644,25 @@ static void CaptureFramePpm(AppState& state, VkImage srcImage, uint32_t width, u
     if (mapped) {
         const uint8_t* pixels = static_cast<const uint8_t*>(mapped);
         std::string path = basePath + (eye == 0 ? ".left.ppm" : ".right.ppm");
-        FILE* f = fopen(path.c_str(), "wb");
+        std::string tmpPath = path + ".tmp";
+        FILE* f = fopen(tmpPath.c_str(), "wb");
         if (f) {
             fprintf(f, "P6\n%u %u\n255\n", width, height);
+            std::vector<uint8_t> rowBuffer(width * 3);
             for (uint32_t y = 0; y < height; y++) {
+                const uint8_t* srcRow = &pixels[(size_t)(y * width) * 4];
                 for (uint32_t x = 0; x < width; x++) {
-                    fwrite(&pixels[(size_t)(y * width + x) * 4], 1, 3, f);
+                    rowBuffer[x * 3 + 0] = srcRow[x * 4 + 0];
+                    rowBuffer[x * 3 + 1] = srcRow[x * 4 + 1];
+                    rowBuffer[x * 3 + 2] = srcRow[x * 4 + 2];
                 }
+                fwrite(rowBuffer.data(), 1, rowBuffer.size(), f);
             }
             fclose(f);
+            rename(tmpPath.c_str(), path.c_str());
             LOGI("CaptureFramePpm: frame capturado em %s (%ux%u)", path.c_str(), width, height);
         } else {
-            LOGE("CaptureFramePpm: falha ao abrir %s para escrita", path.c_str());
+            LOGE("CaptureFramePpm: falha ao abrir %s para escrita", tmpPath.c_str());
         }
         vkUnmapMemory(state.vkDevice, stagingMem);
     }

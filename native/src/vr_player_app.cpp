@@ -1423,16 +1423,23 @@ public:
             std::string basePath;
             { std::lock_guard<std::mutex> lock(g_capturePathMutex); basePath = g_capturePath; }
             std::string path = basePath + (eye == 0 ? ".left.ppm" : ".right.ppm");
-            FILE* f = fopen(path.c_str(), "wb");
+            std::string tmpPath = path + ".tmp";
+            FILE* f = fopen(tmpPath.c_str(), "wb");
             if (f) {
                 fprintf(f, "P6\n%d %d\n255\n", w, h);
                 // glReadPixels vem de baixo pra cima; PPM espera de cima pra baixo.
+                std::vector<uint8_t> rowBuffer(w * 3);
                 for (int y = h - 1; y >= 0; y--) {
+                    const uint8_t* srcRow = &pixels[(size_t)(y * w) * 4];
                     for (int x = 0; x < w; x++) {
-                        fwrite(&pixels[(size_t)(y * w + x) * 4], 1, 3, f);
+                        rowBuffer[x * 3 + 0] = srcRow[x * 4 + 0];
+                        rowBuffer[x * 3 + 1] = srcRow[x * 4 + 1];
+                        rowBuffer[x * 3 + 2] = srcRow[x * 4 + 2];
                     }
+                    fwrite(rowBuffer.data(), 1, rowBuffer.size(), f);
                 }
                 fclose(f);
+                rename(tmpPath.c_str(), path.c_str());
                 LOGI("VRPlayerApp: frame capturado em %s (%dx%d)", path.c_str(), w, h);
             }
             if (eye == 1) g_captureRequested = false;
