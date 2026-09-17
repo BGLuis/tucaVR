@@ -69,6 +69,12 @@
 #include "environment.vert.h"
 #include "environment.frag.h"
 #include "environment_config.h"
+#include "skybox.vert.h"
+#include "skybox.frag.h"
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#define STBI_NO_STDIO
+#include "stb_image.h"
 #define CGLTF_IMPLEMENTATION
 #include "cgltf.h"
 #include <android/asset_manager.h>
@@ -816,6 +822,17 @@ struct AppState {
     bool envMeshLoaded = false;
     std::string currentEnvironmentId = "void";
 
+    // Skybox Cósmico 360 (Fase 0.5 §3)
+    VkPipeline skyboxPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout skyboxPipelineLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout skyboxDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool skyboxDescriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSet skyboxDescriptorSet = VK_NULL_HANDLE;
+    VkImage skyboxImage = VK_NULL_HANDLE;
+    VkDeviceMemory skyboxImageMemory = VK_NULL_HANDLE;
+    VkImageView skyboxImageView = VK_NULL_HANDLE;
+    bool skyboxLoaded = false;
+
     // OpenXR Actions
     // xrAttachSessionActionSets so pode ser chamada 1x por XrSession (spec) —
     // XR_SESSION_STATE_READY dispara de novo toda vez que o app reganha foco
@@ -1135,6 +1152,8 @@ struct VideoPushConstants {
     // T-HDR: 1 se o video atual e HDR (PQ/HLG) — o fragment shader aplica
     // tonemap HDR->SDR quando isto e nao-zero, ver video.frag.
     int   isHdr;
+    float texelWidth;
+    float texelHeight;
 };
 
 // Estagio 4: push constant para UI (MVP + alpha)
@@ -1159,6 +1178,8 @@ struct StereoPushConstants {
     // stereo_cubemap.frag. Sempre 0 no pipeline de foto (photoPipelineLayout,
     // ver ponto de uso) — nao existe decode HDR de foto estatica.
     int   isHdr;
+    float texelWidth;
+    float texelHeight;
 };
 
 struct BeamPushConstants {
@@ -4690,6 +4711,262 @@ static void CreateEnvironmentPipeline(AppState& state) {
     LOGI("Ambiente: pipeline Vulkan de ambiente 3D criado com sucesso");
 }
 
+// Skybox Cósmico 360 (Fase 0.5 §3)
+struct SkyboxPushConstants {
+    Mat4 mvp;
+    XrVector4f tintColor;
+};
+
+static void CreateSkyboxPipeline(AppState& state) {
+    // 1. Descriptor Set Layout com sampler imutável uiSampler (RGBA)
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding         = 0;
+    binding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    binding.pImmutableSamplers = &state.uiSampler;
+
+    VkDescriptorSetLayoutCreateInfo dsLayout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    dsLayout.bindingCount = 1;
+    dsLayout.pBindings    = &binding;
+    VKR(vkCreateDescriptorSetLayout(state.vkDevice, &dsLayout, nullptr, &state.skyboxDescriptorSetLayout));
+
+    // 2. Descriptor Pool
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    poolInfo.maxSets       = 2;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes    = &poolSize;
+    VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.skyboxDescriptorPool));
+
+    // 3. Alocar Descriptor Set
+    VkDescriptorSetAllocateInfo dsAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dsAlloc.descriptorPool     = state.skyboxDescriptorPool;
+    dsAlloc.descriptorSetCount = 1;
+    dsAlloc.pSetLayouts        = &state.skyboxDescriptorSetLayout;
+    VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.skyboxDescriptorSet));
+
+    // 4. Pipeline Layout com Push Constants
+    VkPushConstantRange pcRange{};
+    pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pcRange.offset     = 0;
+    pcRange.size       = sizeof(SkyboxPushConstants);
+
+    VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.setLayoutCount         = 1;
+    layoutInfo.pSetLayouts            = &state.skyboxDescriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges    = &pcRange;
+    VKR(vkCreatePipelineLayout(state.vkDevice, &layoutInfo, nullptr, &state.skyboxPipelineLayout));
+
+    // 5. Shader Modules
+    VkShaderModule vertModule = CreateShaderModule(state, kSkyboxVertSpirv, kSkyboxVertSpirv_size);
+    VkShaderModule fragModule = CreateShaderModule(state, kSkyboxFragSpirv, kSkyboxFragSpirv_size);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName  = "main";
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName  = "main";
+
+    // 6. Vertex Input (mesmo layout que SphereVertex: pos [0..2], uv [3..4])
+    VkVertexInputBindingDescription bindingDesc{};
+    bindingDesc.binding   = 0;
+    bindingDesc.stride    = 5 * sizeof(float);
+    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attrDesc[2]{};
+    attrDesc[0].location = 0;
+    attrDesc[0].binding  = 0;
+    attrDesc[0].format   = VK_FORMAT_R32G32B32_SFLOAT;
+    attrDesc[0].offset   = 0;
+
+    attrDesc[1].location = 1;
+    attrDesc[1].binding  = 0;
+    attrDesc[1].format   = VK_FORMAT_R32G32_SFLOAT;
+    attrDesc[1].offset   = 3 * sizeof(float);
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vertexInput.vertexBindingDescriptionCount   = 1;
+    vertexInput.pVertexBindingDescriptions      = &bindingDesc;
+    vertexInput.vertexAttributeDescriptionCount = 2;
+    vertexInput.pVertexAttributeDescriptions    = attrDesc;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount  = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode    = VK_CULL_MODE_NONE; // Visão de dentro da esfera
+    rasterizer.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth   = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.blendEnable    = VK_FALSE;
+    colorBlendAttachment.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments    = &colorBlendAttachment;
+
+    VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dynamicState.dynamicStateCount = 2;
+    dynamicState.pDynamicStates    = dynamicStates;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipelineInfo.stageCount          = 2;
+    pipelineInfo.pStages             = stages;
+    pipelineInfo.pVertexInputState   = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState      = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState   = &multisampling;
+    pipelineInfo.pColorBlendState    = &colorBlending;
+    pipelineInfo.pDynamicState       = &dynamicState;
+    pipelineInfo.layout              = state.skyboxPipelineLayout;
+    pipelineInfo.renderPass          = state.renderPass;
+    pipelineInfo.subpass             = 0;
+
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &state.skyboxPipeline));
+
+    vkDestroyShaderModule(state.vkDevice, fragModule, nullptr);
+    vkDestroyShaderModule(state.vkDevice, vertModule, nullptr);
+
+    LOGI("Skybox: pipeline Vulkan de Skybox 360 criado com sucesso");
+}
+
+static void DestroyEnvironmentSkybox(AppState& state) {
+    if (state.skyboxImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.skyboxImageView, nullptr);
+        state.skyboxImageView = VK_NULL_HANDLE;
+    }
+    if (state.skyboxImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.skyboxImage, nullptr);
+        state.skyboxImage = VK_NULL_HANDLE;
+    }
+    if (state.skyboxImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.skyboxImageMemory, nullptr);
+        state.skyboxImageMemory = VK_NULL_HANDLE;
+    }
+    state.skyboxLoaded = false;
+}
+
+static bool LoadEnvironmentSkybox(AppState& state, const std::string& skyboxAssetPath) {
+    DestroyEnvironmentSkybox(state);
+
+    if (skyboxAssetPath.empty() || !state.app || !state.app->activity || !state.app->activity->assetManager) {
+        return false;
+    }
+
+    std::string fullPath = skyboxAssetPath;
+    if (fullPath.rfind("environments/", 0) != 0) {
+        fullPath = "environments/" + fullPath;
+    }
+
+    AAsset* asset = AAssetManager_open(state.app->activity->assetManager, fullPath.c_str(), AASSET_MODE_BUFFER);
+    if (!asset) {
+        LOGE("Skybox: Falha ao abrir asset '%s'", fullPath.c_str());
+        return false;
+    }
+
+    size_t assetSize = static_cast<size_t>(AAsset_getLength(asset));
+    const void* assetBuffer = AAsset_getBuffer(asset);
+    if (!assetBuffer || assetSize == 0) {
+        AAsset_close(asset);
+        LOGE("Skybox: Buffer de asset invalido para '%s'", fullPath.c_str());
+        return false;
+    }
+
+    int width = 0, height = 0, channels = 0;
+    stbi_uc* pixels = stbi_load_from_memory(
+        reinterpret_cast<const stbi_uc*>(assetBuffer),
+        static_cast<int>(assetSize),
+        &width, &height, &channels, 4);
+    AAsset_close(asset);
+
+    if (!pixels || width <= 0 || height <= 0) {
+        LOGE("Skybox: Falha ao decodificar imagem PNG de '%s'", fullPath.c_str());
+        if (pixels) stbi_image_free(pixels);
+        return false;
+    }
+
+    LOGI("Skybox: Decodificado '%s' (%dx%d, 4 canais)", fullPath.c_str(), width, height);
+
+    CreateUiImage(state, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                  state.skyboxImage, state.skyboxImageMemory, state.skyboxImageView);
+
+    UpdateUiImageFromBytes(state, pixels, static_cast<uint32_t>(width), static_cast<uint32_t>(height), state.skyboxImage);
+    stbi_image_free(pixels);
+
+    VkDescriptorImageInfo imgInfo{};
+    imgInfo.sampler     = state.uiSampler;
+    imgInfo.imageView   = state.skyboxImageView;
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet          = state.skyboxDescriptorSet;
+    write.dstBinding      = 0;
+    write.descriptorCount = 1;
+    write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo      = &imgInfo;
+    vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+
+    state.skyboxLoaded = true;
+    LOGI("Skybox: '%s' carregado e vinculado com sucesso ao pipeline Vulkan", fullPath.c_str());
+    return true;
+}
+
+static void DrawSkyboxIfLoaded(
+    AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view) {
+    if (!state.skyboxLoaded || state.skyboxPipeline == VK_NULL_HANDLE ||
+        state.sphereVertexBuffer == VK_NULL_HANDLE || state.passthroughActive) {
+        return;
+    }
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.skyboxPipeline);
+    vkCmdBindDescriptorSets(
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.skyboxPipelineLayout,
+        0, 1, &state.skyboxDescriptorSet, 0, nullptr);
+
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
+    vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+    // Skybox rotaciona com a orientação da cabeça e com o yaw da cena, mas sem translação
+    Mat4 skyboxModel = Mat4RotationY(state.sceneYawOffset);
+    Mat4 viewNoTrans = view;
+    viewNoTrans.m[12] = 0.0f;
+    viewNoTrans.m[13] = 0.0f;
+    viewNoTrans.m[14] = 0.0f;
+
+    SkyboxPushConstants skyboxPc{};
+    skyboxPc.mvp = Mat4Multiply(Mat4Multiply(proj, viewNoTrans), skyboxModel);
+    skyboxPc.tintColor = {1.0f, 1.0f, 1.0f, 1.0f};
+
+    vkCmdPushConstants(
+        cmd, state.skyboxPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT,
+        0, sizeof(skyboxPc), &skyboxPc);
+
+    vkCmdDrawIndexed(cmd, state.sphereIndexCount, 1, 0, 0, 0);
+    CountDrawCall(state.sphereIndexCount);
+}
+
 static bool LoadEnvironmentMesh(AppState& state, const std::string& envId) {
     if (state.envVertexBuffer != VK_NULL_HANDLE) {
         vkDestroyBuffer(state.vkDevice, state.envVertexBuffer, nullptr);
@@ -4709,10 +4986,14 @@ static bool LoadEnvironmentMesh(AppState& state, const std::string& envId) {
     }
     state.envIndexCount = 0;
     state.envMeshLoaded = false;
+    DestroyEnvironmentSkybox(state);
     state.currentEnvironmentId = envId;
 
     if (envId == "void" || envId.empty()) {
-        LOGI("Ambiente: Modo Void selecionado (sem geometria 3D)");
+        LOGI("Ambiente: Modo Void selecionado (sem geometria 3D nem skybox)");
+        state.screenPosition = {0.0f, 1.5f, -2.4f};
+        state.screenScaleX = 2.8f;
+        state.screenScaleY = 1.575f;
         return true;
     }
 
@@ -4721,9 +5002,50 @@ static bool LoadEnvironmentMesh(AppState& state, const std::string& envId) {
         return false;
     }
 
-    std::string assetPath = "environments/" + envId + "/model.glb";
+    // Carregar e parsear config.ini do ambiente
+    std::string configPath = "environments/" + envId + "/config.ini";
+    AAsset* cfgAsset = AAssetManager_open(state.app->activity->assetManager, configPath.c_str(), AASSET_MODE_BUFFER);
+    EnvironmentConfig envConfig;
+    if (cfgAsset) {
+        size_t cfgSize = static_cast<size_t>(AAsset_getLength(cfgAsset));
+        const char* cfgBuffer = static_cast<const char*>(AAsset_getBuffer(cfgAsset));
+        if (cfgBuffer && cfgSize > 0) {
+            std::string iniContent(cfgBuffer, cfgSize);
+            envConfig = EnvironmentConfig::Parse(iniContent);
+            LOGI("Ambiente: config.ini parseado para '%s' (pos=%.2f,%.2f,%.2f, scale=%.2f,%.2f, skybox='%s')",
+                 envId.c_str(), envConfig.screenPosX, envConfig.screenPosY, envConfig.screenPosZ,
+                 envConfig.screenScaleX, envConfig.screenScaleY, envConfig.skyboxFile.c_str());
+
+            // Ancorar a tela na posição especificada no ambiente
+            state.screenPosition.x = envConfig.screenPosX;
+            state.screenPosition.y = envConfig.screenPosY;
+            state.screenPosition.z = envConfig.screenPosZ;
+            state.screenScaleX = envConfig.screenScaleX;
+            state.screenScaleY = envConfig.screenScaleY;
+        }
+        AAsset_close(cfgAsset);
+    }
+
+    // Carregar Skybox se configurado
+    if (!envConfig.skyboxFile.empty()) {
+        std::string skyboxPath = envConfig.skyboxFile;
+        if (skyboxPath.rfind("environments/", 0) != 0) {
+            skyboxPath = "environments/" + skyboxPath;
+        }
+        LoadEnvironmentSkybox(state, skyboxPath);
+    }
+
+    std::string assetPath = envConfig.modelFile.empty() ? ("environments/" + envId + "/model.glb") : envConfig.modelFile;
+    if (assetPath.rfind("environments/", 0) != 0) {
+        assetPath = "environments/" + assetPath;
+    }
+
     AAsset* asset = AAssetManager_open(state.app->activity->assetManager, assetPath.c_str(), AASSET_MODE_BUFFER);
     if (!asset) {
+        if (state.skyboxLoaded) {
+            LOGI("Ambiente: '%s' possui apenas skybox (sem malha model.glb)", envId.c_str());
+            return true;
+        }
         LOGE("Ambiente: Falha ao abrir asset '%s'", assetPath.c_str());
         return false;
     }
@@ -4919,6 +5241,7 @@ void RecordFallbackQuad(
     VkRect2D scissor{{0, 0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
+    DrawSkyboxIfLoaded(state, cmd, proj, view);
     DrawEnvironmentIfLoaded(state, cmd, proj, view);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline);
@@ -5231,6 +5554,7 @@ void RecordVideoFlat(
     VkRect2D scissor{{0, 0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
+    DrawSkyboxIfLoaded(state, cmd, proj, view);
     DrawEnvironmentIfLoaded(state, cmd, proj, view);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.videoPipeline);
@@ -5247,6 +5571,10 @@ void RecordVideoFlat(
     pc.sharpness = state.upscalingSharpness;
     pc.upscalingMode = static_cast<int>(state.upscalingMode);
     pc.isHdr = state.isHdr ? 1 : 0;
+    float vw = (state.videoWidth > 0) ? static_cast<float>(state.videoWidth) : 1920.0f;
+    float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1080.0f;
+    pc.texelWidth = 1.0f / vw;
+    pc.texelHeight = 1.0f / vh;
     vkCmdPushConstants(
         cmd, state.videoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -5310,6 +5638,7 @@ void RecordStereoFrame(
 
     const bool cubemapMode = IsCubemapMode(state.screenMode);
     if (!sphereMode && !cubemapMode) {
+        DrawSkyboxIfLoaded(state, cmd, proj, view);
         DrawEnvironmentIfLoaded(state, cmd, proj, view);
     }
 
@@ -5328,6 +5657,10 @@ void RecordStereoFrame(
     spc.cubemapLayout  = sp.cubemapLayout;
     spc.projectionType = sp.projectionType;
     spc.isHdr          = state.isHdr ? 1 : 0;
+    float vw = (state.videoWidth > 0) ? static_cast<float>(state.videoWidth) : 3840.0f;
+    float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1920.0f;
+    spc.texelWidth     = 1.0f / vw;
+    spc.texelHeight    = 1.0f / vh;
     vkCmdPushConstants(cmd, state.stereoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(spc), &spc);
@@ -5390,6 +5723,7 @@ void RecordPhotoFrame(
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     if (!sphereMode) {
+        DrawSkyboxIfLoaded(state, cmd, proj, view);
         DrawEnvironmentIfLoaded(state, cmd, proj, view);
     }
 
@@ -5408,6 +5742,8 @@ void RecordPhotoFrame(
     spc.projectionType = sp.projectionType;
     // Sem decode HDR de foto estatica — sempre SDR.
     spc.isHdr          = 0;
+    spc.texelWidth     = 0.0f;
+    spc.texelHeight    = 0.0f;
     vkCmdPushConstants(cmd, state.photoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(spc), &spc);
@@ -6831,6 +7167,25 @@ void DestroyAppResources(AppState& state) {
     state.envIndexCount = 0;
     state.envMeshLoaded = false;
 
+    // 11. Recursos de Skybox Cósmico 360
+    DestroyEnvironmentSkybox(state);
+    if (state.skyboxPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.skyboxPipeline, nullptr);
+        state.skyboxPipeline = VK_NULL_HANDLE;
+    }
+    if (state.skyboxPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.skyboxPipelineLayout, nullptr);
+        state.skyboxPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.skyboxDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.skyboxDescriptorPool, nullptr);
+        state.skyboxDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (state.skyboxDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(state.vkDevice, state.skyboxDescriptorSetLayout, nullptr);
+        state.skyboxDescriptorSetLayout = VK_NULL_HANDLE;
+    }
+
     if (state.queryPool != VK_NULL_HANDLE) {
         vkDestroyQueryPool(state.vkDevice, state.queryPool, nullptr);
         state.queryPool = VK_NULL_HANDLE;
@@ -7001,6 +7356,7 @@ void android_main(android_app* app) {
     CreatePhotoPipeline(state);
     // Ambientes Virtuais 3D (Fase 0.3 §1 / Fase 0.5 §3)
     CreateEnvironmentPipeline(state);
+    CreateSkyboxPipeline(state);
 
     // O video e iniciado via nativePlayVideo (JNI) quando o usuario seleciona
     // um arquivo no painel de UI — identico ao caminho GLES.
