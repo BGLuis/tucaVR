@@ -464,7 +464,18 @@ pub fn detect_from_filename(name: &str) -> Option<Format3D> {
         || lower.contains("eyefish_190")
     {
         Some(FilenameProjection::Fisheye190Generic)
-    } else if lower.contains("_vr180") || lower.contains("_180x180") || lower.contains("_vr_") {
+    } else if lower.contains("_vr180")
+        || lower.contains("-vr180")
+        || lower.contains(".vr180")
+        || lower.contains("vr180")
+        || lower.contains("_180x180")
+        || lower.contains("-180x180")
+        || lower.contains("_vr_")
+        || lower.contains("180_sbs")
+        || lower.contains("180-sbs")
+        || lower.contains("180_vr")
+        || lower.contains("180vr")
+    {
         Some(FilenameProjection::Vr180Specific)
     } else if lower.contains("_360x180") || lower.contains("_360") {
         Some(FilenameProjection::Spherical360)
@@ -504,9 +515,12 @@ pub fn detect_from_filename(name: &str) -> Option<Format3D> {
             Some(FilenameStereoLayout::OuFull) => Format3D::Spherical360OverUnderFull,
             Some(FilenameStereoLayout::OuHalf) => Format3D::Spherical360OverUnderHalf,
         }),
-        // VR180-specific markers collapse to Sbs regardless of any other
-        // layout marker found — see judgment-call notes above.
-        Some(FilenameProjection::Vr180Specific) => Some(Format3D::Vr180Sbs),
+        // VR180-specific markers collapse to Sbs a menos que haja marcador explícito mono.
+        Some(FilenameProjection::Vr180Specific) => Some(if is_explicit_mono {
+            Format3D::Vr180Mono
+        } else {
+            Format3D::Vr180Sbs
+        }),
         Some(FilenameProjection::Vr180Generic) => Some(match stereo_layout {
             None => Format3D::Vr180Mono,
             Some(_) => Format3D::Vr180Sbs,
@@ -774,6 +788,30 @@ mod tests {
         assert_eq!(
             detect_from_filename("trip_180x180.mp4"),
             Some(Format3D::Vr180Sbs)
+        );
+    }
+
+    #[test]
+    fn filename_vr180_variations() {
+        assert_eq!(
+            detect_from_filename("clip-vr180.mp4"),
+            Some(Format3D::Vr180Sbs)
+        );
+        assert_eq!(
+            detect_from_filename("clip.vr180.mp4"),
+            Some(Format3D::Vr180Sbs)
+        );
+        assert_eq!(
+            detect_from_filename("clip_180vr.mp4"),
+            Some(Format3D::Vr180Sbs)
+        );
+        assert_eq!(
+            detect_from_filename("clip_180_vr.mp4"),
+            Some(Format3D::Vr180Sbs)
+        );
+        assert_eq!(
+            detect_from_filename("clip_vr180_mono.mp4"),
+            Some(Format3D::Vr180Mono)
         );
     }
 

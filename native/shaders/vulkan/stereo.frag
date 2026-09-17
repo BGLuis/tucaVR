@@ -215,7 +215,7 @@ void main() {
             color.r -= spill * (1.0 - chromaAlpha);
         }
         finalAlpha *= chromaAlpha;
-    } else if (vChromaKeyEnabled == 2) {
+    } else if (vChromaKeyEnabled == 2 && vStereoLayout == 1) {
         // Modo 2: DeoVR / HereSphere 6-Segment Packed Alpha
         // Desempacota a máscara alfa embutida nos 4 cantos e 2 cunhas centrais do frame SBS 2:1
         vec2 alphaUv;

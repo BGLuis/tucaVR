@@ -450,12 +450,13 @@ class VRActivity : NativeActivity() {
             FeatureFlags.getPassthroughEdgeRendering(this)
         )
         val initialMaskMode = FeatureFlags.getPassthroughMaskMode(this)
-        nativeSetChromaKeyMode(initialMaskMode)
-        if (initialMaskMode == PassthroughMaskMode.PACKED_ALPHA.id) {
-            nativeSetChromaKeySimilarity(FeatureFlags.getPackedAlphaOpacityMultiplier(this))
-            nativeSetChromaKeySmoothness(FeatureFlags.getPackedAlphaCutoff(this))
-            nativeSetChromaKeyColor(FeatureFlags.getPackedAlphaChoke(this))
+        val safeInitialMode = if (initialMaskMode == PassthroughMaskMode.PACKED_ALPHA.id) {
+            PassthroughMaskMode.OFF.id
         } else {
+            initialMaskMode
+        }
+        nativeSetChromaKeyMode(safeInitialMode)
+        if (safeInitialMode == PassthroughMaskMode.CHROMA_KEY.id) {
             nativeSetChromaKeyColor(FeatureFlags.getChromaKeyColor(this))
             nativeSetChromaKeySimilarity(FeatureFlags.getChromaKeySimilarity(this))
             nativeSetChromaKeySmoothness(FeatureFlags.getChromaKeySmoothness(this))
@@ -1075,19 +1076,24 @@ class VRActivity : NativeActivity() {
     private fun applyPassthroughMaskForSource(source: PlaybackSource) {
         val title = resolveSourceTitle(source)
         if (PackedAlphaDetector.isPackedAlpha(title)) {
-            // Se o arquivo contiver _alpha (DeoVR/HereSphere), ativa Packed Alpha (modo 2)
+            // Se o arquivo contiver convenção _alpha (DeoVR/HereSphere), ativa Packed Alpha (modo 2)
             nativeSetChromaKeyMode(PassthroughMaskMode.PACKED_ALPHA.id)
             nativeSetChromaKeySimilarity(FeatureFlags.getPackedAlphaOpacityMultiplier(this))
             nativeSetChromaKeySmoothness(FeatureFlags.getPackedAlphaCutoff(this))
             nativeSetChromaKeyColor(FeatureFlags.getPackedAlphaChoke(this))
         } else {
+            // Vídeo padrão sem convenção packed alpha no nome:
+            // Só ativa máscara se o usuário tiver configurado Chroma Key (modo 1).
+            // Packed Alpha (modo 2) NUNCA é ativado automaticamente para vídeos normais,
+            // pois amostra as quinas/cunhas do vídeo e causaria artefatos visuais graves (cruz preta e distorção).
             val userMode = FeatureFlags.getPassthroughMaskMode(this)
-            nativeSetChromaKeyMode(userMode)
-            if (userMode == PassthroughMaskMode.PACKED_ALPHA.id) {
-                nativeSetChromaKeySimilarity(FeatureFlags.getPackedAlphaOpacityMultiplier(this))
-                nativeSetChromaKeySmoothness(FeatureFlags.getPackedAlphaCutoff(this))
-                nativeSetChromaKeyColor(FeatureFlags.getPackedAlphaChoke(this))
+            val effectiveMode = if (userMode == PassthroughMaskMode.PACKED_ALPHA.id) {
+                PassthroughMaskMode.OFF.id
             } else {
+                userMode
+            }
+            nativeSetChromaKeyMode(effectiveMode)
+            if (effectiveMode == PassthroughMaskMode.CHROMA_KEY.id) {
                 nativeSetChromaKeyColor(FeatureFlags.getChromaKeyColor(this))
                 nativeSetChromaKeySimilarity(FeatureFlags.getChromaKeySimilarity(this))
                 nativeSetChromaKeySmoothness(FeatureFlags.getChromaKeySmoothness(this))

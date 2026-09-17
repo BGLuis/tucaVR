@@ -5773,8 +5773,11 @@ void RecordVideoFlat(
     float vw = (state.videoWidth > 0) ? static_cast<float>(state.videoWidth) : 1920.0f;
     float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1080.0f;
     pc.texelWidth = 1.0f / vw;
-    pc.texelHeight = 1.0f / vh;
-    pc.chromaKeyEnabled = static_cast<int>(get_chroma_key_enabled());
+    const int rawChromaMode = static_cast<int>(get_chroma_key_enabled());
+    // Chroma Key e Packed Alpha SÓ devem ser executados se o Passthrough estiver realmente ATIVO.
+    // Sem passthrough (ambientes Cinema, Espaço, Skybox, Void), o fundo deve permanecer 100% opaco.
+    // Vídeos Flat 2D só suportam Chroma Key (modo 1); Packed Alpha (modo 2) é exclusivo de SBS estéreo.
+    pc.chromaKeyEnabled = (state.passthroughActive && rawChromaMode == 1) ? 1 : 0;
     pc.chromaColorRgb = get_chroma_key_color();
     pc.chromaSimilarity = get_chroma_key_similarity();
     pc.chromaSmoothness = get_chroma_key_smoothness();
@@ -5868,8 +5871,23 @@ void RecordStereoFrame(
     float vw = (state.videoWidth > 0) ? static_cast<float>(state.videoWidth) : 3840.0f;
     float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1920.0f;
     spc.texelWidth     = 1.0f / vw;
-    spc.texelHeight    = 1.0f / vh;
-    spc.chromaKeyEnabled = static_cast<int>(get_chroma_key_enabled());
+    const int rawChromaMode = static_cast<int>(get_chroma_key_enabled());
+    // Modos estéreo compatíveis com DeoVR Packed Alpha (SBS em 180, Fisheye 190 ou Flat SBS).
+    const bool allowPackedAlpha = (state.screenMode == ScreenMode::Vr180SBS ||
+                                   state.screenMode == ScreenMode::Fisheye190SBS ||
+                                   state.screenMode == ScreenMode::SBS ||
+                                   state.screenMode == ScreenMode::SBSHalf);
+    if (!state.passthroughActive) {
+        // Sem passthrough ativo: NUNCA executa Chroma Key ou Packed Alpha (fundo 100% opaco).
+        spc.chromaKeyEnabled = 0;
+    } else if (rawChromaMode == 2 && !allowPackedAlpha) {
+        // Packed Alpha só é válido para projeções Side-By-Side (VR180 SBS, Fisheye 190 SBS ou Flat SBS).
+        // Modos 360° (mono ou SBS), OU e Cubemap NÃO possuem máscaras embutidas de Packed Alpha;
+        // executar o desempacotador neles geraria artefatos severos (cruz preta e distorção).
+        spc.chromaKeyEnabled = 0;
+    } else {
+        spc.chromaKeyEnabled = rawChromaMode;
+    }
     spc.chromaColorRgb = get_chroma_key_color();
     spc.chromaSimilarity = get_chroma_key_similarity();
     spc.chromaSmoothness = get_chroma_key_smoothness();
@@ -5958,8 +5976,18 @@ void RecordPhotoFrame(
     // Sem decode HDR de foto estatica — sempre SDR.
     spc.isHdr          = 0;
     spc.texelWidth     = 0.0f;
-    spc.texelHeight    = 0.0f;
-    spc.chromaKeyEnabled = static_cast<int>(get_chroma_key_enabled());
+    const int rawChromaMode = static_cast<int>(get_chroma_key_enabled());
+    const bool allowPackedAlpha = (state.screenMode == ScreenMode::Vr180SBS ||
+                                   state.screenMode == ScreenMode::Fisheye190SBS ||
+                                   state.screenMode == ScreenMode::SBS ||
+                                   state.screenMode == ScreenMode::SBSHalf);
+    if (!state.passthroughActive) {
+        spc.chromaKeyEnabled = 0;
+    } else if (rawChromaMode == 2 && !allowPackedAlpha) {
+        spc.chromaKeyEnabled = 0;
+    } else {
+        spc.chromaKeyEnabled = rawChromaMode;
+    }
     spc.chromaColorRgb = get_chroma_key_color();
     spc.chromaSimilarity = get_chroma_key_similarity();
     spc.chromaSmoothness = get_chroma_key_smoothness();
