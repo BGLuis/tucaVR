@@ -277,8 +277,9 @@ O script gera um pacote `.tar.gz` contendo:
 Como o compositor OpenXR desenha diretamente no display em modo `vr_only`, ferramentas padrão como `screencap` não capturam a cena do vídeo.
 
 O player fornece captura direta de frames renderizados através de `nativeRequestFrameCapture`, suportado em ambos os backends (Vulkan e GLES):
-- Salva o frame do olho esquerdo e direito como imagens PPM (`.left.ppm` e `.right.ppm`).
-- O script `scripts/test-3d-playback.sh` utiliza esse mecanismo para validar projeções estereoscópicas e converte automaticamente os frames para PNG usando `ffmpeg`.
+- Salva o frame do olho esquerdo e direito como imagens PPM (`.left.ppm` e `.right.ppm`) com escrita atômica e buffer de linha otimizado.
+- O script `scripts/capture-screen.sh` automatiza o disparo via broadcast `com.tucavr.debug.CAPTURE_FRAME`, extrai os PNGs diretamente para a pasta `captures/` no PC e os abre automaticamente.
+- O script `scripts/test-3d-playback.sh` utiliza esse mesmo mecanismo para validar projeções estereoscópicas e testes automatizados.
 
 ## 9. Diagnóstico de Falhas Nativas e Ciclo de Vida (C-01 a C-04)
 
