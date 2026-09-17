@@ -694,7 +694,16 @@ impl PlaybackController {
 
                 if let Ok(DemuxCommand::SeekTo(target_sec)) = command_rx.try_recv() {
                     let target_ts = (target_sec * 1_000_000.0) as i64;
-                    let _ = demuxer.input_context.seek(target_ts, ..);
+                    // Limite superior explícito (..target_ts) força o FFmpeg a encontrar
+                    // uma keyframe <= target_ts (AVSEEK_FLAG_BACKWARD), evitando que seeks
+                    // para trás saltem para frente. Se falhar, tenta range aberto como fallback.
+                    if let Err(e) = demuxer.input_context.seek(target_ts, ..target_ts) {
+                        crate::log_warn!(
+                            "Demuxer: seek delimitado para {:.2}s falhou ({e}), tentando range aberto",
+                            target_sec
+                        );
+                        let _ = demuxer.input_context.seek(target_ts, ..);
+                    }
                     epoch_d.fetch_add(1, Ordering::SeqCst);
                     // Placeholder ate a thread de video/audio "pousar" e corrigir o
                     // clock pra posicao real (ver PrerollState::take_landing) — so
@@ -811,7 +820,9 @@ impl PlaybackController {
                                 last_good_pos_sec, consecutive_read_errors, READ_ERROR_MAX_RESUME_ATTEMPTS
                             );
                             let target_ts = (last_good_pos_sec * 1_000_000.0) as i64;
-                            let _ = demuxer.input_context.seek(target_ts, ..);
+                            if let Err(_e) = demuxer.input_context.seek(target_ts, ..target_ts) {
+                                let _ = demuxer.input_context.seek(target_ts, ..);
+                            }
                             epoch_d.fetch_add(1, Ordering::SeqCst);
                             sync_d.update_master_clock(last_good_pos_sec);
                             last_enqueued_video_dts_bits_d.store(last_good_pos_sec.to_bits(), Ordering::Relaxed);
@@ -898,6 +909,23 @@ impl PlaybackController {
             loop {
                 if !*is_running_v.lock().unwrap() { break; }
 
+                // Detecção e reset imediato de época: ao sofrer seek, epoch_v é incrementado.
+                // Resetar imediatamente no topo do loop garante que:
+                // 1) pending.clear() elimina frames decodificados velhos (ex.: PTS 60s) que,
+                //    em seeks para trás, causariam atraso positivo (+50s) no decide_frame_action
+                //    e livelock permanente (evitando que o passo 3 de leitura nunca fosse atingido).
+                // 2) video_decoder.flush() descarta buffers em trânsito no hardware MediaCodec.
+                // 3) preroll.begin() ativa awaiting_landing, permitindo que a thread continue
+                //    e pouse mesmo com o playback pausado (!is_playing_v).
+                let latest_epoch = epoch_v.load(Ordering::SeqCst);
+                if latest_epoch != current_epoch {
+                    current_epoch = latest_epoch;
+                    let _ = video_decoder.flush();
+                    pending.clear();
+                    preroll.begin();
+                    last_epoch_change_at = Some(std::time::Instant::now());
+                }
+
                 if !*is_playing_v.lock().unwrap() && !preroll.is_awaiting_landing() {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                     continue;
@@ -972,11 +1000,10 @@ impl PlaybackController {
                     // buffer (rodando na thread de demux) precisa saber.
                     let packet_len = tagged.packet.data().map(|d| d.len()).unwrap_or(0) as u64;
                     saturating_sub_u64(&video_bytes_queued_v, packet_len);
-                    let latest_epoch = epoch_v.load(Ordering::SeqCst);
-                    if tagged.epoch < latest_epoch {
+                    if tagged.epoch < current_epoch {
                         continue;
                     }
-                    if tagged.epoch != current_epoch {
+                    if tagged.epoch > current_epoch {
                         current_epoch = tagged.epoch;
                         let _ = video_decoder.flush();
                         // Pos-flush, qualquer OutputBuffer ainda pendente
@@ -1097,6 +1124,22 @@ impl PlaybackController {
             loop {
                 if !*is_running_a.lock().unwrap() { break; }
 
+                // Verificação de época no topo do loop: garante flush imediato do decoder
+                // e da saída de áudio Oboe mesmo se o reprodutor estiver pausado.
+                let latest_epoch = epoch_a.load(Ordering::SeqCst);
+                if latest_epoch != current_epoch {
+                    current_epoch = latest_epoch;
+                    last_good_audio_pts = 0;
+                    if let Some(ref mut ad) = audio_decoder {
+                        ad.flush();
+                    }
+                    if let Ok(out_guard) = audio_output_for_thread.lock() {
+                        if let Some(out) = out_guard.as_ref() {
+                            out.flush();
+                        }
+                    }
+                }
+
                 if !*is_playing_a.lock().unwrap() {
                     std::thread::sleep(std::time::Duration::from_millis(50));
                     continue;
@@ -1105,10 +1148,10 @@ impl PlaybackController {
                 if let Ok(tagged) = audio_rx.recv_timeout(std::time::Duration::from_millis(50)) {
                     let packet_len = tagged.packet.data().map(|d| d.len()).unwrap_or(0) as u64;
                     saturating_sub_u64(&audio_bytes_queued_a, packet_len);
-                    if tagged.epoch < epoch_a.load(Ordering::SeqCst) {
+                    if tagged.epoch < current_epoch {
                         continue;
                     }
-                    if tagged.epoch != current_epoch {
+                    if tagged.epoch > current_epoch {
                         current_epoch = tagged.epoch;
                         last_good_audio_pts = 0;
                         if let Some(ref mut ad) = audio_decoder {

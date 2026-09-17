@@ -270,6 +270,14 @@ class VRActivity : NativeActivity() {
                         val path = intent.getStringExtra(EXTRA_CAPTURE_PATH) ?: "/sdcard/vr-frame-capture.ppm"
                         nativeRequestFrameCapture(path)
                     }
+                    ACTION_DEBUG_SET_CAMERA_OFFSET -> {
+                        val yaw = intent.getFloatExtra("yaw", 0.0f)
+                        val pitch = intent.getFloatExtra("pitch", 0.0f)
+                        val x = intent.getFloatExtra("x", 0.0f)
+                        val y = intent.getFloatExtra("y", 0.0f)
+                        val z = intent.getFloatExtra("z", 0.0f)
+                        nativeSetDebugCameraOffset(yaw, pitch, x, y, z)
+                    }
                     // Dispara playback SFTP direto via adb, sem navegar a UI nem
                     // colocar o headset na cabeca — mesmo espirito do EXTRA_AUTO_PLAY_PATH
                     // (ver DEBUGGING.md secao 2 / scripts/soak-test.sh), mas para uma fonte
@@ -302,6 +310,7 @@ class VRActivity : NativeActivity() {
             addAction(ACTION_DEBUG_SET_THERMAL_STATUS)
             addAction(ACTION_DEBUG_SET_ENVIRONMENT)
             addAction(ACTION_DEBUG_CAPTURE_FRAME)
+            addAction(ACTION_DEBUG_SET_CAMERA_OFFSET)
             addAction(ACTION_DEBUG_PLAY_SFTP)
         }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -632,6 +641,15 @@ class VRActivity : NativeActivity() {
             autoPlayDispatched = false
         }
         intent.getStringExtra(EXTRA_CAPTURE_PATH)?.let { nativeRequestFrameCapture(it) }
+        intent.getStringExtra(EXTRA_ENVIRONMENT_ID)?.let { setVirtualEnvironment(it) }
+        if (intent.hasExtra("camera_yaw") || intent.hasExtra("camera_x") || intent.hasExtra("camera_z")) {
+            val yaw = intent.getFloatExtra("camera_yaw", 0.0f)
+            val pitch = intent.getFloatExtra("camera_pitch", 0.0f)
+            val x = intent.getFloatExtra("camera_x", 0.0f)
+            val y = intent.getFloatExtra("camera_y", 0.0f)
+            val z = intent.getFloatExtra("camera_z", 0.0f)
+            nativeSetDebugCameraOffset(yaw, pitch, x, y, z)
+        }
     }
 
     override fun onResume() {
@@ -701,6 +719,7 @@ class VRActivity : NativeActivity() {
         const val ACTION_DEBUG_SET_ENVIRONMENT = "com.tucavr.debug.SET_ENVIRONMENT"
         const val EXTRA_ENVIRONMENT_ID = "environment_id"
         const val ACTION_DEBUG_CAPTURE_FRAME = "com.tucavr.debug.CAPTURE_FRAME"
+        const val ACTION_DEBUG_SET_CAMERA_OFFSET = "com.tucavr.debug.SET_CAMERA_OFFSET"
         // Ver ACTION_DEBUG_PLAY_SFTP em registerDebugReceiverIfDebuggable — playback SFTP
         // automatizado via adb, sem depender do headset estar sendo usado.
         const val ACTION_DEBUG_PLAY_SFTP = "com.tucavr.debug.PLAY_SFTP"
@@ -1237,6 +1256,7 @@ class VRActivity : NativeActivity() {
     external fun nativeHideModalPanel()
     external fun nativeIsModalActive(): Boolean
     external fun nativeRequestFrameCapture(path: String)
+    external fun nativeSetDebugCameraOffset(yaw: Float, pitch: Float, x: Float, y: Float, z: Float)
     external fun nativeTakeLastPlaybackError(): String?
 
     // Fase 0.3 Seção 8: Fotos 360° e Fotos 3D estéreo (T8.3, T8.4)

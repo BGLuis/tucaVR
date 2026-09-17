@@ -90,6 +90,11 @@ std::string g_capturePath;
 std::mutex g_capturePathMutex;
 std::string g_sessionId = "--------";
 std::mutex g_sessionIdMutex;
+std::atomic<float> g_debugCameraYaw{0.0f};
+std::atomic<float> g_debugCameraPitch{0.0f};
+std::atomic<float> g_debugCameraX{0.0f};
+std::atomic<float> g_debugCameraY{0.0f};
+std::atomic<float> g_debugCameraZ{0.0f};
 
 static inline std::string get_current_session_id_vk_app() {
     std::lock_guard<std::mutex> lock(g_sessionIdMutex);
@@ -507,6 +512,9 @@ struct EyeSwapchain {
     std::vector<XrSwapchainImageVulkanKHR> images;
     std::vector<VkImageView> imageViews;
     std::vector<VkFramebuffer> framebuffers;
+    std::vector<VkImage> depthImages;
+    std::vector<VkDeviceMemory> depthMemories;
+    std::vector<VkImageView> depthImageViews;
 };
 
 // Representa um frame de video importado como VkImage a partir de um
@@ -723,6 +731,7 @@ struct AppState {
     uint32_t videoWidth = 0;
     uint32_t videoHeight = 0;
     VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;
+    VkFormat depthFormat = VK_FORMAT_UNDEFINED;
 
     // Estagio 2 — pipeline do quad estatico (fallback sem frame de video).
     VkRenderPass renderPass = VK_NULL_HANDLE;
@@ -2092,67 +2101,31 @@ void ApplyFoveation(AppState& state, uint32_t level, float verticalOffset) {
     }
 }
 
-// Um subpass, um color attachment (o proprio swapchain image), sem depth —
-// o Estagio 2 desenha um unico quad que nunca se auto-oculta, entao nao ha
-// motivo para pagar o custo de um depth buffer ainda.
-void CreateRenderPass(AppState& state) {
-    VkAttachmentDescription colorAttachment{};
-    colorAttachment.format = state.swapchainFormat;
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    // UNDEFINED e seguro porque loadOp=CLEAR descarta o conteudo anterior de
-    // qualquer forma — mesmo raciocinio do Estagio 1.
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentReference colorRef{};
-    colorRef.attachment = 0;
-    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
-
-    VkRenderPassCreateInfo renderPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-    renderPassInfo.attachmentCount = 1;
-    renderPassInfo.pAttachments = &colorAttachment;
-    renderPassInfo.subpassCount = 1;
-    renderPassInfo.pSubpasses = &subpass;
-    VKR(vkCreateRenderPass(state.vkDevice, &renderPassInfo, nullptr, &state.renderPass));
+static bool HasStencilComponent(VkFormat format) {
+    return format == VK_FORMAT_D32_SFLOAT_S8_UINT ||
+           format == VK_FORMAT_D24_UNORM_S8_UINT ||
+           format == VK_FORMAT_D16_UNORM_S8_UINT;
 }
 
-// Uma VkImageView + VkFramebuffer por imagem de cada swapchain de olho —
-// precisa do render pass (para o framebuffer) e das imagens ja enumeradas
-// (CreateSwapchains), entao roda depois dos dois.
-void CreateFramebuffers(AppState& state) {
-    for (auto& eyeChain : state.eyes) {
-        eyeChain.imageViews.resize(eyeChain.images.size());
-        eyeChain.framebuffers.resize(eyeChain.images.size());
-
-        for (size_t i = 0; i < eyeChain.images.size(); i++) {
-            VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-            viewInfo.image = eyeChain.images[i].image;
-            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            viewInfo.format = state.swapchainFormat;
-            viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            viewInfo.subresourceRange.levelCount = 1;
-            viewInfo.subresourceRange.layerCount = 1;
-            VKR(vkCreateImageView(state.vkDevice, &viewInfo, nullptr, &eyeChain.imageViews[i]));
-
-            VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-            fbInfo.renderPass = state.renderPass;
-            fbInfo.attachmentCount = 1;
-            fbInfo.pAttachments = &eyeChain.imageViews[i];
-            fbInfo.width = static_cast<uint32_t>(eyeChain.width);
-            fbInfo.height = static_cast<uint32_t>(eyeChain.height);
-            fbInfo.layers = 1;
-            VKR(vkCreateFramebuffer(state.vkDevice, &fbInfo, nullptr, &eyeChain.framebuffers[i]));
+static VkFormat FindSupportedDepthFormat(AppState& state) {
+    const VkFormat candidates[] = {
+        VK_FORMAT_D32_SFLOAT,
+        VK_FORMAT_D32_SFLOAT_S8_UINT,
+        VK_FORMAT_D24_UNORM_S8_UINT,
+        VK_FORMAT_D16_UNORM,
+        VK_FORMAT_D16_UNORM_S8_UINT
+    };
+    for (VkFormat format : candidates) {
+        VkFormatProperties props{};
+        vkGetPhysicalDeviceFormatProperties(state.vkPhysicalDevice, format, &props);
+        if ((props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) ==
+            VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+            LOGI("Vulkan: Formato de profundidade selecionado: %d", static_cast<int>(format));
+            return format;
         }
     }
+    LOGE("Vulkan: Nenhum formato de depth buffer suportado pelo dispositivo!");
+    std::abort();
 }
 
 uint32_t FindMemoryType(AppState& state, uint32_t typeBits, VkMemoryPropertyFlags properties) {
@@ -2166,6 +2139,172 @@ uint32_t FindMemoryType(AppState& state, uint32_t typeBits, VkMemoryPropertyFlag
     }
     LOGE("Nenhum tipo de memoria Vulkan compativel encontrado (typeBits=0x%x)", typeBits);
     std::abort();
+}
+
+static uint32_t FindMemoryTypeWithFallback(AppState& state, uint32_t typeBits,
+                                           VkMemoryPropertyFlags preferred,
+                                           VkMemoryPropertyFlags fallback) {
+    VkPhysicalDeviceMemoryProperties memProps{};
+    vkGetPhysicalDeviceMemoryProperties(state.vkPhysicalDevice, &memProps);
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        if ((typeBits & (1u << i)) && ((memProps.memoryTypes[i].propertyFlags & preferred) == preferred)) {
+            return i;
+        }
+    }
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        if ((typeBits & (1u << i)) && ((memProps.memoryTypes[i].propertyFlags & fallback) == fallback)) {
+            return i;
+        }
+    }
+    LOGE("FindMemoryTypeWithFallback: nenhum tipo compativel (preferred=0x%x, fallback=0x%x)", preferred, fallback);
+    std::abort();
+}
+
+// RenderPass com Color Attachment + Depth Attachment.
+// Depth buffer usa loadOp=CLEAR e storeOp=DONT_CARE com transient allocation,
+// operando 100% na GMEM on-chip da GPU Adreno 740 sem gastar largura de banda de DRAM.
+void CreateRenderPass(AppState& state) {
+    state.depthFormat = FindSupportedDepthFormat(state);
+
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = state.swapchainFormat;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentDescription depthAttachment{};
+    depthAttachment.format = state.depthFormat;
+    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference depthRef{};
+    depthRef.attachment = 1;
+    depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                              VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                              VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                               VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
+
+    VkRenderPassCreateInfo renderPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    renderPassInfo.pAttachments = attachments.data();
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = 1;
+    renderPassInfo.pDependencies = &dependency;
+    VKR(vkCreateRenderPass(state.vkDevice, &renderPassInfo, nullptr, &state.renderPass));
+    LOGI("CreateRenderPass: renderPass criado com color (%d) e depth (%d)",
+         state.swapchainFormat, state.depthFormat);
+}
+
+// Uma VkImageView (Color) + VkImageView (Depth) + VkFramebuffer por imagem de cada swapchain de olho.
+void CreateFramebuffers(AppState& state) {
+    for (auto& eyeChain : state.eyes) {
+        eyeChain.imageViews.resize(eyeChain.images.size());
+        eyeChain.framebuffers.resize(eyeChain.images.size());
+        eyeChain.depthImages.resize(eyeChain.images.size());
+        eyeChain.depthMemories.resize(eyeChain.images.size());
+        eyeChain.depthImageViews.resize(eyeChain.images.size());
+
+        for (size_t i = 0; i < eyeChain.images.size(); i++) {
+            VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            viewInfo.image = eyeChain.images[i].image;
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            viewInfo.format = state.swapchainFormat;
+            viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            viewInfo.subresourceRange.levelCount = 1;
+            viewInfo.subresourceRange.layerCount = 1;
+            VKR(vkCreateImageView(state.vkDevice, &viewInfo, nullptr, &eyeChain.imageViews[i]));
+
+            // Criar Depth Image para este framebuffer
+            VkImageCreateInfo depthImageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+            depthImageInfo.imageType = VK_IMAGE_TYPE_2D;
+            depthImageInfo.extent.width = static_cast<uint32_t>(eyeChain.width);
+            depthImageInfo.extent.height = static_cast<uint32_t>(eyeChain.height);
+            depthImageInfo.extent.depth = 1;
+            depthImageInfo.mipLevels = 1;
+            depthImageInfo.arrayLayers = 1;
+            depthImageInfo.format = state.depthFormat;
+            depthImageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+            depthImageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            depthImageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                   VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+            depthImageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            depthImageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+            // Fallback sem TRANSIENT_ATTACHMENT_BIT se o driver rejeitar
+            VkResult imgRes = vkCreateImage(state.vkDevice, &depthImageInfo, nullptr, &eyeChain.depthImages[i]);
+            if (imgRes != VK_SUCCESS) {
+                depthImageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+                VKR(vkCreateImage(state.vkDevice, &depthImageInfo, nullptr, &eyeChain.depthImages[i]));
+            }
+
+            VkMemoryRequirements memReq{};
+            vkGetImageMemoryRequirements(state.vkDevice, eyeChain.depthImages[i], &memReq);
+
+            VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            allocInfo.allocationSize = memReq.size;
+            allocInfo.memoryTypeIndex = FindMemoryTypeWithFallback(
+                state, memReq.memoryTypeBits,
+                VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &eyeChain.depthMemories[i]));
+            VKR(vkBindImageMemory(state.vkDevice, eyeChain.depthImages[i], eyeChain.depthMemories[i], 0));
+
+            VkImageViewCreateInfo depthViewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            depthViewInfo.image = eyeChain.depthImages[i];
+            depthViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            depthViewInfo.format = state.depthFormat;
+            depthViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            if (HasStencilComponent(state.depthFormat)) {
+                depthViewInfo.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+            }
+            depthViewInfo.subresourceRange.baseMipLevel = 0;
+            depthViewInfo.subresourceRange.levelCount = 1;
+            depthViewInfo.subresourceRange.baseArrayLayer = 0;
+            depthViewInfo.subresourceRange.layerCount = 1;
+            VKR(vkCreateImageView(state.vkDevice, &depthViewInfo, nullptr, &eyeChain.depthImageViews[i]));
+
+            std::array<VkImageView, 2> attachments = {eyeChain.imageViews[i], eyeChain.depthImageViews[i]};
+
+            VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+            fbInfo.renderPass = state.renderPass;
+            fbInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+            fbInfo.pAttachments = attachments.data();
+            fbInfo.width = static_cast<uint32_t>(eyeChain.width);
+            fbInfo.height = static_cast<uint32_t>(eyeChain.height);
+            fbInfo.layers = 1;
+            VKR(vkCreateFramebuffer(state.vkDevice, &fbInfo, nullptr, &eyeChain.framebuffers[i]));
+        }
+    }
 }
 
 // Quad unitario em espaco local (-0.5..0.5 em X/Y, Z=0), escalado/posicionado
@@ -2329,6 +2468,11 @@ void CreateGraphicsPipeline(AppState& state) {
     layoutInfo.pPushConstantRanges = &pushConstantRange;
     VKR(vkCreatePipelineLayout(state.vkDevice, &layoutInfo, nullptr, &state.pipelineLayout));
 
+    VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
     VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     pipelineInfo.stageCount = 2;
     pipelineInfo.pStages = stages;
@@ -2338,6 +2482,7 @@ void CreateGraphicsPipeline(AppState& state) {
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisample;
     pipelineInfo.pColorBlendState = &colorBlend;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = state.pipelineLayout;
     pipelineInfo.renderPass = state.renderPass;
@@ -2529,6 +2674,11 @@ void CreateYcbcrAndVideoPipeline(AppState& state) {
     dynamicState.dynamicStateCount = static_cast<uint32_t>(std::size(dynamicStates));
     dynamicState.pDynamicStates = dynamicStates;
 
+    VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
     VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     pipelineInfo.stageCount = 2;
     pipelineInfo.pStages = stages;
@@ -2538,6 +2688,7 @@ void CreateYcbcrAndVideoPipeline(AppState& state) {
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisample;
     pipelineInfo.pColorBlendState = &colorBlend;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = state.videoPipelineLayout;
     pipelineInfo.renderPass = state.renderPass;
@@ -3502,7 +3653,12 @@ void CreateStereoPipeline(AppState& state) {
     pipeInfo.renderPass          = state.renderPass;
     VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.stereoPipeline));
 
-    // Segundo pipeline, so a topologia muda: o quad SBS/OU plano (RenderFrame,
+    VkPipelineDepthStencilStateCreateInfo dsStateFlat{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    dsStateFlat.depthTestEnable  = VK_TRUE;
+    dsStateFlat.depthWriteEnable = VK_TRUE;
+    dsStateFlat.depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+    // Segundo pipeline, so a topologia e depth mudam: o quad SBS/OU plano (RenderFrame,
     // ramo `else` de `sphereMode`) desenha `state.videoVertexBuffer` — 4
     // vertices ordenados pra TRIANGLE_STRIP (BL,BR,TL,TR, ver
     // CreateVideoVertexBuffer) via `vkCmdDraw(cmd, 4, ...)`, sem indices.
@@ -3512,6 +3668,7 @@ void CreateStereoPipeline(AppState& state) {
     // triangulo (bug reportado em teste real de hardware pros modos
     // SBS/OU planos). Mesmos shaders/layout, so a input assembly muda.
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+    pipeInfo.pDepthStencilState = &dsStateFlat;
     VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.stereoFlatPipeline));
 
     // Terceiro pipeline: Cubemap / EAC na esfera (stereo_cubemap.vert/frag)
@@ -3532,6 +3689,7 @@ void CreateStereoPipeline(AppState& state) {
 
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     pipeInfo.pStages = cubeStages;
+    pipeInfo.pDepthStencilState = &dsState;
     VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.stereoCubemapPipeline));
 
     vkDestroyShaderModule(state.vkDevice, cubeVertMod, nullptr);
@@ -3692,12 +3850,19 @@ static void CreatePhotoPipeline(AppState& state) {
     pipeInfo.layout              = state.photoPipelineLayout;
     pipeInfo.renderPass          = state.renderPass;
 
+    VkPipelineDepthStencilStateCreateInfo dsStateFlat{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    dsStateFlat.depthTestEnable  = VK_TRUE;
+    dsStateFlat.depthWriteEnable = VK_TRUE;
+    dsStateFlat.depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL;
+
     // 1. Pipeline de foto para esfera 360/180
+    pipeInfo.pDepthStencilState = &dsState;
     VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.photoStereoPipeline));
 
     // 2. Pipeline de foto para quad plano (TRIANGLE_STRIP, cull none para Flat/SBS/OU)
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
     rast.cullMode = VK_CULL_MODE_NONE;
+    pipeInfo.pDepthStencilState = &dsStateFlat;
     VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.photoStereoFlatPipeline));
 
     vkDestroyShaderModule(state.vkDevice, vertMod, nullptr);
@@ -4689,6 +4854,11 @@ static void CreateEnvironmentPipeline(AppState& state) {
 
     VKR(vkCreatePipelineLayout(state.vkDevice, &layoutInfo, nullptr, &state.envPipelineLayout));
 
+    VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
     VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     pipelineInfo.stageCount = 2;
     pipelineInfo.pStages = stages;
@@ -4698,6 +4868,7 @@ static void CreateEnvironmentPipeline(AppState& state) {
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisampling;
     pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = state.envPipelineLayout;
     pipelineInfo.renderPass = state.renderPass;
@@ -4828,6 +4999,10 @@ static void CreateSkyboxPipeline(AppState& state) {
     dynamicState.dynamicStateCount = 2;
     dynamicState.pDynamicStates    = dynamicStates;
 
+    VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+
     VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     pipelineInfo.stageCount          = 2;
     pipelineInfo.pStages             = stages;
@@ -4837,6 +5012,7 @@ static void CreateSkyboxPipeline(AppState& state) {
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState   = &multisampling;
     pipelineInfo.pColorBlendState    = &colorBlending;
+    pipelineInfo.pDepthStencilState  = &depthStencil;
     pipelineInfo.pDynamicState       = &dynamicState;
     pipelineInfo.layout              = state.skyboxPipelineLayout;
     pipelineInfo.renderPass          = state.renderPass;
@@ -5218,17 +5394,18 @@ static void DrawEnvironmentIfLoaded(
 void RecordFallbackQuad(
     AppState& state, VkCommandBuffer cmd, VkFramebuffer framebuffer, VkExtent2D extent, const Mat4& mvp,
     const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
-    VkClearValue clearValue{};
+    std::array<VkClearValue, 2> clearValues{};
     // preto quase puro — ambiente escuro de cinema (alpha 0 quando passthrough ativo)
-    clearValue.color = {{0.02f, 0.02f, 0.05f, PassthroughEnvAlpha(state)}};
+    clearValues[0].color = {{0.02f, 0.02f, 0.05f, PassthroughEnvAlpha(state)}};
+    clearValues[1].depthStencil = {1.0f, 0};
 
     VkRenderPassBeginInfo renderPassBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     renderPassBegin.renderPass = state.renderPass;
     renderPassBegin.framebuffer = framebuffer;
     renderPassBegin.renderArea.offset = {0, 0};
     renderPassBegin.renderArea.extent = extent;
-    renderPassBegin.clearValueCount = 1;
-    renderPassBegin.pClearValues = &clearValue;
+    renderPassBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    renderPassBegin.pClearValues = clearValues.data();
     vkCmdBeginRenderPass(cmd, &renderPassBegin, VK_SUBPASS_CONTENTS_INLINE);
 
     VkViewport viewport{};
@@ -5531,17 +5708,18 @@ void RecordVideoFlat(
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         0, 0, nullptr, 0, nullptr, 1, &imgBarrier);
 
-    VkClearValue clearValue{};
+    std::array<VkClearValue, 2> clearValues{};
     // preto ao redor do video (alpha 0 quando passthrough ativo — revela o mundo real)
-    clearValue.color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
+    clearValues[0].color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
+    clearValues[1].depthStencil = {1.0f, 0};
 
     VkRenderPassBeginInfo renderPassBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     renderPassBegin.renderPass = state.renderPass;
     renderPassBegin.framebuffer = framebuffer;
     renderPassBegin.renderArea.offset = {0, 0};
     renderPassBegin.renderArea.extent = extent;
-    renderPassBegin.clearValueCount = 1;
-    renderPassBegin.pClearValues = &clearValue;
+    renderPassBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    renderPassBegin.pClearValues = clearValues.data();
     vkCmdBeginRenderPass(cmd, &renderPassBegin, VK_SUBPASS_CONTENTS_INLINE);
 
     VkViewport viewport{};
@@ -5623,12 +5801,17 @@ void RecordStereoFrame(
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &imgBarrier);
 
-    VkClearValue clearValue{};
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
+    clearValues[1].depthStencil = {1.0f, 0};
+
     VkRenderPassBeginInfo rpBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     rpBegin.renderPass = state.renderPass;
     rpBegin.framebuffer = fb;
+    rpBegin.renderArea.offset = {0, 0};
     rpBegin.renderArea.extent = extent;
-    rpBegin.clearValueCount = 1; rpBegin.pClearValues = &clearValue;
+    rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    rpBegin.pClearValues = clearValues.data();
     vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
 
     VkViewport vp{0, 0, (float)extent.width, (float)extent.height, 0.0f, 1.0f};
@@ -5707,14 +5890,17 @@ void RecordPhotoFrame(
     const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter,
     bool sphereMode, int eye, const StereoParams& sp) {
 
-    VkClearValue clearValue{};
-    clearValue.color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
+    clearValues[1].depthStencil = {1.0f, 0};
 
     VkRenderPassBeginInfo rpBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     rpBegin.renderPass = state.renderPass;
     rpBegin.framebuffer = fb;
+    rpBegin.renderArea.offset = {0, 0};
     rpBegin.renderArea.extent = extent;
-    rpBegin.clearValueCount = 1; rpBegin.pClearValues = &clearValue;
+    rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    rpBegin.pClearValues = clearValues.data();
     vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
 
     VkViewport vp{0, 0, (float)extent.width, (float)extent.height, 0.0f, 1.0f};
@@ -6488,7 +6674,18 @@ void RenderFrame(AppState& state) {
             waitInfo.timeout = XR_INFINITE_DURATION;
             OXR(xrWaitSwapchainImage(eyeChain.handle, &waitInfo));
 
-            const Mat4 view = Mat4RigidInverse(Mat4FromXrPose(views[eye].pose));
+            const Mat4 viewBase = Mat4RigidInverse(Mat4FromXrPose(views[eye].pose));
+            Mat4 view = viewBase;
+            const float dbgYaw = g_debugCameraYaw.load();
+            const float dbgPitch = g_debugCameraPitch.load();
+            const float dbgX = g_debugCameraX.load();
+            const float dbgY = g_debugCameraY.load();
+            const float dbgZ = g_debugCameraZ.load();
+            if (dbgYaw != 0.0f || dbgPitch != 0.0f || dbgX != 0.0f || dbgY != 0.0f || dbgZ != 0.0f) {
+                Mat4 rot = Mat4Multiply(Mat4RotationX(-dbgPitch), Mat4RotationY(-dbgYaw));
+                Mat4 trans = Mat4Translation(-dbgX, -dbgY, -dbgZ);
+                view = Mat4Multiply(Mat4Multiply(rot, trans), viewBase);
+            }
             const Mat4 proj = Mat4ProjectionFromFov(views[eye].fov, 0.05f, 100.0f);
             const Mat4 mvp  = Mat4Multiply(Mat4Multiply(proj, view), screenModel);
 
@@ -7123,7 +7320,7 @@ void DestroyAppResources(AppState& state) {
         state.pipelineLayout = VK_NULL_HANDLE;
     }
 
-    // 9. Framebuffers e ImageViews dos olhos
+    // 9. Framebuffers e ImageViews dos olhos (e Depth buffers)
     for (auto& eyeChain : state.eyes) {
         for (auto framebuffer : eyeChain.framebuffers) {
             if (framebuffer != VK_NULL_HANDLE) {
@@ -7131,6 +7328,24 @@ void DestroyAppResources(AppState& state) {
             }
         }
         eyeChain.framebuffers.clear();
+        for (auto depthImageView : eyeChain.depthImageViews) {
+            if (depthImageView != VK_NULL_HANDLE) {
+                vkDestroyImageView(state.vkDevice, depthImageView, nullptr);
+            }
+        }
+        eyeChain.depthImageViews.clear();
+        for (auto depthImage : eyeChain.depthImages) {
+            if (depthImage != VK_NULL_HANDLE) {
+                vkDestroyImage(state.vkDevice, depthImage, nullptr);
+            }
+        }
+        eyeChain.depthImages.clear();
+        for (auto depthMemory : eyeChain.depthMemories) {
+            if (depthMemory != VK_NULL_HANDLE) {
+                vkFreeMemory(state.vkDevice, depthMemory, nullptr);
+            }
+        }
+        eyeChain.depthMemories.clear();
         for (auto imageView : eyeChain.imageViews) {
             if (imageView != VK_NULL_HANDLE) {
                 vkDestroyImageView(state.vkDevice, imageView, nullptr);

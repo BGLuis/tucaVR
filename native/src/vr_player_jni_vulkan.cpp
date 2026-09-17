@@ -234,6 +234,25 @@ Java_com_tucavr_VRActivity_nativeRequestFrameCapture(JNIEnv* env, jobject, jstri
     LOGI("nativeRequestFrameCapture: %s", g_capturePath.c_str());
 }
 
+extern std::atomic<float> g_debugCameraYaw;
+extern std::atomic<float> g_debugCameraPitch;
+extern std::atomic<float> g_debugCameraX;
+extern std::atomic<float> g_debugCameraY;
+extern std::atomic<float> g_debugCameraZ;
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetDebugCameraOffset(
+    JNIEnv*, jobject, jfloat yawDeg, jfloat pitchDeg, jfloat x, jfloat y, jfloat z) {
+    constexpr float kDegToRad = 3.14159265f / 180.0f;
+    g_debugCameraYaw.store(yawDeg * kDegToRad);
+    g_debugCameraPitch.store(pitchDeg * kDegToRad);
+    g_debugCameraX.store(x);
+    g_debugCameraY.store(y);
+    g_debugCameraZ.store(z);
+    LOGI("nativeSetDebugCameraOffset: yaw=%.1f deg, pitch=%.1f deg, pos=(%.2f, %.2f, %.2f)",
+         yawDeg, pitchDeg, x, y, z);
+}
+
 // Preview de arrasto sobre o quad do video — estado compartilhado com o loop
 // de render em vr_player_app_vulkan.cpp (extern, nao static: unica excecao a
 // separacao "JNI so delega pro bridge Rust" do topo deste arquivo — os bytes
