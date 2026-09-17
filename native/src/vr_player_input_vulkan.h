@@ -718,11 +718,22 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             }
         }
     } else {
-        // A (direita) ou X (esquerda) = Play/Pause. Trigger fora de qualquer
-        // painel visivel tambem funciona como atalho.
-        if (((currA && !state.prevA) || (currX && !state.prevX) ||
-            (currTrigger && !prevTrigger && dispatchHitPanel == 0)) && !keyboardActive) {
+        // A (direita) ou X (esquerda) = Play/Pause.
+        // Trigger no espaço vazio (fora de qualquer painel de UI e fora da tela virtual de vídeo)
+        // também funciona como atalho de Play/Pause.
+        // Se estiver apontando para a tela de vídeo 2D (isHoveringScreen):
+        // - Com Hand Tracking: o pinch é reservado exclusivamente para Grab & Drag (T5.5).
+        // - Com controle Touch Plus: clique na tela acorda os controles flutuantes (HUD)
+        //   sem pausar bruscamente a reprodução.
+        bool triggerInEmptySpace = currTrigger && !prevTrigger && (dispatchHitPanel == 0) && !state.isHoveringScreen;
+        bool buttonPlayPause = (currA && !state.prevA) || (currX && !state.prevX);
+
+        if ((buttonPlayPause || triggerInEmptySpace) && !keyboardActive) {
             toggle_play_pause();
+            state.controlsIdleTime = 0.0f;
+            state.controlsAlpha = 1.0f;
+        } else if (currTrigger && !prevTrigger && state.isHoveringScreen && !state.handTrackingActive && !keyboardActive) {
+            // Clique simples na tela 2D via controle: acorda a barra de controles/HUD
             state.controlsIdleTime = 0.0f;
             state.controlsAlpha = 1.0f;
         }

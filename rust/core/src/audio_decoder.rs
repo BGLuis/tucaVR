@@ -232,4 +232,9 @@ impl AudioDecoder {
 
         Ok(samples)
     }
+
+    /// Esvazia buffers internos do decoder FFmpeg (usado após seek/troca de epoch).
+    pub fn flush(&mut self) {
+        self.decoder.flush();
+    }
 }

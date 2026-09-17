@@ -11,12 +11,15 @@ layout(push_constant) uniform PushConstants {
     float sharpness;     // 0.0 = amostragem bilinear direta, > 0.0 = forca do kernel SGSR1
     int   upscalingMode; // 0 = Off, 1 = Quality, 2 = Performance, 3 = Auto
     int   isHdr;         // T-HDR: 1 = fonte PQ/HLG, aplicar tonemap no fragment shader
+    float texelWidth;    // 1.0 / videoWidth
+    float texelHeight;   // 1.0 / videoHeight
 } pc;
 
 layout(location = 0) out vec2 vTexCoord;
 layout(location = 1) flat out float vSharpness;
 layout(location = 2) flat out int vUpscalingMode;
 layout(location = 3) flat out int vIsHdr;
+layout(location = 4) flat out vec2 vTexelSize;
 
 void main() {
     gl_Position = pc.mvp * vec4(inPosition, 1.0);
@@ -24,4 +27,5 @@ void main() {
     vSharpness = pc.sharpness;
     vUpscalingMode = pc.upscalingMode;
     vIsHdr = pc.isHdr;
+    vTexelSize = vec2(pc.texelWidth, pc.texelHeight);
 }

@@ -913,11 +913,8 @@ impl PlaybackController {
                 }
                 video_present_pending_v.store(pending.len() as u32, Ordering::Relaxed);
 
-                // 2. Decide o que fazer com o frame mais antigo pendente,
-                //    sem travar o loop nisso: so espera em fatias curtas
-                //    (volta sempre pro passo 3 pra manter o decode
-                //    avancando em vez de dormir o atraso inteiro de uma
-                //    vez so).
+                // 2. Decide o que fazer com o frame mais antigo pendente
+                let mut should_feed_input = pending.len() < 2;
                 if let Some(front) = pending.front() {
                     let pts_sec = front.info().presentation_time_us() as f64 / 1_000_000.0;
                     let is_landing = preroll.is_awaiting_landing();
@@ -926,30 +923,46 @@ impl PlaybackController {
                         pts_sec, master_clock, is_landing, LATE_FRAME_RENDER_SKIP_SEC,
                     ) {
                         media_logic::frame_timing::FrameAction::WaitThenRender(d) => {
-                            std::thread::sleep(d.min(PRESENT_WAIT_SLICE));
+                            if d <= std::time::Duration::from_millis(15) {
+                                std::thread::sleep(d);
+                                release_pending_front!(true);
+                                should_feed_input = false;
+                            } else {
+                                std::thread::sleep(PRESENT_WAIT_SLICE);
+                            }
                         }
                         media_logic::frame_timing::FrameAction::Land => {
                             preroll.take_landing();
                             sync_v.update_master_clock(pts_sec);
                             release_pending_front!(true);
+                            should_feed_input = false;
                         }
                         media_logic::frame_timing::FrameAction::RenderNow => {
                             release_pending_front!(true);
+                            should_feed_input = false;
                         }
                         media_logic::frame_timing::FrameAction::Drop => {
                             release_pending_front!(false);
+                            should_feed_input = false;
                         }
                     }
                 }
 
-                // 3. Alimenta o proximo pacote de entrada — timeout curto
+                // Se acabamos de renderizar/descartar ou se já temos frames
+                // decodificados suficientes em fila (>= 2), voltamos imediatamente
+                // ao passo 1 para manter o ritmo de apresentação estável e pontual.
+                if !should_feed_input && !pending.is_empty() {
+                    continue;
+                }
+
+                // 3. Alimenta o proximo pacote de entrada — timeout curto (2ms)
                 //    se ja ha algo pendente aguardando a hora certa, pra
                 //    voltar logo ao passo 2; timeout normal (50ms) se nao
                 //    ha nada pendente (nada a perder esperando mais).
                 let recv_timeout = if pending.is_empty() {
                     std::time::Duration::from_millis(50)
                 } else {
-                    std::time::Duration::from_millis(5)
+                    std::time::Duration::from_millis(2)
                 };
                 match video_rx.recv_timeout(recv_timeout) {
                 Ok(tagged) => {
@@ -1008,14 +1021,16 @@ impl PlaybackController {
                             &frame_data,
                             pts_us,
                             0,
-                            // Sob pressao (entrada cheia porque estamos
-                            // segurando saida pendente demais): libera o
-                            // mais antigo cedo como valvula de alivio, em
-                            // vez de deixar o decode travar de verdade.
-                            // Substitui o antigo
-                            // `release_output_frames_with_sync` chamado
-                            // aqui pelo mesmo motivo.
-                            || release_pending_front!(true),
+                            // Sob pressão (entrada cheia porque estamos
+                            // segurando saída pendente demais): só alivia
+                            // descartando se houver excesso de buffers retidos (>= 4).
+                            // Durante operação normal com fila curta, NUNCA
+                            // ejeta frames prematuramente na tela fora da ordem do PTS.
+                            || {
+                                if pending.len() >= 4 {
+                                    release_pending_front!(false);
+                                }
+                            },
                             || *is_running_v.lock().unwrap()
                         );
                         if was_active && !preroll.is_active() {
@@ -1046,6 +1061,7 @@ impl PlaybackController {
         // Thread 3: Audio Decoder
         let sync_a = sync_manager.clone();
         let speed_bits_a = self.speed_bits.clone();
+        let audio_output_for_thread = audio_output_clone.clone();
 
         let mut audio_sender = None;
         if let Ok(out_guard) = audio_output_clone.lock() {
@@ -1056,7 +1072,9 @@ impl PlaybackController {
 
         let audio_thread = thread::spawn(move || {
             AUDIO_THREAD_TID.store(unsafe { libc::gettid() }, Ordering::Relaxed);
+            let mut current_epoch: u64 = 0;
             let mut applied_speed = 1.0f32;
+            let mut last_good_audio_pts: i64 = 0;
             let layout = audio_decoder
                 .as_ref()
                 .map(|ad| ad.channel_layout())
@@ -1090,6 +1108,18 @@ impl PlaybackController {
                     if tagged.epoch < epoch_a.load(Ordering::SeqCst) {
                         continue;
                     }
+                    if tagged.epoch != current_epoch {
+                        current_epoch = tagged.epoch;
+                        last_good_audio_pts = 0;
+                        if let Some(ref mut ad) = audio_decoder {
+                            ad.flush();
+                        }
+                        if let Ok(out_guard) = audio_output_for_thread.lock() {
+                            if let Some(out) = out_guard.as_ref() {
+                                out.flush();
+                            }
+                        }
+                    }
                     let packet = tagged.packet;
 
                     if let Some(ref mut ad) = audio_decoder {
@@ -1105,9 +1135,23 @@ impl PlaybackController {
 
                         if let Ok(samples) = ad.decode(&packet) {
                             if !samples.is_empty() {
-                                let pts = packet.pts().unwrap_or(0);
+                                let pts = packet.pts().or_else(|| packet.dts()).unwrap_or(last_good_audio_pts);
+                                last_good_audio_pts = pts;
                                 let pts_sec = pts as f64 * audio_time_base;
-                                sync_a.update_audio_pts(pts_sec);
+
+                                // Compensação de latência do buffer de áudio:
+                                // O buffer do AudioOutput (bounded 48000 amostras) retém até 0,5s
+                                // de som à frente. Subtraímos essa profundidade de fila para que o
+                                // master_clock reflita o som que está efetivamente saindo nos fones agora.
+                                let queued_samples = audio_sender.as_ref().map(|s| s.len()).unwrap_or(0);
+                                let acoustic_pts = media_logic::sync::acoustic_audio_pts(
+                                    pts_sec,
+                                    queued_samples,
+                                    48000,
+                                    2,
+                                    applied_speed as f64,
+                                );
+                                sync_a.update_audio_pts(acoustic_pts);
 
                                 let head_rot = media_logic::spatial_audio::get_global_head_orientation();
                                 let spatial_mode = media_logic::spatial_audio::get_global_spatial_mode();
@@ -1279,9 +1323,12 @@ impl PlaybackController {
     }
 
     pub fn get_current_frame(&self) -> *mut std::os::raw::c_void {
-        if let Ok(tex) = self.texture_output.lock() {
-            // Note: acquire_latest_buffer is called in decoding loop thread,
-            // but we can also just return current_buffer here.
+        if let Ok(mut tex) = self.texture_output.lock() {
+            // Tenta adquirir o frame mais recente liberado pelo MediaCodec/Surface
+            // para entrega com latência zero ao render loop do OpenXR (C++).
+            if let Some(buffer) = tex.acquire_latest_buffer() {
+                return buffer.as_ptr() as *mut std::os::raw::c_void;
+            }
             if let Some(buffer) = tex.current_buffer.as_ref() {
                 return buffer.as_ptr() as *mut std::os::raw::c_void;
             }

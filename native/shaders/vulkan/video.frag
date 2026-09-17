@@ -1,5 +1,4 @@
 #version 450
-#extension GL_EXT_samplerless_texture_functions : enable
 
 // Estagio 3 do plano de migracao Vulkan + Upscaling SGSR1 (Modo Qualidade/Auto):
 // Fragment shader que amostra textura YCbCr via sampler imutavel com suporte
@@ -11,6 +10,7 @@ layout(location = 0) in vec2 vTexCoord;
 layout(location = 1) flat in float vSharpness;
 layout(location = 2) flat in int vUpscalingMode;
 layout(location = 3) flat in int vIsHdr;
+layout(location = 4) flat in vec2 vTexelSize;
 
 layout(location = 0) out vec4 outColor;
 
@@ -44,8 +44,7 @@ vec3 TonemapHdrToSdr(vec3 hdrColor) {
 }
 
 // Kernel SGSR1 (Snapdragon Game Super Resolution v1 / 12-tap edge-aware)
-vec3 ApplySGSR1(vec2 uv, float sharpness) {
-    vec2 texelSize = 1.0 / vec2(textureSize(videoTexture, 0));
+vec3 ApplySGSR1(vec2 uv, float sharpness, vec2 texelSize) {
     vec2 dx = vec2(texelSize.x, 0.0);
     vec2 dy = vec2(0.0, texelSize.y);
 
@@ -110,9 +109,9 @@ void main() {
     // alpha forcado a 1.0: video decodificado e sempre opaco, e com
     // passthrough ativo (Fase 0.3 Seção 2) o eye buffer compoe pelo
     // alpha — um alpha < 1 vindo do sampler deixaria o video traslucido.
-    vec3 color = (vSharpness <= 0.01)
+    vec3 color = (vSharpness <= 0.01 || vTexelSize.x <= 0.0 || vTexelSize.y <= 0.0)
         ? texture(videoTexture, vTexCoord).rgb
-        : ApplySGSR1(vTexCoord, vSharpness);
+        : ApplySGSR1(vTexCoord, vSharpness, vTexelSize);
     if (vIsHdr != 0) {
         color = TonemapHdrToSdr(color);
     }

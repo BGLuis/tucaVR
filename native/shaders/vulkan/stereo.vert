@@ -22,6 +22,8 @@ layout(push_constant) uniform PushConstants {
     int   cubemapLayout;
     int   projectionType;
     int   isHdr;         // T-HDR: 1 = fonte PQ/HLG, aplicar tonemap no fragment shader
+    float texelWidth;    // 1.0 / videoWidth
+    float texelHeight;   // 1.0 / videoHeight
 } pc;
 
 layout(location = 0) out vec2 vTexCoord;
@@ -32,6 +34,7 @@ layout(location = 4) flat out int vPolar180;
 layout(location = 5) flat out float vSharpness;
 layout(location = 6) flat out int vUpscalingMode;
 layout(location = 7) flat out int vIsHdr;
+layout(location = 8) flat out vec2 vTexelSize;
 
 void main() {
     gl_Position = pc.mvp * vec4(inPosition, 1.0);
@@ -43,4 +46,5 @@ void main() {
     vSharpness  = pc.sharpness;
     vUpscalingMode = pc.upscalingMode;
     vIsHdr = pc.isHdr;
+    vTexelSize  = vec2(pc.texelWidth, pc.texelHeight);
 }

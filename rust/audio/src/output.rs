@@ -15,6 +15,8 @@ pub struct AudioPlayerCallback {
     // esta vazio no momento em que o callback do Oboe pede amostras — antes disto, o fill de
     // silencio abaixo (`unwrap_or(0.0)`) era um underrun completamente invisivel na telemetria.
     underrun_count: Arc<AtomicU64>,
+    flush_count: Arc<AtomicU64>,
+    local_flush_count: u64,
 }
 
 impl AudioOutputCallback for AudioPlayerCallback {
@@ -25,6 +27,12 @@ impl AudioOutputCallback for AudioPlayerCallback {
         _audio_stream: &mut dyn oboe::AudioOutputStreamSafe,
         audio_data: &mut [(f32, f32)],
     ) -> DataCallbackResult {
+        let current_flush = self.flush_count.load(Ordering::Relaxed);
+        if self.local_flush_count != current_flush {
+            self.local_flush_count = current_flush;
+            while self.receiver.try_recv().is_ok() {}
+        }
+
         let ptr = audio_data.as_mut_ptr() as *mut f32;
         let len = audio_data.len() * 2;
         let slice = unsafe { std::slice::from_raw_parts_mut(ptr, len) };
@@ -49,6 +57,7 @@ pub struct AudioOutput {
     sender: Sender<f32>,
     volume_bits: Arc<AtomicU32>,
     underrun_count: Arc<AtomicU64>,
+    flush_count: Arc<AtomicU64>,
 }
 
 impl AudioOutput {
@@ -56,10 +65,13 @@ impl AudioOutput {
         let (sender, receiver) = bounded(48000); // 0.5 sec of stereo audio buffer
         let volume_bits = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let underrun_count = Arc::new(AtomicU64::new(0));
+        let flush_count = Arc::new(AtomicU64::new(0));
         let callback = AudioPlayerCallback {
             receiver,
             volume_bits: volume_bits.clone(),
             underrun_count: underrun_count.clone(),
+            flush_count: flush_count.clone(),
+            local_flush_count: 0,
         };
 
         let builder = AudioStreamBuilder::default();
@@ -75,13 +87,21 @@ impl AudioOutput {
             .set_callback(callback)
             .open_stream()?;
 
-        Ok(Self { stream, sender, volume_bits, underrun_count })
+        Ok(Self { stream, sender, volume_bits, underrun_count, flush_count })
     }
 
     pub fn push_samples(&mut self, samples: &[f32]) {
         for &sample in samples {
             let _ = self.sender.send(sample);
         }
+    }
+
+    pub fn flush(&self) {
+        self.flush_count.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn get_buffered_samples(&self) -> usize {
+        self.sender.len()
     }
 
     pub fn get_sender(&self) -> Sender<f32> {

@@ -14,6 +14,7 @@ layout(location = 4) flat in int vPolar180;
 layout(location = 5) flat in float vSharpness;
 layout(location = 6) flat in int vUpscalingMode;
 layout(location = 7) flat in int vIsHdr;
+layout(location = 8) flat in vec2  vTexelSize;
 
 layout(location = 0) out vec4 outColor;
 
@@ -37,8 +38,7 @@ vec3 TonemapHdrToSdr(vec3 hdrColor) {
     return pow(clamp(tonemapped, 0.0, 1.0), vec3(1.0 / 2.2));
 }
 
-vec3 ApplySGSR1(vec2 uv, float sharpness) {
-    vec2 texelSize = 1.0 / vec2(textureSize(videoTexture, 0));
+vec3 ApplySGSR1(vec2 uv, float sharpness, vec2 texelSize) {
     vec2 dx = vec2(texelSize.x, 0.0);
     vec2 dy = vec2(0.0, texelSize.y);
 
@@ -95,17 +95,20 @@ vec3 ApplySGSR1(vec2 uv, float sharpness) {
 
 void main() {
     vec2 uv = vTexCoord;
-    int  eye = vEye;
 
-    // Inversao de olhos (swapEyes)
-    if (vSwapEyes != 0) {
-        eye = 1 - eye;
-    }
+    // Inversao de olho se requisitada (swapEyes)
+    int eye = (vSwapEyes != 0) ? (1 - vEye) : vEye;
 
-    // Recorte polar 180: descarta fora do hemisferio frontal
+    // Mapeamento hemisferio frontal 180 graus (T6.4):
+    // A malha da esfera mapeia U de 0 a 1 em torno de 360 graus.
+    // Para video 180 (polar180 != 0), o conteudo util esta no
+    // hemisferio frontal [-90, +90], que corresponde a U em [0.25, 0.75].
+    // Reescalamos U para que [0.25, 0.75] cubra toda a faixa [0, 1] do frame.
+    // Pixels fora do hemisferio frontal ficam pretos (descartados).
     if (vPolar180 != 0) {
         if (uv.x < 0.25 || uv.x > 0.75) {
-            discard;
+            outColor = vec4(0.0, 0.0, 0.0, 1.0);
+            return;
         }
         uv.x = (uv.x - 0.25) * 2.0;
     }
@@ -121,9 +124,9 @@ void main() {
 
     // alpha forcado a 1.0 (video sempre opaco) — ver nota em video.frag
     // sobre composicao por alpha com passthrough ativo.
-    vec3 color = (vSharpness <= 0.01)
+    vec3 color = (vSharpness <= 0.01 || vTexelSize.x <= 0.0 || vTexelSize.y <= 0.0)
         ? texture(videoTexture, uv).rgb
-        : ApplySGSR1(uv, vSharpness);
+        : ApplySGSR1(uv, vSharpness, vTexelSize);
     if (vIsHdr != 0) {
         color = TonemapHdrToSdr(color);
     }

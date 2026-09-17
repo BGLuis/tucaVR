@@ -17,6 +17,7 @@ layout(location = 6) flat in int vCubemapLayout;
 layout(location = 7) flat in int vProjectionType;
 layout(location = 8) in vec3 vWorldDirection;
 layout(location = 9) flat in int vIsHdr;
+layout(location = 10) flat in vec2 vTexelSize;
 
 layout(location = 0) out vec4 outColor;
 
@@ -43,8 +44,7 @@ vec3 TonemapHdrToSdr(vec3 hdrColor) {
 }
 
 // Kernel adaptativo SGSR1 para upscaling e nitidez de vídeo
-vec3 ApplySGSR1(vec2 uv, float sharpness) {
-    vec2 texelSize = 1.0 / vec2(textureSize(videoTexture, 0));
+vec3 ApplySGSR1(vec2 uv, float sharpness, vec2 texelSize) {
     vec2 dx = vec2(texelSize.x, 0.0);
     vec2 dy = vec2(0.0, texelSize.y);
 
@@ -249,9 +249,9 @@ void main() {
         texUV.y = texUV.y * 0.5 + float(eye) * 0.5;
     }
 
-    vec3 color = (vSharpness <= 0.01)
+    vec3 color = (vSharpness <= 0.01 || vTexelSize.x <= 0.0 || vTexelSize.y <= 0.0)
         ? texture(videoTexture, texUV).rgb
-        : ApplySGSR1(texUV, vSharpness);
+        : ApplySGSR1(texUV, vSharpness, vTexelSize);
     if (vIsHdr != 0) {
         color = TonemapHdrToSdr(color);
     }

@@ -9,16 +9,16 @@
 //! and right after resuming — i.e. the wall-clock fallback doesn't jump
 //! forward by however long the video was paused.
 //!
+//! Between audio packets, or when playing files without audio (or after audio
+//! EOF), the master clock extrapolates forward smoothly using wall-clock
+//! elapsed time since the last timestamp update. This prevents the video
+//! decode/presentation loop from freezing on static timestamps.
+//!
 //! This module was moved out of `rust/core/src/sync.rs` verbatim (same
 //! public API), because `core` cannot be compiled on a normal host (see the
 //! crate-level docs in `lib.rs`) and this logic has zero Android
 //! dependencies of its own — it only ever used `std::sync`/`std::time`.
 //! `core::sync` now just re-exports `SyncManager` from here.
-//!
-//! The only behavioral addition versus the original is the `Clock`
-//! injection point, added so `get_master_clock`'s wall-clock fallback path
-//! (and pause/resume math) can be tested deterministically without
-//! sleeping in real time.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -105,32 +105,43 @@ impl SyncManager {
     }
 
     pub fn start(&mut self) {
+        let now = self.clock.now();
         if let Ok(mut st) = self.start_time.lock() {
-            *st = Some(self.clock.now());
-        }
-        if let Ok(mut locked_pts) = self.audio_pts.lock() {
-            *locked_pts = 0.0;
+            *st = Some(now);
         }
     }
 
     pub fn reset(&self) {
-        if let Ok(mut st) = self.start_time.lock() {
-            *st = Some(self.clock.now());
-        }
-        if let Ok(mut locked_pts) = self.audio_pts.lock() {
-            *locked_pts = 0.0;
-        }
+        self.reset_to(0.0);
     }
 
-    pub fn update_audio_pts(&self, pts: f64) {
+    pub fn reset_to(&self, pts: f64) {
+        let now = self.clock.now();
+        if let Ok(mut st) = self.start_time.lock() {
+            *st = Some(now);
+        }
         if let Ok(mut locked_pts) = self.audio_pts.lock() {
             *locked_pts = pts;
         }
     }
 
+    pub fn update_audio_pts(&self, pts: f64) {
+        let now = self.clock.now();
+        if let Ok(mut locked_pts) = self.audio_pts.lock() {
+            *locked_pts = pts;
+        }
+        if let Ok(mut st) = self.start_time.lock() {
+            *st = Some(now);
+        }
+    }
+
     pub fn update_master_clock(&self, time_sec: f64) {
+        let now = self.clock.now();
         if let Ok(mut locked_pts) = self.audio_pts.lock() {
             *locked_pts = time_sec;
+        }
+        if let Ok(mut st) = self.start_time.lock() {
+            *st = Some(now);
         }
     }
 
@@ -156,24 +167,48 @@ impl SyncManager {
     }
 
     pub fn get_master_clock(&self) -> f64 {
-        if let Ok(pts) = self.audio_pts.lock() {
-            let pts_val = *pts;
-            if pts_val == 0.0 {
-                if let Ok(st_lock) = self.start_time.lock() {
-                    if let Some(st) = *st_lock {
-                        let speed = f32::from_bits(self.speed_bits.load(Ordering::Relaxed)) as f64;
-                        let now = if let Ok(pt_lock) = self.pause_start.lock() {
-                            if let Some(pt) = *pt_lock { pt } else { self.clock.now() }
-                        } else { self.clock.now() };
-                        return now.saturating_duration_since(st).as_secs_f64() * speed;
-                    }
-                }
+        let pts_val = match self.audio_pts.lock() {
+            Ok(p) => *p,
+            Err(_) => 0.0,
+        };
+
+        let now = if let Ok(pt_lock) = self.pause_start.lock() {
+            if let Some(pt) = *pt_lock {
+                pt
+            } else {
+                self.clock.now()
             }
-            pts_val
         } else {
-            0.0
+            self.clock.now()
+        };
+
+        let speed = f32::from_bits(self.speed_bits.load(Ordering::Relaxed)) as f64;
+
+        if let Ok(st_lock) = self.start_time.lock() {
+            if let Some(st) = *st_lock {
+                let elapsed = now.saturating_duration_since(st).as_secs_f64() * speed;
+                return pts_val + elapsed;
+            }
         }
+        pts_val
     }
+}
+
+/// Calcula o PTS acústico real do áudio sendo reproduzido no falante agora,
+/// deduzindo o atraso correspondente às amostras enfileiradas no buffer de saída.
+pub fn acoustic_audio_pts(
+    packet_pts_sec: f64,
+    queued_samples: usize,
+    sample_rate: u32,
+    channels: u32,
+    playback_speed: f64,
+) -> f64 {
+    if sample_rate == 0 || channels == 0 {
+        return packet_pts_sec;
+    }
+    let total_samples_per_sec = (sample_rate as f64) * (channels as f64);
+    let queue_delay_sec = (queued_samples as f64 / total_samples_per_sec) * playback_speed;
+    (packet_pts_sec - queue_delay_sec).max(0.0)
 }
 
 #[cfg(test)]
@@ -221,6 +256,35 @@ mod tests {
         sync.update_audio_pts(3.25);
 
         assert_eq!(sync.get_master_clock(), 3.25);
+    }
+
+    #[test]
+    fn audio_pts_advances_continuously_with_wall_clock() {
+        let clock = Arc::new(FakeClock::new());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 0.0, clock.clone());
+        sync.start();
+
+        sync.update_audio_pts(10.0);
+        assert!((sync.get_master_clock() - 10.0).abs() < 1e-9);
+
+        // Quando o relogio de parede avanca sem novos pacotes de audio, o master_clock
+        // continua avancando continuamente, evitando travamentos em gaps ou fim de trilha.
+        clock.advance(Duration::from_millis(50));
+        assert!((sync.get_master_clock() - 10.05).abs() < 1e-6);
+    }
+
+    #[test]
+    fn update_master_clock_advances_continuously_for_video_without_audio() {
+        let clock = Arc::new(FakeClock::new());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 0.0, clock.clone());
+        sync.start();
+
+        // Seek ou pouso em video mudo (sem trilha de audio):
+        sync.update_master_clock(25.0);
+        assert!((sync.get_master_clock() - 25.0).abs() < 1e-9);
+
+        clock.advance(Duration::from_millis(100));
+        assert!((sync.get_master_clock() - 25.10).abs() < 1e-6);
     }
 
     #[test]
@@ -287,5 +351,56 @@ mod tests {
 
         // 1 + 1 + 1 = 3 counted seconds across two pause/resume cycles.
         assert!((sync.get_master_clock() - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn start_preserves_nonzero_initial_pts() {
+        let clock = Arc::new(FakeClock::new());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 120.0, clock.clone());
+        sync.start();
+
+        // initial_pts de 120.0s (ex: seek ou retomada) não deve ser apagado para 0.0s pelo start()
+        assert!((sync.get_master_clock() - 120.0).abs() < 1e-9);
+
+        clock.advance(Duration::from_millis(500));
+        assert!((sync.get_master_clock() - 120.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn reset_to_sets_target_pts_and_restarts_wall_clock() {
+        let clock = Arc::new(FakeClock::new());
+        let mut sync = SyncManager::with_clock(speed_bits(1.0), 0.0, clock.clone());
+        sync.start();
+        clock.advance(Duration::from_secs(10));
+
+        sync.reset_to(45.0);
+        assert!((sync.get_master_clock() - 45.0).abs() < 1e-9);
+
+        clock.advance(Duration::from_millis(250));
+        assert!((sync.get_master_clock() - 45.25).abs() < 1e-6);
+    }
+
+    #[test]
+    fn acoustic_audio_pts_deducts_queue_delay_correctly() {
+        // Buffer cheio (48000 amostras = 0.5s estéreo 48kHz) em velocidade normal (1.0x):
+        // PTS decodificado 10.0s -> PTS nos falantes deve ser 9.5s
+        let pts = acoustic_audio_pts(10.0, 48000, 48000, 2, 1.0);
+        assert!((pts - 9.5).abs() < 1e-6);
+
+        // Buffer vazio (0 amostras):
+        let pts_empty = acoustic_audio_pts(10.0, 0, 48000, 2, 1.0);
+        assert!((pts_empty - 10.0).abs() < 1e-6);
+
+        // Buffer cheio a 2.0x de velocidade (0.5s de reprodução representa 1.0s de mídia):
+        let pts_fast = acoustic_audio_pts(10.0, 48000, 48000, 2, 2.0);
+        assert!((pts_fast - 9.0).abs() < 1e-6);
+
+        // Buffer cheio a 0.5x de velocidade (0.5s de reprodução representa 0.25s de mídia):
+        let pts_slow = acoustic_audio_pts(10.0, 48000, 48000, 2, 0.5);
+        assert!((pts_slow - 9.75).abs() < 1e-6);
+
+        // PTS menor que atraso da fila não deve ficar negativo (clamped a 0.0):
+        let pts_clamp = acoustic_audio_pts(0.2, 48000, 48000, 2, 1.0);
+        assert_eq!(pts_clamp, 0.0);
     }
 }
