@@ -28,7 +28,7 @@ data class ScreenFormatEntry(
 )
 
 /**
- * Catálogo centralizado dos 15 modos de tela do tucaVR.
+ * Catálogo centralizado dos 17 modos de tela do tucaVR.
  * Garante sincronia única entre UI, JNI e renderizadores C++/Rust.
  */
 object ScreenFormatCatalog {
@@ -47,7 +47,9 @@ object ScreenFormatCatalog {
         ScreenFormatEntry(11, R.string.player_mode_cubemap_6x1, R.drawable.icon_cubemap_6x1, ScreenFormatGroup.CUBEMAP),
         ScreenFormatEntry(12, R.string.player_mode_eac_3x2, R.drawable.icon_eac_3x2, ScreenFormatGroup.CUBEMAP),
         ScreenFormatEntry(13, R.string.player_mode_cubemap_3x2_sbs, R.drawable.icon_cubemap_sbs, ScreenFormatGroup.CUBEMAP),
-        ScreenFormatEntry(14, R.string.player_mode_eac_3x2_sbs, R.drawable.icon_eac_sbs, ScreenFormatGroup.CUBEMAP)
+        ScreenFormatEntry(14, R.string.player_mode_eac_3x2_sbs, R.drawable.icon_eac_sbs, ScreenFormatGroup.CUBEMAP),
+        ScreenFormatEntry(15, R.string.player_mode_fisheye_190_mono, R.drawable.icon_fisheye_190, ScreenFormatGroup.SPHERICAL_180),
+        ScreenFormatEntry(16, R.string.player_mode_fisheye_190_sbs, R.drawable.icon_fisheye_190_sbs, ScreenFormatGroup.SPHERICAL_180)
     )
 
     /**

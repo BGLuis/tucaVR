@@ -388,12 +388,14 @@ StereoParams GetStereoParams(ScreenMode mode, int eye) {
     StereoParams p;
     p.eyeIndex   = eye;
     p.swapEyes   = (int)(get_swap_eyes() != 0);
-    p.polar180   = (mode == ScreenMode::Sphere180 || mode == ScreenMode::Vr180SBS) ? 1 : 0;
+    p.polar180   = (mode == ScreenMode::Sphere180 || mode == ScreenMode::Vr180SBS) ? 1 :
+                   (mode == ScreenMode::Fisheye190 || mode == ScreenMode::Fisheye190SBS) ? 2 : 0;
     switch (mode) {
         case ScreenMode::SBS:
         case ScreenMode::SBSHalf:
         case ScreenMode::Sphere360SBS:
         case ScreenMode::Vr180SBS:
+        case ScreenMode::Fisheye190SBS:
             p.stereoLayout = 1; // SBS
             break;
         case ScreenMode::OU:

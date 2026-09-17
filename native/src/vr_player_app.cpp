@@ -1345,6 +1345,10 @@ public:
             case ScreenMode::Vr180SBS:
                 m_uPolar180 = 1.0f;
                 break;
+            case ScreenMode::Fisheye190:
+            case ScreenMode::Fisheye190SBS:
+                m_uPolar180 = 2.0f;
+                break;
             default:
                 m_uPolar180 = 0.0f;
                 break;
@@ -1355,6 +1359,7 @@ public:
             case ScreenMode::Vr180SBS:
             case ScreenMode::Cubemap3x2SBS:
             case ScreenMode::EAC3x2SBS:
+            case ScreenMode::Fisheye190SBS:
                 m_sphereStereoLayout = 1.0f; // SBS
                 break;
             case ScreenMode::Sphere360OU:
@@ -1707,7 +1712,23 @@ public:
             uniform float uSharpness; // 0..1, ver SHARPEN_ENABLED/kSharpenEnabled
             void main() {
                 vec2 uv = vTexCoord;
-                if (uPolar180 > 0.5) {
+                if (uPolar180 > 1.5) {
+                    const float PI = 3.141592653589793;
+                    float theta = 2.0 * PI * (vTexCoord.x - 0.5);
+                    float phi   = PI * vTexCoord.y;
+                    float sinPhi = sin(phi);
+                    vec3 dir = vec3(sinPhi * sin(theta), cos(phi), -sinPhi * cos(theta));
+                    float cosPsi = clamp(-dir.z, -1.0, 1.0);
+                    float psi = acos(cosPsi);
+                    const float kMaxHalfFov = 190.0 * PI / 360.0;
+                    if (psi > kMaxHalfFov) {
+                        discard;
+                    }
+                    float rho = length(dir.xy);
+                    vec2 planeDir = (rho > 1e-6) ? (dir.xy / rho) : vec2(0.0, 0.0);
+                    float rNorm = psi / kMaxHalfFov;
+                    uv = vec2(0.5 + 0.5 * rNorm * planeDir.x, 0.5 - 0.5 * rNorm * planeDir.y);
+                } else if (uPolar180 > 0.5) {
                     if (uv.x < 0.25 || uv.x > 0.75) {
                         discard;
                     }

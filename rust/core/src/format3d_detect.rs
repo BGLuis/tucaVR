@@ -84,7 +84,9 @@ pub fn detect(
                     .or_else(|| meta.get("spherical-video"));
                 if let Some(proj_str) = tag_candidate {
                     let p_lower = proj_str.to_lowercase();
-                    if p_lower.contains("eac") || p_lower.contains("equiangular") {
+                    if p_lower.contains("fisheye") || p_lower.contains("rf52") || p_lower.contains("190") {
+                        projection = Some(VideoProjection::Fisheye190);
+                    } else if p_lower.contains("eac") || p_lower.contains("equiangular") {
                         projection = Some(VideoProjection::EquiangularCubemap);
                     } else if p_lower.contains("cubemap") || p_lower.contains("cube") {
                         projection = Some(VideoProjection::Cubemap);

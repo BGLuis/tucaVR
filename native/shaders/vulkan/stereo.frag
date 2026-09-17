@@ -99,18 +99,43 @@ void main() {
     // Inversao de olho se requisitada (swapEyes)
     int eye = (vSwapEyes != 0) ? (1 - vEye) : vEye;
 
-    // Mapeamento hemisferio frontal 180 graus (T6.4):
+    // Mapeamento hemisferio frontal 180 graus (T6.4) ou Fisheye 190 graus:
     // A malha da esfera mapeia U de 0 a 1 em torno de 360 graus.
-    // Para video 180 (polar180 != 0), o conteudo util esta no
+    // Para video 180 (polar180 == 1), o conteudo util esta no
     // hemisferio frontal [-90, +90], que corresponde a U em [0.25, 0.75].
     // Reescalamos U para que [0.25, 0.75] cubra toda a faixa [0, 1] do frame.
     // Pixels fora do hemisferio frontal ficam pretos (descartados).
-    if (vPolar180 != 0) {
+    if (vPolar180 == 1) {
         if (uv.x < 0.25 || uv.x > 0.75) {
             outColor = vec4(0.0, 0.0, 0.0, 1.0);
             return;
         }
         uv.x = (uv.x - 0.25) * 2.0;
+    } else if (vPolar180 == 2) {
+        // Projeção Fisheye 190° (equidistante f-theta com FOV total de 190° / semi-FOV 95°)
+        const float PI = 3.141592653589793;
+        float theta = 2.0 * PI * (vTexCoord.x - 0.5);
+        float phi   = PI * vTexCoord.y;
+        float sinPhi = sin(phi);
+        vec3 dir = vec3(sinPhi * sin(theta), cos(phi), -sinPhi * cos(theta));
+
+        // Ângulo óptico a partir do eixo frontal (-Z)
+        float cosPsi = clamp(-dir.z, -1.0, 1.0);
+        float psi = acos(cosPsi);
+        const float kMaxHalfFov = 190.0 * PI / 360.0; // 95 graus em radianos (~1.65806 rad)
+
+        if (psi > kMaxHalfFov) {
+            outColor = vec4(0.0, 0.0, 0.0, 1.0);
+            return;
+        }
+
+        // Projeção azimutal equidistante: r = psi / kMaxHalfFov
+        float rho = length(dir.xy);
+        vec2 planeDir = (rho > 1e-6) ? (dir.xy / rho) : vec2(0.0, 0.0);
+        float rNorm = psi / kMaxHalfFov; // 0.0 no centro óptico até 1.0 na borda do círculo de 190°
+
+        // Coordenadas UV locais no círculo fisheye do olho [0, 1] x [0, 1]
+        uv = vec2(0.5 + 0.5 * rNorm * planeDir.x, 0.5 - 0.5 * rNorm * planeDir.y);
     }
 
     // Recorte estereo por olho

@@ -370,6 +370,8 @@
     <string name="player_mode_eac_3x2">EAC 3×2</string>
     <string name="player_mode_cubemap_3x2_sbs">Cubemap 3×2 SBS</string>
     <string name="player_mode_eac_3x2_sbs">EAC 3×2 SBS</string>
+    <string name="player_mode_fisheye_190_mono">Fisheye 190°</string>
+    <string name="player_mode_fisheye_190_sbs">Fisheye 190° 3D (SBS)</string>
     <string name="player_btn_swap_eyes">Trocar olhos</string>
     <string name="player_btn_recenter">Recentralizar</string>
 

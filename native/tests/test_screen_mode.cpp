@@ -19,6 +19,8 @@ static void TestScreenModeIndices() {
     assert(static_cast<uint32_t>(ScreenMode::EAC3x2) == 12);
     assert(static_cast<uint32_t>(ScreenMode::Cubemap3x2SBS) == 13);
     assert(static_cast<uint32_t>(ScreenMode::EAC3x2SBS) == 14);
+    assert(static_cast<uint32_t>(ScreenMode::Fisheye190) == 15);
+    assert(static_cast<uint32_t>(ScreenMode::Fisheye190SBS) == 16);
     std::cout << "[PASS] TestScreenModeIndices\n";
 }
 
@@ -38,11 +40,13 @@ static void TestScreenModeNames() {
     assert(std::strcmp(ScreenModeName(ScreenMode::EAC3x2), "EAC3x2") == 0);
     assert(std::strcmp(ScreenModeName(ScreenMode::Cubemap3x2SBS), "Cubemap3x2SBS") == 0);
     assert(std::strcmp(ScreenModeName(ScreenMode::EAC3x2SBS), "EAC3x2SBS") == 0);
+    assert(std::strcmp(ScreenModeName(ScreenMode::Fisheye190), "Fisheye190") == 0);
+    assert(std::strcmp(ScreenModeName(ScreenMode::Fisheye190SBS), "Fisheye190SBS") == 0);
     std::cout << "[PASS] TestScreenModeNames\n";
 }
 
 static void TestScreenModePredicates() {
-    for (uint32_t i = 0; i <= 14; i++) {
+    for (uint32_t i = 0; i <= 16; i++) {
         ScreenMode m = static_cast<ScreenMode>(i);
         if (i < 5) {
             assert(!IsSphereMode(m));
@@ -60,6 +64,12 @@ static void TestScreenModePredicates() {
             assert(IsCubemapMode(m));
         } else {
             assert(!IsCubemapMode(m));
+        }
+
+        if (i == 15 || i == 16) {
+            assert(IsFisheyeMode(m));
+        } else {
+            assert(!IsFisheyeMode(m));
         }
     }
     std::cout << "[PASS] TestScreenModePredicates\n";

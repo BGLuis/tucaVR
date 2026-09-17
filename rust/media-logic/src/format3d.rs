@@ -66,6 +66,8 @@ pub enum VideoProjection {
     EquiangularCubemap,
     /// Half-equirectangular — 180° VR (front hemisphere only).
     HalfEquirectangular,
+    /// Fisheye 190° — lentes circulares olho de peixe com FOV de 190°.
+    Fisheye190,
 }
 
 /// The format this crate/app actually drives UI and rendering off of. This
@@ -118,6 +120,10 @@ pub enum Format3D {
     Cubemap3x2Sbs,
     /// Equi-Angular Cubemap (EAC) 3x2, stereo SBS.
     Eac3x2Sbs,
+    /// Fisheye 190° monoscópico (projeção circular f-theta).
+    Fisheye190Mono,
+    /// Fisheye 190° stereo SBS (lentes circulares lado a lado, Canon RF 5.2mm / VR190).
+    Fisheye190Sbs,
 }
 
 impl Format3D {
@@ -142,6 +148,8 @@ impl Format3D {
             Format3D::Vr180Sbs => true,
             Format3D::Cubemap3x2Mono | Format3D::Cubemap6x1Mono | Format3D::Eac3x2Mono => false,
             Format3D::Cubemap3x2Sbs | Format3D::Eac3x2Sbs => true,
+            Format3D::Fisheye190Mono => false,
+            Format3D::Fisheye190Sbs => true,
         }
     }
 
@@ -169,11 +177,13 @@ impl Format3D {
             | Format3D::Cubemap6x1Mono
             | Format3D::Eac3x2Mono
             | Format3D::Cubemap3x2Sbs
-            | Format3D::Eac3x2Sbs => true,
+            | Format3D::Eac3x2Sbs
+            | Format3D::Fisheye190Mono
+            | Format3D::Fisheye190Sbs => true,
         }
     }
 
-    /// Índice numérico do `enum class ScreenMode` nativo (0-14) — precisa
+    /// Índice numérico do `enum class ScreenMode` nativo (0-16) — precisa
     /// ficar em sincronia com `native/include/screen_mode.h`,
     /// `rust/bridge/src/lib.rs` e `ScreenFormatCatalog.kt`
     /// (ver CLAUDE.md / GEMINI.md). Match exaustivo — adicionar uma
@@ -198,6 +208,8 @@ impl Format3D {
             Format3D::Eac3x2Mono => 12,
             Format3D::Cubemap3x2Sbs => 13,
             Format3D::Eac3x2Sbs => 14,
+            Format3D::Fisheye190Mono => 15,
+            Format3D::Fisheye190Sbs => 16,
         }
     }
 
@@ -209,7 +221,8 @@ impl Format3D {
             | Format3D::Vr180Mono
             | Format3D::Cubemap3x2Mono
             | Format3D::Cubemap6x1Mono
-            | Format3D::Eac3x2Mono => {
+            | Format3D::Eac3x2Mono
+            | Format3D::Fisheye190Mono => {
                 ThumbnailCropRegion::None
             }
             Format3D::SbsFull
@@ -218,7 +231,8 @@ impl Format3D {
             | Format3D::Spherical360SbsHalf
             | Format3D::Vr180Sbs
             | Format3D::Cubemap3x2Sbs
-            | Format3D::Eac3x2Sbs => ThumbnailCropRegion::LeftHalf,
+            | Format3D::Eac3x2Sbs
+            | Format3D::Fisheye190Sbs => ThumbnailCropRegion::LeftHalf,
             Format3D::OverUnderFull
             | Format3D::OverUnderHalf
             | Format3D::Spherical360OverUnderFull
@@ -327,6 +341,11 @@ pub fn resolve_container_hint(
         } else {
             Format3D::Eac3x2Mono
         }),
+        Some(VideoProjection::Fisheye190) => Some(if is_stereo {
+            Format3D::Fisheye190Sbs
+        } else {
+            Format3D::Fisheye190Mono
+        }),
         Some(_) => None,
         None if is_stereo && is_sbs => {
             Some(if is_full_packing(true, aspect) { Format3D::SbsFull } else { Format3D::SbsHalf })
@@ -373,6 +392,10 @@ enum FilenameStereoLayout {
 /// Internal: projection/extent extracted from a filename.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FilenameProjection {
+    /// Fisheye 190° com identificador específico para SBS (ex: `_rf52`, `_vr190`).
+    Fisheye190Specific,
+    /// Fisheye 190° genérico (ex: `_fisheye190`, `190_fisheye`, `eyefish190`).
+    Fisheye190Generic,
     /// `_vr180`, `_180x180`, `_vr_` — explicitly VR180-branded markers.
     Vr180Specific,
     /// Bare `_180` with no VR180-specific marker alongside it.
@@ -417,8 +440,31 @@ pub fn detect_from_filename(name: &str) -> Option<Format3D> {
         None
     };
 
-    let projection = if lower.contains("_vr180") || lower.contains("_180x180") || lower.contains("_vr_")
+    let is_explicit_mono = lower.contains("_mono")
+        || lower.contains("-mono")
+        || lower.contains(".mono")
+        || lower.contains("2d_")
+        || lower.contains("_2d");
+
+    let projection = if lower.contains("_vr190")
+        || lower.contains("-vr190")
+        || lower.contains(".vr190")
+        || lower.contains("_rf52")
+        || lower.contains("-rf52")
+        || lower.contains(".rf52")
     {
+        Some(FilenameProjection::Fisheye190Specific)
+    } else if lower.contains("fisheye190")
+        || lower.contains("fisheye_190")
+        || lower.contains("fisheye-190")
+        || lower.contains("190_fisheye")
+        || lower.contains("190-fisheye")
+        || lower.contains("190fisheye")
+        || lower.contains("eyefish190")
+        || lower.contains("eyefish_190")
+    {
+        Some(FilenameProjection::Fisheye190Generic)
+    } else if lower.contains("_vr180") || lower.contains("_180x180") || lower.contains("_vr_") {
         Some(FilenameProjection::Vr180Specific)
     } else if lower.contains("_360x180") || lower.contains("_360") {
         Some(FilenameProjection::Spherical360)
@@ -440,6 +486,16 @@ pub fn detect_from_filename(name: &str) -> Option<Format3D> {
             FilenameStereoLayout::SbsHalf => Format3D::SbsHalf,
             FilenameStereoLayout::OuFull => Format3D::OverUnderFull,
             FilenameStereoLayout::OuHalf => Format3D::OverUnderHalf,
+        }),
+        Some(FilenameProjection::Fisheye190Specific) => Some(if is_explicit_mono {
+            Format3D::Fisheye190Mono
+        } else {
+            Format3D::Fisheye190Sbs
+        }),
+        Some(FilenameProjection::Fisheye190Generic) => Some(match stereo_layout {
+            Some(_) => Format3D::Fisheye190Sbs,
+            None if is_explicit_mono => Format3D::Fisheye190Mono,
+            None => Format3D::Fisheye190Sbs,
         }),
         Some(FilenameProjection::Spherical360) => Some(match stereo_layout {
             None => Format3D::Spherical360Mono,
@@ -805,6 +861,43 @@ mod tests {
         assert_eq!(
             detect_from_filename("scene_vr180_take2.mp4"),
             Some(Format3D::Vr180Sbs)
+        );
+    }
+
+    #[test]
+    fn filename_fisheye190_patterns() {
+        assert_eq!(
+            detect_from_filename("concert_fisheye190.mp4"),
+            Some(Format3D::Fisheye190Sbs)
+        );
+        assert_eq!(
+            detect_from_filename("nature_fisheye_190.mkv"),
+            Some(Format3D::Fisheye190Sbs)
+        );
+        assert_eq!(
+            detect_from_filename("canon_shot_rf52.mp4"),
+            Some(Format3D::Fisheye190Sbs)
+        );
+        assert_eq!(
+            detect_from_filename("tour_vr190.mp4"),
+            Some(Format3D::Fisheye190Sbs)
+        );
+        assert_eq!(
+            detect_from_filename("clip_190_fisheye.mp4"),
+            Some(Format3D::Fisheye190Sbs)
+        );
+        assert_eq!(
+            detect_from_filename("user_clip_eyefish190.mp4"),
+            Some(Format3D::Fisheye190Sbs)
+        );
+        // Explicit mono
+        assert_eq!(
+            detect_from_filename("clip_fisheye190_mono.mp4"),
+            Some(Format3D::Fisheye190Mono)
+        );
+        assert_eq!(
+            detect_from_filename("camera_2d_190_fisheye.mp4"),
+            Some(Format3D::Fisheye190Mono)
         );
     }
 
@@ -1202,8 +1295,10 @@ mod tests {
         assert_eq!(Format3D::Eac3x2Mono.to_screen_mode_index(), 12);
         assert_eq!(Format3D::Cubemap3x2Sbs.to_screen_mode_index(), 13);
         assert_eq!(Format3D::Eac3x2Sbs.to_screen_mode_index(), 14);
+        assert_eq!(Format3D::Fisheye190Mono.to_screen_mode_index(), 15);
+        assert_eq!(Format3D::Fisheye190Sbs.to_screen_mode_index(), 16);
 
-        // Todas as variantes válidas (0..=14)
+        // Todas as variantes válidas (0..=16)
         let all_variants = [
             Format3D::Flat2D,
             Format3D::SbsFull,
@@ -1222,9 +1317,11 @@ mod tests {
             Format3D::Eac3x2Mono,
             Format3D::Cubemap3x2Sbs,
             Format3D::Eac3x2Sbs,
+            Format3D::Fisheye190Mono,
+            Format3D::Fisheye190Sbs,
         ];
         for v in all_variants {
-            assert!(v.to_screen_mode_index() <= 14);
+            assert!(v.to_screen_mode_index() <= 16);
         }
     }
 }

@@ -187,7 +187,7 @@ pub extern "C" fn get_audio_thread_tid() -> i32 {
 //   0=2D, 1=SBS, 2=SBS half, 3=OU, 4=OU half,
 //   5=360 mono, 6=180 mono, 7=360 SBS, 8=360 OU, 9=180 SBS,
 //   10=Cubemap 3x2 mono, 11=Cubemap 6x1 mono, 12=EAC 3x2 mono,
-//   13=Cubemap 3x2 SBS, 14=EAC 3x2 SBS
+//   13=Cubemap 3x2 SBS, 14=EAC 3x2 SBS, 15=Fisheye 190 mono, 16=Fisheye 190 SBS
 // T2.4/T2.5 (estereo 360/180): a pesquisa sobre como este pipeline OVRFW
 // sinaliza "qual olho" pro shader (ver vr_player_app.cpp) achou a resposta —
 // o framework ja seta um uniform `ViewID`/`VIEW_ID` (0/1) em toda chamada de
@@ -199,7 +199,7 @@ pub extern "C" fn get_audio_thread_tid() -> i32 {
 // trivial de acrescentar depois, o shader ja suporta via uStereoLayout=2 +
 // uPolar180=1 juntos).
 static SCREEN_MODE: AtomicU32 = AtomicU32::new(0);
-const SCREEN_MODE_COUNT: u32 = 15;
+const SCREEN_MODE_COUNT: u32 = 17;
 static SWAP_EYES: AtomicBool = AtomicBool::new(false);
 
 // Bug reportado em validacao real de headset: o painel "Adicionar servidor"

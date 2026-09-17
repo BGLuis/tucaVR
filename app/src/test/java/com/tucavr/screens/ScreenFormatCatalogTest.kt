@@ -9,7 +9,7 @@ class ScreenFormatCatalogTest {
 
     @Test
     fun testEntriesCoverAllIndicesSequentially() {
-        assertEquals("Deve conter exatamente 15 modos", 15, ScreenFormatCatalog.entries.size)
+        assertEquals("Deve conter exatamente 17 modos", 17, ScreenFormatCatalog.entries.size)
         ScreenFormatCatalog.entries.forEachIndexed { expectedIndex, entry ->
             assertEquals("O índice na posição $expectedIndex deve ser $expectedIndex", expectedIndex, entry.index)
         }
@@ -24,14 +24,14 @@ class ScreenFormatCatalogTest {
 
         assertEquals("Grupo Plano deve ter 5 modos (2D, SBS, SBS-half, OU, OU-half)", 5, flat.size)
         assertEquals("Grupo 360 deve ter 3 modos (360 mono, 360 SBS, 360 OU)", 3, s360.size)
-        assertEquals("Grupo 180 deve ter 2 modos (180 mono, 180 SBS)", 2, s180.size)
+        assertEquals("Grupo 180 deve ter 4 modos (180 mono, 180 SBS, Fisheye 190 mono, Fisheye 190 SBS)", 4, s180.size)
         assertEquals("Grupo Cubemap deve ter 5 modos (3x2 mono, 6x1 mono, EAC mono, 3x2 SBS, EAC SBS)", 5, cubemap.size)
 
         val totalGrouped = flat.size + s360.size + s180.size + cubemap.size
-        assertEquals("A soma de todos os grupos deve ser igual a 15", 15, totalGrouped)
+        assertEquals("A soma de todos os grupos deve ser igual a 17", 17, totalGrouped)
 
         val allIndices = (flat + s360 + s180 + cubemap).map { it.index }.toSet()
-        assertEquals("A união de todos os grupos deve conter todos os índices de 0 a 14", (0..14).toSet(), allIndices)
+        assertEquals("A união de todos os grupos deve conter todos os índices de 0 a 16", (0..16).toSet(), allIndices)
     }
 
     @Test
@@ -47,6 +47,8 @@ class ScreenFormatCatalogTest {
         assertEquals(0, ScreenFormatCatalog.get(0).index)
         assertEquals(9, ScreenFormatCatalog.get(9).index)
         assertEquals(14, ScreenFormatCatalog.get(14).index)
+        assertEquals(15, ScreenFormatCatalog.get(15).index)
+        assertEquals(16, ScreenFormatCatalog.get(16).index)
         // Fallback seguro para índices fora dos limites
         assertEquals(0, ScreenFormatCatalog.get(-1).index)
         assertEquals(0, ScreenFormatCatalog.get(100).index)
@@ -57,7 +59,7 @@ class ScreenFormatCatalogTest {
         (0..4).forEach { mode ->
             assertTrue("Modo $mode deve ser plano", !ScreenFormatCatalog.isSpherical(mode))
         }
-        (5..14).forEach { mode ->
+        (5..16).forEach { mode ->
             assertTrue("Modo $mode deve ser esférico/panorâmico", ScreenFormatCatalog.isSpherical(mode))
         }
     }
@@ -81,9 +83,11 @@ class ScreenFormatCatalogTest {
             11 to "Cubemap6x1",
             12 to "EAC3x2",
             13 to "Cubemap3x2SBS",
-            14 to "EAC3x2SBS"
+            14 to "EAC3x2SBS",
+            15 to "Fisheye190",
+            16 to "Fisheye190SBS"
         )
-        assertEquals(15, ScreenFormatCatalog.entries.size)
+        assertEquals(17, ScreenFormatCatalog.entries.size)
         expectedContract.forEach { (expectedIndex, modeKey) ->
             val entry = ScreenFormatCatalog.get(expectedIndex)
             assertEquals("O índice do modo $modeKey deve ser exatamente $expectedIndex", expectedIndex, entry.index)
