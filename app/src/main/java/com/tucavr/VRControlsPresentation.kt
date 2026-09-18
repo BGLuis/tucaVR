@@ -61,6 +61,9 @@ class VRControlsPresentation(
         if (::timeLabel.isInitialized) timeLabel.text = "00:00"
         if (::totalTimeLabel.isInitialized) totalTimeLabel.text = "00:00"
         if (::titleLabel.isInitialized) titleLabel.text = ""
+        if (::scrubTooltip.isInitialized) {
+            scrubTooltip.visibility = View.GONE
+        }
         if (::seekBar.isInitialized) {
             seekBar.progress = 0
             seekBar.secondaryProgress = 0
@@ -77,6 +80,7 @@ class VRControlsPresentation(
 
 
     private lateinit var seekBar: SeekBar
+    private lateinit var scrubTooltip: TextView
     private lateinit var batteryIcon: ImageView
     private lateinit var batteryLabel: TextView
     private lateinit var thermalIcon: ImageView
@@ -119,9 +123,25 @@ class VRControlsPresentation(
 
     // Resolucao pedida pro decode escalado de scrub local (ver updateScrubPreview) —
     // rapido o bastante pra acompanhar arrastos continuos, ainda reconhecivel.
-    private companion object {
+    companion object {
         const val LOCAL_SCRUB_WIDTH = 320
         const val LOCAL_SCRUB_HEIGHT = 180
+        const val SEEK_BAR_MAX = 10000
+
+        internal fun formatPlaybackTime(seconds: Float, totalDuration: Float = 0f): String {
+            val total = seconds.toInt().coerceAtLeast(0)
+            val hrs = total / 3600
+            val mins = (total % 3600) / 60
+            val secs = total % 60
+            // Formato numerico puro (HH:MM:SS ou MM:SS) -- nao depende de idioma,
+            // mantido via String.format direto. Se a duracao for >= 1h ou houver horas,
+            // usa formato com 3 componentes.
+            return if (totalDuration >= 3600f || hrs > 0) {
+                String.format("%02d:%02d:%02d", hrs, mins, secs)
+            } else {
+                String.format("%02d:%02d", mins, secs)
+            }
+        }
     }
 
     private var lastKnownMode = 0
@@ -134,7 +154,7 @@ class VRControlsPresentation(
         totalDuration = totalSec
         lastKnownCurrentSec = currentSec
         if (!isDragging && totalSec > 0 && (System.currentTimeMillis() - lastSeekTime > 800)) {
-            seekBar.progress = ((currentSec / totalSec) * 100).toInt()
+            seekBar.progress = ((currentSec / totalSec) * SEEK_BAR_MAX).toInt()
             timeLabel.text = formatTime(currentSec)
         }
         if (::totalTimeLabel.isInitialized) {
@@ -156,7 +176,7 @@ class VRControlsPresentation(
     fun updateBufferedProgress(bufferedAheadSec: Float) {
         if (!::seekBar.isInitialized || totalDuration <= 0f) return
         val bufferedEndSec = (lastKnownCurrentSec + bufferedAheadSec).coerceAtMost(totalDuration)
-        seekBar.secondaryProgress = ((bufferedEndSec / totalDuration) * 100).toInt().coerceIn(0, 100)
+        seekBar.secondaryProgress = ((bufferedEndSec / totalDuration) * SEEK_BAR_MAX).toInt().coerceIn(0, SEEK_BAR_MAX)
     }
 
     /**
@@ -367,11 +387,29 @@ class VRControlsPresentation(
         localScrubRetriever = null
     }
 
-    private fun formatTime(seconds: Float): String {
-        val total = seconds.toInt().coerceAtLeast(0)
-        // Formato numerico puro (MM:SS) -- nao depende de idioma, mantido via
-        // String.format direto (nao e uma string de UI traduzivel).
-        return String.format("%02d:%02d", total / 60, total % 60)
+    private fun formatTime(seconds: Float): String = formatPlaybackTime(seconds, totalDuration)
+
+    /**
+     * Atualiza o texto e a posicao horizontal do tooltip flutuante sobre o thumb
+     * da [SeekBar], centralizando-o sobre o ponteiro e aplicando clamp nas bordas.
+     */
+    private fun updateTooltipPosition(progress: Int) {
+        if (totalDuration <= 0f || !::scrubTooltip.isInitialized || !::seekBar.isInitialized) return
+        val targetSec = (progress.toFloat() / SEEK_BAR_MAX) * totalDuration
+        scrubTooltip.text = formatTime(targetSec)
+
+        scrubTooltip.measure(
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
+        )
+        val tooltipWidth = if (scrubTooltip.width > 0) scrubTooltip.width else scrubTooltip.measuredWidth
+        val trackWidth = seekBar.width - seekBar.paddingLeft - seekBar.paddingRight
+        if (trackWidth > 0) {
+            val thumbX = seekBar.paddingLeft + (progress.toFloat() / SEEK_BAR_MAX) * trackWidth
+            val targetX = thumbX - (tooltipWidth / 2f)
+            val maxX = (seekBar.width - tooltipWidth).toFloat().coerceAtLeast(0f)
+            scrubTooltip.translationX = targetX.coerceIn(0f, maxX)
+        }
     }
 
     private fun speedFromProgress(progress: Int): Float = 0.5f + (progress / 100f) * 1.5f
@@ -676,6 +714,8 @@ class VRControlsPresentation(
         val bottomPanel = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER_HORIZONTAL
+            clipChildren = false
+            clipToPadding = false
             background = android.graphics.drawable.GradientDrawable().apply {
                 setColor(VoidTheme.colorBackground)
                 cornerRadius = VoidTheme.dp(context, 18f)
@@ -739,8 +779,7 @@ class VRControlsPresentation(
         val btnRewind = VoidIconButton(context, R.drawable.icon_skip_back, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
             layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
             setOnClickListener {
-                val currentProgress = (seekBar.progress / 100f) * totalDuration
-                val newTarget = kotlin.math.max(0f, currentProgress - 10f)
+                val newTarget = kotlin.math.max(0f, lastKnownCurrentSec - 10f)
                 activity.nativeSeekVideo(newTarget)
             }
         }
@@ -758,8 +797,7 @@ class VRControlsPresentation(
         val btnForward = VoidIconButton(context, R.drawable.icon_skip_forward, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
             layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
             setOnClickListener {
-                val currentProgress = (seekBar.progress / 100f) * totalDuration
-                val newTarget = kotlin.math.min(totalDuration, currentProgress + 10f)
+                val newTarget = kotlin.math.min(totalDuration, lastKnownCurrentSec + 10f)
                 activity.nativeSeekVideo(newTarget)
             }
         }
@@ -804,6 +842,8 @@ class VRControlsPresentation(
         val timelineRow = LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            clipChildren = false
+            clipToPadding = false
             layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 topMargin = VoidTheme.dpToPx(context, 32f)
             }
@@ -817,30 +857,77 @@ class VRControlsPresentation(
         }
         timelineRow.addView(timeLabel)
 
-        seekBar = SeekBar(context).apply {
+        val seekBarContainer = FrameLayout(context).apply {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f).apply {
                 setMargins(VoidTheme.dpToPx(context, 32f), 0, VoidTheme.dpToPx(context, 32f), 0)
             }
+            clipChildren = false
+            clipToPadding = false
+        }
+
+        scrubTooltip = TextView(context).apply {
+            typeface = VoidTheme.typefaceMono
+            textSize = 24f
+            setTextColor(VoidTheme.colorText)
+            gravity = Gravity.CENTER
+            val padH = VoidTheme.dpToPx(context, 12f)
+            val padV = VoidTheme.dpToPx(context, 6f)
+            setPadding(padH, padV, padH, padV)
+            background = android.graphics.drawable.GradientDrawable().apply {
+                setColor(VoidTheme.colorSurfaceAlt)
+                cornerRadius = VoidTheme.dp(context, 8f)
+                setStroke(VoidTheme.dpToPx(context, 1.5f), VoidTheme.colorAccent)
+            }
+            visibility = View.GONE
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.START
+            )
+            translationY = -VoidTheme.dpToPx(context, 44f).toFloat()
+        }
+        seekBarContainer.addView(scrubTooltip)
+
+        seekBar = SeekBar(context).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER_VERTICAL
+            )
             progressTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
             thumbTintList = android.content.res.ColorStateList.valueOf(VoidTheme.colorAccent)
-            max = 100; progress = 0
+            max = SEEK_BAR_MAX
+            progress = 0
             setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
                 override fun onProgressChanged(p0: SeekBar?, progress: Int, fromUser: Boolean) {
-                    if (fromUser && totalDuration > 0) updateScrubPreview((progress / 100f) * totalDuration)
+                    if (fromUser && totalDuration > 0) {
+                        val target = (progress.toFloat() / SEEK_BAR_MAX) * totalDuration
+                        timeLabel.text = formatTime(target)
+                        updateTooltipPosition(progress)
+                        updateScrubPreview(target)
+                    }
                 }
-                override fun onStartTrackingTouch(p0: SeekBar?) { isDragging = true; startScrubPreview() }
+                override fun onStartTrackingTouch(p0: SeekBar?) {
+                    isDragging = true
+                    scrubTooltip.visibility = View.VISIBLE
+                    updateTooltipPosition(progress)
+                    startScrubPreview()
+                }
                 override fun onStopTrackingTouch(p0: SeekBar?) {
-                    isDragging = false; stopScrubPreview()
+                    isDragging = false
+                    scrubTooltip.visibility = View.GONE
+                    stopScrubPreview()
                     lastSeekTime = System.currentTimeMillis()
                     if (totalDuration > 0) {
-                        val target = (progress / 100f) * totalDuration
+                        val target = (progress.toFloat() / SEEK_BAR_MAX) * totalDuration
                         timeLabel.text = formatTime(target)
                         activity.nativeSeekVideo(target)
                     }
                 }
             })
         }
-        timelineRow.addView(seekBar)
+        seekBarContainer.addView(seekBar)
+        timelineRow.addView(seekBarContainer)
 
         totalTimeLabel = TextView(context).apply {
             text = "00:00"
