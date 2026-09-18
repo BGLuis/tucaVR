@@ -356,6 +356,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
     bool controllerActive = leftTracked || rightTracked;
     bool currTrigger = false;
+    bool useLeft = false;
 
     if (controllerActive) {
         state.handTrackingActive = false;
@@ -363,7 +364,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         // esquerda se ela estiver rastreada e (a direita nao estiver rastreada
         // OU o trigger esquerdo estiver pressionado) — deixa o usuario apontar
         // com a mao que estiver usando ativamente.
-        bool useLeft = leftTracked && (!rightTracked || triggerL.currentState == XR_TRUE);
+        useLeft = leftTracked && (!rightTracked || triggerL.currentState == XR_TRUE);
         const XrSpaceLocation& spaceLocation = useLeft ? locL : locR;
         currTrigger = (useLeft ? triggerL.currentState : triggerR.currentState) == XR_TRUE;
 
@@ -656,6 +657,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.lastRayOrigin.z + state.lastRayDir.z * state.lastHitDist,
         };
     }
+    // O laser só é visível se estiver mirando em um painel interativo visível ou manipulando a tela via grab
+    state.beamVisible = state.hasRay && ((dispatchHitPanel != 0 && state.lastHitDist > 0.0f) || state.isScreenGrabbed);
 
     // Haptics (paridade com GLES: pulso leve no hover-enter, mais forte no
     // click) — sempre na mao direita, igual ao FireHaptic(RightHandPath,...)
@@ -719,21 +722,16 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         }
     } else {
         // A (direita) ou X (esquerda) = Play/Pause.
-        // Trigger no espaço vazio (fora de qualquer painel de UI e fora da tela virtual de vídeo)
-        // também funciona como atalho de Play/Pause.
-        // Se estiver apontando para a tela de vídeo 2D (isHoveringScreen):
-        // - Com Hand Tracking: o pinch é reservado exclusivamente para Grab & Drag (T5.5).
-        // - Com controle Touch Plus: clique na tela acorda os controles flutuantes (HUD)
-        //   sem pausar bruscamente a reprodução.
-        bool triggerInEmptySpace = currTrigger && !prevTrigger && (dispatchHitPanel == 0) && !state.isHoveringScreen;
+        // Trigger fora de qualquer painel de UI (dispatchHitPanel == 0) funciona como atalho de Play/Pause
+        // tanto em vídeos 2D planos quanto em vídeos esféricos (180° SBS / 360°).
+        // No Hand Tracking, o pinch na tela 2D é reservado exclusivamente para Grab & Drag.
+        bool triggerOutsideUi = currTrigger && !prevTrigger && (dispatchHitPanel == 0);
+        bool handTrackingGrabPinch = state.handTrackingActive && state.isHoveringScreen && !IsSphereMode(state.screenMode);
+        bool triggerPlayPause = triggerOutsideUi && !handTrackingGrabPinch;
         bool buttonPlayPause = (currA && !state.prevA) || (currX && !state.prevX);
 
-        if ((buttonPlayPause || triggerInEmptySpace) && !keyboardActive) {
+        if ((buttonPlayPause || triggerPlayPause) && !keyboardActive) {
             toggle_play_pause();
-            state.controlsIdleTime = 0.0f;
-            state.controlsAlpha = 1.0f;
-        } else if (currTrigger && !prevTrigger && state.isHoveringScreen && !state.handTrackingActive && !keyboardActive) {
-            // Clique simples na tela 2D via controle: acorda a barra de controles/HUD
             state.controlsIdleTime = 0.0f;
             state.controlsAlpha = 1.0f;
         }
@@ -1026,6 +1024,28 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
     }
 
+    // Rolagem por thumbstick no painel UI (Home/Arquivos) ou Modal
+    if ((dispatchHitPanel == 1 || dispatchHitPanel == 3) && !state.isScreenGrabbed && !state.isTouchDown) {
+        float stickY = (fabsf(rightStick.currentState.y) > 0.15f)
+            ? rightStick.currentState.y
+            : ((useLeft && fabsf(leftStick.currentState.y) > 0.15f) ? leftStick.currentState.y : 0.0f);
+        if (stickY != 0.0f && dt > 0.0f) {
+            const float kScrollSpeedPixelsPerSec = 1200.0f;
+            float scrollDeltaY = -stickY * kScrollSpeedPixelsPerSec * dt;
+            JNIEnv* env = nullptr;
+            state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+            if (env) {
+                jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+                const char* methodName = (dispatchHitPanel == 3) ? "dispatchModalVRScroll" : "dispatchVRScroll";
+                jmethodID scrollMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFF)V");
+                if (scrollMethod) {
+                    env->CallStaticVoidMethod(vrActivityClass, scrollMethod, state.app->activity->clazz, state.lastUvX, state.lastUvY, scrollDeltaY);
+                }
+                env->DeleteLocalRef(vrActivityClass);
+            }
+        }
+    }
+
     // Thumbstick direito e Grab & Drag (T2.5 com Trava de Intenção T3.6)
     {
         const float kDeadzone = 0.15f;
@@ -1140,7 +1160,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         float lx = (fabsf(leftStick.currentState.x) < kDeadzone) ? 0.0f : leftStick.currentState.x;
         float ly = (fabsf(leftStick.currentState.y) < kDeadzone) ? 0.0f : leftStick.currentState.y;
 
-        if (ly != 0.0f) {
+        bool leftAimingUi = useLeft && (dispatchHitPanel == 1 || dispatchHitPanel == 3);
+        if (ly != 0.0f && !leftAimingUi) {
             float vol = get_video_volume();
             vol = std::max(0.0f, std::min(1.0f, vol + ly * 0.5f * dt));
             set_video_volume(vol);

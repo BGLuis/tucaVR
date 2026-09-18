@@ -514,4 +514,56 @@ class VRPresentation(
             }
         }
     }
+
+    /**
+     * Rola suavemente a View rolável sob o cursor (x, y) ou a primeira encontrada na tela ativa.
+     */
+    fun dispatchScroll(x: Float, y: Float, scrollDeltaY: Float) {
+        if (!::screenHost.isInitialized) return
+        val pixelX = x * VRActivity.UI_DISPLAY_WIDTH
+        val pixelY = y * VRActivity.UI_DISPLAY_HEIGHT
+        val target = findScrollableViewAt(screenHost, pixelX, pixelY) ?: findAnyScrollableView(screenHost)
+        target?.scrollBy(0, scrollDeltaY.toInt())
+    }
+
+    private fun findScrollableViewAt(parent: android.view.View, x: Float, y: Float): android.view.View? {
+        if (!parent.isShown) return null
+        val location = IntArray(2)
+        parent.getLocationOnScreen(location)
+        val left = location[0].toFloat()
+        val top = location[1].toFloat()
+        val right = left + parent.width
+        val bottom = top + parent.height
+
+        if (x !in left..right || y !in top..bottom) {
+            return null
+        }
+
+        if (parent is ViewGroup) {
+            for (i in parent.childCount - 1 downTo 0) {
+                val child = parent.getChildAt(i)
+                val scrollable = findScrollableViewAt(child, x, y)
+                if (scrollable != null) return scrollable
+            }
+        }
+
+        if (parent is android.widget.ScrollView || parent is androidx.recyclerview.widget.RecyclerView || parent.canScrollVertically(1) || parent.canScrollVertically(-1)) {
+            return parent
+        }
+        return null
+    }
+
+    private fun findAnyScrollableView(parent: android.view.View): android.view.View? {
+        if (!parent.isShown) return null
+        if (parent is android.widget.ScrollView || parent is androidx.recyclerview.widget.RecyclerView) {
+            return parent
+        }
+        if (parent is ViewGroup) {
+            for (i in 0 until parent.childCount) {
+                val found = findAnyScrollableView(parent.getChildAt(i))
+                if (found != null) return found
+            }
+        }
+        return null
+    }
 }

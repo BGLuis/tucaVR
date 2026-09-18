@@ -814,6 +814,7 @@ struct AppState {
     EyeSwapchain controlsPanelSwapchain;
     EyeSwapchain modalPanelSwapchain;
     EyeSwapchain cursorSwapchain;
+    EyeSwapchain beamSwapchain;
     VkCommandBuffer uiCopyCmd = VK_NULL_HANDLE;
 
     // Preview de arrasto sobre o quad do video (T-seek-ux): reaproveita
@@ -1686,6 +1687,7 @@ void CreateSwapchains(AppState& state) {
     createPanelChain(state.controlsPanelSwapchain, kControlsTexWidth, kControlsTexHeight);
     createPanelChain(state.modalPanelSwapchain, kModalTexWidth, kModalTexHeight);
     createPanelChain(state.cursorSwapchain, 64, 64);
+    createPanelChain(state.beamSwapchain, 32, 128);
 }
 
 // Fase 0.4 T5: Foveated Rendering fixo via XR_FB_foveation — NAO e Vulkan
@@ -3042,6 +3044,121 @@ static void InitCursorSwapchain(AppState& state) {
 
     XrSwapchainImageReleaseInfo rel{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     OXR(xrReleaseSwapchainImage(state.cursorSwapchain.handle, &rel));
+}
+
+// Inicializa o swapchain do raio laser (beam) como textura 32x128 com decaimento suave.
+// O feixe é compositado como XrCompositionLayerQuad após os painéis de UI, garantindo
+// que fique visível à frente da interface sem z-fighting ou oclusão por composição (R-01).
+static void InitBeamSwapchain(AppState& state) {
+    if (state.beamSwapchain.handle == XR_NULL_HANDLE || state.uiCopyCmd == VK_NULL_HANDLE) return;
+
+    XrSwapchainImageAcquireInfo acq{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    uint32_t imgIndex = 0;
+    if (xrAcquireSwapchainImage(state.beamSwapchain.handle, &acq, &imgIndex) != XR_SUCCESS) return;
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    wait.timeout = XR_INFINITE_DURATION;
+    if (xrWaitSwapchainImage(state.beamSwapchain.handle, &wait) != XR_SUCCESS) return;
+
+    constexpr uint32_t kWidth = 32;
+    constexpr uint32_t kHeight = 128;
+    std::vector<uint32_t> pixels(kWidth * kHeight, 0);
+
+    const float centerX = (kWidth - 1) * 0.5f;
+    for (uint32_t y = 0; y < kHeight; y++) {
+        float ny = (kHeight > 1) ? (static_cast<float>(y) / (kHeight - 1)) : 0.5f;
+        float yFade = 1.0f;
+        if (ny < 0.05f) yFade = ny / 0.05f;
+        else if (ny > 0.95f) yFade = (1.0f - ny) / 0.05f;
+
+        for (uint32_t x = 0; x < kWidth; x++) {
+            float dx = fabsf(static_cast<float>(x) - centerX) / (kWidth * 0.5f);
+            if (dx < 1.0f) {
+                float xFactor = cosf(dx * 1.5707963f);
+                float alphaVal = xFactor * xFactor * yFade;
+                uint8_t a = static_cast<uint8_t>(fminf(fmaxf(alphaVal, 0.0f), 1.0f) * 220.0f);
+
+                // Ciano/azul elétrico correspondente à cor do retículo e do beam original
+                uint8_t r = static_cast<uint8_t>(50.0f * (1.0f - dx));
+                uint8_t g = static_cast<uint8_t>(200.0f + 40.0f * (1.0f - dx));
+                uint8_t b = 255;
+
+                // Formato RGBA8 na memória: (A << 24) | (B << 16) | (G << 8) | R
+                pixels[y * kWidth + x] = (static_cast<uint32_t>(a) << 24) |
+                                         (static_cast<uint32_t>(b) << 16) |
+                                         (static_cast<uint32_t>(g) << 8) |
+                                         static_cast<uint32_t>(r);
+            }
+        }
+    }
+
+    const VkDeviceSize bufSize = (VkDeviceSize)kWidth * kHeight * 4;
+    VkBuffer stagingBuf;
+    VkDeviceMemory stagingMem;
+
+    VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bufInfo.size = bufSize;
+    bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    VKR(vkCreateBuffer(state.vkDevice, &bufInfo, nullptr, &stagingBuf));
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(state.vkDevice, stagingBuf, &memReqs);
+    uint32_t memTypeIdx = FindMemoryType(state, memReqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = memTypeIdx;
+    VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &stagingMem));
+    VKR(vkBindBufferMemory(state.vkDevice, stagingBuf, stagingMem, 0));
+
+    void* mapped = nullptr;
+    VKR(vkMapMemory(state.vkDevice, stagingMem, 0, bufSize, 0, &mapped));
+    memcpy(mapped, pixels.data(), (size_t)bufSize);
+    vkUnmapMemory(state.vkDevice, stagingMem);
+
+    VKR(vkResetCommandBuffer(state.uiCopyCmd, 0));
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VKR(vkBeginCommandBuffer(state.uiCopyCmd, &beginInfo));
+
+    VkImage beamImg = state.beamSwapchain.images[imgIndex].image;
+
+    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.image = beamImg;
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(state.uiCopyCmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {kWidth, kHeight, 1};
+    vkCmdCopyBufferToImage(state.uiCopyCmd, stagingBuf, beamImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    vkCmdPipelineBarrier(state.uiCopyCmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VKR(vkEndCommandBuffer(state.uiCopyCmd));
+
+    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &state.uiCopyCmd;
+    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
+    VKR(vkQueueWaitIdle(state.vkQueue));
+
+    vkDestroyBuffer(state.vkDevice, stagingBuf, nullptr);
+    vkFreeMemory(state.vkDevice, stagingMem, nullptr);
+
+    XrSwapchainImageReleaseInfo rel{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    OXR(xrReleaseSwapchainImage(state.beamSwapchain.handle, &rel));
 }
 
 // Mesma logica de UpdateUiImageFromHwb, mas a fonte e um buffer de bytes RGBA
@@ -4683,64 +4800,8 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
     VkDeviceSize offset = 0;
     SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
 
-    // Beam (Laser) — so desenha com um controle de fato rastreado neste
-    // frame (state.hasRay, setado por UpdateInteraction via xrLocateSpace).
-    if (state.hasRay) {
-        // D-02 fix: Quando o modal esta ativo e visivel, o beam e desenhado na
-        // camada de projecao (projectionLayer) mas o modal e um XrCompositionLayerQuad
-        // separado — nao ha depth test entre layers. Se o ray nao acertou o modal
-        // (lastHitDist < 0), escondemos o beam para evitar que ele apareca
-        // visualmente atravessando o modal.
-        bool skipBeam = state.modalActive && state.modalAlpha > 0.5f && state.lastHitDist < 0.0f;
-        if (!skipBeam) {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.beamPipeline);
-            vkCmdBindVertexBuffers(cmd, 0, 1, &state.beamVertexBuffer, &offset);
-
-            // O beam em CreateBeamResources vai de (0,0,0) ate (0,0,-2) no eixo Z negativo.
-            XrVector3f up = {0.0f, 1.0f, 0.0f};
-            if (fabs(state.lastRayDir.y) > 0.99f) up = {1.0f, 0.0f, 0.0f};
-            
-            XrVector3f z = {-state.lastRayDir.x, -state.lastRayDir.y, -state.lastRayDir.z};
-            
-            XrVector3f x = {
-                up.y * z.z - up.z * z.y,
-                up.z * z.x - up.x * z.z,
-                up.x * z.y - up.y * z.x
-            };
-            float xLen = sqrtf(x.x*x.x + x.y*x.y + x.z*x.z);
-            if (xLen > 0.0001f) { x.x /= xLen; x.y /= xLen; x.z /= xLen; }
-
-            XrVector3f y = {
-                z.y * x.z - z.z * x.y,
-                z.z * x.x - z.x * x.z,
-                z.x * x.y - z.y * x.x
-            };
-
-            float beamLength = 5.0f; // Default 5 meters if no hit
-            if (state.lastHitDist > 0.0f) {
-                beamLength = state.lastHitDist;
-            }
-            float zScale = beamLength;
-
-            Mat4 beamModel = {{
-                x.x, x.y, x.z, 0.0f,
-                y.x, y.y, y.z, 0.0f,
-                z.x * zScale, z.y * zScale, z.z * zScale, 0.0f,
-                state.lastRayOrigin.x, state.lastRayOrigin.y, state.lastRayOrigin.z, 1.0f
-            }};
-
-            BeamPushConstants beamPush{};
-            beamPush.mvp = Mat4Multiply(Mat4Multiply(proj, view), beamModel);
-            beamPush.color[0] = 0.0f; beamPush.color[1] = 0.5f; beamPush.color[2] = 1.0f; beamPush.color[3] = 1.0f;
-
-            vkCmdPushConstants(cmd, state.beamPipelineLayout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0, sizeof(beamPush), &beamPush);
-
-            vkCmdDraw(cmd, 2, 1, 0, 0); // 2 vertices para a linha
-            CountDrawCall(2);
-        } // !skipBeam
-    }
+    // O raio laser (beam) agora é renderizado como XrCompositionLayerQuad diretamente
+    // no compositor OpenXR (ver RenderFrame), garantindo que fique à frente de todos os painéis 2D (R-01).
 
     // Posicao/orientacao da tela, mas sem a escala dela: o icone tem tamanho
     // fixo. Por ultimo pra nao ser encoberto (pipelines aqui sao sem depth).
@@ -6500,9 +6561,9 @@ void RenderFrame(AppState& state) {
     std::array<XrCompositionLayerProjectionView, kEyeCount> projectionViews{};
     const bool shouldSubmitLayer = frameState.shouldRender;
     // [0]=passthrough (Fase 0.3 Seção 2, quando ativo) + projection + ui +
-    // controls + modal + cursor = 6. Passthrough SEMPRE vai no indice 0
+    // controls + modal + beam + cursor = 7 (alocado 8 por margem). Passthrough SEMPRE vai no indice 0
     // (fundo) e o projection layer passa a compor com o alpha do swapchain.
-    const XrCompositionLayerBaseHeader* layers[6]{};
+    const XrCompositionLayerBaseHeader* layers[8]{};
     uint32_t layerCount = 0;
     // Declarada aqui (mesmo escopo de `layers` e `endFrameInfo`) porque
     // xrEndFrame roda FORA do `if (shouldSubmitLayer)` abaixo e le os
@@ -6917,6 +6978,82 @@ void RenderFrame(AppState& state) {
         modalQuad.size = {kModalPanelScaleX, kModalPanelScaleY};
 
         // Retículo do Laser no topo de todos os painéis
+        // Raio Laser (Beam) como XrCompositionLayerQuad submetido após os painéis e antes do retículo do cursor (R-01)
+        XrCompositionLayerQuad beamQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+        bool beamActive = false;
+        if (state.beamVisible && state.hasRay) {
+            const float beamLength = state.isScreenGrabbed ? state.grabDistance : state.lastHitDist;
+            XrVector3f p0 = state.lastRayOrigin;
+            XrVector3f p1 = state.cursorDotVisible ? state.cursorDotPos : XrVector3f{
+                p0.x + state.lastRayDir.x * beamLength,
+                p0.y + state.lastRayDir.y * beamLength,
+                p0.z + state.lastRayDir.z * beamLength
+            };
+
+            XrVector3f delta = { p1.x - p0.x, p1.y - p0.y, p1.z - p0.z };
+            float len = sqrtf(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+            if (len > 0.05f) {
+                XrVector3f dir = { delta.x / len, delta.y / len, delta.z / len };
+                XrVector3f mid = { (p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f, (p0.z + p1.z) * 0.5f };
+
+                // Vetor do ponto médio até a cabeça do observador
+                XrVector3f toHead = { headCenter.x - mid.x, headCenter.y - mid.y, headCenter.z - mid.z };
+                float thLen = sqrtf(toHead.x * toHead.x + toHead.y * toHead.y + toHead.z * toHead.z);
+                if (thLen > 1e-4f) { toHead.x /= thLen; toHead.y /= thLen; toHead.z /= thLen; }
+
+                // Y local aponta ao longo da direção do feixe (do controle até o alvo)
+                XrVector3f yLocal = dir;
+
+                // X local aponta perpendicularmente ao raio e à linha de visão (billboard cilíndrico)
+                XrVector3f xLocal = {
+                    yLocal.y * toHead.z - yLocal.z * toHead.y,
+                    yLocal.z * toHead.x - yLocal.x * toHead.z,
+                    yLocal.x * toHead.y - yLocal.y * toHead.x
+                };
+                float xlLen = sqrtf(xLocal.x * xLocal.x + xLocal.y * xLocal.y + xLocal.z * xLocal.z);
+                if (xlLen > 1e-4f) {
+                    xLocal.x /= xlLen; xLocal.y /= xlLen; xLocal.z /= xlLen;
+                } else {
+                    XrVector3f up = (fabsf(yLocal.y) > 0.99f) ? XrVector3f{1.0f, 0.0f, 0.0f} : XrVector3f{0.0f, 1.0f, 0.0f};
+                    xLocal = {
+                        yLocal.y * up.z - yLocal.z * up.y,
+                        yLocal.z * up.x - yLocal.x * up.z,
+                        yLocal.x * up.y - yLocal.y * up.x
+                    };
+                    float xlLenFallback = sqrtf(xLocal.x * xLocal.x + xLocal.y * xLocal.y + xLocal.z * xLocal.z);
+                    if (xlLenFallback > 1e-4f) {
+                        xLocal.x /= xlLenFallback; xLocal.y /= xlLenFallback; xLocal.z /= xlLenFallback;
+                    }
+                }
+
+                // Z local = normal da face do quad (aponta em direção ao observador)
+                XrVector3f zLocal = {
+                    xLocal.y * yLocal.z - xLocal.z * yLocal.y,
+                    xLocal.z * yLocal.x - xLocal.x * yLocal.z,
+                    xLocal.x * yLocal.y - xLocal.y * yLocal.x
+                };
+
+                Mat4 rotM{};
+                rotM.m[0] = xLocal.x; rotM.m[1] = xLocal.y; rotM.m[2] = xLocal.z; rotM.m[3] = 0.0f;
+                rotM.m[4] = yLocal.x; rotM.m[5] = yLocal.y; rotM.m[6] = yLocal.z; rotM.m[7] = 0.0f;
+                rotM.m[8] = zLocal.x; rotM.m[9] = zLocal.y; rotM.m[10] = zLocal.z; rotM.m[11] = 0.0f;
+                rotM.m[12] = 0.0f;    rotM.m[13] = 0.0f;    rotM.m[14] = 0.0f;     rotM.m[15] = 1.0f;
+
+                beamQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                beamQuad.space = state.localSpace;
+                beamQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+                beamQuad.subImage.swapchain = state.beamSwapchain.handle;
+                beamQuad.subImage.imageRect.offset = {0, 0};
+                beamQuad.subImage.imageRect.extent = {32, 128};
+                beamQuad.pose.position = mid;
+                beamQuad.pose.orientation = QuatFromMat4(rotM);
+                constexpr float kBeamThickness = 0.0015f; // 1.5mm de espessura (traço fino e elegante, correspondente à espessura original)
+                beamQuad.size = {kBeamThickness, len};
+                beamActive = true;
+            }
+        }
+
+        // Retículo do Laser no topo de todos os painéis
         XrCompositionLayerQuad cursorQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
         cursorQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
         cursorQuad.space = state.localSpace;
@@ -6970,6 +7107,9 @@ void RenderFrame(AppState& state) {
         }
         if (state.modalHasFrame && state.modalAlpha > 0.05f) {
             layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&modalQuad);
+        }
+        if (beamActive) {
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&beamQuad);
         }
         if (state.cursorDotVisible && state.hasRay) {
             layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cursorQuad);
@@ -7621,6 +7761,7 @@ void android_main(android_app* app) {
     // Estagio 4: pipeline de UI/controles (RGBA8888 + AImageReader)
     CreateUiPipeline(state, app);
     InitCursorSwapchain(state);
+    InitBeamSwapchain(state);
     // Estagio 5: geometria de esfera, pipeline estereo, beam cursor
     CreateSphereGeometry(state);
     CreateStereoPipeline(state);
@@ -7677,6 +7818,7 @@ void android_main(android_app* app) {
     if (state.controlsPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.controlsPanelSwapchain.handle);
     if (state.modalPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.modalPanelSwapchain.handle);
     if (state.cursorSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.cursorSwapchain.handle);
+    if (state.beamSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.beamSwapchain.handle);
     if (state.localSpace != XR_NULL_HANDLE) xrDestroySpace(state.localSpace);
     if (state.session != XR_NULL_HANDLE) xrDestroySession(state.session);
     if (state.vkDevice != VK_NULL_HANDLE) vkDestroyDevice(state.vkDevice, nullptr);

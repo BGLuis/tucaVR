@@ -819,6 +819,13 @@ class VRActivity : NativeActivity() {
         }
 
         @JvmStatic
+        fun dispatchVRScroll(activity: VRActivity, x: Float, y: Float, scrollDeltaY: Float) {
+            activity.runOnUiThread {
+                activity.presentation?.dispatchScroll(x, y, scrollDeltaY)
+            }
+        }
+
+        @JvmStatic
         fun setupControlsVirtualDisplay(activity: VRActivity, surface: Surface, width: Int, height: Int) {
             activity.runOnUiThread {
                 val displayManager = activity.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
@@ -925,6 +932,13 @@ class VRActivity : NativeActivity() {
                 if (action == android.view.MotionEvent.ACTION_UP) {
                     lastModalDownTime = 0L
                 }
+            }
+        }
+
+        @JvmStatic
+        fun dispatchModalVRScroll(activity: VRActivity, x: Float, y: Float, scrollDeltaY: Float) {
+            activity.runOnUiThread {
+                activity.modalPresentation?.dispatchScroll(x, y, scrollDeltaY)
             }
         }
 

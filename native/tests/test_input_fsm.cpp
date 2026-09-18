@@ -9,6 +9,7 @@ struct InputFsmState {
     bool prevB = false;
     bool prevY = false;
     bool prevMenu = false;
+    bool prevTrigger = false;
     float menuHoldTime = 0.0f;
     bool recenterFiredThisHold = false;
     float uiIdleTime = 0.0f;
@@ -61,6 +62,20 @@ inline void ProcessButtonInputs(InputFsmState& state, bool currA, bool currX, bo
         state.recenterFiredThisHold = false;
     }
     state.prevMenu = currMenu;
+}
+
+inline void ProcessTriggerInputs(InputFsmState& state, bool currTrigger, int dispatchHitPanel,
+                                 bool handTrackingActive, bool isHoveringScreen, bool isSphereMode) {
+    bool triggerOutsideUi = currTrigger && !state.prevTrigger && (dispatchHitPanel == 0);
+    bool handTrackingGrabPinch = handTrackingActive && isHoveringScreen && !isSphereMode;
+    bool triggerPlayPause = triggerOutsideUi && !handTrackingGrabPinch;
+
+    if (triggerPlayPause) {
+        state.playPauseToggleCount++;
+        state.controlsIdleTime = 0.0f;
+        state.controlsAlpha = 1.0f;
+    }
+    state.prevTrigger = currTrigger;
 }
 
 static void TestButtonAHoldTriggersOnlyOnce() {
@@ -146,11 +161,54 @@ static void TestMenuButtonShortPressVsLongPress() {
     std::cout << "[PASS] TestMenuButtonShortPressVsLongPress\n";
 }
 
+static void TestTriggerPlayPauseInSphericalAnd2DModes() {
+    // Caso 1: Modo Esférico (180/360) via controle Touch Plus - clicar na tela deve pausar
+    {
+        InputFsmState state;
+        // Frame 1: Clica com gatilho apontando para a tela 360 (dispatchHitPanel=0, isSphereMode=true)
+        ProcessTriggerInputs(state, /*currTrigger=*/true, /*dispatchHitPanel=*/0,
+                             /*handTrackingActive=*/false, /*isHoveringScreen=*/true, /*isSphereMode=*/true);
+        assert(state.playPauseToggleCount == 1);
+
+        // Mantém pressionado por vários frames: não pode disparar novamente
+        ProcessTriggerInputs(state, /*currTrigger=*/true, 0, false, true, true);
+        ProcessTriggerInputs(state, /*currTrigger=*/true, 0, false, true, true);
+        assert(state.playPauseToggleCount == 1);
+
+        // Solta o gatilho
+        ProcessTriggerInputs(state, /*currTrigger=*/false, 0, false, true, true);
+        assert(state.playPauseToggleCount == 1);
+
+        // Clica novamente -> alterna de novo
+        ProcessTriggerInputs(state, /*currTrigger=*/true, 0, false, true, true);
+        assert(state.playPauseToggleCount == 2);
+    }
+
+    // Caso 2: Clicar sobre botão da UI (dispatchHitPanel != 0) NÃO deve disparar o atalho de tela
+    {
+        InputFsmState state;
+        ProcessTriggerInputs(state, /*currTrigger=*/true, /*dispatchHitPanel=*/2,
+                             /*handTrackingActive=*/false, /*isHoveringScreen=*/false, /*isSphereMode=*/false);
+        assert(state.playPauseToggleCount == 0);
+    }
+
+    // Caso 3: Hand Tracking em tela 2D reservado para Grab & Drag - não deve pausar
+    {
+        InputFsmState state;
+        ProcessTriggerInputs(state, /*currTrigger=*/true, /*dispatchHitPanel=*/0,
+                             /*handTrackingActive=*/true, /*isHoveringScreen=*/true, /*isSphereMode=*/false);
+        assert(state.playPauseToggleCount == 0);
+    }
+
+    std::cout << "[PASS] TestTriggerPlayPauseInSphericalAnd2DModes\n";
+}
+
 int main() {
     std::cout << "--- Executando testes unitarios de Input FSM (C-01) ---\n";
     TestButtonAHoldTriggersOnlyOnce();
     TestButtonXHoldTriggersOnlyOnce();
     TestMenuButtonShortPressVsLongPress();
+    TestTriggerPlayPauseInSphericalAnd2DModes();
     std::cout << "--- Todos os testes de Input FSM passaram com sucesso! ---\n";
     return 0;
 }

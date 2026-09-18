@@ -397,4 +397,56 @@ class VRModalPresentation(
         super.onDetachedFromWindow()
         scope.cancel()
     }
+
+    /**
+     * Rola a View rolável ativa dentro do modal frontal.
+     */
+    fun dispatchScroll(x: Float, y: Float, scrollDeltaY: Float) {
+        if (!::rootContainer.isInitialized) return
+        val pixelX = x * VRActivity.MODAL_DISPLAY_WIDTH
+        val pixelY = y * VRActivity.MODAL_DISPLAY_HEIGHT
+        val target = findScrollableViewAt(rootContainer, pixelX, pixelY) ?: findAnyScrollableView(rootContainer)
+        target?.scrollBy(0, scrollDeltaY.toInt())
+    }
+
+    private fun findScrollableViewAt(parent: View, x: Float, y: Float): View? {
+        if (!parent.isShown) return null
+        val location = IntArray(2)
+        parent.getLocationOnScreen(location)
+        val left = location[0].toFloat()
+        val top = location[1].toFloat()
+        val right = left + parent.width
+        val bottom = top + parent.height
+
+        if (x !in left..right || y !in top..bottom) {
+            return null
+        }
+
+        if (parent is ViewGroup) {
+            for (i in parent.childCount - 1 downTo 0) {
+                val child = parent.getChildAt(i)
+                val scrollable = findScrollableViewAt(child, x, y)
+                if (scrollable != null) return scrollable
+            }
+        }
+
+        if (parent is android.widget.ScrollView || parent is androidx.recyclerview.widget.RecyclerView || parent.canScrollVertically(1) || parent.canScrollVertically(-1)) {
+            return parent
+        }
+        return null
+    }
+
+    private fun findAnyScrollableView(parent: View): View? {
+        if (!parent.isShown) return null
+        if (parent is android.widget.ScrollView || parent is androidx.recyclerview.widget.RecyclerView) {
+            return parent
+        }
+        if (parent is ViewGroup) {
+            for (i in 0 until parent.childCount) {
+                val found = findAnyScrollableView(parent.getChildAt(i))
+                if (found != null) return found
+            }
+        }
+        return null
+    }
 }

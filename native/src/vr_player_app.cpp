@@ -2437,7 +2437,9 @@ public:
             m_beamRenderer.RemoveBeam(m_beamHandle);
             m_beamHandle = OVRFW::ovrBeamRenderer::INVALID_BEAM_HANDLE;
         }
-        m_beamHandle = m_beamRenderer.AddBeam(in, 0.015f, rayOrigin, pointerEnd, OVR::Vector4f(1.0f, 0.0f, 0.0f, 1.0f));
+        if (dispatchHitPanel != 0 && minT > 0.0f) {
+            m_beamHandle = m_beamRenderer.AddBeam(in, 0.015f, rayOrigin, pointerEnd, OVR::Vector4f(0.0f, 0.5f, 1.0f, 1.0f));
+        }
 
         // Cursor/reticle no ponto de acerto: o laser sozinho termina "no
         // vazio", o que dificulta mirar em botoes pequenos com precisao
