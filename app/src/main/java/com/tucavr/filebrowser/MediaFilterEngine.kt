@@ -169,10 +169,10 @@ object MediaFilterEngine {
             return true
         }
 
-        val hasActiveFilter = query.isNotBlank() || typeFilter != MediaTypeFilter.ALL || format3DFilter != Format3DFilter.ALL || dateFilter != DateFilter.ALL
-
-        // Poda de pastas vazias se houver filtros ativos
-        if (summary.totalItems == 0 && hasActiveFilter) {
+        // Poda de pastas sem nenhuma mídia reproduzível (nos filhos imediatos OU dentro de
+        // subpastas, ver FolderSummary.hasPlayableMediaWithinDepth) -- vale SEMPRE, não só
+        // quando há filtro ativo, pra não poluir a listagem com pastas vazias por padrão.
+        if (!summary.hasPlayableMediaWithinDepth) {
             return false
         }
 

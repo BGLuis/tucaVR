@@ -8,7 +8,6 @@ import android.os.Build
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.security.MessageDigest
 
 object ThumbnailGenerator {
 
@@ -156,15 +155,8 @@ object ThumbnailGenerator {
     // key, no collisions between unrelated files) can be unit-tested on the JVM without
     // Robolectric or a real Android cacheDir. Everything that touches real I/O
     // (MediaMetadataRetriever, disk reads/writes) stays out of this function on purpose.
-    internal fun cacheKeyFor(entry: MediaEntry): String {
-        // size + lastModified are included so a file replaced/edited at the same path
-        // doesn't reuse a stale thumbnail, while a plain rename does not collide with
-        // an unrelated file's cache entry.
-        return sha256("${entry.path}|${entry.sizeBytes}|${entry.lastModified}")
-    }
-
-    private fun sha256(input: String): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
-        return digest.joinToString("") { "%02x".format(it) }
-    }
+    // Delegates to CacheKeys.forLocalEntry (shared with the Room caches, see CacheKeys.kt)
+    // so the formula lives in one place; kept as `cacheKeyFor` here too since it's the
+    // established/tested name for this file's on-disk thumbnail cache key.
+    internal fun cacheKeyFor(entry: MediaEntry): String = CacheKeys.forLocalEntry(entry)
 }

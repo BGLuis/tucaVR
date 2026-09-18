@@ -8,7 +8,7 @@
 //! exporta as env vars abaixo com os valores corretos e roda
 //! `cargo test -p protocols -- --ignored`.
 use protocols::prefetch::PrefetchReader;
-use protocols::smb::{list_directory, list_shares, SmbFileSource, SmbTarget};
+use protocols::smb::{list_directory, list_shares, scan_has_media, SmbFileSource, SmbTarget};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
@@ -71,6 +71,19 @@ fn list_directory_finds_test_file() {
     let entry = entries.iter().find(|e| e.name == file).unwrap_or_else(|| panic!("{file} nao encontrado em: {entries:?}", entries = entries.iter().map(|e| &e.name).collect::<Vec<_>>()));
     assert!(!entry.is_dir);
     assert!(entry.size > 0);
+}
+
+/// Varredura recursiva de poda de pastas (T-folder-pruning) contra o servidor real —
+/// a fixture so tem o arquivo de teste (nao-midia) na raiz do share autenticado,
+/// entao o resultado esperado e "nenhuma midia encontrada, varredura concluida por
+/// completo" — cobre o caminho de conexao+listagem real (connect_share/list_directory
+/// reusados, sem reconectar por nivel), nao so a logica pura de extensao.
+#[test]
+#[ignore]
+fn scan_has_media_reports_no_media_for_fixture_with_only_a_non_media_file() {
+    let result = scan_has_media(&auth_target(), "").expect("scan_has_media falhou contra o servidor real");
+    assert!(!result.has_media);
+    assert!(result.completed_fully);
 }
 
 /// Leitura de arquivo via `SmbFileSource` + `PrefetchReader` (T6.3) num share

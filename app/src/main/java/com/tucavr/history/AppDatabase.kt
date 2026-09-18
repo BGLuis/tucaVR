@@ -8,6 +8,10 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.tucavr.download.Download
 import com.tucavr.download.DownloadDao
+import com.tucavr.filebrowser.FolderMediaStatus
+import com.tucavr.filebrowser.FolderMediaStatusDao
+import com.tucavr.filebrowser.MediaMetadataCacheDao
+import com.tucavr.filebrowser.MediaMetadataCacheEntry
 import com.tucavr.network.SavedServer
 import com.tucavr.network.SavedServerDao
 import com.tucavr.playlist.Playlist
@@ -20,10 +24,15 @@ import com.tucavr.playlist.PlaylistItem
  * - Tabela `saved_servers`: servidores de rede salvos (schema v2, T11.1).
  * - Tabelas `playlists` e `playlist_items`: listas de reproducao (schema v3, T9.1).
  * - Tabela `downloads`: fila e historico de downloads offline (schema v4, Fase 0.4 Seção 4).
+ * - Tabelas `folder_media_status` e `media_metadata_cache`: poda de pastas vazias e cache de
+ *   metadados de mídia pra exibição rápida (schema v5).
  */
 @Database(
-    entities = [PlaybackHistory::class, SavedServer::class, Playlist::class, PlaylistItem::class, Download::class],
-    version = 4,
+    entities = [
+        PlaybackHistory::class, SavedServer::class, Playlist::class, PlaylistItem::class, Download::class,
+        FolderMediaStatus::class, MediaMetadataCacheEntry::class
+    ],
+    version = 5,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -32,6 +41,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun savedServerDao(): SavedServerDao
     abstract fun playlistDao(): PlaylistDao
     abstract fun downloadDao(): DownloadDao
+    abstract fun folderMediaStatusDao(): FolderMediaStatusDao
+    abstract fun mediaMetadataCacheDao(): MediaMetadataCacheDao
 
     companion object {
         @Volatile
@@ -106,6 +117,33 @@ abstract class AppDatabase : RoomDatabase() {
             "CREATE INDEX IF NOT EXISTS `index_downloads_state` ON `downloads` (`state`)"
         )
 
+        internal val MIGRATION_4_5_SQL = listOf(
+            """
+            CREATE TABLE IF NOT EXISTS `folder_media_status` (
+                `folderKey` TEXT NOT NULL PRIMARY KEY,
+                `hasPlayableMedia` INTEGER NOT NULL,
+                `scanCompletedFully` INTEGER NOT NULL,
+                `lastCheckedAt` INTEGER NOT NULL,
+                `sourceKind` TEXT NOT NULL
+            )
+            """.trimIndent(),
+            """
+            CREATE TABLE IF NOT EXISTS `media_metadata_cache` (
+                `mediaKey` TEXT NOT NULL PRIMARY KEY,
+                `container` TEXT NOT NULL,
+                `containerLong` TEXT NOT NULL,
+                `durationMs` INTEGER NOT NULL,
+                `bitRate` INTEGER NOT NULL,
+                `format3dIndex` INTEGER NOT NULL,
+                `detectionConfidence` INTEGER NOT NULL,
+                `videoWidth` INTEGER NOT NULL,
+                `videoHeight` INTEGER NOT NULL,
+                `videoCodec` TEXT NOT NULL,
+                `fetchedAt` INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+
         val MIGRATION_1_2 = object : Migration(1, 2) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 MIGRATION_1_2_SQL.forEach { db.execSQL(it) }
@@ -124,6 +162,12 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_4_5_SQL.forEach { db.execSQL(it) }
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -131,7 +175,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "vrplayer_history.db"
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                     .also { instance = it }
             }

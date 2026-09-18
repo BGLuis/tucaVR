@@ -1119,6 +1119,11 @@ pub extern "C" fn start_smb_playback(
     domain: *const std::os::raw::c_char,
     start_time_sec: f32,
 ) {
+    // Cancela qualquer geracao de scrub-strip em andamento ANTES de despachar o load —
+    // reduz a janela em que generate_strip_hw pode disputar SESSION_SETUP_LOCK com o setup
+    // do decoder principal (decoder.rs:8-17, achado real em hardware Quest 3). Chamado aqui,
+    // sincronamente na thread que recebeu o JNI, pra sinalizar o mais cedo possivel.
+    core::thumbnail::cancel_strip_generation();
     let target = unsafe {
         let host = match cstr_to_string(host) { Some(s) => s, None => return };
         let share = match cstr_to_string(share) { Some(s) => s, None => return };
@@ -1235,6 +1240,46 @@ pub extern "C" fn smb_list_directory(
     }
 }
 
+/// Poda de pastas vazias (rede) — varredura recursiva "esta pasta tem alguma midia
+/// reproduzivel?" (ver `protocols::smb::scan_has_media`/`protocols::folder_scan`), UMA
+/// conexao para toda a subarvore, sem limite de profundidade fixo, com deadline de
+/// seguranca de 10s. Chamada BLOQUEANTE (pode levar ate o deadline inteiro numa
+/// arvore vazia grande) — Kotlin SEMPRE de `Dispatchers.IO`, nunca da UI thread.
+/// Retorna `"{0|1}\t{0|1}"` (has_media\tcompleted_fully) ou `"ERROR:<mensagem>"`.
+#[no_mangle]
+pub extern "C" fn smb_scan_folder_has_media(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    domain: *const std::os::raw::c_char,
+    share: *const std::os::raw::c_char,
+    path: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
+        let share = match cstr_to_string(share) { Some(s) => s, None => return string_to_c_char("ERROR:share invalido".into()) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        let domain = cstr_to_string(domain).unwrap_or_default();
+        protocols::smb::SmbTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            share,
+            path: String::new(),
+            username,
+            password,
+            domain,
+        }
+    };
+    let path = unsafe { cstr_to_string(path).unwrap_or_default() };
+
+    match protocols::smb::scan_has_media(&target, &path) {
+        Ok(result) => string_to_c_char(format!("{}\t{}", result.has_media as i32, result.completed_fully as i32)),
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
 /// T6.4: inicia playback de um arquivo via FTP. Mesma logica de
 /// `start_smb_playback` (credenciais como parametros separados, nunca uma
 /// URI unica cruzando o JNI) — ver esse comentario para a justificativa
@@ -1248,6 +1293,8 @@ pub extern "C" fn start_ftp_playback(
     password: *const std::os::raw::c_char,
     start_time_sec: f32,
 ) {
+    // Ver comentario em start_smb_playback.
+    core::thumbnail::cancel_strip_generation();
     let target = unsafe {
         let host = match cstr_to_string(host) { Some(s) => s, None => return };
         let path = match cstr_to_string(path) { Some(s) => s, None => return };
@@ -1319,6 +1366,36 @@ pub extern "C" fn ftp_list_directory(
     }
 }
 
+/// Poda de pastas vazias (rede) — ver comentario de `smb_scan_folder_has_media`,
+/// mesmo contrato de entrada/saida, aqui para `protocols::ftp::scan_has_media`.
+#[no_mangle]
+pub extern "C" fn ftp_scan_folder_has_media(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    path: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        protocols::ftp::FtpTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            path: String::new(),
+            username,
+            password,
+        }
+    };
+    let path = unsafe { cstr_to_string(path).unwrap_or_default() };
+
+    match protocols::ftp::scan_has_media(&target, &path) {
+        Ok(result) => string_to_c_char(format!("{}\t{}", result.has_media as i32, result.completed_fully as i32)),
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
 /// T6.4: inicia playback de um arquivo via SFTP. Mesma logica de
 /// `start_ftp_playback`/`start_smb_playback` (credenciais como parametros
 /// separados). `private_key` e o CONTEUDO PEM (nao um caminho de arquivo —
@@ -1334,6 +1411,8 @@ pub extern "C" fn start_sftp_playback(
     private_key: *const std::os::raw::c_char,
     start_time_sec: f32,
 ) {
+    // Ver comentario em start_smb_playback.
+    core::thumbnail::cancel_strip_generation();
     let target = unsafe {
         let host = match cstr_to_string(host) { Some(s) => s, None => return };
         let path = match cstr_to_string(path) { Some(s) => s, None => return };
@@ -1417,6 +1496,42 @@ pub extern "C" fn sftp_list_directory(
     }
 }
 
+/// Poda de pastas vazias (rede) — ver comentario de `smb_scan_folder_has_media`,
+/// mesmo contrato de entrada/saida, aqui para `protocols::sftp::scan_has_media`.
+#[no_mangle]
+pub extern "C" fn sftp_scan_folder_has_media(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    private_key: *const std::os::raw::c_char,
+    path: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        protocols::sftp::SftpTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            path: String::new(),
+            username,
+            password,
+            private_key,
+        }
+    };
+    if let Err(e) = target.validate() {
+        return string_to_c_char(format!("ERROR:{e}"));
+    }
+    let path = unsafe { cstr_to_string(path).unwrap_or_default() };
+
+    match protocols::sftp::scan_has_media(&target, &path) {
+        Ok(result) => string_to_c_char(format!("{}\t{}", result.has_media as i32, result.completed_fully as i32)),
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
 /// T5.1/T5.4: Inicia playback de vídeo a partir de um compartilhamento NFS.
 #[no_mangle]
 pub extern "C" fn start_nfs_playback(
@@ -1427,6 +1542,8 @@ pub extern "C" fn start_nfs_playback(
     version: i32,
     start_time_sec: f32,
 ) {
+    // Ver comentario em start_smb_playback.
+    core::thumbnail::cancel_strip_generation();
     let target = unsafe {
         let host = match cstr_to_string(host) { Some(s) => s, None => return };
         let export_path = match cstr_to_string(export_path) { Some(s) => s, None => return };
@@ -1493,6 +1610,35 @@ pub extern "C" fn nfs_list_directory(
     }
 }
 
+/// Poda de pastas vazias (rede) — ver comentario de `smb_scan_folder_has_media`,
+/// mesmo contrato de entrada/saida, aqui para `protocols::nfs::scan_has_media`.
+#[no_mangle]
+pub extern "C" fn nfs_scan_folder_has_media(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    export_path: *const std::os::raw::c_char,
+    dir_path: *const std::os::raw::c_char,
+    version: i32,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
+        let export_path = match cstr_to_string(export_path) { Some(s) => s, None => return string_to_c_char("ERROR:export_path invalido".into()) };
+        protocols::nfs::NfsTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            export_path,
+            file_path: String::new(),
+            version: version.clamp(3, 4) as u8,
+        }
+    };
+    let dir_path = unsafe { cstr_to_string(dir_path).unwrap_or_default() };
+
+    match protocols::nfs::scan_has_media(&target, &dir_path) {
+        Ok(result) => string_to_c_char(format!("{}\t{}", result.has_media as i32, result.completed_fully as i32)),
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
+
 /// T5.2/T5.4: Lista exports disponíveis num servidor NFS. Chamada BLOQUEANTE.
 #[no_mangle]
 pub extern "C" fn nfs_list_exports(
@@ -1524,6 +1670,8 @@ pub extern "C" fn start_webdav_playback(
     accept_invalid_certs: i32,
     start_time_sec: f32,
 ) {
+    // Ver comentario em start_smb_playback.
+    core::thumbnail::cancel_strip_generation();
     let target = unsafe {
         let host = match cstr_to_string(host) { Some(s) => s, None => return };
         let base_path = match cstr_to_string(base_path) { Some(s) => s, None => return };
@@ -1603,6 +1751,42 @@ pub extern "C" fn webdav_list_directory(
     }
 }
 
+/// Poda de pastas vazias (rede) — ver comentario de `smb_scan_folder_has_media`,
+/// mesmo contrato de entrada/saida, aqui para `protocols::webdav::scan_has_media`.
+#[no_mangle]
+pub extern "C" fn webdav_scan_folder_has_media(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    base_path: *const std::os::raw::c_char,
+    dir_path: *const std::os::raw::c_char,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    use_https: i32,
+    accept_invalid_certs: i32,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
+        let base_path = match cstr_to_string(base_path) { Some(s) => s, None => return string_to_c_char("ERROR:base_path invalido".into()) };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        protocols::webdav::WebdavTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            base_path,
+            file_path: String::new(),
+            username,
+            password,
+            use_https: use_https != 0,
+            accept_invalid_certs: accept_invalid_certs != 0,
+        }
+    };
+    let dir_path = unsafe { cstr_to_string(dir_path).unwrap_or_default() };
+
+    match protocols::webdav::scan_has_media(&target, &dir_path) {
+        Ok(result) => string_to_c_char(format!("{}\t{}", result.has_media as i32, result.completed_fully as i32)),
+        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+    }
+}
 
 /// T10.1: Varredura de servidores na rede local (mDNS + SSDP). Chamada BLOQUEANTE.
 /// Retorna linhas separadas por '\n': "PROTOCOL\tNAME\tHOST\tPORT\tPATH"
@@ -1768,6 +1952,8 @@ pub extern "C" fn probe_http_url(url: *const std::os::raw::c_char) -> *mut std::
 /// imediatamente.
 #[no_mangle]
 pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_time_sec: f32) {
+    // Ver comentario em start_smb_playback.
+    core::thumbnail::cancel_strip_generation();
     if path.is_null() { return; }
     let c_str = unsafe { std::ffi::CStr::from_ptr(path) };
     let path_str = match c_str.to_str() {

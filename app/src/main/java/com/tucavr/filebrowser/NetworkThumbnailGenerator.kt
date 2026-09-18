@@ -14,7 +14,6 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
-import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
@@ -157,25 +156,17 @@ object NetworkThumbnailGenerator {
     // um lastModified confiavel na listagem de rede (SMB/FTP/SFTP so
     // devolvem nome/tipo/tamanho -- ver loadNetworkDirectory), entao
     // tamanho e a unica pista de "arquivo mudou" disponivel aqui.
+    // Delega a formula pra CacheKeys.forSource (compartilhada com os caches Room, ver
+    // CacheKeys.kt), mas continua so aceitando os tipos com geracao de thumbnail suportada
+    // (Smb/Ftp/Sftp/Dlna) -- callers (getScrubStrip) dependem desse throw pra tratar os
+    // demais tipos como "sem thumbnail de rede" via runCatching { }.getOrNull().
     internal fun cacheKeyFor(source: PlaybackSource): String {
-        val raw = when (source) {
-            is PlaybackSource.Smb ->
-                "smb|${source.server.host}|${source.server.port}|${source.server.share}|${source.path}|${source.sizeBytes}"
-            is PlaybackSource.Ftp ->
-                "ftp|${source.server.host}|${source.server.port}|${source.path}|${source.sizeBytes}"
-            is PlaybackSource.Sftp ->
-                "sftp|${source.server.host}|${source.server.port}|${source.path}|${source.sizeBytes}"
-            is PlaybackSource.Dlna ->
-                "dlna|${source.server.host}|${source.url}|${source.sizeBytes}"
+        return when (source) {
+            is PlaybackSource.Smb, is PlaybackSource.Ftp, is PlaybackSource.Sftp, is PlaybackSource.Dlna ->
+                CacheKeys.forSource(source)
             is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Webdav ->
                 throw IllegalArgumentException("NetworkThumbnailGenerator nao suporta $source")
         }
-        return sha256(raw)
-    }
-
-    private fun sha256(input: String): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
-        return digest.joinToString("") { "%02x".format(it) }
     }
 
     // --- Preview de arrasto no seekbar (T-seek-ux) ---

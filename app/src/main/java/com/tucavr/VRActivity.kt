@@ -1637,6 +1637,21 @@ class VRActivity : NativeActivity() {
         path: String
     ): String
 
+    // Poda de pastas vazias (rede): varredura recursiva "esta pasta tem alguma midia
+    // reproduzivel?" (ver rust/protocols/src/folder_scan.rs) -- UMA conexao pra toda a
+    // subarvore, sem limite de profundidade fixo, com deadline de seguranca de 10s.
+    // Chamada BLOQUEANTE (pode levar ate o deadline inteiro) -- SEMPRE de Dispatchers.IO.
+    // Retorno: "{0|1}\t{0|1}" (has_media\tcompleted_fully) ou "ERROR:<mensagem>".
+    external fun nativeSmbScanFolderHasMedia(
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        domain: String,
+        share: String,
+        path: String
+    ): String
+
     // T7.1: probe HEAD-based de URL HTTP(S) (bloqueante, mesma ressalva acima).
     // Retorno: "OK\t{seekable 0|1}\t{content_length ou -1}" ou "ERROR:<mensagem>".
     external fun nativeProbeHttpUrl(url: String): String
@@ -1648,6 +1663,9 @@ class VRActivity : NativeActivity() {
     // Retorno: linhas separadas por \n, ou "ERROR:<mensagem>".
     external fun nativeFtpListDirectory(host: String, port: Int, username: String, password: String, path: String): String
 
+    // Poda de pastas vazias (rede) — ver comentario em nativeSmbScanFolderHasMedia.
+    external fun nativeFtpScanFolderHasMedia(host: String, port: Int, username: String, password: String, path: String): String
+
     // T6.4: playback SFTP. `privateKey`: conteudo PEM da chave privada (nao
     // um caminho de arquivo, ver rust/protocols/src/sftp/uri.rs), string
     // vazia = autenticacao por senha.
@@ -1656,11 +1674,17 @@ class VRActivity : NativeActivity() {
     // T6.2/T6.4: listagem SFTP (bloqueante — SEMPRE de Dispatchers.IO).
     external fun nativeSftpListDirectory(host: String, port: Int, username: String, password: String, privateKey: String, path: String): String
 
+    // Poda de pastas vazias (rede) — ver comentario em nativeSmbScanFolderHasMedia.
+    external fun nativeSftpScanFolderHasMedia(host: String, port: Int, username: String, password: String, privateKey: String, path: String): String
+
     // T5.1/T5.4: playback NFS
     external fun nativePlayNfs(host: String, port: Int, exportPath: String, filePath: String, version: Int, startTimeSec: Float)
 
     // T5.2/T5.4: listagem de diretório NFS (bloqueante — SEMPRE de Dispatchers.IO).
     external fun nativeNfsListDirectory(host: String, port: Int, exportPath: String, dirPath: String, version: Int): String
+
+    // Poda de pastas vazias (rede) — ver comentario em nativeSmbScanFolderHasMedia.
+    external fun nativeNfsScanFolderHasMedia(host: String, port: Int, exportPath: String, dirPath: String, version: Int): String
 
     // T5.2/T5.4: listagem de exports NFS (bloqueante — SEMPRE de Dispatchers.IO).
     external fun nativeNfsListExports(host: String, port: Int): String
@@ -1680,6 +1704,18 @@ class VRActivity : NativeActivity() {
 
     // T3.1: listagem de diretório WebDAV (bloqueante — SEMPRE de Dispatchers.IO)
     external fun nativeWebdavListDirectory(
+        host: String,
+        port: Int,
+        basePath: String,
+        dirPath: String,
+        username: String,
+        password: String,
+        useHttps: Boolean,
+        acceptInvalidCerts: Boolean
+    ): String
+
+    // Poda de pastas vazias (rede) — ver comentario em nativeSmbScanFolderHasMedia.
+    external fun nativeWebdavScanFolderHasMedia(
         host: String,
         port: Int,
         basePath: String,

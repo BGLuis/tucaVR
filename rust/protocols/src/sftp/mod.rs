@@ -282,6 +282,55 @@ pub fn list_directory(t: &SftpTarget, path: &str) -> Result<Vec<SftpDirEntry>, S
     })
 }
 
+/// Varredura recursiva "esta pasta tem alguma midia reproduzivel?" -- ver
+/// `crate::folder_scan`. Reusa a MESMA sessao SFTP pra todas as subpastas
+/// visitadas (nao reconecta por nivel), pilha explicita, sem limite de
+/// profundidade fixo, para no primeiro arquivo de midia ou no deadline de
+/// seguranca.
+pub fn scan_has_media(t: &SftpTarget, path: &str) -> Result<crate::folder_scan::ScanResult, String> {
+    let rt = new_runtime().map_err(|e| e.to_string())?;
+    rt.block_on(async {
+        let session = connect_and_auth(t, false).await?;
+        let sftp = open_sftp_session(&session).await?;
+        let deadline = crate::folder_scan::deadline_from_now();
+
+        let start = if path.is_empty() { ".".to_string() } else { path.to_string() };
+        let mut stack = vec![start];
+        let mut result = crate::folder_scan::ScanResult::exhausted_empty();
+
+        while let Some(current) = stack.pop() {
+            if std::time::Instant::now() > deadline {
+                result = crate::folder_scan::ScanResult::timed_out_assume_has_media();
+                break;
+            }
+            let entries = match sftp.read_dir(&current).await {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            let mut found = false;
+            for entry in entries {
+                let metadata = entry.metadata();
+                let name = entry.file_name();
+                if metadata.file_type().is_dir() {
+                    let child = if current == "." { name } else { format!("{}/{}", current, name) };
+                    stack.push(child);
+                } else if crate::folder_scan::is_media_filename(&name) {
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                result = crate::folder_scan::ScanResult::found();
+                break;
+            }
+        }
+
+        let _ = sftp.close().await;
+        disconnect_best_effort(&session).await;
+        Ok(result)
+    })
+}
+
 /// Fonte de leitura posicional para o Demuxer via custom I/O (T6.3 —
 /// integracao SFTP<->Demuxer). Ver doc do modulo sobre por que isto usa
 /// `RawSftpSession::read` (pread nativo, sem cursor) em vez de um `File`

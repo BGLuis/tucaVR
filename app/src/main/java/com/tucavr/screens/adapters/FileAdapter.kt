@@ -19,9 +19,11 @@ import com.tucavr.designsystem.VoidTheme
 import com.tucavr.filebrowser.FolderPreviewGenerator
 import com.tucavr.filebrowser.MediaEntry
 import com.tucavr.filebrowser.MediaFilterEngine
+import com.tucavr.filebrowser.MediaMetadataCacheEntry
 import com.tucavr.filebrowser.MediaType
 import com.tucavr.filebrowser.ThumbnailGenerator
 import com.tucavr.filebrowser.ViewMode
+import com.tucavr.history.formatDurationMs
 import com.tucavr.screens.formatFileSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -42,7 +44,14 @@ class FileAdapter(
     /** Double-click em vídeo → toca direto. */
     private val onVideoDoubleClick: (MediaEntry) -> Unit = onVideoClick,
     private val thumbnailLoader: (suspend (MediaEntry) -> Bitmap?)? = null,
-    private val folderMosaicLoader: (suspend (MediaEntry) -> Bitmap?)? = null
+    private val folderMosaicLoader: (suspend (MediaEntry) -> Bitmap?)? = null,
+    /**
+     * Leitura SOMENTE do cache de metadados (Room, `media_metadata_cache`) pra exibir um
+     * badge rápido de resolução/duração — NUNCA deve disparar cálculo via Rust (ver
+     * `MediaMetadataReader.readCachedSummary`). Cache miss = nenhum badge, sem popup de
+     * erro, mesmo contrato de silêncio de [thumbnailLoader].
+     */
+    private val metadataBadgeLoader: (suspend (MediaEntry) -> MediaMetadataCacheEntry?)? = null
 ) : RecyclerView.Adapter<FileAdapter.ViewHolder>() {
 
     private sealed class Row {
@@ -254,11 +263,39 @@ class FileAdapter(
                         holder.view.thumbnail.setImageBitmap(bitmap)
                     }
                 }
+
+                if (isVideo && metadataBadgeLoader != null) {
+                    val summary = metadataBadgeLoader.invoke(entry)
+                    val badge = summary?.let { formatMetadataBadge(it) }
+                    if (badge != null && holder.adapterPosition == position) {
+                        val combinedMeta = if (meta != null) "$meta · $badge" else badge
+                        if (holder.view is VoidListRow) {
+                            holder.view.metaView.text = combinedMeta
+                            holder.view.metaView.visibility = View.VISIBLE
+                        } else if (holder.view is VoidGridCard) {
+                            holder.view.metaView.text = combinedMeta
+                            holder.view.metaView.visibility = View.VISIBLE
+                        }
+                    }
+                }
             }
         } else {
             // Áudio
             holder.itemView.setOnClickListener { onVideoClick(entry) }
         }
+    }
+
+    // "1920x1080 · 12:34" -- só entra o que o cache efetivamente conhece; nenhum
+    // campo obrigatório (uma entrada de áudio, por exemplo, não tem dimensões).
+    private fun formatMetadataBadge(summary: MediaMetadataCacheEntry): String? {
+        val parts = mutableListOf<String>()
+        if (summary.videoWidth > 0 && summary.videoHeight > 0) {
+            parts.add("${summary.videoWidth}x${summary.videoHeight}")
+        }
+        if (summary.durationMs > 0) {
+            parts.add(formatDurationMs(summary.durationMs))
+        }
+        return if (parts.isEmpty()) null else parts.joinToString(" · ")
     }
 
     private fun buildHighlightedText(text: String, query: String): CharSequence {

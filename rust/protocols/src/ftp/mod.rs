@@ -123,22 +123,68 @@ fn from_list_file(f: FtpListFile) -> FtpDirEntry {
 /// POSIX/DOS que a propria `suppaftp` ja tem (`suppaftp::list::File::from_str`).
 pub fn list_directory(t: &FtpTarget, path: &str) -> Result<Vec<FtpDirEntry>, String> {
     let mut stream = connect_and_login(t)?;
-    let dir = if path.is_empty() { None } else { Some(path) };
+    let entries = list_directory_on(&mut stream, path)?;
+    let _ = stream.quit();
+    Ok(entries)
+}
 
-    let entries = match stream.mlsd(dir) {
-        Ok(lines) => lines.into_iter().filter_map(|line| FtpListFile::from_mlsx_line(&line).ok()).map(from_list_file).collect(),
+// Extraida de list_directory pra ser reusada por scan_has_media (que reusa a MESMA
+// conexao pra varias pastas, em vez de reconectar por nivel).
+fn list_directory_on(stream: &mut FtpStream, path: &str) -> Result<Vec<FtpDirEntry>, String> {
+    let dir = if path.is_empty() { None } else { Some(path) };
+    match stream.mlsd(dir) {
+        Ok(lines) => Ok(lines.into_iter().filter_map(|line| FtpListFile::from_mlsx_line(&line).ok()).map(from_list_file).collect()),
         Err(_) => {
             let lines = stream.list(dir).map_err(|e| e.to_string())?;
-            lines
+            Ok(lines
                 .into_iter()
                 .filter_map(|line| line.parse::<FtpListFile>().ok())
                 .filter(|f| f.name() != "." && f.name() != "..")
                 .map(from_list_file)
-                .collect()
+                .collect())
         }
-    };
+    }
+}
+
+/// Varredura recursiva "esta pasta tem alguma midia reproduzivel?" -- ver
+/// `crate::folder_scan`. Reusa a MESMA conexao de controle pra todas as
+/// subpastas visitadas (nao reconecta por nivel), pilha explicita, sem
+/// limite de profundidade fixo, para no primeiro arquivo de midia ou no
+/// deadline de seguranca.
+pub fn scan_has_media(t: &FtpTarget, path: &str) -> Result<crate::folder_scan::ScanResult, String> {
+    let mut stream = connect_and_login(t)?;
+    let deadline = crate::folder_scan::deadline_from_now();
+
+    let mut stack = vec![path.to_string()];
+    let mut result = crate::folder_scan::ScanResult::exhausted_empty();
+
+    while let Some(current) = stack.pop() {
+        if std::time::Instant::now() > deadline {
+            result = crate::folder_scan::ScanResult::timed_out_assume_has_media();
+            break;
+        }
+        let entries = match list_directory_on(&mut stream, &current) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let mut found = false;
+        for e in &entries {
+            if e.is_dir {
+                let child = if current.is_empty() { e.name.clone() } else { format!("{}/{}", current, e.name) };
+                stack.push(child);
+            } else if crate::folder_scan::is_media_filename(&e.name) {
+                found = true;
+                break;
+            }
+        }
+        if found {
+            result = crate::folder_scan::ScanResult::found();
+            break;
+        }
+    }
+
     let _ = stream.quit();
-    Ok(entries)
+    Ok(result)
 }
 
 /// Fonte de leitura posicional para o Demuxer via custom I/O (T6.3). Mantem

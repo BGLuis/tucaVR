@@ -30,14 +30,17 @@ import com.tucavr.designsystem.VoidSortSelector
 import com.tucavr.designsystem.VoidText
 import com.tucavr.designsystem.VoidTextField
 import com.tucavr.designsystem.VoidTheme
+import com.tucavr.filebrowser.CacheKeys
 import com.tucavr.filebrowser.DateFilter
 import com.tucavr.filebrowser.FolderConfig
 import com.tucavr.filebrowser.FolderConfigStore
 import com.tucavr.filebrowser.Format3DFilter
 import com.tucavr.filebrowser.MediaEntry
 import com.tucavr.filebrowser.MediaFilterEngine
+import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.filebrowser.MediaType
 import com.tucavr.filebrowser.MediaTypeFilter
+import com.tucavr.filebrowser.NetworkFolderProber
 import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ViewMode
 import com.tucavr.filebrowser.mediaTypeForExtension
@@ -459,6 +462,9 @@ class NetworkSmbScreen(
             thumbnailLoader = { entry ->
                 val source = PlaybackSource.Smb(server, entry.path, entry.sizeBytes)
                 NetworkThumbnailGenerator.getThumbnail(context, activity, source)
+            },
+            metadataBadgeLoader = { entry ->
+                MediaMetadataReader.readCachedSummary(context, PlaybackSource.Smb(server, entry.path, entry.sizeBytes))
             }
         )
         adapter = fileAdapter
@@ -568,7 +574,25 @@ class NetworkSmbScreen(
                 )
             }
 
-            cachedRawEntries = entries
+            // Poda pastas sem mídia reprodutível (ver NetworkFolderProber) -- espera
+            // resolver na primeira visita, cache-first nas seguintes.
+            val pruned = NetworkFolderProber.pruneEmptyFolders(
+                context = context,
+                sourceKind = "smb",
+                entries = entries,
+                folderKeyFor = { entry -> CacheKeys.forFolder("smb", server.host, server.port, server.share, entry.path) },
+                scanFnFor = { entry ->
+                    {
+                        activity.nativeSmbScanFolderHasMedia(
+                            server.host, server.port, server.username, server.password,
+                            server.domain, server.share, entry.path
+                        )
+                    }
+                }
+            )
+            if (browsingServer != server || browsePath != requestedPath) return@launch
+
+            cachedRawEntries = pruned
             applyFiltersAndSort()
         }
     }

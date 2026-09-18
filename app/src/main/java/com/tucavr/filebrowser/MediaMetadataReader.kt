@@ -1,6 +1,8 @@
 package com.tucavr.filebrowser
 
+import android.content.Context
 import com.tucavr.VRActivity
+import com.tucavr.history.AppDatabase
 import com.tucavr.navigation.PlaybackSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -42,6 +44,10 @@ data class MediaMetadata(
 // VideoMetadataReader (MediaMetadataRetriever, so local, so 3 campos).
 object MediaMetadataReader {
 
+    // Sempre busca fresco do Rust -- usado por telas de detalhe/player, que precisam de
+    // tags/tracks completos (nunca guardados no cache, ver [MediaMetadataCacheEntry]).
+    // Write-through: ao obter um resultado, grava o resumo em media_metadata_cache pra
+    // popular o badge rápido de [readCachedSummary] na próxima vez que a listagem renderizar.
     suspend fun read(activity: VRActivity, source: PlaybackSource): MediaMetadata? =
         withContext(Dispatchers.IO) {
             val wire = when (source) {
@@ -62,8 +68,41 @@ object MediaMetadataReader {
                 is PlaybackSource.Nfs, is PlaybackSource.Webdav -> null
             }
             if (wire == null) return@withContext null
-            parse(wire)
+            val metadata = parse(wire) ?: return@withContext null
+            cacheSummary(activity, source, metadata)
+            metadata
         }
+
+    /**
+     * Leitura SOMENTE do cache Room (nunca chama o Rust) -- usada pela listagem
+     * (`FileAdapter`) pra exibir um badge de resolução/duração sem custo. Cache miss
+     * (arquivo ainda não aberto em detalhe/player) simplesmente não mostra nada; o
+     * cálculo real só acontece via [read], que popula o cache pra próxima renderização.
+     */
+    suspend fun readCachedSummary(context: Context, source: PlaybackSource): MediaMetadataCacheEntry? =
+        withContext(Dispatchers.IO) {
+            val key = runCatching { CacheKeys.forSource(source) }.getOrNull() ?: return@withContext null
+            AppDatabase.getInstance(context).mediaMetadataCacheDao().find(key)
+        }
+
+    private suspend fun cacheSummary(context: Context, source: PlaybackSource, metadata: MediaMetadata) {
+        val key = runCatching { CacheKeys.forSource(source) }.getOrNull() ?: return
+        val videoTrack = metadata.videoTracks.firstOrNull()
+        val entry = MediaMetadataCacheEntry(
+            mediaKey = key,
+            container = metadata.container,
+            containerLong = metadata.containerLong,
+            durationMs = metadata.durationMs,
+            bitRate = metadata.bitRate,
+            format3dIndex = metadata.format3dIndex,
+            detectionConfidence = metadata.detectionConfidence,
+            videoWidth = videoTrack?.width ?: 0,
+            videoHeight = videoTrack?.height ?: 0,
+            videoCodec = videoTrack?.codec ?: "",
+            fetchedAt = System.currentTimeMillis()
+        )
+        runCatching { AppDatabase.getInstance(context).mediaMetadataCacheDao().upsert(entry) }
+    }
 
     // Pura (sem Context/Activity) -- testavel na JVM. Ignora linhas
     // desconhecidas/malformadas em vez de falhar tudo, pra a wire poder

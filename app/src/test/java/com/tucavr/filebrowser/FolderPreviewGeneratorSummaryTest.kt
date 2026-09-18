@@ -20,7 +20,8 @@ class FolderPreviewGeneratorSummaryTest {
             audioCount = 3,
             imageCount = 3,
             previewEntries = listOf(entry1, entry2, entry3, entry4),
-            available3DFormats = setOf(Format3DType.SBS, Format3DType.VR_180, Format3DType.VR_360, Format3DType.OU)
+            available3DFormats = setOf(Format3DType.SBS, Format3DType.VR_180, Format3DType.VR_360, Format3DType.OU),
+            hasPlayableMediaWithinDepth = true
         )
 
         assertEquals(10, summary.totalItems)
@@ -40,7 +41,8 @@ class FolderPreviewGeneratorSummaryTest {
             audioCount = 0,
             imageCount = 0,
             previewEntries = emptyList(),
-            available3DFormats = emptySet()
+            available3DFormats = emptySet(),
+            hasPlayableMediaWithinDepth = false
         )
 
         assertNull(summary.firstVideo)

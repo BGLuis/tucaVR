@@ -119,6 +119,53 @@ pub fn list_directory(t: &SmbTarget, path: &str) -> Result<Vec<SmbDirEntry>, Str
     })
 }
 
+/// Varredura recursiva "esta pasta tem alguma midia reproduzivel?" (poda de
+/// pastas vazias na listagem, ver `crate::folder_scan`). Abre UMA conexao/
+/// share (nao uma por nivel, diferente de chamar `list_directory` repetidas
+/// vezes do lado Kotlin) e percorre as subpastas encontradas com uma pilha
+/// explicita, sem limite de profundidade fixo, parando no primeiro arquivo
+/// de midia encontrado ou no deadline de seguranca
+/// (`folder_scan::SCAN_DEADLINE`).
+pub fn scan_has_media(t: &SmbTarget, path: &str) -> Result<crate::folder_scan::ScanResult, String> {
+    let rt = new_runtime().map_err(|e| e.to_string())?;
+    rt.block_on(async {
+        let mut client = SmbClient::connect(client_config(t, false)).await.map_err(|e| e.to_string())?;
+        let mut tree = client.connect_share(&t.share).await.map_err(|e| e.to_string())?;
+        let deadline = crate::folder_scan::deadline_from_now();
+
+        let mut stack = vec![path.to_string()];
+        let mut result = crate::folder_scan::ScanResult::exhausted_empty();
+
+        while let Some(current) = stack.pop() {
+            if std::time::Instant::now() > deadline {
+                result = crate::folder_scan::ScanResult::timed_out_assume_has_media();
+                break;
+            }
+            let entries = match client.list_directory(&mut tree, &current).await {
+                Ok(e) => e,
+                Err(_) => continue, // pasta ilegivel/removida no meio do scan: pula, nao aborta tudo
+            };
+            let mut found = false;
+            for e in &entries {
+                if e.is_directory {
+                    let child = if current.is_empty() { e.name.clone() } else { format!("{}/{}", current, e.name) };
+                    stack.push(child);
+                } else if crate::folder_scan::is_media_filename(&e.name) {
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                result = crate::folder_scan::ScanResult::found();
+                break;
+            }
+        }
+
+        let _ = client.disconnect_share(&tree).await;
+        Ok(result)
+    })
+}
+
 /// Fonte de leitura posicional para o Demuxer via custom I/O (T6.3 —
 /// integracao SMB<->Demuxer; SMB nao tem um verbo "seek" separado, um READ
 /// com offset explicito JA E o primitivo de seek, como a tarefa descreve).

@@ -29,6 +29,7 @@ import com.tucavr.designsystem.VoidSortSelector
 import com.tucavr.designsystem.VoidText
 import com.tucavr.designsystem.VoidTextField
 import com.tucavr.designsystem.VoidTheme
+import com.tucavr.filebrowser.CacheKeys
 import com.tucavr.filebrowser.DateFilter
 import com.tucavr.filebrowser.FolderConfig
 import com.tucavr.filebrowser.FolderConfigStore
@@ -38,6 +39,7 @@ import com.tucavr.filebrowser.MediaEntry
 import com.tucavr.filebrowser.MediaFilterEngine
 import com.tucavr.filebrowser.MediaType
 import com.tucavr.filebrowser.MediaTypeFilter
+import com.tucavr.filebrowser.NetworkFolderProber
 import com.tucavr.filebrowser.ViewMode
 import com.tucavr.filebrowser.mediaTypeForExtension
 import com.tucavr.filebrowser.sortMediaEntries
@@ -662,7 +664,22 @@ class NetworkWebdavScreen(
                 )
             }
 
-            cachedRawEntries = entries
+            val pruned = NetworkFolderProber.pruneEmptyFolders(
+                context = context,
+                sourceKind = "webdav",
+                entries = entries,
+                folderKeyFor = { entry -> CacheKeys.forFolder("webdav", server.host, server.port, server.path, entry.path) },
+                scanFnFor = { entry ->
+                    {
+                        activity.nativeWebdavScanFolderHasMedia(
+                            server.host, server.port, server.path, entry.path,
+                            server.username, password, useHttps, acceptInvalidCerts
+                        )
+                    }
+                }
+            )
+
+            cachedRawEntries = pruned
             applyFiltersAndSort()
         }
     }

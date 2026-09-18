@@ -125,11 +125,18 @@ extern "C" {
     extern char* smb_list_directory(const char* host, int32_t port, const char* username,
                                      const char* password, const char* domain,
                                      const char* share, const char* path);
+    // Poda de pastas vazias (rede) — ver comentario em
+    // rust/bridge/src/lib.rs::smb_scan_folder_has_media.
+    extern char* smb_scan_folder_has_media(const char* host, int32_t port, const char* username,
+                                            const char* password, const char* domain,
+                                            const char* share, const char* path);
     // FTP
     extern void start_ftp_playback(const char* host, int32_t port, const char* path,
                                     const char* username, const char* password, float startTimeSec);
     extern char* ftp_list_directory(const char* host, int32_t port, const char* username,
                                      const char* password, const char* path);
+    extern char* ftp_scan_folder_has_media(const char* host, int32_t port, const char* username,
+                                            const char* password, const char* path);
     // SFTP
     extern void start_sftp_playback(const char* host, int32_t port, const char* path,
                                      const char* username, const char* password,
@@ -137,12 +144,17 @@ extern "C" {
     extern char* sftp_list_directory(const char* host, int32_t port, const char* username,
                                       const char* password, const char* private_key,
                                       const char* path);
+    extern char* sftp_scan_folder_has_media(const char* host, int32_t port, const char* username,
+                                             const char* password, const char* private_key,
+                                             const char* path);
     // NFS
     extern void start_nfs_playback(const char* host, int32_t port, const char* export_path,
                                     const char* file_path, int32_t version, float startTimeSec);
     extern char* nfs_list_directory(const char* host, int32_t port, const char* export_path,
                                      const char* dir_path, int32_t version);
     extern char* nfs_list_exports(const char* host, int32_t port);
+    extern char* nfs_scan_folder_has_media(const char* host, int32_t port, const char* export_path,
+                                            const char* dir_path, int32_t version);
     // WebDAV
     extern void start_webdav_playback(const char* host, int32_t port, const char* base_path,
                                       const char* file_path, const char* username,
@@ -152,6 +164,10 @@ extern "C" {
                                        const char* dir_path, const char* username,
                                        const char* password, int32_t use_https,
                                        int32_t accept_invalid_certs);
+    extern char* webdav_scan_folder_has_media(const char* host, int32_t port, const char* base_path,
+                                               const char* dir_path, const char* username,
+                                               const char* password, int32_t use_https,
+                                               int32_t accept_invalid_certs);
     // Descoberta Automática (mDNS + SSDP)
     extern char* discovery_scan_network(uint32_t timeout_ms);
     // DLNA
@@ -731,6 +747,32 @@ Java_com_tucavr_VRActivity_nativeSmbListDirectory(JNIEnv* env, jobject,
     return RustStringToJStringAndFree(env, result);
 }
 
+// Poda de pastas vazias (rede) — ver comentario em
+// rust/bridge/src/lib.rs::smb_scan_folder_has_media. Chamada BLOQUEANTE
+// (pode levar ate o deadline de seguranca inteiro), Kotlin SEMPRE de
+// Dispatchers.IO.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeSmbScanFolderHasMedia(JNIEnv* env, jobject,
+                                                         jstring host, jint port,
+                                                         jstring username, jstring password,
+                                                         jstring domain, jstring share,
+                                                         jstring path) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    const char* d = env->GetStringUTFChars(domain, nullptr);
+    const char* sh = env->GetStringUTFChars(share, nullptr);
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    char* result = smb_scan_folder_has_media(h, (int32_t)port, u, pw, d, sh, p);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    env->ReleaseStringUTFChars(domain, d);
+    env->ReleaseStringUTFChars(share, sh);
+    env->ReleaseStringUTFChars(path, p);
+    return RustStringToJStringAndFree(env, result);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativePlayFtp(JNIEnv* env, jobject,
                                             jstring host, jint port, jstring path,
@@ -756,6 +798,25 @@ Java_com_tucavr_VRActivity_nativeFtpListDirectory(JNIEnv* env, jobject,
     const char* pw = env->GetStringUTFChars(password, nullptr);
     const char* p = env->GetStringUTFChars(path, nullptr);
     char* result = ftp_list_directory(h, (int32_t)port, u, pw, p);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    env->ReleaseStringUTFChars(path, p);
+    return RustStringToJStringAndFree(env, result);
+}
+
+// Poda de pastas vazias (rede) — ver comentario em
+// nativeSmbScanFolderHasMedia acima.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeFtpScanFolderHasMedia(JNIEnv* env, jobject,
+                                                         jstring host, jint port,
+                                                         jstring username, jstring password,
+                                                         jstring path) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    char* result = ftp_scan_folder_has_media(h, (int32_t)port, u, pw, p);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
@@ -800,6 +861,27 @@ Java_com_tucavr_VRActivity_nativeSftpListDirectory(JNIEnv* env, jobject,
     return RustStringToJStringAndFree(env, result);
 }
 
+// Poda de pastas vazias (rede) — ver comentario em
+// nativeSmbScanFolderHasMedia acima.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeSftpScanFolderHasMedia(JNIEnv* env, jobject,
+                                                          jstring host, jint port,
+                                                          jstring username, jstring password,
+                                                          jstring privateKey, jstring path) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    const char* k = env->GetStringUTFChars(privateKey, nullptr);
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    char* result = sftp_scan_folder_has_media(h, (int32_t)port, u, pw, k, p);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    env->ReleaseStringUTFChars(privateKey, k);
+    env->ReleaseStringUTFChars(path, p);
+    return RustStringToJStringAndFree(env, result);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativePlayNfs(JNIEnv* env, jobject,
                                             jstring host, jint port, jstring exportPath,
@@ -822,6 +904,23 @@ Java_com_tucavr_VRActivity_nativeNfsListDirectory(JNIEnv* env, jobject,
     const char* ep = env->GetStringUTFChars(exportPath, nullptr);
     const char* dp = env->GetStringUTFChars(dirPath, nullptr);
     char* result = nfs_list_directory(h, (int32_t)port, ep, dp, (int32_t)version);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(exportPath, ep);
+    env->ReleaseStringUTFChars(dirPath, dp);
+    return RustStringToJStringAndFree(env, result);
+}
+
+// Poda de pastas vazias (rede) — ver comentario em
+// nativeSmbScanFolderHasMedia acima.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeNfsScanFolderHasMedia(JNIEnv* env, jobject,
+                                                         jstring host, jint port,
+                                                         jstring exportPath, jstring dirPath,
+                                                         jint version) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* ep = env->GetStringUTFChars(exportPath, nullptr);
+    const char* dp = env->GetStringUTFChars(dirPath, nullptr);
+    char* result = nfs_scan_folder_has_media(h, (int32_t)port, ep, dp, (int32_t)version);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(exportPath, ep);
     env->ReleaseStringUTFChars(dirPath, dp);
@@ -868,6 +967,29 @@ Java_com_tucavr_VRActivity_nativeWebdavListDirectory(JNIEnv* env, jobject,
     const char* u = env->GetStringUTFChars(username, nullptr);
     const char* pw = env->GetStringUTFChars(password, nullptr);
     char* result = webdav_list_directory(h, (int32_t)port, bp, dp, u, pw,
+                                        useHttps ? 1 : 0, acceptInvalidCerts ? 1 : 0);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(basePath, bp);
+    env->ReleaseStringUTFChars(dirPath, dp);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    return RustStringToJStringAndFree(env, result);
+}
+
+// Poda de pastas vazias (rede) — ver comentario em
+// nativeSmbScanFolderHasMedia acima.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeWebdavScanFolderHasMedia(JNIEnv* env, jobject,
+                                                            jstring host, jint port,
+                                                            jstring basePath, jstring dirPath,
+                                                            jstring username, jstring password,
+                                                            jboolean useHttps, jboolean acceptInvalidCerts) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* bp = env->GetStringUTFChars(basePath, nullptr);
+    const char* dp = env->GetStringUTFChars(dirPath, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    char* result = webdav_scan_folder_has_media(h, (int32_t)port, bp, dp, u, pw,
                                         useHttps ? 1 : 0, acceptInvalidCerts ? 1 : 0);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(basePath, bp);

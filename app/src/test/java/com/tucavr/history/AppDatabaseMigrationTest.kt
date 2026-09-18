@@ -165,12 +165,35 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
-    fun `full migration chain 1 to 4 preserves playback_history data untouched`() {
+    fun `migration 4 to 5 creates folder_media_status and media_metadata_cache with the expected columns`() {
+        applyMigration(AppDatabase.MIGRATION_1_2_SQL)
+        applyMigration(AppDatabase.MIGRATION_2_3_SQL)
+        applyMigration(AppDatabase.MIGRATION_3_4_SQL)
+        applyMigration(AppDatabase.MIGRATION_4_5_SQL)
+
+        assertTrue("folder_media_status deveria existir após MIGRATION_4_5", connection.tableExists("folder_media_status"))
+        assertTrue("media_metadata_cache deveria existir após MIGRATION_4_5", connection.tableExists("media_metadata_cache"))
+        assertEquals(
+            listOf("folderKey", "hasPlayableMedia", "scanCompletedFully", "lastCheckedAt", "sourceKind"),
+            connection.columnNames("folder_media_status")
+        )
+        assertEquals(
+            listOf(
+                "mediaKey", "container", "containerLong", "durationMs", "bitRate", "format3dIndex",
+                "detectionConfidence", "videoWidth", "videoHeight", "videoCodec", "fetchedAt"
+            ),
+            connection.columnNames("media_metadata_cache")
+        )
+    }
+
+    @Test
+    fun `full migration chain 1 to 5 preserves playback_history data untouched`() {
         insertSampleHistoryRow()
 
         applyMigration(AppDatabase.MIGRATION_1_2_SQL)
         applyMigration(AppDatabase.MIGRATION_2_3_SQL)
         applyMigration(AppDatabase.MIGRATION_3_4_SQL)
+        applyMigration(AppDatabase.MIGRATION_4_5_SQL)
 
         connection.createStatement().use { stmt ->
             stmt.executeQuery("SELECT title, mediaPath, positionMs, durationMs, sourceType FROM playback_history").use { rs ->
@@ -184,26 +207,32 @@ class AppDatabaseMigrationTest {
             }
         }
 
-        // As quatro tabelas de todas as versões coexistem depois da cadeia completa.
+        // As seis tabelas de todas as versões coexistem depois da cadeia completa.
         assertTrue(connection.tableExists("playback_history"))
         assertTrue(connection.tableExists("saved_servers"))
         assertTrue(connection.tableExists("playlists"))
         assertTrue(connection.tableExists("playlist_items"))
         assertTrue(connection.tableExists("downloads"))
+        assertTrue(connection.tableExists("folder_media_status"))
+        assertTrue(connection.tableExists("media_metadata_cache"))
     }
 
     @Test
     fun `migrations are idempotent via CREATE TABLE IF NOT EXISTS`() {
-        // As três migrations usam CREATE TABLE/INDEX IF NOT EXISTS — reaplicar não deve falhar.
+        // Todas as migrations usam CREATE TABLE/INDEX IF NOT EXISTS — reaplicar não deve falhar.
         applyMigration(AppDatabase.MIGRATION_1_2_SQL)
         applyMigration(AppDatabase.MIGRATION_1_2_SQL)
         applyMigration(AppDatabase.MIGRATION_2_3_SQL)
         applyMigration(AppDatabase.MIGRATION_2_3_SQL)
         applyMigration(AppDatabase.MIGRATION_3_4_SQL)
         applyMigration(AppDatabase.MIGRATION_3_4_SQL)
+        applyMigration(AppDatabase.MIGRATION_4_5_SQL)
+        applyMigration(AppDatabase.MIGRATION_4_5_SQL)
 
         assertTrue(connection.tableExists("saved_servers"))
         assertTrue(connection.tableExists("playlists"))
         assertTrue(connection.tableExists("downloads"))
+        assertTrue(connection.tableExists("folder_media_status"))
+        assertTrue(connection.tableExists("media_metadata_cache"))
     }
 }

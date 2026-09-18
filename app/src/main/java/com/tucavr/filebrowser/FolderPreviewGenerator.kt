@@ -16,7 +16,15 @@ data class FolderSummary(
     val audioCount: Int,
     val imageCount: Int,
     val previewEntries: List<MediaEntry>,
-    val available3DFormats: Set<Format3DType>
+    val available3DFormats: Set<Format3DType>,
+    /**
+     * true se houver algum arquivo de mídia reproduzível nos filhos IMEDIATOS desta pasta
+     * OU nos filhos de suas subpastas (2 níveis) — usado por [MediaFilterEngine] pra podar
+     * pastas vazias sempre, não só quando o campo `totalItems`/filtro ativo indicam pasta
+     * vazia no nível imediato (uma pasta pode ter 0 arquivos direto mas ter mídia dentro de
+     * uma subpasta).
+     */
+    val hasPlayableMediaWithinDepth: Boolean
 ) {
     val firstVideo: MediaEntry? get() = previewEntries.firstOrNull()
 }
@@ -75,17 +83,41 @@ object FolderPreviewGenerator {
             }
         }
 
+        val hasImmediateMedia = videoCount > 0 || audioCount > 0 || imageCount > 0
+        val hasPlayableMediaWithinDepth = hasImmediateMedia || children.any { child ->
+            child.isDirectory && !child.name.startsWith(".") && hasMediaWithin(child, levelsRemaining = 0)
+        }
+
         val summary = FolderSummary(
             totalItems = children.size,
             videoCount = videoCount,
             audioCount = audioCount,
             imageCount = imageCount,
             previewEntries = previewVideos,
-            available3DFormats = formats3D
+            available3DFormats = formats3D,
+            hasPlayableMediaWithinDepth = hasPlayableMediaWithinDepth
         )
 
         summaryCache.put(dirPath, summary)
         summary
+    }
+
+    // `levelsRemaining` = quantas subpastas ainda podem ser descidas a partir de `dir`.
+    // Chamada com 0 a partir de getSummary (dir já é uma subpasta de 1 nível abaixo da
+    // pasta cujo resumo está sendo calculado) -- dá o total de 2 níveis pedido: filhos
+    // diretos (já contados em videoCount/audioCount/imageCount) + filhos das subpastas.
+    // Early-exit no primeiro arquivo de mídia encontrado.
+    private fun hasMediaWithin(dir: File, levelsRemaining: Int): Boolean {
+        val children = dir.listFiles() ?: return false
+        for (file in children) {
+            if (file.name.startsWith(".")) continue
+            if (file.isDirectory) {
+                if (levelsRemaining > 0 && hasMediaWithin(file, levelsRemaining - 1)) return true
+            } else if (mediaTypeForExtension(file.extension) != null) {
+                return true
+            }
+        }
+        return false
     }
 
     /**

@@ -30,6 +30,7 @@ import com.tucavr.filebrowser.FolderSummary
 import com.tucavr.filebrowser.Format3DFilter
 import com.tucavr.filebrowser.MediaEntry
 import com.tucavr.filebrowser.MediaFilterEngine
+import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.filebrowser.MediaType
 import com.tucavr.filebrowser.MediaTypeFilter
 import com.tucavr.filebrowser.SortBy
@@ -244,7 +245,10 @@ class LocalFilesScreen(
                 searchQuery = ""
                 renderLocalFiles()
             },
-            onVideoClick = { entry -> onPlayLocalVideo(entry) }
+            onVideoClick = { entry -> onPlayLocalVideo(entry) },
+            metadataBadgeLoader = { entry ->
+                MediaMetadataReader.readCachedSummary(context, PlaybackSource.LocalFile(entry.path, entry.sizeBytes))
+            }
         )
         adapter = fileAdapter
         recycler.adapter = fileAdapter

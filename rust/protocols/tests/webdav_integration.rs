@@ -9,7 +9,7 @@
 //! na raiz do repo, que sobe os containers, exporta as env vars abaixo e roda
 //! `cargo test -p protocols -- --ignored`.
 use protocols::prefetch::RangeSource;
-use protocols::webdav::{list_directory, WebdavFileSource, WebdavTarget};
+use protocols::webdav::{list_directory, scan_has_media, WebdavFileSource, WebdavTarget};
 use sha2::{Digest, Sha256};
 
 fn env_or(key: &str, default: &str) -> String {
@@ -57,6 +57,18 @@ fn list_directory_finds_test_file_on_real_server() {
     });
     assert!(!entry.is_dir);
     assert!(entry.size > 0);
+}
+
+/// Varredura recursiva de poda de pastas (T-folder-pruning) contra o servidor real —
+/// a raiz so tem o arquivo de teste (nao-midia), entao o resultado esperado e
+/// "nenhuma midia encontrada, varredura concluida por completo" — cobre o caminho de
+/// PROPFIND real reusando o mesmo cliente HTTP (pool keep-alive) entre chamadas.
+#[test]
+#[ignore]
+fn scan_has_media_reports_no_media_for_fixture_with_only_a_non_media_file() {
+    let result = scan_has_media(&target(""), "").expect("scan_has_media falhou contra o servidor real");
+    assert!(!result.has_media);
+    assert!(result.completed_fully);
 }
 
 /// Leitura completa via `WebdavFileSource` (GET com Range em blocos concorrentes,

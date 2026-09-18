@@ -9,7 +9,7 @@
 //! `./scripts/test-network-protocols.sh` na raiz do repo, que sobe os containers,
 //! exporta as env vars abaixo com os valores corretos e roda
 //! `cargo test -p protocols -- --ignored`.
-use protocols::ftp::{list_directory, FtpFileSource, FtpTarget};
+use protocols::ftp::{list_directory, scan_has_media, FtpFileSource, FtpTarget};
 use protocols::prefetch::PrefetchReader;
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -55,6 +55,20 @@ fn list_directory_finds_test_file() {
     });
     assert!(!entry.is_dir);
     assert!(entry.size > 0);
+}
+
+/// Varredura recursiva de poda de pastas (T-folder-pruning) contra o servidor real —
+/// a fixture so tem `testfile.bin` na raiz, que NAO e uma extensao de midia
+/// reconhecida (`protocols::folder_scan::is_media_filename`), entao o resultado
+/// esperado e "nenhuma midia encontrada, varredura concluida por completo" — cobre
+/// o caminho de conexao+listagem real, nao so a logica pura de extensao (ja coberta
+/// em folder_scan::tests).
+#[test]
+#[ignore]
+fn scan_has_media_reports_no_media_for_fixture_with_only_a_non_media_file() {
+    let result = scan_has_media(&target(), "").expect("scan_has_media falhou contra o servidor real");
+    assert!(!result.has_media);
+    assert!(result.completed_fully);
 }
 
 /// Leitura de arquivo via `FtpFileSource` + `PrefetchReader` (T6.3) —

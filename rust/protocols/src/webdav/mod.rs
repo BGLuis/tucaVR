@@ -210,6 +210,17 @@ pub fn parse_multistatus_xml<R: io::BufRead>(
 /// Lista o conteúdo de um diretório em um servidor WebDAV via PROPFIND Depth: 1.
 pub fn list_directory(target: &WebdavTarget, dir_path: &str) -> Result<Vec<WebdavDirEntry>, String> {
     let client = create_client(target)?;
+    list_directory_with_client(&client, target, dir_path)
+}
+
+// Extraida de list_directory pra ser reusada por scan_has_media, que reusa o MESMO
+// reqwest::blocking::Client (e seu pool de conexoes HTTP keep-alive) pra varias
+// pastas, em vez de criar um cliente novo por nivel.
+fn list_directory_with_client(
+    client: &reqwest::blocking::Client,
+    target: &WebdavTarget,
+    dir_path: &str,
+) -> Result<Vec<WebdavDirEntry>, String> {
     let mut url = target.url_for_path(dir_path);
 
     // Servidores WebDAV frequentemente exigem que a URL de uma coleção termine com '/'
@@ -241,6 +252,50 @@ pub fn list_directory(target: &WebdavTarget, dir_path: &str) -> Result<Vec<Webda
 
     let reader = io::BufReader::new(resp);
     parse_multistatus_xml(reader, &url)
+}
+
+/// Varredura recursiva "esta pasta tem alguma midia reproduzivel?" -- ver
+/// `crate::folder_scan`. Reusa o MESMO cliente HTTP (pool de conexoes
+/// keep-alive) pra todas as subpastas visitadas, pilha explicita, sem
+/// limite de profundidade fixo, para no primeiro arquivo de midia ou no
+/// deadline de seguranca.
+pub fn scan_has_media(target: &WebdavTarget, dir_path: &str) -> Result<crate::folder_scan::ScanResult, String> {
+    let client = create_client(target)?;
+    let deadline = crate::folder_scan::deadline_from_now();
+
+    let mut stack = vec![dir_path.to_string()];
+    let mut result = crate::folder_scan::ScanResult::exhausted_empty();
+
+    while let Some(current) = stack.pop() {
+        if std::time::Instant::now() > deadline {
+            result = crate::folder_scan::ScanResult::timed_out_assume_has_media();
+            break;
+        }
+        let entries = match list_directory_with_client(&client, target, &current) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+        let mut found = false;
+        for e in &entries {
+            if e.is_dir {
+                let child = if current.is_empty() {
+                    e.name.clone()
+                } else {
+                    format!("{}/{}", current.trim_end_matches('/'), e.name)
+                };
+                stack.push(child);
+            } else if crate::folder_scan::is_media_filename(&e.name) {
+                found = true;
+                break;
+            }
+        }
+        if found {
+            result = crate::folder_scan::ScanResult::found();
+            break;
+        }
+    }
+
+    Ok(result)
 }
 
 fn parse_content_range_total(headers: &reqwest::header::HeaderMap) -> Option<u64> {
