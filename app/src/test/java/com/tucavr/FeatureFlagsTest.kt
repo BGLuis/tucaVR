@@ -54,5 +54,8 @@ class FeatureFlagsTest {
 
         // Chroma Key inicia desabilitado até ativação explícita pelo usuário
         org.junit.Assert.assertFalse("CHROMA_KEY deve iniciar desabilitado por padrão", FeatureFlags.Flag.CHROMA_KEY.defaultEnabled)
+
+        // Modo Ambiente (halo de luz) nunca validado em headset real, deve iniciar desabilitado
+        org.junit.Assert.assertFalse("AMBIENT_MODE deve iniciar desabilitado por padrão", FeatureFlags.Flag.AMBIENT_MODE.defaultEnabled)
     }
 }

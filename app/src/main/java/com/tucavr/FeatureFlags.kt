@@ -54,6 +54,12 @@ object FeatureFlags {
 
         // Chroma Key: recorte de fundo (verde/azul) para vídeos 3D/2D em Passthrough
         CHROMA_KEY("chroma_key", defaultEnabled = false),
+
+        // docs/reports/MODO-AMBIENTE.md: halo de luz atrás da tela derivado da cor
+        // do frame (bias lighting), só ambiente Void, só caminho Vulkan — ver
+        // vr_player_app_vulkan.cpp::shouldDrawAmbientHalo. Desligado por padrão:
+        // nunca validado em headset real até agora.
+        AMBIENT_MODE("ambient_mode", defaultEnabled = false),
     }
 
     /** Chave usada para persistir o modo de áudio espacial como Int (0/1/2). */

@@ -76,6 +76,9 @@ extern "C" {
     extern float get_chroma_key_smoothness();
     extern void set_pause_on_exit(uint32_t enabled);
     extern uint32_t get_pause_on_exit();
+    // docs/reports/MODO-AMBIENTE.md: halo de luz ambiente (Vulkan-only)
+    extern void set_ambient_mode_enabled(uint32_t enabled);
+    extern uint32_t get_ambient_mode_enabled();
     // Upscaling de vídeo (Vulkan-only, MQSR & SGSR1)
     extern void set_upscaling_mode(uint32_t mode);
     extern uint32_t get_upscaling_mode();
@@ -642,6 +645,11 @@ Java_com_tucavr_VRActivity_nativeSetEnvironment(JNIEnv* env, jobject, jstring en
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetPauseOnExit(JNIEnv*, jobject, jboolean enabled) {
     set_pause_on_exit(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetAmbientMode(JNIEnv*, jobject, jboolean enabled) {
+    set_ambient_mode_enabled(enabled ? 1 : 0);
 }
 
 extern "C" JNIEXPORT void JNICALL

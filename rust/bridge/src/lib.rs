@@ -391,6 +391,22 @@ pub extern "C" fn get_pause_on_exit() -> u32 {
     PAUSE_ON_EXIT.load(Ordering::Relaxed) as u32
 }
 
+/// docs/reports/MODO-AMBIENTE.md: halo de luz atrás da tela derivado da cor do
+/// frame (bias lighting). So tem efeito no caminho Vulkan — ver
+/// native/src/vr_player_app_vulkan.cpp. Desligado por padrão: nunca validado
+/// em headset real ate agora.
+static AMBIENT_MODE_ENABLED: AtomicBool = AtomicBool::new(false);
+
+#[no_mangle]
+pub extern "C" fn set_ambient_mode_enabled(enabled: u32) {
+    AMBIENT_MODE_ENABLED.store(enabled != 0, Ordering::Relaxed);
+}
+
+#[no_mangle]
+pub extern "C" fn get_ambient_mode_enabled() -> u32 {
+    AMBIENT_MODE_ENABLED.load(Ordering::Relaxed) as u32
+}
+
 // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
 // Guarda o nível térmico atual enviado pelo Kotlin ThermalMonitor (via JNI/C++).
 // 0=NORMAL, 1=LIGHT, 2=MODERATE, 3=SEVERE, 4=CRITICAL, 5=SHUTDOWN.

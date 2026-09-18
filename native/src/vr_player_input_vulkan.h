@@ -5,6 +5,7 @@
 #include "vk_math.h"
 #include "hand_tracking.h"
 #include "vr_player_feedback_overlay.h"
+#include "vr_player_ambient.h"
 #include <math.h>
 #include <algorithm>
 #include <atomic>
@@ -597,6 +598,29 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             feedbackTargetAlpha = 1.0f;
         }
         state.feedbackAlpha = MoveTowards(state.feedbackAlpha, feedbackTargetAlpha, fadeStep);
+    }
+
+    // docs/reports/MODO-AMBIENTE.md: Modo Ambiente (halo de luz) — gates da
+    // secao 2.4 do relatorio (+ Passthrough, que passou a existir de
+    // verdade depois do relatorio original: um halo colorido flutuando no
+    // quarto real do usuario quebraria a ilusao de passthrough). Convergido
+    // por MoveTowards em vez de aplicado direto — evita um "pop" visivel
+    // quando o usuario liga/desliga o toggle ou entra/sai do ambiente Void.
+    {
+        const bool ambientGatesPass =
+            get_ambient_mode_enabled() != 0 &&
+            !IsSphereMode(state.screenMode) &&
+            !IsCubemapMode(state.screenMode) &&
+            state.thermalLevel < 2 &&
+            state.activeVideoFrame != nullptr &&
+            state.currentEnvironmentId == "void" &&
+            !state.passthroughActive;
+        const float ambientTarget = ambientGatesPass ? vrplayer::kAmbientMaxIntensity : 0.0f;
+        const float ambientFadeStep =
+            (vrplayer::kAmbientColorSmoothSeconds > 0.0f)
+                ? (dt / vrplayer::kAmbientColorSmoothSeconds) * vrplayer::kAmbientMaxIntensity
+                : vrplayer::kAmbientMaxIntensity;
+        state.ambientIntensity = MoveTowards(state.ambientIntensity, ambientTarget, ambientFadeStep);
     }
 
     // So despacha toque/hover pra um painel de fato visivel (evita "clique

@@ -62,6 +62,8 @@
     <string name="settings_foveated_mode_medium">Medium</string>
     <string name="settings_foveated_mode_high">High</string>
     <string name="settings_foveated_mode_auto">Auto (Adaptive)</string>
+    <string name="settings_ambient_mode_label">Ambient Mode</string>
+    <string name="settings_ambient_mode_description">Adds a soft glow behind the screen, colored from the video frame. Only visible in the Void environment. Vulkan only.</string>
     <string name="quality_warning_thermal">Thermal limit reached: reducing rendering quality to cool down device.</string>
     <string name="quality_warning_8k60">High framerate 8K video may experience frame drops on mobile hardware.</string>
     <string name="settings_pause_on_exit_label">Pause on exit</string>

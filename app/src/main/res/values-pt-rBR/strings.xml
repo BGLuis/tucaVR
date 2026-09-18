@@ -53,6 +53,8 @@
     <string name="settings_foveated_mode_medium">Medio</string>
     <string name="settings_foveated_mode_high">Alto</string>
     <string name="settings_foveated_mode_auto">Automatico (Adaptativo)</string>
+    <string name="settings_ambient_mode_label">Modo Ambiente</string>
+    <string name="settings_ambient_mode_description">Adiciona um halo de luz suave atras da tela, com a cor do proprio video. So visivel no ambiente Void. So no Vulkan.</string>
     <string name="quality_warning_thermal">Limite termico atingido: reduzindo qualidade para resfriar o dispositivo.</string>
     <string name="quality_warning_8k60">Video 8K com alta taxa de quadros pode apresentar quedas em hardware movel.</string>
     <string name="settings_pause_on_exit_label">Pausar ao sair</string>

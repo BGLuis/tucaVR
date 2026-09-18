@@ -440,6 +440,9 @@ class VRActivity : NativeActivity() {
         // Pausar ao sair: empurra preferência inicial de auto-pause para a camada nativa
         nativeSetPauseOnExit(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PAUSE_ON_EXIT))
 
+        // docs/reports/MODO-AMBIENTE.md: empurra o estado persistido do halo de luz ambiente
+        nativeSetAmbientMode(FeatureFlags.isEnabled(this, FeatureFlags.Flag.AMBIENT_MODE))
+
         // Fase 0.3 Seção 2: empurra o estado persistido do toggle de Passthrough.
         // A capacidade real (extensão XR_FB_passthrough presente) só é conhecida
         // depois que o C++ cria o XrInstance; o painel de controles consulta
@@ -1805,6 +1808,10 @@ class VRActivity : NativeActivity() {
     external fun nativeSetFoveationMode(mode: Int)
     external fun nativeGetFoveationMode(): Int
     external fun nativeSetPauseOnExit(enabled: Boolean)
+    // docs/reports/MODO-AMBIENTE.md: halo de luz atrás da tela, derivado da cor do
+    // frame. Vulkan-only, GLES aceita a chamada mas não aplica. Só tem efeito visual
+    // com ambiente Void ativo, fora de modos esfera e sem Passthrough ligado.
+    external fun nativeSetAmbientMode(enabled: Boolean)
     // Fase 0.3 Seção 2: Passthrough / Mixed Reality (Vulkan-only, XR_FB_passthrough).
     external fun nativeSetPassthroughEnabled(enabled: Boolean)
     external fun nativeIsPassthroughSupported(): Boolean
