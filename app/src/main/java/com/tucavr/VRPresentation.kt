@@ -303,7 +303,6 @@ class VRPresentation(
             host           = host,
             scope          = scope,
             savedServerDao = savedServerDao,
-            onNavigate     = { dest -> navigateTo(dest) },
             onPlayDlna     = { server: com.tucavr.network.SavedServer, title: String, url: String, sizeBytes: Long ->
                 playSource(PlaybackSource.Dlna(server, title, url, sizeBytes))
             },
@@ -319,18 +318,13 @@ class VRPresentation(
             lockManager           = multicastLockManager,
             onNavigate            = { dest -> navigateTo(dest) },
             onConfigureServer     = { protocol: com.tucavr.network.ServerProtocol, hostStr: String, portNum: Int, nameStr: String, pathStr: String ->
-                when (protocol) {
-                    com.tucavr.network.ServerProtocol.DLNA -> networkHomeScreen.activeTabIndex = 1
-                    com.tucavr.network.ServerProtocol.SMB  -> networkHomeScreen.activeTabIndex = 3
-                    com.tucavr.network.ServerProtocol.NFS  -> networkHomeScreen.activeTabIndex = 4
-                    com.tucavr.network.ServerProtocol.FTP  -> networkHomeScreen.activeTabIndex = 5
-                    com.tucavr.network.ServerProtocol.SFTP -> networkHomeScreen.activeTabIndex = 6
-                    com.tucavr.network.ServerProtocol.WEBDAV -> {
-                        networkHomeScreen.activeTabIndex = 7
-                        networkWebdavScreen.prefill(hostStr, portNum, nameStr, pathStr)
-                    }
+                if (protocol == com.tucavr.network.ServerProtocol.WEBDAV) {
+                    networkWebdavScreen.prefill(hostStr, portNum, nameStr, pathStr)
                 }
-                render()
+                // Abre o formulario de cadastro daquele protocolo dentro da propria
+                // NetworkHomeScreen (DLNA nao tem formulario manual, so descoberta —
+                // openAddForm ignora silenciosamente nesse caso).
+                networkHomeScreen.openAddForm(protocol)
             }
         )
 
@@ -351,13 +345,14 @@ class VRPresentation(
             host                  = host,
             scope                 = scope,
             urlHistory            = urlHistory,
+            savedServerDao        = savedServerDao,
+            credentialStore       = serverCredentials,
             discoveryPageBuilder  = { networkDiscoveryScreen.buildPage() },
-            dlnaPageBuilder       = { networkDlnaScreen.buildPage() },
-            smbPageBuilder        = { networkSmbScreen.buildPage() },
-            nfsPageBuilder        = { networkNfsScreen.buildPage() },
-            ftpPageBuilder        = { networkFtpScreen.buildPage() },
-            sftpPageBuilder       = { networkSftpScreen.buildPage() },
-            webdavPageBuilder     = { networkWebdavScreen.buildPage() },
+            smbAddFormBuilder     = { onSaved -> networkSmbScreen.buildAddServerForm(onSaved) },
+            ftpAddFormBuilder     = { onSaved -> networkFtpScreen.buildAddServerForm(onSaved) },
+            sftpAddFormBuilder    = { onSaved -> networkSftpScreen.buildAddServerForm(onSaved) },
+            nfsAddFormBuilder     = { onSaved -> networkNfsScreen.buildAddServerForm(onSaved) },
+            webdavAddFormBuilder  = { onSaved -> networkWebdavScreen.buildAddServerForm(onSaved) },
             onNavigate            = { dest -> navigateTo(dest) },
             onBack                = { handleBack() }
         )
@@ -502,9 +497,13 @@ class VRPresentation(
             current is Destination.NetworkSftpFiles -> networkSftpScreen.handleBack(current.server)
             current is Destination.NetworkWebdavFiles -> networkWebdavScreen.handleBack(current.server)
             current is Destination.NetworkHome      -> {
-                appNav.navigateTo(Destination.Home)
-                render()
-                true
+                if (networkHomeScreen.handleBack()) {
+                    true
+                } else {
+                    appNav.navigateTo(Destination.Home)
+                    render()
+                    true
+                }
             }
             else -> false
         }

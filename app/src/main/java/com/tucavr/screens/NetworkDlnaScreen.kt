@@ -4,22 +4,17 @@ import android.content.Context
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
 import com.tucavr.R
 import com.tucavr.VRActivity
-import com.tucavr.designsystem.VoidButton
-import com.tucavr.designsystem.VoidButtonStyle
 import com.tucavr.designsystem.VoidListRow
 import com.tucavr.designsystem.VoidPanelChrome
 import com.tucavr.designsystem.VoidText
 import com.tucavr.designsystem.VoidTheme
-import com.tucavr.navigation.Destination
 import com.tucavr.network.SavedServer
 import com.tucavr.network.SavedServerDao
-import com.tucavr.network.ServerProtocol
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -46,7 +41,6 @@ class NetworkDlnaScreen(
     private val host: ScreenHost,
     private val scope: CoroutineScope,
     private val savedServerDao: SavedServerDao,
-    private val onNavigate: (Destination) -> Unit,
     private val onPlayDlna: (server: SavedServer, title: String, url: String, sizeBytes: Long) -> Unit,
     private val onBack: () -> Unit
 ) {
@@ -58,121 +52,6 @@ class NetworkDlnaScreen(
     private var fileListContainer: LinearLayout? = null
     private var fileProgressBar: ProgressBar? = null
     private var fileStatusLabel: android.widget.TextView? = null
-
-    // ---- Aba de Servidores Salvos (para NetworkHomeScreen) ----
-
-    fun buildPage(): View {
-        val page = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
-
-        val headerRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).also {
-                it.bottomMargin = VoidTheme.dpToPx(context, 12f)
-            }
-        }
-
-        val title = VoidText.title(context, context.getString(R.string.network_dlna_header), sizeSp = 20f).apply {
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
-        headerRow.addView(title)
-        page.addView(headerRow)
-
-        val serverListContainer = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
-        page.addView(serverListContainer)
-
-        fun refreshServerList() {
-            serverListContainer.removeAllViews()
-            scope.launch {
-                val servers = withContext(Dispatchers.IO) {
-                    try {
-                        savedServerDao.getByProtocol(ServerProtocol.DLNA)
-                    } catch (e: Exception) {
-                        emptyList()
-                    }
-                }
-                if (servers.isEmpty()) {
-                    serverListContainer.addView(
-                        VoidText.body(
-                            context,
-                            context.getString(R.string.network_dlna_empty),
-                            sizeSp = 16f,
-                            secondary = true
-                        )
-                    )
-                } else {
-                    for (server in servers) {
-                        val row = buildSavedServerRow(server) {
-                            refreshServerList()
-                        }
-                        serverListContainer.addView(row)
-                    }
-                }
-            }
-        }
-        refreshServerList()
-
-        return ScrollView(context).apply {
-            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            addView(page)
-        }
-    }
-
-    private fun buildSavedServerRow(server: SavedServer, onDeleted: () -> Unit): View {
-        val row = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).also {
-                it.bottomMargin = VoidTheme.dpToPx(context, 8f)
-            }
-        }
-
-        val meta = "${server.host}:${server.port}".trim()
-        val listRow = VoidListRow(context).apply {
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            bind(server.name, meta = meta, showThumbnailSlot = false, iconResId = R.drawable.ic_movie)
-            setOnClickListener {
-                onNavigate(Destination.NetworkDlnaFiles(server, "0", server.name))
-            }
-        }
-
-        val btnDelete = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-            text = ""
-            setIcon(R.drawable.icon_x)
-            textSize = 16f
-            minHeight = 0
-            val pad = VoidTheme.dpToPx(context, 12f)
-            setPadding(pad, pad, pad, pad)
-            setOnClickListener {
-                scope.launch(Dispatchers.IO) {
-                    savedServerDao.delete(server.id)
-                    withContext(Dispatchers.Main) {
-                        onDeleted()
-                    }
-                }
-            }
-        }
-
-        row.addView(listRow)
-        row.addView(btnDelete, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            marginStart = VoidTheme.dpToPx(context, 8f)
-        })
-        return row
-    }
 
     // ---- Navegação de Diretórios DLNA (ContentDirectory) ----
 

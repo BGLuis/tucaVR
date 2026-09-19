@@ -22,7 +22,6 @@ import com.tucavr.designsystem.VoidFieldKind
 import com.tucavr.designsystem.VoidFilterChip
 import com.tucavr.designsystem.VoidForm
 import com.tucavr.designsystem.VoidIconButton
-import com.tucavr.designsystem.VoidListRow
 import com.tucavr.designsystem.VoidPanelChrome
 import com.tucavr.designsystem.VoidSearchBar
 import com.tucavr.designsystem.VoidSortSelector
@@ -53,7 +52,6 @@ import com.tucavr.screens.adapters.FileAdapter
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -97,89 +95,9 @@ class NetworkWebdavScreen(
     private var currentConfig = FolderConfig()
     private var cachedRawEntries: List<MediaEntry> = emptyList()
 
-    // ---- Aba WebDAV: lista de servidores e formulário de adição ----
+    // ---- Formulario "Adicionar servidor" (usado pela lista unificada em NetworkHomeScreen) ----
 
-    fun buildPage(): View {
-        val page = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
-
-        page.addView(
-            VoidText.title(context, context.getString(R.string.network_webdav_saved_servers_header), sizeSp = 20f).apply {
-                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
-            }
-        )
-
-        val serversContainer = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-        page.addView(serversContainer)
-
-        fun refreshServerList() {
-            serversContainer.removeAllViews()
-            val servers = runBlocking(Dispatchers.IO) {
-                try {
-                    savedServerDao.getByProtocol(ServerProtocol.WEBDAV)
-                } catch (e: Exception) {
-                    emptyList()
-                }
-            }
-
-            if (servers.isEmpty()) {
-                serversContainer.addView(
-                    VoidText.body(context, context.getString(R.string.network_webdav_empty), sizeSp = 16f, secondary = true)
-                )
-                return
-            }
-
-            servers.forEach { server ->
-                var isHttps = false
-                if (!server.extraJson.isNullOrEmpty()) {
-                    try {
-                        isHttps = JSONObject(server.extraJson).optBoolean("useHttps", false)
-                    } catch (e: Exception) {
-                        // ignore
-                    }
-                }
-                val scheme = if (isHttps) "https" else "http"
-                val metaText = "$scheme://${server.host}:${server.port}${server.path}"
-
-                val row = buildServerRow(
-                    labelText = context.getString(R.string.network_webdav_row_label_format, server.name),
-                    metaText = metaText,
-                    onConnect = {
-                        browsingServer = server
-                        browsePath = ""
-                        onNavigate(Destination.NetworkWebdavFiles(server, ""))
-                    },
-                    onRemove = {
-                        scope.launch(Dispatchers.IO) {
-                            savedServerDao.delete(server.id)
-                            credentialStore.removeCredentials(server.id)
-                            withContext(Dispatchers.Main) {
-                                refreshServerList()
-                            }
-                        }
-                    }
-                )
-                serversContainer.addView(row)
-            }
-        }
-        refreshServerList()
-
-        page.addView(
-            VoidText.title(context, context.getString(R.string.network_webdav_btn_add_server), sizeSp = 20f).apply {
-                setPadding(0, VoidTheme.dpToPx(context, 16f), 0, VoidTheme.dpToPx(context, 8f))
-            }
-        )
-        page.addView(buildAddServerForm { refreshServerList() })
-
-        return ScrollView(context).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-            addView(page)
-        }
-    }
-
-    private fun buildAddServerForm(onSaved: () -> Unit): View {
+    fun buildAddServerForm(onSaved: () -> Unit): View {
         val form = VoidForm(context)
 
         val hostInput = form.field(
@@ -722,34 +640,6 @@ class NetworkWebdavScreen(
         return false
     }
 
-    private fun buildServerRow(
-        labelText: String,
-        metaText: String,
-        onConnect: () -> Unit,
-        onRemove: () -> Unit
-    ): LinearLayout = LinearLayout(context).apply {
-        orientation = LinearLayout.HORIZONTAL
-        gravity = Gravity.CENTER_VERTICAL
-        setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f))
-
-        addView(VoidListRow(context).apply {
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            bind(labelText, meta = metaText, showThumbnailSlot = false, iconResId = R.drawable.ic_network)
-            setOnClickListener { onConnect() }
-        })
-
-        addView(VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-            text = ""
-            setIcon(R.drawable.icon_x)
-            textSize = 16f
-            minHeight = 0
-            val pad = VoidTheme.dpToPx(context, 12f)
-            setPadding(pad, pad, pad, pad)
-            setOnClickListener { onRemove() }
-        }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            marginStart = VoidTheme.dpToPx(context, 8f)
-        })
-    }
 
     private fun folderKey(server: SavedServer, subPath: String): String =
         "webdav_${server.id}_$subPath"

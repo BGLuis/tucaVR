@@ -1,9 +1,10 @@
 package com.tucavr.screens
 
 import android.content.Context
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.FrameLayout
+import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import com.tucavr.R
@@ -15,13 +16,21 @@ import com.tucavr.designsystem.VoidFieldAction
 import com.tucavr.designsystem.VoidFieldKind
 import com.tucavr.designsystem.VoidListRow
 import com.tucavr.designsystem.VoidPanelChrome
-import com.tucavr.designsystem.VoidTabRow
 import com.tucavr.designsystem.VoidText
 import com.tucavr.designsystem.VoidTextField
 import com.tucavr.designsystem.VoidTheme
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
+import com.tucavr.network.SavedServer
+import com.tucavr.network.SavedServerDao
+import com.tucavr.network.ServerCredentialStore
+import com.tucavr.network.ServerProtocol
 import com.tucavr.network.UrlHistoryStore
+import com.tucavr.network.iconRes
+import com.tucavr.network.labelRes
+import com.tucavr.network.toFtpServer
+import com.tucavr.network.toSftpServer
+import com.tucavr.network.toSmbServer
 import com.tucavr.history.isResumable
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -29,17 +38,20 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Tela de landing de rede (abas URL / SMB / FTP / SFTP).
+ * Landing da seção "Rede".
  *
- * Fase 2 do redesign Void: substitui o antigo quad `NetworkPresentation`
- * (removido). Orquestra as quatro abas mas delega a construção de cada uma
- * para as screens especializadas (SMB, FTP, SFTP) e para a aba URL inline
- * abaixo. O índice da aba ativa é preservado entre navegações via
- * [activeTabIndex].
+ * Fase de unificação: em vez de abas por protocolo, mostra uma ÚNICA lista com
+ * todos os servidores salvos (`SavedServerDao.getAll()`), de qualquer protocolo.
+ * A separação por protocolo só aparece no fluxo de CADASTRAR um novo servidor
+ * (fileira de ícones no topo da lista) — reaproveita, sem reescrever, o
+ * `buildAddServerForm()` já existente em cada `NetworkXScreen` (SMB/FTP/SFTP/
+ * NFS/WebDAV). DLNA não tem formulário manual — só é adicionado via descoberta
+ * automática (`NetworkDiscoveryScreen`).
  *
- * As páginas de cada aba são construídas e enfileiradas em [FrameLayout];
- * visibilidade (VISIBLE/GONE) controla qual aba está ativa — padrão simples
- * e zero-dependency de bibliotecas de tabs.
+ * Não há Compose/NavHost neste app (View system puro) — o "modo" atual
+ * ([HomeMode]) é estado local simples, trocado chamando [host.showScreen] de
+ * novo, no mesmo padrão já usado por `browsingServer`/`browsePath` nas telas
+ * de protocolo.
  */
 class NetworkHomeScreen(
     private val context: Context,
@@ -47,88 +59,263 @@ class NetworkHomeScreen(
     private val host: ScreenHost,
     private val scope: CoroutineScope,
     private val urlHistory: UrlHistoryStore,
+    private val savedServerDao: SavedServerDao,
+    private val credentialStore: ServerCredentialStore,
     private val discoveryPageBuilder: () -> View,
-    private val dlnaPageBuilder: () -> View,
-    private val smbPageBuilder: () -> View,
-    private val nfsPageBuilder: () -> View,
-    private val ftpPageBuilder: () -> View,
-    private val sftpPageBuilder: () -> View,
-    private val webdavPageBuilder: () -> View,
+    private val smbAddFormBuilder: (onSaved: () -> Unit) -> View,
+    private val ftpAddFormBuilder: (onSaved: () -> Unit) -> View,
+    private val sftpAddFormBuilder: (onSaved: () -> Unit) -> View,
+    private val nfsAddFormBuilder: (onSaved: () -> Unit) -> View,
+    private val webdavAddFormBuilder: (onSaved: () -> Unit) -> View,
     private val onNavigate: (Destination) -> Unit,
-    private val onBack: () -> Unit,
-    /** Índice da aba ativa (Discovery=0 / DLNA=1 / URL=2 / SMB=3 / NFS=4 / FTP=5 / SFTP=6 / WebDAV=7). */
-    var activeTabIndex: Int = 0
+    private val onBack: () -> Unit
 ) {
 
+    private sealed class HomeMode {
+        object List : HomeMode()
+        data class AddForm(val protocol: ServerProtocol) : HomeMode()
+        object Discovery : HomeMode()
+        object Url : HomeMode()
+    }
+
+    private var mode: HomeMode = HomeMode.List
+
+    /** Formulários manuais de cadastro disponíveis — DLNA não entra aqui (só via descoberta). */
+    private val addFormBuilders: Map<ServerProtocol, (onSaved: () -> Unit) -> View> = linkedMapOf(
+        ServerProtocol.SMB to smbAddFormBuilder,
+        ServerProtocol.FTP to ftpAddFormBuilder,
+        ServerProtocol.SFTP to sftpAddFormBuilder,
+        ServerProtocol.NFS to nfsAddFormBuilder,
+        ServerProtocol.WEBDAV to webdavAddFormBuilder
+    )
+
+    /** Ponto de entrada externo (navegação vinda de outra tela) — sempre reseta para a lista. */
     fun render() {
+        mode = HomeMode.List
+        renderCurrent()
+    }
+
+    /** Abre o formulário de cadastro daquele protocolo (usado também pela Descoberta, com prefill). */
+    fun openAddForm(protocol: ServerProtocol) {
+        if (addFormBuilders.containsKey(protocol)) {
+            mode = HomeMode.AddForm(protocol)
+            renderCurrent()
+        }
+    }
+
+    /** @return true se consumiu o "Voltar" internamente (voltou pra lista); false = deixa o AppNavigator agir. */
+    fun handleBack(): Boolean {
+        if (mode is HomeMode.List) return false
+        mode = HomeMode.List
+        renderCurrent()
+        return true
+    }
+
+    private fun renderCurrent() {
+        when (val m = mode) {
+            is HomeMode.List -> renderList()
+            is HomeMode.AddForm -> renderAddForm(m.protocol)
+            is HomeMode.Discovery -> renderDiscovery()
+            is HomeMode.Url -> renderUrl()
+        }
+    }
+
+    // ---- Modo Lista: todos os servidores salvos, cross-protocolo ----
+
+    private fun renderList() {
         val root = VoidPanelChrome.newRoot(context)
-        // Voltar do painel principal de rede vai para o Home, via orquestrador
         root.addView(
             VoidPanelChrome.buildHeader(context, title = context.getString(R.string.network_title), onBack = { onBack() })
         )
 
-        val pageContainer = FrameLayout(context).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f
-            )
+        val content = LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         }
 
-        val discoveryPage = discoveryPageBuilder()
-        val dlnaPage      = dlnaPageBuilder()
-        val urlPage       = buildUrlPage()
-        val smbPage       = smbPageBuilder()
-        val nfsPage       = nfsPageBuilder()
-        val ftpPage       = ftpPageBuilder()
-        val sftpPage      = sftpPageBuilder()
-        val webdavPage    = webdavPageBuilder()
-        val pages = listOf(discoveryPage, dlnaPage, urlPage, smbPage, nfsPage, ftpPage, sftpPage, webdavPage)
+        content.addView(buildActionsRow())
 
-        pages.forEachIndexed { index, page ->
-            page.visibility = if (index == activeTabIndex) View.VISIBLE else View.GONE
-            pageContainer.addView(page)
-        }
-
-        val tabIcons = listOf(
-            R.drawable.ic_search,
-            R.drawable.ic_movie,
-            R.drawable.ic_link,
-            R.drawable.ic_storage,
-            R.drawable.ic_storage,
-            R.drawable.ic_broadcast,
-            R.drawable.ic_lock,
-            R.drawable.ic_network
+        content.addView(
+            VoidText.title(context, context.getString(R.string.network_saved_servers_header), sizeSp = 20f).apply {
+                setPadding(0, VoidTheme.dpToPx(context, 16f), 0, VoidTheme.dpToPx(context, 8f))
+            }
         )
-        val tabRow = VoidTabRow(
-            context,
-            listOf(
-                context.getString(R.string.network_tab_discovery).trim(),
-                context.getString(R.string.network_tab_dlna).trim(),
-                context.getString(R.string.network_tab_url).trim(),
-                context.getString(R.string.network_tab_smb).trim(),
-                context.getString(R.string.network_tab_nfs).trim(),
-                context.getString(R.string.network_tab_ftp).trim(),
-                context.getString(R.string.network_tab_sftp).trim(),
-                context.getString(R.string.network_tab_webdav).trim()
-            ),
-            iconResIds = tabIcons
-        ) { index ->
-            activeTabIndex = index
-            pages.forEachIndexed { i, page ->
-                page.visibility = if (i == activeTabIndex) View.VISIBLE else View.GONE
+
+        val serversContainer = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(serversContainer)
+
+        fun refresh() {
+            serversContainer.removeAllViews()
+            scope.launch {
+                val servers = withContext(Dispatchers.IO) {
+                    try {
+                        savedServerDao.getAll()
+                    } catch (e: Exception) {
+                        emptyList()
+                    }
+                }
+                if (servers.isEmpty()) {
+                    serversContainer.addView(
+                        VoidText.body(context, context.getString(R.string.network_saved_servers_empty), sizeSp = 16f, secondary = true)
+                    )
+                } else {
+                    servers.forEach { server ->
+                        serversContainer.addView(buildServerRow(server) { refresh() })
+                    }
+                }
             }
         }
-        tabRow.setActiveIndex(activeTabIndex, notify = false)
-        tabRow.layoutParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { bottomMargin = VoidTheme.dpToPx(context, 16f) }
+        refresh()
 
-        root.addView(tabRow)
-        root.addView(pageContainer)
-
+        root.addView(wrapInScroll(content), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         host.showScreen(root)
     }
 
-    // ---- Aba URL ----
+    private fun buildActionsRow(): View {
+        val row = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+
+        fun addAction(iconResId: Int, label: String, onClick: () -> Unit) {
+            row.addView(
+                VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                    text = label
+                    setIcon(iconResId)
+                    textSize = 14f
+                    setOnClickListener { onClick() }
+                },
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    marginEnd = VoidTheme.dpToPx(context, 8f)
+                }
+            )
+        }
+
+        addFormBuilders.keys.forEach { protocol ->
+            addAction(protocol.iconRes, context.getString(protocol.labelRes)) { openAddForm(protocol) }
+        }
+        addAction(R.drawable.ic_search, context.getString(R.string.network_tab_discovery)) {
+            mode = HomeMode.Discovery
+            renderCurrent()
+        }
+        addAction(R.drawable.ic_link, context.getString(R.string.network_tab_url)) {
+            mode = HomeMode.Url
+            renderCurrent()
+        }
+
+        return HorizontalScrollView(context).apply {
+            isHorizontalScrollBarEnabled = false
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            addView(row)
+        }
+    }
+
+    private fun buildServerRow(server: SavedServer, onChanged: () -> Unit): View = LinearLayout(context).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER_VERTICAL
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).also { it.bottomMargin = VoidTheme.dpToPx(context, 8f) }
+
+        val meta = "${context.getString(server.protocol.labelRes)} · ${server.host}:${server.port}"
+        addView(
+            VoidListRow(context).apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                bind(server.name, meta = meta, showThumbnailSlot = false, iconResId = server.protocol.iconRes)
+                setOnClickListener { connectTo(server) }
+            }
+        )
+
+        addView(
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = ""
+                setIcon(R.drawable.icon_x)
+                textSize = 16f
+                minHeight = 0
+                val pad = VoidTheme.dpToPx(context, 12f)
+                setPadding(pad, pad, pad, pad)
+                setOnClickListener {
+                    scope.launch(Dispatchers.IO) {
+                        savedServerDao.delete(server.id)
+                        credentialStore.removeCredentials(server.id)
+                        withContext(Dispatchers.Main) { onChanged() }
+                    }
+                }
+            },
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginStart = VoidTheme.dpToPx(context, 8f)
+            }
+        )
+    }
+
+    /** Monta a Destination correta por protocolo, buscando credenciais quando necessário. */
+    private fun connectTo(server: SavedServer) {
+        scope.launch {
+            val destination = withContext(Dispatchers.IO) {
+                when (server.protocol) {
+                    ServerProtocol.SMB -> Destination.NetworkFiles(
+                        server.toSmbServer(credentialStore.getPassword(server.id)), ""
+                    )
+                    ServerProtocol.FTP -> Destination.NetworkFtpFiles(
+                        server.toFtpServer(credentialStore.getPassword(server.id)), ""
+                    )
+                    ServerProtocol.SFTP -> Destination.NetworkSftpFiles(
+                        server.toSftpServer(credentialStore.getPassword(server.id), credentialStore.getPrivateKey(server.id)), ""
+                    )
+                    ServerProtocol.NFS -> Destination.NetworkNfsFiles(server, "")
+                    ServerProtocol.WEBDAV -> Destination.NetworkWebdavFiles(server, "")
+                    ServerProtocol.DLNA -> Destination.NetworkDlnaFiles(server, "0", server.name)
+                }
+            }
+            onNavigate(destination)
+        }
+    }
+
+    // ---- Modo Formulário: cadastrar servidor de um protocolo específico ----
+
+    private fun renderAddForm(protocol: ServerProtocol) {
+        val builder = addFormBuilders[protocol]
+        if (builder == null) {
+            mode = HomeMode.List
+            renderList()
+            return
+        }
+
+        val root = VoidPanelChrome.newRoot(context)
+        root.addView(
+            VoidPanelChrome.buildHeader(context, title = context.getString(protocol.labelRes), onBack = { handleBack() })
+        )
+        val formView = builder {
+            mode = HomeMode.List
+            renderCurrent()
+        }
+        root.addView(wrapInScroll(formView), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        host.showScreen(root)
+    }
+
+    // ---- Modo Descoberta automática ----
+
+    private fun renderDiscovery() {
+        val root = VoidPanelChrome.newRoot(context)
+        root.addView(
+            VoidPanelChrome.buildHeader(context, title = context.getString(R.string.network_tab_discovery), onBack = { handleBack() })
+        )
+        // NetworkDiscoveryScreen.buildPage() já retorna um ScrollView próprio — não envolver de novo.
+        root.addView(discoveryPageBuilder(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        host.showScreen(root)
+    }
+
+    // ---- Modo Reproduzir via URL (não é um "servidor salvo") ----
+
+    private fun renderUrl() {
+        val root = VoidPanelChrome.newRoot(context)
+        root.addView(
+            VoidPanelChrome.buildHeader(context, title = context.getString(R.string.network_tab_url), onBack = { handleBack() })
+        )
+        // buildUrlPage() já retorna um ScrollView próprio — não envolver de novo.
+        root.addView(buildUrlPage(), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        host.showScreen(root)
+    }
 
     private fun buildUrlPage(): View {
         val page = LinearLayout(context).apply {
@@ -276,7 +463,7 @@ class NetworkHomeScreen(
     // original para o raciocínio completo.
     internal fun wrapInScroll(page: View): View =
         ScrollView(context).apply {
-            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             addView(page)
         }
 }

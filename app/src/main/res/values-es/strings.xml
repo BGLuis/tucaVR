@@ -227,6 +227,10 @@
     <string name="network_tab_sftp">SFTP</string>
     <string name="network_tab_webdav">WebDAV</string>
 
+    <!-- Rede: lista unificada de servidores salvos, cross-protocolo (NetworkHomeScreen) -->
+    <string name="network_saved_servers_header">Servidores guardados</string>
+    <string name="network_saved_servers_empty">(ningún servidor guardado)</string>
+
     <!-- Rede: aba DLNA -->
     <string name="network_dlna_header">Servidores UPnP / DLNA</string>
     <string name="network_dlna_empty">(ningún servidor DLNA guardado o descubierto)</string>
