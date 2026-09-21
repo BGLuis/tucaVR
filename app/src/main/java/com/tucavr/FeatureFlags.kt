@@ -60,6 +60,32 @@ object FeatureFlags {
         // vr_player_app_vulkan.cpp::shouldDrawAmbientHalo. Desligado por padrão:
         // nunca validado em headset real até agora.
         AMBIENT_MODE("ambient_mode", defaultEnabled = false),
+
+        // RF-ENV-007: Modo Noturno (aquecimento ~3000K para redução de luz azul)
+        NIGHT_MODE("night_mode", defaultEnabled = false),
+    }
+
+    /** Chave usada para persistir o brilho do ambiente 3D/Skybox (0.0f a 1.0f). Padrão: 1.0f (100%). */
+    const val KEY_ENVIRONMENT_BRIGHTNESS = "environment_brightness"
+
+    /** Chave usada para persistir a intensidade do Screen Glow (0=Off, 1=Subtle, 2=Strong). Padrão: 2. */
+    const val KEY_SCREEN_GLOW_INTENSITY = "screen_glow_intensity"
+
+    /** Chave usada para persistir a temperatura de cor em Kelvin (2700K a 6500K). Padrão: 6500.0f. */
+    const val KEY_COLOR_TEMPERATURE = "color_temperature"
+
+    const val SCREEN_GLOW_OFF = 0
+    const val SCREEN_GLOW_SUBTLE = 1
+    const val SCREEN_GLOW_STRONG = 2
+
+    const val SCREEN_GLOW_INTENSITY_OFF = 0.0f
+    const val SCREEN_GLOW_INTENSITY_SUBTLE = 0.45f
+    const val SCREEN_GLOW_INTENSITY_STRONG = 0.85f
+
+    fun screenGlowModeToFloat(mode: Int): Float = when (mode) {
+        SCREEN_GLOW_SUBTLE -> SCREEN_GLOW_INTENSITY_SUBTLE
+        SCREEN_GLOW_STRONG -> SCREEN_GLOW_INTENSITY_STRONG
+        else -> SCREEN_GLOW_INTENSITY_OFF
     }
 
     /** Chave usada para persistir o modo de áudio espacial como Int (0/1/2). */
@@ -255,5 +281,63 @@ object FeatureFlags {
             .edit()
             .putInt(KEY_PACKED_ALPHA_CHOKE, choke.coerceIn(0, 100))
             .apply()
+    }
+
+    /** Lê o brilho do ambiente virtual (0.0f a 1.0f). Padrão: 1.0f (100%). */
+    fun getEnvironmentBrightness(context: Context): Float =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getFloat(KEY_ENVIRONMENT_BRIGHTNESS, 1.0f)
+
+    /** Persiste o brilho do ambiente virtual. */
+    fun setEnvironmentBrightness(context: Context, brightness: Float) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putFloat(KEY_ENVIRONMENT_BRIGHTNESS, brightness.coerceIn(0.0f, 1.0f))
+            .apply()
+    }
+
+    /** Lê o modo de intensidade do Screen Glow (0=Off, 1=Subtle, 2=Strong). Padrão: 2. */
+    fun getScreenGlowIntensityMode(context: Context): Int {
+        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        if (prefs.contains(KEY_SCREEN_GLOW_INTENSITY)) {
+            return prefs.getInt(KEY_SCREEN_GLOW_INTENSITY, SCREEN_GLOW_STRONG)
+        }
+        return if (isEnabled(context, Flag.AMBIENT_MODE)) SCREEN_GLOW_STRONG else SCREEN_GLOW_OFF
+    }
+
+    /** Persiste o modo de intensidade do Screen Glow e sincroniza com a flag AMBIENT_MODE. */
+    fun setScreenGlowIntensityMode(context: Context, mode: Int) {
+        val clamped = mode.coerceIn(SCREEN_GLOW_OFF, SCREEN_GLOW_STRONG)
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putInt(KEY_SCREEN_GLOW_INTENSITY, clamped)
+            .putBoolean(Flag.AMBIENT_MODE.key, clamped != SCREEN_GLOW_OFF)
+            .apply()
+    }
+
+    /** Lê a intensidade float do Screen Glow (0.0f, 0.45f ou 0.85f). */
+    fun getScreenGlowIntensityFloat(context: Context): Float =
+        screenGlowModeToFloat(getScreenGlowIntensityMode(context))
+
+    /** Lê a temperatura de cor em Kelvin (2700K a 6500K). Padrão: 6500K. */
+    fun getColorTemperature(context: Context): Float =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getFloat(KEY_COLOR_TEMPERATURE, 6500.0f)
+
+    /** Persiste a temperatura de cor em Kelvin. */
+    fun setColorTemperature(context: Context, kelvin: Float) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putFloat(KEY_COLOR_TEMPERATURE, kelvin.coerceIn(2700.0f, 6500.0f))
+            .apply()
+    }
+
+    /** Lê se o Modo Noturno está ativo. Padrão: false. */
+    fun isNightModeEnabled(context: Context): Boolean =
+        isEnabled(context, Flag.NIGHT_MODE)
+
+    /** Persiste o estado do Modo Noturno. */
+    fun setNightModeEnabled(context: Context, enabled: Boolean) {
+        setEnabled(context, Flag.NIGHT_MODE, enabled)
     }
 }

@@ -1,10 +1,13 @@
 package com.tucavr.screens
 
 import android.content.Context
+import android.content.res.ColorStateList
 import android.view.ViewGroup
 import android.widget.CheckBox
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
+import android.widget.TextView
 import com.tucavr.FeatureFlags
 import com.tucavr.R
 import com.tucavr.UpscalingModeStore
@@ -15,6 +18,7 @@ import com.tucavr.designsystem.VoidFilterChip
 import com.tucavr.designsystem.VoidPanelChrome
 import com.tucavr.designsystem.VoidText
 import com.tucavr.designsystem.VoidTheme
+import kotlin.math.roundToInt
 
 /**
  * Tela de Configurações — Seções "Vídeo" (Upscaling MQSR/SGSR1 e Foveated Rendering),
@@ -61,12 +65,21 @@ class SettingsScreen(
         content.addView(buildUpscalingRow())
         content.addView(buildFoveationRow())
 
+        // Seção Iluminação e Ambiente (RF-ENV-007)
+        content.addView(
+            VoidText.title(context, context.getString(R.string.settings_section_lighting), sizeSp = 18f).apply {
+                setPadding(0, VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 8f))
+            }
+        )
+        content.addView(buildEnvironmentBrightnessRow())
+        content.addView(buildScreenGlowRow())
+        content.addView(buildColorTemperatureRow())
         content.addView(
             buildFlagRow(
-                labelRes = R.string.settings_ambient_mode_label,
-                descriptionRes = R.string.settings_ambient_mode_description,
-                flag = FeatureFlags.Flag.AMBIENT_MODE,
-                onChanged = { enabled -> activity.nativeSetAmbientMode(enabled) }
+                labelRes = R.string.settings_night_mode_label,
+                descriptionRes = R.string.settings_night_mode_description,
+                flag = FeatureFlags.Flag.NIGHT_MODE,
+                onChanged = { enabled -> activity.nativeSetNightMode(enabled) }
             )
         )
 
@@ -415,5 +428,187 @@ class SettingsScreen(
         }
 
         addView(chipContainer)
+    }
+
+    private fun buildEnvironmentBrightnessRow(): LinearLayout = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = VoidTheme.dpToPx(context, 16f) }
+
+        val currentBrightness = FeatureFlags.getEnvironmentBrightness(context)
+        val initialPercent = (currentBrightness * 100f).roundToInt().coerceIn(0, 100)
+
+        val headerRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        val titleView = VoidText.title(context, context.getString(R.string.settings_environment_brightness_label), sizeSp = 16f).apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val valueView = VoidText.body(
+            context,
+            context.getString(R.string.settings_environment_brightness_percent, initialPercent),
+            sizeSp = 14f,
+            secondary = true
+        )
+        headerRow.addView(titleView)
+        headerRow.addView(valueView)
+        addView(headerRow)
+
+        addView(
+            VoidText.body(context, context.getString(R.string.settings_environment_brightness_description), sizeSp = 14f, secondary = true).apply {
+                setPadding(0, VoidTheme.dpToPx(context, 2f), 0, VoidTheme.dpToPx(context, 4f))
+            }
+        )
+
+        val seekBar = SeekBar(context).apply {
+            max = 100
+            progress = initialPercent
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                VoidTheme.dpToPx(context, 44f)
+            )
+            progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+            thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, prog: Int, fromUser: Boolean) {
+                    val brightness = prog / 100f
+                    valueView.text = context.getString(R.string.settings_environment_brightness_percent, prog)
+                    if (fromUser) {
+                        FeatureFlags.setEnvironmentBrightness(context, brightness)
+                        activity.nativeSetEnvironmentBrightness(brightness)
+                    }
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) {}
+            })
+        }
+        addView(seekBar)
+    }
+
+    private fun buildScreenGlowRow(): LinearLayout = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = VoidTheme.dpToPx(context, 16f) }
+
+        addView(
+            VoidText.title(context, context.getString(R.string.settings_screen_glow_label), sizeSp = 16f).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+            }
+        )
+
+        addView(
+            VoidText.body(context, context.getString(R.string.settings_screen_glow_description), sizeSp = 14f, secondary = true).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
+            }
+        )
+
+        val chipContainer = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        val modes = listOf(
+            FeatureFlags.SCREEN_GLOW_OFF to R.string.settings_screen_glow_off,
+            FeatureFlags.SCREEN_GLOW_SUBTLE to R.string.settings_screen_glow_subtle,
+            FeatureFlags.SCREEN_GLOW_STRONG to R.string.settings_screen_glow_strong
+        )
+
+        val chips = mutableListOf<VoidFilterChip>()
+        val currentMode = FeatureFlags.getScreenGlowIntensityMode(context)
+
+        modes.forEach { (mode, labelRes) ->
+            val chip = VoidFilterChip(
+                context = context,
+                text = context.getString(labelRes),
+                isSelectedChip = (mode == currentMode)
+            ).apply {
+                layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f
+                ).apply {
+                    val margin = VoidTheme.dpToPx(context, 4f)
+                    setMargins(margin, 0, margin, 0)
+                }
+                setOnClickListener {
+                    chips.forEach { it.setSelectedState(false) }
+                    setSelectedState(true)
+                    FeatureFlags.setScreenGlowIntensityMode(context, mode)
+                    val intensity = FeatureFlags.screenGlowModeToFloat(mode)
+                    activity.nativeSetScreenGlowIntensity(intensity)
+                    activity.nativeSetAmbientMode(mode != FeatureFlags.SCREEN_GLOW_OFF)
+                }
+            }
+            chips.add(chip)
+            chipContainer.addView(chip)
+        }
+
+        addView(chipContainer)
+    }
+
+    private fun buildColorTemperatureRow(): LinearLayout = LinearLayout(context).apply {
+        orientation = LinearLayout.VERTICAL
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+        ).apply { bottomMargin = VoidTheme.dpToPx(context, 16f) }
+
+        val currentKelvin = FeatureFlags.getColorTemperature(context)
+        val initialProgress = ((currentKelvin - 2700f) / 100f).roundToInt().coerceIn(0, 38)
+
+        val headerRow = LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
+            )
+        }
+
+        val titleView = VoidText.title(context, context.getString(R.string.settings_color_temperature_label), sizeSp = 16f).apply {
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        val valueView = VoidText.body(
+            context,
+            context.getString(R.string.settings_color_temperature_kelvin, currentKelvin.toInt()),
+            sizeSp = 14f,
+            secondary = true
+        )
+        headerRow.addView(titleView)
+        headerRow.addView(valueView)
+        addView(headerRow)
+
+        addView(
+            VoidText.body(context, context.getString(R.string.settings_color_temperature_description), sizeSp = 14f, secondary = true).apply {
+                setPadding(0, VoidTheme.dpToPx(context, 2f), 0, VoidTheme.dpToPx(context, 4f))
+            }
+        )
+
+        val seekBar = SeekBar(context).apply {
+            max = 38
+            progress = initialProgress
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                VoidTheme.dpToPx(context, 44f)
+            )
+            progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+            thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(sb: SeekBar?, prog: Int, fromUser: Boolean) {
+                    val kelvin = 2700f + prog * 100f
+                    valueView.text = context.getString(R.string.settings_color_temperature_kelvin, kelvin.toInt())
+                    if (fromUser) {
+                        FeatureFlags.setColorTemperature(context, kelvin)
+                        activity.nativeSetColorTemperature(kelvin)
+                    }
+                }
+                override fun onStartTrackingTouch(sb: SeekBar?) {}
+                override fun onStopTrackingTouch(sb: SeekBar?) {}
+            })
+        }
+        addView(seekBar)
     }
 }

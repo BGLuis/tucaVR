@@ -17,6 +17,7 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include "vr_player_ambient.h"
 
 extern std::string g_sessionId;
 extern std::mutex g_sessionIdMutex;
@@ -666,6 +667,57 @@ Java_com_tucavr_VRActivity_nativeSetPauseOnExit(JNIEnv*, jobject, jboolean enabl
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetAmbientMode(JNIEnv*, jobject, jboolean enabled) {
     set_ambient_mode_enabled(enabled ? 1 : 0);
+}
+
+// RF-ENV-007: Ajuste de Iluminação e Cor do Ambiente (Fase 0.5 §4)
+static std::atomic<float> g_environmentBrightness{1.0f};
+static std::atomic<float> g_screenGlowIntensity{0.85f};
+static std::atomic<float> g_colorTemperature{6500.0f};
+static std::atomic<bool> g_nightModeEnabled{false};
+
+float get_environment_brightness() {
+    return g_environmentBrightness.load(std::memory_order_relaxed);
+}
+
+float get_screen_glow_intensity() {
+    return g_screenGlowIntensity.load(std::memory_order_relaxed);
+}
+
+float get_color_temperature() {
+    return g_colorTemperature.load(std::memory_order_relaxed);
+}
+
+bool get_night_mode_enabled() {
+    return g_nightModeEnabled.load(std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetEnvironmentBrightness(JNIEnv*, jobject, jfloat brightness) {
+    float clamped = brightness;
+    if (clamped < 0.0f) clamped = 0.0f;
+    if (clamped > 1.0f) clamped = 1.0f;
+    g_environmentBrightness.store(clamped, std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetScreenGlowIntensity(JNIEnv*, jobject, jfloat intensity) {
+    float clamped = intensity;
+    if (clamped < 0.0f) clamped = 0.0f;
+    if (clamped > 1.0f) clamped = 1.0f;
+    g_screenGlowIntensity.store(clamped, std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetColorTemperature(JNIEnv*, jobject, jfloat kelvin) {
+    float clamped = kelvin;
+    if (clamped < 2700.0f) clamped = 2700.0f;
+    if (clamped > 6500.0f) clamped = 6500.0f;
+    g_colorTemperature.store(clamped, std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetNightMode(JNIEnv*, jobject, jboolean enabled) {
+    g_nightModeEnabled.store(enabled != JNI_FALSE, std::memory_order_relaxed);
 }
 
 extern "C" JNIEXPORT void JNICALL

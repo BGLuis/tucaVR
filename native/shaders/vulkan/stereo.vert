@@ -28,6 +28,7 @@ layout(push_constant) uniform PushConstants {
     uint  chromaColorRgb;   // 0xRRGGBB (ex: 0x00FF00)
     float chromaSimilarity; // corte de distancia cromatica (ex: 0.35)
     float chromaSmoothness; // suavidade da transicao de borda (ex: 0.10)
+    float colorTemperature; // Kelvin (2700 a 6500) ou negativo (< 0.0) para Night Mode
 } pc;
 
 layout(location = 0) out vec2 vTexCoord;
@@ -43,6 +44,7 @@ layout(location = 9) flat out int vChromaKeyEnabled;
 layout(location = 10) flat out uint vChromaColorRgb;
 layout(location = 11) flat out float vChromaSimilarity;
 layout(location = 12) flat out float vChromaSmoothness;
+layout(location = 13) flat out float vColorTemperature;
 
 void main() {
     gl_Position = pc.mvp * vec4(inPosition, 1.0);
@@ -59,4 +61,5 @@ void main() {
     vChromaColorRgb = pc.chromaColorRgb;
     vChromaSimilarity = pc.chromaSimilarity;
     vChromaSmoothness = pc.chromaSmoothness;
+    vColorTemperature = pc.colorTemperature;
 }
