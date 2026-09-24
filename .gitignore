@@ -9,6 +9,8 @@ __pycache__/
 
 # Android/Gradle
 build/
+!/docker/build/
+!/docker/build/**
 .gradle/
 local.properties
 *.iml
