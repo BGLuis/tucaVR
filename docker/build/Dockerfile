@@ -1,94 +1,185 @@
+# syntax=docker/dockerfile:1
 # =============================================================================
-# tucaVR — Dockerfile de build completo (APK debug)
+# tucaVR — imagem de build do APK debug
 #
-# Instala todas as toolchains necessárias para compilar o projeto:
-#   JDK 17, Android SDK 34, NDK 26.3, CMake 3.22.1,
-#   Rust stable + aarch64-linux-android, cargo-ndk,
-#   FFmpeg cross-compilado para arm64-v8a.
+# Estágios independentes (o BuildKit constrói sdk, ffmpeg e rust em paralelo):
+#   sdk    -> Android SDK 34, NDK 26.3, CMake 3.22.1, build-tools
+#   ffmpeg -> FFmpeg cross-compilado para arm64-v8a (ffmpeg-android-maker)
+#   rust   -> Rust fixo + target aarch64-linux-android + cargo-ndk
+#   final  -> só o que o build precisa em runtime (sem nasm/yasm/curl/wget,
+#             sem .git nem fontes do FFmpeg)
 #
-# O código-fonte do projeto e o Meta OpenXR SDK são montados em runtime
-# via volume (-v), NÃO copiados para a imagem.
-#
-# Uso:
-#   docker build -t tucavr-builder docker/build/
-#   docker run --rm \
-#     -v "$(pwd)":/project \
-#     -e HOST_UID=$(id -u) -e HOST_GID=$(id -g) \
-#     -v tucavr-gradle-cache:/root/.gradle \
-#     -v tucavr-cargo-cache:/root/.cargo/registry \
-#     tucavr-builder
+# O código-fonte e o Meta OpenXR SDK são montados em /project por volume.
+# O container roda como usuário não-root; use scripts/docker-build.sh, que
+# passa --user com o UID/GID do host (arquivos gerados ficam seus, sem chown).
 # =============================================================================
 
-FROM ubuntu:22.04
+# Pins. Atualize digest/versões de propósito, nunca "latest".
+ARG UBUNTU_IMAGE=ubuntu:22.04@sha256:b8b6ee6aa931ecd9d0d952abc34dc0e5f7c6a30c6bb71b079fe399fde0329c02
 
-ENV DEBIAN_FRONTEND=noninteractive
-ENV LANG=C.UTF-8
-ENV LC_ALL=C.UTF-8
+FROM ${UBUNTU_IMAGE} AS base
+ENV DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8 \
+    LC_ALL=C.UTF-8
+# Sem isso o docker-clean apaga o cache do apt e o cache mount fica vazio.
+RUN rm -f /etc/apt/apt.conf.d/docker-clean
 
-# ── 1. Pacotes do sistema ────────────────────────────────────────────────────
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl wget unzip git ca-certificates \
-        build-essential pkg-config \
-        python3 cmake ninja-build nasm yasm \
-        openjdk-17-jdk-headless \
-        libclang-dev clang \
-    && rm -rf /var/lib/apt/lists/*
-
-# ── 2. Android SDK + NDK + CMake ─────────────────────────────────────────────
+# ── sdk: Android SDK + NDK + CMake ───────────────────────────────────────────
+FROM base AS sdk
+ARG CMDLINE_TOOLS_VERSION=11076708
+ARG CMDLINE_TOOLS_SHA256=2d2d50857e4eb553af5a6dc3ad507a17adf43d115264b1afc116f95c92e5e258
+ARG NDK_VERSION=26.3.11579264
 ENV ANDROID_HOME=/opt/android-sdk
-ENV ANDROID_SDK_ROOT=${ANDROID_HOME}
-ENV PATH="${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}"
 
-# Baixa o cmdline-tools
-RUN mkdir -p "${ANDROID_HOME}/cmdline-tools" && \
-    wget -q "https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip" \
-         -O /tmp/cmdline-tools.zip && \
-    unzip -q /tmp/cmdline-tools.zip -d "${ANDROID_HOME}/cmdline-tools" && \
-    mv "${ANDROID_HOME}/cmdline-tools/cmdline-tools" "${ANDROID_HOME}/cmdline-tools/latest" && \
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        openjdk-17-jdk-headless \
+        unzip
+
+RUN <<EOT
+    set -eux
+    curl -fsSL -o /tmp/cmdline-tools.zip \
+        "https://dl.google.com/android/repository/commandlinetools-linux-${CMDLINE_TOOLS_VERSION}_latest.zip"
+    echo "${CMDLINE_TOOLS_SHA256}  /tmp/cmdline-tools.zip" | sha256sum -c -
+    mkdir -p "${ANDROID_HOME}/cmdline-tools"
+    unzip -q /tmp/cmdline-tools.zip -d "${ANDROID_HOME}/cmdline-tools"
+    mv "${ANDROID_HOME}/cmdline-tools/cmdline-tools" "${ANDROID_HOME}/cmdline-tools/latest"
     rm /tmp/cmdline-tools.zip
-
-# Aceita licenças e instala SDK 34, NDK 26.3, CMake 3.22.1, build-tools
-RUN yes | sdkmanager --licenses > /dev/null 2>&1 && \
-    sdkmanager --no_https \
-        "platform-tools" \
+    yes | "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null
+    "${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager" \
         "platforms;android-34" \
         "build-tools;34.0.0" \
-        "ndk;26.3.11579264" \
+        "ndk;${NDK_VERSION}" \
         "cmake;3.22.1"
+    # Nada aqui escreve no SDK depois; deixa legível para qualquer UID.
+    chmod -R a+rX "${ANDROID_HOME}"
+EOT
 
-ENV ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/26.3.11579264"
-ENV ANDROID_NDK_ROOT="${ANDROID_NDK_HOME}"
-# CMake do SDK no PATH (Gradle encontra automaticamente, mas cargo/oboe pode precisar)
-ENV PATH="${ANDROID_HOME}/cmake/3.22.1/bin:${PATH}"
+# ── ffmpeg: cross-compile para arm64-v8a ─────────────────────────────────────
+FROM base AS ffmpeg
+# Mesmo commit de scripts/setup-deps.sh (FFMPEG_MAKER_COMMIT).
+ARG FFMPEG_MAKER_REF=dd72b161ae5c759fd25a5cab971a3ff710f0bdba
+ARG NDK_VERSION=26.3.11579264
+ENV ANDROID_SDK_HOME=/opt/android-sdk \
+    ANDROID_NDK_HOME=/opt/android-sdk/ndk/${NDK_VERSION}
 
-# ── 3. Rust toolchain ────────────────────────────────────────────────────────
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-        sh -s -- -y --default-toolchain stable --profile minimal
-ENV PATH="/root/.cargo/bin:${PATH}"
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        cmake \
+        curl \
+        git \
+        nasm \
+        ninja-build \
+        pkg-config \
+        python3 \
+        unzip \
+        wget \
+        yasm
 
-RUN rustup target add aarch64-linux-android && \
-    cargo install cargo-ndk
+# Só o NDK: o resto do SDK não participa do build do FFmpeg.
+COPY --from=sdk /opt/android-sdk/ndk /opt/android-sdk/ndk
 
-# ── 4. FFmpeg cross-compile para arm64-v8a ────────────────────────────────────
-# Pinado no mesmo commit usado por scripts/setup-deps.sh
-ENV FFMPEG_MAKER_DIR=/opt/ffmpeg-android-maker
-RUN git clone https://github.com/Javernaut/ffmpeg-android-maker.git "${FFMPEG_MAKER_DIR}" && \
-    cd "${FFMPEG_MAKER_DIR}" && \
-    git checkout dd72b161ae5c759fd25a5cab971a3ff710f0bdba
-
-RUN cd "${FFMPEG_MAKER_DIR}" && \
-    ANDROID_SDK_HOME="${ANDROID_HOME}" \
-    ANDROID_NDK_HOME="${ANDROID_NDK_HOME}" \
+# O prefixo dos .pc gerados é /opt/ffmpeg-android-maker/...; o estágio final
+# copia para o mesmo caminho para o pkg-config continuar resolvendo.
+RUN <<EOT
+    set -eux
+    git clone https://github.com/Javernaut/ffmpeg-android-maker.git /opt/ffmpeg-android-maker
+    cd /opt/ffmpeg-android-maker
+    git checkout "${FFMPEG_MAKER_REF}"
     ./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26
+    # Só o resultado: sem fontes, .git nem o script do maker.
+    mkdir -p /out/build/ffmpeg /out/output/include
+    cp -a build/ffmpeg/arm64-v8a /out/build/ffmpeg/arm64-v8a
+    # scripts/build.sh referencia output/include/arm64-v8a (symlink relativo).
+    ln -s ../../build/ffmpeg/arm64-v8a/include /out/output/include/arm64-v8a
+EOT
 
-# Cria symlink output/include/arm64-v8a → build/.../include (build.sh referencia ambos)
-RUN mkdir -p "${FFMPEG_MAKER_DIR}/output/include" && \
-    ln -sf "${FFMPEG_MAKER_DIR}/build/ffmpeg/arm64-v8a/include" \
-           "${FFMPEG_MAKER_DIR}/output/include/arm64-v8a"
+# ── rust: toolchain fixo + cargo-ndk ─────────────────────────────────────────
+FROM base AS rust
+ARG RUSTUP_VERSION=1.28.2
+ARG RUSTUP_INIT_SHA256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
+ARG RUST_VERSION=1.97.1
+ARG CARGO_NDK_VERSION=4.1.2
+ENV RUSTUP_HOME=/opt/rustup \
+    CARGO_HOME=/opt/cargo \
+    PATH=/opt/cargo/bin:${PATH}
 
-# ── 5. Entrypoint ────────────────────────────────────────────────────────────
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        curl
+
+RUN <<EOT
+    set -eux
+    curl -fsSL -o /tmp/rustup-init \
+        "https://static.rust-lang.org/rustup/archive/${RUSTUP_VERSION}/x86_64-unknown-linux-gnu/rustup-init"
+    echo "${RUSTUP_INIT_SHA256}  /tmp/rustup-init" | sha256sum -c -
+    chmod +x /tmp/rustup-init
+    /tmp/rustup-init -y --no-modify-path --profile minimal \
+        --default-toolchain "${RUST_VERSION}" --target aarch64-linux-android
+    rm /tmp/rustup-init
+EOT
+
+RUN --mount=type=cache,target=/opt/cargo/registry \
+    --mount=type=cache,target=/opt/cargo/git \
+    cargo install cargo-ndk --locked --version "${CARGO_NDK_VERSION}" \
+    && chmod -R a+rX /opt/rustup /opt/cargo
+
+# ── final ────────────────────────────────────────────────────────────────────
+FROM base AS final
+ARG NDK_VERSION=26.3.11579264
+
+LABEL org.opencontainers.image.title="tucaVR builder" \
+      org.opencontainers.image.description="Toolchain de build do APK debug do tucaVR" \
+      org.opencontainers.image.source="https://github.com/BGLuis/tucaVR"
+
+# build-essential: linker do host para build.rs/proc-macros. libclang-dev: bindgen.
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+        build-essential \
+        ca-certificates \
+        git \
+        libclang-dev \
+        openjdk-17-jdk-headless \
+        pkg-config
+
+COPY --link --from=sdk /opt/android-sdk /opt/android-sdk
+COPY --link --from=rust /opt/rustup /opt/rustup
+COPY --link --from=rust /opt/cargo/bin /opt/cargo/bin
+COPY --link --from=ffmpeg /out/ /opt/ffmpeg-android-maker/
+
+# Caches e HOME num caminho gravável por qualquer UID (o container roda com o
+# UID do host via --user). Volumes nomeados herdam estas permissões.
+RUN mkdir -p -m 1777 /cache/gradle /cache/cargo /cache/android /cache/home
+
+ENV ANDROID_HOME=/opt/android-sdk \
+    ANDROID_SDK_ROOT=/opt/android-sdk \
+    ANDROID_NDK_HOME=/opt/android-sdk/ndk/${NDK_VERSION} \
+    ANDROID_NDK_ROOT=/opt/android-sdk/ndk/${NDK_VERSION} \
+    ANDROID_USER_HOME=/cache/android \
+    FFMPEG_MAKER_DIR=/opt/ffmpeg-android-maker \
+    RUSTUP_HOME=/opt/rustup \
+    CARGO_HOME=/cache/cargo \
+    GRADLE_USER_HOME=/cache/gradle \
+    HOME=/cache/home \
+    PATH=/opt/cargo/bin:${PATH} \
+    GIT_CONFIG_COUNT=1 \
+    GIT_CONFIG_KEY_0=safe.directory \
+    GIT_CONFIG_VALUE_0=/project
+
 WORKDIR /project
-COPY entrypoint.sh /entrypoint.sh
-RUN chmod +x /entrypoint.sh
+COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
-ENTRYPOINT ["/entrypoint.sh"]
+# UID estático e não-root por padrão; scripts/docker-build.sh sobrescreve com
+# o UID/GID do host. Sem HEALTHCHECK: é um container de build, não um serviço.
+USER 10001:10001
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
