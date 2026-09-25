@@ -15,6 +15,7 @@ layout(location = 5) flat in int vChromaKeyEnabled;
 layout(location = 6) flat in uint vChromaColorRgb;
 layout(location = 7) flat in float vChromaSimilarity;
 layout(location = 8) flat in float vChromaSmoothness;
+layout(location = 9) flat in float vColorTemperature;
 
 layout(location = 0) out vec4 outColor;
 
@@ -53,6 +54,33 @@ vec3 TonemapHdrToSdr(vec3 hdrColor) {
     vec3 scene = nits / 100.0;
     vec3 tonemapped = scene / (1.0 + scene);
     return pow(clamp(tonemapped, 0.0, 1.0), vec3(1.0 / 2.2));
+}
+
+// Planckian locus approximation (Kelvin 2700K a 6500K / Night Mode ~3000K)
+vec3 ApplyColorTemperature(vec3 color, float tempK) {
+    float t = tempK / 100.0;
+    vec3 tempColor;
+    if (t <= 66.0) {
+        tempColor.r = 1.0;
+    } else {
+        tempColor.r = clamp(1.292 * pow(t - 60.0, -0.1332), 0.0, 1.0);
+    }
+
+    if (t <= 66.0) {
+        tempColor.g = clamp(0.3901 * log(max(t, 1.0)) - 0.6318, 0.0, 1.0);
+    } else {
+        tempColor.g = clamp(1.130 * pow(t - 60.0, -0.0755), 0.0, 1.0);
+    }
+
+    if (t >= 66.0) {
+        tempColor.b = 1.0;
+    } else if (t <= 19.0) {
+        tempColor.b = 0.0;
+    } else {
+        tempColor.b = clamp(0.5432 * log(max(t - 10.0, 1.0)) - 1.1962, 0.0, 1.0);
+    }
+
+    return color * tempColor;
 }
 
 // Kernel SGSR1 (Snapdragon Game Super Resolution v1 / 12-tap edge-aware)
@@ -123,6 +151,13 @@ void main() {
         : ApplySGSR1(vTexCoord, vSharpness, vTexelSize);
     if (vIsHdr != 0) {
         color = TonemapHdrToSdr(color);
+    }
+
+    if (vColorTemperature < 0.0) {
+        // Night Mode: reduz luz azul (~3000K)
+        color = ApplyColorTemperature(color, 3000.0);
+    } else if (abs(vColorTemperature - 6500.0) > 1.0 && vColorTemperature > 1000.0) {
+        color = ApplyColorTemperature(color, vColorTemperature);
     }
 
     float finalAlpha = 1.0;

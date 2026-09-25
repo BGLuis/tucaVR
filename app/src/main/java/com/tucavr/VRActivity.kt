@@ -443,6 +443,12 @@ class VRActivity : NativeActivity() {
         // docs/reports/MODO-AMBIENTE.md: empurra o estado persistido do halo de luz ambiente
         nativeSetAmbientMode(FeatureFlags.isEnabled(this, FeatureFlags.Flag.AMBIENT_MODE))
 
+        // RF-ENV-007: Ajuste de Iluminação e Cor do Ambiente (Fase 0.5 §4)
+        nativeSetEnvironmentBrightness(FeatureFlags.getEnvironmentBrightness(this))
+        nativeSetScreenGlowIntensity(FeatureFlags.getScreenGlowIntensityFloat(this))
+        nativeSetColorTemperature(FeatureFlags.getColorTemperature(this))
+        nativeSetNightMode(FeatureFlags.isNightModeEnabled(this))
+
         // Fase 0.3 Seção 2: empurra o estado persistido do toggle de Passthrough.
         // A capacidade real (extensão XR_FB_passthrough presente) só é conhecida
         // depois que o C++ cria o XrInstance; o painel de controles consulta
@@ -1848,6 +1854,11 @@ class VRActivity : NativeActivity() {
     // frame. Vulkan-only, GLES aceita a chamada mas não aplica. Só tem efeito visual
     // com ambiente Void ativo, fora de modos esfera e sem Passthrough ligado.
     external fun nativeSetAmbientMode(enabled: Boolean)
+    // RF-ENV-007: Ajuste de Iluminação e Cor do Ambiente (Fase 0.5 §4)
+    external fun nativeSetEnvironmentBrightness(brightness: Float)
+    external fun nativeSetScreenGlowIntensity(intensity: Float)
+    external fun nativeSetColorTemperature(kelvin: Float)
+    external fun nativeSetNightMode(enabled: Boolean)
     // Fase 0.3 Seção 2: Passthrough / Mixed Reality (Vulkan-only, XR_FB_passthrough).
     external fun nativeSetPassthroughEnabled(enabled: Boolean)
     external fun nativeIsPassthroughSupported(): Boolean

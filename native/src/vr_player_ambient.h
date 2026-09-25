@@ -35,6 +35,8 @@ constexpr float kAmbientEdgeWidth = 0.22f;
 // Intensidade maxima do halo (multiplicador de alpha) — ponto de partida
 // pra calibracao em headset (F5 do relatorio).
 constexpr float kAmbientMaxIntensity = 0.85f;
+constexpr float kAmbientIntensitySubtle = 0.45f;
+constexpr float kAmbientIntensityStrong = 0.85f;
 
 // Suavizacao temporal (2.3 do relatorio, "obrigatoria, nao polimento") —
 // tempo para o halo convergir pra uma nova cor apos uma mudanca abrupta
@@ -59,3 +61,9 @@ constexpr uint32_t kAmbientDecimationFrames = 3;
 constexpr float kAmbientDownsampleKernelScale = 2.0f;
 
 }  // namespace vrplayer
+
+// Getters de iluminação e cor do ambiente (RF-ENV-007)
+float get_environment_brightness();
+float get_screen_glow_intensity();
+float get_color_temperature();
+bool get_night_mode_enabled();

@@ -607,19 +607,22 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     // por MoveTowards em vez de aplicado direto — evita um "pop" visivel
     // quando o usuario liga/desliga o toggle ou entra/sai do ambiente Void.
     {
+        const float configuredIntensity = get_screen_glow_intensity();
+        const bool is3dRoom = (state.currentEnvironmentId == "cinema" || state.currentEnvironmentId == "living_room");
         const bool ambientGatesPass =
             get_ambient_mode_enabled() != 0 &&
             !IsSphereMode(state.screenMode) &&
             !IsCubemapMode(state.screenMode) &&
             state.thermalLevel < 2 &&
             state.activeVideoFrame != nullptr &&
-            state.currentEnvironmentId == "void" &&
+            (state.currentEnvironmentId == "void" || is3dRoom) &&
             !state.passthroughActive;
-        const float ambientTarget = ambientGatesPass ? vrplayer::kAmbientMaxIntensity : 0.0f;
+        const float maxTarget = (configuredIntensity > 0.001f) ? configuredIntensity : vrplayer::kAmbientMaxIntensity;
+        const float ambientTarget = ambientGatesPass ? maxTarget : 0.0f;
         const float ambientFadeStep =
             (vrplayer::kAmbientColorSmoothSeconds > 0.0f)
-                ? (dt / vrplayer::kAmbientColorSmoothSeconds) * vrplayer::kAmbientMaxIntensity
-                : vrplayer::kAmbientMaxIntensity;
+                ? (dt / vrplayer::kAmbientColorSmoothSeconds) * maxTarget
+                : maxTarget;
         state.ambientIntensity = MoveTowards(state.ambientIntensity, ambientTarget, ambientFadeStep);
     }
 

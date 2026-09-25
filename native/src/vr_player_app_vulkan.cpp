@@ -1229,6 +1229,7 @@ struct VideoPushConstants {
     uint32_t chromaColorRgb;
     float chromaSimilarity;
     float chromaSmoothness;
+    float colorTemperature;
 };
 
 // Estagio 4: push constant para UI (MVP + alpha)
@@ -1259,6 +1260,7 @@ struct StereoPushConstants {
     uint32_t chromaColorRgb;
     float chromaSimilarity;
     float chromaSmoothness;
+    float colorTemperature;
 };
 
 struct BeamPushConstants {
@@ -4901,6 +4903,8 @@ struct EnvironmentVertex {
 struct EnvironmentPushConstants {
     Mat4 mvp;
     XrVector4f tintColor;
+    XrVector4f glowParams; // x: screenGlowIntensity (0.0-1.0), y: environmentBrightness (0.0-1.0), z/w: reserved
+    XrVector4f screenPos;  // xyz: screenWorldPosition
 };
 
 static void CreateEnvironmentPipeline(AppState& state) {
@@ -4976,11 +4980,13 @@ static void CreateEnvironmentPipeline(AppState& state) {
     dynamicState.pDynamicStates = dynamicStates;
 
     VkPushConstantRange pushConstantRange{};
-    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstantRange.offset = 0;
     pushConstantRange.size = sizeof(EnvironmentPushConstants);
 
     VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &state.uiDescriptorSetLayout;
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushConstantRange;
 
@@ -5262,9 +5268,10 @@ static void DrawSkyboxIfLoaded(
     viewNoTrans.m[13] = 0.0f;
     viewNoTrans.m[14] = 0.0f;
 
+    const float skyboxBrightness = get_environment_brightness();
     SkyboxPushConstants skyboxPc{};
     skyboxPc.mvp = Mat4Multiply(Mat4Multiply(proj, viewNoTrans), skyboxModel);
-    skyboxPc.tintColor = {1.0f, 1.0f, 1.0f, 1.0f};
+    skyboxPc.tintColor = {skyboxBrightness, skyboxBrightness, skyboxBrightness, 1.0f};
 
     vkCmdPushConstants(
         cmd, state.skyboxPipelineLayout,
@@ -5495,7 +5502,7 @@ static bool LoadEnvironmentMesh(AppState& state, const std::string& envId) {
 }
 
 static void DrawEnvironmentIfLoaded(
-    AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view) {
+    AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
     if (!state.envMeshLoaded || state.envPipeline == VK_NULL_HANDLE ||
         state.envVertexBuffer == VK_NULL_HANDLE || state.passthroughActive) {
         return;
@@ -5506,17 +5513,34 @@ static void DrawEnvironmentIfLoaded(
     vkCmdBindVertexBuffers(cmd, 0, 1, &state.envVertexBuffer, &offset);
     vkCmdBindIndexBuffer(cmd, state.envIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
+    VkDescriptorSet envAmbientDs = (state.ambientDescriptorSet[state.ambientDisplayIndex] != VK_NULL_HANDLE)
+        ? state.ambientDescriptorSet[state.ambientDisplayIndex]
+        : state.uiDescriptorSet;
+    if (envAmbientDs != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(
+            cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.envPipelineLayout,
+            0, 1, &envAmbientDs, 0, nullptr);
+    }
+
+    const float envBrightness = get_environment_brightness();
     EnvironmentPushConstants envPc{};
     Mat4 envModel = Mat4Multiply(
         Mat4Translation(state.sceneTranslationOffset.x, state.sceneTranslationOffset.y, state.sceneTranslationOffset.z),
         Mat4RotationY(state.sceneYawOffset)
     );
     envPc.mvp = Mat4Multiply(Mat4Multiply(proj, view), envModel);
-    envPc.tintColor = {1.0f, 1.0f, 1.0f, 1.0f};
+    envPc.tintColor = {envBrightness, envBrightness, envBrightness, 1.0f};
+
+    // Screen Glow difuso nos ambientes 3D (Fase 0.5 §4 T4.1 / T4.2)
+    SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
+    const bool is3dRoom = (state.currentEnvironmentId == "cinema" || state.currentEnvironmentId == "living_room");
+    const float glowIntensity = (is3dRoom && state.thermalLevel < 2) ? state.ambientIntensity : 0.0f;
+    envPc.glowParams = {glowIntensity, envBrightness, 0.0f, 0.0f};
+    envPc.screenPos = {scene.screenPos.x, scene.screenPos.y, scene.screenPos.z, 1.0f};
 
     vkCmdPushConstants(
         cmd, state.envPipelineLayout,
-        VK_SHADER_STAGE_VERTEX_BIT,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(envPc), &envPc);
 
     vkCmdDrawIndexed(cmd, state.envIndexCount, 1, 0, 0, 0);
@@ -5987,7 +6011,7 @@ static void RecordAmbientDownsample(AppState& state, VkCommandBuffer cmd) {
 // e o ramo nao-esfera/nao-cubemap de RecordStereoFrame) — RecordFallbackQuad
 // e RecordPhotoFrame nao chamam esta funcao (sem video, sem cor pra derivar).
 static void DrawAmbientHalo(AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
-    if (state.ambientIntensity <= 0.001f || state.ambientHaloPipeline == VK_NULL_HANDLE) {
+    if (state.ambientIntensity <= 0.001f || state.ambientHaloPipeline == VK_NULL_HANDLE || state.currentEnvironmentId != "void") {
         return;
     }
 
@@ -6088,7 +6112,7 @@ void RecordFallbackQuad(
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     DrawSkyboxIfLoaded(state, cmd, proj, view);
-    DrawEnvironmentIfLoaded(state, cmd, proj, view);
+    DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline);
 
@@ -6402,7 +6426,7 @@ void RecordVideoFlat(
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     DrawSkyboxIfLoaded(state, cmd, proj, view);
-    DrawEnvironmentIfLoaded(state, cmd, proj, view);
+    DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
     DrawAmbientHalo(state, cmd, proj, view, headCenter);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.videoPipeline);
@@ -6430,6 +6454,7 @@ void RecordVideoFlat(
     pc.chromaColorRgb = get_chroma_key_color();
     pc.chromaSimilarity = get_chroma_key_similarity();
     pc.chromaSmoothness = get_chroma_key_smoothness();
+    pc.colorTemperature = get_night_mode_enabled() ? -3000.0f : get_color_temperature();
     vkCmdPushConstants(
         cmd, state.videoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -6499,7 +6524,7 @@ void RecordStereoFrame(
     const bool cubemapMode = IsCubemapMode(state.screenMode);
     if (!sphereMode && !cubemapMode) {
         DrawSkyboxIfLoaded(state, cmd, proj, view);
-        DrawEnvironmentIfLoaded(state, cmd, proj, view);
+        DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
         DrawAmbientHalo(state, cmd, proj, view, headCenter);
     }
 
@@ -6541,6 +6566,7 @@ void RecordStereoFrame(
     spc.chromaColorRgb = get_chroma_key_color();
     spc.chromaSimilarity = get_chroma_key_similarity();
     spc.chromaSmoothness = get_chroma_key_smoothness();
+    spc.colorTemperature = get_night_mode_enabled() ? -3000.0f : get_color_temperature();
     vkCmdPushConstants(cmd, state.stereoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(spc), &spc);
@@ -6607,7 +6633,7 @@ void RecordPhotoFrame(
 
     if (!sphereMode) {
         DrawSkyboxIfLoaded(state, cmd, proj, view);
-        DrawEnvironmentIfLoaded(state, cmd, proj, view);
+        DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
     }
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -6641,6 +6667,7 @@ void RecordPhotoFrame(
     spc.chromaColorRgb = get_chroma_key_color();
     spc.chromaSimilarity = get_chroma_key_similarity();
     spc.chromaSmoothness = get_chroma_key_smoothness();
+    spc.colorTemperature = 6500.0f;
     vkCmdPushConstants(cmd, state.photoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(spc), &spc);

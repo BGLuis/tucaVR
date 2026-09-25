@@ -57,5 +57,8 @@ class FeatureFlagsTest {
 
         // Modo Ambiente (halo de luz) nunca validado em headset real, deve iniciar desabilitado
         org.junit.Assert.assertFalse("AMBIENT_MODE deve iniciar desabilitado por padrão", FeatureFlags.Flag.AMBIENT_MODE.defaultEnabled)
+
+        // RF-ENV-007: Modo Noturno deve iniciar desabilitado por padrão
+        org.junit.Assert.assertFalse("NIGHT_MODE deve iniciar desabilitado por padrão", FeatureFlags.Flag.NIGHT_MODE.defaultEnabled)
     }
 }
