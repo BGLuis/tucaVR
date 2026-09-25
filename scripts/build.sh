@@ -11,15 +11,23 @@ echo "🦀 Compilando Rust Core (aarch64-linux-android)..."
 export ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-$ANDROID_HOME/ndk/26.3.11579264}
 export ANDROID_NDK_ROOT=$ANDROID_NDK_HOME
 export PKG_CONFIG_ALLOW_CROSS=1
-export PKG_CONFIG_PATH="$ROOT_DIR/ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/pkgconfig"
-export BINDGEN_EXTRA_CLANG_ARGS="-I$ROOT_DIR/ffmpeg-android-maker/output/include/arm64-v8a -I$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+# FFMPEG_MAKER_DIR permite apontar para um FFmpeg pré-compilado fora do projeto
+# (é o que o container de docker/build faz); por padrão usa o de setup-deps.sh.
+FFMPEG_MAKER_DIR="${FFMPEG_MAKER_DIR:-$ROOT_DIR/ffmpeg-android-maker}"
+if ! ls "$FFMPEG_MAKER_DIR"/build/ffmpeg/arm64-v8a/lib/*.so > /dev/null 2>&1; then
+    echo "❌ FFmpeg para arm64-v8a não encontrado em $FFMPEG_MAKER_DIR" >&2
+    echo "   Rode ./scripts/setup-deps.sh e compile o FFmpeg (veja o README)." >&2
+    exit 1
+fi
+export PKG_CONFIG_PATH="$FFMPEG_MAKER_DIR/build/ffmpeg/arm64-v8a/lib/pkgconfig"
+export BINDGEN_EXTRA_CLANG_ARGS="-I$FFMPEG_MAKER_DIR/output/include/arm64-v8a -I$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
 cd rust
 # cargo ndk copia automaticamente os .so se usarmos o -o
 cargo ndk -t aarch64-linux-android -P 26 -o ../app/src/main/jniLibs build --release
 
 # Copy FFmpeg shared libraries
-cp ../ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/*.so ../app/src/main/jniLibs/arm64-v8a/ || true
+cp "$FFMPEG_MAKER_DIR"/build/ffmpeg/arm64-v8a/lib/*.so ../app/src/main/jniLibs/arm64-v8a/
 
 cd ..
 

@@ -43,6 +43,11 @@ make build      # same thing
 make deploy      # build + adb install
 ```
 
+Containerized build (no SDK/NDK/Rust/FFmpeg on the host; runs `scripts/build.sh` inside `docker/build/`, still needs the Meta SDK under `sdk/`; does not work from a `git worktree`):
+```bash
+./scripts/docker-build.sh   # or: make docker-build
+```
+
 Rust alone (must use `cargo ndk`, not plain `cargo build`, for anything touching `core`/`audio`/`bridge`):
 ```bash
 cd rust && cargo ndk -t aarch64-linux-android -P 26 -o ../app/src/main/jniLibs build --release
