@@ -1314,7 +1314,7 @@ mod tests {
 
     #[test]
     fn test_screen_mode_contract_indices() {
-        // Invariante de contrato: to_screen_mode_index deve mapear estritamente para 0..=14,
+        // Invariante de contrato: to_screen_mode_index deve mapear estritamente para 0..=16,
         // casando com screen_mode.h no C++ e ScreenFormatCatalog.kt no Kotlin.
         assert_eq!(Format3D::Flat2D.to_screen_mode_index(), 0);
         assert_eq!(Format3D::SbsFull.to_screen_mode_index(), 1);
@@ -1336,31 +1336,112 @@ mod tests {
         assert_eq!(Format3D::Fisheye190Mono.to_screen_mode_index(), 15);
         assert_eq!(Format3D::Fisheye190Sbs.to_screen_mode_index(), 16);
 
-        // Todas as variantes válidas (0..=16)
-        let all_variants = [
-            Format3D::Flat2D,
-            Format3D::SbsFull,
-            Format3D::SbsHalf,
-            Format3D::OverUnderFull,
-            Format3D::OverUnderHalf,
-            Format3D::Spherical360Mono,
-            Format3D::Vr180Mono,
-            Format3D::Spherical360SbsFull,
-            Format3D::Spherical360SbsHalf,
-            Format3D::Spherical360OverUnderFull,
-            Format3D::Spherical360OverUnderHalf,
-            Format3D::Vr180Sbs,
-            Format3D::Cubemap3x2Mono,
-            Format3D::Cubemap6x1Mono,
-            Format3D::Eac3x2Mono,
-            Format3D::Cubemap3x2Sbs,
-            Format3D::Eac3x2Sbs,
-            Format3D::Fisheye190Mono,
-            Format3D::Fisheye190Sbs,
-        ];
-        for v in all_variants {
+        for v in ALL_VARIANTS {
             assert!(v.to_screen_mode_index() <= 16);
         }
     }
-}
 
+    // Todas as variantes de Format3D. Uma variante nova que ficar de fora
+    // desta lista faz `screen_mode_encoding_matches_cpp_kotlin_and_bridge`
+    // falhar assim que ela introduzir um índice novo.
+    const ALL_VARIANTS: [Format3D; 19] = [
+        Format3D::Flat2D,
+        Format3D::SbsFull,
+        Format3D::SbsHalf,
+        Format3D::OverUnderFull,
+        Format3D::OverUnderHalf,
+        Format3D::Spherical360Mono,
+        Format3D::Vr180Mono,
+        Format3D::Spherical360SbsFull,
+        Format3D::Spherical360SbsHalf,
+        Format3D::Spherical360OverUnderFull,
+        Format3D::Spherical360OverUnderHalf,
+        Format3D::Vr180Sbs,
+        Format3D::Cubemap3x2Mono,
+        Format3D::Cubemap6x1Mono,
+        Format3D::Eac3x2Mono,
+        Format3D::Cubemap3x2Sbs,
+        Format3D::Eac3x2Sbs,
+        Format3D::Fisheye190Mono,
+        Format3D::Fisheye190Sbs,
+    ];
+
+    /// Extrai os valores de `Nome = N,` do corpo de `enum class ScreenMode`.
+    fn cpp_screen_mode_values(header: &str) -> Vec<u32> {
+        let body = header
+            .split("enum class ScreenMode")
+            .nth(1)
+            .and_then(|rest| rest.split("};").next())
+            .expect("enum class ScreenMode não encontrado em screen_mode.h");
+        body.lines()
+            .filter_map(|line| line.split('=').nth(1))
+            .map(|v| {
+                v.trim()
+                    .trim_end_matches(',')
+                    .parse()
+                    .expect("valor não numérico em ScreenMode")
+            })
+            .collect()
+    }
+
+    /// Extrai o primeiro argumento de cada `ScreenFormatEntry(N, ...)`.
+    fn kotlin_catalog_indices(catalog: &str) -> Vec<u32> {
+        catalog
+            .split("ScreenFormatEntry(")
+            .skip(2) // pula o texto antes da primeira ocorrência e a declaração da data class
+            .map(|rest| {
+                rest.split(',')
+                    .next()
+                    .unwrap()
+                    .trim()
+                    .parse()
+                    .expect("índice não numérico no catálogo")
+            })
+            .collect()
+    }
+
+    #[test]
+    fn screen_mode_encoding_matches_cpp_kotlin_and_bridge() {
+        // A mesma codificação numérica vive em quatro lugares (ver CLAUDE.md).
+        // Só este crate roda no CI sem NDK, então a checagem cruzada mora aqui.
+        let header = include_str!("../../../native/include/screen_mode.h");
+        let catalog =
+            include_str!("../../../app/src/main/java/com/tucavr/screens/ScreenFormatCatalog.kt");
+        let bridge = include_str!("../../bridge/src/lib.rs");
+
+        let cpp = cpp_screen_mode_values(header);
+        let count = cpp.len() as u32;
+        let expected: Vec<u32> = (0..count).collect();
+        assert_eq!(
+            cpp, expected,
+            "ScreenMode (C++) deve ser contíguo a partir de 0"
+        );
+
+        assert_eq!(
+            kotlin_catalog_indices(catalog),
+            expected,
+            "ScreenFormatCatalog.kt deve listar os mesmos índices, em ordem"
+        );
+
+        let bridge_count: u32 = bridge
+            .lines()
+            .find_map(|l| l.trim().strip_prefix("const SCREEN_MODE_COUNT: u32 = "))
+            .and_then(|v| v.trim_end_matches(';').parse().ok())
+            .expect("SCREEN_MODE_COUNT não encontrado em rust/bridge/src/lib.rs");
+        assert_eq!(
+            bridge_count, count,
+            "SCREEN_MODE_COUNT do bridge diverge do C++"
+        );
+
+        let mut produced: Vec<u32> = ALL_VARIANTS
+            .iter()
+            .map(|f| f.to_screen_mode_index())
+            .collect();
+        produced.sort_unstable();
+        produced.dedup();
+        assert_eq!(
+            produced, expected,
+            "Format3D deve cobrir exatamente os modos do C++"
+        );
+    }
+}

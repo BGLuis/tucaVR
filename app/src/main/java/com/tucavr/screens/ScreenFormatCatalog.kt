@@ -15,7 +15,7 @@ enum class ScreenFormatGroup {
 /**
  * Representa uma entrada no catálogo de formatos de tela suportados pelo player.
  *
- * @property index Índice do modo (0..14), correspondente a `ScreenMode` no C++ e `SCREEN_MODE` no Rust.
+ * @property index Índice do modo (0..16), correspondente a `ScreenMode` no C++ e `SCREEN_MODE` no Rust.
  * @property labelResId Recurso de string com o nome legível do modo.
  * @property iconResId Recurso drawable com o ícone representativo do modo.
  * @property group Agrupamento temático do modo (Plano, 360°, 180° ou Cubemap).

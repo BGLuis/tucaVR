@@ -26,7 +26,7 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 - `protocols` — SMB2/3, HTTP(S), FTP, SFTP clients (all pure-Rust, no native TLS/SSH libs, to avoid cross-compile pain). Host-testable.
 - `bridge` — the `cdylib`/`staticlib` consumed by C++; the only crate C++ links against.
 
-Screen/stereo mode encoding (2D/SBS/OU/360/180/Cubemap/EAC variants) is a numeric enum that **must stay in sync across three places**: `SCREEN_MODE` comments in `rust/bridge/src/lib.rs`, `enum class ScreenMode` in `native/include/screen_mode.h`, and the catalog in `ScreenFormatCatalog.kt`.
+Screen/stereo mode encoding (2D/SBS/OU/360/180/Cubemap/EAC/Fisheye variants) is a numeric enum that **must stay in sync across four places**: `SCREEN_MODE` comments and `SCREEN_MODE_COUNT` in `rust/bridge/src/lib.rs`, `enum class ScreenMode` in `native/include/screen_mode.h`, the catalog in `ScreenFormatCatalog.kt`, and `Format3D::to_screen_mode_index` in `rust/media-logic/src/format3d.rs`. The host test `format3d::tests::screen_mode_encoding_matches_cpp_kotlin_and_bridge` fails when the indices or the count diverge; it can't check what each index means, so keep the names aligned by hand.
 
 ## Build commands
 

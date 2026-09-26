@@ -80,10 +80,13 @@ The Rust codebase is organized into modular crates to isolate Android NDK depend
 | `bridge` | C-ABI `extern "C"` (`cdylib` / `staticlib`) consumed by C++ (`vr_player_app.cpp` / `vr_player_app_vulkan.cpp`). | **NDK Only:** Links into the native shared library for Android. |
 
 ### Synchronization of the `ScreenMode` Enum
-Stereoscopic/projection mode representation (2D, Side-by-Side, Over-Under, 180°, 360°, Cubemap, EAC, etc.) is a numeric enum that **must remain strictly synchronized across 3 locations**:
-1. `SCREEN_MODE` comments in `rust/bridge/src/lib.rs`.
+Stereoscopic/projection mode representation (2D, Side-by-Side, Over-Under, 180°, 360°, Cubemap, EAC, etc.) is a numeric enum that **must remain strictly synchronized across 4 locations**:
+1. `SCREEN_MODE` comments and `SCREEN_MODE_COUNT` in `rust/bridge/src/lib.rs`.
 2. `enum class ScreenMode` in `native/include/screen_mode.h`.
 3. The catalog in `ScreenFormatCatalog.kt`.
+4. `Format3D::to_screen_mode_index` in `rust/media-logic/src/format3d.rs`.
+
+The host test `format3d::tests::screen_mode_encoding_matches_cpp_kotlin_and_bridge` (runs in CI) fails when the indices or the mode count diverge; it does not check the meaning of each index.
 
 ---
 
