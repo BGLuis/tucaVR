@@ -365,11 +365,11 @@ def generate_space_platform(output_path):
         for i in range(num_segs):
             faces.append([i, b_in + i + 1, i + 1])
             faces.append([b_in + i + 1, i, b_in + i])
-        # Laterais radiais
-        faces.append([0, b_in, n_pts])
-        faces.append([n_pts, b_in, b_out])
-        faces.append([num_segs, n_pts + num_segs, b_in + num_segs])
-        faces.append([n_pts + num_segs, b_out + num_segs, b_in + num_segs])
+        # Laterais radiais (winding anti-horário visto de fora do setor)
+        faces.append([0, n_pts, b_in])
+        faces.append([n_pts, b_out, b_in])
+        faces.append([num_segs, b_in + num_segs, n_pts + num_segs])
+        faces.append([n_pts + num_segs, b_in + num_segs, b_out + num_segs])
 
         m = trimesh.Trimesh(vertices=verts, faces=faces)
         m.visual.vertex_colors = colors
@@ -428,11 +428,11 @@ def generate_space_platform(output_path):
         for i in range(n_segs):
             faces.append([i, b_in + i + 1, i + 1])
             faces.append([b_in + i + 1, i, b_in + i])
-        # Tampas das pontas
-        faces.append([0, b_in, n_pts])
-        faces.append([n_pts, b_in, b_out])
-        faces.append([n_segs, n_pts + n_segs, b_in + n_segs])
-        faces.append([n_pts + n_segs, b_out + n_segs, b_in + n_segs])
+        # Tampas das pontas (winding anti-horário visto de fora do corrimão)
+        faces.append([0, n_pts, b_in])
+        faces.append([n_pts, b_out, b_in])
+        faces.append([n_segs, b_in + n_segs, n_pts + n_segs])
+        faces.append([n_pts + n_segs, b_in + n_segs, b_out + n_segs])
         m = trimesh.Trimesh(vertices=verts, faces=faces)
         m.visual.vertex_colors = colors
         return m
@@ -451,7 +451,9 @@ def generate_space_platform(output_path):
     f_c = []
     for i in range(n_c):
         next_i = (i + 1) % n_c
-        f_c.append([0, i + 1, next_i + 1])
+        # Anti-horário visto de cima (normal +Y): o pipeline de ambiente usa
+        # VK_CULL_MODE_BACK_BIT, então a ordem inversa sumia com o piso sob o usuário.
+        f_c.append([0, next_i + 1, i + 1])
     m_center = trimesh.Trimesh(vertices=v_c, faces=f_c)
     m_center.visual.vertex_colors = np.array(c_c, dtype=np.uint8)
     meshes.append(m_center)
@@ -610,7 +612,9 @@ def generate_space_platform(output_path):
     meshes.append(make_front_console())
 
     # Combina todas as partes da plataforma em uma malha contínua com cores por vértice
-    full_mesh = trimesh.util.concatenate(meshes)
+    # smooth_shade separa os vértices nas arestas vivas (> 35°): sem isso as
+    # caixas compartilham 8 vértices e as normais dos cantos saem na diagonal.
+    full_mesh = trimesh.graph.smooth_shade(trimesh.util.concatenate(meshes), angle=np.radians(35))
     _ = full_mesh.vertex_normals
 
     tri_count = len(full_mesh.faces)
@@ -618,7 +622,7 @@ def generate_space_platform(output_path):
 
     # Exporta para GLB (glTF 2.0 binário)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    glb_bytes = trimesh.exchange.gltf.export_glb(full_mesh)
+    glb_bytes = trimesh.exchange.gltf.export_glb(full_mesh, include_normals=True)
     with open(output_path, "wb") as f:
         f.write(glb_bytes)
 

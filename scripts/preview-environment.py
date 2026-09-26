@@ -310,13 +310,17 @@ HTML_PAGE = """<!DOCTYPE html>
       if (testPatternTexture) testPatternTexture.needsUpdate = true;
     }
 
+    // Mesma altura de olho que o runtime usa ao recentralizar
+    // (vr_player_app_vulkan.cpp: sceneTranslationOffset.y = headCenter.y - 1.5f).
+    const RUNTIME_EYE_Y = 1.5;
+
     function initScene() {
       const container = document.getElementById('canvas-container');
       scene = new THREE.Scene();
       scene.background = new THREE.Color(0x0a0c10);
 
       camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.05, 1000);
-      camera.position.set(0, 1.6, 0);
+      camera.position.set(0, RUNTIME_EYE_Y, 0);
 
       renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
       renderer.setSize(window.innerWidth, window.innerHeight);
@@ -336,7 +340,7 @@ HTML_PAGE = """<!DOCTYPE html>
       orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
       orbitControls.enableDamping = true;
       orbitControls.dampingFactor = 0.05;
-      orbitControls.target.set(0, 1.6, -3);
+      orbitControls.target.set(0, RUNTIME_EYE_Y, -3);
       orbitControls.enabled = false;
 
       // Controles de Primeira Pessoa
@@ -443,15 +447,15 @@ HTML_PAGE = """<!DOCTYPE html>
         fpsPrompt.style.display = 'none';
         orbitControls.enabled = true;
         camera.position.set(0, 3, 4);
-        orbitControls.target.set(0, 1.6, currentEnv ? currentEnv.screen_pos[2] / 2 : -2);
+        orbitControls.target.set(0, RUNTIME_EYE_Y, currentEnv ? currentEnv.screen_pos[2] / 2 : -2);
       }
     }
 
     function recenterCamera() {
-      camera.position.set(0, 1.6, 0);
+      camera.position.set(0, RUNTIME_EYE_Y, 0);
       camera.rotation.set(0, 0, 0);
       if (orbitControls.enabled) {
-        orbitControls.target.set(0, 1.6, currentEnv ? currentEnv.screen_pos[2] : -3);
+        orbitControls.target.set(0, RUNTIME_EYE_Y, currentEnv ? currentEnv.screen_pos[2] : -3);
       }
     }
 

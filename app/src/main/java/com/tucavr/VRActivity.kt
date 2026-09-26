@@ -1446,12 +1446,12 @@ class VRActivity : NativeActivity() {
             // Reancoragem da tela virtual de acordo com o ambiente (T1.6)
             when (environmentId) {
                 EnvironmentStore.ENV_CINEMA -> {
-                    screenTransformStore.save(0.0f, 2.2f, -7.5f, 6.0f, 3.375f)
-                    nativeSetScreenTransform(0.0f, 2.2f, -7.5f, 6.0f, 3.375f)
+                    screenTransformStore.save(0.0f, 2.5f, -7.5f, 6.0f, 3.375f)
+                    nativeSetScreenTransform(0.0f, 2.5f, -7.5f, 6.0f, 3.375f)
                 }
                 EnvironmentStore.ENV_LIVING_ROOM -> {
-                    screenTransformStore.save(0.0f, 1.5f, -2.8f, 2.4f, 1.35f)
-                    nativeSetScreenTransform(0.0f, 1.5f, -2.8f, 2.4f, 1.35f)
+                    screenTransformStore.save(0.0f, 1.85f, -2.8f, 2.4f, 1.35f)
+                    nativeSetScreenTransform(0.0f, 1.85f, -2.8f, 2.4f, 1.35f)
                 }
                 EnvironmentStore.ENV_SPACE -> {
                     screenTransformStore.save(0.0f, 1.8f, -3.2f, 3.8f, 2.1375f)

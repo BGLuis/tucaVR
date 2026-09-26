@@ -5,8 +5,10 @@ generate_cinema_env.py — Gerador do ambiente 3D "Cinema IMAX" de alta fidelida
 
 Inspirado no "Grand Cinema" do Bigscreen VR e "IMAX Theater" do Skybox VR:
 - Auditório em anfiteatro com 4 fileiras escalonadas em degraus suaves e curvadas em arco voltadas para a tela IMAX.
-- O usuário fica posicionado na fileira VIP central (Row 2, centro) na altura ideal dos olhos (Y = 1.20m),
+- O usuário fica sentado na poltrona central da fileira VIP (Row 2, X = 0) na altura ideal dos olhos (Y = 1.20m),
   com visão panorâmica imersiva e desobstruída da tela gigante (6.0m x 3.375m em Z = -7.5m).
+  Coordenadas acima são de modelagem; o GLB é exportado deslocado +0.30m em Y para o olho
+  cair nos 1.50m do runtime (ver EXPORT_Y_OFFSET) — no config.ini a tela fica em Y = 2.50m.
 - Poltronas ergonômicas de cinema:
   * Almofadas espessas com bordas arredondadas em veludo vermelho rubi profundo (#7a121c).
   * Encosto reclinado com descanso de cabeça contornado.
@@ -17,7 +19,7 @@ Inspirado no "Grand Cinema" do Bigscreen VR e "IMAX Theater" do Skybox VR:
 - Teto com baffles acústicos e cabine de projeção com vidro iluminado ao fundo.
 - Proscênio elegante com palco baixo e moldura chanfrada de titânio ao redor da tela.
 - Baked Ambient Occlusion (AO) suave por vértice.
-- Otimização extrema: 1 draw call, ~12.000 triângulos, vertex colors sem texturas de VRAM, < 300 KB.
+- 1 draw call, ~30.000 triângulos, vertex colors sem texturas de VRAM, ~1.3 MB (vértices separados nas arestas vivas).
 """
 
 import os
@@ -31,6 +33,15 @@ OUTPUT_DIR = os.path.join(PROJECT_ROOT, "app", "src", "main", "assets", "environ
 MODEL_PATH = os.path.join(OUTPUT_DIR, "model.glb")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# O runtime ancora o olho do usuário 1.50m acima da origem do modelo ao
+# recentralizar (vr_player_app_vulkan.cpp: sceneTranslationOffset.y = headCenter.y - 1.5f).
+# A cena é modelada com o olho em DESIGN_EYE_Y e exportada deslocada em Y para
+# que esse ponto caia exatamente em RUNTIME_EYE_Y. O screen_pos do config.ini
+# (e o preset em VRActivity.setVirtualEnvironment) já está em coordenadas exportadas.
+DESIGN_EYE_Y = 1.20
+RUNTIME_EYE_Y = 1.50
+EXPORT_Y_OFFSET = RUNTIME_EYE_Y - DESIGN_EYE_Y
 
 
 def create_box(extents, center=(0, 0, 0), color=(200, 200, 200, 255)):
@@ -244,7 +255,9 @@ def build_cinema():
     # 4. POLTRONAS ERGONÔMICAS EM ARCO (STADIUM SEATING)
     # Fileira 0: 6 poltronas em Z = -3.90m, Y = -0.30m
     # Fileira 1: 8 poltronas em Z = -2.40m, Y = -0.15m
-    # Fileira 2 (VIP Usuário): 8 poltronas em Z = -0.30m, Y = 0.00m (Usuário na central X = 0.0)
+    # Fileira 2 (VIP Usuário): 9 poltronas em Z = 0.00m, Y = 0.00m (Usuário sentado na central X = 0.0)
+    #   Contagem ímpar para existir poltrona em X = 0; com Z = 0 o olho (0, DESIGN_EYE_Y, 0)
+    #   fica 78cm acima do assento e ~11cm à frente do descanso de cabeça.
     # Fileira 3: 8 poltronas em Z = +1.80m, Y = +0.25m
     # =========================================================================
     # Centro de curvatura em direção à tela IMAX (Z = -7.50m)
@@ -253,7 +266,7 @@ def build_cinema():
     seat_rows = [
         {"y": -0.30, "z": -3.90, "count": 6, "spacing": 0.76},
         {"y": -0.15, "z": -2.40, "count": 8, "spacing": 0.78},
-        {"y":  0.00, "z": -0.30, "count": 8, "spacing": 0.80}, # Fileira VIP
+        {"y":  0.00, "z":  0.00, "count": 9, "spacing": 0.80}, # Fileira VIP
         {"y":  0.25, "z":  1.80, "count": 8, "spacing": 0.82},
     ]
 
@@ -313,7 +326,10 @@ def build_cinema():
     # =========================================================================
     # 7. CONCATENAÇÃO EM MALHA ÚNICA E BAKED AMBIENT OCCLUSION (AO)
     # =========================================================================
-    full_mesh = trimesh.util.concatenate(meshes)
+    # smooth_shade separa os vértices nas arestas vivas (> 35°): sem isso as
+    # caixas compartilham 8 vértices, as normais dos cantos saem na diagonal e
+    # tanto o bake abaixo quanto o shader iluminam as faces planas em degradê.
+    full_mesh = trimesh.graph.smooth_shade(trimesh.util.concatenate(meshes), angle=np.radians(35))
     verts = full_mesh.vertices.copy()
     normals = full_mesh.vertex_normals.copy()
     colors = full_mesh.visual.vertex_colors.copy().astype(np.float32)[:, :3] / 255.0
@@ -368,6 +384,10 @@ def build_cinema():
     final_rgba[:, :3] = (shaded_colors * 255.0).astype(np.uint8)
     full_mesh.visual.vertex_colors = final_rgba
 
+    # Deslocamento aplicado só depois do bake: toda a iluminação acima usa as
+    # coordenadas de modelagem (olho em DESIGN_EYE_Y).
+    full_mesh.apply_translation([0.0, EXPORT_Y_OFFSET, 0.0])
+
     return full_mesh
 
 
@@ -376,7 +396,7 @@ def main():
     mesh = build_cinema()
     print(f"Malha gerada: {len(mesh.vertices)} vértices, {len(mesh.faces)} faces ({len(mesh.faces)} triângulos)")
 
-    glb_bytes = mesh.export(file_type="glb")
+    glb_bytes = mesh.export(file_type="glb", include_normals=True)
     with open(MODEL_PATH, "wb") as f:
         f.write(glb_bytes)
 

@@ -10,11 +10,13 @@ Inspirado nos ambientes de sala de estar do Bigscreen VR e Skybox VR:
   * Painel ripado de madeira contra a parede frontal em Z = -3.38m.
   * Console suspenso montado na parede em Z = -3.15m (topo em Y = 0.55m, com 27cm de folga da tela).
   * Mesa de centro em Z = -1.50m (topo em Y = 0.35m, com mais de 1m de área livre).
-  * Câmera do usuário em (0, 1.15, 0).
+  * Câmera do usuário em (0, 1.15, 0). Coordenadas desta lista são de modelagem; o GLB é exportado
+    deslocado +0.35m em Y para o olho cair nos 1.50m do runtime (ver EXPORT_Y_OFFSET) — no
+    config.ini a tela fica em Y = 1.85m.
   * Sofá modular em L: assento em Y = 0.38m (77cm abaixo dos olhos), encosto em Z = +0.65m.
 - Iluminação baked em vertex colors com Ambient Occlusion (AO) suave em cantos e rodapés.
 - Janela panorâmica com horizonte noturno/crepuscular na parede esquerda.
-- 1 draw call, ~6.500 a 8.500 triângulos, formato glTF 2.0 binário (.glb).
+- 1 draw call, ~6.000 triângulos, formato glTF 2.0 binário (.glb).
 """
 
 import os
@@ -28,6 +30,15 @@ OUTPUT_DIR = os.path.join(PROJECT_ROOT, "app", "src", "main", "assets", "environ
 MODEL_PATH = os.path.join(OUTPUT_DIR, "model.glb")
 
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# O runtime ancora o olho do usuário 1.50m acima da origem do modelo ao
+# recentralizar (vr_player_app_vulkan.cpp: sceneTranslationOffset.y = headCenter.y - 1.5f).
+# A cena é modelada com o olho em DESIGN_EYE_Y e exportada deslocada em Y para
+# que esse ponto caia exatamente em RUNTIME_EYE_Y. O screen_pos do config.ini
+# (e o preset em VRActivity.setVirtualEnvironment) já está em coordenadas exportadas.
+DESIGN_EYE_Y = 1.15
+RUNTIME_EYE_Y = 1.50
+EXPORT_Y_OFFSET = RUNTIME_EYE_Y - DESIGN_EYE_Y
 
 
 def create_box(extents, center=(0, 0, 0), color=(200, 200, 200, 255)):
@@ -390,7 +401,10 @@ def build_living_room():
     # =========================================================================
     # 9. CONCATENAÇÃO EM MALHA ÚNICA E BAKED AMBIENT OCCLUSION (AO)
     # =========================================================================
-    full_mesh = trimesh.util.concatenate(meshes)
+    # smooth_shade separa os vértices nas arestas vivas (> 35°): sem isso as
+    # caixas compartilham 8 vértices, as normais dos cantos saem na diagonal e
+    # tanto o bake abaixo quanto o shader iluminam as faces planas em degradê.
+    full_mesh = trimesh.graph.smooth_shade(trimesh.util.concatenate(meshes), angle=np.radians(35))
     verts = full_mesh.vertices.copy()
     normals = full_mesh.vertex_normals.copy()
     colors = full_mesh.visual.vertex_colors.copy().astype(np.float32)[:, :3] / 255.0
@@ -449,6 +463,10 @@ def build_living_room():
     final_rgba[:, :3] = (shaded_colors * 255.0).astype(np.uint8)
     full_mesh.visual.vertex_colors = final_rgba
 
+    # Deslocamento aplicado só depois do bake: toda a iluminação acima usa as
+    # coordenadas de modelagem (olho em DESIGN_EYE_Y).
+    full_mesh.apply_translation([0.0, EXPORT_Y_OFFSET, 0.0])
+
     return full_mesh
 
 
@@ -458,7 +476,7 @@ def main():
     print(f"Malha gerada: {len(mesh.vertices)} vértices, {len(mesh.faces)} faces ({len(mesh.faces)} triângulos)")
 
     # Exporta para GLB
-    glb_bytes = mesh.export(file_type="glb")
+    glb_bytes = mesh.export(file_type="glb", include_normals=True)
     with open(MODEL_PATH, "wb") as f:
         f.write(glb_bytes)
 
