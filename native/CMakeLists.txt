@@ -18,9 +18,12 @@ include_directories(include)
 # -----------------------------------------------------------------------------
 # Graphics API selection (ver docs/VULKAN-MIGRATION-PLAN.md)
 # -----------------------------------------------------------------------------
-# GLES = caminho de producao (default), usa o SampleXrFramework/OVRFW da Meta.
-# VULKAN = esqueleto do Estagio 1 do plano de migracao — caminho paralelo,
-# independente do OVRFW (que e GLES-only por construcao, ver o plano).
+# VULKAN = back-end padrao do app: app/build.gradle.kts sempre passa
+#   -DVRPLAYER_GRAPHICS_API=VULKAN, a menos que o build use
+#   -PvrplayerGraphicsApi=GLES. Independente do OVRFW (que e GLES-only por
+#   construcao, ver o plano).
+# GLES = fallback congelado, usa o SampleXrFramework/OVRFW da Meta. O default
+#   "GLES" abaixo so vale para quem invoca o CMake direto, sem o Gradle.
 set(VRPLAYER_GRAPHICS_API "GLES" CACHE STRING "Graphics API for VR rendering: GLES or VULKAN")
 option(ENABLE_VK_VALIDATION_LAYERS "Enable Vulkan validation layers" OFF)
 if(ENABLE_VK_VALIDATION_LAYERS)

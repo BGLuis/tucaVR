@@ -11,7 +11,7 @@ The **tucaVR** is an immersive 2D/3D video player built specifically for the **M
 - **Application Model:** 100% immersive OpenXR application (`NativeActivity`), declared with `<meta-data android:name="com.oculus.vr.mode" android:value="vr_only" />` in `AndroidManifest.xml`. There are **no** standard 2D Android activities or flat Compose windows.
 - **User Interface:** UI is rendered via `android.app.Presentation` on a `VirtualDisplay`. The resulting buffers are rendered to textures and projected onto interactive 3D quad panels in VR space by the C++ engine.
 - **Specifications & Requirements:** Technical specifications and Architecture Decision Records (ADRs) live in `docs/REQUIREMENTS.md`. Phase tracking and task breakdowns (`T1.1`, `T6.3`, etc.) reside in `docs/phases/PHASE-0.*.md`.
-- **Code Language Conventions:** Source code comments, commit messages, and internal documentation are written in **Portuguese (Brazil)**. Preserve this convention when modifying or adding code.
+- **Code Language Conventions:** Source code comments and internal documentation are written in **Portuguese (Brazil)**; commit messages are written in **English** (Conventional Commits). Preserve these conventions when modifying or adding code.
 
 ---
 
@@ -172,7 +172,7 @@ Features requiring true OpenXR swapchains, 6DoF controller tracking, haptics, an
 
 ## 6. Coding Conventions & Best Practices
 
-- **Language:** Source code comments and commit messages follow **Portuguese (Brazil)**.
+- **Language:** Source code comments follow **Portuguese (Brazil)**; commit messages are in **English** (Conventional Commits).
 - **Internationalization (i18n):** User-facing strings must be declared in `app/src/main/res/values/strings.xml` (English default) and `values-pt-rBR/strings.xml` (Portuguese). Always use positional placeholders (`%1$s`, `%1$d`) via `getString(R.string.xxx, arg1)` — never Kotlin string concatenation.
 - **Thread Management:** Calls originating from the C++ OpenXR render thread dispatched into Kotlin/Android via JNI must be executed on the UI thread using `runOnUiThread`.
 - **Decoder Control (Rust):** Playback state changes (`is_playing`) must suspend the thread (`sleep` / condition variables) rather than killing and re-spawning ffmpeg demux loops.
@@ -183,12 +183,12 @@ Features requiring true OpenXR swapchains, 6DoF controller tracking, haptics, an
 ## 7. Continuous Integration (CI)
 
 The GitHub Actions workflow (`.github/workflows/main.yml`) runs the following steps in sequence:
-1. `cargo clippy -D warnings`
+1. `cargo clippy -p protocols -p media-logic -- -D warnings`
 2. `cargo test -p protocols -p media-logic`
 3. `ktlintCheck`
 4. `./gradlew testDebugUnitTest`
 
-*(The full native C++ / OpenXR build is not run on public CI because the Meta OpenXR Mobile SDK requires individual licensing agreements).*
+A second job, `build-apk`, runs the full native C++ + Rust + Gradle build and uploads the APK as an artifact. It only runs in `BGLuis/vr-multmidia`, because the licensed Meta OpenXR Mobile SDK is checked out from a private repository with a secret; forks get `build-and-lint` only.
 
 ---
 

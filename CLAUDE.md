@@ -13,7 +13,9 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 ```
 
 - **Kotlin** (`app/src/main/java/com/tucavr/`): Android app shell, UI (drawn as plain Android `View`s inside `android.app.Presentation` on a `VirtualDisplay`, projected as textures onto 3D quads by C++ — **not** XML layouts, **not** Compose), network credential storage, Room-based playback history, i18n resources.
-- **C++** (`native/src/vr_player_app.cpp`, built via CMake, `native/CMakeLists.txt`): OpenXR session/swapchain/render loop, Meta's `SampleXrFramework` (OVRFW) from `sdk/meta-openxr-sdk/`, controller input, converts decoded `AHardwareBuffer` frames to `GL_TEXTURE_EXTERNAL_OES` via `eglCreateImageKHR` for zero-copy video rendering.
+- **C++** (`native/src/`, built via CMake, `native/CMakeLists.txt`): OpenXR session/swapchain/render loop, controller input, zero-copy import of decoded `AHardwareBuffer` frames. Two graphics back-ends, chosen at build time:
+  - **Vulkan** (`vr_player_app_vulkan.cpp` + `vr_player_jni_vulkan.cpp`) is what every default build compiles: `app/build.gradle.kts` passes `-DVRPLAYER_GRAPHICS_API=VULKAN` unless `-PvrplayerGraphicsApi=GLES` is given, overriding the `GLES` default in `native/CMakeLists.txt`. Frames are imported via `VkSamplerYcbcrConversion`; this path does not link OVRFW.
+  - **GLES** (`vr_player_app.cpp`, Meta's `SampleXrFramework`/OVRFW from `sdk/meta-openxr-sdk/`, frames via `eglCreateImageKHR` -> `GL_TEXTURE_EXTERNAL_OES`) stays compilable as a fallback until headset validation of the Vulkan cut (`docs/VULKAN-MIGRATION-PLAN.md`, Stage 6), but is frozen: rendering work goes into the Vulkan path only, with no mirroring into GLES.
 - **Rust** (`rust/`, cross-compiled to `aarch64-linux-android` via `cargo ndk`): demuxing (`ffmpeg-next`), hardware decode via `ndk::MediaCodec`, audio (Oboe), network protocol clients (SMB/HTTP/HTTPS/FTP/SFTP).
 
 **Critical rule for the Kotlin<->Rust relationship**: Kotlin never calls Rust directly. It only talks to C++ via JNI; C++ is the only caller of the Rust `bridge` crate's flat `extern "C"` API (see the header comment in `rust/bridge/src/lib.rs`). Don't introduce a Kotlin->Rust UniFFI path — that was considered and rejected (ADR-002 in `docs/REQUIREMENTS.md`) because there is no call path where Kotlin needs to talk to Rust without going through C++'s per-frame render loop.
@@ -67,8 +69,8 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 # Rust unit tests (host-testable crates only)
 cd rust && cargo test -p protocols -p media-logic
 
-# Rust lint (CI runs this with -D warnings)
-cd rust && cargo clippy -- -D warnings
+# Rust lint (same scope as CI; workspace-wide clippy fails on the host for the NDK crates)
+cd rust && cargo clippy -p protocols -p media-logic -- -D warnings
 
 # Single Rust test
 cd rust && cargo test -p media-logic sync::tests::some_test_name
@@ -103,6 +105,6 @@ UI strings live in `app/src/main/res/values/strings.xml` (English, default) and 
 
 ## CI (`.github/workflows/main.yml`)
 
-`build-and-lint` runs, in order: `cargo clippy -D warnings`, `cargo test -p protocols -p media-logic`, `ktlintCheck` (currently non-blocking — falls back to an echo on failure), `./gradlew testDebugUnitTest`. `build-apk` (needs `BGLuis/vr-multmidia`'s SDK secret) does the real native/C++ + Rust + Gradle build and uploads `VR-Player-APK-<ref>` as an artifact. Both native (CMake/NDK) and Rust (`cargo ndk`) compiles are wrapped with `hendrikmuhs/ccache-action` and `mozilla-actions/sccache-action` respectively to avoid full rebuilds from scratch on every run — see the `ccachePath` detection in `app/build.gradle.kts` (only activates when `ccache` is on `PATH`, so local dev builds are unaffected).
+`build-and-lint` runs, in order: `cargo clippy -p protocols -p media-logic -- -D warnings`, `cargo test -p protocols -p media-logic`, `ktlintCheck` (currently non-blocking — falls back to an echo on failure), `./gradlew testDebugUnitTest`. `build-apk` (needs `BGLuis/vr-multmidia`'s SDK secret) does the real native/C++ + Rust + Gradle build and uploads `VR-Player-APK-<ref>` as an artifact. Both native (CMake/NDK) and Rust (`cargo ndk`) compiles are wrapped with `hendrikmuhs/ccache-action` and `mozilla-actions/sccache-action` respectively to avoid full rebuilds from scratch on every run — see the `ccachePath` detection in `app/build.gradle.kts` (only activates when `ccache` is on `PATH`, so local dev builds are unaffected).
 
-`.github/workflows/release.yml` no longer rebuilds the APK from scratch on every push to `main`: it triggers via `workflow_run` after `tucaVR CI` succeeds, looks up that CI run's `VR-Player-APK-main` artifact for the exact commit (`locate-artifact` job, via `gh api .../actions/runs?head_sha=...`) and reuses it instead of recompiling. If no matching CI run is found (e.g. releasing an old tag whose artifact expired), it transparently falls back to the full build steps — same job, steps gated by `steps.reuse.outcome != 'success'`.
+`.github/workflows/release.yml` reuses the CI build instead of compiling the APK itself: it triggers via `workflow_run` after `tucaVR CI` succeeds, looks up that CI run's `VR-Player-APK-main` artifact for the exact commit (`locate-artifact` job, via `gh api .../actions/runs?head_sha=...`) and publishes that. If no matching CI run is found (e.g. releasing an old tag whose artifact expired), it transparently falls back to the full build steps — same job, steps gated by `steps.reuse.outcome != 'success'`.
