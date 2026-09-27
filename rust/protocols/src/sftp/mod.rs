@@ -181,6 +181,22 @@ fn client_config(keepalive: bool) -> client::Config {
     cfg
 }
 
+/// `client::connect` da russh cria o socket sem desligar o Nagle; com
+/// requisicoes SFTP pequenas isso custa ~44 ms por chamada (delayed ACK do
+/// servidor), entao o socket e criado aqui com `TCP_NODELAY`.
+async fn connect_nodelay(
+    t: &SftpTarget,
+    keepalive: bool,
+) -> Result<client::Handle<SftpHandler>, String> {
+    let socket = tokio::net::TcpStream::connect((t.host.as_str(), t.port))
+        .await
+        .map_err(|e| e.to_string())?;
+    socket.set_nodelay(true).map_err(|e| e.to_string())?;
+    client::connect_stream(Arc::new(client_config(keepalive)), socket, SftpHandler)
+        .await
+        .map_err(|e| e.to_string())
+}
+
 /// Conecta e autentica — senha OU chave privada (T6.2 "avancado"), conforme
 /// `SftpTarget::private_key` esta preenchido ou nao (ver `uri.rs`).
 async fn connect_and_auth(
@@ -189,13 +205,7 @@ async fn connect_and_auth(
 ) -> Result<client::Handle<SftpHandler>, String> {
     t.validate()?;
     tokio::time::timeout(SFTP_CONNECT_TIMEOUT, async {
-        let mut session = match client::connect(
-            Arc::new(client_config(keepalive)),
-            (t.host.as_str(), t.port),
-            SftpHandler,
-        )
-        .await
-        {
+        let mut session = match connect_nodelay(t, keepalive).await {
             Ok(session) => {
                 log::info!(
                     "SFTP: conexao TCP/SSH estabelecida com {}:{}",
@@ -206,7 +216,7 @@ async fn connect_and_auth(
             }
             Err(e) => {
                 log::warn!("SFTP: falha ao conectar em {}:{}: {e}", t.host, t.port);
-                return Err(e.to_string());
+                return Err(e);
             }
         };
 
