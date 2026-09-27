@@ -215,6 +215,8 @@ pub struct PrefetchReader<S: RangeSource> {
     /// ultimo miss nao-sequencial — ver `next_ramp_size`.
     sequential_streak: u32,
     thermal_throttled: Option<bool>,
+    /// `false` desliga a busca especulativa do bloco seguinte (ver `without_read_ahead`).
+    read_ahead: bool,
     _source: PhantomData<S>,
 }
 
@@ -226,6 +228,16 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
     pub fn with_block_size(source: S, block_size: usize) -> Self {
         let block_size = block_size.max(64 * 1024);
         Self::with_block_sizes(source, block_size, block_size.min(DEFAULT_SEEK_BLOCK_SIZE))
+    }
+
+    /// Leitor sem read-ahead, para acessos curtos e pontuais (miniatura, metadados) em que o bloco
+    /// seguinte quase nunca chega a ser lido: cada bloco, de `block_size` bytes (tambem no primeiro
+    /// e apos um seek), so e buscado quando alguem le dentro dele. Playback continua usando
+    /// `with_block_sizes`.
+    pub fn without_read_ahead(source: S, block_size: usize) -> Self {
+        let mut reader = Self::with_block_sizes(source, block_size, block_size);
+        reader.read_ahead = false;
+        reader
     }
 
     /// Como `with_block_size`, mas com o tamanho do bloco pos-seek explicito.
@@ -289,6 +301,7 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
             seek_block_size,
             sequential_streak: 0,
             thermal_throttled: None,
+            read_ahead: true,
             _source: PhantomData,
         };
         // Dispara a busca do primeiro bloco ja na construcao: o primeiro
@@ -341,6 +354,9 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
     /// forte o bastante pra pagar o bloco inteiro se o acesso for so um
     /// pulo curto (ex.: keyframe seguinte de um GOP menor que o esperado).
     fn kick_prefetch(&mut self, offset: u64) {
+        if !self.read_ahead {
+            return;
+        }
         if self.is_throttled() {
             // T14.1/T14.2: Em estresse térmico, suspende read-ahead especulativo
             return;
@@ -1020,5 +1036,69 @@ mod tests {
             !requested.contains(&full_block),
             "bloco default original ({full_block}) nao deveria ter sido requisitado apos override, fetches: {requested:?}"
         );
+    }
+
+    /// Acessos pontuais (miniatura, metadados) nao podem pagar por um bloco seguinte que ninguem le:
+    /// com o padrao, o primeiro acerto dispara o proximo bloco; sem read-ahead, so o que foi lido e buscado.
+    #[test]
+    fn without_read_ahead_never_fetches_a_block_nobody_read() {
+        let data: Vec<u8> = (0..255u8).cycle().take(1024 * 1024).collect();
+        let block = 128 * 1024;
+
+        let (source, reads) = instant_source(data.clone(), None);
+        let mut speculative = PrefetchReader::with_block_sizes(source, block, 64 * 1024);
+        speculative.read_exact(&mut [0u8; 1024]).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while reads.load(Ordering::SeqCst) < 2 && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            reads.load(Ordering::SeqCst) >= 2,
+            "premissa do teste: o leitor padrao busca o bloco seguinte sozinho"
+        );
+
+        let (source, reads) = instant_source(data, None);
+        let mut lean = PrefetchReader::without_read_ahead(source, block);
+        lean.read_exact(&mut [0u8; 1024]).unwrap();
+        std::thread::sleep(Duration::from_millis(150));
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            1,
+            "so o bloco lido deve ser buscado"
+        );
+        assert_eq!(
+            lean.stats().bytes_fetched.load(Ordering::Relaxed),
+            block as u64
+        );
+    }
+
+    #[test]
+    fn without_read_ahead_reads_the_same_bytes_across_blocks_and_seeks() {
+        let data: Vec<u8> = (0..251u8).cycle().take(1_000_000).collect();
+        let (source, reads) = instant_source(data.clone(), None);
+        let mut reader = PrefetchReader::without_read_ahead(source, 100_000);
+
+        let mut all = Vec::new();
+        reader.read_to_end(&mut all).unwrap();
+        assert_eq!(all, data, "leitura sequencial atravessando 10 blocos");
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            10,
+            "um RangeSource por bloco, sem leitura extra alem do fim conhecido"
+        );
+
+        reader.seek(SeekFrom::Start(123_456)).unwrap();
+        let mut out = [0u8; 300_000];
+        reader.read_exact(&mut out).unwrap();
+        assert_eq!(
+            &out[..],
+            &data[123_456..423_456],
+            "seek e leitura que cruza blocos"
+        );
+
+        reader.seek(SeekFrom::End(-10)).unwrap();
+        let mut tail = Vec::new();
+        reader.read_to_end(&mut tail).unwrap();
+        assert_eq!(tail, &data[data.len() - 10..]);
     }
 }
