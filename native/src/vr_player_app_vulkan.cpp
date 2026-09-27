@@ -7145,6 +7145,7 @@ void RecordVideoFlat(
     float vw = (state.videoWidth > 0) ? static_cast<float>(state.videoWidth) : 1920.0f;
     float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1080.0f;
     pc.texelWidth = 1.0f / vw;
+    pc.texelHeight = 1.0f / vh;
     const int rawChromaMode = static_cast<int>(get_chroma_key_enabled());
     // Chroma Key e Packed Alpha SÓ devem ser executados se o Passthrough estiver realmente ATIVO.
     // Sem passthrough (ambientes Cinema, Espaço, Skybox, Void), o fundo deve permanecer 100% opaco.
@@ -7246,6 +7247,7 @@ void RecordStereoFrame(
     float vw = (state.videoWidth > 0) ? static_cast<float>(state.videoWidth) : 3840.0f;
     float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1920.0f;
     spc.texelWidth     = 1.0f / vw;
+    spc.texelHeight    = 1.0f / vh;
     const int rawChromaMode = static_cast<int>(get_chroma_key_enabled());
     // Modos estéreo compatíveis com DeoVR Packed Alpha (SBS em 180, Fisheye 190 ou Flat SBS).
     const bool allowPackedAlpha = (state.screenMode == ScreenMode::Vr180SBS ||

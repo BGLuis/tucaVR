@@ -221,7 +221,8 @@ void main() {
         uv.x = uv.x * 0.5 + float(eye) * 0.5;
     }
 
-    vec3 color = (vSharpness <= 0.01 || vTexelSize.x <= 0.0 || vTexelSize.y <= 0.0)
+    // vPolar180 != 0: pula SGSR1 perto do `return` de recorte acima (derivada de LOD diverge, tela preta no Adreno).
+    vec3 color = (vSharpness <= 0.01 || vTexelSize.x <= 0.0 || vTexelSize.y <= 0.0 || vPolar180 != 0)
         ? texture(videoTexture, uv).rgb
         : ApplySGSR1(uv, vSharpness, vTexelSize);
     if (vIsHdr != 0) {
