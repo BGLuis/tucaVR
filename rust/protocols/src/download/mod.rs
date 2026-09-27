@@ -14,8 +14,13 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-/// Tamanho do chunk de leitura para download (256 KB).
-const DOWNLOAD_CHUNK_SIZE: usize = 256 * 1024;
+/// Tamanho do bloco de leitura para download (4 MB). Cada `read_range` e
+/// dividido pelo protocolo em chunks concorrentes (1 MB no SMB, 2 MB no
+/// WebDAV/HTTP, ~252 KB x janela de 16 no SFTP): um bloco menor que isso deixa
+/// sempre uma unica requisicao em voo. Medido em loopback contra SFTP/SMB, 4 MB
+/// ja rende o mesmo que 12 MB (o do playback) e mantem pausa e progresso
+/// respondendo a cada bloco.
+const DOWNLOAD_CHUNK_SIZE: usize = 4 * 1024 * 1024;
 
 /// Estado do download, sincronizado com o Kotlin/Room.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -578,6 +583,54 @@ mod tests {
 
         let read_back = std::fs::read(&dest_file).unwrap();
         assert_eq!(read_back, test_data);
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    /// Anota o tamanho de cada `read_range` pedido.
+    struct SizeRecordingSource {
+        len: u64,
+        requested: Arc<Mutex<Vec<usize>>>,
+    }
+
+    impl RangeSource for SizeRecordingSource {
+        fn read_range(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+            self.requested.lock().unwrap().push(buf.len());
+            let n = buf.len().min((self.len - offset) as usize);
+            buf[..n].fill(0x5a);
+            Ok(n)
+        }
+
+        fn len(&self) -> Option<u64> {
+            Some(self.len)
+        }
+    }
+
+    #[test]
+    fn test_download_reads_are_large_enough_for_the_protocols_concurrency() {
+        let temp_dir = std::env::temp_dir().join(format!("tucavr_test_blocks_{}", std::process::id()));
+        let dest_file = temp_dir.join("big.mp4");
+        let requested = Arc::new(Mutex::new(Vec::new()));
+        let source_requested = requested.clone();
+        let total: u64 = 10 * 1024 * 1024;
+
+        let opener: SourceOpener = Arc::new(move |_uri| Ok(Box::new(SizeRecordingSource { len: total, requested: source_requested.clone() })));
+        let manager = DownloadManager::with_opener(1, opener);
+        manager.enqueue("dl_blocks", "mock://video", dest_file.to_str().unwrap()).unwrap();
+
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(5) && manager.get_stats("dl_blocks").unwrap().state != DownloadState::Completed {
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        assert_eq!(manager.get_stats("dl_blocks").unwrap().state, DownloadState::Completed);
+        let requested = requested.lock().unwrap();
+        // O maior chunk concorrente de um protocolo e 2 MB: cada leitura precisa cobrir mais de um,
+        // senao ha uma unica requisicao em voo e rede e latencia se alternam.
+        let largest_protocol_chunk = 2 * 1024 * 1024;
+        let (last, full_blocks) = requested.split_last().unwrap();
+        assert!(!full_blocks.is_empty() && full_blocks.iter().all(|&len| len >= 2 * largest_protocol_chunk), "leituras pedidas: {requested:?}");
+        assert!(*last <= total as usize);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
