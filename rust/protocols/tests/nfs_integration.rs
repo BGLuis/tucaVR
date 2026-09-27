@@ -106,6 +106,28 @@ fn nfs_file_source_reads_full_file_matching_sha256() {
     assert_eq!(sha256_hex(&data), expected_sha256());
 }
 
+/// Arquivo maior que um RPC READ (o cliente le de 1 MiB em 1 MiB): a remontagem tem que fechar bit a bit.
+#[test]
+#[ignore]
+fn nfs_file_source_reads_a_file_spanning_many_reads_matching_sha256() {
+    let multi = NfsTarget {
+        file_path: env_or("VRPLAYER_TEST_NFS_MULTIBLOCK_FILE", "nfs-multiblock.bin"),
+        ..target()
+    };
+    let expected = std::env::var("VRPLAYER_TEST_NFS_MULTIBLOCK_SHA256")
+        .expect("VRPLAYER_TEST_NFS_MULTIBLOCK_SHA256 nao definido — rode via scripts/test-network-protocols.sh");
+    let mut reader =
+        PrefetchReader::new(NfsFileSource::open(&multi).expect("NfsFileSource::open falhou"));
+    let mut data = Vec::new();
+    reader.read_to_end(&mut data).expect("leitura falhou");
+    assert_eq!(
+        data.len(),
+        3 * 1024 * 1024 + 12_345,
+        "tamanho nao multiplo de 1 MiB: exercita o ultimo READ parcial"
+    );
+    assert_eq!(sha256_hex(&data), expected);
+}
+
 #[test]
 #[ignore]
 fn scan_has_media_reports_media_in_the_dash_fixture() {

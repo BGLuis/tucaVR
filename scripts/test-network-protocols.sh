@@ -47,6 +47,11 @@ head -c 262144 /dev/urandom > "$FIXTURE"
 SHA256=$(sha256sum "$FIXTURE" | cut -d' ' -f1)
 echo "testfile.bin: $((262144 / 1024))KB, sha256=$SHA256"
 
+# NFS: file with more than one READ RPC (1 MiB) and a size that is not a multiple of it, to exercise reassembly.
+NFS_MULTIBLOCK="$COMPOSE_DIR/fixtures/nfs-multiblock.bin"
+head -c $((3 * 1024 * 1024 + 12345)) /dev/urandom > "$NFS_MULTIBLOCK"
+NFS_MULTIBLOCK_SHA256=$(sha256sum "$NFS_MULTIBLOCK" | cut -d' ' -f1)
+
 echo "== Generating the WebDAV fixture =="
 mkdir -p "$COMPOSE_DIR/fixtures/webdav"
 WEBDAV_FIXTURE="$COMPOSE_DIR/fixtures/webdav/testfile.bin"
@@ -242,6 +247,8 @@ export VRPLAYER_TEST_NFS_HOST="127.0.0.1"
 export VRPLAYER_TEST_NFS_PORT="2049"
 export VRPLAYER_TEST_NFS_EXPORT="/export"
 export VRPLAYER_TEST_NFS_FILE="testfile.bin"
+export VRPLAYER_TEST_NFS_MULTIBLOCK_FILE="nfs-multiblock.bin"
+export VRPLAYER_TEST_NFS_MULTIBLOCK_SHA256="$NFS_MULTIBLOCK_SHA256"
 export VRPLAYER_TEST_HTTP_URL_BASE="http://127.0.0.1:18080"
 export VRPLAYER_TEST_WEBDAV_HOST="127.0.0.1"
 export VRPLAYER_TEST_WEBDAV_PORT="18099"

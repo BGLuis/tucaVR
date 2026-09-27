@@ -7,13 +7,14 @@ use std::io;
 use std::time::Duration;
 
 const NFS_TIMEOUT: Duration = Duration::from_secs(10);
-const NFS_MAX_CHUNK: usize = 65536; // 64 KB por RPC READ
 
 pub struct NfsFileSource {
     target: NfsTarget,
     client: NfsClient,
     file_handle: Vec<u8>,
     file_size: u64,
+    /// Bytes por RPC READ, conforme o FSINFO do servidor.
+    read_size: usize,
 }
 
 impl NfsFileSource {
@@ -30,11 +31,14 @@ impl NfsFileSource {
             ));
         }
 
+        let read_size = client.read_size(&root_handle);
+
         Ok(Self {
             target: target.clone(),
             client,
             file_handle,
             file_size,
+            read_size,
         })
     }
 
@@ -47,6 +51,7 @@ impl NfsFileSource {
         )?;
         let (file_handle, file_size, _) =
             client.resolve_path(&root_handle, &self.target.file_path)?;
+        self.read_size = client.read_size(&root_handle);
         self.client = client;
         self.file_handle = file_handle;
         self.file_size = file_size;
@@ -65,7 +70,7 @@ impl RangeSource for NfsFileSource {
 
         while total_read < max_to_read {
             let cur_offset = offset + (total_read as u64);
-            let chunk_size = (max_to_read - total_read).min(NFS_MAX_CHUNK) as u32;
+            let chunk_size = (max_to_read - total_read).min(self.read_size) as u32;
 
             let read_res = self.client.read(&self.file_handle, cur_offset, chunk_size);
             let (data, eof) = match read_res {

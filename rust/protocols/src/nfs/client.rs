@@ -7,6 +7,25 @@ use std::time::Duration;
 const NFS3_OK: u32 = 0;
 const NF3DIR: u32 = 2;
 
+/// Tamanho de READ usado quando o servidor nao informa um (era o valor fixo anterior).
+pub const DEFAULT_READ_SIZE: usize = 64 * 1024;
+/// Teto do READ mesmo que o servidor aceite mais: um bloco maior so aumenta a latencia de cada RPC.
+const MAX_READ_SIZE: usize = 1024 * 1024;
+
+/// Tamanho de READ a usar dado o `rtmax` (maximo aceito) e o `rtpref` (preferido) do FSINFO.
+fn choose_read_size(rtmax: u32, rtpref: u32) -> usize {
+    let preferred = if rtpref > 0 { rtpref } else { rtmax };
+    let capped = if rtmax > 0 {
+        preferred.min(rtmax)
+    } else {
+        preferred
+    };
+    match (capped as usize).min(MAX_READ_SIZE) {
+        0 => DEFAULT_READ_SIZE,
+        size => size,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct NfsDirEntry {
     pub name: String,
@@ -235,6 +254,34 @@ impl NfsClient {
         };
         let rpc = RpcClient::connect(host, nfs_port, timeout)?;
         Ok((Self { rpc }, root_handle))
+    }
+
+    /// Tamanho de READ que o servidor prefere (FSINFO, RFC 1813 §3.3.19), limitado a 1 MiB. Servidores
+    /// Linux costumam pedir 1 MiB; com 64 KiB cada READ pagava um RTT inteiro. Se o FSINFO falha, mantem
+    /// o valor conservador de antes.
+    pub fn read_size(&mut self, handle: &[u8]) -> usize {
+        let mut args = XdrWriter::new();
+        args.write_bytes(handle);
+
+        let parse = |resp: &[u8]| -> io::Result<(u32, u32)> {
+            let mut reader = XdrReader::new(resp);
+            if reader.read_u32()? != NFS3_OK {
+                return Err(io::Error::other("FSINFO recusado"));
+            }
+            read_post_op_attr(&mut reader)?;
+            Ok((reader.read_u32()?, reader.read_u32()?)) // rtmax, rtpref
+        };
+
+        match self
+            .rpc
+            .call(PROG_NFS, VERSION_3, NFSPROC3_FSINFO, &args.into_bytes())
+        {
+            Ok(resp) => match parse(&resp) {
+                Ok((rtmax, rtpref)) => choose_read_size(rtmax, rtpref),
+                Err(_) => DEFAULT_READ_SIZE,
+            },
+            Err(_) => DEFAULT_READ_SIZE,
+        }
     }
 
     /// Procura um arquivo ou pasta dentro de um diretorio (LOOKUP)
@@ -928,5 +975,79 @@ mod tests {
             (11, [9, 8, 7, 6, 5, 4, 3, 2]),
             "a 2a pagina devolve o cookieverf da 1a"
         );
+    }
+
+    #[test]
+    fn read_size_follows_the_servers_preference_within_its_limits() {
+        assert_eq!(
+            choose_read_size(1 << 20, 1 << 20),
+            1 << 20,
+            "Linux costuma anunciar 1 MiB"
+        );
+        assert_eq!(
+            choose_read_size(1 << 20, 32 * 1024),
+            32 * 1024,
+            "respeita um rtpref menor"
+        );
+        assert_eq!(
+            choose_read_size(64 * 1024, 1 << 20),
+            64 * 1024,
+            "nunca acima do rtmax"
+        );
+        assert_eq!(
+            choose_read_size(4 << 20, 4 << 20),
+            1 << 20,
+            "teto de 1 MiB mesmo que o servidor aceite mais"
+        );
+        assert_eq!(
+            choose_read_size(1 << 20, 0),
+            1 << 20,
+            "sem rtpref, usa o rtmax"
+        );
+        assert_eq!(
+            choose_read_size(0, 0),
+            DEFAULT_READ_SIZE,
+            "servidor que nao informa nada"
+        );
+    }
+
+    fn fsinfo_response(rtmax: u32, rtpref: u32) -> Vec<u8> {
+        let mut w = XdrWriter::new();
+        w.write_u32(NFS3_OK);
+        w.write_raw(&post_op_attr(Some((NF3DIR, 4096))));
+        w.write_u32(rtmax);
+        w.write_u32(rtpref);
+        for _ in 0..5 {
+            w.write_u32(0); // rtmult, wtmax, wtpref, wtmult, dtpref
+        }
+        w.into_bytes()
+    }
+
+    #[test]
+    fn client_reads_the_preferred_size_from_fsinfo() {
+        let nfsd = fake_rpc_server(|_, procedure, _| {
+            assert_eq!(procedure, NFSPROC3_FSINFO);
+            fsinfo_response(1 << 20, 512 * 1024)
+        });
+        let mut client = NfsClient {
+            rpc: RpcClient::connect("127.0.0.1", nfsd, T).unwrap(),
+        };
+
+        assert_eq!(client.read_size(&[1; 8]), 512 * 1024);
+    }
+
+    #[test]
+    fn client_keeps_the_conservative_size_when_fsinfo_fails() {
+        let nfsd = fake_rpc_server(|_, _, _| {
+            let mut w = XdrWriter::new();
+            w.write_u32(10004); // NFS3ERR_NOTSUPP
+            w.write_u32(0);
+            w.into_bytes()
+        });
+        let mut client = NfsClient {
+            rpc: RpcClient::connect("127.0.0.1", nfsd, T).unwrap(),
+        };
+
+        assert_eq!(client.read_size(&[1; 8]), DEFAULT_READ_SIZE);
     }
 }
