@@ -8,10 +8,18 @@ use std::time::Duration;
 static XID_COUNTER: AtomicU32 = AtomicU32::new(100);
 
 pub const PROG_PORTMAP: u32 = 100000;
+/// Porta fixa do portmapper/rpcbind (RFC 1833 §3): o unico servico RPC cujo endereco
+/// e conhecido de antemao — os demais (MOUNT) se registram nele.
+pub const PORTMAP_PORT: u16 = 111;
 pub const PROG_NFS: u32 = 100003;
 pub const PROG_MOUNT: u32 = 100005;
 
+pub const VERSION_2: u32 = 2;
 pub const VERSION_3: u32 = 3;
+
+// Procedimentos PORTMAP v2
+pub const PMAPPROC_GETPORT: u32 = 3;
+pub const IPPROTO_TCP: u32 = 6;
 
 // Procedimentos MOUNT v3
 pub const MOUNTPROC3_MNT: u32 = 1;
@@ -21,8 +29,8 @@ pub const MOUNTPROC3_EXPORT: u32 = 5;
 pub const NFSPROC3_GETATTR: u32 = 1;
 pub const NFSPROC3_LOOKUP: u32 = 3;
 pub const NFSPROC3_READ: u32 = 6;
-pub const NFSPROC3_READDIRPLUS: u32 = 16;
-pub const NFSPROC3_READDIR: u32 = 17;
+pub const NFSPROC3_READDIR: u32 = 16;
+pub const NFSPROC3_READDIRPLUS: u32 = 17;
 
 pub const AUTH_NONE: u32 = 0;
 pub const AUTH_UNIX: u32 = 1;

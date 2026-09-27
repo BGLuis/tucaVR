@@ -18,8 +18,8 @@ pub struct NfsFileSource {
 
 impl NfsFileSource {
     pub fn open(target: &NfsTarget) -> Result<Self, String> {
-        let mut client = NfsClient::connect(&target.host, target.port, NFS_TIMEOUT)?;
-        let root_handle = client.mount(&target.export_path)?;
+        let (mut client, root_handle) =
+            NfsClient::open_export(&target.host, target.port, &target.export_path, NFS_TIMEOUT)?;
         let (file_handle, file_size, is_dir) =
             client.resolve_path(&root_handle, &target.file_path)?;
 
@@ -39,8 +39,12 @@ impl NfsFileSource {
     }
 
     fn reconnect(&mut self) -> Result<(), String> {
-        let mut client = NfsClient::connect(&self.target.host, self.target.port, NFS_TIMEOUT)?;
-        let root_handle = client.mount(&self.target.export_path)?;
+        let (mut client, root_handle) = NfsClient::open_export(
+            &self.target.host,
+            self.target.port,
+            &self.target.export_path,
+            NFS_TIMEOUT,
+        )?;
         let (file_handle, file_size, _) =
             client.resolve_path(&root_handle, &self.target.file_path)?;
         self.client = client;

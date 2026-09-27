@@ -608,28 +608,47 @@ mod tests {
 
     #[test]
     fn test_download_reads_are_large_enough_for_the_protocols_concurrency() {
-        let temp_dir = std::env::temp_dir().join(format!("tucavr_test_blocks_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("tucavr_test_blocks_{}", std::process::id()));
         let dest_file = temp_dir.join("big.mp4");
         let requested = Arc::new(Mutex::new(Vec::new()));
         let source_requested = requested.clone();
         let total: u64 = 10 * 1024 * 1024;
 
-        let opener: SourceOpener = Arc::new(move |_uri| Ok(Box::new(SizeRecordingSource { len: total, requested: source_requested.clone() })));
+        let opener: SourceOpener = Arc::new(move |_uri| {
+            Ok(Box::new(SizeRecordingSource {
+                len: total,
+                requested: source_requested.clone(),
+            }))
+        });
         let manager = DownloadManager::with_opener(1, opener);
-        manager.enqueue("dl_blocks", "mock://video", dest_file.to_str().unwrap()).unwrap();
+        manager
+            .enqueue("dl_blocks", "mock://video", dest_file.to_str().unwrap())
+            .unwrap();
 
         let start = Instant::now();
-        while start.elapsed() < Duration::from_secs(5) && manager.get_stats("dl_blocks").unwrap().state != DownloadState::Completed {
+        while start.elapsed() < Duration::from_secs(5)
+            && manager.get_stats("dl_blocks").unwrap().state != DownloadState::Completed
+        {
             thread::sleep(Duration::from_millis(10));
         }
 
-        assert_eq!(manager.get_stats("dl_blocks").unwrap().state, DownloadState::Completed);
+        assert_eq!(
+            manager.get_stats("dl_blocks").unwrap().state,
+            DownloadState::Completed
+        );
         let requested = requested.lock().unwrap();
         // O maior chunk concorrente de um protocolo e 2 MB: cada leitura precisa cobrir mais de um,
         // senao ha uma unica requisicao em voo e rede e latencia se alternam.
         let largest_protocol_chunk = 2 * 1024 * 1024;
         let (last, full_blocks) = requested.split_last().unwrap();
-        assert!(!full_blocks.is_empty() && full_blocks.iter().all(|&len| len >= 2 * largest_protocol_chunk), "leituras pedidas: {requested:?}");
+        assert!(
+            !full_blocks.is_empty()
+                && full_blocks
+                    .iter()
+                    .all(|&len| len >= 2 * largest_protocol_chunk),
+            "leituras pedidas: {requested:?}"
+        );
         assert!(*last <= total as usize);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
