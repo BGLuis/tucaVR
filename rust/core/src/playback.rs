@@ -236,7 +236,7 @@ pub struct PlaybackController {
     // Vulkan certo (BT.709/SDR vs. BT.2020+tonemap pra PQ/HLG). SDR e o
     // default seguro antes do primeiro load_at() ou se o container nao
     // informa nada (mesma suposicao implicita que o pipeline sempre teve).
-    is_hdr: bool,
+    hdr_transfer: media_logic::color::TransferFunction,
     auto_paused: bool,
     // Instrumentacao (docs/DEBUGGING.md), capturada em load_at() antes de
     // mover o Demuxer/HwDecoder pra dentro das threads de sessao — ver
@@ -322,7 +322,7 @@ impl PlaybackController {
             desired_audio_track: 0,
             audio_track_count: 0,
             detected_screen_mode: 0,
-            is_hdr: false,
+            hdr_transfer: media_logic::color::TransferFunction::Sdr,
             auto_paused: false,
             network_stats: None,
             video_queue: None,
@@ -434,6 +434,8 @@ impl PlaybackController {
         let mut codec_id = ffmpeg_next::codec::Id::None;
         let mut video_fps = 0.0f32;
         let mut transfer_function = media_logic::color::TransferFunction::Sdr;
+        let mut avcol_spc = 2; // AVCOL_SPC_UNSPECIFIED
+        let mut avcol_range = 0; // AVCOL_RANGE_UNSPECIFIED
         if let Some(stream) = demuxer.input_context.stream(video_idx) {
             codec_id = stream.parameters().id();
             let avg_fps = stream.avg_frame_rate();
@@ -453,10 +455,14 @@ impl PlaybackController {
                     let trc: ffmpeg_next::ffi::AVColorTransferCharacteristic =
                         video_decoder_ctx.color_transfer_characteristic().into();
                     transfer_function = media_logic::color::from_avcol_trc(trc as i32);
+                    let spc: ffmpeg_next::ffi::AVColorSpace = video_decoder_ctx.color_space().into();
+                    avcol_spc = spc as i32;
+                    let range: ffmpeg_next::ffi::AVColorRange = video_decoder_ctx.color_range().into();
+                    avcol_range = range as i32;
                 }
             }
         }
-        self.is_hdr = transfer_function.is_hdr();
+        self.hdr_transfer = transfer_function;
 
         let (fmt3d, _) = crate::format3d_detect::detect(&demuxer, path, width, height);
         self.detected_screen_mode = fmt3d.to_screen_mode_index();
@@ -544,29 +550,22 @@ impl PlaybackController {
         // Prioridade de decodificação realtime (0 = realtime / baixa latência)
         format.set_i32("priority", 0);
 
-        // Torna explicito pro MediaCodec o espaco de cor do conteudo SDR
-        // que este app foi feito pra tocar (HD/4K/8K reais sao BT.709, nao
-        // BT.601 de SD) — antes disso a plataforma tinha que adivinhar, e o
-        // caminho Vulkan (CreateYcbcrAndVideoPipeline) tinha essa mesma
-        // suposicao errada hardcoded como BT.601 (ver commit que trocou pra
-        // BT.709 la). Valores de android.media.MediaFormat:
-        // COLOR_STANDARD_BT709=1, COLOR_STANDARD_BT2020=6,
-        // COLOR_RANGE_LIMITED=2, COLOR_TRANSFER_SDR_VIDEO=3,
-        // COLOR_TRANSFER_ST2084=6, COLOR_TRANSFER_HLG=7.
-        format.set_i32("color-range", 2);
+        // Repassa ao MediaCodec o espaco de cor declarado pelo container: o
+        // dataspace do buffer decodificado vira o `suggestedYcbcrModel/Range`
+        // que o caminho Vulkan usa pra criar a conversao YCbCr
+        // (GetOrImportVideoFrame). Valores de android.media.MediaFormat:
+        // COLOR_TRANSFER_SDR_VIDEO=3, COLOR_TRANSFER_ST2084=6, COLOR_TRANSFER_HLG=7.
+        format.set_i32(
+            "color-standard",
+            media_logic::color::media_format_color_standard(transfer_function, avcol_spc, height),
+        );
+        if let Some(range) = media_logic::color::media_format_color_range(avcol_range) {
+            format.set_i32("color-range", range);
+        }
         match transfer_function {
-            media_logic::color::TransferFunction::Sdr => {
-                format.set_i32("color-standard", 1);
-                format.set_i32("color-transfer", 3);
-            }
-            media_logic::color::TransferFunction::Pq => {
-                format.set_i32("color-standard", 6);
-                format.set_i32("color-transfer", 6);
-            }
-            media_logic::color::TransferFunction::Hlg => {
-                format.set_i32("color-standard", 6);
-                format.set_i32("color-transfer", 7);
-            }
+            media_logic::color::TransferFunction::Sdr => format.set_i32("color-transfer", 3),
+            media_logic::color::TransferFunction::Pq => format.set_i32("color-transfer", 6),
+            media_logic::color::TransferFunction::Hlg => format.set_i32("color-transfer", 7),
         }
 
         if max_dim >= 7000 && video_fps > 30.0 {
@@ -1718,12 +1717,11 @@ impl PlaybackController {
         self.detected_screen_mode
     }
 
-    /// T-HDR: true se o video atual foi detectado como PQ/HLG (ver
-    /// media_logic::color) — consumido pelo C++ (bridge) pra escolher o
-    /// pipeline de cor Vulkan certo. false antes do primeiro load_at() ou
-    /// para conteudo SDR comum.
-    pub fn is_hdr(&self) -> bool {
-        self.is_hdr
+    /// T-HDR: transfer characteristic do video atual (PQ/HLG/SDR, ver
+    /// media_logic::color) — consumida pelo C++ (bridge) pra escolher o
+    /// tonemap Vulkan certo. SDR antes do primeiro load_at().
+    pub fn hdr_transfer(&self) -> media_logic::color::TransferFunction {
+        self.hdr_transfer
     }
 
     pub fn set_subtitle_track(&mut self, track: i32) {

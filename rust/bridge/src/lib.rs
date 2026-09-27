@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex, RwLock};
 // silencioso, entao os logs de diagnostico de rede adicionados nas sessoes
 // anteriores nunca apareciam no logcat. Implementacao minima em vez de puxar
 // a crate `android_logger` (que nao estava em nenhuma arvore de dependencia
-// deste workspace ainda) — so redireciona pra `__android_log_print`, mesmo
+// deste workspace ainda) — so redireciona pra `__android_log_write`, mesmo
 // mecanismo que o resto do bridge ja usa.
 struct AndroidLogger;
 
@@ -812,14 +812,13 @@ pub extern "C" fn get_video_presentation_pending() -> u32 {
     }
 }
 
-/// T-HDR: 1 se o video atual foi detectado como HDR (PQ/HLG, ver
-/// media_logic::color), 0 caso contrario (inclui antes do primeiro load).
-/// O C++ consulta isto pra escolher o pipeline de cor Vulkan certo
-/// (BT.709/SDR vs. BT.2020 + tonemap).
+/// T-HDR: 0 = SDR (inclui antes do primeiro load), 1 = PQ, 2 = HLG (ver
+/// media_logic::color::TransferFunction::shader_code). Qualquer valor != 0 e
+/// HDR. O C++ repassa o codigo ao shader pra escolher o tonemap certo.
 #[no_mangle]
 pub extern "C" fn get_video_is_hdr() -> u32 {
     match CONTROLLER.try_lock() {
-        Ok(controller) => controller.is_hdr() as u32,
+        Ok(controller) => controller.hdr_transfer().shader_code(),
         Err(_) => 0,
     }
 }

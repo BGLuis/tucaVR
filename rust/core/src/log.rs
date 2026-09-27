@@ -31,7 +31,7 @@ pub fn log_android(level: i32, msg: &str) {
     let formatted = format!("{prefix}{msg}");
     if let Ok(c_msg) = std::ffi::CString::new(formatted) {
         unsafe {
-            ndk_sys::__android_log_print(level, TAG.as_ptr(), c_msg.as_ptr());
+            ndk_sys::__android_log_write(level, TAG.as_ptr(), c_msg.as_ptr());
         }
     }
 }
