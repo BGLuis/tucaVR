@@ -29,6 +29,7 @@ pub mod metadata_wire;
 pub mod playback_params;
 pub mod preroll;
 pub mod quality;
+pub mod retire_ring;
 pub mod retry_backoff;
 pub mod session;
 pub mod spatial_audio;

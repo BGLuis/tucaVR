@@ -71,11 +71,7 @@ const SD_MAX_HEIGHT: u32 = 576;
 /// Sem matriz declarada, SD (<= 576 linhas) cai em BT.601 e o resto em
 /// BT.709 — a convencao de ffmpeg/mpv; declarar 709 pra SD desloca matiz em
 /// pele e vermelhos.
-pub fn media_format_color_standard(
-    transfer: TransferFunction,
-    avcol_spc: i32,
-    height: u32,
-) -> i32 {
+pub fn media_format_color_standard(transfer: TransferFunction, avcol_spc: i32, height: u32) -> i32 {
     if transfer.is_hdr() {
         return COLOR_STANDARD_BT2020;
     }
@@ -138,30 +134,61 @@ mod tests {
         assert_eq!(TransferFunction::Sdr.shader_code(), 0);
         assert_eq!(TransferFunction::Pq.shader_code(), 1);
         assert_eq!(TransferFunction::Hlg.shader_code(), 2);
-        for t in [TransferFunction::Sdr, TransferFunction::Pq, TransferFunction::Hlg] {
+        for t in [
+            TransferFunction::Sdr,
+            TransferFunction::Pq,
+            TransferFunction::Hlg,
+        ] {
             assert_eq!(t.shader_code() != 0, t.is_hdr());
         }
     }
 
     #[test]
     fn hdr_is_always_bt2020_regardless_of_declared_matrix() {
-        assert_eq!(media_format_color_standard(TransferFunction::Pq, 1, 2160), 6);
-        assert_eq!(media_format_color_standard(TransferFunction::Hlg, 2, 1080), 6);
+        assert_eq!(
+            media_format_color_standard(TransferFunction::Pq, 1, 2160),
+            6
+        );
+        assert_eq!(
+            media_format_color_standard(TransferFunction::Hlg, 2, 1080),
+            6
+        );
     }
 
     #[test]
     fn declared_matrix_wins_over_resolution() {
-        assert_eq!(media_format_color_standard(TransferFunction::Sdr, 1, 480), 1);
-        assert_eq!(media_format_color_standard(TransferFunction::Sdr, 5, 1080), 2);
-        assert_eq!(media_format_color_standard(TransferFunction::Sdr, 6, 1080), 4);
-        assert_eq!(media_format_color_standard(TransferFunction::Sdr, 9, 1080), 6);
+        assert_eq!(
+            media_format_color_standard(TransferFunction::Sdr, 1, 480),
+            1
+        );
+        assert_eq!(
+            media_format_color_standard(TransferFunction::Sdr, 5, 1080),
+            2
+        );
+        assert_eq!(
+            media_format_color_standard(TransferFunction::Sdr, 6, 1080),
+            4
+        );
+        assert_eq!(
+            media_format_color_standard(TransferFunction::Sdr, 9, 1080),
+            6
+        );
     }
 
     #[test]
     fn undeclared_matrix_falls_back_by_resolution() {
-        assert_eq!(media_format_color_standard(TransferFunction::Sdr, 2, 576), 2);
-        assert_eq!(media_format_color_standard(TransferFunction::Sdr, 2, 720), 1);
-        assert_eq!(media_format_color_standard(TransferFunction::Sdr, 0, 2160), 1);
+        assert_eq!(
+            media_format_color_standard(TransferFunction::Sdr, 2, 576),
+            2
+        );
+        assert_eq!(
+            media_format_color_standard(TransferFunction::Sdr, 2, 720),
+            1
+        );
+        assert_eq!(
+            media_format_color_standard(TransferFunction::Sdr, 0, 2160),
+            1
+        );
     }
 
     #[test]

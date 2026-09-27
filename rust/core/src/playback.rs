@@ -455,9 +455,11 @@ impl PlaybackController {
                     let trc: ffmpeg_next::ffi::AVColorTransferCharacteristic =
                         video_decoder_ctx.color_transfer_characteristic().into();
                     transfer_function = media_logic::color::from_avcol_trc(trc as i32);
-                    let spc: ffmpeg_next::ffi::AVColorSpace = video_decoder_ctx.color_space().into();
+                    let spc: ffmpeg_next::ffi::AVColorSpace =
+                        video_decoder_ctx.color_space().into();
                     avcol_spc = spc as i32;
-                    let range: ffmpeg_next::ffi::AVColorRange = video_decoder_ctx.color_range().into();
+                    let range: ffmpeg_next::ffi::AVColorRange =
+                        video_decoder_ctx.color_range().into();
                     avcol_range = range as i32;
                 }
             }

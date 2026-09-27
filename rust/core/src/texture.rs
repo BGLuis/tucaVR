@@ -1,12 +1,21 @@
+use media_logic::retire_ring::RetireRing;
 use ndk::hardware_buffer::{HardwareBuffer, HardwareBufferUsage};
 use ndk::media::image_reader::ImageFormat;
 use ndk::media::image_reader::{AcquireResult, Image, ImageReader};
 use ndk::native_window::NativeWindow;
 
+/// Quadros de video mantidos vivos depois de substituidos: cobre os command
+/// buffers em voo do render (kMaxFramesInFlight = 2 no C++), que ainda amostram
+/// o buffer anterior. Ver media_logic::retire_ring.
+const RETIRED_FRAMES: usize = 2;
+/// Fila do ImageReader: 1 em uso + RETIRED_FRAMES aposentados + folga pro MediaCodec.
+const READER_MAX_IMAGES: i32 = 6;
+
 pub struct TextureOutput {
     pub reader: Option<ImageReader>,
     pub current_image: Option<Image>,
     pub current_buffer: Option<HardwareBuffer>,
+    retired: RetireRing<(Image, HardwareBuffer)>,
     // Debug (docs/DEBUGGING.md): conta frames REALMENTE apresentados aqui
     // (ImageReader adquiriu um buffer novo), na thread de decode —
     // independente de quantas vezes o C++ chama get_current_video_frame()
@@ -27,6 +36,7 @@ impl TextureOutput {
             reader: None,
             current_image: None,
             current_buffer: None,
+            retired: RetireRing::new(RETIRED_FRAMES),
             frames_decoded: 0,
         }
     }
@@ -38,12 +48,11 @@ impl TextureOutput {
             height as i32,
             ImageFormat::PRIVATE, // 34 = IMPLEMENTATION_DEFINED, best for surface texturing
             usage,
-            4,
+            READER_MAX_IMAGES,
         )
         .map_err(|e| format!("Failed to create ImageReader: {:?}", e))?;
 
-        self.current_image = None;
-        self.current_buffer = None;
+        self.clear();
         self.reader = Some(reader);
         Ok(())
     }
@@ -51,6 +60,7 @@ impl TextureOutput {
     pub fn clear(&mut self) {
         self.current_buffer = None;
         self.current_image = None;
+        self.retired.clear();
     }
 
     pub fn get_window(&self) -> Option<NativeWindow> {
@@ -69,6 +79,11 @@ impl TextureOutput {
                             // texture_output que o loop de render tambem
                             // disputa — custo real por frame por um log que
                             // ninguem lia.
+                            let previous =
+                                self.current_image.take().zip(self.current_buffer.take());
+                            if let Some(previous) = previous {
+                                self.retired.retire(previous);
+                            }
                             self.current_buffer = Some(buffer);
                             self.current_image = Some(image);
                             self.frames_decoded = self.frames_decoded.wrapping_add(1);
