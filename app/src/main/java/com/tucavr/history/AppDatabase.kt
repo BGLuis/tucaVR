@@ -6,6 +6,8 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import com.tucavr.browser.data.BrowserBookmark
+import com.tucavr.browser.data.BrowserBookmarkDao
 import com.tucavr.download.Download
 import com.tucavr.download.DownloadDao
 import com.tucavr.filebrowser.FolderMediaStatus
@@ -17,6 +19,9 @@ import com.tucavr.network.SavedServerDao
 import com.tucavr.playlist.Playlist
 import com.tucavr.playlist.PlaylistDao
 import com.tucavr.playlist.PlaylistItem
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 
 /**
  * Banco Room principal do aplicativo:
@@ -26,13 +31,14 @@ import com.tucavr.playlist.PlaylistItem
  * - Tabela `downloads`: fila e historico de downloads offline (schema v4, Fase 0.4 Seção 4).
  * - Tabelas `folder_media_status` e `media_metadata_cache`: poda de pastas vazias e cache de
  *   metadados de mídia pra exibição rápida (schema v5).
+ * - `browser_bookmarks` table: VR browser bookmarks/shortcuts (schema v6).
  */
 @Database(
     entities = [
         PlaybackHistory::class, SavedServer::class, Playlist::class, PlaylistItem::class, Download::class,
-        FolderMediaStatus::class, MediaMetadataCacheEntry::class,
+        FolderMediaStatus::class, MediaMetadataCacheEntry::class, BrowserBookmark::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -47,6 +53,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun folderMediaStatusDao(): FolderMediaStatusDao
 
     abstract fun mediaMetadataCacheDao(): MediaMetadataCacheDao
+    abstract fun browserBookmarkDao(): BrowserBookmarkDao
 
     companion object {
         @Volatile
@@ -152,6 +159,20 @@ abstract class AppDatabase : RoomDatabase() {
                 """.trimIndent(),
             )
 
+        internal val MIGRATION_5_6_SQL = listOf(
+            """
+            CREATE TABLE IF NOT EXISTS `browser_bookmarks` (
+                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                `title` TEXT NOT NULL,
+                `url` TEXT NOT NULL,
+                `favicon_url` TEXT,
+                `display_order` INTEGER NOT NULL,
+                `is_preset` INTEGER NOT NULL,
+                `created_at_ms` INTEGER NOT NULL
+            )
+            """.trimIndent()
+        )
+
         val MIGRATION_1_2 =
             object : Migration(1, 2) {
                 override fun migrate(db: SupportSQLiteDatabase) {
@@ -180,6 +201,50 @@ abstract class AppDatabase : RoomDatabase() {
                 }
             }
 
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                MIGRATION_5_6_SQL.forEach { db.execSQL(it) }
+            }
+        }
+
+        val DEFAULT_PRESETS = listOf(
+            BrowserBookmark(
+                title = "YouTube",
+                url = "https://www.youtube.com",
+                faviconUrl = "https://www.youtube.com/favicon.ico",
+                displayOrder = 0,
+                isPreset = true
+            ),
+            BrowserBookmark(
+                title = "Netflix",
+                url = "https://www.netflix.com",
+                faviconUrl = "https://assets.nflxext.com/us/ffe/siteui/common/icons/nficon2016.ico",
+                displayOrder = 1,
+                isPreset = true
+            ),
+            BrowserBookmark(
+                title = "Disney+",
+                url = "https://www.disneyplus.com",
+                faviconUrl = "https://www.disneyplus.com/favicon.ico",
+                displayOrder = 2,
+                isPreset = true
+            ),
+            BrowserBookmark(
+                title = "Prime Video",
+                url = "https://www.primevideo.com",
+                faviconUrl = "https://www.primevideo.com/favicon.ico",
+                displayOrder = 3,
+                isPreset = true
+            ),
+            BrowserBookmark(
+                title = "Twitch",
+                url = "https://www.twitch.tv",
+                faviconUrl = "https://static.twitchcdn.net/assets/favicon-32x32-v2.png",
+                displayOrder = 4,
+                isPreset = true
+            )
+        )
+
         fun getInstance(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -187,7 +252,16 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "vrplayer_history.db",
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addCallback(object : Callback() {
+                        override fun onCreate(db: SupportSQLiteDatabase) {
+                            super.onCreate(db)
+                            // Seed default shortcuts when the database is first created
+                            CoroutineScope(Dispatchers.IO).launch {
+                                instance?.browserBookmarkDao()?.insertAll(DEFAULT_PRESETS)
+                            }
+                        }
+                    })
                     .build()
                     .also { instance = it }
             }

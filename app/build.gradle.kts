@@ -151,6 +151,9 @@ dependencies {
     // T8.1 / T8.2: ExifInterface para metadados de fotos (orientação EXIF e XMP GPano 360)
     implementation("androidx.exifinterface:exifinterface:1.4.0")
 
+    // GeckoView Engine (Mozilla) for Widevine DRM and off-screen rendering support
+    implementation("org.mozilla.geckoview:geckoview-omni:122.0.20240205133611")
+
     // JVM unit tests (app/src/test) — logica pura do file browser
     // (MediaSorter, DirectoryNavigator, DirectoryLister, cache-key do
     // ThumbnailGenerator) roda direto na JVM, sem emulador/Robolectric,
