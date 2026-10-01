@@ -62,7 +62,7 @@ class VRActivity : NativeActivity() {
     var modalPresentation: VRModalPresentation? = null
 
     private var browserVirtualDisplay: android.hardware.display.VirtualDisplay? = null
-    var browserPresentation: com.tucavr.browser.VRBrowserPresentation? = null
+    var browserPresentation: com.tucavr.browser.presentation.VRWebBrowserPresentation? = null
     var browserController: com.tucavr.browser.engine.VRBrowserController? = null
 
     // ==================== TECLADO NATIVO (ver VRPresentation.buildVoidEditText) ====================
@@ -1053,7 +1053,11 @@ class VRActivity : NativeActivity() {
                 activity.browserVirtualDisplay?.display?.let { display ->
                     val controller = VRBrowserController(activity, width, height, dpi)
                     activity.browserController = controller
-                    activity.browserPresentation = com.tucavr.browser.VRBrowserPresentation(activity, display, controller, activity)
+                    activity.browserPresentation = com.tucavr.browser.presentation.VRWebBrowserPresentation(
+                        context = activity,
+                        display = display,
+                        browserController = controller
+                    )
                     activity.browserPresentation?.show()
                     activity.nativeSetBrowserActive(false)
                 }

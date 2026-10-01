@@ -40,6 +40,11 @@ android {
     buildFeatures {
         prefab = true
         buildConfig = true
+        compose = true
+    }
+
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.1"
     }
 
     defaultConfig {
@@ -154,6 +159,22 @@ dependencies {
 
     // GeckoView Engine (Mozilla) for Widevine DRM and off-screen rendering support
     implementation("org.mozilla.geckoview:geckoview-omni:122.0.20240205133611")
+
+    // Hilt / dependency injection
+    implementation("javax.inject:javax.inject:1")
+    implementation("com.google.dagger:hilt-android:2.48")
+
+    // Jetpack Compose and Material 3
+    implementation(platform("androidx.compose:compose-bom:2023.10.01"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.material:material-icons-core")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
 
     // JVM unit tests (app/src/test) — logica pura do file browser
     // (MediaSorter, DirectoryNavigator, DirectoryLister, cache-key do
