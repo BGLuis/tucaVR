@@ -306,6 +306,8 @@ std::atomic<bool> g_newVideoSessionRequested{false};
 std::atomic<bool> g_modalPanelActive{false};
 std::atomic<bool> g_modalPanelShowRequested{false};
 std::atomic<bool> g_modalPanelHideRequested{false};
+std::atomic<bool> g_browserCurvedGeometry{false};
+std::atomic<bool> g_browserActive{false};
 
 // Fase 0.3 Seção 8: Fotos 360° e 3D estéreo (T8.3, T8.4)
 std::atomic<bool> g_photoDirty{false};
@@ -375,8 +377,6 @@ constexpr uint32_t kBrowserTexWidth = 2560;
 constexpr uint32_t kBrowserTexHeight = 1440;
 constexpr float kBrowserPanelScaleX = 2.4f;
 constexpr float kBrowserPanelScaleY = 1.35f;
-
-std::atomic<bool> g_browserCurvedGeometry{false};
 
 // Metricas de performance (debug, ver docs/DEBUGGING.md).
 constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz
@@ -823,6 +823,9 @@ struct AppState {
     float browserAlpha = 1.0f;
     bool browserHasFrame = false;
     bool browserActive = false;
+    XrVector3f browserPosition = {-1.3f, 1.5f, -1.0f};
+    float browserYaw = 0.0f;
+    bool browserPoseInitialized = false;
 
     // R-01 & R-06: Swapchains OpenXR dedicados para composição de painéis 2D como XrCompositionLayerQuad
     struct ImportedUiHwb {
@@ -3702,9 +3705,13 @@ void UpdateUiFrames(AppState& state) {
     acquireAndUpdate(state.uiImageReader, state.uiPanelSwapchain, state.uiHasFrame, kUiTexWidth, kUiTexHeight);
     acquireAndUpdate(state.controlsImageReader, state.controlsPanelSwapchain, state.controlsHasFrame, kControlsTexWidth, kControlsTexHeight);
     acquireAndUpdate(state.modalImageReader, state.modalPanelSwapchain, state.modalHasFrame, kModalTexWidth, kModalTexHeight);
-    acquireAndUpdate(state.browserImageReader, state.browserPanelSwapchain, state.browserHasFrame, kBrowserTexWidth, kBrowserTexHeight);
-    if (state.browserHasFrame) {
-        state.browserActive = true;
+    if (g_browserActive.load()) {
+        acquireAndUpdate(state.browserImageReader, state.browserPanelSwapchain, state.browserHasFrame, kBrowserTexWidth, kBrowserTexHeight);
+        state.browserActive = state.browserHasFrame;
+    } else {
+        state.browserHasFrame = false;
+        state.browserActive = false;
+        state.browserPoseInitialized = false;
     }
 }
 
@@ -7654,12 +7661,8 @@ void RenderFrame(AppState& state) {
         browserQuad.subImage.swapchain = state.browserPanelSwapchain.handle;
         browserQuad.subImage.imageRect.offset = {0, 0};
         browserQuad.subImage.imageRect.extent = {static_cast<int32_t>(kBrowserTexWidth), static_cast<int32_t>(kBrowserTexHeight)};
-        browserQuad.pose.position = scene.uiCenter;
-        XrVector3f toHeadB = Vec3Sub(headCenter, scene.uiCenter);
-        toHeadB.y = 0.0f;
-        float toHeadLenB = sqrtf(toHeadB.x * toHeadB.x + toHeadB.z * toHeadB.z);
-        float browserYaw = (toHeadLenB > 1e-4f) ? atan2f(toHeadB.x / toHeadLenB, toHeadB.z / toHeadLenB) : 0.7f;
-        browserQuad.pose.orientation = QuatFromYaw(browserYaw);
+        browserQuad.pose.position = scene.browserCenter;
+        browserQuad.pose.orientation = QuatFromYaw(state.browserYaw);
         browserQuad.size = {kBrowserPanelScaleX, kBrowserPanelScaleY};
 
         XrCompositionLayerCylinderKHR browserCylinder{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
@@ -7669,10 +7672,10 @@ void RenderFrame(AppState& state) {
         browserCylinder.subImage.swapchain = state.browserPanelSwapchain.handle;
         browserCylinder.subImage.imageRect.offset = {0, 0};
         browserCylinder.subImage.imageRect.extent = {static_cast<int32_t>(kBrowserTexWidth), static_cast<int32_t>(kBrowserTexHeight)};
-        browserCylinder.pose.position = scene.uiCenter;
-        browserCylinder.pose.orientation = QuatFromYaw(browserYaw);
-        browserCylinder.radius = 2.5f;
-        browserCylinder.centralAngle = 3.14159265f / 3.0f;
+        browserCylinder.pose.position = scene.browserCenter;
+        browserCylinder.pose.orientation = QuatFromYaw(state.browserYaw);
+        browserCylinder.radius = 2.3f;
+        browserCylinder.centralAngle = 1.0435f;
         browserCylinder.aspectRatio = (float)kBrowserTexWidth / (float)kBrowserTexHeight;
 
         // Retículo do Laser no topo de todos os painéis

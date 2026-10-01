@@ -230,7 +230,10 @@ class VRPresentation(
                 context = context,
                 host = host,
                 onNavigate = { dest -> navigateTo(dest) },
-            )
+            onOpenBrowser = {
+                activity.nativeSetBrowserActive(true)
+            }
+        )
 
         localFilesScreen =
             LocalFilesScreen(

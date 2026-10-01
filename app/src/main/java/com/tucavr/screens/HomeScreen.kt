@@ -22,6 +22,7 @@ class HomeScreen(
     private val context: Context,
     private val host: ScreenHost,
     private val onNavigate: (Destination) -> Unit,
+    private val onOpenBrowser: () -> Unit = {},
 ) {
     fun render() {
         val root = VoidPanelChrome.newRoot(context)
@@ -47,6 +48,12 @@ class HomeScreen(
                 setIcon(R.drawable.ic_network)
                 setOnClickListener { onNavigate(Destination.NetworkHome) }
             }
+        val btnBrowser = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+            text = "VR Web Browser"
+            textSize = 24f
+            setIcon(R.drawable.ic_browser_home)
+            setOnClickListener { onOpenBrowser() }
+        }
         // T9.4: histórico implementado — botão ativo. A tela lida com lista
         // vazia internamente; não precisa consultar Room aqui.
         val btnContinueWatching =
@@ -80,6 +87,7 @@ class HomeScreen(
 
         root.addView(btnLocal, bigButtonParams)
         root.addView(btnNetwork, bigButtonParams)
+        root.addView(btnBrowser, bigButtonParams)
         root.addView(btnContinueWatching, bigButtonParams)
         root.addView(btnPlaylists, bigButtonParams)
         root.addView(btnDownloads, bigButtonParams)

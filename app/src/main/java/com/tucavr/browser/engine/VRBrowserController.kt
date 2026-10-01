@@ -36,9 +36,6 @@ class VRBrowserController(
         const val DEFAULT_HEIGHT = 1440
         const val DEFAULT_DPI = 320
 
-        const val DEFAULT_USER_AGENT =
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-
         @Volatile
         private var sharedRuntime: GeckoRuntime? = null
 
@@ -51,6 +48,10 @@ class VRBrowserController(
         private fun createRuntime(context: Context): GeckoRuntime {
             val settings = GeckoRuntimeSettings.Builder()
                 .arguments(arrayOf("--enable-media-drm"))
+                .displayDensityOverride(2.2f)
+                .fontSizeFactor(1.5f)
+                .automaticFontSizeAdjustment(true)
+                .forceUserScalableEnabled(true)
                 .build()
             return GeckoRuntime.create(context.applicationContext, settings)
         }
@@ -79,17 +80,23 @@ class VRBrowserController(
     private val _pageTitle = MutableStateFlow("")
     val pageTitle: StateFlow<String> = _pageTitle.asStateFlow()
 
+    private val _isFullScreen = MutableStateFlow(false)
+    val isFullScreen: StateFlow<Boolean> = _isFullScreen.asStateFlow()
+
     init {
         val sessionSettings = GeckoSessionSettings.Builder()
-            .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_DESKTOP)
-            .userAgentOverride(DEFAULT_USER_AGENT)
-            .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_DESKTOP)
+            .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
+            .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
+            .displayMode(GeckoSessionSettings.DISPLAY_MODE_BROWSER)
             .build()
 
         session = GeckoSession(sessionSettings)
         setupDelegates()
         session.open(runtime)
-        setupOffscreenDisplay()
+
+        // GeckoView acquires the session display when attached to the window.
+        // Calling session.acquireDisplay() manually here would make the same session
+        // acquire the display twice and trigger an IllegalStateException.
     }
 
     private fun setupDelegates() {
@@ -124,6 +131,10 @@ class VRBrowserController(
         session.contentDelegate = object : GeckoSession.ContentDelegate {
             override fun onTitleChange(session: GeckoSession, title: String?) {
                 _pageTitle.value = title ?: ""
+            }
+
+            override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
+                _isFullScreen.value = fullScreen
             }
         }
     }

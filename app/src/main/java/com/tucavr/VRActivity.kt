@@ -16,6 +16,8 @@ import android.os.Environment
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.InputDevice
+import android.view.MotionEvent
 import android.view.Surface
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
@@ -23,6 +25,7 @@ import android.widget.EditText
 import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.tucavr.browser.engine.VRBrowserController
 import com.tucavr.chroma.PackedAlphaDetector
 import com.tucavr.chroma.PassthroughMaskMode
 import com.tucavr.debug.DebugTelemetryExporter
@@ -548,6 +551,7 @@ class VRActivity : NativeActivity() {
         debugReceiver = null
 
         // R-01: Desmontagem ordenada e completa das Presentations e VirtualDisplays
+        nativeSetBrowserActive(false)
         try {
             browserPresentation?.dismiss()
         } catch (_: Exception) {}
@@ -1038,18 +1042,20 @@ class VRActivity : NativeActivity() {
         fun setupBrowserVirtualDisplay(activity: VRActivity, surface: Surface, width: Int, height: Int) {
             activity.runOnUiThread {
                 val displayManager = activity.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+                val dpi = VRBrowserController.DEFAULT_DPI
                 activity.browserVirtualDisplay = displayManager.createVirtualDisplay(
                     "VR_Browser_Display",
-                    width, height, 320,
+                    width, height, dpi,
                     surface,
                     DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
                 )
 
                 activity.browserVirtualDisplay?.display?.let { display ->
-                    val controller = com.tucavr.browser.engine.VRBrowserController(activity, width, height, 320)
+                    val controller = VRBrowserController(activity, width, height, dpi)
                     activity.browserController = controller
                     activity.browserPresentation = com.tucavr.browser.VRBrowserPresentation(activity, display, controller, activity)
                     activity.browserPresentation?.show()
+                    activity.nativeSetBrowserActive(true)
                 }
             }
         }
@@ -1065,7 +1071,7 @@ class VRActivity : NativeActivity() {
                 }
 
                 val downTime = if (lastBrowserDownTime == 0L) now else lastBrowserDownTime
-                val event = android.view.MotionEvent.obtain(
+                val event = MotionEvent.obtain(
                     downTime,
                     now,
                     action,
@@ -1074,7 +1080,7 @@ class VRActivity : NativeActivity() {
                     0
                 )
 
-                event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+                event.source = InputDevice.SOURCE_TOUCHSCREEN
 
                 if (action == 7) {
                     activity.browserPresentation?.dispatchGenericMotionEvent(event)
@@ -1084,7 +1090,7 @@ class VRActivity : NativeActivity() {
 
                 event.recycle()
 
-                if (action == android.view.MotionEvent.ACTION_UP) {
+                if (action == MotionEvent.ACTION_UP) {
                     lastBrowserDownTime = 0L
                 }
             }
@@ -1766,6 +1772,7 @@ class VRActivity : NativeActivity() {
 
     fun closeBrowserSession() {
         runOnUiThread {
+            nativeSetBrowserActive(false)
             try {
                 browserPresentation?.dismiss()
             } catch (_: Exception) {}
@@ -2365,6 +2372,7 @@ class VRActivity : NativeActivity() {
     // N1: Propaga o identificador de sessão ativo para C++ e Rust
     external fun nativeSetSessionId(sessionId: String)
     external fun nativeSetBrowserGeometryMode(isCurved: Boolean)
+    external fun nativeSetBrowserActive(active: Boolean)
 
     // Upscaling de vídeo (Vulkan MQSR / SGSR1): 0=OFF, 1=QUALITY, 2=PERFORMANCE, 3=AUTO
     external fun nativeSetUpscalingMode(mode: Int)

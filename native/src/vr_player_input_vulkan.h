@@ -108,6 +108,10 @@ struct SceneTransforms {
     Mat4 screenModelNoScale;
     XrVector3f screenCenter;
     XrVector3f screenNormal;
+
+    Mat4 browserModelNoScale;
+    XrVector3f browserCenter;
+    XrVector3f browserNormal;
 };
 
 inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVector3f& headCenter) {
@@ -148,6 +152,31 @@ inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVec
     t.screenModelNoScale = Mat4Multiply(Mat4Translation(worldScreenPos.x, worldScreenPos.y, worldScreenPos.z), Mat4RotationY(state.sceneYawOffset));
     t.screenCenter = worldScreenPos;
     t.screenNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.sceneYawOffset);
+
+    // Browser: fixed pose on open, facing the user
+    XrVector3f worldBrowserPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(kBaseUiPos, state.sceneYawOffset));
+    XrVector3f toHeadB = Vec3Sub(headCenter, worldBrowserPos);
+    toHeadB.y = 0.0f;
+    float toHeadLenB = sqrtf(toHeadB.x * toHeadB.x + toHeadB.z * toHeadB.z);
+    float bYaw = (toHeadLenB > 1e-4f) ? atan2f(toHeadB.x / toHeadLenB, toHeadB.z / toHeadLenB) : state.sceneYawOffset;
+
+    if (!state.browserPoseInitialized && state.browserActive) {
+        const_cast<AppState&>(state).browserPosition = worldBrowserPos;
+        const_cast<AppState&>(state).browserYaw = bYaw;
+        const_cast<AppState&>(state).browserPoseInitialized = true;
+    } else if (!state.browserActive) {
+        const_cast<AppState&>(state).browserPoseInitialized = false;
+    }
+
+    if (state.browserPoseInitialized) {
+        t.browserCenter = state.browserPosition;
+        t.browserModelNoScale = Mat4Multiply(Mat4Translation(state.browserPosition.x, state.browserPosition.y, state.browserPosition.z), Mat4RotationY(state.browserYaw));
+        t.browserNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.browserYaw);
+    } else {
+        t.browserCenter = worldBrowserPos;
+        t.browserModelNoScale = Mat4Multiply(Mat4Translation(worldBrowserPos.x, worldBrowserPos.y, worldBrowserPos.z), Mat4RotationY(bYaw));
+        t.browserNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, bYaw);
+    }
 
     return t;
 }
@@ -321,6 +350,56 @@ inline float rayHitsQuad(const Mat4& transformNoScale, const XrVector3f& normal,
     return t;
 }
 
+inline float rayHitsCylinder(const Mat4& transformNoScale, float radius, float centralAngle, float aspectRatio,
+                            float& outU, float& outV, const XrVector3f& rayOrigin, const XrVector3f& rayDir) {
+    Mat4 inv = Mat4RigidInverse(transformNoScale);
+    XrVector3f oLoc = {
+        inv.m[0]*rayOrigin.x + inv.m[4]*rayOrigin.y + inv.m[8]*rayOrigin.z + inv.m[12],
+        inv.m[1]*rayOrigin.x + inv.m[5]*rayOrigin.y + inv.m[9]*rayOrigin.z + inv.m[13],
+        inv.m[2]*rayOrigin.x + inv.m[6]*rayOrigin.y + inv.m[10]*rayOrigin.z + inv.m[14]
+    };
+    XrVector3f dLoc = {
+        inv.m[0]*rayDir.x + inv.m[4]*rayDir.y + inv.m[8]*rayDir.z,
+        inv.m[1]*rayDir.x + inv.m[5]*rayDir.y + inv.m[9]*rayDir.z,
+        inv.m[2]*rayDir.x + inv.m[6]*rayDir.y + inv.m[10]*rayDir.z
+    };
+
+    float a = dLoc.x * dLoc.x + dLoc.z * dLoc.z;
+    if (a <= 1e-6f) return -1.0f;
+
+    float b = 2.0f * (oLoc.x * dLoc.x + (oLoc.z + radius) * dLoc.z);
+    float c = oLoc.x * oLoc.x + (oLoc.z + radius) * (oLoc.z + radius) - radius * radius;
+
+    float disc = b * b - 4.0f * a * c;
+    if (disc < 0.0f) return -1.0f;
+
+    float sqrtDisc = sqrtf(disc);
+    float t = (-b - sqrtDisc) / (2.0f * a);
+    if (t <= 0.0f) {
+        t = (-b + sqrtDisc) / (2.0f * a);
+        if (t <= 0.0f) return -1.0f;
+    }
+
+    float hitX = oLoc.x + t * dLoc.x;
+    float hitY = oLoc.y + t * dLoc.y;
+    float hitZ = oLoc.z + t * dLoc.z;
+
+    float phi = atan2f(hitX, hitZ + radius);
+    float halfAngle = centralAngle * 0.5f;
+
+    if (fabsf(phi) > halfAngle) return -1.0f;
+
+    float arcLength = radius * centralAngle;
+    float height = arcLength / aspectRatio;
+
+    if (fabsf(hitY) > height * 0.5f) return -1.0f;
+
+    outU = (phi / centralAngle) + 0.5f;
+    outV = 0.5f - (hitY / height);
+
+    return t;
+}
+
 inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVector3f headCenter,
                                const XrQuaternionf& headOrientation) {
     XrActiveActionSet activeActionSet{};
@@ -485,10 +564,18 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         ? rayHitsQuad(scene.modalModelNoScale, scene.modalNormal, scene.modalCenter,
                       kModalPanelScaleX, kModalPanelScaleY, um, vm, state.lastRayOrigin, state.lastRayDir)
         : -1.0f;
-    float tBrowser = (state.hasRay && state.browserHasFrame && state.browserActive)
-        ? rayHitsQuad(scene.uiModelNoScale, scene.uiNormal, scene.uiCenter, kBrowserPanelScaleX, kBrowserPanelScaleY,
-                      ub, vb, state.lastRayOrigin, state.lastRayDir)
-        : -1.0f;
+    float tBrowser = -1.0f;
+    if (state.hasRay && state.browserHasFrame && state.browserActive) {
+        if (g_browserCurvedGeometry.load()) {
+            tBrowser = rayHitsCylinder(scene.browserModelNoScale, 2.3f, 1.0435f,
+                                      (float)kBrowserTexWidth / (float)kBrowserTexHeight,
+                                      ub, vb, state.lastRayOrigin, state.lastRayDir);
+        } else {
+            tBrowser = rayHitsQuad(scene.browserModelNoScale, scene.browserNormal, scene.browserCenter,
+                                   kBrowserPanelScaleX, kBrowserPanelScaleY,
+                                   ub, vb, state.lastRayOrigin, state.lastRayDir);
+        }
+    }
 
     int currentHitPanel = 0; // 0=none, 1=ui, 2=controls, 3=modal, 4=browser
     float hitU = 0, hitV = 0;
