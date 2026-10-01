@@ -1055,7 +1055,7 @@ class VRActivity : NativeActivity() {
                     activity.browserController = controller
                     activity.browserPresentation = com.tucavr.browser.VRBrowserPresentation(activity, display, controller, activity)
                     activity.browserPresentation?.show()
-                    activity.nativeSetBrowserActive(true)
+                    activity.nativeSetBrowserActive(false)
                 }
             }
         }
@@ -1241,7 +1241,7 @@ class VRActivity : NativeActivity() {
         currentSessionId = sessionId
         sessionStartRealtimeMs = android.os.SystemClock.elapsedRealtime()
         VRLog.activeSessionId = sessionId
-        val (sourceType, sourceRedacted) = DebugTelemetryExporter.extractSourceInfo(source)
+        val (sourceType, sourceRedacted) = com.tucavr.debug.DebugTelemetryExporter.extractSourceInfo(source)
         VRLog.i("Starting playback session $sessionId for $sourceType $sourceRedacted")
         nativeSetSessionId(sessionId)
         ambientAudioManager.setDucked(true)
@@ -1770,18 +1770,17 @@ class VRActivity : NativeActivity() {
         }
     }
 
+    fun openBrowserSession() {
+        runOnUiThread {
+            browserPresentation?.navigateToHome()
+            nativeSetBrowserActive(true)
+        }
+    }
+
     fun closeBrowserSession() {
         runOnUiThread {
             nativeSetBrowserActive(false)
-            try {
-                browserPresentation?.dismiss()
-            } catch (_: Exception) {}
-            browserPresentation = null
-            browserVirtualDisplay?.release()
-            browserVirtualDisplay = null
-            browserController?.closeSession()
-            browserController = null
-            nativeRequestUiPanelVisible()
+            browserPresentation?.navigateToHome()
         }
     }
 

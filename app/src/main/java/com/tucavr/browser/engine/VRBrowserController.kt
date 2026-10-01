@@ -1,28 +1,27 @@
 package com.tucavr.browser.engine
 
 import android.content.Context
-import android.graphics.PixelFormat
-import android.hardware.display.DisplayManager
-import android.hardware.display.VirtualDisplay
-import android.media.ImageReader
-import android.view.Surface
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import org.mozilla.geckoview.GeckoDisplay
 import org.mozilla.geckoview.GeckoRuntime
 import org.mozilla.geckoview.GeckoRuntimeSettings
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoSessionSettings
 
 /**
- * Main manager for the GeckoView engine and Off-Screen Rendering capture (VirtualDisplay/Surface).
+ * Main manager for the GeckoView engine and web session.
  *
  * Responsibilities:
- * 1. Initialize [GeckoRuntime] with Widevine DRM enabled (`--enable-media-drm`).
+ * 1. Initialize the shared [GeckoRuntime] with Widevine DRM enabled (`--enable-media-drm`).
  * 2. Configure [GeckoSession] with a tablet/desktop user agent and desktop viewport.
- * 3. Manage the 2560x1440 [ImageReader] / [VirtualDisplay] to capture off-screen frames for Vulkan.
- * 4. Expose navigation, lifecycle, and reactive state ([StateFlow]).
+ * 3. Expose navigation, lifecycle, and reactive state ([StateFlow]).
+ *
+ * FUTURE EXTENSION NOTE:
+ * This class is the primary integration point for controlling web playback from the video
+ * player's controls. Methods such as [loadUrl], [goBack], [goForward], [reload], and the
+ * [session] object should be preserved and extended to send playback scripts/commands
+ * (Play, Pause, Seek, Volume) to the active page through GeckoSession WebExtension/JS APIs.
  */
 class VRBrowserController(
     private val context: Context,
@@ -58,11 +57,12 @@ class VRBrowserController(
     }
 
     private val runtime: GeckoRuntime = getOrCreateRuntime(context)
-    val session: GeckoSession
 
-    private var imageReader: ImageReader? = null
-    private var virtualDisplay: VirtualDisplay? = null
-    private var geckoDisplay: GeckoDisplay? = null
+    /**
+     * Active GeckoView session.
+     * Kept for future web playback commands (e.g., HTML5 Media Element API / JS injection).
+     */
+    val session: GeckoSession
 
     // Reactive browser state
     private val _currentUrl = MutableStateFlow("")
@@ -93,10 +93,6 @@ class VRBrowserController(
         session = GeckoSession(sessionSettings)
         setupDelegates()
         session.open(runtime)
-
-        // GeckoView acquires the session display when attached to the window.
-        // Calling session.acquireDisplay() manually here would make the same session
-        // acquire the display twice and trigger an IllegalStateException.
     }
 
     private fun setupDelegates() {
@@ -139,53 +135,9 @@ class VRBrowserController(
         }
     }
 
-    private fun setupOffscreenDisplay() {
-        imageReader = ImageReader.newInstance(width, height, PixelFormat.RGBA_8888, 3)
-        val surface = imageReader?.surface ?: return
-
-        val displayManager = context.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
-        virtualDisplay = displayManager.createVirtualDisplay(
-            "VR_Browser_Display",
-            width,
-            height,
-            densityDpi,
-            surface,
-            DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC or DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY
-        )
-
-        val surfaceInfo = GeckoDisplay.SurfaceInfo.Builder(surface)
-            .size(width, height)
-            .build()
-
-        geckoDisplay = session.acquireDisplay()
-        geckoDisplay?.surfaceChanged(surfaceInfo)
-    }
-
-    /**
-     * Returns the Android [Surface] produced by the off-screen image reader.
-     */
-    fun getSurface(): Surface? = imageReader?.surface
-
-    /**
-     * Returns the native (ANativeWindow*) pointer for the [Surface] for JNI/Vulkan integration.
-     */
-    fun getNativeSurfacePointer(): Long {
-        val surface = getSurface() ?: return 0L
-        return try {
-            nativeGetSurfacePointer(surface)
-        } catch (e: Throwable) {
-            try {
-                val field = Surface::class.java.getDeclaredField("mNativeObject")
-                field.isAccessible = true
-                field.getLong(surface)
-            } catch (t: Throwable) {
-                0L
-            }
-        }
-    }
-
     /**
      * Loads a URL in the browser.
+     * Supports direct navigation to HTTP/HTTPS URLs and internal pages (e.g., about:blank).
      */
     fun loadUrl(url: String) {
         val formattedUrl = when {
@@ -197,7 +149,7 @@ class VRBrowserController(
     }
 
     /**
-     * Goes back in the navigation history.
+     * Goes back in the web session's navigation history.
      */
     fun goBack() {
         if (_canGoBack.value) {
@@ -206,7 +158,7 @@ class VRBrowserController(
     }
 
     /**
-     * Goes forward in the navigation history.
+     * Goes forward in the web session's navigation history.
      */
     fun goForward() {
         if (_canGoForward.value) {
@@ -215,27 +167,16 @@ class VRBrowserController(
     }
 
     /**
-     * Reloads the current page.
+     * Reloads the active web page.
      */
     fun reload() {
         session.reload()
     }
 
     /**
-     * Closes the browser session and releases graphics resources (VirtualDisplay/ImageReader/GeckoSession).
+     * Closes the browser session and releases GeckoSession resources.
      */
     fun closeSession() {
-        geckoDisplay?.surfaceDestroyed()
-        geckoDisplay = null
-
-        virtualDisplay?.release()
-        virtualDisplay = null
-
-        imageReader?.close()
-        imageReader = null
-
         session.close()
     }
-
-    private external fun nativeGetSurfacePointer(surface: Surface): Long
 }

@@ -231,7 +231,7 @@ class VRPresentation(
                 host = host,
                 onNavigate = { dest -> navigateTo(dest) },
             onOpenBrowser = {
-                activity.nativeSetBrowserActive(true)
+                activity.openBrowserSession()
             }
         )
 
