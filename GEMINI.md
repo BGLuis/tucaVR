@@ -98,8 +98,36 @@ Downloads `ffmpeg-android-maker` and prepares the Meta OpenXR SDK dependencies:
 ./scripts/setup-deps.sh
 ```
 
+### Rust Cross-Compilation Modes (Docker vs. Host Machine)
+
+The Gradle build automatically handles Rust & FFmpeg cross-compilation via the `buildRust` task (`scripts/build-rust.sh`). By default (`RUST_BUILD_MODE=auto`), it automatically selects the build method:
+
+1. **Docker Mode (Default when host tools are absent):**
+   - **Prerequisites:** Docker (or Podman) running on host.
+   - **No host setup required:** You do NOT need Rust, `cargo`, `cargo-ndk`, or `ffmpeg-android-maker` installed on your host system.
+   - When building in Android Studio or running `./gradlew assembleDebug`, Gradle transparently runs the compilation inside the `tucavr-builder` Docker container.
+
+2. **Host Machine Mode (Direct host compilation):**
+   - **Prerequisites:** To compile natively on your host machine without Docker, install:
+     - **Rust & Target:** `rustup target add aarch64-linux-android`
+     - **Cargo NDK:** `cargo install cargo-ndk`
+     - **Android NDK:** NDK 26.3 (`26.3.11579264`)
+     - **FFmpeg Libraries:** Run `./scripts/setup-deps.sh` and build FFmpeg in `ffmpeg-android-maker`:
+       ```bash
+       cd ffmpeg-android-maker && ./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26
+       ```
+   - Once installed, `scripts/build-rust.sh` automatically detects the host toolchain and builds directly on your host machine.
+
+3. **Explicitly Forcing Build Modes:**
+   Set `rustBuildMode` in `gradle.properties`, `local.properties`, env var `RUST_BUILD_MODE`, or CLI parameter:
+   ```bash
+   ./gradlew assembleDebug -PrustBuildMode=docker # Force Docker
+   ./gradlew assembleDebug -PrustBuildMode=host   # Force Host machine
+   ./gradlew assembleDebug -PrustBuildMode=skip   # Skip (use existing prebuilt .so binaries)
+   ```
+
 ### Full Unified Build & Deploy
-Cross-compiles Rust (`cargo ndk`), places `.so` artifacts in `app/src/main/jniLibs/arm64-v8a`, and executes Gradle assemble:
+Cross-compiles Rust (`cargo ndk` via Docker or Host), places `.so` artifacts in `app/src/main/jniLibs/arm64-v8a`, and executes Gradle assemble:
 ```bash
 ./scripts/build.sh
 # or
@@ -107,8 +135,8 @@ make build
 make deploy      # Builds and runs adb install on connected Quest 3
 ```
 
-### Rust Workspace Only
-Must use `cargo ndk` (target `aarch64-linux-android`) for anything touching `core`, `audio`, or `bridge`:
+### Rust Workspace Only (Host Machine)
+When developing/testing Rust natively on host:
 ```bash
 cd rust && cargo ndk -t aarch64-linux-android -P 26 -o ../app/src/main/jniLibs build --release
 ```

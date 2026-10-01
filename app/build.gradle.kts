@@ -1,5 +1,6 @@
 import java.io.File
 import java.util.Properties
+import org.gradle.api.tasks.Exec
 
 plugins {
     id("com.android.application")
@@ -169,11 +170,42 @@ dependencies {
     testImplementation("org.xerial:sqlite-jdbc:3.44.1.0")
 }
 
-// Placeholder for Rust integration (via Mozilla plugin or custom task)
-tasks.register("buildRust") {
+val localProperties = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+val androidSdkDir = localProperties.getProperty("sdk.dir")
+    ?.let(::File)
+    ?: System.getenv("ANDROID_HOME")?.let(::File)
+    ?: System.getenv("ANDROID_SDK_ROOT")?.let(::File)
+
+val rustBuildMode = (project.findProperty("rustBuildMode") as? String)?.takeIf { it.isNotBlank() }
+    ?: System.getenv("RUST_BUILD_MODE")
+    ?: "auto"
+
+val buildRust = tasks.register<Exec>("buildRust") {
     group = "rust"
-    description = "Builds the Rust library."
-    doLast {
-        println("Executing Rust build placeholder...")
+    description = "Cross-compiles Rust libraries and prepares JNI libraries (Host or Docker)."
+    workingDir(rootProject.projectDir)
+    commandLine("bash", rootProject.file("scripts/build-rust.sh").absolutePath)
+    environment("RUST_BUILD_MODE", rustBuildMode)
+    androidSdkDir?.let {
+        environment("ANDROID_HOME", it.absolutePath)
+        environment("ANDROID_SDK_ROOT", it.absolutePath)
     }
+}
+
+val cleanRust = tasks.register<Exec>("cleanRust") {
+    group = "rust"
+    description = "Removes Rust build artifacts."
+    workingDir(rootProject.projectDir)
+    commandLine("bash", rootProject.file("scripts/build-rust.sh").absolutePath, "--clean")
+    environment("RUST_BUILD_MODE", rustBuildMode)
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(buildRust)
+}
+
+tasks.named("clean").configure {
+    dependsOn(cleanRust)
 }
