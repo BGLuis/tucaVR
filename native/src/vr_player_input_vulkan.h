@@ -472,7 +472,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
     SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
 
-    float uu = 0, vu = 0, uc = 0, vc = 0, um = 0, vm = 0;
+    float uu = 0, vu = 0, uc = 0, vc = 0, um = 0, vm = 0, ub = 0, vb = 0;
     float tUi = state.hasRay
         ? rayHitsQuad(scene.uiModelNoScale, scene.uiNormal, scene.uiCenter, kUiPanelScaleX, kUiPanelScaleY,
                       uu, vu, state.lastRayOrigin, state.lastRayDir)
@@ -485,8 +485,12 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         ? rayHitsQuad(scene.modalModelNoScale, scene.modalNormal, scene.modalCenter,
                       kModalPanelScaleX, kModalPanelScaleY, um, vm, state.lastRayOrigin, state.lastRayDir)
         : -1.0f;
+    float tBrowser = (state.hasRay && state.browserHasFrame && state.browserActive)
+        ? rayHitsQuad(scene.uiModelNoScale, scene.uiNormal, scene.uiCenter, kBrowserPanelScaleX, kBrowserPanelScaleY,
+                      ub, vb, state.lastRayOrigin, state.lastRayDir)
+        : -1.0f;
 
-    int currentHitPanel = 0; // 0=none, 1=ui, 2=controls, 3=modal
+    int currentHitPanel = 0; // 0=none, 1=ui, 2=controls, 3=modal, 4=browser
     float hitU = 0, hitV = 0;
     state.lastHitDist = -1.0f;
 
@@ -500,7 +504,10 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.lastHitDist = -1.0f;
         }
     } else {
-        if (tControls > 0.0f) {
+        if (tBrowser > 0.0f) {
+            currentHitPanel = 4; hitU = ub; hitV = vb;
+            state.lastHitDist = tBrowser;
+        } else if (tControls > 0.0f) {
             currentHitPanel = 2; hitU = uc; hitV = vc;
             state.lastHitDist = tControls;
         } else if (tUi > 0.0f) {
@@ -630,9 +637,12 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     bool uiVisible = state.uiAlpha > 0.5f;
     bool controlsVisible = state.controlsAlpha > 0.5f;
     bool modalVisible = state.modalAlpha > 0.5f;
+    bool browserVisible = state.browserHasFrame && state.browserActive;
     int dispatchHitPanel = 0;
     if (currentHitPanel == 3 && modalVisible) {
         dispatchHitPanel = 3;
+    } else if (currentHitPanel == 4 && browserVisible) {
+        dispatchHitPanel = 4;
     } else if (currentHitPanel == 1 && uiVisible) {
         dispatchHitPanel = 1;
     } else if (currentHitPanel == 2 && controlsVisible) {
@@ -659,8 +669,9 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         state.app->activity->vm->AttachCurrentThread(&env, nullptr);
         if (env) {
             jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
-            const char* methodName = (dispatchHitPanel == 3) ? "dispatchModalVRTouch"
-                                   : ((dispatchHitPanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch");
+            const char* methodName = (dispatchHitPanel == 4) ? "dispatchBrowserTouch"
+                                   : ((dispatchHitPanel == 3) ? "dispatchModalVRTouch"
+                                   : ((dispatchHitPanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch"));
             jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
             if (touchMethod) {
                 env->CallStaticVoidMethod(vrActivityClass, touchMethod, state.app->activity->clazz, hitU, hitV, action);
@@ -1048,8 +1059,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
     }
 
-    // Rolagem por thumbstick no painel UI (Home/Arquivos) ou Modal
-    if ((dispatchHitPanel == 1 || dispatchHitPanel == 3) && !state.isScreenGrabbed && !state.isTouchDown) {
+    // Thumbstick scrolling on the UI (Home/Files), modal, or browser panel
+    if ((dispatchHitPanel == 1 || dispatchHitPanel == 3 || dispatchHitPanel == 4) && !state.isScreenGrabbed && !state.isTouchDown) {
         float stickY = (fabsf(rightStick.currentState.y) > 0.15f)
             ? rightStick.currentState.y
             : ((useLeft && fabsf(leftStick.currentState.y) > 0.15f) ? leftStick.currentState.y : 0.0f);
@@ -1060,7 +1071,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.app->activity->vm->AttachCurrentThread(&env, nullptr);
             if (env) {
                 jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
-                const char* methodName = (dispatchHitPanel == 3) ? "dispatchModalVRScroll" : "dispatchVRScroll";
+                const char* methodName = (dispatchHitPanel == 4) ? "dispatchBrowserScroll"
+                                       : ((dispatchHitPanel == 3) ? "dispatchModalVRScroll" : "dispatchVRScroll");
                 jmethodID scrollMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFF)V");
                 if (scrollMethod) {
                     env->CallStaticVoidMethod(vrActivityClass, scrollMethod, state.app->activity->clazz, state.lastUvX, state.lastUvY, scrollDeltaY);

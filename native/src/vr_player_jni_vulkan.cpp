@@ -232,6 +232,14 @@ extern std::atomic<bool> g_captureRequested;
 extern std::string g_capturePath;
 extern std::mutex g_capturePathMutex;
 
+extern std::atomic<bool> g_browserCurvedGeometry;
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetBrowserGeometryMode(JNIEnv*, jobject, jboolean isCurved) {
+    g_browserCurvedGeometry.store(isCurved == JNI_TRUE, std::memory_order_relaxed);
+    LOGI("nativeSetBrowserGeometryMode: isCurved=%d", (int)(isCurved == JNI_TRUE));
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetSessionId(JNIEnv* env, jobject, jstring jSessionId) {
     if (jSessionId) {

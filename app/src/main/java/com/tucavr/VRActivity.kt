@@ -58,6 +58,10 @@ class VRActivity : NativeActivity() {
     private var modalVirtualDisplay: android.hardware.display.VirtualDisplay? = null
     var modalPresentation: VRModalPresentation? = null
 
+    private var browserVirtualDisplay: android.hardware.display.VirtualDisplay? = null
+    var browserPresentation: com.tucavr.browser.VRBrowserPresentation? = null
+    var browserController: com.tucavr.browser.engine.VRBrowserController? = null
+
     // ==================== TECLADO NATIVO (ver VRPresentation.buildVoidEditText) ====================
     // `nativeKeyboardProxy` e um EditText REAL, anexado direto na janela
     // desta Activity (`addContentView`, nao numa VirtualDisplay) — e o unico
@@ -545,6 +549,15 @@ class VRActivity : NativeActivity() {
 
         // R-01: Desmontagem ordenada e completa das Presentations e VirtualDisplays
         try {
+            browserPresentation?.dismiss()
+        } catch (_: Exception) {}
+        browserPresentation = null
+        browserVirtualDisplay?.release()
+        browserVirtualDisplay = null
+        browserController?.closeSession()
+        browserController = null
+
+        try {
             modalPresentation?.dismiss()
         } catch (_: Exception) {
         }
@@ -781,6 +794,8 @@ class VRActivity : NativeActivity() {
         const val CONTROLS_DISPLAY_HEIGHT = 800
         const val MODAL_DISPLAY_WIDTH = 1024
         const val MODAL_DISPLAY_HEIGHT = 768
+        const val BROWSER_DISPLAY_WIDTH = 2560
+        const val BROWSER_DISPLAY_HEIGHT = 1440
 
         @JvmStatic
         fun openFilePicker(activity: VRActivity) {
@@ -1016,6 +1031,69 @@ class VRActivity : NativeActivity() {
         ) {
             activity.runOnUiThread {
                 activity.modalPresentation?.dispatchScroll(x, y, scrollDeltaY)
+            }
+        }
+
+        @JvmStatic
+        fun setupBrowserVirtualDisplay(activity: VRActivity, surface: Surface, width: Int, height: Int) {
+            activity.runOnUiThread {
+                val displayManager = activity.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+                activity.browserVirtualDisplay = displayManager.createVirtualDisplay(
+                    "VR_Browser_Display",
+                    width, height, 320,
+                    surface,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+                )
+
+                activity.browserVirtualDisplay?.display?.let { display ->
+                    val controller = com.tucavr.browser.engine.VRBrowserController(activity, width, height, 320)
+                    activity.browserController = controller
+                    activity.browserPresentation = com.tucavr.browser.VRBrowserPresentation(activity, display, controller, activity)
+                    activity.browserPresentation?.show()
+                }
+            }
+        }
+
+        private var lastBrowserDownTime: Long = 0
+
+        @JvmStatic
+        fun dispatchBrowserTouch(activity: VRActivity, normX: Float, normY: Float, action: Int) {
+            activity.runOnUiThread {
+                val now = android.os.SystemClock.uptimeMillis()
+                if (action == android.view.MotionEvent.ACTION_DOWN) {
+                    lastBrowserDownTime = now
+                }
+
+                val downTime = if (lastBrowserDownTime == 0L) now else lastBrowserDownTime
+                val event = android.view.MotionEvent.obtain(
+                    downTime,
+                    now,
+                    action,
+                    normX * BROWSER_DISPLAY_WIDTH.toFloat(),
+                    normY * BROWSER_DISPLAY_HEIGHT.toFloat(),
+                    0
+                )
+
+                event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
+
+                if (action == 7) {
+                    activity.browserPresentation?.dispatchGenericMotionEvent(event)
+                } else {
+                    activity.browserPresentation?.dispatchTouchEvent(event)
+                }
+
+                event.recycle()
+
+                if (action == android.view.MotionEvent.ACTION_UP) {
+                    lastBrowserDownTime = 0L
+                }
+            }
+        }
+
+        @JvmStatic
+        fun dispatchBrowserScroll(activity: VRActivity, normX: Float, normY: Float, scrollDeltaY: Float) {
+            activity.runOnUiThread {
+                activity.browserPresentation?.dispatchScroll(scrollDeltaY)
             }
         }
 
@@ -1686,6 +1764,24 @@ class VRActivity : NativeActivity() {
         }
     }
 
+    fun closeBrowserSession() {
+        runOnUiThread {
+            try {
+                browserPresentation?.dismiss()
+            } catch (_: Exception) {}
+            browserPresentation = null
+            browserVirtualDisplay?.release()
+            browserVirtualDisplay = null
+            browserController?.closeSession()
+            browserController = null
+            nativeRequestUiPanelVisible()
+        }
+    }
+
+    fun setBrowserGeometryMode(isCurved: Boolean) {
+        nativeSetBrowserGeometryMode(isCurved)
+    }
+
     /**
      * Exibe o modal de Estatísticas Técnicas no 3º Quad dedicado frontal (VRModalPresentation).
      */
@@ -2268,6 +2364,7 @@ class VRActivity : NativeActivity() {
 
     // N1: Propaga o identificador de sessão ativo para C++ e Rust
     external fun nativeSetSessionId(sessionId: String)
+    external fun nativeSetBrowserGeometryMode(isCurved: Boolean)
 
     // Upscaling de vídeo (Vulkan MQSR / SGSR1): 0=OFF, 1=QUALITY, 2=PERFORMANCE, 3=AUTO
     external fun nativeSetUpscalingMode(mode: Int)
