@@ -1157,7 +1157,8 @@ class VRActivity : NativeActivity() {
         currentSessionId = sessionId
         sessionStartRealtimeMs = android.os.SystemClock.elapsedRealtime()
         VRLog.activeSessionId = sessionId
-        VRLog.i("Iniciando sessao de reproducao $sessionId para $source")
+        val (sourceType, sourceRedacted) = DebugTelemetryExporter.extractSourceInfo(source)
+        VRLog.i("Starting playback session $sessionId for $sourceType $sourceRedacted")
         nativeSetSessionId(sessionId)
         ambientAudioManager.setDucked(true)
         // T7.6: informa o idioma do sistema para a auto-selecao de faixa de
