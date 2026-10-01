@@ -1,6 +1,7 @@
 package com.tucavr.browser.engine
 
 import android.content.Context
+import com.tucavr.debug.VRLog
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,7 +25,7 @@ import org.mozilla.geckoview.GeckoSessionSettings
  * (Play, Pause, Seek, Volume) to the active page through GeckoSession WebExtension/JS APIs.
  */
 class VRBrowserController(
-    private val context: Context,
+    context: Context,
     val width: Int = DEFAULT_WIDTH,
     val height: Int = DEFAULT_HEIGHT,
     val densityDpi: Int = DEFAULT_DPI
@@ -84,6 +85,8 @@ class VRBrowserController(
     val isFullScreen: StateFlow<Boolean> = _isFullScreen.asStateFlow()
 
     init {
+        VRLog.d("[WEB-Browser] Initializing VRBrowserController")
+
         val sessionSettings = GeckoSessionSettings.Builder()
             .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
             .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
@@ -177,6 +180,7 @@ class VRBrowserController(
      * Closes the browser session and releases GeckoSession resources.
      */
     fun closeSession() {
+        VRLog.d("[WEB-Browser] Closing GeckoSession")
         session.close()
     }
 }

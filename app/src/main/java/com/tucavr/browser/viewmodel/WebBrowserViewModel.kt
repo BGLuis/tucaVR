@@ -8,6 +8,7 @@ import com.tucavr.browser.domain.BrowserBookmarkManager
 import com.tucavr.browser.state.MediaCommand
 import com.tucavr.browser.state.WebBrowserEvent
 import com.tucavr.browser.state.WebBrowserUiState
+import com.tucavr.debug.VRLog
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -24,7 +25,7 @@ import javax.inject.Inject
  */
 @HiltViewModel
 class WebBrowserViewModel @Inject constructor(
-    private val mediaController: BrowserMediaController,
+    mediaController: BrowserMediaController,
     private val bookmarkManager: BrowserBookmarkManager
 ) : ViewModel() {
 
@@ -38,6 +39,7 @@ class WebBrowserViewModel @Inject constructor(
     }
 
     private fun observeBookmarks() {
+        VRLog.w("[WEB-Browser] Observing bookmarks")
         viewModelScope.launch {
             bookmarkManager.bookmarks.collectLatest { list ->
                 _uiState.update { current ->
@@ -51,6 +53,7 @@ class WebBrowserViewModel @Inject constructor(
     }
 
     fun handleEvent(event: WebBrowserEvent) {
+        VRLog.i("[WEB-Browser] Handling event: $event")
         when (event) {
             is WebBrowserEvent.OnUrlSubmitted -> {
                 val formattedUrl = bookmarkManager.normalizeUrl(event.url)
@@ -146,5 +149,10 @@ class WebBrowserViewModel @Inject constructor(
     private fun checkIfBookmarked(url: String, bookmarks: List<BrowserBookmark>): Boolean {
         if (url.isBlank() || url == "about:blank") return false
         return bookmarks.any { it.url == url }
+    }
+
+    override fun onCleared() {
+        VRLog.i("[WEB-Browser] ViewModel cleared")
+        super.onCleared()
     }
 }

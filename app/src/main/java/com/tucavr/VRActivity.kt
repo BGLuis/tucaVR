@@ -26,6 +26,7 @@ import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import com.tucavr.browser.engine.VRBrowserController
+import com.tucavr.browser.presentation.VRWebBrowserPresentation
 import com.tucavr.chroma.PackedAlphaDetector
 import com.tucavr.chroma.PassthroughMaskMode
 import com.tucavr.debug.DebugTelemetryExporter
@@ -62,8 +63,8 @@ class VRActivity : NativeActivity() {
     var modalPresentation: VRModalPresentation? = null
 
     private var browserVirtualDisplay: android.hardware.display.VirtualDisplay? = null
-    var browserPresentation: com.tucavr.browser.presentation.VRWebBrowserPresentation? = null
-    var browserController: com.tucavr.browser.engine.VRBrowserController? = null
+    var browserPresentation: VRWebBrowserPresentation? = null
+    var browserController: VRBrowserController? = null
 
     // ==================== TECLADO NATIVO (ver VRPresentation.buildVoidEditText) ====================
     // `nativeKeyboardProxy` e um EditText REAL, anexado direto na janela
@@ -558,7 +559,6 @@ class VRActivity : NativeActivity() {
         browserPresentation = null
         browserVirtualDisplay?.release()
         browserVirtualDisplay = null
-        browserController?.closeSession()
         browserController = null
 
         try {
@@ -1053,7 +1053,7 @@ class VRActivity : NativeActivity() {
                 activity.browserVirtualDisplay?.display?.let { display ->
                     val controller = VRBrowserController(activity, width, height, dpi)
                     activity.browserController = controller
-                    activity.browserPresentation = com.tucavr.browser.presentation.VRWebBrowserPresentation(
+                    activity.browserPresentation = VRWebBrowserPresentation(
                         context = activity,
                         display = display,
                         browserController = controller

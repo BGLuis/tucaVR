@@ -16,25 +16,12 @@ import com.tucavr.browser.domain.BrowserBookmarkManager
 import com.tucavr.browser.engine.VRBrowserController
 import com.tucavr.browser.ui.WebBrowserScreen
 import com.tucavr.browser.viewmodel.WebBrowserViewModel
+import com.tucavr.browser.viewmodel.WebBrowserViewModelFactory
+import com.tucavr.debug.VRLog
 import com.tucavr.history.AppDatabase
 import com.tucavr.presentation.BaseComposePresentation
 import org.mozilla.geckoview.GeckoSession
 
-/**
- * Fallback factory for creating WebBrowserViewModel when external dependency injection is unavailable.
- */
-class WebBrowserViewModelFactory(
-    private val mediaController: BrowserMediaController,
-    private val bookmarkManager: BrowserBookmarkManager
-) : ViewModelProvider.Factory {
-    @Suppress("UNCHECKED_CAST")
-    override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        if (modelClass.isAssignableFrom(WebBrowserViewModel::class.java)) {
-            return WebBrowserViewModel(mediaController, bookmarkManager) as T
-        }
-        throw IllegalArgumentException("Unknown ViewModel class: ${modelClass.name}")
-    }
-}
 
 /**
  * Concrete Presentation dialog for the VR 2D Web Browser panel.
@@ -63,6 +50,7 @@ class VRWebBrowserPresentation(
                 try {
                     ViewModelProvider(viewModelStoreOwner)[WebBrowserViewModel::class.java]
                 } catch (e: Exception) {
+                    VRLog.e("Failed to create WebBrowserViewModel: ${e.message}")
                     createFallbackViewModel()
                 }
             } else {
@@ -71,6 +59,7 @@ class VRWebBrowserPresentation(
     }
 
     private fun createFallbackViewModel(): WebBrowserViewModel {
+        VRLog.w("[WEB-Browser] Fallback WebBrowserViewModel created")
         val db = AppDatabase.getInstance(context.applicationContext)
         val bookmarkDao = db.browserBookmarkDao()
         val bookmarkManager = BrowserBookmarkManager(bookmarkDao)
@@ -84,6 +73,7 @@ class VRWebBrowserPresentation(
 
     @Composable
     override fun PresentationContent() {
+        VRLog.d("[WEB-Browser] Rendering WebBrowserScreen")
         val state by viewModel.uiState.collectAsStateWithLifecycle()
 
         WebBrowserScreen(
@@ -115,10 +105,12 @@ class VRWebBrowserPresentation(
     }
 
     fun navigateToHome() {
+        VRLog.d("[WEB-Browser] Navigating to home")
         browserController.loadUrl("about:blank")
     }
 
     override fun dismiss() {
+        VRLog.d("[WEB-Browser] Dismissing presentation")
         browserController.closeSession()
         super.dismiss()
     }

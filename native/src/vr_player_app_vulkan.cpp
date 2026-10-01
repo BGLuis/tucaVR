@@ -826,6 +826,10 @@ struct AppState {
     XrVector3f browserPosition = {-1.3f, 1.5f, -1.0f};
     float browserYaw = 0.0f;
     bool browserPoseInitialized = false;
+    float browserScaleX = kBrowserPanelScaleX;
+    float browserScaleY = kBrowserPanelScaleY;
+    bool isBrowserGrabbed = false;
+    float browserGrabDistance = 2.4f;
 
     // R-01 & R-06: Swapchains OpenXR dedicados para composição de painéis 2D como XrCompositionLayerQuad
     struct ImportedUiHwb {
@@ -7663,8 +7667,10 @@ void RenderFrame(AppState& state) {
         browserQuad.subImage.imageRect.extent = {static_cast<int32_t>(kBrowserTexWidth), static_cast<int32_t>(kBrowserTexHeight)};
         browserQuad.pose.position = scene.browserCenter;
         browserQuad.pose.orientation = QuatFromYaw(state.browserYaw);
-        browserQuad.size = {kBrowserPanelScaleX, kBrowserPanelScaleY};
+        browserQuad.size = {state.browserScaleX, state.browserScaleY};
 
+        float browserScaleFactor = state.browserScaleX / kBrowserPanelScaleX;
+        float cylinderRadius = 2.3f * browserScaleFactor;
         XrCompositionLayerCylinderKHR browserCylinder{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
         browserCylinder.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
         browserCylinder.space = state.localSpace;
@@ -7672,9 +7678,9 @@ void RenderFrame(AppState& state) {
         browserCylinder.subImage.swapchain = state.browserPanelSwapchain.handle;
         browserCylinder.subImage.imageRect.offset = {0, 0};
         browserCylinder.subImage.imageRect.extent = {static_cast<int32_t>(kBrowserTexWidth), static_cast<int32_t>(kBrowserTexHeight)};
-        browserCylinder.pose.position = scene.browserCenter;
+        browserCylinder.pose.position = Vec3Add(scene.browserCenter, Vec3RotateY({0.0f, 0.0f, cylinderRadius}, state.browserYaw));
         browserCylinder.pose.orientation = QuatFromYaw(state.browserYaw);
-        browserCylinder.radius = 2.3f;
+        browserCylinder.radius = cylinderRadius;
         browserCylinder.centralAngle = 1.0435f;
         browserCylinder.aspectRatio = (float)kBrowserTexWidth / (float)kBrowserTexHeight;
 
@@ -7800,15 +7806,14 @@ void RenderFrame(AppState& state) {
 
         layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projectionLayer);
 
+        if (state.uiHasFrame && state.uiAlpha > 0.05f) {
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&uiQuad);
+        }
         if (state.browserHasFrame && state.browserActive) {
             if (g_browserCurvedGeometry.load()) {
                 layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&browserCylinder);
             } else {
                 layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&browserQuad);
-            }
-        } else {
-            if (state.uiHasFrame && state.uiAlpha > 0.05f) {
-                layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&uiQuad);
             }
         }
         if (state.controlsHasFrame && state.controlsAlpha > 0.05f) {

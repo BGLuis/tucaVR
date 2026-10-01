@@ -137,8 +137,10 @@ find_library(mediandk-lib mediandk)
 find_library(nativewindow-lib nativewindow)
 
 set(OPENXR_SDK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../sdk/meta-openxr-sdk)
-add_subdirectory(${OPENXR_SDK_DIR}/Samples/3rdParty ${CMAKE_CURRENT_BINARY_DIR}/3rdParty)
-add_subdirectory(${OPENXR_SDK_DIR}/Samples/SampleXrFramework ${CMAKE_CURRENT_BINARY_DIR}/SampleXrFramework)
+if(EXISTS ${OPENXR_SDK_DIR}/Samples/3rdParty AND EXISTS ${OPENXR_SDK_DIR}/Samples/SampleXrFramework)
+    add_subdirectory(${OPENXR_SDK_DIR}/Samples/3rdParty ${CMAKE_CURRENT_BINARY_DIR}/3rdParty)
+    add_subdirectory(${OPENXR_SDK_DIR}/Samples/SampleXrFramework ${CMAKE_CURRENT_BINARY_DIR}/SampleXrFramework)
+endif()
 
 # Link everything together
 if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")

@@ -19,6 +19,7 @@ import androidx.savedstate.SavedStateRegistry
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
+import com.tucavr.debug.VRLog
 
 /**
  * Generic, self-contained presentation base for hosting Jetpack Compose in android.app.Presentation.
@@ -59,6 +60,7 @@ abstract class BaseComposePresentation(
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        VRLog.d("${getTag()} Creating presentation")
         savedStateRegistryController.performRestore(savedInstanceState)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_CREATE)
 
@@ -83,11 +85,13 @@ abstract class BaseComposePresentation(
 
     override fun onStart() {
         super.onStart()
+        VRLog.d("${getTag()} Starting presentation")
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_START)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_RESUME)
     }
 
     override fun onStop() {
+        VRLog.d("${getTag()} Stopping presentation")
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_PAUSE)
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_STOP)
         super.onStop()
@@ -100,6 +104,7 @@ abstract class BaseComposePresentation(
     }
 
     override fun dismiss() {
+        VRLog.d("${getTag()} Dismissing presentation")
         lifecycleRegistry.handleLifecycleEvent(Lifecycle.Event.ON_DESTROY)
         window?.decorView?.let { decorView ->
             decorView.setViewTreeLifecycleOwner(null)
@@ -108,5 +113,11 @@ abstract class BaseComposePresentation(
         }
         store.clear()
         super.dismiss()
+    }
+
+    private fun getTag(): String {
+        val parentClass = javaClass.superclass?.simpleName ?: "BaseComposePresentation"
+        val currentClass = javaClass.simpleName
+        return "[$parentClass:$currentClass]"
     }
 }

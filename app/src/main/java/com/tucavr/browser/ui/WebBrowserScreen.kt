@@ -385,6 +385,30 @@ fun WebBrowserScreenPreview() {
                 canGoForward = false,
                 isBookmarked = true,
                 isCurvedGeometry = true,
+                bookmarks = listOf()
+            ),
+            mediaCommands = MutableSharedFlow(),
+            geckoSession = null,
+            onEvent = {},
+            updateWebViewState = { _, _, _, _, _, _, _, _ -> }
+        )
+    }
+}
+
+@Preview(widthDp = 1280, heightDp = 720)
+@Composable
+fun WebBrowserScreenPreviewWithShortcuts() {
+    MaterialTheme(colorScheme = darkColorScheme()) {
+        WebBrowserScreen(
+            state = WebBrowserUiState(
+                url = "",
+                isLoading = true,
+                loadingProgress = 65,
+                pageTitle = "VR Browser Example",
+                canGoBack = true,
+                canGoForward = false,
+                isBookmarked = true,
+                isCurvedGeometry = true,
                 bookmarks = listOf(
                     BrowserBookmark(id = 1, title = "YouTube", url = "https://www.youtube.com"),
                     BrowserBookmark(id = 2, title = "Google", url = "https://www.google.com")
