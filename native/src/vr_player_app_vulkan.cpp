@@ -5536,7 +5536,7 @@ static void DrawEnvironmentIfLoaded(
     const bool is3dRoom = (state.currentEnvironmentId == "cinema" || state.currentEnvironmentId == "living_room");
     const float glowIntensity = (is3dRoom && state.thermalLevel < 2) ? state.ambientIntensity : 0.0f;
     envPc.glowParams = {glowIntensity, envBrightness, 0.0f, 0.0f};
-    envPc.screenPos = {scene.screenPos.x, scene.screenPos.y, scene.screenPos.z, 1.0f};
+    envPc.screenPos = {scene.screenCenter.x, scene.screenCenter.y, scene.screenCenter.z, 1.0f};
 
     vkCmdPushConstants(
         cmd, state.envPipelineLayout,
