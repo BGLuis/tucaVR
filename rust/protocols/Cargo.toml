@@ -26,12 +26,8 @@ suppaftp = { version = "6", default-features = false }
 # armadilha no doc (secao 6, aviso "libssh2 cross-compile"). Async/tokio por
 # baixo, igual ao cliente SMB (ver smb/mod.rs) — ponte pro FFmpeg custom I/O
 # sincrono via block_on por chamada, mesmo padrao.
-russh = "0.45"
-russh-sftp = "2"
-# Exigido para implementar `russh::client::Handler` (trait `async fn` via
-# `#[async_trait]`) — russh usa a mesma crate internamente, mas o atributo
-# precisa estar disponivel para quem implementa o trait tambem.
-async-trait = "0.1"
+russh = "0.64"
+russh-sftp = "3.0.1"
 # `join_all` para disparar sub-leituras de um mesmo read_range CONCORRENTEMENTE
 # sobre a mesma sessao SMB/SFTP (ambas as crates multiplexam por MessageId/
 # request-id — ver docs de smb/mod.rs e sftp/mod.rs). So `future::join_all`
