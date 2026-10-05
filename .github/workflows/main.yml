@@ -277,8 +277,14 @@ jobs:
           RUSTC_WRAPPER: sccache
           SCCACHE_GHA_ENABLED: "true"
 
+      - name: Sanitize artifact name
+        id: artifact-meta
+        run: |
+          SAFE_REF=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
+          echo "name=VR-Player-APK-${SAFE_REF}-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: VR-Player-APK-${{ github.ref_name }}
+          name: ${{ steps.artifact-meta.outputs.name }}
           path: app/build/outputs/apk/debug/app-debug.apk
