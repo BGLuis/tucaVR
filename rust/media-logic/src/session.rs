@@ -238,7 +238,13 @@ mod tests {
         release_tx.send(()).unwrap();
         background_thread.join().unwrap();
 
-        assert_eq!(val, 999, "deve retornar fallback imediatamente sob contencao");
-        assert!(elapsed < Duration::from_millis(10), "try_sample_or demorou demais ({elapsed:?}), bloqueou a thread!");
+        assert_eq!(
+            val, 999,
+            "deve retornar fallback imediatamente sob contencao"
+        );
+        assert!(
+            elapsed < Duration::from_millis(10),
+            "try_sample_or demorou demais ({elapsed:?}), bloqueou a thread!"
+        );
     }
 }

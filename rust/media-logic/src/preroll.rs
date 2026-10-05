@@ -6,7 +6,10 @@ pub struct PrerollState {
 
 impl PrerollState {
     pub fn idle() -> Self {
-        Self { awaiting_landing: false, catching_up: false }
+        Self {
+            awaiting_landing: false,
+            catching_up: false,
+        }
     }
 
     pub fn begin(&mut self) {
@@ -14,7 +17,9 @@ impl PrerollState {
         self.catching_up = true;
     }
 
-    pub fn is_awaiting_landing(&self) -> bool { self.awaiting_landing }
+    pub fn is_awaiting_landing(&self) -> bool {
+        self.awaiting_landing
+    }
 
     pub fn is_active(&self) -> bool {
         self.catching_up

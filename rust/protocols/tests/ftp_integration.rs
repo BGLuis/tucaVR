@@ -9,7 +9,7 @@
 //! `./scripts/test-network-protocols.sh` na raiz do repo, que sobe os containers,
 //! exporta as env vars abaixo com os valores corretos e roda
 //! `cargo test -p protocols -- --ignored`.
-use protocols::ftp::{list_directory, scan_has_media, FtpFileSource, FtpTarget};
+use protocols::ftp::{FtpFileSource, FtpTarget, list_directory, scan_has_media};
 use protocols::prefetch::PrefetchReader;
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -21,7 +21,9 @@ fn env_or(key: &str, default: &str) -> String {
 fn target() -> FtpTarget {
     FtpTarget {
         host: env_or("VRPLAYER_TEST_FTP_HOST", "127.0.0.1"),
-        port: env_or("VRPLAYER_TEST_FTP_PORT", "12121").parse().expect("VRPLAYER_TEST_FTP_PORT invalido"),
+        port: env_or("VRPLAYER_TEST_FTP_PORT", "12121")
+            .parse()
+            .expect("VRPLAYER_TEST_FTP_PORT invalido"),
         path: String::new(),
         username: env_or("VRPLAYER_TEST_FTP_USER", "vruser"),
         password: env_or("VRPLAYER_TEST_FTP_PASS", "vrpass123"),
@@ -33,8 +35,9 @@ fn test_file_name() -> String {
 }
 
 fn expected_sha256() -> String {
-    std::env::var("VRPLAYER_TEST_FILE_SHA256")
-        .expect("VRPLAYER_TEST_FILE_SHA256 nao definido — rode via scripts/test-network-protocols.sh")
+    std::env::var("VRPLAYER_TEST_FILE_SHA256").expect(
+        "VRPLAYER_TEST_FILE_SHA256 nao definido — rode via scripts/test-network-protocols.sh",
+    )
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -48,10 +51,14 @@ fn sha256_hex(data: &[u8]) -> String {
 #[test]
 #[ignore]
 fn list_directory_finds_test_file() {
-    let entries = list_directory(&target(), "").expect("list_directory falhou contra o servidor real");
+    let entries =
+        list_directory(&target(), "").expect("list_directory falhou contra o servidor real");
     let file = test_file_name();
     let entry = entries.iter().find(|e| e.name == file).unwrap_or_else(|| {
-        panic!("{file} nao encontrado em: {entries:?}", entries = entries.iter().map(|e| &e.name).collect::<Vec<_>>())
+        panic!(
+            "{file} nao encontrado em: {entries:?}",
+            entries = entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+        )
     });
     assert!(!entry.is_dir);
     assert!(entry.size > 0);
@@ -66,7 +73,8 @@ fn list_directory_finds_test_file() {
 #[test]
 #[ignore]
 fn scan_has_media_reports_no_media_for_fixture_with_only_a_non_media_file() {
-    let result = scan_has_media(&target(), "").expect("scan_has_media falhou contra o servidor real");
+    let result =
+        scan_has_media(&target(), "").expect("scan_has_media falhou contra o servidor real");
     assert!(!result.has_media);
     assert!(result.completed_fully);
 }
@@ -86,7 +94,9 @@ fn ftp_file_source_reads_full_file_matching_sha256() {
     let source = FtpFileSource::open(&t).expect("FtpFileSource::open falhou");
     let mut reader = PrefetchReader::new(source);
     let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).expect("leitura via PrefetchReader falhou");
+    reader
+        .read_to_end(&mut buf)
+        .expect("leitura via PrefetchReader falhou");
 
     assert_eq!(sha256_hex(&buf), expected_sha256());
 }
@@ -106,7 +116,9 @@ fn ftp_file_source_reads_full_file_with_small_blocks() {
     let source = FtpFileSource::open(&t).expect("FtpFileSource::open falhou");
     let mut reader = PrefetchReader::with_block_size(source, 64 * 1024);
     let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).expect("leitura via PrefetchReader falhou");
+    reader
+        .read_to_end(&mut buf)
+        .expect("leitura via PrefetchReader falhou");
 
     assert_eq!(sha256_hex(&buf), expected_sha256());
 }
@@ -128,14 +140,20 @@ fn ftp_file_source_backward_seek_after_forward_read() {
     let mut reader = PrefetchReader::with_block_size(source, 64 * 1024);
 
     // Le um pedaco perto do fim do arquivo (256KB) primeiro.
-    reader.seek(SeekFrom::Start(200_000)).expect("seek para o fim falhou");
+    reader
+        .seek(SeekFrom::Start(200_000))
+        .expect("seek para o fim falhou");
     let mut tail = [0u8; 1024];
     reader.read_exact(&mut tail).expect("leitura do fim falhou");
 
     // Agora volta pro inicio e le o arquivo inteiro — exercita o reopen.
-    reader.seek(SeekFrom::Start(0)).expect("seek de volta pro inicio falhou");
+    reader
+        .seek(SeekFrom::Start(0))
+        .expect("seek de volta pro inicio falhou");
     let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).expect("leitura completa apos salto pra tras falhou");
+    reader
+        .read_to_end(&mut buf)
+        .expect("leitura completa apos salto pra tras falhou");
 
     assert_eq!(sha256_hex(&buf), expected_sha256());
 }

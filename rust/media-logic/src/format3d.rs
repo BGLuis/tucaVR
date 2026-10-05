@@ -222,9 +222,7 @@ impl Format3D {
             | Format3D::Cubemap3x2Mono
             | Format3D::Cubemap6x1Mono
             | Format3D::Eac3x2Mono
-            | Format3D::Fisheye190Mono => {
-                ThumbnailCropRegion::None
-            }
+            | Format3D::Fisheye190Mono => ThumbnailCropRegion::None,
             Format3D::SbsFull
             | Format3D::SbsHalf
             | Format3D::Spherical360SbsFull
@@ -275,7 +273,6 @@ pub struct ThumbnailDimensions {
     pub height: u32,
 }
 
-
 // SBS: aspecto de frame full (dois olhos completos lado a lado) e cerca do
 // dobro do de um frame normal; half (olhos espremidos pra caber num frame
 // normal) fica proximo do aspecto normal. OU: o inverso (full ~metade,
@@ -285,7 +282,11 @@ pub struct ThumbnailDimensions {
 // escolhendo entre full/half, nunca inventando stereo do nada, entao um
 // limiar largo e seguro. Documentado como aproximacao, nao garantia.
 fn is_full_packing(is_sbs: bool, aspect: f64) -> bool {
-    if is_sbs { aspect >= 2.4 } else { aspect <= 1.2 }
+    if is_sbs {
+        aspect >= 2.4
+    } else {
+        aspect <= 1.2
+    }
 }
 
 /// T3.1: resolve o `Format3D` final a partir do que os metadados do
@@ -314,16 +315,26 @@ pub fn resolve_container_hint(
         stereo,
         Some(VideoStereoMode::SideBySideLeft) | Some(VideoStereoMode::SideBySideRight)
     );
-    let aspect = if width == 0 || height == 0 { 0.0 } else { width as f64 / height as f64 };
+    let aspect = if width == 0 || height == 0 {
+        0.0
+    } else {
+        width as f64 / height as f64
+    };
 
     match projection {
-        Some(VideoProjection::HalfEquirectangular) => {
-            Some(if is_stereo { Format3D::Vr180Sbs } else { Format3D::Vr180Mono })
-        }
+        Some(VideoProjection::HalfEquirectangular) => Some(if is_stereo {
+            Format3D::Vr180Sbs
+        } else {
+            Format3D::Vr180Mono
+        }),
         Some(VideoProjection::Equirectangular) => Some(if !is_stereo {
             Format3D::Spherical360Mono
         } else if is_sbs {
-            if is_full_packing(true, aspect) { Format3D::Spherical360SbsFull } else { Format3D::Spherical360SbsHalf }
+            if is_full_packing(true, aspect) {
+                Format3D::Spherical360SbsFull
+            } else {
+                Format3D::Spherical360SbsHalf
+            }
         } else if is_full_packing(false, aspect) {
             Format3D::Spherical360OverUnderFull
         } else {
@@ -347,12 +358,16 @@ pub fn resolve_container_hint(
             Format3D::Fisheye190Mono
         }),
         Some(_) => None,
-        None if is_stereo && is_sbs => {
-            Some(if is_full_packing(true, aspect) { Format3D::SbsFull } else { Format3D::SbsHalf })
-        }
-        None if is_stereo => {
-            Some(if is_full_packing(false, aspect) { Format3D::OverUnderFull } else { Format3D::OverUnderHalf })
-        }
+        None if is_stereo && is_sbs => Some(if is_full_packing(true, aspect) {
+            Format3D::SbsFull
+        } else {
+            Format3D::SbsHalf
+        }),
+        None if is_stereo => Some(if is_full_packing(false, aspect) {
+            Format3D::OverUnderFull
+        } else {
+            Format3D::OverUnderHalf
+        }),
         None => None,
     }
 }
@@ -569,7 +584,8 @@ pub fn detect_from_resolution(width: u32, height: u32) -> Option<Format3D> {
     // correct even if a caller passes portrait-oriented dimensions.
     let max_dim = width.max(height);
 
-    let close_to = |value: f64, target: f64| (value - target).abs() <= target * RESOLUTION_ASPECT_TOLERANCE;
+    let close_to =
+        |value: f64, target: f64| (value - target).abs() <= target * RESOLUTION_ASPECT_TOLERANCE;
 
     // ~32:9 or ~4:1 -> almost certainly full SBS (two full-width 16:9-ish
     // eyes side by side).
@@ -698,12 +714,18 @@ mod tests {
 
     #[test]
     fn filename_underscore_sbs() {
-        assert_eq!(detect_from_filename("movie_sbs.mp4"), Some(Format3D::SbsFull));
+        assert_eq!(
+            detect_from_filename("movie_sbs.mp4"),
+            Some(Format3D::SbsFull)
+        );
     }
 
     #[test]
     fn filename_dash_sbs() {
-        assert_eq!(detect_from_filename("movie-sbs.mp4"), Some(Format3D::SbsFull));
+        assert_eq!(
+            detect_from_filename("movie-sbs.mp4"),
+            Some(Format3D::SbsFull)
+        );
     }
 
     #[test]
@@ -716,7 +738,10 @@ mod tests {
 
     #[test]
     fn filename_hsbs() {
-        assert_eq!(detect_from_filename("movie_hsbs.mp4"), Some(Format3D::SbsHalf));
+        assert_eq!(
+            detect_from_filename("movie_hsbs.mp4"),
+            Some(Format3D::SbsHalf)
+        );
     }
 
     #[test]
@@ -825,7 +850,10 @@ mod tests {
 
     #[test]
     fn filename_lr() {
-        assert_eq!(detect_from_filename("movie_lr.mp4"), Some(Format3D::SbsFull));
+        assert_eq!(
+            detect_from_filename("movie_lr.mp4"),
+            Some(Format3D::SbsFull)
+        );
     }
 
     #[test]
@@ -1019,9 +1047,9 @@ mod tests {
     #[test]
     fn detect_prefers_container_metadata_over_everything_else() {
         let (format, confidence) = detect(
-            "movie_sbs.mp4",  // filename says full SBS
+            "movie_sbs.mp4", // filename says full SBS
             3840,
-            3840,             // resolution heuristic says 360 OU
+            3840,                      // resolution heuristic says 360 OU
             Some(Format3D::Vr180Mono), // metadata says VR180 mono
         );
         assert_eq!(format, Format3D::Vr180Mono);
@@ -1033,7 +1061,7 @@ mod tests {
         let (format, confidence) = detect(
             "movie_hou.mp4", // filename says half OU
             3840,
-            3840,             // resolution heuristic would say 360 OU full
+            3840, // resolution heuristic would say 360 OU full
             None,
         );
         assert_eq!(format, Format3D::OverUnderHalf);
@@ -1067,8 +1095,14 @@ mod tests {
         assert_eq!(Format3D::Vr180Mono.to_screen_mode_index(), 6);
         assert_eq!(Format3D::Spherical360SbsFull.to_screen_mode_index(), 7);
         assert_eq!(Format3D::Spherical360SbsHalf.to_screen_mode_index(), 7);
-        assert_eq!(Format3D::Spherical360OverUnderFull.to_screen_mode_index(), 8);
-        assert_eq!(Format3D::Spherical360OverUnderHalf.to_screen_mode_index(), 8);
+        assert_eq!(
+            Format3D::Spherical360OverUnderFull.to_screen_mode_index(),
+            8
+        );
+        assert_eq!(
+            Format3D::Spherical360OverUnderHalf.to_screen_mode_index(),
+            8
+        );
         assert_eq!(Format3D::Vr180Sbs.to_screen_mode_index(), 9);
     }
 
@@ -1087,12 +1121,7 @@ mod tests {
             Some(Format3D::Vr180Mono)
         );
         assert_eq!(
-            resolve_container_hint(
-                None,
-                Some(VideoProjection::HalfEquirectangular),
-                1920,
-                1920
-            ),
+            resolve_container_hint(None, Some(VideoProjection::HalfEquirectangular), 1920, 1920),
             Some(Format3D::Vr180Mono)
         );
 
@@ -1130,12 +1159,7 @@ mod tests {
             Some(Format3D::Spherical360Mono)
         );
         assert_eq!(
-            resolve_container_hint(
-                None,
-                Some(VideoProjection::Equirectangular),
-                3840,
-                1920
-            ),
+            resolve_container_hint(None, Some(VideoProjection::Equirectangular), 3840, 1920),
             Some(Format3D::Spherical360Mono)
         );
 
@@ -1225,7 +1249,12 @@ mod tests {
         );
         // Cubemap stereo SBS
         assert_eq!(
-            resolve_container_hint(Some(VideoStereoMode::SideBySideLeft), Some(VideoProjection::Cubemap), 3840, 1280),
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(VideoProjection::Cubemap),
+                3840,
+                1280
+            ),
             Some(Format3D::Cubemap3x2Sbs)
         );
         // EAC mono
@@ -1235,7 +1264,12 @@ mod tests {
         );
         // EAC stereo SBS
         assert_eq!(
-            resolve_container_hint(Some(VideoStereoMode::SideBySideLeft), Some(VideoProjection::EquiangularCubemap), 3840, 1280),
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(VideoProjection::EquiangularCubemap),
+                3840,
+                1280
+            ),
             Some(Format3D::Eac3x2Sbs)
         );
     }
@@ -1259,56 +1293,119 @@ mod tests {
     #[test]
     fn test_thumbnail_crop_region_and_dimensions() {
         // Flat 2D e Mono não recortam
-        assert_eq!(Format3D::Flat2D.thumbnail_crop_region(), ThumbnailCropRegion::None);
+        assert_eq!(
+            Format3D::Flat2D.thumbnail_crop_region(),
+            ThumbnailCropRegion::None
+        );
         assert_eq!(
             Format3D::Flat2D.thumbnail_dimensions(1920, 1080),
-            ThumbnailDimensions { width: 1920, height: 1080 }
+            ThumbnailDimensions {
+                width: 1920,
+                height: 1080
+            }
         );
-        assert_eq!(Format3D::Spherical360Mono.thumbnail_crop_region(), ThumbnailCropRegion::None);
-        assert_eq!(Format3D::Vr180Mono.thumbnail_crop_region(), ThumbnailCropRegion::None);
-        assert_eq!(Format3D::Cubemap3x2Mono.thumbnail_crop_region(), ThumbnailCropRegion::None);
-        assert_eq!(Format3D::Cubemap6x1Mono.thumbnail_crop_region(), ThumbnailCropRegion::None);
-        assert_eq!(Format3D::Eac3x2Mono.thumbnail_crop_region(), ThumbnailCropRegion::None);
+        assert_eq!(
+            Format3D::Spherical360Mono.thumbnail_crop_region(),
+            ThumbnailCropRegion::None
+        );
+        assert_eq!(
+            Format3D::Vr180Mono.thumbnail_crop_region(),
+            ThumbnailCropRegion::None
+        );
+        assert_eq!(
+            Format3D::Cubemap3x2Mono.thumbnail_crop_region(),
+            ThumbnailCropRegion::None
+        );
+        assert_eq!(
+            Format3D::Cubemap6x1Mono.thumbnail_crop_region(),
+            ThumbnailCropRegion::None
+        );
+        assert_eq!(
+            Format3D::Eac3x2Mono.thumbnail_crop_region(),
+            ThumbnailCropRegion::None
+        );
 
         // SBS corta metade esquerda (com alinhamento par)
-        assert_eq!(Format3D::SbsFull.thumbnail_crop_region(), ThumbnailCropRegion::LeftHalf);
+        assert_eq!(
+            Format3D::SbsFull.thumbnail_crop_region(),
+            ThumbnailCropRegion::LeftHalf
+        );
         assert_eq!(
             Format3D::SbsFull.thumbnail_dimensions(3840, 1080),
-            ThumbnailDimensions { width: 1920, height: 1080 }
+            ThumbnailDimensions {
+                width: 1920,
+                height: 1080
+            }
         );
-        assert_eq!(Format3D::SbsHalf.thumbnail_crop_region(), ThumbnailCropRegion::LeftHalf);
+        assert_eq!(
+            Format3D::SbsHalf.thumbnail_crop_region(),
+            ThumbnailCropRegion::LeftHalf
+        );
         assert_eq!(
             Format3D::SbsHalf.thumbnail_dimensions(1920, 1080),
-            ThumbnailDimensions { width: 960, height: 1080 }
+            ThumbnailDimensions {
+                width: 960,
+                height: 1080
+            }
         );
-        assert_eq!(Format3D::Vr180Sbs.thumbnail_crop_region(), ThumbnailCropRegion::LeftHalf);
+        assert_eq!(
+            Format3D::Vr180Sbs.thumbnail_crop_region(),
+            ThumbnailCropRegion::LeftHalf
+        );
         assert_eq!(
             Format3D::Vr180Sbs.thumbnail_dimensions(7680, 3840),
-            ThumbnailDimensions { width: 3840, height: 3840 }
+            ThumbnailDimensions {
+                width: 3840,
+                height: 3840
+            }
         );
-        assert_eq!(Format3D::Cubemap3x2Sbs.thumbnail_crop_region(), ThumbnailCropRegion::LeftHalf);
-        assert_eq!(Format3D::Eac3x2Sbs.thumbnail_crop_region(), ThumbnailCropRegion::LeftHalf);
+        assert_eq!(
+            Format3D::Cubemap3x2Sbs.thumbnail_crop_region(),
+            ThumbnailCropRegion::LeftHalf
+        );
+        assert_eq!(
+            Format3D::Eac3x2Sbs.thumbnail_crop_region(),
+            ThumbnailCropRegion::LeftHalf
+        );
 
         // Over/Under corta metade superior
-        assert_eq!(Format3D::OverUnderFull.thumbnail_crop_region(), ThumbnailCropRegion::TopHalf);
+        assert_eq!(
+            Format3D::OverUnderFull.thumbnail_crop_region(),
+            ThumbnailCropRegion::TopHalf
+        );
         assert_eq!(
             Format3D::OverUnderFull.thumbnail_dimensions(1920, 2160),
-            ThumbnailDimensions { width: 1920, height: 1080 }
+            ThumbnailDimensions {
+                width: 1920,
+                height: 1080
+            }
         );
-        assert_eq!(Format3D::OverUnderHalf.thumbnail_crop_region(), ThumbnailCropRegion::TopHalf);
+        assert_eq!(
+            Format3D::OverUnderHalf.thumbnail_crop_region(),
+            ThumbnailCropRegion::TopHalf
+        );
         assert_eq!(
             Format3D::OverUnderHalf.thumbnail_dimensions(1920, 1080),
-            ThumbnailDimensions { width: 1920, height: 540 }
+            ThumbnailDimensions {
+                width: 1920,
+                height: 540
+            }
         );
 
         // Teste de alinhamento ímpar -> par
         assert_eq!(
             Format3D::SbsFull.thumbnail_dimensions(1921, 1080),
-            ThumbnailDimensions { width: 960, height: 1080 }
+            ThumbnailDimensions {
+                width: 960,
+                height: 1080
+            }
         );
         assert_eq!(
             Format3D::OverUnderFull.thumbnail_dimensions(1920, 1081),
-            ThumbnailDimensions { width: 1920, height: 540 }
+            ThumbnailDimensions {
+                width: 1920,
+                height: 540
+            }
         );
     }
 
@@ -1325,8 +1422,14 @@ mod tests {
         assert_eq!(Format3D::Vr180Mono.to_screen_mode_index(), 6);
         assert_eq!(Format3D::Spherical360SbsFull.to_screen_mode_index(), 7);
         assert_eq!(Format3D::Spherical360SbsHalf.to_screen_mode_index(), 7);
-        assert_eq!(Format3D::Spherical360OverUnderFull.to_screen_mode_index(), 8);
-        assert_eq!(Format3D::Spherical360OverUnderHalf.to_screen_mode_index(), 8);
+        assert_eq!(
+            Format3D::Spherical360OverUnderFull.to_screen_mode_index(),
+            8
+        );
+        assert_eq!(
+            Format3D::Spherical360OverUnderHalf.to_screen_mode_index(),
+            8
+        );
         assert_eq!(Format3D::Vr180Sbs.to_screen_mode_index(), 9);
         assert_eq!(Format3D::Cubemap3x2Mono.to_screen_mode_index(), 10);
         assert_eq!(Format3D::Cubemap6x1Mono.to_screen_mode_index(), 11);

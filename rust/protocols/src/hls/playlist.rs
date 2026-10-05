@@ -67,13 +67,19 @@ pub fn fetch_and_probe_variants(url: &str) -> Result<Vec<HlsVariant>, String> {
 
     match parse_playlist(&body, url)? {
         HlsPlaylist::Master(master) => Ok(master.variants),
-        HlsPlaylist::Media(_) => Err("A URL fornecida é uma Media Playlist, não Master Playlist".to_string()),
+        HlsPlaylist::Media(_) => {
+            Err("A URL fornecida é uma Media Playlist, não Master Playlist".to_string())
+        }
     }
 }
 
 /// Faz o parse de uma playlist M3U8 (Master ou Media) a partir do texto e resolve URLs relativas.
 pub fn parse_playlist(content: &str, base_url: &str) -> Result<HlsPlaylist, String> {
-    let lines: Vec<&str> = content.lines().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
+    let lines: Vec<&str> = content
+        .lines()
+        .map(|l| l.trim())
+        .filter(|l| !l.is_empty())
+        .collect();
 
     if lines.is_empty() || lines[0] != "#EXTM3U" {
         return Err("Arquivo não é uma playlist M3U8 válida (falta cabeçalho #EXTM3U)".to_string());
@@ -107,7 +113,8 @@ fn parse_master_playlist(lines: &[&str], base_url: &str) -> Result<HlsMasterPlay
                     if k == "BANDWIDTH" {
                         bandwidth = v.parse().unwrap_or(0);
                     } else if k == "RESOLUTION" {
-                        if let Some((w_str, h_str)) = v.split_once('x').or_else(|| v.split_once('X'))
+                        if let Some((w_str, h_str)) =
+                            v.split_once('x').or_else(|| v.split_once('X'))
                             && let (Ok(w), Ok(h)) = (w_str.parse::<u32>(), h_str.parse::<u32>())
                         {
                             resolution = Some((w, h));
@@ -195,7 +202,9 @@ fn parse_media_playlist(lines: &[&str], base_url: &str) -> Result<HlsMediaPlayli
             next_duration = dur_str.trim().parse().ok();
         } else if let Some(range_str) = line.strip_prefix("#EXT-X-BYTERANGE:") {
             if let Some((len_str, off_str)) = range_str.split_once('@') {
-                if let (Ok(len), Ok(off)) = (len_str.trim().parse::<u64>(), off_str.trim().parse::<u64>()) {
+                if let (Ok(len), Ok(off)) =
+                    (len_str.trim().parse::<u64>(), off_str.trim().parse::<u64>())
+                {
                     next_byte_range = Some((off, len));
                     last_byte_range_end = off + len;
                 }
@@ -259,7 +268,10 @@ fn split_hls_attributes(attr_str: &str) -> Vec<String> {
 }
 
 fn parse_hex_iv(hex_str: &str) -> Option<[u8; 16]> {
-    let clean = hex_str.strip_prefix("0x").or_else(|| hex_str.strip_prefix("0X")).unwrap_or(hex_str);
+    let clean = hex_str
+        .strip_prefix("0x")
+        .or_else(|| hex_str.strip_prefix("0X"))
+        .unwrap_or(hex_str);
     if clean.len() != 32 {
         return None;
     }
@@ -305,7 +317,10 @@ segment2.ts
                 assert_eq!(master.variants.len(), 3);
                 assert_eq!(master.variants[0].bandwidth, 800000);
                 assert_eq!(master.variants[0].resolution, Some((640, 360)));
-                assert_eq!(master.variants[0].url, "https://example.com/hls/360p/index.m3u8");
+                assert_eq!(
+                    master.variants[0].url,
+                    "https://example.com/hls/360p/index.m3u8"
+                );
 
                 assert_eq!(master.variants[1].bandwidth, 2500000);
                 assert_eq!(master.variants[1].resolution, Some((1280, 720)));
@@ -319,13 +334,17 @@ segment2.ts
 
     #[test]
     fn parse_media_playlist_segments() {
-        let parsed = parse_playlist(SAMPLE_MEDIA, "https://example.com/hls/720p/index.m3u8").unwrap();
+        let parsed =
+            parse_playlist(SAMPLE_MEDIA, "https://example.com/hls/720p/index.m3u8").unwrap();
         match parsed {
             HlsPlaylist::Media(media) => {
                 assert_eq!(media.target_duration, 10.0);
                 assert!(media.is_vod);
                 assert_eq!(media.segments.len(), 3);
-                assert_eq!(media.segments[0].url, "https://example.com/hls/720p/segment0.ts");
+                assert_eq!(
+                    media.segments[0].url,
+                    "https://example.com/hls/720p/segment0.ts"
+                );
                 assert_eq!(media.segments[0].duration, 9.009);
                 assert_eq!(media.segments[0].start_time, 0.0);
 

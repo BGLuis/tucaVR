@@ -1,6 +1,6 @@
-use ndk::media::image_reader::{ImageReader, AcquireResult, Image};
 use ndk::hardware_buffer::{HardwareBuffer, HardwareBufferUsage};
 use ndk::media::image_reader::ImageFormat;
+use ndk::media::image_reader::{AcquireResult, Image, ImageReader};
 use ndk::native_window::NativeWindow;
 
 pub struct TextureOutput {
@@ -23,7 +23,12 @@ unsafe impl Sync for TextureOutput {}
 
 impl TextureOutput {
     pub fn new() -> Self {
-        Self { reader: None, current_image: None, current_buffer: None, frames_decoded: 0 }
+        Self {
+            reader: None,
+            current_image: None,
+            current_buffer: None,
+            frames_decoded: 0,
+        }
     }
 
     pub fn allocate(&mut self, width: u32, height: u32) -> Result<(), String> {
@@ -34,8 +39,9 @@ impl TextureOutput {
             ImageFormat::PRIVATE, // 34 = IMPLEMENTATION_DEFINED, best for surface texturing
             usage,
             4,
-        ).map_err(|e| format!("Failed to create ImageReader: {:?}", e))?;
-        
+        )
+        .map_err(|e| format!("Failed to create ImageReader: {:?}", e))?;
+
         self.current_image = None;
         self.current_buffer = None;
         self.reader = Some(reader);

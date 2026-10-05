@@ -38,7 +38,13 @@ impl SmbTarget {
     pub fn to_internal(&self) -> String {
         format!(
             "smb://{}:{}{sep}{}{sep}{}{sep}{}{sep}{}{sep}{}",
-            self.host, self.port, self.share, self.path, self.username, self.password, self.domain,
+            self.host,
+            self.port,
+            self.share,
+            self.path,
+            self.username,
+            self.password,
+            self.domain,
             sep = SEP
         )
     }

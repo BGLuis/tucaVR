@@ -505,7 +505,10 @@ mod tests {
         let action = controller.evaluate(&sample_critical);
         assert_eq!(
             action,
-            QualityAction::Degrade(QualityLevel::Emergency, QualityTransitionReason::ThermalPressure)
+            QualityAction::Degrade(
+                QualityLevel::Emergency,
+                QualityTransitionReason::ThermalPressure
+            )
         );
         assert_eq!(controller.current_level(), QualityLevel::Emergency);
 
@@ -587,9 +590,15 @@ mod tests {
             ..sample_healthy
         };
 
-        assert_eq!(controller.evaluate(&sample_healthy), QualityAction::Maintain);
+        assert_eq!(
+            controller.evaluate(&sample_healthy),
+            QualityAction::Maintain
+        );
         assert_eq!(controller.evaluate(&sample_spike), QualityAction::Maintain);
-        assert_eq!(controller.evaluate(&sample_healthy), QualityAction::Maintain);
+        assert_eq!(
+            controller.evaluate(&sample_healthy),
+            QualityAction::Maintain
+        );
         assert_eq!(controller.current_level(), QualityLevel::High);
     }
 
@@ -609,7 +618,12 @@ mod tests {
         };
 
         let degrade_count = (0..10)
-            .filter(|_| matches!(controller.evaluate(&sample_drop), QualityAction::Degrade(..)))
+            .filter(|_| {
+                matches!(
+                    controller.evaluate(&sample_drop),
+                    QualityAction::Degrade(..)
+                )
+            })
             .count();
 
         assert!(
@@ -680,7 +694,10 @@ mod tests {
         let action_lag = controller.evaluate(&sample_90hz_lag);
         assert_eq!(
             action_lag,
-            QualityAction::Degrade(QualityLevel::Medium, QualityTransitionReason::FramePacingLag)
+            QualityAction::Degrade(
+                QualityLevel::Medium,
+                QualityTransitionReason::FramePacingLag
+            )
         );
     }
 
@@ -700,7 +717,11 @@ mod tests {
         // Das amostras 1 a 29: mantém Medium
         for i in 1..30 {
             let action = controller.evaluate(&healthy_sample);
-            assert_eq!(action, QualityAction::Maintain, "Amostra {i} não deve subir prematuramente");
+            assert_eq!(
+                action,
+                QualityAction::Maintain,
+                "Amostra {i} não deve subir prematuramente"
+            );
             assert_eq!(controller.current_level(), QualityLevel::Medium);
         }
 

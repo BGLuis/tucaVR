@@ -57,7 +57,8 @@ pub fn scan_ssdp(timeout: Duration) -> Vec<DiscoveredServer> {
                     }
 
                     let (host, port) = if !location.is_empty() {
-                        parse_host_port_from_url(&location).unwrap_or((src_addr.ip().to_string(), src_addr.port()))
+                        parse_host_port_from_url(&location)
+                            .unwrap_or((src_addr.ip().to_string(), src_addr.port()))
                     } else {
                         (src_addr.ip().to_string(), src_addr.port())
                     };
@@ -77,7 +78,10 @@ pub fn scan_ssdp(timeout: Duration) -> Vec<DiscoveredServer> {
                     });
                 }
             }
-            Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock || e.kind() == std::io::ErrorKind::TimedOut => {
+            Err(ref e)
+                if e.kind() == std::io::ErrorKind::WouldBlock
+                    || e.kind() == std::io::ErrorKind::TimedOut =>
+            {
                 // Intervalo de leitura normal
             }
             Err(e) => {
@@ -90,7 +94,9 @@ pub fn scan_ssdp(timeout: Duration) -> Vec<DiscoveredServer> {
 }
 
 fn parse_host_port_from_url(url: &str) -> Option<(String, u16)> {
-    let without_proto = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://"))?;
+    let without_proto = url
+        .strip_prefix("http://")
+        .or_else(|| url.strip_prefix("https://"))?;
     let hostport = without_proto.split('/').next()?;
     if let Some((h, p_str)) = hostport.split_once(':') {
         let p = p_str.parse().ok()?;

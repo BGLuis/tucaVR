@@ -9,7 +9,7 @@
 //! na raiz do repo, que sobe os containers, exporta as env vars abaixo e roda
 //! `cargo test -p protocols -- --ignored`.
 use protocols::prefetch::RangeSource;
-use protocols::webdav::{list_directory, scan_has_media, WebdavFileSource, WebdavTarget};
+use protocols::webdav::{WebdavFileSource, WebdavTarget, list_directory, scan_has_media};
 use sha2::{Digest, Sha256};
 
 fn env_or(key: &str, default: &str) -> String {
@@ -19,7 +19,9 @@ fn env_or(key: &str, default: &str) -> String {
 fn target(file_path: &str) -> WebdavTarget {
     WebdavTarget {
         host: env_or("VRPLAYER_TEST_WEBDAV_HOST", "127.0.0.1"),
-        port: env_or("VRPLAYER_TEST_WEBDAV_PORT", "18099").parse().expect("VRPLAYER_TEST_WEBDAV_PORT invalido"),
+        port: env_or("VRPLAYER_TEST_WEBDAV_PORT", "18099")
+            .parse()
+            .expect("VRPLAYER_TEST_WEBDAV_PORT invalido"),
         base_path: String::new(),
         file_path: file_path.to_string(),
         username: env_or("VRPLAYER_TEST_WEBDAV_USER", "vruser"),
@@ -53,7 +55,10 @@ fn list_directory_finds_test_file_on_real_server() {
     let entries = list_directory(&target(""), "").expect("PROPFIND falhou contra o servidor real");
     let file = test_file_name();
     let entry = entries.iter().find(|e| e.name == file).unwrap_or_else(|| {
-        panic!("{file} nao encontrado em: {:?}", entries.iter().map(|e| &e.name).collect::<Vec<_>>())
+        panic!(
+            "{file} nao encontrado em: {:?}",
+            entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+        )
     });
     assert!(!entry.is_dir);
     assert!(entry.size > 0);
@@ -66,7 +71,8 @@ fn list_directory_finds_test_file_on_real_server() {
 #[test]
 #[ignore]
 fn scan_has_media_reports_no_media_for_fixture_with_only_a_non_media_file() {
-    let result = scan_has_media(&target(""), "").expect("scan_has_media falhou contra o servidor real");
+    let result =
+        scan_has_media(&target(""), "").expect("scan_has_media falhou contra o servidor real");
     assert!(!result.has_media);
     assert!(result.completed_fully);
 }
@@ -78,14 +84,20 @@ fn scan_has_media_reports_no_media_for_fixture_with_only_a_non_media_file() {
 #[ignore]
 fn webdav_file_source_reads_full_file_matching_sha256() {
     let file = test_file_name();
-    let mut source = WebdavFileSource::open(&target(&file)).expect("open WebDAV falhou contra o servidor real");
+    let mut source =
+        WebdavFileSource::open(&target(&file)).expect("open WebDAV falhou contra o servidor real");
 
-    let total = source.len().expect("tamanho do arquivo deveria ser conhecido");
+    let total = source
+        .len()
+        .expect("tamanho do arquivo deveria ser conhecido");
     assert!(total > 0);
 
     let mut buf = vec![0u8; total as usize];
     let n = source.read_range(0, &mut buf).expect("read_range falhou");
-    assert_eq!(n, total as usize, "deveria ler o arquivo inteiro numa chamada");
+    assert_eq!(
+        n, total as usize,
+        "deveria ler o arquivo inteiro numa chamada"
+    );
 
     assert_eq!(sha256_hex(&buf), expected_sha256());
 }
@@ -96,16 +108,21 @@ fn webdav_file_source_reads_full_file_matching_sha256() {
 #[ignore]
 fn webdav_file_source_reads_full_file_with_small_blocks() {
     let file = test_file_name();
-    let mut source = WebdavFileSource::open(&target(&file)).expect("open WebDAV falhou contra o servidor real");
+    let mut source =
+        WebdavFileSource::open(&target(&file)).expect("open WebDAV falhou contra o servidor real");
 
-    let total = source.len().expect("tamanho do arquivo deveria ser conhecido") as usize;
+    let total = source
+        .len()
+        .expect("tamanho do arquivo deveria ser conhecido") as usize;
     let mut collected = Vec::with_capacity(total);
     let mut offset = 0u64;
     let block = 8192usize;
 
     while (offset as usize) < total {
         let mut chunk = vec![0u8; block];
-        let n = source.read_range(offset, &mut chunk).expect("read_range falhou");
+        let n = source
+            .read_range(offset, &mut chunk)
+            .expect("read_range falhou");
         if n == 0 {
             break;
         }

@@ -41,13 +41,13 @@ impl AmbisonicsDecoder {
         let el = 35.264f32;
         let mut speaker_directions = [Vec3::FORWARD; VIRTUAL_DOME_SPEAKERS];
 
-        speaker_directions[0] = Vec3::from_spherical_degrees(45.0, el, 1.0);    // Top Front Right
-        speaker_directions[1] = Vec3::from_spherical_degrees(-45.0, el, 1.0);   // Top Front Left
-        speaker_directions[2] = Vec3::from_spherical_degrees(135.0, el, 1.0);   // Top Back Right
-        speaker_directions[3] = Vec3::from_spherical_degrees(-135.0, el, 1.0);  // Top Back Left
-        speaker_directions[4] = Vec3::from_spherical_degrees(45.0, -el, 1.0);   // Bottom Front Right
-        speaker_directions[5] = Vec3::from_spherical_degrees(-45.0, -el, 1.0);  // Bottom Front Left
-        speaker_directions[6] = Vec3::from_spherical_degrees(135.0, -el, 1.0);  // Bottom Back Right
+        speaker_directions[0] = Vec3::from_spherical_degrees(45.0, el, 1.0); // Top Front Right
+        speaker_directions[1] = Vec3::from_spherical_degrees(-45.0, el, 1.0); // Top Front Left
+        speaker_directions[2] = Vec3::from_spherical_degrees(135.0, el, 1.0); // Top Back Right
+        speaker_directions[3] = Vec3::from_spherical_degrees(-135.0, el, 1.0); // Top Back Left
+        speaker_directions[4] = Vec3::from_spherical_degrees(45.0, -el, 1.0); // Bottom Front Right
+        speaker_directions[5] = Vec3::from_spherical_degrees(-45.0, -el, 1.0); // Bottom Front Left
+        speaker_directions[6] = Vec3::from_spherical_degrees(135.0, -el, 1.0); // Bottom Back Right
         speaker_directions[7] = Vec3::from_spherical_degrees(-135.0, -el, 1.0); // Bottom Back Left
 
         Self {
@@ -135,8 +135,8 @@ impl AmbisonicsDecoder {
             for (sp_idx, sp_dir) in self.speaker_directions.iter().enumerate() {
                 // Direção da caixa virtual em coordenadas esféricas Ambisonics
                 let sp_ambi_x = -sp_dir.z; // Frente
-                let sp_ambi_y = sp_dir.x;  // Direita
-                let sp_ambi_z = sp_dir.y;  // Cima
+                let sp_ambi_y = sp_dir.x; // Direita
+                let sp_ambi_z = sp_dir.y; // Cima
 
                 let gain = w + sqrt3 * (rot_x * sp_ambi_x + rot_y * sp_ambi_y + rot_z * sp_ambi_z);
                 speaker_buffers[sp_idx][i] = gain * inv_8;
@@ -144,7 +144,11 @@ impl AmbisonicsDecoder {
         }
 
         // 3. Convolução binaural de cada caixa virtual com HRTF
-        for (sp, buf) in speaker_buffers.iter().enumerate().take(VIRTUAL_DOME_SPEAKERS) {
+        for (sp, buf) in speaker_buffers
+            .iter()
+            .enumerate()
+            .take(VIRTUAL_DOME_SPEAKERS)
+        {
             let sp_dir = self.speaker_directions[sp];
             let hrir = HrtfDataset::get_hrir_for_direction(sp_dir);
 
@@ -223,7 +227,12 @@ mod tests {
 
         let rot_energy_l = out_l_rot.iter().map(|&x| x * x).sum::<f32>();
         let rot_energy_r = out_r_rot.iter().map(|&x| x * x).sum::<f32>();
-        assert!(rot_energy_r > rot_energy_l * 1.5, "Esperava som na direita ao virar para a esquerda: L={}, R={}", rot_energy_l, rot_energy_r);
+        assert!(
+            rot_energy_r > rot_energy_l * 1.5,
+            "Esperava som na direita ao virar para a esquerda: L={}, R={}",
+            rot_energy_l,
+            rot_energy_r
+        );
 
         // 3. Virando 90° para a direita (-yaw): som frontal gira para a esquerda relativa da cabeça
         decoder.reset();
@@ -231,6 +240,11 @@ mod tests {
         decoder.process_block(&channels, q_right_90, &mut out_l_rot, &mut out_r_rot);
         let rot_r_energy_l = out_l_rot.iter().map(|&x| x * x).sum::<f32>();
         let rot_r_energy_r = out_r_rot.iter().map(|&x| x * x).sum::<f32>();
-        assert!(rot_r_energy_l > rot_r_energy_r * 1.5, "Esperava som na esquerda ao virar para a direita: L={}, R={}", rot_r_energy_l, rot_r_energy_r);
+        assert!(
+            rot_r_energy_l > rot_r_energy_r * 1.5,
+            "Esperava som na esquerda ao virar para a direita: L={}, R={}",
+            rot_r_energy_l,
+            rot_r_energy_r
+        );
     }
 }

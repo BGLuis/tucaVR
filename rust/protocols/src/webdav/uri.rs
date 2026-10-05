@@ -80,8 +80,14 @@ impl WebdavTarget {
         let file_path = parts.next()?.to_string();
         let username = parts.next()?.to_string();
         let password = parts.next()?.to_string();
-        let use_https = parts.next().map(|v| v == "1" || v == "true").unwrap_or(false);
-        let accept_invalid_certs = parts.next().map(|v| v == "1" || v == "true").unwrap_or(false);
+        let use_https = parts
+            .next()
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false);
+        let accept_invalid_certs = parts
+            .next()
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false);
 
         Some(Self {
             host: host.to_string(),

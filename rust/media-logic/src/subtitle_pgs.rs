@@ -542,8 +542,7 @@ fn parse_ods(
             return;
         }
         // object_data_length: u24 be em p[4..7], inclui os 4 bytes de width+height.
-        let data_len =
-            ((p[4] as usize) << 16) | ((p[5] as usize) << 8) | (p[6] as usize);
+        let data_len = ((p[4] as usize) << 16) | ((p[5] as usize) << 8) | (p[6] as usize);
         let width = match be16(p, 7) {
             Some(v) => v,
             None => return,
@@ -671,8 +670,8 @@ mod tests {
         ];
         let mut ods = vec![
             0x00, 0x00, // object_id
-            0x00,       // version
-            0xC0,       // seq_flag = first | last
+            0x00, // version
+            0xC0, // seq_flag = first | last
         ];
         let data_len = (4 + rle.len()) as u32;
         ods.push((data_len >> 16) as u8);
@@ -750,12 +749,21 @@ mod tests {
             },
         ];
         assert!(find_active_pgs(&subs, 500, 0).is_none());
-        assert_eq!(find_active_pgs(&subs, 1500, 0).map(|s| s.start_ms), Some(1000));
+        assert_eq!(
+            find_active_pgs(&subs, 1500, 0).map(|s| s.start_ms),
+            Some(1000)
+        );
         assert!(find_active_pgs(&subs, 3000, 0).is_none()); // fim exclusivo
         assert!(find_active_pgs(&subs, 4000, 0).is_none());
-        assert_eq!(find_active_pgs(&subs, 6000, 0).map(|s| s.start_ms), Some(5000));
+        assert_eq!(
+            find_active_pgs(&subs, 6000, 0).map(|s| s.start_ms),
+            Some(5000)
+        );
         // offset -1000: pts 6000 -> 5000 cai na segunda
-        assert_eq!(find_active_pgs(&subs, 6000, -1000).map(|s| s.start_ms), Some(5000));
+        assert_eq!(
+            find_active_pgs(&subs, 6000, -1000).map(|s| s.start_ms),
+            Some(5000)
+        );
     }
 
     #[test]
@@ -794,8 +802,14 @@ mod tests {
         d2.extend(raw_seg(0x80, &[]));
 
         let subs = parse_pgs_packets(&[
-            PgsPacket { pts_ms: 2000, data: d1 },
-            PgsPacket { pts_ms: 9000, data: d2 },
+            PgsPacket {
+                pts_ms: 2000,
+                data: d1,
+            },
+            PgsPacket {
+                pts_ms: 9000,
+                data: d2,
+            },
         ]);
         assert_eq!(subs.len(), 1);
         assert_eq!(subs[0].start_ms, 2000);

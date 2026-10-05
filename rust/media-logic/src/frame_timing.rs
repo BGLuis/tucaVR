@@ -73,7 +73,10 @@ mod tests {
     #[test]
     fn frame_slightly_ahead_waits_the_exact_remaining_delay() {
         let action = decide_frame_action(1.05, 1.0, false, LATE_SKIP);
-        assert_eq!(action, FrameAction::WaitThenRender(Duration::from_secs_f64(0.05)));
+        assert_eq!(
+            action,
+            FrameAction::WaitThenRender(Duration::from_secs_f64(0.05))
+        );
     }
 
     #[test]
@@ -110,6 +113,9 @@ mod tests {
         // serem despejados prematuramente com RenderNow, evitando que o buffer
         // se esgote a 90 FPS em conteudos 24fps.
         let action = decide_frame_action(2.5, 1.0, false, LATE_SKIP);
-        assert_eq!(action, FrameAction::WaitThenRender(Duration::from_secs_f64(1.0)));
+        assert_eq!(
+            action,
+            FrameAction::WaitThenRender(Duration::from_secs_f64(1.0))
+        );
     }
 }

@@ -35,7 +35,12 @@ impl SftpTarget {
         let key_field = self.private_key.as_deref().unwrap_or("");
         format!(
             "sftp://{}:{}{sep}{}{sep}{}{sep}{}{sep}{}",
-            self.host, self.port, self.path, self.username, self.password, key_field,
+            self.host,
+            self.port,
+            self.path,
+            self.username,
+            self.password,
+            key_field,
             sep = SEP
         )
     }
@@ -59,7 +64,11 @@ impl SftpTarget {
             path,
             username,
             password,
-            private_key: if private_key.is_empty() { None } else { Some(private_key.to_string()) },
+            private_key: if private_key.is_empty() {
+                None
+            } else {
+                Some(private_key.to_string())
+            },
         })
     }
 
@@ -71,7 +80,10 @@ impl SftpTarget {
     pub fn validate(&self) -> Result<(), String> {
         let has_key = self.private_key.as_deref().is_some_and(|k| !k.is_empty());
         if self.password.is_empty() && !has_key {
-            return Err("SftpTarget sem senha e sem chave privada — SFTP nao tem autenticacao anonima".to_string());
+            return Err(
+                "SftpTarget sem senha e sem chave privada — SFTP nao tem autenticacao anonima"
+                    .to_string(),
+            );
         }
         Ok(())
     }

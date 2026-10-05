@@ -54,3 +54,6 @@ ffmpeg-android-maker
 # Relatórios e investigações técnicas locais
 /docs/reports/
 
+# Git worktrees isolados
+.worktrees/
+

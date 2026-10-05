@@ -7,7 +7,7 @@ pub mod uri;
 
 pub use client::{NfsClient, NfsDirEntry};
 pub use source::NfsFileSource;
-pub use uri::{is_nfs_uri, redact, NfsTarget};
+pub use uri::{NfsTarget, is_nfs_uri, redact};
 
 use std::time::Duration;
 
@@ -37,7 +37,10 @@ pub fn list_exports(host: &str, port: u16) -> Result<Vec<String>, String> {
 /// nivel), pilha explicita de paths resolvidos a partir da raiz, sem limite
 /// de profundidade fixo, para no primeiro arquivo de midia ou no deadline
 /// de seguranca.
-pub fn scan_has_media(target: &NfsTarget, dir_path: &str) -> Result<crate::folder_scan::ScanResult, String> {
+pub fn scan_has_media(
+    target: &NfsTarget,
+    dir_path: &str,
+) -> Result<crate::folder_scan::ScanResult, String> {
     let mut client = NfsClient::connect(&target.host, target.port, CONNECT_TIMEOUT)?;
     let root_handle = client.mount(&target.export_path)?;
     let deadline = crate::folder_scan::deadline_from_now();
@@ -64,7 +67,11 @@ pub fn scan_has_media(target: &NfsTarget, dir_path: &str) -> Result<crate::folde
         let mut found = false;
         for e in &entries {
             if e.is_dir {
-                let child = if current.is_empty() { e.name.clone() } else { format!("{}/{}", current, e.name) };
+                let child = if current.is_empty() {
+                    e.name.clone()
+                } else {
+                    format!("{}/{}", current, e.name)
+                };
                 stack.push(child);
             } else if crate::folder_scan::is_media_filename(&e.name) {
                 found = true;

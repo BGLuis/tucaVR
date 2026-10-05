@@ -297,9 +297,12 @@ impl SpatialAudioProcessor {
         // Roteamento conforme layout e modo espacial
         match (self.layout, self.mode) {
             // Estéreo ou Mono com DirectStereo / Pass-through
-            (AudioChannelLayout::Stereo, _) | (AudioChannelLayout::Mono, _) | (_, SpatialAudioMode::DirectStereo) => {
+            (AudioChannelLayout::Stereo, _)
+            | (AudioChannelLayout::Mono, _)
+            | (_, SpatialAudioMode::DirectStereo) => {
                 if ch_count == 2 {
-                    output_stereo[..num_frames * 2].copy_from_slice(&input_interleaved[..num_frames * 2]);
+                    output_stereo[..num_frames * 2]
+                        .copy_from_slice(&input_interleaved[..num_frames * 2]);
                 } else if ch_count == 1 {
                     for frame in 0..num_frames {
                         let sample = input_interleaved[frame];
@@ -308,7 +311,12 @@ impl SpatialAudioProcessor {
                     }
                 } else {
                     // Fallback downmix simples para multicanal no modo DirectStereo
-                    Self::quick_interleaved_downmix(input_interleaved, ch_count, num_frames, output_stereo);
+                    Self::quick_interleaved_downmix(
+                        input_interleaved,
+                        ch_count,
+                        num_frames,
+                        output_stereo,
+                    );
                 }
             }
 
@@ -318,7 +326,12 @@ impl SpatialAudioProcessor {
                 if let Some(virt) = &mut self.surround_virt {
                     virt.process_interleaved(input_interleaved, head_orientation, output_stereo);
                 } else {
-                    Self::quick_interleaved_downmix(input_interleaved, ch_count, num_frames, output_stereo);
+                    Self::quick_interleaved_downmix(
+                        input_interleaved,
+                        ch_count,
+                        num_frames,
+                        output_stereo,
+                    );
                 }
             }
 
@@ -327,13 +340,23 @@ impl SpatialAudioProcessor {
                 if let Some(dec) = &mut self.ambisonics_dec {
                     dec.process_interleaved(input_interleaved, head_orientation, output_stereo);
                 } else {
-                    Self::quick_interleaved_downmix(input_interleaved, ch_count, num_frames, output_stereo);
+                    Self::quick_interleaved_downmix(
+                        input_interleaved,
+                        ch_count,
+                        num_frames,
+                        output_stereo,
+                    );
                 }
             }
 
             // Downmix Simples (ITU-R) ou fallback geral
             _ => {
-                Self::quick_interleaved_downmix(input_interleaved, ch_count, num_frames, output_stereo);
+                Self::quick_interleaved_downmix(
+                    input_interleaved,
+                    ch_count,
+                    num_frames,
+                    output_stereo,
+                );
             }
         }
     }
@@ -417,9 +440,16 @@ mod tests {
         let mut output = Vec::new();
         proc.process(&input, Quat::IDENTITY, &mut output);
 
-        assert_eq!(output.len(), 64 * 2, "SimpleDownmix: saída deve ser 64 frames × 2ch");
+        assert_eq!(
+            output.len(),
+            64 * 2,
+            "SimpleDownmix: saída deve ser 64 frames × 2ch"
+        );
         let left_energy: f32 = output.iter().step_by(2).map(|&x| x * x).sum();
-        assert!(left_energy > 0.0, "SimpleDownmix: canal esquerdo deve ter energia");
+        assert!(
+            left_energy > 0.0,
+            "SimpleDownmix: canal esquerdo deve ter energia"
+        );
     }
 
     /// Garante que ACN e FuMa produzem saídas DIFERENTES para a mesma entrada.
@@ -433,7 +463,7 @@ mod tests {
         // Usar ch1 não-zero garante diferença de rotação.
         let mut input = vec![0.0f32; 4 * block_len];
         for frame in 0..block_len {
-            input[frame * 4] = 0.5;     // W (igual em ambos)
+            input[frame * 4] = 0.5; // W (igual em ambos)
             input[frame * 4 + 1] = 1.0; // ACN: Y direcional  /  FuMa: X direcional
             input[frame * 4 + 3] = 0.5; // ACN: X direcional  /  FuMa: Z direcional
         }
@@ -457,7 +487,11 @@ mod tests {
         proc_fuma.process(&input, head, &mut out_fuma);
 
         // Calcular diferença quadrática total entre as duas saídas
-        let diff: f32 = out_acn.iter().zip(out_fuma.iter()).map(|(&a, &b)| (a - b).powi(2)).sum();
+        let diff: f32 = out_acn
+            .iter()
+            .zip(out_fuma.iter())
+            .map(|(&a, &b)| (a - b).powi(2))
+            .sum();
         assert!(
             diff > 1e-4,
             "ACN e FuMa devem produzir saídas diferentes para o mesmo input: diff={:.6}",
