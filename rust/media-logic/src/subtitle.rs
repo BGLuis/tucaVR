@@ -314,9 +314,9 @@ pub fn detect_and_decode(bytes: &[u8]) -> String {
     }
 
     // 3. Auto-detecção de encoding com chardetng (Mozilla)
-    let mut detector = chardetng::EncodingDetector::new();
+    let mut detector = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Allow);
     detector.feed(bytes, true);
-    let encoding = detector.guess(None, true);
+    let encoding = detector.guess(None, chardetng::Utf8Detection::Allow);
 
     let (cow, _, _) = encoding.decode(bytes);
     cow.into_owned()
