@@ -837,8 +837,8 @@ mod tests {
         }
         assert_eq!(out, data[jump_to as usize..jump_to as usize + out.len()]);
 
-        // Aguarda determinísticamente os 3 passos da rampa
-        let requested = wait_for_requests(&sizes, 3);
+        // Aguarda determinísticamente os 4 passos totais (construção + rampa de 3 passos)
+        let requested = wait_for_requests(&sizes, 4);
         // `ends_with` (nao `==`): a construcao ja dispara um kick(0, seek_block)
         // proprio antes do seek acontecer, que tambem aparece na lista.
         assert!(

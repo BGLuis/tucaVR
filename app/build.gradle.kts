@@ -108,11 +108,11 @@ android {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.12.0")
-    implementation("androidx.appcompat:appcompat:1.6.1")
-    implementation("com.google.android.material:material:1.11.0")
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.google.android.material:material:1.12.0")
     implementation("org.khronos.openxr:openxr_loader_for_android:1.0.34")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     // T6.4: EncryptedSharedPreferences para credenciais de servidores SMB —
     // NUNCA armazenar senha em texto plano (doc, secao 6, aviso "Credenciais").
     implementation("androidx.security:security-crypto:1.1.0")
@@ -127,7 +127,7 @@ dependencies {
     ksp("androidx.room:room-compiler:2.6.1")
 
     // T8.1 / T8.2: ExifInterface para metadados de fotos (orientação EXIF e XMP GPano 360)
-    implementation("androidx.exifinterface:exifinterface:1.3.7")
+    implementation("androidx.exifinterface:exifinterface:1.4.0")
 
     // JVM unit tests (app/src/test) — logica pura do file browser
     // (MediaSorter, DirectoryNavigator, DirectoryLister, cache-key do
@@ -135,7 +135,7 @@ dependencies {
     // porque nenhuma dessas classes toca em APIs Android reais nos
     // caminhos testados. Ver docs/TESTING-PLAN.md.
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
 
     // R-05 (PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): driver SQLite puro-JVM (sem dependencia
     // Android) para exercitar o SQL bruto das migrations do Room (AppDatabase.MIGRATION_*_SQL)

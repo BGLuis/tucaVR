@@ -81,6 +81,7 @@ fn client_config(t: &SmbTarget, auto_reconnect: bool) -> ClientConfig {
         compression: true,
         dfs_enabled: true,
         dfs_target_overrides: Default::default(),
+        connect_options: None,
     }
 }
 

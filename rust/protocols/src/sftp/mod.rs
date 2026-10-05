@@ -78,7 +78,7 @@ use crate::chunking::split_range;
 use crate::prefetch::RangeSource;
 use futures_util::future::join_all;
 use russh::client::{self, Handler};
-use russh::keys::key::PublicKey;
+use russh::keys::{PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh::Disconnect;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::{RawSftpSession, SftpSession};
@@ -155,11 +155,10 @@ const SFTP_CHUNK_RETRY_TIMEOUT: Duration = Duration::from_millis(2000);
 /// outros callbacks usam a implementacao default do trait.
 struct SftpHandler;
 
-#[async_trait::async_trait]
 impl Handler for SftpHandler {
     type Error = russh::Error;
 
-    async fn check_server_key(&mut self, _server_public_key: &PublicKey) -> Result<bool, Self::Error> {
+    async fn check_server_key(&mut self, _server_public_key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
         Ok(true)
     }
 }
@@ -195,8 +194,12 @@ async fn connect_and_auth(t: &SftpTarget, keepalive: bool) -> Result<client::Han
 
         let authenticated = if let Some(pem) = t.private_key.as_deref().filter(|k| !k.is_empty()) {
             let key_pair = russh::keys::decode_secret_key(pem, None).map_err(|e| format!("chave privada invalida: {e}"))?;
+            let key_with_hash = PrivateKeyWithHashAlg::new(
+                Arc::new(key_pair),
+                session.best_supported_rsa_hash().await.map_err(|e| e.to_string())?.flatten(),
+            );
             session
-                .authenticate_publickey(t.username.clone(), Arc::new(key_pair))
+                .authenticate_publickey(t.username.clone(), key_with_hash)
                 .await
                 .map_err(|e| e.to_string())?
         } else {
@@ -206,7 +209,7 @@ async fn connect_and_auth(t: &SftpTarget, keepalive: bool) -> Result<client::Han
                 .map_err(|e| e.to_string())?
         };
 
-        if !authenticated {
+        if !authenticated.success() {
             log::warn!("SFTP: autenticacao rejeitada para usuario {}", t.username);
             return Err("autenticacao SFTP falhou (usuario/senha ou chave privada invalidos)".to_string());
         }
