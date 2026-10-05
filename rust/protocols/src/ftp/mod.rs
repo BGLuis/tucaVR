@@ -48,7 +48,7 @@ use crate::prefetch::RangeSource;
 use std::io::{self, Read};
 use std::net::ToSocketAddrs;
 use std::time::Duration;
-use suppaftp::list::File as FtpListFile;
+use suppaftp::list::{File as FtpListFile, ListParser};
 use suppaftp::types::FileType;
 use suppaftp::{FtpStream, Mode};
 
@@ -133,7 +133,7 @@ pub fn list_directory(t: &FtpTarget, path: &str) -> Result<Vec<FtpDirEntry>, Str
 fn list_directory_on(stream: &mut FtpStream, path: &str) -> Result<Vec<FtpDirEntry>, String> {
     let dir = if path.is_empty() { None } else { Some(path) };
     match stream.mlsd(dir) {
-        Ok(lines) => Ok(lines.into_iter().filter_map(|line| FtpListFile::from_mlsx_line(&line).ok()).map(from_list_file).collect()),
+        Ok(lines) => Ok(lines.into_iter().filter_map(|line| ListParser::parse_mlsd(&line).ok()).map(from_list_file).collect()),
         Err(_) => {
             let lines = stream.list(dir).map_err(|e| e.to_string())?;
             Ok(lines
@@ -238,21 +238,12 @@ impl FtpFileSource {
         Ok(())
     }
 
-    /// Fecha o stream de dados atual (se houver), com o encerramento correto
-    /// pro estado em que ele esta: `finalize_retr_stream` se o RETR ja
-    /// terminou sozinho, `abort` (envia `ABOR`) se foi interrompido no meio —
-    /// ver doc de `data_exhausted` no struct.
+    /// Fecha o stream de dados atual (se houver). Em suppaftp 12+, o
+    /// `TransferStream` implementa `Drop` que encerra o socket de dados e
+    /// lê a resposta de conclusão (`226`) da conexão de controle automaticamente,
+    /// garantindo que o canal de controle continue sincronizado.
     fn close_data_stream(&mut self) {
-        if let Some(stream) = self.data.take() {
-            let result = if self.data_exhausted {
-                self.control.finalize_retr_stream(stream)
-            } else {
-                self.control.abort(stream)
-            };
-            if let Err(e) = result {
-                log::warn!("FtpFileSource: erro ao fechar stream de dados anterior: {e}");
-            }
-        }
+        let _ = self.data.take();
         self.data_exhausted = false;
     }
 
