@@ -25,9 +25,16 @@ TESTS=(
     "test_environment_config"
 )
 
+EXTRA_FLAGS=()
+if [ "${ENABLE_ASAN:-0}" = "1" ]; then
+    echo "-> Habilitando AddressSanitizer e UndefinedBehaviorSanitizer (-fsanitize=address,undefined)..."
+    EXTRA_FLAGS+=("-fsanitize=address,undefined" "-fno-omit-frame-pointer")
+fi
+
 compile_test() {
     local name="$1"
     $CXX -std=c++20 -O2 -Wall -Wextra -Werror \
+        "${EXTRA_FLAGS[@]}" \
         -I native/include \
         "native/tests/${name}.cpp" \
         -o "$BUILD_DIR/${name}"

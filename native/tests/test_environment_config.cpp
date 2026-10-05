@@ -1,4 +1,5 @@
 #include "environment_config.h"
+
 #include <cassert>
 #include <cmath>
 #include <iostream>

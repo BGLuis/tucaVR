@@ -1,10 +1,10 @@
 #pragma once
-#include <string>
-#include <sstream>
-#include <vector>
-#include <cstdlib>
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
+#include <sstream>
+#include <string>
+#include <vector>
 
 /**
  * Configuração de metadados e ancoragem de um ambiente virtual 3D.
@@ -25,24 +25,27 @@ struct EnvironmentConfig {
     float ambientVolume = 0.3f;
     bool particlesEnabled = false;
 
-    static inline std::string Trim(const std::string& str) {
+    static inline std::string Trim(const std::string &str) {
         size_t first = str.find_first_not_of(" \t\r\n");
-        if (first == std::string::npos) return "";
+        if (first == std::string::npos)
+            return "";
         size_t last = str.find_last_not_of(" \t\r\n");
         return str.substr(first, (last - first + 1));
     }
 
-    static inline EnvironmentConfig Parse(const std::string& iniContent) {
+    static inline EnvironmentConfig Parse(const std::string &iniContent) {
         EnvironmentConfig config;
         std::istringstream stream(iniContent);
         std::string line;
 
         while (std::getline(stream, line)) {
             line = Trim(line);
-            if (line.empty() || line[0] == '#' || line[0] == ';') continue;
+            if (line.empty() || line[0] == '#' || line[0] == ';')
+                continue;
 
             size_t eqPos = line.find('=');
-            if (eqPos == std::string::npos) continue;
+            if (eqPos == std::string::npos)
+                continue;
 
             std::string key = Trim(line.substr(0, eqPos));
             std::string val = Trim(line.substr(eqPos + 1));
@@ -54,14 +57,19 @@ struct EnvironmentConfig {
             } else if (key == "screen_pos") {
                 std::istringstream valStream(val);
                 std::string item;
-                if (std::getline(valStream, item, ',')) config.screenPosX = std::strtof(item.c_str(), nullptr);
-                if (std::getline(valStream, item, ',')) config.screenPosY = std::strtof(item.c_str(), nullptr);
-                if (std::getline(valStream, item, ',')) config.screenPosZ = std::strtof(item.c_str(), nullptr);
+                if (std::getline(valStream, item, ','))
+                    config.screenPosX = std::strtof(item.c_str(), nullptr);
+                if (std::getline(valStream, item, ','))
+                    config.screenPosY = std::strtof(item.c_str(), nullptr);
+                if (std::getline(valStream, item, ','))
+                    config.screenPosZ = std::strtof(item.c_str(), nullptr);
             } else if (key == "screen_scale") {
                 std::istringstream valStream(val);
                 std::string item;
-                if (std::getline(valStream, item, ',')) config.screenScaleX = std::strtof(item.c_str(), nullptr);
-                if (std::getline(valStream, item, ',')) config.screenScaleY = std::strtof(item.c_str(), nullptr);
+                if (std::getline(valStream, item, ','))
+                    config.screenScaleX = std::strtof(item.c_str(), nullptr);
+                if (std::getline(valStream, item, ','))
+                    config.screenScaleY = std::strtof(item.c_str(), nullptr);
             } else if (key == "screen_locked") {
                 config.screenLocked = (val == "true" || val == "1" || val == "yes");
             } else if (key == "model_file") {

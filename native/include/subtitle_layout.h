@@ -1,8 +1,8 @@
 #pragma once
 
-#include <cstdint>
-#include <cstddef>
 #include <algorithm>
+#include <cstddef>
+#include <cstdint>
 
 namespace vrplayer {
 
@@ -43,15 +43,8 @@ struct AssSubtitleInfo {
 };
 
 // Calcula a posição e escala do quad de textura PGS sobre a tela virtual
-inline bool ComputePgsQuadBounds(
-    const PgsSubtitleInfo& info,
-    float screenScaleX,
-    float screenScaleY,
-    bool sphereMode,
-    float& outPosX,
-    float& outPosY,
-    float& outScaleX,
-    float& outScaleY) {
+inline bool ComputePgsQuadBounds(const PgsSubtitleInfo &info, float screenScaleX, float screenScaleY, bool sphereMode,
+                                 float &outPosX, float &outPosY, float &outScaleX, float &outScaleY) {
     if (info.width == 0 || info.height == 0 || info.screen_width == 0 || info.screen_height == 0) {
         return false;
     }
@@ -84,13 +77,8 @@ inline bool ComputePgsQuadBounds(
 }
 
 // Calcula os deslocamentos X e Y do texto ASS considerando \pos ou \an (1..9)
-inline void ComputeAssOffsets(
-    const AssSubtitleInfo& info,
-    float screenScaleX,
-    float screenScaleY,
-    bool sphereMode,
-    float& outOffsetX,
-    float& outOffsetY) {
+inline void ComputeAssOffsets(const AssSubtitleInfo &info, float screenScaleX, float screenScaleY, bool sphereMode,
+                              float &outOffsetX, float &outOffsetY) {
     if (info.has_pos != 0) {
         float playResX = (info.play_res_x > 0.0f) ? info.play_res_x : 384.0f;
         float playResY = (info.play_res_y > 0.0f) ? info.play_res_y : 288.0f;
@@ -145,14 +133,11 @@ inline float ComputeAssLineCursorX(uint32_t alignment, float lineWidth, float ma
 }
 
 // Encontra o span correspondente ao deslocamento de bytes no texto
-inline const AssSpanFfi* FindSpanForByteOffset(
-    const AssSpanFfi* spans,
-    uint32_t spanCount,
-    uint32_t byteOffset) {
-    if (!spans || spanCount == 0) return nullptr;
+inline const AssSpanFfi *FindSpanForByteOffset(const AssSpanFfi *spans, uint32_t spanCount, uint32_t byteOffset) {
+    if (!spans || spanCount == 0)
+        return nullptr;
     for (uint32_t i = 0; i < spanCount; ++i) {
-        if (byteOffset >= spans[i].char_offset &&
-            byteOffset < spans[i].char_offset + spans[i].char_length) {
+        if (byteOffset >= spans[i].char_offset && byteOffset < spans[i].char_offset + spans[i].char_length) {
             return &spans[i];
         }
     }

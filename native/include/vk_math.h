@@ -5,30 +5,29 @@
 // plano de migracao Vulkan (docs/VULKAN-MIGRATION-PLAN.md) — nao e uma lib
 // de matematica geral, e usada apenas por vr_player_app_vulkan.cpp.
 
-#include <openxr/openxr.h>
-
 #include <cmath>
+#include <openxr/openxr.h>
 
 struct Mat4 {
     float m[16];
 };
 
-inline XrVector3f Vec3Add(const XrVector3f& a, const XrVector3f& b) {
+inline XrVector3f Vec3Add(const XrVector3f &a, const XrVector3f &b) {
     return {a.x + b.x, a.y + b.y, a.z + b.z};
 }
 
-inline XrVector3f Vec3Sub(const XrVector3f& a, const XrVector3f& b) {
+inline XrVector3f Vec3Sub(const XrVector3f &a, const XrVector3f &b) {
     return {a.x - b.x, a.y - b.y, a.z - b.z};
 }
 
-inline XrVector3f Vec3Scale(const XrVector3f& v, float s) {
+inline XrVector3f Vec3Scale(const XrVector3f &v, float s) {
     return {v.x * s, v.y * s, v.z * s};
 }
 
 // Rotaciona em torno do eixo Y — mesma convencao de sinal de Mat4RotationY
 // abaixo (consistencia interna e o que importa aqui: nao precisa bater bit a
 // bit com OVR::Matrix4f::RotationY do caminho GLES).
-inline XrVector3f Vec3RotateY(const XrVector3f& v, float yaw) {
+inline XrVector3f Vec3RotateY(const XrVector3f &v, float yaw) {
     const float c = cosf(yaw);
     const float s = sinf(yaw);
     return {c * v.x + s * v.z, v.y, -s * v.x + c * v.z};
@@ -40,7 +39,7 @@ inline Mat4 Mat4Identity() {
     return r;
 }
 
-inline Mat4 Mat4Multiply(const Mat4& a, const Mat4& b) {
+inline Mat4 Mat4Multiply(const Mat4 &a, const Mat4 &b) {
     Mat4 r{};
     for (int col = 0; col < 4; col++) {
         for (int row = 0; row < 4; row++) {
@@ -74,9 +73,9 @@ inline Mat4 Mat4RotationX(float angle) {
     Mat4 r = Mat4Identity();
     const float c = cosf(angle);
     const float s = sinf(angle);
-    r.m[5]  = c;
-    r.m[6]  = s;
-    r.m[9]  = -s;
+    r.m[5] = c;
+    r.m[6] = s;
+    r.m[9] = -s;
     r.m[10] = c;
     return r;
 }
@@ -85,16 +84,16 @@ inline Mat4 Mat4RotationY(float angle) {
     Mat4 r = Mat4Identity();
     const float c = cosf(angle);
     const float s = sinf(angle);
-    r.m[0]  = c;
-    r.m[2]  = -s;
-    r.m[8]  = s;
+    r.m[0] = c;
+    r.m[2] = -s;
+    r.m[8] = s;
     r.m[10] = c;
     return r;
 }
 
 // Pose XR (posicao + quaternion) -> matriz de transformacao rigida.
-inline Mat4 Mat4FromXrPose(const XrPosef& pose) {
-    const XrQuaternionf& q = pose.orientation;
+inline Mat4 Mat4FromXrPose(const XrPosef &pose) {
+    const XrQuaternionf &q = pose.orientation;
     const float xx = q.x * q.x, yy = q.y * q.y, zz = q.z * q.z;
     const float xy = q.x * q.y, xz = q.x * q.z, yz = q.y * q.z;
     const float wx = q.w * q.x, wy = q.w * q.y, wz = q.w * q.z;
@@ -121,7 +120,7 @@ inline Mat4 Mat4FromXrPose(const XrPosef& pose) {
 // Inversa de uma transformacao rigida (rotacao ortonormal + translacao):
 // R^-1 = R^T, T^-1 = -R^T * T. Mais barato e mais estavel que uma inversa
 // 4x4 generica, e e tudo que uma pose de camera precisa.
-inline Mat4 Mat4RigidInverse(const Mat4& in) {
+inline Mat4 Mat4RigidInverse(const Mat4 &in) {
     Mat4 r = Mat4Identity();
     r.m[0] = in.m[0];
     r.m[1] = in.m[4];
@@ -145,7 +144,7 @@ inline Mat4 Mat4RigidInverse(const Mat4& in) {
 // implementacao de referencia do OpenXR-SDK (xr_linear.h,
 // XrMatrix4x4f_CreateProjectionFov), especializada para Vulkan (sem os
 // ramos de OpenGL que este projeto nao usa neste arquivo).
-inline Mat4 Mat4ProjectionFromFov(const XrFovf& fov, float nearZ, float farZ) {
+inline Mat4 Mat4ProjectionFromFov(const XrFovf &fov, float nearZ, float farZ) {
     const float tanLeft = tanf(fov.angleLeft);
     const float tanRight = tanf(fov.angleRight);
     const float tanDown = tanf(fov.angleDown);
@@ -172,7 +171,7 @@ inline XrQuaternionf QuatFromYaw(float yaw) {
     return {0.0f, sinf(yaw * 0.5f), 0.0f, cosf(yaw * 0.5f)};
 }
 
-inline XrQuaternionf QuatFromMat4(const Mat4& m) {
+inline XrQuaternionf QuatFromMat4(const Mat4 &m) {
     XrQuaternionf q{};
     float trace = m.m[0] + m.m[5] + m.m[10];
     if (trace > 0.0f) {
@@ -204,4 +203,3 @@ inline XrQuaternionf QuatFromMat4(const Mat4& m) {
     }
     return q;
 }
-

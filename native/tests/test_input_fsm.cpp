@@ -22,7 +22,8 @@ struct InputFsmState {
     int recenterCount = 0;
 };
 
-inline void ProcessButtonInputs(InputFsmState& state, bool currA, bool currX, bool currB, bool currY, bool currMenu, float dt) {
+inline void ProcessButtonInputs(InputFsmState &state, bool currA, bool currX, bool currB, bool currY, bool currMenu,
+                                float dt) {
     constexpr float kRecenterHoldSeconds = 0.75f;
     constexpr float kUiAutoHideSeconds = 5.0f;
 
@@ -64,8 +65,8 @@ inline void ProcessButtonInputs(InputFsmState& state, bool currA, bool currX, bo
     state.prevMenu = currMenu;
 }
 
-inline void ProcessTriggerInputs(InputFsmState& state, bool currTrigger, int dispatchHitPanel,
-                                 bool handTrackingActive, bool isHoveringScreen, bool isSphereMode) {
+inline void ProcessTriggerInputs(InputFsmState &state, bool currTrigger, int dispatchHitPanel, bool handTrackingActive,
+                                 bool isHoveringScreen, bool isSphereMode) {
     bool triggerOutsideUi = currTrigger && !state.prevTrigger && (dispatchHitPanel == 0);
     bool handTrackingGrabPinch = handTrackingActive && isHoveringScreen && !isSphereMode;
     bool triggerPlayPause = triggerOutsideUi && !handTrackingGrabPinch;
