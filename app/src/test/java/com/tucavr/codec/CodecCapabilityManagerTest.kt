@@ -14,9 +14,8 @@ import org.junit.Test
  * Testes unitários para [CodecCapabilityManager] rodando na JVM padrão.
  */
 class CodecCapabilityManagerTest {
-
     private class FakeCodecInfoProvider(
-        private val decoders: List<CodecDecoderInfo>
+        private val decoders: List<CodecDecoderInfo>,
     ) : CodecInfoProvider {
         override fun getDecoders(): List<CodecDecoderInfo> = decoders
     }
@@ -60,22 +59,23 @@ class CodecCapabilityManagerTest {
 
     @Test
     fun `av1 with hardware acceleration is recognized as supported`() {
-        val fakeDecoders = listOf(
-            CodecDecoderInfo(
-                mimeType = CodecCapabilityManager.MIME_AV1,
-                codecName = "c2.qti.av1.decoder",
-                isHardwareAccelerated = true,
-                isSoftwareOnly = false,
-                isVendor = true
-            ),
-            CodecDecoderInfo(
-                mimeType = CodecCapabilityManager.MIME_AVC,
-                codecName = "c2.qti.avc.decoder",
-                isHardwareAccelerated = true,
-                isSoftwareOnly = false,
-                isVendor = true
+        val fakeDecoders =
+            listOf(
+                CodecDecoderInfo(
+                    mimeType = CodecCapabilityManager.MIME_AV1,
+                    codecName = "c2.qti.av1.decoder",
+                    isHardwareAccelerated = true,
+                    isSoftwareOnly = false,
+                    isVendor = true,
+                ),
+                CodecDecoderInfo(
+                    mimeType = CodecCapabilityManager.MIME_AVC,
+                    codecName = "c2.qti.avc.decoder",
+                    isHardwareAccelerated = true,
+                    isSoftwareOnly = false,
+                    isVendor = true,
+                ),
             )
-        )
         CodecCapabilityManager.provider = FakeCodecInfoProvider(fakeDecoders)
 
         assertTrue(CodecCapabilityManager.isHardwareSupported("av1"))
@@ -90,15 +90,16 @@ class CodecCapabilityManagerTest {
 
     @Test
     fun `av1 with software only decoder returns clear hardware unsupported error`() {
-        val fakeDecoders = listOf(
-            CodecDecoderInfo(
-                mimeType = CodecCapabilityManager.MIME_AV1,
-                codecName = "c2.android.av1.decoder",
-                isHardwareAccelerated = false,
-                isSoftwareOnly = true,
-                isVendor = false
+        val fakeDecoders =
+            listOf(
+                CodecDecoderInfo(
+                    mimeType = CodecCapabilityManager.MIME_AV1,
+                    codecName = "c2.android.av1.decoder",
+                    isHardwareAccelerated = false,
+                    isSoftwareOnly = true,
+                    isVendor = false,
+                ),
             )
-        )
         CodecCapabilityManager.provider = FakeCodecInfoProvider(fakeDecoders)
 
         assertFalse(CodecCapabilityManager.isHardwareSupported("av1"))
@@ -128,15 +129,16 @@ class CodecCapabilityManagerTest {
 
     @Test
     fun `vp9 with hardware acceleration is recognized as supported`() {
-        val fakeDecoders = listOf(
-            CodecDecoderInfo(
-                mimeType = CodecCapabilityManager.MIME_VP9,
-                codecName = "OMX.qcom.video.decoder.vp9",
-                isHardwareAccelerated = true,
-                isSoftwareOnly = false,
-                isVendor = true
+        val fakeDecoders =
+            listOf(
+                CodecDecoderInfo(
+                    mimeType = CodecCapabilityManager.MIME_VP9,
+                    codecName = "OMX.qcom.video.decoder.vp9",
+                    isHardwareAccelerated = true,
+                    isSoftwareOnly = false,
+                    isVendor = true,
+                ),
             )
-        )
         CodecCapabilityManager.provider = FakeCodecInfoProvider(fakeDecoders)
 
         assertTrue(CodecCapabilityManager.isHardwareSupported("vp9"))
@@ -148,15 +150,16 @@ class CodecCapabilityManagerTest {
 
     @Test
     fun `vp9 without hardware acceleration returns hardware unsupported error`() {
-        val fakeDecoders = listOf(
-            CodecDecoderInfo(
-                mimeType = CodecCapabilityManager.MIME_VP9,
-                codecName = "c2.android.vp9.decoder",
-                isHardwareAccelerated = false,
-                isSoftwareOnly = true,
-                isVendor = false
+        val fakeDecoders =
+            listOf(
+                CodecDecoderInfo(
+                    mimeType = CodecCapabilityManager.MIME_VP9,
+                    codecName = "c2.android.vp9.decoder",
+                    isHardwareAccelerated = false,
+                    isSoftwareOnly = true,
+                    isVendor = false,
+                ),
             )
-        )
         CodecCapabilityManager.provider = FakeCodecInfoProvider(fakeDecoders)
 
         val validation = CodecCapabilityManager.validatePlaybackSupport("vp9")
@@ -166,22 +169,23 @@ class CodecCapabilityManagerTest {
 
     @Test
     fun `prefers hardware decoder when both hardware and software decoders are present`() {
-        val fakeDecoders = listOf(
-            CodecDecoderInfo(
-                mimeType = CodecCapabilityManager.MIME_AV1,
-                codecName = "c2.android.av1.decoder",
-                isHardwareAccelerated = false,
-                isSoftwareOnly = true,
-                isVendor = false
-            ),
-            CodecDecoderInfo(
-                mimeType = CodecCapabilityManager.MIME_AV1,
-                codecName = "c2.qti.av1.decoder",
-                isHardwareAccelerated = true,
-                isSoftwareOnly = false,
-                isVendor = true
+        val fakeDecoders =
+            listOf(
+                CodecDecoderInfo(
+                    mimeType = CodecCapabilityManager.MIME_AV1,
+                    codecName = "c2.android.av1.decoder",
+                    isHardwareAccelerated = false,
+                    isSoftwareOnly = true,
+                    isVendor = false,
+                ),
+                CodecDecoderInfo(
+                    mimeType = CodecCapabilityManager.MIME_AV1,
+                    codecName = "c2.qti.av1.decoder",
+                    isHardwareAccelerated = true,
+                    isSoftwareOnly = false,
+                    isVendor = true,
+                ),
             )
-        )
         CodecCapabilityManager.provider = FakeCodecInfoProvider(fakeDecoders)
 
         val decoder = CodecCapabilityManager.findDecoder("av1")

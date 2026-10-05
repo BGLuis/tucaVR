@@ -14,7 +14,10 @@ class AmbientAudioManager(private val context: Context) {
     private var baseVolume: Float = 0.3f
     private var isDucked: Boolean = false
 
-    fun playAmbient(environmentId: String, volume: Float = 0.3f) {
+    fun playAmbient(
+        environmentId: String,
+        volume: Float = 0.3f,
+    ) {
         if (currentEnvId == environmentId && currentPlayer != null) {
             baseVolume = volume
             updateVolume()
@@ -28,14 +31,15 @@ class AmbientAudioManager(private val context: Context) {
         val assetPath = "environments/$environmentId/ambient.ogg"
         try {
             val assetFd = context.assets.openFd(assetPath)
-            currentPlayer = MediaPlayer().apply {
-                setDataSource(assetFd.fileDescriptor, assetFd.startOffset, assetFd.length)
-                isLooping = true
-                val vol = if (isDucked) baseVolume * 0.15f else baseVolume
-                setVolume(vol, vol)
-                prepare()
-                start()
-            }
+            currentPlayer =
+                MediaPlayer().apply {
+                    setDataSource(assetFd.fileDescriptor, assetFd.startOffset, assetFd.length)
+                    isLooping = true
+                    val vol = if (isDucked) baseVolume * 0.15f else baseVolume
+                    setVolume(vol, vol)
+                    prepare()
+                    start()
+                }
             assetFd.close()
             Log.i(TAG, "Ambiência iniciada para: $environmentId (volume: $baseVolume)")
         } catch (e: Exception) {

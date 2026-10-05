@@ -5,7 +5,6 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class NetworkFolderProberParseWireTest {
-
     @Test
     fun parsesHasMediaTrueAndCompletedFullyTrue() {
         assertEquals(true to true, NetworkFolderProber.parseWire("1\t1"))

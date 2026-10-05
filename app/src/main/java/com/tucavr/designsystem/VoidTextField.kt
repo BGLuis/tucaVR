@@ -29,7 +29,8 @@ enum class VoidFieldKind {
     NUMBER,
     PASSWORD,
     URI,
-    MULTILINE;
+    MULTILINE,
+    ;
 
     /**
      * Mapeia o tipo de campo para o valor correspondente do `InputType` do Android.
@@ -58,7 +59,7 @@ enum class VoidFieldAction {
     PASTE,
     CLEAR,
     REVEAL,
-    CONTEXT_MENU
+    CONTEXT_MENU,
 }
 
 /**
@@ -80,9 +81,8 @@ class VoidTextField(
     private val actions: Set<VoidFieldAction> = setOf(VoidFieldAction.PASTE, VoidFieldAction.CONTEXT_MENU),
     private val validator: ((String) -> String?)? = null,
     var onImeNext: (() -> Unit)? = null,
-    var onImeDone: (() -> Unit)? = null
+    var onImeDone: (() -> Unit)? = null,
 ) : LinearLayout(context), KeyboardBinding {
-
     val editText: EditText
     private val inputContainer: LinearLayout
     private val errorView: TextView
@@ -101,155 +101,179 @@ class VoidTextField(
 
         // 1. Rótulo superior (se fornecido)
         if (label != null) {
-            val labelView = VoidText.mono(context, label, sizeSp = 13f, secondary = true).apply {
-                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
-            }
+            val labelView =
+                VoidText.mono(context, label, sizeSp = 13f, secondary = true).apply {
+                    setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+                }
             addView(labelView)
         }
 
         // 2. Linha do campo de texto com ações embutidas
-        inputContainer = LinearLayout(context).apply {
-            orientation = HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            minimumHeight = VoidTheme.dpToPx(context, 76f)
-            layoutParams = LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
-
-        editText = EditText(context).apply {
-            this.hint = hint
-            setHintTextColor(VoidTheme.colorTextSecondary)
-            setTextColor(VoidTheme.colorText)
-            textSize = 18f
-            typeface = if (kind == VoidFieldKind.NUMBER || kind == VoidFieldKind.PASSWORD) {
-                VoidTheme.typefaceMono
-            } else {
-                VoidTheme.typefaceBody
-            }
-            background = null
-
-            val padH = VoidTheme.dpToPx(context, 16f)
-            val padV = VoidTheme.dpToPx(context, 16f)
-            setPadding(padH, padV, padH, padV)
-
-            layoutParams = LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-
-            // Configuração do InputType e comportamento de linha
-            inputType = kind.toAndroidInputType(isPasswordRevealed)
-            when (kind) {
-                VoidFieldKind.PASSWORD -> {
-                    transformationMethod = PasswordTransformationMethod.getInstance()
-                    setSingleLine(true)
-                }
-                VoidFieldKind.MULTILINE -> {
-                    setSingleLine(false)
-                    minLines = 3
-                }
-                else -> {
-                    setSingleLine(true)
-                }
+        inputContainer =
+            LinearLayout(context).apply {
+                orientation = HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                minimumHeight = VoidTheme.dpToPx(context, 76f)
+                layoutParams = LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
             }
 
-            setOnFocusChangeListener { _, hasFocus ->
-                updateContainerBackground(hasFocus)
-                if (hasFocus) {
-                    host.showNativeKeyboard(this@VoidTextField)
-                    val rect = Rect(0, 0, width, height)
-                    requestRectangleOnScreen(rect, true)
-                } else {
-                    host.hideNativeKeyboard()
-                    validate()
-                }
-            }
-
-            addTextChangedListener(object : TextWatcher {
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                override fun afterTextChanged(s: Editable?) {
-                    val text = s?.toString() ?: ""
-                    btnClear?.visibility = if (text.isNotEmpty() && actions.contains(VoidFieldAction.CLEAR)) {
-                        View.VISIBLE
+        editText =
+            EditText(context).apply {
+                this.hint = hint
+                setHintTextColor(VoidTheme.colorTextSecondary)
+                setTextColor(VoidTheme.colorText)
+                textSize = 18f
+                typeface =
+                    if (kind == VoidFieldKind.NUMBER || kind == VoidFieldKind.PASSWORD) {
+                        VoidTheme.typefaceMono
                     } else {
-                        View.GONE
+                        VoidTheme.typefaceBody
                     }
-                    if (currentError != null) {
-                        clearError()
+                background = null
+
+                val padH = VoidTheme.dpToPx(context, 16f)
+                val padV = VoidTheme.dpToPx(context, 16f)
+                setPadding(padH, padV, padH, padV)
+
+                layoutParams = LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+
+                // Configuração do InputType e comportamento de linha
+                inputType = kind.toAndroidInputType(isPasswordRevealed)
+                when (kind) {
+                    VoidFieldKind.PASSWORD -> {
+                        transformationMethod = PasswordTransformationMethod.getInstance()
+                        setSingleLine(true)
                     }
-                    onTextChangedCallback?.invoke(text)
+                    VoidFieldKind.MULTILINE -> {
+                        setSingleLine(false)
+                        minLines = 3
+                    }
+                    else -> {
+                        setSingleLine(true)
+                    }
                 }
-            })
-        }
+
+                setOnFocusChangeListener { _, hasFocus ->
+                    updateContainerBackground(hasFocus)
+                    if (hasFocus) {
+                        host.showNativeKeyboard(this@VoidTextField)
+                        val rect = Rect(0, 0, width, height)
+                        requestRectangleOnScreen(rect, true)
+                    } else {
+                        host.hideNativeKeyboard()
+                        validate()
+                    }
+                }
+
+                addTextChangedListener(
+                    object : TextWatcher {
+                        override fun beforeTextChanged(
+                            s: CharSequence?,
+                            start: Int,
+                            count: Int,
+                            after: Int,
+                        ) {}
+
+                        override fun onTextChanged(
+                            s: CharSequence?,
+                            start: Int,
+                            before: Int,
+                            count: Int,
+                        ) {}
+
+                        override fun afterTextChanged(s: Editable?) {
+                            val text = s?.toString() ?: ""
+                            btnClear?.visibility =
+                                if (text.isNotEmpty() && actions.contains(VoidFieldAction.CLEAR)) {
+                                    View.VISIBLE
+                                } else {
+                                    View.GONE
+                                }
+                            if (currentError != null) {
+                                clearError()
+                            }
+                            onTextChangedCallback?.invoke(text)
+                        }
+                    },
+                )
+            }
         inputContainer.addView(editText)
 
         // Botões de ação adicionais
         val btnSize = VoidTheme.dpToPx(context, 54f)
-        val btnMargin = LayoutParams(btnSize, btnSize).apply {
-            marginEnd = VoidTheme.dpToPx(context, 6f)
-        }
+        val btnMargin =
+            LayoutParams(btnSize, btnSize).apply {
+                marginEnd = VoidTheme.dpToPx(context, 6f)
+            }
 
         // Ação: Revelar/Ocultar Senha
         if (actions.contains(VoidFieldAction.REVEAL) && kind == VoidFieldKind.PASSWORD) {
-            btnReveal = VoidIconButton(
-                context,
-                R.drawable.icon_eye_off,
-                VoidButtonStyle.SECONDARY,
-                isCircular = true
-            ).apply {
-                layoutParams = btnMargin
-                setOnClickListener {
-                    togglePasswordReveal()
+            btnReveal =
+                VoidIconButton(
+                    context,
+                    R.drawable.icon_eye_off,
+                    VoidButtonStyle.SECONDARY,
+                    isCircular = true,
+                ).apply {
+                    layoutParams = btnMargin
+                    setOnClickListener {
+                        togglePasswordReveal()
+                    }
                 }
-            }
             inputContainer.addView(btnReveal)
         }
 
         // Ação: Limpar texto
         if (actions.contains(VoidFieldAction.CLEAR)) {
-            btnClear = VoidIconButton(
-                context,
-                R.drawable.icon_x,
-                VoidButtonStyle.SECONDARY,
-                isCircular = true
-            ).apply {
-                layoutParams = btnMargin
-                visibility = if (getText().isNotEmpty()) View.VISIBLE else View.GONE
-                setOnClickListener {
-                    clear()
-                    editText.requestFocus()
+            btnClear =
+                VoidIconButton(
+                    context,
+                    R.drawable.icon_x,
+                    VoidButtonStyle.SECONDARY,
+                    isCircular = true,
+                ).apply {
+                    layoutParams = btnMargin
+                    visibility = if (getText().isNotEmpty()) View.VISIBLE else View.GONE
+                    setOnClickListener {
+                        clear()
+                        editText.requestFocus()
+                    }
                 }
-            }
             inputContainer.addView(btnClear)
         }
 
         // Ação: Colar
         if (actions.contains(VoidFieldAction.PASTE)) {
-            val btnPaste = VoidIconButton(
-                context,
-                R.drawable.ic_content_paste,
-                VoidButtonStyle.SECONDARY,
-                isCircular = true
-            ).apply {
-                layoutParams = btnMargin
-                setOnClickListener {
-                    pasteFromClipboard()
-                    editText.requestFocus()
+            val btnPaste =
+                VoidIconButton(
+                    context,
+                    R.drawable.ic_content_paste,
+                    VoidButtonStyle.SECONDARY,
+                    isCircular = true,
+                ).apply {
+                    layoutParams = btnMargin
+                    setOnClickListener {
+                        pasteFromClipboard()
+                        editText.requestFocus()
+                    }
                 }
-            }
             inputContainer.addView(btnPaste)
         }
 
         // Ação: Menu de Contexto
         if (actions.contains(VoidFieldAction.CONTEXT_MENU)) {
-            val btnMenu = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-                text = "⋮"
-                textSize = 18f
-                val pad = VoidTheme.dpToPx(context, 4f)
-                setPadding(pad, pad, pad, pad)
-                minHeight = btnSize
-                layoutParams = btnMargin
-                setOnClickListener {
-                    openContextMenu()
+            val btnMenu =
+                VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                    text = "⋮"
+                    textSize = 18f
+                    val pad = VoidTheme.dpToPx(context, 4f)
+                    setPadding(pad, pad, pad, pad)
+                    minHeight = btnSize
+                    layoutParams = btnMargin
+                    setOnClickListener {
+                        openContextMenu()
+                    }
                 }
-            }
             inputContainer.addView(btnMenu)
         }
 
@@ -257,16 +281,18 @@ class VoidTextField(
         addView(inputContainer)
 
         // 3. Linha de erro com altura reservada fixa (impede saltos de layout no painel VR)
-        errorView = TextView(context).apply {
-            layoutParams = LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, VoidTheme.dpToPx(context, 20f)).apply {
-                topMargin = VoidTheme.dpToPx(context, 2f)
+        errorView =
+            TextView(context).apply {
+                layoutParams =
+                    LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, VoidTheme.dpToPx(context, 20f)).apply {
+                        topMargin = VoidTheme.dpToPx(context, 2f)
+                    }
+                textSize = 12f
+                typeface = VoidTheme.typefaceBody
+                setTextColor(Color.parseColor("#FF5555"))
+                text = ""
+                visibility = View.VISIBLE
             }
-            textSize = 12f
-            typeface = VoidTheme.typefaceBody
-            setTextColor(Color.parseColor("#FF5555"))
-            text = ""
-            visibility = View.VISIBLE
-        }
         addView(errorView)
     }
 
@@ -276,15 +302,19 @@ class VoidTextField(
         get() = kind.toAndroidInputType(isPasswordRevealed)
 
     override val imeOptions: Int
-        get() = when {
-            onImeNext != null -> EditorInfo.IME_ACTION_NEXT
-            onImeDone != null -> EditorInfo.IME_ACTION_DONE
-            else -> EditorInfo.IME_ACTION_UNSPECIFIED
-        }
+        get() =
+            when {
+                onImeNext != null -> EditorInfo.IME_ACTION_NEXT
+                onImeDone != null -> EditorInfo.IME_ACTION_DONE
+                else -> EditorInfo.IME_ACTION_UNSPECIFIED
+            }
 
     override fun currentText(): CharSequence = editText.text ?: ""
 
-    override fun onKeyboardText(text: CharSequence, selection: Int) {
+    override fun onKeyboardText(
+        text: CharSequence,
+        selection: Int,
+    ) {
         if (editText.text.toString() != text.toString()) {
             editText.setText(text)
             val sel = selection.coerceIn(0, editText.text.length)
@@ -324,11 +354,12 @@ class VoidTextField(
         if (kind != VoidFieldKind.PASSWORD) return
         isPasswordRevealed = !isPasswordRevealed
         editText.inputType = kind.toAndroidInputType(isPasswordRevealed)
-        editText.transformationMethod = if (isPasswordRevealed) {
-            SingleLineTransformationMethod.getInstance()
-        } else {
-            PasswordTransformationMethod.getInstance()
-        }
+        editText.transformationMethod =
+            if (isPasswordRevealed) {
+                SingleLineTransformationMethod.getInstance()
+            } else {
+                PasswordTransformationMethod.getInstance()
+            }
         editText.setSelection(editText.text.length)
         host.syncKeyboard(this)
     }
@@ -361,11 +392,12 @@ class VoidTextField(
 
     fun copyToClipboard() {
         if (kind == VoidFieldKind.PASSWORD) return // Regra de segurança: nunca copia senhas
-        val textToCopy = if (editText.hasSelection()) {
-            editText.text.subSequence(editText.selectionStart, editText.selectionEnd).toString()
-        } else {
-            editText.text.toString()
-        }
+        val textToCopy =
+            if (editText.hasSelection()) {
+                editText.text.subSequence(editText.selectionStart, editText.selectionEnd).toString()
+            } else {
+                editText.text.toString()
+            }
         if (textToCopy.isEmpty()) return
         val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
         val clip = ClipData.newPlainText("text", textToCopy)
@@ -388,16 +420,18 @@ class VoidTextField(
     }
 
     private fun updateContainerBackground(hasFocus: Boolean) {
-        val strokeColor = when {
-            currentError != null -> Color.parseColor("#FF5555")
-            hasFocus -> VoidTheme.colorAccent
-            else -> VoidTheme.colorBorder
-        }
-        val bg = GradientDrawable().apply {
-            setColor(VoidTheme.colorSurface)
-            cornerRadius = VoidTheme.dp(context, VoidTheme.cornerRadiusDp)
-            setStroke(VoidTheme.dpToPx(context, VoidTheme.borderWidthDp), strokeColor)
-        }
+        val strokeColor =
+            when {
+                currentError != null -> Color.parseColor("#FF5555")
+                hasFocus -> VoidTheme.colorAccent
+                else -> VoidTheme.colorBorder
+            }
+        val bg =
+            GradientDrawable().apply {
+                setColor(VoidTheme.colorSurface)
+                cornerRadius = VoidTheme.dp(context, VoidTheme.cornerRadiusDp)
+                setStroke(VoidTheme.dpToPx(context, VoidTheme.borderWidthDp), strokeColor)
+            }
         inputContainer.background = bg
     }
 }

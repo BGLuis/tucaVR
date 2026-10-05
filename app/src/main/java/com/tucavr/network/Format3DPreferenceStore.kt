@@ -16,7 +16,10 @@ class Format3DPreferenceStore(context: Context) {
         return if (ScreenFormatCatalog.isValid(v)) v else null
     }
 
-    fun set(historyKey: String, mode: Int) {
+    fun set(
+        historyKey: String,
+        mode: Int,
+    ) {
         if (ScreenFormatCatalog.isValid(mode)) {
             prefs.edit().putInt(historyKey, mode).apply()
         }

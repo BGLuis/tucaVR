@@ -20,17 +20,16 @@ import javax.xml.parsers.DocumentBuilderFactory
  * - Formas de plural completas ("one" e "other") para todos os <plurals>.
  */
 class I18nParityTest {
-
     data class StringEntry(
         val name: String,
         val isPlural: Boolean,
-        val texts: Map<String, String> // "default" -> texto para <string>; quantity -> texto para <plurals>
+        val texts: Map<String, String>, // "default" -> texto para <string>; quantity -> texto para <plurals>
     )
 
     data class LocaleResources(
         val locale: String,
         val file: File,
-        val entries: List<StringEntry>
+        val entries: List<StringEntry>,
     ) {
         val keys: List<String> = entries.map { it.name }
         val keySet: Set<String> = keys.toSet()
@@ -63,7 +62,10 @@ class I18nParityTest {
             error("Diretório de resources não encontrado a partir de: ${userDir.absolutePath}")
         }
 
-        private fun parseStringsXml(locale: String, file: File): LocaleResources {
+        private fun parseStringsXml(
+            locale: String,
+            file: File,
+        ): LocaleResources {
             assertTrue("Arquivo de strings não encontrado: ${file.absolutePath}", file.isFile)
 
             val docBuilder = DocumentBuilderFactory.newInstance().newDocumentBuilder()
@@ -112,14 +114,14 @@ class I18nParityTest {
         val extraInPt = ptBrKeys - defaultKeys
         assertTrue(
             "Discrepância de chaves em values-pt-rBR/strings.xml: faltantes=$missingInPt, extras=$extraInPt",
-            missingInPt.isEmpty() && extraInPt.isEmpty()
+            missingInPt.isEmpty() && extraInPt.isEmpty(),
         )
 
         val missingInEs = defaultKeys - esKeys
         val extraInEs = esKeys - defaultKeys
         assertTrue(
             "Discrepância de chaves em values-es/strings.xml: faltantes=$missingInEs, extras=$extraInEs",
-            missingInEs.isEmpty() && extraInEs.isEmpty()
+            missingInEs.isEmpty() && extraInEs.isEmpty(),
         )
 
         assertEquals("Total de chaves em pt-BR deve ser idêntico ao default", defaultKeys.size, ptBrKeys.size)
@@ -131,12 +133,12 @@ class I18nParityTest {
         assertEquals(
             "A ordem das chaves em values-pt-rBR/strings.xml deve espelhar exatamente values/strings.xml",
             defaultRes.keys,
-            ptBrRes.keys
+            ptBrRes.keys,
         )
         assertEquals(
             "A ordem das chaves em values-es/strings.xml deve espelhar exatamente values/strings.xml",
             defaultRes.keys,
-            esRes.keys
+            esRes.keys,
         )
     }
 
@@ -152,7 +154,7 @@ class I18nParityTest {
                     assertTrue(
                         "Placeholder não-posicional encontrado em ${loc.file.name} na chave '${entry.name}' ($subKey): $nonPositional. " +
                             "Use placeholders posicionais (%1\$s, %2\$d, etc.) para suportar reordenação gramatical.",
-                        nonPositional.isEmpty()
+                        nonPositional.isEmpty(),
                     )
                 }
             }
@@ -165,13 +167,14 @@ class I18nParityTest {
 
         for (trans in translations) {
             for (defaultEntry in defaultRes.entries) {
-                val transEntry = trans.entryMap[defaultEntry.name]
-                    ?: error("Chave '${defaultEntry.name}' não encontrada em ${trans.locale}")
+                val transEntry =
+                    trans.entryMap[defaultEntry.name]
+                        ?: error("Chave '${defaultEntry.name}' não encontrada em ${trans.locale}")
 
                 assertEquals(
                     "Tipo de recurso (string vs plurals) diverge para '${defaultEntry.name}' em ${trans.locale}",
                     defaultEntry.isPlural,
-                    transEntry.isPlural
+                    transEntry.isPlural,
                 )
 
                 if (!defaultEntry.isPlural) {
@@ -184,12 +187,13 @@ class I18nParityTest {
                     assertEquals(
                         "Placeholders posicionais divergem para chave '${defaultEntry.name}' em ${trans.locale}",
                         defaultPlaceholders,
-                        transPlaceholders
+                        transPlaceholders,
                     )
                 } else {
                     for ((quantity, defaultText) in defaultEntry.texts) {
-                        val transText = transEntry.texts[quantity]?.replace("%%", "")
-                            ?: error("Forma de plural '$quantity' ausente para '${defaultEntry.name}' em ${trans.locale}")
+                        val transText =
+                            transEntry.texts[quantity]?.replace("%%", "")
+                                ?: error("Forma de plural '$quantity' ausente para '${defaultEntry.name}' em ${trans.locale}")
                         val cleanDefault = defaultText.replace("%%", "")
 
                         val defaultPlaceholders = POSITIONAL_PLACEHOLDER_REGEX.findAll(cleanDefault).map { it.value }.sorted().toList()
@@ -198,7 +202,7 @@ class I18nParityTest {
                         assertEquals(
                             "Placeholders posicionais divergem no plural '${defaultEntry.name}' [$quantity] em ${trans.locale}",
                             defaultPlaceholders,
-                            transPlaceholders
+                            transPlaceholders,
                         )
                     }
                 }
@@ -215,11 +219,11 @@ class I18nParityTest {
             for (p in plurals) {
                 assertTrue(
                     "Plural '${p.name}' em ${loc.locale} deve conter a forma 'one'",
-                    p.texts.containsKey("one")
+                    p.texts.containsKey("one"),
                 )
                 assertTrue(
                     "Plural '${p.name}' em ${loc.locale} deve conter a forma 'other'",
-                    p.texts.containsKey("other")
+                    p.texts.containsKey("other"),
                 )
             }
         }

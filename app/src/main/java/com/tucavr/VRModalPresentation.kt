@@ -35,9 +35,8 @@ import kotlinx.coroutines.launch
 class VRModalPresentation(
     private val activity: VRActivity,
     display: Display,
-    context: Context = activity
+    context: Context = activity,
 ) : Presentation(context, display) {
-
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private lateinit var rootContainer: FrameLayout
     private var currentModalView: View? = null
@@ -47,13 +46,15 @@ class VRModalPresentation(
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        rootContainer = FrameLayout(context).apply {
-            layoutParams = ViewGroup.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT
-            )
-            setBackgroundColor(Color.TRANSPARENT)
-        }
+        rootContainer =
+            FrameLayout(context).apply {
+                layoutParams =
+                    ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                setBackgroundColor(Color.TRANSPARENT)
+            }
 
         setContentView(rootContainer)
         window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
@@ -71,8 +72,8 @@ class VRModalPresentation(
             FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT,
-                Gravity.CENTER
-            )
+                Gravity.CENTER,
+            ),
         )
         currentModalView = view
         rootContainer.visibility = View.VISIBLE
@@ -97,10 +98,11 @@ class VRModalPresentation(
      * Prepara e exibe o modal de estatísticas técnicas ([DebugStatsModal]).
      */
     fun showDebugStatsModal() {
-        val modal = DebugStatsModal(
-            context = context,
-            onDismiss = { dismissModal() }
-        )
+        val modal =
+            DebugStatsModal(
+                context = context,
+                onDismiss = { dismissModal() },
+            )
         currentDebugStatsModal = modal
         showModal(modal)
 
@@ -111,7 +113,7 @@ class VRModalPresentation(
                 source = activity.currentPlaybackSource,
                 isCharging = activity.isBatteryCharging(),
                 batteryPercent = activity.getBatteryPercent(),
-                isDebuggable = activity.isDebuggable
+                isDebuggable = activity.isDebuggable,
             )
         }
     }
@@ -130,7 +132,7 @@ class VRModalPresentation(
             source = activity.currentPlaybackSource,
             isCharging = isCharging,
             batteryPercent = batteryPct,
-            isDebuggable = activity.isDebuggable
+            isDebuggable = activity.isDebuggable,
         )
     }
 
@@ -142,36 +144,38 @@ class VRModalPresentation(
         val currentMode = activity.nativeGet3DMode()
 
         scope.launch {
-            val meta = currentSource?.let { src ->
-                MediaMetadataReader.read(activity, src)
-            }
+            val meta =
+                currentSource?.let { src ->
+                    MediaMetadataReader.read(activity, src)
+                }
             val detectedMode = meta?.format3dIndex
             val confidence = meta?.detectionConfidence ?: 3
 
-            val modal = ScreenFormatModal(
-                context = context,
-                currentMode = currentMode,
-                detectedMode = detectedMode,
-                detectionConfidence = confidence,
-                onModeSelected = { mode ->
-                    activity.nativeSetScreenMode(mode)
-                    currentSource?.let { src ->
-                        activity.format3dStore.set(src.historyKey(), mode)
-                    }
-                },
-                onUseAutoDetection = {
-                    activity.nativeSetScreenModeOverride(-1)
-                    currentSource?.let { src ->
-                        activity.format3dStore.clear(src.historyKey())
-                    }
-                    if (detectedMode != null && ScreenFormatCatalog.isValid(detectedMode)) {
-                        activity.nativeSetScreenMode(detectedMode)
-                    }
-                },
-                onDismiss = {
-                    dismissModal()
-                }
-            )
+            val modal =
+                ScreenFormatModal(
+                    context = context,
+                    currentMode = currentMode,
+                    detectedMode = detectedMode,
+                    detectionConfidence = confidence,
+                    onModeSelected = { mode ->
+                        activity.nativeSetScreenMode(mode)
+                        currentSource?.let { src ->
+                            activity.format3dStore.set(src.historyKey(), mode)
+                        }
+                    },
+                    onUseAutoDetection = {
+                        activity.nativeSetScreenModeOverride(-1)
+                        currentSource?.let { src ->
+                            activity.format3dStore.clear(src.historyKey())
+                        }
+                        if (detectedMode != null && ScreenFormatCatalog.isValid(detectedMode)) {
+                            activity.nativeSetScreenMode(detectedMode)
+                        }
+                    },
+                    onDismiss = {
+                        dismissModal()
+                    },
+                )
             showModal(modal)
         }
     }
@@ -184,19 +188,20 @@ class VRModalPresentation(
         val currentTrack = activity.nativeGetSubtitleTrack()
         val currentOffsetMs = activity.nativeGetSubtitleOffsetMs()
 
-        val modal = SubtitleSelectionModal(
-            context = context,
-            trackCount = trackCount,
-            currentTrack = currentTrack,
-            currentOffsetMs = currentOffsetMs,
-            onTrackSelected = { trackIndex ->
-                activity.nativeSetSubtitleTrack(trackIndex)
-            },
-            onOffsetChanged = { offsetMs ->
-                activity.nativeSetSubtitleOffsetMs(offsetMs)
-            },
-            onDismiss = { dismissModal() }
-        )
+        val modal =
+            SubtitleSelectionModal(
+                context = context,
+                trackCount = trackCount,
+                currentTrack = currentTrack,
+                currentOffsetMs = currentOffsetMs,
+                onTrackSelected = { trackIndex ->
+                    activity.nativeSetSubtitleTrack(trackIndex)
+                },
+                onOffsetChanged = { offsetMs ->
+                    activity.nativeSetSubtitleOffsetMs(offsetMs)
+                },
+                onDismiss = { dismissModal() },
+            )
         showModal(modal)
     }
 
@@ -206,19 +211,21 @@ class VRModalPresentation(
     fun showAudioTracksModal() {
         val currentSource = activity.currentPlaybackSource
         scope.launch {
-            val meta = activity.currentMediaMetadata ?: currentSource?.let { src ->
-                MediaMetadataReader.read(activity, src)
-            }
+            val meta =
+                activity.currentMediaMetadata ?: currentSource?.let { src ->
+                    MediaMetadataReader.read(activity, src)
+                }
             val tracks = meta?.tracks ?: emptyList()
-            val modal = AudioTrackModal(
-                context = context,
-                tracks = tracks,
-                activeOrdinal = activity.currentAudioTrackOrdinal,
-                onTrackSelected = { ordinal ->
-                    activity.switchAudioTrack(ordinal)
-                },
-                onDismiss = { dismissModal() }
-            )
+            val modal =
+                AudioTrackModal(
+                    context = context,
+                    tracks = tracks,
+                    activeOrdinal = activity.currentAudioTrackOrdinal,
+                    onTrackSelected = { ordinal ->
+                        activity.switchAudioTrack(ordinal)
+                    },
+                    onDismiss = { dismissModal() },
+                )
             showModal(modal)
         }
     }
@@ -229,21 +236,22 @@ class VRModalPresentation(
     fun showResumePromptModal(
         entry: PlaybackHistory,
         onResume: () -> Unit,
-        onRestart: () -> Unit
+        onRestart: () -> Unit,
     ) {
-        val modal = ResumePromptModal(
-            context = context,
-            entry = entry,
-            onResume = {
-                dismissModal()
-                onResume()
-            },
-            onRestart = {
-                dismissModal()
-                onRestart()
-            },
-            onDismiss = { dismissModal() }
-        )
+        val modal =
+            ResumePromptModal(
+                context = context,
+                entry = entry,
+                onResume = {
+                    dismissModal()
+                    onResume()
+                },
+                onRestart = {
+                    dismissModal()
+                    onRestart()
+                },
+                onDismiss = { dismissModal() },
+            )
         showModal(modal)
     }
 
@@ -265,112 +273,117 @@ class VRModalPresentation(
         val packedAlphaCutoff = FeatureFlags.getPackedAlphaCutoff(context)
         val packedAlphaChoke = FeatureFlags.getPackedAlphaChoke(context)
 
-        val modal = PassthroughSettingsModal(
-            context = context,
-            isPassthroughEnabled = isEnabled,
-            currentOpacity = opacity,
-            isEdgeRenderingEnabled = isEdgeEnabled,
-            currentMaskMode = currentMaskMode,
-            isDetectedPackedAlpha = isDetectedAlpha,
-            isChromaKeyEnabled = isChromaEnabled,
-            currentChromaColor = chromaColor,
-            currentChromaSimilarity = chromaSimilarity,
-            currentChromaSmoothness = chromaSmoothness,
-            currentPackedAlphaOpacityMultiplier = packedAlphaOpacity,
-            currentPackedAlphaCutoff = packedAlphaCutoff,
-            currentPackedAlphaChoke = packedAlphaChoke,
-            onTogglePassthrough = { enabled ->
-                FeatureFlags.setEnabled(context, FeatureFlags.Flag.PASSTHROUGH, enabled)
-                activity.nativeSetPassthroughEnabled(enabled)
-            },
-            onOpacityChanged = { newOpacity ->
-                FeatureFlags.setPassthroughOpacity(context, newOpacity)
-                activity.nativeSetPassthroughStyle(newOpacity, FeatureFlags.getPassthroughEdgeRendering(context))
-            },
-            onEdgeRenderingChanged = { edgeEnabled ->
-                FeatureFlags.setPassthroughEdgeRendering(context, edgeEnabled)
-                activity.nativeSetPassthroughStyle(FeatureFlags.getPassthroughOpacity(context), edgeEnabled)
-            },
-            onMaskModeChanged = { mode ->
-                FeatureFlags.setPassthroughMaskMode(context, mode)
-                activity.nativeSetChromaKeyMode(mode)
-                if (mode == 2) {
-                    val opacityMult = FeatureFlags.getPackedAlphaOpacityMultiplier(context)
-                    val cutoff = FeatureFlags.getPackedAlphaCutoff(context)
-                    val choke = FeatureFlags.getPackedAlphaChoke(context)
-                    activity.nativeSetChromaKeySimilarity(opacityMult)
-                    activity.nativeSetChromaKeySmoothness(cutoff)
-                    activity.nativeSetChromaKeyColor(choke)
-                } else if (mode == 1) {
-                    val sim = FeatureFlags.getChromaKeySimilarity(context)
-                    val smooth = FeatureFlags.getChromaKeySmoothness(context)
-                    val color = FeatureFlags.getChromaKeyColor(context)
-                    activity.nativeSetChromaKeySimilarity(sim)
-                    activity.nativeSetChromaKeySmoothness(smooth)
-                    activity.nativeSetChromaKeyColor(color)
-                }
-            },
-            onToggleChromaKey = { enabled ->
-                FeatureFlags.setEnabled(context, FeatureFlags.Flag.CHROMA_KEY, enabled)
-                activity.nativeSetChromaKeyEnabled(enabled)
-            },
-            onChromaColorChanged = { color ->
-                FeatureFlags.setChromaKeyColor(context, color)
-                if (activity.nativeGetChromaKeyMode() == 1) {
-                    activity.nativeSetChromaKeyColor(color)
-                }
-            },
-            onChromaSimilarityChanged = { sim ->
-                FeatureFlags.setChromaKeySimilarity(context, sim)
-                if (activity.nativeGetChromaKeyMode() == 1) {
-                    activity.nativeSetChromaKeySimilarity(sim)
-                }
-            },
-            onChromaSmoothnessChanged = { smooth ->
-                FeatureFlags.setChromaKeySmoothness(context, smooth)
-                if (activity.nativeGetChromaKeyMode() == 1) {
-                    activity.nativeSetChromaKeySmoothness(smooth)
-                }
-            },
-            onPackedAlphaOpacityChanged = { mult ->
-                FeatureFlags.setPackedAlphaOpacityMultiplier(context, mult)
-                if (activity.nativeGetChromaKeyMode() == 2) {
-                    activity.nativeSetChromaKeySimilarity(mult)
-                }
-            },
-            onPackedAlphaCutoffChanged = { cutoff ->
-                FeatureFlags.setPackedAlphaCutoff(context, cutoff)
-                if (activity.nativeGetChromaKeyMode() == 2) {
-                    activity.nativeSetChromaKeySmoothness(cutoff)
-                }
-            },
-            onPackedAlphaChokeChanged = { choke ->
-                FeatureFlags.setPackedAlphaChoke(context, choke)
-                if (activity.nativeGetChromaKeyMode() == 2) {
-                    activity.nativeSetChromaKeyColor(choke)
-                }
-            },
-            onAutoDetectChroma = { callback ->
-                activity.detectCurrentVideoChromaKey(callback)
-            },
-            onResetScreenPosition = {
-                activity.nativeResetScreenPosition()
-            },
-            onDismiss = { dismissModal() }
-        )
+        val modal =
+            PassthroughSettingsModal(
+                context = context,
+                isPassthroughEnabled = isEnabled,
+                currentOpacity = opacity,
+                isEdgeRenderingEnabled = isEdgeEnabled,
+                currentMaskMode = currentMaskMode,
+                isDetectedPackedAlpha = isDetectedAlpha,
+                isChromaKeyEnabled = isChromaEnabled,
+                currentChromaColor = chromaColor,
+                currentChromaSimilarity = chromaSimilarity,
+                currentChromaSmoothness = chromaSmoothness,
+                currentPackedAlphaOpacityMultiplier = packedAlphaOpacity,
+                currentPackedAlphaCutoff = packedAlphaCutoff,
+                currentPackedAlphaChoke = packedAlphaChoke,
+                onTogglePassthrough = { enabled ->
+                    FeatureFlags.setEnabled(context, FeatureFlags.Flag.PASSTHROUGH, enabled)
+                    activity.nativeSetPassthroughEnabled(enabled)
+                },
+                onOpacityChanged = { newOpacity ->
+                    FeatureFlags.setPassthroughOpacity(context, newOpacity)
+                    activity.nativeSetPassthroughStyle(newOpacity, FeatureFlags.getPassthroughEdgeRendering(context))
+                },
+                onEdgeRenderingChanged = { edgeEnabled ->
+                    FeatureFlags.setPassthroughEdgeRendering(context, edgeEnabled)
+                    activity.nativeSetPassthroughStyle(FeatureFlags.getPassthroughOpacity(context), edgeEnabled)
+                },
+                onMaskModeChanged = { mode ->
+                    FeatureFlags.setPassthroughMaskMode(context, mode)
+                    activity.nativeSetChromaKeyMode(mode)
+                    if (mode == 2) {
+                        val opacityMult = FeatureFlags.getPackedAlphaOpacityMultiplier(context)
+                        val cutoff = FeatureFlags.getPackedAlphaCutoff(context)
+                        val choke = FeatureFlags.getPackedAlphaChoke(context)
+                        activity.nativeSetChromaKeySimilarity(opacityMult)
+                        activity.nativeSetChromaKeySmoothness(cutoff)
+                        activity.nativeSetChromaKeyColor(choke)
+                    } else if (mode == 1) {
+                        val sim = FeatureFlags.getChromaKeySimilarity(context)
+                        val smooth = FeatureFlags.getChromaKeySmoothness(context)
+                        val color = FeatureFlags.getChromaKeyColor(context)
+                        activity.nativeSetChromaKeySimilarity(sim)
+                        activity.nativeSetChromaKeySmoothness(smooth)
+                        activity.nativeSetChromaKeyColor(color)
+                    }
+                },
+                onToggleChromaKey = { enabled ->
+                    FeatureFlags.setEnabled(context, FeatureFlags.Flag.CHROMA_KEY, enabled)
+                    activity.nativeSetChromaKeyEnabled(enabled)
+                },
+                onChromaColorChanged = { color ->
+                    FeatureFlags.setChromaKeyColor(context, color)
+                    if (activity.nativeGetChromaKeyMode() == 1) {
+                        activity.nativeSetChromaKeyColor(color)
+                    }
+                },
+                onChromaSimilarityChanged = { sim ->
+                    FeatureFlags.setChromaKeySimilarity(context, sim)
+                    if (activity.nativeGetChromaKeyMode() == 1) {
+                        activity.nativeSetChromaKeySimilarity(sim)
+                    }
+                },
+                onChromaSmoothnessChanged = { smooth ->
+                    FeatureFlags.setChromaKeySmoothness(context, smooth)
+                    if (activity.nativeGetChromaKeyMode() == 1) {
+                        activity.nativeSetChromaKeySmoothness(smooth)
+                    }
+                },
+                onPackedAlphaOpacityChanged = { mult ->
+                    FeatureFlags.setPackedAlphaOpacityMultiplier(context, mult)
+                    if (activity.nativeGetChromaKeyMode() == 2) {
+                        activity.nativeSetChromaKeySimilarity(mult)
+                    }
+                },
+                onPackedAlphaCutoffChanged = { cutoff ->
+                    FeatureFlags.setPackedAlphaCutoff(context, cutoff)
+                    if (activity.nativeGetChromaKeyMode() == 2) {
+                        activity.nativeSetChromaKeySmoothness(cutoff)
+                    }
+                },
+                onPackedAlphaChokeChanged = { choke ->
+                    FeatureFlags.setPackedAlphaChoke(context, choke)
+                    if (activity.nativeGetChromaKeyMode() == 2) {
+                        activity.nativeSetChromaKeyColor(choke)
+                    }
+                },
+                onAutoDetectChroma = { callback ->
+                    activity.detectCurrentVideoChromaKey(callback)
+                },
+                onResetScreenPosition = {
+                    activity.nativeResetScreenPosition()
+                },
+                onDismiss = { dismissModal() },
+            )
         showModal(modal)
     }
 
     /**
      * Prepara e exibe o modal de fila de reprodução e playlists ([PlaylistModal]).
      */
-    fun showPlaylistModal(queueManager: com.tucavr.playlist.PlaylistQueueManager, onPlayIndex: (Int) -> Unit) {
-        val modal = com.tucavr.designsystem.PlaylistModal(
-            context = context,
-            queueManager = queueManager,
-            onPlayIndex = onPlayIndex,
-            onDismiss = { dismissModal() }
-        )
+    fun showPlaylistModal(
+        queueManager: com.tucavr.playlist.PlaylistQueueManager,
+        onPlayIndex: (Int) -> Unit,
+    ) {
+        val modal =
+            com.tucavr.designsystem.PlaylistModal(
+                context = context,
+                queueManager = queueManager,
+                onPlayIndex = onPlayIndex,
+                onDismiss = { dismissModal() },
+            )
         showModal(modal)
     }
 
@@ -379,17 +392,18 @@ class VRModalPresentation(
      */
     fun showEnvironmentSelectorModal() {
         val activeEnv = activity.environmentStore.getActiveEnvironment()
-        val modal = com.tucavr.designsystem.EnvironmentSelectorModal(
-            context = context,
-            activeEnvironmentId = activeEnv,
-            onEnvironmentSelected = { envId ->
-                activity.setVirtualEnvironment(envId)
-            },
-            onResetAnchor = {
-                activity.resetScreenPosition()
-            },
-            onDismiss = { dismissModal() }
-        )
+        val modal =
+            com.tucavr.designsystem.EnvironmentSelectorModal(
+                context = context,
+                activeEnvironmentId = activeEnv,
+                onEnvironmentSelected = { envId ->
+                    activity.setVirtualEnvironment(envId)
+                },
+                onResetAnchor = {
+                    activity.resetScreenPosition()
+                },
+                onDismiss = { dismissModal() },
+            )
         showModal(modal)
     }
 
@@ -401,7 +415,11 @@ class VRModalPresentation(
     /**
      * Rola a View rolável ativa dentro do modal frontal.
      */
-    fun dispatchScroll(x: Float, y: Float, scrollDeltaY: Float) {
+    fun dispatchScroll(
+        x: Float,
+        y: Float,
+        scrollDeltaY: Float,
+    ) {
         if (!::rootContainer.isInitialized) return
         val pixelX = x * VRActivity.MODAL_DISPLAY_WIDTH
         val pixelY = y * VRActivity.MODAL_DISPLAY_HEIGHT
@@ -409,7 +427,11 @@ class VRModalPresentation(
         target?.scrollBy(0, scrollDeltaY.toInt())
     }
 
-    private fun findScrollableViewAt(parent: View, x: Float, y: Float): View? {
+    private fun findScrollableViewAt(
+        parent: View,
+        x: Float,
+        y: Float,
+    ): View? {
         if (!parent.isShown) return null
         val location = IntArray(2)
         parent.getLocationOnScreen(location)

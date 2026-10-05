@@ -6,7 +6,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class NetworkDiscoveryParsingTest {
-
     private fun parseScanResults(raw: String): List<DiscoveredServerItem> {
         if (raw.isBlank() || raw.startsWith("ERROR:")) {
             return emptyList()
@@ -15,11 +14,12 @@ class NetworkDiscoveryParsingTest {
         return raw.lines().filter { it.isNotBlank() }.mapNotNull { line ->
             val parts = line.split("\t")
             val protoStr = parts.getOrNull(0)?.uppercase() ?: return@mapNotNull null
-            val proto = try {
-                ServerProtocol.valueOf(protoStr)
-            } catch (e: Exception) {
-                return@mapNotNull null
-            }
+            val proto =
+                try {
+                    ServerProtocol.valueOf(protoStr)
+                } catch (e: Exception) {
+                    return@mapNotNull null
+                }
             val name = parts.getOrNull(1) ?: "Server"
             val host = parts.getOrNull(2) ?: return@mapNotNull null
             val port = parts.getOrNull(3)?.toIntOrNull() ?: 0
@@ -30,20 +30,21 @@ class NetworkDiscoveryParsingTest {
                 name = name,
                 host = host,
                 port = port,
-                path = path
+                path = path,
             )
         }
     }
 
     @Test
     fun parseMultipleProtocols() {
-        val raw = """
+        val raw =
+            """
             SMB	Synology NAS	192.168.1.50	445	
             NFS	Linux Media	192.168.1.60	2049	/volume1/media
             FTP	Seedbox	192.168.1.70	21	
             SFTP	Backup Server	192.168.1.80	22	
             DLNA	Plex Media Server	192.168.1.90	32400	http://192.168.1.90:32400/description.xml
-        """.trimIndent()
+            """.trimIndent()
 
         val results = parseScanResults(raw)
         assertEquals(5, results.size)

@@ -24,12 +24,11 @@ data class FolderMediaStatus(
     val hasPlayableMedia: Boolean,
     val scanCompletedFully: Boolean,
     val lastCheckedAt: Long,
-    val sourceKind: String
+    val sourceKind: String,
 )
 
 @Dao
 interface FolderMediaStatusDao {
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entry: FolderMediaStatus)
 

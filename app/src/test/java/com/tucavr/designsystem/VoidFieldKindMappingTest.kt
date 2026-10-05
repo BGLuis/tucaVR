@@ -10,7 +10,6 @@ import org.junit.Test
  * Garante que senhas não virem texto claro e que tipos numéricos/URI/multilinha sejam preservados.
  */
 class VoidFieldKindMappingTest {
-
     @Test
     fun `TEXT mapeia para TYPE_CLASS_TEXT`() {
         val type = VoidFieldKind.TEXT.toAndroidInputType()

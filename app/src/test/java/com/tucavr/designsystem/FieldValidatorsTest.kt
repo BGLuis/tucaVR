@@ -1,7 +1,6 @@
 package com.tucavr.designsystem
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -10,7 +9,6 @@ import org.junit.Test
  * Executam em JVM pura sem dependências do framework Android.
  */
 class FieldValidatorsTest {
-
     @Test
     fun `required validator aceita strings nao vazias e rejeita vazias ou espacos`() {
         val validator = FieldValidators.required("Campo obrigatorio")
@@ -85,10 +83,11 @@ class FieldValidatorsTest {
 
     @Test
     fun `combine executa validadores sequencialmente e devolve o primeiro erro`() {
-        val combined = FieldValidators.combine(
-            FieldValidators.required("Obrigatorio"),
-            FieldValidators.requiredPort("Porta invalida")
-        )
+        val combined =
+            FieldValidators.combine(
+                FieldValidators.required("Obrigatorio"),
+                FieldValidators.requiredPort("Porta invalida"),
+            )
 
         assertEquals("Obrigatorio", combined(""))
         assertEquals("Obrigatorio", combined("   "))

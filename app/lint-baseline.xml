@@ -1,0 +1,2585 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<issues format="6" by="lint 8.5.2" type="baseline" client="gradle" dependencies="false" name="AGP (8.5.2)" variant="all" version="8.5.2">
+
+    <issue
+        id="ScopedStorage"
+        message="The Google Play store has a policy that limits usage of MANAGE_EXTERNAL_STORAGE"
+        errorLine1="    &lt;uses-permission android:name=&quot;android.permission.MANAGE_EXTERNAL_STORAGE&quot; />"
+        errorLine2="                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="12"
+            column="36"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="            String.format(&quot;%d:%02d:%02d&quot;, h, m, s)"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/screens/NetworkDlnaScreen.kt"
+            line="208"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="            String.format(&quot;%02d:%02d&quot;, m, s)"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/screens/NetworkDlnaScreen.kt"
+            line="210"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="            String.format(&quot;%.2f GB&quot;, mb / 1024.0)"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/screens/NetworkDlnaScreen.kt"
+            line="217"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="            String.format(&quot;%.1f MB&quot;, mb)"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/screens/NetworkDlnaScreen.kt"
+            line="219"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="                String.format(&quot;%02d:%02d:%02d&quot;, hrs, mins, secs)"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/VRControlsPresentation.kt"
+            line="140"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="DefaultLocale"
+        message="Implicitly using the default locale is a common source of bugs: Use `String.format(Locale, ...)` instead"
+        errorLine1="                String.format(&quot;%02d:%02d&quot;, mins, secs)"
+        errorLine2="                ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/VRControlsPresentation.kt"
+            line="142"
+            column="17"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 30 (current min is 26): `android.app.ApplicationExitInfo#REASON_ANR`"
+        errorLine1="        reasonCode == ApplicationExitInfo.REASON_ANR || reasonCode == ApplicationExitInfo.REASON_CRASH_NATIVE"
+        errorLine2="                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/debug/ApplicationExitInfoReporter.kt"
+            line="48"
+            column="23"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 30 (current min is 26): `android.app.ApplicationExitInfo#REASON_CRASH_NATIVE`"
+        errorLine1="        reasonCode == ApplicationExitInfo.REASON_ANR || reasonCode == ApplicationExitInfo.REASON_CRASH_NATIVE"
+        errorLine2="                                                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/debug/ApplicationExitInfoReporter.kt"
+            line="48"
+            column="71"/>
+    </issue>
+
+    <issue
+        id="InlinedApi"
+        message="Field requires API level 29 (current min is 26): `android.os.PowerManager#THERMAL_STATUS_NONE`"
+        errorLine1="            PowerManager.THERMAL_STATUS_NONE"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/ThermalMonitor.kt"
+            line="128"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 27 (current min is 26): `android.media.MediaMetadataRetriever#getScaledFrameAtTime`"
+        errorLine1="                val bitmap = retriever.getScaledFrameAtTime(timeUs, android.media.MediaMetadataRetriever.OPTION_CLOSEST, 320, 180)"
+        errorLine2="                                       ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/VRActivity.kt"
+            line="1402"
+            column="40"/>
+    </issue>
+
+    <issue
+        id="NewApi"
+        message="Call requires API level 27 (current min is 26): `android.media.MediaMetadataRetriever#getScaledFrameAtTime`"
+        errorLine1="                    ?: retriever.getScaledFrameAtTime(timeUs, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, 320, 180)"
+        errorLine2="                                 ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/VRActivity.kt"
+            line="1403"
+            column="34"/>
+    </issue>
+
+    <issue
+        id="OldTargetApi"
+        message="Not targeting the latest versions of Android; compatibility modes apply. Consider testing and updating this version. Consult the `android.os.Build.VERSION_CODES` javadoc for details."
+        errorLine1="        targetSdk = 34"
+        errorLine2="        ~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="45"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="SdCardPath"
+        message="Do not hardcode &quot;/sdcard/&quot;; use `Environment.getExternalStorageDirectory().getPath()` instead"
+        errorLine1="                        val path = intent.getStringExtra(EXTRA_CAPTURE_PATH) ?: &quot;/sdcard/vr-frame-capture.ppm&quot;"
+        errorLine2="                                                                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/VRActivity.kt"
+            line="272"
+            column="82"/>
+    </issue>
+
+    <issue
+        id="RedundantLabel"
+        message="Redundant label can be removed"
+        errorLine1="            android:label=&quot;@string/app_name&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="69"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="AppCompatCustomView"
+        message="This custom view should extend `androidx.appcompat.widget.AppCompatButton` instead"
+        errorLine1=") : Button(context) {"
+        errorLine2="    ~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/VoidButton.kt"
+            line="32"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="AppCompatCustomView"
+        message="This custom view should extend `androidx.appcompat.widget.AppCompatButton` instead"
+        errorLine1=") : Button(context) {"
+        errorLine2="    ~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/VoidFilterChip.kt"
+            line="18"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="AppCompatCustomView"
+        message="This custom view should extend `androidx.appcompat.widget.AppCompatImageButton` instead"
+        errorLine1=") : ImageButton(context) {"
+        errorLine2="    ~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/VoidIconButton.kt"
+            line="15"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.core:core-ktx than 1.13.1 is available: 1.19.1"
+        errorLine1="    implementation(&quot;androidx.core:core-ktx:1.13.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="130"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.appcompat:appcompat than 1.7.0 is available: 1.8.0"
+        errorLine1="    implementation(&quot;androidx.appcompat:appcompat:1.7.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="131"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of com.google.android.material:material than 1.12.0 is available: 1.14.0"
+        errorLine1="    implementation(&quot;com.google.android.material:material:1.12.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="132"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of org.jetbrains.kotlinx:kotlinx-coroutines-android than 1.8.1 is available: 1.11.0"
+        errorLine1="    implementation(&quot;org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="134"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.room:room-runtime than 2.6.1 is available: 2.8.5"
+        errorLine1="    implementation(&quot;androidx.room:room-runtime:2.6.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="144"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.room:room-ktx than 2.6.1 is available: 2.8.5"
+        errorLine1="    implementation(&quot;androidx.room:room-ktx:2.6.1&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="145"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.room:room-compiler than 2.6.1 is available: 2.8.5"
+        errorLine1="    ksp(&quot;androidx.room:room-compiler:2.6.1&quot;)"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="146"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="GradleDependency"
+        message="A newer version of androidx.exifinterface:exifinterface than 1.4.0 is available: 1.4.2"
+        errorLine1="    implementation(&quot;androidx.exifinterface:exifinterface:1.4.0&quot;)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="build.gradle.kts"
+            line="149"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="NonResizeableActivity"
+        message="Expecting `android:resizeableActivity=&quot;true&quot;` for this activity so the user can take advantage of the multi-window environment on all devices. NOTE: beginning with Android 12, all apps run in multi-window mode on large screen devices."
+        errorLine1="            android:resizeableActivity=&quot;false&quot;>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="78"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DiscouragedApi"
+        message="Should not restrict activity to fixed orientation. This may not be suitable for different form factors, causing the app to be letterboxed."
+        errorLine1="            android:screenOrientation=&quot;landscape&quot;"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="77"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="DiscouragedApi"
+        message="Activity should not be non-resizable. With this setting, apps cannot be used in multi-window or free form mode."
+        errorLine1="            android:resizeableActivity=&quot;false&quot;>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/AndroidManifest.xml"
+            line="78"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UseCompatLoadingForDrawables"
+        message="Use `AppCompatResources.getDrawable()`"
+        errorLine1="            val icon = context.getDrawable(currentIconResId)?.mutate()"
+        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/VoidButton.kt"
+            line="106"
+            column="24"/>
+    </issue>
+
+    <issue
+        id="UseCompatLoadingForDrawables"
+        message="Use `AppCompatResources.getDrawable()`"
+        errorLine1="            val icon = context.getDrawable(iconResId)?.mutate()"
+        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/VoidFilterChip.kt"
+            line="58"
+            column="24"/>
+    </issue>
+
+    <issue
+        id="UseCompatLoadingForDrawables"
+        message="Use `AppCompatResources.getDrawable()`"
+        errorLine1="            val icon = context.getDrawable(iconResId)?.mutate()"
+        errorLine2="                       ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/VoidListRow.kt"
+            line="78"
+            column="24"/>
+    </issue>
+
+    <issue
+        id="UseCompatLoadingForDrawables"
+        message="Use `AppCompatResources.getDrawable()`"
+        errorLine1="                val icon = context.getDrawable(iconResId)?.mutate()"
+        errorLine2="                           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/VoidTabRow.kt"
+            line="57"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="MissingQuantity"
+        message="For locale &quot;pt&quot; (Portuguese) the following quantity should also be defined: `many`"
+        errorLine1="    &lt;plurals name=&quot;network_smb_form_status_connected&quot;>"
+        errorLine2="    ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="298"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="MissingQuantity"
+        message="For locale &quot;es&quot; (Spanish) the following quantity should also be defined: `many`"
+        errorLine1="    &lt;plurals name=&quot;network_smb_form_status_connected&quot;>"
+        errorLine2="    ^">
+        <location
+            file="src/main/res/values-es/strings.xml"
+            line="300"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;Video&quot; is a common misspelling; did you mean &quot;Vídeo&quot;?"
+        errorLine1="    &lt;string name=&quot;settings_section_video&quot;>Video&lt;/string>"
+        errorLine2="                                          ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="42"
+            column="43"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;Video&quot; is a common misspelling; did you mean &quot;Vídeo&quot;?"
+        errorLine1="    &lt;string name=&quot;settings_upscaling_label&quot;>Upscaling de Video e Super Resolucao&lt;/string>"
+        errorLine2="                                                         ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="43"
+            column="58"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="Did you mean &quot;SGSR!&quot; instead of &quot;SGSR1&quot;?"
+        errorLine1="    &lt;string name=&quot;settings_upscaling_mode_quality&quot;>Calidad (SGSR1)&lt;/string>"
+        errorLine2="                                                            ^">
+        <location
+            file="src/main/res/values-es/strings.xml"
+            line="46"
+            column="61"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="Did you mean &quot;SGSR!&quot; instead of &quot;SGSR1&quot;?"
+        errorLine1="    &lt;string name=&quot;settings_upscaling_mode_quality&quot;>Qualidade (SGSR1)&lt;/string>"
+        errorLine2="                                                              ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="46"
+            column="63"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="Did you mean &quot;SGSR!&quot; instead of &quot;SGSR1&quot;?"
+        errorLine1="    &lt;string name=&quot;settings_upscaling_mode_quality&quot;>Quality (SGSR1)&lt;/string>"
+        errorLine2="                                                            ^">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="55"
+            column="61"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;atras&quot; is a common misspelling; did you mean &quot;atrás&quot;?"
+        errorLine1="    &lt;string name=&quot;settings_ambient_mode_description&quot;>Adiciona um halo de luz suave atras da tela, com a cor do proprio video. So visivel no ambiente Void. So no Vulkan.&lt;/string>"
+        errorLine2="                                                                                   ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="57"
+            column="84"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;video&quot; is a common misspelling; did you mean &quot;vídeo&quot;?"
+        errorLine1="    &lt;string name=&quot;settings_ambient_mode_description&quot;>Adiciona um halo de luz suave atras da tela, com a cor do proprio video. So visivel no ambiente Void. So no Vulkan.&lt;/string>"
+        errorLine2="                                                                                                                       ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="57"
+            column="120"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;Video&quot; is a common misspelling; did you mean &quot;Vídeo&quot;?"
+        errorLine1="    &lt;string name=&quot;quality_warning_8k60&quot;>Video 8K com alta taxa de quadros pode apresentar quedas em hardware movel.&lt;/string>"
+        errorLine2="                                        ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="73"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;video&quot; is a common misspelling; did you mean &quot;vídeo&quot;?"
+        errorLine1="    &lt;string name=&quot;settings_pause_on_exit_description&quot;>Pausa o video automaticamente ao voltar ao menu do sistema ou passthrough.&lt;/string>"
+        errorLine2="                                                              ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="75"
+            column="63"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;acusticas&quot; is a common misspelling; did you mean &quot;acústicas&quot;?"
+        errorLine1="    &lt;string name=&quot;settings_spatial_head_tracking_description&quot;>Rotaciona as caixas acusticas virtuais e o palco sonoro ao virar a cabeca para realismo espacial.&lt;/string>"
+        errorLine2="                                                                                  ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="83"
+            column="83"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;video&quot; is a common misspelling; did you mean &quot;vídeo&quot;?"
+        errorLine1="    &lt;string name=&quot;settings_spatial_screen_locked_description&quot;>Fixa as caixas virtuais relativas ao painel de video em vez do espaco absoluto. Recomendado para conteudo 2D — mantem o dialogo sempre a frente.&lt;/string>"
+        errorLine2="                                                                                                             ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="85"
+            column="110"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;nivel&quot; is a common misspelling; did you mean &quot;nível&quot;?"
+        errorLine1="    &lt;string name=&quot;browser_row_up&quot;>Subir um nivel&lt;/string>"
+        errorLine2="                                           ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="158"
+            column="44"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;Ultimo&quot; is a common misspelling; did you mean &quot;Último&quot;?"
+        errorLine1="    &lt;string name=&quot;browser_sort_last_played&quot;>Ultimo Reproduzido&lt;/string>"
+        errorLine2="                                            ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="168"
+            column="45"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;Nao&quot; is a common misspelling; did you mean &quot;Não&quot;?"
+        errorLine1="    &lt;string name=&quot;history_filter_resumable&quot;>Nao finalizados&lt;/string>"
+        errorLine2="                                            ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="187"
+            column="45"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;Historico&quot; is a common misspelling; did you mean &quot;Histórico&quot;?"
+        errorLine1="    &lt;string name=&quot;history_filter_all&quot;>Historico Completo&lt;/string>"
+        errorLine2="                                      ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="188"
+            column="39"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;video&quot; is a common misspelling; did you mean &quot;vídeo&quot;?"
+        errorLine1="    &lt;string name=&quot;file_detail_label_video_codec&quot;>Codec de video&lt;/string>"
+        errorLine2="                                                          ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="206"
+            column="59"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;Video&quot; is a common misspelling; did you mean &quot;Vídeo&quot;?"
+        errorLine1="    &lt;string name=&quot;file_detail_track_video_format&quot;>%1$d. Video — %2$s&lt;/string>"
+        errorLine2="                                                        ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="212"
+            column="57"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;disponivel&quot; is a common misspelling; did you mean &quot;disponível&quot;?"
+        errorLine1="    &lt;string name=&quot;file_detail_tracks_subtitle_note&quot;>Renderizacao de legenda ainda nao disponivel&lt;/string>"
+        errorLine2="                                                                                      ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="217"
+            column="87"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;nao&quot; is a common misspelling; did you mean &quot;não&quot;?"
+        errorLine1="    &lt;string name=&quot;file_detail_tracks_subtitle_note&quot;>Renderizacao de legenda ainda nao disponivel&lt;/string>"
+        errorLine2="                                                                                  ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="217"
+            column="83"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;Album&quot; is a common misspelling; did you mean &quot;Álbum&quot;?"
+        errorLine1="    &lt;string name=&quot;file_detail_tag_album&quot;>Album&lt;/string>"
+        errorLine2="                                         ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="227"
+            column="42"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;Genero&quot; is a common misspelling; did you mean &quot;Género&quot;?"
+        errorLine1="    &lt;string name=&quot;file_detail_tag_genre&quot;>Genero&lt;/string>"
+        errorLine2="                                         ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="229"
+            column="42"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;Video&quot; is a common misspelling; did you mean &quot;Vídeo&quot;?"
+        errorLine1="    &lt;string name=&quot;player_hls_quality_menu_title&quot;>Qualidade de Video&lt;/string>"
+        errorLine2="                                                              ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="257"
+            column="63"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;anonimo&quot; is a common misspelling; did you mean &quot;anónimo&quot; or &quot;anônimo&quot;?"
+        errorLine1="    &lt;string name=&quot;network_smb_form_guest_checkbox&quot;>Convidado / anonimo (sem usuario/senha)&lt;/string>"
+        errorLine2="                                                               ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="283"
+            column="64"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;usuario&quot; is a common misspelling; did you mean &quot;usuário&quot; or &quot;utilizador&quot;?"
+        errorLine1="    &lt;string name=&quot;network_smb_form_guest_checkbox&quot;>Convidado / anonimo (sem usuario/senha)&lt;/string>"
+        errorLine2="                                                                            ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="283"
+            column="77"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;Usuario&quot; is a common misspelling; did you mean &quot;Usuário&quot; or &quot;Utilizador&quot;?"
+        errorLine1="    &lt;string name=&quot;network_smb_form_user_label&quot;>Usuario&lt;/string>"
+        errorLine2="                                               ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="284"
+            column="48"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;usuario&quot; is a common misspelling; did you mean &quot;usuário&quot; or &quot;utilizador&quot;?"
+        errorLine1="    &lt;string name=&quot;network_smb_form_user_hint&quot;>usuario&lt;/string>"
+        errorLine2="                                              ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="285"
+            column="47"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;obrigatorio&quot; is a common misspelling; did you mean &quot;obrigatório&quot;?"
+        errorLine1="    &lt;string name=&quot;network_smb_form_status_host_required&quot;>Host obrigatorio&lt;/string>"
+        errorLine2="                                                              ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="291"
+            column="63"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;anonimo&quot; is a common misspelling; did you mean &quot;anónimo&quot; or &quot;anônimo&quot;?"
+        errorLine1="    &lt;string name=&quot;network_ftp_anonymous_label&quot;>anonimo&lt;/string>"
+        errorLine2="                                               ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="310"
+            column="48"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;Anonimo&quot; is a common misspelling; did you mean &quot;Anónimo&quot; or &quot;Anônimo&quot;?"
+        errorLine1="    &lt;string name=&quot;network_ftp_form_anonymous_checkbox&quot;>Anonimo (sem usuario/senha)&lt;/string>"
+        errorLine2="                                                       ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="317"
+            column="56"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;usuario&quot; is a common misspelling; did you mean &quot;usuário&quot; or &quot;utilizador&quot;?"
+        errorLine1="    &lt;string name=&quot;network_ftp_form_anonymous_checkbox&quot;>Anonimo (sem usuario/senha)&lt;/string>"
+        errorLine2="                                                                    ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="317"
+            column="69"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;Usuario&quot; is a common misspelling; did you mean &quot;Usuário&quot; or &quot;Utilizador&quot;?"
+        errorLine1="    &lt;string name=&quot;network_ftp_form_user_label&quot;>Usuario&lt;/string>"
+        errorLine2="                                               ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="318"
+            column="48"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;usuario&quot; is a common misspelling; did you mean &quot;usuário&quot; or &quot;utilizador&quot;?"
+        errorLine1="    &lt;string name=&quot;network_ftp_form_user_hint&quot;>usuario&lt;/string>"
+        errorLine2="                                              ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="319"
+            column="47"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;obrigatorio&quot; is a common misspelling; did you mean &quot;obrigatório&quot;?"
+        errorLine1="    &lt;string name=&quot;network_ftp_form_status_host_required&quot;>Host obrigatorio&lt;/string>"
+        errorLine2="                                                              ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="323"
+            column="63"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;Usuario&quot; is a common misspelling; did you mean &quot;Usuário&quot; or &quot;Utilizador&quot;?"
+        errorLine1="    &lt;string name=&quot;network_sftp_form_user_label&quot;>Usuario&lt;/string>"
+        errorLine2="                                                ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="337"
+            column="49"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;usuario&quot; is a common misspelling; did you mean &quot;usuário&quot; or &quot;utilizador&quot;?"
+        errorLine1="    &lt;string name=&quot;network_sftp_form_user_hint&quot;>usuario&lt;/string>"
+        errorLine2="                                               ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="338"
+            column="48"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;obrigatorio&quot; is a common misspelling; did you mean &quot;obrigatório&quot;?"
+        errorLine1="    &lt;string name=&quot;network_sftp_form_status_host_required&quot;>Host obrigatorio&lt;/string>"
+        errorLine2="                                                               ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="345"
+            column="64"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;obrigatoria&quot; is a common misspelling; did you mean &quot;obrigatória&quot;?"
+        errorLine1="    &lt;string name=&quot;network_sftp_form_status_auth_required&quot;>Senha ou chave privada obrigatoria&lt;/string>"
+        errorLine2="                                                                                 ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="346"
+            column="82"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="Did you mean &quot;volume!&quot; instead of &quot;volume1&quot;?"
+        errorLine1="    &lt;string name=&quot;network_nfs_form_export_hint&quot;>/volume1/midia&lt;/string>"
+        errorLine2="                                                 ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="361"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;obrigatorio&quot; is a common misspelling; did you mean &quot;obrigatório&quot;?"
+        errorLine1="    &lt;string name=&quot;network_nfs_form_status_host_required&quot;>Host obrigatorio&lt;/string>"
+        errorLine2="                                                              ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="364"
+            column="63"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;obrigatorio&quot; is a common misspelling; did you mean &quot;obrigatório&quot;?"
+        errorLine1="    &lt;string name=&quot;network_nfs_form_status_export_required&quot;>Caminho do export obrigatorio&lt;/string>"
+        errorLine2="                                                                             ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="365"
+            column="78"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="Did you mean &quot;volume!&quot; instead of &quot;volume1&quot;?"
+        errorLine1="    &lt;string name=&quot;network_nfs_form_export_hint&quot;>/volume1/media&lt;/string>"
+        errorLine2="                                                 ^">
+        <location
+            file="src/main/res/values-es/strings.xml"
+            line="365"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="Did you mean &quot;volume!&quot; instead of &quot;volume1&quot;?"
+        errorLine1="    &lt;string name=&quot;network_nfs_form_export_hint&quot;>/volume1/media&lt;/string>"
+        errorLine2="                                                 ^">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="374"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;usuario&quot; is a common misspelling; did you mean &quot;usuário&quot; or &quot;utilizador&quot;?"
+        errorLine1="    &lt;string name=&quot;network_webdav_form_base_path_hint&quot;>/webdav ou /remote.php/dav/files/usuario&lt;/string>"
+        errorLine2="                                                                                       ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="380"
+            column="88"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;Usuario&quot; is a common misspelling; did you mean &quot;Usuário&quot; or &quot;Utilizador&quot;?"
+        errorLine1="    &lt;string name=&quot;network_webdav_form_user_label&quot;>Usuario&lt;/string>"
+        errorLine2="                                                  ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="384"
+            column="51"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;usuario&quot; is a common misspelling; did you mean &quot;usuário&quot; or &quot;utilizador&quot;?"
+        errorLine1="    &lt;string name=&quot;network_webdav_form_user_hint&quot;>usuario (opcional)&lt;/string>"
+        errorLine2="                                                 ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="385"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;obrigatorio&quot; is a common misspelling; did you mean &quot;obrigatório&quot;?"
+        errorLine1="    &lt;string name=&quot;network_webdav_form_status_host_required&quot;>Host obrigatorio&lt;/string>"
+        errorLine2="                                                                 ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="389"
+            column="66"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;video&quot; is a common misspelling; did you mean &quot;vídeo&quot;?"
+        errorLine1="    &lt;string name=&quot;player_label_controls_hint&quot;>Os controles de reproducao (play/pause/seek/volume) aparecem ao apontar para a tela de video.&lt;/string>"
+        errorLine2="                                                                                                                                     ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="404"
+            column="134"/>
+    </issue>
+
+    <issue
+        id="Typos"
+        message="&quot;historico&quot; is a common misspelling; did you mean &quot;histórico&quot;?"
+        errorLine1="    &lt;string name=&quot;history_empty&quot;>(nenhum historico ainda)&lt;/string>"
+        errorLine2="                                         ^">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="460"
+            column="42"/>
+    </issue>
+
+    <issue
+        id="Untranslatable"
+        message="The resource string &quot;app_name&quot; is marked as translatable=&quot;false&quot;, but is translated to &quot;es&quot; (Spanish) here"
+        errorLine1="    &lt;string name=&quot;app_name&quot; translatable=&quot;false&quot;>tucaVR&lt;/string>"
+        errorLine2="                            ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values-es/strings.xml"
+            line="13"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="Untranslatable"
+        message="The resource string &quot;app_name&quot; is marked as translatable=&quot;false&quot;, but is translated to &quot;pt&quot; (Portuguese) here"
+        errorLine1="    &lt;string name=&quot;app_name&quot; translatable=&quot;false&quot;>tucaVR&lt;/string>"
+        errorLine2="                            ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="13"
+            column="29"/>
+    </issue>
+
+    <issue
+        id="PluralsCandidate"
+        message="Formatting %d followed by words (&quot;items&quot;): This should probably be a plural rather than a string"
+        errorLine1="    &lt;string name=&quot;browser_results_count_format&quot;>Showing %1$d of %2$d items&lt;/string>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="192"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="PluralsCandidate"
+        message="Formatting %d followed by words (&quot;items&quot;): This should probably be a plural rather than a string"
+        errorLine1="    &lt;string name=&quot;browser_folder_summary_format&quot;>%1$s · %2$d items&lt;/string>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="195"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="PluralsCandidate"
+        message="Formatting %d followed by words (&quot;video&quot;): This should probably be a plural rather than a string"
+        errorLine1="    &lt;string name=&quot;playlists_item_count_singular&quot;>%1$d video&lt;/string>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="592"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="PluralsCandidate"
+        message="Formatting %d followed by words (&quot;videos&quot;): This should probably be a plural rather than a string"
+        errorLine1="    &lt;string name=&quot;playlists_item_count_plural&quot;>%1$d videos&lt;/string>"
+        errorLine2="    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="593"
+            column="5"/>
+    </issue>
+
+    <issue
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        notifyDataSetChanged()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/screens/adapters/FileAdapter.kt"
+            line="85"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="NotifyDataSetChanged"
+        message="It will always be more efficient to use more specific change events if you can. Rely on `notifyDataSetChanged` as a last resort."
+        errorLine1="        notifyDataSetChanged()"
+        errorLine2="        ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/screens/adapters/HistoryAdapter.kt"
+            line="37"
+            column="9"/>
+    </issue>
+
+    <issue
+        id="Recycle"
+        message="This `ParcelFileDescriptor` should be freed up after use with `#close()`"
+        errorLine1="            val pfd = contentResolver.openFileDescriptor(uri, &quot;r&quot;)"
+        errorLine2="                                      ~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/VRActivity.kt"
+            line="1262"
+            column="39"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="Unnecessary; SDK_INT is always >= 26"
+        errorLine1="        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/download/DownloadService.kt"
+            line="116"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="ObsoleteSdkInt"
+        message="This folder configuration (`v26`) is unnecessary; `minSdkVersion` is 26. Merge all the resources in this folder into `mipmap-anydpi`.">
+        <location
+            file="src/main/res/mipmap-anydpi-v26"/>
+    </issue>
+
+    <issue
+        id="VectorPath"
+        message="Very long vector path (936 characters), which is bad for performance. Considering reducing precision, removing minor details or rasterizing vector."
+        errorLine1="  &lt;path android:fillColor=&quot;#FFFFFFFF&quot; android:pathData=&quot;M11.99,2C6.47,2 2,6.48 2,12s4.47,10 9.99,10C17.52,22 22,17.52 22,12S17.52,2 11.99,2zM18.92,8h-2.95c-0.32,-1.25 -0.78,-2.45 -1.38,-3.56 1.84,0.63 3.37,1.9 4.33,3.56zM12,4.04c0.83,1.25 1.48,2.53 1.91,3.96h-3.82c0.43,-1.43 1.08,-2.71 1.91,-3.96zM4.26,14C4.08,13.36 4,12.69 4,12s0.08,-1.36 0.26,-2h3.38c-0.08,0.66 -0.14,1.32 -0.14,2 0,0.68 0.06,1.34 0.14,2H4.26zM5.08,16h2.95c0.32,1.25 0.78,2.45 1.38,3.56 -1.84,-0.63 -3.37,-1.9 -4.33,-3.56zM8.03,8H5.08c0.96,-1.66 2.49,-2.93 4.33,-3.56C8.81,5.55 8.35,6.75 8.03,8zM12,19.96c-0.83,-1.25 -1.48,-2.53 -1.91,-3.96h3.82c-0.43,1.43 -1.08,2.71 -1.91,3.96zM14.34,14H9.66c-0.09,-0.66 -0.16,-1.32 -0.16,-2 0,-0.68 0.07,-1.35 0.16,-2h4.68c0.09,0.65 0.16,1.32 0.16,2 0,0.68 -0.07,1.34 -0.16,2zM14.59,19.56c0.6,-1.11 1.06,-2.31 1.38,-3.56h2.95c-0.96,1.65 -2.49,2.93 -4.33,3.56zM16.24,14c0.08,-0.66 0.14,-1.32 0.14,-2 0,-0.68 -0.06,-1.34 -0.14,-2h3.38c0.18,0.64 0.26,1.31 0.26,2s-0.08,1.36 -0.26,2h-3.38z&quot;/>"
+        errorLine2="                                                        ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/drawable/ic_network.xml"
+            line="3"
+            column="57"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_computer` appears to be unused"
+        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/ic_computer.xml"
+            line="1"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_filter` appears to be unused"
+        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/ic_filter.xml"
+            line="1"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_history` appears to be unused"
+        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/ic_history.xml"
+            line="1"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.ic_warning` appears to be unused"
+        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot;"
+        errorLine2="^">
+        <location
+            file="src/main/res/drawable/ic_warning.xml"
+            line="1"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.icon_battery` appears to be unused"
+        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot; android:width=&quot;24dp&quot; android:height=&quot;24dp&quot; android:viewportWidth=&quot;24&quot; android:viewportHeight=&quot;24&quot;>&lt;path android:pathData=&quot;M 22 14 L 22 10&quot; android:fillColor=&quot;#00000000&quot; android:strokeColor=&quot;#FFFFFFFF&quot; android:strokeWidth=&quot;2&quot; android:strokeLineCap=&quot;round&quot; android:strokeLineJoin=&quot;round&quot; />&lt;path android:pathData=&quot;M 4.0,6.0 L 16.0,6.0 A 2.0,2.0 0 0 1 18.0,8.0 L 18.0,16.0 A 2.0,2.0 0 0 1 16.0,18.0 L 4.0,18.0 A 2.0,2.0 0 0 1 2.0,16.0 L 2.0,8.0 A 2.0,2.0 0 0 1 4.0,6.0 Z&quot; android:fillColor=&quot;#00000000&quot; android:strokeColor=&quot;#FFFFFFFF&quot; android:strokeWidth=&quot;2&quot; android:strokeLineCap=&quot;round&quot; android:strokeLineJoin=&quot;round&quot; />&lt;/vector>"
+        errorLine2="~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/drawable/icon_battery.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.drawable.icon_volume_2` appears to be unused"
+        errorLine1="&lt;vector xmlns:android=&quot;http://schemas.android.com/apk/res/android&quot; android:width=&quot;24dp&quot; android:height=&quot;24dp&quot; android:viewportWidth=&quot;24&quot; android:viewportHeight=&quot;24&quot;>&lt;path android:pathData=&quot;M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z&quot; android:fillColor=&quot;#00000000&quot; android:strokeColor=&quot;#FFFFFFFF&quot; android:strokeWidth=&quot;2&quot; android:strokeLineCap=&quot;round&quot; android:strokeLineJoin=&quot;round&quot; />&lt;path android:pathData=&quot;M16 9a5 5 0 0 1 0 6&quot; android:fillColor=&quot;#00000000&quot; android:strokeColor=&quot;#FFFFFFFF&quot; android:strokeWidth=&quot;2&quot; android:strokeLineCap=&quot;round&quot; android:strokeLineJoin=&quot;round&quot; />&lt;path android:pathData=&quot;M19.364 18.364a9 9 0 0 0 0-12.728&quot; android:fillColor=&quot;#00000000&quot; android:strokeColor=&quot;#FFFFFFFF&quot; android:strokeWidth=&quot;2&quot; android:strokeLineCap=&quot;round&quot; android:strokeLineJoin=&quot;round&quot; />&lt;/vector>"
+        errorLine2="~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/drawable/icon_volume_2.xml"
+            line="2"
+            column="1"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.common_row_dir_format` appears to be unused"
+        errorLine1="    &lt;string name=&quot;common_row_dir_format&quot;>%1$s&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="27"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.text_action_reveal` appears to be unused"
+        errorLine1="    &lt;string name=&quot;text_action_reveal&quot;>Show password&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="36"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.text_action_hide` appears to be unused"
+        errorLine1="    &lt;string name=&quot;text_action_hide&quot;>Hide password&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="37"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.settings_ambient_mode_label` appears to be unused"
+        errorLine1="    &lt;string name=&quot;settings_ambient_mode_label&quot;>Ambient Mode&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="65"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.settings_ambient_mode_description` appears to be unused"
+        errorLine1="    &lt;string name=&quot;settings_ambient_mode_description&quot;>Adds a soft glow behind the screen, colored from the video frame. Only visible in the Void environment. Vulkan only.&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="66"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.quality_warning_thermal` appears to be unused"
+        errorLine1="    &lt;string name=&quot;quality_warning_thermal&quot;>Thermal limit reached: reducing rendering quality to cool down device.&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="81"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.quality_warning_8k60` appears to be unused"
+        errorLine1="    &lt;string name=&quot;quality_warning_8k60&quot;>High framerate 8K video may experience frame drops on mobile hardware.&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="82"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.passthrough_reset_screen_description` appears to be unused"
+        errorLine1="    &lt;string name=&quot;passthrough_reset_screen_description&quot;>Restores the virtual screen to its default front position and scale.&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="107"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.mask_mode_label` appears to be unused"
+        errorLine1="    &lt;string name=&quot;mask_mode_label&quot;>Mask Mode&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="113"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.chroma_key_section_title` appears to be unused"
+        errorLine1="    &lt;string name=&quot;chroma_key_section_title&quot;>Chroma Key (Background Removal)&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="128"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.chroma_key_toggle_label` appears to be unused"
+        errorLine1="    &lt;string name=&quot;chroma_key_toggle_label&quot;>Enable Chroma Key&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="129"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.chroma_key_toggle_description` appears to be unused"
+        errorLine1="    &lt;string name=&quot;chroma_key_toggle_description&quot;>Removes solid background (green/blue screen) to blend 3D actors into your room.&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="130"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.browser_view_grid` appears to be unused"
+        errorLine1="    &lt;string name=&quot;browser_view_grid&quot;>Grid&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="171"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.browser_view_list` appears to be unused"
+        errorLine1="    &lt;string name=&quot;browser_view_list&quot;>List&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="172"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.browser_filter_3d_2d` appears to be unused"
+        errorLine1="    &lt;string name=&quot;browser_filter_3d_2d&quot;>2D&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="183"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.browser_filter_date_all` appears to be unused"
+        errorLine1="    &lt;string name=&quot;browser_filter_date_all&quot;>Date: All&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="188"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.browser_filter_date_recent` appears to be unused"
+        errorLine1="    &lt;string name=&quot;browser_filter_date_recent&quot;>24 hours&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="189"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.browser_filter_date_week` appears to be unused"
+        errorLine1="    &lt;string name=&quot;browser_filter_date_week&quot;>7 days&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="190"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.browser_filter_date_month` appears to be unused"
+        errorLine1="    &lt;string name=&quot;browser_filter_date_month&quot;>30 days&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="191"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.file_detail_tracks_subtitle_note` appears to be unused"
+        errorLine1="    &lt;string name=&quot;file_detail_tracks_subtitle_note&quot;>Subtitle rendering is not available yet&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="229"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_dlna_header` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_dlna_header&quot;>UPnP / DLNA Servers&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="260"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_dlna_empty` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_dlna_empty&quot;>(no DLNA server saved or discovered)&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="261"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.player_hls_quality_auto` appears to be unused"
+        errorLine1="    &lt;string name=&quot;player_hls_quality_auto&quot;>Auto (%1$s)&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="268"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.player_hls_quality_menu_title` appears to be unused"
+        errorLine1="    &lt;string name=&quot;player_hls_quality_menu_title&quot;>Video Quality&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="269"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_url_btn_paste` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_url_btn_paste&quot;>Paste&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="276"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_smb_saved_servers_header` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_smb_saved_servers_header&quot;>Saved servers&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="284"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_smb_empty` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_smb_empty&quot;>(no server saved)&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="285"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_smb_guest_label` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_smb_guest_label&quot;>guest&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="286"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_smb_btn_add_server` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_smb_btn_add_server&quot;>+ Add server&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="288"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_smb_form_share_hint` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_smb_form_share_hint&quot;>Videos&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="294"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_smb_form_user_hint` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_smb_form_user_hint&quot;>username&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="297"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_smb_form_pass_hint` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_smb_form_pass_hint&quot;>password&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="299"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_smb_form_domain_hint` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_smb_form_domain_hint&quot;>(optional)&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="301"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_ftp_saved_servers_header` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_ftp_saved_servers_header&quot;>Saved servers&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="320"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_ftp_empty` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_ftp_empty&quot;>(no server saved)&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="321"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_ftp_anonymous_label` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_ftp_anonymous_label&quot;>anonymous&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="322"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_ftp_row_label_format` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_ftp_row_label_format&quot;>%1$s&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="323"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_ftp_btn_add_server` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_ftp_btn_add_server&quot;>+ Add server&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="324"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_ftp_form_user_hint` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_ftp_form_user_hint&quot;>username&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="331"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_ftp_form_pass_hint` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_ftp_form_pass_hint&quot;>password&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="333"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_sftp_saved_servers_header` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_sftp_saved_servers_header&quot;>Saved servers&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="342"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_sftp_empty` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_sftp_empty&quot;>(no server saved)&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="343"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_sftp_key_auth_label` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_sftp_key_auth_label&quot;>key&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="344"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_sftp_row_label_format` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_sftp_row_label_format&quot;>%1$s&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="345"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_sftp_btn_add_server` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_sftp_btn_add_server&quot;>+ Add server&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="346"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_sftp_form_user_hint` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_sftp_form_user_hint&quot;>username&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="351"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_sftp_form_pass_hint` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_sftp_form_pass_hint&quot;>password&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="353"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_sftp_form_btn_paste_key` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_sftp_form_btn_paste_key&quot;>Paste key&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="356"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_nfs_saved_servers_header` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_nfs_saved_servers_header&quot;>Saved servers&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="365"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_nfs_empty` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_nfs_empty&quot;>(no server saved)&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="366"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_nfs_btn_add_server` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_nfs_btn_add_server&quot;>+ Add server&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="368"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_webdav_saved_servers_header` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_webdav_saved_servers_header&quot;>Saved servers&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="384"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_webdav_empty` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_webdav_empty&quot;>(no WebDAV server saved)&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="385"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.network_webdav_btn_add_server` appears to be unused"
+        errorLine1="    &lt;string name=&quot;network_webdav_btn_add_server&quot;>+ Add server&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="387"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.player_title` appears to be unused"
+        errorLine1="    &lt;string name=&quot;player_title&quot;>Playing&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="416"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.player_label_smb_source_format` appears to be unused"
+        errorLine1="    &lt;string name=&quot;player_label_smb_source_format&quot;>%1$s/%2$s&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="418"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.player_label_ftp_source_format` appears to be unused"
+        errorLine1="    &lt;string name=&quot;player_label_ftp_source_format&quot;>%1$s/%2$s&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="419"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.player_label_sftp_source_format` appears to be unused"
+        errorLine1="    &lt;string name=&quot;player_label_sftp_source_format&quot;>%1$s/%2$s&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="420"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.player_label_nfs_source_format` appears to be unused"
+        errorLine1="    &lt;string name=&quot;player_label_nfs_source_format&quot;>%1$s:%2$s/%3$s&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="421"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.player_label_webdav_source_format` appears to be unused"
+        errorLine1="    &lt;string name=&quot;player_label_webdav_source_format&quot;>%1$s/%2$s&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="422"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.player_btn_play_pause` appears to be unused"
+        errorLine1="    &lt;string name=&quot;player_btn_play_pause&quot;>Play / Pause&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="425"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.player_controls_time_format` appears to be unused"
+        errorLine1="    &lt;string name=&quot;player_controls_time_format&quot;>%1$s / %2$s&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="426"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.player_controls_volume_format` appears to be unused"
+        errorLine1="    &lt;string name=&quot;player_controls_volume_format&quot;>%1$d%%&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="427"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.player_controls_speed_format` appears to be unused"
+        errorLine1="    &lt;string name=&quot;player_controls_speed_format&quot;>%1$.2fx&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="428"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.player_btn_swap_eyes` appears to be unused"
+        errorLine1="    &lt;string name=&quot;player_btn_swap_eyes&quot;>Swap eyes&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="450"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.player_btn_recenter` appears to be unused"
+        errorLine1="    &lt;string name=&quot;player_btn_recenter&quot;>Recenter&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="451"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.audio_tracks_active_badge` appears to be unused"
+        errorLine1="    &lt;string name=&quot;audio_tracks_active_badge&quot;>Active&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="495"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.subtitles_size_label` appears to be unused"
+        errorLine1="    &lt;string name=&quot;subtitles_size_label&quot;>Font Size&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="509"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.subtitles_size_small` appears to be unused"
+        errorLine1="    &lt;string name=&quot;subtitles_size_small&quot;>Small&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="510"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.subtitles_size_medium` appears to be unused"
+        errorLine1="    &lt;string name=&quot;subtitles_size_medium&quot;>Medium&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="511"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.subtitles_size_large` appears to be unused"
+        errorLine1="    &lt;string name=&quot;subtitles_size_large&quot;>Large&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="512"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.playlists_added_success` appears to be unused"
+        errorLine1="    &lt;string name=&quot;playlists_added_success&quot;>Added to playlist %1$s&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="595"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.playlists_select_playlist` appears to be unused"
+        errorLine1="    &lt;string name=&quot;playlists_select_playlist&quot;>Select Playlist&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="596"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.photo_viewer_stereo_mono` appears to be unused"
+        errorLine1="    &lt;string name=&quot;photo_viewer_stereo_mono&quot;>Mono&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="620"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="UnusedResources"
+        message="The resource `R.string.photo_viewer_loading` appears to be unused"
+        errorLine1="    &lt;string name=&quot;photo_viewer_loading&quot;>Loading photo…&lt;/string>"
+        errorLine2="            ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="624"
+            column="13"/>
+    </issue>
+
+    <issue
+        id="TypographyEllipsis"
+        message="Replace &quot;...&quot; with ellipsis character (…, &amp;#8230;) ?"
+        errorLine1="    &lt;string name=&quot;network_url_hint&quot;>http:// ou https://...&lt;/string>"
+        errorLine2="                                    ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="260"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="TypographyEllipsis"
+        message="Replace &quot;...&quot; with ellipsis character (…, &amp;#8230;) ?"
+        errorLine1="    &lt;string name=&quot;network_url_hint&quot;>http:// o https://...&lt;/string>"
+        errorLine2="                                    ~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values-es/strings.xml"
+            line="263"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="TypographyEllipsis"
+        message="Replace &quot;...&quot; with ellipsis character (…, &amp;#8230;) ?"
+        errorLine1="    &lt;string name=&quot;network_url_status_checking&quot;>Verificando servidor...&lt;/string>"
+        errorLine2="                                               ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="267"
+            column="48"/>
+    </issue>
+
+    <issue
+        id="TypographyEllipsis"
+        message="Replace &quot;...&quot; with ellipsis character (…, &amp;#8230;) ?"
+        errorLine1="    &lt;string name=&quot;network_url_hint&quot;>http:// or https://...&lt;/string>"
+        errorLine2="                                    ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values/strings.xml"
+            line="272"
+            column="37"/>
+    </issue>
+
+    <issue
+        id="TypographyEllipsis"
+        message="Replace &quot;...&quot; with ellipsis character (…, &amp;#8230;) ?"
+        errorLine1="    &lt;string name=&quot;network_smb_form_status_connecting&quot;>Conectando...&lt;/string>"
+        errorLine2="                                                      ~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="292"
+            column="55"/>
+    </issue>
+
+    <issue
+        id="TypographyEllipsis"
+        message="Replace &quot;...&quot; with ellipsis character (…, &amp;#8230;) ?"
+        errorLine1="    &lt;string name=&quot;network_files_loading&quot;>Carregando...&lt;/string>"
+        errorLine2="                                         ~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="304"
+            column="42"/>
+    </issue>
+
+    <issue
+        id="TypographyEllipsis"
+        message="Replace &quot;...&quot; with ellipsis character (…, &amp;#8230;) ?"
+        errorLine1="    &lt;string name=&quot;network_ftp_form_status_connecting&quot;>Conectando...&lt;/string>"
+        errorLine2="                                                      ~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="324"
+            column="55"/>
+    </issue>
+
+    <issue
+        id="TypographyEllipsis"
+        message="Replace &quot;...&quot; with ellipsis character (…, &amp;#8230;) ?"
+        errorLine1="    &lt;string name=&quot;network_sftp_form_status_connecting&quot;>Conectando...&lt;/string>"
+        errorLine2="                                                       ~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="347"
+            column="56"/>
+    </issue>
+
+    <issue
+        id="TypographyEllipsis"
+        message="Replace &quot;...&quot; with ellipsis character (…, &amp;#8230;) ?"
+        errorLine1="    &lt;string name=&quot;network_nfs_form_status_connecting&quot;>Conectando...&lt;/string>"
+        errorLine2="                                                      ~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="366"
+            column="55"/>
+    </issue>
+
+    <issue
+        id="TypographyEllipsis"
+        message="Replace &quot;...&quot; with ellipsis character (…, &amp;#8230;) ?"
+        errorLine1="    &lt;string name=&quot;network_webdav_form_status_connecting&quot;>Conectando...&lt;/string>"
+        errorLine2="                                                         ~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="390"
+            column="58"/>
+    </issue>
+
+    <issue
+        id="TypographyEllipsis"
+        message="Replace &quot;...&quot; with ellipsis character (…, &amp;#8230;) ?"
+        errorLine1="    &lt;string name=&quot;network_discovery_scanning&quot;>Varrendo a rede local para SMB, NFS, FTP, SFTP e DLNA...&lt;/string>"
+        errorLine2="                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/res/values-pt-rBR/strings.xml"
+            line="397"
+            column="47"/>
+    </issue>
+
+    <issue
+        id="ViewConstructor"
+        message="Custom view `AudioTrackModal` is missing constructor used by tools: `(Context)` or `(Context,AttributeSet)` or `(Context,AttributeSet,int)`"
+        errorLine1="class AudioTrackModal("
+        errorLine2="      ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/AudioTrackModal.kt"
+            line="24"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="ViewConstructor"
+        message="Custom view `DebugStatsModal` is missing constructor used by tools: `(Context)` or `(Context,AttributeSet)` or `(Context,AttributeSet,int)`"
+        errorLine1="class DebugStatsModal("
+        errorLine2="      ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt"
+            line="31"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="ViewConstructor"
+        message="Custom view `EnvironmentSelectorModal` is missing constructor used by tools: `(Context)` or `(Context,AttributeSet)` or `(Context,AttributeSet,int)`"
+        errorLine1="class EnvironmentSelectorModal("
+        errorLine2="      ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/EnvironmentSelectorModal.kt"
+            line="21"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="ViewConstructor"
+        message="Custom view `PassthroughSettingsModal` is missing constructor used by tools: `(Context)` or `(Context,AttributeSet)` or `(Context,AttributeSet,int)`"
+        errorLine1="class PassthroughSettingsModal("
+        errorLine2="      ~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/PassthroughSettingsModal.kt"
+            line="25"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="ViewConstructor"
+        message="Custom view `PlaylistModal` is missing constructor used by tools: `(Context)` or `(Context,AttributeSet)` or `(Context,AttributeSet,int)`"
+        errorLine1="class PlaylistModal("
+        errorLine2="      ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/PlaylistModal.kt"
+            line="25"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="ViewConstructor"
+        message="Custom view `ResumePromptModal` is missing constructor used by tools: `(Context)` or `(Context,AttributeSet)` or `(Context,AttributeSet,int)`"
+        errorLine1="class ResumePromptModal("
+        errorLine2="      ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/ResumePromptModal.kt"
+            line="22"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="ViewConstructor"
+        message="Custom view `ScreenFormatModal` is missing constructor used by tools: `(Context)` or `(Context,AttributeSet)` or `(Context,AttributeSet,int)`"
+        errorLine1="class ScreenFormatModal("
+        errorLine2="      ~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/ScreenFormatModal.kt"
+            line="26"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="ViewConstructor"
+        message="Custom view `SubtitleSelectionModal` is missing constructor used by tools: `(Context)` or `(Context,AttributeSet)` or `(Context,AttributeSet,int)`"
+        errorLine1="class SubtitleSelectionModal("
+        errorLine2="      ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/SubtitleSelectionModal.kt"
+            line="22"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="ViewConstructor"
+        message="Custom view `VoidContextMenu` is missing constructor used by tools: `(Context)` or `(Context,AttributeSet)` or `(Context,AttributeSet,int)`"
+        errorLine1="class VoidContextMenu("
+        errorLine2="      ~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/VoidContextMenu.kt"
+            line="19"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="ViewConstructor"
+        message="Custom view `VoidIconButton` is missing constructor used by tools: `(Context)` or `(Context,AttributeSet)` or `(Context,AttributeSet,int)`"
+        errorLine1="class VoidIconButton @JvmOverloads constructor("
+        errorLine2="      ~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/VoidIconButton.kt"
+            line="9"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="ViewConstructor"
+        message="Custom view `VoidSearchBar` is missing constructor used by tools: `(Context)` or `(Context,AttributeSet)` or `(Context,AttributeSet,int)`"
+        errorLine1="class VoidSearchBar("
+        errorLine2="      ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/VoidSearchBar.kt"
+            line="19"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="ViewConstructor"
+        message="Custom view `VoidSortSelector` is missing constructor used by tools: `(Context)` or `(Context,AttributeSet)` or `(Context,AttributeSet,int)`"
+        errorLine1="class VoidSortSelector("
+        errorLine2="      ~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/VoidSortSelector.kt"
+            line="14"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="ViewConstructor"
+        message="Custom view `VoidTabRow` is missing constructor used by tools: `(Context)` or `(Context,AttributeSet)` or `(Context,AttributeSet,int)`"
+        errorLine1="class VoidTabRow("
+        errorLine2="      ~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/VoidTabRow.kt"
+            line="20"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="ViewConstructor"
+        message="Custom view `VoidTextField` is missing constructor used by tools: `(Context)` or `(Context,AttributeSet)` or `(Context,AttributeSet,int)`"
+        errorLine1="class VoidTextField("
+        errorLine2="      ~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/VoidTextField.kt"
+            line="74"
+            column="7"/>
+    </issue>
+
+    <issue
+        id="ClickableViewAccessibility"
+        message="`onTouch` lambda should call `View#performClick` when a click is detected"
+        errorLine1="                holder.itemView.setOnTouchListener { _, event ->"
+        errorLine2="                                                   ^">
+        <location
+            file="src/main/java/com/tucavr/screens/adapters/FileAdapter.kt"
+            line="242"
+            column="52"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="            view.text = &quot;$text (${ageMs}ms atrás)&quot;"
+        errorLine2="                        ~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt"
+            line="330"
+            column="25"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="            view.text = &quot;$text (${ageMs}ms atrás)&quot;"
+        errorLine2="                                        ~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt"
+            line="330"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        debugStatValueViews[&quot;stutter_freeze&quot;]?.text = &quot;${stats.stutterCount} / ${stats.freezeCount}&quot;"
+        errorLine2="                                                      ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt"
+            line="397"
+            column="55"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        debugStatValueViews[&quot;stereo&quot;]?.text = &quot;${stats.screenMode}$swapStr&quot;"
+        errorLine2="                                              ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt"
+            line="404"
+            column="47"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        debugStatValueViews[&quot;quality&quot;]?.text = &quot;${stats.qualityLevel} (${stats.qualityReason})&quot;"
+        errorLine2="                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt"
+            line="415"
+            column="48"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        debugStatValueViews[&quot;drawcalls&quot;]?.text = &quot;${stats.drawCallCount} / ${stats.triangleCount}&quot;"
+        errorLine2="                                                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt"
+            line="418"
+            column="50"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        debugStatValueViews[&quot;spatial_audio&quot;]?.text = &quot;$spatialName$headStr&quot;"
+        errorLine2="                                                     ~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt"
+            line="437"
+            column="54"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        debugStatValueViews[&quot;audio_track&quot;]?.text = &quot;${stats.audioTrackIndex + 1} / ${maxOf(1, stats.audioTrackCount)}&quot;"
+        errorLine2="                                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt"
+            line="439"
+            column="52"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        debugStatValueViews[&quot;audio_track&quot;]?.text = &quot;${stats.audioTrackIndex + 1} / ${maxOf(1, stats.audioTrackCount)}&quot;"
+        errorLine2="                                                      ~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt"
+            line="439"
+            column="55"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        debugStatValueViews[&quot;seek_latency&quot;]?.text = &quot;${stats.seekLatencyMs} ms&quot;"
+        errorLine2="                                                    ~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt"
+            line="467"
+            column="53"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="        debugStatValueViews[&quot;seek_latency&quot;]?.text = &quot;${stats.seekLatencyMs} ms&quot;"
+        errorLine2="                                                                           ~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt"
+            line="467"
+            column="76"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        debugStatValueViews[&quot;thermal&quot;]?.text = &quot;$thermalName (${stats.thermalLevel})&quot;"
+        errorLine2="                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt"
+            line="478"
+            column="48"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        debugStatValueViews[&quot;battery&quot;]?.text = &quot;$batteryPercent%$chargingStr&quot;"
+        errorLine2="                                               ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt"
+            line="481"
+            column="48"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        debugStatValueViews[&quot;app_version&quot;]?.text = &quot;${BuildConfig.VERSION_NAME} (${if (isDebuggable) &quot;Debug&quot; else &quot;Release&quot;})&quot;"
+        errorLine2="                                                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt"
+            line="482"
+            column="52"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="            text = &quot;+ &quot; + context.getString(R.string.playlists_new).trim()"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/screens/FileDetailScreen.kt"
+            line="457"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="            text = &quot;🪄 &quot; + context.getString(R.string.chroma_key_auto_detect_button)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/PassthroughSettingsModal.kt"
+            line="593"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="            text = &quot;◀  &quot; + context.getString(R.string.photo_viewer_prev)"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/screens/PhotoViewerScreen.kt"
+            line="123"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="            text = context.getString(R.string.photo_viewer_next) + &quot;  ▶&quot;"
+        errorLine2="                   ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/screens/PhotoViewerScreen.kt"
+            line="140"
+            column="20"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                dimensionsLabel?.text = context.getString("
+        errorLine2="                                        ^">
+        <location
+            file="src/main/java/com/tucavr/screens/PhotoViewerScreen.kt"
+            line="318"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                projectionLabel?.text = projLabel + stereoLabel"
+        errorLine2="                                        ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/screens/PhotoViewerScreen.kt"
+            line="332"
+            column="41"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="        zoomLabel?.text = &quot;1.00x&quot;"
+        errorLine2="                           ~~~~~">
+        <location
+            file="src/main/java/com/tucavr/screens/PhotoViewerScreen.kt"
+            line="361"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="        projectionLabel?.text = projLabel + stereoLabel"
+        errorLine2="                                ~~~~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/screens/PhotoViewerScreen.kt"
+            line="419"
+            column="33"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                    text = &quot;$kindLabel ($desc)&quot;"
+        errorLine2="                           ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/screens/PlayerScreen.kt"
+            line="233"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                    text = &quot;$kindLabel ($desc)&quot;"
+        errorLine2="                           ~~~~~~~~~~~~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/screens/PlayerScreen.kt"
+            line="248"
+            column="28"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="        if (::timeLabel.isInitialized) timeLabel.text = &quot;00:00&quot;"
+        errorLine2="                                                         ~~~~~">
+        <location
+            file="src/main/java/com/tucavr/VRControlsPresentation.kt"
+            line="61"
+            column="58"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="        if (::totalTimeLabel.isInitialized) totalTimeLabel.text = &quot;00:00&quot;"
+        errorLine2="                                                                   ~~~~~">
+        <location
+            file="src/main/java/com/tucavr/VRControlsPresentation.kt"
+            line="62"
+            column="68"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="                qualityBadge.text = &quot;AQ: MED&quot;"
+        errorLine2="                                     ~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/VRControlsPresentation.kt"
+            line="241"
+            column="38"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
+        errorLine1="                        if (::batteryLabel.isInitialized) batteryLabel.text = &quot;${pct}%&quot;"
+        errorLine2="                                                                              ~~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/VRControlsPresentation.kt"
+            line="436"
+            column="79"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="            text = &quot;100%&quot;"
+        errorLine2="                    ~~~~">
+        <location
+            file="src/main/java/com/tucavr/VRControlsPresentation.kt"
+            line="532"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="            text = &quot;12:00&quot;"
+        errorLine2="                    ~~~~~">
+        <location
+            file="src/main/java/com/tucavr/VRControlsPresentation.kt"
+            line="550"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="            text = &quot;00:00&quot;"
+        errorLine2="                    ~~~~~">
+        <location
+            file="src/main/java/com/tucavr/VRControlsPresentation.kt"
+            line="853"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="            text = &quot;00:00&quot;"
+        errorLine2="                    ~~~~~">
+        <location
+            file="src/main/java/com/tucavr/VRControlsPresentation.kt"
+            line="933"
+            column="21"/>
+    </issue>
+
+    <issue
+        id="SetTextI18n"
+        message="String literal in `setText` can not be translated. Use Android resources instead."
+        errorLine1="            text = &quot;📁 PASTA&quot;"
+        errorLine2="                    ~~~~~~~~">
+        <location
+            file="src/main/java/com/tucavr/designsystem/VoidGridCard.kt"
+            line="65"
+            column="21"/>
+    </issue>
+
+</issues>

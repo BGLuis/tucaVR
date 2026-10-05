@@ -6,7 +6,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DlnaItemParsingTest {
-
     data class DlnaItem(
         val id: String,
         val title: String,
@@ -15,7 +14,7 @@ class DlnaItemParsingTest {
         val sizeBytes: Long,
         val durationSec: Double,
         val resolution: String?,
-        val thumbnailUrl: String?
+        val thumbnailUrl: String?,
     )
 
     private fun parseDlnaItems(raw: String): List<DlnaItem> {
@@ -42,14 +41,15 @@ class DlnaItemParsingTest {
                 sizeBytes = size,
                 durationSec = dur,
                 resolution = resolution,
-                thumbnailUrl = thumb
+                thumbnailUrl = thumb,
             )
         }
     }
 
     @Test
     fun testParseDlnaItems() {
-        val raw = "1$0\tVideos\t1\t\t-1\t\t\t\n" +
+        val raw =
+            "1$0\tVideos\t1\t\t-1\t\t\t\n" +
                 "1$14\tBig Buck Bunny\t0\thttp://192.168.1.100:8200/MediaItems/14.mp4\t52428800\t596.00\t1920x1080\thttp://192.168.1.100:8200/MediaItems/14.jpg\n"
 
         val items = parseDlnaItems(raw)

@@ -11,15 +11,17 @@ package com.tucavr.debug
 enum class BottleneckStage {
     /** Vídeo não está estagnado (frame_gap_ms dentro do normal) — nada a atribuir. */
     NONE,
+
     /** Fila de vídeo praticamente vazia durante o estagno: o demux não está entregando
      * pacotes novos — rede lenta/caída, ou fonte remota travada. */
     NETWORK,
+
     /** Fila de vídeo praticamente cheia durante o estagno: pacotes chegaram, mas o
      * consumo (decode/sync/apresentação) parou de drenar — exatamente o padrão medido na
      * sessão real de §1.2 (`video_q_depth = 90` pelos 34,5s inteiros do stall). Sinal
      * atual não distingue decode/sync/render especificamente — granularidade além disto
      * exigiria contadores por estágio que ainda não existem no wire. */
-    PRESENTATION
+    PRESENTATION,
 }
 
 object BottleneckStageAnalyzer {

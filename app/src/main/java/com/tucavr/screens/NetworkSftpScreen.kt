@@ -1,14 +1,12 @@
 package com.tucavr.screens
 
 import android.content.Context
-import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
-import android.widget.ScrollView
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -65,9 +63,8 @@ class NetworkSftpScreen(
     private val scope: CoroutineScope,
     private val credentialStore: SftpCredentialStore,
     private val onNavigate: (Destination) -> Unit,
-    private val onBack: () -> Unit
+    private val onBack: () -> Unit,
 ) {
-
     var browsingServer: SftpServer? = null
     var browsePath: String = ""
 
@@ -91,109 +88,125 @@ class NetworkSftpScreen(
     fun buildAddServerForm(onSaved: () -> Unit): View {
         val form = VoidForm(context)
 
-        val fieldHost = form.field(
-            host = host,
-            label = context.getString(R.string.network_sftp_form_host_label),
-            hint = "sftp.example.com",
-            kind = VoidFieldKind.TEXT,
-            validator = FieldValidators.required(context.getString(R.string.network_sftp_form_status_host_required))
-        )
-        val fieldPort = form.field(
-            host = host,
-            label = context.getString(R.string.network_sftp_form_port_label),
-            hint = "22",
-            kind = VoidFieldKind.NUMBER,
-            validator = FieldValidators.port(context.getString(R.string.field_error_invalid_port))
-        )
-        val fieldUser = form.field(
-            host = host,
-            label = context.getString(R.string.network_sftp_form_user_label),
-            hint = "user",
-            kind = VoidFieldKind.TEXT,
-            validator = FieldValidators.required(context.getString(R.string.field_error_required))
-        )
+        val fieldHost =
+            form.field(
+                host = host,
+                label = context.getString(R.string.network_sftp_form_host_label),
+                hint = "sftp.example.com",
+                kind = VoidFieldKind.TEXT,
+                validator = FieldValidators.required(context.getString(R.string.network_sftp_form_status_host_required)),
+            )
+        val fieldPort =
+            form.field(
+                host = host,
+                label = context.getString(R.string.network_sftp_form_port_label),
+                hint = "22",
+                kind = VoidFieldKind.NUMBER,
+                validator = FieldValidators.port(context.getString(R.string.field_error_invalid_port)),
+            )
+        val fieldUser =
+            form.field(
+                host = host,
+                label = context.getString(R.string.network_sftp_form_user_label),
+                hint = "user",
+                kind = VoidFieldKind.TEXT,
+                validator = FieldValidators.required(context.getString(R.string.field_error_required)),
+            )
 
-        val fieldPass = VoidTextField(
-            context = context,
-            host = host,
-            label = context.getString(R.string.network_sftp_form_pass_label),
-            hint = "",
-            kind = VoidFieldKind.PASSWORD,
-            actions = setOf(VoidFieldAction.PASTE, VoidFieldAction.REVEAL, VoidFieldAction.CONTEXT_MENU)
-        )
-        val fieldKey = VoidTextField(
-            context = context,
-            host = host,
-            label = context.getString(R.string.network_sftp_form_key_label),
-            hint = context.getString(R.string.network_sftp_form_key_hint),
-            kind = VoidFieldKind.MULTILINE,
-            actions = setOf(VoidFieldAction.PASTE, VoidFieldAction.CLEAR, VoidFieldAction.CONTEXT_MENU)
-        )
+        val fieldPass =
+            VoidTextField(
+                context = context,
+                host = host,
+                label = context.getString(R.string.network_sftp_form_pass_label),
+                hint = "",
+                kind = VoidFieldKind.PASSWORD,
+                actions = setOf(VoidFieldAction.PASTE, VoidFieldAction.REVEAL, VoidFieldAction.CONTEXT_MENU),
+            )
+        val fieldKey =
+            VoidTextField(
+                context = context,
+                host = host,
+                label = context.getString(R.string.network_sftp_form_key_label),
+                hint = context.getString(R.string.network_sftp_form_key_hint),
+                kind = VoidFieldKind.MULTILINE,
+                actions = setOf(VoidFieldAction.PASTE, VoidFieldAction.CLEAR, VoidFieldAction.CONTEXT_MENU),
+            )
 
-        val keyCheckbox = CheckBox(context).apply {
-            text = context.getString(R.string.network_sftp_form_use_key_checkbox)
-            setTextColor(VoidTheme.colorText)
-            textSize = 14f
-            typeface = VoidTheme.typefaceBody
-            val pad = VoidTheme.dpToPx(context, 8f)
-            setPadding(pad, pad, pad, pad)
-            setOnCheckedChangeListener { _, isChecked ->
-                fieldPass.visibility = if (isChecked) View.GONE else View.VISIBLE
-                fieldKey.visibility = if (isChecked) View.VISIBLE else View.GONE
+        val keyCheckbox =
+            CheckBox(context).apply {
+                text = context.getString(R.string.network_sftp_form_use_key_checkbox)
+                setTextColor(VoidTheme.colorText)
+                textSize = 14f
+                typeface = VoidTheme.typefaceBody
+                val pad = VoidTheme.dpToPx(context, 8f)
+                setPadding(pad, pad, pad, pad)
+                setOnCheckedChangeListener { _, isChecked ->
+                    fieldPass.visibility = if (isChecked) View.GONE else View.VISIBLE
+                    fieldKey.visibility = if (isChecked) View.VISIBLE else View.GONE
+                }
             }
-        }
         fieldKey.visibility = View.GONE
 
         form.addView(keyCheckbox)
         form.addField(fieldPass)
         form.addField(fieldKey)
 
-        val statusText = VoidText.body(context, "", sizeSp = 14f, secondary = true).apply {
-            setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f))
-        }
+        val statusText =
+            VoidText.body(context, "", sizeSp = 14f, secondary = true).apply {
+                setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f))
+            }
 
-        val btnSave = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = context.getString(R.string.network_sftp_btn_test_save)
-            textSize = 16f
-            minHeight = VoidTheme.dpToPx(context, 48f)
-            setOnClickListener {
-                if (!form.validate()) return@setOnClickListener
+        val btnSave =
+            VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+                text = context.getString(R.string.network_sftp_btn_test_save)
+                textSize = 16f
+                minHeight = VoidTheme.dpToPx(context, 48f)
+                setOnClickListener {
+                    if (!form.validate()) return@setOnClickListener
 
-                val hostStr = fieldHost.getText().trim()
-                val portStr = fieldPort.getText().trim()
-                val port = if (portStr.isEmpty()) 22 else (portStr.toIntOrNull() ?: 22)
-                val user = fieldUser.getText().trim()
-                val useKey = keyCheckbox.isChecked
-                val pass = if (useKey) "" else fieldPass.getText().trim()
-                val key = if (useKey) fieldKey.getText().trim() else ""
+                    val hostStr = fieldHost.getText().trim()
+                    val portStr = fieldPort.getText().trim()
+                    val port = if (portStr.isEmpty()) 22 else (portStr.toIntOrNull() ?: 22)
+                    val user = fieldUser.getText().trim()
+                    val useKey = keyCheckbox.isChecked
+                    val pass = if (useKey) "" else fieldPass.getText().trim()
+                    val key = if (useKey) fieldKey.getText().trim() else ""
 
-                if (useKey && key.isEmpty()) {
-                    fieldKey.setError(context.getString(R.string.network_sftp_form_status_auth_required))
-                    return@setOnClickListener
-                }
+                    if (useKey && key.isEmpty()) {
+                        fieldKey.setError(context.getString(R.string.network_sftp_form_status_auth_required))
+                        return@setOnClickListener
+                    }
 
-                testAndSave(hostStr, port, user, pass, key, statusText) {
-                    form.clearAll()
-                    statusText.text = context.getString(R.string.network_sftp_form_status_connected)
-                    onSaved()
+                    testAndSave(hostStr, port, user, pass, key, statusText) {
+                        form.clearAll()
+                        statusText.text = context.getString(R.string.network_sftp_form_status_connected)
+                        onSaved()
+                    }
                 }
             }
-        }
 
         form.onFormSubmit = { btnSave.performClick() }
 
         form.addView(statusText)
-        form.addView(btnSave, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = VoidTheme.dpToPx(context, 8f) })
+        form.addView(
+            btnSave,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = VoidTheme.dpToPx(context, 8f) },
+        )
 
         return form
     }
 
     private fun testAndSave(
-        host: String, port: Int, username: String,
-        password: String, privateKey: String,
-        statusView: android.widget.TextView, onSaved: () -> Unit
+        host: String,
+        port: Int,
+        username: String,
+        password: String,
+        privateKey: String,
+        statusView: android.widget.TextView,
+        onSaved: () -> Unit,
     ) {
         if (host.isEmpty()) {
             statusView.text = context.getString(R.string.network_sftp_form_status_host_required)
@@ -205,25 +218,28 @@ class NetworkSftpScreen(
         }
         statusView.text = context.getString(R.string.network_sftp_form_status_connecting)
         scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                activity.nativeSftpListDirectory(host, port, username, password, privateKey, "")
-            }
+            val result =
+                withContext(Dispatchers.IO) {
+                    activity.nativeSftpListDirectory(host, port, username, password, privateKey, "")
+                }
             if (result.startsWith("ERROR:")) {
-                statusView.text = context.getString(
-                    R.string.network_sftp_form_status_error_format, result.removePrefix("ERROR:")
-                )
+                statusView.text =
+                    context.getString(
+                        R.string.network_sftp_form_status_error_format, result.removePrefix("ERROR:"),
+                    )
                 return@launch
             }
             statusView.text = context.getString(R.string.network_ftp_form_status_connected)
-            val server = SftpServer(
-                id         = credentialStore.newId(),
-                name       = host,
-                host       = host,
-                port       = port,
-                username   = username,
-                password   = password,
-                privateKey = privateKey.ifEmpty { null }
-            )
+            val server =
+                SftpServer(
+                    id = credentialStore.newId(),
+                    name = host,
+                    host = host,
+                    port = port,
+                    username = username,
+                    password = password,
+                    privateKey = privateKey.ifEmpty { null },
+                )
             credentialStore.save(server)
             onSaved()
         }
@@ -240,84 +256,94 @@ class NetworkSftpScreen(
         root.addView(
             VoidPanelChrome.buildHeader(
                 context,
-                title    = server.name,
+                title = server.name,
                 subtitle = if (browsePath.isEmpty()) "/" else browsePath,
-                onBack = { onBack() }
-            )
+                onBack = { onBack() },
+            ),
         )
 
         // Barra de Ferramentas
-        val toolbar = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                it.bottomMargin = VoidTheme.dpToPx(context, 10f)
+        val toolbar =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
+                        it.bottomMargin = VoidTheme.dpToPx(context, 10f)
+                    }
             }
-        }
 
-        searchBar = VoidSearchBar(
-            context = context,
-            host = host,
-            scope = scope,
-            hintText = context.getString(R.string.browser_search_hint),
-            activity = activity,
-            onQueryChanged = { query ->
-                searchQuery = query
-                applyFiltersAndSort()
+        searchBar =
+            VoidSearchBar(
+                context = context,
+                host = host,
+                scope = scope,
+                hintText = context.getString(R.string.browser_search_hint),
+                activity = activity,
+                onQueryChanged = { query ->
+                    searchQuery = query
+                    applyFiltersAndSort()
+                },
+            ).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).also {
+                        it.marginEnd = VoidTheme.dpToPx(context, 8f)
+                    }
             }
-        ).apply {
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).also {
-                it.marginEnd = VoidTheme.dpToPx(context, 8f)
-            }
-        }
         toolbar.addView(searchBar)
 
-        val sortSelector = VoidSortSelector(
-            context = context,
-            currentSortBy = currentConfig.sortBy,
-            currentAscending = currentConfig.ascending,
-            onSortChanged = { newSort, newAscending ->
-                currentConfig = currentConfig.copy(sortBy = newSort, ascending = newAscending)
-                folderConfigStore.saveConfigFor(folderKey, currentConfig)
-                applyFiltersAndSort()
+        val sortSelector =
+            VoidSortSelector(
+                context = context,
+                currentSortBy = currentConfig.sortBy,
+                currentAscending = currentConfig.ascending,
+                onSortChanged = { newSort, newAscending ->
+                    currentConfig = currentConfig.copy(sortBy = newSort, ascending = newAscending)
+                    folderConfigStore.saveConfigFor(folderKey, currentConfig)
+                    applyFiltersAndSort()
+                },
+            ).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
+                        it.marginEnd = VoidTheme.dpToPx(context, 8f)
+                    }
             }
-        ).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                it.marginEnd = VoidTheme.dpToPx(context, 8f)
-            }
-        }
         toolbar.addView(sortSelector)
 
-        val viewModeBtn = VoidIconButton(
-            context,
-            if (currentConfig.viewMode == ViewMode.GRID) R.drawable.ic_view_list else R.drawable.ic_view_grid,
-            VoidButtonStyle.SECONDARY,
-            isCircular = false
-        ).apply {
-            layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 48f), VoidTheme.dpToPx(context, 48f))
-            setOnClickListener {
-                val nextMode = if (currentConfig.viewMode == ViewMode.GRID) ViewMode.LIST else ViewMode.GRID
-                currentConfig = currentConfig.copy(viewMode = nextMode)
-                folderConfigStore.saveConfigFor(folderKey, currentConfig)
-                setImageResource(if (nextMode == ViewMode.GRID) R.drawable.ic_view_list else R.drawable.ic_view_grid)
-                updateLayoutManager()
-                applyFiltersAndSort()
+        val viewModeBtn =
+            VoidIconButton(
+                context,
+                if (currentConfig.viewMode == ViewMode.GRID) R.drawable.ic_view_list else R.drawable.ic_view_grid,
+                VoidButtonStyle.SECONDARY,
+                isCircular = false,
+            ).apply {
+                layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 48f), VoidTheme.dpToPx(context, 48f))
+                setOnClickListener {
+                    val nextMode = if (currentConfig.viewMode == ViewMode.GRID) ViewMode.LIST else ViewMode.GRID
+                    currentConfig = currentConfig.copy(viewMode = nextMode)
+                    folderConfigStore.saveConfigFor(folderKey, currentConfig)
+                    setImageResource(if (nextMode == ViewMode.GRID) R.drawable.ic_view_list else R.drawable.ic_view_grid)
+                    updateLayoutManager()
+                    applyFiltersAndSort()
+                }
             }
-        }
         toolbar.addView(viewModeBtn)
         root.addView(toolbar)
 
         // Chips de Filtro
-        val filterScrollView = HorizontalScrollView(context).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                it.bottomMargin = VoidTheme.dpToPx(context, 8f)
+        val filterScrollView =
+            HorizontalScrollView(context).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
+                        it.bottomMargin = VoidTheme.dpToPx(context, 8f)
+                    }
+                isHorizontalScrollBarEnabled = false
             }
-            isHorizontalScrollBarEnabled = false
-        }
-        val filterChipRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
+        val filterChipRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
 
         // Chips de Tipo
         val typeChips = mutableListOf<Pair<MediaTypeFilter, VoidFilterChip>>()
@@ -325,13 +351,15 @@ class NetworkSftpScreen(
             MediaTypeFilter.ALL to R.string.browser_filter_all,
             MediaTypeFilter.VIDEO to R.string.browser_filter_video,
             MediaTypeFilter.AUDIO to R.string.browser_filter_audio,
-            MediaTypeFilter.IMAGE to R.string.browser_filter_image
+            MediaTypeFilter.IMAGE to R.string.browser_filter_image,
         ).forEach { (type, res) ->
-            val chip = VoidFilterChip(context, context.getString(res), isSelectedChip = currentTypeFilter == type).apply {
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                    it.marginEnd = VoidTheme.dpToPx(context, 8f)
+            val chip =
+                VoidFilterChip(context, context.getString(res), isSelectedChip = currentTypeFilter == type).apply {
+                    layoutParams =
+                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
+                            it.marginEnd = VoidTheme.dpToPx(context, 8f)
+                        }
                 }
-            }
             typeChips.add(type to chip)
             chip.setOnClickListener {
                 currentTypeFilter = type
@@ -348,13 +376,15 @@ class NetworkSftpScreen(
             Format3DFilter.SBS to R.string.browser_filter_3d_sbs,
             Format3DFilter.OU to R.string.browser_filter_3d_ou,
             Format3DFilter.VR_180 to R.string.browser_filter_3d_180,
-            Format3DFilter.VR_360 to R.string.browser_filter_3d_360
+            Format3DFilter.VR_360 to R.string.browser_filter_3d_360,
         ).forEach { (f3d, res) ->
-            val chip = VoidFilterChip(context, context.getString(res), isSelectedChip = currentFormat3DFilter == f3d).apply {
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                    it.marginEnd = VoidTheme.dpToPx(context, 8f)
+            val chip =
+                VoidFilterChip(context, context.getString(res), isSelectedChip = currentFormat3DFilter == f3d).apply {
+                    layoutParams =
+                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
+                            it.marginEnd = VoidTheme.dpToPx(context, 8f)
+                        }
                 }
-            }
             format3DChips.add(f3d to chip)
             chip.setOnClickListener {
                 currentFormat3DFilter = f3d
@@ -368,80 +398,90 @@ class NetworkSftpScreen(
         root.addView(filterScrollView)
 
         // Contador de Resultados
-        val counterView = VoidText.mono(context, "", sizeSp = 13f, secondary = true).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                it.bottomMargin = VoidTheme.dpToPx(context, 6f)
+        val counterView =
+            VoidText.mono(context, "", sizeSp = 13f, secondary = true).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
+                        it.bottomMargin = VoidTheme.dpToPx(context, 6f)
+                    }
             }
-        }
         countLabel = counterView
         root.addView(counterView)
 
         // Recycler com FileAdapter universal
-        val recycler = RecyclerView(context).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-        }
+        val recycler =
+            RecyclerView(context).apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            }
         recyclerView = recycler
         updateLayoutManager()
 
-        val fileAdapter = FileAdapter(
-            context = context,
-            scope = scope,
-            onUpClick = { onBack() },
-            onDirectoryClick = { entry ->
-                browsePath = entry.path
-                searchBar?.clear()
-                searchQuery = ""
-                renderFiles(server)
-            },
-            onVideoClick = { entry ->
-                val source = PlaybackSource.Sftp(server, entry.path, entry.sizeBytes)
-                activity.playSftp(server, entry.path, resumeAtMs = 0L)
-                onNavigate(Destination.Player(source))
-            },
-            thumbnailLoader = { entry ->
-                val source = PlaybackSource.Sftp(server, entry.path, entry.sizeBytes)
-                NetworkThumbnailGenerator.getThumbnail(context, activity, source)
-            },
-            metadataBadgeLoader = { entry ->
-                MediaMetadataReader.readCachedSummary(context, PlaybackSource.Sftp(server, entry.path, entry.sizeBytes))
-            }
-        )
+        val fileAdapter =
+            FileAdapter(
+                context = context,
+                scope = scope,
+                onUpClick = { onBack() },
+                onDirectoryClick = { entry ->
+                    browsePath = entry.path
+                    searchBar?.clear()
+                    searchQuery = ""
+                    renderFiles(server)
+                },
+                onVideoClick = { entry ->
+                    val source = PlaybackSource.Sftp(server, entry.path, entry.sizeBytes)
+                    activity.playSftp(server, entry.path, resumeAtMs = 0L)
+                    onNavigate(Destination.Player(source))
+                },
+                thumbnailLoader = { entry ->
+                    val source = PlaybackSource.Sftp(server, entry.path, entry.sizeBytes)
+                    NetworkThumbnailGenerator.getThumbnail(context, activity, source)
+                },
+                metadataBadgeLoader = { entry ->
+                    MediaMetadataReader.readCachedSummary(context, PlaybackSource.Sftp(server, entry.path, entry.sizeBytes))
+                },
+            )
         adapter = fileAdapter
         recycler.adapter = fileAdapter
         root.addView(recycler)
 
         // Empty State View
-        emptyContainer = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-            visibility = View.GONE
-
-            addView(VoidText.body(context, context.getString(R.string.network_files_empty), sizeSp = 16f, secondary = true).apply {
+        emptyContainer =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
-            })
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+                visibility = View.GONE
 
-            addView(VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-                text = context.getString(R.string.browser_btn_clear_filters)
-                textSize = 15f
-                minHeight = VoidTheme.dpToPx(context, 48f)
-                val padH = VoidTheme.dpToPx(context, 16f)
-                val padV = VoidTheme.dpToPx(context, 10f)
-                setPadding(padH, padV, padH, padV)
-                setOnClickListener {
-                    searchBar?.clear()
-                    searchQuery = ""
-                    currentTypeFilter = MediaTypeFilter.ALL
-                    currentFormat3DFilter = Format3DFilter.ALL
-                    currentDateFilter = DateFilter.ALL
-                    typeChips.forEach { (t, c) -> c.setSelectedState(t == MediaTypeFilter.ALL) }
-                    format3DChips.forEach { (f, c) -> c.setSelectedState(f == Format3DFilter.ALL) }
-                    applyFiltersAndSort()
-                }
-            }, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = VoidTheme.dpToPx(context, 12f)
-            })
-        }
+                addView(
+                    VoidText.body(context, context.getString(R.string.network_files_empty), sizeSp = 16f, secondary = true).apply {
+                        gravity = Gravity.CENTER
+                    },
+                )
+
+                addView(
+                    VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                        text = context.getString(R.string.browser_btn_clear_filters)
+                        textSize = 15f
+                        minHeight = VoidTheme.dpToPx(context, 48f)
+                        val padH = VoidTheme.dpToPx(context, 16f)
+                        val padV = VoidTheme.dpToPx(context, 10f)
+                        setPadding(padH, padV, padH, padV)
+                        setOnClickListener {
+                            searchBar?.clear()
+                            searchQuery = ""
+                            currentTypeFilter = MediaTypeFilter.ALL
+                            currentFormat3DFilter = Format3DFilter.ALL
+                            currentDateFilter = DateFilter.ALL
+                            typeChips.forEach { (t, c) -> c.setSelectedState(t == MediaTypeFilter.ALL) }
+                            format3DChips.forEach { (f, c) -> c.setSelectedState(f == Format3DFilter.ALL) }
+                            applyFiltersAndSort()
+                        }
+                    },
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = VoidTheme.dpToPx(context, 12f)
+                    },
+                )
+            }
         root.addView(emptyContainer)
 
         host.showScreen(root)
@@ -451,13 +491,15 @@ class NetworkSftpScreen(
     private fun updateLayoutManager() {
         val recycler = recyclerView ?: return
         if (currentConfig.viewMode == ViewMode.GRID) {
-            val gridLayout = GridLayoutManager(context, 3).apply {
-                spanSizeLookup = object : GridLayoutManager.SpanSizeLookup() {
-                    override fun getSpanSize(position: Int): Int {
-                        return if (position == 0 && browsePath.isNotEmpty()) 3 else 1
-                    }
+            val gridLayout =
+                GridLayoutManager(context, 3).apply {
+                    spanSizeLookup =
+                        object : GridLayoutManager.SpanSizeLookup() {
+                            override fun getSpanSize(position: Int): Int {
+                                return if (position == 0 && browsePath.isNotEmpty()) 3 else 1
+                            }
+                        }
                 }
-            }
             recycler.layoutManager = gridLayout
         } else {
             recycler.layoutManager = LinearLayoutManager(context)
@@ -478,12 +520,17 @@ class NetworkSftpScreen(
     private fun loadDirectory(server: SftpServer) {
         val requestedPath = browsePath
         scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                activity.nativeSftpListDirectory(
-                    server.host, server.port, server.username, server.password,
-                    server.privateKey ?: "", requestedPath
-                )
-            }
+            val result =
+                withContext(Dispatchers.IO) {
+                    activity.nativeSftpListDirectory(
+                        server.host,
+                        server.port,
+                        server.username,
+                        server.password,
+                        server.privateKey ?: "",
+                        requestedPath,
+                    )
+                }
             if (browsingServer != server || browsePath != requestedPath) return@launch
 
             if (result.startsWith("ERROR:")) {
@@ -493,40 +540,53 @@ class NetworkSftpScreen(
             }
 
             val lines = result.split("\n").filter { it.isNotBlank() }
-            val entries = lines.mapNotNull { line ->
-                val parts = line.split("\t")
-                val name = parts.getOrNull(0) ?: return@mapNotNull null
-                val isDir = parts.getOrNull(1) == "1"
-                val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
-                val childPath = if (requestedPath.isEmpty()) name else "$requestedPath/$name"
+            val entries =
+                lines.mapNotNull { line ->
+                    val parts = line.split("\t")
+                    val name = parts.getOrNull(0) ?: return@mapNotNull null
+                    val isDir = parts.getOrNull(1) == "1"
+                    val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
+                    val childPath = if (requestedPath.isEmpty()) name else "$requestedPath/$name"
 
-                val type = if (isDir) MediaType.DIRECTORY else (mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO)
-                val f3d = if (type == MediaType.VIDEO) MediaFilterEngine.detectFormat3DFromFilename(name) else com.tucavr.filebrowser.Format3DType.FLAT_2D
+                    val type = if (isDir) MediaType.DIRECTORY else (mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO)
+                    val f3d =
+                        if (type == MediaType.VIDEO) {
+                            MediaFilterEngine.detectFormat3DFromFilename(
+                                name,
+                            )
+                        } else {
+                            com.tucavr.filebrowser.Format3DType.FLAT_2D
+                        }
 
-                MediaEntry(
-                    name = name,
-                    path = childPath,
-                    sizeBytes = sizeBytes,
-                    lastModified = 0L,
-                    type = type,
-                    format3DHint = f3d
-                )
-            }
-
-            val pruned = NetworkFolderProber.pruneEmptyFolders(
-                context = context,
-                sourceKind = "sftp",
-                entries = entries,
-                folderKeyFor = { entry -> CacheKeys.forFolder("sftp", server.host, server.port, null, entry.path) },
-                scanFnFor = { entry ->
-                    {
-                        activity.nativeSftpScanFolderHasMedia(
-                            server.host, server.port, server.username, server.password,
-                            server.privateKey ?: "", entry.path
-                        )
-                    }
+                    MediaEntry(
+                        name = name,
+                        path = childPath,
+                        sizeBytes = sizeBytes,
+                        lastModified = 0L,
+                        type = type,
+                        format3DHint = f3d,
+                    )
                 }
-            )
+
+            val pruned =
+                NetworkFolderProber.pruneEmptyFolders(
+                    context = context,
+                    sourceKind = "sftp",
+                    entries = entries,
+                    folderKeyFor = { entry -> CacheKeys.forFolder("sftp", server.host, server.port, null, entry.path) },
+                    scanFnFor = { entry ->
+                        {
+                            activity.nativeSftpScanFolderHasMedia(
+                                server.host,
+                                server.port,
+                                server.username,
+                                server.password,
+                                server.privateKey ?: "",
+                                entry.path,
+                            )
+                        }
+                    },
+                )
             if (browsingServer != server || browsePath != requestedPath) return@launch
 
             cachedRawEntries = pruned
@@ -538,26 +598,27 @@ class NetworkSftpScreen(
         val currentAdapter = adapter ?: return
         val showUp = browsePath.isNotEmpty()
 
-        val filtered = cachedRawEntries.filter { entry ->
-            MediaFilterEngine.matchesFilter(
-                entry = entry,
-                query = searchQuery,
-                typeFilter = currentTypeFilter,
-                format3DFilter = currentFormat3DFilter,
-                dateFilter = currentDateFilter
-            )
-        }
+        val filtered =
+            cachedRawEntries.filter { entry ->
+                MediaFilterEngine.matchesFilter(
+                    entry = entry,
+                    query = searchQuery,
+                    typeFilter = currentTypeFilter,
+                    format3DFilter = currentFormat3DFilter,
+                    dateFilter = currentDateFilter,
+                )
+            }
 
         val sorted = sortMediaEntries(filtered, currentConfig.sortBy, currentConfig.ascending)
         currentAdapter.submit(sorted, showUp, currentConfig.viewMode, searchQuery)
 
-        countLabel?.text = context.getString(
-            R.string.browser_results_count_format, sorted.size, cachedRawEntries.size
-        )
+        countLabel?.text =
+            context.getString(
+                R.string.browser_results_count_format, sorted.size, cachedRawEntries.size,
+            )
 
         val isEmpty = sorted.isEmpty() && !showUp
         recyclerView?.visibility = if (isEmpty) View.GONE else View.VISIBLE
         emptyContainer?.visibility = if (isEmpty) View.GONE else View.GONE
     }
-
 }

@@ -22,9 +22,8 @@ class VoidSearchBar(
     private val scope: CoroutineScope,
     hintText: String = "",
     private val activity: VRActivity? = null,
-    private val onQueryChanged: (query: String) -> Unit
+    private val onQueryChanged: (query: String) -> Unit,
 ) : LinearLayout(context) {
-
     val textField: VoidTextField
     val editText: EditText get() = textField.editText
     private var debounceJob: Job? = null
@@ -34,23 +33,25 @@ class VoidSearchBar(
         gravity = Gravity.CENTER_VERTICAL
         layoutParams = LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
-        textField = VoidTextField(
-            context = context,
-            host = host,
-            hint = hintText,
-            kind = VoidFieldKind.TEXT,
-            actions = setOf(VoidFieldAction.CLEAR, VoidFieldAction.PASTE, VoidFieldAction.CONTEXT_MENU)
-        ).apply {
-            layoutParams = LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-        }
+        textField =
+            VoidTextField(
+                context = context,
+                host = host,
+                hint = hintText,
+                kind = VoidFieldKind.TEXT,
+                actions = setOf(VoidFieldAction.CLEAR, VoidFieldAction.PASTE, VoidFieldAction.CONTEXT_MENU),
+            ).apply {
+                layoutParams = LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            }
         addView(textField)
 
         textField.setOnTextChangedListener { query ->
             debounceJob?.cancel()
-            debounceJob = scope.launch {
-                delay(500L) // Debounce de 500ms (T12.1 / T12.2)
-                onQueryChanged(query)
-            }
+            debounceJob =
+                scope.launch {
+                    delay(500L) // Debounce de 500ms (T12.1 / T12.2)
+                    onQueryChanged(query)
+                }
         }
     }
 

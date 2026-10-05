@@ -15,9 +15,10 @@ import org.junit.Test
 // disk I/O, android.graphics.Bitmap) needs a real device and is left for
 // manual/on-device testing.
 class NetworkThumbnailGeneratorCacheKeyTest {
-
-    private fun smbServer(host: String = "192.168.1.10", share: String = "media") =
-        SmbServer(id = "s1", name = "Server", host = host, port = 445, share = share, username = "", password = "", domain = "")
+    private fun smbServer(
+        host: String = "192.168.1.10",
+        share: String = "media",
+    ) = SmbServer(id = "s1", name = "Server", host = host, port = 445, share = share, username = "", password = "", domain = "")
 
     private fun ftpServer(host: String = "192.168.1.10") =
         FtpServer(id = "f1", name = "Server", host = host, port = 21, username = "", password = "")

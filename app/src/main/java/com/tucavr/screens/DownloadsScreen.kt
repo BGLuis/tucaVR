@@ -28,7 +28,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
 import java.util.Locale
 
 /**
@@ -44,9 +43,8 @@ class DownloadsScreen(
     private val repository: DownloadRepository,
     private val diskSpaceManager: DiskSpaceManager = DiskSpaceManager(),
     private val onNavigate: (Destination) -> Unit,
-    private val onBack: () -> Unit
+    private val onBack: () -> Unit,
 ) {
-
     private lateinit var listContainer: LinearLayout
     private lateinit var storageInfoText: View
     private lateinit var emptyView: View
@@ -63,20 +61,21 @@ class DownloadsScreen(
                 onBack = {
                     livePollJob?.cancel()
                     onBack()
-                }
-            )
+                },
+            ),
         )
 
         // Seção de armazenamento livre no Quest 3
-        val storageSection = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(
-                0,
-                VoidTheme.dpToPx(context, 8f),
-                0,
-                VoidTheme.dpToPx(context, 12f)
-            )
-        }
+        val storageSection =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(
+                    0,
+                    VoidTheme.dpToPx(context, 8f),
+                    0,
+                    VoidTheme.dpToPx(context, 12f),
+                )
+            }
 
         val downloadDir = DownloadRepository.getDefaultDownloadDir()
         val spaceInfo = diskSpaceManager.getDiskSpaceInfo(downloadDir)
@@ -88,67 +87,75 @@ class DownloadsScreen(
         storageSection.addView(storageInfoText)
 
         if (diskSpaceManager.isLowStorage(downloadDir)) {
-            val warning = VoidText.body(
-                context,
-                context.getString(R.string.downloads_storage_low_warning),
-                sizeSp = 14f
-            ).apply {
-                setTextColor(Color.parseColor("#FFCC00")) // Amarelo de alerta
-                setPadding(0, VoidTheme.dpToPx(context, 4f), 0, 0)
-            }
+            val warning =
+                VoidText.body(
+                    context,
+                    context.getString(R.string.downloads_storage_low_warning),
+                    sizeSp = 14f,
+                ).apply {
+                    setTextColor(Color.parseColor("#FFCC00")) // Amarelo de alerta
+                    setPadding(0, VoidTheme.dpToPx(context, 4f), 0, 0)
+                }
             storageSection.addView(warning)
         }
 
         root.addView(storageSection)
 
         // Lista rolável de downloads
-        val scrollView = ScrollView(context).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                0,
-                1f
-            )
-            isFillViewport = true
-        }
+        val scrollView =
+            ScrollView(context).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        0,
+                        1f,
+                    )
+                isFillViewport = true
+            }
 
-        listContainer = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
+        listContainer =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    )
+            }
 
-        emptyView = VoidText.body(
-            context,
-            context.getString(R.string.downloads_empty),
-            sizeSp = 18f,
-            secondary = true
-        ).apply {
-            gravity = Gravity.CENTER
-            setPadding(0, VoidTheme.dpToPx(context, 48f), 0, VoidTheme.dpToPx(context, 48f))
-            visibility = View.GONE
-        }
+        emptyView =
+            VoidText.body(
+                context,
+                context.getString(R.string.downloads_empty),
+                sizeSp = 18f,
+                secondary = true,
+            ).apply {
+                gravity = Gravity.CENTER
+                setPadding(0, VoidTheme.dpToPx(context, 48f), 0, VoidTheme.dpToPx(context, 48f))
+                visibility = View.GONE
+            }
         listContainer.addView(emptyView)
         scrollView.addView(listContainer)
         root.addView(scrollView)
 
         // Rodapé de ações globais
-        val footer = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
-            setPadding(0, VoidTheme.dpToPx(context, 12f), 0, 0)
-        }
+        val footer =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END
+                setPadding(0, VoidTheme.dpToPx(context, 12f), 0, 0)
+            }
 
-        val btnClearCompleted = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-            text = context.getString(R.string.downloads_btn_clear_completed)
-            setOnClickListener {
-                scope.launch {
-                    repository.clearCompleted()
-                    loadDownloads()
+        val btnClearCompleted =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.downloads_btn_clear_completed)
+                setOnClickListener {
+                    scope.launch {
+                        repository.clearCompleted()
+                        loadDownloads()
+                    }
                 }
             }
-        }
         footer.addView(btnClearCompleted)
         root.addView(footer)
 
@@ -169,16 +176,17 @@ class DownloadsScreen(
 
     private fun startLivePolling() {
         livePollJob?.cancel()
-        livePollJob = scope.launch {
-            while (isActive) {
-                repository.syncActiveDownloads()
-                val downloads = repository.listAll()
-                withContext(Dispatchers.Main) {
-                    renderItems(downloads)
+        livePollJob =
+            scope.launch {
+                while (isActive) {
+                    repository.syncActiveDownloads()
+                    val downloads = repository.listAll()
+                    withContext(Dispatchers.Main) {
+                        renderItems(downloads)
+                    }
+                    delay(1000)
                 }
-                delay(1000)
             }
-        }
     }
 
     private fun renderItems(downloads: List<Download>) {
@@ -207,96 +215,113 @@ class DownloadsScreen(
         currentBytes: Long,
         totalBytes: Long,
         state: String,
-        speedBps: Long
+        speedBps: Long,
     ): View {
-        val card = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = VoidTheme.dpToPx(context, 12f)
+        val card =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 12f)
+                    }
+                background =
+                    GradientDrawable().apply {
+                        setColor(VoidTheme.colorSurfaceAlt)
+                        cornerRadius = VoidTheme.dp(context, 8f)
+                    }
+                setPadding(
+                    VoidTheme.dpToPx(context, 16f),
+                    VoidTheme.dpToPx(context, 12f),
+                    VoidTheme.dpToPx(context, 16f),
+                    VoidTheme.dpToPx(context, 12f),
+                )
             }
-            background = GradientDrawable().apply {
-                setColor(VoidTheme.colorSurfaceAlt)
-                cornerRadius = VoidTheme.dp(context, 8f)
-            }
-            setPadding(
-                VoidTheme.dpToPx(context, 16f),
-                VoidTheme.dpToPx(context, 12f),
-                VoidTheme.dpToPx(context, 16f),
-                VoidTheme.dpToPx(context, 12f)
-            )
-        }
 
         // Top row: Nome do arquivo + Badge de Estado
-        val topRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-        }
+        val topRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
 
-        val nameView = VoidText.body(context, item.displayName, sizeSp = 18f).apply {
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
+        val nameView =
+            VoidText.body(context, item.displayName, sizeSp = 18f).apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
 
-        val stateLabel = when (state) {
-            DownloadStatus.QUEUED -> context.getString(R.string.downloads_status_queued)
-            DownloadStatus.DOWNLOADING -> context.getString(R.string.downloads_status_downloading)
-            DownloadStatus.PAUSED -> context.getString(R.string.downloads_status_paused)
-            DownloadStatus.COMPLETED -> context.getString(R.string.downloads_status_completed)
-            DownloadStatus.FAILED -> context.getString(R.string.downloads_status_failed)
-            DownloadStatus.CANCELLED -> context.getString(R.string.downloads_status_failed)
-            else -> state
-        }
+        val stateLabel =
+            when (state) {
+                DownloadStatus.QUEUED -> context.getString(R.string.downloads_status_queued)
+                DownloadStatus.DOWNLOADING -> context.getString(R.string.downloads_status_downloading)
+                DownloadStatus.PAUSED -> context.getString(R.string.downloads_status_paused)
+                DownloadStatus.COMPLETED -> context.getString(R.string.downloads_status_completed)
+                DownloadStatus.FAILED -> context.getString(R.string.downloads_status_failed)
+                DownloadStatus.CANCELLED -> context.getString(R.string.downloads_status_failed)
+                else -> state
+            }
 
-        val stateColor = when (state) {
-            DownloadStatus.COMPLETED -> Color.parseColor("#4CAF50") // Verde
-            DownloadStatus.DOWNLOADING -> Color.parseColor("#00E5FF") // Void Cyan
-            DownloadStatus.PAUSED -> Color.parseColor("#FFCC00") // Amarelo
-            DownloadStatus.FAILED, DownloadStatus.CANCELLED -> Color.parseColor("#F44336") // Vermelho
-            else -> VoidTheme.colorTextSecondary
-        }
+        val stateColor =
+            when (state) {
+                DownloadStatus.COMPLETED -> Color.parseColor("#4CAF50") // Verde
+                DownloadStatus.DOWNLOADING -> Color.parseColor("#00E5FF") // Void Cyan
+                DownloadStatus.PAUSED -> Color.parseColor("#FFCC00") // Amarelo
+                DownloadStatus.FAILED, DownloadStatus.CANCELLED -> Color.parseColor("#F44336") // Vermelho
+                else -> VoidTheme.colorTextSecondary
+            }
 
-        val stateBadge = VoidText.body(context, stateLabel, sizeSp = 14f).apply {
-            setTextColor(stateColor)
-            setPadding(VoidTheme.dpToPx(context, 8f), 0, 0, 0)
-        }
+        val stateBadge =
+            VoidText.body(context, stateLabel, sizeSp = 14f).apply {
+                setTextColor(stateColor)
+                setPadding(VoidTheme.dpToPx(context, 8f), 0, 0, 0)
+            }
 
         topRow.addView(nameView)
         topRow.addView(stateBadge)
         card.addView(topRow)
 
         // Barra de progresso horizontal
-        val percent = if (totalBytes > 0) {
-            ((currentBytes.toDouble() / totalBytes.toDouble()) * 100).toInt().coerceIn(0, 100)
-        } else {
-            0
-        }
-
-        val progressBar = ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                VoidTheme.dpToPx(context, 8f)
-            ).apply {
-                topMargin = VoidTheme.dpToPx(context, 8f)
-                bottomMargin = VoidTheme.dpToPx(context, 6f)
+        val percent =
+            if (totalBytes > 0) {
+                ((currentBytes.toDouble() / totalBytes.toDouble()) * 100).toInt().coerceIn(0, 100)
+            } else {
+                0
             }
-            max = 100
-            this.progress = percent
-            isIndeterminate = (state == DownloadStatus.DOWNLOADING && totalBytes == 0L)
-        }
+
+        val progressBar =
+            ProgressBar(context, null, android.R.attr.progressBarStyleHorizontal).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        VoidTheme.dpToPx(context, 8f),
+                    ).apply {
+                        topMargin = VoidTheme.dpToPx(context, 8f)
+                        bottomMargin = VoidTheme.dpToPx(context, 6f)
+                    }
+                max = 100
+                this.progress = percent
+                isIndeterminate = (state == DownloadStatus.DOWNLOADING && totalBytes == 0L)
+            }
         card.addView(progressBar)
 
         // Linha de métricas: baixados / total, velocidade e ETA
-        val speedStr = if (speedBps > 0) {
-            val mb = speedBps.toDouble() / (1024.0 * 1024.0)
-            String.format(Locale.US, "%.1f MB/s", mb)
-        } else ""
+        val speedStr =
+            if (speedBps > 0) {
+                val mb = speedBps.toDouble() / (1024.0 * 1024.0)
+                String.format(Locale.US, "%.1f MB/s", mb)
+            } else {
+                ""
+            }
 
-        val etaStr = if (speedBps > 0 && totalBytes > currentBytes) {
-            val remainingSecs = (totalBytes - currentBytes) / speedBps
-            formatEta(remainingSecs)
-        } else ""
+        val etaStr =
+            if (speedBps > 0 && totalBytes > currentBytes) {
+                val remainingSecs = (totalBytes - currentBytes) / speedBps
+                formatEta(remainingSecs)
+            } else {
+                ""
+            }
 
         val currFormatted = DiskSpaceManager.formatBytes(currentBytes)
         val totalFormatted = if (totalBytes > 0) DiskSpaceManager.formatBytes(totalBytes) else "—"
@@ -313,109 +338,119 @@ class DownloadsScreen(
         card.addView(detailsView)
 
         // Botões de ação contextuais por tarefa
-        val actionsRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.END
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = VoidTheme.dpToPx(context, 10f)
+        val actionsRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        topMargin = VoidTheme.dpToPx(context, 10f)
+                    }
             }
-        }
 
         when (state) {
             DownloadStatus.DOWNLOADING, DownloadStatus.QUEUED -> {
-                val btnPause = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-                    text = context.getString(R.string.downloads_btn_pause)
-                    textSize = 14f
-                    setOnClickListener {
-                        scope.launch {
-                            repository.pause(item.id)
-                            loadDownloads()
+                val btnPause =
+                    VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                        text = context.getString(R.string.downloads_btn_pause)
+                        textSize = 14f
+                        setOnClickListener {
+                            scope.launch {
+                                repository.pause(item.id)
+                                loadDownloads()
+                            }
                         }
                     }
-                }
-                val btnCancel = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-                    text = context.getString(R.string.downloads_btn_cancel)
-                    textSize = 14f
-                    setOnClickListener {
-                        scope.launch {
-                            repository.cancel(item.id)
-                            loadDownloads()
+                val btnCancel =
+                    VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                        text = context.getString(R.string.downloads_btn_cancel)
+                        textSize = 14f
+                        setOnClickListener {
+                            scope.launch {
+                                repository.cancel(item.id)
+                                loadDownloads()
+                            }
                         }
                     }
-                }
                 actionsRow.addView(btnPause)
                 actionsRow.addView(btnCancel)
             }
             DownloadStatus.PAUSED -> {
-                val btnResume = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-                    text = context.getString(R.string.downloads_btn_resume)
-                    textSize = 14f
-                    setOnClickListener {
-                        scope.launch {
-                            repository.resume(item.id)
-                            loadDownloads()
+                val btnResume =
+                    VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+                        text = context.getString(R.string.downloads_btn_resume)
+                        textSize = 14f
+                        setOnClickListener {
+                            scope.launch {
+                                repository.resume(item.id)
+                                loadDownloads()
+                            }
                         }
                     }
-                }
-                val btnCancel = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-                    text = context.getString(R.string.downloads_btn_cancel)
-                    textSize = 14f
-                    setOnClickListener {
-                        scope.launch {
-                            repository.cancel(item.id)
-                            loadDownloads()
+                val btnCancel =
+                    VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                        text = context.getString(R.string.downloads_btn_cancel)
+                        textSize = 14f
+                        setOnClickListener {
+                            scope.launch {
+                                repository.cancel(item.id)
+                                loadDownloads()
+                            }
                         }
                     }
-                }
                 actionsRow.addView(btnResume)
                 actionsRow.addView(btnCancel)
             }
             DownloadStatus.COMPLETED -> {
-                val btnPlay = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-                    text = context.getString(R.string.downloads_btn_play)
-                    textSize = 14f
-                    setOnClickListener {
-                        livePollJob?.cancel()
-                        onNavigate(Destination.Player(PlaybackSource.LocalFile(item.destinationPath, item.totalBytes)))
-                    }
-                }
-                val btnDelete = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-                    text = context.getString(R.string.playlists_delete)
-                    textSize = 14f
-                    setOnClickListener {
-                        scope.launch {
-                            repository.delete(item.id)
-                            loadDownloads()
+                val btnPlay =
+                    VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+                        text = context.getString(R.string.downloads_btn_play)
+                        textSize = 14f
+                        setOnClickListener {
+                            livePollJob?.cancel()
+                            onNavigate(Destination.Player(PlaybackSource.LocalFile(item.destinationPath, item.totalBytes)))
                         }
                     }
-                }
+                val btnDelete =
+                    VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                        text = context.getString(R.string.playlists_delete)
+                        textSize = 14f
+                        setOnClickListener {
+                            scope.launch {
+                                repository.delete(item.id)
+                                loadDownloads()
+                            }
+                        }
+                    }
                 actionsRow.addView(btnPlay)
                 actionsRow.addView(btnDelete)
             }
             DownloadStatus.FAILED, DownloadStatus.CANCELLED -> {
-                val btnRetry = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-                    text = context.getString(R.string.downloads_btn_retry)
-                    textSize = 14f
-                    setOnClickListener {
-                        scope.launch {
-                            repository.resume(item.id)
-                            loadDownloads()
+                val btnRetry =
+                    VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+                        text = context.getString(R.string.downloads_btn_retry)
+                        textSize = 14f
+                        setOnClickListener {
+                            scope.launch {
+                                repository.resume(item.id)
+                                loadDownloads()
+                            }
                         }
                     }
-                }
-                val btnDelete = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-                    text = context.getString(R.string.playlists_delete)
-                    textSize = 14f
-                    setOnClickListener {
-                        scope.launch {
-                            repository.delete(item.id)
-                            loadDownloads()
+                val btnDelete =
+                    VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                        text = context.getString(R.string.playlists_delete)
+                        textSize = 14f
+                        setOnClickListener {
+                            scope.launch {
+                                repository.delete(item.id)
+                                loadDownloads()
+                            }
                         }
                     }
-                }
                 actionsRow.addView(btnRetry)
                 actionsRow.addView(btnDelete)
             }

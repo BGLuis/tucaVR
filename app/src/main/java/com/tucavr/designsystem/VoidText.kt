@@ -8,9 +8,12 @@ import android.widget.TextView
  * repetir `typeface = ...; setTextColor(...)` em cada painel.
  */
 object VoidText {
-
     /** Titulo de tela — serifada, cor de texto primaria. */
-    fun title(context: Context, text: String, sizeSp: Float = 30f): TextView =
+    fun title(
+        context: Context,
+        text: String,
+        sizeSp: Float = 30f,
+    ): TextView =
         TextView(context).apply {
             this.text = text
             typeface = VoidTheme.typefaceTitle
@@ -19,7 +22,12 @@ object VoidText {
         }
 
     /** Texto de corpo — sans-serif do sistema, cor primaria ou secundaria. */
-    fun body(context: Context, text: String, sizeSp: Float = 20f, secondary: Boolean = false): TextView =
+    fun body(
+        context: Context,
+        text: String,
+        sizeSp: Float = 20f,
+        secondary: Boolean = false,
+    ): TextView =
         TextView(context).apply {
             this.text = text
             typeface = VoidTheme.typefaceBody
@@ -28,7 +36,12 @@ object VoidText {
         }
 
     /** Rotulos/dados tecnicos (caminhos, enderecos, contadores) — monoespacada. */
-    fun mono(context: Context, text: String, sizeSp: Float = 16f, secondary: Boolean = true): TextView =
+    fun mono(
+        context: Context,
+        text: String,
+        sizeSp: Float = 16f,
+        secondary: Boolean = true,
+    ): TextView =
         TextView(context).apply {
             this.text = text
             typeface = VoidTheme.typefaceMono

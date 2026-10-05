@@ -7,9 +7,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ApplicationExitInfoReporterTest {
-
-    private fun summary(reasonCode: Int, timestampMs: Long, pid: Int = 1234, description: String = "") =
-        ApplicationExitInfoReporter.ExitReasonSummary(reasonCode, timestampMs, pid, description)
+    private fun summary(
+        reasonCode: Int,
+        timestampMs: Long,
+        pid: Int = 1234,
+        description: String = "",
+    ) = ApplicationExitInfoReporter.ExitReasonSummary(reasonCode, timestampMs, pid, description)
 
     @Test
     fun anrAndNativeCrashAreRelevantOthersAreNot() {
@@ -22,12 +25,13 @@ class ApplicationExitInfoReporterTest {
 
     @Test
     fun filterNewRelevantExcludesOldAndIrrelevantEntries() {
-        val all = listOf(
-            summary(ApplicationExitInfo.REASON_ANR, timestampMs = 1000L),
-            summary(ApplicationExitInfo.REASON_CRASH_NATIVE, timestampMs = 500L), // antigo demais
-            summary(ApplicationExitInfo.REASON_USER_REQUESTED, timestampMs = 2000L), // irrelevante
-            summary(ApplicationExitInfo.REASON_CRASH_NATIVE, timestampMs = 3000L)
-        )
+        val all =
+            listOf(
+                summary(ApplicationExitInfo.REASON_ANR, timestampMs = 1000L),
+                summary(ApplicationExitInfo.REASON_CRASH_NATIVE, timestampMs = 500L), // antigo demais
+                summary(ApplicationExitInfo.REASON_USER_REQUESTED, timestampMs = 2000L), // irrelevante
+                summary(ApplicationExitInfo.REASON_CRASH_NATIVE, timestampMs = 3000L),
+            )
 
         val result = ApplicationExitInfoReporter.filterNewRelevant(all, lastSeenTimestampMs = 900L)
 
@@ -44,19 +48,21 @@ class ApplicationExitInfoReporterTest {
 
     @Test
     fun filterNewRelevantSortsChronologically() {
-        val all = listOf(
-            summary(ApplicationExitInfo.REASON_ANR, timestampMs = 3000L),
-            summary(ApplicationExitInfo.REASON_CRASH_NATIVE, timestampMs = 1000L)
-        )
+        val all =
+            listOf(
+                summary(ApplicationExitInfo.REASON_ANR, timestampMs = 3000L),
+                summary(ApplicationExitInfo.REASON_CRASH_NATIVE, timestampMs = 1000L),
+            )
         val result = ApplicationExitInfoReporter.filterNewRelevant(all, lastSeenTimestampMs = 0L)
         assertEquals(listOf(1000L, 3000L), result.map { it.timestampMs })
     }
 
     @Test
     fun formatReportIncludesReasonNameTimestampPidAndDescription() {
-        val report = ApplicationExitInfoReporter.formatReport(
-            listOf(summary(ApplicationExitInfo.REASON_ANR, timestampMs = 1234L, pid = 999, description = "input dispatch timed out"))
-        )
+        val report =
+            ApplicationExitInfoReporter.formatReport(
+                listOf(summary(ApplicationExitInfo.REASON_ANR, timestampMs = 1234L, pid = 999, description = "input dispatch timed out")),
+            )
         assertTrue(report.contains("ANR"))
         assertTrue(report.contains("1234"))
         assertTrue(report.contains("999"))

@@ -35,7 +35,6 @@ import com.tucavr.network.SmbServer
  * `VRPresentation` (botao "Voltar" apontado/clicado), nao os botoes fisicos.
  */
 sealed class Destination {
-
     /** Tela inicial: "Arquivos locais" | "Rede" | "Continuar assistindo". */
     object Home : Destination()
 
@@ -61,7 +60,7 @@ sealed class Destination {
         val source: PlaybackSource,
         val displayName: String,
         val sizeBytes: Long = 0L,
-        val lastModified: Long = 0L
+        val lastModified: Long = 0L,
     ) : Destination()
 
     /**
@@ -106,7 +105,7 @@ sealed class Destination {
     data class PhotoViewer(
         val initialEntry: com.tucavr.filebrowser.MediaEntry,
         val photoEntries: List<com.tucavr.filebrowser.MediaEntry>,
-        val initialIndex: Int = 0
+        val initialIndex: Int = 0,
     ) : Destination()
 
     /** Fase 0.4 Seção 4: tela do gerenciador de downloads offline. */
@@ -128,16 +127,23 @@ sealed class Destination {
  */
 sealed class PlaybackSource {
     data class LocalFile(val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
+
     data class Http(val url: String) : PlaybackSource()
+
     data class Smb(val server: SmbServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
+
     /** T6.4: mesma logica de [Smb] acima, ver `VRActivity.playFtp`. */
     data class Ftp(val server: FtpServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
+
     /** T6.4: mesma logica de [Smb] acima, ver `VRActivity.playSftp`. */
     data class Sftp(val server: SftpServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
+
     /** T5.4: playback NFS a partir de um [SavedServer]. */
     data class Nfs(val server: SavedServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
+
     /** T7.4: playback DLNA a partir de um [SavedServer]. */
     data class Dlna(val server: SavedServer, val title: String, val url: String, val sizeBytes: Long = 0L) : PlaybackSource()
+
     /** T3.2/T3.4: playback WebDAV a partir de um [SavedServer]. */
     data class Webdav(val server: SavedServer, val path: String, val sizeBytes: Long = 0L) : PlaybackSource()
 }

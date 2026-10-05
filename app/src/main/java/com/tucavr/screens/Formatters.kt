@@ -12,7 +12,10 @@ import java.util.Locale
  * centralizadas aqui para evitar duplicação e facilitar testes.
  */
 
-fun formatFileSize(context: Context, bytes: Long): String {
+fun formatFileSize(
+    context: Context,
+    bytes: Long,
+): String {
     val mb = bytes / (1024.0 * 1024.0)
     return if (mb >= 1024) {
         context.getString(com.tucavr.R.string.browser_label_size_gb_format, mb / 1024.0)
@@ -21,5 +24,4 @@ fun formatFileSize(context: Context, bytes: Long): String {
     }
 }
 
-fun formatModifiedDate(millis: Long): String =
-    SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(millis))
+fun formatModifiedDate(millis: Long): String = SimpleDateFormat("yyyy-MM-dd HH:mm", Locale.getDefault()).format(Date(millis))

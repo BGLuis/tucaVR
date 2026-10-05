@@ -19,12 +19,12 @@ import kotlinx.coroutines.withContext
 class PlaybackHistoryTracker internal constructor(
     private val dao: PlaybackHistoryDao,
     private val scope: CoroutineScope,
-    private val throttle: PlaybackProgressThrottle
+    private val throttle: PlaybackProgressThrottle,
 ) {
     constructor(context: Context) : this(
         dao = AppDatabase.getInstance(context).playbackHistoryDao(),
         scope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
-        throttle = PlaybackProgressThrottle()
+        throttle = PlaybackProgressThrottle(),
     )
 
     // Estado da midia tocando agora — atualizado a cada `startTracking` e a
@@ -45,19 +45,23 @@ class PlaybackHistoryTracker internal constructor(
      * `durationMs = 0` imediatamente poluiria a tela de T9.4 com uma entrada
      * sem progresso visivel enquanto o video ainda esta carregando.
      */
-    fun startTracking(source: PlaybackSource, title: String) {
+    fun startTracking(
+        source: PlaybackSource,
+        title: String,
+    ) {
         throttle.reset()
-        current = PlaybackHistory(
-            historyKey = source.historyKey(),
-            title = title,
-            mediaPath = source.mediaPath(),
-            positionMs = 0L,
-            durationMs = 0L,
-            lastPlayedAt = System.currentTimeMillis(),
-            thumbnailPath = null,
-            sourceType = source.historySourceType(),
-            serverInfo = source.serverInfoJson()
-        )
+        current =
+            PlaybackHistory(
+                historyKey = source.historyKey(),
+                title = title,
+                mediaPath = source.mediaPath(),
+                positionMs = 0L,
+                durationMs = 0L,
+                lastPlayedAt = System.currentTimeMillis(),
+                thumbnailPath = null,
+                sourceType = source.historySourceType(),
+                serverInfo = source.serverInfoJson(),
+            )
     }
 
     /**
@@ -67,16 +71,20 @@ class PlaybackHistoryTracker internal constructor(
      * (~a cada 10s) e quando ha uma midia sendo rastreada
      * ([startTracking] ja foi chamado).
      */
-    fun onProgress(currentSec: Float, totalSec: Float) {
+    fun onProgress(
+        currentSec: Float,
+        totalSec: Float,
+    ) {
         val base = current ?: return
         if (totalSec <= 0f) return
         if (!throttle.shouldSave()) return
 
-        val updated = base.copy(
-            positionMs = (currentSec * 1000).toLong().coerceAtLeast(0L),
-            durationMs = (totalSec * 1000).toLong().coerceAtLeast(0L),
-            lastPlayedAt = System.currentTimeMillis()
-        )
+        val updated =
+            base.copy(
+                positionMs = (currentSec * 1000).toLong().coerceAtLeast(0L),
+                durationMs = (totalSec * 1000).toLong().coerceAtLeast(0L),
+                lastPlayedAt = System.currentTimeMillis(),
+            )
         current = updated
         scope.launch { dao.upsert(updated) }
     }
@@ -85,15 +93,19 @@ class PlaybackHistoryTracker internal constructor(
      * Força o salvamento imediato do progresso atual (sem esperar o throttle de 10s),
      * chamado ao encerrar a reprodução (ex: botão Fechar/X).
      */
-    fun flushProgress(currentSec: Float, totalSec: Float) {
+    fun flushProgress(
+        currentSec: Float,
+        totalSec: Float,
+    ) {
         val base = current ?: return
         if (totalSec <= 0f) return
 
-        val updated = base.copy(
-            positionMs = (currentSec * 1000).toLong().coerceAtLeast(0L),
-            durationMs = (totalSec * 1000).toLong().coerceAtLeast(0L),
-            lastPlayedAt = System.currentTimeMillis()
-        )
+        val updated =
+            base.copy(
+                positionMs = (currentSec * 1000).toLong().coerceAtLeast(0L),
+                durationMs = (totalSec * 1000).toLong().coerceAtLeast(0L),
+                lastPlayedAt = System.currentTimeMillis(),
+            )
         current = updated
         scope.launch { dao.upsert(updated) }
     }
@@ -114,12 +126,10 @@ class PlaybackHistoryTracker internal constructor(
      * internamente, entao o chamador so precisa estar dentro de QUALQUER
      * coroutine.
      */
-    suspend fun findExisting(source: PlaybackSource): PlaybackHistory? =
-        withContext(Dispatchers.IO) { dao.findByKey(source.historyKey()) }
+    suspend fun findExisting(source: PlaybackSource): PlaybackHistory? = withContext(Dispatchers.IO) { dao.findByKey(source.historyKey()) }
 
     /** T9.4: lista completa, mais recentes primeiro. */
-    suspend fun listRecent(): List<PlaybackHistory> =
-        withContext(Dispatchers.IO) { dao.listRecentFirst() }
+    suspend fun listRecent(): List<PlaybackHistory> = withContext(Dispatchers.IO) { dao.listRecentFirst() }
 
     suspend fun delete(historyKey: String) {
         withContext(Dispatchers.IO) { dao.deleteByKey(historyKey) }

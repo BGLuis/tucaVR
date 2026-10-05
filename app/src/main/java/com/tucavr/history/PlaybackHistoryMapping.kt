@@ -40,102 +40,113 @@ import org.json.JSONObject
  *    `VRPresentation.loadNetworkDirectory` monta `childPath`), entao nao ha
  *    um campo `filename` separado — seria redundante.
  */
-fun PlaybackSource.historyKey(): String = when (this) {
-    is PlaybackSource.LocalFile -> "local|$path|$sizeBytes"
-    is PlaybackSource.Http -> "http|$url"
-    is PlaybackSource.Smb -> "smb|${server.name}|${server.share}|$path|$sizeBytes"
-    // Mesmo raciocinio do SMB acima (aviso do doc, secao 9): so `server.name`
-    // (rotulo escolhido pelo usuario), nunca host/porta (que podem mudar).
-    is PlaybackSource.Ftp -> "ftp|${server.name}|$path|$sizeBytes"
-    is PlaybackSource.Sftp -> "sftp|${server.name}|$path|$sizeBytes"
-    is PlaybackSource.Nfs -> "nfs|${server.name}|${server.path}|$path|$sizeBytes"
-    is PlaybackSource.Dlna -> "dlna|${server.name}|$url|$sizeBytes"
-    is PlaybackSource.Webdav -> "webdav|${server.name}|${server.path}|$path|$sizeBytes"
-}
+fun PlaybackSource.historyKey(): String =
+    when (this) {
+        is PlaybackSource.LocalFile -> "local|$path|$sizeBytes"
+        is PlaybackSource.Http -> "http|$url"
+        is PlaybackSource.Smb -> "smb|${server.name}|${server.share}|$path|$sizeBytes"
+        // Mesmo raciocinio do SMB acima (aviso do doc, secao 9): so `server.name`
+        // (rotulo escolhido pelo usuario), nunca host/porta (que podem mudar).
+        is PlaybackSource.Ftp -> "ftp|${server.name}|$path|$sizeBytes"
+        is PlaybackSource.Sftp -> "sftp|${server.name}|$path|$sizeBytes"
+        is PlaybackSource.Nfs -> "nfs|${server.name}|${server.path}|$path|$sizeBytes"
+        is PlaybackSource.Dlna -> "dlna|${server.name}|$url|$sizeBytes"
+        is PlaybackSource.Webdav -> "webdav|${server.name}|${server.path}|$path|$sizeBytes"
+    }
 
 /** Ver [PlaybackHistory.mediaPath]. */
-fun PlaybackSource.mediaPath(): String = when (this) {
-    is PlaybackSource.LocalFile -> path
-    is PlaybackSource.Http -> url
-    is PlaybackSource.Smb -> path
-    is PlaybackSource.Ftp -> path
-    is PlaybackSource.Sftp -> path
-    is PlaybackSource.Nfs -> path
-    is PlaybackSource.Dlna -> url
-    is PlaybackSource.Webdav -> path
-}
+fun PlaybackSource.mediaPath(): String =
+    when (this) {
+        is PlaybackSource.LocalFile -> path
+        is PlaybackSource.Http -> url
+        is PlaybackSource.Smb -> path
+        is PlaybackSource.Ftp -> path
+        is PlaybackSource.Sftp -> path
+        is PlaybackSource.Nfs -> path
+        is PlaybackSource.Dlna -> url
+        is PlaybackSource.Webdav -> path
+    }
 
-fun PlaybackSource.historySourceType(): HistorySourceType = when (this) {
-    is PlaybackSource.LocalFile -> HistorySourceType.LOCAL
-    is PlaybackSource.Http -> HistorySourceType.HTTP
-    is PlaybackSource.Smb -> HistorySourceType.SMB
-    is PlaybackSource.Ftp -> HistorySourceType.FTP
-    is PlaybackSource.Sftp -> HistorySourceType.SFTP
-    is PlaybackSource.Nfs -> HistorySourceType.NFS
-    is PlaybackSource.Dlna -> HistorySourceType.DLNA
-    is PlaybackSource.Webdav -> HistorySourceType.WEBDAV
-}
+fun PlaybackSource.historySourceType(): HistorySourceType =
+    when (this) {
+        is PlaybackSource.LocalFile -> HistorySourceType.LOCAL
+        is PlaybackSource.Http -> HistorySourceType.HTTP
+        is PlaybackSource.Smb -> HistorySourceType.SMB
+        is PlaybackSource.Ftp -> HistorySourceType.FTP
+        is PlaybackSource.Sftp -> HistorySourceType.SFTP
+        is PlaybackSource.Nfs -> HistorySourceType.NFS
+        is PlaybackSource.Dlna -> HistorySourceType.DLNA
+        is PlaybackSource.Webdav -> HistorySourceType.WEBDAV
+    }
 
 /** Titulo padrao (usado quando quem chama nao tem um titulo melhor a mao). */
-fun PlaybackSource.defaultHistoryTitle(): String = when (this) {
-    is PlaybackSource.LocalFile -> path.substringAfterLast('/')
-    is PlaybackSource.Http -> url
-    is PlaybackSource.Smb -> path.substringAfterLast('/')
-    is PlaybackSource.Ftp -> path.substringAfterLast('/')
-    is PlaybackSource.Sftp -> path.substringAfterLast('/')
-    is PlaybackSource.Nfs -> path.substringAfterLast('/')
-    is PlaybackSource.Dlna -> title
-    is PlaybackSource.Webdav -> path.substringAfterLast('/')
-}
+fun PlaybackSource.defaultHistoryTitle(): String =
+    when (this) {
+        is PlaybackSource.LocalFile -> path.substringAfterLast('/')
+        is PlaybackSource.Http -> url
+        is PlaybackSource.Smb -> path.substringAfterLast('/')
+        is PlaybackSource.Ftp -> path.substringAfterLast('/')
+        is PlaybackSource.Sftp -> path.substringAfterLast('/')
+        is PlaybackSource.Nfs -> path.substringAfterLast('/')
+        is PlaybackSource.Dlna -> title
+        is PlaybackSource.Webdav -> path.substringAfterLast('/')
+    }
 
 /**
  * JSON com dados do servidor SMB/FTP/SFTP/NFS/DLNA para [PlaybackHistory.serverInfo]
  * — `null` para fontes que nao vem de um servidor salvo (local/HTTP).
  */
-fun PlaybackSource.serverInfoJson(): String? = when (this) {
-    is PlaybackSource.Smb -> JSONObject().apply {
-        put("serverId", server.id)
-        put("name", server.name)
-        put("host", server.host)
-        put("port", server.port)
-        put("share", server.share)
-        put("domain", server.domain)
-    }.toString()
-    is PlaybackSource.Ftp -> JSONObject().apply {
-        put("serverId", server.id)
-        put("name", server.name)
-        put("host", server.host)
-        put("port", server.port)
-    }.toString()
-    is PlaybackSource.Sftp -> JSONObject().apply {
-        put("serverId", server.id)
-        put("name", server.name)
-        put("host", server.host)
-        put("port", server.port)
-    }.toString()
-    is PlaybackSource.Nfs -> JSONObject().apply {
-        put("serverId", server.id)
-        put("name", server.name)
-        put("host", server.host)
-        put("port", server.port)
-        put("exportPath", server.path)
-    }.toString()
-    is PlaybackSource.Dlna -> JSONObject().apply {
-        put("serverId", server.id)
-        put("name", server.name)
-        put("host", server.host)
-        put("port", server.port)
-        put("controlUrl", server.path)
-    }.toString()
-    is PlaybackSource.Webdav -> JSONObject().apply {
-        put("serverId", server.id)
-        put("name", server.name)
-        put("host", server.host)
-        put("port", server.port)
-        put("basePath", server.path)
-        if (!server.extraJson.isNullOrEmpty()) {
-            put("extraJson", server.extraJson)
-        }
-    }.toString()
-    else -> null
-}
+fun PlaybackSource.serverInfoJson(): String? =
+    when (this) {
+        is PlaybackSource.Smb ->
+            JSONObject().apply {
+                put("serverId", server.id)
+                put("name", server.name)
+                put("host", server.host)
+                put("port", server.port)
+                put("share", server.share)
+                put("domain", server.domain)
+            }.toString()
+        is PlaybackSource.Ftp ->
+            JSONObject().apply {
+                put("serverId", server.id)
+                put("name", server.name)
+                put("host", server.host)
+                put("port", server.port)
+            }.toString()
+        is PlaybackSource.Sftp ->
+            JSONObject().apply {
+                put("serverId", server.id)
+                put("name", server.name)
+                put("host", server.host)
+                put("port", server.port)
+            }.toString()
+        is PlaybackSource.Nfs ->
+            JSONObject().apply {
+                put("serverId", server.id)
+                put("name", server.name)
+                put("host", server.host)
+                put("port", server.port)
+                put("exportPath", server.path)
+            }.toString()
+        is PlaybackSource.Dlna ->
+            JSONObject().apply {
+                put("serverId", server.id)
+                put("name", server.name)
+                put("host", server.host)
+                put("port", server.port)
+                put("controlUrl", server.path)
+            }.toString()
+        is PlaybackSource.Webdav ->
+            JSONObject().apply {
+                put("serverId", server.id)
+                put("name", server.name)
+                put("host", server.host)
+                put("port", server.port)
+                put("basePath", server.path)
+                if (!server.extraJson.isNullOrEmpty()) {
+                    put("extraJson", server.extraJson)
+                }
+            }.toString()
+        else -> null
+    }

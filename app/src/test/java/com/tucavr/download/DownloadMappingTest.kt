@@ -15,7 +15,6 @@ import org.junit.Test
  * Valida a codificação correta dos separadores NUL (\u0000) e esquemas de rede.
  */
 class DownloadMappingTest {
-
     private val sep = '\u0000'
 
     @Test
@@ -27,16 +26,17 @@ class DownloadMappingTest {
 
     @Test
     fun `smb source mapping with null separators`() {
-        val server = SmbServer(
-            id = "s1",
-            name = "NAS",
-            host = "192.168.1.100",
-            port = 445,
-            share = "Movies",
-            username = "admin",
-            password = "secret",
-            domain = "WORKGROUP"
-        )
+        val server =
+            SmbServer(
+                id = "s1",
+                name = "NAS",
+                host = "192.168.1.100",
+                port = 445,
+                share = "Movies",
+                username = "admin",
+                password = "secret",
+                domain = "WORKGROUP",
+            )
         val src = PlaybackSource.Smb(server, "/Action/avatar.mkv", 5000L)
         val expected = "smb://192.168.1.100:445${sep}Movies${sep}Action/avatar.mkv${sep}admin${sep}secret${sep}WORKGROUP"
 
@@ -46,14 +46,15 @@ class DownloadMappingTest {
 
     @Test
     fun `ftp source mapping with null separators`() {
-        val server = FtpServer(
-            id = "f1",
-            name = "FTP",
-            host = "10.0.0.5",
-            port = 21,
-            username = "ftpuser",
-            password = "ftppassword"
-        )
+        val server =
+            FtpServer(
+                id = "f1",
+                name = "FTP",
+                host = "10.0.0.5",
+                port = 21,
+                username = "ftpuser",
+                password = "ftppassword",
+            )
         val src = PlaybackSource.Ftp(server, "vids/clip.mp4", 1234L)
         val expected = "ftp://10.0.0.5:21${sep}vids/clip.mp4${sep}ftpuser${sep}ftppassword"
 
@@ -63,17 +64,18 @@ class DownloadMappingTest {
 
     @Test
     fun `sftp source mapping with key`() {
-        val server = SftpServer(
-            id = "sf1",
-            name = "SFTP",
-            host = "10.0.0.6",
-            port = 22,
-            username = "sshuser",
-            password = "",
-            privateKey = "-----BEGIN OPENSSH PRIVATE KEY-----..."
-        )
+        val server =
+            SftpServer(
+                id = "sf1",
+                name = "SFTP",
+                host = "10.0.0.6",
+                port = 22,
+                username = "sshuser",
+                password = "",
+                privateKey = "-----BEGIN OPENSSH PRIVATE KEY-----...",
+            )
         val src = PlaybackSource.Sftp(server, "/home/sshuser/video.mp4", 4321L)
-        val expected = "sftp://10.0.0.6:22${sep}home/sshuser/video.mp4${sep}sshuser${sep}${sep}-----BEGIN OPENSSH PRIVATE KEY-----..."
+        val expected = "sftp://10.0.0.6:22${sep}home/sshuser/video.mp4${sep}sshuser${sep}$sep-----BEGIN OPENSSH PRIVATE KEY-----..."
 
         assertEquals(expected, src.toDownloadInternalUri())
         assertEquals("SFTP", src.toSourceTypeString())
@@ -81,16 +83,17 @@ class DownloadMappingTest {
 
     @Test
     fun `nfs source mapping includes version 3`() {
-        val server = SavedServer(
-            id = "nfs1",
-            name = "NFS Server",
-            protocol = ServerProtocol.NFS,
-            host = "192.168.1.200",
-            port = 2049,
-            path = "/exports/media"
-        )
+        val server =
+            SavedServer(
+                id = "nfs1",
+                name = "NFS Server",
+                protocol = ServerProtocol.NFS,
+                host = "192.168.1.200",
+                port = 2049,
+                path = "/exports/media",
+            )
         val src = PlaybackSource.Nfs(server, "movies/inception.mkv", 8888L)
-        val expected = "nfs://192.168.1.200:2049${sep}/exports/media${sep}movies/inception.mkv${sep}3"
+        val expected = "nfs://192.168.1.200:2049$sep/exports/media${sep}movies/inception.mkv${sep}3"
 
         assertEquals(expected, src.toDownloadInternalUri())
         assertEquals("NFS", src.toSourceTypeString())
@@ -98,33 +101,35 @@ class DownloadMappingTest {
 
     @Test
     fun `webdav source mapping parses extraJson flags`() {
-        val server = SavedServer(
-            id = "wd1",
-            name = "Nextcloud",
-            protocol = ServerProtocol.WEBDAV,
-            host = "cloud.example.com",
-            port = 443,
-            path = "/remote.php/webdav",
-            username = "clouduser",
-            extraJson = "{\"useHttps\":true,\"acceptInvalidCerts\":false}"
-        )
+        val server =
+            SavedServer(
+                id = "wd1",
+                name = "Nextcloud",
+                protocol = ServerProtocol.WEBDAV,
+                host = "cloud.example.com",
+                port = 443,
+                path = "/remote.php/webdav",
+                username = "clouduser",
+                extraJson = "{\"useHttps\":true,\"acceptInvalidCerts\":false}",
+            )
         val src = PlaybackSource.Webdav(server, "Photos/trip.mp4", 9999L)
         val uri = src.toDownloadInternalUri()
 
-        assertTrue(uri.startsWith("webdav://cloud.example.com:443${sep}/remote.php/webdav${sep}Photos/trip.mp4${sep}clouduser${sep}"))
+        assertTrue(uri.startsWith("webdav://cloud.example.com:443$sep/remote.php/webdav${sep}Photos/trip.mp4${sep}clouduser$sep"))
         assertTrue(uri.endsWith("${sep}1${sep}0"))
         assertEquals("WEBDAV", src.toSourceTypeString())
     }
 
     @Test
     fun `dlna source mapping`() {
-        val server = SavedServer(
-            id = "dlna1",
-            name = "Media Server",
-            protocol = ServerProtocol.DLNA,
-            host = "192.168.1.50",
-            port = 50001
-        )
+        val server =
+            SavedServer(
+                id = "dlna1",
+                name = "Media Server",
+                protocol = ServerProtocol.DLNA,
+                host = "192.168.1.50",
+                port = 50001,
+            )
         val src = PlaybackSource.Dlna(server, "Stream Title", "http://192.168.1.50:50001/stream.mp4", 1000L)
         assertEquals("http://192.168.1.50:50001/stream.mp4", src.toDownloadInternalUri())
         assertEquals("DLNA", src.toSourceTypeString())

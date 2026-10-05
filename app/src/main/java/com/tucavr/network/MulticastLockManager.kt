@@ -11,16 +11,16 @@ import android.util.Log
  * Deve ser adquirido APENAS durante a tela de Descoberta e liberado imediatamente ao sair.
  */
 class MulticastLockManager(context: Context) {
-
     private val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
     private var multicastLock: WifiManager.MulticastLock? = null
 
     @Synchronized
     fun acquire() {
         if (multicastLock == null) {
-            multicastLock = wifiManager?.createMulticastLock(LOCK_TAG)?.apply {
-                setReferenceCounted(false)
-            }
+            multicastLock =
+                wifiManager?.createMulticastLock(LOCK_TAG)?.apply {
+                    setReferenceCounted(false)
+                }
         }
         multicastLock?.let { lock ->
             if (!lock.isHeld) {

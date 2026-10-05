@@ -2,7 +2,6 @@ package com.tucavr
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
@@ -10,7 +9,6 @@ import org.junit.Test
  * Valida limites de clamping, conversões de modo de screen glow e flags de modo noturno.
  */
 class EnvironmentLightingTest {
-
     @Test
     fun testScreenGlowModeMapping() {
         assertEquals(0.0f, FeatureFlags.screenGlowModeToFloat(FeatureFlags.SCREEN_GLOW_OFF), 0.001f)

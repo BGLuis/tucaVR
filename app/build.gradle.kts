@@ -6,15 +6,17 @@ plugins {
     id("org.jetbrains.kotlin.android")
     // T9.1: Room usa KSP em vez de kapt (ver justificativa no build.gradle.kts raiz).
     id("com.google.devtools.ksp")
+    id("org.jlleitschuh.gradle.ktlint")
 }
 
 // Sincronização de versão do sistema com version.properties na raiz
 val versionPropsFile = rootProject.file("version.properties")
-val versionProps = Properties().apply {
-    if (versionPropsFile.exists()) {
-        versionPropsFile.inputStream().use { load(it) }
+val versionProps =
+    Properties().apply {
+        if (versionPropsFile.exists()) {
+            versionPropsFile.inputStream().use { load(it) }
+        }
     }
-}
 val defaultVersionName = versionProps.getProperty("versionName", "0.4.7")
 val defaultVersionCode = versionProps.getProperty("versionCode", "470").toIntOrNull() ?: 470
 
@@ -24,10 +26,11 @@ val appVersionCode = (project.findProperty("appVersionCode") as? String)?.toIntO
 // ccache acelera recompilacoes do build nativo (CMake/NDK) quando disponivel no PATH
 // (ex.: hendrikmuhs/ccache-action no CI). Deteccao automatica em vez de flag manual —
 // nao afeta devs locais sem ccache instalado.
-val ccachePath = System.getenv("PATH")
-    ?.split(File.pathSeparator)
-    ?.map { File(it, "ccache") }
-    ?.firstOrNull { it.canExecute() }
+val ccachePath =
+    System.getenv("PATH")
+        ?.split(File.pathSeparator)
+        ?.map { File(it, "ccache") }
+        ?.firstOrNull { it.canExecute() }
 
 android {
     namespace = "com.tucavr"
@@ -84,7 +87,7 @@ android {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
+                "proguard-rules.pro",
             )
         }
     }
@@ -104,6 +107,25 @@ android {
             path = file("../native/CMakeLists.txt")
             version = "3.22.1"
         }
+    }
+
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = false
+        warningsAsErrors = false
+        baseline = file("lint-baseline.xml")
+        textReport = true
+        htmlReport = true
+    }
+}
+
+ktlint {
+    android.set(true)
+    ignoreFailures.set(false)
+    baseline.set(file("config/ktlint/baseline.xml"))
+    reporters {
+        reporter(org.jlleitschuh.gradle.ktlint.reporter.ReporterType.PLAIN)
+        reporter(org.jlleitschuh.gradle.ktlint.reporter.ReporterType.CHECKSTYLE)
     }
 }
 

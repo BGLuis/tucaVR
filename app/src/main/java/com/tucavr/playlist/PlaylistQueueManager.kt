@@ -7,10 +7,10 @@ import java.util.Random
  * Modos de reprodução suportados pelo player.
  */
 enum class PlaybackMode {
-    NORMAL,      // Reprodução sequencial direta até o final
-    REPEAT_ALL,  // Ao atingir o final da playlist, retorna ao início
-    REPEAT_ONE,  // Repete continuamente a mesma mídia
-    SHUFFLE      // Reproduz os itens em ordem pseudo-aleatória sem repetição
+    NORMAL, // Reprodução sequencial direta até o final
+    REPEAT_ALL, // Ao atingir o final da playlist, retorna ao início
+    REPEAT_ONE, // Repete continuamente a mesma mídia
+    SHUFFLE, // Reproduz os itens em ordem pseudo-aleatória sem repetição
 }
 
 /**
@@ -20,12 +20,16 @@ enum class PlaybackMode {
  * Repetir Tudo, Repetir Uma, Aleatório) e o auto-avanço ao final da duração do vídeo.
  */
 class PlaylistQueueManager(
-    private var random: Random = Random()
+    private var random: Random = Random(),
 ) {
-
     interface Listener {
         fun onQueueChanged()
-        fun onItemChanged(item: PlaylistItem?, index: Int)
+
+        fun onItemChanged(
+            item: PlaylistItem?,
+            index: Int,
+        )
+
         fun onModeChanged(mode: PlaybackMode)
     }
 
@@ -61,7 +65,11 @@ class PlaylistQueueManager(
     /**
      * Inicia a reprodução de uma playlist a partir do índice especificado.
      */
-    fun startPlaylist(playlist: Playlist, items: List<PlaylistItem>, startIndex: Int = 0) {
+    fun startPlaylist(
+        playlist: Playlist,
+        items: List<PlaylistItem>,
+        startIndex: Int = 0,
+    ) {
         currentPlaylist = playlist
         originalItems = items.sortedBy { it.position }
         hasTriggeredEndForCurrent = false
@@ -111,12 +119,13 @@ class PlaylistQueueManager(
      * NORMAL -> REPEAT_ALL -> REPEAT_ONE -> SHUFFLE -> NORMAL
      */
     fun cyclePlaybackMode(): PlaybackMode {
-        val nextMode = when (playbackMode) {
-            PlaybackMode.NORMAL -> PlaybackMode.REPEAT_ALL
-            PlaybackMode.REPEAT_ALL -> PlaybackMode.REPEAT_ONE
-            PlaybackMode.REPEAT_ONE -> PlaybackMode.SHUFFLE
-            PlaybackMode.SHUFFLE -> PlaybackMode.NORMAL
-        }
+        val nextMode =
+            when (playbackMode) {
+                PlaybackMode.NORMAL -> PlaybackMode.REPEAT_ALL
+                PlaybackMode.REPEAT_ALL -> PlaybackMode.REPEAT_ONE
+                PlaybackMode.REPEAT_ONE -> PlaybackMode.SHUFFLE
+                PlaybackMode.SHUFFLE -> PlaybackMode.NORMAL
+            }
         setPlaybackMode(nextMode)
         return nextMode
     }
@@ -265,7 +274,10 @@ class PlaylistQueueManager(
     /**
      * Notificado pelo player durante a reprodução para detectar o término da mídia (EOF/duração).
      */
-    fun onPlaybackProgress(currentSec: Float, totalSec: Float) {
+    fun onPlaybackProgress(
+        currentSec: Float,
+        totalSec: Float,
+    ) {
         if (originalItems.isEmpty() || totalSec <= 1.0f) return
 
         // Se o usuário voltou para trás, reabilita detecção de fim
@@ -334,7 +346,10 @@ class PlaylistQueueManager(
         listeners.forEach { it.onQueueChanged() }
     }
 
-    private fun notifyItemChanged(item: PlaylistItem?, index: Int) {
+    private fun notifyItemChanged(
+        item: PlaylistItem?,
+        index: Int,
+    ) {
         listeners.forEach { it.onItemChanged(item, index) }
     }
 }

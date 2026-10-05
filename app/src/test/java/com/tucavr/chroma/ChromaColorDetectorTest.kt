@@ -9,13 +9,12 @@ import org.junit.Test
  * Valida a auto-detecção em fundos Cinza, Vermelho, Verde, Preto e formatos 3D SBS.
  */
 class ChromaColorDetectorTest {
-
     private fun createSyntheticFrame(
         width: Int,
         height: Int,
         bgColor: Int,
         centerColor: Int = 0x334455,
-        centerMarginRatio: Float = 0.25f
+        centerMarginRatio: Float = 0.25f,
     ): IntArray {
         val pixels = IntArray(width * height)
         val minX = (width * centerMarginRatio).toInt()

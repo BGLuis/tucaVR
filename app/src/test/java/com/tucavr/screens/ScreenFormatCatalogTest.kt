@@ -6,7 +6,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ScreenFormatCatalogTest {
-
     @Test
     fun testEntriesCoverAllIndicesSequentially() {
         assertEquals("Deve conter exatamente 17 modos", 17, ScreenFormatCatalog.entries.size)
@@ -68,25 +67,26 @@ class ScreenFormatCatalogTest {
     fun testContractParityWithNativeAndRust() {
         // Invariante de contrato cross-language:
         // C-ABI ScreenMode em C++ (screen_mode.h) e Rust (format3d.rs)
-        val expectedContract = listOf(
-            0 to "Flat2D",
-            1 to "SBS",
-            2 to "SBSHalf",
-            3 to "OU",
-            4 to "OUHalf",
-            5 to "Sphere360",
-            6 to "Sphere180",
-            7 to "Sphere360SBS",
-            8 to "Sphere360OU",
-            9 to "Vr180SBS",
-            10 to "Cubemap3x2",
-            11 to "Cubemap6x1",
-            12 to "EAC3x2",
-            13 to "Cubemap3x2SBS",
-            14 to "EAC3x2SBS",
-            15 to "Fisheye190",
-            16 to "Fisheye190SBS"
-        )
+        val expectedContract =
+            listOf(
+                0 to "Flat2D",
+                1 to "SBS",
+                2 to "SBSHalf",
+                3 to "OU",
+                4 to "OUHalf",
+                5 to "Sphere360",
+                6 to "Sphere180",
+                7 to "Sphere360SBS",
+                8 to "Sphere360OU",
+                9 to "Vr180SBS",
+                10 to "Cubemap3x2",
+                11 to "Cubemap6x1",
+                12 to "EAC3x2",
+                13 to "Cubemap3x2SBS",
+                14 to "EAC3x2SBS",
+                15 to "Fisheye190",
+                16 to "Fisheye190SBS",
+            )
         assertEquals(17, ScreenFormatCatalog.entries.size)
         expectedContract.forEach { (expectedIndex, modeKey) ->
             val entry = ScreenFormatCatalog.get(expectedIndex)

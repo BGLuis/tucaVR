@@ -12,9 +12,11 @@ import org.junit.Test
 // itself is pure and was extracted into `ThumbnailGenerator.cacheKeyFor` (internal)
 // specifically so it could be covered here without Robolectric.
 class ThumbnailGeneratorCacheKeyTest {
-
-    private fun entry(path: String = "/sdcard/Movies/movie.mp4", size: Long = 12345L, modified: Long = 1_700_000_000L) =
-        MediaEntry(name = "movie.mp4", path = path, sizeBytes = size, lastModified = modified, type = MediaType.VIDEO)
+    private fun entry(
+        path: String = "/sdcard/Movies/movie.mp4",
+        size: Long = 12345L,
+        modified: Long = 1_700_000_000L,
+    ) = MediaEntry(name = "movie.mp4", path = path, sizeBytes = size, lastModified = modified, type = MediaType.VIDEO)
 
     @Test
     fun sameEntryProducesTheSameKey() {
@@ -51,7 +53,7 @@ class ThumbnailGeneratorCacheKeyTest {
 
         assertNotEquals(
             ThumbnailGenerator.cacheKeyFor(movieA),
-            ThumbnailGenerator.cacheKeyFor(unrelatedFileWithSameSizeAndDate)
+            ThumbnailGenerator.cacheKeyFor(unrelatedFileWithSameSizeAndDate),
         )
     }
 
@@ -65,20 +67,22 @@ class ThumbnailGeneratorCacheKeyTest {
 
     @Test
     fun imageEntryProducesConsistentCacheKey() {
-        val imageEntry1 = MediaEntry(
-            name = "photo_360.jpg",
-            path = "/sdcard/Pictures/photo_360.jpg",
-            sizeBytes = 8_500_000L,
-            lastModified = 1_710_000_000L,
-            type = MediaType.IMAGE
-        )
-        val imageEntry2 = MediaEntry(
-            name = "photo_360.jpg",
-            path = "/sdcard/Pictures/photo_360.jpg",
-            sizeBytes = 8_500_000L,
-            lastModified = 1_710_000_000L,
-            type = MediaType.IMAGE
-        )
+        val imageEntry1 =
+            MediaEntry(
+                name = "photo_360.jpg",
+                path = "/sdcard/Pictures/photo_360.jpg",
+                sizeBytes = 8_500_000L,
+                lastModified = 1_710_000_000L,
+                type = MediaType.IMAGE,
+            )
+        val imageEntry2 =
+            MediaEntry(
+                name = "photo_360.jpg",
+                path = "/sdcard/Pictures/photo_360.jpg",
+                sizeBytes = 8_500_000L,
+                lastModified = 1_710_000_000L,
+                type = MediaType.IMAGE,
+            )
         val modifiedImage = imageEntry1.copy(lastModified = 1_720_000_000L)
 
         assertEquals(ThumbnailGenerator.cacheKeyFor(imageEntry1), ThumbnailGenerator.cacheKeyFor(imageEntry2))

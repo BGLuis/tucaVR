@@ -36,7 +36,6 @@ import kotlinx.coroutines.withContext
  * `MediaFilterEngine`, preservando o comportamento de filtro por tipo/3D já existente.
  */
 object NetworkFolderProber {
-
     private const val TTL_FRESH_MS = 24L * 60 * 60 * 1000 // resultado definitivo (scanCompletedFully)
     private const val TTL_TIMED_OUT_MS = 60L * 60 * 1000 // resultado por deadline: revalida bem mais cedo
 
@@ -72,22 +71,24 @@ object NetworkFolderProber {
         sourceKind: String,
         entries: List<MediaEntry>,
         folderKeyFor: (MediaEntry) -> String,
-        scanFnFor: (MediaEntry) -> suspend () -> String
-    ): List<MediaEntry> = coroutineScope {
-        val directories = entries.filter { it.type == MediaType.DIRECTORY }
-        if (directories.isEmpty()) return@coroutineScope entries
+        scanFnFor: (MediaEntry) -> suspend () -> String,
+    ): List<MediaEntry> =
+        coroutineScope {
+            val directories = entries.filter { it.type == MediaType.DIRECTORY }
+            if (directories.isEmpty()) return@coroutineScope entries
 
-        val hasMediaByPath = directories
-            .map { entry ->
-                async {
-                    entry.path to resolveFolderHasMedia(context, sourceKind, folderKeyFor(entry), scanFnFor(entry))
-                }
-            }
-            .awaitAll()
-            .toMap()
+            val hasMediaByPath =
+                directories
+                    .map { entry ->
+                        async {
+                            entry.path to resolveFolderHasMedia(context, sourceKind, folderKeyFor(entry), scanFnFor(entry))
+                        }
+                    }
+                    .awaitAll()
+                    .toMap()
 
-        entries.filter { it.type != MediaType.DIRECTORY || hasMediaByPath[it.path] != false }
-    }
+            entries.filter { it.type != MediaType.DIRECTORY || hasMediaByPath[it.path] != false }
+        }
 
     /**
      * Resolve se a pasta identificada por `folderKey` tem mídia, priorizando o cache.
@@ -100,7 +101,7 @@ object NetworkFolderProber {
         context: Context,
         sourceKind: String,
         folderKey: String,
-        scanFn: suspend () -> String
+        scanFn: suspend () -> String,
     ): Boolean {
         val dao = AppDatabase.getInstance(context).folderMediaStatusDao()
         val cached = dao.find(folderKey)
@@ -121,7 +122,12 @@ object NetworkFolderProber {
         }
     }
 
-    private fun revalidateInBackground(context: Context, sourceKind: String, folderKey: String, scanFn: suspend () -> String) {
+    private fun revalidateInBackground(
+        context: Context,
+        sourceKind: String,
+        folderKey: String,
+        scanFn: suspend () -> String,
+    ) {
         backgroundScope.launch {
             backgroundRevalidationSemaphore.withPermit {
                 scanAndCache(context, sourceKind, folderKey, scanFn)
@@ -129,19 +135,25 @@ object NetworkFolderProber {
         }
     }
 
-    private suspend fun scanAndCache(context: Context, sourceKind: String, folderKey: String, scanFn: suspend () -> String): Boolean {
+    private suspend fun scanAndCache(
+        context: Context,
+        sourceKind: String,
+        folderKey: String,
+        scanFn: suspend () -> String,
+    ): Boolean {
         val wire = withContext(Dispatchers.IO) { runCatching { scanFn() }.getOrNull() }
         // Falha de rede/parse: NÃO esconde a pasta (assume que pode ter conteúdo), mas com
         // completedFully=false pra revalidar bem mais cedo (mesmo tratamento do deadline).
         val (hasMedia, completedFully) = parseWire(wire) ?: (true to false)
 
-        val entry = FolderMediaStatus(
-            folderKey = folderKey,
-            hasPlayableMedia = hasMedia,
-            scanCompletedFully = completedFully,
-            lastCheckedAt = System.currentTimeMillis(),
-            sourceKind = sourceKind
-        )
+        val entry =
+            FolderMediaStatus(
+                folderKey = folderKey,
+                hasPlayableMedia = hasMedia,
+                scanCompletedFully = completedFully,
+                lastCheckedAt = System.currentTimeMillis(),
+                sourceKind = sourceKind,
+            )
         runCatching { AppDatabase.getInstance(context).folderMediaStatusDao().upsert(entry) }
         return hasMedia
     }
@@ -153,8 +165,18 @@ object NetworkFolderProber {
         if (wire == null || wire.startsWith("ERROR:")) return null
         val parts = wire.split("\t")
         if (parts.size != 2) return null
-        val hasMedia = when (parts[0]) { "1" -> true; "0" -> false; else -> return null }
-        val completedFully = when (parts[1]) { "1" -> true; "0" -> false; else -> return null }
+        val hasMedia =
+            when (parts[0]) {
+                "1" -> true
+                "0" -> false
+                else -> return null
+            }
+        val completedFully =
+            when (parts[1]) {
+                "1" -> true
+                "0" -> false
+                else -> return null
+            }
         return hasMedia to completedFully
     }
 }

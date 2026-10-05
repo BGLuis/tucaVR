@@ -17,7 +17,8 @@ class UpscalingModeStore(context: Context) {
         OFF(0),
         QUALITY(1),
         PERFORMANCE(2),
-        AUTO(3);
+        AUTO(3),
+        ;
 
         companion object {
             fun fromId(id: Int): Mode = entries.firstOrNull { it.id == id } ?: OFF

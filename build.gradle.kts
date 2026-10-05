@@ -8,4 +8,5 @@ plugins {
     // projeto (ver plugin acima) — o sufixo apos o "-" e a versao do proprio
     // KSP, independente da versao do Kotlin.
     id("com.google.devtools.ksp") version "1.9.0-1.0.13" apply false
+    id("org.jlleitschuh.gradle.ktlint") version "12.1.1" apply false
 }

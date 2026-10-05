@@ -1,5 +1,5 @@
 package com.tucavr
- 
+
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -7,7 +7,6 @@ import org.junit.Test
  * Testes unitários para a formatação de tempo e minutagem do player VR ([VRControlsPresentation.formatPlaybackTime]).
  */
 class VRControlsTimeFormatTest {
-
     @Test
     fun `formats under a minute`() {
         assertEquals("00:00", VRControlsPresentation.formatPlaybackTime(0f))

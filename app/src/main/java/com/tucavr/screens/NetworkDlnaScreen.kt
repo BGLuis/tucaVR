@@ -29,7 +29,7 @@ data class DlnaItem(
     val sizeBytes: Long,
     val durationSec: Double,
     val resolution: String?,
-    val thumbnailUrl: String?
+    val thumbnailUrl: String?,
 )
 
 /**
@@ -42,9 +42,8 @@ class NetworkDlnaScreen(
     private val scope: CoroutineScope,
     private val savedServerDao: SavedServerDao,
     private val onPlayDlna: (server: SavedServer, title: String, url: String, sizeBytes: Long) -> Unit,
-    private val onBack: () -> Unit
+    private val onBack: () -> Unit,
 ) {
-
     private val folderStack = ArrayDeque<Pair<String, String>>()
     private var currentServer: SavedServer? = null
     private var currentItems: List<DlnaItem> = emptyList()
@@ -55,7 +54,10 @@ class NetworkDlnaScreen(
 
     // ---- Navegação de Diretórios DLNA (ContentDirectory) ----
 
-    fun renderFiles(server: SavedServer, objectId: String = "0") {
+    fun renderFiles(
+        server: SavedServer,
+        objectId: String = "0",
+    ) {
         currentServer = server
         if (folderStack.isEmpty()) {
             folderStack.push(Pair("0", server.name))
@@ -68,47 +70,54 @@ class NetworkDlnaScreen(
             VoidPanelChrome.buildHeader(
                 context,
                 title = currentFolder.second,
-                onBack = { handleBack() }
-            )
+                onBack = { handleBack() },
+            ),
         )
 
-        val progressRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            ).also {
-                it.bottomMargin = VoidTheme.dpToPx(context, 8f)
+        val progressRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).also {
+                        it.bottomMargin = VoidTheme.dpToPx(context, 8f)
+                    }
             }
-        }
 
-        fileProgressBar = ProgressBar(context).apply {
-            isIndeterminate = true
-            visibility = View.GONE
-            layoutParams = LinearLayout.LayoutParams(
-                VoidTheme.dpToPx(context, 24f), VoidTheme.dpToPx(context, 24f)
-            ).also {
-                it.marginEnd = VoidTheme.dpToPx(context, 8f)
+        fileProgressBar =
+            ProgressBar(context).apply {
+                isIndeterminate = true
+                visibility = View.GONE
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        VoidTheme.dpToPx(context, 24f), VoidTheme.dpToPx(context, 24f),
+                    ).also {
+                        it.marginEnd = VoidTheme.dpToPx(context, 8f)
+                    }
             }
-        }
         progressRow.addView(fileProgressBar)
 
         fileStatusLabel = VoidText.body(context, "", sizeSp = 14f, secondary = true)
         progressRow.addView(fileStatusLabel)
         root.addView(progressRow)
 
-        val listContainer = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-            )
-        }
+        val listContainer =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                    )
+            }
         fileListContainer = listContainer
 
-        val scroll = ScrollView(context).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-            addView(listContainer)
-        }
+        val scroll =
+            ScrollView(context).apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+                addView(listContainer)
+            }
         root.addView(scroll)
 
         host.showScreen(root)
@@ -122,9 +131,10 @@ class NetworkDlnaScreen(
         fileStatusLabel?.text = context.getString(R.string.network_dlna_loading)
 
         scope.launch {
-            val raw = withContext(Dispatchers.IO) {
-                activity.nativeDlnaBrowse(server.path, objectId, 0, 200)
-            }
+            val raw =
+                withContext(Dispatchers.IO) {
+                    activity.nativeDlnaBrowse(server.path, objectId, 0, 200)
+                }
 
             fileProgressBar?.visibility = View.GONE
             if (raw.startsWith("ERROR:")) {
@@ -148,8 +158,8 @@ class NetworkDlnaScreen(
                     context,
                     context.getString(R.string.network_dlna_no_items),
                     sizeSp = 16f,
-                    secondary = true
-                )
+                    secondary = true,
+                ),
             )
             return
         }
@@ -157,26 +167,28 @@ class NetworkDlnaScreen(
         val server = currentServer ?: return
 
         for (item in currentItems) {
-            val row = VoidListRow(context).apply {
-                layoutParams = LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                ).also {
-                    it.bottomMargin = VoidTheme.dpToPx(context, 8f)
-                }
+            val row =
+                VoidListRow(context).apply {
+                    layoutParams =
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ).also {
+                            it.bottomMargin = VoidTheme.dpToPx(context, 8f)
+                        }
 
-                val icon = if (item.isContainer) R.drawable.ic_folder else R.drawable.ic_movie
-                val meta = buildItemMeta(item)
-                bind(item.title, meta = meta, showThumbnailSlot = false, iconResId = icon)
+                    val icon = if (item.isContainer) R.drawable.ic_folder else R.drawable.ic_movie
+                    val meta = buildItemMeta(item)
+                    bind(item.title, meta = meta, showThumbnailSlot = false, iconResId = icon)
 
-                setOnClickListener {
-                    if (item.isContainer) {
-                        folderStack.push(Pair(item.id, item.title))
-                        renderFiles(server, item.id)
-                    } else if (!item.url.isNullOrBlank()) {
-                        onPlayDlna(server, item.title, item.url, item.sizeBytes)
+                    setOnClickListener {
+                        if (item.isContainer) {
+                            folderStack.push(Pair(item.id, item.title))
+                            renderFiles(server, item.id)
+                        } else if (!item.url.isNullOrBlank()) {
+                            onPlayDlna(server, item.title, item.url, item.sizeBytes)
+                        }
                     }
                 }
-            }
             container.addView(row)
         }
     }
@@ -255,7 +267,7 @@ class NetworkDlnaScreen(
                 sizeBytes = size,
                 durationSec = dur,
                 resolution = resolution,
-                thumbnailUrl = thumb
+                thumbnailUrl = thumb,
             )
         }
     }
