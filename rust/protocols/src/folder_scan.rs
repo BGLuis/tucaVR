@@ -28,8 +28,7 @@ const MEDIA_EXTENSIONS: &[&str] = &[
     // vídeo
     "mp4", "mkv", "avi", "mov", "webm", "flv", "ts", "m3u8", "mpd", "3gp", "wmv", "mpg", "mpeg",
     // áudio
-    "mp3", "flac", "aac", "ogg", "wav", "m4a", "opus", "wma",
-    // imagem
+    "mp3", "flac", "aac", "ogg", "wav", "m4a", "opus", "wma", // imagem
     "jpg", "jpeg", "png", "webp", "gif", "bmp", "heic",
 ];
 
@@ -45,7 +44,9 @@ pub fn deadline_from_now() -> Instant {
 
 pub fn is_media_filename(name: &str) -> bool {
     match name.rsplit_once('.') {
-        Some((_, ext)) if !ext.is_empty() => MEDIA_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str()),
+        Some((_, ext)) if !ext.is_empty() => {
+            MEDIA_EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
+        }
         _ => false,
     }
 }
@@ -62,15 +63,24 @@ pub struct ScanResult {
 
 impl ScanResult {
     pub fn found() -> Self {
-        Self { has_media: true, completed_fully: true }
+        Self {
+            has_media: true,
+            completed_fully: true,
+        }
     }
 
     pub fn exhausted_empty() -> Self {
-        Self { has_media: false, completed_fully: true }
+        Self {
+            has_media: false,
+            completed_fully: true,
+        }
     }
 
     pub fn timed_out_assume_has_media() -> Self {
-        Self { has_media: true, completed_fully: false }
+        Self {
+            has_media: true,
+            completed_fully: false,
+        }
     }
 }
 
@@ -97,8 +107,26 @@ mod tests {
 
     #[test]
     fn found_and_exhausted_and_timed_out_report_the_expected_flags() {
-        assert_eq!(ScanResult::found(), ScanResult { has_media: true, completed_fully: true });
-        assert_eq!(ScanResult::exhausted_empty(), ScanResult { has_media: false, completed_fully: true });
-        assert_eq!(ScanResult::timed_out_assume_has_media(), ScanResult { has_media: true, completed_fully: false });
+        assert_eq!(
+            ScanResult::found(),
+            ScanResult {
+                has_media: true,
+                completed_fully: true
+            }
+        );
+        assert_eq!(
+            ScanResult::exhausted_empty(),
+            ScanResult {
+                has_media: false,
+                completed_fully: true
+            }
+        );
+        assert_eq!(
+            ScanResult::timed_out_assume_has_media(),
+            ScanResult {
+                has_media: true,
+                completed_fully: false
+            }
+        );
     }
 }

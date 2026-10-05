@@ -20,10 +20,14 @@ impl NfsFileSource {
     pub fn open(target: &NfsTarget) -> Result<Self, String> {
         let mut client = NfsClient::connect(&target.host, target.port, NFS_TIMEOUT)?;
         let root_handle = client.mount(&target.export_path)?;
-        let (file_handle, file_size, is_dir) = client.resolve_path(&root_handle, &target.file_path)?;
+        let (file_handle, file_size, is_dir) =
+            client.resolve_path(&root_handle, &target.file_path)?;
 
         if is_dir {
-            return Err(format!("'{}' e um diretorio, nao um arquivo de midia", target.file_path));
+            return Err(format!(
+                "'{}' e um diretorio, nao um arquivo de midia",
+                target.file_path
+            ));
         }
 
         Ok(Self {
@@ -37,7 +41,8 @@ impl NfsFileSource {
     fn reconnect(&mut self) -> Result<(), String> {
         let mut client = NfsClient::connect(&self.target.host, self.target.port, NFS_TIMEOUT)?;
         let root_handle = client.mount(&self.target.export_path)?;
-        let (file_handle, file_size, _) = client.resolve_path(&root_handle, &self.target.file_path)?;
+        let (file_handle, file_size, _) =
+            client.resolve_path(&root_handle, &self.target.file_path)?;
         self.client = client;
         self.file_handle = file_handle;
         self.file_size = file_size;

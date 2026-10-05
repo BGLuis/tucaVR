@@ -26,7 +26,6 @@ import java.util.Locale
  * estiver suspenso ou fora da cabeça do usuário (Fase 0.4 Seção 4 / Cuidados e Armadilhas).
  */
 class DownloadService : Service() {
-
     companion object {
         const val CHANNEL_ID = "tucavr_downloads_channel"
         const val NOTIFICATION_ID = 1001
@@ -44,18 +43,23 @@ class DownloadService : Service() {
         createNotificationChannel()
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        val initialNotification = buildNotification(
-            title = getString(R.string.downloads_notification_title),
-            text = getString(R.string.downloads_status_downloading),
-            progress = 0
-        )
+    override fun onStartCommand(
+        intent: Intent?,
+        flags: Int,
+        startId: Int,
+    ): Int {
+        val initialNotification =
+            buildNotification(
+                title = getString(R.string.downloads_notification_title),
+                text = getString(R.string.downloads_status_downloading),
+                progress = 0,
+            )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(
                 NOTIFICATION_ID,
                 initialNotification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
             )
         } else {
             startForeground(NOTIFICATION_ID, initialNotification)
@@ -68,66 +72,78 @@ class DownloadService : Service() {
     private fun startMonitoringLoop() {
         if (syncJob?.isActive == true) return
 
-        syncJob = serviceScope.launch {
-            while (isActive) {
-                val hasActive = repository.syncActiveDownloads()
-                if (!hasActive) {
-                    break
-                }
-
-                val activeList = repository.listActive()
-                if (activeList.isNotEmpty()) {
-                    val first = activeList.first()
-                    val stats = repository.getStats(first.id)
-                    val percent = if (first.totalBytes > 0) {
-                        val dl = stats?.downloadedBytes ?: first.downloadedBytes
-                        ((dl.toDouble() / first.totalBytes.toDouble()) * 100).toInt().coerceIn(0, 100)
-                    } else 0
-
-                    val speedStr = stats?.let {
-                        val mb = it.speedBps.toDouble() / (1024.0 * 1024.0)
-                        String.format(Locale.US, "%.1f MB/s", mb)
-                    } ?: ""
-
-                    val text = if (speedStr.isNotEmpty()) {
-                        "${first.displayName} ($percent% • $speedStr)"
-                    } else {
-                        "${first.displayName} ($percent%)"
+        syncJob =
+            serviceScope.launch {
+                while (isActive) {
+                    val hasActive = repository.syncActiveDownloads()
+                    if (!hasActive) {
+                        break
                     }
 
-                    val updatedNotification = buildNotification(
-                        title = getString(R.string.downloads_notification_title),
-                        text = text,
-                        progress = percent
-                    )
-                    notificationManager.notify(NOTIFICATION_ID, updatedNotification)
+                    val activeList = repository.listActive()
+                    if (activeList.isNotEmpty()) {
+                        val first = activeList.first()
+                        val stats = repository.getStats(first.id)
+                        val percent =
+                            if (first.totalBytes > 0) {
+                                val dl = stats?.downloadedBytes ?: first.downloadedBytes
+                                ((dl.toDouble() / first.totalBytes.toDouble()) * 100).toInt().coerceIn(0, 100)
+                            } else {
+                                0
+                            }
+
+                        val speedStr =
+                            stats?.let {
+                                val mb = it.speedBps.toDouble() / (1024.0 * 1024.0)
+                                String.format(Locale.US, "%.1f MB/s", mb)
+                            } ?: ""
+
+                        val text =
+                            if (speedStr.isNotEmpty()) {
+                                "${first.displayName} ($percent% • $speedStr)"
+                            } else {
+                                "${first.displayName} ($percent%)"
+                            }
+
+                        val updatedNotification =
+                            buildNotification(
+                                title = getString(R.string.downloads_notification_title),
+                                text = text,
+                                progress = percent,
+                            )
+                        notificationManager.notify(NOTIFICATION_ID, updatedNotification)
+                    }
+
+                    delay(1000)
                 }
 
-                delay(1000)
+                // Encerra o serviço quando a fila estiver vazia/pausada
+                stopForeground(STOP_FOREGROUND_REMOVE)
+                stopSelf()
             }
-
-            // Encerra o serviço quando a fila estiver vazia/pausada
-            stopForeground(STOP_FOREGROUND_REMOVE)
-            stopSelf()
-        }
     }
 
     private fun createNotificationChannel() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val name = getString(R.string.downloads_title)
-            val channel = NotificationChannel(
-                CHANNEL_ID,
-                name,
-                NotificationManager.IMPORTANCE_LOW
-            ).apply {
-                description = "Progresso de downloads offline"
-                setShowBadge(false)
-            }
+            val channel =
+                NotificationChannel(
+                    CHANNEL_ID,
+                    name,
+                    NotificationManager.IMPORTANCE_LOW,
+                ).apply {
+                    description = "Progresso de downloads offline"
+                    setShowBadge(false)
+                }
             notificationManager.createNotificationChannel(channel)
         }
     }
 
-    private fun buildNotification(title: String, text: String, progress: Int): Notification {
+    private fun buildNotification(
+        title: String,
+        text: String,
+        progress: Int,
+    ): Notification {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(text)

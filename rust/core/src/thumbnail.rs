@@ -1,6 +1,6 @@
-use ffmpeg_next as ffmpeg;
 use ffmpeg::format::Pixel;
 use ffmpeg::software::scaling::{context::Context as ScalingContext, flag::Flags};
+use ffmpeg_next as ffmpeg;
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -57,7 +57,6 @@ pub fn clear_cancelled_thumbnail(token: u64) {
         }
     }
 }
-
 
 pub struct ThumbnailImage {
     /// Pixels RGBA8 empacotados, `width * height * 4` bytes, sem padding de
@@ -130,7 +129,12 @@ fn is_effectively_black(rgba: &[u8]) -> bool {
 /// qualquer falha (sem faixa de video, decode falhou, arquivo inacessivel,
 /// etc.) — mesmo contrato de silencio do `ThumbnailGenerator` local: a UI so
 /// deixa de mostrar a miniatura, sem popup de erro.
-pub fn generate(path: &str, max_width: u32, max_height: u32, cancel_token: u64) -> Option<ThumbnailImage> {
+pub fn generate(
+    path: &str,
+    max_width: u32,
+    max_height: u32,
+    cancel_token: u64,
+) -> Option<ThumbnailImage> {
     if max_width == 0 || max_height == 0 {
         return None;
     }
@@ -152,7 +156,8 @@ pub fn generate(path: &str, max_width: u32, max_height: u32, cancel_token: u64) 
     let video_stream_index = demuxer.video_stream_index?;
 
     let stream = demuxer.input_context.stream(video_stream_index)?;
-    let mut codec_context = ffmpeg::codec::context::Context::from_parameters(stream.parameters()).ok()?;
+    let mut codec_context =
+        ffmpeg::codec::context::Context::from_parameters(stream.parameters()).ok()?;
     // Trabalho 3: thread_count = 1 elimina o pool de threads e DPB gigante do decoder
     // por software em resoluções 8K/4K durante geração de miniaturas.
     codec_context.set_threading(ffmpeg::threading::Config {
@@ -166,28 +171,54 @@ pub fn generate(path: &str, max_width: u32, max_height: u32, cancel_token: u64) 
     }
 
     // Trabalho 4: detecção 3D gratuita antes de borrows mutáveis do demuxer
-    let (format_3d, _) = crate::format3d_detect::detect(&demuxer, path, decoder.width(), decoder.height());
+    let (format_3d, _) =
+        crate::format3d_detect::detect(&demuxer, path, decoder.width(), decoder.height());
 
     let primary_target_us = primary_seek_target_us(demuxer.input_context.duration());
-    let _ = demuxer.input_context.seek(primary_target_us, ..primary_target_us);
-    let mut image = decode_and_scale(&mut demuxer, &mut decoder, video_stream_index, max_width, max_height, format_3d, cancel_token);
+    let _ = demuxer
+        .input_context
+        .seek(primary_target_us, ..primary_target_us);
+    let mut image = decode_and_scale(
+        &mut demuxer,
+        &mut decoder,
+        video_stream_index,
+        max_width,
+        max_height,
+        format_3d,
+        cancel_token,
+    );
 
     for &fallback_us in FALLBACK_SEEK_TARGETS_US.iter() {
         if is_thumbnail_cancelled(cancel_token) {
             return None;
         }
-        let is_useless = image.as_ref().map(|img| is_effectively_black(&img.rgba)).unwrap_or(true);
+        let is_useless = image
+            .as_ref()
+            .map(|img| is_effectively_black(&img.rgba))
+            .unwrap_or(true);
         if !is_useless {
             break;
         }
-        if demuxer.input_context.seek(fallback_us, ..fallback_us).is_err() {
+        if demuxer
+            .input_context
+            .seek(fallback_us, ..fallback_us)
+            .is_err()
+        {
             continue;
         }
         // Flush obrigatorio apos o seek (mesmo motivo documentado em
         // generate_strip): sem isto o decoder tenta usar frames de
         // referencia de antes do seek, produzindo lixo em vez de so falhar.
         decoder.flush();
-        image = decode_and_scale(&mut demuxer, &mut decoder, video_stream_index, max_width, max_height, format_3d, cancel_token);
+        image = decode_and_scale(
+            &mut demuxer,
+            &mut decoder,
+            video_stream_index,
+            max_width,
+            max_height,
+            format_3d,
+            cancel_token,
+        );
     }
 
     image
@@ -255,7 +286,8 @@ fn decode_and_scale(
         max_width,
         max_height,
         Flags::BILINEAR,
-    ).ok()?;
+    )
+    .ok()?;
 
     let mut scaled = ffmpeg::frame::Video::empty();
     scaler.run(&decoded, &mut scaled).ok()?;
@@ -279,7 +311,11 @@ fn decode_and_scale(
         rgba.extend_from_slice(&data[start..end]);
     }
 
-    Some(ThumbnailImage { rgba, width: max_width, height: max_height })
+    Some(ThumbnailImage {
+        rgba,
+        width: max_width,
+        height: max_height,
+    })
 }
 
 /// Trilha esparsa de thumbnails (um a cada `interval_secs`) pra preview de
@@ -306,7 +342,12 @@ pub struct ThumbnailStrip {
 /// `generate()` (falha pontual não vira popup de erro).
 const MAX_STRIP_SOURCE_PIXELS: u32 = 3840 * 2160;
 
-pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height: u32) -> Option<ThumbnailStrip> {
+pub fn generate_strip(
+    path: &str,
+    interval_secs: f64,
+    max_width: u32,
+    max_height: u32,
+) -> Option<ThumbnailStrip> {
     if max_width == 0 || max_height == 0 || interval_secs <= 0.0 {
         return None;
     }
@@ -316,7 +357,8 @@ pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height
     let mut demuxer = Demuxer::new(path).ok()?;
     let video_stream_index = demuxer.video_stream_index?;
     let stream = demuxer.input_context.stream(video_stream_index)?;
-    let mut codec_context = ffmpeg::codec::context::Context::from_parameters(stream.parameters()).ok()?;
+    let mut codec_context =
+        ffmpeg::codec::context::Context::from_parameters(stream.parameters()).ok()?;
     codec_context.set_threading(ffmpeg::threading::Config {
         kind: ffmpeg::threading::Type::None,
         count: 1,
@@ -331,7 +373,8 @@ pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height
         return generate_strip_hw(path, interval_secs, max_width, max_height);
     }
 
-    let (format_3d, _) = crate::format3d_detect::detect(&demuxer, path, decoder.width(), decoder.height());
+    let (format_3d, _) =
+        crate::format3d_detect::detect(&demuxer, path, decoder.width(), decoder.height());
 
     let duration_secs = demuxer.input_context.duration() as f64 / 1_000_000.0;
     let count = (duration_secs / interval_secs).floor() as usize;
@@ -356,7 +399,15 @@ pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height
         // falhar — `generate()` nunca precisou disto porque so faz UM seek
         // e decoder comeca zerado.
         decoder.flush();
-        if let Some(image) = decode_and_scale(&mut demuxer, &mut decoder, video_stream_index, max_width, max_height, format_3d, 0) {
+        if let Some(image) = decode_and_scale(
+            &mut demuxer,
+            &mut decoder,
+            video_stream_index,
+            max_width,
+            max_height,
+            format_3d,
+            0,
+        ) {
             chunk.copy_from_slice(&image.rgba);
         }
 
@@ -374,7 +425,12 @@ pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height
         return None;
     }
 
-    Some(ThumbnailStrip { rgba, count, width: max_width, height: max_height })
+    Some(ThumbnailStrip {
+        rgba,
+        count,
+        width: max_width,
+        height: max_height,
+    })
 }
 
 /// Trilha por decode de HARDWARE (MediaCodec, ver `crate::decoder::HwDecoder`)
@@ -391,7 +447,12 @@ pub fn generate_strip(path: &str, interval_secs: f64, max_width: u32, max_height
 /// recria a sessao inteira, ver playback.rs) — `flush()` nunca foi
 /// exercitado aqui, e o custo de recriar (dezenas de ms por posicao, mais
 /// caro que flush) e aceitavel pra uma trilha gerada em background.
-fn generate_strip_hw(path: &str, interval_secs: f64, max_width: u32, max_height: u32) -> Option<ThumbnailStrip> {
+fn generate_strip_hw(
+    path: &str,
+    interval_secs: f64,
+    max_width: u32,
+    max_height: u32,
+) -> Option<ThumbnailStrip> {
     STRIP_CANCELLED.store(false, Ordering::Relaxed);
     let mut demuxer = Demuxer::new(path).ok()?;
     let video_stream_index = demuxer.video_stream_index?;
@@ -399,7 +460,8 @@ fn generate_strip_hw(path: &str, interval_secs: f64, max_width: u32, max_height:
     let codec_id = stream.parameters().id();
     let (mime, video_is_nal_based) = crate::decoder::mime_for_codec_id(codec_id).ok()?;
 
-    let codec_context = ffmpeg::codec::context::Context::from_parameters(stream.parameters()).ok()?;
+    let codec_context =
+        ffmpeg::codec::context::Context::from_parameters(stream.parameters()).ok()?;
     let video_decoder_ctx = codec_context.decoder().video().ok()?;
     let src_width = video_decoder_ctx.width();
     let src_height = video_decoder_ctx.height();
@@ -471,14 +533,23 @@ fn generate_strip_hw(path: &str, interval_secs: f64, max_width: u32, max_height:
     let cancelled = STRIP_CANCELLED.load(Ordering::Relaxed);
     crate::log_info!(
         "generate_strip_hw: {ok_count}/{count} posicoes com sucesso{}",
-        if cancelled { " (cancelada, nao sera cacheada)" } else { "" }
+        if cancelled {
+            " (cancelada, nao sera cacheada)"
+        } else {
+            ""
+        }
     );
     // Ver comentario equivalente em generate_strip acima: nao cachear parcial.
     if cancelled {
         return None;
     }
 
-    Some(ThumbnailStrip { rgba, count, width: max_width, height: max_height })
+    Some(ThumbnailStrip {
+        rgba,
+        count,
+        width: max_width,
+        height: max_height,
+    })
 }
 
 fn log_thumb_once(msg: &str) {
@@ -534,7 +605,11 @@ fn decode_and_scale_hw(
 /// color-format negociado em runtime e converte pra RGBA na resolucao
 /// minuscula da trilha — ver `media_logic::yuv_convert` pra por que essa
 /// logica vive numa crate pura e testavel em vez de aqui direto.
-fn raw_frame_to_thumbnail(raw: &RawFrame, max_width: u32, max_height: u32) -> Option<ThumbnailImage> {
+fn raw_frame_to_thumbnail(
+    raw: &RawFrame,
+    max_width: u32,
+    max_height: u32,
+) -> Option<ThumbnailImage> {
     use media_logic::yuv_convert::{yuv420_to_rgba_scaled, YuvLayout, YuvPlanes};
 
     let layout = YuvLayout::from_android_color_format(raw.color_format)?;
@@ -543,8 +618,16 @@ fn raw_frame_to_thumbnail(raw: &RawFrame, max_width: u32, max_height: u32) -> Op
     if width == 0 || height == 0 {
         return None;
     }
-    let stride = if raw.stride > 0 { raw.stride as usize } else { width as usize };
-    let slice_height = if raw.slice_height > 0 { raw.slice_height as usize } else { height as usize };
+    let stride = if raw.stride > 0 {
+        raw.stride as usize
+    } else {
+        width as usize
+    };
+    let slice_height = if raw.slice_height > 0 {
+        raw.slice_height as usize
+    } else {
+        height as usize
+    };
 
     let y_size = stride.checked_mul(slice_height)?;
     if raw.data.len() < y_size {
@@ -591,5 +674,9 @@ fn raw_frame_to_thumbnail(raw: &RawFrame, max_width: u32, max_height: u32) -> Op
     };
 
     let rgba = yuv420_to_rgba_scaled(&planes, layout, width, height, max_width, max_height)?;
-    Some(ThumbnailImage { rgba, width: max_width, height: max_height })
+    Some(ThumbnailImage {
+        rgba,
+        width: max_width,
+        height: max_height,
+    })
 }

@@ -1,9 +1,9 @@
-use crate::demuxer::Demuxer;
-use crate::decoder::HwDecoder;
 use crate::audio_decoder::AudioDecoder;
-use audio::output::AudioOutput;
+use crate::decoder::HwDecoder;
+use crate::demuxer::Demuxer;
 use crate::sync::SyncManager;
 use crate::texture::TextureOutput;
+use audio::output::AudioOutput;
 use ndk::media::media_format::MediaFormat;
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -78,12 +78,13 @@ const READ_ERROR_BACKOFF_CAP: Duration = Duration::from_secs(5);
 /// `media_logic::buffer_gate::BufferTargets`) — valores aprovados para o
 /// rollout inicial; ajustar depois com telemetria real de device (o CSV ja
 /// expõe `video_q_depth`/`net_mbs`, ver `docs/DEBUGGING.md`).
-const BUFFER_TARGETS: media_logic::buffer_gate::BufferTargets = media_logic::buffer_gate::BufferTargets {
-    playing_local_sec: 2.0,
-    playing_network_sec: 8.0,
-    paused_target_sec: 25.0,
-    resume_hysteresis: 0.8,
-};
+const BUFFER_TARGETS: media_logic::buffer_gate::BufferTargets =
+    media_logic::buffer_gate::BufferTargets {
+        playing_local_sec: 2.0,
+        playing_network_sec: 8.0,
+        paused_target_sec: 25.0,
+        resume_hysteresis: 0.8,
+    };
 
 // Teto de bytes do buffer profundo pausado: nao e mais uma constante fixa
 // aqui — ver `media_logic::buffer_gate::paused_byte_ceiling_for_device`,
@@ -365,14 +366,19 @@ impl PlaybackController {
         *self.seek_started_at.lock().unwrap() = Some(Instant::now());
 
         if let Some(session) = &self.session {
-            if session.command_tx.send(DemuxCommand::SeekTo(position_sec)).is_ok() {
+            if session
+                .command_tx
+                .send(DemuxCommand::SeekTo(position_sec))
+                .is_ok()
+            {
                 return Ok(());
             }
         }
 
         let was_playing = self.is_playing();
         self.stop();
-        self.load_at(&path, position_sec).map_err(|e| e.to_string())?;
+        self.load_at(&path, position_sec)
+            .map_err(|e| e.to_string())?;
         if !was_playing {
             self.pause();
         }
@@ -383,7 +389,11 @@ impl PlaybackController {
         self.load_at(path, 0.0)
     }
 
-    pub fn load_at(&mut self, path: &str, start_time: f64) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn load_at(
+        &mut self,
+        path: &str,
+        start_time: f64,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let load_started_at = Instant::now();
         {
             let mut marker = self.seek_started_at.lock().unwrap();
@@ -399,9 +409,19 @@ impl PlaybackController {
         }
 
         self.current_path = Some(path.to_string());
-        let mut demuxer = Demuxer::open(path, Some(&mut self.connection_cache)).map_err(|e| e.to_string())?;
-        crate::log_info!("load_at: demux_open={}ms", load_started_at.elapsed().as_millis());
-        self.load_phase_demux_open_ms.store(load_started_at.elapsed().as_millis().min(u128::from(u32::MAX)) as u32, Ordering::Relaxed);
+        let mut demuxer =
+            Demuxer::open(path, Some(&mut self.connection_cache)).map_err(|e| e.to_string())?;
+        crate::log_info!(
+            "load_at: demux_open={}ms",
+            load_started_at.elapsed().as_millis()
+        );
+        self.load_phase_demux_open_ms.store(
+            load_started_at
+                .elapsed()
+                .as_millis()
+                .min(u128::from(u32::MAX)) as u32,
+            Ordering::Relaxed,
+        );
         self.network_stats = demuxer.network_stats.clone();
         self.demux_corrupt_packets = Some(demuxer.corrupt_packets.clone());
         demuxer.select_audio_track(self.desired_audio_track);
@@ -420,7 +440,9 @@ impl PlaybackController {
             if avg_fps.denominator() > 0 {
                 video_fps = avg_fps.numerator() as f32 / avg_fps.denominator() as f32;
             }
-            if let Ok(decoder) = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters()) {
+            if let Ok(decoder) =
+                ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())
+            {
                 if let Ok(video_decoder_ctx) = decoder.decoder().video() {
                     width = video_decoder_ctx.width() as u32;
                     height = video_decoder_ctx.height() as u32;
@@ -451,13 +473,18 @@ impl PlaybackController {
             } else {
                 (String::new(), String::new())
             };
-            self.available_subtitle_tracks.push(crate::subtitle_loader::SubtitleTrackInfo {
-                title: if title.is_empty() { format!("Track {}", i + 1) } else { title },
-                language: lang,
-                is_external: false,
-                source_path: None,
-                stream_index: Some(stream_idx),
-            });
+            self.available_subtitle_tracks
+                .push(crate::subtitle_loader::SubtitleTrackInfo {
+                    title: if title.is_empty() {
+                        format!("Track {}", i + 1)
+                    } else {
+                        title
+                    },
+                    language: lang,
+                    is_external: false,
+                    source_path: None,
+                    stream_index: Some(stream_idx),
+                });
         }
         if self.selected_subtitle_track >= 0
             && (self.selected_subtitle_track as usize) < self.available_subtitle_tracks.len()
@@ -472,7 +499,9 @@ impl PlaybackController {
                     .iter()
                     .map(|t| t.language.clone())
                     .collect();
-                if let Some(idx) = media_logic::subtitle::match_subtitle_language(&langs, lang.as_str()) {
+                if let Some(idx) =
+                    media_logic::subtitle::match_subtitle_language(&langs, lang.as_str())
+                {
                     self.selected_subtitle_track = idx as i32;
                     self.load_subtitle_track(idx);
                 }
@@ -547,13 +576,23 @@ impl PlaybackController {
             );
         }
 
-        let video_decoder = HwDecoder::new_configured_and_started(mime, &format, window.as_ref()).map_err(|e| e.to_string())?;
+        let video_decoder = HwDecoder::new_configured_and_started(mime, &format, window.as_ref())
+            .map_err(|e| e.to_string())?;
         let (frames_output, frames_dropped, decode_errors) = video_decoder.metrics();
         self.frames_output = Some(frames_output);
         self.frames_dropped = Some(frames_dropped);
         self.decode_errors = Some(decode_errors);
-        crate::log_info!("load_at: decoder_ready={}ms", load_started_at.elapsed().as_millis());
-        self.load_phase_decoder_ready_ms.store(load_started_at.elapsed().as_millis().min(u128::from(u32::MAX)) as u32, Ordering::Relaxed);
+        crate::log_info!(
+            "load_at: decoder_ready={}ms",
+            load_started_at.elapsed().as_millis()
+        );
+        self.load_phase_decoder_ready_ms.store(
+            load_started_at
+                .elapsed()
+                .as_millis()
+                .min(u128::from(u32::MAX)) as u32,
+            Ordering::Relaxed,
+        );
 
         let mut sps_pps = None;
         if let Some(ed) = demuxer.get_video_extradata() {
@@ -578,8 +617,17 @@ impl PlaybackController {
                 audio_out = Some(out);
             }
         }
-        crate::log_info!("load_at: audio_ready={}ms", load_started_at.elapsed().as_millis());
-        self.load_phase_audio_ready_ms.store(load_started_at.elapsed().as_millis().min(u128::from(u32::MAX)) as u32, Ordering::Relaxed);
+        crate::log_info!(
+            "load_at: audio_ready={}ms",
+            load_started_at.elapsed().as_millis()
+        );
+        self.load_phase_audio_ready_ms.store(
+            load_started_at
+                .elapsed()
+                .as_millis()
+                .min(u128::from(u32::MAX)) as u32,
+            Ordering::Relaxed,
+        );
 
         if let Ok(mut out_guard) = self.audio_output.lock() {
             // Reaplica o volume persistido (o AudioOutput e recriado a cada load).
@@ -621,7 +669,8 @@ impl PlaybackController {
         // sem isso, um PTS/contador de bytes deixado pela sessao anterior
         // faria o gate (calculado a partir de last_enqueued_video_dts_bits)
         // achar que ja ha buffer de sobra e travar a demux logo na abertura.
-        self.last_enqueued_video_dts_bits.store(start_time.to_bits(), Ordering::Relaxed);
+        self.last_enqueued_video_dts_bits
+            .store(start_time.to_bits(), Ordering::Relaxed);
         self.video_bytes_queued.store(0, Ordering::Relaxed);
         self.audio_bytes_queued.store(0, Ordering::Relaxed);
 
@@ -690,7 +739,9 @@ impl PlaybackController {
             let is_network_source = demuxer.network_stats.is_some();
             let mut buffer_gate_state = media_logic::buffer_gate::GateState::Read;
             loop {
-                if !*is_running_d.lock().unwrap() { break; }
+                if !*is_running_d.lock().unwrap() {
+                    break;
+                }
 
                 if let Ok(DemuxCommand::SeekTo(target_sec)) = command_rx.try_recv() {
                     let target_ts = (target_sec * 1_000_000.0) as i64;
@@ -784,13 +835,32 @@ impl PlaybackController {
                             // DTS==PTS de qualquer forma).
                             if let Some(dts) = packet.dts().or_else(|| packet.pts()) {
                                 let buffer_pos_sec = (dts as f64 * video_time_base).max(0.0);
-                                last_enqueued_video_dts_bits_d.store(buffer_pos_sec.to_bits(), Ordering::Relaxed);
+                                last_enqueued_video_dts_bits_d
+                                    .store(buffer_pos_sec.to_bits(), Ordering::Relaxed);
                             }
                             video_bytes_queued_d.fetch_add(packet_len, Ordering::Relaxed);
-                            if !try_send_until_stopped(&video_tx, TaggedPacket { epoch: current_epoch, packet }, &is_running_d) { break; }
+                            if !try_send_until_stopped(
+                                &video_tx,
+                                TaggedPacket {
+                                    epoch: current_epoch,
+                                    packet,
+                                },
+                                &is_running_d,
+                            ) {
+                                break;
+                            }
                         } else if demuxer.audio_stream_index == Some(idx) {
                             audio_bytes_queued_d.fetch_add(packet_len, Ordering::Relaxed);
-                            if !try_send_until_stopped(&audio_tx, TaggedPacket { epoch: current_epoch, packet }, &is_running_d) { break; }
+                            if !try_send_until_stopped(
+                                &audio_tx,
+                                TaggedPacket {
+                                    epoch: current_epoch,
+                                    packet,
+                                },
+                                &is_running_d,
+                            ) {
+                                break;
+                            }
                         }
                     }
                     crate::demuxer::ReadPacketOutcome::Eof => {
@@ -825,7 +895,8 @@ impl PlaybackController {
                             }
                             epoch_d.fetch_add(1, Ordering::SeqCst);
                             sync_d.update_master_clock(last_good_pos_sec);
-                            last_enqueued_video_dts_bits_d.store(last_good_pos_sec.to_bits(), Ordering::Relaxed);
+                            last_enqueued_video_dts_bits_d
+                                .store(last_good_pos_sec.to_bits(), Ordering::Relaxed);
                             buffer_gate_state = media_logic::buffer_gate::GateState::Read;
                             thread::sleep(media_logic::retry_backoff::backoff_with_jitter(
                                 consecutive_read_errors,
@@ -842,7 +913,8 @@ impl PlaybackController {
                             sync_d.reset();
                             last_good_pos_sec = 0.0;
                             consecutive_read_errors = 0;
-                            last_enqueued_video_dts_bits_d.store(0.0f64.to_bits(), Ordering::Relaxed);
+                            last_enqueued_video_dts_bits_d
+                                .store(0.0f64.to_bits(), Ordering::Relaxed);
                             buffer_gate_state = media_logic::buffer_gate::GateState::Read;
                         }
                     }
@@ -895,19 +967,22 @@ impl PlaybackController {
                             }
                         }
                         let master_clock = sync_v.get_master_clock();
-                        let inst_drift_ms = ((master_clock - pts_sec) * 1000.0).clamp(i32::MIN as f64, i32::MAX as f64);
+                        let inst_drift_ms = ((master_clock - pts_sec) * 1000.0)
+                            .clamp(i32::MIN as f64, i32::MAX as f64);
                         let prev_drift_ms = av_drift_v.load(Ordering::Relaxed) as f64;
                         let smoothed_drift_ms = prev_drift_ms * 0.9 + inst_drift_ms * 0.1;
                         av_drift_v.store(
                             smoothed_drift_ms.clamp(i32::MIN as f64, i32::MAX as f64) as i32,
-                            Ordering::Relaxed
+                            Ordering::Relaxed,
                         );
                     }
                 };
             }
 
             loop {
-                if !*is_running_v.lock().unwrap() { break; }
+                if !*is_running_v.lock().unwrap() {
+                    break;
+                }
 
                 // Detecção e reset imediato de época: ao sofrer seek, epoch_v é incrementado.
                 // Resetar imediatamente no topo do loop garante que:
@@ -948,7 +1023,10 @@ impl PlaybackController {
                     let is_landing = preroll.is_awaiting_landing();
                     let master_clock = sync_v.get_master_clock();
                     match media_logic::frame_timing::decide_frame_action(
-                        pts_sec, master_clock, is_landing, LATE_FRAME_RENDER_SKIP_SEC,
+                        pts_sec,
+                        master_clock,
+                        is_landing,
+                        LATE_FRAME_RENDER_SKIP_SEC,
                     ) {
                         media_logic::frame_timing::FrameAction::WaitThenRender(d) => {
                             if d <= std::time::Duration::from_millis(15) {
@@ -993,94 +1071,103 @@ impl PlaybackController {
                     std::time::Duration::from_millis(2)
                 };
                 match video_rx.recv_timeout(recv_timeout) {
-                Ok(tagged) => {
-                    // Descontado incondicionalmente, mesmo se o pacote for de
-                    // uma epoca velha e descartado logo abaixo — ele saiu
-                    // fisicamente do canal de qualquer jeito, entao o gate de
-                    // buffer (rodando na thread de demux) precisa saber.
-                    let packet_len = tagged.packet.data().map(|d| d.len()).unwrap_or(0) as u64;
-                    saturating_sub_u64(&video_bytes_queued_v, packet_len);
-                    if tagged.epoch < current_epoch {
-                        continue;
-                    }
-                    if tagged.epoch > current_epoch {
-                        current_epoch = tagged.epoch;
-                        let _ = video_decoder.flush();
-                        // Pos-flush, qualquer OutputBuffer ainda pendente
-                        // aponta pra um indice que o MediaCodec ja
-                        // invalidou/reclamou internamente — descartar SEM
-                        // chamar release_output neles (seria usar um
-                        // handle morto; flush() ja cuida de liberar esses
-                        // slots do lado do codec).
-                        pending.clear();
-                        preroll.begin();
-                        last_epoch_change_at = Some(std::time::Instant::now());
-                    }
-                    let packet = tagged.packet;
-
-                    let was_active = preroll.is_active();
-                    if was_active {
-                        catchup_packets += 1;
-                    }
-
-                    let pts = packet.pts().unwrap_or(0);
-                    let pts_sec = pts as f64 * video_time_base;
-                    let lag = sync_v.get_master_clock() - pts_sec;
-                    if !was_active && lag > CATCH_UP_SKIP_THRESHOLD_SEC && packet.is_key() {
-                        crate::log_info!("Video catch-up: retomando decode na keyframe (lag era {lag:.2}s)");
-                    }
-                    if preroll.should_skip_packet(packet.is_key(), lag, CATCH_UP_SKIP_THRESHOLD_SEC) {
-                        continue;
-                    }
-
-                    if let Some(data) = packet.data() {
-                        let frame_data = if video_is_nal_based {
-                            crate::nal::convert_avcc_to_annexb(data)
-                        } else {
-                            data.to_vec()
-                        };
-                        // MediaCodec espera presentationTimeUs expressamente em MICROSSEGUNDOS (us).
-                        // Em conteineres como Matroska (MKV), video_time_base e 1/1000 (ms).
-                        // Converter pts para microssegundos reais evita que drivers como Qualcomm C2
-                        // interpretem o delta de ~42ms como 42us e superestimem o framerate para 23809 fps.
-                        let pts_us = (pts_sec * 1_000_000.0).max(0.0) as i64;
-                        let _ = video_decoder.feed_input(
-                            &frame_data,
-                            pts_us,
-                            0,
-                            // Sob pressão (entrada cheia porque estamos
-                            // segurando saída pendente demais): só alivia
-                            // descartando se houver excesso de buffers retidos (>= 4).
-                            // Durante operação normal com fila curta, NUNCA
-                            // ejeta frames prematuramente na tela fora da ordem do PTS.
-                            || {
-                                if pending.len() >= 4 {
-                                    release_pending_front!(false);
-                                }
-                            },
-                            || *is_running_v.lock().unwrap()
-                        );
-                        if was_active && !preroll.is_active() {
-                            if let Some(start) = seek_started_at_v.lock().unwrap().take() {
-                                let ms = start.elapsed().as_millis().min(u128::from(u32::MAX)) as u32;
-                                seek_latency_v.store(ms, Ordering::Relaxed);
-                                crate::log_info!("seek: landing={ms}ms catchup_packets={catchup_packets}");
-                            }
-                            catchup_packets = 0;
+                    Ok(tagged) => {
+                        // Descontado incondicionalmente, mesmo se o pacote for de
+                        // uma epoca velha e descartado logo abaixo — ele saiu
+                        // fisicamente do canal de qualquer jeito, entao o gate de
+                        // buffer (rodando na thread de demux) precisa saber.
+                        let packet_len = tagged.packet.data().map(|d| d.len()).unwrap_or(0) as u64;
+                        saturating_sub_u64(&video_bytes_queued_v, packet_len);
+                        if tagged.epoch < current_epoch {
+                            continue;
                         }
-                    }
-                }
-                Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
-                    if let Some(t) = last_epoch_change_at {
-                        if t.elapsed() < std::time::Duration::from_secs(3) {
-                            crate::log_warn!(
-                                "seek: fila de video vazia {}ms apos epoca mudar",
-                                t.elapsed().as_millis()
+                        if tagged.epoch > current_epoch {
+                            current_epoch = tagged.epoch;
+                            let _ = video_decoder.flush();
+                            // Pos-flush, qualquer OutputBuffer ainda pendente
+                            // aponta pra um indice que o MediaCodec ja
+                            // invalidou/reclamou internamente — descartar SEM
+                            // chamar release_output neles (seria usar um
+                            // handle morto; flush() ja cuida de liberar esses
+                            // slots do lado do codec).
+                            pending.clear();
+                            preroll.begin();
+                            last_epoch_change_at = Some(std::time::Instant::now());
+                        }
+                        let packet = tagged.packet;
+
+                        let was_active = preroll.is_active();
+                        if was_active {
+                            catchup_packets += 1;
+                        }
+
+                        let pts = packet.pts().unwrap_or(0);
+                        let pts_sec = pts as f64 * video_time_base;
+                        let lag = sync_v.get_master_clock() - pts_sec;
+                        if !was_active && lag > CATCH_UP_SKIP_THRESHOLD_SEC && packet.is_key() {
+                            crate::log_info!(
+                                "Video catch-up: retomando decode na keyframe (lag era {lag:.2}s)"
                             );
                         }
+                        if preroll.should_skip_packet(
+                            packet.is_key(),
+                            lag,
+                            CATCH_UP_SKIP_THRESHOLD_SEC,
+                        ) {
+                            continue;
+                        }
+
+                        if let Some(data) = packet.data() {
+                            let frame_data = if video_is_nal_based {
+                                crate::nal::convert_avcc_to_annexb(data)
+                            } else {
+                                data.to_vec()
+                            };
+                            // MediaCodec espera presentationTimeUs expressamente em MICROSSEGUNDOS (us).
+                            // Em conteineres como Matroska (MKV), video_time_base e 1/1000 (ms).
+                            // Converter pts para microssegundos reais evita que drivers como Qualcomm C2
+                            // interpretem o delta de ~42ms como 42us e superestimem o framerate para 23809 fps.
+                            let pts_us = (pts_sec * 1_000_000.0).max(0.0) as i64;
+                            let _ = video_decoder.feed_input(
+                                &frame_data,
+                                pts_us,
+                                0,
+                                // Sob pressão (entrada cheia porque estamos
+                                // segurando saída pendente demais): só alivia
+                                // descartando se houver excesso de buffers retidos (>= 4).
+                                // Durante operação normal com fila curta, NUNCA
+                                // ejeta frames prematuramente na tela fora da ordem do PTS.
+                                || {
+                                    if pending.len() >= 4 {
+                                        release_pending_front!(false);
+                                    }
+                                },
+                                || *is_running_v.lock().unwrap(),
+                            );
+                            if was_active && !preroll.is_active() {
+                                if let Some(start) = seek_started_at_v.lock().unwrap().take() {
+                                    let ms = start.elapsed().as_millis().min(u128::from(u32::MAX))
+                                        as u32;
+                                    seek_latency_v.store(ms, Ordering::Relaxed);
+                                    crate::log_info!(
+                                        "seek: landing={ms}ms catchup_packets={catchup_packets}"
+                                    );
+                                }
+                                catchup_packets = 0;
+                            }
+                        }
                     }
-                }
-                Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {}
+                    Err(crossbeam_channel::RecvTimeoutError::Timeout) => {
+                        if let Some(t) = last_epoch_change_at {
+                            if t.elapsed() < std::time::Duration::from_secs(3) {
+                                crate::log_warn!(
+                                    "seek: fila de video vazia {}ms apos epoca mudar",
+                                    t.elapsed().as_millis()
+                                );
+                            }
+                        }
+                    }
+                    Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {}
                 }
             }
         });
@@ -1119,10 +1206,13 @@ impl PlaybackController {
             let mut last_speed_change = std::time::Instant::now()
                 .checked_sub(std::time::Duration::from_secs(1))
                 .unwrap_or_else(std::time::Instant::now);
-            const MIN_SPEED_CHANGE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(200);
+            const MIN_SPEED_CHANGE_INTERVAL: std::time::Duration =
+                std::time::Duration::from_millis(200);
 
             loop {
-                if !*is_running_a.lock().unwrap() { break; }
+                if !*is_running_a.lock().unwrap() {
+                    break;
+                }
 
                 // Verificação de época no topo do loop: garante flush imediato do decoder
                 // e da saída de áudio Oboe mesmo se o reprodutor estiver pausado.
@@ -1178,7 +1268,10 @@ impl PlaybackController {
 
                         if let Ok(samples) = ad.decode(&packet) {
                             if !samples.is_empty() {
-                                let pts = packet.pts().or_else(|| packet.dts()).unwrap_or(last_good_audio_pts);
+                                let pts = packet
+                                    .pts()
+                                    .or_else(|| packet.dts())
+                                    .unwrap_or(last_good_audio_pts);
                                 last_good_audio_pts = pts;
                                 let pts_sec = pts as f64 * audio_time_base;
 
@@ -1186,7 +1279,8 @@ impl PlaybackController {
                                 // O buffer do AudioOutput (bounded 48000 amostras) retém até 0,5s
                                 // de som à frente. Subtraímos essa profundidade de fila para que o
                                 // master_clock reflita o som que está efetivamente saindo nos fones agora.
-                                let queued_samples = audio_sender.as_ref().map(|s| s.len()).unwrap_or(0);
+                                let queued_samples =
+                                    audio_sender.as_ref().map(|s| s.len()).unwrap_or(0);
                                 let acoustic_pts = media_logic::sync::acoustic_audio_pts(
                                     pts_sec,
                                     queued_samples,
@@ -1196,9 +1290,12 @@ impl PlaybackController {
                                 );
                                 sync_a.update_audio_pts(acoustic_pts);
 
-                                let head_rot = media_logic::spatial_audio::get_global_head_orientation();
-                                let spatial_mode = media_logic::spatial_audio::get_global_spatial_mode();
-                                let head_tracking = media_logic::spatial_audio::get_global_head_tracking_enabled();
+                                let head_rot =
+                                    media_logic::spatial_audio::get_global_head_orientation();
+                                let spatial_mode =
+                                    media_logic::spatial_audio::get_global_spatial_mode();
+                                let head_tracking =
+                                    media_logic::spatial_audio::get_global_head_tracking_enabled();
 
                                 spatial_processor.set_mode(spatial_mode);
                                 spatial_processor.set_head_tracking_enabled(head_tracking);
@@ -1265,7 +1362,10 @@ impl PlaybackController {
     /// perda de foco), nao so o clique direto no botao. Ver
     /// get_playback_is_playing em rust/bridge/src/lib.rs.
     pub fn is_playing(&self) -> bool {
-        self.session.as_ref().map(|s| s.is_playing()).unwrap_or(false)
+        self.session
+            .as_ref()
+            .map(|s| s.is_playing())
+            .unwrap_or(false)
     }
 
     /// Volume vai de 0.0 (mudo) a 1.0 (100%); valores fora do range sao
@@ -1334,7 +1434,9 @@ impl PlaybackController {
         }
         self.desired_audio_track = (self.desired_audio_track + 1) % self.audio_track_count;
         let (current_position, _) = self.get_progress();
-        let Some(path) = self.current_path.clone() else { return };
+        let Some(path) = self.current_path.clone() else {
+            return;
+        };
         let was_playing = self.is_playing();
         self.stop();
         // Erro descartado de proposito: cycle_audio_track() nao tem
@@ -1352,7 +1454,12 @@ impl PlaybackController {
     }
 
     pub fn on_focus_lost(&mut self) {
-        if self.session.as_ref().map(|s| s.is_playing()).unwrap_or(false) {
+        if self
+            .session
+            .as_ref()
+            .map(|s| s.is_playing())
+            .unwrap_or(false)
+        {
             self.auto_paused = true;
             self.pause();
         }
@@ -1383,7 +1490,10 @@ impl PlaybackController {
     /// Conta frames APRESENTADOS (renderizados), nao frames que o MediaCodec
     /// produziu — ver get_frames_output_count() pra essa distincao.
     pub fn get_frames_decoded_count(&self) -> u64 {
-        self.texture_output.lock().map(|tex| tex.frames_decoded).unwrap_or(0)
+        self.texture_output
+            .lock()
+            .map(|tex| tex.frames_decoded)
+            .unwrap_or(0)
     }
 
     /// Debug (docs/DEBUGGING.md) — total de buffers de saida que o
@@ -1391,13 +1501,19 @@ impl PlaybackController {
     /// decidir renderizar ou descartar. Ground truth do throughput real do
     /// decoder — ver HwDecoder::metrics().
     pub fn get_frames_output_count(&self) -> u64 {
-        self.frames_output.as_ref().map(|a| a.load(Ordering::Relaxed)).unwrap_or(0)
+        self.frames_output
+            .as_ref()
+            .map(|a| a.load(Ordering::Relaxed))
+            .unwrap_or(0)
     }
 
     /// Debug (docs/DEBUGGING.md) — frames que o MediaCodec produziu mas o
     /// callback de sync descartou por atraso (LATE_FRAME_RENDER_SKIP_SEC).
     pub fn get_frames_dropped_count(&self) -> u64 {
-        self.frames_dropped.as_ref().map(|a| a.load(Ordering::Relaxed)).unwrap_or(0)
+        self.frames_dropped
+            .as_ref()
+            .map(|a| a.load(Ordering::Relaxed))
+            .unwrap_or(0)
     }
 
     /// Debug (docs/DEBUGGING.md) — quantos pacotes de video estao
@@ -1405,7 +1521,10 @@ impl PlaybackController {
     /// de forma sustentada = a thread de demux nao esta acompanhando o
     /// consumo (rede lenta ou travada); alto e estavel = normal.
     pub fn get_video_queue_depth(&self) -> u32 {
-        self.video_queue.as_ref().map(|s| s.len() as u32).unwrap_or(0)
+        self.video_queue
+            .as_ref()
+            .map(|s| s.len() as u32)
+            .unwrap_or(0)
     }
 
     /// Debug (docs/DEBUGGING.md) — quantos frames o MediaCodec ja
@@ -1420,7 +1539,10 @@ impl PlaybackController {
     /// F4: espelho de get_video_queue_depth() para a fila de áudio — antes invisível de
     /// fora (só video_queue guardava o clone do Sender pra observabilidade).
     pub fn get_audio_queue_depth(&self) -> u32 {
-        self.audio_queue.as_ref().map(|s| s.len() as u32).unwrap_or(0)
+        self.audio_queue
+            .as_ref()
+            .map(|s| s.len() as u32)
+            .unwrap_or(0)
     }
 
     /// "Buffer estilo YouTube" — segundos de vídeo já enfileirados à frente
@@ -1460,7 +1582,10 @@ impl PlaybackController {
     /// ou `http://` puro (sem PrefetchReader envolvido). O C++ amostra isto
     /// ao longo do tempo e calcula MB/s, mesmo padrao de decFps.
     pub fn get_network_bytes_read(&self) -> u64 {
-        self.network_stats.as_ref().map(|s| s.bytes_fetched.load(Ordering::Relaxed)).unwrap_or(0)
+        self.network_stats
+            .as_ref()
+            .map(|s| s.bytes_fetched.load(Ordering::Relaxed))
+            .unwrap_or(0)
     }
 
     /// Debug (docs/DEBUGGING.md) — duracao do ULTIMO fetch de bloco completo
@@ -1469,7 +1594,10 @@ impl PlaybackController {
     /// stalls/retries pontuais (alguns blocos rapidos, outros muito lentos) —
     /// ver docs/NETWORK-IO-PERFORMANCE.md.
     pub fn get_network_last_block_fetch_ms(&self) -> f32 {
-        self.network_stats.as_ref().map(|s| s.last_fetch_us.load(Ordering::Relaxed) as f32 / 1000.0).unwrap_or(0.0)
+        self.network_stats
+            .as_ref()
+            .map(|s| s.last_fetch_us.load(Ordering::Relaxed) as f32 / 1000.0)
+            .unwrap_or(0.0)
     }
 
     /// Debug (docs/DEBUGGING.md) — quantos blocos foram buscados no total
@@ -1478,28 +1606,43 @@ impl PlaybackController {
     /// durante playback estavel (nao logo apos abrir o arquivo) indica
     /// acesso menos sequencial do que o esperado.
     pub fn get_network_blocks_fetched(&self) -> u64 {
-        self.network_stats.as_ref().map(|s| s.blocks_fetched.load(Ordering::Relaxed)).unwrap_or(0)
+        self.network_stats
+            .as_ref()
+            .map(|s| s.blocks_fetched.load(Ordering::Relaxed))
+            .unwrap_or(0)
     }
 
     pub fn get_network_blocks_discarded(&self) -> u64 {
-        self.network_stats.as_ref().map(|s| s.blocks_discarded.load(Ordering::Relaxed)).unwrap_or(0)
+        self.network_stats
+            .as_ref()
+            .map(|s| s.blocks_discarded.load(Ordering::Relaxed))
+            .unwrap_or(0)
     }
 
     /// F4: falhas de fetch do PrefetchReader (io::Error do RangeSource) — antes so logadas.
     pub fn get_network_fetch_failures(&self) -> u64 {
-        self.network_stats.as_ref().map(|s| s.fetch_failures.load(Ordering::Relaxed)).unwrap_or(0)
+        self.network_stats
+            .as_ref()
+            .map(|s| s.fetch_failures.load(Ordering::Relaxed))
+            .unwrap_or(0)
     }
 
     /// F4: blocos especulativos consecutivos desde o ultimo seek nao-sequencial — alto = leitura
     /// sequencial confirmada, 0 = acabou de sofrer um seek (ver PrefetchReader::sequential_streak).
     pub fn get_network_sequential_streak(&self) -> u32 {
-        self.network_stats.as_ref().map(|s| s.sequential_streak.load(Ordering::Relaxed)).unwrap_or(0)
+        self.network_stats
+            .as_ref()
+            .map(|s| s.sequential_streak.load(Ordering::Relaxed))
+            .unwrap_or(0)
     }
 
     /// F4: 1 se o read-ahead especulativo esta suspenso por throttle termico (T14.1/T14.2), 0
     /// caso contrario ou antes do primeiro load_at().
     pub fn get_network_throttled(&self) -> u32 {
-        self.network_stats.as_ref().map(|s| s.throttled.load(Ordering::Relaxed)).unwrap_or(0)
+        self.network_stats
+            .as_ref()
+            .map(|s| s.throttled.load(Ordering::Relaxed))
+            .unwrap_or(0)
     }
 
     // Duracao do ultimo seek concluido (pedido -> pre-roll terminou), em ms. 0 antes do primeiro.
@@ -1526,11 +1669,22 @@ impl PlaybackController {
     }
 
     pub fn toggle_play_pause(&mut self) {
-        let currently_playing = self.session.as_ref().map(|s| s.is_playing()).unwrap_or(false);
+        let currently_playing = self
+            .session
+            .as_ref()
+            .map(|s| s.is_playing())
+            .unwrap_or(false);
         let new_state = !currently_playing;
         self.set_playing(new_state);
 
-        crate::log_info!("{}", if new_state { "Resumed playback" } else { "Paused playback" });
+        crate::log_info!(
+            "{}",
+            if new_state {
+                "Resumed playback"
+            } else {
+                "Paused playback"
+            }
+        );
     }
 
     /// Para a geracao atual de threads e espera (join) elas
@@ -1608,21 +1762,28 @@ impl PlaybackController {
         };
         self.apply_loaded_subtitle(loaded);
         let idx = self.available_subtitle_tracks.len();
-        self.available_subtitle_tracks.push(crate::subtitle_loader::SubtitleTrackInfo {
-            title: std::path::Path::new(path).file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "External".into()),
-            language: String::new(),
-            is_external: true,
-            source_path: Some(path.to_string()),
-            stream_index: None,
-        });
+        self.available_subtitle_tracks
+            .push(crate::subtitle_loader::SubtitleTrackInfo {
+                title: std::path::Path::new(path)
+                    .file_name()
+                    .map(|f| f.to_string_lossy().to_string())
+                    .unwrap_or_else(|| "External".into()),
+                language: String::new(),
+                is_external: true,
+                source_path: Some(path.to_string()),
+                stream_index: None,
+            });
         self.selected_subtitle_track = idx as i32;
         Ok(count)
     }
 
     pub fn set_preferred_subtitle_language(&mut self, lang: &str) {
         let lang = lang.trim();
-        self.preferred_subtitle_language =
-            if lang.is_empty() { None } else { Some(lang.to_string()) };
+        self.preferred_subtitle_language = if lang.is_empty() {
+            None
+        } else {
+            Some(lang.to_string())
+        };
     }
 
     fn apply_loaded_subtitle(&mut self, loaded: crate::subtitle_loader::LoadedSubtitle) {
@@ -1646,11 +1807,11 @@ impl PlaybackController {
     }
 
     fn load_subtitle_track(&mut self, idx: usize) {
-        let (is_external, source_path, stream_index) =
-            match self.available_subtitle_tracks.get(idx) {
-                Some(t) => (t.is_external, t.source_path.clone(), t.stream_index),
-                None => return,
-            };
+        let (is_external, source_path, stream_index) = match self.available_subtitle_tracks.get(idx)
+        {
+            Some(t) => (t.is_external, t.source_path.clone(), t.stream_index),
+            None => return,
+        };
 
         if is_external {
             let Some(path) = source_path else { return };
@@ -1680,7 +1841,8 @@ impl PlaybackController {
         let entries = self.subtitle_entries.as_ref()?;
         let current_pts_sec = self.sync_manager.get_master_clock();
         let current_pts_ms = (current_pts_sec * 1000.0) as i64;
-        media_logic::subtitle::find_active_cue(entries, current_pts_ms, self.subtitle_offset_ms).map(|c| c.text.clone())
+        media_logic::subtitle::find_active_cue(entries, current_pts_ms, self.subtitle_offset_ms)
+            .map(|c| c.text.clone())
     }
 
     pub fn get_active_pgs(&self) -> Option<&media_logic::subtitle_pgs::PgsSubtitle> {
@@ -1690,11 +1852,20 @@ impl PlaybackController {
         media_logic::subtitle_pgs::find_active_pgs(pgs, current_pts_ms, self.subtitle_offset_ms)
     }
 
-    pub fn get_active_ass_event(&self) -> Option<(&media_logic::subtitle_ass::AssEvent, &media_logic::subtitle_ass::AssScriptInfo)> {
+    pub fn get_active_ass_event(
+        &self,
+    ) -> Option<(
+        &media_logic::subtitle_ass::AssEvent,
+        &media_logic::subtitle_ass::AssScriptInfo,
+    )> {
         let ass = self.ass_subtitle.as_ref()?;
         let current_pts_sec = self.sync_manager.get_master_clock();
         let current_pts_ms = (current_pts_sec * 1000.0) as i64;
-        let event = media_logic::subtitle_ass::find_active_ass_event(ass, current_pts_ms, self.subtitle_offset_ms)?;
+        let event = media_logic::subtitle_ass::find_active_ass_event(
+            ass,
+            current_pts_ms,
+            self.subtitle_offset_ms,
+        )?;
         Some((event, &ass.script_info))
     }
 }

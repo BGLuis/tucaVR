@@ -49,9 +49,8 @@ class PassthroughSettingsModal(
     private val onPackedAlphaChokeChanged: (choke: Int) -> Unit = {},
     private val onAutoDetectChroma: ((callback: (com.tucavr.chroma.ChromaDetectionResult?) -> Unit) -> Unit)? = null,
     private val onResetScreenPosition: () -> Unit,
-    private val onDismiss: () -> Unit
+    private val onDismiss: () -> Unit,
 ) : FrameLayout(context) {
-
     private val opacityValueText: TextView
     private val btnTogglePassthrough: VoidButton
     private val btnToggleEdge: VoidButton
@@ -63,92 +62,103 @@ class PassthroughSettingsModal(
         setOnClickListener { onDismiss() }
 
         val panelWidth = VoidTheme.dpToPx(context, 680f)
-        val panel = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LayoutParams(panelWidth, LayoutParams.WRAP_CONTENT).apply {
-                gravity = Gravity.CENTER
+        val panel =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams =
+                    LayoutParams(panelWidth, LayoutParams.WRAP_CONTENT).apply {
+                        gravity = Gravity.CENTER
+                    }
+                background =
+                    GradientDrawable().apply {
+                        setColor(VoidTheme.colorSurface)
+                        cornerRadius = VoidTheme.dp(context, 16f)
+                        setStroke(VoidTheme.dpToPx(context, VoidTheme.borderWidthDp), VoidTheme.colorBorder)
+                    }
+                val pad = VoidTheme.dpToPx(context, 28f)
+                setPadding(pad, pad, pad, pad)
+                isClickable = true
+                setOnClickListener { /* Consumir clique dentro do modal */ }
             }
-            background = GradientDrawable().apply {
-                setColor(VoidTheme.colorSurface)
-                cornerRadius = VoidTheme.dp(context, 16f)
-                setStroke(VoidTheme.dpToPx(context, VoidTheme.borderWidthDp), VoidTheme.colorBorder)
-            }
-            val pad = VoidTheme.dpToPx(context, 28f)
-            setPadding(pad, pad, pad, pad)
-            isClickable = true
-            setOnClickListener { /* Consumir clique dentro do modal */ }
-        }
 
         // Header: Título + Botão Fechar
-        val header = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = VoidTheme.dpToPx(context, 20f)
+        val header =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 20f)
+                    }
             }
-        }
 
-        val title = TextView(context).apply {
-            text = context.getString(R.string.passthrough_modal_title)
-            typeface = VoidTheme.typefaceTitle
-            textSize = 22f
-            setTextColor(VoidTheme.colorText)
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
+        val title =
+            TextView(context).apply {
+                text = context.getString(R.string.passthrough_modal_title)
+                typeface = VoidTheme.typefaceTitle
+                textSize = 22f
+                setTextColor(VoidTheme.colorText)
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
         header.addView(title)
 
-        val closeBtn = VoidIconButton(
-            context,
-            R.drawable.icon_x,
-            VoidButtonStyle.SECONDARY,
-            isCircular = true,
-            isTransparent = true
-        ).apply {
-            val s = VoidTheme.dpToPx(context, 48f)
-            layoutParams = LinearLayout.LayoutParams(s, s)
-            setOnClickListener { onDismiss() }
-        }
+        val closeBtn =
+            VoidIconButton(
+                context,
+                R.drawable.icon_x,
+                VoidButtonStyle.SECONDARY,
+                isCircular = true,
+                isTransparent = true,
+            ).apply {
+                val s = VoidTheme.dpToPx(context, 48f)
+                layoutParams = LinearLayout.LayoutParams(s, s)
+                setOnClickListener { onDismiss() }
+            }
         header.addView(closeBtn)
         panel.addView(header)
 
         // 1. Linha de Toggle de Passthrough
-        val toggleRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = VoidTheme.dpToPx(context, 18f)
+        val toggleRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 18f)
+                    }
             }
-        }
-        val toggleTextContainer = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
+        val toggleTextContainer =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
         toggleTextContainer.addView(
-            VoidText.body(context, context.getString(R.string.passthrough_toggle_label), sizeSp = 18f)
+            VoidText.body(context, context.getString(R.string.passthrough_toggle_label), sizeSp = 18f),
         )
         toggleTextContainer.addView(
-            VoidText.body(context, context.getString(R.string.passthrough_toggle_description), sizeSp = 14f, secondary = true)
+            VoidText.body(context, context.getString(R.string.passthrough_toggle_description), sizeSp = 14f, secondary = true),
         )
         toggleRow.addView(toggleTextContainer)
 
-        btnTogglePassthrough = VoidButton(
-            context,
-            if (isPassthroughEnabled) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
-        ).apply {
-            text = if (isPassthroughEnabled) context.getString(R.string.passthrough_state_on) else context.getString(R.string.passthrough_state_off)
-            setOnClickListener {
-                isPassthroughEnabled = !isPassthroughEnabled
-                style = if (isPassthroughEnabled) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
+        btnTogglePassthrough =
+            VoidButton(
+                context,
+                if (isPassthroughEnabled) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY,
+            ).apply {
                 text = if (isPassthroughEnabled) context.getString(R.string.passthrough_state_on) else context.getString(R.string.passthrough_state_off)
-                onTogglePassthrough(isPassthroughEnabled)
+                setOnClickListener {
+                    isPassthroughEnabled = !isPassthroughEnabled
+                    style = if (isPassthroughEnabled) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
+                    text = if (isPassthroughEnabled) context.getString(R.string.passthrough_state_on) else context.getString(R.string.passthrough_state_off)
+                    onTogglePassthrough(isPassthroughEnabled)
+                }
             }
-        }
         toggleRow.addView(btnTogglePassthrough)
         panel.addView(toggleRow)
 
@@ -156,98 +166,116 @@ class PassthroughSettingsModal(
         panel.addView(createDivider())
 
         // 2. Linha de Opacidade (Slider 0% - 100%)
-        val opacityHeader = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = VoidTheme.dpToPx(context, 14f)
-                bottomMargin = VoidTheme.dpToPx(context, 8f)
+        val opacityHeader =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        topMargin = VoidTheme.dpToPx(context, 14f)
+                        bottomMargin = VoidTheme.dpToPx(context, 8f)
+                    }
             }
-        }
-        val opacityLabel = VoidText.body(context, context.getString(R.string.passthrough_opacity_label), sizeSp = 18f).apply {
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
+        val opacityLabel =
+            VoidText.body(context, context.getString(R.string.passthrough_opacity_label), sizeSp = 18f).apply {
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
         opacityHeader.addView(opacityLabel)
 
         val initialPercent = (currentOpacity * 100f).toInt().coerceIn(0, 100)
-        opacityValueText = VoidText.mono(
-            context,
-            context.getString(R.string.passthrough_opacity_percent, initialPercent),
-            sizeSp = 18f
-        ).apply {
-            setTextColor(VoidTheme.colorAccent)
-        }
+        opacityValueText =
+            VoidText.mono(
+                context,
+                context.getString(R.string.passthrough_opacity_percent, initialPercent),
+                sizeSp = 18f,
+            ).apply {
+                setTextColor(VoidTheme.colorAccent)
+            }
         opacityHeader.addView(opacityValueText)
         panel.addView(opacityHeader)
 
-        val opacitySeekBar = SeekBar(context).apply {
-            max = 100
-            progress = initialPercent
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                VoidTheme.dpToPx(context, 48f)
-            ).apply {
-                bottomMargin = VoidTheme.dpToPx(context, 16f)
-            }
-            progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
-            thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    val opacity = progress / 100f
-                    currentOpacity = opacity
-                    opacityValueText.text = context.getString(R.string.passthrough_opacity_percent, progress)
-                    if (fromUser) {
-                        onOpacityChanged(opacity)
+        val opacitySeekBar =
+            SeekBar(context).apply {
+                max = 100
+                progress = initialPercent
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        VoidTheme.dpToPx(context, 48f),
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 16f)
                     }
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-            })
-        }
+                progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                setOnSeekBarChangeListener(
+                    object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(
+                            seekBar: SeekBar?,
+                            progress: Int,
+                            fromUser: Boolean,
+                        ) {
+                            val opacity = progress / 100f
+                            currentOpacity = opacity
+                            opacityValueText.text = context.getString(R.string.passthrough_opacity_percent, progress)
+                            if (fromUser) {
+                                onOpacityChanged(opacity)
+                            }
+                        }
+
+                        override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+
+                        override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                    },
+                )
+            }
         panel.addView(opacitySeekBar)
 
         // Divisor sutil
         panel.addView(createDivider())
 
         // 3. Linha de Edge Rendering
-        val edgeRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = VoidTheme.dpToPx(context, 14f)
-                bottomMargin = VoidTheme.dpToPx(context, 18f)
+        val edgeRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        topMargin = VoidTheme.dpToPx(context, 14f)
+                        bottomMargin = VoidTheme.dpToPx(context, 18f)
+                    }
             }
-        }
-        val edgeTextContainer = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
+        val edgeTextContainer =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
         edgeTextContainer.addView(
-            VoidText.body(context, context.getString(R.string.passthrough_edge_rendering_label), sizeSp = 18f)
+            VoidText.body(context, context.getString(R.string.passthrough_edge_rendering_label), sizeSp = 18f),
         )
         edgeTextContainer.addView(
-            VoidText.body(context, context.getString(R.string.passthrough_edge_rendering_description), sizeSp = 14f, secondary = true)
+            VoidText.body(context, context.getString(R.string.passthrough_edge_rendering_description), sizeSp = 14f, secondary = true),
         )
         edgeRow.addView(edgeTextContainer)
 
-        btnToggleEdge = VoidButton(
-            context,
-            if (isEdgeRenderingEnabled) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
-        ).apply {
-            text = if (isEdgeRenderingEnabled) context.getString(R.string.passthrough_state_on) else context.getString(R.string.passthrough_state_off)
-            setOnClickListener {
-                isEdgeRenderingEnabled = !isEdgeRenderingEnabled
-                style = if (isEdgeRenderingEnabled) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
+        btnToggleEdge =
+            VoidButton(
+                context,
+                if (isEdgeRenderingEnabled) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY,
+            ).apply {
                 text = if (isEdgeRenderingEnabled) context.getString(R.string.passthrough_state_on) else context.getString(R.string.passthrough_state_off)
-                onEdgeRenderingChanged(isEdgeRenderingEnabled)
+                setOnClickListener {
+                    isEdgeRenderingEnabled = !isEdgeRenderingEnabled
+                    style = if (isEdgeRenderingEnabled) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
+                    text = if (isEdgeRenderingEnabled) context.getString(R.string.passthrough_state_on) else context.getString(R.string.passthrough_state_off)
+                    onEdgeRenderingChanged(isEdgeRenderingEnabled)
+                }
             }
-        }
         edgeRow.addView(btnToggleEdge)
         panel.addView(edgeRow)
 
@@ -255,282 +283,337 @@ class PassthroughSettingsModal(
         panel.addView(createDivider())
 
         // 4. Seção de Máscara e Recorte de Fundo (Chroma Key & Packed Alpha)
-        val maskHeader = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = VoidTheme.dpToPx(context, 14f)
-                bottomMargin = VoidTheme.dpToPx(context, 10f)
+        val maskHeader =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        topMargin = VoidTheme.dpToPx(context, 14f)
+                        bottomMargin = VoidTheme.dpToPx(context, 10f)
+                    }
             }
-        }
         maskHeader.addView(
-            VoidText.body(context, context.getString(R.string.mask_mode_section_title), sizeSp = 18f)
+            VoidText.body(context, context.getString(R.string.mask_mode_section_title), sizeSp = 18f),
         )
         maskHeader.addView(
-            VoidText.body(context, context.getString(R.string.mask_mode_description), sizeSp = 14f, secondary = true)
+            VoidText.body(context, context.getString(R.string.mask_mode_description), sizeSp = 14f, secondary = true),
         )
         panel.addView(maskHeader)
 
         if (isDetectedPackedAlpha) {
-            val detectedBadge = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                background = GradientDrawable().apply {
-                    setColor(0x2844AAFF.toInt())
-                    cornerRadius = VoidTheme.dp(context, 8f)
-                    setStroke(VoidTheme.dpToPx(context, 1f), 0x6644AAFF.toInt())
+            val detectedBadge =
+                LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    background =
+                        GradientDrawable().apply {
+                            setColor(0x2844AAFF.toInt())
+                            cornerRadius = VoidTheme.dp(context, 8f)
+                            setStroke(VoidTheme.dpToPx(context, 1f), 0x6644AAFF.toInt())
+                        }
+                    val padH = VoidTheme.dpToPx(context, 12f)
+                    val padV = VoidTheme.dpToPx(context, 8f)
+                    setPadding(padH, padV, padH, padV)
+                    layoutParams =
+                        LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                        ).apply {
+                            bottomMargin = VoidTheme.dpToPx(context, 12f)
+                        }
                 }
-                val padH = VoidTheme.dpToPx(context, 12f)
-                val padV = VoidTheme.dpToPx(context, 8f)
-                setPadding(padH, padV, padH, padV)
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    bottomMargin = VoidTheme.dpToPx(context, 12f)
-                }
-            }
             detectedBadge.addView(
                 VoidText.body(context, context.getString(R.string.mask_mode_packed_alpha_detected), sizeSp = 14f).apply {
                     setTextColor(0xFF88CCFF.toInt())
-                }
+                },
             )
             panel.addView(detectedBadge)
         }
 
-        val packedAlphaDetailsContainer = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = if (currentMaskMode == 2) View.VISIBLE else View.GONE
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = VoidTheme.dpToPx(context, 14f)
+        val packedAlphaDetailsContainer =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = if (currentMaskMode == 2) View.VISIBLE else View.GONE
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 14f)
+                    }
+                background =
+                    GradientDrawable().apply {
+                        setColor(0x2244AAFF.toInt())
+                        cornerRadius = VoidTheme.dp(context, 12f)
+                        setStroke(VoidTheme.dpToPx(context, 1f), 0x5544AAFF.toInt())
+                    }
+                val pad = VoidTheme.dpToPx(context, 16f)
+                setPadding(pad, pad, pad, pad)
             }
-            background = GradientDrawable().apply {
-                setColor(0x2244AAFF.toInt())
-                cornerRadius = VoidTheme.dp(context, 12f)
-                setStroke(VoidTheme.dpToPx(context, 1f), 0x5544AAFF.toInt())
-            }
-            val pad = VoidTheme.dpToPx(context, 16f)
-            setPadding(pad, pad, pad, pad)
-        }
         packedAlphaDetailsContainer.addView(
             VoidText.body(context, "✂️ " + context.getString(R.string.mask_mode_packed_alpha), sizeSp = 16f).apply {
                 setTextColor(0xFF88CCFF.toInt())
-            }
+            },
         )
         packedAlphaDetailsContainer.addView(
             VoidText.body(context, context.getString(R.string.mask_mode_packed_alpha_info), sizeSp = 14f, secondary = true).apply {
                 setPadding(0, VoidTheme.dpToPx(context, 4f), 0, 0)
-            }
+            },
         )
 
         // 1. Slider de Reforço de Opacidade do Packed Alpha (1.0x a 2.5x, padrão 1.5x)
-        val alphaOpacityHeader = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = VoidTheme.dpToPx(context, 10f)
-                bottomMargin = VoidTheme.dpToPx(context, 6f)
+        val alphaOpacityHeader =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        topMargin = VoidTheme.dpToPx(context, 10f)
+                        bottomMargin = VoidTheme.dpToPx(context, 6f)
+                    }
             }
-        }
         alphaOpacityHeader.addView(
             VoidText.body(context, context.getString(R.string.packed_alpha_opacity_multiplier_label), sizeSp = 15f).apply {
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
+            },
         )
-        val alphaOpacityValueText = VoidText.mono(
-            context,
-            context.getString(R.string.packed_alpha_opacity_multiplier_value, currentPackedAlphaOpacityMultiplier),
-            sizeSp = 15f
-        ).apply {
-            setTextColor(VoidTheme.colorAccent)
-        }
+        val alphaOpacityValueText =
+            VoidText.mono(
+                context,
+                context.getString(R.string.packed_alpha_opacity_multiplier_value, currentPackedAlphaOpacityMultiplier),
+                sizeSp = 15f,
+            ).apply {
+                setTextColor(VoidTheme.colorAccent)
+            }
         alphaOpacityHeader.addView(alphaOpacityValueText)
         packedAlphaDetailsContainer.addView(alphaOpacityHeader)
 
-        val alphaOpacitySeekBar = SeekBar(context).apply {
-            max = 15 // 0 a 15 => 1.0x a 2.5x com passos de 0.1x
-            progress = ((currentPackedAlphaOpacityMultiplier - 1.0f) * 10f).toInt().coerceIn(0, 15)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                VoidTheme.dpToPx(context, 40f)
-            ).apply {
-                bottomMargin = VoidTheme.dpToPx(context, 8f)
-            }
-            progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
-            thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    val mult = 1.0f + progress * 0.1f
-                    currentPackedAlphaOpacityMultiplier = mult
-                    alphaOpacityValueText.text = context.getString(R.string.packed_alpha_opacity_multiplier_value, mult)
-                    if (fromUser) {
-                        onPackedAlphaOpacityChanged(mult)
+        val alphaOpacitySeekBar =
+            SeekBar(context).apply {
+                max = 15 // 0 a 15 => 1.0x a 2.5x com passos de 0.1x
+                progress = ((currentPackedAlphaOpacityMultiplier - 1.0f) * 10f).toInt().coerceIn(0, 15)
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        VoidTheme.dpToPx(context, 40f),
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 8f)
                     }
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-            })
-        }
+                progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                setOnSeekBarChangeListener(
+                    object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(
+                            seekBar: SeekBar?,
+                            progress: Int,
+                            fromUser: Boolean,
+                        ) {
+                            val mult = 1.0f + progress * 0.1f
+                            currentPackedAlphaOpacityMultiplier = mult
+                            alphaOpacityValueText.text = context.getString(R.string.packed_alpha_opacity_multiplier_value, mult)
+                            if (fromUser) {
+                                onPackedAlphaOpacityChanged(mult)
+                            }
+                        }
+
+                        override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+
+                        override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                    },
+                )
+            }
         packedAlphaDetailsContainer.addView(alphaOpacitySeekBar)
 
         // 2. Slider de Corte de Fundo / Black Cutoff (1% a 10%, padrão 3%)
-        val alphaCutoffHeader = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = VoidTheme.dpToPx(context, 4f)
-                bottomMargin = VoidTheme.dpToPx(context, 6f)
+        val alphaCutoffHeader =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        topMargin = VoidTheme.dpToPx(context, 4f)
+                        bottomMargin = VoidTheme.dpToPx(context, 6f)
+                    }
             }
-        }
         alphaCutoffHeader.addView(
             VoidText.body(context, context.getString(R.string.packed_alpha_black_cutoff_label), sizeSp = 15f).apply {
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
+            },
         )
         val cutoffPercent = (currentPackedAlphaCutoff * 100f).toInt().coerceIn(1, 20)
-        val alphaCutoffValueText = VoidText.mono(
-            context,
-            context.getString(R.string.packed_alpha_black_cutoff_percent, cutoffPercent),
-            sizeSp = 15f
-        ).apply {
-            setTextColor(VoidTheme.colorAccent)
-        }
+        val alphaCutoffValueText =
+            VoidText.mono(
+                context,
+                context.getString(R.string.packed_alpha_black_cutoff_percent, cutoffPercent),
+                sizeSp = 15f,
+            ).apply {
+                setTextColor(VoidTheme.colorAccent)
+            }
         alphaCutoffHeader.addView(alphaCutoffValueText)
         packedAlphaDetailsContainer.addView(alphaCutoffHeader)
 
-        val alphaCutoffSeekBar = SeekBar(context).apply {
-            max = 20
-            progress = cutoffPercent
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                VoidTheme.dpToPx(context, 40f)
-            ).apply {
-                bottomMargin = VoidTheme.dpToPx(context, 8f)
-            }
-            progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
-            thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    val actualProgress = progress.coerceAtLeast(1)
-                    val cutoff = actualProgress / 100f
-                    currentPackedAlphaCutoff = cutoff
-                    alphaCutoffValueText.text = context.getString(R.string.packed_alpha_black_cutoff_percent, actualProgress)
-                    if (fromUser) {
-                        onPackedAlphaCutoffChanged(cutoff)
+        val alphaCutoffSeekBar =
+            SeekBar(context).apply {
+                max = 20
+                progress = cutoffPercent
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        VoidTheme.dpToPx(context, 40f),
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 8f)
                     }
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-            })
-        }
+                progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                setOnSeekBarChangeListener(
+                    object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(
+                            seekBar: SeekBar?,
+                            progress: Int,
+                            fromUser: Boolean,
+                        ) {
+                            val actualProgress = progress.coerceAtLeast(1)
+                            val cutoff = actualProgress / 100f
+                            currentPackedAlphaCutoff = cutoff
+                            alphaCutoffValueText.text = context.getString(R.string.packed_alpha_black_cutoff_percent, actualProgress)
+                            if (fromUser) {
+                                onPackedAlphaCutoffChanged(cutoff)
+                            }
+                        }
+
+                        override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+
+                        override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                    },
+                )
+            }
         packedAlphaDetailsContainer.addView(alphaCutoffSeekBar)
 
         // 3. Slider de Desbaste de Borda / Matte Choke (0% a 100%, padrão 65%)
-        val alphaChokeHeader = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = VoidTheme.dpToPx(context, 4f)
-                bottomMargin = VoidTheme.dpToPx(context, 6f)
+        val alphaChokeHeader =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        topMargin = VoidTheme.dpToPx(context, 4f)
+                        bottomMargin = VoidTheme.dpToPx(context, 6f)
+                    }
             }
-        }
         alphaChokeHeader.addView(
             VoidText.body(context, context.getString(R.string.packed_alpha_choke_label), sizeSp = 15f).apply {
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
+            },
         )
-        val alphaChokeValueText = VoidText.mono(
-            context,
-            context.getString(R.string.packed_alpha_choke_percent, currentPackedAlphaChoke),
-            sizeSp = 15f
-        ).apply {
-            setTextColor(VoidTheme.colorAccent)
-        }
+        val alphaChokeValueText =
+            VoidText.mono(
+                context,
+                context.getString(R.string.packed_alpha_choke_percent, currentPackedAlphaChoke),
+                sizeSp = 15f,
+            ).apply {
+                setTextColor(VoidTheme.colorAccent)
+            }
         alphaChokeHeader.addView(alphaChokeValueText)
         packedAlphaDetailsContainer.addView(alphaChokeHeader)
 
-        val alphaChokeSeekBar = SeekBar(context).apply {
-            max = 100
-            progress = currentPackedAlphaChoke.coerceIn(0, 100)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                VoidTheme.dpToPx(context, 40f)
-            )
-            progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
-            thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    currentPackedAlphaChoke = progress
-                    alphaChokeValueText.text = context.getString(R.string.packed_alpha_choke_percent, progress)
-                    if (fromUser) {
-                        onPackedAlphaChokeChanged(progress)
-                    }
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-            })
-        }
+        val alphaChokeSeekBar =
+            SeekBar(context).apply {
+                max = 100
+                progress = currentPackedAlphaChoke.coerceIn(0, 100)
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        VoidTheme.dpToPx(context, 40f),
+                    )
+                progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                setOnSeekBarChangeListener(
+                    object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(
+                            seekBar: SeekBar?,
+                            progress: Int,
+                            fromUser: Boolean,
+                        ) {
+                            currentPackedAlphaChoke = progress
+                            alphaChokeValueText.text = context.getString(R.string.packed_alpha_choke_percent, progress)
+                            if (fromUser) {
+                                onPackedAlphaChokeChanged(progress)
+                            }
+                        }
+
+                        override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+
+                        override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                    },
+                )
+            }
         packedAlphaDetailsContainer.addView(alphaChokeSeekBar)
 
-        val chromaDetailsContainer = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            visibility = if (currentMaskMode == 1) View.VISIBLE else View.GONE
-        }
+        val chromaDetailsContainer =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                visibility = if (currentMaskMode == 1) View.VISIBLE else View.GONE
+            }
 
-        val modeSelectorRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
+        val modeSelectorRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 14f)
+                    }
+            }
+
+        val btnModeOff =
+            VoidButton(
+                context,
+                if (currentMaskMode == 0) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY,
+                isCompact = true,
             ).apply {
-                bottomMargin = VoidTheme.dpToPx(context, 14f)
+                text = context.getString(R.string.mask_mode_off)
+                layoutParams =
+                    LinearLayout.LayoutParams(0, VoidTheme.dpToPx(context, 44f), 1f).apply {
+                        marginEnd = VoidTheme.dpToPx(context, 8f)
+                    }
             }
-        }
 
-        val btnModeOff = VoidButton(
-            context,
-            if (currentMaskMode == 0) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY,
-            isCompact = true
-        ).apply {
-            text = context.getString(R.string.mask_mode_off)
-            layoutParams = LinearLayout.LayoutParams(0, VoidTheme.dpToPx(context, 44f), 1f).apply {
-                marginEnd = VoidTheme.dpToPx(context, 8f)
+        val btnModePackedAlpha =
+            VoidButton(
+                context,
+                if (currentMaskMode == 2) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY,
+                isCompact = true,
+            ).apply {
+                text = context.getString(R.string.mask_mode_packed_alpha)
+                layoutParams =
+                    LinearLayout.LayoutParams(0, VoidTheme.dpToPx(context, 44f), 1f).apply {
+                        marginEnd = VoidTheme.dpToPx(context, 8f)
+                    }
             }
-        }
 
-        val btnModePackedAlpha = VoidButton(
-            context,
-            if (currentMaskMode == 2) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY,
-            isCompact = true
-        ).apply {
-            text = context.getString(R.string.mask_mode_packed_alpha)
-            layoutParams = LinearLayout.LayoutParams(0, VoidTheme.dpToPx(context, 44f), 1f).apply {
-                marginEnd = VoidTheme.dpToPx(context, 8f)
+        val btnModeChroma =
+            VoidButton(
+                context,
+                if (currentMaskMode == 1) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY,
+                isCompact = true,
+            ).apply {
+                text = context.getString(R.string.mask_mode_chroma_key)
+                layoutParams = LinearLayout.LayoutParams(0, VoidTheme.dpToPx(context, 44f), 1f)
             }
-        }
-
-        val btnModeChroma = VoidButton(
-            context,
-            if (currentMaskMode == 1) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY,
-            isCompact = true
-        ).apply {
-            text = context.getString(R.string.mask_mode_chroma_key)
-            layoutParams = LinearLayout.LayoutParams(0, VoidTheme.dpToPx(context, 44f), 1f)
-        }
 
         val updateModeButtons = {
             btnModeOff.style = if (currentMaskMode == 0) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
@@ -573,42 +656,49 @@ class PassthroughSettingsModal(
         // Sub-controles de Chroma Key (Auto-Detect, Paleta de Cores, Sliders RGB, Similaridade e Suavidade)
 
         // 1. Botão de Auto-Detecção
-        val autoDetectContainer = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = VoidTheme.dpToPx(context, 4f)
-                bottomMargin = VoidTheme.dpToPx(context, 12f)
+        val autoDetectContainer =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        topMargin = VoidTheme.dpToPx(context, 4f)
+                        bottomMargin = VoidTheme.dpToPx(context, 12f)
+                    }
             }
-        }
 
-        val autoDetectStatusText = VoidText.body(context, "", sizeSp = 14f, secondary = true).apply {
-            visibility = View.GONE
-            setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f))
-        }
+        val autoDetectStatusText =
+            VoidText.body(context, "", sizeSp = 14f, secondary = true).apply {
+                visibility = View.GONE
+                setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f))
+            }
 
-        val btnAutoDetect = VoidButton(context, VoidButtonStyle.SECONDARY, isCompact = true).apply {
-            text = "🪄 " + context.getString(R.string.chroma_key_auto_detect_button)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                VoidTheme.dpToPx(context, 44f)
-            )
-        }
+        val btnAutoDetect =
+            VoidButton(context, VoidButtonStyle.SECONDARY, isCompact = true).apply {
+                text = "🪄 " + context.getString(R.string.chroma_key_auto_detect_button)
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        VoidTheme.dpToPx(context, 44f),
+                    )
+            }
         autoDetectContainer.addView(btnAutoDetect)
         autoDetectContainer.addView(autoDetectStatusText)
         chromaDetailsContainer.addView(autoDetectContainer)
 
         // 2. Paleta de Cores de Estúdio (Presets)
-        val paletteLabel = VoidText.body(context, context.getString(R.string.chroma_key_color_label), sizeSp = 16f).apply {
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = VoidTheme.dpToPx(context, 8f)
+        val paletteLabel =
+            VoidText.body(context, context.getString(R.string.chroma_key_color_label), sizeSp = 16f).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 8f)
+                    }
             }
-        }
         chromaDetailsContainer.addView(paletteLabel)
 
         val presetVerde = 0x00FF00
@@ -618,25 +708,29 @@ class PassthroughSettingsModal(
         val presetPreto = 0x000000
         val presetBranco = 0xFFFFFF
 
-        val paletteRow1 = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = VoidTheme.dpToPx(context, 8f)
+        val paletteRow1 =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 8f)
+                    }
             }
-        }
 
-        val paletteRow2 = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = VoidTheme.dpToPx(context, 14f)
+        val paletteRow2 =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 14f)
+                    }
             }
-        }
 
         var btnPVerde: VoidButton? = null
         var btnPAzul: VoidButton? = null
@@ -657,17 +751,21 @@ class PassthroughSettingsModal(
         var simSeekBar: SeekBar? = null
         var simValueText: TextView? = null
 
-        fun updateColorUi(color: Int, notify: Boolean = true) {
+        fun updateColorUi(
+            color: Int,
+            notify: Boolean = true,
+        ) {
             currentChromaColor = color
             val r = (color shr 16) and 0xFF
             val g = (color shr 8) and 0xFF
             val b = color and 0xFF
 
-            colorPreviewSwatch?.background = GradientDrawable().apply {
-                setColor(Color.rgb(r, g, b))
-                cornerRadius = VoidTheme.dp(context, 6f)
-                setStroke(VoidTheme.dpToPx(context, 1.5f), VoidTheme.colorBorder)
-            }
+            colorPreviewSwatch?.background =
+                GradientDrawable().apply {
+                    setColor(Color.rgb(r, g, b))
+                    cornerRadius = VoidTheme.dp(context, 6f)
+                    setStroke(VoidTheme.dpToPx(context, 1.5f), VoidTheme.colorBorder)
+                }
             hexCodeText?.text = String.format("#%06X", color)
 
             isInternalRgbUpdate = true
@@ -691,16 +789,20 @@ class PassthroughSettingsModal(
             }
         }
 
-        fun createPaletteBtn(presetColor: Int, labelRes: Int): VoidButton {
+        fun createPaletteBtn(
+            presetColor: Int,
+            labelRes: Int,
+        ): VoidButton {
             return VoidButton(
                 context,
                 if (currentChromaColor == presetColor) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY,
-                isCompact = true
+                isCompact = true,
             ).apply {
                 text = context.getString(labelRes)
-                layoutParams = LinearLayout.LayoutParams(0, VoidTheme.dpToPx(context, 40f), 1f).apply {
-                    setMargins(VoidTheme.dpToPx(context, 3f), 0, VoidTheme.dpToPx(context, 3f), 0)
-                }
+                layoutParams =
+                    LinearLayout.LayoutParams(0, VoidTheme.dpToPx(context, 40f), 1f).apply {
+                        setMargins(VoidTheme.dpToPx(context, 3f), 0, VoidTheme.dpToPx(context, 3f), 0)
+                    }
                 setOnClickListener {
                     updateColorUi(presetColor, notify = true)
                 }
@@ -724,67 +826,89 @@ class PassthroughSettingsModal(
         chromaDetailsContainer.addView(paletteRow2)
 
         // 3. Ajuste Fino de Cor (RGB)
-        val rgbHeader = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                bottomMargin = VoidTheme.dpToPx(context, 8f)
+        val rgbHeader =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 8f)
+                    }
             }
-        }
-        val rgbTitle = VoidText.body(context, context.getString(R.string.chroma_key_custom_color_title), sizeSp = 16f).apply {
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        }
+        val rgbTitle =
+            VoidText.body(context, context.getString(R.string.chroma_key_custom_color_title), sizeSp = 16f).apply {
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
         rgbHeader.addView(rgbTitle)
 
-        colorPreviewSwatch = View(context).apply {
-            val sw = VoidTheme.dpToPx(context, 32f)
-            val sh = VoidTheme.dpToPx(context, 24f)
-            layoutParams = LinearLayout.LayoutParams(sw, sh).apply {
-                rightMargin = VoidTheme.dpToPx(context, 8f)
+        colorPreviewSwatch =
+            View(context).apply {
+                val sw = VoidTheme.dpToPx(context, 32f)
+                val sh = VoidTheme.dpToPx(context, 24f)
+                layoutParams =
+                    LinearLayout.LayoutParams(sw, sh).apply {
+                        rightMargin = VoidTheme.dpToPx(context, 8f)
+                    }
             }
-        }
         rgbHeader.addView(colorPreviewSwatch)
 
-        hexCodeText = VoidText.mono(context, String.format("#%06X", currentChromaColor), sizeSp = 16f).apply {
-            setTextColor(VoidTheme.colorAccent)
-        }
+        hexCodeText =
+            VoidText.mono(context, String.format("#%06X", currentChromaColor), sizeSp = 16f).apply {
+                setTextColor(VoidTheme.colorAccent)
+            }
         rgbHeader.addView(hexCodeText)
         chromaDetailsContainer.addView(rgbHeader)
 
-        fun createRgbSliderRow(labelRes: Int, initialValue: Int, onChannelChanged: (Int) -> Unit): Pair<SeekBar, TextView> {
-            val row = LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                layoutParams = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.MATCH_PARENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    bottomMargin = VoidTheme.dpToPx(context, 4f)
-                }
-            }
-            val valueText = VoidText.mono(context, context.getString(labelRes, initialValue), sizeSp = 14f).apply {
-                layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 72f), LinearLayout.LayoutParams.WRAP_CONTENT)
-            }
-            val seekBar = SeekBar(context).apply {
-                max = 255
-                progress = initialValue
-                layoutParams = LinearLayout.LayoutParams(0, VoidTheme.dpToPx(context, 38f), 1f)
-                progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
-                thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
-                setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                    override fun onProgressChanged(sb: SeekBar?, progress: Int, fromUser: Boolean) {
-                        valueText.text = context.getString(labelRes, progress)
-                        if (fromUser && !isInternalRgbUpdate) {
-                            onChannelChanged(progress)
+        fun createRgbSliderRow(
+            labelRes: Int,
+            initialValue: Int,
+            onChannelChanged: (Int) -> Unit,
+        ): Pair<SeekBar, TextView> {
+            val row =
+                LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    layoutParams =
+                        LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                        ).apply {
+                            bottomMargin = VoidTheme.dpToPx(context, 4f)
                         }
-                    }
-                    override fun onStartTrackingTouch(sb: SeekBar?) {}
-                    override fun onStopTrackingTouch(sb: SeekBar?) {}
-                })
-            }
+                }
+            val valueText =
+                VoidText.mono(context, context.getString(labelRes, initialValue), sizeSp = 14f).apply {
+                    layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 72f), LinearLayout.LayoutParams.WRAP_CONTENT)
+                }
+            val seekBar =
+                SeekBar(context).apply {
+                    max = 255
+                    progress = initialValue
+                    layoutParams = LinearLayout.LayoutParams(0, VoidTheme.dpToPx(context, 38f), 1f)
+                    progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                    thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                    setOnSeekBarChangeListener(
+                        object : SeekBar.OnSeekBarChangeListener {
+                            override fun onProgressChanged(
+                                sb: SeekBar?,
+                                progress: Int,
+                                fromUser: Boolean,
+                            ) {
+                                valueText.text = context.getString(labelRes, progress)
+                                if (fromUser && !isInternalRgbUpdate) {
+                                    onChannelChanged(progress)
+                                }
+                            }
+
+                            override fun onStartTrackingTouch(sb: SeekBar?) {}
+
+                            override fun onStopTrackingTouch(sb: SeekBar?) {}
+                        },
+                    )
+                }
             row.addView(valueText)
             row.addView(seekBar)
             chromaDetailsContainer.addView(row)
@@ -795,24 +919,27 @@ class PassthroughSettingsModal(
         val initG = (currentChromaColor shr 8) and 0xFF
         val initB = currentChromaColor and 0xFF
 
-        val pairR = createRgbSliderRow(R.string.chroma_key_channel_r, initR) { newR ->
-            val color = (newR shl 16) or ((seekG?.progress ?: 0) shl 8) or (seekB?.progress ?: 0)
-            updateColorUi(color, notify = true)
-        }
+        val pairR =
+            createRgbSliderRow(R.string.chroma_key_channel_r, initR) { newR ->
+                val color = (newR shl 16) or ((seekG?.progress ?: 0) shl 8) or (seekB?.progress ?: 0)
+                updateColorUi(color, notify = true)
+            }
         seekR = pairR.first
         textR = pairR.second
 
-        val pairG = createRgbSliderRow(R.string.chroma_key_channel_g, initG) { newG ->
-            val color = (seekR.progress shl 16) or (newG shl 8) or (seekB?.progress ?: 0)
-            updateColorUi(color, notify = true)
-        }
+        val pairG =
+            createRgbSliderRow(R.string.chroma_key_channel_g, initG) { newG ->
+                val color = (seekR.progress shl 16) or (newG shl 8) or (seekB?.progress ?: 0)
+                updateColorUi(color, notify = true)
+            }
         seekG = pairG.first
         textG = pairG.second
 
-        val pairB = createRgbSliderRow(R.string.chroma_key_channel_b, initB) { newB ->
-            val color = (seekR.progress shl 16) or (seekG.progress shl 8) or newB
-            updateColorUi(color, notify = true)
-        }
+        val pairB =
+            createRgbSliderRow(R.string.chroma_key_channel_b, initB) { newB ->
+                val color = (seekR.progress shl 16) or (seekG.progress shl 8) or newB
+                updateColorUi(color, notify = true)
+            }
         seekB = pairB.first
         textB = pairB.second
 
@@ -844,99 +971,129 @@ class PassthroughSettingsModal(
         }
 
         // 4. Slider de Similaridade / Tolerância
-        val simHeader = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = VoidTheme.dpToPx(context, 10f)
-                bottomMargin = VoidTheme.dpToPx(context, 6f)
+        val simHeader =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        topMargin = VoidTheme.dpToPx(context, 10f)
+                        bottomMargin = VoidTheme.dpToPx(context, 6f)
+                    }
             }
-        }
-        simHeader.addView(VoidText.body(context, context.getString(R.string.chroma_key_similarity_label), sizeSp = 16f).apply {
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        })
+        simHeader.addView(
+            VoidText.body(context, context.getString(R.string.chroma_key_similarity_label), sizeSp = 16f).apply {
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            },
+        )
         val simPercent = (currentChromaSimilarity * 100f).toInt().coerceIn(1, 100)
-        simValueText = VoidText.mono(context, context.getString(R.string.chroma_key_similarity_percent, simPercent), sizeSp = 16f).apply {
-            setTextColor(VoidTheme.colorAccent)
-        }
+        simValueText =
+            VoidText.mono(context, context.getString(R.string.chroma_key_similarity_percent, simPercent), sizeSp = 16f).apply {
+                setTextColor(VoidTheme.colorAccent)
+            }
         simHeader.addView(simValueText)
         chromaDetailsContainer.addView(simHeader)
 
-        simSeekBar = SeekBar(context).apply {
-            max = 100
-            progress = simPercent
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                VoidTheme.dpToPx(context, 44f)
-            ).apply {
-                bottomMargin = VoidTheme.dpToPx(context, 10f)
-            }
-            progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
-            thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    val sim = progress / 100f
-                    currentChromaSimilarity = sim
-                    simValueText.text = context.getString(R.string.chroma_key_similarity_percent, progress)
-                    if (fromUser) {
-                        onChromaSimilarityChanged(sim)
+        simSeekBar =
+            SeekBar(context).apply {
+                max = 100
+                progress = simPercent
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        VoidTheme.dpToPx(context, 44f),
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 10f)
                     }
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-            })
-        }
+                progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                setOnSeekBarChangeListener(
+                    object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(
+                            seekBar: SeekBar?,
+                            progress: Int,
+                            fromUser: Boolean,
+                        ) {
+                            val sim = progress / 100f
+                            currentChromaSimilarity = sim
+                            simValueText.text = context.getString(R.string.chroma_key_similarity_percent, progress)
+                            if (fromUser) {
+                                onChromaSimilarityChanged(sim)
+                            }
+                        }
+
+                        override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+
+                        override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                    },
+                )
+            }
         chromaDetailsContainer.addView(simSeekBar)
 
         // 5. Slider de Suavidade
-        val smoothHeader = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = VoidTheme.dpToPx(context, 6f)
-                bottomMargin = VoidTheme.dpToPx(context, 6f)
+        val smoothHeader =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        topMargin = VoidTheme.dpToPx(context, 6f)
+                        bottomMargin = VoidTheme.dpToPx(context, 6f)
+                    }
             }
-        }
-        smoothHeader.addView(VoidText.body(context, context.getString(R.string.chroma_key_smoothness_label), sizeSp = 16f).apply {
-            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-        })
+        smoothHeader.addView(
+            VoidText.body(context, context.getString(R.string.chroma_key_smoothness_label), sizeSp = 16f).apply {
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            },
+        )
         val smoothPercent = (currentChromaSmoothness * 100f).toInt().coerceIn(1, 100)
-        val smoothValueText = VoidText.mono(context, context.getString(R.string.chroma_key_smoothness_percent, smoothPercent), sizeSp = 16f).apply {
-            setTextColor(VoidTheme.colorAccent)
-        }
+        val smoothValueText =
+            VoidText.mono(context, context.getString(R.string.chroma_key_smoothness_percent, smoothPercent), sizeSp = 16f).apply {
+                setTextColor(VoidTheme.colorAccent)
+            }
         smoothHeader.addView(smoothValueText)
         chromaDetailsContainer.addView(smoothHeader)
 
-        val smoothSeekBar = SeekBar(context).apply {
-            max = 50
-            progress = smoothPercent
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                VoidTheme.dpToPx(context, 44f)
-            ).apply {
-                bottomMargin = VoidTheme.dpToPx(context, 14f)
-            }
-            progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
-            thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
-            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
-                override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) {
-                    val smooth = progress / 100f
-                    currentChromaSmoothness = smooth
-                    smoothValueText.text = context.getString(R.string.chroma_key_smoothness_percent, progress)
-                    if (fromUser) {
-                        onChromaSmoothnessChanged(smooth)
+        val smoothSeekBar =
+            SeekBar(context).apply {
+                max = 50
+                progress = smoothPercent
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        VoidTheme.dpToPx(context, 44f),
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 14f)
                     }
-                }
-                override fun onStartTrackingTouch(seekBar: SeekBar?) {}
-                override fun onStopTrackingTouch(seekBar: SeekBar?) {}
-            })
-        }
+                progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                setOnSeekBarChangeListener(
+                    object : SeekBar.OnSeekBarChangeListener {
+                        override fun onProgressChanged(
+                            seekBar: SeekBar?,
+                            progress: Int,
+                            fromUser: Boolean,
+                        ) {
+                            val smooth = progress / 100f
+                            currentChromaSmoothness = smooth
+                            smoothValueText.text = context.getString(R.string.chroma_key_smoothness_percent, progress)
+                            if (fromUser) {
+                                onChromaSmoothnessChanged(smooth)
+                            }
+                        }
+
+                        override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+
+                        override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+                    },
+                )
+            }
         chromaDetailsContainer.addView(smoothSeekBar)
 
         panel.addView(chromaDetailsContainer)
@@ -945,47 +1102,54 @@ class PassthroughSettingsModal(
         panel.addView(createDivider())
 
         // 4. Seção de Posicionamento Espacial e Dica Grab & Drag (T2.5)
-        val posSection = LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply {
-                topMargin = VoidTheme.dpToPx(context, 14f)
+        val posSection =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        topMargin = VoidTheme.dpToPx(context, 14f)
+                    }
             }
-        }
 
-        val grabHintText = VoidText.body(context, context.getString(R.string.passthrough_grab_hint), sizeSp = 14f, secondary = true).apply {
-            setPadding(0, 0, 0, VoidTheme.dpToPx(context, 14f))
-        }
+        val grabHintText =
+            VoidText.body(context, context.getString(R.string.passthrough_grab_hint), sizeSp = 14f, secondary = true).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 14f))
+            }
         posSection.addView(grabHintText)
 
-        val btnResetScreen = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-            text = context.getString(R.string.passthrough_reset_screen_button)
-            layoutParams = LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                VoidTheme.dpToPx(context, 48f)
-            )
-            setOnClickListener {
-                onResetScreenPosition()
-                // Efeito visual rápido de confirmação
-                style = VoidButtonStyle.ACTIVE
-                postDelayed({
-                    style = VoidButtonStyle.SECONDARY
-                }, 300)
+        val btnResetScreen =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.passthrough_reset_screen_button)
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        VoidTheme.dpToPx(context, 48f),
+                    )
+                setOnClickListener {
+                    onResetScreenPosition()
+                    // Efeito visual rápido de confirmação
+                    style = VoidButtonStyle.ACTIVE
+                    postDelayed({
+                        style = VoidButtonStyle.SECONDARY
+                    }, 300)
+                }
             }
-        }
         posSection.addView(btnResetScreen)
         panel.addView(posSection)
 
         addView(panel)
     }
 
-    private fun createDivider(): View = View(context).apply {
-        layoutParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            VoidTheme.dpToPx(context, 1f)
-        )
-        setBackgroundColor(VoidTheme.colorBorder)
-    }
+    private fun createDivider(): View =
+        View(context).apply {
+            layoutParams =
+                LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT,
+                    VoidTheme.dpToPx(context, 1f),
+                )
+            setBackgroundColor(VoidTheme.colorBorder)
+        }
 }

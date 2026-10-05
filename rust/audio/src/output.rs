@@ -1,10 +1,10 @@
+use crossbeam_channel::{bounded, Receiver, Sender};
 use oboe::{
-    AudioOutputCallback, AudioStreamAsync, AudioStreamBuilder, DataCallbackResult,
-    PerformanceMode, SharingMode, Output, Stereo, AudioStream, AudioOutputStream
+    AudioOutputCallback, AudioOutputStream, AudioStream, AudioStreamAsync, AudioStreamBuilder,
+    DataCallbackResult, Output, PerformanceMode, SharingMode, Stereo,
 };
-use crossbeam_channel::{Receiver, Sender, bounded};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::Arc;
 
 pub struct AudioPlayerCallback {
     receiver: Receiver<f32>,
@@ -87,7 +87,13 @@ impl AudioOutput {
             .set_callback(callback)
             .open_stream()?;
 
-        Ok(Self { stream, sender, volume_bits, underrun_count, flush_count })
+        Ok(Self {
+            stream,
+            sender,
+            volume_bits,
+            underrun_count,
+            flush_count,
+        })
     }
 
     pub fn push_samples(&mut self, samples: &[f32]) {
@@ -109,7 +115,8 @@ impl AudioOutput {
     }
 
     pub fn set_volume(&self, volume: f32) {
-        self.volume_bits.store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        self.volume_bits
+            .store(volume.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
     }
 
     pub fn get_volume(&self) -> f32 {

@@ -6,7 +6,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PhotoDecoderTest {
-
     @Test
     fun testCalculateInSampleSizeWithinMaxBounds() {
         // Imagens que já cabem no limite seguro 8192x4096 devem ter sampleSize = 1
@@ -52,11 +51,12 @@ class PhotoDecoderTest {
 
     @Test
     fun testCalculateInSampleSizePowerOfTwo() {
-        val samples = listOf(
-            PhotoDecoder.calculateInSampleSize(1000, 1000, 500, 500),
-            PhotoDecoder.calculateInSampleSize(5000, 5000, 500, 500),
-            PhotoDecoder.calculateInSampleSize(20000, 20000, 8192, 4096)
-        )
+        val samples =
+            listOf(
+                PhotoDecoder.calculateInSampleSize(1000, 1000, 500, 500),
+                PhotoDecoder.calculateInSampleSize(5000, 5000, 500, 500),
+                PhotoDecoder.calculateInSampleSize(20000, 20000, 8192, 4096),
+            )
         for (sample in samples) {
             // Potência de 2: (s & (s - 1)) == 0 e s > 0
             assertTrue(sample > 0 && (sample and (sample - 1)) == 0)

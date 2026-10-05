@@ -39,9 +39,8 @@ class ContinueWatchingScreen(
     private val ftpCredentials: FtpCredentialStore,
     private val sftpCredentials: SftpCredentialStore,
     private val onNavigate: (Destination) -> Unit,
-    private val onBack: () -> Unit
+    private val onBack: () -> Unit,
 ) {
-
     private var filterOnlyResumable: Boolean = true
 
     fun render() {
@@ -50,81 +49,93 @@ class ContinueWatchingScreen(
             VoidPanelChrome.buildHeader(
                 context,
                 title = context.getString(R.string.history_continue_watching_title),
-                onBack = { onBack() }
-            )
+                onBack = { onBack() },
+            ),
         )
 
         // Filtro T12.4: Não-finalizados vs Todos
-        val filterRow = LinearLayout(context).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                it.bottomMargin = VoidTheme.dpToPx(context, 12f)
+        val filterRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
+                        it.bottomMargin = VoidTheme.dpToPx(context, 12f)
+                    }
             }
-        }
 
         lateinit var chipResumable: VoidFilterChip
         lateinit var chipAll: VoidFilterChip
 
-        val recycler = RecyclerView(context).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
-            layoutManager = LinearLayoutManager(context)
-        }
-        val emptyText = VoidText.body(
-            context, context.getString(R.string.history_empty), sizeSp = 16f, secondary = true
-        ).apply { visibility = View.GONE }
+        val recycler =
+            RecyclerView(context).apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+                layoutManager = LinearLayoutManager(context)
+            }
+        val emptyText =
+            VoidText.body(
+                context,
+                context.getString(R.string.history_empty),
+                sizeSp = 16f,
+                secondary = true,
+            ).apply { visibility = View.GONE }
 
         lateinit var adapter: HistoryAdapter
 
         fun refresh() {
             scope.launch {
                 val allItems = activity.historyTracker.listRecent()
-                val items = if (filterOnlyResumable) {
-                    allItems.filter { it.isResumable() }
-                } else {
-                    allItems
-                }
+                val items =
+                    if (filterOnlyResumable) {
+                        allItems.filter { it.isResumable() }
+                    } else {
+                        allItems
+                    }
                 adapter.submit(items)
                 recycler.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
                 emptyText.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
             }
         }
 
-        chipResumable = VoidFilterChip(context, context.getString(R.string.history_filter_resumable), isSelectedChip = filterOnlyResumable).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                it.marginEnd = VoidTheme.dpToPx(context, 8f)
+        chipResumable =
+            VoidFilterChip(context, context.getString(R.string.history_filter_resumable), isSelectedChip = filterOnlyResumable).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
+                        it.marginEnd = VoidTheme.dpToPx(context, 8f)
+                    }
+                setOnClickListener {
+                    filterOnlyResumable = true
+                    chipResumable.setSelectedState(true)
+                    chipAll.setSelectedState(false)
+                    refresh()
+                }
             }
-            setOnClickListener {
-                filterOnlyResumable = true
-                chipResumable.setSelectedState(true)
-                chipAll.setSelectedState(false)
-                refresh()
-            }
-        }
         filterRow.addView(chipResumable)
 
-        chipAll = VoidFilterChip(context, context.getString(R.string.history_filter_all), isSelectedChip = !filterOnlyResumable).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            setOnClickListener {
-                filterOnlyResumable = false
-                chipResumable.setSelectedState(false)
-                chipAll.setSelectedState(true)
-                refresh()
+        chipAll =
+            VoidFilterChip(context, context.getString(R.string.history_filter_all), isSelectedChip = !filterOnlyResumable).apply {
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+                setOnClickListener {
+                    filterOnlyResumable = false
+                    chipResumable.setSelectedState(false)
+                    chipAll.setSelectedState(true)
+                    refresh()
+                }
             }
-        }
         filterRow.addView(chipAll)
 
         root.addView(filterRow)
 
-        adapter = HistoryAdapter(
-            onItemClick    = { entry -> resumeFromHistory(entry) },
-            onRemoveClick  = { entry ->
-                scope.launch {
-                    activity.historyTracker.delete(entry.historyKey)
-                    refresh()
-                }
-            }
-        )
+        adapter =
+            HistoryAdapter(
+                onItemClick = { entry -> resumeFromHistory(entry) },
+                onRemoveClick = { entry ->
+                    scope.launch {
+                        activity.historyTracker.delete(entry.historyKey)
+                        refresh()
+                    }
+                },
+            )
         recycler.adapter = adapter
 
         root.addView(recycler)
@@ -149,67 +160,73 @@ class ContinueWatchingScreen(
                 onNavigate(Destination.Player(source))
             }
             HistorySourceType.SMB -> {
-                val server = resolveServer(entry.serverInfo) { id ->
-                    smbCredentials.list().find { it.id == id }
-                } ?: return
+                val server =
+                    resolveServer(entry.serverInfo) { id ->
+                        smbCredentials.list().find { it.id == id }
+                    } ?: return
                 val source = PlaybackSource.Smb(server, entry.mediaPath)
                 activity.playSmb(server, entry.mediaPath, resumeAtMs = entry.positionMs)
                 onNavigate(Destination.Player(source))
             }
             HistorySourceType.FTP -> {
-                val server = resolveServer(entry.serverInfo) { id ->
-                    ftpCredentials.list().find { it.id == id }
-                } ?: return
+                val server =
+                    resolveServer(entry.serverInfo) { id ->
+                        ftpCredentials.list().find { it.id == id }
+                    } ?: return
                 val source = PlaybackSource.Ftp(server, entry.mediaPath)
                 activity.playFtp(server, entry.mediaPath, resumeAtMs = entry.positionMs)
                 onNavigate(Destination.Player(source))
             }
             HistorySourceType.SFTP -> {
-                val server = resolveServer(entry.serverInfo) { id ->
-                    sftpCredentials.list().find { it.id == id }
-                } ?: return
+                val server =
+                    resolveServer(entry.serverInfo) { id ->
+                        sftpCredentials.list().find { it.id == id }
+                    } ?: return
                 val source = PlaybackSource.Sftp(server, entry.mediaPath)
                 activity.playSftp(server, entry.mediaPath, resumeAtMs = entry.positionMs)
                 onNavigate(Destination.Player(source))
             }
             HistorySourceType.NFS -> {
-                val server = resolveServer(entry.serverInfo) { id ->
-                    kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
-                        try {
-                            com.tucavr.history.AppDatabase.getInstance(context).savedServerDao().getById(id)
-                        } catch (e: Exception) {
-                            null
+                val server =
+                    resolveServer(entry.serverInfo) { id ->
+                        kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                            try {
+                                com.tucavr.history.AppDatabase.getInstance(context).savedServerDao().getById(id)
+                            } catch (e: Exception) {
+                                null
+                            }
                         }
-                    }
-                } ?: return
+                    } ?: return
                 val source = PlaybackSource.Nfs(server, entry.mediaPath)
                 activity.playNfs(server, entry.mediaPath, resumeAtMs = entry.positionMs)
                 onNavigate(Destination.Player(source))
             }
             HistorySourceType.DLNA -> {
-                val server = resolveServer(entry.serverInfo) { id ->
-                    kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
-                        try {
-                            com.tucavr.history.AppDatabase.getInstance(context).savedServerDao().getById(id)
-                        } catch (e: Exception) {
-                            null
+                val server =
+                    resolveServer(entry.serverInfo) { id ->
+                        kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                            try {
+                                com.tucavr.history.AppDatabase.getInstance(context).savedServerDao().getById(id)
+                            } catch (e: Exception) {
+                                null
+                            }
                         }
-                    }
-                } ?: com.tucavr.network.SavedServer(name = entry.title, protocol = com.tucavr.network.ServerProtocol.DLNA, host = "", port = 0, path = "")
+                    } ?: com.tucavr.network.SavedServer(name = entry.title, protocol = com.tucavr.network.ServerProtocol.DLNA, host = "", port = 0, path = "")
                 val source = PlaybackSource.Dlna(server, entry.title, entry.mediaPath)
                 activity.playDlna(server, entry.title, entry.mediaPath, resumeAtMs = entry.positionMs)
                 onNavigate(Destination.Player(source))
             }
             HistorySourceType.WEBDAV -> {
-                val server = resolveServer(entry.serverInfo) { id ->
-                    kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
-                        try {
-                            com.tucavr.history.AppDatabase.getInstance(context).savedServerDao().getById(id)
-                        } catch (e: Exception) {
-                            null
+                val server =
+                    resolveServer(entry.serverInfo) { id ->
+                        kotlinx.coroutines.runBlocking(kotlinx.coroutines.Dispatchers.IO) {
+                            try {
+                                com.tucavr.history.AppDatabase.getInstance(context).savedServerDao().getById(id)
+                            } catch (e: Exception) {
+                                null
+                            }
                         }
-                    }
-                } ?: return
+                    } ?: return
                 val source = PlaybackSource.Webdav(server, entry.mediaPath)
                 activity.playWebdav(server, entry.mediaPath, resumeAtMs = entry.positionMs)
                 onNavigate(Destination.Player(source))
@@ -217,7 +234,10 @@ class ContinueWatchingScreen(
         }
     }
 
-    private fun <T> resolveServer(serverInfoJson: String?, finder: (String) -> T?): T? {
+    private fun <T> resolveServer(
+        serverInfoJson: String?,
+        finder: (String) -> T?,
+    ): T? {
         if (serverInfoJson == null) return null
         return try {
             val serverId = JSONObject(serverInfoJson).getString("serverId")

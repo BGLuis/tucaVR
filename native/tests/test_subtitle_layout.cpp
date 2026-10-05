@@ -1,4 +1,5 @@
 #include "subtitle_layout.h"
+
 #include <cassert>
 #include <cmath>
 #include <iostream>
@@ -153,19 +154,25 @@ static void TestFindSpanForByteOffset() {
     AssSpanFfi spans[2]{};
     spans[0].char_offset = 0;
     spans[0].char_length = 5;
-    spans[0].r = 255; spans[0].g = 0; spans[0].b = 0; spans[0].a = 255;
+    spans[0].r = 255;
+    spans[0].g = 0;
+    spans[0].b = 0;
+    spans[0].a = 255;
 
     spans[1].char_offset = 5;
     spans[1].char_length = 6;
-    spans[1].r = 0; spans[1].g = 255; spans[1].b = 0; spans[1].a = 255;
+    spans[1].r = 0;
+    spans[1].g = 255;
+    spans[1].b = 0;
+    spans[1].a = 255;
 
-    const AssSpanFfi* s0 = FindSpanForByteOffset(spans, 2, 2);
+    const AssSpanFfi *s0 = FindSpanForByteOffset(spans, 2, 2);
     assert(s0 != nullptr && s0->r == 255 && s0->g == 0);
 
-    const AssSpanFfi* s1 = FindSpanForByteOffset(spans, 2, 7);
+    const AssSpanFfi *s1 = FindSpanForByteOffset(spans, 2, 7);
     assert(s1 != nullptr && s1->r == 0 && s1->g == 255);
 
-    const AssSpanFfi* sOut = FindSpanForByteOffset(spans, 2, 20);
+    const AssSpanFfi *sOut = FindSpanForByteOffset(spans, 2, 20);
     assert(sOut == nullptr);
 
     std::cout << "[PASS] TestFindSpanForByteOffset\n";

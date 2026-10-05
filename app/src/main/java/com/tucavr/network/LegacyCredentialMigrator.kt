@@ -11,9 +11,8 @@ import android.util.Log
 class LegacyCredentialMigrator(
     private val context: Context,
     private val savedServerDao: SavedServerDao,
-    private val credentialStore: ServerCredentialStore
+    private val credentialStore: ServerCredentialStore,
 ) {
-
     suspend fun migrateIfNeeded() {
         val prefs = context.getSharedPreferences(MIGRATION_PREFS, Context.MODE_PRIVATE)
         if (prefs.getBoolean(KEY_MIGRATED, false)) {
@@ -49,7 +48,7 @@ class LegacyCredentialMigrator(
                 credentialStore.saveCredentials(
                     sftp.id,
                     password = sftp.password,
-                    privateKey = sftp.privateKey
+                    privateKey = sftp.privateKey,
                 )
             }
 

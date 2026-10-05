@@ -5,6 +5,7 @@ import android.os.Build
 import android.os.PowerManager
 import android.util.Log
 import androidx.annotation.RequiresApi
+import androidx.core.content.ContextCompat
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executor
 
@@ -18,7 +19,7 @@ import java.util.concurrent.Executor
  */
 class ThermalMonitor(
     private val context: Context,
-    private val powerManager: PowerManager? = context.getSystemService(PowerManager::class.java)
+    private val powerManager: PowerManager? = context.getSystemService(PowerManager::class.java),
 ) {
     companion object {
         private const val TAG = "ThermalMonitor"
@@ -27,52 +28,55 @@ class ThermalMonitor(
          * Mapeia o status numérico de [PowerManager.THERMAL_STATUS_*] para [ThermalState].
          * Extraído como função pura para testes unitários isolados na JVM sem mocks de sistema.
          */
-        fun mapStatusToState(status: Int): ThermalState = when (status) {
-            PowerManager.THERMAL_STATUS_NONE,
-            PowerManager.THERMAL_STATUS_LIGHT ->
-                ThermalState(ThermalLevel.NORMAL, emptyList())
+        fun mapStatusToState(status: Int): ThermalState =
+            when (status) {
+                PowerManager.THERMAL_STATUS_NONE,
+                PowerManager.THERMAL_STATUS_LIGHT,
+                ->
+                    ThermalState(ThermalLevel.NORMAL, emptyList())
 
-            PowerManager.THERMAL_STATUS_MODERATE ->
-                ThermalState(
-                    ThermalLevel.MODERATE,
-                    listOf(
-                        ThermalAction.SIMPLIFY_ENVIRONMENT,
-                        ThermalAction.PAUSE_PREFETCH
+                PowerManager.THERMAL_STATUS_MODERATE ->
+                    ThermalState(
+                        ThermalLevel.MODERATE,
+                        listOf(
+                            ThermalAction.SIMPLIFY_ENVIRONMENT,
+                            ThermalAction.PAUSE_PREFETCH,
+                        ),
                     )
-                )
 
-            PowerManager.THERMAL_STATUS_SEVERE ->
-                ThermalState(
-                    ThermalLevel.SEVERE,
-                    listOf(
-                        ThermalAction.REDUCE_RENDER_RESOLUTION,
-                        ThermalAction.SIMPLIFY_ENVIRONMENT,
-                        ThermalAction.LIMIT_FPS,
-                        ThermalAction.WARN_USER
+                PowerManager.THERMAL_STATUS_SEVERE ->
+                    ThermalState(
+                        ThermalLevel.SEVERE,
+                        listOf(
+                            ThermalAction.REDUCE_RENDER_RESOLUTION,
+                            ThermalAction.SIMPLIFY_ENVIRONMENT,
+                            ThermalAction.LIMIT_FPS,
+                            ThermalAction.WARN_USER,
+                        ),
                     )
-                )
 
-            PowerManager.THERMAL_STATUS_CRITICAL ->
-                ThermalState(
-                    ThermalLevel.CRITICAL,
-                    listOf(
-                        ThermalAction.PAUSE_PLAYBACK,
-                        ThermalAction.WARN_USER
+                PowerManager.THERMAL_STATUS_CRITICAL ->
+                    ThermalState(
+                        ThermalLevel.CRITICAL,
+                        listOf(
+                            ThermalAction.PAUSE_PLAYBACK,
+                            ThermalAction.WARN_USER,
+                        ),
                     )
-                )
 
-            PowerManager.THERMAL_STATUS_EMERGENCY,
-            PowerManager.THERMAL_STATUS_SHUTDOWN ->
-                ThermalState(
-                    ThermalLevel.SHUTDOWN,
-                    listOf(
-                        ThermalAction.PAUSE_PLAYBACK,
-                        ThermalAction.WARN_USER
+                PowerManager.THERMAL_STATUS_EMERGENCY,
+                PowerManager.THERMAL_STATUS_SHUTDOWN,
+                ->
+                    ThermalState(
+                        ThermalLevel.SHUTDOWN,
+                        listOf(
+                            ThermalAction.PAUSE_PLAYBACK,
+                            ThermalAction.WARN_USER,
+                        ),
                     )
-                )
 
-            else -> ThermalState(ThermalLevel.NORMAL, emptyList())
-        }
+                else -> ThermalState(ThermalLevel.NORMAL, emptyList())
+            }
     }
 
     enum class ThermalLevel(val rawLevel: Int) {
@@ -81,7 +85,7 @@ class ThermalMonitor(
         MODERATE(2),
         SEVERE(3),
         CRITICAL(4),
-        SHUTDOWN(5)
+        SHUTDOWN(5),
     }
 
     enum class ThermalAction {
@@ -91,12 +95,12 @@ class ThermalMonitor(
         LIMIT_FPS, // Reduzir de 90fps para 72fps
         PAUSE_PREFETCH, // Parar prefetch de rede em background
         WARN_USER, // Notificar usuário na interface
-        PAUSE_PLAYBACK // Pausar decodificação imediatamente
+        PAUSE_PLAYBACK, // Pausar decodificação imediatamente
     }
 
     data class ThermalState(
         val level: ThermalLevel,
-        val actions: List<ThermalAction>
+        val actions: List<ThermalAction>,
     )
 
     private val listeners = CopyOnWriteArrayList<(ThermalState) -> Unit>()
@@ -110,35 +114,37 @@ class ThermalMonitor(
      * Inicia o monitoramento de status térmico do dispositivo.
      */
     fun startMonitoring(
-        executor: Executor = context.mainExecutor,
-        callback: (ThermalState) -> Unit
+        executor: Executor = ContextCompat.getMainExecutor(context),
+        callback: (ThermalState) -> Unit,
     ) {
         listeners.add(callback)
 
         // Dispara o estado atual imediatamente para o novo listener
-        val initialStatus = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && powerManager != null) {
-            try {
-                powerManager.currentThermalStatus
-            } catch (e: Exception) {
-                Log.w(TAG, "Falha ao obter status termico inicial: ${e.message}")
+        val initialStatus =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && powerManager != null) {
+                try {
+                    powerManager.currentThermalStatus
+                } catch (e: Exception) {
+                    Log.w(TAG, "Falha ao obter status termico inicial: ${e.message}")
+                    PowerManager.THERMAL_STATUS_NONE
+                }
+            } else {
                 PowerManager.THERMAL_STATUS_NONE
             }
-        } else {
-            PowerManager.THERMAL_STATUS_NONE
-        }
         val initialState = mapStatusToState(initialStatus)
         currentState = initialState
         callback(initialState)
 
         if (systemListener == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && powerManager != null) {
-            val listener = PowerManager.OnThermalStatusChangedListener { status ->
-                val state = mapStatusToState(status)
-                currentState = state
-                Log.i(TAG, "Status termico alterado: $status -> level=${state.level}, actions=${state.actions}")
-                for (cb in listeners) {
-                    cb(state)
+            val listener =
+                PowerManager.OnThermalStatusChangedListener { status ->
+                    val state = mapStatusToState(status)
+                    currentState = state
+                    Log.i(TAG, "Status termico alterado: $status -> level=${state.level}, actions=${state.actions}")
+                    for (cb in listeners) {
+                        cb(state)
+                    }
                 }
-            }
             try {
                 powerManager.addThermalStatusListener(executor, listener)
                 systemListener = listener

@@ -2,19 +2,18 @@ package com.tucavr.filebrowser
 
 import android.content.Context
 import android.content.SharedPreferences
-import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
 
 enum class ViewMode {
     LIST,
-    GRID
+    GRID,
 }
 
 data class FolderConfig(
     val sortBy: SortBy = SortBy.NAME,
     val ascending: Boolean = true,
-    val viewMode: ViewMode = ViewMode.GRID
+    val viewMode: ViewMode = ViewMode.GRID,
 )
 
 /**
@@ -23,7 +22,6 @@ data class FolderConfig(
  * e espelhamento em SharedPreferences).
  */
 class FolderConfigStore(private val context: Context) {
-
     private val prefs: SharedPreferences =
         context.getSharedPreferences("vrplayer_folder_configs", Context.MODE_PRIVATE)
 
@@ -89,7 +87,10 @@ class FolderConfigStore(private val context: Context) {
     /**
      * Salva a configuração de uma pasta específica no arquivo oculto e no SharedPreferences.
      */
-    fun saveConfigFor(folderPath: String?, config: FolderConfig) {
+    fun saveConfigFor(
+        folderPath: String?,
+        config: FolderConfig,
+    ) {
         if (folderPath.isNullOrBlank()) {
             saveGlobalConfig(config)
             return

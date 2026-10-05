@@ -11,11 +11,11 @@ enum class PassthroughMaskMode(val id: Int) {
     CHROMA_KEY(1),
 
     /** Formato DeoVR / HereSphere 6-Segment Packed Alpha (fatiado nas quinas e cunhas do frame 2:1 SBS). */
-    PACKED_ALPHA(2);
+    PACKED_ALPHA(2),
+    ;
 
     companion object {
-        fun fromId(id: Int): PassthroughMaskMode =
-            entries.find { it.id == id } ?: OFF
+        fun fromId(id: Int): PassthroughMaskMode = entries.find { it.id == id } ?: OFF
     }
 }
 
@@ -27,7 +27,6 @@ enum class PassthroughMaskMode(val id: Int) {
  * adotam a convenção _alpha (ex: video_FISHEYE190_alpha.mp4).
  */
 object PackedAlphaDetector {
-
     /**
      * Verifica se o nome do arquivo ou caminho indica formato Packed Alpha.
      */

@@ -32,15 +32,16 @@ object ApplicationExitInfoReporter {
         val reasonCode: Int,
         val timestampMs: Long,
         val pid: Int,
-        val description: String
+        val description: String,
     )
 
-    fun reasonName(reasonCode: Int): String = when (reasonCode) {
-        ApplicationExitInfo.REASON_ANR -> "ANR"
-        ApplicationExitInfo.REASON_CRASH_NATIVE -> "CRASH_NATIVE"
-        ApplicationExitInfo.REASON_CRASH -> "CRASH_JVM"
-        else -> "OTHER($reasonCode)"
-    }
+    fun reasonName(reasonCode: Int): String =
+        when (reasonCode) {
+            ApplicationExitInfo.REASON_ANR -> "ANR"
+            ApplicationExitInfo.REASON_CRASH_NATIVE -> "CRASH_NATIVE"
+            ApplicationExitInfo.REASON_CRASH -> "CRASH_JVM"
+            else -> "OTHER($reasonCode)"
+        }
 
     /** Só estas duas classes de morte são hoje invisíveis (JVM crash já é capturado pelo
      * handler existente em VRActivity) — ver rationale na doc da classe. */
@@ -49,7 +50,10 @@ object ApplicationExitInfoReporter {
 
     /** Filtra por [isRelevantReason] e por mais recente que [lastSeenTimestampMs] — evita
      * reportar o mesmo evento a cada reinício do app enquanto o histórico do sistema não gira. */
-    fun filterNewRelevant(all: List<ExitReasonSummary>, lastSeenTimestampMs: Long): List<ExitReasonSummary> =
+    fun filterNewRelevant(
+        all: List<ExitReasonSummary>,
+        lastSeenTimestampMs: Long,
+    ): List<ExitReasonSummary> =
         all.filter { it.timestampMs > lastSeenTimestampMs && isRelevantReason(it.reasonCode) }
             .sortedBy { it.timestampMs }
 
@@ -79,16 +83,18 @@ object ApplicationExitInfoReporter {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val lastSeen = prefs.getLong(KEY_LAST_SEEN_TIMESTAMP_MS, 0L)
 
-        val all = try {
-            am.getHistoricalProcessExitReasons(null, 0, 0)
-        } catch (e: Exception) {
-            VRLog.w("ApplicationExitInfoReporter: falha ao ler histórico de saída", e)
-            return
-        }
+        val all =
+            try {
+                am.getHistoricalProcessExitReasons(null, 0, 0)
+            } catch (e: Exception) {
+                VRLog.w("ApplicationExitInfoReporter: falha ao ler histórico de saída", e)
+                return
+            }
 
-        val allSummaries = all.map {
-            ExitReasonSummary(it.reason, it.timestamp, it.pid, it.description ?: "")
-        }
+        val allSummaries =
+            all.map {
+                ExitReasonSummary(it.reason, it.timestamp, it.pid, it.description ?: "")
+            }
         val relevant = filterNewRelevant(allSummaries, lastSeen)
         if (relevant.isEmpty()) return
 

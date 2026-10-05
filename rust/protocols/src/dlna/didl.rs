@@ -124,9 +124,13 @@ pub fn parse_didl_lite(xml: &str) -> Result<Vec<DlnaItem>, String> {
                         let val = attr.unescape_value().unwrap_or_default().to_string();
                         if key.eq_ignore_ascii_case("size") && current_size.is_none() {
                             current_size = val.parse().ok();
-                        } else if key.eq_ignore_ascii_case("duration") && current_duration_sec.is_none() {
+                        } else if key.eq_ignore_ascii_case("duration")
+                            && current_duration_sec.is_none()
+                        {
                             current_duration_sec = parse_duration_to_seconds(&val);
-                        } else if key.eq_ignore_ascii_case("resolution") && current_resolution.is_none() {
+                        } else if key.eq_ignore_ascii_case("resolution")
+                            && current_resolution.is_none()
+                        {
                             current_resolution = Some(val);
                         }
                     }
@@ -138,7 +142,11 @@ pub fn parse_didl_lite(xml: &str) -> Result<Vec<DlnaItem>, String> {
 
                 if local_name.eq_ignore_ascii_case("container") && in_container {
                     items.push(DlnaItem {
-                        id: if current_id.is_empty() { "0".to_string() } else { current_id.clone() },
+                        id: if current_id.is_empty() {
+                            "0".to_string()
+                        } else {
+                            current_id.clone()
+                        },
                         parent_id: current_parent_id.take(),
                         title: current_title.take().unwrap_or_else(|| "Pasta".to_string()),
                         is_container: true,
@@ -174,13 +182,19 @@ pub fn parse_didl_lite(xml: &str) -> Result<Vec<DlnaItem>, String> {
                 if in_container || in_item {
                     if current_tag.eq_ignore_ascii_case("title") && current_title.is_none() {
                         current_title = Some(text);
-                    } else if (current_tag.eq_ignore_ascii_case("albumArtURI") || current_tag.eq_ignore_ascii_case("icon"))
+                    } else if (current_tag.eq_ignore_ascii_case("albumArtURI")
+                        || current_tag.eq_ignore_ascii_case("icon"))
                         && current_album_art.is_none()
                     {
                         current_album_art = Some(text);
-                    } else if current_tag.eq_ignore_ascii_case("class") && current_upnp_class.is_none() {
+                    } else if current_tag.eq_ignore_ascii_case("class")
+                        && current_upnp_class.is_none()
+                    {
                         current_upnp_class = Some(text);
-                    } else if current_tag.eq_ignore_ascii_case("res") && in_item && current_res_url.is_none() {
+                    } else if current_tag.eq_ignore_ascii_case("res")
+                        && in_item
+                        && current_res_url.is_none()
+                    {
                         current_res_url = Some(text);
                     }
                 }
@@ -223,7 +237,10 @@ mod tests {
         assert_eq!(container.title, "Movies");
         assert!(container.is_container);
         assert_eq!(container.child_count, Some(3));
-        assert_eq!(container.album_art_url, Some("http://192.168.1.100:8200/icons/movies.jpg".to_string()));
+        assert_eq!(
+            container.album_art_url,
+            Some("http://192.168.1.100:8200/icons/movies.jpg".to_string())
+        );
 
         let video = &items[1];
         assert_eq!(video.id, "1$2$42");
@@ -232,12 +249,18 @@ mod tests {
         assert_eq!(video.size_bytes, Some(1073741824));
         assert_eq!(video.duration_sec, Some(596.467));
         assert_eq!(video.resolution, Some("3840x2160".to_string()));
-        assert_eq!(video.res_url, Some("http://192.168.1.100:8200/MediaItems/42.mp4".to_string()));
+        assert_eq!(
+            video.res_url,
+            Some("http://192.168.1.100:8200/MediaItems/42.mp4".to_string())
+        );
     }
 
     #[test]
     fn duration_parsing() {
-        assert_eq!(parse_duration_to_seconds("01:23:45.500"), Some(3600.0 + 23.0 * 60.0 + 45.5));
+        assert_eq!(
+            parse_duration_to_seconds("01:23:45.500"),
+            Some(3600.0 + 23.0 * 60.0 + 45.5)
+        );
         assert_eq!(parse_duration_to_seconds("05:30"), Some(330.0));
         assert_eq!(parse_duration_to_seconds("120"), Some(120.0));
     }

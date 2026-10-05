@@ -30,12 +30,11 @@ data class MediaMetadataCacheEntry(
     val videoWidth: Int,
     val videoHeight: Int,
     val videoCodec: String,
-    val fetchedAt: Long
+    val fetchedAt: Long,
 )
 
 @Dao
 interface MediaMetadataCacheDao {
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(entry: MediaMetadataCacheEntry)
 

@@ -8,7 +8,7 @@
 
 pub mod uri;
 
-pub use uri::{is_webdav_uri, redact, WebdavTarget};
+pub use uri::{WebdavTarget, is_webdav_uri, redact};
 
 use crate::chunking::split_range;
 use crate::prefetch::RangeSource;
@@ -208,7 +208,10 @@ pub fn parse_multistatus_xml<R: io::BufRead>(
 }
 
 /// Lista o conteúdo de um diretório em um servidor WebDAV via PROPFIND Depth: 1.
-pub fn list_directory(target: &WebdavTarget, dir_path: &str) -> Result<Vec<WebdavDirEntry>, String> {
+pub fn list_directory(
+    target: &WebdavTarget,
+    dir_path: &str,
+) -> Result<Vec<WebdavDirEntry>, String> {
     let client = create_client(target)?;
     list_directory_with_client(&client, target, dir_path)
 }
@@ -247,7 +250,9 @@ fn list_directory_with_client(
 
     let status = resp.status();
     if status.as_u16() != 207 && !status.is_success() {
-        return Err(format!("Servidor WebDAV respondeu com status HTTP {status}"));
+        return Err(format!(
+            "Servidor WebDAV respondeu com status HTTP {status}"
+        ));
     }
 
     let reader = io::BufReader::new(resp);
@@ -259,7 +264,10 @@ fn list_directory_with_client(
 /// keep-alive) pra todas as subpastas visitadas, pilha explicita, sem
 /// limite de profundidade fixo, para no primeiro arquivo de midia ou no
 /// deadline de seguranca.
-pub fn scan_has_media(target: &WebdavTarget, dir_path: &str) -> Result<crate::folder_scan::ScanResult, String> {
+pub fn scan_has_media(
+    target: &WebdavTarget,
+    dir_path: &str,
+) -> Result<crate::folder_scan::ScanResult, String> {
     let client = create_client(target)?;
     let deadline = crate::folder_scan::deadline_from_now();
 
@@ -442,7 +450,9 @@ impl RangeSource for WebdavFileSource {
 
                 for handle in handles {
                     results.push(handle.join().unwrap_or_else(|_| {
-                        Err(io::Error::other("thread de leitura WebDAV entrou em pânico"))
+                        Err(io::Error::other(
+                            "thread de leitura WebDAV entrou em pânico",
+                        ))
                     }));
                 }
             });
@@ -508,7 +518,8 @@ mod tests {
   </d:response>
 </d:multistatus>"#;
 
-        let entries = parse_multistatus_xml(Cursor::new(xml), "/remote.php/dav/files/user/Videos/").unwrap();
+        let entries =
+            parse_multistatus_xml(Cursor::new(xml), "/remote.php/dav/files/user/Videos/").unwrap();
         assert_eq!(entries.len(), 2);
 
         // Subpasta VR 180
@@ -545,7 +556,8 @@ mod tests {
   </D:response>
 </D:multistatus>"#;
 
-        let entries = parse_multistatus_xml(Cursor::new(xml), "http://192.168.1.50:5005/webdav").unwrap();
+        let entries =
+            parse_multistatus_xml(Cursor::new(xml), "http://192.168.1.50:5005/webdav").unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].name, "sample.mkv");
         assert!(!entries[0].is_dir);

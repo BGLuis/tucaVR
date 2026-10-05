@@ -67,7 +67,10 @@ pub fn is_nfs_uri(s: &str) -> bool {
 
 pub fn redact(s: &str) -> String {
     match NfsTarget::from_internal(s) {
-        Some(t) => format!("nfs://{}:{}{}/{}", t.host, t.port, t.export_path, t.file_path),
+        Some(t) => format!(
+            "nfs://{}:{}{}/{}",
+            t.host, t.port, t.export_path, t.file_path
+        ),
         None => "nfs://<invalid>".to_string(),
     }
 }

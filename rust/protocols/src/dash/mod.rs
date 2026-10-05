@@ -7,7 +7,7 @@ pub mod manifest;
 pub mod stream;
 
 pub use manifest::{
-    parse_byte_range, parse_iso8601_duration, parse_mpd, resolve_template_url, DashAdaptationSet, DashManifest,
-    DashPeriod, DashRepresentation, SegmentBase, SegmentTemplate,
+    DashAdaptationSet, DashManifest, DashPeriod, DashRepresentation, SegmentBase, SegmentTemplate,
+    parse_byte_range, parse_iso8601_duration, parse_mpd, resolve_template_url,
 };
-pub use stream::{fetch_and_probe_representations, DashStreamSource};
+pub use stream::{DashStreamSource, fetch_and_probe_representations};

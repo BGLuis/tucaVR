@@ -4,7 +4,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class UpscalingModeStoreTest {
-
     @Test
     fun testModeIdsMatchContract() {
         assertEquals(0, UpscalingModeStore.Mode.OFF.id)

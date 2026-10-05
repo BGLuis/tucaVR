@@ -43,9 +43,24 @@ pub struct AssColor {
 }
 
 impl AssColor {
-    pub const WHITE: AssColor = AssColor { r: 255, g: 255, b: 255, a: 255 };
-    pub const BLACK: AssColor = AssColor { r: 0, g: 0, b: 0, a: 255 };
-    pub const RED: AssColor = AssColor { r: 255, g: 0, b: 0, a: 255 };
+    pub const WHITE: AssColor = AssColor {
+        r: 255,
+        g: 255,
+        b: 255,
+        a: 255,
+    };
+    pub const BLACK: AssColor = AssColor {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 255,
+    };
+    pub const RED: AssColor = AssColor {
+        r: 255,
+        g: 0,
+        b: 0,
+        a: 255,
+    };
 }
 
 /// Converte um valor de cor ASS para `AssColor`.
@@ -244,11 +259,7 @@ impl AssSubtitle {
 
 /// Busca os eventos ASS ativos no instante `pts_ms` (com `offset_ms` aplicado).
 /// Espelha o contrato de `subtitle::find_active_cue` e `subtitle_pgs::find_active_pgs`.
-pub fn find_active_ass_events(
-    doc: &AssSubtitle,
-    pts_ms: i64,
-    offset_ms: i64,
-) -> Vec<&AssEvent> {
+pub fn find_active_ass_events(doc: &AssSubtitle, pts_ms: i64, offset_ms: i64) -> Vec<&AssEvent> {
     let Some(effective) = pts_ms.checked_add(offset_ms) else {
         return Vec::new();
     };
@@ -265,11 +276,7 @@ pub fn find_active_ass_events(
 /// Busca o evento ASS ativo no instante `pts_ms` (com `offset_ms` aplicado).
 /// Caso múltiplos eventos estejam ativos simultaneamente, prioriza o de maior `layer`
 /// e, em caso de empate, o com início mais recente (`start_ms`).
-pub fn find_active_ass_event(
-    doc: &AssSubtitle,
-    pts_ms: i64,
-    offset_ms: i64,
-) -> Option<&AssEvent> {
+pub fn find_active_ass_event(doc: &AssSubtitle, pts_ms: i64, offset_ms: i64) -> Option<&AssEvent> {
     let events = find_active_ass_events(doc, pts_ms, offset_ms);
     events.into_iter().max_by_key(|e| (e.layer, e.start_ms))
 }
@@ -420,7 +427,11 @@ pub fn ass_document_from_mkv_packets(header: &str, packets: &[MkvAssPacket]) -> 
             }
         }
         // f = [ReadOrder, Layer, Style, Name, MarginL, MarginR, MarginV, Effect, Text]
-        let layer = if f[1].trim().is_empty() { "0" } else { f[1].trim() };
+        let layer = if f[1].trim().is_empty() {
+            "0"
+        } else {
+            f[1].trim()
+        };
         doc.push_str("Dialogue: ");
         doc.push_str(layer);
         doc.push(',');
@@ -513,8 +524,8 @@ fn apply_script_info(line: &str, info: &mut AssScriptInfo) {
 fn legacy_alignment_to_numpad(a: u8) -> u8 {
     match a {
         1..=3 => a,
-        5..=7 => a + 2,   // 5->7, 6->8, 7->9
-        9..=11 => a - 5,  // 9->4, 10->5, 11->6
+        5..=7 => a + 2,  // 5->7, 6->8, 7->9
+        9..=11 => a - 5, // 9->4, 10->5, 11->6
         _ => 2,
     }
 }
@@ -556,7 +567,10 @@ fn parse_style_line(rest: &str, fmt: &[String], legacy: bool) -> Option<AssStyle
     if let Some(c) = get("SecondaryColour").and_then(parse_ass_color) {
         st.secondary_colour = c;
     }
-    if let Some(c) = get("OutlineColour").or_else(|| get("TertiaryColour")).and_then(parse_ass_color) {
+    if let Some(c) = get("OutlineColour")
+        .or_else(|| get("TertiaryColour"))
+        .and_then(parse_ass_color)
+    {
         st.outline_colour = c;
     }
     if let Some(c) = get("BackColour").and_then(parse_ass_color) {
@@ -652,9 +666,15 @@ fn parse_dialogue_line(rest: &str, fmt: &[String], styles: &[AssStyle]) -> Optio
         .and_then(|v| v.parse::<i32>().ok())
         .unwrap_or(0);
 
-    let style_name = field("Style").map(|s| s.trim().to_string()).unwrap_or_default();
-    let actor = field("Name").map(|s| s.trim().to_string()).unwrap_or_default();
-    let effect = field("Effect").map(|s| s.trim().to_string()).unwrap_or_default();
+    let style_name = field("Style")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let actor = field("Name")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
+    let effect = field("Effect")
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default();
     let text_raw = field("Text").unwrap_or("");
 
     let mut style = styles
@@ -979,27 +999,52 @@ Comment: 0,0:00:07.00,0:00:09.00,Default,,0,0,0,,isto deve ser ignorado
     fn test_parse_ass_color_aabbggrr() {
         assert_eq!(
             parse_ass_color("&H00FFFFFF"),
-            Some(AssColor { r: 255, g: 255, b: 255, a: 255 })
+            Some(AssColor {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255
+            })
         );
         // AA=0x80 => transparência 128 => alfa de exibição 127; BB=FF => azul.
         assert_eq!(
             parse_ass_color("&H80FF0000"),
-            Some(AssColor { r: 0, g: 0, b: 255, a: 127 })
+            Some(AssColor {
+                r: 0,
+                g: 0,
+                b: 255,
+                a: 127
+            })
         );
         // Totalmente transparente.
         assert_eq!(
             parse_ass_color("&HFF000000"),
-            Some(AssColor { r: 0, g: 0, b: 0, a: 0 })
+            Some(AssColor {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0
+            })
         );
         // Com `&` de fechamento de override tag e forma curta BBGGRR.
         assert_eq!(
             parse_ass_color("&H0000FF&"),
-            Some(AssColor { r: 255, g: 0, b: 0, a: 255 })
+            Some(AssColor {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255
+            })
         );
         // SSA antigo: inteiro decimal (16711680 = 0x00FF0000 => azul).
         assert_eq!(
             parse_ass_color("16711680"),
-            Some(AssColor { r: 0, g: 0, b: 255, a: 255 })
+            Some(AssColor {
+                r: 0,
+                g: 0,
+                b: 255,
+                a: 255
+            })
         );
         assert_eq!(parse_ass_color("lixo"), None);
     }
@@ -1019,7 +1064,15 @@ Comment: 0,0:00:07.00,0:00:09.00,Default,,0,0,0,,isto deve ser ignorado
         assert_eq!(def.font_name, "Arial");
         assert_eq!(def.font_size, 72.0);
         assert_eq!(def.primary_colour, AssColor::WHITE);
-        assert_eq!(def.outline_colour, AssColor { r: 0x20, g: 0x20, b: 0x20, a: 255 });
+        assert_eq!(
+            def.outline_colour,
+            AssColor {
+                r: 0x20,
+                g: 0x20,
+                b: 0x20,
+                a: 255
+            }
+        );
         assert_eq!(def.border_style, 1);
         assert_eq!(def.outline, 3.0);
         assert_eq!(def.shadow, 1.0);
@@ -1032,7 +1085,15 @@ Comment: 0,0:00:07.00,0:00:09.00,Default,,0,0,0,,isto deve ser ignorado
         assert!(titulo.bold);
         assert_eq!(titulo.alignment, 8);
         // &H0000FFFF => AA=00, BB=00, GG=FF, RR=FF => amarelo opaco.
-        assert_eq!(titulo.primary_colour, AssColor { r: 255, g: 255, b: 0, a: 255 });
+        assert_eq!(
+            titulo.primary_colour,
+            AssColor {
+                r: 255,
+                g: 255,
+                b: 0,
+                a: 255
+            }
+        );
     }
 
     #[test]
@@ -1058,7 +1119,15 @@ Comment: 0,0:00:07.00,0:00:09.00,Default,,0,0,0,,isto deve ser ignorado
         // Primeiro span: vermelho + negrito. Depois do \r: volta ao estilo base.
         assert!(ev.spans.len() >= 2);
         let red = &ev.spans[0];
-        assert_eq!(red.colour, AssColor { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(
+            red.colour,
+            AssColor {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255
+            }
+        );
         assert!(red.bold);
         assert_eq!(red.text, "Vermelho em negrito");
 
@@ -1108,7 +1177,10 @@ Comment: 0,0:00:07.00,0:00:09.00,Default,,0,0,0,,isto deve ser ignorado
             strip_ass_override_tags("{\\pos(10,10)\\b1}Olá{\\b0} mundo"),
             "Olá mundo"
         );
-        assert_eq!(strip_ass_override_tags("linha 1\\Nlinha 2"), "linha 1\nlinha 2");
+        assert_eq!(
+            strip_ass_override_tags("linha 1\\Nlinha 2"),
+            "linha 1\nlinha 2"
+        );
     }
 
     #[test]
@@ -1202,12 +1274,18 @@ Dialogue: 0,0:00:06.00,0:00:08.00,Default,,0,0,0,,Terceira linha
         let evs = find_active_ass_events(&doc, 1500, 0);
         assert_eq!(evs.len(), 1);
         assert_eq!(evs[0].text, "Primeira linha");
-        assert_eq!(find_active_ass_event(&doc, 1500, 0).unwrap().text, "Primeira linha");
+        assert_eq!(
+            find_active_ass_event(&doc, 1500, 0).unwrap().text,
+            "Primeira linha"
+        );
 
         // Em 2500ms: ambas as linhas ativas; find_active_ass_event prioriza layer 1
         let evs = find_active_ass_events(&doc, 2500, 0);
         assert_eq!(evs.len(), 2);
-        assert_eq!(find_active_ass_event(&doc, 2500, 0).unwrap().text, "Segunda linha (layer 1)");
+        assert_eq!(
+            find_active_ass_event(&doc, 2500, 0).unwrap().text,
+            "Segunda linha (layer 1)"
+        );
 
         // Teste de offset (+1000ms): em 500ms com offset 1000ms => tempo efetivo 1500ms
         let evs = find_active_ass_events(&doc, 500, 1000);
@@ -1221,4 +1299,3 @@ Dialogue: 0,0:00:06.00,0:00:08.00,Default,,0,0,0,,Terceira linha
         assert!(find_active_ass_events(&doc, 500, -1000).is_empty());
     }
 }
-

@@ -13,7 +13,7 @@ enum class ServerProtocol {
     SFTP,
     NFS,
     DLNA,
-    WEBDAV
+    WEBDAV,
 }
 
 /**
@@ -24,21 +24,23 @@ enum class ServerProtocol {
  */
 @get:DrawableRes
 val ServerProtocol.iconRes: Int
-    get() = when (this) {
-        ServerProtocol.SMB, ServerProtocol.NFS -> R.drawable.ic_storage
-        ServerProtocol.FTP -> R.drawable.ic_broadcast
-        ServerProtocol.SFTP -> R.drawable.ic_lock
-        ServerProtocol.DLNA -> R.drawable.ic_movie
-        ServerProtocol.WEBDAV -> R.drawable.ic_link
-    }
+    get() =
+        when (this) {
+            ServerProtocol.SMB, ServerProtocol.NFS -> R.drawable.ic_storage
+            ServerProtocol.FTP -> R.drawable.ic_broadcast
+            ServerProtocol.SFTP -> R.drawable.ic_lock
+            ServerProtocol.DLNA -> R.drawable.ic_movie
+            ServerProtocol.WEBDAV -> R.drawable.ic_link
+        }
 
 @get:StringRes
 val ServerProtocol.labelRes: Int
-    get() = when (this) {
-        ServerProtocol.SMB -> R.string.network_tab_smb
-        ServerProtocol.FTP -> R.string.network_tab_ftp
-        ServerProtocol.SFTP -> R.string.network_tab_sftp
-        ServerProtocol.NFS -> R.string.network_tab_nfs
-        ServerProtocol.DLNA -> R.string.network_tab_dlna
-        ServerProtocol.WEBDAV -> R.string.network_tab_webdav
-    }
+    get() =
+        when (this) {
+            ServerProtocol.SMB -> R.string.network_tab_smb
+            ServerProtocol.FTP -> R.string.network_tab_ftp
+            ServerProtocol.SFTP -> R.string.network_tab_sftp
+            ServerProtocol.NFS -> R.string.network_tab_nfs
+            ServerProtocol.DLNA -> R.string.network_tab_dlna
+            ServerProtocol.WEBDAV -> R.string.network_tab_webdav
+        }

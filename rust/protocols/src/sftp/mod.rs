@@ -77,9 +77,9 @@ pub use uri::{SftpTarget, is_sftp_uri, redact};
 use crate::chunking::split_range;
 use crate::prefetch::RangeSource;
 use futures_util::future::join_all;
+use russh::Disconnect;
 use russh::client::{self, Handler};
 use russh::keys::{PrivateKeyWithHashAlg, PublicKeyOrCertificate};
-use russh::Disconnect;
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::{RawSftpSession, SftpSession};
 use russh_sftp::protocol::{Data, FileAttributes, OpenFlags, StatusCode};
@@ -89,7 +89,9 @@ use std::time::Duration;
 use tokio::runtime::Runtime;
 
 fn new_runtime() -> io::Result<Runtime> {
-    tokio::runtime::Builder::new_current_thread().enable_all().build()
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
 }
 
 /// Ate quantos bytes pedir num unico `SSH_FXP_READ` — um pouco abaixo do
@@ -158,7 +160,10 @@ struct SftpHandler;
 impl Handler for SftpHandler {
     type Error = russh::Error;
 
-    async fn check_server_key(&mut self, _server_public_key: &PublicKeyOrCertificate) -> Result<bool, Self::Error> {
+    async fn check_server_key(
+        &mut self,
+        _server_public_key: &PublicKeyOrCertificate,
+    ) -> Result<bool, Self::Error> {
         Ok(true)
     }
 }
@@ -178,12 +183,25 @@ fn client_config(keepalive: bool) -> client::Config {
 
 /// Conecta e autentica — senha OU chave privada (T6.2 "avancado"), conforme
 /// `SftpTarget::private_key` esta preenchido ou nao (ver `uri.rs`).
-async fn connect_and_auth(t: &SftpTarget, keepalive: bool) -> Result<client::Handle<SftpHandler>, String> {
+async fn connect_and_auth(
+    t: &SftpTarget,
+    keepalive: bool,
+) -> Result<client::Handle<SftpHandler>, String> {
     t.validate()?;
     tokio::time::timeout(SFTP_CONNECT_TIMEOUT, async {
-        let mut session = match client::connect(Arc::new(client_config(keepalive)), (t.host.as_str(), t.port), SftpHandler).await {
+        let mut session = match client::connect(
+            Arc::new(client_config(keepalive)),
+            (t.host.as_str(), t.port),
+            SftpHandler,
+        )
+        .await
+        {
             Ok(session) => {
-                log::info!("SFTP: conexao TCP/SSH estabelecida com {}:{}", t.host, t.port);
+                log::info!(
+                    "SFTP: conexao TCP/SSH estabelecida com {}:{}",
+                    t.host,
+                    t.port
+                );
                 session
             }
             Err(e) => {
@@ -193,10 +211,15 @@ async fn connect_and_auth(t: &SftpTarget, keepalive: bool) -> Result<client::Han
         };
 
         let authenticated = if let Some(pem) = t.private_key.as_deref().filter(|k| !k.is_empty()) {
-            let key_pair = russh::keys::decode_secret_key(pem, None).map_err(|e| format!("chave privada invalida: {e}"))?;
+            let key_pair = russh::keys::decode_secret_key(pem, None)
+                .map_err(|e| format!("chave privada invalida: {e}"))?;
             let key_with_hash = PrivateKeyWithHashAlg::new(
                 Arc::new(key_pair),
-                session.best_supported_rsa_hash().await.map_err(|e| e.to_string())?.flatten(),
+                session
+                    .best_supported_rsa_hash()
+                    .await
+                    .map_err(|e| e.to_string())?
+                    .flatten(),
             );
             session
                 .authenticate_publickey(t.username.clone(), key_with_hash)
@@ -211,13 +234,20 @@ async fn connect_and_auth(t: &SftpTarget, keepalive: bool) -> Result<client::Han
 
         if !authenticated.success() {
             log::warn!("SFTP: autenticacao rejeitada para usuario {}", t.username);
-            return Err("autenticacao SFTP falhou (usuario/senha ou chave privada invalidos)".to_string());
+            return Err(
+                "autenticacao SFTP falhou (usuario/senha ou chave privada invalidos)".to_string(),
+            );
         }
         log::info!("SFTP: autenticado como {}", t.username);
         Ok(session)
     })
     .await
-    .map_err(|_| format!("SFTP: timeout de conexao/autenticacao apos {}s", SFTP_CONNECT_TIMEOUT.as_secs()))?
+    .map_err(|_| {
+        format!(
+            "SFTP: timeout de conexao/autenticacao apos {}s",
+            SFTP_CONNECT_TIMEOUT.as_secs()
+        )
+    })?
 }
 
 /// Abre o canal SSH e sobe o subsistema `sftp` de alto nivel — usado so por
@@ -225,24 +255,40 @@ async fn connect_and_auth(t: &SftpTarget, keepalive: bool) -> Result<client::Han
 /// metadata embutida). `SftpFileSource` usa `open_raw_sftp` abaixo em vez
 /// desta, porque precisa do `read` posicional do `RawSftpSession`.
 async fn open_sftp_session(session: &client::Handle<SftpHandler>) -> Result<SftpSession, String> {
-    let channel = session.channel_open_session().await.map_err(|e| e.to_string())?;
-    channel.request_subsystem(true, "sftp").await.map_err(|e| e.to_string())?;
-    SftpSession::new(channel.into_stream()).await.map_err(|e| e.to_string())
+    let channel = session
+        .channel_open_session()
+        .await
+        .map_err(|e| e.to_string())?;
+    channel
+        .request_subsystem(true, "sftp")
+        .await
+        .map_err(|e| e.to_string())?;
+    SftpSession::new(channel.into_stream())
+        .await
+        .map_err(|e| e.to_string())
 }
 
 /// Equivalente a `open_sftp_session` acima, mas devolve o `RawSftpSession`
 /// de baixo nivel (T6.3 — precisa do `read(handle, offset, len)` posicional,
 /// que o `File` de alto nivel nao expoe diretamente).
 async fn open_raw_sftp(session: &client::Handle<SftpHandler>) -> Result<RawSftpSession, String> {
-    let channel = session.channel_open_session().await.map_err(|e| e.to_string())?;
-    channel.request_subsystem(true, "sftp").await.map_err(|e| e.to_string())?;
+    let channel = session
+        .channel_open_session()
+        .await
+        .map_err(|e| e.to_string())?;
+    channel
+        .request_subsystem(true, "sftp")
+        .await
+        .map_err(|e| e.to_string())?;
     let raw = RawSftpSession::new(channel.into_stream());
     raw.init().await.map_err(|e| e.to_string())?;
     Ok(raw)
 }
 
 async fn disconnect_best_effort(session: &client::Handle<SftpHandler>) {
-    let _ = session.disconnect(Disconnect::ByApplication, "", "en").await;
+    let _ = session
+        .disconnect(Disconnect::ByApplication, "", "en")
+        .await;
 }
 
 pub struct SftpDirEntry {
@@ -275,7 +321,11 @@ pub fn list_directory(t: &SftpTarget, path: &str) -> Result<Vec<SftpDirEntry>, S
         let result = entries
             .map(|entry| {
                 let metadata = entry.metadata();
-                SftpDirEntry { name: entry.file_name(), is_dir: metadata.file_type().is_dir(), size: metadata.len() }
+                SftpDirEntry {
+                    name: entry.file_name(),
+                    is_dir: metadata.file_type().is_dir(),
+                    size: metadata.len(),
+                }
             })
             .collect();
 
@@ -290,14 +340,21 @@ pub fn list_directory(t: &SftpTarget, path: &str) -> Result<Vec<SftpDirEntry>, S
 /// visitadas (nao reconecta por nivel), pilha explicita, sem limite de
 /// profundidade fixo, para no primeiro arquivo de midia ou no deadline de
 /// seguranca.
-pub fn scan_has_media(t: &SftpTarget, path: &str) -> Result<crate::folder_scan::ScanResult, String> {
+pub fn scan_has_media(
+    t: &SftpTarget,
+    path: &str,
+) -> Result<crate::folder_scan::ScanResult, String> {
     let rt = new_runtime().map_err(|e| e.to_string())?;
     rt.block_on(async {
         let session = connect_and_auth(t, false).await?;
         let sftp = open_sftp_session(&session).await?;
         let deadline = crate::folder_scan::deadline_from_now();
 
-        let start = if path.is_empty() { ".".to_string() } else { path.to_string() };
+        let start = if path.is_empty() {
+            ".".to_string()
+        } else {
+            path.to_string()
+        };
         let mut stack = vec![start];
         let mut result = crate::folder_scan::ScanResult::exhausted_empty();
 
@@ -315,7 +372,11 @@ pub fn scan_has_media(t: &SftpTarget, path: &str) -> Result<crate::folder_scan::
                 let metadata = entry.metadata();
                 let name = entry.file_name();
                 if metadata.file_type().is_dir() {
-                    let child = if current == "." { name } else { format!("{}/{}", current, name) };
+                    let child = if current == "." {
+                        name
+                    } else {
+                        format!("{}/{}", current, name)
+                    };
                     stack.push(child);
                 } else if crate::folder_scan::is_media_filename(&name) {
                     found = true;
@@ -360,28 +421,60 @@ impl SftpFileSource {
         let runtime = new_runtime().map_err(|e| e.to_string())?;
         let target = t.clone();
         let (session, raw, handle, size) = runtime.block_on(Self::connect_open(&target))?;
-        Ok(Self { runtime, target, session: Some(session), raw: Some(raw), handle: Some(handle), size })
+        Ok(Self {
+            runtime,
+            target,
+            session: Some(session),
+            raw: Some(raw),
+            handle: Some(handle),
+            size,
+        })
     }
 
-    async fn connect_open(t: &SftpTarget) -> Result<(client::Handle<SftpHandler>, RawSftpSession, String, u64), String> {
+    async fn connect_open(
+        t: &SftpTarget,
+    ) -> Result<(client::Handle<SftpHandler>, RawSftpSession, String, u64), String> {
         let session = connect_and_auth(t, true).await?;
         let raw = tokio::time::timeout(SFTP_CONNECT_TIMEOUT, open_raw_sftp(&session))
             .await
-            .map_err(|_| format!("SFTP: timeout ao abrir subsistema SFTP apos {}s", SFTP_CONNECT_TIMEOUT.as_secs()))??;
-        let handle = tokio::time::timeout(SFTP_CONNECT_TIMEOUT, raw.open(t.path.as_str(), OpenFlags::READ, FileAttributes::empty()))
-            .await
-            .map_err(|_| format!("SFTP: timeout ao abrir arquivo {} apos {}s", t.path, SFTP_CONNECT_TIMEOUT.as_secs()))?
-            .map_err(|e| {
-                log::warn!("SFTP: falha ao abrir arquivo {}: {e}", t.path);
-                e.to_string()
-            })?.handle;
+            .map_err(|_| {
+                format!(
+                    "SFTP: timeout ao abrir subsistema SFTP apos {}s",
+                    SFTP_CONNECT_TIMEOUT.as_secs()
+                )
+            })??;
+        let handle = tokio::time::timeout(
+            SFTP_CONNECT_TIMEOUT,
+            raw.open(t.path.as_str(), OpenFlags::READ, FileAttributes::empty()),
+        )
+        .await
+        .map_err(|_| {
+            format!(
+                "SFTP: timeout ao abrir arquivo {} apos {}s",
+                t.path,
+                SFTP_CONNECT_TIMEOUT.as_secs()
+            )
+        })?
+        .map_err(|e| {
+            log::warn!("SFTP: falha ao abrir arquivo {}: {e}", t.path);
+            e.to_string()
+        })?
+        .handle;
         let size = tokio::time::timeout(SFTP_CONNECT_TIMEOUT, raw.fstat(handle.as_str()))
             .await
-            .map_err(|_| format!("SFTP: timeout ao obter tamanho de {} apos {}s", t.path, SFTP_CONNECT_TIMEOUT.as_secs()))?
+            .map_err(|_| {
+                format!(
+                    "SFTP: timeout ao obter tamanho de {} apos {}s",
+                    t.path,
+                    SFTP_CONNECT_TIMEOUT.as_secs()
+                )
+            })?
             .map_err(|e| {
                 log::warn!("SFTP: falha ao obter tamanho de {}: {e}", t.path);
                 e.to_string()
-            })?.attrs.len();
+            })?
+            .attrs
+            .len();
         log::info!("SFTP: arquivo aberto {} ({size} bytes)", t.path);
         Ok((session, raw, handle, size))
     }
@@ -429,7 +522,12 @@ impl SftpFileSource {
     /// preenche o que ainda falta; o que sobrar apos `SFTP_SUB_READ_ROUNDS`
     /// cai pro laco sequencial original (garante terminar sempre, sem
     /// arriscar buracos silenciosos de zeros no meio do bloco).
-    async fn read_chunk_filling(raw: &RawSftpSession, handle: &str, chunk_offset: u64, chunk_len: u32) -> Result<Data, SftpError> {
+    async fn read_chunk_filling(
+        raw: &RawSftpSession,
+        handle: &str,
+        chunk_offset: u64,
+        chunk_len: u32,
+    ) -> Result<Data, SftpError> {
         let mut acc = vec![0u8; chunk_len as usize];
         let mut hit_end_at: Option<u32> = None;
         let mut missing: Vec<(u64, u32)> = split_range(chunk_offset, chunk_len, SFTP_SUB_READ_SIZE);
@@ -438,7 +536,8 @@ impl SftpFileSource {
             if missing.is_empty() || hit_end_at.is_some() {
                 break;
             }
-            let results = join_all(missing.iter().map(|&(off, len)| raw.read(handle, off, len))).await;
+            let results =
+                join_all(missing.iter().map(|&(off, len)| raw.read(handle, off, len))).await;
             let mut next_missing = Vec::new();
             for (&(off, len), result) in missing.iter().zip(results) {
                 let rel = (off - chunk_offset) as u32;
@@ -449,7 +548,8 @@ impl SftpFileSource {
                             hit_end_at = Some(hit_end_at.map_or(rel, |v| v.min(rel)));
                             continue;
                         }
-                        acc[rel as usize..(rel + n) as usize].copy_from_slice(&data.data[..n as usize]);
+                        acc[rel as usize..(rel + n) as usize]
+                            .copy_from_slice(&data.data[..n as usize]);
                         if n < len {
                             next_missing.push((off + n as u64, len - n));
                         }
@@ -496,14 +596,29 @@ impl SftpFileSource {
         Ok(Data { id: 0, data: acc })
     }
 
-    fn try_read_range_into(&mut self, offset: u64, buf: &mut [u8], total: &mut usize) -> io::Result<()> {
+    fn try_read_range_into(
+        &mut self,
+        offset: u64,
+        buf: &mut [u8],
+        total: &mut usize,
+    ) -> io::Result<()> {
         let (Some(raw), Some(handle)) = (self.raw.as_ref(), self.handle.as_deref()) else {
-            log::warn!("SFTP: try_read_range chamado sem conexao ativa (offset {offset}, buf {} bytes)", buf.len());
+            log::warn!(
+                "SFTP: try_read_range chamado sem conexao ativa (offset {offset}, buf {} bytes)",
+                buf.len()
+            );
             return Err(io::Error::other("SftpFileSource sem conexao ativa"));
         };
-        log::info!("SFTP: try_read_range offset={offset} pedindo {} bytes", buf.len());
+        log::info!(
+            "SFTP: try_read_range offset={offset} pedindo {} bytes",
+            buf.len()
+        );
 
-        let want = if offset >= self.size { 0 } else { (buf.len() as u64).min(self.size - offset) as u32 };
+        let want = if offset >= self.size {
+            0
+        } else {
+            (buf.len() as u64).min(self.size - offset) as u32
+        };
         if want == 0 {
             return Ok(());
         }
@@ -514,7 +629,9 @@ impl SftpFileSource {
             let mut results = match self.runtime.block_on(async {
                 tokio::time::timeout(
                     SFTP_READ_TIMEOUT,
-                    join_all(batch.iter().map(|&(chunk_offset, chunk_len)| Self::read_chunk_filling(raw, handle, chunk_offset, chunk_len))),
+                    join_all(batch.iter().map(|&(chunk_offset, chunk_len)| {
+                        Self::read_chunk_filling(raw, handle, chunk_offset, chunk_len)
+                    })),
                 )
                 .await
             }) {
@@ -526,7 +643,10 @@ impl SftpFileSource {
                     );
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        format!("SFTP: sem resposta do servidor por {:?} (stall de rede)", SFTP_READ_TIMEOUT),
+                        format!(
+                            "SFTP: sem resposta do servidor por {:?} (stall de rede)",
+                            SFTP_READ_TIMEOUT
+                        ),
                     ));
                 }
             };
@@ -541,7 +661,9 @@ impl SftpFileSource {
                     .filter_map(|(i, r)| match r {
                         // Eof e um resultado legitimo (fim do arquivo), nao
                         // uma falha — nao ha nada pra reler.
-                        Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => None,
+                        Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => {
+                            None
+                        }
                         Err(_) => Some(i),
                         Ok(_) => None,
                     })
@@ -566,7 +688,10 @@ impl SftpFileSource {
                         }
                     }
                     Err(_timeout) => {
-                        log::warn!("SFTP: timeout ao retentar chunks falhos ({:?})", SFTP_CHUNK_RETRY_TIMEOUT);
+                        log::warn!(
+                            "SFTP: timeout ao retentar chunks falhos ({:?})",
+                            SFTP_CHUNK_RETRY_TIMEOUT
+                        );
                         break;
                     }
                 }
@@ -589,9 +714,13 @@ impl SftpFileSource {
                             break 'batches;
                         }
                     }
-                    Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => break 'batches,
+                    Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => {
+                        break 'batches;
+                    }
                     Err(e) => {
-                        log::warn!("SFTP: leitura em offset {chunk_offset} (tam {chunk_len}) falhou: {e}");
+                        log::warn!(
+                            "SFTP: leitura em offset {chunk_offset} (tam {chunk_len}) falhou: {e}"
+                        );
                         return Err(io::Error::other(e.to_string()));
                     }
                 }
@@ -626,10 +755,13 @@ impl RangeSource for SftpFileSource {
                 let remaining_offset = offset + total_read as u64;
                 let remaining_buf = &mut buf[total_read..];
                 let mut resumed_read = 0usize;
-                let res = self.try_read_range_into(remaining_offset, remaining_buf, &mut resumed_read);
+                let res =
+                    self.try_read_range_into(remaining_offset, remaining_buf, &mut resumed_read);
                 total_read += resumed_read;
                 if total_read > 0 && res.is_err() {
-                    log::warn!("SftpFileSource: entregando bloco parcial de {total_read} bytes apos falha na retomada");
+                    log::warn!(
+                        "SftpFileSource: entregando bloco parcial de {total_read} bytes apos falha na retomada"
+                    );
                     Ok(total_read)
                 } else {
                     res.map(|()| total_read)

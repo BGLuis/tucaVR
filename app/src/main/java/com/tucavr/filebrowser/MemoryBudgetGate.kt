@@ -17,7 +17,7 @@ import kotlinx.coroutines.sync.withLock
 class MemoryBudgetGate(
     totalBudgetBytes: Long = DEFAULT_BUDGET_BYTES,
     private val starvationDeadlineMs: Long = DEFAULT_STARVATION_DEADLINE_MS,
-    private val clock: () -> Long = System::currentTimeMillis
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     companion object {
         const val DEFAULT_BUDGET_BYTES = 900L * 1024L * 1024L // 900 MiB
@@ -32,7 +32,7 @@ class MemoryBudgetGate(
             width: Int,
             height: Int,
             bitDepth: Int = 8,
-            kMultiplier: Double = DEFAULT_K_MULTIPLIER
+            kMultiplier: Double = DEFAULT_K_MULTIPLIER,
         ): Long {
             if (width <= 0 || height <= 0) {
                 // Fallback seguro (1080p) se a resolução for desconhecida
@@ -57,7 +57,7 @@ class MemoryBudgetGate(
     private class PendingRequest(
         val requestedBytes: Long,
         val queuedAt: Long,
-        val deferred: CompletableDeferred<Unit> = CompletableDeferred()
+        val deferred: CompletableDeferred<Unit> = CompletableDeferred(),
     )
 
     /**
@@ -74,7 +74,10 @@ class MemoryBudgetGate(
      * Executa o bloco sob a cota de memória solicitada.
      * Clampa pedidos maiores que o orçamento total para evitar deadlock.
      */
-    suspend fun <T> withBudget(requestedBytes: Long, block: suspend () -> T): T {
+    suspend fun <T> withBudget(
+        requestedBytes: Long,
+        block: suspend () -> T,
+    ): T {
         val effectiveRequested = requestedBytes.coerceIn(1L, _totalBudget)
         acquire(effectiveRequested)
         return try {
@@ -85,22 +88,23 @@ class MemoryBudgetGate(
     }
 
     private suspend fun acquire(requested: Long) {
-        val deferred: CompletableDeferred<Unit>? = lock.withLock {
-            val now = clock()
-            if (waitQueue.isEmpty() && _usedBudget + requested <= _totalBudget) {
-                _usedBudget += requested
-                null
-            } else {
-                val req = PendingRequest(requested, now)
-                waitQueue.add(req)
-                dispatchWaiters()
-                if (req.deferred.isCompleted) {
+        val deferred: CompletableDeferred<Unit>? =
+            lock.withLock {
+                val now = clock()
+                if (waitQueue.isEmpty() && _usedBudget + requested <= _totalBudget) {
+                    _usedBudget += requested
                     null
                 } else {
-                    req.deferred
+                    val req = PendingRequest(requested, now)
+                    waitQueue.add(req)
+                    dispatchWaiters()
+                    if (req.deferred.isCompleted) {
+                        null
+                    } else {
+                        req.deferred
+                    }
                 }
             }
-        }
 
         if (deferred != null) {
             try {

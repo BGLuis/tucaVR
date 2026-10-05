@@ -95,7 +95,8 @@ pub fn parse_device_description(xml: &str, location: &str) -> Result<DlnaDevice,
                 } else {
                     if current_tag.eq_ignore_ascii_case("friendlyName") && friendly_name.is_none() {
                         friendly_name = Some(text);
-                    } else if current_tag.eq_ignore_ascii_case("modelName") && model_name.is_none() {
+                    } else if current_tag.eq_ignore_ascii_case("modelName") && model_name.is_none()
+                    {
                         model_name = Some(text);
                     } else if current_tag.eq_ignore_ascii_case("url") && icon_url.is_none() {
                         icon_url = Some(resolve_url(location, &text));
@@ -110,7 +111,8 @@ pub fn parse_device_description(xml: &str, location: &str) -> Result<DlnaDevice,
     }
 
     let friendly_name = friendly_name.unwrap_or_else(|| "DLNA Media Server".to_string());
-    let control_url_raw = control_url.ok_or_else(|| "Serviço ContentDirectory não encontrado no dispositivo DLNA".to_string())?;
+    let control_url_raw = control_url
+        .ok_or_else(|| "Serviço ContentDirectory não encontrado no dispositivo DLNA".to_string())?;
     let resolved_control_url = resolve_url(location, &control_url_raw);
 
     Ok(DlnaDevice {
@@ -135,10 +137,15 @@ pub fn fetch_device_description(location_url: &str) -> Result<DlnaDevice, String
         .map_err(|e| format!("Falha ao conectar ao servidor DLNA ({location_url}): {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(format!("Servidor DLNA retornou HTTP status {}", resp.status()));
+        return Err(format!(
+            "Servidor DLNA retornou HTTP status {}",
+            resp.status()
+        ));
     }
 
-    let body = resp.text().map_err(|e| format!("Falha ao ler resposta XML: {e}"))?;
+    let body = resp
+        .text()
+        .map_err(|e| format!("Falha ao ler resposta XML: {e}"))?;
     parse_device_description(&body, location_url)
 }
 
@@ -188,18 +195,32 @@ mod tests {
 
     #[test]
     fn parse_valid_device_xml() {
-        let dev = parse_device_description(SAMPLE_DEVICE_XML, "http://192.168.1.100:8200/rootDesc.xml").unwrap();
+        let dev =
+            parse_device_description(SAMPLE_DEVICE_XML, "http://192.168.1.100:8200/rootDesc.xml")
+                .unwrap();
         assert_eq!(dev.friendly_name, "Home Media Server (MiniDLNA)");
-        assert_eq!(dev.model_name, Some("Windows Media Connect compatible".to_string()));
+        assert_eq!(
+            dev.model_name,
+            Some("Windows Media Connect compatible".to_string())
+        );
         assert_eq!(dev.control_url, "http://192.168.1.100:8200/ctl/ContentDir");
-        assert_eq!(dev.icon_url, Some("http://192.168.1.100:8200/icons/sm.png".to_string()));
+        assert_eq!(
+            dev.icon_url,
+            Some("http://192.168.1.100:8200/icons/sm.png".to_string())
+        );
     }
 
     #[test]
     fn resolve_relative_urls() {
         let base = "http://10.0.0.5:8080/desc/root.xml";
-        assert_eq!(resolve_url(base, "/control"), "http://10.0.0.5:8080/control");
-        assert_eq!(resolve_url(base, "control"), "http://10.0.0.5:8080/desc/control");
+        assert_eq!(
+            resolve_url(base, "/control"),
+            "http://10.0.0.5:8080/control"
+        );
+        assert_eq!(
+            resolve_url(base, "control"),
+            "http://10.0.0.5:8080/desc/control"
+        );
         assert_eq!(resolve_url(base, "http://other/ctrl"), "http://other/ctrl");
     }
 }

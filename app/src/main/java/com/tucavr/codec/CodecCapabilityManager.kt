@@ -12,7 +12,7 @@ data class CodecDecoderInfo(
     val codecName: String,
     val isHardwareAccelerated: Boolean,
     val isSoftwareOnly: Boolean,
-    val isVendor: Boolean
+    val isVendor: Boolean,
 )
 
 /**
@@ -20,7 +20,9 @@ data class CodecDecoderInfo(
  */
 sealed class CodecSupportStatus {
     data class Supported(val decoder: CodecDecoderInfo) : CodecSupportStatus()
+
     data class SoftwareOnly(val decoder: CodecDecoderInfo) : CodecSupportStatus()
+
     object Unsupported : CodecSupportStatus()
 
     val isHardwareAccelerated: Boolean
@@ -37,7 +39,7 @@ data class PlaybackValidationResult(
     val isPlayable: Boolean,
     val isHardwareAccelerated: Boolean,
     val errorMessageResId: Int? = null,
-    val decoderName: String? = null
+    val decoderName: String? = null,
 )
 
 /**
@@ -57,22 +59,25 @@ class SystemCodecInfoProvider : CodecInfoProvider {
             val result = mutableListOf<CodecDecoderInfo>()
             for (info in list.codecInfos) {
                 if (info.isEncoder) continue
-                val isHw = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    info.isHardwareAccelerated
-                } else {
-                    !info.name.startsWith("OMX.google.", ignoreCase = true) &&
-                        !info.name.startsWith("c2.android.", ignoreCase = true)
-                }
-                val isSw = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    info.isSoftwareOnly
-                } else {
-                    !isHw
-                }
-                val isVendor = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                    info.isVendor
-                } else {
-                    isHw
-                }
+                val isHw =
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        info.isHardwareAccelerated
+                    } else {
+                        !info.name.startsWith("OMX.google.", ignoreCase = true) &&
+                            !info.name.startsWith("c2.android.", ignoreCase = true)
+                    }
+                val isSw =
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        info.isSoftwareOnly
+                    } else {
+                        !isHw
+                    }
+                val isVendor =
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        info.isVendor
+                    } else {
+                        isHw
+                    }
                 for (type in info.supportedTypes) {
                     result.add(
                         CodecDecoderInfo(
@@ -80,8 +85,8 @@ class SystemCodecInfoProvider : CodecInfoProvider {
                             codecName = info.name,
                             isHardwareAccelerated = isHw,
                             isSoftwareOnly = isSw,
-                            isVendor = isVendor
-                        )
+                            isVendor = isVendor,
+                        ),
                     )
                 }
             }
@@ -198,7 +203,7 @@ object CodecCapabilityManager {
                 PlaybackValidationResult(
                     isPlayable = true,
                     isHardwareAccelerated = true,
-                    decoderName = status.decoder.codecName
+                    decoderName = status.decoder.codecName,
                 )
             }
             is CodecSupportStatus.SoftwareOnly -> {
@@ -209,27 +214,28 @@ object CodecCapabilityManager {
                         isPlayable = false,
                         isHardwareAccelerated = false,
                         errorMessageResId = R.string.codec_hw_unsupported_error,
-                        decoderName = status.decoder.codecName
+                        decoderName = status.decoder.codecName,
                     )
                 } else {
                     PlaybackValidationResult(
                         isPlayable = true,
                         isHardwareAccelerated = false,
-                        decoderName = status.decoder.codecName
+                        decoderName = status.decoder.codecName,
                     )
                 }
             }
             is CodecSupportStatus.Unsupported -> {
-                val errorRes = if (isAv1OrVp9) {
-                    R.string.codec_hw_unsupported_error
-                } else {
-                    R.string.codec_generic_unsupported_error
-                }
+                val errorRes =
+                    if (isAv1OrVp9) {
+                        R.string.codec_hw_unsupported_error
+                    } else {
+                        R.string.codec_generic_unsupported_error
+                    }
                 PlaybackValidationResult(
                     isPlayable = false,
                     isHardwareAccelerated = false,
                     errorMessageResId = errorRes,
-                    decoderName = null
+                    decoderName = null,
                 )
             }
         }

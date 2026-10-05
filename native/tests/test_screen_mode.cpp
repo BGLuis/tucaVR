@@ -1,4 +1,5 @@
 #include "screen_mode.h"
+
 #include <cassert>
 #include <cstring>
 #include <iostream>

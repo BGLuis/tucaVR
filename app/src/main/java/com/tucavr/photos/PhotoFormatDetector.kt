@@ -10,7 +10,7 @@ import java.util.Locale
 enum class PhotoProjection {
     FLAT,
     EQUIRECTANGULAR_360,
-    VR_180
+    VR_180,
 }
 
 /**
@@ -19,7 +19,7 @@ enum class PhotoProjection {
 enum class PhotoStereoMode {
     MONO,
     SIDE_BY_SIDE,
-    OVER_UNDER
+    OVER_UNDER,
 }
 
 /**
@@ -27,7 +27,7 @@ enum class PhotoStereoMode {
  */
 data class PhotoFormat(
     val projection: PhotoProjection,
-    val stereoMode: PhotoStereoMode
+    val stereoMode: PhotoStereoMode,
 ) {
     /**
      * Mapeia para o enum ScreenMode do renderizador C++/Vulkan:
@@ -36,21 +36,24 @@ data class PhotoFormat(
      */
     fun toScreenMode(): Int {
         return when (projection) {
-            PhotoProjection.FLAT -> when (stereoMode) {
-                PhotoStereoMode.MONO -> 0 // Flat2D
-                PhotoStereoMode.SIDE_BY_SIDE -> 1 // SBS
-                PhotoStereoMode.OVER_UNDER -> 3 // OU
-            }
-            PhotoProjection.EQUIRECTANGULAR_360 -> when (stereoMode) {
-                PhotoStereoMode.MONO -> 5 // Sphere360
-                PhotoStereoMode.SIDE_BY_SIDE -> 7 // Sphere360SBS
-                PhotoStereoMode.OVER_UNDER -> 8 // Sphere360OU
-            }
-            PhotoProjection.VR_180 -> when (stereoMode) {
-                PhotoStereoMode.MONO -> 6 // Sphere180
-                PhotoStereoMode.SIDE_BY_SIDE -> 9 // Vr180SBS
-                PhotoStereoMode.OVER_UNDER -> 6 // Fallback Sphere180
-            }
+            PhotoProjection.FLAT ->
+                when (stereoMode) {
+                    PhotoStereoMode.MONO -> 0 // Flat2D
+                    PhotoStereoMode.SIDE_BY_SIDE -> 1 // SBS
+                    PhotoStereoMode.OVER_UNDER -> 3 // OU
+                }
+            PhotoProjection.EQUIRECTANGULAR_360 ->
+                when (stereoMode) {
+                    PhotoStereoMode.MONO -> 5 // Sphere360
+                    PhotoStereoMode.SIDE_BY_SIDE -> 7 // Sphere360SBS
+                    PhotoStereoMode.OVER_UNDER -> 8 // Sphere360OU
+                }
+            PhotoProjection.VR_180 ->
+                when (stereoMode) {
+                    PhotoStereoMode.MONO -> 6 // Sphere180
+                    PhotoStereoMode.SIDE_BY_SIDE -> 9 // Vr180SBS
+                    PhotoStereoMode.OVER_UNDER -> 6 // Fallback Sphere180
+                }
         }
     }
 }
@@ -61,13 +64,16 @@ data class PhotoFormat(
  * heurística de aspecto 2:1 para fotos 360 panorâmicas e convenções de sufixo de arquivo (_sbs, _ou, _lr, _3d).
  */
 object PhotoFormatDetector {
-
     private const val MIN_360_WIDTH_HEURISTIC = 3840
 
     /**
      * Detecta o modo estéreo a partir do nome do arquivo e dimensões.
      */
-    fun detectStereoMode(filename: String, width: Int = 0, height: Int = 0): PhotoStereoMode {
+    fun detectStereoMode(
+        filename: String,
+        width: Int = 0,
+        height: Int = 0,
+    ): PhotoStereoMode {
         val lower = filename.lowercase(Locale.ROOT)
 
         // Over-Under (Top-Bottom)
@@ -130,7 +136,7 @@ object PhotoFormatDetector {
         width: Int,
         height: Int,
         xmpMetadata: String? = null,
-        filename: String? = null
+        filename: String? = null,
     ): PhotoProjection {
         // 1. Prioridade máxima: metadados XMP explícitos GPano
         val xmpProjection = parseXmpProjection(xmpMetadata)
@@ -174,7 +180,7 @@ object PhotoFormatDetector {
         width: Int,
         height: Int,
         xmpMetadata: String? = null,
-        filename: String = ""
+        filename: String = "",
     ): PhotoFormat {
         val proj = detectProjection(width, height, xmpMetadata, filename)
         val stereo = detectStereoMode(filename, width, height)
@@ -184,7 +190,11 @@ object PhotoFormatDetector {
     /**
      * Extrai metadados e detecta o formato diretamente do arquivo local.
      */
-    fun detectFromPath(filePath: String, width: Int = 0, height: Int = 0): PhotoFormat {
+    fun detectFromPath(
+        filePath: String,
+        width: Int = 0,
+        height: Int = 0,
+    ): PhotoFormat {
         val file = File(filePath)
         val filename = file.name
 

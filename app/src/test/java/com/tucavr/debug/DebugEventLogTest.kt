@@ -5,7 +5,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DebugEventLogTest {
-
     @Test
     fun firstSampleWithNoPreviousProducesNoEvents() {
         val current = NativeDebugStats(stutterCount = 5, freezeCount = 2)

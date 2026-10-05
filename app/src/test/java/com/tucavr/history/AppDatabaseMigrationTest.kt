@@ -28,11 +28,11 @@ import java.sql.DriverManager
  * ela sobrevive intacta depois das três.
  */
 class AppDatabaseMigrationTest {
-
     private lateinit var connection: Connection
 
     // Espelha a tabela `playback_history` real (schema v1) — ver PlaybackHistory.kt.
-    private val v1Schema = """
+    private val v1Schema =
+        """
         CREATE TABLE IF NOT EXISTS `playback_history` (
             `historyKey` TEXT NOT NULL PRIMARY KEY,
             `title` TEXT NOT NULL,
@@ -44,7 +44,7 @@ class AppDatabaseMigrationTest {
             `sourceType` TEXT NOT NULL,
             `serverInfo` TEXT
         )
-    """.trimIndent()
+        """.trimIndent()
 
     @Before
     fun openInMemoryDatabase() {
@@ -89,7 +89,7 @@ class AppDatabaseMigrationTest {
         connection.prepareStatement(
             "INSERT INTO `playback_history` " +
                 "(historyKey, title, mediaPath, positionMs, durationMs, lastPlayedAt, thumbnailPath, sourceType, serverInfo) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ).use { stmt ->
             stmt.setString(1, "local::/sdcard/Movies/clip.mp4")
             stmt.setString(2, "Clip de teste")
@@ -119,7 +119,7 @@ class AppDatabaseMigrationTest {
         assertTrue("saved_servers deveria existir após MIGRATION_1_2", connection.tableExists("saved_servers"))
         assertEquals(
             listOf("id", "name", "protocol", "host", "port", "path", "username", "domain", "isAutoDiscovered", "lastConnectedAt", "iconUrl", "extraJson"),
-            connection.columnNames("saved_servers")
+            connection.columnNames("saved_servers"),
         )
     }
 
@@ -132,15 +132,15 @@ class AppDatabaseMigrationTest {
         assertTrue(connection.tableExists("playlist_items"))
         assertTrue(
             "index_playlist_items_playlistId deveria existir após MIGRATION_2_3",
-            connection.indexExists("index_playlist_items_playlistId")
+            connection.indexExists("index_playlist_items_playlistId"),
         )
         assertEquals(
             listOf("id", "name", "createdAt", "itemCount"),
-            connection.columnNames("playlists")
+            connection.columnNames("playlists"),
         )
         assertEquals(
             listOf("id", "playlistId", "mediaUri", "title", "durationMs", "position", "sourceType"),
-            connection.columnNames("playlist_items")
+            connection.columnNames("playlist_items"),
         )
     }
 
@@ -153,14 +153,14 @@ class AppDatabaseMigrationTest {
         assertTrue("downloads deveria existir após MIGRATION_3_4", connection.tableExists("downloads"))
         assertTrue(
             "index_downloads_state deveria existir após MIGRATION_3_4",
-            connection.indexExists("index_downloads_state")
+            connection.indexExists("index_downloads_state"),
         )
         assertEquals(
             listOf(
                 "id", "sourceUri", "sourceType", "destinationPath", "displayName", "totalBytes",
-                "downloadedBytes", "state", "createdAt", "completedAt", "errorMessage", "serverId"
+                "downloadedBytes", "state", "createdAt", "completedAt", "errorMessage", "serverId",
             ),
-            connection.columnNames("downloads")
+            connection.columnNames("downloads"),
         )
     }
 
@@ -175,14 +175,14 @@ class AppDatabaseMigrationTest {
         assertTrue("media_metadata_cache deveria existir após MIGRATION_4_5", connection.tableExists("media_metadata_cache"))
         assertEquals(
             listOf("folderKey", "hasPlayableMedia", "scanCompletedFully", "lastCheckedAt", "sourceKind"),
-            connection.columnNames("folder_media_status")
+            connection.columnNames("folder_media_status"),
         )
         assertEquals(
             listOf(
                 "mediaKey", "container", "containerLong", "durationMs", "bitRate", "format3dIndex",
-                "detectionConfidence", "videoWidth", "videoHeight", "videoCodec", "fetchedAt"
+                "detectionConfidence", "videoWidth", "videoHeight", "videoCodec", "fetchedAt",
             ),
-            connection.columnNames("media_metadata_cache")
+            connection.columnNames("media_metadata_cache"),
         )
     }
 

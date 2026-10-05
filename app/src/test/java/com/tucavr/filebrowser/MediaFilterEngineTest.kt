@@ -6,7 +6,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class MediaFilterEngineTest {
-
     @Test
     fun detects3DFormatsFromFilename() {
         assertEquals(Format3DType.SBS, MediaFilterEngine.detectFormat3DFromFilename("Avatar.3D-SBS.1080p.mkv"))

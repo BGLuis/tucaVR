@@ -18,7 +18,7 @@ data class DecodedPhoto(
     val height: Int,
     val originalWidth: Int,
     val originalHeight: Int,
-    val format: PhotoFormat
+    val format: PhotoFormat,
 ) {
     /**
      * Converte os pixels do Bitmap (ARGB_8888) em um array de bytes RGBA cru
@@ -37,7 +37,6 @@ data class DecodedPhoto(
  * além de normalizar a rotação com base nas tags EXIF.
  */
 object PhotoDecoder {
-
     /**
      * Limite seguro de textura para o Quest 3 (Snapdragon XR2 Gen 2).
      * Embora o limite de hardware seja 16384, 8192x4096 é o teto prático para evitar esgotamento de VRAM.
@@ -54,7 +53,7 @@ object PhotoDecoder {
         width: Int,
         height: Int,
         maxWidth: Int = MAX_TEXTURE_WIDTH,
-        maxHeight: Int = MAX_TEXTURE_HEIGHT
+        maxHeight: Int = MAX_TEXTURE_HEIGHT,
     ): Int {
         if (width <= 0 || height <= 0) return 1
         if (width <= maxWidth && height <= maxHeight) return 1
@@ -118,9 +117,10 @@ object PhotoDecoder {
         if (!file.exists() || !file.canRead()) return null
 
         // 1. Obter dimensões originais sem carregar os pixels em memória
-        val boundsOptions = BitmapFactory.Options().apply {
-            inJustDecodeBounds = true
-        }
+        val boundsOptions =
+            BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
         BitmapFactory.decodeFile(filePath, boundsOptions)
         val origW = boundsOptions.outWidth
         val origH = boundsOptions.outHeight
@@ -139,23 +139,25 @@ object PhotoDecoder {
         val sampleSize = calculateInSampleSize(effectiveW, effectiveH, MAX_TEXTURE_WIDTH, MAX_TEXTURE_HEIGHT)
 
         // 4. Decodificação completa com subsample
-        val decodeOptions = BitmapFactory.Options().apply {
-            inSampleSize = sampleSize
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
+        val decodeOptions =
+            BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
         val rawBitmap = BitmapFactory.decodeFile(filePath, decodeOptions) ?: return null
 
         // 5. Aplicar rotação EXIF se necessário
-        val finalBitmap = if (degrees != 0f) {
-            val matrix = Matrix().apply { postRotate(degrees) }
-            val rotated = Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
-            if (rotated != rawBitmap) {
-                rawBitmap.recycle()
+        val finalBitmap =
+            if (degrees != 0f) {
+                val matrix = Matrix().apply { postRotate(degrees) }
+                val rotated = Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
+                if (rotated != rawBitmap) {
+                    rawBitmap.recycle()
+                }
+                rotated
+            } else {
+                rawBitmap
             }
-            rotated
-        } else {
-            rawBitmap
-        }
 
         return DecodedPhoto(
             bitmap = finalBitmap,
@@ -163,19 +165,23 @@ object PhotoDecoder {
             height = finalBitmap.height,
             originalWidth = origW,
             originalHeight = origH,
-            format = format
+            format = format,
         )
     }
 
     /**
      * Decodifica uma imagem a partir de um array de bytes (ex: baixado de rede SMB/FTP/SFTP/HTTP).
      */
-    fun decodePhoto(bytes: ByteArray, filename: String = ""): DecodedPhoto? {
+    fun decodePhoto(
+        bytes: ByteArray,
+        filename: String = "",
+    ): DecodedPhoto? {
         if (bytes.isEmpty()) return null
 
-        val boundsOptions = BitmapFactory.Options().apply {
-            inJustDecodeBounds = true
-        }
+        val boundsOptions =
+            BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, boundsOptions)
         val origW = boundsOptions.outWidth
         val origH = boundsOptions.outHeight
@@ -189,22 +195,24 @@ object PhotoDecoder {
         val effectiveH = if (degrees == 90f || degrees == 270f) origW else origH
 
         val sampleSize = calculateInSampleSize(effectiveW, effectiveH, MAX_TEXTURE_WIDTH, MAX_TEXTURE_HEIGHT)
-        val decodeOptions = BitmapFactory.Options().apply {
-            inSampleSize = sampleSize
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
+        val decodeOptions =
+            BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
         val rawBitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOptions) ?: return null
 
-        val finalBitmap = if (degrees != 0f) {
-            val matrix = Matrix().apply { postRotate(degrees) }
-            val rotated = Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
-            if (rotated != rawBitmap) {
-                rawBitmap.recycle()
+        val finalBitmap =
+            if (degrees != 0f) {
+                val matrix = Matrix().apply { postRotate(degrees) }
+                val rotated = Bitmap.createBitmap(rawBitmap, 0, 0, rawBitmap.width, rawBitmap.height, matrix, true)
+                if (rotated != rawBitmap) {
+                    rawBitmap.recycle()
+                }
+                rotated
+            } else {
+                rawBitmap
             }
-            rotated
-        } else {
-            rawBitmap
-        }
 
         return DecodedPhoto(
             bitmap = finalBitmap,
@@ -212,14 +220,18 @@ object PhotoDecoder {
             height = finalBitmap.height,
             originalWidth = origW,
             originalHeight = origH,
-            format = format
+            format = format,
         )
     }
 
     /**
      * Gera miniatura dimensionada para a biblioteca de arquivos (T8.6).
      */
-    fun decodeThumbnail(filePath: String, targetWidth: Int = 512, targetHeight: Int = 288): Bitmap? {
+    fun decodeThumbnail(
+        filePath: String,
+        targetWidth: Int = 512,
+        targetHeight: Int = 288,
+    ): Bitmap? {
         val file = File(filePath)
         if (!file.exists() || !file.canRead()) return null
 
@@ -235,18 +247,22 @@ object PhotoDecoder {
         val effectiveH = if (degrees == 90f || degrees == 270f) origW else origH
 
         val sampleSize = calculateInSampleSize(effectiveW, effectiveH, targetWidth * 2, targetHeight * 2)
-        val decodeOptions = BitmapFactory.Options().apply {
-            inSampleSize = sampleSize
-            inPreferredConfig = Bitmap.Config.ARGB_8888
-        }
+        val decodeOptions =
+            BitmapFactory.Options().apply {
+                inSampleSize = sampleSize
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
         val sampled = BitmapFactory.decodeFile(filePath, decodeOptions) ?: return null
 
-        val rotated = if (degrees != 0f) {
-            val matrix = Matrix().apply { postRotate(degrees) }
-            val rot = Bitmap.createBitmap(sampled, 0, 0, sampled.width, sampled.height, matrix, true)
-            if (rot != sampled) sampled.recycle()
-            rot
-        } else sampled
+        val rotated =
+            if (degrees != 0f) {
+                val matrix = Matrix().apply { postRotate(degrees) }
+                val rot = Bitmap.createBitmap(sampled, 0, 0, sampled.width, sampled.height, matrix, true)
+                if (rot != sampled) sampled.recycle()
+                rot
+            } else {
+                sampled
+            }
 
         // Escalar preservando aspecto ou ajustando para targetWidth/targetHeight
         return if (rotated.width != targetWidth || rotated.height != targetHeight) {

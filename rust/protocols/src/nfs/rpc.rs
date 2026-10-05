@@ -35,7 +35,9 @@ pub struct XdrWriter {
 
 impl XdrWriter {
     pub fn new() -> Self {
-        Self { buf: Vec::with_capacity(512) }
+        Self {
+            buf: Vec::with_capacity(512),
+        }
     }
 
     pub fn write_u32(&mut self, val: u32) {
@@ -108,7 +110,10 @@ impl<'a> XdrReader<'a> {
 
     pub fn read_fixed_bytes<const N: usize>(&mut self) -> io::Result<[u8; N]> {
         if self.remaining() < N {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "XDR fixed bytes EOF"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "XDR fixed bytes EOF",
+            ));
         }
         let mut arr = [0u8; N];
         arr.copy_from_slice(&self.buf[self.pos..self.pos + N]);
@@ -141,7 +146,10 @@ impl<'a> XdrReader<'a> {
     pub fn read_bytes(&mut self) -> io::Result<&'a [u8]> {
         let len = self.read_u32()? as usize;
         if self.remaining() < len {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "XDR bytes EOF"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "XDR bytes EOF",
+            ));
         }
         let slice = &self.buf[self.pos..self.pos + len];
         let pad = (4 - (len % 4)) % 4;
@@ -234,7 +242,9 @@ impl RpcClient {
         let mut reader = XdrReader::new(&resp_buf);
         let rx_xid = reader.read_u32().map_err(|e| e.to_string())?;
         if rx_xid != xid {
-            return Err(format!("XID incompativel (esperado {xid}, recebido {rx_xid})"));
+            return Err(format!(
+                "XID incompativel (esperado {xid}, recebido {rx_xid})"
+            ));
         }
 
         let msg_type = reader.read_u32().map_err(|e| e.to_string())?;

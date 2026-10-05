@@ -7,11 +7,11 @@
 // caminho de chamada onde o Kotlin fale com o Rust sem passar pelo C++.
 // Ver ADR-002 (revisado) em docs/REQUIREMENTS.md.
 
-use std::os::raw::c_void;
 use core::playback::PlaybackController;
-use std::sync::{Arc, Mutex};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use once_cell::sync::Lazy;
+use std::os::raw::c_void;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 // Nenhum backend de `log` (facade usada por `protocols`, ex.
 // `log::warn!("SftpFileSource: reconectando...")`) era inicializado em
@@ -37,7 +37,9 @@ impl log::Log for AndroidLogger {
             log::Level::Debug => 3, // ANDROID_LOG_DEBUG
             log::Level::Trace => 2, // ANDROID_LOG_VERBOSE
         };
-        unsafe { log(prio, &format!("[{}] {}", record.target(), record.args())); }
+        unsafe {
+            log(prio, &format!("[{}] {}", record.target(), record.args()));
+        }
     }
 
     fn flush(&self) {}
@@ -59,8 +61,11 @@ static CONTROLLER: Lazy<Arc<Mutex<PlaybackController>>> = Lazy::new(|| {
 });
 
 // Anel circular de erros de reprodução (N6). Mantém histórico e preserva polling para Toast.
-static ERROR_RING: Lazy<media_logic::error_ring::ErrorRingBuffer> =
-    Lazy::new(|| media_logic::error_ring::ErrorRingBuffer::new(media_logic::error_ring::ErrorRingBuffer::DEFAULT_CAPACITY));
+static ERROR_RING: Lazy<media_logic::error_ring::ErrorRingBuffer> = Lazy::new(|| {
+    media_logic::error_ring::ErrorRingBuffer::new(
+        media_logic::error_ring::ErrorRingBuffer::DEFAULT_CAPACITY,
+    )
+});
 
 // Gerenciador de downloads offline (Fase 0.4 Seção 4).
 static DOWNLOAD_MANAGER: Lazy<Arc<protocols::download::DownloadManager>> =
@@ -1032,7 +1037,10 @@ unsafe fn cstr_to_string(ptr: *const std::os::raw::c_char) -> Option<String> {
     if ptr.is_null() {
         return None;
     }
-    unsafe { std::ffi::CStr::from_ptr(ptr) }.to_str().ok().map(|s| s.to_string())
+    unsafe { std::ffi::CStr::from_ptr(ptr) }
+        .to_str()
+        .ok()
+        .map(|s| s.to_string())
 }
 
 /// Converte uma `String` Rust numa `*mut c_char` que o Kotlin le via JNI e
@@ -1125,9 +1133,18 @@ pub extern "C" fn start_smb_playback(
     // sincronamente na thread que recebeu o JNI, pra sinalizar o mais cedo possivel.
     core::thumbnail::cancel_strip_generation();
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return };
-        let share = match cstr_to_string(share) { Some(s) => s, None => return };
-        let path = match cstr_to_string(path) { Some(s) => s, None => return };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return,
+        };
+        let share = match cstr_to_string(share) {
+            Some(s) => s,
+            None => return,
+        };
+        let path = match cstr_to_string(path) {
+            Some(s) => s,
+            None => return,
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let domain = cstr_to_string(domain).unwrap_or_default();
@@ -1144,18 +1161,30 @@ pub extern "C" fn start_smb_playback(
 
     spawn_loading(move || {
         let internal_uri = target.to_internal();
-        unsafe { log(4, &format!("Loading SMB video: {}", protocols::smb::redact(&internal_uri))); }
+        unsafe {
+            log(
+                4,
+                &format!(
+                    "Loading SMB video: {}",
+                    protocols::smb::redact(&internal_uri)
+                ),
+            );
+        }
 
         reset_3d_mode();
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
-                unsafe { log(6, &format!("Error loading SMB video: {:?}", e)); }
+                unsafe {
+                    log(6, &format!("Error loading SMB video: {:?}", e));
+                }
                 set_last_playback_error(format!("{:?}", e));
             } else {
                 apply_screen_mode_after_load(&controller);
-                unsafe { log(4, "SMB video loaded successfully!"); }
+                unsafe {
+                    log(4, "SMB video loaded successfully!");
+                }
             }
         }
     });
@@ -1175,7 +1204,10 @@ pub extern "C" fn smb_list_shares(
     domain: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".into()),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let domain = cstr_to_string(domain).unwrap_or_default();
@@ -1211,8 +1243,14 @@ pub extern "C" fn smb_list_directory(
     path: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
-        let share = match cstr_to_string(share) { Some(s) => s, None => return string_to_c_char("ERROR:share invalido".into()) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".into()),
+        };
+        let share = match cstr_to_string(share) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:share invalido".into()),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let domain = cstr_to_string(domain).unwrap_or_default();
@@ -1257,8 +1295,14 @@ pub extern "C" fn smb_scan_folder_has_media(
     path: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
-        let share = match cstr_to_string(share) { Some(s) => s, None => return string_to_c_char("ERROR:share invalido".into()) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".into()),
+        };
+        let share = match cstr_to_string(share) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:share invalido".into()),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let domain = cstr_to_string(domain).unwrap_or_default();
@@ -1275,7 +1319,10 @@ pub extern "C" fn smb_scan_folder_has_media(
     let path = unsafe { cstr_to_string(path).unwrap_or_default() };
 
     match protocols::smb::scan_has_media(&target, &path) {
-        Ok(result) => string_to_c_char(format!("{}\t{}", result.has_media as i32, result.completed_fully as i32)),
+        Ok(result) => string_to_c_char(format!(
+            "{}\t{}",
+            result.has_media as i32, result.completed_fully as i32
+        )),
         Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
     }
 }
@@ -1296,8 +1343,14 @@ pub extern "C" fn start_ftp_playback(
     // Ver comentario em start_smb_playback.
     core::thumbnail::cancel_strip_generation();
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return };
-        let path = match cstr_to_string(path) { Some(s) => s, None => return };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return,
+        };
+        let path = match cstr_to_string(path) {
+            Some(s) => s,
+            None => return,
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         protocols::ftp::FtpTarget {
@@ -1311,18 +1364,30 @@ pub extern "C" fn start_ftp_playback(
 
     spawn_loading(move || {
         let internal_uri = target.to_internal();
-        unsafe { log(4, &format!("Loading FTP video: {}", protocols::ftp::redact(&internal_uri))); }
+        unsafe {
+            log(
+                4,
+                &format!(
+                    "Loading FTP video: {}",
+                    protocols::ftp::redact(&internal_uri)
+                ),
+            );
+        }
 
         reset_3d_mode();
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
-                unsafe { log(6, &format!("Error loading FTP video: {:?}", e)); }
+                unsafe {
+                    log(6, &format!("Error loading FTP video: {:?}", e));
+                }
                 set_last_playback_error(format!("{:?}", e));
             } else {
                 apply_screen_mode_after_load(&controller);
-                unsafe { log(4, "FTP video loaded successfully!"); }
+                unsafe {
+                    log(4, "FTP video loaded successfully!");
+                }
             }
         }
     });
@@ -1341,7 +1406,10 @@ pub extern "C" fn ftp_list_directory(
     path: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".into()),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         protocols::ftp::FtpTarget {
@@ -1377,7 +1445,10 @@ pub extern "C" fn ftp_scan_folder_has_media(
     path: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".into()),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         protocols::ftp::FtpTarget {
@@ -1391,7 +1462,10 @@ pub extern "C" fn ftp_scan_folder_has_media(
     let path = unsafe { cstr_to_string(path).unwrap_or_default() };
 
     match protocols::ftp::scan_has_media(&target, &path) {
-        Ok(result) => string_to_c_char(format!("{}\t{}", result.has_media as i32, result.completed_fully as i32)),
+        Ok(result) => string_to_c_char(format!(
+            "{}\t{}",
+            result.has_media as i32, result.completed_fully as i32
+        )),
         Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
     }
 }
@@ -1414,8 +1488,14 @@ pub extern "C" fn start_sftp_playback(
     // Ver comentario em start_smb_playback.
     core::thumbnail::cancel_strip_generation();
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return };
-        let path = match cstr_to_string(path) { Some(s) => s, None => return };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return,
+        };
+        let path = match cstr_to_string(path) {
+            Some(s) => s,
+            None => return,
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
@@ -1429,25 +1509,39 @@ pub extern "C" fn start_sftp_playback(
         }
     };
     if let Err(e) = target.validate() {
-        unsafe { log(6, &format!("Error loading SFTP video: {e}")); }
+        unsafe {
+            log(6, &format!("Error loading SFTP video: {e}"));
+        }
         set_last_playback_error(e);
         return;
     }
 
     spawn_loading(move || {
         let internal_uri = target.to_internal();
-        unsafe { log(4, &format!("Loading SFTP video: {}", protocols::sftp::redact(&internal_uri))); }
+        unsafe {
+            log(
+                4,
+                &format!(
+                    "Loading SFTP video: {}",
+                    protocols::sftp::redact(&internal_uri)
+                ),
+            );
+        }
 
         reset_3d_mode();
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
-                unsafe { log(6, &format!("Error loading SFTP video: {:?}", e)); }
+                unsafe {
+                    log(6, &format!("Error loading SFTP video: {:?}", e));
+                }
                 set_last_playback_error(format!("{:?}", e));
             } else {
                 apply_screen_mode_after_load(&controller);
-                unsafe { log(4, "SFTP video loaded successfully!"); }
+                unsafe {
+                    log(4, "SFTP video loaded successfully!");
+                }
             }
         }
     });
@@ -1466,7 +1560,10 @@ pub extern "C" fn sftp_list_directory(
     path: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".into()),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
@@ -1508,7 +1605,10 @@ pub extern "C" fn sftp_scan_folder_has_media(
     path: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".into()),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
@@ -1527,7 +1627,10 @@ pub extern "C" fn sftp_scan_folder_has_media(
     let path = unsafe { cstr_to_string(path).unwrap_or_default() };
 
     match protocols::sftp::scan_has_media(&target, &path) {
-        Ok(result) => string_to_c_char(format!("{}\t{}", result.has_media as i32, result.completed_fully as i32)),
+        Ok(result) => string_to_c_char(format!(
+            "{}\t{}",
+            result.has_media as i32, result.completed_fully as i32
+        )),
         Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
     }
 }
@@ -1545,9 +1648,18 @@ pub extern "C" fn start_nfs_playback(
     // Ver comentario em start_smb_playback.
     core::thumbnail::cancel_strip_generation();
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return };
-        let export_path = match cstr_to_string(export_path) { Some(s) => s, None => return };
-        let file_path = match cstr_to_string(file_path) { Some(s) => s, None => return };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return,
+        };
+        let export_path = match cstr_to_string(export_path) {
+            Some(s) => s,
+            None => return,
+        };
+        let file_path = match cstr_to_string(file_path) {
+            Some(s) => s,
+            None => return,
+        };
         protocols::nfs::NfsTarget {
             host,
             port: port.clamp(1, u16::MAX as i32) as u16,
@@ -1559,18 +1671,30 @@ pub extern "C" fn start_nfs_playback(
 
     spawn_loading(move || {
         let internal_uri = target.to_internal();
-        unsafe { log(4, &format!("Loading NFS video: {}", protocols::nfs::redact(&internal_uri))); }
+        unsafe {
+            log(
+                4,
+                &format!(
+                    "Loading NFS video: {}",
+                    protocols::nfs::redact(&internal_uri)
+                ),
+            );
+        }
 
         reset_3d_mode();
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
-                unsafe { log(6, &format!("Error loading NFS video: {:?}", e)); }
+                unsafe {
+                    log(6, &format!("Error loading NFS video: {:?}", e));
+                }
                 set_last_playback_error(format!("{:?}", e));
             } else {
                 apply_screen_mode_after_load(&controller);
-                unsafe { log(4, "NFS video loaded successfully!"); }
+                unsafe {
+                    log(4, "NFS video loaded successfully!");
+                }
             }
         }
     });
@@ -1586,8 +1710,14 @@ pub extern "C" fn nfs_list_directory(
     version: i32,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
-        let export_path = match cstr_to_string(export_path) { Some(s) => s, None => return string_to_c_char("ERROR:export_path invalido".into()) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".into()),
+        };
+        let export_path = match cstr_to_string(export_path) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:export_path invalido".into()),
+        };
         protocols::nfs::NfsTarget {
             host,
             port: port.clamp(1, u16::MAX as i32) as u16,
@@ -1621,8 +1751,14 @@ pub extern "C" fn nfs_scan_folder_has_media(
     version: i32,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
-        let export_path = match cstr_to_string(export_path) { Some(s) => s, None => return string_to_c_char("ERROR:export_path invalido".into()) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".into()),
+        };
+        let export_path = match cstr_to_string(export_path) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:export_path invalido".into()),
+        };
         protocols::nfs::NfsTarget {
             host,
             port: port.clamp(1, u16::MAX as i32) as u16,
@@ -1634,7 +1770,10 @@ pub extern "C" fn nfs_scan_folder_has_media(
     let dir_path = unsafe { cstr_to_string(dir_path).unwrap_or_default() };
 
     match protocols::nfs::scan_has_media(&target, &dir_path) {
-        Ok(result) => string_to_c_char(format!("{}\t{}", result.has_media as i32, result.completed_fully as i32)),
+        Ok(result) => string_to_c_char(format!(
+            "{}\t{}",
+            result.has_media as i32, result.completed_fully as i32
+        )),
         Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
     }
 }
@@ -1673,9 +1812,18 @@ pub extern "C" fn start_webdav_playback(
     // Ver comentario em start_smb_playback.
     core::thumbnail::cancel_strip_generation();
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return };
-        let base_path = match cstr_to_string(base_path) { Some(s) => s, None => return };
-        let file_path = match cstr_to_string(file_path) { Some(s) => s, None => return };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return,
+        };
+        let base_path = match cstr_to_string(base_path) {
+            Some(s) => s,
+            None => return,
+        };
+        let file_path = match cstr_to_string(file_path) {
+            Some(s) => s,
+            None => return,
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         protocols::webdav::WebdavTarget {
@@ -1692,18 +1840,30 @@ pub extern "C" fn start_webdav_playback(
 
     spawn_loading(move || {
         let internal_uri = target.to_internal();
-        unsafe { log(4, &format!("Loading WebDAV video: {}", protocols::webdav::redact(&internal_uri))); }
+        unsafe {
+            log(
+                4,
+                &format!(
+                    "Loading WebDAV video: {}",
+                    protocols::webdav::redact(&internal_uri)
+                ),
+            );
+        }
 
         reset_3d_mode();
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
-                unsafe { log(6, &format!("Error loading WebDAV video: {:?}", e)); }
+                unsafe {
+                    log(6, &format!("Error loading WebDAV video: {:?}", e));
+                }
                 set_last_playback_error(format!("{:?}", e));
             } else {
                 apply_screen_mode_after_load(&controller);
-                unsafe { log(4, "WebDAV video loaded successfully!"); }
+                unsafe {
+                    log(4, "WebDAV video loaded successfully!");
+                }
             }
         }
     });
@@ -1722,8 +1882,14 @@ pub extern "C" fn webdav_list_directory(
     accept_invalid_certs: i32,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
-        let base_path = match cstr_to_string(base_path) { Some(s) => s, None => return string_to_c_char("ERROR:base_path invalido".into()) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".into()),
+        };
+        let base_path = match cstr_to_string(base_path) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:base_path invalido".into()),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         protocols::webdav::WebdavTarget {
@@ -1765,8 +1931,14 @@ pub extern "C" fn webdav_scan_folder_has_media(
     accept_invalid_certs: i32,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".into()) };
-        let base_path = match cstr_to_string(base_path) { Some(s) => s, None => return string_to_c_char("ERROR:base_path invalido".into()) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".into()),
+        };
+        let base_path = match cstr_to_string(base_path) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:base_path invalido".into()),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         protocols::webdav::WebdavTarget {
@@ -1783,7 +1955,10 @@ pub extern "C" fn webdav_scan_folder_has_media(
     let dir_path = unsafe { cstr_to_string(dir_path).unwrap_or_default() };
 
     match protocols::webdav::scan_has_media(&target, &dir_path) {
-        Ok(result) => string_to_c_char(format!("{}\t{}", result.has_media as i32, result.completed_fully as i32)),
+        Ok(result) => string_to_c_char(format!(
+            "{}\t{}",
+            result.has_media as i32, result.completed_fully as i32
+        )),
         Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
     }
 }
@@ -1795,7 +1970,12 @@ pub extern "C" fn discovery_scan_network(timeout_ms: u32) -> *mut std::os::raw::
     let servers = protocols::discovery::scan_local_network(timeout_ms as u64);
     let lines: Vec<String> = servers
         .into_iter()
-        .map(|s| format!("{}\t{}\t{}\t{}\t{}", s.protocol, s.name, s.host, s.port, s.path))
+        .map(|s| {
+            format!(
+                "{}\t{}\t{}\t{}\t{}",
+                s.protocol, s.name, s.host, s.port, s.path
+            )
+        })
         .collect();
     string_to_c_char(lines.join("\n"))
 }
@@ -1803,21 +1983,21 @@ pub extern "C" fn discovery_scan_network(timeout_ms: u32) -> *mut std::os::raw::
 /// T7.2: Obtém o Device Description XML de um servidor DLNA e retorna detalhes (friendlyName, controlURL, icon).
 /// Chamada BLOQUEANTE. Retorna "OK\t{friendlyName}\t{controlURL}\t{iconUrl}" ou "ERROR:<msg>".
 #[no_mangle]
-pub extern "C" fn dlna_get_device_description(location: *const std::os::raw::c_char) -> *mut std::os::raw::c_char {
+pub extern "C" fn dlna_get_device_description(
+    location: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
     let location_str = match unsafe { cstr_to_string(location) } {
         Some(s) => s,
         None => return string_to_c_char("ERROR:location invalida".into()),
     };
 
     match protocols::dlna::fetch_device_description(&location_str) {
-        Ok(dev) => {
-            string_to_c_char(format!(
-                "OK\t{}\t{}\t{}",
-                dev.friendly_name,
-                dev.control_url,
-                dev.icon_url.unwrap_or_default()
-            ))
-        }
+        Ok(dev) => string_to_c_char(format!(
+            "OK\t{}\t{}\t{}",
+            dev.friendly_name,
+            dev.control_url,
+            dev.icon_url.unwrap_or_default()
+        )),
         Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
     }
 }
@@ -1850,7 +2030,9 @@ pub extern "C" fn dlna_browse_directory(
                         if item.is_container { 1 } else { 0 },
                         item.res_url.unwrap_or_default(),
                         item.size_bytes.map(|s| s as i64).unwrap_or(-1),
-                        item.duration_sec.map(|d| format!("{:.2}", d)).unwrap_or_default(),
+                        item.duration_sec
+                            .map(|d| format!("{:.2}", d))
+                            .unwrap_or_default(),
                         item.resolution.unwrap_or_default(),
                         item.album_art_url.unwrap_or_default()
                     )
@@ -1865,7 +2047,9 @@ pub extern "C" fn dlna_browse_directory(
 /// T8.1/T8.6: Faz o probe de variantes de uma URL M3U8 Master Playlist.
 /// Chamada BLOQUEANTE. Retorna linhas separadas por '\n': "index\tbandwidth\twidthxheight\tcodecs\turl"
 #[no_mangle]
-pub extern "C" fn hls_probe_variants(url: *const std::os::raw::c_char) -> *mut std::os::raw::c_char {
+pub extern "C" fn hls_probe_variants(
+    url: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
     let url_str = match unsafe { cstr_to_string(url) } {
         Some(s) => s,
         None => return string_to_c_char("ERROR:URL invalida".into()),
@@ -1877,8 +2061,18 @@ pub extern "C" fn hls_probe_variants(url: *const std::os::raw::c_char) -> *mut s
                 .into_iter()
                 .enumerate()
                 .map(|(idx, v)| {
-                    let res_str = v.resolution.map(|(w, h)| format!("{w}x{h}")).unwrap_or_else(|| "auto".to_string());
-                    format!("{}\t{}\t{}\t{}\t{}", idx, v.bandwidth, res_str, v.codecs.unwrap_or_default(), v.url)
+                    let res_str = v
+                        .resolution
+                        .map(|(w, h)| format!("{w}x{h}"))
+                        .unwrap_or_else(|| "auto".to_string());
+                    format!(
+                        "{}\t{}\t{}\t{}\t{}",
+                        idx,
+                        v.bandwidth,
+                        res_str,
+                        v.codecs.unwrap_or_default(),
+                        v.url
+                    )
                 })
                 .collect();
             string_to_c_char(lines.join("\n"))
@@ -1890,7 +2084,9 @@ pub extern "C" fn hls_probe_variants(url: *const std::os::raw::c_char) -> *mut s
 /// T2.1/T2.6: Faz o probe de representações de uma URL MPD (MPEG-DASH).
 /// Chamada BLOQUEANTE. Retorna linhas separadas por '\n': "index\tbandwidth\twidthxheight\tcodecs\tid"
 #[no_mangle]
-pub extern "C" fn dash_probe_representations(url: *const std::os::raw::c_char) -> *mut std::os::raw::c_char {
+pub extern "C" fn dash_probe_representations(
+    url: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
     let url_str = match unsafe { cstr_to_string(url) } {
         Some(s) => s,
         None => return string_to_c_char("ERROR:URL invalida".into()),
@@ -1906,7 +2102,14 @@ pub extern "C" fn dash_probe_representations(url: *const std::os::raw::c_char) -
                         (Some(w), Some(h)) => format!("{w}x{h}"),
                         _ => "auto".to_string(),
                     };
-                    format!("{}\t{}\t{}\t{}\t{}", idx, r.bandwidth, res_str, r.codecs.unwrap_or_default(), r.id)
+                    format!(
+                        "{}\t{}\t{}\t{}\t{}",
+                        idx,
+                        r.bandwidth,
+                        res_str,
+                        r.codecs.unwrap_or_default(),
+                        r.id
+                    )
                 })
                 .collect();
             string_to_c_char(lines.join("\n"))
@@ -1931,7 +2134,9 @@ pub extern "C" fn probe_http_url(url: *const std::os::raw::c_char) -> *mut std::
     if !caps.reachable {
         return string_to_c_char(format!(
             "ERROR:{}",
-            caps.error.unwrap_or_else(|| format!("HTTP {}", caps.status)).replace('\n', " ")
+            caps.error
+                .unwrap_or_else(|| format!("HTTP {}", caps.status))
+                .replace('\n', " ")
         ));
     }
     string_to_c_char(format!(
@@ -1954,7 +2159,9 @@ pub extern "C" fn probe_http_url(url: *const std::os::raw::c_char) -> *mut std::
 pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_time_sec: f32) {
     // Ver comentario em start_smb_playback.
     core::thumbnail::cancel_strip_generation();
-    if path.is_null() { return; }
+    if path.is_null() {
+        return;
+    }
     let c_str = unsafe { std::ffi::CStr::from_ptr(path) };
     let path_str = match c_str.to_str() {
         Ok(s) => s.to_string(),
@@ -1962,7 +2169,9 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
     };
 
     spawn_loading(move || {
-        unsafe { log(4, &format!("Loading video: {}", path_str)); }
+        unsafe {
+            log(4, &format!("Loading video: {}", path_str));
+        }
 
         reset_3d_mode();
         if path_str.starts_with("http://") || path_str.starts_with("https://") {
@@ -1971,11 +2180,15 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
             if let Err(e) = controller.load_at(&path_str, f64::from(start_time_sec)) {
-                unsafe { log(6, &format!("Error loading video: {:?}", e)); }
+                unsafe {
+                    log(6, &format!("Error loading video: {:?}", e));
+                }
                 set_last_playback_error(format!("{:?}", e));
             } else {
                 apply_screen_mode_after_load(&controller);
-                unsafe { log(4, "Video loaded successfully!"); }
+                unsafe {
+                    log(4, "Video loaded successfully!");
+                }
             }
         }
     });
@@ -2029,7 +2242,9 @@ pub extern "C" fn seek_video_playback(position: f32) {
     spawn_loading(move || {
         if let Ok(mut controller) = CONTROLLER.lock() {
             if let Err(e) = controller.seek(position as f64) {
-                unsafe { log(6, &format!("Error seeking video: {e}")); }
+                unsafe {
+                    log(6, &format!("Error seeking video: {e}"));
+                }
                 set_last_playback_error(e);
             }
         }
@@ -2080,7 +2295,9 @@ pub extern "C" fn cycle_audio_track() {
 pub extern "C" fn get_audio_track_count() -> u32 {
     // try_sample_or: chamada periodica do render loop (C++ HUD / telemetry a 90Hz).
     // Se o lock estiver ocupado (load_at em background), devolve 0 sem bloquear a render thread.
-    media_logic::session::try_sample_or(&CONTROLLER, 0, |controller| controller.audio_track_count() as u32)
+    media_logic::session::try_sample_or(&CONTROLLER, 0, |controller| {
+        controller.audio_track_count() as u32
+    })
 }
 
 /// Seleciona a trilha de audio desejada pro PROXIMO `load_at()` — nao troca
@@ -2107,7 +2324,9 @@ pub extern "C" fn set_head_pose_orientation(x: f32, y: f32, z: f32, w: f32) {
 /// 0 = DirectStereo (pass-through), 1 = VirtualizedBinaural (HRTF 3D), 2 = SimpleDownmix.
 #[no_mangle]
 pub extern "C" fn set_spatial_audio_mode(mode: u32) {
-    media_logic::spatial_audio::set_global_spatial_mode(media_logic::spatial_audio::SpatialAudioMode::from(mode));
+    media_logic::spatial_audio::set_global_spatial_mode(
+        media_logic::spatial_audio::SpatialAudioMode::from(mode),
+    );
 }
 
 #[no_mangle]
@@ -2185,9 +2404,15 @@ fn write_thumbnail(
         None => (std::ptr::null_mut(), 0, 0, 0),
     };
     unsafe {
-        if !out_width.is_null() { *out_width = width; }
-        if !out_height.is_null() { *out_height = height; }
-        if !out_len.is_null() { *out_len = len; }
+        if !out_width.is_null() {
+            *out_width = width;
+        }
+        if !out_height.is_null() {
+            *out_height = height;
+        }
+        if !out_len.is_null() {
+            *out_len = len;
+        }
     }
     ptr
 }
@@ -2219,9 +2444,18 @@ pub extern "C" fn smb_generate_thumbnail(
     out_len: *mut usize,
 ) -> *mut u8 {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return write_thumbnail(None, out_width, out_height, out_len) };
-        let share = match cstr_to_string(share) { Some(s) => s, None => return write_thumbnail(None, out_width, out_height, out_len) };
-        let path = match cstr_to_string(path) { Some(s) => s, None => return write_thumbnail(None, out_width, out_height, out_len) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return write_thumbnail(None, out_width, out_height, out_len),
+        };
+        let share = match cstr_to_string(share) {
+            Some(s) => s,
+            None => return write_thumbnail(None, out_width, out_height, out_len),
+        };
+        let path = match cstr_to_string(path) {
+            Some(s) => s,
+            None => return write_thumbnail(None, out_width, out_height, out_len),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let domain = cstr_to_string(domain).unwrap_or_default();
@@ -2257,8 +2491,14 @@ pub extern "C" fn ftp_generate_thumbnail(
     out_len: *mut usize,
 ) -> *mut u8 {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return write_thumbnail(None, out_width, out_height, out_len) };
-        let path = match cstr_to_string(path) { Some(s) => s, None => return write_thumbnail(None, out_width, out_height, out_len) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return write_thumbnail(None, out_width, out_height, out_len),
+        };
+        let path = match cstr_to_string(path) {
+            Some(s) => s,
+            None => return write_thumbnail(None, out_width, out_height, out_len),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         protocols::ftp::FtpTarget {
@@ -2294,8 +2534,14 @@ pub extern "C" fn sftp_generate_thumbnail(
     out_len: *mut usize,
 ) -> *mut u8 {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return write_thumbnail(None, out_width, out_height, out_len) };
-        let path = match cstr_to_string(path) { Some(s) => s, None => return write_thumbnail(None, out_width, out_height, out_len) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return write_thumbnail(None, out_width, out_height, out_len),
+        };
+        let path = match cstr_to_string(path) {
+            Some(s) => s,
+            None => return write_thumbnail(None, out_width, out_height, out_len),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
@@ -2359,10 +2605,18 @@ fn write_thumbnail_strip(
         None => (std::ptr::null_mut(), 0, 0, 0, 0),
     };
     unsafe {
-        if !out_width.is_null() { *out_width = width; }
-        if !out_height.is_null() { *out_height = height; }
-        if !out_count.is_null() { *out_count = count; }
-        if !out_len.is_null() { *out_len = len; }
+        if !out_width.is_null() {
+            *out_width = width;
+        }
+        if !out_height.is_null() {
+            *out_height = height;
+        }
+        if !out_count.is_null() {
+            *out_count = count;
+        }
+        if !out_len.is_null() {
+            *out_len = len;
+        }
     }
     ptr
 }
@@ -2391,9 +2645,18 @@ pub extern "C" fn smb_generate_thumbnail_strip(
     out_len: *mut usize,
 ) -> *mut u8 {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return write_thumbnail_strip(None, out_width, out_height, out_count, out_len) };
-        let share = match cstr_to_string(share) { Some(s) => s, None => return write_thumbnail_strip(None, out_width, out_height, out_count, out_len) };
-        let path = match cstr_to_string(path) { Some(s) => s, None => return write_thumbnail_strip(None, out_width, out_height, out_count, out_len) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return write_thumbnail_strip(None, out_width, out_height, out_count, out_len),
+        };
+        let share = match cstr_to_string(share) {
+            Some(s) => s,
+            None => return write_thumbnail_strip(None, out_width, out_height, out_count, out_len),
+        };
+        let path = match cstr_to_string(path) {
+            Some(s) => s,
+            None => return write_thumbnail_strip(None, out_width, out_height, out_count, out_len),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let domain = cstr_to_string(domain).unwrap_or_default();
@@ -2415,7 +2678,8 @@ pub extern "C" fn smb_generate_thumbnail_strip(
     // rodar concorrente com o playback principal — precisa validar em hardware real
     // que isso de fato evita o crash antigo antes de considerar definitivo.
     let internal_uri = target.to_internal();
-    let strip = core::thumbnail::generate_strip(&internal_uri, interval_secs as f64, max_width, max_height);
+    let strip =
+        core::thumbnail::generate_strip(&internal_uri, interval_secs as f64, max_width, max_height);
     write_thumbnail_strip(strip, out_width, out_height, out_count, out_len)
 }
 
@@ -2440,8 +2704,14 @@ pub extern "C" fn sftp_generate_thumbnail_strip(
     out_len: *mut usize,
 ) -> *mut u8 {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return write_thumbnail_strip(None, out_width, out_height, out_count, out_len) };
-        let path = match cstr_to_string(path) { Some(s) => s, None => return write_thumbnail_strip(None, out_width, out_height, out_count, out_len) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return write_thumbnail_strip(None, out_width, out_height, out_count, out_len),
+        };
+        let path = match cstr_to_string(path) {
+            Some(s) => s,
+            None => return write_thumbnail_strip(None, out_width, out_height, out_count, out_len),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
@@ -2460,7 +2730,8 @@ pub extern "C" fn sftp_generate_thumbnail_strip(
     // Ver comentario equivalente em smb_generate_thumbnail_strip acima — experimento,
     // playback_is_active() nao gate mais aqui, SESSION_SETUP_LOCK assume esse papel.
     let internal_uri = target.to_internal();
-    let strip = core::thumbnail::generate_strip(&internal_uri, interval_secs as f64, max_width, max_height);
+    let strip =
+        core::thumbnail::generate_strip(&internal_uri, interval_secs as f64, max_width, max_height);
     write_thumbnail_strip(strip, out_width, out_height, out_count, out_len)
 }
 
@@ -2495,7 +2766,9 @@ fn metadata_to_c_char(internal_uri: &str) -> *mut std::os::raw::c_char {
 /// frame nenhum) — Kotlin SEMPRE de `Dispatchers.IO`. Retorno DEVE ser
 /// liberado com `free_rust_string`.
 #[no_mangle]
-pub extern "C" fn read_media_metadata(path: *const std::os::raw::c_char) -> *mut std::os::raw::c_char {
+pub extern "C" fn read_media_metadata(
+    path: *const std::os::raw::c_char,
+) -> *mut std::os::raw::c_char {
     let path = match unsafe { cstr_to_string(path) } {
         Some(s) => s,
         None => return string_to_c_char("ERROR:caminho invalido".to_string()),
@@ -2517,9 +2790,18 @@ pub extern "C" fn smb_read_metadata(
     path: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".to_string()) };
-        let share = match cstr_to_string(share) { Some(s) => s, None => return string_to_c_char("ERROR:share invalido".to_string()) };
-        let path = match cstr_to_string(path) { Some(s) => s, None => return string_to_c_char("ERROR:caminho invalido".to_string()) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".to_string()),
+        };
+        let share = match cstr_to_string(share) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:share invalido".to_string()),
+        };
+        let path = match cstr_to_string(path) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:caminho invalido".to_string()),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let domain = cstr_to_string(domain).unwrap_or_default();
@@ -2546,8 +2828,14 @@ pub extern "C" fn ftp_read_metadata(
     path: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".to_string()) };
-        let path = match cstr_to_string(path) { Some(s) => s, None => return string_to_c_char("ERROR:caminho invalido".to_string()) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".to_string()),
+        };
+        let path = match cstr_to_string(path) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:caminho invalido".to_string()),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         protocols::ftp::FtpTarget {
@@ -2574,8 +2862,14 @@ pub extern "C" fn sftp_read_metadata(
     path: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
-        let host = match cstr_to_string(host) { Some(s) => s, None => return string_to_c_char("ERROR:host invalido".to_string()) };
-        let path = match cstr_to_string(path) { Some(s) => s, None => return string_to_c_char("ERROR:caminho invalido".to_string()) };
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".to_string()),
+        };
+        let path = match cstr_to_string(path) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:caminho invalido".to_string()),
+        };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
@@ -2684,7 +2978,10 @@ pub extern "C" fn get_subtitle_track_count() -> u32 {
 }
 
 #[no_mangle]
-pub extern "C" fn get_active_subtitle_text(out_buf: *mut std::os::raw::c_char, max_len: usize) -> u32 {
+pub extern "C" fn get_active_subtitle_text(
+    out_buf: *mut std::os::raw::c_char,
+    max_len: usize,
+) -> u32 {
     if out_buf.is_null() || max_len == 0 {
         return 0;
     }
@@ -2772,12 +3069,24 @@ pub extern "C" fn get_active_pgs_info(
     if let Ok(controller) = CONTROLLER.try_lock() {
         if let Some(pgs) = controller.get_active_pgs() {
             unsafe {
-                if !out_x.is_null() { *out_x = pgs.x; }
-                if !out_y.is_null() { *out_y = pgs.y; }
-                if !out_width.is_null() { *out_width = pgs.width; }
-                if !out_height.is_null() { *out_height = pgs.height; }
-                if !out_screen_w.is_null() { *out_screen_w = pgs.screen_width; }
-                if !out_screen_h.is_null() { *out_screen_h = pgs.screen_height; }
+                if !out_x.is_null() {
+                    *out_x = pgs.x;
+                }
+                if !out_y.is_null() {
+                    *out_y = pgs.y;
+                }
+                if !out_width.is_null() {
+                    *out_width = pgs.width;
+                }
+                if !out_height.is_null() {
+                    *out_height = pgs.height;
+                }
+                if !out_screen_w.is_null() {
+                    *out_screen_w = pgs.screen_width;
+                }
+                if !out_screen_h.is_null() {
+                    *out_screen_h = pgs.screen_height;
+                }
             }
             return true;
         }
@@ -2843,7 +3152,9 @@ pub extern "C" fn get_active_ass_info(
                     end_ms: event.end_ms,
                     span_count: event.spans.len().min(max_spans) as u32,
                 };
-                unsafe { *out_info = info; }
+                unsafe {
+                    *out_info = info;
+                }
             }
 
             if !out_text.is_null() && max_text_len > 0 {
@@ -2912,7 +3223,9 @@ pub extern "C" fn download_enqueue(
     match DOWNLOAD_MANAGER.enqueue(&id_str, &uri_str, &dest_str) {
         Ok(()) => 0,
         Err(e) => {
-            unsafe { log(6, &format!("download_enqueue error: {e}")); }
+            unsafe {
+                log(6, &format!("download_enqueue error: {e}"));
+            }
             -2
         }
     }
@@ -2924,7 +3237,11 @@ pub extern "C" fn download_pause(id: *const std::os::raw::c_char) -> i32 {
         Some(s) => s,
         None => return -1,
     };
-    if DOWNLOAD_MANAGER.pause(&id_str) { 0 } else { -1 }
+    if DOWNLOAD_MANAGER.pause(&id_str) {
+        0
+    } else {
+        -1
+    }
 }
 
 #[no_mangle]
@@ -2933,7 +3250,11 @@ pub extern "C" fn download_resume(id: *const std::os::raw::c_char) -> i32 {
         Some(s) => s,
         None => return -1,
     };
-    if DOWNLOAD_MANAGER.resume(&id_str) { 0 } else { -1 }
+    if DOWNLOAD_MANAGER.resume(&id_str) {
+        0
+    } else {
+        -1
+    }
 }
 
 #[no_mangle]
@@ -2942,7 +3263,11 @@ pub extern "C" fn download_cancel(id: *const std::os::raw::c_char) -> i32 {
         Some(s) => s,
         None => return -1,
     };
-    if DOWNLOAD_MANAGER.cancel(&id_str) { 0 } else { -1 }
+    if DOWNLOAD_MANAGER.cancel(&id_str) {
+        0
+    } else {
+        -1
+    }
 }
 
 #[no_mangle]
@@ -2983,5 +3308,3 @@ pub extern "C" fn download_get_stats(
 pub extern "C" fn download_set_playback_active(active: u32) {
     DOWNLOAD_MANAGER.set_playback_active(active != 0);
 }
-
-

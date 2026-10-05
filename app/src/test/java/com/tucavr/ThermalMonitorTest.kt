@@ -7,7 +7,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ThermalMonitorTest {
-
     @Test
     fun testNoneAndLightMapToNormalWithEmptyActions() {
         val stateNone = ThermalMonitor.mapStatusToState(PowerManager.THERMAL_STATUS_NONE)

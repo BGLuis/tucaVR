@@ -21,9 +21,8 @@ class VoidTabRow(
     context: Context,
     labels: List<String>,
     private val iconResIds: List<Int>? = null,
-    private val onTabSelected: (index: Int) -> Unit
+    private val onTabSelected: (index: Int) -> Unit,
 ) : LinearLayout(context) {
-
     private val tabLabels = mutableListOf<TextView>()
     private val tabUnderlineCores = mutableListOf<View>()
     private val tabUnderlineGlows = mutableListOf<View>()
@@ -38,52 +37,63 @@ class VoidTabRow(
         styleAll()
     }
 
-    private fun buildTab(label: String, index: Int, iconResId: Int): LinearLayout {
+    private fun buildTab(
+        label: String,
+        index: Int,
+        iconResId: Int,
+    ): LinearLayout {
         // Alvo de toque generoso (mesma razao do VoidButton/VoidListRow —
         // feedback de usuario em validacao real: hitbox pequena demais pra
         // apontar com precisao via raycast em VR).
-        val column = LinearLayout(context).apply {
-            orientation = VERTICAL
-            gravity = Gravity.CENTER_HORIZONTAL
-            minimumHeight = VoidTheme.dpToPx(context, 76f)
-        }
+        val column =
+            LinearLayout(context).apply {
+                orientation = VERTICAL
+                gravity = Gravity.CENTER_HORIZONTAL
+                minimumHeight = VoidTheme.dpToPx(context, 76f)
+            }
 
-        val text = VoidText.body(context, label, sizeSp = 20f).apply {
-            gravity = Gravity.CENTER
-            val padV = VoidTheme.dpToPx(context, 24f)
-            setPadding(0, padV, 0, padV)
-            
-            if (iconResId != 0) {
-                val icon = context.getDrawable(iconResId)?.mutate()
-                icon?.colorFilter = android.graphics.PorterDuffColorFilter(VoidTheme.colorTextSecondary, android.graphics.PorterDuff.Mode.SRC_IN)
-                if (icon != null) {
-                    val size = VoidTheme.dpToPx(context, 20f)
-                    icon.setBounds(0, 0, size, size)
-                    setCompoundDrawables(icon, null, null, null)
-                    compoundDrawablePadding = VoidTheme.dpToPx(context, 8f)
+        val text =
+            VoidText.body(context, label, sizeSp = 20f).apply {
+                gravity = Gravity.CENTER
+                val padV = VoidTheme.dpToPx(context, 24f)
+                setPadding(0, padV, 0, padV)
+
+                if (iconResId != 0) {
+                    val icon = context.getDrawable(iconResId)?.mutate()
+                    icon?.colorFilter = android.graphics.PorterDuffColorFilter(VoidTheme.colorTextSecondary, android.graphics.PorterDuff.Mode.SRC_IN)
+                    if (icon != null) {
+                        val size = VoidTheme.dpToPx(context, 20f)
+                        icon.setBounds(0, 0, size, size)
+                        setCompoundDrawables(icon, null, null, null)
+                        compoundDrawablePadding = VoidTheme.dpToPx(context, 8f)
+                    }
                 }
             }
-        }
         tabLabels.add(text)
         column.addView(text)
 
         val underlineHeight = VoidTheme.dpToPx(context, 6f)
-        val underline = FrameLayout(context).apply {
-            layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, underlineHeight)
-        }
-        val glow = View(context).apply {
-            layoutParams = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, underlineHeight).apply {
-                gravity = Gravity.CENTER
+        val underline =
+            FrameLayout(context).apply {
+                layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, underlineHeight)
             }
-            setBackgroundColor(VoidTheme.accentWithAlpha(70))
-        }
-        val core = View(context).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.MATCH_PARENT,
-                VoidTheme.dpToPx(context, 2f)
-            ).apply { gravity = Gravity.CENTER }
-            setBackgroundColor(VoidTheme.colorAccent)
-        }
+        val glow =
+            View(context).apply {
+                layoutParams =
+                    FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, underlineHeight).apply {
+                        gravity = Gravity.CENTER
+                    }
+                setBackgroundColor(VoidTheme.accentWithAlpha(70))
+            }
+        val core =
+            View(context).apply {
+                layoutParams =
+                    FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        VoidTheme.dpToPx(context, 2f),
+                    ).apply { gravity = Gravity.CENTER }
+                setBackgroundColor(VoidTheme.colorAccent)
+            }
         tabUnderlineGlows.add(glow)
         tabUnderlineCores.add(core)
         underline.addView(glow)
@@ -94,7 +104,10 @@ class VoidTabRow(
         return column
     }
 
-    fun setActiveIndex(index: Int, notify: Boolean = true) {
+    fun setActiveIndex(
+        index: Int,
+        notify: Boolean = true,
+    ) {
         activeIndex = index
         styleAll()
         if (notify) onTabSelected(index)

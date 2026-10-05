@@ -70,7 +70,12 @@ pub fn extract(path: &str) -> Result<MediaMetadata, String> {
 // tipos de trilha que mais valem a pena listar aqui. codec::Parameters do
 // ffmpeg-next 9.0 nao expoe esses campos, entao o acesso e via ponteiro cru
 // (mesmo padrao ja usado em Demuxer::get_video_extradata).
-fn track_info(demuxer: &Demuxer, kind: TrackKind, ordinal: usize, stream_index: usize) -> TrackInfo {
+fn track_info(
+    demuxer: &Demuxer,
+    kind: TrackKind,
+    ordinal: usize,
+    stream_index: usize,
+) -> TrackInfo {
     let empty = || TrackInfo {
         kind,
         ordinal,
@@ -94,7 +99,9 @@ fn track_info(demuxer: &Demuxer, kind: TrackKind, ordinal: usize, stream_index: 
     let meta = stream.metadata();
     let language = meta.get("language").unwrap_or_default().to_string();
     let title = meta.get("title").unwrap_or_default().to_string();
-    let is_default = stream.disposition().contains(ffmpeg::format::stream::Disposition::DEFAULT);
+    let is_default = stream
+        .disposition()
+        .contains(ffmpeg::format::stream::Disposition::DEFAULT);
 
     let fps_milli = {
         let rate = stream.avg_frame_rate();
@@ -110,7 +117,13 @@ fn track_info(demuxer: &Demuxer, kind: TrackKind, ordinal: usize, stream_index: 
     // ch_layout (AVChannelLayout), o campo legado `channels` foi removido.
     let (width, height, channels, sample_rate, stream_bit_rate) = unsafe {
         let p = params.as_ptr();
-        ((*p).width as u32, (*p).height as u32, (*p).ch_layout.nb_channels as u32, (*p).sample_rate as u32, (*p).bit_rate)
+        (
+            (*p).width as u32,
+            (*p).height as u32,
+            (*p).ch_layout.nb_channels as u32,
+            (*p).sample_rate as u32,
+            (*p).bit_rate,
+        )
     };
 
     let (width, height) = match kind {

@@ -6,7 +6,7 @@ import java.util.Locale
 
 data class DiskSpaceInfo(
     val availableBytes: Long,
-    val totalBytes: Long
+    val totalBytes: Long,
 ) {
     val freePercentage: Double
         get() = if (totalBytes > 0) (availableBytes.toDouble() / totalBytes.toDouble()) * 100.0 else 0.0
@@ -22,7 +22,7 @@ class DiskSpaceManager(
     private val spaceProvider: (File) -> DiskSpaceInfo = { dir ->
         val stat = StatFs(dir.path)
         DiskSpaceInfo(stat.availableBytes, stat.totalBytes)
-    }
+    },
 ) {
     companion object {
         const val SAFETY_BUFFER_BYTES: Long = 2_000_000_000L // 2 GB
@@ -48,7 +48,10 @@ class DiskSpaceManager(
         }
     }
 
-    fun hasSufficientSpace(dir: File, requiredBytes: Long): Boolean {
+    fun hasSufficientSpace(
+        dir: File,
+        requiredBytes: Long,
+    ): Boolean {
         val info = getDiskSpaceInfo(dir)
         if (info.totalBytes == 0L) return true // Não conseguiu ler, permite
         return info.availableBytes >= (requiredBytes + SAFETY_BUFFER_BYTES)

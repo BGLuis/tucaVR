@@ -16,8 +16,10 @@ import org.junit.Test
  * `MediaSorterTest`/`ThumbnailGeneratorCacheKeyTest` (ver docs/TESTING-PLAN.md).
  */
 class PlaybackHistoryMappingTest {
-
-    private fun smbServer(name: String = "nas", share: String = "Videos") = SmbServer(
+    private fun smbServer(
+        name: String = "nas",
+        share: String = "Videos",
+    ) = SmbServer(
         id = "server-1",
         name = name,
         host = "192.168.1.10",
@@ -25,7 +27,7 @@ class PlaybackHistoryMappingTest {
         share = share,
         username = "user",
         password = "pass",
-        domain = ""
+        domain = "",
     )
 
     // ---------- historyKey: estabilidade (aviso da secao 9 do doc) ----------
@@ -86,15 +88,40 @@ class PlaybackHistoryMappingTest {
         assertEquals(HistorySourceType.LOCAL, PlaybackSource.LocalFile("/a").historySourceType())
         assertEquals(HistorySourceType.HTTP, PlaybackSource.Http("http://a").historySourceType())
         assertEquals(HistorySourceType.SMB, PlaybackSource.Smb(smbServer(), "a").historySourceType())
-        val dlnaServer = com.tucavr.network.SavedServer(name = "Plex", protocol = com.tucavr.network.ServerProtocol.DLNA, host = "192.168.1.5", port = 32469, path = "http://192.168.1.5:32469/control/ContentDirectory")
-        assertEquals(HistorySourceType.DLNA, PlaybackSource.Dlna(dlnaServer, "Movie", "http://192.168.1.5:32469/media/1.mp4").historySourceType())
-        val webdavServer = com.tucavr.network.SavedServer(name = "Nextcloud", protocol = com.tucavr.network.ServerProtocol.WEBDAV, host = "cloud.example.com", port = 443, path = "/remote.php/webdav")
+        val dlnaServer =
+            com.tucavr.network.SavedServer(
+                name = "Plex",
+                protocol = com.tucavr.network.ServerProtocol.DLNA,
+                host = "192.168.1.5",
+                port = 32469,
+                path = "http://192.168.1.5:32469/control/ContentDirectory",
+            )
+        assertEquals(
+            HistorySourceType.DLNA,
+            PlaybackSource.Dlna(dlnaServer, "Movie", "http://192.168.1.5:32469/media/1.mp4").historySourceType(),
+        )
+        val webdavServer =
+            com.tucavr.network.SavedServer(
+                name = "Nextcloud",
+                protocol = com.tucavr.network.ServerProtocol.WEBDAV,
+                host = "cloud.example.com",
+                port = 443,
+                path = "/remote.php/webdav",
+            )
         assertEquals(HistorySourceType.WEBDAV, PlaybackSource.Webdav(webdavServer, "Videos/nature.mp4", 1000L).historySourceType())
     }
 
     @Test
     fun `webdav key includes server name, path and size`() {
-        val server = com.tucavr.network.SavedServer(id = "srv-wd", name = "MyCloud", protocol = com.tucavr.network.ServerProtocol.WEBDAV, host = "192.168.1.50", port = 8080, path = "/webdav")
+        val server =
+            com.tucavr.network.SavedServer(
+                id = "srv-wd",
+                name = "MyCloud",
+                protocol = com.tucavr.network.ServerProtocol.WEBDAV,
+                host = "192.168.1.50",
+                port = 8080,
+                path = "/webdav",
+            )
         val key = PlaybackSource.Webdav(server, "Movies/sample.mkv", 54321L).historyKey()
         assertEquals("webdav|MyCloud|/webdav|Movies/sample.mkv|54321", key)
     }
@@ -104,15 +131,35 @@ class PlaybackHistoryMappingTest {
         assertEquals("/sdcard/Movies/foo.mp4", PlaybackSource.LocalFile("/sdcard/Movies/foo.mp4", 100L).mediaPath())
         assertEquals("https://example.com/x.mp4", PlaybackSource.Http("https://example.com/x.mp4").mediaPath())
         assertEquals("Filmes/foo.mkv", PlaybackSource.Smb(smbServer(), "Filmes/foo.mkv", 100L).mediaPath())
-        val dlnaServer = com.tucavr.network.SavedServer(name = "Plex", protocol = com.tucavr.network.ServerProtocol.DLNA, host = "192.168.1.5", port = 32469, path = "http://192.168.1.5:32469/control/ContentDirectory")
-        assertEquals("http://192.168.1.5:32469/media/1.mp4", PlaybackSource.Dlna(dlnaServer, "Movie", "http://192.168.1.5:32469/media/1.mp4").mediaPath())
-        val webdavServer = com.tucavr.network.SavedServer(name = "Nextcloud", protocol = com.tucavr.network.ServerProtocol.WEBDAV, host = "cloud.example.com", port = 443, path = "/remote.php/webdav")
+        val dlnaServer =
+            com.tucavr.network.SavedServer(
+                name = "Plex",
+                protocol = com.tucavr.network.ServerProtocol.DLNA,
+                host = "192.168.1.5",
+                port = 32469,
+                path = "http://192.168.1.5:32469/control/ContentDirectory",
+            )
+        assertEquals(
+            "http://192.168.1.5:32469/media/1.mp4",
+            PlaybackSource.Dlna(dlnaServer, "Movie", "http://192.168.1.5:32469/media/1.mp4").mediaPath(),
+        )
+        val webdavServer =
+            com.tucavr.network.SavedServer(
+                name = "Nextcloud",
+                protocol = com.tucavr.network.ServerProtocol.WEBDAV,
+                host = "cloud.example.com",
+                port = 443,
+                path = "/remote.php/webdav",
+            )
         assertEquals("Videos/nature.mp4", PlaybackSource.Webdav(webdavServer, "Videos/nature.mp4", 1000L).mediaPath())
     }
 
     // ---------- isResumable ----------
 
-    private fun historyOf(positionMs: Long, durationMs: Long) = PlaybackHistory(
+    private fun historyOf(
+        positionMs: Long,
+        durationMs: Long,
+    ) = PlaybackHistory(
         historyKey = "k",
         title = "t",
         mediaPath = "p",
@@ -121,7 +168,7 @@ class PlaybackHistoryMappingTest {
         lastPlayedAt = 0L,
         thumbnailPath = null,
         sourceType = HistorySourceType.LOCAL,
-        serverInfo = null
+        serverInfo = null,
     )
 
     @Test

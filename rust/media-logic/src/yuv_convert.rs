@@ -139,17 +139,34 @@ mod tests {
     #[test]
     fn unsupported_color_format_returns_none() {
         assert_eq!(YuvLayout::from_android_color_format(0x7f420888), None);
-        assert_eq!(YuvLayout::from_android_color_format(19), Some(YuvLayout::Planar));
-        assert_eq!(YuvLayout::from_android_color_format(21), Some(YuvLayout::SemiPlanar));
+        assert_eq!(
+            YuvLayout::from_android_color_format(19),
+            Some(YuvLayout::Planar)
+        );
+        assert_eq!(
+            YuvLayout::from_android_color_format(21),
+            Some(YuvLayout::SemiPlanar)
+        );
     }
 
     #[test]
     fn solid_white_frame_converts_to_near_white_rgb() {
         let (y, u, v) = solid_planar(235, 128, 128, 4, 4);
-        let planes = YuvPlanes { y: &y, y_stride: 4, u: &u, u_stride: 2, v: &v, v_stride: 2 };
+        let planes = YuvPlanes {
+            y: &y,
+            y_stride: 4,
+            u: &u,
+            u_stride: 2,
+            v: &v,
+            v_stride: 2,
+        };
         let rgba = yuv420_to_rgba_scaled(&planes, YuvLayout::Planar, 4, 4, 2, 2).unwrap();
         for px in rgba.as_chunks::<4>().0 {
-            assert!(px[0] > 220 && px[1] > 220 && px[2] > 220, "pixel nao ficou proximo de branco: {:?}", px);
+            assert!(
+                px[0] > 220 && px[1] > 220 && px[2] > 220,
+                "pixel nao ficou proximo de branco: {:?}",
+                px
+            );
             assert_eq!(px[3], 255);
         }
     }
@@ -157,17 +174,35 @@ mod tests {
     #[test]
     fn solid_black_frame_converts_to_near_black_rgb() {
         let (y, u, v) = solid_planar(16, 128, 128, 4, 4);
-        let planes = YuvPlanes { y: &y, y_stride: 4, u: &u, u_stride: 2, v: &v, v_stride: 2 };
+        let planes = YuvPlanes {
+            y: &y,
+            y_stride: 4,
+            u: &u,
+            u_stride: 2,
+            v: &v,
+            v_stride: 2,
+        };
         let rgba = yuv420_to_rgba_scaled(&planes, YuvLayout::Planar, 4, 4, 2, 2).unwrap();
         for px in rgba.as_chunks::<4>().0 {
-            assert!(px[0] < 30 && px[1] < 30 && px[2] < 30, "pixel nao ficou proximo de preto: {:?}", px);
+            assert!(
+                px[0] < 30 && px[1] < 30 && px[2] < 30,
+                "pixel nao ficou proximo de preto: {:?}",
+                px
+            );
         }
     }
 
     #[test]
     fn semi_planar_interleaved_uv_matches_planar_equivalent() {
         let (y, u, v) = solid_planar(180, 90, 200, 4, 4);
-        let planar = YuvPlanes { y: &y, y_stride: 4, u: &u, u_stride: 2, v: &v, v_stride: 2 };
+        let planar = YuvPlanes {
+            y: &y,
+            y_stride: 4,
+            u: &u,
+            u_stride: 2,
+            v: &v,
+            v_stride: 2,
+        };
         let planar_rgba = yuv420_to_rgba_scaled(&planar, YuvLayout::Planar, 4, 4, 4, 4).unwrap();
 
         let mut uv = Vec::with_capacity(u.len() * 2);
@@ -175,7 +210,14 @@ mod tests {
             uv.push(u[i]);
             uv.push(v[i]);
         }
-        let semi = YuvPlanes { y: &y, y_stride: 4, u: &uv, u_stride: 4, v: &[], v_stride: 0 };
+        let semi = YuvPlanes {
+            y: &y,
+            y_stride: 4,
+            u: &uv,
+            u_stride: 4,
+            v: &[],
+            v_stride: 0,
+        };
         let semi_rgba = yuv420_to_rgba_scaled(&semi, YuvLayout::SemiPlanar, 4, 4, 4, 4).unwrap();
 
         assert_eq!(planar_rgba, semi_rgba);
@@ -199,10 +241,22 @@ mod tests {
         }
         let u = vec![128u8; 2];
         let v = vec![128u8; 2];
-        let planes = YuvPlanes { y: &y, y_stride: stride, u: &u, u_stride: 2, v: &v, v_stride: 2 };
-        let rgba = yuv420_to_rgba_scaled(&planes, YuvLayout::Planar, width, height, width, height).unwrap();
+        let planes = YuvPlanes {
+            y: &y,
+            y_stride: stride,
+            u: &u,
+            u_stride: 2,
+            v: &v,
+            v_stride: 2,
+        };
+        let rgba = yuv420_to_rgba_scaled(&planes, YuvLayout::Planar, width, height, width, height)
+            .unwrap();
         for px in rgba.as_chunks::<4>().0 {
-            assert!(px[0] > 220, "leu padding de stride como pixel de imagem: {:?}", px);
+            assert!(
+                px[0] > 220,
+                "leu padding de stride como pixel de imagem: {:?}",
+                px
+            );
         }
     }
 
@@ -213,7 +267,17 @@ mod tests {
         let v = vec![128u8; 1];
         // src_height=4 mas y so tem 4 bytes no total (cabe 1 linha) —
         // qualquer linha alem da primeira estoura o slice.
-        let planes = YuvPlanes { y: &y, y_stride: 4, u: &u, u_stride: 1, v: &v, v_stride: 1 };
-        assert_eq!(yuv420_to_rgba_scaled(&planes, YuvLayout::Planar, 4, 4, 4, 4), None);
+        let planes = YuvPlanes {
+            y: &y,
+            y_stride: 4,
+            u: &u,
+            u_stride: 1,
+            v: &v,
+            v_stride: 1,
+        };
+        assert_eq!(
+            yuv420_to_rgba_scaled(&planes, YuvLayout::Planar, 4, 4, 4, 4),
+            None
+        );
     }
 }

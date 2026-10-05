@@ -42,7 +42,7 @@
 
 pub mod uri;
 
-pub use uri::{is_ftp_uri, redact, FtpTarget};
+pub use uri::{FtpTarget, is_ftp_uri, redact};
 
 use crate::prefetch::RangeSource;
 use std::io::{self, Read};
@@ -74,10 +74,12 @@ const ANONYMOUS_USER: &str = "anonymous";
 const ANONYMOUS_PASSWORD: &str = "anonymous@vrplayer.local";
 
 fn resolve(host: &str, port: u16) -> io::Result<std::net::SocketAddr> {
-    (host, port)
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("nao foi possivel resolver {host}:{port}")))
+    (host, port).to_socket_addrs()?.next().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("nao foi possivel resolver {host}:{port}"),
+        )
+    })
 }
 
 /// Conecta, autentica (usuario/senha OU anonimo se `username` vazio) e forca
@@ -85,7 +87,8 @@ fn resolve(host: &str, port: u16) -> io::Result<std::net::SocketAddr> {
 /// `FtpFileSource::open` (conexao de vida longa pelo tempo do playback).
 fn connect_and_login(t: &FtpTarget) -> Result<FtpStream, String> {
     let addr = resolve(&t.host, t.port).map_err(|e| e.to_string())?;
-    let mut stream = FtpStream::connect_timeout(addr, CONNECT_TIMEOUT).map_err(|e| e.to_string())?;
+    let mut stream =
+        FtpStream::connect_timeout(addr, CONNECT_TIMEOUT).map_err(|e| e.to_string())?;
     // T6.1: modo passivo obrigatorio — ver comentario no topo do arquivo.
     stream.set_mode(Mode::Passive);
     if t.username.is_empty() {
@@ -98,7 +101,9 @@ fn connect_and_login(t: &FtpTarget) -> Result<FtpStream, String> {
     // linha em modo ASCII (default do FTP), o que corromperia qualquer
     // arquivo de video. Tambem deixa SIZE/REST consistentes com o que RETR
     // de fato transfere.
-    stream.transfer_type(FileType::Binary).map_err(|e| e.to_string())?;
+    stream
+        .transfer_type(FileType::Binary)
+        .map_err(|e| e.to_string())?;
     Ok(stream)
 }
 
@@ -109,7 +114,11 @@ pub struct FtpDirEntry {
 }
 
 fn from_list_file(f: FtpListFile) -> FtpDirEntry {
-    FtpDirEntry { name: f.name().to_string(), is_dir: f.is_directory(), size: f.size() as u64 }
+    FtpDirEntry {
+        name: f.name().to_string(),
+        is_dir: f.is_directory(),
+        size: f.size() as u64,
+    }
 }
 
 /// Lista um diretorio no servidor (T6.1 "listar diretorios"). `path` vazio =
@@ -133,7 +142,11 @@ pub fn list_directory(t: &FtpTarget, path: &str) -> Result<Vec<FtpDirEntry>, Str
 fn list_directory_on(stream: &mut FtpStream, path: &str) -> Result<Vec<FtpDirEntry>, String> {
     let dir = if path.is_empty() { None } else { Some(path) };
     match stream.mlsd(dir) {
-        Ok(lines) => Ok(lines.into_iter().filter_map(|line| ListParser::parse_mlsd(&line).ok()).map(from_list_file).collect()),
+        Ok(lines) => Ok(lines
+            .into_iter()
+            .filter_map(|line| ListParser::parse_mlsd(&line).ok())
+            .map(from_list_file)
+            .collect()),
         Err(_) => {
             let lines = stream.list(dir).map_err(|e| e.to_string())?;
             Ok(lines
@@ -170,7 +183,11 @@ pub fn scan_has_media(t: &FtpTarget, path: &str) -> Result<crate::folder_scan::S
         let mut found = false;
         for e in &entries {
             if e.is_dir {
-                let child = if current.is_empty() { e.name.clone() } else { format!("{}/{}", current, e.name) };
+                let child = if current.is_empty() {
+                    e.name.clone()
+                } else {
+                    format!("{}/{}", current, e.name)
+                };
                 stack.push(child);
             } else if crate::folder_scan::is_media_filename(&e.name) {
                 found = true;
@@ -222,7 +239,15 @@ impl FtpFileSource {
     pub fn open(t: &FtpTarget) -> Result<Self, String> {
         let mut control = connect_and_login(t)?;
         let size = control.size(&t.path).map_err(|e| e.to_string())? as u64;
-        Ok(Self { control, target: t.clone(), path: t.path.clone(), size, data: None, data_pos: 0, data_exhausted: false })
+        Ok(Self {
+            control,
+            target: t.clone(),
+            path: t.path.clone(),
+            size,
+            data: None,
+            data_pos: 0,
+            data_exhausted: false,
+        })
     }
 
     /// Reabre a conexao de controle do zero, no mesmo caminho — mesmo padrao
@@ -253,9 +278,14 @@ impl FtpFileSource {
     /// difere do que ja esta aberto.
     fn open_data_stream(&mut self, offset: u64) -> io::Result<()> {
         if offset > 0 {
-            self.control.resume_transfer(offset as usize).map_err(|e| io::Error::other(e.to_string()))?;
+            self.control
+                .resume_transfer(offset as usize)
+                .map_err(|e| io::Error::other(e.to_string()))?;
         }
-        let stream = self.control.retr_as_stream(&self.path).map_err(|e| io::Error::other(e.to_string()))?;
+        let stream = self
+            .control
+            .retr_as_stream(&self.path)
+            .map_err(|e| io::Error::other(e.to_string()))?;
         self.data = Some(Box::new(stream));
         self.data_pos = offset;
         self.data_exhausted = false;

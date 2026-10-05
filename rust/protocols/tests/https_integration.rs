@@ -10,7 +10,7 @@
 //! `./scripts/test-network-protocols.sh`, nunca em `cargo test` normal.
 #![cfg(feature = "integration-tests")]
 
-use protocols::http::{probe, HttpsRangeSource};
+use protocols::http::{HttpsRangeSource, probe};
 use protocols::prefetch::{PrefetchReader, RangeSource};
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -20,12 +20,16 @@ fn env_or(key: &str, default: &str) -> String {
 }
 
 fn test_url() -> String {
-    env_or("VRPLAYER_TEST_HTTPS_URL", "https://127.0.0.1:18443/testfile.bin")
+    env_or(
+        "VRPLAYER_TEST_HTTPS_URL",
+        "https://127.0.0.1:18443/testfile.bin",
+    )
 }
 
 fn expected_sha256() -> String {
-    std::env::var("VRPLAYER_TEST_FILE_SHA256")
-        .expect("VRPLAYER_TEST_FILE_SHA256 nao definido — rode via scripts/test-network-protocols.sh")
+    std::env::var("VRPLAYER_TEST_FILE_SHA256").expect(
+        "VRPLAYER_TEST_FILE_SHA256 nao definido — rode via scripts/test-network-protocols.sh",
+    )
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -44,8 +48,14 @@ fn probe_trusts_test_ca_and_detects_range_support() {
 
     let caps = probe(&test_url());
 
-    assert!(caps.reachable, "probe nao alcancou o servidor HTTPS: {caps:?}");
-    assert!(caps.seekable, "nginx deveria anunciar Accept-Ranges: bytes: {caps:?}");
+    assert!(
+        caps.reachable,
+        "probe nao alcancou o servidor HTTPS: {caps:?}"
+    );
+    assert!(
+        caps.seekable,
+        "nginx deveria anunciar Accept-Ranges: bytes: {caps:?}"
+    );
 }
 
 /// Reconstroi o arquivo inteiro via `HttpsRangeSource` + `PrefetchReader` (o
@@ -58,7 +68,9 @@ fn https_range_source_reads_full_file_matching_sha256() {
     let source = HttpsRangeSource::new(&test_url()).expect("HttpsRangeSource::new falhou");
     let mut reader = PrefetchReader::new(source);
     let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).expect("leitura via PrefetchReader falhou");
+    reader
+        .read_to_end(&mut buf)
+        .expect("leitura via PrefetchReader falhou");
 
     assert_eq!(sha256_hex(&buf), expected_sha256());
 }
@@ -71,9 +83,14 @@ fn https_range_source_reads_full_file_matching_sha256() {
 fn https_range_source_reads_partial_range_correctly() {
     let mut source = HttpsRangeSource::new(&test_url()).expect("HttpsRangeSource::new falhou");
     let total = source.len().expect("Content-Length deveria ser conhecido");
-    assert!(total > 8192, "arquivo de teste pequeno demais para este teste: {total} bytes");
+    assert!(
+        total > 8192,
+        "arquivo de teste pequeno demais para este teste: {total} bytes"
+    );
 
     let mut buf = vec![0u8; 4096];
-    let n = source.read_range(4096, &mut buf).expect("read_range falhou");
+    let n = source
+        .read_range(4096, &mut buf)
+        .expect("read_range falhou");
     assert_eq!(n, 4096);
 }

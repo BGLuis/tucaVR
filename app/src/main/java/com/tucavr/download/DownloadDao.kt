@@ -10,7 +10,6 @@ import androidx.room.Query
  */
 @Dao
 interface DownloadDao {
-
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsert(download: Download)
 
@@ -24,13 +23,25 @@ interface DownloadDao {
     suspend fun listActive(): List<Download>
 
     @Query("UPDATE downloads SET downloadedBytes = :downloadedBytes, state = :state WHERE id = :id")
-    suspend fun updateProgress(id: String, downloadedBytes: Long, state: String)
+    suspend fun updateProgress(
+        id: String,
+        downloadedBytes: Long,
+        state: String,
+    )
 
     @Query("UPDATE downloads SET completedAt = :completedAt, state = :state, downloadedBytes = totalBytes WHERE id = :id")
-    suspend fun updateCompleted(id: String, completedAt: Long, state: String = DownloadStatus.COMPLETED)
+    suspend fun updateCompleted(
+        id: String,
+        completedAt: Long,
+        state: String = DownloadStatus.COMPLETED,
+    )
 
     @Query("UPDATE downloads SET errorMessage = :errorMessage, state = :state WHERE id = :id")
-    suspend fun updateFailed(id: String, errorMessage: String, state: String = DownloadStatus.FAILED)
+    suspend fun updateFailed(
+        id: String,
+        errorMessage: String,
+        state: String = DownloadStatus.FAILED,
+    )
 
     @Query("DELETE FROM downloads WHERE id = :id")
     suspend fun deleteById(id: String)

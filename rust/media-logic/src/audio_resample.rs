@@ -41,7 +41,11 @@ pub fn target_sample_rate(base_rate: u32, speed: f32) -> u32 {
 /// smaller than expected (should not happen in practice, but a bug here is
 /// exactly what caused the T2.6 crackling: trusting the buffer's allocated
 /// size instead of what's actually valid).
-pub fn valid_sample_count(reported_samples: usize, channels: usize, available_floats: usize) -> usize {
+pub fn valid_sample_count(
+    reported_samples: usize,
+    channels: usize,
+    available_floats: usize,
+) -> usize {
     (reported_samples * channels).min(available_floats)
 }
 
@@ -92,7 +96,10 @@ mod tests {
         let reported_samples = 5;
         let channels = 2;
         let available_floats = 64; // linesize-padded, much bigger than 5*2=10
-        assert_eq!(valid_sample_count(reported_samples, channels, available_floats), 10);
+        assert_eq!(
+            valid_sample_count(reported_samples, channels, available_floats),
+            10
+        );
     }
 
     #[test]

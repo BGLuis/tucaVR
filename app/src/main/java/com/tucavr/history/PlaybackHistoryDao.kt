@@ -14,7 +14,6 @@ import androidx.room.Query
  */
 @Dao
 interface PlaybackHistoryDao {
-
     /**
      * Insere ou substitui (por [PlaybackHistory.historyKey], a chave
      * primaria) — cobre tanto "primeiro save" (T9.2, aos 10s de reproducao)

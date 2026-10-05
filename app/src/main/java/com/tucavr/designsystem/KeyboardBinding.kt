@@ -23,7 +23,10 @@ interface KeyboardBinding {
      * Chamado pelo proxy de teclado nativo quando o usuário digita ou altera o cursor no teclado do sistema.
      * Atualiza o campo com [text] e posiciona o cursor em [selection].
      */
-    fun onKeyboardText(text: CharSequence, selection: Int)
+    fun onKeyboardText(
+        text: CharSequence,
+        selection: Int,
+    )
 
     /**
      * Chamado quando o usuário aciona uma ação do editor (Next, Done, etc.) no teclado nativo.

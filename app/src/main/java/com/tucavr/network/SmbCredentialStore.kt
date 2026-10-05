@@ -20,7 +20,7 @@ data class SmbServer(
     /** Vazio = guest/anonimo (T6.1). */
     val username: String,
     val password: String,
-    val domain: String
+    val domain: String,
 ) {
     val isGuest: Boolean get() = username.isEmpty()
 }
@@ -32,23 +32,24 @@ data class SmbServer(
  */
 class SmbCredentialStore(
     private val dao: SavedServerDao,
-    private val credentials: ServerCredentialStore
+    private val credentials: ServerCredentialStore,
 ) {
     constructor(context: Context) : this(
         AppDatabase.getInstance(context).savedServerDao(),
-        ServerCredentialStore(context)
+        ServerCredentialStore(context),
     )
 
-    fun list(): List<SmbServer> = runBlocking(Dispatchers.IO) {
-        try {
-            dao.getByProtocol(ServerProtocol.SMB).map { saved ->
-                val password = credentials.getPassword(saved.id)
-                saved.toSmbServer(password = password)
+    fun list(): List<SmbServer> =
+        runBlocking(Dispatchers.IO) {
+            try {
+                dao.getByProtocol(ServerProtocol.SMB).map { saved ->
+                    val password = credentials.getPassword(saved.id)
+                    saved.toSmbServer(password = password)
+                }
+            } catch (e: Exception) {
+                emptyList()
             }
-        } catch (e: Exception) {
-            emptyList()
         }
-    }
 
     /** Cria um id novo (`UUID`) para um servidor novo. */
     fun newId(): String = UUID.randomUUID().toString()

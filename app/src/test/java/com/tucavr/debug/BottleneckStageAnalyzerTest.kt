@@ -4,7 +4,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class BottleneckStageAnalyzerTest {
-
     @Test
     fun healthyPlaybackReturnsNone() {
         val stats = NativeDebugStats(frameGapMs = 16.7f, queueDepth = 45)
@@ -35,25 +34,28 @@ class BottleneckStageAnalyzerTest {
 
     @Test
     fun exactlyAtStallThresholdIsNotYetStalled() {
-        val stats = NativeDebugStats(
-            frameGapMs = BottleneckStageAnalyzer.STALL_THRESHOLD_MS,
-            queueDepth = 0
-        )
+        val stats =
+            NativeDebugStats(
+                frameGapMs = BottleneckStageAnalyzer.STALL_THRESHOLD_MS,
+                queueDepth = 0,
+            )
         assertEquals(BottleneckStage.NONE, BottleneckStageAnalyzer.analyze(stats))
     }
 
     @Test
     fun queueThresholdsAreInclusive() {
-        val emptyBoundary = NativeDebugStats(
-            frameGapMs = 501f,
-            queueDepth = BottleneckStageAnalyzer.QUEUE_EMPTY_THRESHOLD
-        )
+        val emptyBoundary =
+            NativeDebugStats(
+                frameGapMs = 501f,
+                queueDepth = BottleneckStageAnalyzer.QUEUE_EMPTY_THRESHOLD,
+            )
         assertEquals(BottleneckStage.NETWORK, BottleneckStageAnalyzer.analyze(emptyBoundary))
 
-        val fullBoundary = NativeDebugStats(
-            frameGapMs = 501f,
-            queueDepth = BottleneckStageAnalyzer.QUEUE_FULL_THRESHOLD
-        )
+        val fullBoundary =
+            NativeDebugStats(
+                frameGapMs = 501f,
+                queueDepth = BottleneckStageAnalyzer.QUEUE_FULL_THRESHOLD,
+            )
         assertEquals(BottleneckStage.PRESENTATION, BottleneckStageAnalyzer.analyze(fullBoundary))
     }
 }

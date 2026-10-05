@@ -9,7 +9,6 @@ import java.nio.file.Files
 
 // T5.5: navegacao hierarquica (enter/goBack) via back-stack simples.
 class DirectoryNavigatorTest {
-
     private fun tempDir(): File = Files.createTempDirectory("navigator-test").toFile().apply { deleteOnExit() }
 
     @Test

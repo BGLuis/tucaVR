@@ -2,7 +2,6 @@ package com.tucavr.chroma
 
 import android.graphics.Bitmap
 import kotlin.math.max
-import kotlin.math.min
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
@@ -16,7 +15,7 @@ import kotlin.math.sqrt
 data class ChromaDetectionResult(
     val colorRgb: Int,
     val suggestedSimilarity: Float,
-    val confidence: Float
+    val confidence: Float,
 )
 
 /**
@@ -33,7 +32,6 @@ data class ChromaDetectionResult(
  * 4. Extrai a cor mediana/média do cluster dominante e calcula a similaridade sugerida com base na variância.
  */
 object ChromaColorDetector {
-
     private data class SamplePoint(val x: Int, val y: Int)
 
     private data class YcbcrColor(val y: Float, val cb: Float, val cr: Float, val r: Int, val g: Int, val b: Int)
@@ -41,7 +39,10 @@ object ChromaColorDetector {
     /**
      * Detecta a cor de fundo dominante a partir de um [Bitmap] do Android.
      */
-    fun detectFromBitmap(bitmap: Bitmap, screenModeIndex: Int = 0): ChromaDetectionResult {
+    fun detectFromBitmap(
+        bitmap: Bitmap,
+        screenModeIndex: Int = 0,
+    ): ChromaDetectionResult {
         val width = bitmap.width
         val height = bitmap.height
         val pixels = IntArray(width * height)
@@ -56,7 +57,7 @@ object ChromaColorDetector {
         pixels: IntArray,
         width: Int,
         height: Int,
-        screenModeIndex: Int = 0
+        screenModeIndex: Int = 0,
     ): ChromaDetectionResult {
         if (width <= 0 || height <= 0 || pixels.size < width * height) {
             return ChromaDetectionResult(colorRgb = 0x00FF00, suggestedSimilarity = 0.35f, confidence = 0f)
@@ -124,11 +125,15 @@ object ChromaColorDetector {
         return ChromaDetectionResult(
             colorRgb = detectedColorRgb,
             suggestedSimilarity = (suggestedSim * 100f).roundToInt() / 100f,
-            confidence = (confidence * 100f).roundToInt() / 100f
+            confidence = (confidence * 100f).roundToInt() / 100f,
         )
     }
 
-    private fun generatePerimeterSampleCoords(width: Int, height: Int, screenModeIndex: Int): List<SamplePoint> {
+    private fun generatePerimeterSampleCoords(
+        width: Int,
+        height: Int,
+        screenModeIndex: Int,
+    ): List<SamplePoint> {
         val result = mutableListOf<SamplePoint>()
 
         // Verifica se é Side-by-Side (SBS)
@@ -160,7 +165,13 @@ object ChromaColorDetector {
         return result
     }
 
-    private fun sampleRect(outList: MutableList<SamplePoint>, offsetX: Int, offsetY: Int, rectW: Int, rectH: Int) {
+    private fun sampleRect(
+        outList: MutableList<SamplePoint>,
+        offsetX: Int,
+        offsetY: Int,
+        rectW: Int,
+        rectH: Int,
+    ) {
         val insetX = max(2, (rectW * 0.04f).toInt())
         val insetY = max(2, (rectH * 0.04f).toInt())
 
@@ -194,7 +205,11 @@ object ChromaColorDetector {
         }
     }
 
-    private fun rgbToYcbcr(r: Int, g: Int, b: Int): YcbcrColor {
+    private fun rgbToYcbcr(
+        r: Int,
+        g: Int,
+        b: Int,
+    ): YcbcrColor {
         val rf = r / 255f
         val gf = g / 255f
         val bf = b / 255f
@@ -204,7 +219,10 @@ object ChromaColorDetector {
         return YcbcrColor(y, cb, cr, r, g, b)
     }
 
-    private fun colorDistance(a: YcbcrColor, b: YcbcrColor): Float {
+    private fun colorDistance(
+        a: YcbcrColor,
+        b: YcbcrColor,
+    ): Float {
         // Distância adaptativa equivalente ao fragment shader
         val keyChroma = sqrt(b.cb * b.cb + b.cr * b.cr)
         // Se a saturação for baixa (cinza/neutro), peso do Y é 1.0. Se saturado, 0.15.

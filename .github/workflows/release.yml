@@ -153,13 +153,13 @@ jobs:
       - name: Setup Android NDK
         if: steps.reuse.outcome != 'success' && steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
-          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;${{ env.NDK_VERSION }}"
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${{ env.NDK_VERSION }}"
 
       - name: Configure Android NDK Environment
         if: steps.reuse.outcome != 'success'
         run: |
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
-          echo "ANDROID_SDK_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${{ env.NDK_VERSION }}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
 
       - name: Cache FFmpeg Build
         if: steps.reuse.outcome != 'success'
@@ -174,8 +174,8 @@ jobs:
         run: |
           ./scripts/setup-deps.sh
           cd ffmpeg-android-maker
-          export ANDROID_SDK_HOME=$ANDROID_HOME
-          export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}
+          export ANDROID_SDK_HOME="$ANDROID_HOME"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}"
           ./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26
 
       - name: Determine Release Configuration
@@ -200,29 +200,35 @@ jobs:
 
           if [[ -n "$INPUT_TAG" ]]; then
             CLEAN_VERSION="${INPUT_TAG#v}"
-            echo "rel_name=Release $INPUT_TAG" >> "$GITHUB_ENV"
-            echo "rel_tag=$INPUT_TAG" >> "$GITHUB_ENV"
-            echo "is_prerelease=$INPUT_PRERELEASE" >> "$GITHUB_ENV"
-            echo "APP_VERSION_NAME=$CLEAN_VERSION" >> "$GITHUB_ENV"
-            echo "APP_VERSION_CODE=$SYS_CODE" >> "$GITHUB_ENV"
+            {
+              echo "rel_name=Release $INPUT_TAG"
+              echo "rel_tag=$INPUT_TAG"
+              echo "is_prerelease=$INPUT_PRERELEASE"
+              echo "APP_VERSION_NAME=$CLEAN_VERSION"
+              echo "APP_VERSION_CODE=$SYS_CODE"
+            } >> "$GITHUB_ENV"
           elif [[ "$REF_TYPE" == "tag" ]]; then
             CLEAN_VERSION="${REF_NAME#v}"
-            echo "rel_name=Release $REF_NAME" >> "$GITHUB_ENV"
-            echo "rel_tag=$REF_NAME" >> "$GITHUB_ENV"
+            IS_PRE="false"
             if [[ "$REF" == *"-beta"* ]] || [[ "$REF" == *"-alpha"* ]]; then
-              echo "is_prerelease=true" >> "$GITHUB_ENV"
-            else
-              echo "is_prerelease=false" >> "$GITHUB_ENV"
+              IS_PRE="true"
             fi
-            echo "APP_VERSION_NAME=$CLEAN_VERSION" >> "$GITHUB_ENV"
-            echo "APP_VERSION_CODE=$SYS_CODE" >> "$GITHUB_ENV"
+            {
+              echo "rel_name=Release $REF_NAME"
+              echo "rel_tag=$REF_NAME"
+              echo "is_prerelease=$IS_PRE"
+              echo "APP_VERSION_NAME=$CLEAN_VERSION"
+              echo "APP_VERSION_CODE=$SYS_CODE"
+            } >> "$GITHUB_ENV"
           else
             # Push na branch main: utiliza a versão do sistema com número da build
-            echo "rel_name=Release v${SYS_VERSION} (Build #${RUN_NUMBER})" >> "$GITHUB_ENV"
-            echo "rel_tag=v${SYS_VERSION}-build.${RUN_NUMBER}" >> "$GITHUB_ENV"
-            echo "is_prerelease=true" >> "$GITHUB_ENV"
-            echo "APP_VERSION_NAME=${SYS_VERSION}-build.${RUN_NUMBER}" >> "$GITHUB_ENV"
-            echo "APP_VERSION_CODE=$SYS_CODE" >> "$GITHUB_ENV"
+            {
+              echo "rel_name=Release v${SYS_VERSION} (Build #${RUN_NUMBER})"
+              echo "rel_tag=v${SYS_VERSION}-build.${RUN_NUMBER}"
+              echo "is_prerelease=true"
+              echo "APP_VERSION_NAME=${SYS_VERSION}-build.${RUN_NUMBER}"
+              echo "APP_VERSION_CODE=$SYS_CODE"
+            } >> "$GITHUB_ENV"
           fi
 
       - name: Build Unified Script (Rust + C++ + Gradle)

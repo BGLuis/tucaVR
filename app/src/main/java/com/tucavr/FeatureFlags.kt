@@ -82,11 +82,12 @@ object FeatureFlags {
     const val SCREEN_GLOW_INTENSITY_SUBTLE = 0.45f
     const val SCREEN_GLOW_INTENSITY_STRONG = 0.85f
 
-    fun screenGlowModeToFloat(mode: Int): Float = when (mode) {
-        SCREEN_GLOW_SUBTLE -> SCREEN_GLOW_INTENSITY_SUBTLE
-        SCREEN_GLOW_STRONG -> SCREEN_GLOW_INTENSITY_STRONG
-        else -> SCREEN_GLOW_INTENSITY_OFF
-    }
+    fun screenGlowModeToFloat(mode: Int): Float =
+        when (mode) {
+            SCREEN_GLOW_SUBTLE -> SCREEN_GLOW_INTENSITY_SUBTLE
+            SCREEN_GLOW_STRONG -> SCREEN_GLOW_INTENSITY_STRONG
+            else -> SCREEN_GLOW_INTENSITY_OFF
+        }
 
     /** Chave usada para persistir o modo de áudio espacial como Int (0/1/2). */
     private const val KEY_SPATIAL_AUDIO_MODE = "spatial_audio_mode"
@@ -121,11 +122,18 @@ object FeatureFlags {
     /** Chave usada para persistir o desbaste de borda (Matte Choke) do Packed Alpha (0 a 100%). Padrão: 65%. */
     private const val KEY_PACKED_ALPHA_CHOKE = "packed_alpha_choke"
 
-    fun isEnabled(context: Context, flag: Flag): Boolean =
+    fun isEnabled(
+        context: Context,
+        flag: Flag,
+    ): Boolean =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .getBoolean(flag.key, flag.defaultEnabled)
 
-    fun setEnabled(context: Context, flag: Flag, enabled: Boolean) {
+    fun setEnabled(
+        context: Context,
+        flag: Flag,
+        enabled: Boolean,
+    ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(flag.key, enabled).apply()
     }
@@ -140,7 +148,10 @@ object FeatureFlags {
             .getInt(KEY_SPATIAL_AUDIO_MODE, 1)
 
     /** Persiste o modo de áudio espacial como Int (0/1/2). */
-    fun setSpatialAudioMode(context: Context, mode: Int) {
+    fun setSpatialAudioMode(
+        context: Context,
+        mode: Int,
+    ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putInt(KEY_SPATIAL_AUDIO_MODE, mode).apply()
     }
@@ -153,7 +164,10 @@ object FeatureFlags {
             .getInt(KEY_FOVEATED_RENDERING_MODE, 0)
 
     /** Persiste o modo de Foveated Rendering como Int (0 a 4) e sincroniza a flag legada. */
-    fun setFoveatedRenderingMode(context: Context, mode: Int) {
+    fun setFoveatedRenderingMode(
+        context: Context,
+        mode: Int,
+    ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putInt(KEY_FOVEATED_RENDERING_MODE, mode)
@@ -167,7 +181,10 @@ object FeatureFlags {
             .getFloat(KEY_PASSTHROUGH_OPACITY, 1.0f)
 
     /** Persiste a opacidade do Passthrough. */
-    fun setPassthroughOpacity(context: Context, opacity: Float) {
+    fun setPassthroughOpacity(
+        context: Context,
+        opacity: Float,
+    ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putFloat(KEY_PASSTHROUGH_OPACITY, opacity.coerceIn(0.0f, 1.0f))
@@ -180,7 +197,10 @@ object FeatureFlags {
             .getBoolean(KEY_PASSTHROUGH_EDGE_RENDERING, false)
 
     /** Persiste o estado do Edge Rendering do Passthrough. */
-    fun setPassthroughEdgeRendering(context: Context, enabled: Boolean) {
+    fun setPassthroughEdgeRendering(
+        context: Context,
+        enabled: Boolean,
+    ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putBoolean(KEY_PASSTHROUGH_EDGE_RENDERING, enabled)
@@ -193,7 +213,10 @@ object FeatureFlags {
             .getInt(KEY_CHROMA_KEY_COLOR, 0x00FF00)
 
     /** Persiste a cor do Chroma Key. */
-    fun setChromaKeyColor(context: Context, color: Int) {
+    fun setChromaKeyColor(
+        context: Context,
+        color: Int,
+    ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putInt(KEY_CHROMA_KEY_COLOR, color and 0x00FFFFFF)
@@ -206,7 +229,10 @@ object FeatureFlags {
             .getFloat(KEY_CHROMA_KEY_SIMILARITY, 0.35f)
 
     /** Persiste a tolerância de corte do Chroma Key. */
-    fun setChromaKeySimilarity(context: Context, similarity: Float) {
+    fun setChromaKeySimilarity(
+        context: Context,
+        similarity: Float,
+    ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putFloat(KEY_CHROMA_KEY_SIMILARITY, similarity.coerceIn(0.01f, 1.0f))
@@ -219,7 +245,10 @@ object FeatureFlags {
             .getFloat(KEY_CHROMA_KEY_SMOOTHNESS, 0.10f)
 
     /** Persiste a suavidade de borda do Chroma Key. */
-    fun setChromaKeySmoothness(context: Context, smoothness: Float) {
+    fun setChromaKeySmoothness(
+        context: Context,
+        smoothness: Float,
+    ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putFloat(KEY_CHROMA_KEY_SMOOTHNESS, smoothness.coerceIn(0.001f, 0.5f))
@@ -236,7 +265,10 @@ object FeatureFlags {
     }
 
     /** Persiste o modo de máscara do Passthrough. */
-    fun setPassthroughMaskMode(context: Context, mode: Int) {
+    fun setPassthroughMaskMode(
+        context: Context,
+        mode: Int,
+    ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putInt(KEY_PASSTHROUGH_MASK_MODE, mode)
@@ -250,7 +282,10 @@ object FeatureFlags {
             .getFloat(KEY_PACKED_ALPHA_OPACITY_MULTIPLIER, 1.5f)
 
     /** Persiste o multiplicador de opacidade do Packed Alpha. */
-    fun setPackedAlphaOpacityMultiplier(context: Context, multiplier: Float) {
+    fun setPackedAlphaOpacityMultiplier(
+        context: Context,
+        multiplier: Float,
+    ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putFloat(KEY_PACKED_ALPHA_OPACITY_MULTIPLIER, multiplier.coerceIn(1.0f, 2.5f))
@@ -263,7 +298,10 @@ object FeatureFlags {
             .getFloat(KEY_PACKED_ALPHA_CUTOFF, 0.06f)
 
     /** Persiste o corte de fundo preto do Packed Alpha. */
-    fun setPackedAlphaCutoff(context: Context, cutoff: Float) {
+    fun setPackedAlphaCutoff(
+        context: Context,
+        cutoff: Float,
+    ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putFloat(KEY_PACKED_ALPHA_CUTOFF, cutoff.coerceIn(0.005f, 0.25f))
@@ -276,7 +314,10 @@ object FeatureFlags {
             .getInt(KEY_PACKED_ALPHA_CHOKE, 65)
 
     /** Persiste o desbaste de borda do Packed Alpha. */
-    fun setPackedAlphaChoke(context: Context, choke: Int) {
+    fun setPackedAlphaChoke(
+        context: Context,
+        choke: Int,
+    ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putInt(KEY_PACKED_ALPHA_CHOKE, choke.coerceIn(0, 100))
@@ -289,7 +330,10 @@ object FeatureFlags {
             .getFloat(KEY_ENVIRONMENT_BRIGHTNESS, 1.0f)
 
     /** Persiste o brilho do ambiente virtual. */
-    fun setEnvironmentBrightness(context: Context, brightness: Float) {
+    fun setEnvironmentBrightness(
+        context: Context,
+        brightness: Float,
+    ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putFloat(KEY_ENVIRONMENT_BRIGHTNESS, brightness.coerceIn(0.0f, 1.0f))
@@ -306,7 +350,10 @@ object FeatureFlags {
     }
 
     /** Persiste o modo de intensidade do Screen Glow e sincroniza com a flag AMBIENT_MODE. */
-    fun setScreenGlowIntensityMode(context: Context, mode: Int) {
+    fun setScreenGlowIntensityMode(
+        context: Context,
+        mode: Int,
+    ) {
         val clamped = mode.coerceIn(SCREEN_GLOW_OFF, SCREEN_GLOW_STRONG)
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
@@ -316,8 +363,7 @@ object FeatureFlags {
     }
 
     /** Lê a intensidade float do Screen Glow (0.0f, 0.45f ou 0.85f). */
-    fun getScreenGlowIntensityFloat(context: Context): Float =
-        screenGlowModeToFloat(getScreenGlowIntensityMode(context))
+    fun getScreenGlowIntensityFloat(context: Context): Float = screenGlowModeToFloat(getScreenGlowIntensityMode(context))
 
     /** Lê a temperatura de cor em Kelvin (2700K a 6500K). Padrão: 6500K. */
     fun getColorTemperature(context: Context): Float =
@@ -325,7 +371,10 @@ object FeatureFlags {
             .getFloat(KEY_COLOR_TEMPERATURE, 6500.0f)
 
     /** Persiste a temperatura de cor em Kelvin. */
-    fun setColorTemperature(context: Context, kelvin: Float) {
+    fun setColorTemperature(
+        context: Context,
+        kelvin: Float,
+    ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit()
             .putFloat(KEY_COLOR_TEMPERATURE, kelvin.coerceIn(2700.0f, 6500.0f))
@@ -333,11 +382,13 @@ object FeatureFlags {
     }
 
     /** Lê se o Modo Noturno está ativo. Padrão: false. */
-    fun isNightModeEnabled(context: Context): Boolean =
-        isEnabled(context, Flag.NIGHT_MODE)
+    fun isNightModeEnabled(context: Context): Boolean = isEnabled(context, Flag.NIGHT_MODE)
 
     /** Persiste o estado do Modo Noturno. */
-    fun setNightModeEnabled(context: Context, enabled: Boolean) {
+    fun setNightModeEnabled(
+        context: Context,
+        enabled: Boolean,
+    ) {
         setEnabled(context, Flag.NIGHT_MODE, enabled)
     }
 }

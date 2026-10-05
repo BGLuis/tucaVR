@@ -5,7 +5,6 @@ import org.junit.Test
 
 /** T9.3/T9.4 — formatacao usada no prompt "Retomar de XX:XX?" e na lista de "Continuar assistindo". */
 class PlaybackHistoryFormatTest {
-
     @Test
     fun `formats under a minute`() {
         assertEquals("00:00", formatDurationMs(0L))
@@ -29,7 +28,10 @@ class PlaybackHistoryFormatTest {
         assertEquals("00:00", formatDurationMs(-500L))
     }
 
-    private fun historyOf(positionMs: Long, durationMs: Long) = PlaybackHistory(
+    private fun historyOf(
+        positionMs: Long,
+        durationMs: Long,
+    ) = PlaybackHistory(
         historyKey = "k",
         title = "t",
         mediaPath = "p",
@@ -38,7 +40,7 @@ class PlaybackHistoryFormatTest {
         lastPlayedAt = 0L,
         thumbnailPath = null,
         sourceType = HistorySourceType.LOCAL,
-        serverInfo = null
+        serverInfo = null,
     )
 
     @Test

@@ -6,12 +6,11 @@ import org.junit.Test
 // T5.6: sortMediaEntries — nome/data/tamanho/tipo, diretorios sempre antes de
 // arquivos (qualquer que seja o modo/direcao de ordenacao).
 class MediaSorterTest {
-
     private fun entry(
         name: String,
         type: MediaType = MediaType.VIDEO,
         sizeBytes: Long = 0,
-        lastModified: Long = 0
+        lastModified: Long = 0,
     ) = MediaEntry(name = name, path = "/root/$name", sizeBytes = sizeBytes, lastModified = lastModified, type = type)
 
     @Test
@@ -34,11 +33,12 @@ class MediaSorterTest {
 
     @Test
     fun sortsByDateAscending() {
-        val entries = listOf(
-            entry("newest.mp4", lastModified = 300),
-            entry("oldest.mp4", lastModified = 100),
-            entry("middle.mp4", lastModified = 200)
-        )
+        val entries =
+            listOf(
+                entry("newest.mp4", lastModified = 300),
+                entry("oldest.mp4", lastModified = 100),
+                entry("middle.mp4", lastModified = 200),
+            )
 
         val sorted = sortMediaEntries(entries, SortBy.DATE, ascending = true)
 
@@ -47,11 +47,12 @@ class MediaSorterTest {
 
     @Test
     fun sortsByDateDescending() {
-        val entries = listOf(
-            entry("newest.mp4", lastModified = 300),
-            entry("oldest.mp4", lastModified = 100),
-            entry("middle.mp4", lastModified = 200)
-        )
+        val entries =
+            listOf(
+                entry("newest.mp4", lastModified = 300),
+                entry("oldest.mp4", lastModified = 100),
+                entry("middle.mp4", lastModified = 200),
+            )
 
         val sorted = sortMediaEntries(entries, SortBy.DATE, ascending = false)
 
@@ -69,11 +70,12 @@ class MediaSorterTest {
 
     @Test
     fun sortsByType() {
-        val entries = listOf(
-            entry("song.mp3", type = MediaType.AUDIO),
-            entry("clip.mp4", type = MediaType.VIDEO),
-            entry("pic.jpg", type = MediaType.IMAGE)
-        )
+        val entries =
+            listOf(
+                entry("song.mp3", type = MediaType.AUDIO),
+                entry("clip.mp4", type = MediaType.VIDEO),
+                entry("pic.jpg", type = MediaType.IMAGE),
+            )
 
         val sorted = sortMediaEntries(entries, SortBy.TYPE, ascending = true)
 
@@ -83,11 +85,12 @@ class MediaSorterTest {
 
     @Test
     fun directoriesAlwaysComeBeforeFilesRegardlessOfSortMode() {
-        val entries = listOf(
-            entry("zzz_file.mp4", type = MediaType.VIDEO),
-            entry("aaa_dir", type = MediaType.DIRECTORY),
-            entry("mmm_file.mp4", type = MediaType.VIDEO)
-        )
+        val entries =
+            listOf(
+                entry("zzz_file.mp4", type = MediaType.VIDEO),
+                entry("aaa_dir", type = MediaType.DIRECTORY),
+                entry("mmm_file.mp4", type = MediaType.VIDEO),
+            )
 
         val sorted = sortMediaEntries(entries, SortBy.NAME, ascending = true)
 
@@ -96,20 +99,22 @@ class MediaSorterTest {
 
     @Test
     fun directoriesStayFirstEvenWhenDescending() {
-        val entries = listOf(
-            entry("zzz_dir", type = MediaType.DIRECTORY),
-            entry("aaa_file.mp4", type = MediaType.VIDEO)
-        )
+        val entries =
+            listOf(
+                entry("zzz_dir", type = MediaType.DIRECTORY),
+                entry("aaa_file.mp4", type = MediaType.VIDEO),
+            )
 
         val sorted = sortMediaEntries(entries, SortBy.NAME, ascending = false)
 
         // Descending by name would normally put "zzz_dir" before "aaa_file.mp4" anyway
         // here, so also check with names that would reverse the expected order if
         // directories-first weren't enforced.
-        val entries2 = listOf(
-            entry("aaa_dir", type = MediaType.DIRECTORY),
-            entry("zzz_file.mp4", type = MediaType.VIDEO)
-        )
+        val entries2 =
+            listOf(
+                entry("aaa_dir", type = MediaType.DIRECTORY),
+                entry("zzz_file.mp4", type = MediaType.VIDEO),
+            )
         val sorted2 = sortMediaEntries(entries2, SortBy.NAME, ascending = false)
 
         assertEquals("zzz_dir", sorted.first().name)
@@ -118,11 +123,12 @@ class MediaSorterTest {
 
     @Test
     fun multipleDirectoriesAreThemselvesSortedAmongEachOther() {
-        val entries = listOf(
-            entry("zeta_dir", type = MediaType.DIRECTORY),
-            entry("alpha_dir", type = MediaType.DIRECTORY),
-            entry("file.mp4", type = MediaType.VIDEO)
-        )
+        val entries =
+            listOf(
+                entry("zeta_dir", type = MediaType.DIRECTORY),
+                entry("alpha_dir", type = MediaType.DIRECTORY),
+                entry("file.mp4", type = MediaType.VIDEO),
+            )
 
         val sorted = sortMediaEntries(entries, SortBy.NAME, ascending = true)
 
@@ -131,12 +137,13 @@ class MediaSorterTest {
 
     @Test
     fun sortsByLastPlayedAscendingAndDescending() {
-        val entries = listOf(
-            MediaEntry("old_played.mp4", "/path/1", 100, 100, MediaType.VIDEO, lastPlayedAt = 1000L),
-            MediaEntry("recent_played.mp4", "/path/2", 100, 100, MediaType.VIDEO, lastPlayedAt = 5000L),
-            MediaEntry("never_played.mp4", "/path/3", 100, 100, MediaType.VIDEO, lastPlayedAt = null),
-            MediaEntry("my_dir", "/path/dir", 0, 100, MediaType.DIRECTORY)
-        )
+        val entries =
+            listOf(
+                MediaEntry("old_played.mp4", "/path/1", 100, 100, MediaType.VIDEO, lastPlayedAt = 1000L),
+                MediaEntry("recent_played.mp4", "/path/2", 100, 100, MediaType.VIDEO, lastPlayedAt = 5000L),
+                MediaEntry("never_played.mp4", "/path/3", 100, 100, MediaType.VIDEO, lastPlayedAt = null),
+                MediaEntry("my_dir", "/path/dir", 0, 100, MediaType.DIRECTORY),
+            )
 
         val sortedDesc = sortMediaEntries(entries, SortBy.LAST_PLAYED, ascending = false)
         assertEquals(listOf("my_dir", "recent_played.mp4", "old_played.mp4", "never_played.mp4"), sortedDesc.map { it.name })

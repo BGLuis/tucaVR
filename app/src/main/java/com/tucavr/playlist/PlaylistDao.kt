@@ -12,7 +12,6 @@ import androidx.room.Update
  */
 @Dao
 interface PlaylistDao {
-
     @Query("SELECT * FROM playlists ORDER BY createdAt DESC")
     suspend fun getAllPlaylists(): List<Playlist>
 
@@ -29,7 +28,10 @@ interface PlaylistDao {
     suspend fun deletePlaylist(id: String)
 
     @Query("UPDATE playlists SET itemCount = :count WHERE id = :id")
-    suspend fun updateItemCount(id: String, count: Int)
+    suspend fun updateItemCount(
+        id: String,
+        count: Int,
+    )
 
     // ---- Itens de Playlist ----
 
@@ -80,9 +82,10 @@ interface PlaylistDao {
     suspend fun removeItemAndReorder(item: PlaylistItem) {
         deleteItem(item.id)
         val remaining = getItemsForPlaylist(item.playlistId)
-        val reordered = remaining.mapIndexed { index, pi ->
-            if (pi.position != index) pi.copy(position = index) else pi
-        }
+        val reordered =
+            remaining.mapIndexed { index, pi ->
+                if (pi.position != index) pi.copy(position = index) else pi
+            }
         updateItems(reordered)
         updateItemCount(item.playlistId, reordered.size)
     }
@@ -91,7 +94,10 @@ interface PlaylistDao {
      * Troca a ordem de dois itens adjacentes na playlist.
      */
     @Transaction
-    suspend fun swapItemPositions(itemA: PlaylistItem, itemB: PlaylistItem) {
+    suspend fun swapItemPositions(
+        itemA: PlaylistItem,
+        itemB: PlaylistItem,
+    ) {
         val updatedA = itemA.copy(position = itemB.position)
         val updatedB = itemB.copy(position = itemA.position)
         updateItems(listOf(updatedA, updatedB))

@@ -4,7 +4,7 @@ enum class MediaType {
     VIDEO,
     AUDIO,
     IMAGE,
-    DIRECTORY
+    DIRECTORY,
 }
 
 enum class Format3DType {
@@ -12,7 +12,7 @@ enum class Format3DType {
     SBS,
     OU,
     VR_180,
-    VR_360
+    VR_360,
 }
 
 data class MediaEntry(
@@ -25,6 +25,5 @@ data class MediaEntry(
     val progressFraction: Float? = null,
     val lastPlayedAt: Long? = null,
     val itemCount: Int? = null,
-    val previewPath: String? = null
+    val previewPath: String? = null,
 )
-

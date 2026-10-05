@@ -40,10 +40,10 @@ impl SurroundVirtualizer {
         let mut speaker_directions = [Vec3::FORWARD; MAX_SURROUND_CHANNELS];
         // 5.1: FL (-30°), FR (+30°), C (0°), LFE (centro/chão), SL (-110°), SR (+110°)
         speaker_directions[0] = Vec3::from_spherical_degrees(-30.0, 0.0, 1.0); // Front Left
-        speaker_directions[1] = Vec3::from_spherical_degrees(30.0, 0.0, 1.0);  // Front Right
-        speaker_directions[2] = Vec3::from_spherical_degrees(0.0, 0.0, 1.0);   // Center
+        speaker_directions[1] = Vec3::from_spherical_degrees(30.0, 0.0, 1.0); // Front Right
+        speaker_directions[2] = Vec3::from_spherical_degrees(0.0, 0.0, 1.0); // Center
         speaker_directions[3] = Vec3::from_spherical_degrees(0.0, -30.0, 0.5); // LFE (não direcional)
-        speaker_directions[4] = Vec3::from_spherical_degrees(-110.0, 0.0, 1.0);// Surround Left
+        speaker_directions[4] = Vec3::from_spherical_degrees(-110.0, 0.0, 1.0); // Surround Left
         speaker_directions[5] = Vec3::from_spherical_degrees(110.0, 0.0, 1.0); // Surround Right
 
         Self {
@@ -61,12 +61,12 @@ impl SurroundVirtualizer {
         let mut speaker_directions = [Vec3::FORWARD; MAX_SURROUND_CHANNELS];
         // 7.1: FL (-30°), FR (+30°), C (0°), LFE, SL (-90°), SR (+90°), BL (-150°), BR (+150°)
         speaker_directions[0] = Vec3::from_spherical_degrees(-30.0, 0.0, 1.0); // Front Left
-        speaker_directions[1] = Vec3::from_spherical_degrees(30.0, 0.0, 1.0);  // Front Right
-        speaker_directions[2] = Vec3::from_spherical_degrees(0.0, 0.0, 1.0);   // Center
+        speaker_directions[1] = Vec3::from_spherical_degrees(30.0, 0.0, 1.0); // Front Right
+        speaker_directions[2] = Vec3::from_spherical_degrees(0.0, 0.0, 1.0); // Center
         speaker_directions[3] = Vec3::from_spherical_degrees(0.0, -30.0, 0.5); // LFE
-        speaker_directions[4] = Vec3::from_spherical_degrees(-90.0, 0.0, 1.0);  // Side Left
-        speaker_directions[5] = Vec3::from_spherical_degrees(90.0, 0.0, 1.0);   // Side Right
-        speaker_directions[6] = Vec3::from_spherical_degrees(-150.0, 0.0, 1.0);// Back Left
+        speaker_directions[4] = Vec3::from_spherical_degrees(-90.0, 0.0, 1.0); // Side Left
+        speaker_directions[5] = Vec3::from_spherical_degrees(90.0, 0.0, 1.0); // Side Right
+        speaker_directions[6] = Vec3::from_spherical_degrees(-150.0, 0.0, 1.0); // Back Left
         speaker_directions[7] = Vec3::from_spherical_degrees(150.0, 0.0, 1.0); // Back Right
 
         Self {
@@ -136,7 +136,8 @@ impl SurroundVirtualizer {
             if ch == 3 {
                 // Canal 3 = LFE (Subwoofer): Filtro Low-Pass e soma direta nos dois ouvidos sem HRTF
                 for (i, &sample) in input.iter().enumerate() {
-                    let lfe_sample = self.lfe_filter.process_sample(sample) * std::f32::consts::FRAC_1_SQRT_2;
+                    let lfe_sample =
+                        self.lfe_filter.process_sample(sample) * std::f32::consts::FRAC_1_SQRT_2;
                     out_left[i] += lfe_sample;
                     out_right[i] += lfe_sample;
                 }
@@ -170,7 +171,11 @@ impl SurroundVirtualizer {
             buf.resize(num_frames, 0.0f32);
         }
 
-        for (frame, chunk) in interleaved_in.chunks_exact(ch_count).take(num_frames).enumerate() {
+        for (frame, chunk) in interleaved_in
+            .chunks_exact(ch_count)
+            .take(num_frames)
+            .enumerate()
+        {
             for (ch, &val) in chunk.iter().enumerate().take(ch_count) {
                 ch_buffers[ch][frame] = val;
             }
@@ -179,7 +184,10 @@ impl SurroundVirtualizer {
         let mut left_out = vec![0.0f32; num_frames];
         let mut right_out = vec![0.0f32; num_frames];
 
-        let ch_slices: Vec<&[f32]> = ch_buffers[..ch_count].iter().map(|v| v.as_slice()).collect();
+        let ch_slices: Vec<&[f32]> = ch_buffers[..ch_count]
+            .iter()
+            .map(|v| v.as_slice())
+            .collect();
         self.process_block(&ch_slices, head_orientation, &mut left_out, &mut right_out);
 
         for frame in 0..num_frames {
@@ -223,17 +231,34 @@ mod tests {
         c_ch[0] = 1.0; // Impulso no centro
 
         let empty = vec![0.0f32; block_len];
-        let channels = [&empty[..], &empty[..], &c_ch[..], &empty[..], &empty[..], &empty[..]];
+        let channels = [
+            &empty[..],
+            &empty[..],
+            &c_ch[..],
+            &empty[..],
+            &empty[..],
+            &empty[..],
+        ];
 
         let mut out_l_front = vec![0.0f32; block_len];
         let mut out_r_front = vec![0.0f32; block_len];
 
         // 1. Olhando para a frente: o canal Central deve soar equilibrado em ambos os ouvidos
-        virt.process_block(&channels, Quat::IDENTITY, &mut out_l_front, &mut out_r_front);
+        virt.process_block(
+            &channels,
+            Quat::IDENTITY,
+            &mut out_l_front,
+            &mut out_r_front,
+        );
 
         let energy_l = out_l_front.iter().map(|&x| x * x).sum::<f32>();
         let energy_r = out_r_front.iter().map(|&x| x * x).sum::<f32>();
-        assert!((energy_l - energy_r).abs() < 0.05, "Center channel mismatch: L={}, R={}", energy_l, energy_r);
+        assert!(
+            (energy_l - energy_r).abs() < 0.05,
+            "Center channel mismatch: L={}, R={}",
+            energy_l,
+            energy_r
+        );
 
         // 2. Virando 90° para a esquerda (+yaw): o canal Central fica à direita relativa do ouvinte
         virt.reset();
@@ -246,17 +271,32 @@ mod tests {
         let rot_energy_r = out_r_rotated.iter().map(|&x| x * x).sum::<f32>();
 
         // Ao virar para a esquerda, a caixa central fica à direita do usuário -> ouvido direito recebe mais energia
-        assert!(rot_energy_r > rot_energy_l * 1.5, "Expected R > L when turned left: L={}, R={}", rot_energy_l, rot_energy_r);
+        assert!(
+            rot_energy_r > rot_energy_l * 1.5,
+            "Expected R > L when turned left: L={}, R={}",
+            rot_energy_l,
+            rot_energy_r
+        );
 
         // 3. Virando 90° para a direita (-yaw): o canal Central fica à esquerda relativa do ouvinte
         virt.reset();
         let q_right_90 = Quat::from_axis_angle_y(-std::f32::consts::FRAC_PI_2);
-        virt.process_block(&channels, q_right_90, &mut out_l_rotated, &mut out_r_rotated);
+        virt.process_block(
+            &channels,
+            q_right_90,
+            &mut out_l_rotated,
+            &mut out_r_rotated,
+        );
         let rot_r_energy_l = out_l_rotated.iter().map(|&x| x * x).sum::<f32>();
         let rot_r_energy_r = out_r_rotated.iter().map(|&x| x * x).sum::<f32>();
 
         // Ao virar para a direita, a caixa central fica à esquerda do usuário -> ouvido esquerdo recebe mais energia
-        assert!(rot_r_energy_l > rot_r_energy_r * 1.5, "Expected L > R when turned right: L={}, R={}", rot_r_energy_l, rot_r_energy_r);
+        assert!(
+            rot_r_energy_l > rot_r_energy_r * 1.5,
+            "Expected L > R when turned right: L={}, R={}",
+            rot_r_energy_l,
+            rot_r_energy_r
+        );
     }
 
     /// Teste de cobertura 7.1: equivalente ao test_5_1_virtualizer_head_rotation
@@ -273,8 +313,14 @@ mod tests {
         let empty = vec![0.0f32; block_len];
         // 7.1: FL, FR, C, LFE, SL, SR, BL, BR
         let channels = [
-            &empty[..], &empty[..], &c_ch[..], &empty[..],
-            &empty[..], &empty[..], &empty[..], &empty[..],
+            &empty[..],
+            &empty[..],
+            &c_ch[..],
+            &empty[..],
+            &empty[..],
+            &empty[..],
+            &empty[..],
+            &empty[..],
         ];
 
         let mut out_l = vec![0.0f32; block_len];
@@ -284,7 +330,12 @@ mod tests {
         virt.process_block(&channels, Quat::IDENTITY, &mut out_l, &mut out_r);
         let el = out_l.iter().map(|&x| x * x).sum::<f32>();
         let er = out_r.iter().map(|&x| x * x).sum::<f32>();
-        assert!((el - er).abs() < 0.05, "7.1 Center symmetry: L={}, R={}", el, er);
+        assert!(
+            (el - er).abs() < 0.05,
+            "7.1 Center symmetry: L={}, R={}",
+            el,
+            er
+        );
 
         // Virando para a esquerda: centro vai para a direita
         virt.reset();
@@ -292,7 +343,12 @@ mod tests {
         virt.process_block(&channels, q_left_90, &mut out_l, &mut out_r);
         let el_rot = out_l.iter().map(|&x| x * x).sum::<f32>();
         let er_rot = out_r.iter().map(|&x| x * x).sum::<f32>();
-        assert!(er_rot > el_rot * 1.5, "7.1 Expected R > L when turned left: L={}, R={}", el_rot, er_rot);
+        assert!(
+            er_rot > el_rot * 1.5,
+            "7.1 Expected R > L when turned left: L={}, R={}",
+            el_rot,
+            er_rot
+        );
 
         // Virando para a direita: centro vai para a esquerda
         virt.reset();
@@ -300,19 +356,37 @@ mod tests {
         virt.process_block(&channels, q_right_90, &mut out_l, &mut out_r);
         let el_rot = out_l.iter().map(|&x| x * x).sum::<f32>();
         let er_rot = out_r.iter().map(|&x| x * x).sum::<f32>();
-        assert!(el_rot > er_rot * 1.5, "7.1 Expected L > R when turned right: L={}, R={}", el_rot, er_rot);
+        assert!(
+            el_rot > er_rot * 1.5,
+            "7.1 Expected L > R when turned right: L={}, R={}",
+            el_rot,
+            er_rot
+        );
 
         // Surround traseiros (BL = ch6, BR = ch7) devem produzir energia na saída
         let mut bl_ch = vec![0.0f32; block_len];
         bl_ch[0] = 1.0;
         let channels_bl = [
-            &empty[..], &empty[..], &empty[..], &empty[..],
-            &empty[..], &empty[..], &bl_ch[..], &empty[..],
+            &empty[..],
+            &empty[..],
+            &empty[..],
+            &empty[..],
+            &empty[..],
+            &empty[..],
+            &bl_ch[..],
+            &empty[..],
         ];
         virt.reset();
         virt.process_block(&channels_bl, Quat::IDENTITY, &mut out_l, &mut out_r);
-        let bl_energy = out_l.iter().chain(out_r.iter()).map(|&x| x * x).sum::<f32>();
-        assert!(bl_energy > 0.0, "7.1 Back Left channel deve produzir energia na saída binaural");
+        let bl_energy = out_l
+            .iter()
+            .chain(out_r.iter())
+            .map(|&x| x * x)
+            .sum::<f32>();
+        assert!(
+            bl_energy > 0.0,
+            "7.1 Back Left channel deve produzir energia na saída binaural"
+        );
     }
 
     /// Garante que o canal LFE filtrado não vaza energia significativa acima de 120 Hz.
@@ -359,7 +433,14 @@ mod tests {
         let left_ch = vec![1.0f32; block_len];
         let right_ch = vec![1.0f32; block_len];
         let empty = vec![0.0f32; block_len];
-        let channels = [&left_ch[..], &right_ch[..], &empty[..], &empty[..], &empty[..], &empty[..]];
+        let channels = [
+            &left_ch[..],
+            &right_ch[..],
+            &empty[..],
+            &empty[..],
+            &empty[..],
+            &empty[..],
+        ];
 
         let mut out_l = vec![0.0f32; block_len];
         let mut out_r = vec![0.0f32; block_len];

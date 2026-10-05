@@ -5,7 +5,6 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ScreenTransformStoreTest {
-
     @Test
     fun testDefaultsMatchCinematicStandard() {
         assertEquals(0.0f, ScreenTransformStore.DEFAULT_POS_X, 0.001f)

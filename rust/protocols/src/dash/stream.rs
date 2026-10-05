@@ -1,7 +1,7 @@
 //! Pipeline de streaming, download de segmentos e ABR para DASH (T2.2 - T2.5).
 
 use super::manifest::{
-    parse_mpd, resolve_dash_url, resolve_template_url, DashManifest, DashRepresentation,
+    DashManifest, DashRepresentation, parse_mpd, resolve_dash_url, resolve_template_url,
 };
 use crate::hls::abr::AdaptiveBitrateManager;
 use crate::prefetch::RangeSource;
@@ -47,7 +47,9 @@ pub fn fetch_and_probe_representations(url: &str) -> Result<Vec<DashRepresentati
         return Err(format!("Servidor DASH retornou HTTP {}", resp.status()));
     }
 
-    let xml = resp.text().map_err(|e| format!("Erro ao ler corpo do MPD: {e}"))?;
+    let xml = resp
+        .text()
+        .map_err(|e| format!("Erro ao ler corpo do MPD: {e}"))?;
     let manifest = parse_mpd(&xml, &normalized)?;
     let reps = manifest.video_representations();
     if reps.is_empty() {
@@ -98,10 +100,15 @@ impl DashStreamSource {
             .map_err(|e| format!("Falha ao conectar ao servidor DASH ({normalized}): {e}"))?;
 
         if !resp.status().is_success() {
-            return Err(format!("Servidor DASH retornou status HTTP {}", resp.status()));
+            return Err(format!(
+                "Servidor DASH retornou status HTTP {}",
+                resp.status()
+            ));
         }
 
-        let body = resp.text().map_err(|e| format!("Falha ao ler XML do MPD: {e}"))?;
+        let body = resp
+            .text()
+            .map_err(|e| format!("Falha ao ler XML do MPD: {e}"))?;
         let manifest = parse_mpd(&body, &normalized)?;
 
         let video_reps = manifest.video_representations();
@@ -110,15 +117,20 @@ impl DashStreamSource {
         }
 
         let abr = AdaptiveBitrateManager::new(video_reps);
-        let active_rep = abr.current_variant().cloned().ok_or_else(|| "Nenhuma variante ativa".to_string())?;
+        let active_rep = abr
+            .current_variant()
+            .cloned()
+            .ok_or_else(|| "Nenhuma variante ativa".to_string())?;
 
-        let (start_number, seg_duration, total_segs) = Self::calculate_segment_params(&active_rep, &manifest);
+        let (start_number, seg_duration, total_segs) =
+            Self::calculate_segment_params(&active_rep, &manifest);
 
-        let estimated_bytes = if active_rep.bandwidth > 0 && manifest.duration_sec.unwrap_or(0.0) > 0.0 {
-            Some(((active_rep.bandwidth as f64 * manifest.duration_sec.unwrap()) / 8.0) as u64)
-        } else {
-            None
-        };
+        let estimated_bytes =
+            if active_rep.bandwidth > 0 && manifest.duration_sec.unwrap_or(0.0) > 0.0 {
+                Some(((active_rep.bandwidth as f64 * manifest.duration_sec.unwrap()) / 8.0) as u64)
+            } else {
+                None
+            };
 
         let mut source = Self {
             client,
@@ -156,7 +168,10 @@ impl DashStreamSource {
             .unwrap_or(0)
     }
 
-    fn calculate_segment_params(rep: &DashRepresentation, manifest: &DashManifest) -> (u64, f64, Option<u64>) {
+    fn calculate_segment_params(
+        rep: &DashRepresentation,
+        manifest: &DashManifest,
+    ) -> (u64, f64, Option<u64>) {
         if let Some(ref template) = rep.segment_template {
             let timescale = template.timescale.max(1) as f64;
             let duration_units = template.duration.unwrap_or(template.timescale) as f64;
@@ -200,10 +215,15 @@ impl DashStreamSource {
         };
 
         if active_rep.id != self.active_rep_id {
-            log::info!("DASH: Trocando representação ativa para id={} ({} bps)", active_rep.id, active_rep.bandwidth);
+            log::info!(
+                "DASH: Trocando representação ativa para id={} ({} bps)",
+                active_rep.id,
+                active_rep.bandwidth
+            );
             self.active_rep_id = active_rep.id.clone();
             self.has_delivered_init_for_active_rep = false;
-            let (start_number, seg_duration, total_segs) = Self::calculate_segment_params(&active_rep, &self.manifest);
+            let (start_number, seg_duration, total_segs) =
+                Self::calculate_segment_params(&active_rep, &self.manifest);
             self.start_number = start_number;
             self.segment_duration_sec = seg_duration;
             self.total_segments = total_segs;
@@ -223,7 +243,8 @@ impl DashStreamSource {
         let base = rep.base_url.as_deref().unwrap_or(&self.mpd_url);
 
         if let Some(ref template) = rep.segment_template
-            && let Some(ref init_rel) = template.initialization {
+            && let Some(ref init_rel) = template.initialization
+        {
             let resolved_rel = resolve_template_url(init_rel, &rep.id, 0, 0);
             let full_url = resolve_dash_url(&self.mpd_url, base, &resolved_rel)?;
 
@@ -235,7 +256,10 @@ impl DashStreamSource {
                 .map_err(|e| format!("Falha ao baixar init segment ({full_url}): {e}"))?;
 
             if !resp.status().is_success() {
-                return Err(format!("Servidor retornou HTTP {} ao baixar init segment", resp.status()));
+                return Err(format!(
+                    "Servidor retornou HTTP {} ao baixar init segment",
+                    resp.status()
+                ));
             }
 
             let data = resp.bytes().map_err(|e| e.to_string())?.to_vec();
@@ -244,8 +268,12 @@ impl DashStreamSource {
         }
 
         if let Some(ref sb) = rep.segment_base
-            && let Some((offset, len)) = sb.initialization_range {
-            log::info!("DASH: Baixando init segment via Range {offset}-{} de {base}", offset + len - 1);
+            && let Some((offset, len)) = sb.initialization_range
+        {
+            log::info!(
+                "DASH: Baixando init segment via Range {offset}-{} de {base}",
+                offset + len - 1
+            );
             let resp = self
                 .client
                 .get(base)
@@ -254,7 +282,10 @@ impl DashStreamSource {
                 .map_err(|e| format!("Falha no range request de init segment: {e}"))?;
 
             if !resp.status().is_success() {
-                return Err(format!("Range HTTP {} ao buscar init segment", resp.status()));
+                return Err(format!(
+                    "Range HTTP {} ao buscar init segment",
+                    resp.status()
+                ));
             }
 
             let data = resp.bytes().map_err(|e| e.to_string())?.to_vec();
@@ -341,7 +372,8 @@ impl DashStreamSource {
 
         // Se ainda não entregou o init segment para a representação ativa, entrega primeiro
         if !self.has_delivered_init_for_active_rep
-            && let Some(init_data) = self.init_segments.get(&active_rep.id) {
+            && let Some(init_data) = self.init_segments.get(&active_rep.id)
+        {
             self.buffer = init_data.clone();
             self.buffer_offset = 0;
             self.has_delivered_init_for_active_rep = true;
@@ -350,7 +382,8 @@ impl DashStreamSource {
 
         // Verifica término de VOD
         if let Some(total) = self.total_segments
-            && self.current_segment_num >= self.start_number + total {
+            && self.current_segment_num >= self.start_number + total
+        {
             return Ok(false); // EOF
         }
 
@@ -358,38 +391,52 @@ impl DashStreamSource {
         let base = active_rep.base_url.as_deref().unwrap_or(&self.mpd_url);
 
         if let Some(ref template) = active_rep.segment_template
-            && let Some(ref media_rel) = template.media {
+            && let Some(ref media_rel) = template.media
+        {
             let _timescale = template.timescale.max(1);
             let duration_units = template.duration.unwrap_or(template.timescale);
-            let time_units = (self.current_segment_num.saturating_sub(template.start_number)) * duration_units;
+            let time_units = (self
+                .current_segment_num
+                .saturating_sub(template.start_number))
+                * duration_units;
 
-            let resolved_rel = resolve_template_url(media_rel, &active_rep.id, self.current_segment_num, time_units);
-            let full_url = resolve_dash_url(&self.mpd_url, base, &resolved_rel).map_err(io::Error::other)?;
+            let resolved_rel = resolve_template_url(
+                media_rel,
+                &active_rep.id,
+                self.current_segment_num,
+                time_units,
+            );
+            let full_url =
+                resolve_dash_url(&self.mpd_url, base, &resolved_rel).map_err(io::Error::other)?;
 
-                let start_time = Instant::now();
-                let resp = self
-                    .client
-                    .get(&full_url)
-                    .send()
-                    .map_err(|e| io::Error::other(format!("Falha ao baixar segmento DASH ({full_url}): {e}")))?;
+            let start_time = Instant::now();
+            let resp = self.client.get(&full_url).send().map_err(|e| {
+                io::Error::other(format!("Falha ao baixar segmento DASH ({full_url}): {e}"))
+            })?;
 
-                if !resp.status().is_success() {
-                    return Err(io::Error::other(format!("HTTP {} ao buscar segmento {}", resp.status(), self.current_segment_num)));
-                }
+            if !resp.status().is_success() {
+                return Err(io::Error::other(format!(
+                    "HTTP {} ao buscar segmento {}",
+                    resp.status(),
+                    self.current_segment_num
+                )));
+            }
 
-                let data = resp.bytes().map_err(io::Error::other)?.to_vec();
-                let dur = start_time.elapsed();
+            let data = resp.bytes().map_err(io::Error::other)?.to_vec();
+            let dur = start_time.elapsed();
 
-                // Notifica ABR para adaptação de qualidade
-                let quality_changed = self.abr.record_segment_download(data.len(), dur, self.segment_duration_sec);
-                if quality_changed {
-                    let _ = self.switch_to_active_representation();
-                }
+            // Notifica ABR para adaptação de qualidade
+            let quality_changed =
+                self.abr
+                    .record_segment_download(data.len(), dur, self.segment_duration_sec);
+            if quality_changed {
+                let _ = self.switch_to_active_representation();
+            }
 
-                self.buffer = data;
-                self.buffer_offset = 0;
-                self.current_segment_num += 1;
-                return Ok(true);
+            self.buffer = data;
+            self.buffer_offset = 0;
+            self.current_segment_num += 1;
+            return Ok(true);
         }
 
         // R-02: representação só com SegmentBase (sem SegmentTemplate) — sem segmentos
@@ -421,7 +468,11 @@ impl DashStreamSource {
             .get(base)
             .header("Range", format!("bytes={start}-{end}"))
             .send()
-            .map_err(|e| io::Error::other(format!("Falha ao baixar bloco SegmentBase DASH ({base}): {e}")))?;
+            .map_err(|e| {
+                io::Error::other(format!(
+                    "Falha ao baixar bloco SegmentBase DASH ({base}): {e}"
+                ))
+            })?;
 
         if !resp.status().is_success() {
             return Err(io::Error::other(format!(
@@ -461,7 +512,8 @@ impl io::Read for DashStreamSource {
         let available = self.buffer.len() - self.buffer_offset;
         let to_copy = buf.len().min(available);
 
-        buf[..to_copy].copy_from_slice(&self.buffer[self.buffer_offset..self.buffer_offset + to_copy]);
+        buf[..to_copy]
+            .copy_from_slice(&self.buffer[self.buffer_offset..self.buffer_offset + to_copy]);
         self.buffer_offset += to_copy;
         self.virtual_stream_position += to_copy as u64;
 
@@ -519,16 +571,25 @@ mod tests {
 
     #[test]
     fn test_normalize_dash_url() {
-        assert_eq!(normalize_dash_url("dash://example.com/live.mpd"), "https://example.com/live.mpd");
-        assert_eq!(normalize_dash_url("https://example.com/live.mpd"), "https://example.com/live.mpd");
-        assert_eq!(normalize_dash_url("http://example.com/live.mpd"), "http://example.com/live.mpd");
+        assert_eq!(
+            normalize_dash_url("dash://example.com/live.mpd"),
+            "https://example.com/live.mpd"
+        );
+        assert_eq!(
+            normalize_dash_url("https://example.com/live.mpd"),
+            "https://example.com/live.mpd"
+        );
+        assert_eq!(
+            normalize_dash_url("http://example.com/live.mpd"),
+            "http://example.com/live.mpd"
+        );
     }
 
     #[test]
     fn test_dash_stream_source_read_and_seek_with_mock_server() {
         let server = MockServer::start();
 
-        let mpd_xml = format!(r#"<?xml version="1.0" encoding="utf-8"?>
+        let mpd_xml = r#"<?xml version="1.0" encoding="utf-8"?>
 <MPD xmlns="urn:mpeg:dash:schema:mpd:2011"
      mediaPresentationDuration="PT6S"
      type="static">
@@ -542,7 +603,8 @@ mod tests {
       <Representation id="v1" bandwidth="1000000" width="1280" height="720" />
     </AdaptationSet>
   </Period>
-</MPD>"#);
+</MPD>"#
+            .to_string();
 
         let mpd_mock = server.mock(|when, then| {
             when.method(GET).path("/manifest.mpd");
@@ -588,7 +650,9 @@ mod tests {
 
         // Após seek, recebe o init segment de novo se ainda não foi entregue na nova posição
         let mut seek_init_buf = vec![0u8; 16];
-        let bytes_init2 = source.read(&mut seek_init_buf).expect("read init after seek");
+        let bytes_init2 = source
+            .read(&mut seek_init_buf)
+            .expect("read init after seek");
         assert_eq!(&seek_init_buf[..bytes_init2], b"INIT_HEADER_MOOV");
 
         // E em seguida recebe os dados do segmento 2
@@ -643,7 +707,10 @@ mod tests {
         let mpd_url = legit_server.url("/manifest.mpd");
         let result = DashStreamSource::open(&mpd_url);
 
-        assert!(result.is_err(), "open() deveria falhar ao detectar init segment cross-origin");
+        assert!(
+            result.is_err(),
+            "open() deveria falhar ao detectar init segment cross-origin"
+        );
         mpd_mock.assert();
         evil_mock.assert_calls(0);
     }
@@ -686,14 +753,17 @@ mod tests {
         });
 
         let mpd_url = server.url("/manifest.mpd");
-        let mut source = DashStreamSource::open(&mpd_url).expect("open deve ter sucesso (SegmentBase)");
+        let mut source =
+            DashStreamSource::open(&mpd_url).expect("open deve ter sucesso (SegmentBase)");
 
         let mut init_buf = vec![0u8; 64];
         let n_init = source.read(&mut init_buf).expect("read init segment");
         assert!(n_init > 0);
 
         let mut media_buf = vec![0u8; 64];
-        let n_media = source.read(&mut media_buf).expect("read media chunk (SegmentBase)");
+        let n_media = source
+            .read(&mut media_buf)
+            .expect("read media chunk (SegmentBase)");
         assert_eq!(&media_buf[..n_media], b"MEDIA_DATA_AFTER_INIT_HEADER");
 
         // O bloco recebido é menor que DASH_SEGMENT_BASE_CHUNK_SIZE (4 MB) — fim do arquivo.
@@ -740,14 +810,21 @@ mod tests {
         let mut source = DashStreamSource::open(&mpd_url).expect("open deve ter sucesso");
 
         // bandwidth=8_000_000 bps, duração=10s => estimated_total_bytes = 8_000_000*10/8 = 10_000_000
-        let total_bytes = source.estimated_total_bytes.expect("deveria estimar tamanho total");
-        source.seek_to_timestamp(5.0).expect("seek deve funcionar em SegmentBase");
+        let total_bytes = source
+            .estimated_total_bytes
+            .expect("deveria estimar tamanho total");
+        source
+            .seek_to_timestamp(5.0)
+            .expect("seek deve funcionar em SegmentBase");
 
         // Timestamp na metade da duração => offset-alvo na metade do tamanho estimado.
         let expected = (0.5 * total_bytes as f64) as u64;
         assert_eq!(source.segment_base_next_offset, expected);
         assert!(!source.segment_base_eof);
-        assert!(!source.has_delivered_init_for_active_rep, "seek deve reenviar o init segment");
+        assert!(
+            !source.has_delivered_init_for_active_rep,
+            "seek deve reenviar o init segment"
+        );
 
         mpd_mock.assert();
         media_mock.assert();

@@ -17,7 +17,7 @@ data class FtpServer(
     val port: Int,
     /** Vazio = login anonimo (T6.1). */
     val username: String,
-    val password: String
+    val password: String,
 ) {
     val isAnonymous: Boolean get() = username.isEmpty()
 }
@@ -28,23 +28,24 @@ data class FtpServer(
  */
 class FtpCredentialStore(
     private val dao: SavedServerDao,
-    private val credentials: ServerCredentialStore
+    private val credentials: ServerCredentialStore,
 ) {
     constructor(context: Context) : this(
         AppDatabase.getInstance(context).savedServerDao(),
-        ServerCredentialStore(context)
+        ServerCredentialStore(context),
     )
 
-    fun list(): List<FtpServer> = runBlocking(Dispatchers.IO) {
-        try {
-            dao.getByProtocol(ServerProtocol.FTP).map { saved ->
-                val password = credentials.getPassword(saved.id)
-                saved.toFtpServer(password = password)
+    fun list(): List<FtpServer> =
+        runBlocking(Dispatchers.IO) {
+            try {
+                dao.getByProtocol(ServerProtocol.FTP).map { saved ->
+                    val password = credentials.getPassword(saved.id)
+                    saved.toFtpServer(password = password)
+                }
+            } catch (e: Exception) {
+                emptyList()
             }
-        } catch (e: Exception) {
-            emptyList()
         }
-    }
 
     fun newId(): String = UUID.randomUUID().toString()
 

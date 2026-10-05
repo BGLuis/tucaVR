@@ -11,13 +11,13 @@ import org.junit.Test
 // doc-comment de metadata_wire.rs). Runtime Rust nunca roda no host (rust/core exige
 // NDK), entao este e o unico teste automatizado que exercita o formato de ponta a ponta.
 class MediaMetadataReaderParseTest {
-
     @Test
     fun parsesFullWireWithTagsAndTracks() {
-        val wire = "F\tmatroska\tMatroska / WebM\t7384000000\t25000000\t7\t0\n" +
-            "M\ttitle\tBig Buck Bunny\n" +
-            "T\tvideo\t0\thevc\t\t\t3840\t2160\t60000\t0\t0\t22000000\t1\n" +
-            "T\taudio\t1\teac3\tpor\t\t0\t0\t0\t6\t48000\t448000\t0"
+        val wire =
+            "F\tmatroska\tMatroska / WebM\t7384000000\t25000000\t7\t0\n" +
+                "M\ttitle\tBig Buck Bunny\n" +
+                "T\tvideo\t0\thevc\t\t\t3840\t2160\t60000\t0\t0\t22000000\t1\n" +
+                "T\taudio\t1\teac3\tpor\t\t0\t0\t0\t6\t48000\t448000\t0"
 
         val meta = MediaMetadataReader.parse(wire)!!
 
@@ -79,9 +79,10 @@ class MediaMetadataReaderParseTest {
 
     @Test
     fun unknownRecordTypeIsIgnoredWithoutBreakingTheRest() {
-        val wire = "F\tmp4\tMP4\t1000000\t500000\n" +
-            "X\tsomething\tfrom\tthe\tfuture\n" +
-            "T\tvideo\t0\th264\t\t\t1920\t1080\t30000\t0\t0\t500000\t1"
+        val wire =
+            "F\tmp4\tMP4\t1000000\t500000\n" +
+                "X\tsomething\tfrom\tthe\tfuture\n" +
+                "T\tvideo\t0\th264\t\t\t1920\t1080\t30000\t0\t0\t500000\t1"
 
         val meta = MediaMetadataReader.parse(wire)!!
 
@@ -91,8 +92,9 @@ class MediaMetadataReaderParseTest {
 
     @Test
     fun subtitleTrackWithUnknownLanguageParsesWithEmptyFields() {
-        val wire = "F\tmatroska\tMatroska\t1000000\t0\n" +
-            "T\tsubtitle\t0\tsubrip\t\t\t0\t0\t0\t0\t0\t0\t0"
+        val wire =
+            "F\tmatroska\tMatroska\t1000000\t0\n" +
+                "T\tsubtitle\t0\tsubrip\t\t\t0\t0\t0\t0\t0\t0\t0"
 
         val meta = MediaMetadataReader.parse(wire)!!
 

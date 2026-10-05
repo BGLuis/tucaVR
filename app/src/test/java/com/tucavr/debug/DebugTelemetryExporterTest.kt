@@ -2,7 +2,6 @@ package com.tucavr.debug
 
 import com.tucavr.navigation.PlaybackSource
 import com.tucavr.network.FtpServer
-import com.tucavr.network.SavedServer
 import com.tucavr.network.SftpServer
 import com.tucavr.network.SmbServer
 import org.junit.Assert.assertEquals
@@ -11,8 +10,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class DebugTelemetryExporterTest {
-
-    private val tsvHud = """
+    private val tsvHud =
+        """
         backend	VULKAN
         screen_mode	Vr180SBS
         stereo_layout	1
@@ -58,18 +57,19 @@ class DebugTelemetryExporterTest {
         quality_reason	GpuOverload
         draw_call_count	9
         triangle_count	12000
-    """.trimIndent()
+        """.trimIndent()
 
     @Test
     fun testCsvHeaderMatchesParsedRowCount() {
         val source = PlaybackSource.LocalFile("/sdcard/Movies/sample.mp4", 1024L)
-        val row = DebugTelemetryExporter.parseHudToCsvRow(
-            hudText = tsvHud,
-            sessionId = "a1b2c3d4",
-            timestampMs = 1700000000000L,
-            source = source,
-            elapsedSeconds = 10.5f
-        )
+        val row =
+            DebugTelemetryExporter.parseHudToCsvRow(
+                hudText = tsvHud,
+                sessionId = "a1b2c3d4",
+                timestampMs = 1700000000000L,
+                source = source,
+                elapsedSeconds = 10.5f,
+            )
 
         val headerCols = DebugTelemetryExporter.CSV_HEADER.split(',').size
         val rowCols = row.split(',').size
@@ -81,37 +81,41 @@ class DebugTelemetryExporterTest {
     fun testCsvHeaderCarriesSchemaVersionAsFirstColumn() {
         assertEquals("schema_version", DebugTelemetryExporter.CSV_HEADER.split(',').first())
 
-        val row = DebugTelemetryExporter.parseHudToCsvRow(
-            hudText = tsvHud,
-            sessionId = "a1b2c3d4",
-            timestampMs = 1700000000000L,
-            source = PlaybackSource.LocalFile("/sdcard/Movies/sample.mp4", 1024L)
-        )
+        val row =
+            DebugTelemetryExporter.parseHudToCsvRow(
+                hudText = tsvHud,
+                sessionId = "a1b2c3d4",
+                timestampMs = 1700000000000L,
+                source = PlaybackSource.LocalFile("/sdcard/Movies/sample.mp4", 1024L),
+            )
         assertEquals(DebugTelemetryExporter.SCHEMA_VERSION.toString(), row.split(',').first())
     }
 
     @Test
     fun testParseTsvHudFormat() {
-        val source = PlaybackSource.Sftp(
-            server = com.tucavr.network.SftpServer(
-                id = "sftp-1",
-                name = "NAS",
-                host = "10.10.10.44",
-                port = 2022,
-                username = "user",
-                password = "secret",
-                privateKey = null
-            ),
-            path = "videos/8k.mp4"
-        )
+        val source =
+            PlaybackSource.Sftp(
+                server =
+                    com.tucavr.network.SftpServer(
+                        id = "sftp-1",
+                        name = "NAS",
+                        host = "10.10.10.44",
+                        port = 2022,
+                        username = "user",
+                        password = "secret",
+                        privateKey = null,
+                    ),
+                path = "videos/8k.mp4",
+            )
 
-        val row = DebugTelemetryExporter.parseHudToCsvRow(
-            hudText = tsvHud,
-            sessionId = "d212b387",
-            timestampMs = 1700000002000L,
-            source = source,
-            elapsedSeconds = 157.25f
-        )
+        val row =
+            DebugTelemetryExporter.parseHudToCsvRow(
+                hudText = tsvHud,
+                sessionId = "d212b387",
+                timestampMs = 1700000002000L,
+                source = source,
+                elapsedSeconds = 157.25f,
+            )
 
         val cols = row.split(',')
         assertEquals(DebugTelemetryExporter.CSV_HEADER.split(',').size, cols.size)
@@ -202,19 +206,21 @@ class DebugTelemetryExporterTest {
 
     @Test
     fun testParseTsvHudFormatCarriesStallCountAndFreshnessFields() {
-        val hudWithStallFields = tsvHud + "\n" +
-            "video_stall_count\t3\n" +
-            "video_stats_age_ms\t1200\n" +
-            "network_stats_age_ms\t340\n" +
-            "audio_stats_age_ms\t0\n" +
-            "render_stats_age_ms\t0"
+        val hudWithStallFields =
+            tsvHud + "\n" +
+                "video_stall_count\t3\n" +
+                "video_stats_age_ms\t1200\n" +
+                "network_stats_age_ms\t340\n" +
+                "audio_stats_age_ms\t0\n" +
+                "render_stats_age_ms\t0"
 
-        val row = DebugTelemetryExporter.parseHudToCsvRow(
-            hudText = hudWithStallFields,
-            sessionId = "sess-stall",
-            timestampMs = 2000L,
-            source = null
-        )
+        val row =
+            DebugTelemetryExporter.parseHudToCsvRow(
+                hudText = hudWithStallFields,
+                sessionId = "sess-stall",
+                timestampMs = 2000L,
+                source = null,
+            )
         val cols = row.split(',')
         assertEquals("3", cols[49]) // video_stall_count
         assertEquals("1200", cols[50]) // video_stats_age_ms
@@ -225,21 +231,23 @@ class DebugTelemetryExporterTest {
 
     @Test
     fun testParseTsvHudFormatCarriesF4SourceCollectionFields() {
-        val hudWithF4Fields = tsvHud + "\n" +
-            "network_fetch_failures\t2\n" +
-            "network_sequential_streak\t5\n" +
-            "network_throttled\t1\n" +
-            "audio_queue_depth\t40\n" +
-            "decode_error_count\t1\n" +
-            "demux_corrupt_packet_count\t7\n" +
-            "audio_underrun_count\t9"
+        val hudWithF4Fields =
+            tsvHud + "\n" +
+                "network_fetch_failures\t2\n" +
+                "network_sequential_streak\t5\n" +
+                "network_throttled\t1\n" +
+                "audio_queue_depth\t40\n" +
+                "decode_error_count\t1\n" +
+                "demux_corrupt_packet_count\t7\n" +
+                "audio_underrun_count\t9"
 
-        val row = DebugTelemetryExporter.parseHudToCsvRow(
-            hudText = hudWithF4Fields,
-            sessionId = "sess-f4",
-            timestampMs = 3000L,
-            source = null
-        )
+        val row =
+            DebugTelemetryExporter.parseHudToCsvRow(
+                hudText = hudWithF4Fields,
+                sessionId = "sess-f4",
+                timestampMs = 3000L,
+                source = null,
+            )
         val cols = row.split(',')
         assertEquals("2", cols[54]) // network_fetch_failures
         assertEquals("5", cols[55]) // network_sequential_streak
@@ -252,17 +260,19 @@ class DebugTelemetryExporterTest {
 
     @Test
     fun testParseTsvHudFormatCarriesLoadPhaseTimings() {
-        val hudWithLoadPhases = tsvHud + "\n" +
-            "load_phase_demux_open_ms\t12\n" +
-            "load_phase_decoder_ready_ms\t45\n" +
-            "load_phase_audio_ready_ms\t60"
+        val hudWithLoadPhases =
+            tsvHud + "\n" +
+                "load_phase_demux_open_ms\t12\n" +
+                "load_phase_decoder_ready_ms\t45\n" +
+                "load_phase_audio_ready_ms\t60"
 
-        val row = DebugTelemetryExporter.parseHudToCsvRow(
-            hudText = hudWithLoadPhases,
-            sessionId = "sess-load",
-            timestampMs = 4000L,
-            source = null
-        )
+        val row =
+            DebugTelemetryExporter.parseHudToCsvRow(
+                hudText = hudWithLoadPhases,
+                sessionId = "sess-load",
+                timestampMs = 4000L,
+                source = null,
+            )
         val cols = row.split(',')
         assertEquals("12", cols[61]) // load_phase_demux_open_ms
         assertEquals("45", cols[62]) // load_phase_decoder_ready_ms
@@ -271,25 +281,27 @@ class DebugTelemetryExporterTest {
 
     @Test
     fun testParseTsvHudFormatCarriesPerformanceMetricsFields() {
-        val hudWithPerfMetrics = tsvHud + "\n" +
-            "perf_metrics_valid_mask\t1023\n" +
-            "perf_app_cpu_frametime_ms\t3.10\n" +
-            "perf_app_gpu_frametime_ms\t4.20\n" +
-            "perf_motion_to_photon_latency_ms\t18.50\n" +
-            "perf_compositor_cpu_frametime_ms\t2.00\n" +
-            "perf_compositor_gpu_frametime_ms\t2.50\n" +
-            "perf_compositor_dropped_frame_count\t3\n" +
-            "perf_compositor_spacewarp_mode\t1\n" +
-            "perf_device_cpu_util_average\t45.00\n" +
-            "perf_device_cpu_util_worst\t80.00\n" +
-            "perf_device_gpu_util\t60.00"
+        val hudWithPerfMetrics =
+            tsvHud + "\n" +
+                "perf_metrics_valid_mask\t1023\n" +
+                "perf_app_cpu_frametime_ms\t3.10\n" +
+                "perf_app_gpu_frametime_ms\t4.20\n" +
+                "perf_motion_to_photon_latency_ms\t18.50\n" +
+                "perf_compositor_cpu_frametime_ms\t2.00\n" +
+                "perf_compositor_gpu_frametime_ms\t2.50\n" +
+                "perf_compositor_dropped_frame_count\t3\n" +
+                "perf_compositor_spacewarp_mode\t1\n" +
+                "perf_device_cpu_util_average\t45.00\n" +
+                "perf_device_cpu_util_worst\t80.00\n" +
+                "perf_device_gpu_util\t60.00"
 
-        val row = DebugTelemetryExporter.parseHudToCsvRow(
-            hudText = hudWithPerfMetrics,
-            sessionId = "sess-perf",
-            timestampMs = 5000L,
-            source = null
-        )
+        val row =
+            DebugTelemetryExporter.parseHudToCsvRow(
+                hudText = hudWithPerfMetrics,
+                sessionId = "sess-perf",
+                timestampMs = 5000L,
+                source = null,
+            )
         val cols = row.split(',')
         assertEquals("1023", cols[64]) // perf_metrics_valid_mask
         assertEquals("3.10", cols[65]) // perf_app_cpu_frametime_ms
@@ -306,22 +318,24 @@ class DebugTelemetryExporterTest {
 
     @Test
     fun testParseTsvHudFormatCarriesFrameTimeHistogram() {
-        val hudWithHistogram = tsvHud + "\n" +
-            "hist_bucket_0\t100\n" +
-            "hist_bucket_1\t50\n" +
-            "hist_bucket_2\t20\n" +
-            "hist_bucket_3\t10\n" +
-            "hist_bucket_4\t5\n" +
-            "hist_bucket_5\t3\n" +
-            "hist_bucket_6\t2\n" +
-            "hist_bucket_7\t1"
+        val hudWithHistogram =
+            tsvHud + "\n" +
+                "hist_bucket_0\t100\n" +
+                "hist_bucket_1\t50\n" +
+                "hist_bucket_2\t20\n" +
+                "hist_bucket_3\t10\n" +
+                "hist_bucket_4\t5\n" +
+                "hist_bucket_5\t3\n" +
+                "hist_bucket_6\t2\n" +
+                "hist_bucket_7\t1"
 
-        val row = DebugTelemetryExporter.parseHudToCsvRow(
-            hudText = hudWithHistogram,
-            sessionId = "sess-hist",
-            timestampMs = 6000L,
-            source = null
-        )
+        val row =
+            DebugTelemetryExporter.parseHudToCsvRow(
+                hudText = hudWithHistogram,
+                sessionId = "sess-hist",
+                timestampMs = 6000L,
+                source = null,
+            )
         val cols = row.split(',')
         val expected = listOf("100", "50", "20", "10", "5", "3", "2", "1")
         for (i in expected.indices) {
@@ -331,12 +345,13 @@ class DebugTelemetryExporterTest {
 
     @Test
     fun testUnparsableHudProducesDefaultRowInsteadOfCrashing() {
-        val row = DebugTelemetryExporter.parseHudToCsvRow(
-            hudText = "ERROR: not ready",
-            sessionId = "sess1",
-            timestampMs = 1000L,
-            source = null
-        )
+        val row =
+            DebugTelemetryExporter.parseHudToCsvRow(
+                hudText = "ERROR: not ready",
+                sessionId = "sess1",
+                timestampMs = 1000L,
+                source = null,
+            )
         val cols = row.split(',')
         assertEquals(DebugTelemetryExporter.CSV_HEADER.split(',').size, cols.size)
         assertEquals("UNKNOWN", cols[4]) // backend default
@@ -371,19 +386,21 @@ class DebugTelemetryExporterTest {
 
     @Test
     fun testExtractSourceInfoRedactsSensibleData() {
-        val smbSource = PlaybackSource.Smb(
-            server = SmbServer(
-                id = "smb-1",
-                name = "MyNAS",
-                host = "192.168.1.50",
-                port = 445,
-                share = "videos",
-                username = "alice",
-                password = "ultra_secret_password",
-                domain = "WORKGROUP"
-            ),
-            path = "movies/avatar.mkv"
-        )
+        val smbSource =
+            PlaybackSource.Smb(
+                server =
+                    SmbServer(
+                        id = "smb-1",
+                        name = "MyNAS",
+                        host = "192.168.1.50",
+                        port = 445,
+                        share = "videos",
+                        username = "alice",
+                        password = "ultra_secret_password",
+                        domain = "WORKGROUP",
+                    ),
+                path = "movies/avatar.mkv",
+            )
 
         val (type, redactedPath) = DebugTelemetryExporter.extractSourceInfo(smbSource)
         assertEquals("Smb", type)
@@ -401,36 +418,55 @@ class DebugTelemetryExporterTest {
         // carries a real password field (Smb/Ftp/Sftp).
         val secretPassword = "ultra_secret_password_123"
 
-        val sources = listOf(
-            PlaybackSource.Smb(
-                server = SmbServer(
-                    id = "smb-1", name = "NAS", host = "192.168.1.50", port = 445,
-                    share = "videos", username = "alice", password = secretPassword, domain = "WORKGROUP"
+        val sources =
+            listOf(
+                PlaybackSource.Smb(
+                    server =
+                        SmbServer(
+                            id = "smb-1",
+                            name = "NAS",
+                            host = "192.168.1.50",
+                            port = 445,
+                            share = "videos",
+                            username = "alice",
+                            password = secretPassword,
+                            domain = "WORKGROUP",
+                        ),
+                    path = "movies/avatar.mkv",
                 ),
-                path = "movies/avatar.mkv"
-            ),
-            PlaybackSource.Ftp(
-                server = FtpServer(
-                    id = "ftp-1", name = "FTP", host = "files.local", port = 21,
-                    username = "bob", password = secretPassword
+                PlaybackSource.Ftp(
+                    server =
+                        FtpServer(
+                            id = "ftp-1",
+                            name = "FTP",
+                            host = "files.local",
+                            port = 21,
+                            username = "bob",
+                            password = secretPassword,
+                        ),
+                    path = "clip.mp4",
                 ),
-                path = "clip.mp4"
-            ),
-            PlaybackSource.Sftp(
-                server = SftpServer(
-                    id = "sftp-1", name = "NAS", host = "10.10.10.44", port = 2022,
-                    username = "user", password = secretPassword, privateKey = null
+                PlaybackSource.Sftp(
+                    server =
+                        SftpServer(
+                            id = "sftp-1",
+                            name = "NAS",
+                            host = "10.10.10.44",
+                            port = 2022,
+                            username = "user",
+                            password = secretPassword,
+                            privateKey = null,
+                        ),
+                    path = "videos/8k.mp4",
                 ),
-                path = "videos/8k.mp4"
             )
-        )
 
         for (source in sources) {
             val (sourceType, sourceRedacted) = DebugTelemetryExporter.extractSourceInfo(source)
             val crashLine = "Current Source: $sourceType $sourceRedacted"
             assertFalse(
                 "Vazamento de senha para fonte $sourceType: $crashLine",
-                crashLine.contains("password=") || crashLine.contains(secretPassword)
+                crashLine.contains("password=") || crashLine.contains(secretPassword),
             )
         }
     }
@@ -438,12 +474,13 @@ class DebugTelemetryExporterTest {
     @Test
     fun testCsvEscapingWithCommasAndQuotes() {
         val source = PlaybackSource.LocalFile("/sdcard/Movies/Title, with \"quotes\" and commas.mp4")
-        val row = DebugTelemetryExporter.parseHudToCsvRow(
-            hudText = tsvHud,
-            sessionId = "sess,1",
-            timestampMs = 1000L,
-            source = source
-        )
+        val row =
+            DebugTelemetryExporter.parseHudToCsvRow(
+                hudText = tsvHud,
+                sessionId = "sess,1",
+                timestampMs = 1000L,
+                source = source,
+            )
 
         assertTrue(row.contains("\"sess,1\""))
         assertTrue(row.contains("\"/sdcard/Movies/Title, with \"\"quotes\"\" and commas.mp4\""))

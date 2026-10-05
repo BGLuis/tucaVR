@@ -19,7 +19,12 @@ use std::time::Duration;
 
 /// `attempt` começa em 1 (primeira retentativa). `rand_unit` deve estar em
 /// `[0.0, 1.0]` — valores fora da faixa são grampeados, nunca geram pânico.
-pub fn backoff_with_jitter(attempt: u32, base: Duration, cap: Duration, rand_unit: f64) -> Duration {
+pub fn backoff_with_jitter(
+    attempt: u32,
+    base: Duration,
+    cap: Duration,
+    rand_unit: f64,
+) -> Duration {
     let exp_attempt = attempt.saturating_sub(1).min(31);
     let exponential = base.saturating_mul(1u32 << exp_attempt).min(cap);
     let half = exponential / 2;

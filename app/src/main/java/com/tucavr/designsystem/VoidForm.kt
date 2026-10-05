@@ -11,16 +11,16 @@ import com.tucavr.screens.ScreenHost
  * validação integrada e rolagem focada.
  */
 class VoidForm(context: Context) : LinearLayout(context) {
-
     private val fieldList = mutableListOf<VoidTextField>()
     var onFormSubmit: (() -> Unit)? = null
 
     init {
         orientation = VERTICAL
-        layoutParams = LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT
-        )
+        layoutParams =
+            LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            )
     }
 
     /**
@@ -32,17 +32,18 @@ class VoidForm(context: Context) : LinearLayout(context) {
         hint: String = "",
         kind: VoidFieldKind = VoidFieldKind.TEXT,
         actions: Set<VoidFieldAction> = setOf(VoidFieldAction.PASTE, VoidFieldAction.CONTEXT_MENU),
-        validator: ((String) -> String?)? = null
+        validator: ((String) -> String?)? = null,
     ): VoidTextField {
-        val f = VoidTextField(
-            context = context,
-            host = host,
-            label = label,
-            hint = hint,
-            kind = kind,
-            actions = actions,
-            validator = validator
-        )
+        val f =
+            VoidTextField(
+                context = context,
+                host = host,
+                label = label,
+                hint = hint,
+                kind = kind,
+                actions = actions,
+                validator = validator,
+            )
         addField(f)
         return f
     }
@@ -150,7 +151,11 @@ class VoidForm(context: Context) : LinearLayout(context) {
         /**
          * Função pura para resolução do próximo item visível (testável em JVM sem Android Views).
          */
-        fun <T> findNextVisibleItem(items: List<T>, currentIndex: Int, isVisible: (T) -> Boolean): T? {
+        fun <T> findNextVisibleItem(
+            items: List<T>,
+            currentIndex: Int,
+            isVisible: (T) -> Boolean,
+        ): T? {
             if (currentIndex < 0 || currentIndex >= items.size) return null
             for (i in (currentIndex + 1) until items.size) {
                 if (isVisible(items[i])) {

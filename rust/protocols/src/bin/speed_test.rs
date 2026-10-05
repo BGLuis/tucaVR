@@ -102,7 +102,9 @@ impl Args {
         let mut bools = std::collections::HashSet::new();
         let mut it = std::env::args().skip(1).peekable();
         while let Some(arg) = it.next() {
-            let Some(name) = arg.strip_prefix("--") else { continue };
+            let Some(name) = arg.strip_prefix("--") else {
+                continue;
+            };
             match name {
                 "accept-invalid-certs" => {
                     bools.insert(name.to_string());
@@ -132,17 +134,23 @@ impl Args {
         match self.get(name) {
             Some(v) => v.to_string(),
             None => {
-                eprintln!("speed_test: flag --{name} e obrigatoria para este protocolo (use --help)");
+                eprintln!(
+                    "speed_test: flag --{name} e obrigatoria para este protocolo (use --help)"
+                );
                 std::process::exit(2);
             }
         }
     }
 
     fn get_u16(&self, name: &str, default: u16) -> u16 {
-        self.get(name).map(|v| v.parse().unwrap_or_else(|_| {
-            eprintln!("speed_test: --{name} invalido, esperado numero");
-            std::process::exit(2);
-        })).unwrap_or(default)
+        self.get(name)
+            .map(|v| {
+                v.parse().unwrap_or_else(|_| {
+                    eprintln!("speed_test: --{name} invalido, esperado numero");
+                    std::process::exit(2);
+                })
+            })
+            .unwrap_or(default)
     }
 
     fn has_bool(&self, name: &str) -> bool {
@@ -245,7 +253,12 @@ fn main() -> ExitCode {
         });
         Duration::from_secs(secs)
     });
-    let block_size = (args.get_or("block-size-mb", &DEFAULT_BLOCK_SIZE_MB.to_string()).parse::<u64>().unwrap_or(DEFAULT_BLOCK_SIZE_MB) * 1024 * 1024) as usize;
+    let block_size = (args
+        .get_or("block-size-mb", &DEFAULT_BLOCK_SIZE_MB.to_string())
+        .parse::<u64>()
+        .unwrap_or(DEFAULT_BLOCK_SIZE_MB)
+        * 1024
+        * 1024) as usize;
 
     let internal_uri = build_internal_uri(&protocol, &args);
 
@@ -258,14 +271,24 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    eprintln!("speed_test: conexao aberta em {:.2}s", open_start.elapsed().as_secs_f64());
+    eprintln!(
+        "speed_test: conexao aberta em {:.2}s",
+        open_start.elapsed().as_secs_f64()
+    );
 
     let total_len = source.len();
     match total_len {
-        Some(len) => eprintln!("speed_test: tamanho do arquivo: {} ({:.2} MB)", len, human_mb(len)),
+        Some(len) => eprintln!(
+            "speed_test: tamanho do arquivo: {} ({:.2} MB)",
+            len,
+            human_mb(len)
+        ),
         None => eprintln!("speed_test: tamanho do arquivo desconhecido (protocolo nao informou)"),
     }
-    eprintln!("speed_test: lendo em blocos de {} MB...\n", block_size / (1024 * 1024));
+    eprintln!(
+        "speed_test: lendo em blocos de {} MB...\n",
+        block_size / (1024 * 1024)
+    );
 
     let mut buf = vec![0u8; block_size];
     let mut offset: u64 = 0;
@@ -303,7 +326,9 @@ fn main() -> ExitCode {
                     run_start.elapsed().as_secs_f64(),
                     human_mb(total_read)
                 );
-                eprintln!("speed_test: isto e um sinal de stall/falha real de rede ou servidor — nao um artefato do pipeline de playback do app.");
+                eprintln!(
+                    "speed_test: isto e um sinal de stall/falha real de rede ou servidor — nao um artefato do pipeline de playback do app."
+                );
                 return ExitCode::FAILURE;
             }
         };
@@ -347,7 +372,10 @@ fn main() -> ExitCode {
 
     eprintln!("\n=== resumo ===");
     eprintln!("protocolo:        {protocol}");
-    eprintln!("total lido:       {:.2} MB ({block_num} blocos)", human_mb(total_read));
+    eprintln!(
+        "total lido:       {:.2} MB ({block_num} blocos)",
+        human_mb(total_read)
+    );
     eprintln!("tempo total:      {:.2}s", total_elapsed.as_secs_f64());
     eprintln!("throughput medio: {avg_mbs:.2} MB/s");
     if block_num > 0 {

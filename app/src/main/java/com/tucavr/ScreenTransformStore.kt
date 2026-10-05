@@ -40,7 +40,13 @@ class ScreenTransformStore(context: Context) {
         )
     }
 
-    fun save(posX: Float, posY: Float, posZ: Float, scaleX: Float, scaleY: Float) {
+    fun save(
+        posX: Float,
+        posY: Float,
+        posZ: Float,
+        scaleX: Float,
+        scaleY: Float,
+    ) {
         val clampedScaleX = scaleX.coerceIn(MIN_SCALE_X, MAX_SCALE_X)
         val clampedScaleY = if (scaleY > 0f) scaleY else clampedScaleX * (9.0f / 16.0f)
         prefs.edit()

@@ -28,11 +28,15 @@ impl NfsClient {
         let mut args = XdrWriter::new();
         args.write_string(export_path);
 
-        let resp_bytes = self.rpc.call(PROG_MOUNT, VERSION_3, MOUNTPROC3_MNT, &args.into_bytes())?;
+        let resp_bytes =
+            self.rpc
+                .call(PROG_MOUNT, VERSION_3, MOUNTPROC3_MNT, &args.into_bytes())?;
         let mut reader = XdrReader::new(&resp_bytes);
         let status = reader.read_u32().map_err(|e| e.to_string())?;
         if status != 0 {
-            return Err(format!("MOUNT falhou para {export_path} com status {status}"));
+            return Err(format!(
+                "MOUNT falhou para {export_path} com status {status}"
+            ));
         }
 
         let handle = reader.read_bytes().map_err(|e| e.to_string())?;
@@ -41,7 +45,9 @@ impl NfsClient {
 
     /// Lista os exports disponíveis no servidor (MOUNTPROC3_EXPORT)
     pub fn list_exports(&mut self) -> Result<Vec<String>, String> {
-        let resp_bytes = self.rpc.call(PROG_MOUNT, VERSION_3, MOUNTPROC3_EXPORT, &[])?;
+        let resp_bytes = self
+            .rpc
+            .call(PROG_MOUNT, VERSION_3, MOUNTPROC3_EXPORT, &[])?;
         let mut reader = XdrReader::new(&resp_bytes);
         let mut exports = Vec::new();
 
@@ -66,16 +72,24 @@ impl NfsClient {
     }
 
     /// Procura um arquivo ou pasta dentro de um diretorio (LOOKUP)
-    pub fn lookup(&mut self, dir_handle: &[u8], name: &str) -> Result<(Vec<u8>, u64, bool), String> {
+    pub fn lookup(
+        &mut self,
+        dir_handle: &[u8],
+        name: &str,
+    ) -> Result<(Vec<u8>, u64, bool), String> {
         let mut args = XdrWriter::new();
         args.write_bytes(dir_handle);
         args.write_string(name);
 
-        let resp_bytes = self.rpc.call(PROG_NFS, VERSION_3, NFSPROC3_LOOKUP, &args.into_bytes())?;
+        let resp_bytes = self
+            .rpc
+            .call(PROG_NFS, VERSION_3, NFSPROC3_LOOKUP, &args.into_bytes())?;
         let mut reader = XdrReader::new(&resp_bytes);
         let status = reader.read_u32().map_err(|e| e.to_string())?;
         if status != NFS3_OK {
-            return Err(format!("NFS LOOKUP falhou para '{name}' com status {status}"));
+            return Err(format!(
+                "NFS LOOKUP falhou para '{name}' com status {status}"
+            ));
         }
 
         let obj_handle = reader.read_bytes().map_err(|e| e.to_string())?.to_vec();
@@ -98,7 +112,11 @@ impl NfsClient {
     }
 
     /// Resolve um caminho hierarquico ("pasta/subpasta/arquivo.mkv") a partir do handle raiz
-    pub fn resolve_path(&mut self, root_handle: &[u8], path: &str) -> Result<(Vec<u8>, u64, bool), String> {
+    pub fn resolve_path(
+        &mut self,
+        root_handle: &[u8],
+        path: &str,
+    ) -> Result<(Vec<u8>, u64, bool), String> {
         let segments: Vec<&str> = path
             .split('/')
             .map(|s| s.trim())
@@ -138,7 +156,14 @@ impl NfsClient {
             args.write_u32(4096); // dir_count
             args.write_u32(32768); // max_count
 
-            let resp_bytes = self.rpc.call(PROG_NFS, VERSION_3, NFSPROC3_READDIRPLUS, &args.into_bytes())
+            let resp_bytes = self
+                .rpc
+                .call(
+                    PROG_NFS,
+                    VERSION_3,
+                    NFSPROC3_READDIRPLUS,
+                    &args.into_bytes(),
+                )
                 .or_else(|_| {
                     // Fallback para READDIR basico
                     let mut basic_args = XdrWriter::new();
@@ -146,7 +171,12 @@ impl NfsClient {
                     basic_args.write_u64(cookie);
                     basic_args.write_raw(&cookieverf);
                     basic_args.write_u32(32768);
-                    self.rpc.call(PROG_NFS, VERSION_3, NFSPROC3_READDIR, &basic_args.into_bytes())
+                    self.rpc.call(
+                        PROG_NFS,
+                        VERSION_3,
+                        NFSPROC3_READDIR,
+                        &basic_args.into_bytes(),
+                    )
                 })?;
 
             let mut reader = XdrReader::new(&resp_bytes);
@@ -212,17 +242,26 @@ impl NfsClient {
     }
 
     /// Le um bloco de dados com offset posicional de 64 bits (READ)
-    pub fn read(&mut self, file_handle: &[u8], offset: u64, count: u32) -> Result<(Vec<u8>, bool), String> {
+    pub fn read(
+        &mut self,
+        file_handle: &[u8],
+        offset: u64,
+        count: u32,
+    ) -> Result<(Vec<u8>, bool), String> {
         let mut args = XdrWriter::new();
         args.write_bytes(file_handle);
         args.write_u64(offset);
         args.write_u32(count);
 
-        let resp_bytes = self.rpc.call(PROG_NFS, VERSION_3, NFSPROC3_READ, &args.into_bytes())?;
+        let resp_bytes = self
+            .rpc
+            .call(PROG_NFS, VERSION_3, NFSPROC3_READ, &args.into_bytes())?;
         let mut reader = XdrReader::new(&resp_bytes);
         let status = reader.read_u32().map_err(|e| e.to_string())?;
         if status != NFS3_OK {
-            return Err(format!("NFS READ falhou com status {status} no offset {offset}"));
+            return Err(format!(
+                "NFS READ falhou com status {status} no offset {offset}"
+            ));
         }
 
         // post_op_attr

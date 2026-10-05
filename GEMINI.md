@@ -148,8 +148,13 @@ cd rust && cargo test -p media-logic sync::tests::test_name
 # Run a specific Kotlin test class
 ./gradlew testDebugUnitTest --tests "com.tucavr.filebrowser.MediaSorterTest"
 
-# Kotlin linter
+# Kotlin linter and Android static analysis
 ./gradlew ktlintCheck
+./gradlew :app:lintDebug
+
+# C++ code formatting and shader validation
+clang-format --dry-run -Werror native/tests/*.cpp native/include/vk_math.h native/include/screen_mode.h native/include/subtitle_layout.h native/include/hand_tracking.h native/include/environment_config.h
+./scripts/check-shaders.sh
 ```
 
 ### 2. Network Protocol Integration Tests (Docker)
@@ -182,13 +187,13 @@ Features requiring true OpenXR swapchains, 6DoF controller tracking, haptics, an
 
 ## 7. Continuous Integration (CI)
 
-The GitHub Actions workflow (`.github/workflows/main.yml`) runs the following steps in sequence:
-1. `cargo clippy -p protocols -p media-logic -- -D warnings`
-2. `cargo test -p protocols -p media-logic`
-3. `ktlintCheck`
-4. `./gradlew testDebugUnitTest`
+The GitHub Actions workflow (`.github/workflows/main.yml`) runs decoupled parallel quality jobs on PRs and pushes:
+1. `security-and-workflows`: `actionlint` (workflow syntax), `cargo-deny` (Rust licenses/advisories), `gitleaks` (secret scan).
+2. `rust-checks`: `cargo fmt --check`, `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings`, `cargo test -p protocols -p media-logic`.
+3. `cpp-checks`: `clang-format --dry-run -Werror`, `./scripts/check-shaders.sh`, `ENABLE_ASAN=1 ./scripts/test-native-host.sh`.
+4. `android-checks`: `./gradlew ktlintCheck`, `./gradlew :app:lintDebug`, `./gradlew testDebugUnitTest`.
 
-A second job, `build-apk`, runs the full native C++ + Rust + Gradle build and uploads the APK as an artifact. It only runs in `BGLuis/vr-multmidia`, because the licensed Meta OpenXR Mobile SDK is checked out from a private repository with a secret; forks get `build-and-lint` only.
+A gated job, `build-apk`, depends on all above checks passing and runs the full native C++ + Rust + Gradle build to upload the Quest 3 APK. It runs on `main`/`develop` or via manual `workflow_dispatch`.
 
 ---
 
