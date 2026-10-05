@@ -9,7 +9,7 @@ edition = "2024"
 # timeout/reconexao em Wi-Fi instavel do Quest. Async/tokio por baixo; ver
 # smb/mod.rs sobre como isso e ponte para o mundo sincrono que o FFmpeg
 # custom I/O exige.
-smb2 = "0.18"
+smb2 = "0.27"
 tokio = { version = "1", features = ["rt", "net", "time", "macros"] }
 # Cliente HTTPS para o fallback de custom I/O (T7.2) — usado apenas quando o
 # libavformat bundled neste projeto nao tem suporte nativo a TLS (ver nota em
