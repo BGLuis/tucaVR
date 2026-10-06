@@ -25,9 +25,20 @@ sealed class DebugEvent {
 
     data class Freeze(val freezeCount: Int, override val bottleneckStage: BottleneckStage, override val snapshot: String) : DebugEvent()
 
-    data class VideoStallEnded(val videoStallCount: Int, val frameGapMsAtDetection: Float, override val bottleneckStage: BottleneckStage, override val snapshot: String) : DebugEvent()
+    data class VideoStallEnded(
+        val videoStallCount: Int,
+        val frameGapMsAtDetection: Float,
+        override val bottleneckStage: BottleneckStage,
+        override val snapshot: String,
+    ) : DebugEvent()
 
-    data class QualityTransition(val fromLevel: String, val toLevel: String, val reason: String, override val bottleneckStage: BottleneckStage, override val snapshot: String) : DebugEvent()
+    data class QualityTransition(
+        val fromLevel: String,
+        val toLevel: String,
+        val reason: String,
+        override val bottleneckStage: BottleneckStage,
+        override val snapshot: String,
+    ) : DebugEvent()
 }
 
 object DebugEventLog {
@@ -91,7 +102,8 @@ object DebugEventLog {
                         event.videoStallCount,
                         event.frameGapMsAtDetection,
                     )
-                is DebugEvent.QualityTransition -> "QUALITY_TRANSITION\tfrom=${event.fromLevel}\tto=${event.toLevel}\treason=${event.reason}"
+                is DebugEvent.QualityTransition ->
+                    "QUALITY_TRANSITION\tfrom=${event.fromLevel}\tto=${event.toLevel}\treason=${event.reason}"
             }
         return "$timestampMs\t$body\tstage=$stageStr\t${event.snapshot}"
     }

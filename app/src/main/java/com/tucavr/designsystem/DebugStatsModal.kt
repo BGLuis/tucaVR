@@ -449,11 +449,15 @@ class DebugStatsModal(
 
         debugStatValueViews["backend"]?.text = stats.backend
 
-        // F5 G5: campos ja coletados e nunca exibidos (relatorio 2.5) — zero coleta nova.
-        setValue("gpu_time", String.format(Locale.US, "%.2f / %.2f ms", stats.gpuTimeMs, stats.smoothedGpuTimeMs), stats.renderStatsAgeMs)
+        setValue(
+            "gpu_time",
+            String.format(Locale.US, "%.2f / %.2f ms", stats.gpuTimeMs, stats.smoothedGpuTimeMs),
+            stats.renderStatsAgeMs,
+        )
         debugStatValueViews["quality"]?.text = "${stats.qualityLevel} (${stats.qualityReason})"
         val mqsrStr = if (stats.mqsrEnabled) " [MQSR]" else ""
-        debugStatValueViews["upscaling"]?.text = String.format(Locale.US, "%s %.2f%s", stats.upscalingMode, stats.upscalingSharpness, mqsrStr)
+        debugStatValueViews["upscaling"]?.text =
+            String.format(Locale.US, "%s %.2f%s", stats.upscalingMode, stats.upscalingSharpness, mqsrStr)
         debugStatValueViews["drawcalls"]?.text = "${stats.drawCallCount} / ${stats.triangleCount}"
 
         // 2. Áudio & Sincronização

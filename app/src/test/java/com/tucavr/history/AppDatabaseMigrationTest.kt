@@ -116,7 +116,10 @@ class AppDatabaseMigrationTest {
 
         assertTrue("saved_servers deveria existir após MIGRATION_1_2", connection.tableExists("saved_servers"))
         assertEquals(
-            listOf("id", "name", "protocol", "host", "port", "path", "username", "domain", "isAutoDiscovered", "lastConnectedAt", "iconUrl", "extraJson"),
+            listOf(
+                "id", "name", "protocol", "host", "port", "path", "username", "domain",
+                "isAutoDiscovered", "lastConnectedAt", "iconUrl", "extraJson",
+            ),
             connection.columnNames("saved_servers"),
         )
     }

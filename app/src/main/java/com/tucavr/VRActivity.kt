@@ -572,16 +572,6 @@ class VRActivity : NativeActivity() {
     }
 
     /**
-     * Chamado por `VRPresentation.buildVoidEditText` quando um campo de
-     * texto do painel VR ganha foco. Foca o [nativeKeyboardProxy] (EditText
-     * real, ver comentario na declaracao) pra abrir o teclado nativo do
-     * Meta Quest, pre-preenchido com o texto atual de [target], e liga um
-     * `TextWatcher` que espelha cada mudanca de volta pra [target] — o
-     * usuario ve o texto aparecer no campo do painel VR normalmente, mesmo
-     * digitando num EditText que fisicamente vive noutra janela.
-     */
-
-    /**
      * Chamado por [VRPresentation] quando um [KeyboardBinding] (campo de texto do painel VR)
      * ganha foco. Foca o [nativeKeyboardProxy] para abrir o teclado nativo do Meta Quest,
      * pre-preenchido com o texto atual do [target], herda o `inputType` e `imeOptions`,

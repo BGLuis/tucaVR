@@ -119,12 +119,14 @@ object DebugTelemetryExporter {
         when (source) {
             is PlaybackSource.LocalFile -> "LocalFile" to source.path
             is PlaybackSource.Http -> "Http" to redactSource(source.url)
-            is PlaybackSource.Smb -> "Smb" to redactSource("smb://${source.server.host}:${source.server.port}/${source.server.share}/${source.path}")
+            is PlaybackSource.Smb ->
+                "Smb" to redactSource("smb://${source.server.host}:${source.server.port}/${source.server.share}/${source.path}")
             is PlaybackSource.Ftp -> "Ftp" to redactSource("ftp://${source.server.host}:${source.server.port}/${source.path}")
             is PlaybackSource.Sftp -> "Sftp" to redactSource("sftp://${source.server.host}:${source.server.port}/${source.path}")
             is PlaybackSource.Nfs -> "Nfs" to redactSource("nfs://${source.server.host}:${source.server.port}/${source.path}")
             is PlaybackSource.Dlna -> "Dlna" to redactSource(source.url)
-            is PlaybackSource.Webdav -> "Webdav" to redactSource("webdav://${source.server.host}:${source.server.port}${source.server.path}/${source.path}")
+            is PlaybackSource.Webdav ->
+                "Webdav" to redactSource("webdav://${source.server.host}:${source.server.port}${source.server.path}/${source.path}")
             null -> "Unknown" to ""
         }
 
