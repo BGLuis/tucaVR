@@ -484,8 +484,8 @@ sequenceDiagram
 
 Para detalhes complementares sobre subsistemas específicos do tucaVR:
 
-- **[docs/REQUIREMENTS.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/REQUIREMENTS.md):** Requisitos de negócio, priorização de fases e registro histórico de ADRs (ADR-001 a ADR-006).
-- **[docs/VULKAN-MIGRATION-PLAN.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/VULKAN-MIGRATION-PLAN.md):** Arquitetura detalhada da transição do pipeline gráfico GLES para Vulkan.
-- **[docs/TESTING-PLAN.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/TESTING-PLAN.md):** Estratégia de isolamento de testes unitários host, testes Docker de protocolos de rede e testes em hardware real.
-- **[docs/DEBUGGING.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/DEBUGGING.md):** Guia de depuração em dispositivo, comandos ADB, overlay de HUD em VR e inspeção de métricas de playback.
-- **[docs/NETWORK-IO-PERFORMANCE.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/NETWORK-IO-PERFORMANCE.md):** Análise de buffers de streaming e comportamento do prefetcher de rede.
+- **[docs/REQUIREMENTS.md](REQUIREMENTS.md):** Requisitos de negócio, priorização de fases e registro histórico de ADRs (ADR-001 a ADR-006).
+- **[docs/VULKAN-MIGRATION-PLAN.md](VULKAN-MIGRATION-PLAN.md):** Arquitetura detalhada da transição do pipeline gráfico GLES para Vulkan.
+- **[docs/TESTING-PLAN.md](TESTING-PLAN.md):** Estratégia de isolamento de testes unitários host, testes Docker de protocolos de rede e testes em hardware real.
+- **[docs/DEBUGGING.md](DEBUGGING.md):** Guia de depuração em dispositivo, comandos ADB, overlay de HUD em VR e inspeção de métricas de playback.
+- **[docs/NETWORK-IO-PERFORMANCE.md](NETWORK-IO-PERFORMANCE.md):** Análise de buffers de streaming e comportamento do prefetcher de rede.

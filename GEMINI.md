@@ -199,12 +199,12 @@ A gated job, `build-apk`, depends on all above checks passing and runs the full 
 
 ## 8. Documentation Index (`docs/`)
 
-- [`docs/ARCHITECTURE.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/ARCHITECTURE.md): Canonical technical system architecture, tri-layer topology, Vulkan/GLES pipelines, and sequence diagrams.
-- [`docs/REQUIREMENTS.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/REQUIREMENTS.md): Core business requirements, architecture decisions (ADR-001 through ADR-005).
-- [`docs/TESTING-PLAN.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/TESTING-PLAN.md): Detailed testing isolation rationale and hardware test inventory.
-- [`docs/VULKAN-MIGRATION-PLAN.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/VULKAN-MIGRATION-PLAN.md): Architecture, migration stages, and Vulkan rendering pipeline.
-- [`docs/DEBUGGING.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/DEBUGGING.md): On-device debugging guide, HUD overlay, and ADB trigger commands.
-- [`docs/i18n.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/i18n.md): Localization conventions, plurals, and string resource guidelines.
-- [`docs/NETWORK-IO-PERFORMANCE.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/NETWORK-IO-PERFORMANCE.md): Network buffer analysis and prefetching behavior.
-- [`docs/phases/`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/phases/): Task tracking by project phase (`PHASE-0.1-MVP.md` through `PHASE-1.0-RELEASE.md`).
-- [`docs/reports/`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/reports/): Feature investigation reports (3D format auto-detection, spatial audio, DLNA/UPnP, HLS, etc.).
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): Canonical technical system architecture, tri-layer topology, Vulkan/GLES pipelines, and sequence diagrams.
+- [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md): Core business requirements, architecture decisions (ADR-001 through ADR-005).
+- [`docs/TESTING-PLAN.md`](docs/TESTING-PLAN.md): Detailed testing isolation rationale and hardware test inventory.
+- [`docs/VULKAN-MIGRATION-PLAN.md`](docs/VULKAN-MIGRATION-PLAN.md): Architecture, migration stages, and Vulkan rendering pipeline.
+- [`docs/DEBUGGING.md`](docs/DEBUGGING.md): On-device debugging guide, HUD overlay, and ADB trigger commands.
+- [`docs/i18n.md`](docs/i18n.md): Localization conventions, plurals, and string resource guidelines.
+- [`docs/NETWORK-IO-PERFORMANCE.md`](docs/NETWORK-IO-PERFORMANCE.md): Network buffer analysis and prefetching behavior.
+- [`docs/phases/`](docs/phases/): Task tracking by project phase (`PHASE-0.1-MVP.md` through `PHASE-1.0-RELEASE.md`).
+- [`docs/reports/`](docs/reports/): Feature investigation reports (3D format auto-detection, spatial audio, DLNA/UPnP, HLS, etc.).
