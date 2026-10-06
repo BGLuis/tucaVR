@@ -77,7 +77,7 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 
 ## Coding style
 
-- **Rust** — `cargo fmt`, and `cargo clippy -- -D warnings` must pass. CI enforces the clippy gate.
+- **Rust** — `cargo fmt`, and `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings` must pass. CI enforces the clippy gate.
 - **Kotlin** — `./gradlew ktlintCheck`. It is currently non-blocking in CI, but please keep it clean anyway.
 - **C++** — C++20, matching the surrounding file. Respect the OVRFW shader conventions: the framework injects `FragmentHeader`/`VertexHeader` into custom shaders, so things like `fragColor` and `TransformVertex` are already declared for you.
 - **Comments and docs are written in Portuguese (BR).** That is the existing convention across the codebase — match it when adding comments to existing files. Issues, PRs and this guide are in English.
@@ -85,11 +85,12 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 
 ## Cross-cutting rules that are easy to get wrong
 
-**Screen/stereo mode enum.** The numeric encoding for 2D/SBS/OU/360/180/Cubemap/EAC variants must stay in sync across **three** places:
+**Screen/stereo mode enum.** The numeric encoding for 2D/SBS/OU/360/180/Cubemap/EAC variants must stay in sync across **four** places:
 
 1. the `SCREEN_MODE` comments in `rust/bridge/src/lib.rs`
 2. `enum class ScreenMode` in `native/include/screen_mode.h`
 3. the catalog in `ScreenFormatCatalog.kt`
+4. `Format3D::to_screen_mode_index` in `rust/media-logic/src/format3d.rs`
 
 Changing one without the others produces a silently wrong projection, not a compile error.
 
@@ -102,7 +103,7 @@ Changing one without the others produces a silently wrong projection, not a comp
 ```sh
 # Rust — host-testable crates only
 cd rust && cargo test -p protocols -p media-logic
-cd rust && cargo clippy -- -D warnings
+cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings
 
 # A single Rust test
 cd rust && cargo test -p media-logic sync::tests::some_test_name
@@ -141,7 +142,7 @@ There are also longer-running scripts for stability and memory work: `scripts/so
 2. Target `develop` unless you are fixing something that must go straight to a release.
 3. Fill in the [pull request template](.github/PULL_REQUEST_TEMPLATE.md) — in particular the "How has this been tested?" section, including whether you tested on a real headset.
 4. For anything visual, attach a screenshot or a short clip captured from the Quest. Describing a rendering change in prose rarely survives review.
-5. CI (`.github/workflows/main.yml`) runs, in order: `cargo clippy -D warnings`, `cargo test -p protocols -p media-logic`, `ktlintCheck` (non-blocking) and `./gradlew testDebugUnitTest`. The full native build runs in a separate job that needs the licensed Meta SDK.
+5. CI (`.github/workflows/main.yml`) runs decoupled parallel jobs: `cargo clippy -p protocols -p media-logic -- -D warnings`, `cargo test -p protocols -p media-logic`, `ktlintCheck`, Android Lint and `./gradlew testDebugUnitTest`, plus C++ host tests and shader validation. The full native build (`build-apk`) runs in a separate gated job that builds the Quest 3 APK.
 
 Small, focused pull requests get reviewed much faster than large ones. If you are planning something substantial — a new protocol, a rendering change, a new phase task — open an issue first so the approach can be discussed before you invest the time.
 

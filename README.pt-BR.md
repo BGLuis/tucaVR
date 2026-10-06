@@ -201,7 +201,7 @@ O `scripts/build.sh` já define todas elas; você só precisa configurá-las man
 cd rust && cargo test -p protocols -p media-logic
 
 # Lint Rust (o CI roda isso com -D warnings)
-cd rust && cargo clippy -- -D warnings
+cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings
 
 # Testes unitários JVM do Kotlin + lint
 ./gradlew testDebugUnitTest

@@ -212,7 +212,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 cd rust && cargo test -p protocols -p media-logic
 
 # Rust lint (CI runs this with -D warnings)
-cd rust && cargo clippy -- -D warnings
+cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings
 
 # Kotlin JVM unit tests + lint
 ./gradlew testDebugUnitTest

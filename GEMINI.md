@@ -137,7 +137,7 @@ Because `rust/core`, `rust/audio`, and `rust/bridge` require the NDK, only `prot
 cd rust && cargo test -p protocols -p media-logic
 
 # Rust linter (enforced in CI with -D warnings)
-cd rust && cargo clippy -- -D warnings
+cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings
 
 # Run a specific Rust test
 cd rust && cargo test -p media-logic sync::tests::test_name
