@@ -78,7 +78,7 @@ impl ErrorRingBuffer {
             .unwrap_or_default()
     }
 
-    /// F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): `all()` serializado como TSV
+    /// F4: `all()` serializado como TSV
     /// (uma linha por erro: `timestamp_ms\tsession_id\tmessage`, campo vazio quando
     /// `session_id` é `None`) — mesma convenção de `debug_stats.h::SerializeDebugStats`,
     /// pra cruzar a fronteira FFI sem expor `Vec<PlaybackError>` pelo C ABI. Quebras de

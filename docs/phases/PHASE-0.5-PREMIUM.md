@@ -645,10 +645,9 @@ Ambiente Espacial:
   - Textura ASTC compactada
   - Incluir `config.json` com posição da tela e spawn point
 
-- [ ] **T3.2** — Implementar **skybox cubemap de alta qualidade** (C++):
-  - 6 faces de 2048×2048 (ou 4096×4096 para mais detalhe) em ASTC
-  - Renderizar ANTES de qualquer geometria (depth write off)
-  - Rotação apenas (não translação) — skybox é "infinitamente distante"
+- [x] **T3.2** — Implementar **skybox cubemap de alta qualidade** (C++):
+  - Renderizado antes de geometrias com rotação pura sem translação
+  - Implementado em `native/src/vr_player_app_vulkan.cpp` (`CreateSkyboxPipeline`, `LoadEnvironmentSkybox`, `DrawSkyboxIfLoaded`) integrado a `environments/<id>/config.ini` e shaders SPIR-V (`kSkyboxVertSpirv`, `kSkyboxFragSpirv`).
   ```cpp
   void renderSkybox(const glm::mat4 viewProj[2]) {
       glDepthMask(GL_FALSE);

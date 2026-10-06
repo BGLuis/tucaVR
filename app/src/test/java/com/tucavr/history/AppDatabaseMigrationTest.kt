@@ -10,9 +10,7 @@ import java.sql.Connection
 import java.sql.DriverManager
 
 /**
- * Testes de migração do Room para `AppDatabase` (Fase 0.4, item R-05 de
- * `docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md` — pedido também pelo relatório anterior,
- * `PHASE-0.4-07-TRANSVERSAIS-E-DOD.md:113-115`).
+ * Testes de migração do Room para `AppDatabase` (Fase 0.4, item R-05).
  *
  * O projeto evita Robolectric de propósito (ver comentário em `app/build.gradle.kts` sobre os
  * testes de `filebrowser`), e não há source set `androidTest`/emulador disponível para rodar

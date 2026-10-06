@@ -130,7 +130,7 @@ extern "C" {
     // Fase 0.4 T5: Foveated Rendering — ver ApplyFoveation abaixo.
     extern uint32_t get_foveation_enabled();
     extern uint32_t get_foveation_mode();
-    // docs/reports/MODO-AMBIENTE.md: halo de luz ambiente (Vulkan-only) — ver UpdateInteraction.
+    // Modo Ambiente: halo de luz ambiente (Vulkan-only) — ver UpdateInteraction.
     extern uint32_t get_ambient_mode_enabled();
     // Upscaling de vídeo (Vulkan MQSR / SGSR1)
     extern uint32_t get_upscaling_mode();
@@ -168,9 +168,8 @@ extern "C" {
     );
     extern uint32_t quality_controller_get_level();
     extern uint32_t quality_controller_get_reason();
-    // P-05 (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md): tid das 3 threads do
-    // pipeline Rust, pra registro via xrSetAndroidApplicationThreadKHR. Retornam 0 enquanto a
-    // thread correspondente ainda nao subiu.
+    // P-05: tid das 3 threads do pipeline Rust, pra registro via xrSetAndroidApplicationThreadKHR.
+    // Retornam 0 enquanto a thread correspondente ainda nao subiu.
     extern int32_t get_demux_thread_tid();
     extern int32_t get_video_thread_tid();
     extern int32_t get_audio_thread_tid();
@@ -224,8 +223,7 @@ extern "C" {
     extern uint64_t get_network_blocks_fetched();
     extern uint64_t get_network_blocks_discarded();
     extern uint32_t get_last_seek_latency_ms(); // debug, ver docs/DEBUGGING.md
-    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): coleta nova na origem — contadores
-    // que ja existiam no lado Rust mas nao tinham exposicao FFI nem campo no wire.
+    // F4: coleta nova na origem — contadores que ja existiam no lado Rust mas nao tinham exposicao FFI nem campo no wire.
     extern uint64_t get_network_fetch_failures();
     extern uint32_t get_network_sequential_streak();
     extern uint32_t get_network_throttled();
@@ -378,7 +376,7 @@ constexpr uint32_t kModalTexHeight = 768;
 constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz
 constexpr float kFreezeThresholdMs = 250.0f; // stall claro, nao so reprojection
 
-// F5 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md), G2: bordas do histograma de frame
+// F5, G2: bordas do histograma de frame
 // time. 11.1 = cadencia alvo a 90Hz, 20 = kStutterThresholdMs, 250 = kFreezeThresholdMs —
 // os tres marcos que o relatorio pede desenhados no grafico; os demais so dao granularidade
 // na faixa intermediaria. 7 bordas -> 8 buckets (o ultimo pega tudo acima de 250ms).
@@ -451,7 +449,7 @@ StereoParams GetStereoParams(ScreenMode mode, int eye) {
     return p;
 }
 
-// R-07 (docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): contadores de draw call e
+// R-07: contadores de draw call e
 // triangulos do frame Vulkan em construcao — resetados uma vez por frame (antes do loop de
 // olhos) e somados em AppState.lastFrameDrawCallCount/lastFrameTriangleCount ao final do frame,
 // para alimentar o HUD/CSV de debug. Pre-requisito citado pelo relatorio transversal da Fase 0.4
@@ -501,7 +499,7 @@ PFN LoadXrFunction(XrInstance instance, const char* name) {
 // Forward declaration — struct AppState so e definida mais abaixo neste arquivo.
 struct AppState;
 
-// Auditoria pos-reinicio (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md, P-01/P-04/P-06):
+// Auditoria pos-reinicio (P-01/P-04/P-06):
 // unico ponto que deve escrever em state.displayRefreshRate depois da sessao criada. Pede a
 // taxa e SO atualiza o campo a partir de uma leitura confirmada via xrGetDisplayRefreshRateFB —
 // nunca a partir do valor pedido, que pode ser rejeitado silenciosamente pelo runtime. E
@@ -552,7 +550,7 @@ struct VideoFrame {
     uint64_t lastUsedFrame = 0;
 };
 
-// D-04 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): sinal de frescor por grupo de campos.
+// D-04: sinal de frescor por grupo de campos.
 // Em vez de assumir que uma leitura e "atual" so porque foi buscada agora, rastreia a ultima
 // vez que um contador MONOTONICO do grupo de fato mudou de valor — se `net_blocks_fetched`
 // (por exemplo) fica parado por varias amostras, isso significa "sem dado novo ha Xms",
@@ -629,7 +627,7 @@ struct AppState {
 
     // Fase 0.2 T14 / Fase 0.4: Monitoramento Térmico e Qualidade Adaptativa (RNF-PERF-006)
     PFN_xrRequestDisplayRefreshRateFB pfnRequestDisplayRefreshRateFB = nullptr;
-    // Auditoria pos-reinicio (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md, P-01/P-06):
+    // Auditoria pos-reinicio (P-01/P-06):
     // a taxa real so pode ser conhecida via enumeracao + leitura confirmada do runtime — nunca
     // assumir o valor pedido. Ver RequestAndConfirmDisplayRefreshRate().
     PFN_xrEnumerateDisplayRefreshRatesFB pfnEnumerateDisplayRefreshRatesFB = nullptr;
@@ -677,7 +675,7 @@ struct AppState {
     float timestampPeriod = 0.0f;
     float lastGpuTimeMs = 0.0f;
     float smoothedGpuTimeMs = 0.0f;
-    // R-07 (docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): draw calls e triangulos do
+    // R-07: draw calls e triangulos do
     // ultimo frame completo (ambos os olhos), para o HUD de debug — ver g_frameDrawCallCount.
     uint32_t lastFrameDrawCallCount = 0;
     uint64_t lastFrameTriangleCount = 0;
@@ -688,7 +686,7 @@ struct AppState {
     bool upscalingEnabled = false;
     bool supportsMqsr = false;
     bool supportsPerfMetrics = false;
-    // F3 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): XR_META_performance_metrics.
+    // F3: XR_META_performance_metrics.
     // `supportsPerfMetrics` acima so significa que a EXTENSAO foi habilitada — o SISTEMA de
     // metricas precisa ser habilitado a parte via xrSetPerformanceMetricsStateMETA (ver
     // SetupPerformanceMetrics), ou toda query devolve XR_ERROR_VALIDATION_FAILURE.
@@ -710,8 +708,7 @@ struct AppState {
     // Resultados da ultima query bem-sucedida (1Hz, ver PollPerformanceMetrics) + bitmask de
     // validade (D-04: "nao suportado" tem que ser distinto de zero — bit 0 = contador nao
     // trouxe nenhum valor valido nesta amostra, nao "o valor e zero"). Especificacao PROIBE
-    // usar estes contadores para governar comportamento (ver 8.1 do relatorio) — diagnostico
-    // apenas, nunca entrada do QualityController.
+    // usar estes contadores para governar comportamento — diagnostico apenas, nunca entrada do QualityController.
     uint32_t perfMetricsValidMask = 0;
     float perfAppCpuFrametimeMs = 0.0f;
     float perfAppGpuFrametimeMs = 0.0f;
@@ -724,11 +721,11 @@ struct AppState {
     float perfDeviceCpuUtilWorst = 0.0f;
     float perfDeviceGpuUtil = 0.0f;
 
-    // F8 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, 8.2): ADPF — API 33+
+    // F8: ADPF — API 33+
     // (android_get_device_api_level(), verificado em runtime; NAO e telemetria, e uma API de
     // ESCRITA: o app declara a duracao de frame alvo e reporta a real, o sistema ajusta
     // escalonamento/frequencia de CPU/GPU. Ao contrario dos contadores de XR_META_performance_
-    // metrics (8.1), esta e FEITA para governar comportamento do SO — nao confundir as duas.
+    // metrics, esta e FEITA para governar comportamento do SO — nao confundir as duas.
     APerformanceHintManager* adpfManager = nullptr;
     APerformanceHintSession* adpfSession = nullptr;
     bool supportsAdpf = false;
@@ -861,13 +858,13 @@ struct AppState {
     VkImageView skyboxImageView = VK_NULL_HANDLE;
     bool skyboxLoaded = false;
 
-    // docs/reports/MODO-AMBIENTE.md: halo de luz atras da tela derivado da
+    // Modo Ambiente: halo de luz atras da tela derivado da
     // cor do frame (bias lighting). So caminho Vulkan, so ambiente Void
     // (ver DrawAmbientHalo). Alvo offscreen 32x18 com ping-pong (2 imagens)
     // pra suavizacao temporal por-textura: o passe de reducao (F2) le a
     // imagem "anterior" (a que NAO esta escrevendo) e mistura com a nova
     // media antes de escrever na "atual" — evita flash de tela cheia num
-    // corte de cena (2.3 do relatorio) sem precisar reduzir a cor a um
+    // corte de cena sem precisar reduzir a cor a um
     // unico RGB (o halo mantem uma leve variacao espacial). Reusa
     // state.uiSampler/uiDescriptorSetLayout (mesmo shape: sampler2D RGBA
     // linear/clamp) — so precisa do proprio descriptor pool, no molde de
@@ -1115,7 +1112,7 @@ struct AppState {
     float msSinceLastVideoFrame = 0.0f;
     bool videoStallLogged = false;
 
-    // D-02 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): contador cumulativo de episodios
+    // D-02: contador cumulativo de episodios
     // de stall de video JA CONCLUIDOS (msSinceLastVideoFrame excedeu kVideoStallThresholdMs e
     // um novo frame chegou depois). Distinto de stutterCount/freezeCount acima, que medem o
     // LOOP DE RENDER — um stall de video pode ficar invisivel atras de um loop "saudavel" a
@@ -1324,11 +1321,9 @@ void CreateXrInstance(AppState& state) {
     state.supportsPerfMetrics = isExtensionSupported(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME);
     if (state.supportsPerfMetrics) {
         extensions.push_back(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME);
-        // F3 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): mensagem corrigida — isto so diz
-        // que a EXTENSAO foi negociada com o runtime. O SISTEMA de metricas em si so liga
-        // depois de xrSetPerformanceMetricsStateMETA (ver SetupPerformanceMetrics, chamado
-        // apos a sessao existir); antes a mensagem "detectada e habilitada" sugeria as duas
-        // coisas juntas, quando nenhuma query jamais era feita.
+        // F3: mensagem corrigida — isto so diz que a EXTENSAO foi negociada com o runtime.
+        // O SISTEMA de metricas em si so liga depois de xrSetPerformanceMetricsStateMETA
+        // (ver SetupPerformanceMetrics, chamado apos a sessao existir).
         LOGI("OpenXR: Extensão XR_META_performance_metrics detectada (sistema de métricas habilitado separadamente após a criação da sessão)");
     }
 
@@ -1355,8 +1350,7 @@ void CreateXrInstance(AppState& state) {
     }
 
     // Auditoria pos-reinicio (P-05): declara as threads do app como criticas ao runtime XR,
-    // pra evitar que o escalonador do Android as coloque em nucleos pequenos entre um boot e
-    // outro (ver docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+    // pra evitar que o escalonador do Android as coloque em nucleos pequenos entre um boot e outro.
     state.supportsAndroidThreadSettings = isExtensionSupported(XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME);
     if (state.supportsAndroidThreadSettings) {
         extensions.push_back(XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME);
@@ -1826,8 +1820,8 @@ void SetupPassthrough(AppState& state) {
     LOGI("Passthrough: XrPassthroughFB + layer criados (pausados)");
 }
 
-// F3 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): resolve os function pointers e os
-// XrPath dos 11 contadores (secao 8.1 do relatorio; per-core cpuN_utilization deliberadamente
+// F3: resolve os function pointers e os
+// XrPath dos 11 contadores (per-core cpuN_utilization deliberadamente
 // fora — custaria mais um campo por nucleo do XR2 Gen 2 pelo mesmo diagnostico ja coberto por
 // cpu_utilization_average/worst), e habilita o SISTEMA de metricas via
 // xrSetPerformanceMetricsStateMETA (distinto de so ter a extensao negociada — ver o log
@@ -1913,12 +1907,12 @@ void PollPerformanceMetrics(AppState& state) {
     state.perfMetricsValidMask = mask;
 }
 
-// F8 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, 8.2): declara à ADPF a duração de frame
+// F8: declara à ADPF a duração de frame
 // alvo e a thread que faz o trabalho critico — mesma thread ja registrada via
 // xrSetAndroidApplicationThreadKHR logo antes desta chamada (ver comentario la: "unica thread
 // nativa do app"). API 33+; checa a versao do SISTEMA em runtime (nao so a de compilacao),
 // porque o app roda em minSdk 26 mesmo com o manifest limitando supportedDevices a quest3/
-// quest3s (que reportam API 34 — ver relatorio 8.2 — mas o build nao pode assumir isso).
+// quest3s (que reportam API 34 mas o build nao pode assumir isso).
 void SetupAdpfSession(AppState& state) {
     if (android_get_device_api_level() < 33) {
         LOGI("ADPF: API do dispositivo < 33 — sessao nao criada");
@@ -5548,7 +5542,7 @@ static void DrawEnvironmentIfLoaded(
 }
 
 // ============================================================================
-// docs/reports/MODO-AMBIENTE.md — Modo Ambiente (halo de luz derivado do frame)
+// Modo Ambiente (halo de luz derivado do frame)
 // ============================================================================
 //
 // F1 (CreateAmbientTarget): primeiro render target offscreen do app — ate
@@ -7010,8 +7004,7 @@ void RenderFrame(AppState& state) {
             state.smoothedFps = (state.smoothedFps <= 0.0f)
                 ? instFps : (state.smoothedFps * 0.9f + instFps * 0.1f);
             // P-06: cap contra a taxa real (nao 90 fixo) — acima de 90Hz (taxas estendidas do
-            // Horizon OS >= v2.7) o cap fixo saturava errado, e abaixo de 90 (72Hz) mentia pra
-            // cima (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+            // Horizon OS >= v2.7) o cap fixo saturava errado, e abaixo de 90 (72Hz) mentia pra cima.
             if (state.smoothedFps > state.displayRefreshRate) {
                 state.smoothedFps = state.displayRefreshRate;
             }
@@ -7134,7 +7127,7 @@ void RenderFrame(AppState& state) {
                 // mapeia thermal_level>=3 para o nivel Low (target_fps=72), e o bloco de
                 // avaliacao de qualidade abaixo e o unico que chama
                 // RequestAndConfirmDisplayRefreshRate — dono unico da escrita de
-                // state.displayRefreshRate (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+                // state.displayRefreshRate.
             }
         }
 
@@ -7330,7 +7323,7 @@ void RenderFrame(AppState& state) {
 
         // Avaliacao de Qualidade Adaptativa & Escala de Resolucao unificada via Rust media-logic (F1/F2)
         //
-        // P-02 (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md): QualitySample foi
+        // P-02: QualitySample foi
         // desenhado para amostragem ~1Hz (ver doc do struct em
         // rust/media-logic/src/quality.rs) mas era avaliado a cada frame renderizado
         // (~90Hz) — a historese das regras vira uma cascata de dezenas de ms em vez de
@@ -7438,8 +7431,8 @@ void RenderFrame(AppState& state) {
             beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             VKR(vkBeginCommandBuffer(cmd, &beginInfo));
 
-            // docs/reports/MODO-AMBIENTE.md: passe de reducao do halo, 1x
-            // por frame (nao por olho — armadilha 1 do relatorio), gravado
+            // Modo Ambiente: passe de reducao do halo, 1x
+            // por frame (nao por olho), gravado
             // no comeco do command buffer do 1o olho, antes do render pass
             // principal desse olho comecar.
             if (eye == 0) {
@@ -7831,8 +7824,7 @@ void PollXrEvents(AppState& state) {
             }
         } else if (eventBuffer.type == XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB) {
             // P-01: mudanca de taxa iniciada pelo sistema (fora de qualquer pedido do app) —
-            // sem este ramo o app nunca ficava sabendo (docs/reports/
-            // TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+            // sem este ramo o app nunca ficava sabendo.
             const auto* event = reinterpret_cast<const XrEventDataDisplayRefreshRateChangedFB*>(&eventBuffer);
             state.displayRefreshRate = event->toDisplayRefreshRate;
             LOGI("VRPlayerAppVK: refresh rate mudou (evento do sistema) %.1fHz -> %.1fHz",
@@ -7848,7 +7840,7 @@ void DestroyAppResources(AppState& state) {
     // 1. Limpar cache de frames de vídeo (YCbCr)
     ClearVideoImageCache(state);
 
-    // docs/reports/MODO-AMBIENTE.md: Modo Ambiente (halo de luz) — nao usa
+    // Modo Ambiente (halo de luz) — nao usa
     // nenhum handle de propriedade do video/UI, so os seus proprios.
     DestroyAmbientResources(state);
 
@@ -8304,7 +8296,7 @@ void android_main(android_app* app) {
     SetupHandTracking(state);
 
     // P-05: registra a thread principal (unica thread nativa do app — nao ha render thread
-    // separada, ver docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md) como critica ao
+    // separada) como critica ao
     // runtime XR, antes de qualquer outra configuracao — best-effort, nao aborta em falha.
     if (state.supportsAndroidThreadSettings) {
         state.pfnSetAndroidApplicationThreadKHR =
@@ -8335,8 +8327,7 @@ void android_main(android_app* app) {
     if (state.pfnRequestDisplayRefreshRateFB != nullptr) {
         // P-01: enumera as taxas realmente suportadas pelo runtime em vez de assumir 90Hz —
         // Meta orienta explicitamente a nao assumir e a cair para uma taxa da lista quando o
-        // pedido preferido nao tiver sucesso (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md,
-        // secao 5).
+        // pedido preferido nao tiver sucesso.
         float chosenHz = 90.0f;
         if (state.pfnEnumerateDisplayRefreshRatesFB != nullptr) {
             uint32_t rateCount = 0;
@@ -8402,7 +8393,7 @@ void android_main(android_app* app) {
     // Ambientes Virtuais 3D (Fase 0.3 §1 / Fase 0.5 §3)
     CreateEnvironmentPipeline(state);
     CreateSkyboxPipeline(state);
-    // docs/reports/MODO-AMBIENTE.md: Modo Ambiente (halo de luz). Depois de
+    // Modo Ambiente (halo de luz). Depois de
     // CreateUiPipeline de proposito — reusa uiSampler/uiDescriptorSetLayout.
     CreateAmbientTarget(state);
     CreateAmbientPipelines(state);

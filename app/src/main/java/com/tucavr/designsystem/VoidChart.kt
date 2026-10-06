@@ -12,17 +12,14 @@ import kotlin.math.max
 import kotlin.math.min
 
 /**
- * F5 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, seção 2.5): primeiro `View` com `onDraw`
- * customizado do projeto — nenhum existia antes desta fase. Renderiza os 5 gráficos (G1-G5)
+ * F5: `View` com `onDraw` customizado para diagnóstico em tempo real. Renderiza os 5 gráficos (G1-G5)
  * via composição de [ChartSeries]/[ChartMarker]/[TimelineSample] em vez de 5 classes bespoke,
  * já que os 5 casos se reduzem a: linha, área, barras (histograma) ou faixa colorida por
  * estado (timeline) — todos sobre o mesmo eixo X (tempo ou índice de bucket) e eixo Y (valor).
  *
- * IMPORTANTE (pitfall registrado no relatório, seção 4): o quad do modal é 1024×768px
- * projetando um painel de 760×580dp — traços de 1px desaparecem nessa densidade. Todo
- * dimensionamento aqui usa dp (via [VoidTheme.dp]) com espessura mínima de 2dp, mas a
- * legibilidade real só pode ser confirmada no headset (não verificado nesta sessão — ver
- * docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md seção 5).
+ * IMPORTANTE: o quad do modal é 1024×768px projetando um painel de 760×580dp — traços de
+ * 1px desaparecem nessa densidade. Todo dimensionamento aqui usa dp (via [VoidTheme.dp])
+ * com espessura mínima de 2dp, mas a legibilidade real só pode ser confirmada no headset.
  */
 enum class SeriesStyle { LINE, AREA, BARS }
 

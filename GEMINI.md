@@ -214,4 +214,3 @@ A gated job, `build-apk`, depends on all above checks passing and runs the full 
 - [`docs/i18n.md`](docs/i18n.md): Localization conventions, plurals, and string resource guidelines.
 - [`docs/NETWORK-IO-PERFORMANCE.md`](docs/NETWORK-IO-PERFORMANCE.md): Network buffer analysis and prefetching behavior.
 - [`docs/phases/`](docs/phases/): Task tracking by project phase (`PHASE-0.1-MVP.md` through `PHASE-1.0-RELEASE.md`).
-- [`docs/reports/`](docs/reports/): Feature investigation reports (3D format auto-detection, spatial audio, DLNA/UPnP, HLS, etc.).

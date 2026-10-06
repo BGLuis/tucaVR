@@ -46,7 +46,7 @@ pub struct HwDecoder {
     // estes valores de fora sem lock. Ver metrics().
     frames_output: Arc<AtomicU64>,
     frames_dropped: Arc<AtomicU64>,
-    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): decode_packet() abaixo retorna
+    // F4: decode_packet() abaixo retorna
     // Result, mas o chamador em playback.rs descartava com `let _ = ...` — sem contador, um
     // erro de decode persistente era indistinguivel de "sem erro nenhum" na telemetria.
     decode_errors: Arc<AtomicU64>,

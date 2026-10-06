@@ -1,7 +1,7 @@
 #version 450
 
-// docs/reports/MODO-AMBIENTE.md F3: distancia assinada ate o retangulo do
-// video (2.2 do relatorio). Dentro do retangulo [rectMin, rectMax] (que
+// Modo Ambiente F3: distancia assinada ate o retangulo do
+// video (2.2). Dentro do retangulo [rectMin, rectMax] (que
 // corresponde exatamente ao quad de video, ja que o halo e esse mesmo
 // retangulo escalado por kAmbientHaloScale a partir do centro), amostra a
 // textura reduzida remapeando a UV de volta pra 0..1; fora dele, clampa a

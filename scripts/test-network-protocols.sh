@@ -1,11 +1,10 @@
 #!/bin/bash
 # Orquestra os testes de integracao de rede (T6/T7, docs/phases/PHASE-0.1-MVP.md,
-# PHASE-0.2-3D-NETWORK.md, e Fase 0.4 Secoes 2/3 — achado R-04 de
-# docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): sobe servidores reais de SMB2/3,
+# PHASE-0.2-3D-NETWORK.md, e Fase 0.4 Secoes 2/3): sobe servidores reais de SMB2/3,
 # HTTP, HTTPS, FTP, SFTP, DASH e WebDAV via Docker (docker/network-tests/), roda os
 # testes Rust marcados #[ignore] em rust/protocols/tests/*_integration.rs contra eles,
 # e derruba tudo no final. Substitui a validacao manual que faltava em
-# T6.1/T6.3/T7.1/R-04 ("nunca testado contra um servidor real").
+# T6.1/T6.3/T7.1 ("nunca testado contra um servidor real").
 #
 # Uso:
 #   ./scripts/test-network-protocols.sh            # roda tudo e derruba os containers

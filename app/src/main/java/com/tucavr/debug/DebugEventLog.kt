@@ -7,12 +7,11 @@ import java.io.PrintWriter
 import java.util.Locale
 
 /**
- * F6 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, seção 2.2): log de eventos — a série a
- * 1Hz (CSV) não pode ver um stutter de 20ms (90 frames por amostra) e os contadores
- * cumulativos sobrevivem à decimação mas só dizem "quantos", não "quando" nem "com o
- * pipeline em que estado". Um evento por episódio (stutter/freeze/stall/transição de
- * qualidade), com snapshot do pipeline no início — complementa o histograma (F5 G2, dá a
- * distribuição) respondendo "o que estava acontecendo quando travou".
+ * F6: log de eventos — a série a 1Hz (CSV) não pode ver um stutter de 20ms
+ * (90 frames por amostra) e os contadores cumulativos sobrevivem à decimação mas só dizem
+ * "quantos", não "quando" nem "com o pipeline em que estado". Um evento por episódio
+ * (stutter/freeze/stall/transição de qualidade), com snapshot do pipeline no início —
+ * complementa o histograma respondendo "o que estava acontecendo quando travou".
  *
  * [detectEvents]/[formatEventLine] são puros — comparam duas amostras já parseadas
  * ([NativeDebugStats]) e formatam texto, sem `Context`/arquivo — testável com JUnit puro na

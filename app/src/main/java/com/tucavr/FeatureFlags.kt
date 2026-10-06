@@ -43,7 +43,7 @@ object FeatureFlags {
         // Fase 0.2 T9: Carregamento automático de legendas (.srt / .vtt)
         AUTO_LOAD_SUBTITLES("auto_load_subtitles", defaultEnabled = true),
 
-        // Painel de Estatísticas Técnicas / Stats for Nerds (docs/reports/DEBUG-STATS-MODAL.md)
+        // Painel de Estatísticas Técnicas / Stats for Nerds (ver docs/DEBUGGING.md)
         DEBUG_STATS_PANEL("debug_stats_panel", defaultEnabled = false),
 
         // Telemetria de Debug: exporta série temporal de reprodução em CSV (N2).
@@ -55,7 +55,7 @@ object FeatureFlags {
         // Chroma Key: recorte de fundo (verde/azul) para vídeos 3D/2D em Passthrough
         CHROMA_KEY("chroma_key", defaultEnabled = false),
 
-        // docs/reports/MODO-AMBIENTE.md: halo de luz atrás da tela derivado da cor
+        // Modo Ambiente: halo de luz atrás da tela derivado da cor
         // do frame (bias lighting), só ambiente Void, só caminho Vulkan — ver
         // vr_player_app_vulkan.cpp::shouldDrawAmbientHalo. Desligado por padrão:
         // nunca validado em headset real até agora.

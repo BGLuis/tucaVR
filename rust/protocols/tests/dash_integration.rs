@@ -1,5 +1,5 @@
-//! Teste de integracao DASH (Fase 0.4 Secao 2, achado R-04 de
-//! docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md) contra manifestos MPD reais, gerados por
+//! Teste de integracao DASH (Fase 0.4 Secao 2, achado R-04)
+//! contra manifestos MPD reais, gerados por
 //! ffmpeg e servidos por um nginx real em Docker — nao mocks `httpmock`. Cobre os dois modos de
 //! endereçamento que `rust/protocols/src/dash` suporta:
 //! - `template/manifest.mpd`: `SegmentTemplate` com `$Number$` (video com 3 segmentos + audio).

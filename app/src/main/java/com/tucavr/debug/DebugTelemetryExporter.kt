@@ -109,13 +109,11 @@ object DebugTelemetryExporter {
 
     /**
      * Extrai tipo e caminho redigido a partir do [PlaybackSource]. Toda saída desta função é
-     * destinada a artefatos que saem do device (CSV de telemetria, relatório de crash — ver
-     * D-03 em docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md) — por isso os 5 ramos de rede
-     * abaixo passam pela mesma [redactSource] usada por Http/Dlna, em vez de montar a URL
-     * manualmente sem redação (o bug original: uma coluna chamada "source_redacted" que não
-     * redigia nada nesses 5 ramos). Nenhum destes ramos referencia `server.password` — a
-     * senha nunca passa por aqui; o vazamento de D-03 estava em VRActivity.kt interpolando o
-     * data class inteiro diretamente, sem nunca chamar esta função.
+     * destinada a artefatos que saem do device (CSV de telemetria, relatório de crash) — por
+     * isso os 5 ramos de rede abaixo passam pela mesma [redactSource] usada por Http/Dlna, em vez
+     * de montar a URL manualmente sem redação (o bug original: uma coluna chamada "source_redacted"
+     * que não redigia nada nesses 5 ramos). Nenhum destes ramos referencia `server.password` — a
+     * senha nunca passa por aqui.
      */
     fun extractSourceInfo(source: PlaybackSource?): Pair<String, String> =
         when (source) {

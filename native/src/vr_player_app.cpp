@@ -282,7 +282,7 @@ extern "C" {
     extern uint32_t get_audio_screen_locked();
     extern void set_screen_orientation(float x, float y, float z, float w);
 
-    // Debug Stats Modal (docs/reports/DEBUG-STATS-MODAL.md)
+    // Debug Stats Modal (ver docs/DEBUGGING.md)
     extern float get_last_av_drift_ms();
     extern uint32_t get_foveation_enabled();
     extern uint32_t get_audio_track_count();
@@ -2615,7 +2615,7 @@ public:
                 }
             }
 
-            // HUD de debug (docs/DEBUGGING.md / docs/reports/DEBUG-STATS-MODAL.md)
+            // HUD de debug (docs/DEBUGGING.md)
             if (g_debugStatsEnabled.load(std::memory_order_relaxed)) {
                 DebugStats stats;
                 stats.backend = "GLES";

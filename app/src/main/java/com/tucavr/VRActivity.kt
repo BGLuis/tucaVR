@@ -289,8 +289,7 @@ class VRActivity : NativeActivity() {
                         // (ver DEBUGGING.md secao 2 / scripts/soak-test.sh), mas para uma fonte
                         // de rede em vez de arquivo local, ja que EXTRA_AUTO_PLAY_PATH so chama
                         // playFile() (PlaybackSource.LocalFile). Util pra reproduzir sozinho um
-                        // cenario de stall de rede (ex: docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md)
-                        // de forma automatizada/repetivel.
+                        // cenario de stall de rede de forma automatizada/repetivel.
                         ACTION_DEBUG_PLAY_SFTP -> {
                             val host = intent.getStringExtra(EXTRA_SFTP_HOST)
                             val path = intent.getStringExtra(EXTRA_SFTP_PATH)
@@ -451,7 +450,7 @@ class VRActivity : NativeActivity() {
         // Pausar ao sair: empurra preferência inicial de auto-pause para a camada nativa
         nativeSetPauseOnExit(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PAUSE_ON_EXIT))
 
-        // docs/reports/MODO-AMBIENTE.md: empurra o estado persistido do halo de luz ambiente
+        // Modo Ambiente: empurra o estado persistido do halo de luz ambiente
         nativeSetAmbientMode(FeatureFlags.isEnabled(this, FeatureFlags.Flag.AMBIENT_MODE))
 
         // RF-ENV-007: Ajuste de Iluminação e Cor do Ambiente (Fase 0.5 §4)
@@ -489,14 +488,13 @@ class VRActivity : NativeActivity() {
         // T4.4: inicializa o modo screen-locked a partir da preferência persistida
         nativeSetAudioScreenLocked(FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_SCREEN_LOCKED))
 
-        // Painel de Estatísticas Técnicas / Stats for Nerds (docs/reports/DEBUG-STATS-MODAL.md)
+        // Painel de Estatísticas Técnicas / Stats for Nerds (ver docs/DEBUGGING.md)
         isDebugStatsEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.DEBUG_STATS_PANEL)
         nativeSetDebugStatsEnabled(isDebugStatsEnabled)
 
-        // F8 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): ANR e crash nativo (inclusive o
-        // abort do ART no teardown Vulkan) não deixam rastro no handler de exceções da JVM
-        // abaixo — ApplicationExitInfo é a única fonte pra essas duas classes de morte do
-        // processo. Custo: uma leitura no arranque, zero em runtime.
+        // F8: ANR e crash nativo (inclusive o abort do ART no teardown Vulkan)
+        // não deixam rastro no handler de exceções da JVM abaixo — ApplicationExitInfo
+        // é a única fonte pra essas duas classes de morte do processo. Custo: uma leitura no arranque, zero em runtime.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             com.tucavr.debug.ApplicationExitInfoReporter.checkAndReport(this)
         }
@@ -516,10 +514,9 @@ class VRActivity : NativeActivity() {
                         writer.println("Session ID: $sid")
                         writer.println("Timestamp: ${System.currentTimeMillis()}")
                         writer.println("Thread: ${thread.name} (ID: ${thread.id})")
-                        // D-03 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): NUNCA interpolar
-                        // currentPlaybackSource diretamente — o toString() sintetizado da data
-                        // class de servidor (Smb/Ftp/Sftp/etc.) inclui o campo `password` em
-                        // claro, e este arquivo sai do device via scripts/collect-debug.sh.
+                        // D-03: NUNCA interpolar currentPlaybackSource diretamente — o
+                        // toString() sintetizado da data class de servidor (Smb/Ftp/Sftp/etc.)
+                        // inclui o campo `password` em claro, e este arquivo sai do device via scripts/collect-debug.sh.
                         val (sourceType, sourceRedacted) =
                             com.tucavr.debug.DebugTelemetryExporter
                                 .extractSourceInfo(currentPlaybackSource)
@@ -1101,7 +1098,7 @@ class VRActivity : NativeActivity() {
             }
         }
 
-        // Estatísticas de debug (ver docs/DEBUGGING.md / docs/reports/DEBUG-STATS-MODAL.md)
+        // Estatísticas de debug (ver docs/DEBUGGING.md)
         @JvmStatic
         fun updateDebugHud(
             activity: VRActivity,
@@ -1162,8 +1159,7 @@ class VRActivity : NativeActivity() {
     @Volatile
     private var sessionStartRealtimeMs: Long = 0L
 
-    // F6 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): log de eventos por sessão — ver
-    // com.tucavr.debug.DebugEventLog.
+    // F6: log de eventos por sessão — ver com.tucavr.debug.DebugEventLog.
     private val debugEventLogWriter by lazy { com.tucavr.debug.DebugEventLogWriter(this) }
 
     private fun startSession(source: PlaybackSource) {
@@ -2143,7 +2139,7 @@ class VRActivity : NativeActivity() {
 
     external fun nativeSetPauseOnExit(enabled: Boolean)
 
-    // docs/reports/MODO-AMBIENTE.md: halo de luz atrás da tela, derivado da cor do
+    // Modo Ambiente: halo de luz atrás da tela, derivado da cor do
     // frame. Vulkan-only, GLES aceita a chamada mas não aplica. Só tem efeito visual
     // com ambiente Void ativo, fora de modos esfera e sem Passthrough ligado.
     external fun nativeSetAmbientMode(enabled: Boolean)
@@ -2276,7 +2272,7 @@ class VRActivity : NativeActivity() {
     // fixo cravado pro Quest 3.
     external fun nativeSetDeviceTotalMemoryBytes(bytes: Long)
 
-    // Painel de Estatísticas Técnicas / Stats for Nerds (docs/reports/DEBUG-STATS-MODAL.md)
+    // Painel de Estatísticas Técnicas / Stats for Nerds (ver docs/DEBUGGING.md)
     external fun nativeSetDebugStatsEnabled(enabled: Boolean)
 
     // N1: Propaga o identificador de sessão ativo para C++ e Rust

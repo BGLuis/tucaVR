@@ -19,8 +19,7 @@ fn url_origin(url: &str) -> Option<&str> {
 
 /// Resolve uma URL de `BaseURL`/segmento DASH contra `base`, restringindo o resultado à MESMA
 /// origem de `mpd_url` — mitiga SSRF via um manifesto MPD malicioso ou comprometido que aponte
-/// `BaseURL`/`SegmentTemplate` para um host arbitrário (achado R-01,
-/// `docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md`). `mpd_url` é sempre a URL originalmente
+/// `BaseURL`/`SegmentTemplate` para um host arbitrário (achado R-01). `mpd_url` é sempre a URL originalmente
 /// solicitada pelo usuário/app — nunca um valor extraído do próprio documento — então usá-la
 /// como origem confiável é seguro. Sem essa checagem, `resolve_url` (compartilhada com o cliente
 /// DLNA, que não tem esse risco por ser descoberto via SSDP/LAN) retorna qualquer URL absoluta

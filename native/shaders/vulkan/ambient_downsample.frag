@@ -1,8 +1,8 @@
 #version 450
 
-// docs/reports/MODO-AMBIENTE.md F2: reduz a textura YCbCr do video (set 0,
+// Modo Ambiente F2: reduz a textura YCbCr do video (set 0,
 // mesmo videoDescriptorSetLayout do pipeline de video — reuso, nao
-// duplicacao, ver 1.3/2.1 do relatorio) pra uma grade pequena, amostrando
+// duplicacao) pra uma grade pequena, amostrando
 // 4x4 taps por texel de saida. Mistura com o resultado do frame anterior
 // (set 1, textura ping-pong) em vez de escrever a media nova direto — essa
 // e a suavizacao temporal (2.3 do relatorio) rodando por-pixel sobre a

@@ -1,9 +1,8 @@
 #pragma once
 
-// docs/reports/MODO-AMBIENTE.md — Modo Ambiente: halo de luz atras da tela
-// de video derivado da cor de baixa frequencia do frame (bias lighting, o
-// analogo VR do "modo ambiente" do YouTube). So caminho Vulkan (2.5 do
-// relatorio: o GLES monta a cena empilhando ovrDrawSurface, arquitetura
+// Modo Ambiente: halo de luz atras da tela de video derivado da cor
+// de baixa frequencia do frame (bias lighting, o analogo VR do "modo ambiente"
+// do YouTube). So caminho Vulkan (o GLES monta a cena empilhando ovrDrawSurface, arquitetura
 // incompativel com vkCmdBindPipeline/vkCmdDraw — seria uma segunda
 // implementacao inteira, nao um port). Constantes num header compartilhado
 // pra nao divergirem se o GLES um dia ganhar a feature — mesmo motivo de

@@ -600,12 +600,10 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         state.feedbackAlpha = MoveTowards(state.feedbackAlpha, feedbackTargetAlpha, fadeStep);
     }
 
-    // docs/reports/MODO-AMBIENTE.md: Modo Ambiente (halo de luz) — gates da
-    // secao 2.4 do relatorio (+ Passthrough, que passou a existir de
-    // verdade depois do relatorio original: um halo colorido flutuando no
-    // quarto real do usuario quebraria a ilusao de passthrough). Convergido
-    // por MoveTowards em vez de aplicado direto — evita um "pop" visivel
-    // quando o usuario liga/desliga o toggle ou entra/sai do ambiente Void.
+    // Modo Ambiente (halo de luz) — gates:
+    // Passthrough (um halo colorido flutuando no quarto real do usuario quebraria a
+    // ilusao de passthrough). Convergido por MoveTowards em vez de aplicado direto —
+    // evita um "pop" visivel quando o usuario liga/desliga o toggle ou entra/sai do ambiente Void.
     {
         const float configuredIntensity = get_screen_glow_intensity();
         const bool is3dRoom = (state.currentEnvironmentId == "cinema" || state.currentEnvironmentId == "living_room");
@@ -865,7 +863,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             }
         }
 
-        // HUD de debug (docs/DEBUGGING.md / docs/reports/DEBUG-STATS-MODAL.md)
+        // HUD de debug (docs/DEBUGGING.md)
         if (g_debugStatsEnabled.load(std::memory_order_relaxed)) {
             StereoParams spHud = GetStereoParams(state.screenMode, 0);
             const char* upscaleStr = "OFF";
@@ -943,12 +941,12 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             stats.subtitleTrackIndex = get_subtitle_track();
             stats.subtitleOffsetMs = (int32_t)get_subtitle_offset_ms();
 
-            // F1 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): D-02 e D-04.
+            // F1: D-02 e D-04.
             stats.videoStallCount = state.videoStallCount;
             auto freshnessNow = std::chrono::steady_clock::now();
             stats.videoStatsAgeMs = state.videoFreshness.UpdateAndGetAgeMs(state.lastDecodedFrameCount, freshnessNow);
             stats.networkStatsAgeMs = state.networkFreshness.UpdateAndGetAgeMs(stats.netBlocksFetched, freshnessNow);
-            // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): coleta nova na origem.
+            // F4: coleta nova na origem.
             stats.networkFetchFailures = get_network_fetch_failures();
             stats.networkSequentialStreak = get_network_sequential_streak();
             stats.networkThrottled = get_network_throttled();
@@ -989,8 +987,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             stats.audioStatsAgeMs = 0;
             stats.renderStatsAgeMs = 0; // computado a cada frame no loop de render — sempre atual
 
-            // 4096 (era 2048): F1/F3/F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md) somam
-            // ~20 campos aos 44 atuais; ver g_debugStatsTruncated em debug_stats.h.
+            // 4096 (era 2048): F1/F3/F4 somam ~20 campos aos 44 originais; ver g_debugStatsTruncated em debug_stats.h.
             char hudBuffer[4096];
             SerializeDebugStats(stats, hudBuffer, sizeof(hudBuffer));
 
