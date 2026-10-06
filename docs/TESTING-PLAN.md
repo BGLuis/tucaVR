@@ -109,6 +109,21 @@ vídeo real para decodificar, então o teste seria de valor questionável;
 melhor deixar para verificação manual (thumbnail aparece corretamente no
 file browser).
 
+### 3.4 C++ — testes nativos no host (`./scripts/test-native-host.sh`)
+
+Testes de unidade em C++ compilados nativamente no host (x86_64) sem depender do runtime do Quest 3:
+
+| Binário | O que cobre |
+|---|---|
+| `vk_math_test` | Operações matemáticas vetoriais e matriciais Vulkan (`native/include/vk_math.h`) |
+| `screen_mode_test` | Mapeamento e propriedades dos 17 modos de projeção estéreo (`native/include/screen_mode.h`) |
+| `subtitle_layout_test` | Posicionamento espacial, quebra de linha e layout 3D de legendas (`native/include/subtitle_layout.h`) |
+| `hand_tracking_test` | Rastreamento de mãos, gestos de pinça e mapeamento de juntas (`native/include/hand_tracking.h`) |
+| `environment_config_test` | Configuração de ambientes virtuais, skybox e iluminação ambiente (`native/include/environment_config.h`) |
+| `test_subtitles` | Parser e formatação de legendas |
+
+Requer `cmake` e o pacote `libopenxr-dev` (`sudo apt-get install libopenxr-dev`). Podem ser executados com AddressSanitizer habilitado via `ENABLE_ASAN=1 ./scripts/test-native-host.sh` (como configurado no CI).
+
 ## 4. O que CONTINUA exigindo o headset físico (e por quê)
 
 - **Renderização OpenXR real** (`native/src/*.cpp`): swapchain, timing de
@@ -148,31 +163,38 @@ file browser).
 # Rust — crates host-testable (protocols + media-logic)
 cd rust && cargo test -p protocols -p media-logic
 
-# Rust — verificar que o workspace inteiro ainda compila para Android
-# (não roda testes, so confirma que compila — precisa de NDK + FFmpeg
-# cross-compilado; ver scripts/build.sh para as env vars necessárias)
-cd rust && cargo ndk -t aarch64-linux-android -P 26 build
+# Rust — lint com escopo restrito aos crates testáveis no host
+cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings
 
-# Kotlin — testes JVM puros
+# C++ — testes de unidade nativos no host (requer cmake e libopenxr-dev)
+./scripts/test-native-host.sh
+
+# Kotlin — testes JVM puros e verificação estática
 ./gradlew testDebugUnitTest
+./gradlew ktlintCheck
+./gradlew :app:lintDebug
+
+# Executar todas as suítes de teste do host de uma vez
+make test
+
+# Rust — verificar que o workspace inteiro compila para Android
+# (não roda testes, apenas confirma que compila — precisa de NDK + FFmpeg
+# cross-compilado; ver scripts/build.sh para as variáveis de ambiente necessárias)
+cd rust && cargo ndk -t aarch64-linux-android -P 26 build
 ```
 
-Resultado nesta sessão: **68 testes, 0 falhas** (26 em `media-logic`, 12 em
-`protocols`, 30 em Kotlin `app/src/test`). Workspace Rust completo
-cross-compila para `aarch64-linux-android` sem erros.
+Todas as suítes de teste de unidade do host (Rust `media-logic` e `protocols`, Kotlin JVM e binários nativos C++) executam e passam localmente e no CI com 0 falhas. O workspace Rust completo cross-compila para `aarch64-linux-android` sem erros.
 
 ## 6. CI (`.github/workflows/main.yml`)
 
-Adicionados dois steps novos, além do `clippy`/`ktlintCheck` que já existiam:
+O workflow de integração contínua executa 4 jobs paralelos desacoplados para validação rápida no host:
 
-- `cargo test -p protocols -p media-logic` — não o workspace inteiro,
-  porque `core`/`audio`/`bridge` não compilam num runner genérico (ver
-  seção 2). Compilar essas crates para Android no CI (via `cargo ndk`) e
-  então *rodar* os testes exigiria um emulador Android/dispositivo real
-  conectado ao runner — fora do escopo desta rodada, e o valor marginal é
-  baixo já que a lógica que valeria a pena testar ali já foi extraída para
-  `media-logic`.
-- `./gradlew testDebugUnitTest` — os testes JVM do Kotlin.
+1. `security-and-workflows`: `actionlint` (validação de sintaxe dos workflows), `cargo-deny` (licenças e advisory de dependências Rust), `gitleaks` (varredura de segredos).
+2. `rust-checks`: `cargo fmt --check`, `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings`, `cargo test -p protocols -p media-logic`.
+3. `cpp-checks`: `clang-format --dry-run -Werror`, `./scripts/check-shaders.sh` (validação GLSL e compilação SPIR-V), `ENABLE_ASAN=1 ./scripts/test-native-host.sh` (compilação e execução dos 6 binários C++ de host com AddressSanitizer).
+4. `android-checks`: `./gradlew ktlintCheck` (formatador com baseline XML), `./gradlew :app:lintDebug` (análise estática Android), `./gradlew testDebugUnitTest` (testes unitários JVM do Kotlin, incluindo `I18nParityTest`).
+
+O job de compilação do APK (`build-apk`) depende do sucesso de todos os 4 jobs acima e compila a aplicação completa (Rust via `cargo ndk`, C++ via CMake, e Gradle APK do Quest 3).
 
 ## 7. Pequenos refactors feitos para viabilizar os testes
 

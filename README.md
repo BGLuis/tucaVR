@@ -20,7 +20,7 @@
 ![Android](https://www.shieldcn.dev/badge/Android-SDK%2034-3DDC84.svg?logo=android&variant=branded&size=sm)
 
   <h3>tucaVR</h3>
-  A fully immersive 2D/3D video player for the Meta Quest 3 that streams straight from your own NAS over SMB, NFS, FTP, SFTP, DLNA or HTTP(S).
+  A fully immersive 2D/3D video player for the Meta Quest 3 that streams straight from your own NAS over SMB, NFS, FTP, SFTP, WebDAV, DLNA or HTTP(S).
 
 **English** · [Português (BR)](README.pt-BR.md)
 
@@ -56,7 +56,7 @@ Kotlin never calls Rust directly: it talks to C++ over JNI, and C++ is the only 
 | **3D / VR**   | Side-by-Side and Over/Under (half & full), 360° mono and stereo, VR180 — with automatic format detection |
 | **Audio**     | Oboe output with A/V sync, spatial audio, per-track selection                                            |
 | **Subtitles** | External subtitle files with automatic charset detection (`chardetng`)                                   |
-| **Streaming** | HTTP(S) direct URLs and HLS (including AES-128 encrypted segments)                                       |
+| **Streaming** | HTTP(S) direct URLs, HLS (including AES-128 encrypted segments) and DASH |
 | **Rendering** | Vulkan by default, OpenGL ES available as a fallback backend                                             |
 
 ### Where it plays from
@@ -67,6 +67,7 @@ Kotlin never calls Rust directly: it talks to C++ over JNI, and C++ is the only 
 | **NFS**          | Browse and play from NFS exports                               |
 | **FTP**          | Pure-Rust blocking client                                      |
 | **SFTP**         | Over SSH via `russh` — no `libssh2`/OpenSSL dependency         |
+| **WebDAV**       | Over HTTP(S) with RFC 4918 PROPFIND XML directory parsing      |
 | **DLNA / UPnP**  | Device description + DIDL-Lite browsing                        |
 | **HTTP / HTTPS** | Direct URLs, with `rustls` for TLS                             |
 | **Discovery**    | Automatic mDNS / DNS-SD server discovery on the local network  |

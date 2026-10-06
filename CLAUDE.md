@@ -25,7 +25,7 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 - `core` — demuxer (dispatches `smb://`/`https://` to custom I/O in `protocols`, local/`http://` to native libavformat — see `demuxer.rs`), MediaCodec decoder, playback/sync state. **Depends on `ndk`/`ndk-sys`/`oboe-sys` transitively — does not compile on a normal host.**
 - `audio` — Oboe (NDK) audio output. Same host-compile restriction as `core`.
 - `media-logic` — **zero Android/hardware dependencies, deliberately.** Pure logic extracted out of `core` (`SyncManager`, audio-resample math, playback speed/volume clamps, playback "generation" contract) specifically so it can run under plain `cargo test` on a laptop/CI. When touching sync, resample, or playback-param logic in `core`, check whether the actual logic lives here instead (`core` re-exports/delegates to it) — see `docs/TESTING-PLAN.md` section 2 for the full reasoning.
-- `protocols` — SMB2/3, HTTP(S), FTP, SFTP clients (all pure-Rust, no native TLS/SSH libs, to avoid cross-compile pain). Host-testable.
+- `protocols` — pure-Rust streaming clients and format parsers (SMB 2/3, HTTP(S), FTP, SFTP, NFS, WebDAV, DLNA/UPnP, HLS, DASH, chunking, discovery, download, folder_scan, prefetch; zero native C TLS/SSH dependencies). Host-testable.
 - `bridge` — the `cdylib`/`staticlib` consumed by C++; the only crate C++ links against.
 
 Screen/stereo mode encoding (2D/SBS/OU/360/180/Cubemap/EAC/Fisheye variants) is a numeric enum that **must stay in sync across four places**: `SCREEN_MODE` comments and `SCREEN_MODE_COUNT` in `rust/bridge/src/lib.rs`, `enum class ScreenMode` in `native/include/screen_mode.h`, the catalog in `ScreenFormatCatalog.kt`, and `Format3D::to_screen_mode_index` in `rust/media-logic/src/format3d.rs`. The host test `format3d::tests::screen_mode_encoding_matches_cpp_kotlin_and_bridge` fails when the indices or the count diverge; it can't check what each index means, so keep the names aligned by hand.
@@ -70,20 +70,28 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 cd rust && cargo test -p protocols -p media-logic
 
 # Rust lint (same scope as CI; workspace-wide clippy fails on the host for the NDK crates)
-cd rust && cargo clippy -p protocols -p media-logic -- -D warnings
+cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings
 
 # Single Rust test
 cd rust && cargo test -p media-logic sync::tests::some_test_name
 
+# C++ host unit tests (native math, screen mode, subtitle layout, hand tracking, environment config)
+# Requires cmake and libopenxr-dev (or run via ./scripts/test-native-host.sh)
+./scripts/test-native-host.sh
+
 # Kotlin JVM unit tests (app/src/test — pure logic only: MediaSorter, DirectoryNavigator,
-# DirectoryLister, ThumbnailGenerator cache-key, PlaybackHistory mapping/format/throttle)
+# DirectoryLister, ThumbnailGenerator cache-key, PlaybackHistory mapping/format/throttle, I18nParityTest)
 ./gradlew testDebugUnitTest
 
 # Single Kotlin test class
 ./gradlew testDebugUnitTest --tests "com.tucavr.filebrowser.MediaSorterTest"
 
-# Kotlin lint
+# Kotlin lint and Android static analysis
 ./gradlew ktlintCheck
+./gradlew :app:lintDebug
+
+# Run all host unit tests at once (Rust + C++ + Android lint & unit tests)
+make test
 ```
 
 Network protocol integration tests (real SMB/HTTP/HTTPS/FTP/SFTP servers via Docker, `#[ignore]`d by default):
@@ -101,10 +109,16 @@ There's also `scripts/soak-test.sh` (long-run stability, results land in `soak-t
 
 ## i18n
 
-UI strings live in `app/src/main/res/values/strings.xml` (English, default) and `values-pt-rBR/strings.xml` (Portuguese, mirrors key order exactly for side-by-side diffing). Interpolated strings use positional placeholders (`%1$s`, `%1$d`) via `getString(R.string.xxx, arg1, ...)`, never Kotlin string concatenation, so argument order can change per-locale. See `docs/i18n.md` for which files were deliberately left un-externalized (pure-logic files with no user-facing text) and the one real `<plurals>` case (SMB share count). Adding a new locale: see `docs/i18n.md` section covering T8.5.
+UI strings live in `app/src/main/res/values/strings.xml` (English, default), `values-pt-rBR/strings.xml` (Portuguese), and `values-es/strings.xml` (Spanish), which mirror key order exactly for side-by-side diffing. Parity across locales is enforced by `I18nParityTest` in `testDebugUnitTest`. Interpolated strings use positional placeholders (`%1$s`, `%1$d`) via `getString(R.string.xxx, arg1, ...)`, never Kotlin string concatenation, so argument order can change per-locale. See `docs/i18n.md` for which files were deliberately left un-externalized (pure-logic files with no user-facing text) and the one real `<plurals>` case (SMB share count). Adding a new locale: see `docs/i18n.md` section covering T8.5.
 
 ## CI (`.github/workflows/main.yml`)
 
-`build-and-lint` runs, in order: `cargo clippy -p protocols -p media-logic -- -D warnings`, `cargo test -p protocols -p media-logic`, `ktlintCheck` (currently non-blocking — falls back to an echo on failure), `./gradlew testDebugUnitTest`. `build-apk` (needs `BGLuis/vr-multmidia`'s SDK secret) does the real native/C++ + Rust + Gradle build and uploads `VR-Player-APK-<ref>` as an artifact. Both native (CMake/NDK) and Rust (`cargo ndk`) compiles are wrapped with `hendrikmuhs/ccache-action` and `mozilla-actions/sccache-action` respectively to avoid full rebuilds from scratch on every run — see the `ccachePath` detection in `app/build.gradle.kts` (only activates when `ccache` is on `PATH`, so local dev builds are unaffected).
+The CI workflow runs 4 parallel check jobs:
+1. `security-and-workflows`: `actionlint` (workflow lint), `cargo-deny` (Rust licenses and advisories), `gitleaks` (secret scan).
+2. `rust-checks`: `cargo fmt --check`, `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings`, `cargo test -p protocols -p media-logic`.
+3. `cpp-checks`: `clang-format --dry-run -Werror`, `./scripts/check-shaders.sh`, `ENABLE_ASAN=1 ./scripts/test-native-host.sh`.
+4. `android-checks`: `./gradlew ktlintCheck`, `./gradlew :app:lintDebug`, `./gradlew testDebugUnitTest`.
+
+`build-apk` (runs on `BGLuis/vr-multmidia` or `BGLuis/tucaVR` when SDK PAT is present) depends on all 4 check jobs passing, executes the real native/C++ + Rust + Gradle build, and uploads `VR-Player-APK-<ref>` as an artifact. Both native (CMake/NDK) and Rust (`cargo ndk`) compiles are wrapped with `hendrikmuhs/ccache-action` and `mozilla-actions/sccache-action` respectively to avoid full rebuilds from scratch on every run — see the `ccachePath` detection in `app/build.gradle.kts` (only activates when `ccache` is on `PATH`, so local dev builds are unaffected).
 
 `.github/workflows/release.yml` reuses the CI build instead of compiling the APK itself: it triggers via `workflow_run` after `tucaVR CI` succeeds, looks up that CI run's `VR-Player-APK-main` artifact for the exact commit (`locate-artifact` job, via `gh api .../actions/runs?head_sha=...`) and publishes that. If no matching CI run is found (e.g. releasing an old tag whose artifact expired), it transparently falls back to the full build steps — same job, steps gated by `steps.reuse.outcome != 'success'`.

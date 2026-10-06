@@ -112,8 +112,16 @@ cd rust && cargo test -p media-logic sync::tests::some_test_name
 ./gradlew testDebugUnitTest
 ./gradlew testDebugUnitTest --tests "com.tucavr.filebrowser.MediaSorterTest"
 
-# Kotlin lint
+# Kotlin lint and Android static analysis
 ./gradlew ktlintCheck
+./gradlew :app:lintDebug
+
+# C++ host unit tests (native math, screen mode, subtitle layout, hand tracking, environment config)
+# Requires cmake and libopenxr-dev (installed via apt-get install libopenxr-dev)
+./scripts/test-native-host.sh
+
+# Run all host test suites at once (Rust + C++ + Android lint & unit tests)
+make test
 ```
 
 **Network protocol integration tests** run against real SMB/HTTP/HTTPS/FTP/SFTP servers in Docker. They are `#[ignore]`d by default and need docker, the compose plugin, curl and sha256sum:
@@ -142,7 +150,7 @@ There are also longer-running scripts for stability and memory work: `scripts/so
 2. Target `develop` unless you are fixing something that must go straight to a release.
 3. Fill in the [pull request template](.github/PULL_REQUEST_TEMPLATE.md) — in particular the "How has this been tested?" section, including whether you tested on a real headset.
 4. For anything visual, attach a screenshot or a short clip captured from the Quest. Describing a rendering change in prose rarely survives review.
-5. CI (`.github/workflows/main.yml`) runs decoupled parallel jobs: `cargo clippy -p protocols -p media-logic -- -D warnings`, `cargo test -p protocols -p media-logic`, `ktlintCheck`, Android Lint and `./gradlew testDebugUnitTest`, plus C++ host tests and shader validation. The full native build (`build-apk`) runs in a separate gated job that builds the Quest 3 APK.
+5. CI (`.github/workflows/main.yml`) runs decoupled parallel jobs: `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings`, `cargo test -p protocols -p media-logic`, `ktlintCheck`, Android Lint and `./gradlew testDebugUnitTest`, plus C++ host tests and shader validation. The full native build (`build-apk`) runs in a separate gated job that builds the Quest 3 APK.
 
 Small, focused pull requests get reviewed much faster than large ones. If you are planning something substantial — a new protocol, a rendering change, a new phase task — open an issue first so the approach can be discussed before you invest the time.
 

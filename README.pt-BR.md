@@ -18,7 +18,7 @@
 ![Android](https://www.shieldcn.dev/badge/Android-SDK%2034-3DDC84.svg?logo=android&variant=branded&size=sm)
 
   <h3>tucaVR</h3>
-  Player de vídeo 2D/3D totalmente imersivo para o Meta Quest 3, que reproduz direto do seu NAS por SMB, NFS, FTP, SFTP, DLNA ou HTTP(S).
+  Player de vídeo 2D/3D totalmente imersivo para o Meta Quest 3, que reproduz direto do seu NAS por SMB, NFS, FTP, SFTP, WebDAV, DLNA ou HTTP(S).
 
   [English](README.md) · **Português (BR)**
 
@@ -54,7 +54,7 @@ O Kotlin nunca chama o Rust diretamente: ele fala com o C++ por JNI, e o C++ é 
 | **3D / VR** | Side-by-Side e Over/Under (half e full), 360° mono e estéreo, VR180 — com detecção automática de formato |
 | **Áudio** | Saída via Oboe com sincronia A/V, áudio espacial e seleção de faixa |
 | **Legendas** | Arquivos de legenda externos com detecção automática de charset (`chardetng`) |
-| **Streaming** | URLs diretas HTTP(S) e HLS (inclusive segmentos criptografados em AES-128) |
+| **Streaming** | URLs diretas HTTP(S), HLS (inclusive segmentos criptografados em AES-128) e DASH |
 | **Renderização** | Vulkan por padrão, OpenGL ES disponível como backend de fallback |
 
 ### De onde ele reproduz
@@ -65,6 +65,7 @@ O Kotlin nunca chama o Rust diretamente: ele fala com o C++ por JNI, e o C++ é 
 | **NFS** | Navegar e reproduzir a partir de exports NFS |
 | **FTP** | Cliente bloqueante em Rust puro |
 | **SFTP** | Sobre SSH via `russh` — sem dependência de `libssh2`/OpenSSL |
+| **WebDAV** | Sobre HTTP(S) com parsing XML PROPFIND (RFC 4918) |
 | **DLNA / UPnP** | Device description + browsing DIDL-Lite |
 | **HTTP / HTTPS** | URLs diretas, com `rustls` para TLS |
 | **Descoberta** | Descoberta automática de servidores na rede local via mDNS / DNS-SD |
