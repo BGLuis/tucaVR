@@ -43,11 +43,11 @@ flowchart TB
     end
 
     subgraph JNI_BOUNDARY ["Fronteira JNI Bidirecional"]
-        JNI_Calls["• C++ -> Kotlin: setupVirtualDisplay, dispatchVRTouch, runOnUiThread\n• Kotlin -> C++: nativeTogglePlayPause, nativeSeek, nativeStartVideo"]
+        JNI_Calls["• C++ -> Kotlin: setupVirtualDisplay, dispatchVRTouch, runOnUiThread\n• Kotlin -> C++: nativeTogglePlayPause, nativeSeekVideo, nativePlayVideo"]
     end
 
     subgraph CPP ["2. Camada C++ (native/) — OpenXR Engine & Rendering"]
-        XrSession["OpenXR Session & Swapchain Loop (OVRFW)"]
+        XrSession["OpenXR Session & Swapchain Loop (Vulkan nativo / OVRFW no GLES fallback)"]
         VkPipeline["Vulkan Render Pipeline (vr_player_app_vulkan.cpp)"]
         GlesPipeline["OpenGL ES Fallback (vr_player_app.cpp)"]
         Raycast["Raycast Controller Input (vr_player_input_vulkan.h)"]
@@ -78,8 +78,8 @@ flowchart TB
 | Camada | Linguagem | Módulos Principais | Responsabilidade |
 | :--- | :--- | :--- | :--- |
 | **Shell & UI** | Kotlin | `VRActivity.kt`, `VRPresentation.kt`, `VRControlsPresentation.kt`, `history/` | Orquestração do Android OS, desenho de UI nativa via `VirtualDisplay`, persistência com Room, credenciais cifradas (`EncryptedSharedPreferences`). |
-| **XR Engine** | C++17 | `vr_player_app_vulkan.cpp`, `vr_player_app.cpp`, `vr_player_jni_vulkan.cpp` | Sessão OpenXR, swapchains, loop de desenho a 72/90/120 Hz, raycasting de controles Touch Plus, importação de `AHardwareBuffer` para Vulkan/GLES. |
-| **Media Core** | Rust 2021 | `core`, `media-logic`, `protocols`, `audio`, `bridge` | Demuxing de arquivos locais e remotos, decodificação acelerada por hardware via NDK `MediaCodec`, saída de áudio com `Oboe`, clientes de rede seguros. |
+| **XR Engine** | C++20 | `vr_player_app_vulkan.cpp`, `vr_player_app.cpp`, `vr_player_jni_vulkan.cpp` | Sessão OpenXR, swapchains, loop de desenho a 72/90/120 Hz, raycasting de controles Touch Plus, importação de `AHardwareBuffer` para Vulkan/GLES. |
+| **Media Core** | Rust (2021 workspace / 2024 protocols) | `core`, `media-logic`, `protocols`, `audio`, `bridge` | Demuxing de arquivos locais e remotos, decodificação acelerada por hardware via NDK `MediaCodec`, saída de áudio com `Oboe`, clientes de rede seguros. |
 
 ### 2.2 A Regra Crítica FFI (ADR-002: Kotlin $\leftrightarrow$ Rust)
 
@@ -116,19 +116,16 @@ O pipeline gráfico do tucaVR foi migrado para **Vulkan 1.1** como backend prim�
                   └──────────────────┬──────────────────┘
                                      ▼
                   ┌─────────────────────────────────────┐
-                  │   OpenXR Multiview Swapchain        │
+                  │   OpenXR Swapchains (Por Olho)      │
                   │  (Stereo Projections / VR Screen)   │
                   └─────────────────────────────────────┘
 ```
 
 ### 3.1 Backend Primário: Vulkan (`vr_player_app_vulkan.cpp`)
 
-1. **Extensões de Instância e Dispositivo:**
-   - `VK_KHR_android_surface`
-   - `VK_KHR_external_memory` e `VK_KHR_external_memory_fd`
-   - `VK_ANDROID_external_memory_android_hardware_buffer`
-   - `VK_KHR_sampler_ycbcr_conversion`
-   - `VK_KHR_dedicated_allocation`
+1. **Extensões de Instância e Dispositivo (`vr_player_app_vulkan.cpp:1454-1567`):**
+   - **Instância:** `VK_KHR_external_memory_capabilities`, `VK_KHR_get_physical_device_properties2`
+   - **Dispositivo:** `VK_ANDROID_external_memory_android_hardware_buffer`, `VK_KHR_sampler_ycbcr_conversion`, `VK_KHR_external_memory`, `VK_KHR_dedicated_allocation`, `VK_KHR_bind_memory2`, `VK_KHR_get_memory_requirements2`
 2. **Importação do Buffer do Vídeo (`GetOrImportVideoFrame`):**
    - O Rust fornece o ponteiro `AHardwareBuffer*` decodificado pelo MediaCodec.
    - O C++ consulta os requisitos de memória via `vkGetAndroidHardwareBufferPropertiesANDROID`.
@@ -328,7 +325,7 @@ pub extern "C" fn get_current_video_frame() -> *mut c_void {
 
 ### 6.2 Anel Circular de Erros (`ErrorRingBuffer`)
 
-Falhas de I/O em threads secundárias do Rust não devem disparar exceções nem causar pânicos no processo. A crate `media-logic` implementa o `ErrorRingBuffer`, que armazena atomicamente os últimos erros ocorridos. A camada Kotlin consome periodicamente essa fila via polling leve (`take_last_playback_error()`) e exibe Toasts na interface sem qualquer sincronização bloqueante.
+Falhas de I/O em threads secundárias do Rust não devem disparar exceções nem causar pânicos no processo. A crate `media-logic` implementa o `ErrorRingBuffer`, que armazena atomicamente os últimos erros ocorridos. A camada Kotlin consome periodicamente essa fila via polling leve JNI (`VRActivity.nativeTakeLastPlaybackError()`, respeitando o isolamento do ADR-002 onde Kotlin nunca acessa Rust diretamente) e exibe Toasts na interface sem qualquer sincronização bloqueante.
 
 ---
 
@@ -362,7 +359,7 @@ Servidores SMB, FTP e SFTP exigem armazenamento seguro de senhas e chaves privad
 
 ### 8.2 Histórico e Favoritos (Room Database)
 
-A persistência do progresso dos vídeos e da biblioteca é gerenciada pelo **Android Room DB** (`PlaybackHistoryDatabase`), utilizando KSP para geração de código.
+A persistência do progresso dos vídeos e da biblioteca é gerenciada pelo **Android Room DB** (`AppDatabase`, em `history/AppDatabase.kt:18`), utilizando KSP para geração de código.
 - As atualizações de progresso são throttled (estranguladas) para não gerar sobrecarga no disco de armazenamento flash do headset durante reproduções contínuas.
 
 ---

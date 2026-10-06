@@ -41,7 +41,7 @@ graph LR
 ```
 
 - **Kotlin** (`app/`) — shell Android e a UI, desenhada como `View`s comuns do Android dentro de um `android.app.Presentation` sobre um `VirtualDisplay`, e então projetada como textura em quads 3D pela camada nativa. Também cuida do armazenamento criptografado de credenciais, do histórico de reprodução (Room) e da localização.
-- **C++** (`native/`) — sessão OpenXR, swapchains e o loop de renderização em cima do `SampleXrFramework` (OVRFW) da Meta. Vulkan é o backend padrão, com o caminho OpenGL ES mantido como fallback. Os frames decodificados chegam como `AHardwareBuffer` e são ligados como texturas externas em zero-copy.
+- **C++** (`native/`, C++20) — sessão OpenXR, swapchains e o loop de renderização. Vulkan é o backend padrão (independente do OVRFW), com o caminho OpenGL ES mantido como fallback congelado construído sobre o `SampleXrFramework` (OVRFW) da Meta. Os frames decodificados chegam como `AHardwareBuffer` e são ligados como texturas externas em zero-copy.
 - **Rust** (`rust/`) — cross-compilado para `aarch64-linux-android`. Demuxing com `ffmpeg-next`, decodificação por hardware via `ndk::MediaCodec`, saída de áudio pelo Oboe, e todos os clientes de protocolo de rede escritos em Rust puro (sem libs nativas de TLS/SSH, para não sofrer no cross-compile).
 
 O Kotlin nunca chama o Rust diretamente: ele fala com o C++ por JNI, e o C++ é o único consumidor da API `extern "C"` da crate `bridge`.

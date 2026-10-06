@@ -58,7 +58,7 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 ```
 
 - **Kotlin** (`app/src/main/java/com/tucavr/`) — the Android shell and the UI. The UI is drawn as plain Android `View`s inside an `android.app.Presentation` on a `VirtualDisplay`, and the native layer projects it onto 3D quads. It is **not** XML layouts as a screen hierarchy and **not** Jetpack Compose. Also owns credential storage, Room-backed history and i18n.
-- **C++** (`native/src/`) — OpenXR session, swapchains and the render loop, built on Meta's `SampleXrFramework` (OVRFW). Vulkan is the default backend; the OpenGL ES path is kept as a real fallback (`-PvrplayerGraphicsApi=GLES`).
+- **C++** (`native/src/`) — OpenXR session, swapchains and the render loop. Vulkan is the default backend (independent of OVRFW); the frozen OpenGL ES fallback path built on Meta's `SampleXrFramework` (OVRFW) is kept available (`-PvrplayerGraphicsApi=GLES`).
 - **Rust** (`rust/`) — demuxing (`ffmpeg-next`), hardware decode (`ndk::MediaCodec`), audio (Oboe) and every network protocol client.
 
 **The one rule that is non-negotiable:** Kotlin never calls Rust directly. Kotlin talks to C++ over JNI, and C++ is the only caller of the `bridge` crate's flat `extern "C"` API. Do not introduce a Kotlin → Rust UniFFI path — that was considered and deliberately rejected (ADR-002 in `docs/REQUIREMENTS.md`), because there is no call path where Kotlin needs to reach Rust without going through the per-frame render loop in C++.
@@ -79,7 +79,7 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 
 - **Rust** — `cargo fmt`, and `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings` must pass. CI enforces the clippy gate.
 - **Kotlin** — `./gradlew ktlintCheck`. It is currently non-blocking in CI, but please keep it clean anyway.
-- **C++** — C++20, matching the surrounding file. Respect the OVRFW shader conventions: the framework injects `FragmentHeader`/`VertexHeader` into custom shaders, so things like `fragColor` and `TransformVertex` are already declared for you.
+- **C++** — C++20, matching the surrounding file. In the frozen GLES fallback, respect the OVRFW shader conventions (the framework injects `FragmentHeader`/`VertexHeader`); in the default Vulkan backend, shaders are written in standard GLSL and compiled to SPIR-V via `glslc`.
 - **Comments and docs are written in Portuguese (BR).** That is the existing convention across the codebase — match it when adding comments to existing files. Issues, PRs and this guide are in English.
 - Prefer explaining *why* in a comment over restating *what* the code does. The existing comments tend to record the reasoning behind a version pin or a workaround; that style has been genuinely useful here.
 

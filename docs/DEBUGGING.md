@@ -199,7 +199,7 @@ nativo (sem string de recurso/i18n — é diagnóstico técnico, não UI de
 produção). `VRActivity.isDebuggable` filtra antes de tocar a `View`; builds
 de release recebem a chamada mas ela é descartada sem custo.
 
-## 4. Vulkan validation layers (já habilitadas no build local)
+## 4. Vulkan validation layers (opcional via build flag)
 
 `CreateVulkanInstanceAndDevice` (`vr_player_app_vulkan.cpp`) checa em
 runtime (`vkEnumerateInstanceLayerProperties`) se `VK_LAYER_KHRONOS_validation`

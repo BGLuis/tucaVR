@@ -36,7 +36,7 @@ A aplicação opera como uma `NativeActivity` 100% imersiva em OpenXR (`<meta-da
 | Camada | Diretório | Tecnologia | Papel Principal |
 | :--- | :--- | :--- | :--- |
 | **Shell & UI** | `app/` | Kotlin | Shell Android, interfaces nativas desenhadas em `VirtualDisplay` via `VRPresentation`, credenciais com `EncryptedSharedPreferences` e histórico com Room DB. |
-| **Engine Gráfica** | `native/` | C++17, OpenXR, Vulkan (primário) / GLES (fallback) | Ciclo de vida da sessão OpenXR, render loop (72/90/120 Hz), projeções 2D/3D (SBS, OU, 180°, 360°), raycast de controles Touch Plus e importação Zero-Copy de texturas. |
+| **Engine Gráfica** | `native/` | C++20, OpenXR, Vulkan (primário) / GLES (fallback) | Ciclo de vida da sessão OpenXR, render loop (72/90/120 Hz), projeções 2D/3D (SBS, OU, 180°, 360°), raycast de controles Touch Plus e importação Zero-Copy de texturas. |
 | **Núcleo de Mídia** | `rust/` | Rust (NDK + `media-logic`) | Demuxing (`ffmpeg-next`), decodificação de hardware com `ndk::MediaCodec`, áudio de baixa latência com `Oboe`, clientes de rede (SMB 2/3, HTTP, FTP, SFTP) e sincronismo A/V (`SyncManager`). |
 
 ---
