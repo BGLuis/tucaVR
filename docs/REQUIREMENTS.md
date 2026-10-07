@@ -233,6 +233,9 @@ graph TB
 | RNF-QUAL-005 | Documentação de API pública | Obrigatório |
 | RNF-QUAL-006 | Logging estruturado (níveis: trace/debug/info/warn/error) | Obrigatório |
 
+> RNF-QUAL-002 ainda não atendido: não existe `app/src/androidTest` e a fronteira JNI não tem
+> teste automatizado — a cobertura atual é host-only (Rust, C++ e JVM), ver `docs/TESTING-PLAN.md`.
+
 ---
 
 ## 5. Stack Tecnológico Definido
@@ -274,10 +277,10 @@ graph TB
 | Fallback | OpenGL ES 3.x (via OVRFW, `-PvrplayerGraphicsApi=GLES`) | Mantido como caminho alternativo |
 | Passthrough | Meta Passthrough API (XR extension) | Mixed reality |
 | Hand tracking | XR_EXT_hand_tracking | Gestos naturais |
-| Eye tracking | XR_EXT_eye_gaze_interaction | UI por olhar |
+| Eye tracking | XR_EXT_eye_gaze_interaction (não implementado — roadmap v0.5, "Eye tracking UI") | UI por olhar |
 | Environment | Meshes customizados + skyboxes | Ambientes 3D |
 | Shader lang | GLSL → SPIR-V (Vulkan, via `glslc`) / GLSL (GLES fallback) | Shaders em `native/shaders/vulkan/` |
-| Math | SampleXrFramework + `vk_math.h` próprio C++20 (`glm` descartado, ver §5.5) | Primitivas matemáticas sem dependência externa |
+| Math | `native/include/vk_math.h` próprio (Vulkan); `OVR::` do SampleXrFramework só no fallback GLES (`glm` descartado, ver §5.5) | Primitivas matemáticas sem dependência externa |
 
 ### 5.4 Build & Tooling
 | Componente | Tecnologia |
@@ -298,7 +301,7 @@ Durante o desenvolvimento do projeto, várias bibliotecas preliminarmente consid
 | **Koin** | Kotlin | Descartado | A injeção de dependências manual e direta foi adotada; o grafo do app é simples e explícito, dispensando o overhead de reflexão e inicialização de runtime de DI. |
 | **DataStore** | Kotlin | Descartado | Room DB (com migrações versionadas e tipadas via KSP) atende perfeitamente dados estruturados (histórico, servidores), enquanto `EncryptedSharedPreferences` atende segredos com hardware Keystore. |
 | **Ktor Client** | Kotlin | Descartado | O networking de mídia é 100% tratado no Rust (`protocols`), e a descoberta na LAN usa `NsdManager` (mDNS nativo do Android) e SSDP puro no Rust, tornando um cliente HTTP assíncrono em Kotlin redundante. |
-| **glm** | C++ | Descartado | O SampleXrFramework já fornece primitivas vetoriais/matriciais (`OVR::Matrix4f`, `OVR::Vector3f`), e para o caminho Vulkan foi criado `vk_math.h` com recursos nativos de C++20, eliminando dependências externas. |
+| **glm** | C++ | Descartado | O backend Vulkan (padrão, sem OVRFW) usa o `native/include/vk_math.h` próprio; só o fallback GLES congelado usa as primitivas `OVR::Matrix4f`/`OVR::Vector3f` do SampleXrFramework. Nenhum dos dois caminhos precisa de dependência externa. |
 | **rupnp** | Rust | Descartado | Implementação SSDP/SOAP enxuta e pura em `rust/protocols/src/dlna/`, evitando dependências pesadas e permitindo integração direta com o pipeline de streaming do player. |
 | **subparse** | Rust | Descartado | O FFmpeg (`ffmpeg-next`) já extrai pacotes de legendas e metadados, complementado pelo parser ASS/SSA próprio em `rust/core/src/subtitle_loader.rs`. |
 | **clang-tidy** | C++ / Tooling | Descartado | Para manter o CI rápido e determinístico, a análise estática nativa baseia-se em `clang-format --dry-run -Werror` e compilação rigorosa com flags do compilador C++20 (`-Wall -Wextra`). |

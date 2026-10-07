@@ -722,6 +722,7 @@ Ambiente Espacial:
   ```
 
 - [ ] **T3.4** — Implementar **áudio de ambiência por ambiente** (Rust/Kotlin):
+  > **Parcial:** loop por ambiente e ducking em `app/src/main/java/com/tucavr/AmbientAudioManager.kt:17,52` (chamado em `VRActivity.kt:1162,1429,1666`); falta o fade out/in na troca de ambiente.
   - Cada ambiente tem uma faixa de áudio opcional em loop (arquivo `.ogg` no assets)
   - Volume do áudio ambiente reduz automaticamente quando vídeo está tocando (ducking)
   - Transição: fade out ao trocar de ambiente, fade in no novo

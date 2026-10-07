@@ -429,7 +429,7 @@ Descobrir automaticamente servidores de mídia na rede via UPnP/DLNA e navegar s
 
 ### Tarefas
 
-- [x] **T7.1** — Implementar **SSDP Discovery** no Rust (`rust/protocols/src/dlna/discovery.rs`):
+- [x] **T7.1** — Implementar **SSDP Discovery** no Rust (`rust/protocols/src/discovery/ssdp.rs:15`, `scan_ssdp`):
     - Enviar `M-SEARCH` multicast para `239.255.255.250:1900`
     - Filtrar por `urn:schemas-upnp-org:device:MediaServer:1`
     - Parsear responses para obter `LOCATION` do device description XML
@@ -446,7 +446,7 @@ Descobrir automaticamente servidores de mídia na rede via UPnP/DLNA e navegar s
 - [x] **T7.2** — Parsear **Device Description XML** (`rust/protocols/src/dlna/device.rs`):
     - Obter `friendlyName`, `modelName`, ícone
     - Localizar `ContentDirectory` service URL
-- [x] **T7.3** — Implementar cliente **ContentDirectory** (SOAP) (`rust/protocols/src/dlna/content_directory.rs`):
+- [x] **T7.3** — Implementar cliente **ContentDirectory** (SOAP) (`rust/protocols/src/dlna/soap.rs:72`, `execute_browse_soap`; DIDL-Lite em `rust/protocols/src/dlna/didl.rs:42`):
     - `Browse` action: navegar diretórios de conteúdo
     - Parsear DIDL-Lite XML (metadados de cada item)
     - Extrair `res` element (URL de streaming do conteúdo)
