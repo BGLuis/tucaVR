@@ -35,10 +35,9 @@ class DebugStatsModal(
     private val debugStatValueViews = mutableMapOf<String, TextView>()
     private val charts = mutableMapOf<String, VoidChart>()
 
-    // F5 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): histórico rolante em memória para
-    // G1/G3/G4/G5 — acumulado a partir das amostras de ~10Hz que já chegam via updateStats,
-    // sem alargar o wire (2.5 do relatório). G2 usa os contadores cumulativos direto do wire,
-    // sem histórico próprio.
+    // F5: histórico rolante em memória para G1/G3/G4/G5 — acumulado a partir das
+    // amostras de ~10Hz que já chegam via updateStats, sem alargar o wire. G2 usa
+    // os contadores cumulativos direto do wire, sem histórico próprio.
     private val bottleneckHistory = ArrayDeque<BottleneckStage>()
     private val bufferHealthHistory = ArrayDeque<Float>()
     private val netMbsHistory = ArrayDeque<Float>()
@@ -46,13 +45,12 @@ class DebugStatsModal(
     private val gpuTimeHistory = ArrayDeque<Float>()
 
     companion object {
-        // D-04 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): valor com idade acima de
-        // ~2 amostras (HUD atualiza a ~10Hz, ver DebugTelemetryExporter) aparece esmaecido
-        // com a idade ao lado, em vez de mentir sendo exibido como corrente — ver os 34
-        // exemplos de valor congelado por 34 amostras seguidas na sessão real do relatório.
+        // D-04: valor com idade acima de ~2 amostras (HUD atualiza a ~10Hz,
+        // ver DebugTelemetryExporter) aparece esmaecido com a idade ao lado,
+        // em vez de ser exibido incorretamente como corrente.
         private const val STALE_THRESHOLD_MS = 200
 
-        // 60s a ~10Hz (relatório 2.5, G1: "faixas por estágio, 60s").
+        // 60s a ~10Hz (G1: "faixas por estágio, 60s").
         private const val HISTORY_MAX_SAMPLES = 600
     }
 
@@ -160,9 +158,8 @@ class DebugStatsModal(
         buildStatSection(
             context.getString(R.string.debug_stats_section_video_render),
             listOf(
-                // F5 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): bottleneck_stage como
-                // primeira linha do painel (secao 2.3) — responde "onde travou" sem
-                // reconstruir a leitura a mao.
+                // F5: bottleneck_stage como primeira linha do painel —
+                // responde "onde travou" sem reconstruir a leitura a mao.
                 "bottleneck" to context.getString(R.string.debug_stats_label_bottleneck),
                 "resolution" to context.getString(R.string.debug_stats_label_resolution),
                 "decoder" to context.getString(R.string.debug_stats_label_video_decoder),
@@ -302,9 +299,8 @@ class DebugStatsModal(
     }
 
     /**
-     * F5 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, seção 2.5): os 5 gráficos, cada um
-     * com uma legenda curta acima. Alturas em dp (60dp) — ver aviso de densidade em
-     * [VoidChart]; legibilidade real só confirmável no headset.
+     * F5: os 5 gráficos, cada um com uma legenda curta acima. Alturas em dp (60dp) —
+     * ver aviso de densidade em [VoidChart]; legibilidade real só confirmável no headset.
      */
     private fun buildChartsSection(container: LinearLayout) {
         val sectionHeader =
@@ -453,11 +449,15 @@ class DebugStatsModal(
 
         debugStatValueViews["backend"]?.text = stats.backend
 
-        // F5 G5: campos ja coletados e nunca exibidos (relatorio 2.5) — zero coleta nova.
-        setValue("gpu_time", String.format(Locale.US, "%.2f / %.2f ms", stats.gpuTimeMs, stats.smoothedGpuTimeMs), stats.renderStatsAgeMs)
+        setValue(
+            "gpu_time",
+            String.format(Locale.US, "%.2f / %.2f ms", stats.gpuTimeMs, stats.smoothedGpuTimeMs),
+            stats.renderStatsAgeMs,
+        )
         debugStatValueViews["quality"]?.text = "${stats.qualityLevel} (${stats.qualityReason})"
         val mqsrStr = if (stats.mqsrEnabled) " [MQSR]" else ""
-        debugStatValueViews["upscaling"]?.text = String.format(Locale.US, "%s %.2f%s", stats.upscalingMode, stats.upscalingSharpness, mqsrStr)
+        debugStatValueViews["upscaling"]?.text =
+            String.format(Locale.US, "%s %.2f%s", stats.upscalingMode, stats.upscalingSharpness, mqsrStr)
         debugStatValueViews["drawcalls"]?.text = "${stats.drawCallCount} / ${stats.triangleCount}"
 
         // 2. Áudio & Sincronização

@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-// P-05 (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md): tid das 3 threads do pipeline,
+// P-05: tid das 3 threads do pipeline,
 // reportado pra C++ registrar como thread critica ao runtime XR via
 // xrSetAndroidApplicationThreadKHR (rust/bridge/src/lib.rs expoe getters que leem estas
 // estaticas — C++ e o unico com acesso ao XrSession, entao o registro em si acontece la; aqui
@@ -46,7 +46,7 @@ const CATCH_UP_SKIP_THRESHOLD_SEC: f64 = 0.5;
 /// posicao de video conhecida (em vez de reiniciar do byte 0 do arquivo)
 /// apos um erro de leitura, antes de cair pro ultimo recurso (seek pro
 /// inicio). Achado desta sessao (analise de sessoes de telemetria com
-/// stalls de dezenas de segundos via SFTP, docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md):
+/// stalls de dezenas de segundos via SFTP):
 /// o codigo anterior reiniciava do ZERO em QUALQUER erro de leitura —
 /// inclusive um soluco transitorio de rede plenamente normal (confirmado
 /// via rust/protocols/src/bin/speed_test.rs: o link real oscila mas nunca
@@ -243,7 +243,7 @@ pub struct PlaybackController {
     // getters no fim do impl. `None`/valores zerados antes do primeiro load.
     network_stats: Option<Arc<protocols::prefetch::PrefetchStats>>,
     video_queue: Option<crossbeam_channel::Sender<TaggedPacket>>,
-    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): audio_tx sempre existiu (ver
+    // F4: audio_tx sempre existiu (ver
     // load_at), mas so video_queue guardava o clone pra observabilidade — a fila de audio
     // era invisivel de fora, sem jeito de saber se o gargalo era decode/consumo de audio.
     audio_queue: Option<crossbeam_channel::Sender<TaggedPacket>>,
@@ -262,7 +262,7 @@ pub struct PlaybackController {
     connection_cache: crate::demuxer::ConnectionCache,
     seek_started_at: Arc<Mutex<Option<Instant>>>,
     seek_latency_ms: Arc<AtomicU32>,
-    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): fases do load_at() — antes so
+    // F4: fases do load_at() — antes so
     // logadas (log_info!), agora tambem consultaveis sem grep no logcat. Mesmo padrao de
     // seek_latency_ms acima: sobrevivem a troca de sessao, sobrescritas a cada load_at().
     load_phase_demux_open_ms: Arc<AtomicU32>,

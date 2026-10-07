@@ -10,8 +10,7 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Tamanho de cada bloco de mídia baixado via Range para representações `SegmentBase` (R-02,
-/// docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md) — evita carregar o arquivo inteiro (GBs em
+/// Tamanho de cada bloco de mídia baixado via Range para representações `SegmentBase` (R-02) — evita carregar o arquivo inteiro (GBs em
 /// 8K) de uma vez em memória; mesma ordem de grandeza do `REMOTE_PREFETCH_BLOCK_SIZE` usado
 /// pelos outros protocolos via `PrefetchReader` (`rust/core/src/demuxer.rs`).
 const DASH_SEGMENT_BASE_CHUNK_SIZE: u64 = 4 * 1024 * 1024;
@@ -33,7 +32,7 @@ pub fn fetch_and_probe_representations(url: &str) -> Result<Vec<DashRepresentati
         .timeout(Duration::from_secs(10))
         // R-01: sem redirect automático — um redirecionamento HTTP 3xx da mesma origem já
         // validada por `resolve_dash_url` poderia apontar para fora dela, contornando a
-        // checagem de origem só por string. Ver docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md.
+        // checagem de origem só por string.
         .redirect(reqwest::redirect::Policy::none())
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))?;
@@ -331,8 +330,7 @@ impl DashStreamSource {
         } else if active_rep.segment_base.is_some() {
             // R-03: SegmentBase não tem segmentos numerados — aproxima o byte-alvo pela fração
             // linear duração/tamanho estimado (mesma técnica já usada no fallback genérico de
-            // `io::Seek::seek` acima). Sem sidx parseado, não há como ser exato; documentado
-            // como aproximação em docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md (R-03).
+            // `io::Seek::seek` acima). Sem sidx parseado, não há como ser exato (R-03).
             let start_offset = Self::segment_base_start_offset(&active_rep);
             let target_offset = match (self.estimated_total_bytes, self.manifest.duration_sec) {
                 (Some(total), Some(dur)) if total > 0 && dur > 0.0 => {
@@ -668,7 +666,7 @@ mod tests {
 
     #[test]
     fn test_dash_stream_source_blocks_cross_origin_init_segment_ssrf() {
-        // R-01 (docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): um MPD malicioso com
+        // R-01: um MPD malicioso com
         // SegmentTemplate@initialization absoluto apontando para outra origem NÃO deve resultar
         // em nenhuma requisição a esse host — `open()` deve falhar antes de tentar baixá-lo.
         let evil_server = MockServer::start();
@@ -717,7 +715,7 @@ mod tests {
 
     #[test]
     fn test_dash_stream_source_segment_base_downloads_media_after_init() {
-        // R-02 (docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): antes deste fix,
+        // R-02: antes deste fix,
         // representações só-SegmentBase baixavam o segmento de inicialização e paravam — nenhum
         // dado de mídia era buscado. Este teste prova que a segunda leitura (o bloco de mídia)
         // agora dispara uma segunda requisição HTTP real.

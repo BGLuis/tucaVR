@@ -45,7 +45,7 @@ Resolução efetiva por olho em conteúdo 360° SBS:
   - Histerese assimétrica (degradação rápida $\le 2$ amostras, subida gradual após 30s estáveis).
   - Integrado via FFI plana em `rust/bridge/src/lib.rs` e consumido no render loop Vulkan em `native/src/vr_player_app_vulkan.cpp`.
 - [x] **T1.3** — ~~Implementar downscale de textura GPU~~ *(Rejeitado/Podado)*:
-  - Avaliado no relatório arquitetural `docs/reports/PHASE-0.4-01-8K-ADAPTIVE-QUALITY.md`. Rejeitado formalmente devido ao overhead proibitivo de render-to-texture offscreen e double memory bandwidth no XR2 Gen 2.
+  - Rejeitado formalmente devido ao overhead proibitivo de render-to-texture offscreen e double memory bandwidth no XR2 Gen 2.
 - [x] **T1.4** — Implementar **métricas de performance** (C++):
   - Coleta contínua de frame times, pacing lag, smoothed GPU time via timestamps Vulkan (`smoothedGpuTimeMs`), e taxa de quadros perdidos alimentando o `QualityController`.
 - [x] **T1.5** — **HUD de debug** (toggle via menu / modal):
@@ -637,7 +637,7 @@ Eye-Tracked Foveated Rendering: Centro segue o olhar (v0.5)
   - `Low`: FFR HIGH, 72Hz.
   - `Emergency`: FFR HIGH + verticalOffset 10.0f, 72Hz.
 - [x] **T5.4** — ~~Foveated decode (avançado)~~ *(Rejeitado/Podado)*:
-  - Avaliado no relatório `docs/reports/PHASE-0.4-05-FOVEATED-RENDERING.md`. Rejeitado formalmente devido à ausência de decodificadores de múltiplos fluxos sincronizados e falta de suporte nativo a HEVC motion-constrained tile sets no Android NDK.
+  - Rejeitado formalmente devido à ausência de decodificadores de múltiplos fluxos sincronizados e falta de suporte nativo a HEVC motion-constrained tile sets no Android NDK.
 - [x] **T5.5** — Opção de **desabilitar foveation** e seletor granular no menu de settings:
   - Seletor granular implementado em `screens/SettingsScreen.kt` (*Desligado, Baixo, Médio, Alto, Automático*).
   - Persistência em `FeatureFlags.kt` sincronizando tanto o modo inteiro quanto o boolean legado.

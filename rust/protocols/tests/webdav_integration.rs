@@ -1,5 +1,5 @@
-//! Teste de integracao WebDAV (Fase 0.4 Secao 3, achado R-04 de
-//! docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md) contra um servidor WebDAV REAL
+//! Teste de integracao WebDAV (Fase 0.4 Secao 3, achado R-04)
+//! contra um servidor WebDAV REAL
 //! (Apache + mod_dav via `bytemark/webdav`) rodando em Docker — nao um mock. Os testes
 //! existentes em src/webdav/mod.rs usam `httpmock` (in-process); este arquivo preenche a
 //! lacuna de nunca ter sido testado contra um servidor real (PROPFIND, auth Basic, GET

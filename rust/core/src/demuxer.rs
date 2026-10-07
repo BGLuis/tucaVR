@@ -72,7 +72,7 @@ pub struct Demuxer {
     // envolvido, ver roteamento em `new()`). Capturado ANTES de o
     // PrefetchReader ser engolido pelo `StreamIo` opaco do ffmpeg-next.
     pub network_stats: Option<Arc<PrefetchStats>>,
-    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): pacotes corrompidos/invalidos
+    // F4: pacotes corrompidos/invalidos
     // descartados silenciosamente por read_packet() abaixo — antes disto, invisivel.
     pub corrupt_packets: Arc<AtomicU64>,
 }

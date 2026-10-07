@@ -172,7 +172,7 @@ pub struct QualityController {
     current_level: QualityLevel,
     last_reason: QualityTransitionReason,
     /// Amostras consecutivas com dropped_fps acima do limiar (ver
-    /// docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md, P-03 — antes desta correção, um
+    /// P-03 — antes desta correção, um
     /// unico pico isolado degradava o nivel imediatamente e podia travar o app em um nivel
     /// baixo pelo resto da sessao).
     dropped_fps_stress_count: u32,
@@ -202,8 +202,7 @@ impl QualityController {
     /// Limiar de dropped FPS considerado estresse.
     pub const DROPPED_FPS_STRESS_THRESHOLD: f32 = 3.0f32;
     /// Amostras consecutivas de dropped FPS acima do limiar para disparar degradação — antes
-    /// desta constante, uma única amostra degradava na hora (ver
-    /// docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md, P-03).
+    /// desta constante, uma única amostra degradava na hora (P-03).
     pub const DROPPED_FPS_STRESS_THRESHOLD_SAMPLES: u32 = 2;
 
     pub fn new() -> Self {
@@ -266,7 +265,7 @@ impl QualityController {
         let pacing_budget_ms = frame_interval_ms * 1.20f32;
         let gpu_budget_ms = frame_interval_ms * 0.85f32;
         let gpu_healthy_ms = frame_interval_ms * 0.65f32;
-        // D-01 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): um frame perfeitamente pago
+        // D-01: um frame perfeitamente pago
         // mede EXATAMENTE frame_interval_ms (delta de predictedDisplayTime — ver
         // vr_player_app_vulkan.cpp:5018-5020), nunca menos. Um limiar abaixo de 1.0x
         // (era 0.95) tornava `sample.frame_time_ms < pacing_healthy_ms` sempre falso em
@@ -540,7 +539,7 @@ mod tests {
 
     #[test]
     fn test_dropped_fps_degrades_after_two_samples() {
-        // Auditoria pos-reinicio (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md, P-03):
+        // Auditoria pos-reinicio (P-03):
         // antes desta correcao, uma unica amostra ja degradava — igual as regras de GPU/pacing
         // (ver test_gpu_overload_degrades_after_two_samples), agora exige 2 amostras
         // consecutivas de estresse.

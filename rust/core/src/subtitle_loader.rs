@@ -66,8 +66,7 @@ pub fn load_subtitle_from_path(path: &str) -> Result<LoadedSubtitle, String> {
 /// `AV_CODEC_ID_TEXT`, WebVTT, MOV_TEXT/tx3g, ASS/SSA). Legendas bitmap
 /// (`HDMV_PGS_SUBTITLE`, `DVD_SUBTITLE`) ainda não têm caminho de render de
 /// textura no C++, então retornam **erro explícito** — em vez de a faixa ficar
-/// vazia e silenciosa, que era o bug descrito no relatório
-/// (`docs/reports/PHASE-0.3-07-LEGENDAS-ASS-PGS.md` §1).
+/// vazia e silenciosa.
 ///
 /// Custo: uma leitura completa do container só para as legendas. Aceitável para
 /// arquivos locais na v0.3; para rede é caro e pode virar leitura incremental

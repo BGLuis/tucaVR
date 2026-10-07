@@ -1,6 +1,6 @@
 #version 450
 
-// docs/reports/MODO-AMBIENTE.md F3: quad do halo — mesma geometria do quad
+// Modo Ambiente F3: quad do halo — mesma geometria do quad
 // de video (posicao -0.5..0.5, UV 0..1, ver CreateVideoVertexBuffer), MVP
 // escalado por kAmbientHaloScale sobre screenScaleX/Y no lado C++
 // (DrawAmbientHalo). Reusa videoVertexBuffer, zero geometria nova.

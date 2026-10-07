@@ -156,7 +156,7 @@ pub extern "C" fn get_playback_feedback_event() -> u64 {
     FEEDBACK_EVENT.load(Ordering::Relaxed)
 }
 
-// P-05 (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md): tid das 3 threads do pipeline de
+// P-05: tid das 3 threads do pipeline de
 // reproducao (rust/core/src/playback.rs), pra C++ registrar como thread critica ao runtime XR
 // via xrSetAndroidApplicationThreadKHR — so C++ tem o XrSession, entao o registro em si
 // acontece la; aqui so expomos os tids publicados pelas proprias threads (mesmo idioma de
@@ -396,7 +396,7 @@ pub extern "C" fn get_pause_on_exit() -> u32 {
     PAUSE_ON_EXIT.load(Ordering::Relaxed) as u32
 }
 
-/// docs/reports/MODO-AMBIENTE.md: halo de luz atrás da tela derivado da cor do
+/// Modo ambiente: halo de luz atrás da tela derivado da cor do
 /// frame (bias lighting). So tem efeito no caminho Vulkan — ver
 /// native/src/vr_player_app_vulkan.cpp. Desligado por padrão: nunca validado
 /// em headset real ate agora.
@@ -869,7 +869,7 @@ pub extern "C" fn get_network_blocks_discarded() -> u64 {
     }
 }
 
-/// F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): falhas de fetch de rede — antes so
+/// F4: falhas de fetch de rede — antes so
 /// visiveis no logcat.
 #[no_mangle]
 pub extern "C" fn get_network_fetch_failures() -> u64 {
@@ -1097,7 +1097,7 @@ pub extern "C" fn get_playback_error_count() -> i32 {
     ERROR_RING.count() as i32
 }
 
-/// F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): todos os erros do anel circular (não
+/// F4: todos os erros do anel circular (não
 /// destrutivo, ao contrário de `take_last_playback_error`), serializados como TSV — uma linha
 /// por erro, ver `ErrorRingBuffer::all_as_tsv`. Retorna string vazia (nunca nulo) se não há
 /// erros. Retorno precisa ser liberado com `free_rust_string`.

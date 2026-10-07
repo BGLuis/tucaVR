@@ -109,24 +109,24 @@ object DebugTelemetryExporter {
 
     /**
      * Extrai tipo e caminho redigido a partir do [PlaybackSource]. Toda saída desta função é
-     * destinada a artefatos que saem do device (CSV de telemetria, relatório de crash — ver
-     * D-03 em docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md) — por isso os 5 ramos de rede
-     * abaixo passam pela mesma [redactSource] usada por Http/Dlna, em vez de montar a URL
-     * manualmente sem redação (o bug original: uma coluna chamada "source_redacted" que não
-     * redigia nada nesses 5 ramos). Nenhum destes ramos referencia `server.password` — a
-     * senha nunca passa por aqui; o vazamento de D-03 estava em VRActivity.kt interpolando o
-     * data class inteiro diretamente, sem nunca chamar esta função.
+     * destinada a artefatos que saem do device (CSV de telemetria, relatório de crash) — por
+     * isso os 5 ramos de rede abaixo passam pela mesma [redactSource] usada por Http/Dlna, em vez
+     * de montar a URL manualmente sem redação (o bug original: uma coluna chamada "source_redacted"
+     * que não redigia nada nesses 5 ramos). Nenhum destes ramos referencia `server.password` — a
+     * senha nunca passa por aqui.
      */
     fun extractSourceInfo(source: PlaybackSource?): Pair<String, String> =
         when (source) {
             is PlaybackSource.LocalFile -> "LocalFile" to source.path
             is PlaybackSource.Http -> "Http" to redactSource(source.url)
-            is PlaybackSource.Smb -> "Smb" to redactSource("smb://${source.server.host}:${source.server.port}/${source.server.share}/${source.path}")
+            is PlaybackSource.Smb ->
+                "Smb" to redactSource("smb://${source.server.host}:${source.server.port}/${source.server.share}/${source.path}")
             is PlaybackSource.Ftp -> "Ftp" to redactSource("ftp://${source.server.host}:${source.server.port}/${source.path}")
             is PlaybackSource.Sftp -> "Sftp" to redactSource("sftp://${source.server.host}:${source.server.port}/${source.path}")
             is PlaybackSource.Nfs -> "Nfs" to redactSource("nfs://${source.server.host}:${source.server.port}/${source.path}")
             is PlaybackSource.Dlna -> "Dlna" to redactSource(source.url)
-            is PlaybackSource.Webdav -> "Webdav" to redactSource("webdav://${source.server.host}:${source.server.port}${source.server.path}/${source.path}")
+            is PlaybackSource.Webdav ->
+                "Webdav" to redactSource("webdav://${source.server.host}:${source.server.port}${source.server.path}/${source.path}")
             null -> "Unknown" to ""
         }
 

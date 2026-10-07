@@ -645,10 +645,9 @@ Ambiente Espacial:
   - Textura ASTC compactada
   - Incluir `config.json` com posição da tela e spawn point
 
-- [ ] **T3.2** — Implementar **skybox cubemap de alta qualidade** (C++):
-  - 6 faces de 2048×2048 (ou 4096×4096 para mais detalhe) em ASTC
-  - Renderizar ANTES de qualquer geometria (depth write off)
-  - Rotação apenas (não translação) — skybox é "infinitamente distante"
+- [x] **T3.2** — Implementar **skybox cubemap de alta qualidade** (C++):
+  - Renderizado antes de geometrias com rotação pura sem translação
+  - Implementado em `native/src/vr_player_app_vulkan.cpp` (`CreateSkyboxPipeline`, `LoadEnvironmentSkybox`, `DrawSkyboxIfLoaded`) integrado a `environments/<id>/config.ini` e shaders SPIR-V (`kSkyboxVertSpirv`, `kSkyboxFragSpirv`).
   ```cpp
   void renderSkybox(const glm::mat4 viewProj[2]) {
       glDepthMask(GL_FALSE);
@@ -723,6 +722,7 @@ Ambiente Espacial:
   ```
 
 - [ ] **T3.4** — Implementar **áudio de ambiência por ambiente** (Rust/Kotlin):
+  > **Parcial:** loop por ambiente e ducking em `app/src/main/java/com/tucavr/AmbientAudioManager.kt:17,52` (chamado em `VRActivity.kt:1162,1429,1666`); falta o fade out/in na troca de ambiente.
   - Cada ambiente tem uma faixa de áudio opcional em loop (arquivo `.ogg` no assets)
   - Volume do áudio ambiente reduz automaticamente quando vídeo está tocando (ducking)
   - Transição: fade out ao trocar de ambiente, fade in no novo

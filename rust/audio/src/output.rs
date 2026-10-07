@@ -11,7 +11,7 @@ pub struct AudioPlayerCallback {
     // f32 armazenado como bits para poder ser lido sem lock no callback
     // de audio em tempo real (chamado pelo Oboe, nao deve bloquear).
     volume_bits: Arc<AtomicU32>,
-    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): incrementado sempre que o canal
+    // F4: incrementado sempre que o canal
     // esta vazio no momento em que o callback do Oboe pede amostras — antes disto, o fill de
     // silencio abaixo (`unwrap_or(0.0)`) era um underrun completamente invisivel na telemetria.
     underrun_count: Arc<AtomicU64>,

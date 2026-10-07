@@ -11,13 +11,12 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * F8 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, seção 8.2): "a maior lacuna de dados do
- * app inteiro, e a mais barata" — ANR e crash nativo (inclusive o abort do ART no teardown
- * Vulkan documentado em outro relatório) não produzem nada em `getExternalFilesDir("debug")`
- * hoje, porque o handler em [com.tucavr.VRActivity] só captura exceções da JVM em threads que
+ * F8: ANR e crash nativo (inclusive o abort do ART no teardown Vulkan) não
+ * produzem nada em `getExternalFilesDir("debug")` pelo handler padrão de exceções,
+ * porque o handler em [com.tucavr.VRActivity] só captura exceções da JVM em threads que
  * o próprio app possui (`Thread.setDefaultUncaughtExceptionHandler`). `ApplicationExitInfo` é
  * lida uma vez no arranque seguinte — custa zero em runtime — e cobre essas duas classes de
- * morte do processo que hoje são invisíveis.
+ * morte do processo que antes eram invisíveis.
  *
  * `[ExitReasonSummary]`/[formatReport]/[reasonName] são puros (sem `Context`/framework) de
  * propósito — [android.app.ApplicationExitInfo] é uma classe do framework sem construtor

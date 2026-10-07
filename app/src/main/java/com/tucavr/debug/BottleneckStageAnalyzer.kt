@@ -1,10 +1,8 @@
 package com.tucavr.debug
 
 /**
- * F5 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, seção 2.3): atribuição de estágio do
- * pipeline a partir de sinais que já trafegam no wire — resolve a pergunta "onde travou" sem
- * reconstruir a leitura à mão (o que a telemetria anterior exigia, e o que levou o
- * QualityController a culpar DROPPED_FRAMES num caso onde o gargalo era outro, ver §1.2).
+ * F5: atribuição de estágio do pipeline a partir de sinais que já trafegam no wire —
+ * resolve a pergunta "onde travou" sem reconstruir a leitura à mão.
  *
  * Puro (sem Context/View/native) de propósito: testável com JUnit puro na JVM.
  */

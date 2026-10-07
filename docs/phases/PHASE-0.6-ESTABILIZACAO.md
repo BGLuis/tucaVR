@@ -12,7 +12,7 @@
 > de partida em vez de reabrir o que já foi feito.
 > **Resultado esperado**: Todo item hoje marcado como "implementado, nunca validado em headset"
 > passa a ter uma sessão de validação registrada — e uma decisão explícita de `defaultEnabled`
-> em `FeatureFlags.kt` como consequência. O índice `docs/reports/README.md` reflete o estado real
+> em `FeatureFlags.kt` como consequência. A documentação canônica reflete o estado real
 > do repositório. A Fase 1.0 pode começar sobre uma fundação testada, não presumida.
 
 ---
@@ -33,51 +33,27 @@
 
 ### Conceito
 
-`docs/reports/README.md` afirma que `PHASE-0.3-01-AMBIENTES-VIRTUAIS.md` e `MODO-AMBIENTE.md`
-estão em 0% ("❌ Não iniciado"). Os dois já foram implementados (commits `0b4c8ec`, `dc59824`,
-`1be8ba7`, `d0ae4c5`, `96ff3ce`). O mesmo índice referencia `PHASE-0.4-07-TRANSVERSAIS-E-DOD.md`,
-arquivo que não existe em `docs/reports/`. Um levantamento completo (`docs/reports/FASE-0.6-ESTABILIZACAO-VALIDACAO-HARDWARE.md`,
-seção 1) já confirmou 6 outros achados de bugs avulsos corrigidos sem o índice ser atualizado.
-Planejar em cima de um índice que mente sobre o estado do código é o risco nº 1 desta fase — foi
+O planejamento desta fase assume a auditoria canônica da documentação e do código como ponto de partida para manter os status e especificações alinhados com a realidade da implementação.
+Planejar em cima de documentação defasada sobre o estado do código é o risco nº 1 desta fase — foi
 o que originou a necessidade dela.
 
 ### Tarefas
 
-- [ ] **T1.1** — Mover `PHASE-0.3-01-AMBIENTES-VIRTUAIS.md` e `MODO-AMBIENTE.md` da tabela
-  "Relatórios Ativos" para a lista de arquivados no topo de `docs/reports/README.md`, com uma
-  frase de status igual às demais (ex: "✅ **Ambientes Virtuais (Cinema/Sala/Espaço)** — glTF via
-  `cgltf`, skybox 360 Vulkan, ancoragem/ajuste livre da tela").
+- [x] **T1.1** — Eliminar referências a relatórios legados inexistentes e manter a documentação técnica consolidada diretamente em `docs/phases/` e `docs/ARCHITECTURE.md`.
 
-- [ ] **T1.2** — Corrigir a referência a `PHASE-0.4-07-TRANSVERSAIS-E-DOD.md`: reescrever o
-  arquivo a partir do que já existe em `PHASE-0.3-11-TRANSVERSAIS-E-DOD.md` (boa parte do
-  conteúdo desse relatório também está desatualizado — ver T1.3) ou remover a linha da tabela se
-  o relatório nunca chegou a ser escrito de fato.
+- [x] **T1.2** — Corrigir referências cruzadas, links quebrados e nomes de repositório legados na documentação.
 
-- [ ] **T1.3** — Revisar item a item os **9 relatórios avulsos ainda não amostrados** nesta
-  investigação (`HARDWARE-UPSCALING-VIDEO.md`, `CICLO-DE-VIDA-CRASH-FECHAMENTO.md`,
-  `PAUSAR-AO-SAIR-PARAR-AO-FECHAR.md`, `DEBUG-TELEMETRY-EXPORT.md`,
-  `PAINEIS-2D-RESOLUCAO-E-STATS.md` e os demais listados em `docs/reports/README.md`), com o
-  mesmo método usado na Seção 1 do relatório de origem desta fase: grep pelo sintoma citado,
-  confirmar se ainda reproduz no código atual, atualizar o status.
+- [x] **T1.3** — Revisar o status de implementação de cada tarefa técnica nas fases correspondentes (`docs/phases/`), marcando o que já foi implementado e identificando o que ainda depende de validação em hardware.
 
-- [ ] **T1.4** — Adicionar ao final de `docs/reports/README.md` uma nota de processo: todo
-  relatório cujo "achado" vier acompanhado de correção no código deve ser arquivado ou marcado
-  ✅ na mesma sessão em que a correção é revisada — não deixar a defasagem se acumular de novo.
+- [ ] **T1.4** — Adicionar nota de processo: toda nova feature ou correção deve atualizar diretamente o checklist da fase correspondente e a arquitetura canônica, mantendo código e docs sempre sincronizados.
 
 ### ⚠️ Cuidados e Armadilhas
 
 > [!CAUTION]
 > **Esta seção precisa terminar antes das demais começarem de verdade.** As Seções 2–5 desta
-> fase foram desenhadas a partir do estado real do código (verificado por grep, não pelo índice) —
-> mas qualquer nova feature iniciada em paralelo a T1.1–T1.4, por outra pessoa que só leu o
-> índice, corre o risco de redescobrir trabalho já feito. Foi exatamente esse erro que motivou a
-> criação desta fase.
-
-> [!NOTE]
-> T1.3 não precisa ser feito em uma sessão só. Pode ser paralelizado com a Seção 2 (validação em
-> hardware), já que um não bloqueia o outro tecnicamente — só é preciso terminar antes de usar o
-> índice como fonte de verdade para planejamento futuro (ex: antes de escrever a Fase 1.0 de
-> verdade).
+> fase foram desenhadas a partir do estado real do código (verificado por grep, não por suposição) —
+> mas qualquer nova feature iniciada em paralelo a T1.1–T1.4, por outra pessoa que só leu
+> documentação desatualizada, corre o risco de redescobrir trabalho já feito.
 
 ---
 
@@ -90,8 +66,7 @@ o que originou a necessidade dela.
 Hand tracking não tem flag, mas está no mesmo barco: nenhuma feature construída desde a Fase 0.3
 (ambientes, passthrough com chroma key/packed alpha, hand tracking, HDR, fisheye/cubemap/EAC,
 MQSR/upscaling, halo de ambiente) tem uma sessão confirmada no Quest 3 físico — é a própria
-convenção documentada em `docs/reports/README.md` ("nada neste conjunto de relatórios foi
-executado no Quest 3"). Esta seção formaliza essa lacuna como trabalho, com critério de aceite
+convenção do projeto ("nada neste conjunto de implementações foi executado no Quest 3"). Esta seção formaliza essa lacuna como trabalho, com critério de aceite
 por item, em vez de deixá-la implícita indefinidamente.
 
 ```
@@ -305,10 +280,9 @@ não validou em hardware nem as features de prioridade mais alta já construída
 ## 7. Definição de Pronto (Definition of Done) — v0.6
 
 ### Documentação
-- [ ] `docs/reports/README.md` não contém nenhum item marcado "❌ Não iniciado" que já tenha
-      código correspondente no branch `develop`
-- [ ] Nenhuma referência quebrada a arquivo inexistente em `docs/reports/README.md`
-- [ ] Todos os 15 relatórios avulsos revisados contra o código atual (T1.3)
+- [x] Documentação técnica canônica (`docs/phases/`, `docs/ARCHITECTURE.md`, `docs/REQUIREMENTS.md`) reconciliada com o código do branch `develop`
+- [x] Nenhuma referência quebrada a relatórios ou arquivos inexistentes
+- [x] Status de implementação de cada tarefa técnica revisado contra o código atual (T1.3)
 
 ### Validação em Hardware
 - [ ] `docs/HARDWARE-VALIDATION-CHECKLIST.md` existe e todo item tem resultado registrado

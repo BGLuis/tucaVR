@@ -83,7 +83,7 @@ pub struct PrefetchStats {
     /// Quantos prefetches em voo foram descartados por um seek real (ver
     /// ensure_cache) — alto = padrao de acesso pouco sequencial.
     pub blocks_discarded: AtomicU64,
-    /// F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): falhas de fetch
+    /// F4: falhas de fetch
     /// (io::Error do RangeSource) — antes so logadas (log::warn!), nunca contadas.
     pub fetch_failures: AtomicU64,
     /// F4: espelho de PrefetchReader::sequential_streak (campo privado, single-thread na

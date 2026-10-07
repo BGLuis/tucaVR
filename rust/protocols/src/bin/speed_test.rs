@@ -5,8 +5,7 @@
 //! Download Manager, ver `download/mod.rs`).
 //!
 //! Objetivo: isolar os dois lados do gargalo observado em sessoes de
-//! playback com stalls longos (ver docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md
-//! e NETWORK-IO-PERFORMANCE.md) — rodando SO a leitura de rede, sem decode/
+//! playback com stalls longos (ver NETWORK-IO-PERFORMANCE.md) — rodando SO a leitura de rede, sem decode/
 //! render/OpenXR no caminho, da pra saber se um stall e:
 //!   - rede/servidor lento de verdade (esta ferramenta tambem fica lenta/trava)
 //!   - ou um gargalo em outro estagio do pipeline do app (esta ferramenta

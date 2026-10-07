@@ -344,12 +344,12 @@ Implementar o loop de rendering OpenXR mínimo com um ambiente "void" (fundo esc
   - Grip button + thumbstick para resize
   - Fixar posição no espaço ou follow head (opção)
   > Thumbstick direito (`RightRemoteJoystick`) move a tela (Y = frente/trás, X = altura); segurando o grip (`RightRemoteGripTrigger`) o mesmo stick redimensiona mantendo aspect ratio 16:9. Limites de conforto aplicados (profundidade -0.75m a -8m, altura 0.2m a 3.5m, largura 0.5m a 6m). "Fixar posição/follow head" (opção secundária) não implementado.
-- [ ] **T3.7** — Configurar Vulkan rendering pipeline:
+- [x] **T3.7** — Configurar Vulkan rendering pipeline:
   - Render pass com depth buffer
   - Pipeline para quad texturizado
   - Pipeline para UI overlay (controles)
   - Multiview rendering (renderizar ambos olhos em uma passada)
-  > **Decisão arquitetural não documentada anteriormente**: o projeto usa OpenGL ES 3.x (via `OVRFW`), não Vulkan — isso diverge do ADR-003 do REQUIREMENTS.md, mas é a alternativa que o próprio PHASE-0.1-MVP sugere ("considere OpenGL ES para o MVP se a complexidade de Vulkan atrasar demais", seção 3, cuidados). Multiview (`GL_OVR_multiview2`) já funciona via macro `TransformVertex` do framework; pipeline para UI overlay funciona (quads da UI 2D projetados em VR). Falta decidir formalmente Vulkan vs. GLES antes de v0.2+ e atualizar o ADR-003.
+  > **Implementado**: Pipeline nativo Vulkan 1.1 implementado em `native/src/vr_player_app_vulkan.cpp` com suporte a multiview (`VK_KHR_multiview`), render passes, shaders SPIR-V compilados via `glslc`, importação de `AHardwareBuffer` via `VK_ANDROID_external_memory_android_hardware_buffer` e fallback mantido para OpenGL ES 3.x (`native/src/vr_player_app.cpp`, comutável via `-PvrplayerGraphicsApi=GLES`).
 
 ### ⚠️ Cuidados e Armadilhas
 

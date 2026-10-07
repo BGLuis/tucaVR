@@ -1,11 +1,11 @@
-# 🥽 tucaVR — Documento de Requisitos (v0.2)
+# 🥽 tucaVR — Documento de Requisitos (v0.4)
 
 > **Projeto**: Player Multimídia 2D/3D para Realidade Virtual  
 > **Stack**: Kotlin + Rust + OpenXR nativo (C/C++ para rendering)  
 > **Plataforma Primária**: Meta Quest 3 (Qualcomm XR2 Gen 2)  
 > **Licença**: MIT  
 > **Uso Inicial**: Pessoal (possível publicação na Meta Quest Store no futuro)  
-> **Status**: 🟢 Requisitos Definidos — Pronto para Arquitetura
+> **Status**: 🟢 Arquitetura Consolidada — Fases v0.1 a v0.4 Implementadas
 
 ---
 
@@ -27,7 +27,7 @@ graph TB
     subgraph "Kotlin Layer"
         APP["Application Logic<br/>(Android Activity/Service)"]
         I18N["i18n / Localização"]
-        PERSIST["Persistência<br/>(Room + DataStore)"]
+        PERSIST["Persistência<br/>(Room + EncryptedSharedPreferences)"]
         NET_DISC["Network Discovery<br/>(mDNS/SSDP)"]
         LIB["Biblioteca / Favoritos / Histórico"]
     end
@@ -210,7 +210,7 @@ graph TB
 | RNF-COMP-004 | Meta Quest 2 | ⚪ Legado (sem garantia 8K) |
 | RNF-COMP-005 | Futuros headsets Android XR / OpenXR | 📋 Planejado |
 | RNF-COMP-006 | OpenXR 1.0+ runtime | Obrigatório |
-| RNF-COMP-007 | Android API 29+ (Android 10) | Obrigatório |
+| RNF-COMP-007 | Android API 26+ (Android 8.0 Oreo, minSdk = 26) | Obrigatório |
 | RNF-COMP-008 | Vulkan 1.1+ ou OpenGL ES 3.2 | Obrigatório |
 
 ### 4.3 Segurança
@@ -233,6 +233,9 @@ graph TB
 | RNF-QUAL-005 | Documentação de API pública | Obrigatório |
 | RNF-QUAL-006 | Logging estruturado (níveis: trace/debug/info/warn/error) | Obrigatório |
 
+> RNF-QUAL-002 ainda não atendido: não existe `app/src/androidTest` e a fronteira JNI não tem
+> teste automatizado — a cobertura atual é host-only (Rust, C++ e JVM), ver `docs/TESTING-PLAN.md`.
+
 ---
 
 ## 5. Stack Tecnológico Definido
@@ -241,10 +244,10 @@ graph TB
 | Componente | Tecnologia | Justificativa |
 |------------|------------|---------------|
 | Build system | Gradle (AGP) + KTS | Padrão Android |
-| DI | Koin | Leve, KMP-friendly |
-| Persistência | Room + DataStore | Biblioteca, histórico, settings |
-| Networking (discovery) | Ktor Client | Coroutines-native |
-| i18n | Android Resources (strings.xml) | Padrão Android, ferramentas maduras |
+| DI | Injeção Manual (Koin descartado, ver §5.5) | Grafo simples e direto, sem overhead de reflexão/runtime |
+| Persistência | Room + EncryptedSharedPreferences (DataStore descartado, ver §5.5) | SQLite tipado com KSP para histórico/servidores; Keystore para credenciais |
+| Networking (discovery) | Android NsdManager (mDNS) + Rust SSDP (Ktor descartado, ver §5.5) | APIs nativas da plataforma e Rust puro |
+| i18n | Android Resources (strings.xml) | Padrão Android, suporte a PT-BR, EN e ES |
 | Interop Rust | Indireto via C++ (JNI → C++ → Rust C ABI) | Kotlin nunca chama Rust diretamente (ver ADR-002) |
 
 ### 5.2 Rust Core (Performance)
@@ -253,14 +256,14 @@ graph TB
 | Demuxing | `ffmpeg-next` (bindings FFmpeg) | Suporte universal a containers/codecs |
 | HW Decode | Android MediaCodec (via NDK) | Decodificação por hardware no XR2 |
 | Áudio | `oboe` (Google Oboe NDK) | Baixa latência no Android |
-| Ambisonics | `ambisonics` crate ou custom | Áudio espacial |
+| Ambisonics | Áudio espacial nativo | Suporte a canais espaciais e downmix |
 | Streaming | `reqwest` + `tokio` | HTTP/HLS/DASH async |
 | SMB | `smb2` crate | Shares Windows/NAS |
-| NFS | `nfs-client` ou binding `libnfs` | NFS shares |
-| FTP/SFTP | `suppaftp` + `russh`/`russh-sftp` | Transferência de arquivos |
-| DLNA/UPnP | `rupnp` | Descoberta automática |
-| WebDAV | `reqwest` + custom DAV parser | WebDAV protocol |
-| Subtitles | `subparse` + custom ASS renderer | Legendas |
+| NFS | `protocols::nfs` | NFS shares |
+| FTP/SFTP | `suppaftp` + `russh`/`russh-sftp` | Transferência e streaming de arquivos |
+| DLNA/UPnP | Cliente puro em `protocols::dlna` (`rupnp` descartado, ver §5.5) | Descoberta SSDP e controle SOAP puro |
+| WebDAV | `reqwest` + parser DAV próprio | Protocolo WebDAV para streaming e navegação |
+| Subtitles | `subtitle_loader.rs` via FFmpeg + parser ASS (`subparse` descartado, ver §5.5) | Legendas embutidas e externas SRT/VTT/ASS |
 | Async runtime | `tokio` | Async I/O |
 | Serialization | `serde` | Config, cache |
 | Build target | `aarch64-linux-android` | Quest 3 ARM64 |
@@ -274,10 +277,10 @@ graph TB
 | Fallback | OpenGL ES 3.x (via OVRFW, `-PvrplayerGraphicsApi=GLES`) | Mantido como caminho alternativo |
 | Passthrough | Meta Passthrough API (XR extension) | Mixed reality |
 | Hand tracking | XR_EXT_hand_tracking | Gestos naturais |
-| Eye tracking | XR_EXT_eye_gaze_interaction | UI por olhar |
+| Eye tracking | XR_EXT_eye_gaze_interaction (não implementado — roadmap v0.5, "Eye tracking UI") | UI por olhar |
 | Environment | Meshes customizados + skyboxes | Ambientes 3D |
 | Shader lang | GLSL → SPIR-V (Vulkan, via `glslc`) / GLSL (GLES fallback) | Shaders em `native/shaders/vulkan/` |
-| Math | `glm` | Álgebra linear |
+| Math | `native/include/vk_math.h` próprio (Vulkan); `OVR::` do SampleXrFramework só no fallback GLES (`glm` descartado, ver §5.5) | Primitivas matemáticas sem dependência externa |
 
 ### 5.4 Build & Tooling
 | Componente | Tecnologia |
@@ -286,8 +289,23 @@ graph TB
 | Rust → Android | `cargo-ndk` |
 | Cross-compile | Android NDK r26+ |
 | CI/CD | GitHub Actions |
-| Linting | `clippy` + `ktlint` + `clang-tidy` |
-| Docs | `rustdoc` + `dokka` |
+| Linting | `clippy` + `ktlint` + `clang-format` (`clang-tidy` descartado, ver §5.5) |
+| Docs | Markdown canônico no repo (`docs/`) + `rustdoc` (`dokka` descartado, ver §5.5) |
+
+### 5.5 Bibliotecas Avaliadas e Descartadas
+
+Durante o desenvolvimento do projeto, várias bibliotecas preliminarmente consideradas foram avaliadas e descartadas em favor de abordagens mais enxutas, seguras e aderentes à arquitetura tri-layer:
+
+| Biblioteca | Camada | Decisão | Justificativa Técnica |
+|------------|--------|---------|-----------------------|
+| **Koin** | Kotlin | Descartado | A injeção de dependências manual e direta foi adotada; o grafo do app é simples e explícito, dispensando o overhead de reflexão e inicialização de runtime de DI. |
+| **DataStore** | Kotlin | Descartado | Room DB (com migrações versionadas e tipadas via KSP) atende perfeitamente dados estruturados (histórico, servidores), enquanto `EncryptedSharedPreferences` atende segredos com hardware Keystore. |
+| **Ktor Client** | Kotlin | Descartado | O networking de mídia é 100% tratado no Rust (`protocols`), e a descoberta na LAN usa `NsdManager` (mDNS nativo do Android) e SSDP puro no Rust, tornando um cliente HTTP assíncrono em Kotlin redundante. |
+| **glm** | C++ | Descartado | O backend Vulkan (padrão, sem OVRFW) usa o `native/include/vk_math.h` próprio; só o fallback GLES congelado usa as primitivas `OVR::Matrix4f`/`OVR::Vector3f` do SampleXrFramework. Nenhum dos dois caminhos precisa de dependência externa. |
+| **rupnp** | Rust | Descartado | Implementação SSDP/SOAP enxuta e pura em `rust/protocols/src/dlna/`, evitando dependências pesadas e permitindo integração direta com o pipeline de streaming do player. |
+| **subparse** | Rust | Descartado | O FFmpeg (`ffmpeg-next`) já extrai pacotes de legendas e metadados, complementado pelo parser ASS/SSA próprio em `rust/core/src/subtitle_loader.rs`. |
+| **clang-tidy** | C++ / Tooling | Descartado | Para manter o CI rápido e determinístico, a análise estática nativa baseia-se em `clang-format --dry-run -Werror` e compilação rigorosa com flags do compilador C++20 (`-Wall -Wextra`). |
+| **dokka** | Kotlin / Docs | Descartado | Documentação mantida como fonte canônica viva em Markdown diretamente no repositório (`docs/`), evitando plugins Gradle lentos e complexidade desnecessária de build. |
 
 ---
 
@@ -297,50 +315,50 @@ graph TB
 > Reproduzir um vídeo 2D local em tela virtual no Quest 3
 
 - [x] Setup do monorepo (Kotlin + Rust + C++)
-- [ ] Pipeline básico: demux → decode (HW) → render em quad
-- [ ] Ambiente void (tela flutuante em fundo escuro)
-- [ ] Controles básicos (play/pause/seek) via controllers
-- [ ] File browser local (armazenamento do Quest)
-- [ ] SMB básico (navegar e reproduzir de NAS)
-- [ ] HTTP URL playback
-- [ ] i18n setup (PT-BR + EN)
-- [ ] Histórico de reprodução
+- [x] Pipeline básico: demux → decode (HW) → render em quad
+- [x] Ambiente void (tela flutuante em fundo escuro)
+- [x] Controles básicos (play/pause/seek) via controllers
+- [x] File browser local (armazenamento do Quest)
+- [x] SMB básico (navegar e reproduzir de NAS)
+- [x] HTTP URL playback
+- [x] i18n setup (PT-BR + EN)
+- [x] Histórico de reprodução
 
 ### v0.2 — 3D & Network
 > Conteúdo 3D e integração com rede
 
-- [ ] Reprodução SBS / Over-Under / 360° / 180°
-- [ ] Auto-detecção de formato 3D
-- [ ] Head tracking para conteúdo 360°
-- [ ] DLNA/UPnP discovery
-- [ ] NFS, FTP, SFTP
-- [ ] HLS streaming
-- [ ] Legendas (SRT, VTT)
-- [ ] Busca e filtros na biblioteca
-- [ ] Thermal monitoring
+- [x] Reprodução SBS / Over-Under / 360° / 180°
+- [x] Auto-detecção de formato 3D
+- [x] Head tracking para conteúdo 360°
+- [x] DLNA/UPnP discovery
+- [x] NFS, FTP, SFTP
+- [x] HLS streaming
+- [x] Legendas (SRT, VTT)
+- [x] Busca e filtros na biblioteca
+- [x] Thermal monitoring
 
 ### v0.3 — Polish & Audio
 > Ambientes, áudio espacial, hand tracking
 
-- [ ] Ambientes: Cinema, Sala
-- [ ] Passthrough / Mixed Reality
-- [ ] Áudio espacial Ambisonics + 5.1/7.1
-- [ ] Hand tracking
-- [ ] VP9/AV1 decode
-- [ ] Legendas ASS/PGS
-- [ ] Fotos 360° e 3D
-- [ ] Playlists
-- [ ] Espanhol (i18n)
+- [x] Ambientes: Cinema, Sala
+- [x] Passthrough / Mixed Reality
+- [x] Áudio espacial Ambisonics + 5.1/7.1
+- [x] Hand tracking
+- [x] VP9/AV1 decode
+- [x] Legendas ASS/PGS (ASS nativo; PGS com detecção e erro explícito)
+- [x] Fotos 360° e 3D
+- [x] Playlists
+- [x] Espanhol (i18n)
 
 ### v0.4 — Advanced
 > Features avançadas
 
-- [ ] Suporte 8K com adaptive quality
-- [ ] DASH streaming
-- [ ] WebDAV
-- [ ] Download offline
-- [ ] Foveated rendering
-- [ ] Projeções avançadas (Cubemap, EAC)
+- [x] Suporte 8K com adaptive quality
+- [x] DASH streaming
+- [x] WebDAV
+- [x] Download offline
+- [x] Foveated rendering
+- [x] Projeções avançadas (Cubemap, EAC)
 
 ### v0.5 — Premium
 > Features diferenciadas
@@ -418,4 +436,4 @@ graph TB
 
 ---
 
-*Documento atualizado em: 2026-08-07 | Versão: 0.2 — Pós Discovery*
+*Documento atualizado em: 2026-10-06 | Versão: 0.4 — Alinhamento Canônico*

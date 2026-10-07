@@ -128,10 +128,7 @@ O projeto inclui três utilitários para visualizar o aplicativo e inspecionar o
 
 ## 3. Modal de Estatísticas Técnicas ("Stats for Nerds")
 
-O app possui um modal completo de diagnóstico em tempo real ("Stats for Nerds"), acessível através do botão de estatísticas na barra de controles do player quando ativado em **Configurações > Avançado > Estatísticas Técnicas**. Esta seção foi reescrita após a triagem de
-`docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md` (fases F0–F8): contrato único
-de campos, frescor por grupo, atribuição de estágio, 5 gráficos e log de
-eventos.
+O app possui um modal completo de diagnóstico em tempo real ("Stats for Nerds"), acessível através do botão de estatísticas na barra de controles do player quando ativado em **Configurações > Avançado > Estatísticas Técnicas**. Esta seção documenta a arquitetura de diagnóstico unificada (fases F0–F8): contrato único de campos, frescor por grupo, atribuição de estágio, 5 gráficos e log de eventos.
 
 ### Ativação e Zero Overhead
 - **Configurações**: O toggle `DEBUG_STATS_PANEL` persiste a preferência do usuário e notifica instantaneamente o motor nativo via JNI (`nativeSetDebugStatsEnabled`).
@@ -199,7 +196,7 @@ nativo (sem string de recurso/i18n — é diagnóstico técnico, não UI de
 produção). `VRActivity.isDebuggable` filtra antes de tocar a `View`; builds
 de release recebem a chamada mas ela é descartada sem custo.
 
-## 4. Vulkan validation layers (já habilitadas no build local)
+## 4. Vulkan validation layers (opcional via build flag)
 
 `CreateVulkanInstanceAndDevice` (`vr_player_app_vulkan.cpp`) checa em
 runtime (`vkEnumerateInstanceLayerProperties`) se `VK_LAYER_KHRONOS_validation`
@@ -307,7 +304,7 @@ adb logcat -d -b main -b crash -s \
 - `SIGSEGV`/`SIGABRT` envolvendo `libvulkan.so` ou driver `adreno`: Trabalho pendente na GPU durante destruição do dispositivo por ausência de `vkDeviceWaitIdle` (**C-02**).
 - `VUID-vkDestroyDevice-device-05137` / `VUID-vkDestroyCommandPool-...`: Objetos Vulkan destruídos fora de ordem ou após o `VkDevice` (**C-03**).
 - `WindowLeaked` com `VRPresentation`: `Presentation` ou `VirtualDisplay` não foram liberadas no `onDestroy` da Activity (**R-01**).
-- Comportamento de reabertura suja (ex: tocar mídia anterior ou nascer em 3D incorreto): Variáveis estáticas retidas no processo em cache sem reset na reinicialização (**C-04**). Consulte [`docs/reports/CICLO-DE-VIDA-CRASH-FECHAMENTO.md`](./reports/CICLO-DE-VIDA-CRASH-FECHAMENTO.md) para a análise detalhada.
+- Comportamento de reabertura suja (ex: tocar mídia anterior ou nascer em 3D incorreto): Variáveis estáticas retidas no processo em cache sem reset na reinicialização (**C-04**).
 
 ## 10. `XR_META_performance_metrics` (F3)
 

@@ -77,7 +77,7 @@ extern "C" {
     extern float get_chroma_key_smoothness();
     extern void set_pause_on_exit(uint32_t enabled);
     extern uint32_t get_pause_on_exit();
-    // docs/reports/MODO-AMBIENTE.md: halo de luz ambiente (Vulkan-only)
+    // Modo Ambiente: halo de luz ambiente (Vulkan-only)
     extern void set_ambient_mode_enabled(uint32_t enabled);
     extern uint32_t get_ambient_mode_enabled();
     // Upscaling de vídeo (Vulkan-only, MQSR & SGSR1)

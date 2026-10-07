@@ -21,7 +21,7 @@
 /// Alvos de buffer, em segundos de mídia à frente do relógio mestre.
 ///
 /// Os valores usados em produção (2.0 / 8.0 / 25.0 / 0.8) são os aprovados
-/// para o rollout inicial (ver docs/reports — plano de buffer "estilo
+/// para o rollout inicial (plano de buffer "estilo
 /// YouTube"), não constantes fixas neste módulo: cada chamador decide os
 /// próprios números, este tipo só carrega e valida a forma.
 #[derive(Debug, Clone, Copy, PartialEq)]
