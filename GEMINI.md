@@ -142,7 +142,7 @@ cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features
 # Run a specific Rust test
 cd rust && cargo test -p media-logic sync::tests::test_name
 
-# Kotlin JVM unit tests (MediaSorter, DirectoryNavigator, DirectoryLister, History, etc.)
+# Kotlin JVM unit tests (pure logic only; see app/src/test for the current classes)
 ./gradlew testDebugUnitTest
 
 # Run a specific Kotlin test class
@@ -160,7 +160,7 @@ clang-format --dry-run -Werror native/tests/*.cpp native/include/vk_math.h nativ
 # Requires cmake and libopenxr-dev (or run via ./scripts/test-native-host.sh)
 ./scripts/test-native-host.sh
 
-# Run all host test suites (Rust + C++ + Android lint & unit tests)
+# Run all host test suites (Rust + C++ host + Kotlin JVM; no lint)
 make test
 ```
 

@@ -120,11 +120,11 @@ cd rust && cargo test -p media-logic sync::tests::some_test_name
 # Requires cmake and libopenxr-dev (installed via apt-get install libopenxr-dev)
 ./scripts/test-native-host.sh
 
-# Run all host test suites at once (Rust + C++ + Android lint & unit tests)
+# Run all host test suites at once (Rust + C++ host + Kotlin JVM; no lint)
 make test
 ```
 
-**Network protocol integration tests** run against real SMB/HTTP/HTTPS/FTP/SFTP servers in Docker. They are `#[ignore]`d by default and need docker, the compose plugin, curl and sha256sum:
+**Network protocol integration tests** run against real SMB/HTTP/HTTPS/FTP/SFTP/WebDAV servers in Docker, plus generated DASH fixtures. They are `#[ignore]`d by default and need docker, the compose plugin, curl, sha256sum and ffmpeg:
 
 ```sh
 ./scripts/test-network-protocols.sh          # up, run, tear down

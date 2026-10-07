@@ -16,7 +16,7 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 - **C++** (`native/src/`, built via CMake, `native/CMakeLists.txt`): OpenXR session/swapchain/render loop, controller input, zero-copy import of decoded `AHardwareBuffer` frames. Two graphics back-ends, chosen at build time:
   - **Vulkan** (`vr_player_app_vulkan.cpp` + `vr_player_jni_vulkan.cpp`) is what every default build compiles: `app/build.gradle.kts` passes `-DVRPLAYER_GRAPHICS_API=VULKAN` unless `-PvrplayerGraphicsApi=GLES` is given, overriding the `GLES` default in `native/CMakeLists.txt`. Frames are imported via `VkSamplerYcbcrConversion`; this path does not link OVRFW.
   - **GLES** (`vr_player_app.cpp`, Meta's `SampleXrFramework`/OVRFW from `sdk/meta-openxr-sdk/`, frames via `eglCreateImageKHR` -> `GL_TEXTURE_EXTERNAL_OES`) stays compilable as a fallback until headset validation of the Vulkan cut (`docs/VULKAN-MIGRATION-PLAN.md`, Stage 6), but is frozen: rendering work goes into the Vulkan path only, with no mirroring into GLES.
-- **Rust** (`rust/`, cross-compiled to `aarch64-linux-android` via `cargo ndk`): demuxing (`ffmpeg-next`), hardware decode via `ndk::MediaCodec`, audio (Oboe), network protocol clients (SMB/HTTP/HTTPS/FTP/SFTP).
+- **Rust** (`rust/`, cross-compiled to `aarch64-linux-android` via `cargo ndk`): demuxing (`ffmpeg-next`), hardware decode via `ndk::MediaCodec`, audio (Oboe), network protocol clients (SMB/HTTP(S)/FTP/SFTP/NFS/WebDAV/DLNA, HLS/DASH — full list under `protocols` below).
 
 **Critical rule for the Kotlin<->Rust relationship**: Kotlin never calls Rust directly. It only talks to C++ via JNI; C++ is the only caller of the Rust `bridge` crate's flat `extern "C"` API (see the header comment in `rust/bridge/src/lib.rs`). Don't introduce a Kotlin->Rust UniFFI path — that was considered and rejected (ADR-002 in `docs/REQUIREMENTS.md`) because there is no call path where Kotlin needs to talk to Rust without going through C++'s per-frame render loop.
 
@@ -79,8 +79,7 @@ cd rust && cargo test -p media-logic sync::tests::some_test_name
 # Requires cmake and libopenxr-dev (or run via ./scripts/test-native-host.sh)
 ./scripts/test-native-host.sh
 
-# Kotlin JVM unit tests (app/src/test — pure logic only: MediaSorter, DirectoryNavigator,
-# DirectoryLister, ThumbnailGenerator cache-key, PlaybackHistory mapping/format/throttle, I18nParityTest)
+# Kotlin JVM unit tests (pure logic only; see app/src/test for the current classes)
 ./gradlew testDebugUnitTest
 
 # Single Kotlin test class
@@ -90,16 +89,16 @@ cd rust && cargo test -p media-logic sync::tests::some_test_name
 ./gradlew ktlintCheck
 ./gradlew :app:lintDebug
 
-# Run all host unit tests at once (Rust + C++ + Android lint & unit tests)
+# Run all host unit tests at once (Rust + C++ host + Kotlin JVM; no lint)
 make test
 ```
 
-Network protocol integration tests (real SMB/HTTP/HTTPS/FTP/SFTP servers via Docker, `#[ignore]`d by default):
+Network protocol integration tests (real SMB/HTTP/HTTPS/FTP/SFTP/WebDAV servers plus generated DASH fixtures via Docker, `#[ignore]`d by default):
 ```bash
 ./scripts/test-network-protocols.sh          # spins up docker/network-tests/, runs, tears down
 ./scripts/test-network-protocols.sh --keep   # leaves containers up for debugging
 ```
-Requires docker + docker compose plugin, curl, sha256sum. No headset needed. See `docker/network-tests/README.md` for per-protocol gotchas (FTP passive-mode addressing, SFTP chroot ownership rules, TLS cert `basicConstraints`, samba `-s` field ordering) before touching `docker-compose.yml`.
+Requires docker + docker compose plugin, curl, sha256sum, ffmpeg (for the DASH fixtures). No headset needed. See `docker/network-tests/README.md` for per-protocol gotchas (FTP passive-mode addressing, SFTP chroot ownership rules, TLS cert `basicConstraints`, samba `-s` field ordering) before touching `docker-compose.yml`.
 
 Everything requiring actual OpenXR rendering, controller haptics, or hardware `MediaCodec` decode has no automated coverage and needs the physical Quest 3 headset — don't claim these are verified without stating that explicitly.
 

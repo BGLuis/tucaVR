@@ -220,7 +220,7 @@ cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features
 ./gradlew ktlintCheck
 ```
 
-Network protocol integration tests run against real SMB/HTTP/HTTPS/FTP/SFTP servers in Docker — no headset required:
+Network protocol integration tests run against real SMB/HTTP/HTTPS/FTP/SFTP/WebDAV servers (plus generated DASH fixtures) in Docker — no headset required:
 
 ```sh
 ./scripts/test-network-protocols.sh          # spins containers up, runs, tears down

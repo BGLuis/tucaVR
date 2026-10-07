@@ -209,7 +209,7 @@ cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features
 ./gradlew ktlintCheck
 ```
 
-Os testes de integração dos protocolos de rede rodam contra servidores SMB/HTTP/HTTPS/FTP/SFTP reais em Docker — sem precisar de headset:
+Os testes de integração dos protocolos de rede rodam contra servidores SMB/HTTP/HTTPS/FTP/SFTP/WebDAV reais (mais fixtures DASH geradas) em Docker — sem precisar de headset:
 
 ```sh
 ./scripts/test-network-protocols.sh          # sobe os containers, roda e derruba
