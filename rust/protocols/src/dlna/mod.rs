@@ -7,8 +7,8 @@ pub mod device;
 pub mod didl;
 pub mod soap;
 
-pub use device::{fetch_device_description, parse_device_description, resolve_url, DlnaDevice};
-pub use didl::{parse_didl_lite, parse_duration_to_seconds, DlnaItem};
+pub use device::{DlnaDevice, fetch_device_description, parse_device_description, resolve_url};
+pub use didl::{DlnaItem, parse_didl_lite, parse_duration_to_seconds};
 pub use soap::{build_browse_envelope, execute_browse_soap, extract_result_from_soap_response};
 
 /// Navega no diretório de conteúdo (ContentDirectory) de um servidor DLNA via SOAP Browse.

@@ -61,12 +61,18 @@ mod tests {
 
     #[test]
     fn exact_multiple_returns_equal_chunks() {
-        assert_eq!(split_range(0, 768, 256), vec![(0, 256), (256, 256), (512, 256)]);
+        assert_eq!(
+            split_range(0, 768, 256),
+            vec![(0, 256), (256, 256), (512, 256)]
+        );
     }
 
     #[test]
     fn remainder_yields_smaller_final_chunk() {
-        assert_eq!(split_range(0, 700, 256), vec![(0, 256), (256, 256), (512, 188)]);
+        assert_eq!(
+            split_range(0, 700, 256),
+            vec![(0, 256), (256, 256), (512, 188)]
+        );
     }
 
     #[test]
@@ -80,12 +86,21 @@ mod tests {
         let mut expected_next = offset;
         let mut covered = 0u64;
         for &(start, len) in &chunks {
-            assert_eq!(start, expected_next, "chunk nao contiguo: esperava comecar em {expected_next}, veio {start}");
-            assert!(len > 0 && len <= chunk_size, "chunk fora do tamanho maximo: {len}");
+            assert_eq!(
+                start, expected_next,
+                "chunk nao contiguo: esperava comecar em {expected_next}, veio {start}"
+            );
+            assert!(
+                len > 0 && len <= chunk_size,
+                "chunk fora do tamanho maximo: {len}"
+            );
             expected_next += len as u64;
             covered += len as u64;
         }
-        assert_eq!(covered, total_len as u64, "chunks nao cobrem o range inteiro");
+        assert_eq!(
+            covered, total_len as u64,
+            "chunks nao cobrem o range inteiro"
+        );
     }
 
     #[test]

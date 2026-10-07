@@ -59,7 +59,10 @@ impl ErrorRingBuffer {
 
     /// Retorna uma cópia do erro mais recente sem consumir o slot do Toast.
     pub fn peek_latest(&self) -> Option<PlaybackError> {
-        self.errors.lock().ok().and_then(|lock| lock.back().cloned())
+        self.errors
+            .lock()
+            .ok()
+            .and_then(|lock| lock.back().cloned())
     }
 
     /// Retorna o total de erros armazenados atualmente no anel.
@@ -69,10 +72,13 @@ impl ErrorRingBuffer {
 
     /// Retorna todos os erros em ordem cronológica (mais antigo primeiro).
     pub fn all(&self) -> Vec<PlaybackError> {
-        self.errors.lock().map(|lock| lock.iter().cloned().collect()).unwrap_or_default()
+        self.errors
+            .lock()
+            .map(|lock| lock.iter().cloned().collect())
+            .unwrap_or_default()
     }
 
-    /// F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): `all()` serializado como TSV
+    /// F4: `all()` serializado como TSV
     /// (uma linha por erro: `timestamp_ms\tsession_id\tmessage`, campo vazio quando
     /// `session_id` é `None`) — mesma convenção de `debug_stats.h::SerializeDebugStats`,
     /// pra cruzar a fronteira FFI sem expor `Vec<PlaybackError>` pelo C ABI. Quebras de
@@ -170,7 +176,11 @@ mod tests {
 
         let tsv = ring.all_as_tsv();
         let lines: Vec<&str> = tsv.split('\n').collect();
-        assert_eq!(lines.len(), 2, "uma linha por erro, sem quebras internas vazando registros");
+        assert_eq!(
+            lines.len(),
+            2,
+            "uma linha por erro, sem quebras internas vazando registros"
+        );
         assert_eq!(lines[0], "100\tsess1\tErro simples");
         assert_eq!(lines[1], "200\t\tErro com quebras");
     }

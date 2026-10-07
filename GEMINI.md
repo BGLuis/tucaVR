@@ -1,6 +1,6 @@
 # GEMINI.md
 
-This file provides architectural context, build workflows, testing guidelines, and coding conventions for **Gemini CLI / Antigravity** and other AI assistants working in the **vr-multmidia** repository.
+This file provides architectural context, build workflows, testing guidelines, and coding conventions for **Gemini CLI / Antigravity** and other AI assistants working in the **tucaVR** repository.
 
 ---
 
@@ -11,7 +11,7 @@ The **tucaVR** is an immersive 2D/3D video player built specifically for the **M
 - **Application Model:** 100% immersive OpenXR application (`NativeActivity`), declared with `<meta-data android:name="com.oculus.vr.mode" android:value="vr_only" />` in `AndroidManifest.xml`. There are **no** standard 2D Android activities or flat Compose windows.
 - **User Interface:** UI is rendered via `android.app.Presentation` on a `VirtualDisplay`. The resulting buffers are rendered to textures and projected onto interactive 3D quad panels in VR space by the C++ engine.
 - **Specifications & Requirements:** Technical specifications and Architecture Decision Records (ADRs) live in `docs/REQUIREMENTS.md`. Phase tracking and task breakdowns (`T1.1`, `T6.3`, etc.) reside in `docs/phases/PHASE-0.*.md`.
-- **Code Language Conventions:** Source code comments, commit messages, and internal documentation are written in **Portuguese (Brazil)**. Preserve this convention when modifying or adding code.
+- **Code Language Conventions:** Source code comments and internal documentation are written in **Portuguese (Brazil)**; commit messages are written in **English** (Conventional Commits). Preserve these conventions when modifying or adding code.
 
 ---
 
@@ -44,7 +44,7 @@ The system is strictly partitioned into three communicating layers:
    - Custom UI design system in `com.tucavr.designsystem` (`VoidButton`, `VoidTheme`, `VoidPanelChrome`, etc.).
    - Secure credential storage using `androidx.security:security-crypto` (`EncryptedSharedPreferences` — **never** store passwords in plain text).
    - Playback history persistence via Android Room DB using KSP (`app/src/main/java/com/tucavr/history/`).
-   - Localization & i18n resources (`app/src/main/res/values/strings.xml` and `values-pt-rBR/strings.xml`).
+   - Localization & i18n resources (`app/src/main/res/values/strings.xml`, `values-pt-rBR/strings.xml`, and `values-es/strings.xml`; verified by `I18nParityTest`).
 
 2. **C++ (`native/src/`, built via CMake `native/CMakeLists.txt`):**
    - OpenXR session, swapchains, tracking, reference spaces (`XR_REFERENCE_SPACE_TYPE_STAGE`), and frame render loop.
@@ -59,7 +59,7 @@ The system is strictly partitioned into three communicating layers:
    - Demuxing with `ffmpeg-next` (local files and custom network streams).
    - Hardware-accelerated video decoding via `ndk::MediaCodec`.
    - Low-latency audio rendering with `Oboe` (NDK).
-   - Pure-Rust network streaming clients (SMB 2/3, HTTP/HTTPS, FTP, SFTP).
+   - Pure-Rust network streaming clients and format parsers (SMB 2/3, HTTP(S), FTP, SFTP, NFS, WebDAV, DLNA/UPnP, HLS, DASH).
 
 ### ⚠️ Critical FFI Boundary Rule (Kotlin $\leftrightarrow$ Rust)
 > [!IMPORTANT]
@@ -76,14 +76,17 @@ The Rust codebase is organized into modular crates to isolate Android NDK depend
 | `core` | Demuxer (`ffmpeg-next`), `MediaCodec` decoder, playback state machine (`PlaybackController`). | **NDK Only:** Transitive dependency on `ndk`, `ndk-sys`, `oboe-sys`. Does not compile on host x86_64 without NDK toolchain. |
 | `audio` | Audio output stream via Oboe (NDK). | **NDK Only:** Requires Android NDK audio headers and runtime. |
 | `media-logic` | Pure logic extracted from `core`: A/V synchronization (`SyncManager`), audio resampling math, volume/speed clamps, seek generation tracking. | **Host Testable:** Zero Android/hardware dependencies. Executes directly under `cargo test` on development host and CI. |
-| `protocols` | SMB2/3, HTTP(S), FTP, and SFTP streaming clients (pure-Rust implementations, zero native C TLS/SSH library dependencies). | **Host Testable:** Executes under `cargo test` and automated Docker integration tests. |
+| `protocols` | Pure-Rust streaming clients and format parsers (SMB 2/3, HTTP(S), FTP, SFTP, NFS, WebDAV, DLNA/UPnP, HLS, DASH, chunking, discovery, download, folder_scan, prefetch; zero native C TLS/SSH dependencies). | **Host Testable:** Executes under `cargo test` and automated Docker integration tests. |
 | `bridge` | C-ABI `extern "C"` (`cdylib` / `staticlib`) consumed by C++ (`vr_player_app.cpp` / `vr_player_app_vulkan.cpp`). | **NDK Only:** Links into the native shared library for Android. |
 
 ### Synchronization of the `ScreenMode` Enum
-Stereoscopic/projection mode representation (2D, Side-by-Side, Over-Under, 180°, 360°, Cubemap, EAC, etc.) is a numeric enum that **must remain strictly synchronized across 3 locations**:
-1. `SCREEN_MODE` comments in `rust/bridge/src/lib.rs`.
+Stereoscopic/projection mode representation (2D, Side-by-Side, Over-Under, 180°, 360°, Cubemap, EAC, etc.) is a numeric enum that **must remain strictly synchronized across 4 locations**:
+1. `SCREEN_MODE` comments and `SCREEN_MODE_COUNT` in `rust/bridge/src/lib.rs`.
 2. `enum class ScreenMode` in `native/include/screen_mode.h`.
 3. The catalog in `ScreenFormatCatalog.kt`.
+4. `Format3D::to_screen_mode_index` in `rust/media-logic/src/format3d.rs`.
+
+The host test `format3d::tests::screen_mode_encoding_matches_cpp_kotlin_and_bridge` (runs in CI) fails when the indices or the mode count diverge; it does not check the meaning of each index.
 
 ---
 
@@ -134,19 +137,31 @@ Because `rust/core`, `rust/audio`, and `rust/bridge` require the NDK, only `prot
 cd rust && cargo test -p protocols -p media-logic
 
 # Rust linter (enforced in CI with -D warnings)
-cd rust && cargo clippy -- -D warnings
+cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings
 
 # Run a specific Rust test
 cd rust && cargo test -p media-logic sync::tests::test_name
 
-# Kotlin JVM unit tests (MediaSorter, DirectoryNavigator, DirectoryLister, History, etc.)
+# Kotlin JVM unit tests (pure logic only; see app/src/test for the current classes)
 ./gradlew testDebugUnitTest
 
 # Run a specific Kotlin test class
 ./gradlew testDebugUnitTest --tests "com.tucavr.filebrowser.MediaSorterTest"
 
-# Kotlin linter
+# Kotlin linter and Android static analysis
 ./gradlew ktlintCheck
+./gradlew :app:lintDebug
+
+# C++ code formatting and shader validation
+clang-format --dry-run -Werror native/tests/*.cpp native/include/vk_math.h native/include/screen_mode.h native/include/subtitle_layout.h native/include/hand_tracking.h native/include/environment_config.h
+./scripts/check-shaders.sh
+
+# C++ host unit tests (native math, screen mode, subtitle layout, hand tracking, environment config)
+# Requires cmake and libopenxr-dev (or run via ./scripts/test-native-host.sh)
+./scripts/test-native-host.sh
+
+# Run all host test suites (Rust + C++ host + Kotlin JVM; no lint)
+make test
 ```
 
 ### 2. Network Protocol Integration Tests (Docker)
@@ -169,8 +184,8 @@ Features requiring true OpenXR swapchains, 6DoF controller tracking, haptics, an
 
 ## 6. Coding Conventions & Best Practices
 
-- **Language:** Source code comments and commit messages follow **Portuguese (Brazil)**.
-- **Internationalization (i18n):** User-facing strings must be declared in `app/src/main/res/values/strings.xml` (English default) and `values-pt-rBR/strings.xml` (Portuguese). Always use positional placeholders (`%1$s`, `%1$d`) via `getString(R.string.xxx, arg1)` — never Kotlin string concatenation.
+- **Language:** Source code comments follow **Portuguese (Brazil)**; commit messages are in **English** (Conventional Commits).
+- **Internationalization (i18n):** User-facing strings must be declared in `app/src/main/res/values/strings.xml` (English default), `values-pt-rBR/strings.xml` (Portuguese), and `values-es/strings.xml` (Spanish). Always use positional placeholders (`%1$s`, `%1$d`) via `getString(R.string.xxx, arg1)` — never Kotlin string concatenation. Parity is enforced by `I18nParityTest`.
 - **Thread Management:** Calls originating from the C++ OpenXR render thread dispatched into Kotlin/Android via JNI must be executed on the UI thread using `runOnUiThread`.
 - **Decoder Control (Rust):** Playback state changes (`is_playing`) must suspend the thread (`sleep` / condition variables) rather than killing and re-spawning ffmpeg demux loops.
 - **Credential Security:** Network credentials must use `SmbCredentialStore`, `FtpCredentialStore`, and `SftpCredentialStore` backed by `EncryptedSharedPreferences`. Never write plaintext passwords to disk or logs.
@@ -179,24 +194,23 @@ Features requiring true OpenXR swapchains, 6DoF controller tracking, haptics, an
 
 ## 7. Continuous Integration (CI)
 
-The GitHub Actions workflow (`.github/workflows/main.yml`) runs the following steps in sequence:
-1. `cargo clippy -D warnings`
-2. `cargo test -p protocols -p media-logic`
-3. `ktlintCheck`
-4. `./gradlew testDebugUnitTest`
+The GitHub Actions workflow (`.github/workflows/main.yml`) runs decoupled parallel quality jobs on PRs and pushes:
+1. `security-and-workflows`: `actionlint` (workflow syntax), `cargo-deny` (Rust licenses/advisories), `gitleaks` (secret scan).
+2. `rust-checks`: `cargo fmt --check`, `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings`, `cargo test -p protocols -p media-logic`.
+3. `cpp-checks`: `clang-format --dry-run -Werror`, `./scripts/check-shaders.sh`, `ENABLE_ASAN=1 ./scripts/test-native-host.sh`.
+4. `android-checks`: `./gradlew ktlintCheck`, `./gradlew :app:lintDebug`, `./gradlew testDebugUnitTest`.
 
-*(The full native C++ / OpenXR build is not run on public CI because the Meta OpenXR Mobile SDK requires individual licensing agreements).*
+A gated job, `build-apk`, depends on all above checks passing and runs the full native C++ + Rust + Gradle build to upload the Quest 3 APK. It runs on `main`/`develop` or via manual `workflow_dispatch`.
 
 ---
 
 ## 8. Documentation Index (`docs/`)
 
-- [`docs/ARCHITECTURE.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/ARCHITECTURE.md): Canonical technical system architecture, tri-layer topology, Vulkan/GLES pipelines, and sequence diagrams.
-- [`docs/REQUIREMENTS.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/REQUIREMENTS.md): Core business requirements, architecture decisions (ADR-001 through ADR-005).
-- [`docs/TESTING-PLAN.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/TESTING-PLAN.md): Detailed testing isolation rationale and hardware test inventory.
-- [`docs/VULKAN-MIGRATION-PLAN.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/VULKAN-MIGRATION-PLAN.md): Architecture, migration stages, and Vulkan rendering pipeline.
-- [`docs/DEBUGGING.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/DEBUGGING.md): On-device debugging guide, HUD overlay, and ADB trigger commands.
-- [`docs/i18n.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/i18n.md): Localization conventions, plurals, and string resource guidelines.
-- [`docs/NETWORK-IO-PERFORMANCE.md`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/NETWORK-IO-PERFORMANCE.md): Network buffer analysis and prefetching behavior.
-- [`docs/phases/`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/phases/): Task tracking by project phase (`PHASE-0.1-MVP.md` through `PHASE-1.0-RELEASE.md`).
-- [`docs/reports/`](file:///home/luis/Documents/hand-on/vr-multmidia/docs/reports/): Feature investigation reports (3D format auto-detection, spatial audio, DLNA/UPnP, HLS, etc.).
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): Canonical technical system architecture, tri-layer topology, Vulkan/GLES pipelines, and sequence diagrams.
+- [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md): Core business requirements, architecture decisions (ADR-001 through ADR-006).
+- [`docs/TESTING-PLAN.md`](docs/TESTING-PLAN.md): Detailed testing isolation rationale and hardware test inventory.
+- [`docs/VULKAN-MIGRATION-PLAN.md`](docs/VULKAN-MIGRATION-PLAN.md): Architecture, migration stages, and Vulkan rendering pipeline.
+- [`docs/DEBUGGING.md`](docs/DEBUGGING.md): On-device debugging guide, HUD overlay, and ADB trigger commands.
+- [`docs/i18n.md`](docs/i18n.md): Localization conventions, plurals, and string resource guidelines.
+- [`docs/NETWORK-IO-PERFORMANCE.md`](docs/NETWORK-IO-PERFORMANCE.md): Network buffer analysis and prefetching behavior.
+- [`docs/phases/`](docs/phases/): Task tracking by project phase (`PHASE-0.1-MVP.md` through `PHASE-1.0-RELEASE.md`).

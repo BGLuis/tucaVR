@@ -9,27 +9,29 @@ import com.tucavr.network.SmbCredentialStore
 /**
  * Funções de mapeamento bidirecional entre [PlaybackSource] e [PlaylistItem].
  */
-fun PlaybackSource.toPlaylistItemUri(): String = when (this) {
-    is PlaybackSource.LocalFile -> path
-    is PlaybackSource.Http -> url
-    is PlaybackSource.Smb -> "${server.id}|$path"
-    is PlaybackSource.Ftp -> "${server.id}|$path"
-    is PlaybackSource.Sftp -> "${server.id}|$path"
-    is PlaybackSource.Nfs -> "${server.id}|$path"
-    is PlaybackSource.Dlna -> "${server.id}|$url"
-    is PlaybackSource.Webdav -> "${server.id}|$path"
-}
+fun PlaybackSource.toPlaylistItemUri(): String =
+    when (this) {
+        is PlaybackSource.LocalFile -> path
+        is PlaybackSource.Http -> url
+        is PlaybackSource.Smb -> "${server.id}|$path"
+        is PlaybackSource.Ftp -> "${server.id}|$path"
+        is PlaybackSource.Sftp -> "${server.id}|$path"
+        is PlaybackSource.Nfs -> "${server.id}|$path"
+        is PlaybackSource.Dlna -> "${server.id}|$url"
+        is PlaybackSource.Webdav -> "${server.id}|$path"
+    }
 
-fun PlaybackSource.sourceTypeString(): String = when (this) {
-    is PlaybackSource.LocalFile -> "LOCAL"
-    is PlaybackSource.Http -> "HTTP"
-    is PlaybackSource.Smb -> "SMB"
-    is PlaybackSource.Ftp -> "FTP"
-    is PlaybackSource.Sftp -> "SFTP"
-    is PlaybackSource.Nfs -> "NFS"
-    is PlaybackSource.Dlna -> "DLNA"
-    is PlaybackSource.Webdav -> "WEBDAV"
-}
+fun PlaybackSource.sourceTypeString(): String =
+    when (this) {
+        is PlaybackSource.LocalFile -> "LOCAL"
+        is PlaybackSource.Http -> "HTTP"
+        is PlaybackSource.Smb -> "SMB"
+        is PlaybackSource.Ftp -> "FTP"
+        is PlaybackSource.Sftp -> "SFTP"
+        is PlaybackSource.Nfs -> "NFS"
+        is PlaybackSource.Dlna -> "DLNA"
+        is PlaybackSource.Webdav -> "WEBDAV"
+    }
 
 /**
  * Reconstrói o [PlaybackSource] a partir de um [PlaylistItem].
@@ -39,7 +41,7 @@ suspend fun PlaylistItem.toPlaybackSource(
     smbCredentials: SmbCredentialStore? = null,
     ftpCredentials: FtpCredentialStore? = null,
     sftpCredentials: SftpCredentialStore? = null,
-    savedServerDao: SavedServerDao? = null
+    savedServerDao: SavedServerDao? = null,
 ): PlaybackSource? {
     return when (sourceType) {
         "LOCAL" -> PlaybackSource.LocalFile(mediaUri)

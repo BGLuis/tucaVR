@@ -10,7 +10,6 @@ import org.junit.Test
  * de segurança por padrão para o Quest 3.
  */
 class FeatureFlagsTest {
-
     @Test
     fun `all feature flag keys are unique and non-empty`() {
         val flags = FeatureFlags.Flag.values()
@@ -23,7 +22,7 @@ class FeatureFlagsTest {
         assertEquals(
             "Detectada colisão de chaves entre flags: ${keys.groupBy { it }.filter { it.value.size > 1 }.keys}",
             keys.toSet().size,
-            keys.size
+            keys.size,
         )
     }
 
@@ -33,7 +32,7 @@ class FeatureFlagsTest {
         for (flag in FeatureFlags.Flag.values()) {
             assertTrue(
                 "A chave '${flag.key}' da flag ${flag.name} deve seguir o padrão snake_case",
-                flag.key.matches(snakeCaseRegex)
+                flag.key.matches(snakeCaseRegex),
             )
         }
     }
@@ -41,7 +40,10 @@ class FeatureFlagsTest {
     @Test
     fun `safety-critical flags have correct defaults for VR performance and safety`() {
         // Scrub preview gera picos de frame time ao arrastar seekbar em 8K, deve iniciar desabilitado
-        org.junit.Assert.assertFalse("SCRUB_PREVIEW deve iniciar desabilitado por segurança de performance", FeatureFlags.Flag.SCRUB_PREVIEW.defaultEnabled)
+        org.junit.Assert.assertFalse(
+            "SCRUB_PREVIEW deve iniciar desabilitado por segurança de performance",
+            FeatureFlags.Flag.SCRUB_PREVIEW.defaultEnabled,
+        )
 
         // Foveated rendering experimental, deve iniciar desabilitado
         org.junit.Assert.assertFalse("FOVEATED_RENDERING deve iniciar desabilitado", FeatureFlags.Flag.FOVEATED_RENDERING.defaultEnabled)
@@ -51,5 +53,14 @@ class FeatureFlagsTest {
 
         // Passthrough inicia desabilitado até ativação explícita pelo usuário
         org.junit.Assert.assertFalse("PASSTHROUGH deve iniciar desabilitado por padrão", FeatureFlags.Flag.PASSTHROUGH.defaultEnabled)
+
+        // Chroma Key inicia desabilitado até ativação explícita pelo usuário
+        org.junit.Assert.assertFalse("CHROMA_KEY deve iniciar desabilitado por padrão", FeatureFlags.Flag.CHROMA_KEY.defaultEnabled)
+
+        // Modo Ambiente (halo de luz) nunca validado em headset real, deve iniciar desabilitado
+        org.junit.Assert.assertFalse("AMBIENT_MODE deve iniciar desabilitado por padrão", FeatureFlags.Flag.AMBIENT_MODE.defaultEnabled)
+
+        // RF-ENV-007: Modo Noturno deve iniciar desabilitado por padrão
+        org.junit.Assert.assertFalse("NIGHT_MODE deve iniciar desabilitado por padrão", FeatureFlags.Flag.NIGHT_MODE.defaultEnabled)
     }
 }

@@ -8,6 +8,10 @@ import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
 import com.tucavr.download.Download
 import com.tucavr.download.DownloadDao
+import com.tucavr.filebrowser.FolderMediaStatus
+import com.tucavr.filebrowser.FolderMediaStatusDao
+import com.tucavr.filebrowser.MediaMetadataCacheDao
+import com.tucavr.filebrowser.MediaMetadataCacheEntry
 import com.tucavr.network.SavedServer
 import com.tucavr.network.SavedServerDao
 import com.tucavr.playlist.Playlist
@@ -20,18 +24,29 @@ import com.tucavr.playlist.PlaylistItem
  * - Tabela `saved_servers`: servidores de rede salvos (schema v2, T11.1).
  * - Tabelas `playlists` e `playlist_items`: listas de reproducao (schema v3, T9.1).
  * - Tabela `downloads`: fila e historico de downloads offline (schema v4, Fase 0.4 Seção 4).
+ * - Tabelas `folder_media_status` e `media_metadata_cache`: poda de pastas vazias e cache de
+ *   metadados de mídia pra exibição rápida (schema v5).
  */
 @Database(
-    entities = [PlaybackHistory::class, SavedServer::class, Playlist::class, PlaylistItem::class, Download::class],
-    version = 4,
-    exportSchema = false
+    entities = [
+        PlaybackHistory::class, SavedServer::class, Playlist::class, PlaylistItem::class, Download::class,
+        FolderMediaStatus::class, MediaMetadataCacheEntry::class,
+    ],
+    version = 5,
+    exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
-
     abstract fun playbackHistoryDao(): PlaybackHistoryDao
+
     abstract fun savedServerDao(): SavedServerDao
+
     abstract fun playlistDao(): PlaylistDao
+
     abstract fun downloadDao(): DownloadDao
+
+    abstract fun folderMediaStatusDao(): FolderMediaStatusDao
+
+    abstract fun mediaMetadataCacheDao(): MediaMetadataCacheDao
 
     companion object {
         @Volatile
@@ -43,95 +58,136 @@ abstract class AppDatabase : RoomDatabase() {
         // `SupportSQLiteDatabase`/Robolectric — o projeto evita Robolectric de propósito (ver
         // comentário em `app/build.gradle.kts` sobre os testes de `filebrowser`). O objeto
         // `Migration` real usado pelo Room em produção só itera essa lista chamando `execSQL`.
-        internal val MIGRATION_1_2_SQL = listOf(
-            """
-            CREATE TABLE IF NOT EXISTS `saved_servers` (
-                `id` TEXT NOT NULL PRIMARY KEY,
-                `name` TEXT NOT NULL,
-                `protocol` TEXT NOT NULL,
-                `host` TEXT NOT NULL,
-                `port` INTEGER NOT NULL,
-                `path` TEXT NOT NULL,
-                `username` TEXT NOT NULL,
-                `domain` TEXT NOT NULL,
-                `isAutoDiscovered` INTEGER NOT NULL,
-                `lastConnectedAt` INTEGER,
-                `iconUrl` TEXT,
-                `extraJson` TEXT
+        internal val MIGRATION_1_2_SQL =
+            listOf(
+                """
+                CREATE TABLE IF NOT EXISTS `saved_servers` (
+                    `id` TEXT NOT NULL PRIMARY KEY,
+                    `name` TEXT NOT NULL,
+                    `protocol` TEXT NOT NULL,
+                    `host` TEXT NOT NULL,
+                    `port` INTEGER NOT NULL,
+                    `path` TEXT NOT NULL,
+                    `username` TEXT NOT NULL,
+                    `domain` TEXT NOT NULL,
+                    `isAutoDiscovered` INTEGER NOT NULL,
+                    `lastConnectedAt` INTEGER,
+                    `iconUrl` TEXT,
+                    `extraJson` TEXT
+                )
+                """.trimIndent(),
             )
-            """.trimIndent()
-        )
 
-        internal val MIGRATION_2_3_SQL = listOf(
-            """
-            CREATE TABLE IF NOT EXISTS `playlists` (
-                `id` TEXT NOT NULL PRIMARY KEY,
-                `name` TEXT NOT NULL,
-                `createdAt` INTEGER NOT NULL,
-                `itemCount` INTEGER NOT NULL
+        internal val MIGRATION_2_3_SQL =
+            listOf(
+                """
+                CREATE TABLE IF NOT EXISTS `playlists` (
+                    `id` TEXT NOT NULL PRIMARY KEY,
+                    `name` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `itemCount` INTEGER NOT NULL
+                )
+                """.trimIndent(),
+                """
+                CREATE TABLE IF NOT EXISTS `playlist_items` (
+                    `id` TEXT NOT NULL PRIMARY KEY,
+                    `playlistId` TEXT NOT NULL,
+                    `mediaUri` TEXT NOT NULL,
+                    `title` TEXT NOT NULL,
+                    `durationMs` INTEGER NOT NULL,
+                    `position` INTEGER NOT NULL,
+                    `sourceType` TEXT NOT NULL,
+                    FOREIGN KEY(`playlistId`) REFERENCES `playlists`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
+                )
+                """.trimIndent(),
+                "CREATE INDEX IF NOT EXISTS `index_playlist_items_playlistId` ON `playlist_items` (`playlistId`)",
             )
-            """.trimIndent(),
-            """
-            CREATE TABLE IF NOT EXISTS `playlist_items` (
-                `id` TEXT NOT NULL PRIMARY KEY,
-                `playlistId` TEXT NOT NULL,
-                `mediaUri` TEXT NOT NULL,
-                `title` TEXT NOT NULL,
-                `durationMs` INTEGER NOT NULL,
-                `position` INTEGER NOT NULL,
-                `sourceType` TEXT NOT NULL,
-                FOREIGN KEY(`playlistId`) REFERENCES `playlists`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE
-            )
-            """.trimIndent(),
-            "CREATE INDEX IF NOT EXISTS `index_playlist_items_playlistId` ON `playlist_items` (`playlistId`)"
-        )
 
-        internal val MIGRATION_3_4_SQL = listOf(
-            """
-            CREATE TABLE IF NOT EXISTS `downloads` (
-                `id` TEXT NOT NULL PRIMARY KEY,
-                `sourceUri` TEXT NOT NULL,
-                `sourceType` TEXT NOT NULL,
-                `destinationPath` TEXT NOT NULL,
-                `displayName` TEXT NOT NULL,
-                `totalBytes` INTEGER NOT NULL,
-                `downloadedBytes` INTEGER NOT NULL,
-                `state` TEXT NOT NULL,
-                `createdAt` INTEGER NOT NULL,
-                `completedAt` INTEGER,
-                `errorMessage` TEXT,
-                `serverId` TEXT
+        internal val MIGRATION_3_4_SQL =
+            listOf(
+                """
+                CREATE TABLE IF NOT EXISTS `downloads` (
+                    `id` TEXT NOT NULL PRIMARY KEY,
+                    `sourceUri` TEXT NOT NULL,
+                    `sourceType` TEXT NOT NULL,
+                    `destinationPath` TEXT NOT NULL,
+                    `displayName` TEXT NOT NULL,
+                    `totalBytes` INTEGER NOT NULL,
+                    `downloadedBytes` INTEGER NOT NULL,
+                    `state` TEXT NOT NULL,
+                    `createdAt` INTEGER NOT NULL,
+                    `completedAt` INTEGER,
+                    `errorMessage` TEXT,
+                    `serverId` TEXT
+                )
+                """.trimIndent(),
+                "CREATE INDEX IF NOT EXISTS `index_downloads_state` ON `downloads` (`state`)",
             )
-            """.trimIndent(),
-            "CREATE INDEX IF NOT EXISTS `index_downloads_state` ON `downloads` (`state`)"
-        )
 
-        val MIGRATION_1_2 = object : Migration(1, 2) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                MIGRATION_1_2_SQL.forEach { db.execSQL(it) }
+        internal val MIGRATION_4_5_SQL =
+            listOf(
+                """
+                CREATE TABLE IF NOT EXISTS `folder_media_status` (
+                    `folderKey` TEXT NOT NULL PRIMARY KEY,
+                    `hasPlayableMedia` INTEGER NOT NULL,
+                    `scanCompletedFully` INTEGER NOT NULL,
+                    `lastCheckedAt` INTEGER NOT NULL,
+                    `sourceKind` TEXT NOT NULL
+                )
+                """.trimIndent(),
+                """
+                CREATE TABLE IF NOT EXISTS `media_metadata_cache` (
+                    `mediaKey` TEXT NOT NULL PRIMARY KEY,
+                    `container` TEXT NOT NULL,
+                    `containerLong` TEXT NOT NULL,
+                    `durationMs` INTEGER NOT NULL,
+                    `bitRate` INTEGER NOT NULL,
+                    `format3dIndex` INTEGER NOT NULL,
+                    `detectionConfidence` INTEGER NOT NULL,
+                    `videoWidth` INTEGER NOT NULL,
+                    `videoHeight` INTEGER NOT NULL,
+                    `videoCodec` TEXT NOT NULL,
+                    `fetchedAt` INTEGER NOT NULL
+                )
+                """.trimIndent(),
+            )
+
+        val MIGRATION_1_2 =
+            object : Migration(1, 2) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    MIGRATION_1_2_SQL.forEach { db.execSQL(it) }
+                }
             }
-        }
 
-        val MIGRATION_2_3 = object : Migration(2, 3) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                MIGRATION_2_3_SQL.forEach { db.execSQL(it) }
+        val MIGRATION_2_3 =
+            object : Migration(2, 3) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    MIGRATION_2_3_SQL.forEach { db.execSQL(it) }
+                }
             }
-        }
 
-        val MIGRATION_3_4 = object : Migration(3, 4) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                MIGRATION_3_4_SQL.forEach { db.execSQL(it) }
+        val MIGRATION_3_4 =
+            object : Migration(3, 4) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    MIGRATION_3_4_SQL.forEach { db.execSQL(it) }
+                }
             }
-        }
+
+        val MIGRATION_4_5 =
+            object : Migration(4, 5) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    MIGRATION_4_5_SQL.forEach { db.execSQL(it) }
+                }
+            }
 
         fun getInstance(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
-                    "vrplayer_history.db"
+                    "vrplayer_history.db",
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                     .build()
                     .also { instance = it }
             }

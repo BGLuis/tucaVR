@@ -645,10 +645,9 @@ Ambiente Espacial:
   - Textura ASTC compactada
   - Incluir `config.json` com posição da tela e spawn point
 
-- [ ] **T3.2** — Implementar **skybox cubemap de alta qualidade** (C++):
-  - 6 faces de 2048×2048 (ou 4096×4096 para mais detalhe) em ASTC
-  - Renderizar ANTES de qualquer geometria (depth write off)
-  - Rotação apenas (não translação) — skybox é "infinitamente distante"
+- [x] **T3.2** — Implementar **skybox cubemap de alta qualidade** (C++):
+  - Renderizado antes de geometrias com rotação pura sem translação
+  - Implementado em `native/src/vr_player_app_vulkan.cpp` (`CreateSkyboxPipeline`, `LoadEnvironmentSkybox`, `DrawSkyboxIfLoaded`) integrado a `environments/<id>/config.ini` e shaders SPIR-V (`kSkyboxVertSpirv`, `kSkyboxFragSpirv`).
   ```cpp
   void renderSkybox(const glm::mat4 viewProj[2]) {
       glDepthMask(GL_FALSE);
@@ -723,6 +722,7 @@ Ambiente Espacial:
   ```
 
 - [ ] **T3.4** — Implementar **áudio de ambiência por ambiente** (Rust/Kotlin):
+  > **Parcial:** loop por ambiente e ducking em `app/src/main/java/com/tucavr/AmbientAudioManager.kt:17,52` (chamado em `VRActivity.kt:1162,1429,1666`); falta o fade out/in na troca de ambiente.
   - Cada ambiente tem uma faixa de áudio opcional em loop (arquivo `.ogg` no assets)
   - Volume do áudio ambiente reduz automaticamente quando vídeo está tocando (ducking)
   - Transição: fade out ao trocar de ambiente, fade in no novo
@@ -809,7 +809,7 @@ Screen Glow Effect:
 
 ### Tarefas
 
-- [ ] **T4.1** — Implementar **Screen Glow** (C++/GLSL):
+- [x] **T4.1** — Implementar **Screen Glow** (C++/GLSL):
   - Amostrar cor média do frame de vídeo atual (via mipmap ou downscale FBO)
   - Usar essa cor como fonte de luz difusa que ilumina o ambiente ao redor da tela
   - Suavizar temporalmente para evitar cintilação em cenas de corte rápido
@@ -873,7 +873,7 @@ Screen Glow Effect:
   };
   ```
 
-- [ ] **T4.2** — Atualizar **shaders do ambiente** para receber screen glow (GLSL):
+- [x] **T4.2** — Atualizar **shaders do ambiente** para receber screen glow (GLSL):
   ```glsl
   // Uniforms adicionados ao shader PBR do ambiente
   uniform vec3 uScreenGlowColor;     // Cor média da tela
@@ -901,12 +901,12 @@ Screen Glow Effect:
   }
   ```
 
-- [ ] **T4.3** — Implementar **controle de brilho do ambiente** (Kotlin + C++):
+- [x] **T4.3** — Implementar **controle de brilho do ambiente** (Kotlin + C++):
   - Slider na UI de configurações (0% = void total, 100% = iluminação original do lightmap)
   - Persistir em DataStore, enviar ao C++ via JNI
   - Aplicar via uniform `uEnvironmentBrightness`
 
-- [ ] **T4.4** — Implementar **temperatura de cor / Night Mode** (GLSL):
+- [x] **T4.4** — Implementar **temperatura de cor / Night Mode** (GLSL):
   ```glsl
   // Aplicar ao shader de vídeo (na tela virtual)
   uniform float uColorTemperature; // 2700 (quente) a 6500 (neutro)
@@ -948,7 +948,7 @@ Screen Glow Effect:
   }
   ```
 
-- [ ] **T4.5** — Implementar **UI de ajustes de iluminação** (Kotlin):
+- [x] **T4.5** — Implementar **UI de ajustes de iluminação** (Kotlin):
   - Slider "Brilho do ambiente" (0-100%)
   - Slider "Temperatura de cor" (2700K Quente ↔ 6500K Neutro)
   - Toggle "Screen Glow" (Desligado / Sutil / Forte)
@@ -1062,12 +1062,12 @@ Screen Glow Effect:
 - [ ] Transição entre ambientes com fade suave (< 3s de loading)
 
 ### Iluminação
-- [ ] Screen glow reflete cor média do vídeo nas paredes do ambiente
-- [ ] Suavização temporal: sem cintilação em cenas de corte rápido
-- [ ] Slider de brilho do ambiente funcional (0% = void, 100% = original)
-- [ ] Slider de temperatura de cor funcional (quente ↔ neutro)
-- [ ] Night mode reduz componente azul da tela de vídeo
-- [ ] Todas as preferências persistidas entre sessões
+- [x] Screen glow reflete cor média do vídeo nas paredes do ambiente
+- [x] Suavização temporal: sem cintilação em cenas de corte rápido
+- [x] Slider de brilho do ambiente funcional (0% = void, 100% = original)
+- [x] Slider de temperatura de cor funcional (quente ↔ neutro)
+- [x] Night mode reduz componente azul da tela de vídeo
+- [x] Todas as preferências persistidas entre sessões
 
 ### Geral
 - [ ] Nenhuma regressão nos testes das fases 0.1–0.4

@@ -6,7 +6,10 @@ pub struct PrerollState {
 
 impl PrerollState {
     pub fn idle() -> Self {
-        Self { awaiting_landing: false, catching_up: false }
+        Self {
+            awaiting_landing: false,
+            catching_up: false,
+        }
     }
 
     pub fn begin(&mut self) {
@@ -14,7 +17,9 @@ impl PrerollState {
         self.catching_up = true;
     }
 
-    pub fn is_awaiting_landing(&self) -> bool { self.awaiting_landing }
+    pub fn is_awaiting_landing(&self) -> bool {
+        self.awaiting_landing
+    }
 
     pub fn is_active(&self) -> bool {
         self.catching_up
@@ -113,5 +118,24 @@ mod tests {
         assert!(preroll.should_skip_packet(false, 0.6, 0.5));
         assert!(!preroll.should_skip_packet(true, 0.6, 0.5));
         assert!(!preroll.should_skip_packet(false, 0.4, 0.5));
+    }
+
+    #[test]
+    fn repeated_seeks_rearm_awaiting_landing_and_catching_up() {
+        let mut preroll = PrerollState::idle();
+
+        // Primeiro seek / início de reprodução
+        preroll.begin();
+        assert!(preroll.is_awaiting_landing());
+        assert!(preroll.is_active());
+        assert!(preroll.take_landing());
+        assert!(!preroll.is_awaiting_landing());
+
+        // Segundo seek (ex.: backward seek)
+        preroll.begin();
+        assert!(preroll.is_awaiting_landing());
+        assert!(preroll.is_active());
+        assert!(preroll.take_landing());
+        assert!(!preroll.is_awaiting_landing());
     }
 }

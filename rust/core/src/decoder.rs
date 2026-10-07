@@ -1,4 +1,7 @@
-use ndk::media::media_codec::{MediaCodec, MediaCodecDirection, DequeuedInputBufferResult, DequeuedOutputBufferInfoResult, OutputBuffer};
+use ndk::media::media_codec::{
+    DequeuedInputBufferResult, DequeuedOutputBufferInfoResult, MediaCodec, MediaCodecDirection,
+    OutputBuffer,
+};
 use ndk::media::media_format::MediaFormat;
 use ndk::native_window::NativeWindow;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -43,7 +46,7 @@ pub struct HwDecoder {
     // estes valores de fora sem lock. Ver metrics().
     frames_output: Arc<AtomicU64>,
     frames_dropped: Arc<AtomicU64>,
-    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): decode_packet() abaixo retorna
+    // F4: decode_packet() abaixo retorna
     // Result, mas o chamador em playback.rs descartava com `let _ = ...` — sem contador, um
     // erro de decode persistente era indistinguivel de "sem erro nenhum" na telemetria.
     decode_errors: Arc<AtomicU64>,
@@ -54,14 +57,16 @@ unsafe impl Sync for HwDecoder {}
 
 impl HwDecoder {
     pub fn new(mime: &str) -> Result<Self, String> {
-        let codec = MediaCodec::from_decoder_type(mime)
-            .ok_or_else(|| {
-                if mime == media_logic::codec::MIME_AV1 || mime == media_logic::codec::MIME_VP9 {
-                    format!("O dispositivo não possui suporte de hardware para este codec ({})", mime)
-                } else {
-                    format!("Failed to create MediaCodec for mime: {}", mime)
-                }
-            })?;
+        let codec = MediaCodec::from_decoder_type(mime).ok_or_else(|| {
+            if mime == media_logic::codec::MIME_AV1 || mime == media_logic::codec::MIME_VP9 {
+                format!(
+                    "O dispositivo não possui suporte de hardware para este codec ({})",
+                    mime
+                )
+            } else {
+                format!("Failed to create MediaCodec for mime: {}", mime)
+            }
+        })?;
         Ok(Self {
             codec: Some(codec),
             frames_output: Arc::new(AtomicU64::new(0)),
@@ -81,7 +86,11 @@ impl HwDecoder {
     /// `decode_errors` (F4): incrementado por `decode_packet` em qualquer um dos seus
     /// caminhos de erro (codec nao inicializado, queue/dequeue de buffer falhando).
     pub fn metrics(&self) -> (Arc<AtomicU64>, Arc<AtomicU64>, Arc<AtomicU64>) {
-        (self.frames_output.clone(), self.frames_dropped.clone(), self.decode_errors.clone())
+        (
+            self.frames_output.clone(),
+            self.frames_dropped.clone(),
+            self.decode_errors.clone(),
+        )
     }
 
     /// new()+configure()+start() atomicamente sob SESSION_SETUP_LOCK — ver
@@ -100,9 +109,14 @@ impl HwDecoder {
         Ok(decoder)
     }
 
-    pub fn configure(&mut self, format: &MediaFormat, window: Option<&NativeWindow>) -> Result<(), String> {
+    pub fn configure(
+        &mut self,
+        format: &MediaFormat,
+        window: Option<&NativeWindow>,
+    ) -> Result<(), String> {
         if let Some(codec) = &self.codec {
-            codec.configure(format, window, MediaCodecDirection::Decoder)
+            codec
+                .configure(format, window, MediaCodecDirection::Decoder)
                 .map_err(|e| format!("Failed to configure codec: {:?}", e))?;
             Ok(())
         } else {
@@ -112,7 +126,9 @@ impl HwDecoder {
 
     pub fn start(&self) -> Result<(), String> {
         if let Some(codec) = &self.codec {
-            codec.start().map_err(|e| format!("Failed to start codec: {:?}", e))?;
+            codec
+                .start()
+                .map_err(|e| format!("Failed to start codec: {:?}", e))?;
             Ok(())
         } else {
             Err("Codec not initialized".to_string())
@@ -133,7 +149,9 @@ impl HwDecoder {
     /// o proximo pacote apos o flush precisa ser uma keyframe.
     pub fn flush(&self) -> Result<(), String> {
         let codec = self.codec.as_ref().ok_or("Codec not initialized")?;
-        codec.flush().map_err(|e| format!("Failed to flush codec: {:?}", e))
+        codec
+            .flush()
+            .map_err(|e| format!("Failed to flush codec: {:?}", e))
     }
 
     /// `should_continue` e checado a cada volta do loop de retry (quando o
@@ -143,7 +161,15 @@ impl HwDecoder {
     /// thread que agora pode ser esperada via `join()` (ver
     /// PlaybackSession::stop_and_join), um travamento aqui trava quem
     /// estiver esperando essa thread tambem.
-    pub fn decode_packet<F, A, S>(&self, data: &[u8], pts: i64, flags: u32, mut sync_callback: F, mut after_release: A, should_continue: S) -> Result<bool, String>
+    pub fn decode_packet<F, A, S>(
+        &self,
+        data: &[u8],
+        pts: i64,
+        flags: u32,
+        mut sync_callback: F,
+        mut after_release: A,
+        should_continue: S,
+    ) -> Result<bool, String>
     where
         F: FnMut(i64) -> bool,
         A: FnMut(),
@@ -166,21 +192,24 @@ impl HwDecoder {
                     for i in 0..len {
                         slice[i].write(data[i]);
                     }
-                    
-                    codec.queue_input_buffer(buf, 0, len, pts as u64, flags)
+
+                    codec
+                        .queue_input_buffer(buf, 0, len, pts as u64, flags)
                         .map_err(|e| {
                             self.decode_errors.fetch_add(1, Ordering::Relaxed);
                             format!("queue_input_buffer failed: {:?}", e)
                         })?;
 
-                    if self.release_output_frames_with_sync(&mut sync_callback, &mut after_release) {
+                    if self.release_output_frames_with_sync(&mut sync_callback, &mut after_release)
+                    {
                         released_any = true;
                     }
                     return Ok(released_any);
                 }
                 Ok(DequeuedInputBufferResult::TryAgainLater) => {
                     // Decoder is full. Pull output frames to free up input buffers.
-                    if self.release_output_frames_with_sync(&mut sync_callback, &mut after_release) {
+                    if self.release_output_frames_with_sync(&mut sync_callback, &mut after_release)
+                    {
                         released_any = true;
                     } else {
                         // Avoid busy loop if decoder is stuck
@@ -194,8 +223,12 @@ impl HwDecoder {
             }
         }
     }
-    
-    pub fn release_output_frames_with_sync<F, A>(&self, mut sync_callback: F, mut after_release: A) -> bool
+
+    pub fn release_output_frames_with_sync<F, A>(
+        &self,
+        mut sync_callback: F,
+        mut after_release: A,
+    ) -> bool
     where
         F: FnMut(i64) -> bool,
         A: FnMut(),
@@ -248,10 +281,13 @@ impl HwDecoder {
     /// decodificados estao pendentes de apresentacao e pode decidir
     /// liberar o mais antigo cedo (aceitando pequena imprecisao de sync)
     /// como valvula de alivio antes de travar de verdade.
+    ///
+    /// `pts_us`: timestamp de apresentacao estritamente em MICROSSEGUNDOS (us),
+    /// conforme exigido pelo `AMediaCodec_queueInputBuffer` do Android NDK.
     pub fn feed_input(
         &self,
         data: &[u8],
-        pts: i64,
+        pts_us: i64,
         flags: u32,
         mut on_stalled: impl FnMut(),
         should_continue: impl Fn() -> bool,
@@ -273,7 +309,8 @@ impl HwDecoder {
                         slice[i].write(data[i]);
                     }
 
-                    codec.queue_input_buffer(buf, 0, len, pts as u64, flags)
+                    codec
+                        .queue_input_buffer(buf, 0, len, pts_us as u64, flags)
                         .map_err(|e| {
                             self.decode_errors.fetch_add(1, Ordering::Relaxed);
                             format!("queue_input_buffer failed: {:?}", e)
@@ -324,7 +361,8 @@ impl HwDecoder {
     /// `release_output_frames_with_sync`.
     pub fn release_output(&self, buf: OutputBuffer<'_>, render: bool) -> Result<(), String> {
         let codec = self.codec.as_ref().ok_or("Codec not initialized")?;
-        codec.release_output_buffer(buf, render)
+        codec
+            .release_output_buffer(buf, render)
             .map_err(|e| format!("release_output_buffer failed: {:?}", e))?;
         if !render {
             self.frames_dropped.fetch_add(1, Ordering::Relaxed);
@@ -340,7 +378,12 @@ impl HwDecoder {
     /// podem nao ter saida pronta logo apos este pacote — quem chama
     /// alimenta o proximo pacote e tenta de novo (mesmo padrao de
     /// `thumbnail::decode_and_scale` pro decode por software).
-    pub fn decode_one_frame_raw(&self, data: &[u8], pts: i64, flags: u32) -> Result<Option<RawFrame>, String> {
+    pub fn decode_one_frame_raw(
+        &self,
+        data: &[u8],
+        pts: i64,
+        flags: u32,
+    ) -> Result<Option<RawFrame>, String> {
         let codec = self.codec.as_ref().ok_or("Codec not initialized")?;
 
         let mut queued = false;
@@ -352,7 +395,8 @@ impl HwDecoder {
                     for i in 0..len {
                         slice[i].write(data[i]);
                     }
-                    codec.queue_input_buffer(buf, 0, len, pts as u64, flags)
+                    codec
+                        .queue_input_buffer(buf, 0, len, pts as u64, flags)
                         .map_err(|e| format!("queue_input_buffer failed: {:?}", e))?;
                     queued = true;
                     break;

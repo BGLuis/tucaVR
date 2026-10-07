@@ -21,7 +21,7 @@ package com.tucavr.history
  */
 class PlaybackProgressThrottle(
     private val minIntervalMs: Long = DEFAULT_MIN_INTERVAL_MS,
-    private val nowMs: () -> Long = System::currentTimeMillis
+    private val nowMs: () -> Long = System::currentTimeMillis,
 ) {
     private var lastSaveAtMs: Long? = null
 

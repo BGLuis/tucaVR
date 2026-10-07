@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="utf-8"?>
+<baseline version="1.0">
+    <file name="src/main/java/com/tucavr/VRActivity.kt">
+        <error line="587" column="5" source="standard:no-consecutive-comments" />
+    </file>
+    <file name="src/main/java/com/tucavr/VRControlsPresentation.kt">
+        <error line="331" column="1" source="standard:max-line-length" />
+        <error line="455" column="1" source="standard:max-line-length" />
+        <error line="473" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/com/tucavr/VRModalPresentation.kt">
+        <error line="455" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/com/tucavr/VRPresentation.kt">
+        <error line="248" column="1" source="standard:max-line-length" />
+        <error line="601" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/com/tucavr/debug/DebugEventLog.kt">
+        <error line="29" column="1" source="standard:max-line-length" />
+        <error line="31" column="1" source="standard:max-line-length" />
+        <error line="95" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/com/tucavr/debug/DebugTelemetryExporter.kt">
+        <error line="44" column="1" source="standard:max-line-length" />
+        <error line="124" column="1" source="standard:max-line-length" />
+        <error line="129" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/com/tucavr/designsystem/DebugStatsModal.kt">
+        <error line="460" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/com/tucavr/designsystem/PassthroughSettingsModal.kt">
+        <error line="154" column="1" source="standard:max-line-length" />
+        <error line="158" column="1" source="standard:max-line-length" />
+        <error line="271" column="1" source="standard:max-line-length" />
+        <error line="275" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/com/tucavr/designsystem/VoidTabRow.kt">
+        <error line="63" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/com/tucavr/designsystem/VoidTheme.kt">
+        <error line="36" column="15" source="standard:property-naming" />
+        <error line="37" column="15" source="standard:property-naming" />
+    </file>
+    <file name="src/main/java/com/tucavr/filebrowser/MemoryBudgetGate.kt">
+        <error line="48" column="17" source="standard:property-naming" />
+        <error line="49" column="17" source="standard:property-naming" />
+    </file>
+    <file name="src/main/java/com/tucavr/filebrowser/NetworkThumbnailGenerator.kt">
+        <error line="155" column="1" source="standard:max-line-length" />
+        <error line="275" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/com/tucavr/history/PlaybackHistoryMapping.kt">
+        <error line="19" column="1" source="standard:no-consecutive-comments" />
+    </file>
+    <file name="src/main/java/com/tucavr/screens/ContinueWatchingScreen.kt">
+        <error line="214" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/com/tucavr/screens/NetworkFtpScreen.kt">
+        <error line="531" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/com/tucavr/screens/NetworkNfsScreen.kt">
+        <error line="155" column="1" source="standard:max-line-length" />
+        <error line="505" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/com/tucavr/screens/NetworkSftpScreen.kt">
+        <error line="551" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/com/tucavr/screens/NetworkSmbScreen.kt">
+        <error line="562" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/com/tucavr/screens/NetworkWebdavScreen.kt">
+        <error line="626" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/test/java/com/tucavr/I18nParityTest.kt">
+        <error line="26" column="41" source="standard:discouraged-comment-location" />
+    </file>
+    <file name="src/test/java/com/tucavr/chroma/PackedAlphaDetectorTest.kt">
+        <error line="44" column="30" source="standard:discouraged-comment-location" />
+    </file>
+    <file name="src/test/java/com/tucavr/debug/ApplicationExitInfoReporterTest.kt">
+        <error line="31" column="87" source="standard:discouraged-comment-location" />
+        <error line="32" column="90" source="standard:discouraged-comment-location" />
+    </file>
+    <file name="src/test/java/com/tucavr/history/AppDatabaseMigrationTest.kt">
+        <error line="121" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/test/java/com/tucavr/network/DlnaItemParsingTest.kt">
+        <error line="53" column="1" source="standard:max-line-length" />
+    </file>
+</baseline>

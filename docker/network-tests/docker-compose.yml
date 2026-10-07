@@ -1,6 +1,5 @@
 # Ambiente de teste de protocolos de rede para o Fase 0.1 (T6/T7,
-# docs/phases/PHASE-0.1-MVP.md) e Fase 0.4 (Secoes 2/3, achado R-04 de
-# docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md). Sobe um servidor real para cada
+# docs/phases/PHASE-0.1-MVP.md) e Fase 0.4 (Secoes 2/3). Sobe um servidor real para cada
 # protocolo que o Demuxer (Rust) fala (rust/protocols/src): SMB2/3, HTTP puro, HTTPS
 # com TLS auto-assinado, DASH (MPD real servido pelo proprio http-test) e WebDAV — para
 # exercitar o codigo de producao contra servidores de verdade em vez de so mocks

@@ -41,7 +41,11 @@ impl FtpTarget {
     pub fn to_internal(&self) -> String {
         format!(
             "ftp://{}:{}{sep}{}{sep}{}{sep}{}",
-            self.host, self.port, self.path, self.username, self.password,
+            self.host,
+            self.port,
+            self.path,
+            self.username,
+            self.password,
             sep = SEP
         )
     }

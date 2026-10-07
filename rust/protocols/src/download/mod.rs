@@ -96,7 +96,11 @@ impl DownloadTask {
     }
 
     pub fn snapshot(&self) -> DownloadStats {
-        let err = self.error_message.lock().ok().and_then(|guard| guard.clone());
+        let err = self
+            .error_message
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone());
         DownloadStats {
             id: self.id.clone(),
             total_bytes: self.total_bytes.load(Ordering::Relaxed),
@@ -142,7 +146,9 @@ pub fn default_source_opener(uri: &str) -> Result<Box<dyn RangeSource>, String> 
         let source = crate::http::HttpsRangeSource::new(uri)?;
         Ok(Box::new(source))
     } else {
-        Err(format!("Esquema de protocolo não suportado para download: {uri}"))
+        Err(format!(
+            "Esquema de protocolo não suportado para download: {uri}"
+        ))
     }
 }
 
@@ -178,13 +184,24 @@ impl DownloadManager {
     }
 
     /// Enfileira uma nova tarefa de download.
-    pub fn enqueue(&self, id: &str, source_uri: &str, destination_path: &str) -> Result<(), String> {
-        let mut tasks = self.tasks.lock().map_err(|_| "Mutex envenenado".to_string())?;
+    pub fn enqueue(
+        &self,
+        id: &str,
+        source_uri: &str,
+        destination_path: &str,
+    ) -> Result<(), String> {
+        let mut tasks = self
+            .tasks
+            .lock()
+            .map_err(|_| "Mutex envenenado".to_string())?;
 
         // Se a tarefa já existe, apenas reativa se estiver pausada/falha/cancelada
         if let Some(existing) = tasks.iter().find(|t| t.id == id) {
             let state = existing.get_state();
-            if state == DownloadState::Paused || state == DownloadState::Failed || state == DownloadState::Cancelled {
+            if state == DownloadState::Paused
+                || state == DownloadState::Failed
+                || state == DownloadState::Cancelled
+            {
                 existing.pause_flag.store(false, Ordering::Relaxed);
                 existing.cancel_flag.store(false, Ordering::Relaxed);
                 existing.set_state(DownloadState::Queued);
@@ -209,8 +226,12 @@ impl DownloadManager {
 
     /// Pausa uma tarefa em andamento ou enfileirada.
     pub fn pause(&self, id: &str) -> bool {
-        let Ok(tasks) = self.tasks.lock() else { return false };
-        let Some(task) = tasks.iter().find(|t| t.id == id) else { return false };
+        let Ok(tasks) = self.tasks.lock() else {
+            return false;
+        };
+        let Some(task) = tasks.iter().find(|t| t.id == id) else {
+            return false;
+        };
 
         task.pause_flag.store(true, Ordering::Relaxed);
         let state = task.get_state();
@@ -222,8 +243,12 @@ impl DownloadManager {
 
     /// Retoma uma tarefa pausada.
     pub fn resume(&self, id: &str) -> bool {
-        let Ok(tasks) = self.tasks.lock() else { return false };
-        let Some(task) = tasks.iter().find(|t| t.id == id) else { return false };
+        let Ok(tasks) = self.tasks.lock() else {
+            return false;
+        };
+        let Some(task) = tasks.iter().find(|t| t.id == id) else {
+            return false;
+        };
 
         let state = task.get_state();
         if state == DownloadState::Paused || state == DownloadState::Failed {
@@ -239,8 +264,12 @@ impl DownloadManager {
 
     /// Cancela uma tarefa e remove o arquivo `.part`.
     pub fn cancel(&self, id: &str) -> bool {
-        let Ok(tasks) = self.tasks.lock() else { return false };
-        let Some(task) = tasks.iter().find(|t| t.id == id) else { return false };
+        let Ok(tasks) = self.tasks.lock() else {
+            return false;
+        };
+        let Some(task) = tasks.iter().find(|t| t.id == id) else {
+            return false;
+        };
 
         task.cancel_flag.store(true, Ordering::Relaxed);
         task.set_state(DownloadState::Cancelled);
@@ -261,7 +290,9 @@ impl DownloadManager {
 
     /// Obtém estatísticas de todas as tarefas.
     pub fn get_all_stats(&self) -> Vec<DownloadStats> {
-        let Ok(tasks) = self.tasks.lock() else { return Vec::new() };
+        let Ok(tasks) = self.tasks.lock() else {
+            return Vec::new();
+        };
         tasks.iter().map(|t| t.snapshot()).collect()
     }
 
@@ -322,7 +353,11 @@ impl DownloadManager {
                     } else if task_clone.pause_flag.load(Ordering::Relaxed) {
                         task_clone.set_state(DownloadState::Paused);
                     } else {
-                        log::error!("Erro no download [{}] ({}): {err}", task_clone.id, task_clone.destination_path.display());
+                        log::error!(
+                            "Erro no download [{}] ({}): {err}",
+                            task_clone.id,
+                            task_clone.destination_path.display()
+                        );
                         if let Ok(mut guard) = task_clone.error_message.lock() {
                             *guard = Some(err);
                         }
@@ -348,11 +383,14 @@ fn execute_download(
 
     // Verifica bytes existentes no arquivo parcial
     let existing_bytes = if task.part_path.exists() {
-        std::fs::metadata(&task.part_path).map(|m| m.len()).unwrap_or(0)
+        std::fs::metadata(&task.part_path)
+            .map(|m| m.len())
+            .unwrap_or(0)
     } else {
         0
     };
-    task.downloaded_bytes.store(existing_bytes, Ordering::Relaxed);
+    task.downloaded_bytes
+        .store(existing_bytes, Ordering::Relaxed);
 
     // Abre a fonte do protocolo remoto
     let mut source = opener(&task.source_uri)?;
@@ -418,7 +456,8 @@ fn execute_download(
 
         current_offset += n as u64;
         bytes_since_speed_check += n as u64;
-        task.downloaded_bytes.store(current_offset, Ordering::Relaxed);
+        task.downloaded_bytes
+            .store(current_offset, Ordering::Relaxed);
 
         // Atualiza cálculo de velocidade a cada ~500ms
         let elapsed = last_speed_check.elapsed();
@@ -430,7 +469,8 @@ fn execute_download(
         }
     }
 
-    file.flush().map_err(|e| format!("Falha ao descarregar buffer: {e}"))?;
+    file.flush()
+        .map_err(|e| format!("Falha ao descarregar buffer: {e}"))?;
     drop(file);
 
     // Valida se o download atingiu o tamanho esperado (quando conhecido)
@@ -508,11 +548,16 @@ mod tests {
         let reads_clone = reads.clone();
 
         let opener: SourceOpener = Arc::new(move |_uri| {
-            Ok(Box::new(MockRangeSource::new(data_clone.clone(), reads_clone.clone())))
+            Ok(Box::new(MockRangeSource::new(
+                data_clone.clone(),
+                reads_clone.clone(),
+            )))
         });
 
         let manager = DownloadManager::with_opener(2, opener);
-        manager.enqueue("dl_1", "mock://video", dest_file.to_str().unwrap()).unwrap();
+        manager
+            .enqueue("dl_1", "mock://video", dest_file.to_str().unwrap())
+            .unwrap();
 
         // Aguarda conclusão (máximo 2 segundos)
         let start = Instant::now();
@@ -539,7 +584,8 @@ mod tests {
 
     #[test]
     fn test_download_resume_from_part_file() {
-        let temp_dir = std::env::temp_dir().join(format!("tucavr_test_resume_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("tucavr_test_resume_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let dest_file = temp_dir.join("resumed_video.mp4");
         let part_file = temp_dir.join("resumed_video.mp4.part");
@@ -553,11 +599,16 @@ mod tests {
         let reads_clone = reads.clone();
 
         let opener: SourceOpener = Arc::new(move |_uri| {
-            Ok(Box::new(MockRangeSource::new(data_clone.clone(), reads_clone.clone())))
+            Ok(Box::new(MockRangeSource::new(
+                data_clone.clone(),
+                reads_clone.clone(),
+            )))
         });
 
         let manager = DownloadManager::with_opener(2, opener);
-        manager.enqueue("dl_resume", "mock://video", dest_file.to_str().unwrap()).unwrap();
+        manager
+            .enqueue("dl_resume", "mock://video", dest_file.to_str().unwrap())
+            .unwrap();
 
         let start = Instant::now();
         while start.elapsed() < Duration::from_secs(2) {
@@ -581,7 +632,8 @@ mod tests {
 
     #[test]
     fn test_concurrency_limit_respects_max_active() {
-        let temp_dir = std::env::temp_dir().join(format!("tucavr_test_conc_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("tucavr_test_conc_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
 
         let test_data = vec![0x99u8; 1_000];
@@ -590,40 +642,59 @@ mod tests {
         let reads_clone = reads.clone();
 
         let opener: SourceOpener = Arc::new(move |_uri| {
-            Ok(Box::new(MockRangeSource::new(data_clone.clone(), reads_clone.clone())))
+            Ok(Box::new(MockRangeSource::new(
+                data_clone.clone(),
+                reads_clone.clone(),
+            )))
         });
 
         let manager = DownloadManager::with_opener(2, opener);
 
         for i in 1..=5 {
             let path = temp_dir.join(format!("file_{i}.mp4"));
-            manager.enqueue(&format!("id_{i}"), "mock://uri", path.to_str().unwrap()).unwrap();
+            manager
+                .enqueue(&format!("id_{i}"), "mock://uri", path.to_str().unwrap())
+                .unwrap();
         }
 
         // Verifica que no máximo 2 estão em Downloading simultaneamente
         let all = manager.get_all_stats();
-        let active = all.iter().filter(|s| s.state == DownloadState::Downloading).count();
-        assert!(active <= 2, "Concorrência ativa ({active}) excedeu o limite máximo de 2");
+        let active = all
+            .iter()
+            .filter(|s| s.state == DownloadState::Downloading)
+            .count();
+        assert!(
+            active <= 2,
+            "Concorrência ativa ({active}) excedeu o limite máximo de 2"
+        );
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
     fn test_pause_and_cancel_flags() {
-        let temp_dir = std::env::temp_dir().join(format!("tucavr_test_ctrl_{}", std::process::id()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("tucavr_test_ctrl_{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let path1 = temp_dir.join("pause.mp4");
         let path2 = temp_dir.join("cancel.mp4");
 
         let opener: SourceOpener = Arc::new(|_uri| {
-            Ok(Box::new(MockRangeSource::new(vec![0u8; 100], Arc::new(AtomicUsize::new(0)))))
+            Ok(Box::new(MockRangeSource::new(
+                vec![0u8; 100],
+                Arc::new(AtomicUsize::new(0)),
+            )))
         });
 
         let manager = DownloadManager::with_opener(1, opener);
-        manager.enqueue("t_pause", "mock://uri", path1.to_str().unwrap()).unwrap();
+        manager
+            .enqueue("t_pause", "mock://uri", path1.to_str().unwrap())
+            .unwrap();
         assert!(manager.pause("t_pause"));
 
-        manager.enqueue("t_cancel", "mock://uri", path2.to_str().unwrap()).unwrap();
+        manager
+            .enqueue("t_cancel", "mock://uri", path2.to_str().unwrap())
+            .unwrap();
         assert!(manager.cancel("t_cancel"));
         let stats_cancel = manager.get_stats("t_cancel").unwrap();
         assert_eq!(stats_cancel.state, DownloadState::Cancelled);

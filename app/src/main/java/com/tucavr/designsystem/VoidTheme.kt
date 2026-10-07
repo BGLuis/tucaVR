@@ -9,7 +9,6 @@ import android.util.TypedValue
  * Identidade visual "Void" (aprovada pelo dono do produto).
  */
 object VoidTheme {
-
     // ---------- Cores ----------
     val colorBackground = Color.parseColor("#121212")
     val colorSurface = Color.parseColor("#1A1A1A")
@@ -19,8 +18,7 @@ object VoidTheme {
     val colorAccent = Color.parseColor("#FF6B00")
     val colorBorder = Color.parseColor("#3A2F1E")
 
-    fun accentWithAlpha(alpha: Int): Int =
-        Color.argb(alpha, Color.red(colorAccent), Color.green(colorAccent), Color.blue(colorAccent))
+    fun accentWithAlpha(alpha: Int): Int = Color.argb(alpha, Color.red(colorAccent), Color.green(colorAccent), Color.blue(colorAccent))
 
     // ---------- Tipografia ----------
     lateinit var typefaceTitle: Typeface
@@ -38,8 +36,13 @@ object VoidTheme {
     const val cornerRadiusDp = 12f
     const val borderWidthDp = 1.5f
 
-    fun dp(context: Context, value: Float): Float =
-        TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value, context.resources.displayMetrics)
+    fun dp(
+        context: Context,
+        value: Float,
+    ): Float = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value, context.resources.displayMetrics)
 
-    fun dpToPx(context: Context, value: Float): Int = dp(context, value).toInt()
+    fun dpToPx(
+        context: Context,
+        value: Float,
+    ): Int = dp(context, value).toInt()
 }

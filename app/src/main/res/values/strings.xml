@@ -62,6 +62,22 @@
     <string name="settings_foveated_mode_medium">Medium</string>
     <string name="settings_foveated_mode_high">High</string>
     <string name="settings_foveated_mode_auto">Auto (Adaptive)</string>
+    <string name="settings_ambient_mode_label">Ambient Mode</string>
+    <string name="settings_ambient_mode_description">Adds a soft glow behind the screen, colored from the video frame. Only visible in the Void environment. Vulkan only.</string>
+    <string name="settings_section_lighting">Environment &amp; Lighting</string>
+    <string name="settings_environment_brightness_label">Environment Brightness</string>
+    <string name="settings_environment_brightness_description">Controls virtual room lighting and skybox brightness (0%% to 100%%).</string>
+    <string name="settings_environment_brightness_percent">%1$d%%</string>
+    <string name="settings_screen_glow_label">Reactive Screen Glow</string>
+    <string name="settings_screen_glow_description">Reflects dynamic video color onto virtual room walls and surrounding space.</string>
+    <string name="settings_screen_glow_off">Off</string>
+    <string name="settings_screen_glow_subtle">Subtle</string>
+    <string name="settings_screen_glow_strong">Strong</string>
+    <string name="settings_color_temperature_label">Color Temperature</string>
+    <string name="settings_color_temperature_description">Adjusts the video screen color warmth from warm incandescent to neutral daylight.</string>
+    <string name="settings_color_temperature_kelvin">%1$dK</string>
+    <string name="settings_night_mode_label">Night Mode</string>
+    <string name="settings_night_mode_description">Reduces blue light emission (~3000K) for comfortable viewing in dark environments.</string>
     <string name="quality_warning_thermal">Thermal limit reached: reducing rendering quality to cool down device.</string>
     <string name="quality_warning_8k60">High framerate 8K video may experience frame drops on mobile hardware.</string>
     <string name="settings_pause_on_exit_label">Pause on exit</string>
@@ -91,6 +107,60 @@
     <string name="passthrough_reset_screen_description">Restores the virtual screen to its default front position and scale.</string>
     <string name="passthrough_grab_hint">Hint: Point at the screen and hold Grip to grab and reposition in 3D space.</string>
     <string name="settings_passthrough_open_button">Settings</string>
+
+    <!-- Passthrough Mask Modes (Chroma Key & Packed Alpha) -->
+    <string name="mask_mode_section_title">Mask &amp; Background Removal</string>
+    <string name="mask_mode_label">Mask Mode</string>
+    <string name="mask_mode_description">Choose how background is removed for Passthrough (Packed Alpha or Chroma Key).</string>
+    <string name="mask_mode_off">Off</string>
+    <string name="mask_mode_packed_alpha">Packed Alpha</string>
+    <string name="mask_mode_chroma_key">Chroma Key</string>
+    <string name="mask_mode_packed_alpha_detected">✨ DeoVR / HereSphere Packed Alpha format detected in this video.</string>
+    <string name="mask_mode_packed_alpha_info">Real-time unpacking of the 6-segment transparency mask embedded in the video margins.</string>
+    <string name="packed_alpha_opacity_multiplier_label">Opacity Boost (Hair &amp; Edges)</string>
+    <string name="packed_alpha_opacity_multiplier_value">%1$.1fx</string>
+    <string name="packed_alpha_black_cutoff_label">Black Cutoff (Background)</string>
+    <string name="packed_alpha_black_cutoff_percent">%1$d%%</string>
+    <string name="packed_alpha_choke_label">Edge Choke (Remove Fringe)</string>
+    <string name="packed_alpha_choke_percent">%1$d%%</string>
+
+    <!-- Chroma Key (Background Removal for Passthrough) -->
+    <string name="chroma_key_section_title">Chroma Key (Background Removal)</string>
+    <string name="chroma_key_toggle_label">Enable Chroma Key</string>
+    <string name="chroma_key_toggle_description">Removes solid background (green/blue screen) to blend 3D actors into your room.</string>
+    <string name="chroma_key_auto_detect_button">Auto Detect Background</string>
+    <string name="chroma_key_auto_detect_status_detecting">Analyzing video frame…</string>
+    <string name="chroma_key_auto_detect_status_success">Detected color: %1$s</string>
+    <string name="chroma_key_auto_detect_status_failed">Could not detect background automatically</string>
+    <string name="chroma_key_color_label">Key Color</string>
+    <string name="chroma_key_color_green">Green</string>
+    <string name="chroma_key_color_blue">Blue</string>
+    <string name="chroma_key_color_red">Red</string>
+    <string name="chroma_key_color_gray">Gray</string>
+    <string name="chroma_key_color_black">Black</string>
+    <string name="chroma_key_color_white">White</string>
+    <string name="chroma_key_custom_color_title">Fine-tune Color (RGB)</string>
+    <string name="chroma_key_channel_r">R: %1$d</string>
+    <string name="chroma_key_channel_g">G: %1$d</string>
+    <string name="chroma_key_channel_b">B: %1$d</string>
+    <string name="chroma_key_similarity_label">Color Tolerance</string>
+    <string name="chroma_key_similarity_percent">%1$d%%</string>
+    <string name="chroma_key_smoothness_label">Edge Softness</string>
+    <string name="chroma_key_smoothness_percent">%1$d%%</string>
+
+    <!-- Virtual Environments (Phase 0.3 §1 & Phase 0.5 §3) -->
+    <string name="environments_modal_title">Virtual Environments</string>
+    <string name="env_void_title">Void</string>
+    <string name="env_void_desc">Pure pitch-black background with zero GPU overhead.</string>
+    <string name="env_space_title">Cosmic Space</string>
+    <string name="env_space_desc">Orbital platform floating in space with nebula and stardust.</string>
+    <string name="env_cinema_title">Cinema IMAX</string>
+    <string name="env_cinema_desc">Grand theater hall with cushioned seats and giant anchored screen.</string>
+    <string name="env_living_room_title">Living Room</string>
+    <string name="env_living_room_desc">Cozy home interior with screen anchored to the wall.</string>
+    <string name="env_passthrough_title">Passthrough (MR)</string>
+    <string name="env_passthrough_desc">Mixed Reality displaying your physical room as background.</string>
+    <string name="env_reset_anchor_button">Reset to Environment Anchor</string>
 
     <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
     <string name="browser_title_local_files">Local Files</string>
@@ -181,6 +251,10 @@
     <string name="network_tab_ftp">FTP</string>
     <string name="network_tab_sftp">SFTP</string>
     <string name="network_tab_webdav">WebDAV</string>
+
+    <!-- Rede: lista unificada de servidores salvos, cross-protocolo (NetworkHomeScreen) -->
+    <string name="network_saved_servers_header">Saved servers</string>
+    <string name="network_saved_servers_empty">(no server saved)</string>
 
     <!-- Rede: aba DLNA -->
     <string name="network_dlna_header">UPnP / DLNA Servers</string>
@@ -371,6 +445,8 @@
     <string name="player_mode_eac_3x2">EAC 3×2</string>
     <string name="player_mode_cubemap_3x2_sbs">Cubemap 3×2 SBS</string>
     <string name="player_mode_eac_3x2_sbs">EAC 3×2 SBS</string>
+    <string name="player_mode_fisheye_190_mono">Fisheye 190°</string>
+    <string name="player_mode_fisheye_190_sbs">Fisheye 190° 3D (SBS)</string>
     <string name="player_btn_swap_eyes">Swap eyes</string>
     <string name="player_btn_recenter">Recenter</string>
 

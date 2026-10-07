@@ -1,4 +1,5 @@
 #include "vk_math.h"
+
 #include <cassert>
 #include <cmath>
 #include <iostream>

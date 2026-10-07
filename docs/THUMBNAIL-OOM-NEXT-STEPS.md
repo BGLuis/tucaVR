@@ -1,8 +1,9 @@
 # Thumbnails de rede: OOM em pastas 8K + geração ciente de formato 3D
 
-> Documento de handoff — escrito para uma sessão SEM contexto prévio.
-> Tudo que é preciso saber está aqui; os `arquivo:linha` foram verificados
-> em `develop` (base: `6ac4975`).
+> **Historical document / Status dos itens:**
+> - Item 1 (`MemoryBudgetGate`): Concluído (`app/src/main/java/com/tucavr/filebrowser/MemoryBudgetGate.kt:17`).
+> - Item 2 (Geração ciente de 3D): Concluído (`app/src/main/java/com/tucavr/filebrowser/ThumbnailGenerator.kt`).
+> - Item 3 (`thread_count = 1`): Concluído (`rust/core/src/thumbnail.rs:156`).
 
 ---
 

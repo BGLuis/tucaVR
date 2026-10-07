@@ -20,7 +20,7 @@
 ![Android](https://www.shieldcn.dev/badge/Android-SDK%2034-3DDC84.svg?logo=android&variant=branded&size=sm)
 
   <h3>tucaVR</h3>
-  A fully immersive 2D/3D video player for the Meta Quest 3 that streams straight from your own NAS over SMB, NFS, FTP, SFTP, DLNA or HTTP(S).
+  A fully immersive 2D/3D video player for the Meta Quest 3 that streams straight from your own NAS over SMB, NFS, FTP, SFTP, WebDAV, DLNA or HTTP(S).
 
 **English** · [Português (BR)](README.pt-BR.md)
 
@@ -43,7 +43,7 @@ graph LR
 ```
 
 - **Kotlin** (`app/`) — Android shell and the UI, drawn as plain Android `View`s inside an `android.app.Presentation` on a `VirtualDisplay`, then projected as textures onto 3D quads by the native layer. Also handles encrypted credential storage, Room-backed playback history and localization.
-- **C++** (`native/`) — OpenXR session, swapchains and the render loop on top of Meta's `SampleXrFramework` (OVRFW). Vulkan is the default backend, with an OpenGL ES path kept as a fallback. Decoded frames arrive as `AHardwareBuffer`s and are bound zero-copy as external textures.
+- **C++** (`native/`, C++20) — OpenXR session, swapchains and the render loop. Vulkan is the default backend (independent of OVRFW), with an OpenGL ES path kept as a frozen fallback built on Meta's `SampleXrFramework` (OVRFW). Decoded frames arrive as `AHardwareBuffer`s and are bound zero-copy as external textures.
 - **Rust** (`rust/`) — cross-compiled to `aarch64-linux-android`. Demuxing with `ffmpeg-next`, hardware decoding through `ndk::MediaCodec`, audio output via Oboe, and every network protocol client written in pure Rust (no native TLS/SSH libraries, to keep cross-compilation sane).
 
 Kotlin never calls Rust directly: it talks to C++ over JNI, and C++ is the only consumer of the Rust `bridge` crate's flat `extern "C"` API.
@@ -56,7 +56,7 @@ Kotlin never calls Rust directly: it talks to C++ over JNI, and C++ is the only 
 | **3D / VR**   | Side-by-Side and Over/Under (half & full), 360° mono and stereo, VR180 — with automatic format detection |
 | **Audio**     | Oboe output with A/V sync, spatial audio, per-track selection                                            |
 | **Subtitles** | External subtitle files with automatic charset detection (`chardetng`)                                   |
-| **Streaming** | HTTP(S) direct URLs and HLS (including AES-128 encrypted segments)                                       |
+| **Streaming** | HTTP(S) direct URLs, HLS (including AES-128 encrypted segments) and DASH |
 | **Rendering** | Vulkan by default, OpenGL ES available as a fallback backend                                             |
 
 ### Where it plays from
@@ -67,6 +67,7 @@ Kotlin never calls Rust directly: it talks to C++ over JNI, and C++ is the only 
 | **NFS**          | Browse and play from NFS exports                               |
 | **FTP**          | Pure-Rust blocking client                                      |
 | **SFTP**         | Over SSH via `russh` — no `libssh2`/OpenSSL dependency         |
+| **WebDAV**       | Over HTTP(S) with RFC 4918 PROPFIND XML directory parsing      |
 | **DLNA / UPnP**  | Device description + DIDL-Lite browsing                        |
 | **HTTP / HTTPS** | Direct URLs, with `rustls` for TLS                             |
 | **Discovery**    | Automatic mDNS / DNS-SD server discovery on the local network  |
@@ -212,14 +213,14 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 cd rust && cargo test -p protocols -p media-logic
 
 # Rust lint (CI runs this with -D warnings)
-cd rust && cargo clippy -- -D warnings
+cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings
 
 # Kotlin JVM unit tests + lint
 ./gradlew testDebugUnitTest
 ./gradlew ktlintCheck
 ```
 
-Network protocol integration tests run against real SMB/HTTP/HTTPS/FTP/SFTP servers in Docker — no headset required:
+Network protocol integration tests run against real SMB/HTTP/HTTPS/FTP/SFTP/WebDAV servers (plus generated DASH fixtures) in Docker — no headset required:
 
 ```sh
 ./scripts/test-network-protocols.sh          # spins containers up, runs, tears down

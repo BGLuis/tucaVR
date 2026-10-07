@@ -19,9 +19,11 @@ import com.tucavr.designsystem.VoidTheme
 import com.tucavr.filebrowser.FolderPreviewGenerator
 import com.tucavr.filebrowser.MediaEntry
 import com.tucavr.filebrowser.MediaFilterEngine
+import com.tucavr.filebrowser.MediaMetadataCacheEntry
 import com.tucavr.filebrowser.MediaType
 import com.tucavr.filebrowser.ThumbnailGenerator
 import com.tucavr.filebrowser.ViewMode
+import com.tucavr.history.formatDurationMs
 import com.tucavr.screens.formatFileSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -42,11 +44,18 @@ class FileAdapter(
     /** Double-click em vídeo → toca direto. */
     private val onVideoDoubleClick: (MediaEntry) -> Unit = onVideoClick,
     private val thumbnailLoader: (suspend (MediaEntry) -> Bitmap?)? = null,
-    private val folderMosaicLoader: (suspend (MediaEntry) -> Bitmap?)? = null
+    private val folderMosaicLoader: (suspend (MediaEntry) -> Bitmap?)? = null,
+    /**
+     * Leitura SOMENTE do cache de metadados (Room, `media_metadata_cache`) pra exibir um
+     * badge rápido de resolução/duração — NUNCA deve disparar cálculo via Rust (ver
+     * `MediaMetadataReader.readCachedSummary`). Cache miss = nenhum badge, sem popup de
+     * erro, mesmo contrato de silêncio de [thumbnailLoader].
+     */
+    private val metadataBadgeLoader: (suspend (MediaEntry) -> MediaMetadataCacheEntry?)? = null,
 ) : RecyclerView.Adapter<FileAdapter.ViewHolder>() {
-
     private sealed class Row {
         object Up : Row()
+
         data class Item(val entry: MediaEntry) : Row()
     }
 
@@ -64,31 +73,37 @@ class FileAdapter(
         entries: List<MediaEntry>,
         showUp: Boolean,
         viewMode: ViewMode = currentViewMode,
-        searchQuery: String = ""
+        searchQuery: String = "",
     ) {
         currentViewMode = viewMode
         currentSearchQuery = searchQuery
 
-        rows = buildList {
-            if (showUp) add(Row.Up)
-            entries.forEach { add(Row.Item(it)) }
-        }
+        rows =
+            buildList {
+                if (showUp) add(Row.Up)
+                entries.forEach { add(Row.Item(it)) }
+            }
         notifyDataSetChanged()
     }
 
     inner class ViewHolder(val view: View) : RecyclerView.ViewHolder(view) {
         var thumbnailJob: Job? = null
         var boundEntry: MediaEntry? = null
-        val gestureDetector = GestureDetector(view.context, object : GestureDetector.SimpleOnGestureListener() {
-            override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                boundEntry?.let(onVideoClick)
-                return true
-            }
-            override fun onDoubleTap(e: MotionEvent): Boolean {
-                boundEntry?.let(onVideoDoubleClick)
-                return true
-            }
-        })
+        val gestureDetector =
+            GestureDetector(
+                view.context,
+                object : GestureDetector.SimpleOnGestureListener() {
+                    override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
+                        boundEntry?.let(onVideoClick)
+                        return true
+                    }
+
+                    override fun onDoubleTap(e: MotionEvent): Boolean {
+                        boundEntry?.let(onVideoDoubleClick)
+                        return true
+                    }
+                },
+            )
     }
 
     override fun getItemViewType(position: Int): Int {
@@ -98,31 +113,40 @@ class FileAdapter(
         }
     }
 
-    override fun onCreateViewHolder(parent: ViewGroup, viewType: Int): ViewHolder {
-        val view: View = when (viewType) {
-            VIEW_TYPE_UP, VIEW_TYPE_LIST_ITEM -> {
-                VoidListRow(parent.context).apply {
-                    layoutParams = LinearLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).also { it.bottomMargin = VoidTheme.dpToPx(parent.context, 8f) }
-                }
-            }
-            VIEW_TYPE_GRID_ITEM -> {
-                VoidGridCard(parent.context).apply {
-                    val cardMargin = VoidTheme.dpToPx(parent.context, 6f)
-                    layoutParams = ViewGroup.MarginLayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-                    ).apply {
-                        setMargins(cardMargin, cardMargin, cardMargin, cardMargin)
+    override fun onCreateViewHolder(
+        parent: ViewGroup,
+        viewType: Int,
+    ): ViewHolder {
+        val view: View =
+            when (viewType) {
+                VIEW_TYPE_UP, VIEW_TYPE_LIST_ITEM -> {
+                    VoidListRow(parent.context).apply {
+                        layoutParams =
+                            LinearLayout.LayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ).also { it.bottomMargin = VoidTheme.dpToPx(parent.context, 8f) }
                     }
                 }
+                VIEW_TYPE_GRID_ITEM -> {
+                    VoidGridCard(parent.context).apply {
+                        val cardMargin = VoidTheme.dpToPx(parent.context, 6f)
+                        layoutParams =
+                            ViewGroup.MarginLayoutParams(
+                                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ).apply {
+                                setMargins(cardMargin, cardMargin, cardMargin, cardMargin)
+                            }
+                    }
+                }
+                else -> VoidListRow(parent.context)
             }
-            else -> VoidListRow(parent.context)
-        }
         return ViewHolder(view)
     }
 
-    override fun onBindViewHolder(holder: ViewHolder, position: Int) {
+    override fun onBindViewHolder(
+        holder: ViewHolder,
+        position: Int,
+    ) {
         holder.thumbnailJob?.cancel()
         holder.boundEntry = null
         holder.itemView.setOnTouchListener(null)
@@ -140,13 +164,17 @@ class FileAdapter(
             holder.view.bind(
                 context.getString(R.string.browser_row_up).trim(),
                 showThumbnailSlot = false,
-                iconResId = R.drawable.ic_arrow_up
+                iconResId = R.drawable.ic_arrow_up,
             )
         }
         holder.itemView.setOnClickListener { onUpClick() }
     }
 
-    private fun bindItemRow(holder: ViewHolder, entry: MediaEntry, position: Int) {
+    private fun bindItemRow(
+        holder: ViewHolder,
+        entry: MediaEntry,
+        position: Int,
+    ) {
         val isDir = entry.type == MediaType.DIRECTORY
         val isVideo = entry.type == MediaType.VIDEO
         val isImage = entry.type == MediaType.IMAGE
@@ -154,19 +182,21 @@ class FileAdapter(
         // Highlight no nome se houver busca ativa
         val displayName = buildHighlightedText(entry.name, currentSearchQuery)
 
-        val iconRes = when (entry.type) {
-            MediaType.DIRECTORY -> R.drawable.ic_folder
-            MediaType.VIDEO -> R.drawable.ic_movie
-            MediaType.AUDIO -> R.drawable.ic_audio
-            MediaType.IMAGE -> R.drawable.ic_image
-        }
+        val iconRes =
+            when (entry.type) {
+                MediaType.DIRECTORY -> R.drawable.ic_folder
+                MediaType.VIDEO -> R.drawable.ic_movie
+                MediaType.AUDIO -> R.drawable.ic_audio
+                MediaType.IMAGE -> R.drawable.ic_image
+            }
 
-        val meta = when {
-            isDir -> entry.itemCount?.let { context.getString(R.string.browser_folder_summary_format, "", it).removePrefix(" · ") }
-            isVideo -> formatFileSize(context, entry.sizeBytes)
-            entry.sizeBytes > 0 -> formatFileSize(context, entry.sizeBytes)
-            else -> null
-        }
+        val meta =
+            when {
+                isDir -> entry.itemCount?.let { context.getString(R.string.browser_folder_summary_format, "", it).removePrefix(" · ") }
+                isVideo -> formatFileSize(context, entry.sizeBytes)
+                entry.sizeBytes > 0 -> formatFileSize(context, entry.sizeBytes)
+                else -> null
+            }
 
         if (holder.view is VoidListRow) {
             holder.view.thumbnail.setImageBitmap(null)
@@ -174,7 +204,7 @@ class FileAdapter(
                 title = displayName.toString(),
                 meta = meta,
                 showThumbnailSlot = isVideo || isDir || isImage,
-                iconResId = iconRes
+                iconResId = iconRes,
             )
             holder.view.titleView.text = displayName
         } else if (holder.view is VoidGridCard) {
@@ -185,7 +215,7 @@ class FileAdapter(
                 format3D = entry.format3DHint,
                 iconResId = iconRes,
                 isFolder = isDir,
-                progressFraction = entry.progressFraction
+                progressFraction = entry.progressFraction,
             )
         }
 
@@ -194,39 +224,42 @@ class FileAdapter(
             holder.itemView.setOnClickListener { onDirectoryClick(entry) }
 
             // Carregamento de mosaico e estatísticas da pasta em segundo plano
-            holder.thumbnailJob = scope.launch {
-                val summary = FolderPreviewGenerator.getSummary(entry.path)
-                if (summary != null && holder.adapterPosition == position) {
-                    val summaryMeta = if (summary.videoCount > 0) {
-                        "${summary.totalItems} itens · ${summary.videoCount} vídeos"
-                    } else {
-                        "${summary.totalItems} itens"
+            holder.thumbnailJob =
+                scope.launch {
+                    val summary = FolderPreviewGenerator.getSummary(entry.path)
+                    if (summary != null && holder.adapterPosition == position) {
+                        val summaryMeta =
+                            if (summary.videoCount > 0) {
+                                "${summary.totalItems} itens · ${summary.videoCount} vídeos"
+                            } else {
+                                "${summary.totalItems} itens"
+                            }
+
+                        if (holder.view is VoidListRow) {
+                            holder.view.metaView.text = summaryMeta
+                            holder.view.metaView.visibility = View.VISIBLE
+                        } else if (holder.view is VoidGridCard) {
+                            holder.view.metaView.text = summaryMeta
+                            holder.view.metaView.visibility = View.VISIBLE
+                        }
                     }
 
-                    if (holder.view is VoidListRow) {
-                        holder.view.metaView.text = summaryMeta
-                        holder.view.metaView.visibility = View.VISIBLE
-                    } else if (holder.view is VoidGridCard) {
-                        holder.view.metaView.text = summaryMeta
-                        holder.view.metaView.visibility = View.VISIBLE
+                    val folderMosaic =
+                        if (folderMosaicLoader != null) {
+                            folderMosaicLoader.invoke(entry)
+                        } else {
+                            FolderPreviewGenerator.getFolderMosaic(context, entry.path, thumbnailLoader)
+                        }
+
+                    if (folderMosaic != null && holder.adapterPosition == position) {
+                        if (holder.view is VoidListRow) {
+                            holder.view.thumbnail.setImageBitmap(folderMosaic)
+                            holder.view.thumbnail.visibility = View.VISIBLE
+                        } else if (holder.view is VoidGridCard) {
+                            holder.view.thumbnail.setImageBitmap(folderMosaic)
+                        }
                     }
                 }
-
-                val folderMosaic = if (folderMosaicLoader != null) {
-                    folderMosaicLoader.invoke(entry)
-                } else {
-                    FolderPreviewGenerator.getFolderMosaic(context, entry.path, thumbnailLoader)
-                }
-
-                if (folderMosaic != null && holder.adapterPosition == position) {
-                    if (holder.view is VoidListRow) {
-                        holder.view.thumbnail.setImageBitmap(folderMosaic)
-                        holder.view.thumbnail.visibility = View.VISIBLE
-                    } else if (holder.view is VoidGridCard) {
-                        holder.view.thumbnail.setImageBitmap(folderMosaic)
-                    }
-                }
-            }
         } else if (isVideo || isImage) {
             holder.boundEntry = entry
             if (isVideo) {
@@ -239,29 +272,62 @@ class FileAdapter(
             }
 
             // Carregamento de miniatura da mídia (vídeo ou imagem)
-            holder.thumbnailJob = scope.launch {
-                val bitmap = if (thumbnailLoader != null) {
-                    thumbnailLoader.invoke(entry)
-                } else {
-                    ThumbnailGenerator.getThumbnail(context, entry)
-                }
+            holder.thumbnailJob =
+                scope.launch {
+                    val bitmap =
+                        if (thumbnailLoader != null) {
+                            thumbnailLoader.invoke(entry)
+                        } else {
+                            ThumbnailGenerator.getThumbnail(context, entry)
+                        }
 
-                if (bitmap != null && holder.adapterPosition == position) {
-                    if (holder.view is VoidListRow) {
-                        holder.view.thumbnail.setImageBitmap(bitmap)
-                        holder.view.thumbnail.visibility = View.VISIBLE
-                    } else if (holder.view is VoidGridCard) {
-                        holder.view.thumbnail.setImageBitmap(bitmap)
+                    if (bitmap != null && holder.adapterPosition == position) {
+                        if (holder.view is VoidListRow) {
+                            holder.view.thumbnail.setImageBitmap(bitmap)
+                            holder.view.thumbnail.visibility = View.VISIBLE
+                        } else if (holder.view is VoidGridCard) {
+                            holder.view.thumbnail.setImageBitmap(bitmap)
+                        }
+                    }
+
+                    if (isVideo && metadataBadgeLoader != null) {
+                        val summary = metadataBadgeLoader.invoke(entry)
+                        val badge = summary?.let { formatMetadataBadge(it) }
+                        if (badge != null && holder.adapterPosition == position) {
+                            val combinedMeta = if (meta != null) "$meta · $badge" else badge
+                            if (holder.view is VoidListRow) {
+                                holder.view.metaView.text = combinedMeta
+                                holder.view.metaView.visibility = View.VISIBLE
+                            } else if (holder.view is VoidGridCard) {
+                                holder.view.metaView.text = combinedMeta
+                                holder.view.metaView.visibility = View.VISIBLE
+                            }
+                        }
                     }
                 }
-            }
         } else {
             // Áudio
             holder.itemView.setOnClickListener { onVideoClick(entry) }
         }
     }
 
-    private fun buildHighlightedText(text: String, query: String): CharSequence {
+    // "1920x1080 · 12:34" -- só entra o que o cache efetivamente conhece; nenhum
+    // campo obrigatório (uma entrada de áudio, por exemplo, não tem dimensões).
+    private fun formatMetadataBadge(summary: MediaMetadataCacheEntry): String? {
+        val parts = mutableListOf<String>()
+        if (summary.videoWidth > 0 && summary.videoHeight > 0) {
+            parts.add("${summary.videoWidth}x${summary.videoHeight}")
+        }
+        if (summary.durationMs > 0) {
+            parts.add(formatDurationMs(summary.durationMs))
+        }
+        return if (parts.isEmpty()) null else parts.joinToString(" · ")
+    }
+
+    private fun buildHighlightedText(
+        text: String,
+        query: String,
+    ): CharSequence {
         if (query.isBlank()) return text
         val ranges = MediaFilterEngine.findHighlightRanges(text, query)
         if (ranges.isEmpty()) return text

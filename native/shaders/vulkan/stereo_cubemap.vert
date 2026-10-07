@@ -18,6 +18,13 @@ layout(push_constant) uniform PushConstants {
     int   cubemapLayout; // 0 = 3x2, 1 = 6x1, 2 = EAC 3x2, 3 = cross
     int   projectionType;// 0 = Linear Cubemap, 1 = EAC
     int   isHdr;         // T-HDR: 1 = fonte PQ/HLG, aplicar tonemap no fragment shader
+    float texelWidth;    // 1.0 / videoWidth
+    float texelHeight;   // 1.0 / videoHeight
+    int   chromaKeyEnabled; // alinhamento com StereoPushConstants
+    uint  chromaColorRgb;
+    float chromaSimilarity;
+    float chromaSmoothness;
+    float colorTemperature; // Kelvin (2700 a 6500) ou negativo (< 0.0) para Night Mode
 } pc;
 
 layout(location = 0) out vec2 vTexCoord;
@@ -30,6 +37,8 @@ layout(location = 6) flat out int vCubemapLayout;
 layout(location = 7) flat out int vProjectionType;
 layout(location = 8) out vec3 vWorldDirection;
 layout(location = 9) flat out int vIsHdr;
+layout(location = 10) flat out vec2 vTexelSize;
+layout(location = 11) flat out float vColorTemperature;
 
 void main() {
     gl_Position       = pc.mvp * vec4(inPosition, 1.0);
@@ -43,4 +52,6 @@ void main() {
     vProjectionType   = pc.projectionType;
     vWorldDirection   = inPosition;
     vIsHdr            = pc.isHdr;
+    vTexelSize        = vec2(pc.texelWidth, pc.texelHeight);
+    vColorTemperature = pc.colorTemperature;
 }

@@ -2,7 +2,7 @@
 
 > **Documento de Referência Rápida**  
 > Para a documentação arquitetural completa, exaustiva e com diagramas de sequência detalhados, consulte:  
-> 👉 **[docs/ARCHITECTURE.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/ARCHITECTURE.md)**
+> 👉 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**
 
 ---
 
@@ -36,7 +36,7 @@ A aplicação opera como uma `NativeActivity` 100% imersiva em OpenXR (`<meta-da
 | Camada | Diretório | Tecnologia | Papel Principal |
 | :--- | :--- | :--- | :--- |
 | **Shell & UI** | `app/` | Kotlin | Shell Android, interfaces nativas desenhadas em `VirtualDisplay` via `VRPresentation`, credenciais com `EncryptedSharedPreferences` e histórico com Room DB. |
-| **Engine Gráfica** | `native/` | C++17, OpenXR, Vulkan (primário) / GLES (fallback) | Ciclo de vida da sessão OpenXR, render loop (72/90/120 Hz), projeções 2D/3D (SBS, OU, 180°, 360°), raycast de controles Touch Plus e importação Zero-Copy de texturas. |
+| **Engine Gráfica** | `native/` | C++20, OpenXR, Vulkan (primário) / GLES (fallback) | Ciclo de vida da sessão OpenXR, render loop (72/90/120 Hz), projeções 2D/3D (SBS, OU, 180°, 360°), raycast de controles Touch Plus e importação Zero-Copy de texturas. |
 | **Núcleo de Mídia** | `rust/` | Rust (NDK + `media-logic`) | Demuxing (`ffmpeg-next`), decodificação de hardware com `ndk::MediaCodec`, áudio de baixa latência com `Oboe`, clientes de rede (SMB 2/3, HTTP, FTP, SFTP) e sincronismo A/V (`SyncManager`). |
 
 ---
@@ -53,9 +53,9 @@ A aplicação opera como uma `NativeActivity` 100% imersiva em OpenXR (`<meta-da
 
 ## 4. Índice de Documentação Detalhada
 
-* 📘 **[docs/ARCHITECTURE.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/ARCHITECTURE.md):** Especificação canônica integral, pipeline Vulkan/GLES, modelo de concorrência e diagramas de sequência Mermaid.
-* 📋 **[docs/REQUIREMENTS.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/REQUIREMENTS.md):** Requisitos funcionais, fases de desenvolvimento e Architecture Decision Records (ADRs).
-* 🌋 **[docs/VULKAN-MIGRATION-PLAN.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/VULKAN-MIGRATION-PLAN.md):** Detalhes da migração e arquitetura do backend Vulkan.
-* 🧪 **[docs/TESTING-PLAN.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/TESTING-PLAN.md):** Estratégia de testes host, testes de integração Docker e testes em hardware.
-* 🐛 **[docs/DEBUGGING.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/DEBUGGING.md):** Procedimentos de depuração em headset Quest 3, HUD overlay e ADB triggers.
-* 🌐 **[docs/NETWORK-IO-PERFORMANCE.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/NETWORK-IO-PERFORMANCE.md):** Arquitetura do prefetcher e streaming de alta performance.
+* 📘 **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md):** Especificação canônica integral, pipeline Vulkan/GLES, modelo de concorrência e diagramas de sequência Mermaid.
+* 📋 **[docs/REQUIREMENTS.md](docs/REQUIREMENTS.md):** Requisitos funcionais, fases de desenvolvimento e Architecture Decision Records (ADRs).
+* 🌋 **[docs/VULKAN-MIGRATION-PLAN.md](docs/VULKAN-MIGRATION-PLAN.md):** Detalhes da migração e arquitetura do backend Vulkan.
+* 🧪 **[docs/TESTING-PLAN.md](docs/TESTING-PLAN.md):** Estratégia de testes host, testes de integração Docker e testes em hardware.
+* 🐛 **[docs/DEBUGGING.md](docs/DEBUGGING.md):** Procedimentos de depuração em headset Quest 3, HUD overlay e ADB triggers.
+* 🌐 **[docs/NETWORK-IO-PERFORMANCE.md](docs/NETWORK-IO-PERFORMANCE.md):** Arquitetura do prefetcher e streaming de alta performance.

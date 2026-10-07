@@ -17,6 +17,7 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include "vr_player_ambient.h"
 
 extern std::string g_sessionId;
 extern std::mutex g_sessionIdMutex;
@@ -65,8 +66,20 @@ extern "C" {
     extern float get_passthrough_opacity();
     extern void set_passthrough_edge_rendering(uint32_t enabled);
     extern uint32_t get_passthrough_edge_rendering();
+    // Suporte a Chroma Key em tempo real para vídeos 3D / 2D com Passthrough
+    extern void set_chroma_key_enabled(uint32_t enabled);
+    extern uint32_t get_chroma_key_enabled();
+    extern void set_chroma_key_color(uint32_t color);
+    extern uint32_t get_chroma_key_color();
+    extern void set_chroma_key_similarity(float sim);
+    extern float get_chroma_key_similarity();
+    extern void set_chroma_key_smoothness(float smooth);
+    extern float get_chroma_key_smoothness();
     extern void set_pause_on_exit(uint32_t enabled);
     extern uint32_t get_pause_on_exit();
+    // Modo Ambiente: halo de luz ambiente (Vulkan-only)
+    extern void set_ambient_mode_enabled(uint32_t enabled);
+    extern uint32_t get_ambient_mode_enabled();
     // Upscaling de vídeo (Vulkan-only, MQSR & SGSR1)
     extern void set_upscaling_mode(uint32_t mode);
     extern uint32_t get_upscaling_mode();
@@ -113,11 +126,18 @@ extern "C" {
     extern char* smb_list_directory(const char* host, int32_t port, const char* username,
                                      const char* password, const char* domain,
                                      const char* share, const char* path);
+    // Poda de pastas vazias (rede) — ver comentario em
+    // rust/bridge/src/lib.rs::smb_scan_folder_has_media.
+    extern char* smb_scan_folder_has_media(const char* host, int32_t port, const char* username,
+                                            const char* password, const char* domain,
+                                            const char* share, const char* path);
     // FTP
     extern void start_ftp_playback(const char* host, int32_t port, const char* path,
                                     const char* username, const char* password, float startTimeSec);
     extern char* ftp_list_directory(const char* host, int32_t port, const char* username,
                                      const char* password, const char* path);
+    extern char* ftp_scan_folder_has_media(const char* host, int32_t port, const char* username,
+                                            const char* password, const char* path);
     // SFTP
     extern void start_sftp_playback(const char* host, int32_t port, const char* path,
                                      const char* username, const char* password,
@@ -125,12 +145,17 @@ extern "C" {
     extern char* sftp_list_directory(const char* host, int32_t port, const char* username,
                                       const char* password, const char* private_key,
                                       const char* path);
+    extern char* sftp_scan_folder_has_media(const char* host, int32_t port, const char* username,
+                                             const char* password, const char* private_key,
+                                             const char* path);
     // NFS
     extern void start_nfs_playback(const char* host, int32_t port, const char* export_path,
                                     const char* file_path, int32_t version, float startTimeSec);
     extern char* nfs_list_directory(const char* host, int32_t port, const char* export_path,
                                      const char* dir_path, int32_t version);
     extern char* nfs_list_exports(const char* host, int32_t port);
+    extern char* nfs_scan_folder_has_media(const char* host, int32_t port, const char* export_path,
+                                            const char* dir_path, int32_t version);
     // WebDAV
     extern void start_webdav_playback(const char* host, int32_t port, const char* base_path,
                                       const char* file_path, const char* username,
@@ -140,6 +165,10 @@ extern "C" {
                                        const char* dir_path, const char* username,
                                        const char* password, int32_t use_https,
                                        int32_t accept_invalid_certs);
+    extern char* webdav_scan_folder_has_media(const char* host, int32_t port, const char* base_path,
+                                               const char* dir_path, const char* username,
+                                               const char* password, int32_t use_https,
+                                               int32_t accept_invalid_certs);
     // Descoberta Automática (mDNS + SSDP)
     extern char* discovery_scan_network(uint32_t timeout_ms);
     // DLNA
@@ -234,6 +263,25 @@ Java_com_tucavr_VRActivity_nativeRequestFrameCapture(JNIEnv* env, jobject, jstri
     LOGI("nativeRequestFrameCapture: %s", g_capturePath.c_str());
 }
 
+extern std::atomic<float> g_debugCameraYaw;
+extern std::atomic<float> g_debugCameraPitch;
+extern std::atomic<float> g_debugCameraX;
+extern std::atomic<float> g_debugCameraY;
+extern std::atomic<float> g_debugCameraZ;
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetDebugCameraOffset(
+    JNIEnv*, jobject, jfloat yawDeg, jfloat pitchDeg, jfloat x, jfloat y, jfloat z) {
+    constexpr float kDegToRad = 3.14159265f / 180.0f;
+    g_debugCameraYaw.store(yawDeg * kDegToRad);
+    g_debugCameraPitch.store(pitchDeg * kDegToRad);
+    g_debugCameraX.store(x);
+    g_debugCameraY.store(y);
+    g_debugCameraZ.store(z);
+    LOGI("nativeSetDebugCameraOffset: yaw=%.1f deg, pitch=%.1f deg, pos=(%.2f, %.2f, %.2f)",
+         yawDeg, pitchDeg, x, y, z);
+}
+
 // Preview de arrasto sobre o quad do video — estado compartilhado com o loop
 // de render em vr_player_app_vulkan.cpp (extern, nao static: unica excecao a
 // separacao "JNI so delega pro bridge Rust" do topo deste arquivo — os bytes
@@ -250,6 +298,7 @@ extern std::mutex g_scrubOverlayMutex;
 extern std::atomic<bool> g_requestUiPanelVisible;
 extern std::atomic<bool> g_requestControlsPanelVisible;
 extern std::atomic<bool> g_stopVideoRequested;
+extern std::atomic<bool> g_newVideoSessionRequested;
 extern std::atomic<bool> g_modalPanelActive;
 extern std::atomic<bool> g_modalPanelShowRequested;
 extern std::atomic<bool> g_modalPanelHideRequested;
@@ -399,6 +448,7 @@ Java_com_tucavr_VRActivity_nativePlayVideo(JNIEnv* env, jobject, jstring path, j
     start_video_playback(pathStr, startTimeSec);
     env->ReleaseStringUTFChars(path, pathStr);
     g_requestControlsPanelVisible.store(true);
+    g_newVideoSessionRequested.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -483,6 +533,15 @@ Java_com_tucavr_VRActivity_nativeGetFoveationMode(JNIEnv*, jobject) {
 }
 
 extern std::atomic<bool> g_resetScreenPositionRequested;
+extern std::atomic<bool> g_setScreenTransformRequested;
+extern std::atomic<float> g_requestedScreenPosX;
+extern std::atomic<float> g_requestedScreenPosY;
+extern std::atomic<float> g_requestedScreenPosZ;
+extern std::atomic<float> g_requestedScreenScaleX;
+extern std::atomic<float> g_requestedScreenScaleY;
+extern std::atomic<bool> g_environmentChangeRequested;
+extern char g_requestedEnvironmentId[64];
+extern std::mutex g_environmentMutex;
 
 // Fase 0.3 Seção 2: Passthrough / Mixed Reality.
 extern "C" JNIEXPORT void JNICALL
@@ -511,14 +570,154 @@ Java_com_tucavr_VRActivity_nativeGetPassthroughEdgeRendering(JNIEnv*, jobject) {
     return get_passthrough_edge_rendering() ? JNI_TRUE : JNI_FALSE;
 }
 
+// Suporte a Chroma Key e Packed Alpha em tempo real para vídeos 3D / 2D com Passthrough
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetChromaKeyEnabled(JNIEnv*, jobject, jboolean enabled) {
+    if (enabled) {
+        // Preserva o modo 2 (Packed Alpha) caso já esteja ativo, evitando sobrescrita indevida
+        if (get_chroma_key_enabled() != 2) {
+            set_chroma_key_enabled(1);
+        }
+    } else {
+        set_chroma_key_enabled(0);
+    }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetChromaKeyEnabled(JNIEnv*, jobject) {
+    return get_chroma_key_enabled() != 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetChromaKeyMode(JNIEnv*, jobject, jint mode) {
+    set_chroma_key_enabled(static_cast<uint32_t>(mode));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_VRActivity_nativeGetChromaKeyMode(JNIEnv*, jobject) {
+    return static_cast<jint>(get_chroma_key_enabled());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetChromaKeyColor(JNIEnv*, jobject, jint color) {
+    set_chroma_key_color(static_cast<uint32_t>(color));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_VRActivity_nativeGetChromaKeyColor(JNIEnv*, jobject) {
+    return static_cast<jint>(get_chroma_key_color());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetChromaKeySimilarity(JNIEnv*, jobject, jfloat similarity) {
+    set_chroma_key_similarity(static_cast<float>(similarity));
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_tucavr_VRActivity_nativeGetChromaKeySimilarity(JNIEnv*, jobject) {
+    return static_cast<jfloat>(get_chroma_key_similarity());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetChromaKeySmoothness(JNIEnv*, jobject, jfloat smoothness) {
+    set_chroma_key_smoothness(static_cast<float>(smoothness));
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_tucavr_VRActivity_nativeGetChromaKeySmoothness(JNIEnv*, jobject) {
+    return static_cast<jfloat>(get_chroma_key_smoothness());
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeResetScreenPosition(JNIEnv*, jobject) {
     g_resetScreenPositionRequested.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetScreenTransform(
+    JNIEnv*, jobject, jfloat posX, jfloat posY, jfloat posZ, jfloat scaleX, jfloat scaleY) {
+    g_requestedScreenPosX.store(static_cast<float>(posX));
+    g_requestedScreenPosY.store(static_cast<float>(posY));
+    g_requestedScreenPosZ.store(static_cast<float>(posZ));
+    g_requestedScreenScaleX.store(static_cast<float>(scaleX));
+    g_requestedScreenScaleY.store(static_cast<float>(scaleY));
+    g_setScreenTransformRequested.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetEnvironment(JNIEnv* env, jobject, jstring environmentId) {
+    if (!environmentId) return;
+    const char* envStr = env->GetStringUTFChars(environmentId, nullptr);
+    if (envStr) {
+        {
+            std::lock_guard<std::mutex> lock(g_environmentMutex);
+            strncpy(g_requestedEnvironmentId, envStr, sizeof(g_requestedEnvironmentId) - 1);
+            g_requestedEnvironmentId[sizeof(g_requestedEnvironmentId) - 1] = '\0';
+        }
+        env->ReleaseStringUTFChars(environmentId, envStr);
+        g_environmentChangeRequested.store(true);
+    }
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetPauseOnExit(JNIEnv*, jobject, jboolean enabled) {
     set_pause_on_exit(enabled ? 1 : 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetAmbientMode(JNIEnv*, jobject, jboolean enabled) {
+    set_ambient_mode_enabled(enabled ? 1 : 0);
+}
+
+// RF-ENV-007: Ajuste de Iluminação e Cor do Ambiente (Fase 0.5 §4)
+static std::atomic<float> g_environmentBrightness{1.0f};
+static std::atomic<float> g_screenGlowIntensity{0.85f};
+static std::atomic<float> g_colorTemperature{6500.0f};
+static std::atomic<bool> g_nightModeEnabled{false};
+
+float get_environment_brightness() {
+    return g_environmentBrightness.load(std::memory_order_relaxed);
+}
+
+float get_screen_glow_intensity() {
+    return g_screenGlowIntensity.load(std::memory_order_relaxed);
+}
+
+float get_color_temperature() {
+    return g_colorTemperature.load(std::memory_order_relaxed);
+}
+
+bool get_night_mode_enabled() {
+    return g_nightModeEnabled.load(std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetEnvironmentBrightness(JNIEnv*, jobject, jfloat brightness) {
+    float clamped = brightness;
+    if (clamped < 0.0f) clamped = 0.0f;
+    if (clamped > 1.0f) clamped = 1.0f;
+    g_environmentBrightness.store(clamped, std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetScreenGlowIntensity(JNIEnv*, jobject, jfloat intensity) {
+    float clamped = intensity;
+    if (clamped < 0.0f) clamped = 0.0f;
+    if (clamped > 1.0f) clamped = 1.0f;
+    g_screenGlowIntensity.store(clamped, std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetColorTemperature(JNIEnv*, jobject, jfloat kelvin) {
+    float clamped = kelvin;
+    if (clamped < 2700.0f) clamped = 2700.0f;
+    if (clamped > 6500.0f) clamped = 6500.0f;
+    g_colorTemperature.store(clamped, std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetNightMode(JNIEnv*, jobject, jboolean enabled) {
+    g_nightModeEnabled.store(enabled != JNI_FALSE, std::memory_order_relaxed);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -600,6 +799,32 @@ Java_com_tucavr_VRActivity_nativeSmbListDirectory(JNIEnv* env, jobject,
     return RustStringToJStringAndFree(env, result);
 }
 
+// Poda de pastas vazias (rede) — ver comentario em
+// rust/bridge/src/lib.rs::smb_scan_folder_has_media. Chamada BLOQUEANTE
+// (pode levar ate o deadline de seguranca inteiro), Kotlin SEMPRE de
+// Dispatchers.IO.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeSmbScanFolderHasMedia(JNIEnv* env, jobject,
+                                                         jstring host, jint port,
+                                                         jstring username, jstring password,
+                                                         jstring domain, jstring share,
+                                                         jstring path) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    const char* d = env->GetStringUTFChars(domain, nullptr);
+    const char* sh = env->GetStringUTFChars(share, nullptr);
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    char* result = smb_scan_folder_has_media(h, (int32_t)port, u, pw, d, sh, p);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    env->ReleaseStringUTFChars(domain, d);
+    env->ReleaseStringUTFChars(share, sh);
+    env->ReleaseStringUTFChars(path, p);
+    return RustStringToJStringAndFree(env, result);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativePlayFtp(JNIEnv* env, jobject,
                                             jstring host, jint port, jstring path,
@@ -625,6 +850,25 @@ Java_com_tucavr_VRActivity_nativeFtpListDirectory(JNIEnv* env, jobject,
     const char* pw = env->GetStringUTFChars(password, nullptr);
     const char* p = env->GetStringUTFChars(path, nullptr);
     char* result = ftp_list_directory(h, (int32_t)port, u, pw, p);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    env->ReleaseStringUTFChars(path, p);
+    return RustStringToJStringAndFree(env, result);
+}
+
+// Poda de pastas vazias (rede) — ver comentario em
+// nativeSmbScanFolderHasMedia acima.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeFtpScanFolderHasMedia(JNIEnv* env, jobject,
+                                                         jstring host, jint port,
+                                                         jstring username, jstring password,
+                                                         jstring path) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    char* result = ftp_scan_folder_has_media(h, (int32_t)port, u, pw, p);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
@@ -669,6 +913,27 @@ Java_com_tucavr_VRActivity_nativeSftpListDirectory(JNIEnv* env, jobject,
     return RustStringToJStringAndFree(env, result);
 }
 
+// Poda de pastas vazias (rede) — ver comentario em
+// nativeSmbScanFolderHasMedia acima.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeSftpScanFolderHasMedia(JNIEnv* env, jobject,
+                                                          jstring host, jint port,
+                                                          jstring username, jstring password,
+                                                          jstring privateKey, jstring path) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    const char* k = env->GetStringUTFChars(privateKey, nullptr);
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    char* result = sftp_scan_folder_has_media(h, (int32_t)port, u, pw, k, p);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    env->ReleaseStringUTFChars(privateKey, k);
+    env->ReleaseStringUTFChars(path, p);
+    return RustStringToJStringAndFree(env, result);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativePlayNfs(JNIEnv* env, jobject,
                                             jstring host, jint port, jstring exportPath,
@@ -691,6 +956,23 @@ Java_com_tucavr_VRActivity_nativeNfsListDirectory(JNIEnv* env, jobject,
     const char* ep = env->GetStringUTFChars(exportPath, nullptr);
     const char* dp = env->GetStringUTFChars(dirPath, nullptr);
     char* result = nfs_list_directory(h, (int32_t)port, ep, dp, (int32_t)version);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(exportPath, ep);
+    env->ReleaseStringUTFChars(dirPath, dp);
+    return RustStringToJStringAndFree(env, result);
+}
+
+// Poda de pastas vazias (rede) — ver comentario em
+// nativeSmbScanFolderHasMedia acima.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeNfsScanFolderHasMedia(JNIEnv* env, jobject,
+                                                         jstring host, jint port,
+                                                         jstring exportPath, jstring dirPath,
+                                                         jint version) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* ep = env->GetStringUTFChars(exportPath, nullptr);
+    const char* dp = env->GetStringUTFChars(dirPath, nullptr);
+    char* result = nfs_scan_folder_has_media(h, (int32_t)port, ep, dp, (int32_t)version);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(exportPath, ep);
     env->ReleaseStringUTFChars(dirPath, dp);
@@ -737,6 +1019,29 @@ Java_com_tucavr_VRActivity_nativeWebdavListDirectory(JNIEnv* env, jobject,
     const char* u = env->GetStringUTFChars(username, nullptr);
     const char* pw = env->GetStringUTFChars(password, nullptr);
     char* result = webdav_list_directory(h, (int32_t)port, bp, dp, u, pw,
+                                        useHttps ? 1 : 0, acceptInvalidCerts ? 1 : 0);
+    env->ReleaseStringUTFChars(host, h);
+    env->ReleaseStringUTFChars(basePath, bp);
+    env->ReleaseStringUTFChars(dirPath, dp);
+    env->ReleaseStringUTFChars(username, u);
+    env->ReleaseStringUTFChars(password, pw);
+    return RustStringToJStringAndFree(env, result);
+}
+
+// Poda de pastas vazias (rede) — ver comentario em
+// nativeSmbScanFolderHasMedia acima.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeWebdavScanFolderHasMedia(JNIEnv* env, jobject,
+                                                            jstring host, jint port,
+                                                            jstring basePath, jstring dirPath,
+                                                            jstring username, jstring password,
+                                                            jboolean useHttps, jboolean acceptInvalidCerts) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    const char* bp = env->GetStringUTFChars(basePath, nullptr);
+    const char* dp = env->GetStringUTFChars(dirPath, nullptr);
+    const char* u = env->GetStringUTFChars(username, nullptr);
+    const char* pw = env->GetStringUTFChars(password, nullptr);
+    char* result = webdav_scan_folder_has_media(h, (int32_t)port, bp, dp, u, pw,
                                         useHttps ? 1 : 0, acceptInvalidCerts ? 1 : 0);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(basePath, bp);

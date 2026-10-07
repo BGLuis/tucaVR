@@ -16,12 +16,12 @@ import androidx.room.PrimaryKey
             entity = Playlist::class,
             parentColumns = ["id"],
             childColumns = ["playlistId"],
-            onDelete = ForeignKey.CASCADE
-        )
+            onDelete = ForeignKey.CASCADE,
+        ),
     ],
     indices = [
-        Index(value = ["playlistId"])
-    ]
+        Index(value = ["playlistId"]),
+    ],
 )
 data class PlaylistItem(
     @PrimaryKey val id: String,
@@ -30,5 +30,5 @@ data class PlaylistItem(
     val title: String,
     val durationMs: Long,
     val position: Int,
-    val sourceType: String
+    val sourceType: String,
 )

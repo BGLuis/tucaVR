@@ -1,12 +1,10 @@
 package com.tucavr.filebrowser
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 class FolderPreviewGeneratorSummaryTest {
-
     @Test
     fun folderSummaryCorrectlyReportsCountsAndFirstVideo() {
         val entry1 = MediaEntry("vid1.mp4", "/path/vid1.mp4", 100, 100, MediaType.VIDEO, format3DHint = Format3DType.SBS)
@@ -14,14 +12,16 @@ class FolderPreviewGeneratorSummaryTest {
         val entry3 = MediaEntry("vid3.mp4", "/path/vid3.mp4", 300, 100, MediaType.VIDEO, format3DHint = Format3DType.VR_360)
         val entry4 = MediaEntry("vid4.mp4", "/path/vid4.mp4", 400, 100, MediaType.VIDEO, format3DHint = Format3DType.OU)
 
-        val summary = FolderSummary(
-            totalItems = 10,
-            videoCount = 4,
-            audioCount = 3,
-            imageCount = 3,
-            previewEntries = listOf(entry1, entry2, entry3, entry4),
-            available3DFormats = setOf(Format3DType.SBS, Format3DType.VR_180, Format3DType.VR_360, Format3DType.OU)
-        )
+        val summary =
+            FolderSummary(
+                totalItems = 10,
+                videoCount = 4,
+                audioCount = 3,
+                imageCount = 3,
+                previewEntries = listOf(entry1, entry2, entry3, entry4),
+                available3DFormats = setOf(Format3DType.SBS, Format3DType.VR_180, Format3DType.VR_360, Format3DType.OU),
+                hasPlayableMediaWithinDepth = true,
+            )
 
         assertEquals(10, summary.totalItems)
         assertEquals(4, summary.videoCount)
@@ -34,14 +34,16 @@ class FolderPreviewGeneratorSummaryTest {
 
     @Test
     fun emptyFolderSummaryReportsNullFirstVideo() {
-        val summary = FolderSummary(
-            totalItems = 0,
-            videoCount = 0,
-            audioCount = 0,
-            imageCount = 0,
-            previewEntries = emptyList(),
-            available3DFormats = emptySet()
-        )
+        val summary =
+            FolderSummary(
+                totalItems = 0,
+                videoCount = 0,
+                audioCount = 0,
+                imageCount = 0,
+                previewEntries = emptyList(),
+                available3DFormats = emptySet(),
+                hasPlayableMediaWithinDepth = false,
+            )
 
         assertNull(summary.firstVideo)
         assertEquals(0, summary.previewEntries.size)

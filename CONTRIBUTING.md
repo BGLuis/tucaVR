@@ -58,7 +58,7 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 ```
 
 - **Kotlin** (`app/src/main/java/com/tucavr/`) — the Android shell and the UI. The UI is drawn as plain Android `View`s inside an `android.app.Presentation` on a `VirtualDisplay`, and the native layer projects it onto 3D quads. It is **not** XML layouts as a screen hierarchy and **not** Jetpack Compose. Also owns credential storage, Room-backed history and i18n.
-- **C++** (`native/src/`) — OpenXR session, swapchains and the render loop, built on Meta's `SampleXrFramework` (OVRFW). Vulkan is the default backend; the OpenGL ES path is kept as a real fallback (`-PvrplayerGraphicsApi=GLES`).
+- **C++** (`native/src/`) — OpenXR session, swapchains and the render loop. Vulkan is the default backend (independent of OVRFW); the frozen OpenGL ES fallback path built on Meta's `SampleXrFramework` (OVRFW) is kept available (`-PvrplayerGraphicsApi=GLES`).
 - **Rust** (`rust/`) — demuxing (`ffmpeg-next`), hardware decode (`ndk::MediaCodec`), audio (Oboe) and every network protocol client.
 
 **The one rule that is non-negotiable:** Kotlin never calls Rust directly. Kotlin talks to C++ over JNI, and C++ is the only caller of the `bridge` crate's flat `extern "C"` API. Do not introduce a Kotlin → Rust UniFFI path — that was considered and deliberately rejected (ADR-002 in `docs/REQUIREMENTS.md`), because there is no call path where Kotlin needs to reach Rust without going through the per-frame render loop in C++.
@@ -77,19 +77,20 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 
 ## Coding style
 
-- **Rust** — `cargo fmt`, and `cargo clippy -- -D warnings` must pass. CI enforces the clippy gate.
-- **Kotlin** — `./gradlew ktlintCheck`. It is currently non-blocking in CI, but please keep it clean anyway.
-- **C++** — C++20, matching the surrounding file. Respect the OVRFW shader conventions: the framework injects `FragmentHeader`/`VertexHeader` into custom shaders, so things like `fragColor` and `TransformVertex` are already declared for you.
+- **Rust** — `cargo fmt`, and `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings` must pass. CI enforces the clippy gate.
+- **Kotlin** — `./gradlew ktlintCheck` must pass; CI blocks on it. Pre-existing violations are frozen in `app/config/ktlint/baseline.xml`.
+- **C++** — C++20, matching the surrounding file. In the frozen GLES fallback, respect the OVRFW shader conventions (the framework injects `FragmentHeader`/`VertexHeader`); in the default Vulkan backend, shaders are written in standard GLSL and compiled to SPIR-V via `glslc`.
 - **Comments and docs are written in Portuguese (BR).** That is the existing convention across the codebase — match it when adding comments to existing files. Issues, PRs and this guide are in English.
 - Prefer explaining *why* in a comment over restating *what* the code does. The existing comments tend to record the reasoning behind a version pin or a workaround; that style has been genuinely useful here.
 
 ## Cross-cutting rules that are easy to get wrong
 
-**Screen/stereo mode enum.** The numeric encoding for 2D/SBS/OU/360/180/Cubemap/EAC variants must stay in sync across **three** places:
+**Screen/stereo mode enum.** The numeric encoding for 2D/SBS/OU/360/180/Cubemap/EAC variants must stay in sync across **four** places:
 
 1. the `SCREEN_MODE` comments in `rust/bridge/src/lib.rs`
 2. `enum class ScreenMode` in `native/include/screen_mode.h`
 3. the catalog in `ScreenFormatCatalog.kt`
+4. `Format3D::to_screen_mode_index` in `rust/media-logic/src/format3d.rs`
 
 Changing one without the others produces a silently wrong projection, not a compile error.
 
@@ -102,7 +103,7 @@ Changing one without the others produces a silently wrong projection, not a comp
 ```sh
 # Rust — host-testable crates only
 cd rust && cargo test -p protocols -p media-logic
-cd rust && cargo clippy -- -D warnings
+cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings
 
 # A single Rust test
 cd rust && cargo test -p media-logic sync::tests::some_test_name
@@ -111,11 +112,19 @@ cd rust && cargo test -p media-logic sync::tests::some_test_name
 ./gradlew testDebugUnitTest
 ./gradlew testDebugUnitTest --tests "com.tucavr.filebrowser.MediaSorterTest"
 
-# Kotlin lint
+# Kotlin lint and Android static analysis
 ./gradlew ktlintCheck
+./gradlew :app:lintDebug
+
+# C++ host unit tests (native math, screen mode, subtitle layout, hand tracking, environment config)
+# Requires cmake and libopenxr-dev (installed via apt-get install libopenxr-dev)
+./scripts/test-native-host.sh
+
+# Run all host test suites at once (Rust + C++ host + Kotlin JVM; no lint)
+make test
 ```
 
-**Network protocol integration tests** run against real SMB/HTTP/HTTPS/FTP/SFTP servers in Docker. They are `#[ignore]`d by default and need docker, the compose plugin, curl and sha256sum:
+**Network protocol integration tests** run against real SMB/HTTP/HTTPS/FTP/SFTP/WebDAV servers in Docker, plus generated DASH fixtures. They are `#[ignore]`d by default and need docker, the compose plugin, curl, sha256sum and ffmpeg:
 
 ```sh
 ./scripts/test-network-protocols.sh          # up, run, tear down
@@ -141,7 +150,7 @@ There are also longer-running scripts for stability and memory work: `scripts/so
 2. Target `develop` unless you are fixing something that must go straight to a release.
 3. Fill in the [pull request template](.github/PULL_REQUEST_TEMPLATE.md) — in particular the "How has this been tested?" section, including whether you tested on a real headset.
 4. For anything visual, attach a screenshot or a short clip captured from the Quest. Describing a rendering change in prose rarely survives review.
-5. CI (`.github/workflows/main.yml`) runs, in order: `cargo clippy -D warnings`, `cargo test -p protocols -p media-logic`, `ktlintCheck` (non-blocking) and `./gradlew testDebugUnitTest`. The full native build runs in a separate job that needs the licensed Meta SDK.
+5. CI (`.github/workflows/main.yml`) runs decoupled parallel jobs: `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings`, `cargo test -p protocols -p media-logic`, `ktlintCheck`, Android Lint and `./gradlew testDebugUnitTest`, plus C++ host tests and shader validation. The full native build (`build-apk`) runs in a separate gated job that builds the Quest 3 APK.
 
 Small, focused pull requests get reviewed much faster than large ones. If you are planning something substantial — a new protocol, a rendering change, a new phase task — open an issue first so the approach can be discussed before you invest the time.
 

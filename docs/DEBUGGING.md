@@ -87,12 +87,48 @@ O receiver só é registrado se `ApplicationInfo.FLAG_DEBUGGABLE` estiver
 setada (verdadeiro pro build `debug` do Gradle por padrão) — nunca existe
 num APK de release, então não é uma superfície de ataque nesse caso.
 
+### Trocar Ambiente Virtual via ADB (build debuggable)
+
+Permite trocar o ambiente 3D (e reancorar a tela virtual) a qualquer momento:
+
+```bash
+# cinema, living_room, space, void ou passthrough
+adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id cinema
+adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id living_room
+adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id space
+adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id void
+```
+
+### Visualização e Espelhamento na Tela do PC
+
+O projeto inclui três utilitários para visualizar o aplicativo e inspecionar os ambientes 3D diretamente no computador:
+
+1. **Visualizador 3D Desktop/Web (100% Offline / Sem Headset):**
+   Abre um visualizador WebGL (Three.js) interativo no navegador do PC para inspecionar os ambientes 3D, navegar em primeira pessoa (WASD + mouse), testar a tela virtual ancorada e o áudio ambiente:
+   ```bash
+   ./scripts/preview-environment.py
+   ```
+
+2. **Espelhamento em Tempo Real via USB (com o Quest 3):**
+   Utiliza o `scrcpy` com parâmetros otimizados para o Quest 3 (recorte do olho direito, 90 FPS e baixa latência de ~20ms):
+   ```bash
+   ./scripts/quest-mirror.sh
+   # Opções: --right-eye (padrão), --left-eye, --full (ambos os olhos)
+   ```
+
+3. **Captura Instantânea de Frame Vulkan via ADB:**
+   Dispara a captura de framebuffer direto do motor gráfico do Quest 3, transfere para a pasta `captures/` do PC em PNG e abre no visualizador de imagens:
+   ```bash
+   ./scripts/capture-screen.sh
+   # Ou via broadcast manual:
+   adb shell am broadcast -a com.tucavr.debug.CAPTURE_FRAME --es capture_path /sdcard/vr-frame-capture.ppm
+   ```
+
+
+
 ## 3. Modal de Estatísticas Técnicas ("Stats for Nerds")
 
-O app possui um modal completo de diagnóstico em tempo real ("Stats for Nerds"), acessível através do botão de estatísticas na barra de controles do player quando ativado em **Configurações > Avançado > Estatísticas Técnicas**. Esta seção foi reescrita após a triagem de
-`docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md` (fases F0–F8): contrato único
-de campos, frescor por grupo, atribuição de estágio, 5 gráficos e log de
-eventos.
+O app possui um modal completo de diagnóstico em tempo real ("Stats for Nerds"), acessível através do botão de estatísticas na barra de controles do player quando ativado em **Configurações > Avançado > Estatísticas Técnicas**. Esta seção documenta a arquitetura de diagnóstico unificada (fases F0–F8): contrato único de campos, frescor por grupo, atribuição de estágio, 5 gráficos e log de eventos.
 
 ### Ativação e Zero Overhead
 - **Configurações**: O toggle `DEBUG_STATS_PANEL` persiste a preferência do usuário e notifica instantaneamente o motor nativo via JNI (`nativeSetDebugStatsEnabled`).
@@ -160,7 +196,7 @@ nativo (sem string de recurso/i18n — é diagnóstico técnico, não UI de
 produção). `VRActivity.isDebuggable` filtra antes de tocar a `View`; builds
 de release recebem a chamada mas ela é descartada sem custo.
 
-## 4. Vulkan validation layers (já habilitadas no build local)
+## 4. Vulkan validation layers (opcional via build flag)
 
 `CreateVulkanInstanceAndDevice` (`vr_player_app_vulkan.cpp`) checa em
 runtime (`vkEnumerateInstanceLayerProperties`) se `VK_LAYER_KHRONOS_validation`
@@ -238,8 +274,9 @@ O script gera um pacote `.tar.gz` contendo:
 Como o compositor OpenXR desenha diretamente no display em modo `vr_only`, ferramentas padrão como `screencap` não capturam a cena do vídeo.
 
 O player fornece captura direta de frames renderizados através de `nativeRequestFrameCapture`, suportado em ambos os backends (Vulkan e GLES):
-- Salva o frame do olho esquerdo e direito como imagens PPM (`.left.ppm` e `.right.ppm`).
-- O script `scripts/test-3d-playback.sh` utiliza esse mecanismo para validar projeções estereoscópicas e converte automaticamente os frames para PNG usando `ffmpeg`.
+- Salva o frame do olho esquerdo e direito como imagens PPM (`.left.ppm` e `.right.ppm`) com escrita atômica e buffer de linha otimizado.
+- O script `scripts/capture-screen.sh` automatiza o disparo via broadcast `com.tucavr.debug.CAPTURE_FRAME`, extrai os PNGs diretamente para a pasta `captures/` no PC e os abre automaticamente.
+- O script `scripts/test-3d-playback.sh` utiliza esse mesmo mecanismo para validar projeções estereoscópicas e testes automatizados.
 
 ## 9. Diagnóstico de Falhas Nativas e Ciclo de Vida (C-01 a C-04)
 
@@ -267,7 +304,7 @@ adb logcat -d -b main -b crash -s \
 - `SIGSEGV`/`SIGABRT` envolvendo `libvulkan.so` ou driver `adreno`: Trabalho pendente na GPU durante destruição do dispositivo por ausência de `vkDeviceWaitIdle` (**C-02**).
 - `VUID-vkDestroyDevice-device-05137` / `VUID-vkDestroyCommandPool-...`: Objetos Vulkan destruídos fora de ordem ou após o `VkDevice` (**C-03**).
 - `WindowLeaked` com `VRPresentation`: `Presentation` ou `VirtualDisplay` não foram liberadas no `onDestroy` da Activity (**R-01**).
-- Comportamento de reabertura suja (ex: tocar mídia anterior ou nascer em 3D incorreto): Variáveis estáticas retidas no processo em cache sem reset na reinicialização (**C-04**). Consulte [`docs/reports/CICLO-DE-VIDA-CRASH-FECHAMENTO.md`](./reports/CICLO-DE-VIDA-CRASH-FECHAMENTO.md) para a análise detalhada.
+- Comportamento de reabertura suja (ex: tocar mídia anterior ou nascer em 3D incorreto): Variáveis estáticas retidas no processo em cache sem reset na reinicialização (**C-04**).
 
 ## 10. `XR_META_performance_metrics` (F3)
 

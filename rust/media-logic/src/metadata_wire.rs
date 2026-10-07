@@ -63,7 +63,13 @@ pub struct MediaMetadata {
 // exata de um caractere de controle que nao tem por que aparecer num titulo.
 fn sanitize_field(s: &str) -> String {
     s.chars()
-        .map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c })
+        .map(|c| {
+            if c == '\t' || c == '\n' || c == '\r' {
+                ' '
+            } else {
+                c
+            }
+        })
         .collect()
 }
 
@@ -81,7 +87,11 @@ pub fn encode(meta: &MediaMetadata) -> String {
     ));
 
     for (key, value) in &meta.tags {
-        lines.push(format!("M\t{}\t{}", sanitize_field(key), sanitize_field(value)));
+        lines.push(format!(
+            "M\t{}\t{}",
+            sanitize_field(key),
+            sanitize_field(value)
+        ));
     }
 
     for track in &meta.tracks {

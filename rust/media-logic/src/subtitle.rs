@@ -314,9 +314,9 @@ pub fn detect_and_decode(bytes: &[u8]) -> String {
     }
 
     // 3. Auto-detecção de encoding com chardetng (Mozilla)
-    let mut detector = chardetng::EncodingDetector::new();
+    let mut detector = chardetng::EncodingDetector::new(chardetng::Iso2022JpDetection::Allow);
     detector.feed(bytes, true);
-    let encoding = detector.guess(None, true);
+    let encoding = detector.guess(None, chardetng::Utf8Detection::Allow);
 
     let (cow, _, _) = encoding.decode(bytes);
     cow.into_owned()
@@ -434,7 +434,10 @@ mod tests {
     #[test]
     fn test_sanitize_subtitle_text_strips_html_and_unescapes() {
         let input = "<b>Olá</b>, <i>mundo</i>! &amp; Bem-vindo &lt;VR&gt;";
-        assert_eq!(sanitize_subtitle_text(input), "Olá, mundo! & Bem-vindo <VR>");
+        assert_eq!(
+            sanitize_subtitle_text(input),
+            "Olá, mundo! & Bem-vindo <VR>"
+        );
 
         let font_tag = "<font color=\"#ff0000\">Texto Colorido</font>";
         assert_eq!(sanitize_subtitle_text(font_tag), "Texto Colorido");
@@ -502,29 +505,56 @@ Segunda linha WebVTT
     #[test]
     fn test_find_active_cue_with_offset() {
         let cues = vec![
-            SubtitleEntry { index: 1, start_ms: 1000, end_ms: 3000, text: "Um".into() },
-            SubtitleEntry { index: 2, start_ms: 5000, end_ms: 8000, text: "Dois".into() },
-            SubtitleEntry { index: 3, start_ms: 10000, end_ms: 12000, text: "Três".into() },
+            SubtitleEntry {
+                index: 1,
+                start_ms: 1000,
+                end_ms: 3000,
+                text: "Um".into(),
+            },
+            SubtitleEntry {
+                index: 2,
+                start_ms: 5000,
+                end_ms: 8000,
+                text: "Dois".into(),
+            },
+            SubtitleEntry {
+                index: 3,
+                start_ms: 10000,
+                end_ms: 12000,
+                text: "Três".into(),
+            },
         ];
 
         // Antes do início
         assert_eq!(find_active_cue(&cues, 500, 0), None);
 
         // Durante o primeiro cue
-        assert_eq!(find_active_cue(&cues, 1500, 0).map(|c| c.text.as_str()), Some("Um"));
+        assert_eq!(
+            find_active_cue(&cues, 1500, 0).map(|c| c.text.as_str()),
+            Some("Um")
+        );
         assert_eq!(find_active_cue(&cues, 3000, 0), None); // limite final é exclusivo
 
         // Durante intervalo entre cues
         assert_eq!(find_active_cue(&cues, 4000, 0), None);
 
         // Segundo cue
-        assert_eq!(find_active_cue(&cues, 6000, 0).map(|c| c.text.as_str()), Some("Dois"));
+        assert_eq!(
+            find_active_cue(&cues, 6000, 0).map(|c| c.text.as_str()),
+            Some("Dois")
+        );
 
         // Com offset positivo (+1000ms): PTS de 4500 vira 5500 -> acha "Dois"
-        assert_eq!(find_active_cue(&cues, 4500, 1000).map(|c| c.text.as_str()), Some("Dois"));
+        assert_eq!(
+            find_active_cue(&cues, 4500, 1000).map(|c| c.text.as_str()),
+            Some("Dois")
+        );
 
         // Com offset negativo (-1000ms): PTS de 6000 vira 5000 -> acha "Dois"
-        assert_eq!(find_active_cue(&cues, 6000, -1000).map(|c| c.text.as_str()), Some("Dois"));
+        assert_eq!(
+            find_active_cue(&cues, 6000, -1000).map(|c| c.text.as_str()),
+            Some("Dois")
+        );
     }
 
     #[test]
@@ -562,11 +592,7 @@ Segunda linha WebVTT
 
     #[test]
     fn test_match_subtitle_language_t76() {
-        let tracks = vec![
-            "por".to_string(),
-            "eng".to_string(),
-            "jpn".to_string(),
-        ];
+        let tracks = vec!["por".to_string(), "eng".to_string(), "jpn".to_string()];
         assert_eq!(match_subtitle_language(&tracks, "pt-BR"), Some(0));
         assert_eq!(match_subtitle_language(&tracks, "en"), Some(1));
         assert_eq!(match_subtitle_language(&tracks, "ja"), Some(2));

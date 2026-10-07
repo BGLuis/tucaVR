@@ -7,6 +7,8 @@ import android.view.Display
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import com.tucavr.designsystem.KeyboardBinding
+import com.tucavr.designsystem.VoidTheme
+import com.tucavr.download.DownloadRepository
 import com.tucavr.filebrowser.DirectoryNavigator
 import com.tucavr.navigation.AppNavigator
 import com.tucavr.navigation.Destination
@@ -16,7 +18,9 @@ import com.tucavr.network.ServerCredentialStore
 import com.tucavr.network.SftpCredentialStore
 import com.tucavr.network.SmbCredentialStore
 import com.tucavr.network.UrlHistoryStore
+import com.tucavr.playlist.PlaylistDao
 import com.tucavr.screens.ContinueWatchingScreen
+import com.tucavr.screens.DownloadsScreen
 import com.tucavr.screens.FileDetailScreen
 import com.tucavr.screens.HomeScreen
 import com.tucavr.screens.LocalFilesScreen
@@ -29,20 +33,15 @@ import com.tucavr.screens.NetworkSftpScreen
 import com.tucavr.screens.NetworkSmbScreen
 import com.tucavr.screens.NetworkWebdavScreen
 import com.tucavr.screens.PlayerScreen
-import com.tucavr.playlist.PlaylistDao
-import com.tucavr.screens.PlaylistsScreen
 import com.tucavr.screens.PlaylistDetailScreen
+import com.tucavr.screens.PlaylistsScreen
 import com.tucavr.screens.ResumePromptScreen
 import com.tucavr.screens.ScreenHost
-import com.tucavr.download.DownloadRepository
-import com.tucavr.screens.DownloadsScreen
 import com.tucavr.screens.SettingsScreen
-import com.tucavr.designsystem.VoidTheme
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
 
 /**
  * Fase 2 do redesign "Void": único quad/painel de UI além da tela de vídeo
@@ -71,9 +70,8 @@ class VRPresentation(
     // (herdado de Presentation/Dialog) NÃO é a Activity real, é um
     // ContextThemeWrapper derivado do display-context. Guardamos a Activity
     // de verdade para poder chamar nativeX()/playFile()/playUrl() etc.
-    private val activity: VRActivity
+    private val activity: VRActivity,
 ) : Presentation(outerContext, display, android.R.style.Theme_NoTitleBar_Fullscreen) {
-
     // ---- Infraestrutura de navegação ----
 
     private val appNav = AppNavigator()
@@ -103,30 +101,43 @@ class VRPresentation(
                 keyboardTarget = null
                 activity.hideNativeKeyboard()
                 screenHost.removeAllViews()
-                screenHost.addView(view, FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-                ))
+                screenHost.addView(
+                    view,
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    ),
+                )
             }
+
             override fun showNativeKeyboard(binding: KeyboardBinding) {
                 keyboardTarget = binding
                 activity.showNativeKeyboardFor(binding)
             }
+
             override fun hideNativeKeyboard() {
                 keyboardTarget = null
                 activity.hideNativeKeyboard()
             }
+
             override fun syncKeyboard(binding: KeyboardBinding) {
                 if (keyboardTarget === binding) {
                     activity.syncKeyboardText(binding)
                 }
             }
+
             override fun showOverlay(view: android.view.View) {
                 if (view.parent == null) {
-                    screenHost.addView(view, FrameLayout.LayoutParams(
-                        ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT
-                    ))
+                    screenHost.addView(
+                        view,
+                        FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                        ),
+                    )
                 }
             }
+
             override fun hideOverlay(view: android.view.View) {
                 screenHost.removeView(view)
             }
@@ -168,19 +179,20 @@ class VRPresentation(
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        val db          = com.tucavr.history.AppDatabase.getInstance(activity)
-        savedServerDao  = db.savedServerDao()
-        playlistDao     = db.playlistDao()
+        val db = com.tucavr.history.AppDatabase.getInstance(activity)
+        savedServerDao = db.savedServerDao()
+        playlistDao = db.playlistDao()
         multicastLockManager = com.tucavr.network.MulticastLockManager(activity)
-        smbCredentials  = SmbCredentialStore(activity)
-        ftpCredentials  = FtpCredentialStore(activity)
+        smbCredentials = SmbCredentialStore(activity)
+        ftpCredentials = FtpCredentialStore(activity)
         sftpCredentials = SftpCredentialStore(activity)
         serverCredentials = ServerCredentialStore(activity)
-        urlHistory      = UrlHistoryStore(activity)
+        urlHistory = UrlHistoryStore(activity)
 
-        screenHost = FrameLayout(context).apply {
-            setBackgroundColor(VoidTheme.colorBackground)
-        }
+        screenHost =
+            FrameLayout(context).apply {
+                setBackgroundColor(VoidTheme.colorBackground)
+            }
         setContentView(screenHost)
         window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
@@ -204,250 +216,276 @@ class VRPresentation(
     // ---- Inicialização das screens ----
 
     private fun initScreens() {
-        resumePromptScreen = ResumePromptScreen(
-            context   = context,
-            activity  = activity,
-            host      = host,
-            scope     = scope,
-            onBack    = { render() }
-        )
+        resumePromptScreen =
+            ResumePromptScreen(
+                context = context,
+                activity = activity,
+                host = host,
+                scope = scope,
+                onBack = { render() },
+            )
 
-        homeScreen = HomeScreen(
-            context    = context,
-            host       = host,
-            onNavigate = { dest -> navigateTo(dest) }
-        )
+        homeScreen =
+            HomeScreen(
+                context = context,
+                host = host,
+                onNavigate = { dest -> navigateTo(dest) },
+            )
 
-        localFilesScreen = LocalFilesScreen(
-            context       = context,
-            activity      = activity,
-            host          = host,
-            scope         = scope,
-            dirNavigator  = dirNavigator,
-            onNavigate    = { dest -> navigateTo(dest) },
-            onBack        = { handleBack() },
-            onPlayLocalVideo = { entry ->
-                if (entry.type == com.tucavr.filebrowser.MediaType.IMAGE) {
-                    val dirFiles = dirNavigator.currentPath.listFiles()
-                        ?.filter { !it.isDirectory && com.tucavr.filebrowser.mediaTypeForExtension(it.extension) == com.tucavr.filebrowser.MediaType.IMAGE }
-                        ?.map {
-                            com.tucavr.filebrowser.MediaEntry(
-                                name = it.name,
-                                path = it.absolutePath,
-                                sizeBytes = it.length(),
-                                lastModified = it.lastModified(),
-                                type = com.tucavr.filebrowser.MediaType.IMAGE
-                            )
-                        }
-                    val allImages = if (!dirFiles.isNullOrEmpty()) dirFiles else listOf(entry)
-                    val idx = allImages.indexOfFirst { it.path == entry.path }.coerceAtLeast(0)
-                    navigateTo(Destination.PhotoViewer(entry, allImages, idx))
-                } else {
-                    playSource(PlaybackSource.LocalFile(entry.path, entry.sizeBytes))
-                }
-            }
-        )
+        localFilesScreen =
+            LocalFilesScreen(
+                context = context,
+                activity = activity,
+                host = host,
+                scope = scope,
+                dirNavigator = dirNavigator,
+                onNavigate = { dest -> navigateTo(dest) },
+                onBack = { handleBack() },
+                onPlayLocalVideo = { entry ->
+                    if (entry.type == com.tucavr.filebrowser.MediaType.IMAGE) {
+                        val dirFiles =
+                            dirNavigator.currentPath.listFiles()
+                                ?.filter { !it.isDirectory && com.tucavr.filebrowser.mediaTypeForExtension(it.extension) == com.tucavr.filebrowser.MediaType.IMAGE }
+                                ?.map {
+                                    com.tucavr.filebrowser.MediaEntry(
+                                        name = it.name,
+                                        path = it.absolutePath,
+                                        sizeBytes = it.length(),
+                                        lastModified = it.lastModified(),
+                                        type = com.tucavr.filebrowser.MediaType.IMAGE,
+                                    )
+                                }
+                        val allImages = if (!dirFiles.isNullOrEmpty()) dirFiles else listOf(entry)
+                        val idx = allImages.indexOfFirst { it.path == entry.path }.coerceAtLeast(0)
+                        navigateTo(Destination.PhotoViewer(entry, allImages, idx))
+                    } else {
+                        playSource(PlaybackSource.LocalFile(entry.path, entry.sizeBytes))
+                    }
+                },
+            )
 
-        fileDetailScreen = FileDetailScreen(
-            context  = context,
-            activity = activity,
-            host     = host,
-            scope    = scope,
-            onBack   = { handleBack() },
-            onPlay   = { source -> playSource(source) }
-        )
+        fileDetailScreen =
+            FileDetailScreen(
+                context = context,
+                activity = activity,
+                host = host,
+                scope = scope,
+                onBack = { handleBack() },
+                onPlay = { source -> playSource(source) },
+            )
 
-        networkSmbScreen = NetworkSmbScreen(
-            context               = context,
-            activity              = activity,
-            host                  = host,
-            scope                 = scope,
-            credentialStore       = smbCredentials,
-            onNavigate            = { dest -> navigateTo(dest) },
-            onBack                = { handleBack() }
-        )
+        networkSmbScreen =
+            NetworkSmbScreen(
+                context = context,
+                activity = activity,
+                host = host,
+                scope = scope,
+                credentialStore = smbCredentials,
+                onNavigate = { dest -> navigateTo(dest) },
+                onBack = { handleBack() },
+            )
 
-        networkNfsScreen = NetworkNfsScreen(
-            context               = context,
-            activity              = activity,
-            host                  = host,
-            scope                 = scope,
-            savedServerDao        = savedServerDao,
-            onNavigate            = { dest -> navigateTo(dest) },
-            onBack                = { handleBack() }
-        )
+        networkNfsScreen =
+            NetworkNfsScreen(
+                context = context,
+                activity = activity,
+                host = host,
+                scope = scope,
+                savedServerDao = savedServerDao,
+                onNavigate = { dest -> navigateTo(dest) },
+                onBack = { handleBack() },
+            )
 
-        networkFtpScreen = NetworkFtpScreen(
-            context               = context,
-            activity              = activity,
-            host                  = host,
-            scope                 = scope,
-            credentialStore       = ftpCredentials,
-            onNavigate            = { dest -> navigateTo(dest) },
-            onBack                = { handleBack() }
-        )
+        networkFtpScreen =
+            NetworkFtpScreen(
+                context = context,
+                activity = activity,
+                host = host,
+                scope = scope,
+                credentialStore = ftpCredentials,
+                onNavigate = { dest -> navigateTo(dest) },
+                onBack = { handleBack() },
+            )
 
-        networkSftpScreen = NetworkSftpScreen(
-            context               = context,
-            activity              = activity,
-            host                  = host,
-            scope                 = scope,
-            credentialStore       = sftpCredentials,
-            onNavigate            = { dest -> navigateTo(dest) },
-            onBack                = { handleBack() }
-        )
+        networkSftpScreen =
+            NetworkSftpScreen(
+                context = context,
+                activity = activity,
+                host = host,
+                scope = scope,
+                credentialStore = sftpCredentials,
+                onNavigate = { dest -> navigateTo(dest) },
+                onBack = { handleBack() },
+            )
 
-        networkDlnaScreen = NetworkDlnaScreen(
-            context        = context,
-            activity       = activity,
-            host           = host,
-            scope          = scope,
-            savedServerDao = savedServerDao,
-            onNavigate     = { dest -> navigateTo(dest) },
-            onPlayDlna     = { server: com.tucavr.network.SavedServer, title: String, url: String, sizeBytes: Long ->
-                playSource(PlaybackSource.Dlna(server, title, url, sizeBytes))
-            },
-            onBack         = { handleBack() }
-        )
+        networkDlnaScreen =
+            NetworkDlnaScreen(
+                context = context,
+                activity = activity,
+                host = host,
+                scope = scope,
+                savedServerDao = savedServerDao,
+                onPlayDlna = { server: com.tucavr.network.SavedServer, title: String, url: String, sizeBytes: Long ->
+                    playSource(PlaybackSource.Dlna(server, title, url, sizeBytes))
+                },
+                onBack = { handleBack() },
+            )
 
-        networkDiscoveryScreen = NetworkDiscoveryScreen(
-            context               = context,
-            activity              = activity,
-            host                  = host,
-            scope                 = scope,
-            savedServerDao        = savedServerDao,
-            lockManager           = multicastLockManager,
-            onNavigate            = { dest -> navigateTo(dest) },
-            onConfigureServer     = { protocol: com.tucavr.network.ServerProtocol, hostStr: String, portNum: Int, nameStr: String, pathStr: String ->
-                when (protocol) {
-                    com.tucavr.network.ServerProtocol.DLNA -> networkHomeScreen.activeTabIndex = 1
-                    com.tucavr.network.ServerProtocol.SMB  -> networkHomeScreen.activeTabIndex = 3
-                    com.tucavr.network.ServerProtocol.NFS  -> networkHomeScreen.activeTabIndex = 4
-                    com.tucavr.network.ServerProtocol.FTP  -> networkHomeScreen.activeTabIndex = 5
-                    com.tucavr.network.ServerProtocol.SFTP -> networkHomeScreen.activeTabIndex = 6
-                    com.tucavr.network.ServerProtocol.WEBDAV -> {
-                        networkHomeScreen.activeTabIndex = 7
+        networkDiscoveryScreen =
+            NetworkDiscoveryScreen(
+                context = context,
+                activity = activity,
+                host = host,
+                scope = scope,
+                savedServerDao = savedServerDao,
+                lockManager = multicastLockManager,
+                onNavigate = { dest -> navigateTo(dest) },
+                onConfigureServer = {
+                        protocol: com.tucavr.network.ServerProtocol,
+                        hostStr: String,
+                        portNum: Int,
+                        nameStr: String,
+                        pathStr: String,
+                    ->
+                    if (protocol == com.tucavr.network.ServerProtocol.WEBDAV) {
                         networkWebdavScreen.prefill(hostStr, portNum, nameStr, pathStr)
                     }
-                }
-                render()
-            }
-        )
+                    // Abre o formulario de cadastro daquele protocolo dentro da propria
+                    // NetworkHomeScreen (DLNA nao tem formulario manual, so descoberta —
+                    // openAddForm ignora silenciosamente nesse caso).
+                    networkHomeScreen.openAddForm(protocol)
+                },
+            )
 
-        networkWebdavScreen = NetworkWebdavScreen(
-            context         = context,
-            activity        = activity,
-            host            = host,
-            scope           = scope,
-            savedServerDao  = savedServerDao,
-            credentialStore = serverCredentials,
-            onNavigate      = { dest -> navigateTo(dest) },
-            onBack          = { handleBack() }
-        )
+        networkWebdavScreen =
+            NetworkWebdavScreen(
+                context = context,
+                activity = activity,
+                host = host,
+                scope = scope,
+                savedServerDao = savedServerDao,
+                credentialStore = serverCredentials,
+                onNavigate = { dest -> navigateTo(dest) },
+                onBack = { handleBack() },
+            )
 
-        networkHomeScreen = NetworkHomeScreen(
-            context               = context,
-            activity              = activity,
-            host                  = host,
-            scope                 = scope,
-            urlHistory            = urlHistory,
-            discoveryPageBuilder  = { networkDiscoveryScreen.buildPage() },
-            dlnaPageBuilder       = { networkDlnaScreen.buildPage() },
-            smbPageBuilder        = { networkSmbScreen.buildPage() },
-            nfsPageBuilder        = { networkNfsScreen.buildPage() },
-            ftpPageBuilder        = { networkFtpScreen.buildPage() },
-            sftpPageBuilder       = { networkSftpScreen.buildPage() },
-            webdavPageBuilder     = { networkWebdavScreen.buildPage() },
-            onNavigate            = { dest -> navigateTo(dest) },
-            onBack                = { handleBack() }
-        )
+        networkHomeScreen =
+            NetworkHomeScreen(
+                context = context,
+                activity = activity,
+                host = host,
+                scope = scope,
+                urlHistory = urlHistory,
+                savedServerDao = savedServerDao,
+                credentialStore = serverCredentials,
+                discoveryPageBuilder = { networkDiscoveryScreen.buildPage() },
+                smbAddFormBuilder = { onSaved -> networkSmbScreen.buildAddServerForm(onSaved) },
+                ftpAddFormBuilder = { onSaved -> networkFtpScreen.buildAddServerForm(onSaved) },
+                sftpAddFormBuilder = { onSaved -> networkSftpScreen.buildAddServerForm(onSaved) },
+                nfsAddFormBuilder = { onSaved -> networkNfsScreen.buildAddServerForm(onSaved) },
+                webdavAddFormBuilder = { onSaved -> networkWebdavScreen.buildAddServerForm(onSaved) },
+                onNavigate = { dest -> navigateTo(dest) },
+                onBack = { handleBack() },
+            )
 
-        continueWatchingScreen = ContinueWatchingScreen(
-            context         = context,
-            activity        = activity,
-            host            = host,
-            scope           = scope,
-            smbCredentials  = smbCredentials,
-            ftpCredentials  = ftpCredentials,
-            sftpCredentials = sftpCredentials,
-            onNavigate      = { dest -> navigateTo(dest) },
-            onBack          = { handleBack() }
-        )
+        continueWatchingScreen =
+            ContinueWatchingScreen(
+                context = context,
+                activity = activity,
+                host = host,
+                scope = scope,
+                smbCredentials = smbCredentials,
+                ftpCredentials = ftpCredentials,
+                sftpCredentials = sftpCredentials,
+                onNavigate = { dest -> navigateTo(dest) },
+                onBack = { handleBack() },
+            )
 
-        playerScreen = PlayerScreen(
-            context  = context,
-            activity = activity,
-            host     = host,
-            scope    = scope,
-            onBack   = { handleBack() }
-        )
+        playerScreen =
+            PlayerScreen(
+                context = context,
+                activity = activity,
+                host = host,
+                scope = scope,
+                onBack = { handleBack() },
+            )
 
-        settingsScreen = SettingsScreen(
-            context  = context,
-            activity = activity,
-            host     = host,
-            onBack   = { handleBack() }
-        )
+        settingsScreen =
+            SettingsScreen(
+                context = context,
+                activity = activity,
+                host = host,
+                onBack = { handleBack() },
+            )
 
-        playlistsScreen = PlaylistsScreen(
-            context     = context,
-            host        = host,
-            scope       = scope,
-            playlistDao = playlistDao,
-            onNavigate  = { dest -> navigateTo(dest) },
-            onBack      = { handleBack() }
-        )
+        playlistsScreen =
+            PlaylistsScreen(
+                context = context,
+                host = host,
+                scope = scope,
+                playlistDao = playlistDao,
+                onNavigate = { dest -> navigateTo(dest) },
+                onBack = { handleBack() },
+            )
 
-        playlistDetailScreen = PlaylistDetailScreen(
-            context        = context,
-            host           = host,
-            scope          = scope,
-            playlistDao    = playlistDao,
-            onPlayPlaylist = { playlist, items, startIndex ->
-                activity.startPlaylist(playlist, items, startIndex)
-            },
-            onBack         = { handleBack() }
-        )
+        playlistDetailScreen =
+            PlaylistDetailScreen(
+                context = context,
+                host = host,
+                scope = scope,
+                playlistDao = playlistDao,
+                onPlayPlaylist = { playlist, items, startIndex ->
+                    activity.startPlaylist(playlist, items, startIndex)
+                },
+                onBack = { handleBack() },
+            )
 
-        photoViewerScreen = com.tucavr.screens.PhotoViewerScreen(
-            context  = context,
-            activity = activity,
-            host     = host,
-            scope    = scope,
-            onBack   = { handleBack() }
-        )
+        photoViewerScreen =
+            com.tucavr.screens.PhotoViewerScreen(
+                context = context,
+                activity = activity,
+                host = host,
+                scope = scope,
+                onBack = { handleBack() },
+            )
 
-        downloadsScreen = DownloadsScreen(
-            context    = context,
-            host       = host,
-            scope      = scope,
-            repository = DownloadRepository(context),
-            onNavigate = { dest -> navigateTo(dest) },
-            onBack     = { handleBack() }
-        )
+        downloadsScreen =
+            DownloadsScreen(
+                context = context,
+                host = host,
+                scope = scope,
+                repository = DownloadRepository(context),
+                onNavigate = { dest -> navigateTo(dest) },
+                onBack = { handleBack() },
+            )
     }
 
     // ---- Máquina de telas ----
 
     private fun render() {
         when (val destination = appNav.current) {
-            is Destination.Home             -> homeScreen.render()
-            is Destination.LocalFiles       -> localFilesScreen.renderLocalFiles()
-            is Destination.FileDetail       -> fileDetailScreen.render(destination)
-            is Destination.NetworkHome      -> networkHomeScreen.render()
-            is Destination.NetworkFiles     -> networkSmbScreen.renderFiles(destination.server)
-            is Destination.NetworkNfsFiles  -> networkNfsScreen.renderFiles(destination.server, destination.path)
+            is Destination.Home -> homeScreen.render()
+            is Destination.LocalFiles -> localFilesScreen.renderLocalFiles()
+            is Destination.FileDetail -> fileDetailScreen.render(destination)
+            is Destination.NetworkHome -> networkHomeScreen.render()
+            is Destination.NetworkFiles -> networkSmbScreen.renderFiles(destination.server)
+            is Destination.NetworkNfsFiles -> networkNfsScreen.renderFiles(destination.server, destination.path)
             is Destination.NetworkDlnaFiles -> networkDlnaScreen.renderFiles(destination.server, destination.objectId)
-            is Destination.NetworkFtpFiles  -> networkFtpScreen.renderFiles(destination.server)
+            is Destination.NetworkFtpFiles -> networkFtpScreen.renderFiles(destination.server)
             is Destination.NetworkSftpFiles -> networkSftpScreen.renderFiles(destination.server)
             is Destination.NetworkWebdavFiles -> networkWebdavScreen.renderFiles(destination.server, destination.path)
             is Destination.ContinueWatching -> continueWatchingScreen.render()
-            is Destination.Playlists        -> playlistsScreen.render()
-            is Destination.PlaylistDetail   -> playlistDetailScreen.render(destination.playlistId)
-            is Destination.Player           -> playerScreen.render(destination.source)
-            is Destination.PhotoViewer      -> photoViewerScreen.render(destination.initialEntry, destination.photoEntries, destination.initialIndex)
-            is Destination.Downloads        -> downloadsScreen.render()
-            is Destination.Settings         -> settingsScreen.render()
+            is Destination.Playlists -> playlistsScreen.render()
+            is Destination.PlaylistDetail -> playlistDetailScreen.render(destination.playlistId)
+            is Destination.Player -> playerScreen.render(destination.source)
+            is Destination.PhotoViewer ->
+                photoViewerScreen.render(
+                    destination.initialEntry,
+                    destination.photoEntries,
+                    destination.initialIndex,
+                )
+            is Destination.Downloads -> downloadsScreen.render()
+            is Destination.Settings -> settingsScreen.render()
         }
     }
 
@@ -470,13 +508,13 @@ class VRPresentation(
         resumePromptScreen.promptOrPlay(source) { resumeAtMs ->
             when (source) {
                 is PlaybackSource.LocalFile -> activity.playFile(source.path, source.sizeBytes, resumeAtMs)
-                is PlaybackSource.Http      -> activity.playUrl(source.url, resumeAtMs)
-                is PlaybackSource.Smb       -> activity.playSmb(source.server, source.path, source.sizeBytes, resumeAtMs)
-                is PlaybackSource.Nfs       -> activity.playNfs(source.server, source.path, source.sizeBytes, resumeAtMs)
-                is PlaybackSource.Dlna      -> activity.playDlna(source.server, source.title, source.url, source.sizeBytes, resumeAtMs)
-                is PlaybackSource.Ftp       -> activity.playFtp(source.server, source.path, source.sizeBytes, resumeAtMs)
-                is PlaybackSource.Sftp      -> activity.playSftp(source.server, source.path, source.sizeBytes, resumeAtMs)
-                is PlaybackSource.Webdav    -> activity.playWebdav(source.server, source.path, source.sizeBytes, resumeAtMs)
+                is PlaybackSource.Http -> activity.playUrl(source.url, resumeAtMs)
+                is PlaybackSource.Smb -> activity.playSmb(source.server, source.path, source.sizeBytes, resumeAtMs)
+                is PlaybackSource.Nfs -> activity.playNfs(source.server, source.path, source.sizeBytes, resumeAtMs)
+                is PlaybackSource.Dlna -> activity.playDlna(source.server, source.title, source.url, source.sizeBytes, resumeAtMs)
+                is PlaybackSource.Ftp -> activity.playFtp(source.server, source.path, source.sizeBytes, resumeAtMs)
+                is PlaybackSource.Sftp -> activity.playSftp(source.server, source.path, source.sizeBytes, resumeAtMs)
+                is PlaybackSource.Webdav -> activity.playWebdav(source.server, source.path, source.sizeBytes, resumeAtMs)
             }
             navigateTo(Destination.Player(source))
         }
@@ -491,27 +529,92 @@ class VRPresentation(
      */
     private fun handleBack() {
         val current = appNav.current
-        val handled = when {
-            current is Destination.LocalFiles       -> localFilesScreen.handleBack()
-            current is Destination.NetworkFiles     -> networkSmbScreen.handleBack(current.server)
-            current is Destination.NetworkNfsFiles  -> {
-                networkNfsScreen.handleBack()
-                true
+        val handled =
+            when {
+                current is Destination.LocalFiles -> localFilesScreen.handleBack()
+                current is Destination.NetworkFiles -> networkSmbScreen.handleBack(current.server)
+                current is Destination.NetworkNfsFiles -> {
+                    networkNfsScreen.handleBack()
+                    true
+                }
+                current is Destination.NetworkFtpFiles -> networkFtpScreen.handleBack(current.server)
+                current is Destination.NetworkSftpFiles -> networkSftpScreen.handleBack(current.server)
+                current is Destination.NetworkWebdavFiles -> networkWebdavScreen.handleBack(current.server)
+                current is Destination.NetworkHome -> {
+                    if (networkHomeScreen.handleBack()) {
+                        true
+                    } else {
+                        appNav.navigateTo(Destination.Home)
+                        render()
+                        true
+                    }
+                }
+                else -> false
             }
-            current is Destination.NetworkFtpFiles  -> networkFtpScreen.handleBack(current.server)
-            current is Destination.NetworkSftpFiles -> networkSftpScreen.handleBack(current.server)
-            current is Destination.NetworkWebdavFiles -> networkWebdavScreen.handleBack(current.server)
-            current is Destination.NetworkHome      -> {
-                appNav.navigateTo(Destination.Home)
-                render()
-                true
-            }
-            else -> false
-        }
         if (!handled) {
             if (appNav.back()) {
                 render()
             }
         }
+    }
+
+    /**
+     * Rola suavemente a View rolável sob o cursor (x, y) ou a primeira encontrada na tela ativa.
+     */
+    fun dispatchScroll(
+        x: Float,
+        y: Float,
+        scrollDeltaY: Float,
+    ) {
+        if (!::screenHost.isInitialized) return
+        val pixelX = x * VRActivity.UI_DISPLAY_WIDTH
+        val pixelY = y * VRActivity.UI_DISPLAY_HEIGHT
+        val target = findScrollableViewAt(screenHost, pixelX, pixelY) ?: findAnyScrollableView(screenHost)
+        target?.scrollBy(0, scrollDeltaY.toInt())
+    }
+
+    private fun findScrollableViewAt(
+        parent: android.view.View,
+        x: Float,
+        y: Float,
+    ): android.view.View? {
+        if (!parent.isShown) return null
+        val location = IntArray(2)
+        parent.getLocationOnScreen(location)
+        val left = location[0].toFloat()
+        val top = location[1].toFloat()
+        val right = left + parent.width
+        val bottom = top + parent.height
+
+        if (x !in left..right || y !in top..bottom) {
+            return null
+        }
+
+        if (parent is ViewGroup) {
+            for (i in parent.childCount - 1 downTo 0) {
+                val child = parent.getChildAt(i)
+                val scrollable = findScrollableViewAt(child, x, y)
+                if (scrollable != null) return scrollable
+            }
+        }
+
+        if (parent is android.widget.ScrollView || parent is androidx.recyclerview.widget.RecyclerView || parent.canScrollVertically(1) || parent.canScrollVertically(-1)) {
+            return parent
+        }
+        return null
+    }
+
+    private fun findAnyScrollableView(parent: android.view.View): android.view.View? {
+        if (!parent.isShown) return null
+        if (parent is android.widget.ScrollView || parent is androidx.recyclerview.widget.RecyclerView) {
+            return parent
+        }
+        if (parent is ViewGroup) {
+            for (i in 0 until parent.childCount) {
+                val found = findAnyScrollableView(parent.getChildAt(i))
+                if (found != null) return found
+            }
+        }
+        return null
     }
 }

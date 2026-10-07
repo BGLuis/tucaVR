@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""Regenera no PC os 5 gráficos do painel de estatísticas (F5/F6 de
-docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md) a partir de um CSV de telemetria
-versionado, sem precisar do headset — mesmos dados, mesmas 5 visões
-(app/src/main/java/com/tucavr/designsystem/VoidChart.kt), pra triagem offline.
+"""Regenera no PC os 5 gráficos do painel de estatísticas (F5/F6)
+a partir de um CSV de telemetria versionado, sem precisar do headset — mesmos dados,
+mesmas 5 visões (app/src/main/java/com/tucavr/designsystem/VoidChart.kt), pra triagem offline.
 
 Uso:
     python3 scripts/plot-session.py caminho/para/session-XXXX.csv [--out saida.png]

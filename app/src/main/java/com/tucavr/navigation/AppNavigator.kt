@@ -19,7 +19,6 @@ package com.tucavr.navigation
  * estou agora", enquanto a pilha privada guarda so o historico por tras dele.
  */
 class AppNavigator(private val home: Destination = Destination.Home) {
-
     private val backStack = ArrayDeque<Destination>()
 
     var current: Destination = home

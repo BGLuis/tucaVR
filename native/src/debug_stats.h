@@ -61,13 +61,13 @@ struct DebugStats {
     int mqsrEnabled = 0;
     const char* qualityLevel = "HIGH";
     const char* qualityReason = "NONE";
-    // R-07 (docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): draw calls e triangulos do
+    // R-07: draw calls e triangulos do
     // ultimo frame completo (ambos os olhos) — ver AppState.lastFrameDrawCallCount em
     // vr_player_app_vulkan.cpp.
     uint32_t drawCallCount = 0;
     uint64_t triangleCount = 0;
 
-    // F1 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md):
+    // F1:
     // D-02 — contador cumulativo de episodios de stall de video JA CONCLUIDOS, distinto de
     // stutterCount/freezeCount acima (que medem o loop de render, nao a apresentacao de
     // video). So populado no backend Vulkan — ver AppState::videoStallCount.
@@ -90,14 +90,14 @@ struct DebugStats {
     uint64_t decodeErrorCount = 0;
     uint64_t demuxCorruptPacketCount = 0;
     uint64_t audioUnderrunCount = 0;
-    // F4: fases do load_at() (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md) — antes so no
+    // F4: fases do load_at() — antes so no
     // logcat. 0 antes do primeiro load, ou nao mudam ate a proxima troca de video/sessao.
     uint32_t loadPhaseDemuxOpenMs = 0;
     uint32_t loadPhaseDecoderReadyMs = 0;
     uint32_t loadPhaseAudioReadyMs = 0;
 
-    // F3 — XR_META_performance_metrics (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, secao
-    // 8.1). Diagnostico apenas — especificacao PROIBE usar para governar comportamento do app.
+    // F3 — XR_META_performance_metrics.
+    // Diagnostico apenas — especificacao PROIBE usar para governar comportamento do app.
     // perfMetricsValidMask: bit N = 1 quando o contador correspondente trouxe um valor valido
     // na ultima amostra (1Hz); "nao suportado" fica distinto de zero (D-04) checando o bit
     // antes de confiar no numero, em vez de expor um booleano por contador.

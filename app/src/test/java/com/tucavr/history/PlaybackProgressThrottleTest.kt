@@ -13,9 +13,10 @@ import org.junit.Test
  * depender de `Thread.sleep` real nem de tempo de parede.
  */
 class PlaybackProgressThrottleTest {
-
     private class FakeClock(var nowMs: Long = 0L) {
-        fun advance(deltaMs: Long) { nowMs += deltaMs }
+        fun advance(deltaMs: Long) {
+            nowMs += deltaMs
+        }
     }
 
     @Test

@@ -13,8 +13,7 @@ import android.content.Context
 class UrlHistoryStore(context: Context) {
     private val prefs = context.getSharedPreferences("url_history", Context.MODE_PRIVATE)
 
-    fun list(): List<String> =
-        (prefs.getString(KEY, null) ?: "").split("\n").filter { it.isNotBlank() }
+    fun list(): List<String> = (prefs.getString(KEY, null) ?: "").split("\n").filter { it.isNotBlank() }
 
     fun add(url: String) {
         val updated = (listOf(url) + list().filterNot { it == url }).take(MAX_ENTRIES)

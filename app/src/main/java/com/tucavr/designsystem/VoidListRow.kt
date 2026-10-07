@@ -16,7 +16,6 @@ import android.widget.LinearLayout
  * `bind()` decide o que mostrar; a view em si e so a casca reutilizavel.
  */
 class VoidListRow(context: Context) : LinearLayout(context) {
-
     val thumbnail: ImageView
     private val textColumn: LinearLayout
     val titleView: android.widget.TextView
@@ -32,35 +31,41 @@ class VoidListRow(context: Context) : LinearLayout(context) {
         val padV = VoidTheme.dpToPx(context, 22f)
         setPadding(padH, padV, padH, padV)
         minimumHeight = VoidTheme.dpToPx(context, 76f)
-        background = GradientDrawable().apply {
-            setColor(VoidTheme.colorSurface)
-            cornerRadius = VoidTheme.dp(context, 10f)
-        }
+        background =
+            GradientDrawable().apply {
+                setColor(VoidTheme.colorSurface)
+                cornerRadius = VoidTheme.dp(context, 10f)
+            }
 
         val thumbHeight = VoidTheme.dpToPx(context, 44f)
         val thumbWidth = thumbHeight * 16 / 9
-        thumbnail = ImageView(context).apply {
-            layoutParams = LayoutParams(thumbWidth, thumbHeight).also {
-                it.marginEnd = VoidTheme.dpToPx(context, 16f)
+        thumbnail =
+            ImageView(context).apply {
+                layoutParams =
+                    LayoutParams(thumbWidth, thumbHeight).also {
+                        it.marginEnd = VoidTheme.dpToPx(context, 16f)
+                    }
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                visibility = View.GONE
+                background =
+                    GradientDrawable().apply {
+                        setColor(VoidTheme.colorSurfaceAlt)
+                        cornerRadius = VoidTheme.dp(context, 6f)
+                    }
+                clipToOutline = true
             }
-            scaleType = ImageView.ScaleType.CENTER_CROP
-            visibility = View.GONE
-            background = GradientDrawable().apply {
-                setColor(VoidTheme.colorSurfaceAlt)
-                cornerRadius = VoidTheme.dp(context, 6f)
-            }
-            clipToOutline = true
-        }
         addView(thumbnail)
 
-        textColumn = LinearLayout(context).apply {
-            orientation = VERTICAL
-            layoutParams = LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-        }
+        textColumn =
+            LinearLayout(context).apply {
+                orientation = VERTICAL
+                layoutParams = LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
         titleView = VoidText.body(context, "", sizeSp = 20f)
-        metaView = VoidText.mono(context, "", sizeSp = 14f, secondary = true).apply {
-            visibility = View.GONE
-        }
+        metaView =
+            VoidText.mono(context, "", sizeSp = 14f, secondary = true).apply {
+                visibility = View.GONE
+            }
         textColumn.addView(titleView)
         textColumn.addView(metaView)
         addView(textColumn)
@@ -71,9 +76,14 @@ class VoidListRow(context: Context) : LinearLayout(context) {
      * quando a linha nao tem imagem (ex.: entrada "subir um nivel") — evita
      * o titulo "pular" horizontalmente conforme a linha tem ou nao thumbnail.
      */
-    fun bind(title: String, meta: String? = null, showThumbnailSlot: Boolean = true, iconResId: Int = 0) {
+    fun bind(
+        title: String,
+        meta: String? = null,
+        showThumbnailSlot: Boolean = true,
+        iconResId: Int = 0,
+    ) {
         titleView.text = title
-        
+
         if (iconResId != 0) {
             val icon = context.getDrawable(iconResId)?.mutate()
             icon?.colorFilter = android.graphics.PorterDuffColorFilter(VoidTheme.colorText, android.graphics.PorterDuff.Mode.SRC_IN)
@@ -86,7 +96,7 @@ class VoidListRow(context: Context) : LinearLayout(context) {
         } else {
             titleView.setCompoundDrawables(null, null, null, null)
         }
-        
+
         if (meta != null) {
             metaView.text = meta
             metaView.visibility = View.VISIBLE

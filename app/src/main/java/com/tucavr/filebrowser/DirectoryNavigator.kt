@@ -3,7 +3,6 @@ package com.tucavr.filebrowser
 import java.io.File
 
 class DirectoryNavigator(rootDir: File) {
-
     private val backStack = ArrayDeque<File>()
 
     var currentPath: File = rootDir

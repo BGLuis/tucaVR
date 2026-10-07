@@ -83,7 +83,7 @@ pub struct PrefetchStats {
     /// Quantos prefetches em voo foram descartados por um seek real (ver
     /// ensure_cache) — alto = padrao de acesso pouco sequencial.
     pub blocks_discarded: AtomicU64,
-    /// F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): falhas de fetch
+    /// F4: falhas de fetch
     /// (io::Error do RangeSource) — antes so logadas (log::warn!), nunca contadas.
     pub fetch_failures: AtomicU64,
     /// F4: espelho de PrefetchReader::sequential_streak (campo privado, single-thread na
@@ -93,6 +93,9 @@ pub struct PrefetchStats {
     /// F4: espelho de PrefetchReader::is_throttled() (0/1) — throttle termico suspende
     /// read-ahead especulativo (T14.1/T14.2).
     pub throttled: AtomicU32,
+    /// Tamanho de bloco alvo dinamico configuravel (ex.: 4MB para 1080p, 12MB para 4K/8K).
+    /// Se 0 ou menor que 64KB, o prefetch reader mantem o `block_size` padrao.
+    pub target_block_size: AtomicU64,
 }
 
 /// Melhor esforco pra elevar a prioridade da thread de I/O de rede acima do
@@ -115,7 +118,9 @@ fn raise_io_thread_priority() {
         // depois), mas o suficiente pra confirmar se caiu num nucleo de
         // performance ou eficiencia do XR2 Gen 2 logo apos o setpriority.
         let cpu = libc::sched_getcpu();
-        log::info!("vrplayer-prefetch-io: nice {before} -> {after} (pedido {TARGET_NICE}), cpu={cpu}");
+        log::info!(
+            "vrplayer-prefetch-io: nice {before} -> {after} (pedido {TARGET_NICE}), cpu={cpu}"
+        );
     }
 }
 
@@ -303,14 +308,20 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
     }
 
     fn is_throttled(&self) -> bool {
-        let throttled = self.thermal_throttled.unwrap_or_else(is_thermal_throttle_active);
+        let throttled = self
+            .thermal_throttled
+            .unwrap_or_else(is_thermal_throttle_active);
         // F4: espelha pra leitura externa (bridge/C++) — ver PrefetchStats::throttled.
-        self.stats.throttled.store(throttled as u32, Ordering::Relaxed);
+        self.stats
+            .throttled
+            .store(throttled as u32, Ordering::Relaxed);
         throttled
     }
 
     fn cache_hit(&self, pos: u64) -> bool {
-        self.cache_len > 0 && pos >= self.cache_start && pos < self.cache_start + self.cache_len as u64
+        self.cache_len > 0
+            && pos >= self.cache_start
+            && pos < self.cache_start + self.cache_len as u64
     }
 
     /// Clone do `Arc` de instrumentacao — pega isto ANTES de entregar o
@@ -339,14 +350,22 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
     }
 
     fn next_ramp_size(&mut self) -> usize {
-        let size = if self.sequential_streak == 0 {
-            (self.seek_block_size * 4).min(self.block_size)
+        let target = self.stats.target_block_size.load(Ordering::Relaxed) as usize;
+        let effective_block_size = if target >= 64 * 1024 {
+            target
         } else {
             self.block_size
         };
+        let size = if self.sequential_streak == 0 {
+            (self.seek_block_size * 4).min(effective_block_size)
+        } else {
+            effective_block_size
+        };
         self.sequential_streak = self.sequential_streak.saturating_add(1);
         // F4: espelha pra leitura externa (bridge/C++) — ver PrefetchStats::sequential_streak.
-        self.stats.sequential_streak.store(self.sequential_streak, Ordering::Relaxed);
+        self.stats
+            .sequential_streak
+            .store(self.sequential_streak, Ordering::Relaxed);
         size
     }
 
@@ -406,7 +425,9 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
             }
             self.sequential_streak = 0;
             self.stats.sequential_streak.store(0, Ordering::Relaxed);
-            self.cmd_tx.send(Command::Fetch(pos, self.seek_block_size)).map_err(|_| worker_gone_err())?;
+            self.cmd_tx
+                .send(Command::Fetch(pos, self.seek_block_size))
+                .map_err(|_| worker_gone_err())?;
             let result = self.result_rx.recv().map_err(|_| worker_gone_err())?;
             self.install(result?);
             // Deliberadamente NAO kicka o proximo bloco aqui — ver doc do
@@ -455,7 +476,10 @@ impl<S: RangeSource + 'static> Seek for PrefetchReader<S> {
             }
         };
         if new_pos < 0 {
-            return Err(io::Error::new(io::ErrorKind::InvalidInput, "seek para posicao negativa"));
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "seek para posicao negativa",
+            ));
         }
         self.pos = new_pos as u64;
         Ok(self.pos)
@@ -477,7 +501,7 @@ impl<S: RangeSource> Drop for PrefetchReader<S> {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::{mpsc as std_mpsc, Arc, Condvar};
+    use std::sync::{Arc, Condvar, mpsc as std_mpsc};
     use std::time::{Duration, Instant};
 
     /// Fonte fake em memoria com atraso artificial configuravel por chamada
@@ -517,7 +541,15 @@ mod tests {
 
     fn instant_source(data: Vec<u8>, fail_at: Option<u64>) -> (DelayedMemSource, Arc<AtomicUsize>) {
         let reads = Arc::new(AtomicUsize::new(0));
-        (DelayedMemSource { data, delay: Duration::ZERO, reads: reads.clone(), fail_at }, reads)
+        (
+            DelayedMemSource {
+                data,
+                delay: Duration::ZERO,
+                reads: reads.clone(),
+                fail_at,
+            },
+            reads,
+        )
     }
 
     #[test]
@@ -538,7 +570,11 @@ mod tests {
         assert_eq!(out, data);
         // 10_000 bytes / 4096-byte blocks = 3 buscas (0, 4096, 8192), bem
         // menos que 10_000 reads individuais.
-        assert!(reads.load(Ordering::SeqCst) <= 4, "leituras de rede: {}", reads.load(Ordering::SeqCst));
+        assert!(
+            reads.load(Ordering::SeqCst) <= 4,
+            "leituras de rede: {}",
+            reads.load(Ordering::SeqCst)
+        );
     }
 
     #[test]
@@ -567,7 +603,12 @@ mod tests {
         let consume_delay = Duration::from_millis(60);
         let data: Vec<u8> = (0..255u8).cycle().take(block * n_blocks).collect();
         let reads = Arc::new(AtomicUsize::new(0));
-        let source = DelayedMemSource { data: data.clone(), delay, reads: reads.clone(), fail_at: None };
+        let source = DelayedMemSource {
+            data: data.clone(),
+            delay,
+            reads: reads.clone(),
+            fail_at: None,
+        };
         let mut reader = PrefetchReader::with_block_size(source, block);
 
         let mut out = vec![0u8; data.len()];
@@ -597,7 +638,12 @@ mod tests {
     fn seek_during_pending_prefetch_returns_correct_data() {
         let block = 4096;
         let data: Vec<u8> = (0..255u8).cycle().take(block * 5).collect();
-        let source = DelayedMemSource { data: data.clone(), delay: Duration::from_millis(20), reads: Arc::new(AtomicUsize::new(0)), fail_at: None };
+        let source = DelayedMemSource {
+            data: data.clone(),
+            delay: Duration::from_millis(20),
+            reads: Arc::new(AtomicUsize::new(0)),
+            fail_at: None,
+        };
         let mut reader = PrefetchReader::with_block_size(source, block);
 
         // Consome o bloco 0 — dispara o prefetch do bloco 1 em background.
@@ -631,12 +677,23 @@ mod tests {
         let (source, _reads) = instant_source(data.clone(), None);
         let mut reader = PrefetchReader::with_block_size(source, block);
 
-        let plan: &[(u64, usize)] = &[(0, 500), (500, 1200), (9500, 300), (0, 100), (3000, 2500), (10240 - 50, 50)];
+        let plan: &[(u64, usize)] = &[
+            (0, 500),
+            (500, 1200),
+            (9500, 300),
+            (0, 100),
+            (3000, 2500),
+            (10240 - 50, 50),
+        ];
         for &(offset, len) in plan {
             reader.seek(SeekFrom::Start(offset)).unwrap();
             let mut buf = vec![0u8; len];
             reader.read_exact(&mut buf).unwrap();
-            assert_eq!(buf, data[offset as usize..offset as usize + len], "mismatch lendo offset={offset} len={len}");
+            assert_eq!(
+                buf,
+                data[offset as usize..offset as usize + len],
+                "mismatch lendo offset={offset} len={len}"
+            );
         }
     }
 
@@ -661,7 +718,9 @@ mod tests {
             drop(reader);
             let _ = done_tx.send(());
         });
-        done_rx.recv_timeout(Duration::from_secs(2)).expect("drop do PrefetchReader nao encerrou a thread de background a tempo");
+        done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("drop do PrefetchReader nao encerrou a thread de background a tempo");
     }
 
     /// Erro da fonte (falha de rede simulada) deve propagar como `Err` para
@@ -675,22 +734,33 @@ mod tests {
 
         let mut buf = vec![0u8; block];
         let result = reader.read(&mut buf);
-        assert!(result.is_err(), "erro da fonte deveria propagar, obteve: {result:?}");
+        assert!(
+            result.is_err(),
+            "erro da fonte deveria propagar, obteve: {result:?}"
+        );
     }
 
     /// Fonte fake que registra o TAMANHO de cada `read_range` pedido, para
     /// provar a rampa (T-seek-ux): o primeiro fetch pos-seek deve ser
     /// pequeno, os seguintes (leitura sequencial confirmada) devem voltar ao
     /// tamanho cheio. Sincronizada via `Condvar` para testes determinísticos sem `thread::sleep`.
+    type SizeSyncPair = Arc<(Mutex<Vec<usize>>, Condvar)>;
+
     struct SizeTrackingSource {
         data: Vec<u8>,
-        requested_sizes: Arc<(Mutex<Vec<usize>>, Condvar)>,
+        requested_sizes: SizeSyncPair,
     }
 
     impl SizeTrackingSource {
-        fn new(data: Vec<u8>) -> (Self, Arc<(Mutex<Vec<usize>>, Condvar)>) {
+        fn new(data: Vec<u8>) -> (Self, SizeSyncPair) {
             let pair = Arc::new((Mutex::new(Vec::new()), Condvar::new()));
-            (Self { data, requested_sizes: pair.clone() }, pair)
+            (
+                Self {
+                    data,
+                    requested_sizes: pair.clone(),
+                },
+                pair,
+            )
         }
     }
 
@@ -828,8 +898,8 @@ mod tests {
         }
         assert_eq!(out, data[jump_to as usize..jump_to as usize + out.len()]);
 
-        // Aguarda determinísticamente os 3 passos da rampa
-        let requested = wait_for_requests(&sizes, 3);
+        // Aguarda determinísticamente os 4 passos totais (construção + rampa de 3 passos)
+        let requested = wait_for_requests(&sizes, 4);
         // `ends_with` (nao `==`): a construcao ja dispara um kick(0, seek_block)
         // proprio antes do seek acontecer, que tambem aparece na lista.
         assert!(
@@ -881,7 +951,9 @@ mod tests {
             if offset >= self.data.len() {
                 return Ok(0);
             }
-            let n = (self.data.len() - offset).min(buf.len()).min(self.max_chunk);
+            let n = (self.data.len() - offset)
+                .min(buf.len())
+                .min(self.max_chunk);
             buf[..n].copy_from_slice(&self.data[offset..offset + n]);
             Ok(n)
         }
@@ -896,11 +968,57 @@ mod tests {
         let block_size = 4096;
         let data: Vec<u8> = (0..255u8).cycle().take(block_size * 5).collect();
         // Força cada read_range a entregar no máximo 1000 bytes (< block_size)
-        let source = PartialDeliverySource { data: data.clone(), max_chunk: 1000 };
+        let source = PartialDeliverySource {
+            data: data.clone(),
+            max_chunk: 1000,
+        };
         let mut reader = PrefetchReader::with_block_size(source, block_size);
 
         let mut out = vec![0u8; data.len()];
-        reader.read_exact(&mut out).expect("falha ao ler de fonte com entrega parcial");
-        assert_eq!(out, data, "dados lidos diferem do conteudo original sob entregas parciais");
+        reader
+            .read_exact(&mut out)
+            .expect("falha ao ler de fonte com entrega parcial");
+        assert_eq!(
+            out, data,
+            "dados lidos diferem do conteudo original sob entregas parciais"
+        );
+    }
+
+    #[test]
+    fn dynamic_target_block_size_overrides_default_block_size() {
+        let full_block = 12 * 1024 * 1024;
+        let seek_block = 512 * 1024;
+        let target_override = 4 * 1024 * 1024;
+        let data: Vec<u8> = (0..255u8).cycle().take(full_block * 3).collect();
+        let (source, sizes) = SizeTrackingSource::new(data.clone());
+        let mut reader = PrefetchReader::with_block_sizes(source, full_block, seek_block);
+
+        // Configura target_block_size dinamicamente
+        reader
+            .stats()
+            .target_block_size
+            .store(target_override as u64, Ordering::Relaxed);
+
+        let jump_to = full_block as u64;
+        reader.seek(SeekFrom::Start(jump_to)).unwrap();
+        // Consome bloco do seek + bloco intermediario
+        let medium_block = (seek_block * 4).min(target_override);
+        let mut out = vec![0u8; seek_block + medium_block + 4096];
+        let mut done = 0;
+        while done < out.len() {
+            let chunk = 4096.min(out.len() - done);
+            reader.read_exact(&mut out[done..done + chunk]).unwrap();
+            done += chunk;
+        }
+
+        let requested = wait_for_requests(&sizes, 4);
+        assert!(
+            requested.contains(&target_override),
+            "esperava fetch respeitar target_block_size ({target_override}), fetches: {requested:?}"
+        );
+        assert!(
+            !requested.contains(&full_block),
+            "bloco default original ({full_block}) nao deveria ter sido requisitado apos override, fetches: {requested:?}"
+        );
     }
 }

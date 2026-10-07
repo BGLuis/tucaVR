@@ -3,8 +3,7 @@
 Servidores reais (via Docker) para os protocolos que `rust/protocols` implementa,
 usados pelos testes de integração em `rust/protocols/tests/`. Existem para preencher
 a lacuna documentada em `docs/phases/PHASE-0.1-MVP.md` (T6.1/T6.3/T7.1: "nunca testado
-contra um servidor real") e, mais recentemente, o achado R-04 de
-`docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md` (DASH e WebDAV tinham a mesma lacuna).
+contra um servidor real") e estender os testes de integração para DASH e WebDAV.
 
 Não use manualmente — rode `./scripts/test-network-protocols.sh` na raiz do repo, que
 gera as fixtures, sobe os containers, roda os testes Rust e derruba tudo.

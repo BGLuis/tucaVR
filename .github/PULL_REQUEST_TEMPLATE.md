@@ -39,7 +39,7 @@
 - [ ] I have performed a self-review of my own code.
 - [ ] I have commented my code, particularly in hard-to-understand areas.
 - [ ] I have added new tests that prove my fix is effective or that my feature works.
-- [ ] The CI/CD Actions (build-and-lint) are passing for this PR.
+- [ ] The CI checks (Security & Workflows, Rust, C++ and Android) are passing for this PR.
 
 ### If applicable
 

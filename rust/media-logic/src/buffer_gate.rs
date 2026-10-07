@@ -21,7 +21,7 @@
 /// Alvos de buffer, em segundos de mídia à frente do relógio mestre.
 ///
 /// Os valores usados em produção (2.0 / 8.0 / 25.0 / 0.8) são os aprovados
-/// para o rollout inicial (ver docs/reports — plano de buffer "estilo
+/// para o rollout inicial (plano de buffer "estilo
 /// YouTube"), não constantes fixas neste módulo: cada chamador decide os
 /// próprios números, este tipo só carrega e valida a forma.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -217,29 +217,53 @@ mod tests {
         state = next_gate_state(state, 1.61, 0, &t, u64::MAX, false, false);
         assert_eq!(state, GateState::Wait, "ainda acima da banda de retomada");
         state = next_gate_state(state, 1.59, 0, &t, u64::MAX, false, false);
-        assert_eq!(state, GateState::Read, "abaixo da banda, deve retomar a leitura");
+        assert_eq!(
+            state,
+            GateState::Read,
+            "abaixo da banda, deve retomar a leitura"
+        );
     }
 
     #[test]
     fn byte_ceiling_forces_wait_even_if_duration_target_not_reached() {
         let t = targets();
         let state = next_gate_state(GateState::Read, 0.5, 300, &t, 200, true, true);
-        assert_eq!(state, GateState::Wait, "teto de bytes deve cortar antes do alvo em segundos");
+        assert_eq!(
+            state,
+            GateState::Wait,
+            "teto de bytes deve cortar antes do alvo em segundos"
+        );
     }
 
     #[test]
     fn duration_target_still_applies_when_byte_ceiling_not_reached() {
         let t = targets();
         let state = next_gate_state(GateState::Read, 26.0, 50, &t, 200 * 1024 * 1024, true, true);
-        assert_eq!(state, GateState::Wait, "alvo em segundos deve valer mesmo com bytes livres");
+        assert_eq!(
+            state,
+            GateState::Wait,
+            "alvo em segundos deve valer mesmo com bytes livres"
+        );
     }
 
     #[test]
     fn paused_network_source_reads_deep_into_the_paused_target_when_bytes_allow() {
         let t = targets();
         // 20s ainda abaixo do alvo pausado de 25s, e bem abaixo do teto de bytes.
-        let state = next_gate_state(GateState::Read, 20.0, 1024, &t, 200 * 1024 * 1024, true, true);
-        assert_eq!(state, GateState::Read, "pausado deveria continuar bufferizando alem do alvo de rede tocando");
+        let state = next_gate_state(
+            GateState::Read,
+            20.0,
+            1024,
+            &t,
+            200 * 1024 * 1024,
+            true,
+            true,
+        );
+        assert_eq!(
+            state,
+            GateState::Read,
+            "pausado deveria continuar bufferizando alem do alvo de rede tocando"
+        );
     }
 
     #[test]
@@ -255,21 +279,30 @@ mod tests {
         // 200MB — nao e a mesma conta com GiB) — dentro de 10MB da
         // referencia de 200MB que ja estava aprovada, o que importa aqui.
         let ten_mb = 10 * 1024 * 1024;
-        assert!((ceiling as i64 - 200 * 1024 * 1024).abs() < ten_mb, "esperava ~200MB, obteve {ceiling}");
+        assert!(
+            (ceiling as i64 - 200 * 1024 * 1024).abs() < ten_mb,
+            "esperava ~200MB, obteve {ceiling}"
+        );
     }
 
     #[test]
     fn lower_memory_device_gets_a_smaller_ceiling_but_never_below_the_floor() {
         let four_gb = 4u64 * 1024 * 1024 * 1024;
         // 2.5% de 4GB = ~100MB, abaixo do piso de 128MB -> deve ser grampeado pro piso.
-        assert_eq!(paused_byte_ceiling_for_device(four_gb), PAUSED_BYTE_CEILING_MIN_BYTES);
+        assert_eq!(
+            paused_byte_ceiling_for_device(four_gb),
+            PAUSED_BYTE_CEILING_MIN_BYTES
+        );
     }
 
     #[test]
     fn higher_memory_device_is_capped_instead_of_scaling_unbounded() {
         let sixteen_gb = 16u64 * 1024 * 1024 * 1024;
         // 2.5% de 16GB = ~429MB, bem acima do teto de 256MB -> deve ser grampeado pro teto.
-        assert_eq!(paused_byte_ceiling_for_device(sixteen_gb), PAUSED_BYTE_CEILING_MAX_BYTES);
+        assert_eq!(
+            paused_byte_ceiling_for_device(sixteen_gb),
+            PAUSED_BYTE_CEILING_MAX_BYTES
+        );
     }
 
     #[test]

@@ -1,0 +1,3 @@
+# Whitelist: o único arquivo do contexto que a imagem usa.
+*
+!entrypoint.sh

@@ -2,24 +2,23 @@ package com.tucavr.network
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SavedServerMappingTest {
-
     @Test
     fun smbServerToSavedServerMapping() {
-        val smb = SmbServer(
-            id = "smb-123",
-            name = "NAS Casa",
-            host = "192.168.1.100",
-            port = 445,
-            share = "videos",
-            username = "luis",
-            password = "secretpassword",
-            domain = "WORKGROUP"
-        )
+        val smb =
+            SmbServer(
+                id = "smb-123",
+                name = "NAS Casa",
+                host = "192.168.1.100",
+                port = 445,
+                share = "videos",
+                username = "luis",
+                password = "secretpassword",
+                domain = "WORKGROUP",
+            )
 
         val saved = smb.toSavedServer()
 
@@ -46,14 +45,15 @@ class SavedServerMappingTest {
 
     @Test
     fun ftpServerToSavedServerMapping() {
-        val ftp = FtpServer(
-            id = "ftp-456",
-            name = "Seedbox FTP",
-            host = "ftp.example.com",
-            port = 21,
-            username = "anonymous",
-            password = ""
-        )
+        val ftp =
+            FtpServer(
+                id = "ftp-456",
+                name = "Seedbox FTP",
+                host = "ftp.example.com",
+                port = 21,
+                username = "anonymous",
+                password = "",
+            )
 
         val saved = ftp.toSavedServer()
 
@@ -73,15 +73,16 @@ class SavedServerMappingTest {
 
     @Test
     fun sftpServerToSavedServerMapping() {
-        val sftp = SftpServer(
-            id = "sftp-789",
-            name = "Servidor Remoto SSH",
-            host = "ssh.example.com",
-            port = 2222,
-            username = "root",
-            password = "",
-            privateKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nMOCK\n-----END OPENSSH PRIVATE KEY-----"
-        )
+        val sftp =
+            SftpServer(
+                id = "sftp-789",
+                name = "Servidor Remoto SSH",
+                host = "ssh.example.com",
+                port = 2222,
+                username = "root",
+                password = "",
+                privateKey = "-----BEGIN OPENSSH PRIVATE KEY-----\nMOCK\n-----END OPENSSH PRIVATE KEY-----",
+            )
 
         val saved = sftp.toSavedServer()
 
@@ -103,22 +104,24 @@ class SavedServerMappingTest {
 
     @Test
     fun guestOrAnonymousCheck() {
-        val guest = SavedServer(
-            name = "Guest SMB",
-            protocol = ServerProtocol.SMB,
-            host = "10.0.0.1",
-            port = 445,
-            username = ""
-        )
+        val guest =
+            SavedServer(
+                name = "Guest SMB",
+                protocol = ServerProtocol.SMB,
+                host = "10.0.0.1",
+                port = 445,
+                username = "",
+            )
         assertTrue(guest.isGuest)
 
-        val user = SavedServer(
-            name = "User SMB",
-            protocol = ServerProtocol.SMB,
-            host = "10.0.0.1",
-            port = 445,
-            username = "admin"
-        )
+        val user =
+            SavedServer(
+                name = "User SMB",
+                protocol = ServerProtocol.SMB,
+                host = "10.0.0.1",
+                port = 445,
+                username = "admin",
+            )
         assertFalse(user.isGuest)
     }
 }

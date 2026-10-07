@@ -16,7 +16,15 @@ data class FolderSummary(
     val audioCount: Int,
     val imageCount: Int,
     val previewEntries: List<MediaEntry>,
-    val available3DFormats: Set<Format3DType>
+    val available3DFormats: Set<Format3DType>,
+    /**
+     * true se houver algum arquivo de mídia reproduzível nos filhos IMEDIATOS desta pasta
+     * OU nos filhos de suas subpastas (2 níveis) — usado por [MediaFilterEngine] pra podar
+     * pastas vazias sempre, não só quando o campo `totalItems`/filtro ativo indicam pasta
+     * vazia no nível imediato (uma pasta pode ter 0 arquivos direto mas ter mídia dentro de
+     * uma subpasta).
+     */
+    val hasPlayableMediaWithinDepth: Boolean,
 ) {
     val firstVideo: MediaEntry? get() = previewEntries.firstOrNull()
 }
@@ -26,66 +34,100 @@ data class FolderSummary(
  * para pastas da biblioteca.
  */
 object FolderPreviewGenerator {
-
     // Caches limitados para evitar vazamento de memória nativa com bitmaps de mosaicos
     private val summaryCache = android.util.LruCache<String, FolderSummary>(200)
-    private val mosaicCache = object : android.util.LruCache<String, Bitmap>(32 * 1024 * 1024) { // 32 MiB
-        override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
-    }
-
-    suspend fun getSummary(dirPath: String): FolderSummary? = withContext(Dispatchers.IO) {
-        summaryCache.get(dirPath)?.let { return@withContext it }
-
-        val dir = File(dirPath)
-        if (!dir.exists() || !dir.isDirectory) return@withContext null
-
-        val children = dir.listFiles() ?: return@withContext null
-
-        var videoCount = 0
-        var audioCount = 0
-        var imageCount = 0
-        val previewVideos = mutableListOf<MediaEntry>()
-        val formats3D = mutableSetOf<Format3DType>()
-
-        for (file in children) {
-            if (file.name.startsWith(".")) continue
-            val ext = file.extension
-            val type = mediaTypeForExtension(ext)
-            when (type) {
-                MediaType.VIDEO -> {
-                    videoCount++
-                    val f3d = MediaFilterEngine.detectFormat3DFromFilename(file.name)
-                    formats3D.add(f3d)
-                    if (previewVideos.size < 4) {
-                        previewVideos.add(
-                            MediaEntry(
-                                name = file.name,
-                                path = file.absolutePath,
-                                sizeBytes = file.length(),
-                                lastModified = file.lastModified(),
-                                type = MediaType.VIDEO,
-                                format3DHint = f3d
-                            )
-                        )
-                    }
-                }
-                MediaType.AUDIO -> audioCount++
-                MediaType.IMAGE -> imageCount++
-                MediaType.DIRECTORY, null -> {}
-            }
+    private val mosaicCache =
+        object : android.util.LruCache<String, Bitmap>(32 * 1024 * 1024) { // 32 MiB
+            override fun sizeOf(
+                key: String,
+                value: Bitmap,
+            ): Int = value.byteCount
         }
 
-        val summary = FolderSummary(
-            totalItems = children.size,
-            videoCount = videoCount,
-            audioCount = audioCount,
-            imageCount = imageCount,
-            previewEntries = previewVideos,
-            available3DFormats = formats3D
-        )
+    suspend fun getSummary(dirPath: String): FolderSummary? =
+        withContext(Dispatchers.IO) {
+            summaryCache.get(dirPath)?.let { return@withContext it }
 
-        summaryCache.put(dirPath, summary)
-        summary
+            val dir = File(dirPath)
+            if (!dir.exists() || !dir.isDirectory) return@withContext null
+
+            val children = dir.listFiles() ?: return@withContext null
+
+            var videoCount = 0
+            var audioCount = 0
+            var imageCount = 0
+            val previewVideos = mutableListOf<MediaEntry>()
+            val formats3D = mutableSetOf<Format3DType>()
+
+            for (file in children) {
+                if (file.name.startsWith(".")) continue
+                val ext = file.extension
+                val type = mediaTypeForExtension(ext)
+                when (type) {
+                    MediaType.VIDEO -> {
+                        videoCount++
+                        val f3d = MediaFilterEngine.detectFormat3DFromFilename(file.name)
+                        formats3D.add(f3d)
+                        if (previewVideos.size < 4) {
+                            previewVideos.add(
+                                MediaEntry(
+                                    name = file.name,
+                                    path = file.absolutePath,
+                                    sizeBytes = file.length(),
+                                    lastModified = file.lastModified(),
+                                    type = MediaType.VIDEO,
+                                    format3DHint = f3d,
+                                ),
+                            )
+                        }
+                    }
+                    MediaType.AUDIO -> audioCount++
+                    MediaType.IMAGE -> imageCount++
+                    MediaType.DIRECTORY, null -> {}
+                }
+            }
+
+            val hasImmediateMedia = videoCount > 0 || audioCount > 0 || imageCount > 0
+            val hasPlayableMediaWithinDepth =
+                hasImmediateMedia ||
+                    children.any { child ->
+                        child.isDirectory && !child.name.startsWith(".") && hasMediaWithin(child, levelsRemaining = 0)
+                    }
+
+            val summary =
+                FolderSummary(
+                    totalItems = children.size,
+                    videoCount = videoCount,
+                    audioCount = audioCount,
+                    imageCount = imageCount,
+                    previewEntries = previewVideos,
+                    available3DFormats = formats3D,
+                    hasPlayableMediaWithinDepth = hasPlayableMediaWithinDepth,
+                )
+
+            summaryCache.put(dirPath, summary)
+            summary
+        }
+
+    // `levelsRemaining` = quantas subpastas ainda podem ser descidas a partir de `dir`.
+    // Chamada com 0 a partir de getSummary (dir já é uma subpasta de 1 nível abaixo da
+    // pasta cujo resumo está sendo calculado) -- dá o total de 2 níveis pedido: filhos
+    // diretos (já contados em videoCount/audioCount/imageCount) + filhos das subpastas.
+    // Early-exit no primeiro arquivo de mídia encontrado.
+    private fun hasMediaWithin(
+        dir: File,
+        levelsRemaining: Int,
+    ): Boolean {
+        val children = dir.listFiles() ?: return false
+        for (file in children) {
+            if (file.name.startsWith(".")) continue
+            if (file.isDirectory) {
+                if (levelsRemaining > 0 && hasMediaWithin(file, levelsRemaining - 1)) return true
+            } else if (mediaTypeForExtension(file.extension) != null) {
+                return true
+            }
+        }
+        return false
     }
 
     /**
@@ -94,48 +136,55 @@ object FolderPreviewGenerator {
     suspend fun getFolderMosaic(
         context: Context,
         dirPath: String,
-        thumbnailLoader: (suspend (MediaEntry) -> Bitmap?)? = null
-    ): Bitmap? = withContext(Dispatchers.IO) {
-        mosaicCache.get(dirPath)?.let { return@withContext it }
+        thumbnailLoader: (suspend (MediaEntry) -> Bitmap?)? = null,
+    ): Bitmap? =
+        withContext(Dispatchers.IO) {
+            mosaicCache.get(dirPath)?.let { return@withContext it }
 
-        val summary = getSummary(dirPath) ?: return@withContext null
-        if (summary.previewEntries.isEmpty()) return@withContext null
+            val summary = getSummary(dirPath) ?: return@withContext null
+            if (summary.previewEntries.isEmpty()) return@withContext null
 
-        val loadedBitmaps = mutableListOf<Bitmap>()
-        for (entry in summary.previewEntries) {
-            val bmp = if (thumbnailLoader != null) {
-                thumbnailLoader(entry)
-            } else {
-                ThumbnailGenerator.getThumbnail(context, entry)
+            val loadedBitmaps = mutableListOf<Bitmap>()
+            for (entry in summary.previewEntries) {
+                val bmp =
+                    if (thumbnailLoader != null) {
+                        thumbnailLoader(entry)
+                    } else {
+                        ThumbnailGenerator.getThumbnail(context, entry)
+                    }
+                if (bmp != null) {
+                    loadedBitmaps.add(bmp)
+                }
             }
-            if (bmp != null) {
-                loadedBitmaps.add(bmp)
+
+            if (loadedBitmaps.isEmpty()) return@withContext null
+
+            val mosaic = createFolderMosaic(loadedBitmaps)
+            if (mosaic != null) {
+                mosaicCache.put(dirPath, mosaic)
             }
+            mosaic
         }
-
-        if (loadedBitmaps.isEmpty()) return@withContext null
-
-        val mosaic = createFolderMosaic(loadedBitmaps)
-        if (mosaic != null) {
-            mosaicCache.put(dirPath, mosaic)
-        }
-        mosaic
-    }
 
     /**
      * Compõe uma colagem de até 4 bitmaps em resolução 512x288.
      */
-    fun createFolderMosaic(bitmaps: List<Bitmap>, width: Int = 512, height: Int = 288): Bitmap? {
+    fun createFolderMosaic(
+        bitmaps: List<Bitmap>,
+        width: Int = 512,
+        height: Int = 288,
+    ): Bitmap? {
         if (bitmaps.isEmpty()) return null
 
         val result = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(result)
         val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-        val dividerPaint = Paint().apply {
-            color = Color.parseColor("#121214")
-            style = Paint.Style.STROKE
-            strokeWidth = 3f
-        }
+        val dividerPaint =
+            Paint().apply {
+                color = Color.parseColor("#121214")
+                style = Paint.Style.STROKE
+                strokeWidth = 3f
+            }
 
         when (bitmaps.size) {
             1 -> {
@@ -213,7 +262,12 @@ object FolderPreviewGenerator {
         return result
     }
 
-    private fun cropCenterRect(srcWidth: Int, srcHeight: Int, targetWidth: Int, targetHeight: Int): Rect {
+    private fun cropCenterRect(
+        srcWidth: Int,
+        srcHeight: Int,
+        targetWidth: Int,
+        targetHeight: Int,
+    ): Rect {
         val targetAspect = targetWidth.toFloat() / targetHeight.toFloat()
         val srcAspect = srcWidth.toFloat() / srcHeight.toFloat()
 

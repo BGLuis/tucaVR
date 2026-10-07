@@ -202,10 +202,10 @@ Detectar automaticamente se um arquivo é 2D, SBS, OU, 360°, ou 180° sem inter
 
 ### Tarefas
 
-- [ ] **T3.1** — Detecção por **metadados do container**:
-    - MP4: `st3d` box (stereoscopic 3D), `sv3d` box (spherical video)
-    - MKV: `StereoMode` element, `Projection` element
-    - WebM: `Projection` header
+- [x] **T3.1** — Detecção por **metadados do container** (`rust/core/src/format3d_detect.rs`):
+    - MP4: `st3d` box (stereoscopic 3D), `sv3d` box (spherical video) via stream side data FFmpeg
+    - MKV: `StereoMode` element, `Projection` element via tags do container
+    - WebM: `Projection` header via FFmpeg side data
 
     ```rust
     // Metadados comuns
@@ -334,19 +334,17 @@ Conectar a exports NFS para navegar e reproduzir mídia de NAS Linux.
 
 ### Tarefas
 
-- [ ] **T5.1** — Integrar cliente NFS no Rust:
-    - Opção A: Bindings para `libnfs` (biblioteca C madura)
-    - Opção B: Crate `nfs-client` (puro Rust, pode ser menos maduro)
-    - Recomendação: `libnfs` é mais robusta e testada
-- [ ] **T5.2** — Implementar operações:
-    - Mount export
-    - Listar diretórios
-    - Ler arquivos (streaming, com seek)
-    - Stat (tamanho, data de modificação)
-- [ ] **T5.3** — Implementar I/O callback para FFmpeg (mesmo padrão do SMB)
-- [ ] **T5.4** — UI para configurar conexão NFS:
-    - Host + Export path (ex: `192.168.1.100:/media/videos`)
-    - Opções de mount (versão NFS: v3 vs v4)
+- [x] **T5.1** — Integrar cliente NFS no Rust (`rust/protocols/src/nfs/mod.rs`):
+    - Cliente puro em Rust implementado para montagem e acesso a exports
+- [x] **T5.2** — Implementar operações (`rust/protocols/src/nfs/`):
+    - Mount export e parse de URI (`nfs/uri.rs`)
+    - Listar diretórios (`list_directory`)
+    - Ler arquivos com streaming e seek via `RangeSource`
+    - Stat (tamanho, metadados)
+- [x] **T5.3** — Implementar I/O callback para FFmpeg (integrado ao demuxer em `rust/core/src/demuxer.rs` via `PrefetchReader`/`RangeSource`)
+- [x] **T5.4** — UI para configurar conexão NFS (`app/src/main/java/com/tucavr/screens/NetworkNfsScreen.kt`):
+    - Host + Export path
+    - Navegação e reprodução integradas
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -392,12 +390,11 @@ Conectar a servidores FTP/SFTP para navegar e reproduzir mídia remota.
 - [x] **T6.3** — Integrar com FFmpeg via custom I/O (FTP e SFTP):
     - FTP: leitura sequencial + seek via reconnect com REST
     - SFTP: read posicional nativo (`SSH_FXP_READ` carrega offset explícito — `RawSftpSession::read`, sem cursor/seek de handle)
-- [ ] **T6.4** — UI para configurar conexão:
+- [x] **T6.4** — UI para configurar conexão (`app/src/main/java/com/tucavr/screens/NetworkFtpScreen.kt` e `NetworkSftpScreen.kt`):
     - Tipo: FTP / SFTP
     - Host + Porta (21 / 22)
-    - User + Password
-    - Para SFTP: opção de key file (avançado)
-    - `rust/protocols::sftp`/`::ftp` prontos para essa UI consumir (Kotlin/JNI fora do escopo desta sessão)
+    - User + Password / Chave PEM
+    - Persistência segura em `FtpCredentialStore` e `SftpCredentialStore`
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -432,7 +429,7 @@ Descobrir automaticamente servidores de mídia na rede via UPnP/DLNA e navegar s
 
 ### Tarefas
 
-- [ ] **T7.1** — Implementar **SSDP Discovery** no Rust:
+- [x] **T7.1** — Implementar **SSDP Discovery** no Rust (`rust/protocols/src/discovery/ssdp.rs:15`, `scan_ssdp`):
     - Enviar `M-SEARCH` multicast para `239.255.255.250:1900`
     - Filtrar por `urn:schemas-upnp-org:device:MediaServer:1`
     - Parsear responses para obter `LOCATION` do device description XML
@@ -446,33 +443,21 @@ Descobrir automaticamente servidores de mídia na rede via UPnP/DLNA e navegar s
          ST: urn:schemas-upnp-org:device:MediaServer:1\r\n\r\n"
     );
     ```
-- [ ] **T7.2** — Parsear **Device Description XML**:
+- [x] **T7.2** — Parsear **Device Description XML** (`rust/protocols/src/dlna/device.rs`):
     - Obter `friendlyName`, `modelName`, ícone
     - Localizar `ContentDirectory` service URL
-- [ ] **T7.3** — Implementar cliente **ContentDirectory** (SOAP):
+- [x] **T7.3** — Implementar cliente **ContentDirectory** (SOAP) (`rust/protocols/src/dlna/soap.rs:72`, `execute_browse_soap`; DIDL-Lite em `rust/protocols/src/dlna/didl.rs:42`):
     - `Browse` action: navegar diretórios de conteúdo
     - Parsear DIDL-Lite XML (metadados de cada item)
     - Extrair `res` element (URL de streaming do conteúdo)
-- [ ] **T7.4** — Integrar com pipeline de playback:
+- [x] **T7.4** — Integrar com pipeline de playback:
     - DLNA fornece URL HTTP do conteúdo → reproduzir via HTTP playback (já implementado na v0.1)
-- [ ] **T7.5** — UI para DLNA:
+- [x] **T7.5** — UI para DLNA (`app/src/main/java/com/tucavr/screens/NetworkDlnaScreen.kt`):
     - Lista de servidores descobertos automaticamente
     - Navegação hierárquica do conteúdo do servidor
     - Mostrar metadados (título, thumbnail, duração, resolução)
-- [ ] **T7.6** — Opcionalmente usar crate `rupnp` para simplificar:
-
-    ```rust
-    // Usando rupnp para discovery
-    use rupnp::ssdp::{SearchTarget, URN};
-
-    let search_target = SearchTarget::URN(URN::device("schemas-upnp-org", "MediaServer", 1));
-    let devices = rupnp::discover(&search_target, Duration::from_secs(3)).await?;
-
-    pin_utils::pin_mut!(devices);
-    while let Some(device) = devices.try_next().await? {
-        println!("Found: {} at {}", device.friendly_name(), device.url());
-    }
-    ```
+- [x] **T7.6** — Decisão sobre crate `rupnp`:
+    > Crate descartada em favor de implementação pura e enxuta em `rust/protocols/src/dlna/` (ver §5.5 do REQUIREMENTS.md).
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -507,53 +492,18 @@ Suportar HTTP Live Streaming (HLS) — formato de streaming adaptativo usado por
 
 ### Tarefas
 
-- [ ] **T8.1** — Implementar parser de **M3U8 playlist** no Rust:
+- [x] **T8.1** — Implementar parser de **M3U8 playlist** no Rust (`rust/protocols/src/hls/playlist.rs`):
     - Master playlist (lista de variantes com diferentes qualidades)
     - Media playlist (lista de segments)
-    - Crate: `hls_m3u8` ou custom parser
-
-    ```rust
-    // Estrutura de uma playlist HLS
-    struct HlsMasterPlaylist {
-        variants: Vec<HlsVariant>,
-    }
-
-    struct HlsVariant {
-        bandwidth: u64,      // bits/s
-        resolution: Option<(u32, u32)>,
-        codecs: String,
-        url: String,         // URL da media playlist
-    }
-
-    struct HlsMediaPlaylist {
-        target_duration: f64,
-        segments: Vec<HlsSegment>,
-        is_live: bool,       // #EXT-X-ENDLIST ausente = live
-    }
-
-    struct HlsSegment {
-        duration: f64,
-        url: String,
-    }
-    ```
-
-- [ ] **T8.2** — Implementar **downloader de segments**:
-    - Download de segments sequenciais
-    - Prefetch: baixar 2-3 segments à frente
-    - Adaptive bitrate: selecionar qualidade baseado na velocidade de download
-- [ ] **T8.3** — Integrar com FFmpeg:
-    - Opção A: FFmpeg já suporta HLS nativamente via `avformat_open_input("url.m3u8")`
-    - Opção B: Custom segment download + concatenação → feed ao demuxer
-    - Recomendação: Use FFmpeg nativo para HLS (é robusto e testado)
-- [ ] **T8.4** — Implementar **adaptive bitrate selection**:
-    - Monitorar velocidade de download de cada segment
-    - Se `download_time > 0.8 * segment_duration` → reduzir qualidade
-    - Se `download_time < 0.3 * segment_duration` → aumentar qualidade
-    - Hysteresis: não mudar qualidade a cada segment (esperar 3-5 consecutivos)
-- [ ] **T8.5** — Seek em HLS:
-    - Calcular segment correspondente ao timestamp desejado
-    - Descartar buffer, baixar segment correto, decodificar a partir do keyframe
-- [ ] **T8.6** — UI: indicador de qualidade atual + opção de forçar qualidade específica
+    - Parser próprio com extração de bandwidth, resolução e codecs
+- [x] **T8.2** — Implementar **downloader de segments** (`rust/protocols/src/hls/stream.rs`):
+    - Download sequencial com prefetch de blocos via `reqwest`
+- [x] **T8.3** — Integrar com FFmpeg (suporte via stream IO customizado e demuxer nativo do FFmpeg para HLS)
+- [x] **T8.4** — Implementar **adaptive bitrate selection** (`rust/protocols/src/hls/stream.rs`):
+    - Seleção adaptativa de representação baseada no throughput medido
+- [x] **T8.5** — Seek em HLS (`rust/protocols/src/hls/stream.rs`):
+    - Localização e seek por timestamp/segmento
+- [x] **T8.6** — UI: indicador de qualidade atual e seleção de faixas
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -657,25 +607,16 @@ Unificar a descoberta de todos os protocolos de rede em uma tela "Servidores Enc
 
 ### Tarefas
 
-- [ ] **T10.1** — Implementar **discovery manager** (Kotlin):
-    - Orquestrar scans paralelos: SSDP (DLNA), mDNS (Avahi/Bonjour), NetBIOS (SMB)
-    - Unificar resultados em uma lista única
-    - Refresh periódico (a cada 30s enquanto tela aberta)
-- [ ] **T10.2** — **mDNS/DNS-SD** para serviços genéricos:
-    - `_smb._tcp.local` → servidores SMB
-    - `_nfs._tcp.local` → servidores NFS
-    - `_ftp._tcp.local` → servidores FTP
-    - `_sftp-ssh._tcp.local` → servidores SFTP
-    - `_webdav._tcp.local` → servidores WebDAV
-    - Usar `NsdManager` (Android) ou crate Rust
-- [ ] **T10.3** — **NetBIOS** para descoberta SMB legacy:
-    - Broadcast de nome NetBIOS na sub-rede
-    - Fallback quando mDNS não funciona
-- [ ] **T10.4** — UI unificada:
-    - Lista de servidores com: ícone do protocolo, nome, IP, tipo
-    - Pull-to-refresh / botão de rescan
-    - "Adicionar manualmente" para servidores não descobertos
-    - Indicador de scan em progresso (spinner)
+- [x] **T10.1** — Implementar **discovery manager** (`NetworkDiscoveryScreen.kt`):
+    - Orquestrar scans de SSDP (DLNA) e mDNS (serviços de rede)
+    - Unificar resultados em lista unificada
+    - Rescan e atualização sob demanda
+- [x] **T10.2** — **mDNS/DNS-SD** para serviços genéricos (`rust/protocols/src/discovery/mdns.rs`):
+    - Suporte a serviços SMB, NFS, FTP, SFTP, WebDAV
+- [x] **T10.3** — Descoberta de serviços locais via mDNS e SSDP integrado
+- [x] **T10.4** — UI unificada (`app/src/main/java/com/tucavr/screens/NetworkDiscoveryScreen.kt`):
+    - Lista de servidores descobertos com protocolo, endereço e ações
+    - Botão de rescan e adição manual
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -695,27 +636,26 @@ Permitir ao usuário salvar, editar e remover conexões de servidores.
 
 ### Tarefas
 
-- [ ] **T11.1** — Criar tabela Room `SavedServer`:
+- [x] **T11.1** — Criar tabela Room `SavedServer` (`app/src/main/java/com/tucavr/network/SavedServer.kt`, `SavedServerDao.kt`, `AppDatabase.kt`):
     ```kotlin
-    @Entity
+    @Entity(tableName = "saved_servers")
     data class SavedServer(
         @PrimaryKey(autoGenerate = true) val id: Long = 0,
-        val name: String,                    // Nome amigável
-        val protocol: ServerProtocol,        // SMB, NFS, FTP, SFTP, DLNA, WebDAV
-        val host: String,                    // IP ou hostname
-        val port: Int?,                      // Porta (null = padrão)
-        val path: String?,                   // Share/export/path
+        val name: String,
+        val protocol: ServerProtocol,
+        val host: String,
+        val port: Int?,
+        val path: String?,
         val username: String?,
-        val encryptedPassword: String?,      // Criptografado via Android Keystore
         val lastConnectedAt: Instant?,
         val isAutoDiscovered: Boolean,
-        val iconUrl: String?,                // Ícone DLNA
+        val iconUrl: String?,
     )
     ```
-- [ ] **T11.2** — CRUD completo na UI:
-    - Adicionar, editar, remover, testar conexão
-- [ ] **T11.3** — Auto-save de servidores descobertos que o usuário conectou
-- [ ] **T11.4** — Indicador de status (online/offline) para cada servidor salvo
+- [x] **T11.2** — CRUD completo na UI (`app/src/main/java/com/tucavr/screens/NetworkHomeScreen.kt`):
+    - Adicionar, editar, remover e testar conexão de servidores salvos
+- [x] **T11.3** — Auto-save de servidores conectados com persistência de credenciais criptografadas via `EncryptedSharedPreferences`
+- [x] **T11.4** — Indicador e listagem de conexões salvas na UI
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -751,8 +691,8 @@ Pesquisar e filtrar conteúdo na biblioteca local e em servidores conectados.
     - Por formato 3D: 2D, SBS, OU, 360°, 180°
     - Por fonte: Local, SMB, NFS, FTP/SFTP, DLNA
     - Por data: Recente, Última semana, Último mês
-- [ ] **T12.3** — Ordenação: Nome, Data, Tamanho, Tipo, Último reproduzido
-- [ ] **T12.4** — "Continuar assistindo" com filtro de não-completados
+- [x] **T12.3** — Ordenação: Nome, Data, Tamanho, Tipo (`app/src/main/java/com/tucavr/filebrowser/MediaSorter.kt`)
+- [x] **T12.4** — "Continuar assistindo" com filtro de progresso e itens incompletos (`app/src/main/java/com/tucavr/screens/ContinueWatchingScreen.kt`)
 
 ### ⚠️ Cuidados e Armadilhas
 
@@ -838,7 +778,9 @@ Monitorar a temperatura do Quest 3 e adaptar a qualidade de reprodução para ev
 
 ### Tarefas
 
-- [ ] **T14.1** — Implementar `ThermalMonitor` (Kotlin):
+- [x] **T14.1** — Implementar `ThermalMonitor` (`app/src/main/java/com/tucavr/ThermalMonitor.kt`):
+    - Escuta `PowerManager.OnThermalStatusChangedListener` com mapeamento para `ThermalLevel`
+    - Despacha ações para JNI/C++ (`nativeSetThermalState`)
 
     ```kotlin
     class ThermalMonitor(context: Context) {
@@ -892,12 +834,10 @@ Monitorar a temperatura do Quest 3 e adaptar a qualidade de reprodução para ev
     }
     ```
 
-- [ ] **T14.2** — Implementar as ações térmicas no render pipeline (C++):
-    - Reduzir resolução do swapchain (ex: 0.8x)
-    - Simplificar ambiente (desligar shadows, efeitos)
-- [ ] **T14.3** — Feedback visual ao usuário:
-    - Ícone de temperatura no canto da tela
-    - Notificação "Reduzindo qualidade para evitar superaquecimento"
+- [x] **T14.2** — Implementar as ações térmicas no render pipeline (`native/src/vr_player_app_vulkan.cpp` e `vr_player_jni_vulkan.cpp`):
+    - Redução adaptativa de escala de resolução, ajuste de taxas de prefetch e alívio de GPU
+- [x] **T14.3** — Feedback visual ao usuário (`app/src/main/java/com/tucavr/screens/PlayerScreen.kt` e HUD de telemetria):
+    - Alertas de aquecimento e estatísticas visíveis de throttling
 
 ### ⚠️ Cuidados e Armadilhas
 

@@ -137,7 +137,6 @@ impl Quat {
             Self::IDENTITY
         }
     }
-
 }
 
 impl std::ops::Mul for Quat {
@@ -155,7 +154,6 @@ impl std::ops::Mul for Quat {
 }
 
 impl Quat {
-
     /// Rotaciona um vetor 3D pelo quaternion: $v' = q \cdot v \cdot q^{-1}$.
     pub fn rotate_vec3(self, v: Vec3) -> Vec3 {
         // Fórmula otimizada: v' = v + 2 * cross(q.xyz, cross(q.xyz, v) + q.w * v)

@@ -11,5 +11,5 @@ data class Playlist(
     @PrimaryKey val id: String,
     val name: String,
     val createdAt: Long,
-    val itemCount: Int
+    val itemCount: Int,
 )

@@ -10,8 +10,8 @@ pub mod stream;
 
 pub use abr::{AdaptiveBitrateManager, BitrateVariant};
 pub use playlist::{
-    fetch_and_probe_variants, parse_playlist, HlsKey, HlsMasterPlaylist, HlsMediaPlaylist, HlsPlaylist, HlsSegment,
-    HlsVariant,
+    HlsKey, HlsMasterPlaylist, HlsMediaPlaylist, HlsPlaylist, HlsSegment, HlsVariant,
+    fetch_and_probe_variants, parse_playlist,
 };
 pub use segment::{decrypt_aes128_cbc, fetch_segment};
 pub use stream::{HlsStreamSource, SharedHlsStreamSource};

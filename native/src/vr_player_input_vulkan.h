@@ -5,6 +5,7 @@
 #include "vk_math.h"
 #include "hand_tracking.h"
 #include "vr_player_feedback_overlay.h"
+#include "vr_player_ambient.h"
 #include <math.h>
 #include <algorithm>
 #include <atomic>
@@ -12,6 +13,31 @@
 
 extern std::atomic<bool> g_requestControlsPanelVisible;
 extern std::atomic<bool> g_resetScreenPositionRequested;
+extern std::atomic<bool> g_setScreenTransformRequested;
+extern std::atomic<float> g_requestedScreenPosX;
+extern std::atomic<float> g_requestedScreenPosY;
+extern std::atomic<float> g_requestedScreenPosZ;
+extern std::atomic<float> g_requestedScreenScaleX;
+extern std::atomic<float> g_requestedScreenScaleY;
+
+inline void NotifyScreenTransformChanged(AppState& state, const XrVector3f& pos, float scaleX, float scaleY) {
+    if (!state.app || !state.app->activity || !state.app->activity->vm) return;
+    JNIEnv* env = nullptr;
+    state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+    if (!env) return;
+
+    jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+    if (vrActivityClass) {
+        jmethodID method = env->GetStaticMethodID(
+            vrActivityClass, "onNativeScreenTransformChanged", "(Lcom/tucavr/VRActivity;FFFFF)V");
+        if (method) {
+            env->CallStaticVoidMethod(
+                vrActivityClass, method, state.app->activity->clazz,
+                pos.x, pos.y, pos.z, scaleX, scaleY);
+        }
+        env->DeleteLocalRef(vrActivityClass);
+    }
+}
 
 // Timings de auto-hide/recenter — mesmos valores do caminho GLES
 // (vr_player_app.cpp: kUiAutoHideSeconds/kUiFadeDuration/kRecenterHoldSeconds).
@@ -331,6 +357,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
     bool controllerActive = leftTracked || rightTracked;
     bool currTrigger = false;
+    bool useLeft = false;
 
     if (controllerActive) {
         state.handTrackingActive = false;
@@ -338,7 +365,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         // esquerda se ela estiver rastreada e (a direita nao estiver rastreada
         // OU o trigger esquerdo estiver pressionado) — deixa o usuario apontar
         // com a mao que estiver usando ativamente.
-        bool useLeft = leftTracked && (!rightTracked || triggerL.currentState == XR_TRUE);
+        useLeft = leftTracked && (!rightTracked || triggerL.currentState == XR_TRUE);
         const XrSpaceLocation& spaceLocation = useLeft ? locL : locR;
         currTrigger = (useLeft ? triggerL.currentState : triggerR.currentState) == XR_TRUE;
 
@@ -573,6 +600,30 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         state.feedbackAlpha = MoveTowards(state.feedbackAlpha, feedbackTargetAlpha, fadeStep);
     }
 
+    // Modo Ambiente (halo de luz) — gates:
+    // Passthrough (um halo colorido flutuando no quarto real do usuario quebraria a
+    // ilusao de passthrough). Convergido por MoveTowards em vez de aplicado direto —
+    // evita um "pop" visivel quando o usuario liga/desliga o toggle ou entra/sai do ambiente Void.
+    {
+        const float configuredIntensity = get_screen_glow_intensity();
+        const bool is3dRoom = (state.currentEnvironmentId == "cinema" || state.currentEnvironmentId == "living_room");
+        const bool ambientGatesPass =
+            get_ambient_mode_enabled() != 0 &&
+            !IsSphereMode(state.screenMode) &&
+            !IsCubemapMode(state.screenMode) &&
+            state.thermalLevel < 2 &&
+            state.activeVideoFrame != nullptr &&
+            (state.currentEnvironmentId == "void" || is3dRoom) &&
+            !state.passthroughActive;
+        const float maxTarget = (configuredIntensity > 0.001f) ? configuredIntensity : vrplayer::kAmbientMaxIntensity;
+        const float ambientTarget = ambientGatesPass ? maxTarget : 0.0f;
+        const float ambientFadeStep =
+            (vrplayer::kAmbientColorSmoothSeconds > 0.0f)
+                ? (dt / vrplayer::kAmbientColorSmoothSeconds) * maxTarget
+                : maxTarget;
+        state.ambientIntensity = MoveTowards(state.ambientIntensity, ambientTarget, ambientFadeStep);
+    }
+
     // So despacha toque/hover pra um painel de fato visivel (evita "clique
     // invisivel" num painel escondido pelo auto-hide); a deteccao geometrica
     // acima continua sempre ativa pra poder trazer o painel de volta.
@@ -631,6 +682,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.lastRayOrigin.z + state.lastRayDir.z * state.lastHitDist,
         };
     }
+    // O laser só é visível se estiver mirando em um painel interativo visível ou manipulando a tela via grab
+    state.beamVisible = state.hasRay && ((dispatchHitPanel != 0 && state.lastHitDist > 0.0f) || state.isScreenGrabbed);
 
     // Haptics (paridade com GLES: pulso leve no hover-enter, mais forte no
     // click) — sempre na mao direita, igual ao FireHaptic(RightHandPath,...)
@@ -693,10 +746,16 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             }
         }
     } else {
-        // A (direita) ou X (esquerda) = Play/Pause. Trigger fora de qualquer
-        // painel visivel tambem funciona como atalho.
-        if (((currA && !state.prevA) || (currX && !state.prevX) ||
-            (currTrigger && !prevTrigger && dispatchHitPanel == 0)) && !keyboardActive) {
+        // A (direita) ou X (esquerda) = Play/Pause.
+        // Trigger fora de qualquer painel de UI (dispatchHitPanel == 0) funciona como atalho de Play/Pause
+        // tanto em vídeos 2D planos quanto em vídeos esféricos (180° SBS / 360°).
+        // No Hand Tracking, o pinch na tela 2D é reservado exclusivamente para Grab & Drag.
+        bool triggerOutsideUi = currTrigger && !prevTrigger && (dispatchHitPanel == 0);
+        bool handTrackingGrabPinch = state.handTrackingActive && state.isHoveringScreen && !IsSphereMode(state.screenMode);
+        bool triggerPlayPause = triggerOutsideUi && !handTrackingGrabPinch;
+        bool buttonPlayPause = (currA && !state.prevA) || (currX && !state.prevX);
+
+        if ((buttonPlayPause || triggerPlayPause) && !keyboardActive) {
             toggle_play_pause();
             state.controlsIdleTime = 0.0f;
             state.controlsAlpha = 1.0f;
@@ -804,7 +863,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             }
         }
 
-        // HUD de debug (docs/DEBUGGING.md / docs/reports/DEBUG-STATS-MODAL.md)
+        // HUD de debug (docs/DEBUGGING.md)
         if (g_debugStatsEnabled.load(std::memory_order_relaxed)) {
             StereoParams spHud = GetStereoParams(state.screenMode, 0);
             const char* upscaleStr = "OFF";
@@ -882,12 +941,12 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             stats.subtitleTrackIndex = get_subtitle_track();
             stats.subtitleOffsetMs = (int32_t)get_subtitle_offset_ms();
 
-            // F1 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): D-02 e D-04.
+            // F1: D-02 e D-04.
             stats.videoStallCount = state.videoStallCount;
             auto freshnessNow = std::chrono::steady_clock::now();
             stats.videoStatsAgeMs = state.videoFreshness.UpdateAndGetAgeMs(state.lastDecodedFrameCount, freshnessNow);
             stats.networkStatsAgeMs = state.networkFreshness.UpdateAndGetAgeMs(stats.netBlocksFetched, freshnessNow);
-            // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): coleta nova na origem.
+            // F4: coleta nova na origem.
             stats.networkFetchFailures = get_network_fetch_failures();
             stats.networkSequentialStreak = get_network_sequential_streak();
             stats.networkThrottled = get_network_throttled();
@@ -928,8 +987,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             stats.audioStatsAgeMs = 0;
             stats.renderStatsAgeMs = 0; // computado a cada frame no loop de render — sempre atual
 
-            // 4096 (era 2048): F1/F3/F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md) somam
-            // ~20 campos aos 44 atuais; ver g_debugStatsTruncated em debug_stats.h.
+            // 4096 (era 2048): F1/F3/F4 somam ~20 campos aos 44 originais; ver g_debugStatsTruncated em debug_stats.h.
             char hudBuffer[4096];
             SerializeDebugStats(stats, hudBuffer, sizeof(hudBuffer));
 
@@ -967,21 +1025,59 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     XrActionStateFloat squeezeState{XR_TYPE_ACTION_STATE_FLOAT};
     xrGetActionStateFloat(state.session, &squeezeInfo, &squeezeState);
 
-    // Redefinição de posição solicitada via JNI ou Reset
-    if (::g_resetScreenPositionRequested.exchange(false)) {
-        state.screenPosition = {0.0f, 1.5f, -2.0f};
-        state.screenScaleX = 1.6f;
-        state.screenScaleY = 0.9f;
+    // Carregamento de transformação solicitado via JNI (persistência)
+    if (::g_setScreenTransformRequested.exchange(false)) {
+        state.screenPosition.x = ::g_requestedScreenPosX.load();
+        state.screenPosition.y = ::g_requestedScreenPosY.load();
+        state.screenPosition.z = ::g_requestedScreenPosZ.load();
+        state.screenScaleX = ::g_requestedScreenScaleX.load();
+        state.screenScaleY = ::g_requestedScreenScaleY.load();
         state.isScreenGrabbed = false;
-        LOGI("Screen: posição e escala redefinidas para o padrão {0, 1.5, -2}");
+        LOGI("Screen: posição e escala carregadas via JNI: pos={%.2f, %.2f, %.2f}, scale={%.2f, %.2f}",
+             state.screenPosition.x, state.screenPosition.y, state.screenPosition.z,
+             state.screenScaleX, state.screenScaleY);
     }
 
-    // Thumbstick direito e Grab & Drag (T2.5)
+    // Redefinição de posição solicitada via JNI ou Reset
+    if (::g_resetScreenPositionRequested.exchange(false)) {
+        state.screenPosition = {0.0f, 1.5f, -2.4f};
+        state.screenScaleX = 2.8f;
+        state.screenScaleY = 1.575f;
+        state.isScreenGrabbed = false;
+        LOGI("Screen: posição e escala redefinidas para o padrão cinematográfico {0, 1.5, -2.4}");
+        NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
+    }
+
+    // Rolagem por thumbstick no painel UI (Home/Arquivos) ou Modal
+    if ((dispatchHitPanel == 1 || dispatchHitPanel == 3) && !state.isScreenGrabbed && !state.isTouchDown) {
+        float stickY = (fabsf(rightStick.currentState.y) > 0.15f)
+            ? rightStick.currentState.y
+            : ((useLeft && fabsf(leftStick.currentState.y) > 0.15f) ? leftStick.currentState.y : 0.0f);
+        if (stickY != 0.0f && dt > 0.0f) {
+            const float kScrollSpeedPixelsPerSec = 1200.0f;
+            float scrollDeltaY = -stickY * kScrollSpeedPixelsPerSec * dt;
+            JNIEnv* env = nullptr;
+            state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+            if (env) {
+                jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+                const char* methodName = (dispatchHitPanel == 3) ? "dispatchModalVRScroll" : "dispatchVRScroll";
+                jmethodID scrollMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFF)V");
+                if (scrollMethod) {
+                    env->CallStaticVoidMethod(vrActivityClass, scrollMethod, state.app->activity->clazz, state.lastUvX, state.lastUvY, scrollDeltaY);
+                }
+                env->DeleteLocalRef(vrActivityClass);
+            }
+        }
+    }
+
+    // Thumbstick direito e Grab & Drag (T2.5 com Trava de Intenção T3.6)
     {
         const float kDeadzone = 0.15f;
         float sx = (fabsf(rightStick.currentState.x) < kDeadzone) ? 0.0f : rightStick.currentState.x;
         float sy = (fabsf(rightStick.currentState.y) < kDeadzone) ? 0.0f : rightStick.currentState.y;
         bool gripHeld = squeezeState.currentState > 0.5f;
+        bool prevGrabbed = state.isScreenGrabbed;
+        static bool s_prevDirectAdjustActive = false;
 
         if (state.handTrackingActive) {
             // T5.5: Com Hand Tracking, pinch segurado apontando para a tela virtual (fora dos painéis de UI) faz Grab & Drag
@@ -994,52 +1090,91 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                     XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.grabDistance));
                     XrVector3f relPos = Vec3Sub(targetWorld, state.sceneTranslationOffset);
                     state.screenPosition = Vec3RotateY(relPos, -state.sceneYawOffset);
-                    state.screenPosition.z = std::min(-0.75f, std::max(state.screenPosition.z, -8.0f));
-                    state.screenPosition.y = std::max(0.2f, std::min(state.screenPosition.y, 3.5f));
+                    state.screenPosition.z = std::min(-0.8f, std::max(state.screenPosition.z, -10.0f));
+                    state.screenPosition.y = std::max(0.3f, std::min(state.screenPosition.y, 3.5f));
                     state.screenPosition.x = std::max(-4.0f, std::min(state.screenPosition.x, 4.0f));
                 } else {
                     state.isScreenGrabbed = false;
                 }
             }
+            if (prevGrabbed && !state.isScreenGrabbed) {
+                NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
+            }
         } else {
-            if (gripHeld && sy != 0.0f) {
+            // Controller Touch Plus (Opção B):
+            // O thumbstick NUNCA move a tela quando desacompanhado de intenção expressa (elimina 100% de toques acidentais).
+            // Dois modos intencionais suportados:
+            // 1) Laser Grab & Drag: apontar o laser para a tela e segurar Grip.
+            //    - Movimento da mão translada a tela no espaço.
+            //    - Stick vertical (sy) redimensiona a escala proporcionalmente.
+            //    - Stick horizontal (sx) ajusta a distância (push/pull).
+            // 2) Ajuste Direto: segurar Grip + Trigger simultaneamente no controle direito.
+            //    - Stick vertical (sy) ajusta profundidade Z.
+            //    - Stick horizontal (sx) ajusta altura Y.
+
+            bool isAimingScreen = (currentHitPanel == 0 && tScreen > 0.0f && !state.modalActive && !IsSphereMode(state.screenMode));
+            bool directAdjustCombo = gripHeld && currTrigger && (currentHitPanel == 0) && !state.modalActive;
+
+            if (directAdjustCombo) {
                 state.isScreenGrabbed = false;
-                const float kResizeSpeedMetersPerSec = 1.0f;
-                float newWidth = state.screenScaleX + sy * kResizeSpeedMetersPerSec * dt;
-                newWidth = std::max(0.5f, std::min(newWidth, 6.0f));
-                state.screenScaleX = newWidth;
-                state.screenScaleY = newWidth * (9.0f / 16.0f);
-            } else if (!gripHeld && (sx != 0.0f || sy != 0.0f)) {
-                state.isScreenGrabbed = false;
-                const float kMoveSpeedMetersPerSec = 1.5f;
-                state.screenPosition.z -= sy * kMoveSpeedMetersPerSec * dt;
-                state.screenPosition.y += sx * kMoveSpeedMetersPerSec * dt;
-                // Limites de conforto: nunca deixar a tela grudada no rosto nem sumir no chao/teto.
-                state.screenPosition.z = std::min(-0.75f, std::max(state.screenPosition.z, -8.0f));
-                state.screenPosition.y = std::max(0.2f, std::min(state.screenPosition.y, 3.5f));
-                state.screenPosition.x = std::max(-4.0f, std::min(state.screenPosition.x, 4.0f));
-            } else if (gripHeld && !IsSphereMode(state.screenMode) && currentHitPanel == 0 && !state.modalActive) {
-                // T2.5: Grab & Drag direto no espaço 3D apontando o laser para a tela
-                if (!state.isScreenGrabbed && tScreen > 0.0f) {
+                if (!s_prevDirectAdjustActive) {
+                    FireHaptic(state, rightPath, 0.4f, 25000000 /* 25ms */);
+                }
+                if (sy != 0.0f || sx != 0.0f) {
+                    const float kMoveSpeedMetersPerSec = 1.5f;
+                    state.screenPosition.z -= sy * kMoveSpeedMetersPerSec * dt;
+                    state.screenPosition.y += sx * kMoveSpeedMetersPerSec * dt;
+                    state.screenPosition.z = std::min(-0.8f, std::max(state.screenPosition.z, -10.0f));
+                    state.screenPosition.y = std::max(0.3f, std::min(state.screenPosition.y, 3.5f));
+                    state.screenPosition.x = std::max(-4.0f, std::min(state.screenPosition.x, 4.0f));
+                }
+            } else if (gripHeld && !IsSphereMode(state.screenMode) && (state.isScreenGrabbed || isAimingScreen)) {
+                if (!state.isScreenGrabbed && isAimingScreen) {
                     state.isScreenGrabbed = true;
                     state.grabDistance = std::max(0.8f, std::min(tScreen, 8.0f));
                     FireHaptic(state, rightPath, 0.4f, 20000000 /* 20ms */);
                 }
+
+                if (state.isScreenGrabbed) {
+                    // Redimensionamento pelo stick enquanto segura o Grip na tela
+                    if (sy != 0.0f) {
+                        const float kResizeSpeedMetersPerSec = 1.2f;
+                        float newWidth = state.screenScaleX + sy * kResizeSpeedMetersPerSec * dt;
+                        newWidth = std::max(0.8f, std::min(newWidth, 8.0f));
+                        state.screenScaleX = newWidth;
+                        state.screenScaleY = newWidth * (9.0f / 16.0f);
+                    }
+
+                    // Push / pull de distância pelo stick horizontal
+                    if (sx != 0.0f) {
+                        const float kPushPullSpeed = 1.5f;
+                        state.grabDistance -= sx * kPushPullSpeed * dt;
+                        state.grabDistance = std::max(0.8f, std::min(state.grabDistance, 8.0f));
+                    }
+
+                    if (state.hasRay) {
+                        XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.grabDistance));
+                        XrVector3f relPos = Vec3Sub(targetWorld, state.sceneTranslationOffset);
+                        state.screenPosition = Vec3RotateY(relPos, -state.sceneYawOffset);
+                        state.screenPosition.z = std::min(-0.8f, std::max(state.screenPosition.z, -10.0f));
+                        state.screenPosition.y = std::max(0.3f, std::min(state.screenPosition.y, 3.5f));
+                        state.screenPosition.x = std::max(-4.0f, std::min(state.screenPosition.x, 4.0f));
+                    }
+                }
+            } else {
+                state.isScreenGrabbed = false;
             }
 
-            if (state.isScreenGrabbed) {
-                if (gripHeld && state.hasRay) {
-                    XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.grabDistance));
-                    XrVector3f relPos = Vec3Sub(targetWorld, state.sceneTranslationOffset);
-                    state.screenPosition = Vec3RotateY(relPos, -state.sceneYawOffset);
-                    state.screenPosition.z = std::min(-0.75f, std::max(state.screenPosition.z, -8.0f));
-                    state.screenPosition.y = std::max(0.2f, std::min(state.screenPosition.y, 3.5f));
-                    state.screenPosition.x = std::max(-4.0f, std::min(state.screenPosition.x, 4.0f));
-                } else {
-                    state.isScreenGrabbed = false;
-                    FireHaptic(state, rightPath, 0.2f, 15000000 /* 15ms */);
-                }
+            // Notifica encerramento de interação para persistir em SharedPreferences
+            if (prevGrabbed && !state.isScreenGrabbed) {
+                FireHaptic(state, rightPath, 0.2f, 15000000 /* 15ms */);
+                NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
             }
+            if (s_prevDirectAdjustActive && !directAdjustCombo) {
+                FireHaptic(state, rightPath, 0.2f, 15000000 /* 15ms */);
+                NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
+            }
+            s_prevDirectAdjustActive = directAdjustCombo;
         }
     }
 
@@ -1049,7 +1184,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         float lx = (fabsf(leftStick.currentState.x) < kDeadzone) ? 0.0f : leftStick.currentState.x;
         float ly = (fabsf(leftStick.currentState.y) < kDeadzone) ? 0.0f : leftStick.currentState.y;
 
-        if (ly != 0.0f) {
+        bool leftAimingUi = useLeft && (dispatchHitPanel == 1 || dispatchHitPanel == 3);
+        if (ly != 0.0f && !leftAimingUi) {
             float vol = get_video_volume();
             vol = std::max(0.0f, std::min(1.0f, vol + ly * 0.5f * dt));
             set_video_volume(vol);

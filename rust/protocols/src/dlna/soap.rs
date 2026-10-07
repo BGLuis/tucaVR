@@ -52,15 +52,17 @@ pub fn extract_result_from_soap_response(soap_xml: &str) -> Result<String, Strin
     let start_idx = soap_xml
         .find(start_tag)
         .or_else(|| soap_xml.find("<Result "))
-        .and_then(|pos| {
-            soap_xml[pos..].find('>').map(|offset| pos + offset + 1)
-        })
-        .ok_or_else(|| "Tag <Result> não encontrada na resposta SOAP do ContentDirectory".to_string())?;
+        .and_then(|pos| soap_xml[pos..].find('>').map(|offset| pos + offset + 1))
+        .ok_or_else(|| {
+            "Tag <Result> não encontrada na resposta SOAP do ContentDirectory".to_string()
+        })?;
 
     let end_idx = soap_xml[start_idx..]
         .find(end_tag)
         .map(|pos| start_idx + pos)
-        .ok_or_else(|| "Tag </Result> não encontrada na resposta SOAP do ContentDirectory".to_string())?;
+        .ok_or_else(|| {
+            "Tag </Result> não encontrada na resposta SOAP do ContentDirectory".to_string()
+        })?;
 
     let raw_result = &soap_xml[start_idx..end_idx];
     Ok(unescape_xml(raw_result))
@@ -83,16 +85,24 @@ pub fn execute_browse_soap(
     let resp = client
         .post(control_url)
         .header("Content-Type", "text/xml; charset=\"utf-8\"")
-        .header("SOAPAction", "\"urn:schemas-upnp-org:service:ContentDirectory:1#Browse\"")
+        .header(
+            "SOAPAction",
+            "\"urn:schemas-upnp-org:service:ContentDirectory:1#Browse\"",
+        )
         .body(envelope)
         .send()
         .map_err(|e| format!("Falha na requisição SOAP para {control_url}: {e}"))?;
 
     if !resp.status().is_success() {
-        return Err(format!("Ação SOAP Browse falhou com HTTP status {}", resp.status()));
+        return Err(format!(
+            "Ação SOAP Browse falhou com HTTP status {}",
+            resp.status()
+        ));
     }
 
-    let body = resp.text().map_err(|e| format!("Falha ao ler resposta SOAP: {e}"))?;
+    let body = resp
+        .text()
+        .map_err(|e| format!("Falha ao ler resposta SOAP: {e}"))?;
     extract_result_from_soap_response(&body)
 }
 

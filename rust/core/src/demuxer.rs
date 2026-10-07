@@ -1,7 +1,7 @@
-use ffmpeg_next as ffmpeg;
 use ffmpeg::format::context::{Input, StreamIo};
+use ffmpeg_next as ffmpeg;
 use protocols::prefetch::{PrefetchReader, PrefetchStats, SharedRangeSource};
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 // 12MB em vez do default 4MB: a 8K/60fps HEVC (~63Mbps / 7.85MB/s), 4MB cobre só ~0.5s por bloco.
@@ -72,7 +72,7 @@ pub struct Demuxer {
     // envolvido, ver roteamento em `new()`). Capturado ANTES de o
     // PrefetchReader ser engolido pelo `StreamIo` opaco do ffmpeg-next.
     pub network_stats: Option<Arc<PrefetchStats>>,
-    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): pacotes corrompidos/invalidos
+    // F4: pacotes corrompidos/invalidos
     // descartados silenciosamente por read_packet() abaixo — antes disto, invisivel.
     pub corrupt_packets: Arc<AtomicU64>,
 }
@@ -116,50 +116,103 @@ impl Demuxer {
 
         let ictx = if let Some(target) = protocols::smb::SmbTarget::from_internal(path) {
             let shared = Self::smb_source(path, &target, cache)?;
-            let reader = PrefetchReader::with_block_sizes(shared, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);
+            let reader = PrefetchReader::with_block_sizes(
+                shared,
+                REMOTE_PREFETCH_BLOCK_SIZE,
+                SEEK_PREFETCH_BLOCK_SIZE,
+            );
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(stream_io, Some(&target.path), Some(fast_probe_options())).map_err(|e| e.to_string())?
+            ffmpeg::format::input_from_stream(
+                stream_io,
+                Some(&target.path),
+                Some(fast_probe_options()),
+            )
+            .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::ftp::FtpTarget::from_internal(path) {
             let source = protocols::ftp::FtpFileSource::open(&target)?;
-            let reader = PrefetchReader::with_block_sizes(source, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);
+            let reader = PrefetchReader::with_block_sizes(
+                source,
+                REMOTE_PREFETCH_BLOCK_SIZE,
+                SEEK_PREFETCH_BLOCK_SIZE,
+            );
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(stream_io, Some(&target.path), Some(fast_probe_options())).map_err(|e| e.to_string())?
+            ffmpeg::format::input_from_stream(
+                stream_io,
+                Some(&target.path),
+                Some(fast_probe_options()),
+            )
+            .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::sftp::SftpTarget::from_internal(path) {
             let shared = Self::sftp_source(path, &target, cache)?;
-            let reader = PrefetchReader::with_block_sizes(shared, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);
+            let reader = PrefetchReader::with_block_sizes(
+                shared,
+                REMOTE_PREFETCH_BLOCK_SIZE,
+                SEEK_PREFETCH_BLOCK_SIZE,
+            );
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(stream_io, Some(&target.path), Some(fast_probe_options())).map_err(|e| e.to_string())?
+            ffmpeg::format::input_from_stream(
+                stream_io,
+                Some(&target.path),
+                Some(fast_probe_options()),
+            )
+            .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::nfs::NfsTarget::from_internal(path) {
             let source = protocols::nfs::NfsFileSource::open(&target)?;
-            let reader = PrefetchReader::with_block_sizes(source, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);
+            let reader = PrefetchReader::with_block_sizes(
+                source,
+                REMOTE_PREFETCH_BLOCK_SIZE,
+                SEEK_PREFETCH_BLOCK_SIZE,
+            );
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(stream_io, Some(&target.file_path), Some(fast_probe_options())).map_err(|e| e.to_string())?
+            ffmpeg::format::input_from_stream(
+                stream_io,
+                Some(&target.file_path),
+                Some(fast_probe_options()),
+            )
+            .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::webdav::WebdavTarget::from_internal(path) {
             let shared = Self::webdav_source(path, &target, cache)?;
-            let reader = PrefetchReader::with_block_sizes(shared, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);
+            let reader = PrefetchReader::with_block_sizes(
+                shared,
+                REMOTE_PREFETCH_BLOCK_SIZE,
+                SEEK_PREFETCH_BLOCK_SIZE,
+            );
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(stream_io, Some(&target.file_path), Some(fast_probe_options())).map_err(|e| e.to_string())?
+            ffmpeg::format::input_from_stream(
+                stream_io,
+                Some(&target.file_path),
+                Some(fast_probe_options()),
+            )
+            .map_err(|e| e.to_string())?
         } else if path.contains(".m3u8") || path.starts_with("hls://") {
             let source = protocols::hls::HlsStreamSource::open(path)?;
             let stream_io = StreamIo::from_read_seek(source).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(stream_io, Some(path), Some(fast_probe_options())).map_err(|e| e.to_string())?
+            ffmpeg::format::input_from_stream(stream_io, Some(path), Some(fast_probe_options()))
+                .map_err(|e| e.to_string())?
         } else if path.contains(".mpd") || path.starts_with("dash://") {
             let source = protocols::dash::DashStreamSource::open(path)?;
             let stream_io = StreamIo::from_read_seek(source).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(stream_io, Some(path), Some(fast_probe_options())).map_err(|e| e.to_string())?
+            ffmpeg::format::input_from_stream(stream_io, Some(path), Some(fast_probe_options()))
+                .map_err(|e| e.to_string())?
         } else if path.starts_with("https://") {
             let shared = Self::https_source(path, cache)?;
-            let reader = PrefetchReader::with_block_sizes(shared, REMOTE_PREFETCH_BLOCK_SIZE, SEEK_PREFETCH_BLOCK_SIZE);
+            let reader = PrefetchReader::with_block_sizes(
+                shared,
+                REMOTE_PREFETCH_BLOCK_SIZE,
+                SEEK_PREFETCH_BLOCK_SIZE,
+            );
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(stream_io, Some(path), Some(fast_probe_options())).map_err(|e| e.to_string())?
+            ffmpeg::format::input_from_stream(stream_io, Some(path), Some(fast_probe_options()))
+                .map_err(|e| e.to_string())?
         } else {
-            ffmpeg::format::input_with_dictionary(&path, fast_probe_options()).map_err(|e| e.to_string())?
+            ffmpeg::format::input_with_dictionary(&path, fast_probe_options())
+                .map_err(|e| e.to_string())?
         };
 
         let mut video_streams = Vec::new();
@@ -178,6 +231,27 @@ impl Demuxer {
 
         let video_stream_index = video_streams.first().copied();
         let audio_stream_index = audio_streams.first().copied();
+
+        // Ajuste dinamico do prefetch: se o video for 1080p ou menor, reduzimos
+        // o bloco alvo para 4MB (evita RTT alto por bloco e oscilacao do buffer_gate).
+        // Para 4K/8K mantem o padrao de 12MB.
+        if let (Some(ref stats), Some(idx)) = (&network_stats, video_stream_index) {
+            if let Some(stream) = ictx.stream(idx) {
+                let params = stream.parameters();
+                let (width, height) = unsafe {
+                    let p = params.as_ptr();
+                    ((*p).width as u32, (*p).height as u32)
+                };
+                if width > 0 && height > 0 && width <= 1920 && height <= 1080 {
+                    crate::log_info!("vrplayer-demuxer: video 1080p ou menor detectado ({width}x{height}), ajustando prefetch para 4MB");
+                    stats
+                        .target_block_size
+                        .store(4 * 1024 * 1024, Ordering::Relaxed);
+                } else if width > 0 && height > 0 {
+                    crate::log_info!("vrplayer-demuxer: video alta resolucao detectado ({width}x{height}), mantendo prefetch padrao (12MB)");
+                }
+            }
+        }
 
         Ok(Self {
             input_context: ictx,
@@ -272,7 +346,9 @@ impl Demuxer {
                 return Ok(SharedRangeSource::new(conn.clone()));
             }
         }
-        let conn = Arc::new(Mutex::new(protocols::webdav::WebdavFileSource::open(target)?));
+        let conn = Arc::new(Mutex::new(protocols::webdav::WebdavFileSource::open(
+            target,
+        )?));
         *cache = ConnectionCache::Webdav(path.to_string(), conn.clone());
         Ok(SharedRangeSource::new(conn))
     }
@@ -315,7 +391,8 @@ impl Demuxer {
                 // Pacote corrompido isolado — o demuxer consegue
                 // resincronizar (mesmo comportamento do PacketIter interno).
                 Err(ffmpeg::Error::InvalidData) => {
-                    self.corrupt_packets.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    self.corrupt_packets
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     continue;
                 }
                 Err(e) => return ReadPacketOutcome::Error(e.to_string()),

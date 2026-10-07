@@ -21,55 +21,62 @@ import com.tucavr.navigation.Destination
 class HomeScreen(
     private val context: Context,
     private val host: ScreenHost,
-    private val onNavigate: (Destination) -> Unit
+    private val onNavigate: (Destination) -> Unit,
 ) {
-
     fun render() {
         val root = VoidPanelChrome.newRoot(context)
         root.addView(VoidPanelChrome.buildHeader(context, title = context.getString(R.string.home_title)))
 
-        val bigButtonParams = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = VoidTheme.dpToPx(context, 20f) }
+        val bigButtonParams =
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+            ).apply { topMargin = VoidTheme.dpToPx(context, 20f) }
 
-        val btnLocal = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = context.getString(R.string.home_btn_local_files).trim()
-            textSize = 24f
-            setIcon(R.drawable.ic_folder)
-            setOnClickListener { onNavigate(Destination.LocalFiles("")) }
-        }
-        val btnNetwork = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = context.getString(R.string.home_btn_network).trim()
-            textSize = 24f
-            setIcon(R.drawable.ic_network)
-            setOnClickListener { onNavigate(Destination.NetworkHome) }
-        }
+        val btnLocal =
+            VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+                text = context.getString(R.string.home_btn_local_files).trim()
+                textSize = 24f
+                setIcon(R.drawable.ic_folder)
+                setOnClickListener { onNavigate(Destination.LocalFiles("")) }
+            }
+        val btnNetwork =
+            VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+                text = context.getString(R.string.home_btn_network).trim()
+                textSize = 24f
+                setIcon(R.drawable.ic_network)
+                setOnClickListener { onNavigate(Destination.NetworkHome) }
+            }
         // T9.4: histórico implementado — botão ativo. A tela lida com lista
         // vazia internamente; não precisa consultar Room aqui.
-        val btnContinueWatching = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = context.getString(R.string.home_btn_continue_watching).trim()
-            textSize = 20f
-            setIcon(R.drawable.ic_play_arrow)
-            setOnClickListener { onNavigate(Destination.ContinueWatching) }
-        }
-        val btnPlaylists = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = context.getString(R.string.home_btn_playlists).trim()
-            textSize = 20f
-            setIcon(R.drawable.ic_view_list)
-            setOnClickListener { onNavigate(Destination.Playlists) }
-        }
-        val btnDownloads = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = context.getString(R.string.home_btn_downloads).trim()
-            textSize = 20f
-            setIcon(R.drawable.ic_download)
-            setOnClickListener { onNavigate(Destination.Downloads) }
-        }
-        val btnSettings = VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-            text = context.getString(R.string.home_btn_settings).trim()
-            textSize = 18f
-            setIcon(R.drawable.icon_settings)
-            setOnClickListener { onNavigate(Destination.Settings) }
-        }
+        val btnContinueWatching =
+            VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+                text = context.getString(R.string.home_btn_continue_watching).trim()
+                textSize = 20f
+                setIcon(R.drawable.ic_play_arrow)
+                setOnClickListener { onNavigate(Destination.ContinueWatching) }
+            }
+        val btnPlaylists =
+            VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+                text = context.getString(R.string.home_btn_playlists).trim()
+                textSize = 20f
+                setIcon(R.drawable.ic_view_list)
+                setOnClickListener { onNavigate(Destination.Playlists) }
+            }
+        val btnDownloads =
+            VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+                text = context.getString(R.string.home_btn_downloads).trim()
+                textSize = 20f
+                setIcon(R.drawable.ic_download)
+                setOnClickListener { onNavigate(Destination.Downloads) }
+            }
+        val btnSettings =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.home_btn_settings).trim()
+                textSize = 18f
+                setIcon(R.drawable.icon_settings)
+                setOnClickListener { onNavigate(Destination.Settings) }
+            }
 
         root.addView(btnLocal, bigButtonParams)
         root.addView(btnNetwork, bigButtonParams)

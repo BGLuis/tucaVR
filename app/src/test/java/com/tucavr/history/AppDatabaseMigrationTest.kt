@@ -10,9 +10,7 @@ import java.sql.Connection
 import java.sql.DriverManager
 
 /**
- * Testes de migração do Room para `AppDatabase` (Fase 0.4, item R-05 de
- * `docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md` — pedido também pelo relatório anterior,
- * `PHASE-0.4-07-TRANSVERSAIS-E-DOD.md:113-115`).
+ * Testes de migração do Room para `AppDatabase` (Fase 0.4, item R-05).
  *
  * O projeto evita Robolectric de propósito (ver comentário em `app/build.gradle.kts` sobre os
  * testes de `filebrowser`), e não há source set `androidTest`/emulador disponível para rodar
@@ -28,11 +26,11 @@ import java.sql.DriverManager
  * ela sobrevive intacta depois das três.
  */
 class AppDatabaseMigrationTest {
-
     private lateinit var connection: Connection
 
     // Espelha a tabela `playback_history` real (schema v1) — ver PlaybackHistory.kt.
-    private val v1Schema = """
+    private val v1Schema =
+        """
         CREATE TABLE IF NOT EXISTS `playback_history` (
             `historyKey` TEXT NOT NULL PRIMARY KEY,
             `title` TEXT NOT NULL,
@@ -44,7 +42,7 @@ class AppDatabaseMigrationTest {
             `sourceType` TEXT NOT NULL,
             `serverInfo` TEXT
         )
-    """.trimIndent()
+        """.trimIndent()
 
     @Before
     fun openInMemoryDatabase() {
@@ -89,7 +87,7 @@ class AppDatabaseMigrationTest {
         connection.prepareStatement(
             "INSERT INTO `playback_history` " +
                 "(historyKey, title, mediaPath, positionMs, durationMs, lastPlayedAt, thumbnailPath, sourceType, serverInfo) " +
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ).use { stmt ->
             stmt.setString(1, "local::/sdcard/Movies/clip.mp4")
             stmt.setString(2, "Clip de teste")
@@ -118,8 +116,11 @@ class AppDatabaseMigrationTest {
 
         assertTrue("saved_servers deveria existir após MIGRATION_1_2", connection.tableExists("saved_servers"))
         assertEquals(
-            listOf("id", "name", "protocol", "host", "port", "path", "username", "domain", "isAutoDiscovered", "lastConnectedAt", "iconUrl", "extraJson"),
-            connection.columnNames("saved_servers")
+            listOf(
+                "id", "name", "protocol", "host", "port", "path", "username", "domain",
+                "isAutoDiscovered", "lastConnectedAt", "iconUrl", "extraJson",
+            ),
+            connection.columnNames("saved_servers"),
         )
     }
 
@@ -132,15 +133,15 @@ class AppDatabaseMigrationTest {
         assertTrue(connection.tableExists("playlist_items"))
         assertTrue(
             "index_playlist_items_playlistId deveria existir após MIGRATION_2_3",
-            connection.indexExists("index_playlist_items_playlistId")
+            connection.indexExists("index_playlist_items_playlistId"),
         )
         assertEquals(
             listOf("id", "name", "createdAt", "itemCount"),
-            connection.columnNames("playlists")
+            connection.columnNames("playlists"),
         )
         assertEquals(
             listOf("id", "playlistId", "mediaUri", "title", "durationMs", "position", "sourceType"),
-            connection.columnNames("playlist_items")
+            connection.columnNames("playlist_items"),
         )
     }
 
@@ -153,24 +154,47 @@ class AppDatabaseMigrationTest {
         assertTrue("downloads deveria existir após MIGRATION_3_4", connection.tableExists("downloads"))
         assertTrue(
             "index_downloads_state deveria existir após MIGRATION_3_4",
-            connection.indexExists("index_downloads_state")
+            connection.indexExists("index_downloads_state"),
         )
         assertEquals(
             listOf(
                 "id", "sourceUri", "sourceType", "destinationPath", "displayName", "totalBytes",
-                "downloadedBytes", "state", "createdAt", "completedAt", "errorMessage", "serverId"
+                "downloadedBytes", "state", "createdAt", "completedAt", "errorMessage", "serverId",
             ),
-            connection.columnNames("downloads")
+            connection.columnNames("downloads"),
         )
     }
 
     @Test
-    fun `full migration chain 1 to 4 preserves playback_history data untouched`() {
+    fun `migration 4 to 5 creates folder_media_status and media_metadata_cache with the expected columns`() {
+        applyMigration(AppDatabase.MIGRATION_1_2_SQL)
+        applyMigration(AppDatabase.MIGRATION_2_3_SQL)
+        applyMigration(AppDatabase.MIGRATION_3_4_SQL)
+        applyMigration(AppDatabase.MIGRATION_4_5_SQL)
+
+        assertTrue("folder_media_status deveria existir após MIGRATION_4_5", connection.tableExists("folder_media_status"))
+        assertTrue("media_metadata_cache deveria existir após MIGRATION_4_5", connection.tableExists("media_metadata_cache"))
+        assertEquals(
+            listOf("folderKey", "hasPlayableMedia", "scanCompletedFully", "lastCheckedAt", "sourceKind"),
+            connection.columnNames("folder_media_status"),
+        )
+        assertEquals(
+            listOf(
+                "mediaKey", "container", "containerLong", "durationMs", "bitRate", "format3dIndex",
+                "detectionConfidence", "videoWidth", "videoHeight", "videoCodec", "fetchedAt",
+            ),
+            connection.columnNames("media_metadata_cache"),
+        )
+    }
+
+    @Test
+    fun `full migration chain 1 to 5 preserves playback_history data untouched`() {
         insertSampleHistoryRow()
 
         applyMigration(AppDatabase.MIGRATION_1_2_SQL)
         applyMigration(AppDatabase.MIGRATION_2_3_SQL)
         applyMigration(AppDatabase.MIGRATION_3_4_SQL)
+        applyMigration(AppDatabase.MIGRATION_4_5_SQL)
 
         connection.createStatement().use { stmt ->
             stmt.executeQuery("SELECT title, mediaPath, positionMs, durationMs, sourceType FROM playback_history").use { rs ->
@@ -184,26 +208,32 @@ class AppDatabaseMigrationTest {
             }
         }
 
-        // As quatro tabelas de todas as versões coexistem depois da cadeia completa.
+        // As seis tabelas de todas as versões coexistem depois da cadeia completa.
         assertTrue(connection.tableExists("playback_history"))
         assertTrue(connection.tableExists("saved_servers"))
         assertTrue(connection.tableExists("playlists"))
         assertTrue(connection.tableExists("playlist_items"))
         assertTrue(connection.tableExists("downloads"))
+        assertTrue(connection.tableExists("folder_media_status"))
+        assertTrue(connection.tableExists("media_metadata_cache"))
     }
 
     @Test
     fun `migrations are idempotent via CREATE TABLE IF NOT EXISTS`() {
-        // As três migrations usam CREATE TABLE/INDEX IF NOT EXISTS — reaplicar não deve falhar.
+        // Todas as migrations usam CREATE TABLE/INDEX IF NOT EXISTS — reaplicar não deve falhar.
         applyMigration(AppDatabase.MIGRATION_1_2_SQL)
         applyMigration(AppDatabase.MIGRATION_1_2_SQL)
         applyMigration(AppDatabase.MIGRATION_2_3_SQL)
         applyMigration(AppDatabase.MIGRATION_2_3_SQL)
         applyMigration(AppDatabase.MIGRATION_3_4_SQL)
         applyMigration(AppDatabase.MIGRATION_3_4_SQL)
+        applyMigration(AppDatabase.MIGRATION_4_5_SQL)
+        applyMigration(AppDatabase.MIGRATION_4_5_SQL)
 
         assertTrue(connection.tableExists("saved_servers"))
         assertTrue(connection.tableExists("playlists"))
         assertTrue(connection.tableExists("downloads"))
+        assertTrue(connection.tableExists("folder_media_status"))
+        assertTrue(connection.tableExists("media_metadata_cache"))
     }
 }

@@ -152,9 +152,27 @@ mod tests {
 
     fn test_variants() -> Vec<HlsVariant> {
         vec![
-            HlsVariant { bandwidth: 500_000, resolution: Some((640, 360)), codecs: None, frame_rate: None, url: "360p.m3u8".into() },
-            HlsVariant { bandwidth: 2_000_000, resolution: Some((1280, 720)), codecs: None, frame_rate: None, url: "720p.m3u8".into() },
-            HlsVariant { bandwidth: 6_000_000, resolution: Some((1920, 1080)), codecs: None, frame_rate: None, url: "1080p.m3u8".into() },
+            HlsVariant {
+                bandwidth: 500_000,
+                resolution: Some((640, 360)),
+                codecs: None,
+                frame_rate: None,
+                url: "360p.m3u8".into(),
+            },
+            HlsVariant {
+                bandwidth: 2_000_000,
+                resolution: Some((1280, 720)),
+                codecs: None,
+                frame_rate: None,
+                url: "720p.m3u8".into(),
+            },
+            HlsVariant {
+                bandwidth: 6_000_000,
+                resolution: Some((1920, 1080)),
+                codecs: None,
+                frame_rate: None,
+                url: "1080p.m3u8".into(),
+            },
         ]
     }
 

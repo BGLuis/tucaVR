@@ -1,9 +1,13 @@
-.PHONY: all build install deploy test
+.PHONY: all build docker-build install deploy test
 
 all: deploy
 
 build:
 	./scripts/build.sh
+
+# Mesmo pipeline do `build`, dentro de um container (nada instalado no host).
+docker-build:
+	./scripts/docker-build.sh
 
 install:
 	adb install -r app/build/outputs/apk/debug/app-debug.apk

@@ -8,7 +8,6 @@ import org.junit.Test
 // aqui exercitada isoladamente porque o resto de ThumbnailGenerator precisa de
 // MediaMetadataRetriever/Bitmap reais (ver docs/TESTING-PLAN.md).
 class ThumbnailGeneratorTargetTimeTest {
-
     @Test
     fun tenPercentOfADurationThatFallsWithinTheClampRange() {
         val threeMinutesMs = 3 * 60 * 1000L

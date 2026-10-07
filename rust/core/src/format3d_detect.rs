@@ -10,8 +10,8 @@
 
 use ffmpeg_next as ffmpeg;
 use media_logic::format3d::{
-    detect as detect_logic, resolve_container_hint, DetectionConfidence, Format3D,
-    VideoProjection, VideoStereoMode,
+    detect as detect_logic, resolve_container_hint, DetectionConfidence, Format3D, VideoProjection,
+    VideoStereoMode,
 };
 
 use crate::demuxer::Demuxer;
@@ -34,7 +34,9 @@ pub fn detect(
             if let Some(mode_str) = meta.get("stereo_mode") {
                 stereo = match mode_str.to_lowercase().as_str() {
                     "mono" => Some(VideoStereoMode::Mono),
-                    "left_right" | "1" | "side_by_side_left_first" => Some(VideoStereoMode::SideBySideLeft),
+                    "left_right" | "1" | "side_by_side_left_first" => {
+                        Some(VideoStereoMode::SideBySideLeft)
+                    }
                     "right_left" | "right_first" => Some(VideoStereoMode::SideBySideRight),
                     "top_bottom" | "top_bottom_left_first" => Some(VideoStereoMode::TopBottomLeft),
                     "bottom_top" | "bottom_top_left_first" => Some(VideoStereoMode::TopBottomRight),
@@ -84,7 +86,12 @@ pub fn detect(
                     .or_else(|| meta.get("spherical-video"));
                 if let Some(proj_str) = tag_candidate {
                     let p_lower = proj_str.to_lowercase();
-                    if p_lower.contains("eac") || p_lower.contains("equiangular") {
+                    if p_lower.contains("fisheye")
+                        || p_lower.contains("rf52")
+                        || p_lower.contains("190")
+                    {
+                        projection = Some(VideoProjection::Fisheye190);
+                    } else if p_lower.contains("eac") || p_lower.contains("equiangular") {
                         projection = Some(VideoProjection::EquiangularCubemap);
                     } else if p_lower.contains("cubemap") || p_lower.contains("cube") {
                         projection = Some(VideoProjection::Cubemap);

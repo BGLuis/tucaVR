@@ -66,6 +66,23 @@
 #include "subtitle.vert.h"
 #include "subtitle.frag.h"
 #include "subtitle_layout.h"
+#include "environment.vert.h"
+#include "environment.frag.h"
+#include "environment_config.h"
+#include "skybox.vert.h"
+#include "skybox.frag.h"
+#include "vr_player_ambient.h"
+#include "ambient_downsample.vert.h"
+#include "ambient_downsample.frag.h"
+#include "ambient.vert.h"
+#include "ambient.frag.h"
+#define STB_IMAGE_IMPLEMENTATION
+#define STBI_ONLY_PNG
+#define STBI_NO_STDIO
+#include "stb_image.h"
+#define CGLTF_IMPLEMENTATION
+#include "cgltf.h"
+#include <android/asset_manager.h>
 
 #ifndef XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME
 #define XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME "XR_FB_display_refresh_rate"
@@ -78,6 +95,11 @@ std::string g_capturePath;
 std::mutex g_capturePathMutex;
 std::string g_sessionId = "--------";
 std::mutex g_sessionIdMutex;
+std::atomic<float> g_debugCameraYaw{0.0f};
+std::atomic<float> g_debugCameraPitch{0.0f};
+std::atomic<float> g_debugCameraX{0.0f};
+std::atomic<float> g_debugCameraY{0.0f};
+std::atomic<float> g_debugCameraZ{0.0f};
 
 static inline std::string get_current_session_id_vk_app() {
     std::lock_guard<std::mutex> lock(g_sessionIdMutex);
@@ -108,6 +130,8 @@ extern "C" {
     // Fase 0.4 T5: Foveated Rendering — ver ApplyFoveation abaixo.
     extern uint32_t get_foveation_enabled();
     extern uint32_t get_foveation_mode();
+    // Modo Ambiente: halo de luz ambiente (Vulkan-only) — ver UpdateInteraction.
+    extern uint32_t get_ambient_mode_enabled();
     // Upscaling de vídeo (Vulkan MQSR / SGSR1)
     extern uint32_t get_upscaling_mode();
     extern void evaluate_upscaling_ffi(
@@ -144,9 +168,8 @@ extern "C" {
     );
     extern uint32_t quality_controller_get_level();
     extern uint32_t quality_controller_get_reason();
-    // P-05 (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md): tid das 3 threads do
-    // pipeline Rust, pra registro via xrSetAndroidApplicationThreadKHR. Retornam 0 enquanto a
-    // thread correspondente ainda nao subiu.
+    // P-05: tid das 3 threads do pipeline Rust, pra registro via xrSetAndroidApplicationThreadKHR.
+    // Retornam 0 enquanto a thread correspondente ainda nao subiu.
     extern int32_t get_demux_thread_tid();
     extern int32_t get_video_thread_tid();
     extern int32_t get_audio_thread_tid();
@@ -200,8 +223,7 @@ extern "C" {
     extern uint64_t get_network_blocks_fetched();
     extern uint64_t get_network_blocks_discarded();
     extern uint32_t get_last_seek_latency_ms(); // debug, ver docs/DEBUGGING.md
-    // F4 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): coleta nova na origem — contadores
-    // que ja existiam no lado Rust mas nao tinham exposicao FFI nem campo no wire.
+    // F4: coleta nova na origem — contadores que ja existiam no lado Rust mas nao tinham exposicao FFI nem campo no wire.
     extern uint64_t get_network_fetch_failures();
     extern uint32_t get_network_sequential_streak();
     extern uint32_t get_network_throttled();
@@ -242,9 +264,27 @@ extern "C" {
     extern void set_passthrough_supported(uint32_t supported);
     extern float get_passthrough_opacity();
     extern uint32_t get_passthrough_edge_rendering();
+    // Suporte a Chroma Key em tempo real para vídeos 3D / 2D com Passthrough
+    extern uint32_t get_chroma_key_enabled();
+    extern void set_chroma_key_enabled(uint32_t enabled);
+    extern uint32_t get_chroma_key_color();
+    extern void set_chroma_key_color(uint32_t color);
+    extern float get_chroma_key_similarity();
+    extern void set_chroma_key_similarity(float sim);
+    extern float get_chroma_key_smoothness();
+    extern void set_chroma_key_smoothness(float smooth);
 }
 
 std::atomic<bool> g_resetScreenPositionRequested{false};
+std::atomic<bool> g_setScreenTransformRequested{false};
+std::atomic<float> g_requestedScreenPosX{0.0f};
+std::atomic<float> g_requestedScreenPosY{1.5f};
+std::atomic<float> g_requestedScreenPosZ{-2.4f};
+std::atomic<float> g_requestedScreenScaleX{2.8f};
+std::atomic<float> g_requestedScreenScaleY{1.575f};
+std::atomic<bool> g_environmentChangeRequested{false};
+char g_requestedEnvironmentId[64] = "void";
+std::mutex g_environmentMutex;
 
 // Preview de arrasto no seekbar renderizado sobre o quad do video
 // (T-seek-ux) — escrito por nativeUpdateScrubOverlay/nativeSetScrubOverlayVisible
@@ -262,6 +302,7 @@ std::mutex g_scrubOverlayMutex;
 std::atomic<bool> g_requestUiPanelVisible{false};
 std::atomic<bool> g_requestControlsPanelVisible{false};
 std::atomic<bool> g_stopVideoRequested{false};
+std::atomic<bool> g_newVideoSessionRequested{false};
 std::atomic<bool> g_modalPanelActive{false};
 std::atomic<bool> g_modalPanelShowRequested{false};
 std::atomic<bool> g_modalPanelHideRequested{false};
@@ -290,6 +331,7 @@ void ResetGlobalState() {
     g_requestUiPanelVisible.store(false);
     g_requestControlsPanelVisible.store(false);
     g_stopVideoRequested.store(false);
+    g_newVideoSessionRequested.store(false);
     g_modalPanelActive.store(false);
     g_modalPanelShowRequested.store(false);
     g_modalPanelHideRequested.store(false);
@@ -311,14 +353,11 @@ void ResetGlobalState() {
 namespace {
 
 constexpr int kEyeCount = 2;
-// Limite de entradas no cache de VkImage por AHardwareBuffer. Era 6
-// (herdado do m_eglImageCache do caminho GLES) — logcat de hardware desta
-// sessao (docs/NETWORK-IO-PERFORMANCE.md) mostrou evicao em TODO frame
-// (~10 ponteiros de AHardwareBuffer distintos circulando contra um limite
-// de 6), o que reimporta a VkImage/aloca descriptor set do zero a cada
-// frame em vez de reaproveitar. Subido pra folga real acima do numero de
-// buffers que o MediaCodec/ImageReader mantem em voo.
-constexpr size_t kVideoImageCacheLimit = 16;
+// Limite de entradas no cache de VkImage por AHardwareBuffer. Subido para 32
+// para acomodar com folga os 21-24 buffers de saida alocados pelo decodificador
+// Qualcomm C2 em 1080p (Snapdragon XR2 Gen 2) e evitar eviccoes sincronas no loop
+// de renderizacao OpenXR. Em 8K60, o hardware aloca apenas 6-8 buffers.
+constexpr size_t kVideoImageCacheLimit = 32;
 // Raio da esfera 360 (20m, mesmo do caminho GLES: kSphereRadius em vr_player_app.cpp:1604)
 constexpr float kSphereRadius = 20.0f;
 
@@ -337,7 +376,7 @@ constexpr uint32_t kModalTexHeight = 768;
 constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz
 constexpr float kFreezeThresholdMs = 250.0f; // stall claro, nao so reprojection
 
-// F5 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md), G2: bordas do histograma de frame
+// F5, G2: bordas do histograma de frame
 // time. 11.1 = cadencia alvo a 90Hz, 20 = kStutterThresholdMs, 250 = kFreezeThresholdMs —
 // os tres marcos que o relatorio pede desenhados no grafico; os demais so dao granularidade
 // na faixa intermediaria. 7 bordas -> 8 buckets (o ultimo pega tudo acima de 250ms).
@@ -363,12 +402,14 @@ StereoParams GetStereoParams(ScreenMode mode, int eye) {
     StereoParams p;
     p.eyeIndex   = eye;
     p.swapEyes   = (int)(get_swap_eyes() != 0);
-    p.polar180   = (mode == ScreenMode::Sphere180 || mode == ScreenMode::Vr180SBS) ? 1 : 0;
+    p.polar180   = (mode == ScreenMode::Sphere180 || mode == ScreenMode::Vr180SBS) ? 1 :
+                   (mode == ScreenMode::Fisheye190 || mode == ScreenMode::Fisheye190SBS) ? 2 : 0;
     switch (mode) {
         case ScreenMode::SBS:
         case ScreenMode::SBSHalf:
         case ScreenMode::Sphere360SBS:
         case ScreenMode::Vr180SBS:
+        case ScreenMode::Fisheye190SBS:
             p.stereoLayout = 1; // SBS
             break;
         case ScreenMode::OU:
@@ -408,7 +449,7 @@ StereoParams GetStereoParams(ScreenMode mode, int eye) {
     return p;
 }
 
-// R-07 (docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): contadores de draw call e
+// R-07: contadores de draw call e
 // triangulos do frame Vulkan em construcao — resetados uma vez por frame (antes do loop de
 // olhos) e somados em AppState.lastFrameDrawCallCount/lastFrameTriangleCount ao final do frame,
 // para alimentar o HUD/CSV de debug. Pre-requisito citado pelo relatorio transversal da Fase 0.4
@@ -458,7 +499,7 @@ PFN LoadXrFunction(XrInstance instance, const char* name) {
 // Forward declaration — struct AppState so e definida mais abaixo neste arquivo.
 struct AppState;
 
-// Auditoria pos-reinicio (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md, P-01/P-04/P-06):
+// Auditoria pos-reinicio (P-01/P-04/P-06):
 // unico ponto que deve escrever em state.displayRefreshRate depois da sessao criada. Pede a
 // taxa e SO atualiza o campo a partir de uma leitura confirmada via xrGetDisplayRefreshRateFB —
 // nunca a partir do valor pedido, que pode ser rejeitado silenciosamente pelo runtime. E
@@ -487,6 +528,9 @@ struct EyeSwapchain {
     std::vector<XrSwapchainImageVulkanKHR> images;
     std::vector<VkImageView> imageViews;
     std::vector<VkFramebuffer> framebuffers;
+    std::vector<VkImage> depthImages;
+    std::vector<VkDeviceMemory> depthMemories;
+    std::vector<VkImageView> depthImageViews;
 };
 
 // Representa um frame de video importado como VkImage a partir de um
@@ -506,7 +550,7 @@ struct VideoFrame {
     uint64_t lastUsedFrame = 0;
 };
 
-// D-04 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): sinal de frescor por grupo de campos.
+// D-04: sinal de frescor por grupo de campos.
 // Em vez de assumir que uma leitura e "atual" so porque foi buscada agora, rastreia a ultima
 // vez que um contador MONOTONICO do grupo de fato mudou de valor — se `net_blocks_fetched`
 // (por exemplo) fica parado por varias amostras, isso significa "sem dado novo ha Xms",
@@ -583,7 +627,7 @@ struct AppState {
 
     // Fase 0.2 T14 / Fase 0.4: Monitoramento Térmico e Qualidade Adaptativa (RNF-PERF-006)
     PFN_xrRequestDisplayRefreshRateFB pfnRequestDisplayRefreshRateFB = nullptr;
-    // Auditoria pos-reinicio (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md, P-01/P-06):
+    // Auditoria pos-reinicio (P-01/P-06):
     // a taxa real so pode ser conhecida via enumeracao + leitura confirmada do runtime — nunca
     // assumir o valor pedido. Ver RequestAndConfirmDisplayRefreshRate().
     PFN_xrEnumerateDisplayRefreshRatesFB pfnEnumerateDisplayRefreshRatesFB = nullptr;
@@ -631,7 +675,7 @@ struct AppState {
     float timestampPeriod = 0.0f;
     float lastGpuTimeMs = 0.0f;
     float smoothedGpuTimeMs = 0.0f;
-    // R-07 (docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): draw calls e triangulos do
+    // R-07: draw calls e triangulos do
     // ultimo frame completo (ambos os olhos), para o HUD de debug — ver g_frameDrawCallCount.
     uint32_t lastFrameDrawCallCount = 0;
     uint64_t lastFrameTriangleCount = 0;
@@ -642,7 +686,7 @@ struct AppState {
     bool upscalingEnabled = false;
     bool supportsMqsr = false;
     bool supportsPerfMetrics = false;
-    // F3 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): XR_META_performance_metrics.
+    // F3: XR_META_performance_metrics.
     // `supportsPerfMetrics` acima so significa que a EXTENSAO foi habilitada — o SISTEMA de
     // metricas precisa ser habilitado a parte via xrSetPerformanceMetricsStateMETA (ver
     // SetupPerformanceMetrics), ou toda query devolve XR_ERROR_VALIDATION_FAILURE.
@@ -664,8 +708,7 @@ struct AppState {
     // Resultados da ultima query bem-sucedida (1Hz, ver PollPerformanceMetrics) + bitmask de
     // validade (D-04: "nao suportado" tem que ser distinto de zero — bit 0 = contador nao
     // trouxe nenhum valor valido nesta amostra, nao "o valor e zero"). Especificacao PROIBE
-    // usar estes contadores para governar comportamento (ver 8.1 do relatorio) — diagnostico
-    // apenas, nunca entrada do QualityController.
+    // usar estes contadores para governar comportamento — diagnostico apenas, nunca entrada do QualityController.
     uint32_t perfMetricsValidMask = 0;
     float perfAppCpuFrametimeMs = 0.0f;
     float perfAppGpuFrametimeMs = 0.0f;
@@ -678,11 +721,11 @@ struct AppState {
     float perfDeviceCpuUtilWorst = 0.0f;
     float perfDeviceGpuUtil = 0.0f;
 
-    // F8 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, 8.2): ADPF — API 33+
+    // F8: ADPF — API 33+
     // (android_get_device_api_level(), verificado em runtime; NAO e telemetria, e uma API de
     // ESCRITA: o app declara a duracao de frame alvo e reporta a real, o sistema ajusta
     // escalonamento/frequencia de CPU/GPU. Ao contrario dos contadores de XR_META_performance_
-    // metrics (8.1), esta e FEITA para governar comportamento do SO — nao confundir as duas.
+    // metrics, esta e FEITA para governar comportamento do SO — nao confundir as duas.
     APerformanceHintManager* adpfManager = nullptr;
     APerformanceHintSession* adpfSession = nullptr;
     bool supportsAdpf = false;
@@ -703,6 +746,7 @@ struct AppState {
     uint32_t videoWidth = 0;
     uint32_t videoHeight = 0;
     VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;
+    VkFormat depthFormat = VK_FORMAT_UNDEFINED;
 
     // Estagio 2 — pipeline do quad estatico (fallback sem frame de video).
     VkRenderPass renderPass = VK_NULL_HANDLE;
@@ -774,6 +818,7 @@ struct AppState {
     EyeSwapchain controlsPanelSwapchain;
     EyeSwapchain modalPanelSwapchain;
     EyeSwapchain cursorSwapchain;
+    EyeSwapchain beamSwapchain;
     VkCommandBuffer uiCopyCmd = VK_NULL_HANDLE;
 
     // Preview de arrasto sobre o quad do video (T-seek-ux): reaproveita
@@ -790,6 +835,71 @@ struct AppState {
     uint32_t scrubOverlayTexWidth = 0;
     uint32_t scrubOverlayTexHeight = 0;
     bool scrubOverlayReady = false;
+
+    // Ambientes Virtuais 3D (Fase 0.3 §1 / Fase 0.5 §3)
+    VkPipeline envPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout envPipelineLayout = VK_NULL_HANDLE;
+    VkBuffer envVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory envVertexMemory = VK_NULL_HANDLE;
+    VkBuffer envIndexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory envIndexMemory = VK_NULL_HANDLE;
+    uint32_t envIndexCount = 0;
+    bool envMeshLoaded = false;
+    std::string currentEnvironmentId = "void";
+
+    // Skybox Cósmico 360 (Fase 0.5 §3)
+    VkPipeline skyboxPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout skyboxPipelineLayout = VK_NULL_HANDLE;
+    VkDescriptorSetLayout skyboxDescriptorSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool skyboxDescriptorPool = VK_NULL_HANDLE;
+    VkDescriptorSet skyboxDescriptorSet = VK_NULL_HANDLE;
+    VkImage skyboxImage = VK_NULL_HANDLE;
+    VkDeviceMemory skyboxImageMemory = VK_NULL_HANDLE;
+    VkImageView skyboxImageView = VK_NULL_HANDLE;
+    bool skyboxLoaded = false;
+
+    // Modo Ambiente: halo de luz atras da tela derivado da
+    // cor do frame (bias lighting). So caminho Vulkan, so ambiente Void
+    // (ver DrawAmbientHalo). Alvo offscreen 32x18 com ping-pong (2 imagens)
+    // pra suavizacao temporal por-textura: o passe de reducao (F2) le a
+    // imagem "anterior" (a que NAO esta escrevendo) e mistura com a nova
+    // media antes de escrever na "atual" — evita flash de tela cheia num
+    // corte de cena sem precisar reduzir a cor a um
+    // unico RGB (o halo mantem uma leve variacao espacial). Reusa
+    // state.uiSampler/uiDescriptorSetLayout (mesmo shape: sampler2D RGBA
+    // linear/clamp) — so precisa do proprio descriptor pool, no molde de
+    // scrubOverlayDescriptorPool acima (o pool de UI ja esta cheio).
+    VkRenderPass ambientRenderPass = VK_NULL_HANDLE;
+    std::array<VkImage, 2> ambientImage = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    std::array<VkDeviceMemory, 2> ambientImageMemory = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    std::array<VkImageView, 2> ambientImageView = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    std::array<VkFramebuffer, 2> ambientFramebuffer = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkDescriptorPool ambientDescriptorPool = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, 2> ambientDescriptorSet = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    // Indice (0 ou 1) da imagem com o resultado valido mais recente —
+    // DrawAmbientHalo sempre amostra esta; RecordAmbientDownsample escreve
+    // na OUTRA e so entao inverte este indice.
+    int ambientDisplayIndex = 0;
+    VkPipelineLayout ambientDownsamplePipelineLayout = VK_NULL_HANDLE;
+    VkPipeline ambientDownsamplePipeline = VK_NULL_HANDLE;
+    VkPipelineLayout ambientHaloPipelineLayout = VK_NULL_HANDLE;
+    VkPipeline ambientHaloPipeline = VK_NULL_HANDLE;
+    // Intensidade suavizada (MoveTowards em UpdateInteraction, vr_player_input_vulkan.h)
+    // — converge pra 0 quando qualquer gate falha (sphere/cubemap, termico,
+    // sem frame, fora do Void, Passthrough ativo) e pra kAmbientMaxIntensity
+    // quando todos passam. Zero custo extra: RecordAmbientDownsample e
+    // DrawAmbientHalo pulam o trabalho inteiro quando <= 0.
+    float ambientIntensity = 0.0f;
+    // Decimacao (2.3 do relatorio): o passe de reducao so roda 1 a cada
+    // kAmbientDecimationFrames frames — a cor de ambiente nao precisa de
+    // 90Hz pra parecer estavel.
+    uint32_t ambientFrameCounter = 0;
+    // Tempo real decorrido (nao numero de frames) desde a ultima execucao
+    // do passe de reducao — o blend de suavizacao usa isso em vez de um
+    // fator fixo por atualizacao, pra manter a mesma constante de tempo
+    // independente de variacao de framerate/decimacao.
+    std::chrono::steady_clock::time_point ambientLastUpdateTs{};
+    bool ambientLastUpdateValid = false;
 
     // OpenXR Actions
     // xrAttachSessionActionSets so pode ser chamada 1x por XrSession (spec) —
@@ -936,9 +1046,9 @@ struct AppState {
 
     // Tela virtual ajustavel via thumbstick (Etapa 6) — posicao/escala em
     // espaco "base" (antes do offset de cena acima).
-    XrVector3f screenPosition = {0.0f, 1.5f, -2.0f};
-    float screenScaleX = 1.6f;
-    float screenScaleY = 0.9f;
+    XrVector3f screenPosition = {0.0f, 1.5f, -2.4f};
+    float screenScaleX = 2.8f;
+    float screenScaleY = 1.575f;
 
     // Fase 0.3 Seção 2: Grab & Drag da tela virtual (T2.5)
     bool isScreenGrabbed = false;
@@ -1002,7 +1112,7 @@ struct AppState {
     float msSinceLastVideoFrame = 0.0f;
     bool videoStallLogged = false;
 
-    // D-02 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): contador cumulativo de episodios
+    // D-02: contador cumulativo de episodios
     // de stall de video JA CONCLUIDOS (msSinceLastVideoFrame excedeu kVideoStallThresholdMs e
     // um novo frame chegou depois). Distinto de stutterCount/freezeCount acima, que medem o
     // LOOP DE RENDER — um stall de video pode ficar invisivel atras de um loop "saudavel" a
@@ -1110,6 +1220,13 @@ struct VideoPushConstants {
     // T-HDR: 1 se o video atual e HDR (PQ/HLG) — o fragment shader aplica
     // tonemap HDR->SDR quando isto e nao-zero, ver video.frag.
     int   isHdr;
+    float texelWidth;
+    float texelHeight;
+    int   chromaKeyEnabled;
+    uint32_t chromaColorRgb;
+    float chromaSimilarity;
+    float chromaSmoothness;
+    float colorTemperature;
 };
 
 // Estagio 4: push constant para UI (MVP + alpha)
@@ -1134,6 +1251,13 @@ struct StereoPushConstants {
     // stereo_cubemap.frag. Sempre 0 no pipeline de foto (photoPipelineLayout,
     // ver ponto de uso) — nao existe decode HDR de foto estatica.
     int   isHdr;
+    float texelWidth;
+    float texelHeight;
+    int   chromaKeyEnabled;
+    uint32_t chromaColorRgb;
+    float chromaSimilarity;
+    float chromaSmoothness;
+    float colorTemperature;
 };
 
 struct BeamPushConstants {
@@ -1197,11 +1321,9 @@ void CreateXrInstance(AppState& state) {
     state.supportsPerfMetrics = isExtensionSupported(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME);
     if (state.supportsPerfMetrics) {
         extensions.push_back(XR_META_PERFORMANCE_METRICS_EXTENSION_NAME);
-        // F3 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): mensagem corrigida — isto so diz
-        // que a EXTENSAO foi negociada com o runtime. O SISTEMA de metricas em si so liga
-        // depois de xrSetPerformanceMetricsStateMETA (ver SetupPerformanceMetrics, chamado
-        // apos a sessao existir); antes a mensagem "detectada e habilitada" sugeria as duas
-        // coisas juntas, quando nenhuma query jamais era feita.
+        // F3: mensagem corrigida — isto so diz que a EXTENSAO foi negociada com o runtime.
+        // O SISTEMA de metricas em si so liga depois de xrSetPerformanceMetricsStateMETA
+        // (ver SetupPerformanceMetrics, chamado apos a sessao existir).
         LOGI("OpenXR: Extensão XR_META_performance_metrics detectada (sistema de métricas habilitado separadamente após a criação da sessão)");
     }
 
@@ -1228,8 +1350,7 @@ void CreateXrInstance(AppState& state) {
     }
 
     // Auditoria pos-reinicio (P-05): declara as threads do app como criticas ao runtime XR,
-    // pra evitar que o escalonador do Android as coloque em nucleos pequenos entre um boot e
-    // outro (ver docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+    // pra evitar que o escalonador do Android as coloque em nucleos pequenos entre um boot e outro.
     state.supportsAndroidThreadSettings = isExtensionSupported(XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME);
     if (state.supportsAndroidThreadSettings) {
         extensions.push_back(XR_KHR_ANDROID_THREAD_SETTINGS_EXTENSION_NAME);
@@ -1612,6 +1733,7 @@ void CreateSwapchains(AppState& state) {
     createPanelChain(state.controlsPanelSwapchain, kControlsTexWidth, kControlsTexHeight);
     createPanelChain(state.modalPanelSwapchain, kModalTexWidth, kModalTexHeight);
     createPanelChain(state.cursorSwapchain, 64, 64);
+    createPanelChain(state.beamSwapchain, 32, 128);
 }
 
 // Fase 0.4 T5: Foveated Rendering fixo via XR_FB_foveation — NAO e Vulkan
@@ -1698,8 +1820,8 @@ void SetupPassthrough(AppState& state) {
     LOGI("Passthrough: XrPassthroughFB + layer criados (pausados)");
 }
 
-// F3 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md): resolve os function pointers e os
-// XrPath dos 11 contadores (secao 8.1 do relatorio; per-core cpuN_utilization deliberadamente
+// F3: resolve os function pointers e os
+// XrPath dos 11 contadores (per-core cpuN_utilization deliberadamente
 // fora — custaria mais um campo por nucleo do XR2 Gen 2 pelo mesmo diagnostico ja coberto por
 // cpu_utilization_average/worst), e habilita o SISTEMA de metricas via
 // xrSetPerformanceMetricsStateMETA (distinto de so ter a extensao negociada — ver o log
@@ -1785,12 +1907,12 @@ void PollPerformanceMetrics(AppState& state) {
     state.perfMetricsValidMask = mask;
 }
 
-// F8 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, 8.2): declara à ADPF a duração de frame
+// F8: declara à ADPF a duração de frame
 // alvo e a thread que faz o trabalho critico — mesma thread ja registrada via
 // xrSetAndroidApplicationThreadKHR logo antes desta chamada (ver comentario la: "unica thread
 // nativa do app"). API 33+; checa a versao do SISTEMA em runtime (nao so a de compilacao),
 // porque o app roda em minSdk 26 mesmo com o manifest limitando supportedDevices a quest3/
-// quest3s (que reportam API 34 — ver relatorio 8.2 — mas o build nao pode assumir isso).
+// quest3s (que reportam API 34 mas o build nao pode assumir isso).
 void SetupAdpfSession(AppState& state) {
     if (android_get_device_api_level() < 33) {
         LOGI("ADPF: API do dispositivo < 33 — sessao nao criada");
@@ -1863,9 +1985,11 @@ void UpdatePassthrough(AppState& state) {
     if (!state.supportsPassthrough || state.passthroughLayer == XR_NULL_HANDLE) return;
 
     const bool userDesired = get_passthrough_enabled() != 0;
+    const bool chromaKeyActive = get_chroma_key_enabled() != 0;
     // Otimização de GPU (Phase 0.3 Seção 2): em modos 360° esféricos a geometria opaca
-    // cobre 100% do campo de visão, pausamos a camada para economizar 15-20% de GPU.
-    const bool desired = userDesired && !Is360Mode(state.screenMode);
+    // cobre 100% do campo de visão, pausamos a camada para economizar 15-20% de GPU,
+    // a menos que o Chroma Key esteja ativo (onde o fundo 360 é recortado para o passthrough).
+    const bool desired = userDesired && (!Is360Mode(state.screenMode) || chromaKeyActive);
 
     if (desired != state.passthroughActive) {
         if (desired) {
@@ -2046,67 +2170,31 @@ void ApplyFoveation(AppState& state, uint32_t level, float verticalOffset) {
     }
 }
 
-// Um subpass, um color attachment (o proprio swapchain image), sem depth —
-// o Estagio 2 desenha um unico quad que nunca se auto-oculta, entao nao ha
-// motivo para pagar o custo de um depth buffer ainda.
-void CreateRenderPass(AppState& state) {
-    VkAttachmentDescription colorAttachment{};
-    colorAttachment.format = state.swapchainFormat;
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    // UNDEFINED e seguro porque loadOp=CLEAR descarta o conteudo anterior de
-    // qualquer forma — mesmo raciocinio do Estagio 1.
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentReference colorRef{};
-    colorRef.attachment = 0;
-    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-
-    VkSubpassDescription subpass{};
-    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
-    subpass.colorAttachmentCount = 1;
-    subpass.pColorAttachments = &colorRef;
-
-    VkRenderPassCreateInfo renderPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-    renderPassInfo.attachmentCount = 1;
-    renderPassInfo.pAttachments = &colorAttachment;
-    renderPassInfo.subpassCount = 1;
-    renderPassInfo.pSubpasses = &subpass;
-    VKR(vkCreateRenderPass(state.vkDevice, &renderPassInfo, nullptr, &state.renderPass));
+static bool HasStencilComponent(VkFormat format) {
+    return format == VK_FORMAT_D32_SFLOAT_S8_UINT ||
+           format == VK_FORMAT_D24_UNORM_S8_UINT ||
+           format == VK_FORMAT_D16_UNORM_S8_UINT;
 }
 
-// Uma VkImageView + VkFramebuffer por imagem de cada swapchain de olho —
-// precisa do render pass (para o framebuffer) e das imagens ja enumeradas
-// (CreateSwapchains), entao roda depois dos dois.
-void CreateFramebuffers(AppState& state) {
-    for (auto& eyeChain : state.eyes) {
-        eyeChain.imageViews.resize(eyeChain.images.size());
-        eyeChain.framebuffers.resize(eyeChain.images.size());
-
-        for (size_t i = 0; i < eyeChain.images.size(); i++) {
-            VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
-            viewInfo.image = eyeChain.images[i].image;
-            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-            viewInfo.format = state.swapchainFormat;
-            viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-            viewInfo.subresourceRange.levelCount = 1;
-            viewInfo.subresourceRange.layerCount = 1;
-            VKR(vkCreateImageView(state.vkDevice, &viewInfo, nullptr, &eyeChain.imageViews[i]));
-
-            VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
-            fbInfo.renderPass = state.renderPass;
-            fbInfo.attachmentCount = 1;
-            fbInfo.pAttachments = &eyeChain.imageViews[i];
-            fbInfo.width = static_cast<uint32_t>(eyeChain.width);
-            fbInfo.height = static_cast<uint32_t>(eyeChain.height);
-            fbInfo.layers = 1;
-            VKR(vkCreateFramebuffer(state.vkDevice, &fbInfo, nullptr, &eyeChain.framebuffers[i]));
+static VkFormat FindSupportedDepthFormat(AppState& state) {
+    const VkFormat candidates[] = {
+        VK_FORMAT_D32_SFLOAT,
+        VK_FORMAT_D32_SFLOAT_S8_UINT,
+        VK_FORMAT_D24_UNORM_S8_UINT,
+        VK_FORMAT_D16_UNORM,
+        VK_FORMAT_D16_UNORM_S8_UINT
+    };
+    for (VkFormat format : candidates) {
+        VkFormatProperties props{};
+        vkGetPhysicalDeviceFormatProperties(state.vkPhysicalDevice, format, &props);
+        if ((props.optimalTilingFeatures & VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) ==
+            VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT) {
+            LOGI("Vulkan: Formato de profundidade selecionado: %d", static_cast<int>(format));
+            return format;
         }
     }
+    LOGE("Vulkan: Nenhum formato de depth buffer suportado pelo dispositivo!");
+    std::abort();
 }
 
 uint32_t FindMemoryType(AppState& state, uint32_t typeBits, VkMemoryPropertyFlags properties) {
@@ -2120,6 +2208,172 @@ uint32_t FindMemoryType(AppState& state, uint32_t typeBits, VkMemoryPropertyFlag
     }
     LOGE("Nenhum tipo de memoria Vulkan compativel encontrado (typeBits=0x%x)", typeBits);
     std::abort();
+}
+
+static uint32_t FindMemoryTypeWithFallback(AppState& state, uint32_t typeBits,
+                                           VkMemoryPropertyFlags preferred,
+                                           VkMemoryPropertyFlags fallback) {
+    VkPhysicalDeviceMemoryProperties memProps{};
+    vkGetPhysicalDeviceMemoryProperties(state.vkPhysicalDevice, &memProps);
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        if ((typeBits & (1u << i)) && ((memProps.memoryTypes[i].propertyFlags & preferred) == preferred)) {
+            return i;
+        }
+    }
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        if ((typeBits & (1u << i)) && ((memProps.memoryTypes[i].propertyFlags & fallback) == fallback)) {
+            return i;
+        }
+    }
+    LOGE("FindMemoryTypeWithFallback: nenhum tipo compativel (preferred=0x%x, fallback=0x%x)", preferred, fallback);
+    std::abort();
+}
+
+// RenderPass com Color Attachment + Depth Attachment.
+// Depth buffer usa loadOp=CLEAR e storeOp=DONT_CARE com transient allocation,
+// operando 100% na GMEM on-chip da GPU Adreno 740 sem gastar largura de banda de DRAM.
+void CreateRenderPass(AppState& state) {
+    state.depthFormat = FindSupportedDepthFormat(state);
+
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = state.swapchainFormat;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference colorRef{};
+    colorRef.attachment = 0;
+    colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentDescription depthAttachment{};
+    depthAttachment.format = state.depthFormat;
+    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference depthRef{};
+    depthRef.attachment = 1;
+    depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+    subpass.pDepthStencilAttachment = &depthRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                              VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.srcAccessMask = 0;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
+                              VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+                               VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+    std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
+
+    VkRenderPassCreateInfo renderPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    renderPassInfo.pAttachments = attachments.data();
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+    renderPassInfo.dependencyCount = 1;
+    renderPassInfo.pDependencies = &dependency;
+    VKR(vkCreateRenderPass(state.vkDevice, &renderPassInfo, nullptr, &state.renderPass));
+    LOGI("CreateRenderPass: renderPass criado com color (%d) e depth (%d)",
+         state.swapchainFormat, state.depthFormat);
+}
+
+// Uma VkImageView (Color) + VkImageView (Depth) + VkFramebuffer por imagem de cada swapchain de olho.
+void CreateFramebuffers(AppState& state) {
+    for (auto& eyeChain : state.eyes) {
+        eyeChain.imageViews.resize(eyeChain.images.size());
+        eyeChain.framebuffers.resize(eyeChain.images.size());
+        eyeChain.depthImages.resize(eyeChain.images.size());
+        eyeChain.depthMemories.resize(eyeChain.images.size());
+        eyeChain.depthImageViews.resize(eyeChain.images.size());
+
+        for (size_t i = 0; i < eyeChain.images.size(); i++) {
+            VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            viewInfo.image = eyeChain.images[i].image;
+            viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            viewInfo.format = state.swapchainFormat;
+            viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            viewInfo.subresourceRange.levelCount = 1;
+            viewInfo.subresourceRange.layerCount = 1;
+            VKR(vkCreateImageView(state.vkDevice, &viewInfo, nullptr, &eyeChain.imageViews[i]));
+
+            // Criar Depth Image para este framebuffer
+            VkImageCreateInfo depthImageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+            depthImageInfo.imageType = VK_IMAGE_TYPE_2D;
+            depthImageInfo.extent.width = static_cast<uint32_t>(eyeChain.width);
+            depthImageInfo.extent.height = static_cast<uint32_t>(eyeChain.height);
+            depthImageInfo.extent.depth = 1;
+            depthImageInfo.mipLevels = 1;
+            depthImageInfo.arrayLayers = 1;
+            depthImageInfo.format = state.depthFormat;
+            depthImageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+            depthImageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+            depthImageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
+                                   VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+            depthImageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            depthImageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+            // Fallback sem TRANSIENT_ATTACHMENT_BIT se o driver rejeitar
+            VkResult imgRes = vkCreateImage(state.vkDevice, &depthImageInfo, nullptr, &eyeChain.depthImages[i]);
+            if (imgRes != VK_SUCCESS) {
+                depthImageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+                VKR(vkCreateImage(state.vkDevice, &depthImageInfo, nullptr, &eyeChain.depthImages[i]));
+            }
+
+            VkMemoryRequirements memReq{};
+            vkGetImageMemoryRequirements(state.vkDevice, eyeChain.depthImages[i], &memReq);
+
+            VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+            allocInfo.allocationSize = memReq.size;
+            allocInfo.memoryTypeIndex = FindMemoryTypeWithFallback(
+                state, memReq.memoryTypeBits,
+                VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT,
+                VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &eyeChain.depthMemories[i]));
+            VKR(vkBindImageMemory(state.vkDevice, eyeChain.depthImages[i], eyeChain.depthMemories[i], 0));
+
+            VkImageViewCreateInfo depthViewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+            depthViewInfo.image = eyeChain.depthImages[i];
+            depthViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+            depthViewInfo.format = state.depthFormat;
+            depthViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT;
+            if (HasStencilComponent(state.depthFormat)) {
+                depthViewInfo.subresourceRange.aspectMask |= VK_IMAGE_ASPECT_STENCIL_BIT;
+            }
+            depthViewInfo.subresourceRange.baseMipLevel = 0;
+            depthViewInfo.subresourceRange.levelCount = 1;
+            depthViewInfo.subresourceRange.baseArrayLayer = 0;
+            depthViewInfo.subresourceRange.layerCount = 1;
+            VKR(vkCreateImageView(state.vkDevice, &depthViewInfo, nullptr, &eyeChain.depthImageViews[i]));
+
+            std::array<VkImageView, 2> attachments = {eyeChain.imageViews[i], eyeChain.depthImageViews[i]};
+
+            VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+            fbInfo.renderPass = state.renderPass;
+            fbInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+            fbInfo.pAttachments = attachments.data();
+            fbInfo.width = static_cast<uint32_t>(eyeChain.width);
+            fbInfo.height = static_cast<uint32_t>(eyeChain.height);
+            fbInfo.layers = 1;
+            VKR(vkCreateFramebuffer(state.vkDevice, &fbInfo, nullptr, &eyeChain.framebuffers[i]));
+        }
+    }
 }
 
 // Quad unitario em espaco local (-0.5..0.5 em X/Y, Z=0), escalado/posicionado
@@ -2283,6 +2537,11 @@ void CreateGraphicsPipeline(AppState& state) {
     layoutInfo.pPushConstantRanges = &pushConstantRange;
     VKR(vkCreatePipelineLayout(state.vkDevice, &layoutInfo, nullptr, &state.pipelineLayout));
 
+    VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
     VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     pipelineInfo.stageCount = 2;
     pipelineInfo.pStages = stages;
@@ -2292,6 +2551,7 @@ void CreateGraphicsPipeline(AppState& state) {
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisample;
     pipelineInfo.pColorBlendState = &colorBlend;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = state.pipelineLayout;
     pipelineInfo.renderPass = state.renderPass;
@@ -2483,6 +2743,11 @@ void CreateYcbcrAndVideoPipeline(AppState& state) {
     dynamicState.dynamicStateCount = static_cast<uint32_t>(std::size(dynamicStates));
     dynamicState.pDynamicStates = dynamicStates;
 
+    VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
     VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     pipelineInfo.stageCount = 2;
     pipelineInfo.pStages = stages;
@@ -2492,6 +2757,7 @@ void CreateYcbcrAndVideoPipeline(AppState& state) {
     pipelineInfo.pRasterizationState = &rasterizer;
     pipelineInfo.pMultisampleState = &multisample;
     pipelineInfo.pColorBlendState = &colorBlend;
+    pipelineInfo.pDepthStencilState = &depthStencil;
     pipelineInfo.pDynamicState = &dynamicState;
     pipelineInfo.layout = state.videoPipelineLayout;
     pipelineInfo.renderPass = state.renderPass;
@@ -2824,6 +3090,121 @@ static void InitCursorSwapchain(AppState& state) {
 
     XrSwapchainImageReleaseInfo rel{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     OXR(xrReleaseSwapchainImage(state.cursorSwapchain.handle, &rel));
+}
+
+// Inicializa o swapchain do raio laser (beam) como textura 32x128 com decaimento suave.
+// O feixe é compositado como XrCompositionLayerQuad após os painéis de UI, garantindo
+// que fique visível à frente da interface sem z-fighting ou oclusão por composição (R-01).
+static void InitBeamSwapchain(AppState& state) {
+    if (state.beamSwapchain.handle == XR_NULL_HANDLE || state.uiCopyCmd == VK_NULL_HANDLE) return;
+
+    XrSwapchainImageAcquireInfo acq{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+    uint32_t imgIndex = 0;
+    if (xrAcquireSwapchainImage(state.beamSwapchain.handle, &acq, &imgIndex) != XR_SUCCESS) return;
+    XrSwapchainImageWaitInfo wait{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+    wait.timeout = XR_INFINITE_DURATION;
+    if (xrWaitSwapchainImage(state.beamSwapchain.handle, &wait) != XR_SUCCESS) return;
+
+    constexpr uint32_t kWidth = 32;
+    constexpr uint32_t kHeight = 128;
+    std::vector<uint32_t> pixels(kWidth * kHeight, 0);
+
+    const float centerX = (kWidth - 1) * 0.5f;
+    for (uint32_t y = 0; y < kHeight; y++) {
+        float ny = (kHeight > 1) ? (static_cast<float>(y) / (kHeight - 1)) : 0.5f;
+        float yFade = 1.0f;
+        if (ny < 0.05f) yFade = ny / 0.05f;
+        else if (ny > 0.95f) yFade = (1.0f - ny) / 0.05f;
+
+        for (uint32_t x = 0; x < kWidth; x++) {
+            float dx = fabsf(static_cast<float>(x) - centerX) / (kWidth * 0.5f);
+            if (dx < 1.0f) {
+                float xFactor = cosf(dx * 1.5707963f);
+                float alphaVal = xFactor * xFactor * yFade;
+                uint8_t a = static_cast<uint8_t>(fminf(fmaxf(alphaVal, 0.0f), 1.0f) * 220.0f);
+
+                // Ciano/azul elétrico correspondente à cor do retículo e do beam original
+                uint8_t r = static_cast<uint8_t>(50.0f * (1.0f - dx));
+                uint8_t g = static_cast<uint8_t>(200.0f + 40.0f * (1.0f - dx));
+                uint8_t b = 255;
+
+                // Formato RGBA8 na memória: (A << 24) | (B << 16) | (G << 8) | R
+                pixels[y * kWidth + x] = (static_cast<uint32_t>(a) << 24) |
+                                         (static_cast<uint32_t>(b) << 16) |
+                                         (static_cast<uint32_t>(g) << 8) |
+                                         static_cast<uint32_t>(r);
+            }
+        }
+    }
+
+    const VkDeviceSize bufSize = (VkDeviceSize)kWidth * kHeight * 4;
+    VkBuffer stagingBuf;
+    VkDeviceMemory stagingMem;
+
+    VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bufInfo.size = bufSize;
+    bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    VKR(vkCreateBuffer(state.vkDevice, &bufInfo, nullptr, &stagingBuf));
+
+    VkMemoryRequirements memReqs;
+    vkGetBufferMemoryRequirements(state.vkDevice, stagingBuf, &memReqs);
+    uint32_t memTypeIdx = FindMemoryType(state, memReqs.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = memTypeIdx;
+    VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &stagingMem));
+    VKR(vkBindBufferMemory(state.vkDevice, stagingBuf, stagingMem, 0));
+
+    void* mapped = nullptr;
+    VKR(vkMapMemory(state.vkDevice, stagingMem, 0, bufSize, 0, &mapped));
+    memcpy(mapped, pixels.data(), (size_t)bufSize);
+    vkUnmapMemory(state.vkDevice, stagingMem);
+
+    VKR(vkResetCommandBuffer(state.uiCopyCmd, 0));
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VKR(vkBeginCommandBuffer(state.uiCopyCmd, &beginInfo));
+
+    VkImage beamImg = state.beamSwapchain.images[imgIndex].image;
+
+    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.image = beamImg;
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(state.uiCopyCmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {kWidth, kHeight, 1};
+    vkCmdCopyBufferToImage(state.uiCopyCmd, stagingBuf, beamImg, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    vkCmdPipelineBarrier(state.uiCopyCmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+        0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VKR(vkEndCommandBuffer(state.uiCopyCmd));
+
+    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &state.uiCopyCmd;
+    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
+    VKR(vkQueueWaitIdle(state.vkQueue));
+
+    vkDestroyBuffer(state.vkDevice, stagingBuf, nullptr);
+    vkFreeMemory(state.vkDevice, stagingMem, nullptr);
+
+    XrSwapchainImageReleaseInfo rel{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+    OXR(xrReleaseSwapchainImage(state.beamSwapchain.handle, &rel));
 }
 
 // Mesma logica de UpdateUiImageFromHwb, mas a fonte e um buffer de bytes RGBA
@@ -3456,7 +3837,12 @@ void CreateStereoPipeline(AppState& state) {
     pipeInfo.renderPass          = state.renderPass;
     VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.stereoPipeline));
 
-    // Segundo pipeline, so a topologia muda: o quad SBS/OU plano (RenderFrame,
+    VkPipelineDepthStencilStateCreateInfo dsStateFlat{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    dsStateFlat.depthTestEnable  = VK_TRUE;
+    dsStateFlat.depthWriteEnable = VK_TRUE;
+    dsStateFlat.depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+    // Segundo pipeline, so a topologia e depth mudam: o quad SBS/OU plano (RenderFrame,
     // ramo `else` de `sphereMode`) desenha `state.videoVertexBuffer` — 4
     // vertices ordenados pra TRIANGLE_STRIP (BL,BR,TL,TR, ver
     // CreateVideoVertexBuffer) via `vkCmdDraw(cmd, 4, ...)`, sem indices.
@@ -3466,6 +3852,7 @@ void CreateStereoPipeline(AppState& state) {
     // triangulo (bug reportado em teste real de hardware pros modos
     // SBS/OU planos). Mesmos shaders/layout, so a input assembly muda.
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+    pipeInfo.pDepthStencilState = &dsStateFlat;
     VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.stereoFlatPipeline));
 
     // Terceiro pipeline: Cubemap / EAC na esfera (stereo_cubemap.vert/frag)
@@ -3486,6 +3873,7 @@ void CreateStereoPipeline(AppState& state) {
 
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
     pipeInfo.pStages = cubeStages;
+    pipeInfo.pDepthStencilState = &dsState;
     VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.stereoCubemapPipeline));
 
     vkDestroyShaderModule(state.vkDevice, cubeVertMod, nullptr);
@@ -3646,12 +4034,19 @@ static void CreatePhotoPipeline(AppState& state) {
     pipeInfo.layout              = state.photoPipelineLayout;
     pipeInfo.renderPass          = state.renderPass;
 
+    VkPipelineDepthStencilStateCreateInfo dsStateFlat{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    dsStateFlat.depthTestEnable  = VK_TRUE;
+    dsStateFlat.depthWriteEnable = VK_TRUE;
+    dsStateFlat.depthCompareOp   = VK_COMPARE_OP_LESS_OR_EQUAL;
+
     // 1. Pipeline de foto para esfera 360/180
+    pipeInfo.pDepthStencilState = &dsState;
     VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.photoStereoPipeline));
 
     // 2. Pipeline de foto para quad plano (TRIANGLE_STRIP, cull none para Flat/SBS/OU)
     ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
     rast.cullMode = VK_CULL_MODE_NONE;
+    pipeInfo.pDepthStencilState = &dsStateFlat;
     VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipeInfo, nullptr, &state.photoStereoFlatPipeline));
 
     vkDestroyShaderModule(state.vkDevice, vertMod, nullptr);
@@ -4451,64 +4846,8 @@ static void DrawUiQuads(AppState& state, VkCommandBuffer cmd, const Mat4& proj, 
     VkDeviceSize offset = 0;
     SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
 
-    // Beam (Laser) — so desenha com um controle de fato rastreado neste
-    // frame (state.hasRay, setado por UpdateInteraction via xrLocateSpace).
-    if (state.hasRay) {
-        // D-02 fix: Quando o modal esta ativo e visivel, o beam e desenhado na
-        // camada de projecao (projectionLayer) mas o modal e um XrCompositionLayerQuad
-        // separado — nao ha depth test entre layers. Se o ray nao acertou o modal
-        // (lastHitDist < 0), escondemos o beam para evitar que ele apareca
-        // visualmente atravessando o modal.
-        bool skipBeam = state.modalActive && state.modalAlpha > 0.5f && state.lastHitDist < 0.0f;
-        if (!skipBeam) {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.beamPipeline);
-            vkCmdBindVertexBuffers(cmd, 0, 1, &state.beamVertexBuffer, &offset);
-
-            // O beam em CreateBeamResources vai de (0,0,0) ate (0,0,-2) no eixo Z negativo.
-            XrVector3f up = {0.0f, 1.0f, 0.0f};
-            if (fabs(state.lastRayDir.y) > 0.99f) up = {1.0f, 0.0f, 0.0f};
-            
-            XrVector3f z = {-state.lastRayDir.x, -state.lastRayDir.y, -state.lastRayDir.z};
-            
-            XrVector3f x = {
-                up.y * z.z - up.z * z.y,
-                up.z * z.x - up.x * z.z,
-                up.x * z.y - up.y * z.x
-            };
-            float xLen = sqrtf(x.x*x.x + x.y*x.y + x.z*x.z);
-            if (xLen > 0.0001f) { x.x /= xLen; x.y /= xLen; x.z /= xLen; }
-
-            XrVector3f y = {
-                z.y * x.z - z.z * x.y,
-                z.z * x.x - z.x * x.z,
-                z.x * x.y - z.y * x.x
-            };
-
-            float beamLength = 5.0f; // Default 5 meters if no hit
-            if (state.lastHitDist > 0.0f) {
-                beamLength = state.lastHitDist;
-            }
-            float zScale = beamLength;
-
-            Mat4 beamModel = {{
-                x.x, x.y, x.z, 0.0f,
-                y.x, y.y, y.z, 0.0f,
-                z.x * zScale, z.y * zScale, z.z * zScale, 0.0f,
-                state.lastRayOrigin.x, state.lastRayOrigin.y, state.lastRayOrigin.z, 1.0f
-            }};
-
-            BeamPushConstants beamPush{};
-            beamPush.mvp = Mat4Multiply(Mat4Multiply(proj, view), beamModel);
-            beamPush.color[0] = 0.0f; beamPush.color[1] = 0.5f; beamPush.color[2] = 1.0f; beamPush.color[3] = 1.0f;
-
-            vkCmdPushConstants(cmd, state.beamPipelineLayout,
-                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-                0, sizeof(beamPush), &beamPush);
-
-            vkCmdDraw(cmd, 2, 1, 0, 0); // 2 vertices para a linha
-            CountDrawCall(2);
-        } // !skipBeam
-    }
+    // O raio laser (beam) agora é renderizado como XrCompositionLayerQuad diretamente
+    // no compositor OpenXR (ver RenderFrame), garantindo que fique à frente de todos os painéis 2D (R-01).
 
     // Posicao/orientacao da tela, mas sem a escala dela: o icone tem tamanho
     // fixo. Por ultimo pra nao ser encoberto (pipelines aqui sao sem depth).
@@ -4548,20 +4887,1212 @@ static inline float PassthroughEnvAlpha(const AppState& state) {
     return state.passthroughActive ? 0.0f : 1.0f;
 }
 
+// Ambientes Virtuais 3D (Fase 0.3 §1 / Fase 0.5 §3)
+struct EnvironmentVertex {
+    float pos[3];
+    float normal[3];
+    float color[4];
+};
+
+struct EnvironmentPushConstants {
+    Mat4 mvp;
+    XrVector4f tintColor;
+    XrVector4f glowParams; // x: screenGlowIntensity (0.0-1.0), y: environmentBrightness (0.0-1.0), z/w: reserved
+    XrVector4f screenPos;  // xyz: screenWorldPosition
+};
+
+static void CreateEnvironmentPipeline(AppState& state) {
+    VkShaderModule vertModule = CreateShaderModule(state, kEnvironmentVertSpirv, kEnvironmentVertSpirv_size);
+    VkShaderModule fragModule = CreateShaderModule(state, kEnvironmentFragSpirv, kEnvironmentFragSpirv_size);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName = "main";
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName = "main";
+
+    VkVertexInputBindingDescription bindingDesc{};
+    bindingDesc.binding = 0;
+    bindingDesc.stride = sizeof(EnvironmentVertex);
+    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attrDesc[3]{};
+    attrDesc[0].location = 0;
+    attrDesc[0].binding = 0;
+    attrDesc[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attrDesc[0].offset = offsetof(EnvironmentVertex, pos);
+
+    attrDesc[1].location = 1;
+    attrDesc[1].binding = 0;
+    attrDesc[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attrDesc[1].offset = offsetof(EnvironmentVertex, normal);
+
+    attrDesc[2].location = 2;
+    attrDesc[2].binding = 0;
+    attrDesc[2].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attrDesc[2].offset = offsetof(EnvironmentVertex, color);
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &bindingDesc;
+    vertexInput.vertexAttributeDescriptionCount = 3;
+    vertexInput.pVertexAttributeDescriptions = attrDesc;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.blendEnable = VK_FALSE;
+    colorBlendAttachment.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dynamicState.dynamicStateCount = 2;
+    dynamicState.pDynamicStates = dynamicStates;
+
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(EnvironmentPushConstants);
+
+    VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &state.uiDescriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushConstantRange;
+
+    VKR(vkCreatePipelineLayout(state.vkDevice, &layoutInfo, nullptr, &state.envPipelineLayout));
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = state.envPipelineLayout;
+    pipelineInfo.renderPass = state.renderPass;
+    pipelineInfo.subpass = 0;
+
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &state.envPipeline));
+
+    vkDestroyShaderModule(state.vkDevice, fragModule, nullptr);
+    vkDestroyShaderModule(state.vkDevice, vertModule, nullptr);
+
+    LOGI("Ambiente: pipeline Vulkan de ambiente 3D criado com sucesso");
+}
+
+// Skybox Cósmico 360 (Fase 0.5 §3)
+struct SkyboxPushConstants {
+    Mat4 mvp;
+    XrVector4f tintColor;
+};
+
+static void CreateSkyboxPipeline(AppState& state) {
+    // 1. Descriptor Set Layout com sampler imutável uiSampler (RGBA)
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding         = 0;
+    binding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    binding.pImmutableSamplers = &state.uiSampler;
+
+    VkDescriptorSetLayoutCreateInfo dsLayout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    dsLayout.bindingCount = 1;
+    dsLayout.pBindings    = &binding;
+    VKR(vkCreateDescriptorSetLayout(state.vkDevice, &dsLayout, nullptr, &state.skyboxDescriptorSetLayout));
+
+    // 2. Descriptor Pool
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    poolInfo.maxSets       = 2;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes    = &poolSize;
+    VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.skyboxDescriptorPool));
+
+    // 3. Alocar Descriptor Set
+    VkDescriptorSetAllocateInfo dsAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    dsAlloc.descriptorPool     = state.skyboxDescriptorPool;
+    dsAlloc.descriptorSetCount = 1;
+    dsAlloc.pSetLayouts        = &state.skyboxDescriptorSetLayout;
+    VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.skyboxDescriptorSet));
+
+    // 4. Pipeline Layout com Push Constants
+    VkPushConstantRange pcRange{};
+    pcRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    pcRange.offset     = 0;
+    pcRange.size       = sizeof(SkyboxPushConstants);
+
+    VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.setLayoutCount         = 1;
+    layoutInfo.pSetLayouts            = &state.skyboxDescriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges    = &pcRange;
+    VKR(vkCreatePipelineLayout(state.vkDevice, &layoutInfo, nullptr, &state.skyboxPipelineLayout));
+
+    // 5. Shader Modules
+    VkShaderModule vertModule = CreateShaderModule(state, kSkyboxVertSpirv, kSkyboxVertSpirv_size);
+    VkShaderModule fragModule = CreateShaderModule(state, kSkyboxFragSpirv, kSkyboxFragSpirv_size);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName  = "main";
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName  = "main";
+
+    // 6. Vertex Input (mesmo layout que SphereVertex: pos [0..2], uv [3..4])
+    VkVertexInputBindingDescription bindingDesc{};
+    bindingDesc.binding   = 0;
+    bindingDesc.stride    = 5 * sizeof(float);
+    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attrDesc[2]{};
+    attrDesc[0].location = 0;
+    attrDesc[0].binding  = 0;
+    attrDesc[0].format   = VK_FORMAT_R32G32B32_SFLOAT;
+    attrDesc[0].offset   = 0;
+
+    attrDesc[1].location = 1;
+    attrDesc[1].binding  = 0;
+    attrDesc[1].format   = VK_FORMAT_R32G32_SFLOAT;
+    attrDesc[1].offset   = 3 * sizeof(float);
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vertexInput.vertexBindingDescriptionCount   = 1;
+    vertexInput.pVertexBindingDescriptions      = &bindingDesc;
+    vertexInput.vertexAttributeDescriptionCount = 2;
+    vertexInput.pVertexAttributeDescriptions    = attrDesc;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount  = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode    = VK_CULL_MODE_NONE; // Visão de dentro da esfera
+    rasterizer.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth   = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.blendEnable    = VK_FALSE;
+    colorBlendAttachment.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments    = &colorBlendAttachment;
+
+    VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dynamicState.dynamicStateCount = 2;
+    dynamicState.pDynamicStates    = dynamicStates;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipelineInfo.stageCount          = 2;
+    pipelineInfo.pStages             = stages;
+    pipelineInfo.pVertexInputState   = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState      = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState   = &multisampling;
+    pipelineInfo.pColorBlendState    = &colorBlending;
+    pipelineInfo.pDepthStencilState  = &depthStencil;
+    pipelineInfo.pDynamicState       = &dynamicState;
+    pipelineInfo.layout              = state.skyboxPipelineLayout;
+    pipelineInfo.renderPass          = state.renderPass;
+    pipelineInfo.subpass             = 0;
+
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &state.skyboxPipeline));
+
+    vkDestroyShaderModule(state.vkDevice, fragModule, nullptr);
+    vkDestroyShaderModule(state.vkDevice, vertModule, nullptr);
+
+    LOGI("Skybox: pipeline Vulkan de Skybox 360 criado com sucesso");
+}
+
+static void DestroyEnvironmentSkybox(AppState& state) {
+    if (state.skyboxImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.skyboxImageView, nullptr);
+        state.skyboxImageView = VK_NULL_HANDLE;
+    }
+    if (state.skyboxImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.skyboxImage, nullptr);
+        state.skyboxImage = VK_NULL_HANDLE;
+    }
+    if (state.skyboxImageMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.skyboxImageMemory, nullptr);
+        state.skyboxImageMemory = VK_NULL_HANDLE;
+    }
+    state.skyboxLoaded = false;
+}
+
+static bool LoadEnvironmentSkybox(AppState& state, const std::string& skyboxAssetPath) {
+    DestroyEnvironmentSkybox(state);
+
+    if (skyboxAssetPath.empty() || !state.app || !state.app->activity || !state.app->activity->assetManager) {
+        return false;
+    }
+
+    std::string fullPath = skyboxAssetPath;
+    if (fullPath.rfind("environments/", 0) != 0) {
+        fullPath = "environments/" + fullPath;
+    }
+
+    AAsset* asset = AAssetManager_open(state.app->activity->assetManager, fullPath.c_str(), AASSET_MODE_BUFFER);
+    if (!asset) {
+        LOGE("Skybox: Falha ao abrir asset '%s'", fullPath.c_str());
+        return false;
+    }
+
+    size_t assetSize = static_cast<size_t>(AAsset_getLength(asset));
+    const void* assetBuffer = AAsset_getBuffer(asset);
+    if (!assetBuffer || assetSize == 0) {
+        AAsset_close(asset);
+        LOGE("Skybox: Buffer de asset invalido para '%s'", fullPath.c_str());
+        return false;
+    }
+
+    int width = 0, height = 0, channels = 0;
+    stbi_uc* pixels = stbi_load_from_memory(
+        reinterpret_cast<const stbi_uc*>(assetBuffer),
+        static_cast<int>(assetSize),
+        &width, &height, &channels, 4);
+    AAsset_close(asset);
+
+    if (!pixels || width <= 0 || height <= 0) {
+        LOGE("Skybox: Falha ao decodificar imagem PNG de '%s'", fullPath.c_str());
+        if (pixels) stbi_image_free(pixels);
+        return false;
+    }
+
+    LOGI("Skybox: Decodificado '%s' (%dx%d, 4 canais)", fullPath.c_str(), width, height);
+
+    CreateUiImage(state, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
+                  state.skyboxImage, state.skyboxImageMemory, state.skyboxImageView);
+
+    UpdateUiImageFromBytes(state, pixels, static_cast<uint32_t>(width), static_cast<uint32_t>(height), state.skyboxImage);
+    stbi_image_free(pixels);
+
+    VkDescriptorImageInfo imgInfo{};
+    imgInfo.sampler     = state.uiSampler;
+    imgInfo.imageView   = state.skyboxImageView;
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet          = state.skyboxDescriptorSet;
+    write.dstBinding      = 0;
+    write.descriptorCount = 1;
+    write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo      = &imgInfo;
+    vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+
+    state.skyboxLoaded = true;
+    LOGI("Skybox: '%s' carregado e vinculado com sucesso ao pipeline Vulkan", fullPath.c_str());
+    return true;
+}
+
+static void DrawSkyboxIfLoaded(
+    AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view) {
+    if (!state.skyboxLoaded || state.skyboxPipeline == VK_NULL_HANDLE ||
+        state.sphereVertexBuffer == VK_NULL_HANDLE || state.passthroughActive) {
+        return;
+    }
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.skyboxPipeline);
+    vkCmdBindDescriptorSets(
+        cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.skyboxPipelineLayout,
+        0, 1, &state.skyboxDescriptorSet, 0, nullptr);
+
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
+    vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+    // Skybox rotaciona com a orientação da cabeça e com o yaw da cena, mas sem translação
+    Mat4 skyboxModel = Mat4RotationY(state.sceneYawOffset);
+    Mat4 viewNoTrans = view;
+    viewNoTrans.m[12] = 0.0f;
+    viewNoTrans.m[13] = 0.0f;
+    viewNoTrans.m[14] = 0.0f;
+
+    const float skyboxBrightness = get_environment_brightness();
+    SkyboxPushConstants skyboxPc{};
+    skyboxPc.mvp = Mat4Multiply(Mat4Multiply(proj, viewNoTrans), skyboxModel);
+    skyboxPc.tintColor = {skyboxBrightness, skyboxBrightness, skyboxBrightness, 1.0f};
+
+    vkCmdPushConstants(
+        cmd, state.skyboxPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT,
+        0, sizeof(skyboxPc), &skyboxPc);
+
+    vkCmdDrawIndexed(cmd, state.sphereIndexCount, 1, 0, 0, 0);
+    CountDrawCall(state.sphereIndexCount);
+}
+
+static bool LoadEnvironmentMesh(AppState& state, const std::string& envId) {
+    if (state.envVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.envVertexBuffer, nullptr);
+        state.envVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.envVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.envVertexMemory, nullptr);
+        state.envVertexMemory = VK_NULL_HANDLE;
+    }
+    if (state.envIndexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.envIndexBuffer, nullptr);
+        state.envIndexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.envIndexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.envIndexMemory, nullptr);
+        state.envIndexMemory = VK_NULL_HANDLE;
+    }
+    state.envIndexCount = 0;
+    state.envMeshLoaded = false;
+    DestroyEnvironmentSkybox(state);
+    state.currentEnvironmentId = envId;
+
+    if (envId == "void" || envId.empty()) {
+        LOGI("Ambiente: Modo Void selecionado (sem geometria 3D nem skybox)");
+        state.screenPosition = {0.0f, 1.5f, -2.4f};
+        state.screenScaleX = 2.8f;
+        state.screenScaleY = 1.575f;
+        return true;
+    }
+
+    if (!state.app || !state.app->activity || !state.app->activity->assetManager) {
+        LOGE("Ambiente: AAssetManager nao disponivel");
+        return false;
+    }
+
+    // Carregar e parsear config.ini do ambiente
+    std::string configPath = "environments/" + envId + "/config.ini";
+    AAsset* cfgAsset = AAssetManager_open(state.app->activity->assetManager, configPath.c_str(), AASSET_MODE_BUFFER);
+    EnvironmentConfig envConfig;
+    if (cfgAsset) {
+        size_t cfgSize = static_cast<size_t>(AAsset_getLength(cfgAsset));
+        const char* cfgBuffer = static_cast<const char*>(AAsset_getBuffer(cfgAsset));
+        if (cfgBuffer && cfgSize > 0) {
+            std::string iniContent(cfgBuffer, cfgSize);
+            envConfig = EnvironmentConfig::Parse(iniContent);
+            LOGI("Ambiente: config.ini parseado para '%s' (pos=%.2f,%.2f,%.2f, scale=%.2f,%.2f, skybox='%s')",
+                 envId.c_str(), envConfig.screenPosX, envConfig.screenPosY, envConfig.screenPosZ,
+                 envConfig.screenScaleX, envConfig.screenScaleY, envConfig.skyboxFile.c_str());
+
+            // Ancorar a tela na posição especificada no ambiente
+            state.screenPosition.x = envConfig.screenPosX;
+            state.screenPosition.y = envConfig.screenPosY;
+            state.screenPosition.z = envConfig.screenPosZ;
+            state.screenScaleX = envConfig.screenScaleX;
+            state.screenScaleY = envConfig.screenScaleY;
+        }
+        AAsset_close(cfgAsset);
+    }
+
+    // Carregar Skybox se configurado
+    if (!envConfig.skyboxFile.empty()) {
+        std::string skyboxPath = envConfig.skyboxFile;
+        if (skyboxPath.rfind("environments/", 0) != 0) {
+            skyboxPath = "environments/" + skyboxPath;
+        }
+        LoadEnvironmentSkybox(state, skyboxPath);
+    }
+
+    std::string assetPath = envConfig.modelFile.empty() ? ("environments/" + envId + "/model.glb") : envConfig.modelFile;
+    if (assetPath.rfind("environments/", 0) != 0) {
+        assetPath = "environments/" + assetPath;
+    }
+
+    AAsset* asset = AAssetManager_open(state.app->activity->assetManager, assetPath.c_str(), AASSET_MODE_BUFFER);
+    if (!asset) {
+        if (state.skyboxLoaded) {
+            LOGI("Ambiente: '%s' possui apenas skybox (sem malha model.glb)", envId.c_str());
+            return true;
+        }
+        LOGE("Ambiente: Falha ao abrir asset '%s'", assetPath.c_str());
+        return false;
+    }
+
+    size_t assetSize = static_cast<size_t>(AAsset_getLength(asset));
+    const void* assetBuffer = AAsset_getBuffer(asset);
+    if (!assetBuffer || assetSize == 0) {
+        AAsset_close(asset);
+        LOGE("Ambiente: Buffer de asset invalido para '%s'", assetPath.c_str());
+        return false;
+    }
+
+    cgltf_options options{};
+    cgltf_data* data = nullptr;
+    cgltf_result res = cgltf_parse(&options, assetBuffer, assetSize, &data);
+    if (res != cgltf_result_success || !data) {
+        AAsset_close(asset);
+        LOGE("Ambiente: Falha ao parsear GLB '%s' (erro %d)", assetPath.c_str(), static_cast<int>(res));
+        return false;
+    }
+
+    res = cgltf_load_buffers(&options, data, nullptr);
+    if (res != cgltf_result_success) {
+        cgltf_free(data);
+        AAsset_close(asset);
+        LOGE("Ambiente: Falha ao carregar buffers de '%s'", assetPath.c_str());
+        return false;
+    }
+
+    std::vector<EnvironmentVertex> vertices;
+    std::vector<uint32_t> indices;
+
+    for (size_t m = 0; m < data->meshes_count; ++m) {
+        const auto& mesh = data->meshes[m];
+        for (size_t p = 0; p < mesh.primitives_count; ++p) {
+            const auto& prim = mesh.primitives[p];
+            if (prim.type != cgltf_primitive_type_triangles) continue;
+
+            uint32_t vertexBase = static_cast<uint32_t>(vertices.size());
+            cgltf_accessor* posAcc = nullptr;
+            cgltf_accessor* normAcc = nullptr;
+            cgltf_accessor* colorAcc = nullptr;
+
+            for (size_t a = 0; a < prim.attributes_count; ++a) {
+                if (prim.attributes[a].type == cgltf_attribute_type_position) posAcc = prim.attributes[a].data;
+                else if (prim.attributes[a].type == cgltf_attribute_type_normal) normAcc = prim.attributes[a].data;
+                else if (prim.attributes[a].type == cgltf_attribute_type_color) colorAcc = prim.attributes[a].data;
+            }
+
+            if (!posAcc) continue;
+
+            size_t count = posAcc->count;
+            for (size_t i = 0; i < count; ++i) {
+                EnvironmentVertex v{};
+                v.pos[0] = v.pos[1] = v.pos[2] = 0.0f;
+                v.normal[0] = 0.0f; v.normal[1] = 1.0f; v.normal[2] = 0.0f;
+                v.color[0] = v.color[1] = v.color[2] = v.color[3] = 1.0f;
+
+                cgltf_accessor_read_float(posAcc, i, v.pos, 3);
+                if (normAcc) cgltf_accessor_read_float(normAcc, i, v.normal, 3);
+                if (colorAcc) {
+                    float c[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+                    cgltf_accessor_read_float(colorAcc, i, c, colorAcc->type == cgltf_type_vec4 ? 4 : 3);
+                    v.color[0] = c[0]; v.color[1] = c[1]; v.color[2] = c[2]; v.color[3] = c[3];
+                }
+                vertices.push_back(v);
+            }
+
+            if (prim.indices) {
+                size_t icount = prim.indices->count;
+                for (size_t i = 0; i < icount; ++i) {
+                    indices.push_back(vertexBase + static_cast<uint32_t>(cgltf_accessor_read_index(prim.indices, i)));
+                }
+            } else {
+                for (size_t i = 0; i < count; ++i) {
+                    indices.push_back(vertexBase + static_cast<uint32_t>(i));
+                }
+            }
+        }
+    }
+
+    cgltf_free(data);
+    AAsset_close(asset);
+
+    if (vertices.empty() || indices.empty()) {
+        LOGE("Ambiente: Nenhuma geometria util encontrada em '%s'", assetPath.c_str());
+        return false;
+    }
+
+    // Criar Vertex Buffer
+    VkBufferCreateInfo vbInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    vbInfo.size = vertices.size() * sizeof(EnvironmentVertex);
+    vbInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    vbInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VKR(vkCreateBuffer(state.vkDevice, &vbInfo, nullptr, &state.envVertexBuffer));
+
+    VkMemoryRequirements vmr{};
+    vkGetBufferMemoryRequirements(state.vkDevice, state.envVertexBuffer, &vmr);
+    VkMemoryAllocateInfo vai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    vai.allocationSize = vmr.size;
+    vai.memoryTypeIndex = FindMemoryType(
+        state, vmr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VKR(vkAllocateMemory(state.vkDevice, &vai, nullptr, &state.envVertexMemory));
+    VKR(vkBindBufferMemory(state.vkDevice, state.envVertexBuffer, state.envVertexMemory, 0));
+
+    void* mappedVerts = nullptr;
+    VKR(vkMapMemory(state.vkDevice, state.envVertexMemory, 0, vbInfo.size, 0, &mappedVerts));
+    std::memcpy(mappedVerts, vertices.data(), vbInfo.size);
+    vkUnmapMemory(state.vkDevice, state.envVertexMemory);
+
+    // Criar Index Buffer
+    VkBufferCreateInfo ibInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    ibInfo.size = indices.size() * sizeof(uint32_t);
+    ibInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    ibInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VKR(vkCreateBuffer(state.vkDevice, &ibInfo, nullptr, &state.envIndexBuffer));
+
+    VkMemoryRequirements imr{};
+    vkGetBufferMemoryRequirements(state.vkDevice, state.envIndexBuffer, &imr);
+    VkMemoryAllocateInfo iai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    iai.allocationSize = imr.size;
+    iai.memoryTypeIndex = FindMemoryType(
+        state, imr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VKR(vkAllocateMemory(state.vkDevice, &iai, nullptr, &state.envIndexMemory));
+    VKR(vkBindBufferMemory(state.vkDevice, state.envIndexBuffer, state.envIndexMemory, 0));
+
+    void* mappedIndices = nullptr;
+    VKR(vkMapMemory(state.vkDevice, state.envIndexMemory, 0, ibInfo.size, 0, &mappedIndices));
+    std::memcpy(mappedIndices, indices.data(), ibInfo.size);
+    vkUnmapMemory(state.vkDevice, state.envIndexMemory);
+
+    state.envIndexCount = static_cast<uint32_t>(indices.size());
+    state.envMeshLoaded = true;
+    LOGI("Ambiente: '%s' carregado com sucesso (%zu vertices, %u indices, %zu bytes)",
+         envId.c_str(), vertices.size(), state.envIndexCount, vbInfo.size + ibInfo.size);
+    return true;
+}
+
+static void DrawEnvironmentIfLoaded(
+    AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
+    if (!state.envMeshLoaded || state.envPipeline == VK_NULL_HANDLE ||
+        state.envVertexBuffer == VK_NULL_HANDLE || state.passthroughActive) {
+        return;
+    }
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.envPipeline);
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &state.envVertexBuffer, &offset);
+    vkCmdBindIndexBuffer(cmd, state.envIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+    VkDescriptorSet envAmbientDs = (state.ambientDescriptorSet[state.ambientDisplayIndex] != VK_NULL_HANDLE)
+        ? state.ambientDescriptorSet[state.ambientDisplayIndex]
+        : state.uiDescriptorSet;
+    if (envAmbientDs != VK_NULL_HANDLE) {
+        vkCmdBindDescriptorSets(
+            cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.envPipelineLayout,
+            0, 1, &envAmbientDs, 0, nullptr);
+    }
+
+    const float envBrightness = get_environment_brightness();
+    EnvironmentPushConstants envPc{};
+    Mat4 envModel = Mat4Multiply(
+        Mat4Translation(state.sceneTranslationOffset.x, state.sceneTranslationOffset.y, state.sceneTranslationOffset.z),
+        Mat4RotationY(state.sceneYawOffset)
+    );
+    envPc.mvp = Mat4Multiply(Mat4Multiply(proj, view), envModel);
+    envPc.tintColor = {envBrightness, envBrightness, envBrightness, 1.0f};
+
+    // Screen Glow difuso nos ambientes 3D (Fase 0.5 §4 T4.1 / T4.2)
+    SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
+    const bool is3dRoom = (state.currentEnvironmentId == "cinema" || state.currentEnvironmentId == "living_room");
+    const float glowIntensity = (is3dRoom && state.thermalLevel < 2) ? state.ambientIntensity : 0.0f;
+    envPc.glowParams = {glowIntensity, envBrightness, 0.0f, 0.0f};
+    envPc.screenPos = {scene.screenCenter.x, scene.screenCenter.y, scene.screenCenter.z, 1.0f};
+
+    vkCmdPushConstants(
+        cmd, state.envPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        0, sizeof(envPc), &envPc);
+
+    vkCmdDrawIndexed(cmd, state.envIndexCount, 1, 0, 0, 0);
+    CountDrawCall(state.envIndexCount);
+}
+
+// ============================================================================
+// Modo Ambiente (halo de luz derivado do frame)
+// ============================================================================
+//
+// F1 (CreateAmbientTarget): primeiro render target offscreen do app — ate
+// aqui nao existia nenhum (grep de VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+// retornava zero). 32x18 R8G8B8A8_UNORM, ping-pong (2 imagens).
+// F2 (CreateAmbientDownsamplePipeline / RecordAmbientDownsample): reduz a
+// textura YCbCr do frame de video pra essa grade pequena, 1x por frame
+// (nao por olho — a cor de ambiente e monoscopica por definicao).
+// F3 (CreateAmbientHaloPipeline / DrawAmbientHalo): quad atras da tela,
+// amostra a textura reduzida com queda smoothstep na borda.
+// F4 (suavizacao/gates): embutido em RecordAmbientDownsample (blend
+// temporal por-textura) e em UpdateInteraction, vr_player_input_vulkan.h
+// (state.ambientIntensity via MoveTowards, mesmos gates da secao 2.4 do
+// relatorio + Passthrough, que passou a existir de verdade depois do
+// relatorio original).
+
+struct AmbientDownsamplePushConstants {
+    float blend;
+};
+
+struct AmbientHaloPushConstants {
+    Mat4 mvp;
+    float insetScale;
+    float edgeWidth;
+    float intensity;
+    float aspect; // screenScaleX / screenScaleY — corrige o falloff pra nao ficar esticado
+};
+
+// F1: cria o alvo offscreen (render pass + 2 imagens ping-pong + descriptor
+// sets). Chamada 1x na inicializacao, DEPOIS de CreateUiPipeline — reusa
+// state.uiSampler/state.uiDescriptorSetLayout (mesmo shape: sampler2D RGBA
+// linear/clamp), entao esses dois precisam existir primeiro.
+static void CreateAmbientTarget(AppState& state) {
+    const VkFormat format = VK_FORMAT_R8G8B8A8_UNORM;
+    VkFormatProperties formatProps{};
+    vkGetPhysicalDeviceFormatProperties(state.vkPhysicalDevice, format, &formatProps);
+    if (!(formatProps.optimalTilingFeatures & VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)) {
+        LOGE("Modo Ambiente: VK_FORMAT_R8G8B8A8_UNORM nao suportado como color attachment — halo desabilitado");
+        return;
+    }
+
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = format;
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; // sobrescrito por inteiro a cada execucao
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; // pronto pra DrawAmbientHalo amostrar
+
+    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    dependency.srcAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo rpInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+    rpInfo.attachmentCount = 1;
+    rpInfo.pAttachments = &colorAttachment;
+    rpInfo.subpassCount = 1;
+    rpInfo.pSubpasses = &subpass;
+    rpInfo.dependencyCount = 1;
+    rpInfo.pDependencies = &dependency;
+    VKR(vkCreateRenderPass(state.vkDevice, &rpInfo, nullptr, &state.ambientRenderPass));
+
+    for (int i = 0; i < 2; i++) {
+        VkImageCreateInfo imgInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+        imgInfo.imageType = VK_IMAGE_TYPE_2D;
+        imgInfo.extent = {vrplayer::kAmbientTargetWidth, vrplayer::kAmbientTargetHeight, 1};
+        imgInfo.mipLevels = 1;
+        imgInfo.arrayLayers = 1;
+        imgInfo.format = format;
+        imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+        imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imgInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+        imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VKR(vkCreateImage(state.vkDevice, &imgInfo, nullptr, &state.ambientImage[i]));
+
+        VkMemoryRequirements memReq{};
+        vkGetImageMemoryRequirements(state.vkDevice, state.ambientImage[i], &memReq);
+        VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        allocInfo.allocationSize = memReq.size;
+        allocInfo.memoryTypeIndex = FindMemoryType(state, memReq.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &state.ambientImageMemory[i]));
+        VKR(vkBindImageMemory(state.vkDevice, state.ambientImage[i], state.ambientImageMemory[i], 0));
+
+        VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        viewInfo.image = state.ambientImage[i];
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = format;
+        viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VKR(vkCreateImageView(state.vkDevice, &viewInfo, nullptr, &state.ambientImageView[i]));
+
+        VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+        fbInfo.renderPass = state.ambientRenderPass;
+        fbInfo.attachmentCount = 1;
+        fbInfo.pAttachments = &state.ambientImageView[i];
+        fbInfo.width = vrplayer::kAmbientTargetWidth;
+        fbInfo.height = vrplayer::kAmbientTargetHeight;
+        fbInfo.layers = 1;
+        VKR(vkCreateFramebuffer(state.vkDevice, &fbInfo, nullptr, &state.ambientFramebuffer[i]));
+    }
+
+    // Descriptor pool/sets proprios — reusa uiDescriptorSetLayout/uiSampler,
+    // mas o pool de UI (state.uiDescriptorPool) ja esta cheio (3/3, ver
+    // CreateUiPipeline), mesmo motivo de scrubOverlayDescriptorPool acima.
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
+    poolInfo.maxSets = 2;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.ambientDescriptorPool));
+
+    for (int i = 0; i < 2; i++) {
+        VkDescriptorSetAllocateInfo dsAlloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        dsAlloc.descriptorPool = state.ambientDescriptorPool;
+        dsAlloc.descriptorSetCount = 1;
+        dsAlloc.pSetLayouts = &state.uiDescriptorSetLayout;
+        VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.ambientDescriptorSet[i]));
+
+        VkDescriptorImageInfo imgInfo{};
+        imgInfo.sampler = state.uiSampler;
+        imgInfo.imageView = state.ambientImageView[i];
+        imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet = state.ambientDescriptorSet[i];
+        write.dstBinding = 0;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &imgInfo;
+        vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+    }
+
+    // As duas imagens comecam em VK_IMAGE_LAYOUT_UNDEFINED — mas o
+    // descriptor set acima ja declara SHADER_READ_ONLY_OPTIMAL. Sem isso, a
+    // PRIMEIRA execucao de RecordAmbientDownsample amostraria a imagem
+    // "anterior" (ainda UNDEFINED) num layout que nao bate com o real —
+    // erro de validacao, independente do blend descartar o valor lido.
+    // Limpa pra preto e transiciona as duas 1x, fora do loop de frame.
+    VkCommandBufferAllocateInfo cbAlloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cbAlloc.commandPool = state.vkCommandPool;
+    cbAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbAlloc.commandBufferCount = 1;
+    VkCommandBuffer initCmd = VK_NULL_HANDLE;
+    VKR(vkAllocateCommandBuffers(state.vkDevice, &cbAlloc, &initCmd));
+
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VKR(vkBeginCommandBuffer(initCmd, &beginInfo));
+
+    VkClearColorValue black{};
+    for (int i = 0; i < 2; i++) {
+        VkImageMemoryBarrier toDst{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        toDst.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        toDst.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toDst.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toDst.image = state.ambientImage[i];
+        toDst.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(initCmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &toDst);
+
+        VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdClearColorImage(initCmd, state.ambientImage[i], VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &black, 1, &range);
+
+        VkImageMemoryBarrier toRead{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+        toRead.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        toRead.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        toRead.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        toRead.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        toRead.image = state.ambientImage[i];
+        toRead.subresourceRange = range;
+        vkCmdPipelineBarrier(initCmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+            0, 0, nullptr, 0, nullptr, 1, &toRead);
+    }
+
+    VKR(vkEndCommandBuffer(initCmd));
+    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &initCmd;
+    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
+    VKR(vkQueueWaitIdle(state.vkQueue));
+    vkFreeCommandBuffers(state.vkDevice, state.vkCommandPool, 1, &initCmd);
+
+    LOGI("Modo Ambiente: alvo offscreen %ux%u (ping-pong) criado com sucesso",
+         vrplayer::kAmbientTargetWidth, vrplayer::kAmbientTargetHeight);
+}
+
+// F2: pipeline do passe de reducao — le a textura YCbCr do frame atual
+// (set 0, reusa state.videoDescriptorSetLayout literalmente: e um sampler
+// YCbCr IMUTAVEL, qualquer pipeline que leia o video tem que usar o MESMO
+// layout, ver 1.3 item 3 do relatorio) e a textura "anterior" do ping-pong
+// (set 1, reusa state.uiDescriptorSetLayout — sampler RGBA normal).
+static void CreateAmbientDownsamplePipeline(AppState& state) {
+    std::array<VkDescriptorSetLayout, 2> setLayouts = {
+        state.videoDescriptorSetLayout, state.uiDescriptorSetLayout};
+
+    VkPushConstantRange pcRange{VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(AmbientDownsamplePushConstants)};
+    VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.setLayoutCount = static_cast<uint32_t>(setLayouts.size());
+    layoutInfo.pSetLayouts = setLayouts.data();
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pcRange;
+    VKR(vkCreatePipelineLayout(state.vkDevice, &layoutInfo, nullptr, &state.ambientDownsamplePipelineLayout));
+
+    VkShaderModule vertModule = CreateShaderModule(state, kAmbientDownsampleVertSpirv, kAmbientDownsampleVertSpirv_size);
+    VkShaderModule fragModule = CreateShaderModule(state, kAmbientDownsampleFragSpirv, kAmbientDownsampleFragSpirv_size);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName = "main";
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName = "main";
+
+    // Sem vertex buffer — fullscreen triangle via gl_VertexIndex (ambient_downsample.vert)
+    VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.blendEnable = VK_FALSE;
+    colorBlendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                           VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo colorBlending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dynamicState.dynamicStateCount = 2;
+    dynamicState.pDynamicStates = dynamicStates;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = state.ambientDownsamplePipelineLayout;
+    pipelineInfo.renderPass = state.ambientRenderPass;
+    pipelineInfo.subpass = 0;
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &state.ambientDownsamplePipeline));
+
+    vkDestroyShaderModule(state.vkDevice, fragModule, nullptr);
+    vkDestroyShaderModule(state.vkDevice, vertModule, nullptr);
+}
+
+// F3: pipeline do halo — reusa state.uiDescriptorSetLayout (amostra a
+// textura reduzida, RGBA normal); pipeline propria por causa do vertex
+// layout/push constant/fragment diferentes de CreateUiPipeline (mas o
+// bloco de alpha blending abaixo e uma copia literal do de la).
+static void CreateAmbientHaloPipeline(AppState& state) {
+    VkPushConstantRange pcRange{
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(AmbientHaloPushConstants)};
+    VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &state.uiDescriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pcRange;
+    VKR(vkCreatePipelineLayout(state.vkDevice, &layoutInfo, nullptr, &state.ambientHaloPipelineLayout));
+
+    VkShaderModule vertModule = CreateShaderModule(state, kAmbientVertSpirv, kAmbientVertSpirv_size);
+    VkShaderModule fragModule = CreateShaderModule(state, kAmbientFragSpirv, kAmbientFragSpirv_size);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName = "main";
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName = "main";
+
+    // Mesmo vertex layout do quad de video (posicao + UV) — reusa videoVertexBuffer.
+    VkVertexInputBindingDescription bindingDesc{0, 5 * sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attrs[2] = {
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
+        {1, 0, VK_FORMAT_R32G32_SFLOAT, 3 * sizeof(float)},
+    };
+    VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &bindingDesc;
+    vertexInput.vertexAttributeDescriptionCount = 2;
+    vertexInput.pVertexAttributeDescriptions = attrs;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+
+    VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // Alpha blending (SRC_ALPHA / ONE_MINUS_SRC_ALPHA) — copia literal do
+    // bloco de CreateUiPipeline.
+    VkPipelineColorBlendAttachmentState blendAtt{};
+    blendAtt.blendEnable = VK_TRUE;
+    blendAtt.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAtt.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAtt.colorBlendOp = VK_BLEND_OP_ADD;
+    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAtt.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blendAtt.alphaBlendOp = VK_BLEND_OP_ADD;
+    blendAtt.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo colorBlending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &blendAtt;
+
+    VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dynamicState.dynamicStateCount = 2;
+    dynamicState.pDynamicStates = dynamicStates;
+
+    // Sem depth test, de proposito (2.2 do relatorio): a ordem de gravacao
+    // — halo sempre antes do quad de video — e o unico contrato de
+    // profundidade. O render pass principal ganhou um depth buffer real
+    // desde a versao original do relatorio (CreateRenderPass); manter o
+    // halo fora do depth test evita que um bug futuro de reordenacao seja
+    // mascarado pelo depth test em vez de aparecer visivelmente (o video
+    // escreve depth, entao um halo "depois" seria descartado, nao
+    // sobreposto — pior pra debugar).
+    VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = state.ambientHaloPipelineLayout;
+    pipelineInfo.renderPass = state.renderPass;
+    pipelineInfo.subpass = 0;
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &state.ambientHaloPipeline));
+
+    vkDestroyShaderModule(state.vkDevice, fragModule, nullptr);
+    vkDestroyShaderModule(state.vkDevice, vertModule, nullptr);
+
+    LOGI("Modo Ambiente: pipelines de reducao e halo criados com sucesso");
+}
+
+static void CreateAmbientPipelines(AppState& state) {
+    if (state.ambientRenderPass == VK_NULL_HANDLE) return; // F1 falhou (formato nao suportado)
+    CreateAmbientDownsamplePipeline(state);
+    CreateAmbientHaloPipeline(state);
+}
+
+// F2 + metade de F4 (suavizacao temporal + decimacao): roda 1x por frame,
+// chamada em RenderFrame com eye==0, ANTES do laco de olhos — a cor de
+// ambiente e monoscopica, gravar isso por olho pagaria tudo em dobro
+// (armadilha 1 do relatorio).
+static void RecordAmbientDownsample(AppState& state, VkCommandBuffer cmd) {
+    if (state.ambientIntensity <= 0.001f || state.activeVideoFrame == nullptr ||
+        state.ambientDownsamplePipeline == VK_NULL_HANDLE) {
+        return;
+    }
+
+    state.ambientFrameCounter++;
+    if (state.ambientFrameCounter % vrplayer::kAmbientDecimationFrames != 0) {
+        return;
+    }
+
+    const int writeIdx = 1 - state.ambientDisplayIndex;
+    const int readIdx = state.ambientDisplayIndex;
+
+    const auto now = std::chrono::steady_clock::now();
+    float elapsedSec = vrplayer::kAmbientColorSmoothSeconds; // 1a atualizacao: blend total (evita ler lixo)
+    if (state.ambientLastUpdateValid) {
+        elapsedSec = std::chrono::duration<float>(now - state.ambientLastUpdateTs).count();
+    }
+    state.ambientLastUpdateTs = now;
+    state.ambientLastUpdateValid = true;
+    const float blend = std::min(1.0f, elapsedSec / vrplayer::kAmbientColorSmoothSeconds);
+
+    VkRenderPassBeginInfo rpBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    rpBegin.renderPass = state.ambientRenderPass;
+    rpBegin.framebuffer = state.ambientFramebuffer[writeIdx];
+    rpBegin.renderArea.extent = {vrplayer::kAmbientTargetWidth, vrplayer::kAmbientTargetHeight};
+    vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport viewport{0, 0, (float)vrplayer::kAmbientTargetWidth, (float)vrplayer::kAmbientTargetHeight, 0.0f, 1.0f};
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+    VkRect2D scissor{{0, 0}, {vrplayer::kAmbientTargetWidth, vrplayer::kAmbientTargetHeight}};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.ambientDownsamplePipeline);
+    std::array<VkDescriptorSet, 2> sets = {state.activeVideoFrame->descriptorSet, state.ambientDescriptorSet[readIdx]};
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.ambientDownsamplePipelineLayout,
+        0, static_cast<uint32_t>(sets.size()), sets.data(), 0, nullptr);
+
+    AmbientDownsamplePushConstants pc{blend};
+    vkCmdPushConstants(cmd, state.ambientDownsamplePipelineLayout, VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+
+    vkCmdDraw(cmd, 3, 1, 0, 0);
+    CountDrawCall(3);
+
+    vkCmdEndRenderPass(cmd);
+
+    state.ambientDisplayIndex = writeIdx;
+}
+
+// F3: desenha o halo. Chamada como PRIMEIRO draw do render pass principal
+// (antes de DrawSkyboxIfLoaded/DrawEnvironmentIfLoaded na sequencia
+// existente, que por sua vez ja rodam antes do quad de video) nos
+// call-sites que so existem quando ha um frame de video real (RecordVideoFlat
+// e o ramo nao-esfera/nao-cubemap de RecordStereoFrame) — RecordFallbackQuad
+// e RecordPhotoFrame nao chamam esta funcao (sem video, sem cor pra derivar).
+static void DrawAmbientHalo(AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
+    if (state.ambientIntensity <= 0.001f || state.ambientHaloPipeline == VK_NULL_HANDLE || state.currentEnvironmentId != "void") {
+        return;
+    }
+
+    SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
+    Mat4 haloModel = Mat4Multiply(
+        scene.screenModelNoScale,
+        Mat4Scale(state.screenScaleX * vrplayer::kAmbientHaloScale,
+                  state.screenScaleY * vrplayer::kAmbientHaloScale, 1.0f));
+
+    AmbientHaloPushConstants pc{};
+    pc.mvp = Mat4Multiply(Mat4Multiply(proj, view), haloModel);
+    pc.insetScale = 1.0f / vrplayer::kAmbientHaloScale;
+    pc.edgeWidth = vrplayer::kAmbientEdgeWidth;
+    pc.intensity = state.ambientIntensity;
+    pc.aspect = (state.screenScaleY > 0.0001f) ? (state.screenScaleX / state.screenScaleY) : 1.0f;
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.ambientHaloPipeline);
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
+    vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.ambientHaloPipelineLayout,
+        0, 1, &state.ambientDescriptorSet[state.ambientDisplayIndex], 0, nullptr);
+    vkCmdPushConstants(cmd, state.ambientHaloPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 4, 1, 0, 0);
+    CountDrawCall(4);
+}
+
+static void DestroyAmbientResources(AppState& state) {
+    if (state.ambientHaloPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.ambientHaloPipeline, nullptr);
+        state.ambientHaloPipeline = VK_NULL_HANDLE;
+    }
+    if (state.ambientHaloPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.ambientHaloPipelineLayout, nullptr);
+        state.ambientHaloPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.ambientDownsamplePipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.ambientDownsamplePipeline, nullptr);
+        state.ambientDownsamplePipeline = VK_NULL_HANDLE;
+    }
+    if (state.ambientDownsamplePipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.ambientDownsamplePipelineLayout, nullptr);
+        state.ambientDownsamplePipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.ambientDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.ambientDescriptorPool, nullptr);
+        state.ambientDescriptorPool = VK_NULL_HANDLE;
+    }
+    for (int i = 0; i < 2; i++) {
+        if (state.ambientFramebuffer[i] != VK_NULL_HANDLE) {
+            vkDestroyFramebuffer(state.vkDevice, state.ambientFramebuffer[i], nullptr);
+            state.ambientFramebuffer[i] = VK_NULL_HANDLE;
+        }
+        if (state.ambientImageView[i] != VK_NULL_HANDLE) {
+            vkDestroyImageView(state.vkDevice, state.ambientImageView[i], nullptr);
+            state.ambientImageView[i] = VK_NULL_HANDLE;
+        }
+        if (state.ambientImage[i] != VK_NULL_HANDLE) {
+            vkDestroyImage(state.vkDevice, state.ambientImage[i], nullptr);
+            state.ambientImage[i] = VK_NULL_HANDLE;
+        }
+        if (state.ambientImageMemory[i] != VK_NULL_HANDLE) {
+            vkFreeMemory(state.vkDevice, state.ambientImageMemory[i], nullptr);
+            state.ambientImageMemory[i] = VK_NULL_HANDLE;
+        }
+    }
+    if (state.ambientRenderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(state.vkDevice, state.ambientRenderPass, nullptr);
+        state.ambientRenderPass = VK_NULL_HANDLE;
+    }
+}
+
 void RecordFallbackQuad(
     AppState& state, VkCommandBuffer cmd, VkFramebuffer framebuffer, VkExtent2D extent, const Mat4& mvp,
     const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
-    VkClearValue clearValue{};
+    std::array<VkClearValue, 2> clearValues{};
     // preto quase puro — ambiente escuro de cinema (alpha 0 quando passthrough ativo)
-    clearValue.color = {{0.02f, 0.02f, 0.05f, PassthroughEnvAlpha(state)}};
+    clearValues[0].color = {{0.02f, 0.02f, 0.05f, PassthroughEnvAlpha(state)}};
+    clearValues[1].depthStencil = {1.0f, 0};
 
     VkRenderPassBeginInfo renderPassBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     renderPassBegin.renderPass = state.renderPass;
     renderPassBegin.framebuffer = framebuffer;
     renderPassBegin.renderArea.offset = {0, 0};
     renderPassBegin.renderArea.extent = extent;
-    renderPassBegin.clearValueCount = 1;
-    renderPassBegin.pClearValues = &clearValue;
+    renderPassBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    renderPassBegin.pClearValues = clearValues.data();
     vkCmdBeginRenderPass(cmd, &renderPassBegin, VK_SUBPASS_CONTENTS_INLINE);
 
     VkViewport viewport{};
@@ -4573,6 +6104,9 @@ void RecordFallbackQuad(
 
     VkRect2D scissor{{0, 0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    DrawSkyboxIfLoaded(state, cmd, proj, view);
+    DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline);
 
@@ -4595,6 +6129,33 @@ void RecordFallbackQuad(
     DrawUiQuads(state, cmd, proj, view, headCenter);
 
     vkCmdEndRenderPass(cmd);
+}
+
+// Libera todos os recursos Vulkan (VkImage, VkDeviceMemory, VkImageView, descriptor sets)
+// associados aos AHardwareBuffers em cache. Chamado ao parar a reproducao, ao iniciar uma nova
+// sessao de video, ou durante o shutdown do aplicativo.
+void ClearVideoImageCache(AppState& state) {
+    if (state.vkDevice == VK_NULL_HANDLE || state.videoImageCache.empty()) return;
+    LOGI("Cache de video: liberando %zu imagens da GPU", state.videoImageCache.size());
+    for (auto& [buf, frame] : state.videoImageCache) {
+        if (frame.descriptorSet != VK_NULL_HANDLE && state.videoDescriptorPool != VK_NULL_HANDLE) {
+            vkFreeDescriptorSets(state.vkDevice, state.videoDescriptorPool, 1, &frame.descriptorSet);
+            frame.descriptorSet = VK_NULL_HANDLE;
+        }
+        if (frame.imageView != VK_NULL_HANDLE) {
+            vkDestroyImageView(state.vkDevice, frame.imageView, nullptr);
+            frame.imageView = VK_NULL_HANDLE;
+        }
+        if (frame.image != VK_NULL_HANDLE) {
+            vkDestroyImage(state.vkDevice, frame.image, nullptr);
+            frame.image = VK_NULL_HANDLE;
+        }
+        if (frame.memory != VK_NULL_HANDLE) {
+            vkFreeMemory(state.vkDevice, frame.memory, nullptr);
+            frame.memory = VK_NULL_HANDLE;
+        }
+    }
+    state.videoImageCache.clear();
 }
 
 // Estagio 3: importa um AHardwareBuffer como VkImage via
@@ -4834,17 +6395,18 @@ void RecordVideoFlat(
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         0, 0, nullptr, 0, nullptr, 1, &imgBarrier);
 
-    VkClearValue clearValue{};
+    std::array<VkClearValue, 2> clearValues{};
     // preto ao redor do video (alpha 0 quando passthrough ativo — revela o mundo real)
-    clearValue.color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
+    clearValues[0].color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
+    clearValues[1].depthStencil = {1.0f, 0};
 
     VkRenderPassBeginInfo renderPassBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     renderPassBegin.renderPass = state.renderPass;
     renderPassBegin.framebuffer = framebuffer;
     renderPassBegin.renderArea.offset = {0, 0};
     renderPassBegin.renderArea.extent = extent;
-    renderPassBegin.clearValueCount = 1;
-    renderPassBegin.pClearValues = &clearValue;
+    renderPassBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    renderPassBegin.pClearValues = clearValues.data();
     vkCmdBeginRenderPass(cmd, &renderPassBegin, VK_SUBPASS_CONTENTS_INLINE);
 
     VkViewport viewport{};
@@ -4856,6 +6418,10 @@ void RecordVideoFlat(
 
     VkRect2D scissor{{0, 0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    DrawSkyboxIfLoaded(state, cmd, proj, view);
+    DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
+    DrawAmbientHalo(state, cmd, proj, view, headCenter);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.videoPipeline);
 
@@ -4871,6 +6437,18 @@ void RecordVideoFlat(
     pc.sharpness = state.upscalingSharpness;
     pc.upscalingMode = static_cast<int>(state.upscalingMode);
     pc.isHdr = state.isHdr ? 1 : 0;
+    float vw = (state.videoWidth > 0) ? static_cast<float>(state.videoWidth) : 1920.0f;
+    float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1080.0f;
+    pc.texelWidth = 1.0f / vw;
+    const int rawChromaMode = static_cast<int>(get_chroma_key_enabled());
+    // Chroma Key e Packed Alpha SÓ devem ser executados se o Passthrough estiver realmente ATIVO.
+    // Sem passthrough (ambientes Cinema, Espaço, Skybox, Void), o fundo deve permanecer 100% opaco.
+    // Vídeos Flat 2D só suportam Chroma Key (modo 1); Packed Alpha (modo 2) é exclusivo de SBS estéreo.
+    pc.chromaKeyEnabled = (state.passthroughActive && rawChromaMode == 1) ? 1 : 0;
+    pc.chromaColorRgb = get_chroma_key_color();
+    pc.chromaSimilarity = get_chroma_key_similarity();
+    pc.chromaSmoothness = get_chroma_key_smoothness();
+    pc.colorTemperature = get_night_mode_enabled() ? -3000.0f : get_color_temperature();
     vkCmdPushConstants(
         cmd, state.videoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
@@ -4919,12 +6497,17 @@ void RecordStereoFrame(
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &imgBarrier);
 
-    VkClearValue clearValue{};
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
+    clearValues[1].depthStencil = {1.0f, 0};
+
     VkRenderPassBeginInfo rpBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     rpBegin.renderPass = state.renderPass;
     rpBegin.framebuffer = fb;
+    rpBegin.renderArea.offset = {0, 0};
     rpBegin.renderArea.extent = extent;
-    rpBegin.clearValueCount = 1; rpBegin.pClearValues = &clearValue;
+    rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    rpBegin.pClearValues = clearValues.data();
     vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
 
     VkViewport vp{0, 0, (float)extent.width, (float)extent.height, 0.0f, 1.0f};
@@ -4933,6 +6516,12 @@ void RecordStereoFrame(
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     const bool cubemapMode = IsCubemapMode(state.screenMode);
+    if (!sphereMode && !cubemapMode) {
+        DrawSkyboxIfLoaded(state, cmd, proj, view);
+        DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
+        DrawAmbientHalo(state, cmd, proj, view, headCenter);
+    }
+
     VkPipeline targetPipeline = cubemapMode ? state.stereoCubemapPipeline
                               : (sphereMode ? state.stereoPipeline : state.stereoFlatPipeline);
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, targetPipeline);
@@ -4948,6 +6537,30 @@ void RecordStereoFrame(
     spc.cubemapLayout  = sp.cubemapLayout;
     spc.projectionType = sp.projectionType;
     spc.isHdr          = state.isHdr ? 1 : 0;
+    float vw = (state.videoWidth > 0) ? static_cast<float>(state.videoWidth) : 3840.0f;
+    float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1920.0f;
+    spc.texelWidth     = 1.0f / vw;
+    const int rawChromaMode = static_cast<int>(get_chroma_key_enabled());
+    // Modos estéreo compatíveis com DeoVR Packed Alpha (SBS em 180, Fisheye 190 ou Flat SBS).
+    const bool allowPackedAlpha = (state.screenMode == ScreenMode::Vr180SBS ||
+                                   state.screenMode == ScreenMode::Fisheye190SBS ||
+                                   state.screenMode == ScreenMode::SBS ||
+                                   state.screenMode == ScreenMode::SBSHalf);
+    if (!state.passthroughActive) {
+        // Sem passthrough ativo: NUNCA executa Chroma Key ou Packed Alpha (fundo 100% opaco).
+        spc.chromaKeyEnabled = 0;
+    } else if (rawChromaMode == 2 && !allowPackedAlpha) {
+        // Packed Alpha só é válido para projeções Side-By-Side (VR180 SBS, Fisheye 190 SBS ou Flat SBS).
+        // Modos 360° (mono ou SBS), OU e Cubemap NÃO possuem máscaras embutidas de Packed Alpha;
+        // executar o desempacotador neles geraria artefatos severos (cruz preta e distorção).
+        spc.chromaKeyEnabled = 0;
+    } else {
+        spc.chromaKeyEnabled = rawChromaMode;
+    }
+    spc.chromaColorRgb = get_chroma_key_color();
+    spc.chromaSimilarity = get_chroma_key_similarity();
+    spc.chromaSmoothness = get_chroma_key_smoothness();
+    spc.colorTemperature = get_night_mode_enabled() ? -3000.0f : get_color_temperature();
     vkCmdPushConstants(cmd, state.stereoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(spc), &spc);
@@ -4994,20 +6607,28 @@ void RecordPhotoFrame(
     const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter,
     bool sphereMode, int eye, const StereoParams& sp) {
 
-    VkClearValue clearValue{};
-    clearValue.color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
+    clearValues[1].depthStencil = {1.0f, 0};
 
     VkRenderPassBeginInfo rpBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
     rpBegin.renderPass = state.renderPass;
     rpBegin.framebuffer = fb;
+    rpBegin.renderArea.offset = {0, 0};
     rpBegin.renderArea.extent = extent;
-    rpBegin.clearValueCount = 1; rpBegin.pClearValues = &clearValue;
+    rpBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    rpBegin.pClearValues = clearValues.data();
     vkCmdBeginRenderPass(cmd, &rpBegin, VK_SUBPASS_CONTENTS_INLINE);
 
     VkViewport vp{0, 0, (float)extent.width, (float)extent.height, 0.0f, 1.0f};
     vkCmdSetViewport(cmd, 0, 1, &vp);
     VkRect2D scissor{{0,0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    if (!sphereMode) {
+        DrawSkyboxIfLoaded(state, cmd, proj, view);
+        DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
+    }
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
         sphereMode ? state.photoStereoPipeline : state.photoStereoFlatPipeline);
@@ -5024,6 +6645,23 @@ void RecordPhotoFrame(
     spc.projectionType = sp.projectionType;
     // Sem decode HDR de foto estatica — sempre SDR.
     spc.isHdr          = 0;
+    spc.texelWidth     = 0.0f;
+    const int rawChromaMode = static_cast<int>(get_chroma_key_enabled());
+    const bool allowPackedAlpha = (state.screenMode == ScreenMode::Vr180SBS ||
+                                   state.screenMode == ScreenMode::Fisheye190SBS ||
+                                   state.screenMode == ScreenMode::SBS ||
+                                   state.screenMode == ScreenMode::SBSHalf);
+    if (!state.passthroughActive) {
+        spc.chromaKeyEnabled = 0;
+    } else if (rawChromaMode == 2 && !allowPackedAlpha) {
+        spc.chromaKeyEnabled = 0;
+    } else {
+        spc.chromaKeyEnabled = rawChromaMode;
+    }
+    spc.chromaColorRgb = get_chroma_key_color();
+    spc.chromaSimilarity = get_chroma_key_similarity();
+    spc.chromaSmoothness = get_chroma_key_smoothness();
+    spc.colorTemperature = 6500.0f;
     vkCmdPushConstants(cmd, state.photoPipelineLayout,
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(spc), &spc);
@@ -5085,8 +6723,11 @@ void PushVideoGapSample(AppState& state, float gapMs) {
 // Chamado uma vez por loop de frame, antes de RenderFrame.
 // Equivale ao bloco vr_player_app.cpp:1354-1400 (m_eglImageCache).
 void UpdateVideoFrame(AppState& state) {
-    if (g_stopVideoRequested.exchange(false)) {
-        LOGI("Video: parada solicitada — limpando frame ativo e encerrando renderizacao do video");
+    bool stopRequested = g_stopVideoRequested.exchange(false);
+    bool newSessionRequested = g_newVideoSessionRequested.exchange(false);
+    if (stopRequested || newSessionRequested) {
+        LOGI("Video: %s — limpando frame ativo e cache Vulkan",
+             stopRequested ? "parada solicitada" : "nova sessao de video iniciada");
         state.activeVideoFrame = nullptr;
         state.lastVideoBuffer = nullptr;
         state.msSinceLastVideoFrame = 0.0f;
@@ -5096,8 +6737,11 @@ void UpdateVideoFrame(AppState& state) {
         state.videoJitterMs = 0.0f;
         state.controlsAlpha = 0.0f;
         state.controlsIdleTime = kUiAutoHideSeconds;
-        g_requestUiPanelVisible.store(true);
-        return;
+        ClearVideoImageCache(state);
+        if (stopRequested) {
+            g_requestUiPanelVisible.store(true);
+            return;
+        }
     }
 
     AHardwareBuffer* buffer = get_current_video_frame();
@@ -5254,18 +6898,25 @@ static void CaptureFramePpm(AppState& state, VkImage srcImage, uint32_t width, u
     if (mapped) {
         const uint8_t* pixels = static_cast<const uint8_t*>(mapped);
         std::string path = basePath + (eye == 0 ? ".left.ppm" : ".right.ppm");
-        FILE* f = fopen(path.c_str(), "wb");
+        std::string tmpPath = path + ".tmp";
+        FILE* f = fopen(tmpPath.c_str(), "wb");
         if (f) {
             fprintf(f, "P6\n%u %u\n255\n", width, height);
+            std::vector<uint8_t> rowBuffer(width * 3);
             for (uint32_t y = 0; y < height; y++) {
+                const uint8_t* srcRow = &pixels[(size_t)(y * width) * 4];
                 for (uint32_t x = 0; x < width; x++) {
-                    fwrite(&pixels[(size_t)(y * width + x) * 4], 1, 3, f);
+                    rowBuffer[x * 3 + 0] = srcRow[x * 4 + 0];
+                    rowBuffer[x * 3 + 1] = srcRow[x * 4 + 1];
+                    rowBuffer[x * 3 + 2] = srcRow[x * 4 + 2];
                 }
+                fwrite(rowBuffer.data(), 1, rowBuffer.size(), f);
             }
             fclose(f);
+            rename(tmpPath.c_str(), path.c_str());
             LOGI("CaptureFramePpm: frame capturado em %s (%ux%u)", path.c_str(), width, height);
         } else {
-            LOGE("CaptureFramePpm: falha ao abrir %s para escrita", path.c_str());
+            LOGE("CaptureFramePpm: falha ao abrir %s para escrita", tmpPath.c_str());
         }
         vkUnmapMemory(state.vkDevice, stagingMem);
     }
@@ -5353,8 +7004,7 @@ void RenderFrame(AppState& state) {
             state.smoothedFps = (state.smoothedFps <= 0.0f)
                 ? instFps : (state.smoothedFps * 0.9f + instFps * 0.1f);
             // P-06: cap contra a taxa real (nao 90 fixo) — acima de 90Hz (taxas estendidas do
-            // Horizon OS >= v2.7) o cap fixo saturava errado, e abaixo de 90 (72Hz) mentia pra
-            // cima (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+            // Horizon OS >= v2.7) o cap fixo saturava errado, e abaixo de 90 (72Hz) mentia pra cima.
             if (state.smoothedFps > state.displayRefreshRate) {
                 state.smoothedFps = state.displayRefreshRate;
             }
@@ -5477,7 +7127,7 @@ void RenderFrame(AppState& state) {
                 // mapeia thermal_level>=3 para o nivel Low (target_fps=72), e o bloco de
                 // avaliacao de qualidade abaixo e o unico que chama
                 // RequestAndConfirmDisplayRefreshRate — dono unico da escrita de
-                // state.displayRefreshRate (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+                // state.displayRefreshRate.
             }
         }
 
@@ -5520,9 +7170,9 @@ void RenderFrame(AppState& state) {
     std::array<XrCompositionLayerProjectionView, kEyeCount> projectionViews{};
     const bool shouldSubmitLayer = frameState.shouldRender;
     // [0]=passthrough (Fase 0.3 Seção 2, quando ativo) + projection + ui +
-    // controls + modal + cursor = 6. Passthrough SEMPRE vai no indice 0
+    // controls + modal + beam + cursor = 7 (alocado 8 por margem). Passthrough SEMPRE vai no indice 0
     // (fundo) e o projection layer passa a compor com o alpha do swapchain.
-    const XrCompositionLayerBaseHeader* layers[6]{};
+    const XrCompositionLayerBaseHeader* layers[8]{};
     uint32_t layerCount = 0;
     // Declarada aqui (mesmo escopo de `layers` e `endFrameInfo`) porque
     // xrEndFrame roda FORA do `if (shouldSubmitLayer)` abaixo e le os
@@ -5556,6 +7206,19 @@ void RenderFrame(AppState& state) {
             state.sceneTranslationOffset.y = headCenter.y - 1.5f;
             state.needsOsRecenter = false;
             state.sceneCalibrated = true;
+        }
+
+        // Processa troca pendente de ambiente virtual 3D
+        if (g_environmentChangeRequested.exchange(false)) {
+            std::string targetEnv;
+            {
+                std::lock_guard<std::mutex> lock(g_environmentMutex);
+                targetEnv = g_requestedEnvironmentId;
+            }
+            if (targetEnv != state.currentEnvironmentId) {
+                vkDeviceWaitIdle(state.vkDevice);
+                LoadEnvironmentMesh(state, targetEnv);
+            }
         }
 
         // Estagio 4/5: Processar interacoes apos obtermos a posicao da cabeca
@@ -5660,7 +7323,7 @@ void RenderFrame(AppState& state) {
 
         // Avaliacao de Qualidade Adaptativa & Escala de Resolucao unificada via Rust media-logic (F1/F2)
         //
-        // P-02 (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md): QualitySample foi
+        // P-02: QualitySample foi
         // desenhado para amostragem ~1Hz (ver doc do struct em
         // rust/media-logic/src/quality.rs) mas era avaliado a cada frame renderizado
         // (~90Hz) — a historese das regras vira uma cascata de dezenas de ms em vez de
@@ -5742,7 +7405,18 @@ void RenderFrame(AppState& state) {
             waitInfo.timeout = XR_INFINITE_DURATION;
             OXR(xrWaitSwapchainImage(eyeChain.handle, &waitInfo));
 
-            const Mat4 view = Mat4RigidInverse(Mat4FromXrPose(views[eye].pose));
+            const Mat4 viewBase = Mat4RigidInverse(Mat4FromXrPose(views[eye].pose));
+            Mat4 view = viewBase;
+            const float dbgYaw = g_debugCameraYaw.load();
+            const float dbgPitch = g_debugCameraPitch.load();
+            const float dbgX = g_debugCameraX.load();
+            const float dbgY = g_debugCameraY.load();
+            const float dbgZ = g_debugCameraZ.load();
+            if (dbgYaw != 0.0f || dbgPitch != 0.0f || dbgX != 0.0f || dbgY != 0.0f || dbgZ != 0.0f) {
+                Mat4 rot = Mat4Multiply(Mat4RotationX(-dbgPitch), Mat4RotationY(-dbgYaw));
+                Mat4 trans = Mat4Translation(-dbgX, -dbgY, -dbgZ);
+                view = Mat4Multiply(Mat4Multiply(rot, trans), viewBase);
+            }
             const Mat4 proj = Mat4ProjectionFromFov(views[eye].fov, 0.05f, 100.0f);
             const Mat4 mvp  = Mat4Multiply(Mat4Multiply(proj, view), screenModel);
 
@@ -5756,6 +7430,14 @@ void RenderFrame(AppState& state) {
             VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
             beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
             VKR(vkBeginCommandBuffer(cmd, &beginInfo));
+
+            // Modo Ambiente: passe de reducao do halo, 1x
+            // por frame (nao por olho), gravado
+            // no comeco do command buffer do 1o olho, antes do render pass
+            // principal desse olho comecar.
+            if (eye == 0) {
+                RecordAmbientDownsample(state, cmd);
+            }
 
             const uint32_t queryStart = state.currentFrameIndex * 4 + eye * 2;
             const uint32_t queryEnd = queryStart + 1;
@@ -5913,6 +7595,82 @@ void RenderFrame(AppState& state) {
         modalQuad.size = {kModalPanelScaleX, kModalPanelScaleY};
 
         // Retículo do Laser no topo de todos os painéis
+        // Raio Laser (Beam) como XrCompositionLayerQuad submetido após os painéis e antes do retículo do cursor (R-01)
+        XrCompositionLayerQuad beamQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+        bool beamActive = false;
+        if (state.beamVisible && state.hasRay) {
+            const float beamLength = state.isScreenGrabbed ? state.grabDistance : state.lastHitDist;
+            XrVector3f p0 = state.lastRayOrigin;
+            XrVector3f p1 = state.cursorDotVisible ? state.cursorDotPos : XrVector3f{
+                p0.x + state.lastRayDir.x * beamLength,
+                p0.y + state.lastRayDir.y * beamLength,
+                p0.z + state.lastRayDir.z * beamLength
+            };
+
+            XrVector3f delta = { p1.x - p0.x, p1.y - p0.y, p1.z - p0.z };
+            float len = sqrtf(delta.x * delta.x + delta.y * delta.y + delta.z * delta.z);
+            if (len > 0.05f) {
+                XrVector3f dir = { delta.x / len, delta.y / len, delta.z / len };
+                XrVector3f mid = { (p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f, (p0.z + p1.z) * 0.5f };
+
+                // Vetor do ponto médio até a cabeça do observador
+                XrVector3f toHead = { headCenter.x - mid.x, headCenter.y - mid.y, headCenter.z - mid.z };
+                float thLen = sqrtf(toHead.x * toHead.x + toHead.y * toHead.y + toHead.z * toHead.z);
+                if (thLen > 1e-4f) { toHead.x /= thLen; toHead.y /= thLen; toHead.z /= thLen; }
+
+                // Y local aponta ao longo da direção do feixe (do controle até o alvo)
+                XrVector3f yLocal = dir;
+
+                // X local aponta perpendicularmente ao raio e à linha de visão (billboard cilíndrico)
+                XrVector3f xLocal = {
+                    yLocal.y * toHead.z - yLocal.z * toHead.y,
+                    yLocal.z * toHead.x - yLocal.x * toHead.z,
+                    yLocal.x * toHead.y - yLocal.y * toHead.x
+                };
+                float xlLen = sqrtf(xLocal.x * xLocal.x + xLocal.y * xLocal.y + xLocal.z * xLocal.z);
+                if (xlLen > 1e-4f) {
+                    xLocal.x /= xlLen; xLocal.y /= xlLen; xLocal.z /= xlLen;
+                } else {
+                    XrVector3f up = (fabsf(yLocal.y) > 0.99f) ? XrVector3f{1.0f, 0.0f, 0.0f} : XrVector3f{0.0f, 1.0f, 0.0f};
+                    xLocal = {
+                        yLocal.y * up.z - yLocal.z * up.y,
+                        yLocal.z * up.x - yLocal.x * up.z,
+                        yLocal.x * up.y - yLocal.y * up.x
+                    };
+                    float xlLenFallback = sqrtf(xLocal.x * xLocal.x + xLocal.y * xLocal.y + xLocal.z * xLocal.z);
+                    if (xlLenFallback > 1e-4f) {
+                        xLocal.x /= xlLenFallback; xLocal.y /= xlLenFallback; xLocal.z /= xlLenFallback;
+                    }
+                }
+
+                // Z local = normal da face do quad (aponta em direção ao observador)
+                XrVector3f zLocal = {
+                    xLocal.y * yLocal.z - xLocal.z * yLocal.y,
+                    xLocal.z * yLocal.x - xLocal.x * yLocal.z,
+                    xLocal.x * yLocal.y - xLocal.y * yLocal.x
+                };
+
+                Mat4 rotM{};
+                rotM.m[0] = xLocal.x; rotM.m[1] = xLocal.y; rotM.m[2] = xLocal.z; rotM.m[3] = 0.0f;
+                rotM.m[4] = yLocal.x; rotM.m[5] = yLocal.y; rotM.m[6] = yLocal.z; rotM.m[7] = 0.0f;
+                rotM.m[8] = zLocal.x; rotM.m[9] = zLocal.y; rotM.m[10] = zLocal.z; rotM.m[11] = 0.0f;
+                rotM.m[12] = 0.0f;    rotM.m[13] = 0.0f;    rotM.m[14] = 0.0f;     rotM.m[15] = 1.0f;
+
+                beamQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+                beamQuad.space = state.localSpace;
+                beamQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+                beamQuad.subImage.swapchain = state.beamSwapchain.handle;
+                beamQuad.subImage.imageRect.offset = {0, 0};
+                beamQuad.subImage.imageRect.extent = {32, 128};
+                beamQuad.pose.position = mid;
+                beamQuad.pose.orientation = QuatFromMat4(rotM);
+                constexpr float kBeamThickness = 0.0015f; // 1.5mm de espessura (traço fino e elegante, correspondente à espessura original)
+                beamQuad.size = {kBeamThickness, len};
+                beamActive = true;
+            }
+        }
+
+        // Retículo do Laser no topo de todos os painéis
         XrCompositionLayerQuad cursorQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
         cursorQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
         cursorQuad.space = state.localSpace;
@@ -5966,6 +7724,9 @@ void RenderFrame(AppState& state) {
         }
         if (state.modalHasFrame && state.modalAlpha > 0.05f) {
             layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&modalQuad);
+        }
+        if (beamActive) {
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&beamQuad);
         }
         if (state.cursorDotVisible && state.hasRay) {
             layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cursorQuad);
@@ -6063,8 +7824,7 @@ void PollXrEvents(AppState& state) {
             }
         } else if (eventBuffer.type == XR_TYPE_EVENT_DATA_DISPLAY_REFRESH_RATE_CHANGED_FB) {
             // P-01: mudanca de taxa iniciada pelo sistema (fora de qualquer pedido do app) —
-            // sem este ramo o app nunca ficava sabendo (docs/reports/
-            // TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md).
+            // sem este ramo o app nunca ficava sabendo.
             const auto* event = reinterpret_cast<const XrEventDataDisplayRefreshRateChangedFB*>(&eventBuffer);
             state.displayRefreshRate = event->toDisplayRefreshRate;
             LOGI("VRPlayerAppVK: refresh rate mudou (evento do sistema) %.1fHz -> %.1fHz",
@@ -6078,25 +7838,11 @@ void DestroyAppResources(AppState& state) {
     if (state.vkDevice == VK_NULL_HANDLE) return;
 
     // 1. Limpar cache de frames de vídeo (YCbCr)
-    for (auto& [buf, frame] : state.videoImageCache) {
-        if (frame.descriptorSet != VK_NULL_HANDLE && state.videoDescriptorPool != VK_NULL_HANDLE) {
-            vkFreeDescriptorSets(state.vkDevice, state.videoDescriptorPool, 1, &frame.descriptorSet);
-            frame.descriptorSet = VK_NULL_HANDLE;
-        }
-        if (frame.imageView != VK_NULL_HANDLE) {
-            vkDestroyImageView(state.vkDevice, frame.imageView, nullptr);
-            frame.imageView = VK_NULL_HANDLE;
-        }
-        if (frame.image != VK_NULL_HANDLE) {
-            vkDestroyImage(state.vkDevice, frame.image, nullptr);
-            frame.image = VK_NULL_HANDLE;
-        }
-        if (frame.memory != VK_NULL_HANDLE) {
-            vkFreeMemory(state.vkDevice, frame.memory, nullptr);
-            frame.memory = VK_NULL_HANDLE;
-        }
-    }
-    state.videoImageCache.clear();
+    ClearVideoImageCache(state);
+
+    // Modo Ambiente (halo de luz) — nao usa
+    // nenhum handle de propriedade do video/UI, so os seus proprios.
+    DestroyAmbientResources(state);
 
     if (state.videoDescriptorPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(state.vkDevice, state.videoDescriptorPool, nullptr);
@@ -6395,7 +8141,7 @@ void DestroyAppResources(AppState& state) {
         state.pipelineLayout = VK_NULL_HANDLE;
     }
 
-    // 9. Framebuffers e ImageViews dos olhos
+    // 9. Framebuffers e ImageViews dos olhos (e Depth buffers)
     for (auto& eyeChain : state.eyes) {
         for (auto framebuffer : eyeChain.framebuffers) {
             if (framebuffer != VK_NULL_HANDLE) {
@@ -6403,12 +8149,77 @@ void DestroyAppResources(AppState& state) {
             }
         }
         eyeChain.framebuffers.clear();
+        for (auto depthImageView : eyeChain.depthImageViews) {
+            if (depthImageView != VK_NULL_HANDLE) {
+                vkDestroyImageView(state.vkDevice, depthImageView, nullptr);
+            }
+        }
+        eyeChain.depthImageViews.clear();
+        for (auto depthImage : eyeChain.depthImages) {
+            if (depthImage != VK_NULL_HANDLE) {
+                vkDestroyImage(state.vkDevice, depthImage, nullptr);
+            }
+        }
+        eyeChain.depthImages.clear();
+        for (auto depthMemory : eyeChain.depthMemories) {
+            if (depthMemory != VK_NULL_HANDLE) {
+                vkFreeMemory(state.vkDevice, depthMemory, nullptr);
+            }
+        }
+        eyeChain.depthMemories.clear();
         for (auto imageView : eyeChain.imageViews) {
             if (imageView != VK_NULL_HANDLE) {
                 vkDestroyImageView(state.vkDevice, imageView, nullptr);
             }
         }
         eyeChain.imageViews.clear();
+    }
+
+    // 10. Recursos de Ambiente Virtual 3D
+    if (state.envPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.envPipeline, nullptr);
+        state.envPipeline = VK_NULL_HANDLE;
+    }
+    if (state.envPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.envPipelineLayout, nullptr);
+        state.envPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.envVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.envVertexBuffer, nullptr);
+        state.envVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.envVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.envVertexMemory, nullptr);
+        state.envVertexMemory = VK_NULL_HANDLE;
+    }
+    if (state.envIndexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.envIndexBuffer, nullptr);
+        state.envIndexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.envIndexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.envIndexMemory, nullptr);
+        state.envIndexMemory = VK_NULL_HANDLE;
+    }
+    state.envIndexCount = 0;
+    state.envMeshLoaded = false;
+
+    // 11. Recursos de Skybox Cósmico 360
+    DestroyEnvironmentSkybox(state);
+    if (state.skyboxPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.skyboxPipeline, nullptr);
+        state.skyboxPipeline = VK_NULL_HANDLE;
+    }
+    if (state.skyboxPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.skyboxPipelineLayout, nullptr);
+        state.skyboxPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.skyboxDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.skyboxDescriptorPool, nullptr);
+        state.skyboxDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (state.skyboxDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(state.vkDevice, state.skyboxDescriptorSetLayout, nullptr);
+        state.skyboxDescriptorSetLayout = VK_NULL_HANDLE;
     }
 
     if (state.queryPool != VK_NULL_HANDLE) {
@@ -6485,7 +8296,7 @@ void android_main(android_app* app) {
     SetupHandTracking(state);
 
     // P-05: registra a thread principal (unica thread nativa do app — nao ha render thread
-    // separada, ver docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md) como critica ao
+    // separada) como critica ao
     // runtime XR, antes de qualquer outra configuracao — best-effort, nao aborta em falha.
     if (state.supportsAndroidThreadSettings) {
         state.pfnSetAndroidApplicationThreadKHR =
@@ -6516,8 +8327,7 @@ void android_main(android_app* app) {
     if (state.pfnRequestDisplayRefreshRateFB != nullptr) {
         // P-01: enumera as taxas realmente suportadas pelo runtime em vez de assumir 90Hz —
         // Meta orienta explicitamente a nao assumir e a cair para uma taxa da lista quando o
-        // pedido preferido nao tiver sucesso (docs/reports/TRAVAMENTOS-POS-REINICIO-DO-HEADSET.md,
-        // secao 5).
+        // pedido preferido nao tiver sucesso.
         float chosenHz = 90.0f;
         if (state.pfnEnumerateDisplayRefreshRatesFB != nullptr) {
             uint32_t rateCount = 0;
@@ -6570,6 +8380,7 @@ void android_main(android_app* app) {
     // Estagio 4: pipeline de UI/controles (RGBA8888 + AImageReader)
     CreateUiPipeline(state, app);
     InitCursorSwapchain(state);
+    InitBeamSwapchain(state);
     // Estagio 5: geometria de esfera, pipeline estereo, beam cursor
     CreateSphereGeometry(state);
     CreateStereoPipeline(state);
@@ -6579,6 +8390,13 @@ void android_main(android_app* app) {
     CreateSubtitlePipeline(state);
     // Fase 0.3 Seção 8: pipeline de fotos estáticas 360/3D (T8.3, T8.4)
     CreatePhotoPipeline(state);
+    // Ambientes Virtuais 3D (Fase 0.3 §1 / Fase 0.5 §3)
+    CreateEnvironmentPipeline(state);
+    CreateSkyboxPipeline(state);
+    // Modo Ambiente (halo de luz). Depois de
+    // CreateUiPipeline de proposito — reusa uiSampler/uiDescriptorSetLayout.
+    CreateAmbientTarget(state);
+    CreateAmbientPipelines(state);
 
     // O video e iniciado via nativePlayVideo (JNI) quando o usuario seleciona
     // um arquivo no painel de UI — identico ao caminho GLES.
@@ -6623,6 +8441,7 @@ void android_main(android_app* app) {
     if (state.controlsPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.controlsPanelSwapchain.handle);
     if (state.modalPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.modalPanelSwapchain.handle);
     if (state.cursorSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.cursorSwapchain.handle);
+    if (state.beamSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.beamSwapchain.handle);
     if (state.localSpace != XR_NULL_HANDLE) xrDestroySpace(state.localSpace);
     if (state.session != XR_NULL_HANDLE) xrDestroySession(state.session);
     if (state.vkDevice != VK_NULL_HANDLE) vkDestroyDevice(state.vkDevice, nullptr);

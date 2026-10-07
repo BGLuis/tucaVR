@@ -4,9 +4,13 @@
 *.swp
 *.swo
 .DS_Store
+__pycache__/
+*.pyc
 
 # Android/Gradle
 build/
+!/docker/build/
+!/docker/build/**
 .gradle/
 local.properties
 *.iml
@@ -49,4 +53,7 @@ ffmpeg-android-maker
 
 # Relatórios e investigações técnicas locais
 /docs/reports/
+
+# Git worktrees isolados
+.worktrees/
 

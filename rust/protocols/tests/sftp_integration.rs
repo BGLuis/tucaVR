@@ -11,7 +11,7 @@
 //! exporta as env vars abaixo com os valores corretos e roda
 //! `cargo test -p protocols -- --ignored`.
 use protocols::prefetch::PrefetchReader;
-use protocols::sftp::{list_directory, SftpFileSource, SftpTarget};
+use protocols::sftp::{SftpFileSource, SftpTarget, list_directory, scan_has_media};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
@@ -23,7 +23,9 @@ fn env_or(key: &str, default: &str) -> String {
 fn password_target() -> SftpTarget {
     SftpTarget {
         host: env_or("VRPLAYER_TEST_SFTP_HOST", "127.0.0.1"),
-        port: env_or("VRPLAYER_TEST_SFTP_PORT", "12222").parse().expect("VRPLAYER_TEST_SFTP_PORT invalido"),
+        port: env_or("VRPLAYER_TEST_SFTP_PORT", "12222")
+            .parse()
+            .expect("VRPLAYER_TEST_SFTP_PORT invalido"),
         path: String::new(),
         username: env_or("VRPLAYER_TEST_SFTP_USER", "vruser"),
         password: env_or("VRPLAYER_TEST_SFTP_PASS", "vrpass123"),
@@ -37,9 +39,17 @@ fn password_target() -> SftpTarget {
 /// `authenticate_password`).
 fn key_target() -> SftpTarget {
     let key_path = env_or("VRPLAYER_TEST_SFTP_KEY_PATH", "");
-    assert!(!key_path.is_empty(), "VRPLAYER_TEST_SFTP_KEY_PATH nao definido — rode via scripts/test-network-protocols.sh");
-    let pem = std::fs::read_to_string(&key_path).unwrap_or_else(|e| panic!("nao consegui ler {key_path}: {e}"));
-    SftpTarget { password: String::new(), private_key: Some(pem), ..password_target() }
+    assert!(
+        !key_path.is_empty(),
+        "VRPLAYER_TEST_SFTP_KEY_PATH nao definido — rode via scripts/test-network-protocols.sh"
+    );
+    let pem = std::fs::read_to_string(&key_path)
+        .unwrap_or_else(|e| panic!("nao consegui ler {key_path}: {e}"));
+    SftpTarget {
+        password: String::new(),
+        private_key: Some(pem),
+        ..password_target()
+    }
 }
 
 /// Subdiretorio dentro do home SFTP onde a fixture fica montada (ver
@@ -59,8 +69,9 @@ fn test_file_path() -> String {
 }
 
 fn expected_sha256() -> String {
-    std::env::var("VRPLAYER_TEST_FILE_SHA256")
-        .expect("VRPLAYER_TEST_FILE_SHA256 nao definido — rode via scripts/test-network-protocols.sh")
+    std::env::var("VRPLAYER_TEST_FILE_SHA256").expect(
+        "VRPLAYER_TEST_FILE_SHA256 nao definido — rode via scripts/test-network-protocols.sh",
+    )
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -74,13 +85,30 @@ fn sha256_hex(data: &[u8]) -> String {
 #[test]
 #[ignore]
 fn list_directory_finds_test_file() {
-    let entries = list_directory(&password_target(), FIXTURES_DIR).expect("list_directory falhou contra o servidor real");
+    let entries = list_directory(&password_target(), FIXTURES_DIR)
+        .expect("list_directory falhou contra o servidor real");
     let file = test_file_name();
     let entry = entries.iter().find(|e| e.name == file).unwrap_or_else(|| {
-        panic!("{file} nao encontrado em: {entries:?}", entries = entries.iter().map(|e| &e.name).collect::<Vec<_>>())
+        panic!(
+            "{file} nao encontrado em: {entries:?}",
+            entries = entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+        )
     });
     assert!(!entry.is_dir);
     assert!(entry.size > 0);
+}
+
+/// Varredura recursiva de poda de pastas (T-folder-pruning) contra o servidor real —
+/// `FIXTURES_DIR` so tem o arquivo de teste (nao-midia), entao o resultado esperado
+/// e "nenhuma midia encontrada, varredura concluida por completo" — cobre o caminho
+/// de conexao+listagem real (mesma sessao SFTP reusada, sem reconectar por nivel).
+#[test]
+#[ignore]
+fn scan_has_media_reports_no_media_for_fixture_with_only_a_non_media_file() {
+    let result = scan_has_media(&password_target(), FIXTURES_DIR)
+        .expect("scan_has_media falhou contra o servidor real");
+    assert!(!result.has_media);
+    assert!(result.completed_fully);
 }
 
 /// Leitura de arquivo via `SftpFileSource` + `PrefetchReader` (T6.3) com
@@ -96,7 +124,9 @@ fn sftp_file_source_reads_full_file_matching_sha256_password() {
     let source = SftpFileSource::open(&target).expect("SftpFileSource::open falhou (senha)");
     let mut reader = PrefetchReader::new(source);
     let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).expect("leitura via PrefetchReader falhou");
+    reader
+        .read_to_end(&mut buf)
+        .expect("leitura via PrefetchReader falhou");
 
     assert_eq!(sha256_hex(&buf), expected_sha256());
 }
@@ -115,7 +145,9 @@ fn sftp_file_source_reads_full_file_matching_sha256_key_auth() {
     let source = SftpFileSource::open(&target).expect("SftpFileSource::open falhou (chave)");
     let mut reader = PrefetchReader::new(source);
     let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).expect("leitura via PrefetchReader falhou");
+    reader
+        .read_to_end(&mut buf)
+        .expect("leitura via PrefetchReader falhou");
 
     assert_eq!(sha256_hex(&buf), expected_sha256());
 }
@@ -126,9 +158,14 @@ fn sftp_file_source_reads_full_file_matching_sha256_key_auth() {
 #[test]
 #[ignore]
 fn list_directory_finds_test_file_key_auth() {
-    let entries = list_directory(&key_target(), FIXTURES_DIR).expect("list_directory falhou (chave) contra o servidor real");
+    let entries = list_directory(&key_target(), FIXTURES_DIR)
+        .expect("list_directory falhou (chave) contra o servidor real");
     let file = test_file_name();
-    assert!(entries.iter().any(|e| e.name == file), "entries: {entries:?}", entries = entries.iter().map(|e| &e.name).collect::<Vec<_>>());
+    assert!(
+        entries.iter().any(|e| e.name == file),
+        "entries: {entries:?}",
+        entries = entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+    );
 }
 
 /// Forca blocos pequenos (64KB em vez dos 4MB padrao) pra multiplicar o
@@ -146,7 +183,9 @@ fn sftp_file_source_reads_full_file_with_small_blocks() {
     let source = SftpFileSource::open(&target).expect("SftpFileSource::open falhou");
     let mut reader = PrefetchReader::with_block_size(source, 64 * 1024);
     let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).expect("leitura via PrefetchReader falhou");
+    reader
+        .read_to_end(&mut buf)
+        .expect("leitura via PrefetchReader falhou");
 
     assert_eq!(sha256_hex(&buf), expected_sha256());
 }
@@ -173,14 +212,20 @@ fn sftp_file_source_backward_seek_after_forward_read() {
     let mut reader = PrefetchReader::with_block_size(source, 64 * 1024);
 
     // Le um pedaco perto do fim do arquivo (256KB) primeiro.
-    reader.seek(SeekFrom::Start(200_000)).expect("seek para o fim falhou");
+    reader
+        .seek(SeekFrom::Start(200_000))
+        .expect("seek para o fim falhou");
     let mut tail = [0u8; 1024];
     reader.read_exact(&mut tail).expect("leitura do fim falhou");
 
     // Agora volta pro inicio e le o arquivo inteiro.
-    reader.seek(SeekFrom::Start(0)).expect("seek de volta pro inicio falhou");
+    reader
+        .seek(SeekFrom::Start(0))
+        .expect("seek de volta pro inicio falhou");
     let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).expect("leitura completa apos salto pra tras falhou");
+    reader
+        .read_to_end(&mut buf)
+        .expect("leitura completa apos salto pra tras falhou");
 
     assert_eq!(sha256_hex(&buf), expected_sha256());
 }

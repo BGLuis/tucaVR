@@ -4,7 +4,6 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class PhotoFormatDetectorTest {
-
     @Test
     fun testDetectStereoModeSbsSuffixes() {
         assertEquals(PhotoStereoMode.SIDE_BY_SIDE, PhotoFormatDetector.detectStereoMode("vacation_sbs.jpg"))
@@ -61,7 +60,10 @@ class PhotoFormatDetectorTest {
     fun testDetectProjectionByFilename() {
         assertEquals(PhotoProjection.EQUIRECTANGULAR_360, PhotoFormatDetector.detectProjection(1920, 1080, null, "pano_360_beach.jpg"))
         assertEquals(PhotoProjection.EQUIRECTANGULAR_360, PhotoFormatDetector.detectProjection(1920, 1080, null, "photosphere_room.jpg"))
-        assertEquals(PhotoProjection.EQUIRECTANGULAR_360, PhotoFormatDetector.detectProjection(1920, 1080, null, "equirectangular_street.jpg"))
+        assertEquals(
+            PhotoProjection.EQUIRECTANGULAR_360,
+            PhotoFormatDetector.detectProjection(1920, 1080, null, "equirectangular_street.jpg"),
+        )
         assertEquals(PhotoProjection.EQUIRECTANGULAR_360, PhotoFormatDetector.detectProjection(1920, 1080, null, "tour_vr360.jpeg"))
 
         assertEquals(PhotoProjection.VR_180, PhotoFormatDetector.detectProjection(1920, 1080, null, "vr180_stage.jpg"))

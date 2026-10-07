@@ -9,19 +9,20 @@ import org.junit.Test
 import java.util.Random
 
 class PlaylistQueueManagerTest {
+    private val samplePlaylist =
+        Playlist(
+            id = "pl_1",
+            name = "Sci-Fi Hits",
+            createdAt = 1000L,
+            itemCount = 3,
+        )
 
-    private val samplePlaylist = Playlist(
-        id = "pl_1",
-        name = "Sci-Fi Hits",
-        createdAt = 1000L,
-        itemCount = 3
-    )
-
-    private val sampleItems = listOf(
-        PlaylistItem("item_1", "pl_1", "/storage/video1.mp4", "Video 1", 60_000L, 0, "LOCAL"),
-        PlaylistItem("item_2", "pl_1", "/storage/video2.mp4", "Video 2", 120_000L, 1, "LOCAL"),
-        PlaylistItem("item_3", "pl_1", "/storage/video3.mp4", "Video 3", 180_000L, 2, "LOCAL")
-    )
+    private val sampleItems =
+        listOf(
+            PlaylistItem("item_1", "pl_1", "/storage/video1.mp4", "Video 1", 60_000L, 0, "LOCAL"),
+            PlaylistItem("item_2", "pl_1", "/storage/video2.mp4", "Video 2", 120_000L, 1, "LOCAL"),
+            PlaylistItem("item_3", "pl_1", "/storage/video3.mp4", "Video 3", 180_000L, 2, "LOCAL"),
+        )
 
     @Test
     fun `test normal playback advances sequentially until end`() {
@@ -173,9 +174,10 @@ class PlaylistQueueManagerTest {
         // Remove item_2 (índice 1)
         items.removeAt(1)
 
-        val reordered = items.mapIndexed { index, item ->
-            item.copy(position = index)
-        }
+        val reordered =
+            items.mapIndexed { index, item ->
+                item.copy(position = index)
+            }
 
         assertEquals(2, reordered.size)
         assertEquals("item_1", reordered[0].id)

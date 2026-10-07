@@ -24,7 +24,10 @@ pub fn fetch_segment(
         .map_err(|e| format!("Falha ao baixar segmento HLS ({}): {e}", segment.url))?;
 
     if !resp.status().is_success() && resp.status().as_u16() != 206 {
-        return Err(format!("Erro HTTP {} ao baixar segmento HLS", resp.status()));
+        return Err(format!(
+            "Erro HTTP {} ao baixar segmento HLS",
+            resp.status()
+        ));
     }
 
     let raw_bytes = resp
@@ -76,7 +79,10 @@ fn get_or_fetch_key(
         .to_vec();
 
     if bytes.len() != 16 {
-        return Err(format!("Tamanho inválido para chave AES-128: {} bytes (esperado: 16)", bytes.len()));
+        return Err(format!(
+            "Tamanho inválido para chave AES-128: {} bytes (esperado: 16)",
+            bytes.len()
+        ));
     }
 
     key_cache.insert(uri.clone(), bytes.clone());
@@ -98,7 +104,11 @@ fn resolve_iv(key_info: &HlsKey, sequence_number: usize) -> [u8; 16] {
 }
 
 /// Descriptografa blocos em modo AES-128-CBC com unpadding PKCS#7.
-pub fn decrypt_aes128_cbc(key: &[u8; 16], iv: &[u8; 16], ciphertext: &[u8]) -> Result<Vec<u8>, String> {
+pub fn decrypt_aes128_cbc(
+    key: &[u8; 16],
+    iv: &[u8; 16],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, String> {
     if ciphertext.is_empty() {
         return Ok(Vec::new());
     }
@@ -152,14 +162,20 @@ mod tests {
     fn aes128_cbc_roundtrip() {
         use aes::cipher::BlockEncrypt;
 
-        let key = [0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf, 0x4f, 0x3c];
-        let iv = [0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f];
+        let key = [
+            0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
+            0x4f, 0x3c,
+        ];
+        let iv = [
+            0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d,
+            0x0e, 0x0f,
+        ];
         let plaintext = b"Hello, HLS Streaming on Meta Quest 3!";
 
         // PKCS#7 padding
         let pad_len = 16 - (plaintext.len() % 16);
         let mut padded = plaintext.to_vec();
-        padded.extend(std::iter::repeat(pad_len as u8).take(pad_len));
+        padded.extend(std::iter::repeat_n(pad_len as u8, pad_len));
 
         // Encripta
         let cipher = aes::Aes128::new((&key).into());

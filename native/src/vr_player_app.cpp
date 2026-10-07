@@ -242,6 +242,14 @@ extern "C" {
     extern float get_passthrough_opacity();
     extern void set_passthrough_edge_rendering(uint32_t enabled);
     extern uint32_t get_passthrough_edge_rendering();
+    extern void set_chroma_key_enabled(uint32_t enabled);
+    extern uint32_t get_chroma_key_enabled();
+    extern void set_chroma_key_color(uint32_t color);
+    extern uint32_t get_chroma_key_color();
+    extern void set_chroma_key_similarity(float sim);
+    extern float get_chroma_key_similarity();
+    extern void set_chroma_key_smoothness(float smooth);
+    extern float get_chroma_key_smoothness();
     extern void set_pause_on_exit(uint32_t enabled);
     // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
     extern void set_thermal_level(uint32_t level);
@@ -274,7 +282,7 @@ extern "C" {
     extern uint32_t get_audio_screen_locked();
     extern void set_screen_orientation(float x, float y, float z, float w);
 
-    // Debug Stats Modal (docs/reports/DEBUG-STATS-MODAL.md)
+    // Debug Stats Modal (ver docs/DEBUGGING.md)
     extern float get_last_av_drift_ms();
     extern uint32_t get_foveation_enabled();
     extern uint32_t get_audio_track_count();
@@ -577,7 +585,76 @@ Java_com_tucavr_VRActivity_nativeGetPassthroughEdgeRendering(JNIEnv* env, jobjec
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetChromaKeyEnabled(JNIEnv*, jobject, jboolean enabled) {
+    if (enabled) {
+        // Preserva o modo 2 (Packed Alpha) caso já esteja ativo, evitando sobrescrita indevida
+        if (get_chroma_key_enabled() != 2) {
+            set_chroma_key_enabled(1);
+        }
+    } else {
+        set_chroma_key_enabled(0);
+    }
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetChromaKeyEnabled(JNIEnv*, jobject) {
+    return get_chroma_key_enabled() != 0 ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetChromaKeyMode(JNIEnv*, jobject, jint mode) {
+    set_chroma_key_enabled(static_cast<uint32_t>(mode));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_VRActivity_nativeGetChromaKeyMode(JNIEnv*, jobject) {
+    return static_cast<jint>(get_chroma_key_enabled());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetChromaKeyColor(JNIEnv*, jobject, jint color) {
+    set_chroma_key_color(static_cast<uint32_t>(color));
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_VRActivity_nativeGetChromaKeyColor(JNIEnv*, jobject) {
+    return static_cast<jint>(get_chroma_key_color());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetChromaKeySimilarity(JNIEnv*, jobject, jfloat similarity) {
+    set_chroma_key_similarity(static_cast<float>(similarity));
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_tucavr_VRActivity_nativeGetChromaKeySimilarity(JNIEnv*, jobject) {
+    return static_cast<jfloat>(get_chroma_key_similarity());
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetChromaKeySmoothness(JNIEnv*, jobject, jfloat smoothness) {
+    set_chroma_key_smoothness(static_cast<float>(smoothness));
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_tucavr_VRActivity_nativeGetChromaKeySmoothness(JNIEnv*, jobject) {
+    return static_cast<jfloat>(get_chroma_key_smoothness());
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeResetScreenPosition(JNIEnv* env, jobject thiz) {
+    // No-op em GLES
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetScreenTransform(
+    JNIEnv* env, jobject thiz, jfloat posX, jfloat posY, jfloat posZ, jfloat scaleX, jfloat scaleY) {
+    // No-op em GLES
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetEnvironment(
+    JNIEnv* env, jobject thiz, jstring environmentId) {
     // No-op em GLES
 }
 
@@ -1333,6 +1410,10 @@ public:
             case ScreenMode::Vr180SBS:
                 m_uPolar180 = 1.0f;
                 break;
+            case ScreenMode::Fisheye190:
+            case ScreenMode::Fisheye190SBS:
+                m_uPolar180 = 2.0f;
+                break;
             default:
                 m_uPolar180 = 0.0f;
                 break;
@@ -1343,6 +1424,7 @@ public:
             case ScreenMode::Vr180SBS:
             case ScreenMode::Cubemap3x2SBS:
             case ScreenMode::EAC3x2SBS:
+            case ScreenMode::Fisheye190SBS:
                 m_sphereStereoLayout = 1.0f; // SBS
                 break;
             case ScreenMode::Sphere360OU:
@@ -1411,16 +1493,23 @@ public:
             std::string basePath;
             { std::lock_guard<std::mutex> lock(g_capturePathMutex); basePath = g_capturePath; }
             std::string path = basePath + (eye == 0 ? ".left.ppm" : ".right.ppm");
-            FILE* f = fopen(path.c_str(), "wb");
+            std::string tmpPath = path + ".tmp";
+            FILE* f = fopen(tmpPath.c_str(), "wb");
             if (f) {
                 fprintf(f, "P6\n%d %d\n255\n", w, h);
                 // glReadPixels vem de baixo pra cima; PPM espera de cima pra baixo.
+                std::vector<uint8_t> rowBuffer(w * 3);
                 for (int y = h - 1; y >= 0; y--) {
+                    const uint8_t* srcRow = &pixels[(size_t)(y * w) * 4];
                     for (int x = 0; x < w; x++) {
-                        fwrite(&pixels[(size_t)(y * w + x) * 4], 1, 3, f);
+                        rowBuffer[x * 3 + 0] = srcRow[x * 4 + 0];
+                        rowBuffer[x * 3 + 1] = srcRow[x * 4 + 1];
+                        rowBuffer[x * 3 + 2] = srcRow[x * 4 + 2];
                     }
+                    fwrite(rowBuffer.data(), 1, rowBuffer.size(), f);
                 }
                 fclose(f);
+                rename(tmpPath.c_str(), path.c_str());
                 LOGI("VRPlayerApp: frame capturado em %s (%dx%d)", path.c_str(), w, h);
             }
             if (eye == 1) g_captureRequested = false;
@@ -1688,7 +1777,23 @@ public:
             uniform float uSharpness; // 0..1, ver SHARPEN_ENABLED/kSharpenEnabled
             void main() {
                 vec2 uv = vTexCoord;
-                if (uPolar180 > 0.5) {
+                if (uPolar180 > 1.5) {
+                    const float PI = 3.141592653589793;
+                    float theta = 2.0 * PI * (vTexCoord.x - 0.5);
+                    float phi   = PI * vTexCoord.y;
+                    float sinPhi = sin(phi);
+                    vec3 dir = vec3(sinPhi * sin(theta), cos(phi), -sinPhi * cos(theta));
+                    float cosPsi = clamp(-dir.z, -1.0, 1.0);
+                    float psi = acos(cosPsi);
+                    const float kMaxHalfFov = 190.0 * PI / 360.0;
+                    if (psi > kMaxHalfFov) {
+                        discard;
+                    }
+                    float rho = length(dir.xy);
+                    vec2 planeDir = (rho > 1e-6) ? (dir.xy / rho) : vec2(0.0, 0.0);
+                    float rNorm = psi / kMaxHalfFov;
+                    uv = vec2(0.5 + 0.5 * rNorm * planeDir.x, 0.5 - 0.5 * rNorm * planeDir.y);
+                } else if (uPolar180 > 0.5) {
                     if (uv.x < 0.25 || uv.x > 0.75) {
                         discard;
                     }
@@ -2332,7 +2437,9 @@ public:
             m_beamRenderer.RemoveBeam(m_beamHandle);
             m_beamHandle = OVRFW::ovrBeamRenderer::INVALID_BEAM_HANDLE;
         }
-        m_beamHandle = m_beamRenderer.AddBeam(in, 0.015f, rayOrigin, pointerEnd, OVR::Vector4f(1.0f, 0.0f, 0.0f, 1.0f));
+        if (dispatchHitPanel != 0 && minT > 0.0f) {
+            m_beamHandle = m_beamRenderer.AddBeam(in, 0.015f, rayOrigin, pointerEnd, OVR::Vector4f(0.0f, 0.5f, 1.0f, 1.0f));
+        }
 
         // Cursor/reticle no ponto de acerto: o laser sozinho termina "no
         // vazio", o que dificulta mirar em botoes pequenos com precisao
@@ -2508,7 +2615,7 @@ public:
                 }
             }
 
-            // HUD de debug (docs/DEBUGGING.md / docs/reports/DEBUG-STATS-MODAL.md)
+            // HUD de debug (docs/DEBUGGING.md)
             if (g_debugStatsEnabled.load(std::memory_order_relaxed)) {
                 DebugStats stats;
                 stats.backend = "GLES";
@@ -2567,10 +2674,9 @@ public:
             }
         }
 
-        // --- MOVER/REDIMENSIONAR A TELA VIRTUAL (T3.6) ---
-        // Sem grip: thumbstick direito move a tela (Y do stick = frente/tras,
-        // X do stick = cima/baixo). Com grip: thumbstick redimensiona,
-        // mantendo o aspect ratio 16:9.
+        // --- MOVER/REDIMENSIONAR A TELA VIRTUAL (T3.6 - Corrigido com trava de intenção) ---
+        // Exige intenção explícita: só redimensiona ou move se o Grip estiver pressionado.
+        // Sem grip: o thumbstick direito NUNCA move a tela acidentalmente.
         {
             const float kDeadzone = 0.15f;
             OVR::Vector2f stick = in.RightRemoteJoystick;
@@ -2578,21 +2684,24 @@ public:
             if (fabsf(stick.y) < kDeadzone) stick.y = 0.0f;
 
             bool gripHeld = in.RightRemoteGripTrigger > 0.5f;
+            bool triggerHeld = in.RightRemoteIndexTrigger > 0.5f;
 
-            if (gripHeld && stick.y != 0.0f) {
-                const float kResizeSpeedMetersPerSec = 1.0f;
-                float newWidth = m_screenScale.x + stick.y * kResizeSpeedMetersPerSec * in.DeltaSeconds;
-                newWidth = std::max(0.5f, std::min(newWidth, 6.0f));
-                m_screenScale.x = newWidth;
-                m_screenScale.y = newWidth * (9.0f / 16.0f);
-            } else if (!gripHeld && (stick.x != 0.0f || stick.y != 0.0f)) {
-                const float kMoveSpeedMetersPerSec = 1.5f;
-                m_screenPosition.z -= stick.y * kMoveSpeedMetersPerSec * in.DeltaSeconds;
-                m_screenPosition.y += stick.x * kMoveSpeedMetersPerSec * in.DeltaSeconds;
-                // Limites de conforto: nunca deixar a tela grudada no rosto
-                // nem sumir no chao/teto.
-                m_screenPosition.z = std::min(-0.75f, std::max(m_screenPosition.z, -8.0f));
-                m_screenPosition.y = std::max(0.2f, std::min(m_screenPosition.y, 3.5f));
+            if (gripHeld) {
+                if (triggerHeld && (stick.x != 0.0f || stick.y != 0.0f)) {
+                    // Modo ajuste de posição direto (Grip + Trigger)
+                    const float kMoveSpeedMetersPerSec = 1.5f;
+                    m_screenPosition.z -= stick.y * kMoveSpeedMetersPerSec * in.DeltaSeconds;
+                    m_screenPosition.y += stick.x * kMoveSpeedMetersPerSec * in.DeltaSeconds;
+                    m_screenPosition.z = std::min(-0.8f, std::max(m_screenPosition.z, -10.0f));
+                    m_screenPosition.y = std::max(0.3f, std::min(m_screenPosition.y, 3.5f));
+                } else if (stick.y != 0.0f) {
+                    // Redimensionamento (Grip + Stick Y)
+                    const float kResizeSpeedMetersPerSec = 1.2f;
+                    float newWidth = m_screenScale.x + stick.y * kResizeSpeedMetersPerSec * in.DeltaSeconds;
+                    newWidth = std::max(0.8f, std::min(newWidth, 8.0f));
+                    m_screenScale.x = newWidth;
+                    m_screenScale.y = newWidth * (9.0f / 16.0f);
+                }
             }
         }
 
@@ -3073,9 +3182,9 @@ private:
     float m_feedbackHoldTime = 0.0f;
     float m_feedbackAlpha = 0.0f;
 
-    // Posicao/tamanho da tela virtual, ajustaveis em runtime (T3.6)
-    OVR::Vector3f m_screenPosition = OVR::Vector3f(0.0f, 1.5f, -2.0f);
-    OVR::Vector2f m_screenScale = OVR::Vector2f(1.6f, 0.9f);
+    // Posicao/tamanho da tela virtual, ajustaveis em runtime (T3.6 - Padrão Cinematográfico)
+    OVR::Vector3f m_screenPosition = OVR::Vector3f(0.0f, 1.5f, -2.4f);
+    OVR::Vector2f m_screenScale = OVR::Vector2f(2.8f, 1.575f);
 
     // T1.1/T1.2/T1.5: quad SBS/OU com separacao real de olho — programa e
     // geometria proprios, separados de m_program (que continua servindo o

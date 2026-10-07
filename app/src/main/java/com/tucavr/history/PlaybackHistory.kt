@@ -70,5 +70,5 @@ data class PlaybackHistory(
      * recuperadas de novo pelo `serverId` na hora de retomar, nunca
      * duplicadas aqui em texto plano.
      */
-    val serverInfo: String?
+    val serverInfo: String?,
 )

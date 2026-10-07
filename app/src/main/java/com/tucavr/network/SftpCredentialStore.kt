@@ -19,7 +19,7 @@ data class SftpServer(
     val port: Int,
     val username: String,
     val password: String,
-    val privateKey: String?
+    val privateKey: String?,
 ) {
     val usesKeyAuth: Boolean get() = !privateKey.isNullOrEmpty()
 }
@@ -30,24 +30,25 @@ data class SftpServer(
  */
 class SftpCredentialStore(
     private val dao: SavedServerDao,
-    private val credentials: ServerCredentialStore
+    private val credentials: ServerCredentialStore,
 ) {
     constructor(context: Context) : this(
         AppDatabase.getInstance(context).savedServerDao(),
-        ServerCredentialStore(context)
+        ServerCredentialStore(context),
     )
 
-    fun list(): List<SftpServer> = runBlocking(Dispatchers.IO) {
-        try {
-            dao.getByProtocol(ServerProtocol.SFTP).map { saved ->
-                val password = credentials.getPassword(saved.id)
-                val privateKey = credentials.getPrivateKey(saved.id)
-                saved.toSftpServer(password = password, privateKey = privateKey)
+    fun list(): List<SftpServer> =
+        runBlocking(Dispatchers.IO) {
+            try {
+                dao.getByProtocol(ServerProtocol.SFTP).map { saved ->
+                    val password = credentials.getPassword(saved.id)
+                    val privateKey = credentials.getPrivateKey(saved.id)
+                    saved.toSftpServer(password = password, privateKey = privateKey)
+                }
+            } catch (e: Exception) {
+                emptyList()
             }
-        } catch (e: Exception) {
-            emptyList()
         }
-    }
 
     fun newId(): String = UUID.randomUUID().toString()
 
@@ -58,7 +59,7 @@ class SftpCredentialStore(
                 credentials.saveCredentials(
                     server.id,
                     password = server.password,
-                    privateKey = server.privateKey
+                    privateKey = server.privateKey,
                 )
             } catch (e: Exception) {
                 // Log / ignore

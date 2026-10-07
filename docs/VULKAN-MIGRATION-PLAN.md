@@ -1,11 +1,10 @@
 # Plano de Migração OpenGL ES → Vulkan
 
-> Contexto: `docs/REQUIREMENTS.md` (ADR-003) registra "Vulkan 1.1 como API
-> primária, fallback OpenGL ES 3.2" — mas isso nunca foi implementado assim.
-> Hoje 100% do rendering é OpenGL ES. Este documento mapeia por que isso
-> aconteceu, o que exatamente precisaria mudar, e uma estratégia de migração
-> em estágios que mantém o app sempre buildável e shippable no Quest 3
-> durante todo o processo (nenhum "big bang").
+> **Historical document / Documento histórico:** Plano de migração executado.
+> O backend Vulkan 1.1 (`vr_player_app_vulkan.cpp`) foi integralmente implementado e tornou-se a API primária/padrão no Stage 6. O OpenGL ES permanece apenas como fallback congelado via `-PvrplayerGraphicsApi=GLES`.
+>
+> Contexto original da migração: `docs/REQUIREMENTS.md` (ADR-003) registrou "Vulkan 1.1 como API
+> primária, fallback OpenGL ES 3.2". Este documento planejou os 6 estágios que concluíram a transição.
 
 ## 1. Estado atual (verificado nesta rodada, não suposto)
 

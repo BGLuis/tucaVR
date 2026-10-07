@@ -14,21 +14,31 @@ pub fn extract_vps_sps_pps(extradata: &[u8]) -> Option<Vec<u8>> {
 
     for _ in 0..num_arrays {
         // 1 byte: array_completeness(1) + reserved(1) + NAL_unit_type(6)
-        if offset + 3 > extradata.len() { return None; }
+        if offset + 3 > extradata.len() {
+            return None;
+        }
         offset += 1;
         let num_nalus = ((extradata[offset] as usize) << 8) | (extradata[offset + 1] as usize);
         offset += 2;
 
         for _ in 0..num_nalus {
-            if offset + 2 > extradata.len() { return None; }
+            if offset + 2 > extradata.len() {
+                return None;
+            }
             let nalu_len = ((extradata[offset] as usize) << 8) | (extradata[offset + 1] as usize);
             offset += 2;
-            if offset + nalu_len > extradata.len() { return None; }
+            if offset + nalu_len > extradata.len() {
+                return None;
+            }
             out.extend_from_slice(&[0, 0, 0, 1]);
             out.extend_from_slice(&extradata[offset..offset + nalu_len]);
             offset += nalu_len;
         }
     }
 
-    if out.is_empty() { None } else { Some(out) }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }

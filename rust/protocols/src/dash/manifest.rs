@@ -19,8 +19,7 @@ fn url_origin(url: &str) -> Option<&str> {
 
 /// Resolve uma URL de `BaseURL`/segmento DASH contra `base`, restringindo o resultado à MESMA
 /// origem de `mpd_url` — mitiga SSRF via um manifesto MPD malicioso ou comprometido que aponte
-/// `BaseURL`/`SegmentTemplate` para um host arbitrário (achado R-01,
-/// `docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md`). `mpd_url` é sempre a URL originalmente
+/// `BaseURL`/`SegmentTemplate` para um host arbitrário (achado R-01). `mpd_url` é sempre a URL originalmente
 /// solicitada pelo usuário/app — nunca um valor extraído do próprio documento — então usá-la
 /// como origem confiável é seguro. Sem essa checagem, `resolve_url` (compartilhada com o cliente
 /// DLNA, que não tem esse risco por ser descoberto via SSDP/LAN) retorna qualquer URL absoluta
@@ -32,7 +31,9 @@ pub fn resolve_dash_url(mpd_url: &str, base: &str, relative: &str) -> Result<Str
         (Some(expected), Some(actual)) => Err(format!(
             "URL DASH fora da origem do MPD bloqueada (SSRF): esperado '{expected}', recebido '{actual}' (relative='{relative}')"
         )),
-        _ => Err(format!("URL DASH inválida ou sem esquema http(s): '{resolved}'")),
+        _ => Err(format!(
+            "URL DASH inválida ou sem esquema http(s): '{resolved}'"
+        )),
     }
 }
 
@@ -181,7 +182,7 @@ pub struct SegmentTemplate {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SegmentBase {
-    pub index_range: Option<(u64, u64)>, // (offset, length)
+    pub index_range: Option<(u64, u64)>,          // (offset, length)
     pub initialization_range: Option<(u64, u64)>, // (offset, length)
     pub timescale: u64,
     pub presentation_time_offset: u64,
@@ -244,11 +245,17 @@ impl DashManifest {
                 let is_video = match (&adapt.content_type, &adapt.mime_type) {
                     (Some(ct), _) if ct.eq_ignore_ascii_case("video") => true,
                     (_, Some(mt)) if mt.to_ascii_lowercase().starts_with("video/") => true,
-                    _ => adapt.representations.iter().any(|r| r.width.is_some() || r.height.is_some()),
+                    _ => adapt
+                        .representations
+                        .iter()
+                        .any(|r| r.width.is_some() || r.height.is_some()),
                 };
 
                 if !is_video && !adapt.representations.is_empty() {
-                    let any_dims = adapt.representations.iter().any(|r| r.width.is_some() || r.height.is_some());
+                    let any_dims = adapt
+                        .representations
+                        .iter()
+                        .any(|r| r.width.is_some() || r.height.is_some());
                     if !any_dims {
                         continue;
                     }
@@ -299,7 +306,11 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
                 let tag_raw = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                let local_tag = tag_raw.split(':').next_back().unwrap_or(&tag_raw).to_string();
+                let local_tag = tag_raw
+                    .split(':')
+                    .next_back()
+                    .unwrap_or(&tag_raw)
+                    .to_string();
                 current_tag = local_tag.clone();
 
                 match local_tag.as_str() {
@@ -483,7 +494,11 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
             }
             Ok(Event::Empty(ref e)) => {
                 let tag_raw = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                let local_tag = tag_raw.split(':').next_back().unwrap_or(&tag_raw).to_string();
+                let local_tag = tag_raw
+                    .split(':')
+                    .next_back()
+                    .unwrap_or(&tag_raw)
+                    .to_string();
 
                 match local_tag.as_str() {
                     "SegmentTemplate" => {
@@ -562,10 +577,12 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
                             if key_local == "range" {
                                 let init_range = parse_byte_range(&val);
                                 if let Some(ref mut rep) = current_rep
-                                    && let Some(ref mut sb) = rep.segment_base {
+                                    && let Some(ref mut sb) = rep.segment_base
+                                {
                                     sb.initialization_range = init_range;
                                 } else if let Some(ref mut adapt) = current_adapt
-                                    && let Some(ref mut sb) = adapt.segment_base {
+                                    && let Some(ref mut sb) = adapt.segment_base
+                                {
                                     sb.initialization_range = init_range;
                                 }
                             }
@@ -627,18 +644,24 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
             }
             Ok(Event::End(ref e)) => {
                 let tag_raw = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                let local_tag = tag_raw.split(':').next_back().unwrap_or(&tag_raw).to_string();
+                let local_tag = tag_raw
+                    .split(':')
+                    .next_back()
+                    .unwrap_or(&tag_raw)
+                    .to_string();
 
                 match local_tag.as_str() {
                     "Representation" => {
                         if let Some(rep) = current_rep.take()
-                            && let Some(ref mut adapt) = current_adapt {
+                            && let Some(ref mut adapt) = current_adapt
+                        {
                             adapt.representations.push(rep);
                         }
                     }
                     "AdaptationSet" => {
                         if let Some(adapt) = current_adapt.take()
-                            && let Some(ref mut period) = current_period {
+                            && let Some(ref mut period) = current_period
+                        {
                             period.adaptation_sets.push(adapt);
                         }
                     }
@@ -659,7 +682,8 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
     }
 
     if let Some(rep) = current_rep.take()
-        && let Some(ref mut adapt) = current_adapt {
+        && let Some(ref mut adapt) = current_adapt
+    {
         adapt.representations.push(rep);
     }
     if let Some(adapt) = current_adapt.take() {
@@ -705,18 +729,34 @@ mod tests {
 
         // Absoluta na MESMA origem (outro path) — permitida.
         assert_eq!(
-            resolve_dash_url(mpd_url, mpd_url, "https://stream.example.com/cdn/chunk-1.m4s").unwrap(),
+            resolve_dash_url(
+                mpd_url,
+                mpd_url,
+                "https://stream.example.com/cdn/chunk-1.m4s"
+            )
+            .unwrap(),
             "https://stream.example.com/cdn/chunk-1.m4s"
         );
 
         // Absoluta em origem DIFERENTE (host distinto) — bloqueada (SSRF, R-01).
-        assert!(resolve_dash_url(mpd_url, mpd_url, "https://evil.example.net/chunk-1.m4s").is_err());
+        assert!(
+            resolve_dash_url(mpd_url, mpd_url, "https://evil.example.net/chunk-1.m4s").is_err()
+        );
 
         // Mesma host, esquema diferente (https -> http) — também bloqueada.
-        assert!(resolve_dash_url(mpd_url, mpd_url, "http://stream.example.com/chunk-1.m4s").is_err());
+        assert!(
+            resolve_dash_url(mpd_url, mpd_url, "http://stream.example.com/chunk-1.m4s").is_err()
+        );
 
         // Mesma host/esquema, porta diferente — também bloqueada.
-        assert!(resolve_dash_url(mpd_url, mpd_url, "https://stream.example.com:8443/chunk-1.m4s").is_err());
+        assert!(
+            resolve_dash_url(
+                mpd_url,
+                mpd_url,
+                "https://stream.example.com:8443/chunk-1.m4s"
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -738,7 +778,10 @@ mod tests {
         // Um MPD malicioso/comprometido apontando BaseURL para outra origem deve falhar o parse,
         // não ser aceito silenciosamente — achado R-01 (SSRF), verificado nesta auditoria.
         let result = parse_mpd(xml, "https://cdn.example.com/dash/manifest.mpd");
-        assert!(result.is_err(), "BaseURL cross-origin deveria ser bloqueada");
+        assert!(
+            result.is_err(),
+            "BaseURL cross-origin deveria ser bloqueada"
+        );
     }
 
     #[test]
@@ -753,13 +796,19 @@ mod tests {
     #[test]
     fn test_resolve_template_url() {
         let t1 = "chunk-$RepresentationID$-$Number$.m4s";
-        assert_eq!(resolve_template_url(t1, "video_1080p", 42, 0), "chunk-video_1080p-42.m4s");
+        assert_eq!(
+            resolve_template_url(t1, "video_1080p", 42, 0),
+            "chunk-video_1080p-42.m4s"
+        );
 
         let t2 = "segment_$RepresentationID$_$Number%05d$.m4s";
         assert_eq!(resolve_template_url(t2, "v1", 7, 0), "segment_v1_00007.m4s");
 
         let t3 = "$RepresentationID$/$Time$.m4s";
-        assert_eq!(resolve_template_url(t3, "audio", 0, 192000), "audio/192000.m4s");
+        assert_eq!(
+            resolve_template_url(t3, "audio", 0, 192000),
+            "audio/192000.m4s"
+        );
 
         let t4 = "test_$$dollar_$Number$.m4s";
         assert_eq!(resolve_template_url(t4, "v", 1, 0), "test_$dollar_1.m4s");
@@ -788,7 +837,8 @@ mod tests {
   </Period>
 </MPD>"#;
 
-        let manifest = parse_mpd(xml, "https://stream.example.com/live/manifest.mpd").expect("parse_mpd deve ter sucesso");
+        let manifest = parse_mpd(xml, "https://stream.example.com/live/manifest.mpd")
+            .expect("parse_mpd deve ter sucesso");
         assert_eq!(manifest.duration_sec, Some(600.0));
         assert_eq!(manifest.min_buffer_time_sec, Some(1.5));
         assert!(!manifest.is_dynamic);
@@ -800,10 +850,16 @@ mod tests {
         assert_eq!(video_reps[0].bandwidth, 1_000_000);
         assert_eq!(video_reps[0].width, Some(1280));
         assert_eq!(video_reps[0].height, Some(720));
-        let template = video_reps[0].segment_template.as_ref().expect("template herdado");
+        let template = video_reps[0]
+            .segment_template
+            .as_ref()
+            .expect("template herdado");
         assert_eq!(template.timescale, 1000);
         assert_eq!(template.duration, Some(2000));
-        assert_eq!(template.initialization.as_deref(), Some("init-$RepresentationID$.mp4"));
+        assert_eq!(
+            template.initialization.as_deref(),
+            Some("init-$RepresentationID$.mp4")
+        );
 
         assert_eq!(video_reps[1].id, "v2");
         assert_eq!(video_reps[1].bandwidth, 3_000_000);
@@ -827,13 +883,20 @@ mod tests {
   </Period>
 </MPD>"#;
 
-        let manifest = parse_mpd(xml, "https://cdn.example.com/dash/manifest.mpd").expect("parse_mpd base deve passar");
+        let manifest = parse_mpd(xml, "https://cdn.example.com/dash/manifest.mpd")
+            .expect("parse_mpd base deve passar");
         let reps = manifest.video_representations();
         assert_eq!(reps.len(), 1);
         assert_eq!(reps[0].id, "rep_base");
-        assert_eq!(reps[0].base_url.as_deref(), Some("https://cdn.example.com/dash/video.mp4"));
+        assert_eq!(
+            reps[0].base_url.as_deref(),
+            Some("https://cdn.example.com/dash/video.mp4")
+        );
 
-        let sb = reps[0].segment_base.as_ref().expect("segment base esperado");
+        let sb = reps[0]
+            .segment_base
+            .as_ref()
+            .expect("segment base esperado");
         assert_eq!(sb.index_range, Some((835, 666))); // 1500 - 835 + 1
         assert_eq!(sb.initialization_range, Some((0, 835))); // 834 - 0 + 1
     }

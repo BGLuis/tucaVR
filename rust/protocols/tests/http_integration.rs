@@ -14,7 +14,10 @@ fn env_or(key: &str, default: &str) -> String {
 }
 
 fn test_url() -> String {
-    env_or("VRPLAYER_TEST_HTTP_URL", "http://127.0.0.1:18080/testfile.bin")
+    env_or(
+        "VRPLAYER_TEST_HTTP_URL",
+        "http://127.0.0.1:18080/testfile.bin",
+    )
 }
 
 #[test]
@@ -23,6 +26,12 @@ fn probe_detects_real_nginx_range_support_and_size() {
     let caps = probe(&test_url());
 
     assert!(caps.reachable, "probe nao alcancou o servidor: {caps:?}");
-    assert!(caps.seekable, "nginx deveria anunciar Accept-Ranges: bytes: {caps:?}");
-    assert!(caps.content_length.unwrap_or(0) > 0, "content_length ausente/zero: {caps:?}");
+    assert!(
+        caps.seekable,
+        "nginx deveria anunciar Accept-Ranges: bytes: {caps:?}"
+    );
+    assert!(
+        caps.content_length.unwrap_or(0) > 0,
+        "content_length ausente/zero: {caps:?}"
+    );
 }

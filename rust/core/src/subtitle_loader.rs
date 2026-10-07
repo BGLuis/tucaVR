@@ -5,10 +5,10 @@
 
 use crate::demuxer::{Demuxer, ReadPacketOutcome};
 use ffmpeg_next as ffmpeg;
-use media_logic::subtitle::{detect_and_decode, parse_srt, parse_vtt, sanitize_subtitle_text, SubtitleEntry};
-use media_logic::subtitle_ass::{
-    ass_document_from_mkv_packets, parse_ass, MkvAssPacket,
+use media_logic::subtitle::{
+    detect_and_decode, parse_srt, parse_vtt, sanitize_subtitle_text, SubtitleEntry,
 };
+use media_logic::subtitle_ass::{ass_document_from_mkv_packets, parse_ass, MkvAssPacket};
 use media_logic::subtitle_pgs::{parse_pgs_packets, parse_pgs_sup, PgsPacket};
 use std::path::Path;
 
@@ -45,7 +45,10 @@ pub fn load_subtitle_from_path(path: &str) -> Result<LoadedSubtitle, String> {
     let decoded_text = detect_and_decode(&bytes);
 
     // Identifica formato por extensão ou conteúdo inicial.
-    if lower.ends_with(".ass") || lower.ends_with(".ssa") || decoded_text.trim_start().starts_with("[Script Info]") {
+    if lower.ends_with(".ass")
+        || lower.ends_with(".ssa")
+        || decoded_text.trim_start().starts_with("[Script Info]")
+    {
         let ass = parse_ass(&decoded_text);
         Ok(LoadedSubtitle::Ass(ass))
     } else if lower.ends_with(".vtt") || decoded_text.trim_start().starts_with("WEBVTT") {
@@ -63,16 +66,12 @@ pub fn load_subtitle_from_path(path: &str) -> Result<LoadedSubtitle, String> {
 /// `AV_CODEC_ID_TEXT`, WebVTT, MOV_TEXT/tx3g, ASS/SSA). Legendas bitmap
 /// (`HDMV_PGS_SUBTITLE`, `DVD_SUBTITLE`) ainda não têm caminho de render de
 /// textura no C++, então retornam **erro explícito** — em vez de a faixa ficar
-/// vazia e silenciosa, que era o bug descrito no relatório
-/// (`docs/reports/PHASE-0.3-07-LEGENDAS-ASS-PGS.md` §1).
+/// vazia e silenciosa.
 ///
 /// Custo: uma leitura completa do container só para as legendas. Aceitável para
 /// arquivos locais na v0.3; para rede é caro e pode virar leitura incremental
 /// mais tarde.
-pub fn load_embedded_subtitle(
-    path: &str,
-    stream_index: usize,
-) -> Result<LoadedSubtitle, String> {
+pub fn load_embedded_subtitle(path: &str, stream_index: usize) -> Result<LoadedSubtitle, String> {
     let mut demuxer = Demuxer::new(path).map_err(|e| format!("abrir demuxer: {e}"))?;
 
     let (codec_id, tb_num, tb_den, extradata) = {
@@ -275,8 +274,19 @@ pub fn probe_sidecar_subtitles(video_path: &str) -> Vec<SubtitleTrackInfo> {
     if let (Some(parent), Some(stem)) = (p.parent(), p.file_stem()) {
         let stem_str = stem.to_string_lossy();
         let candidate_extensions = &[
-            "srt", "vtt", "ass", "ssa", "sup", "pt-BR.srt", "en.srt", "pt.srt", "es.srt", "pt-BR.ass",
-            "en.ass", "pt-BR.sup", "en.sup",
+            "srt",
+            "vtt",
+            "ass",
+            "ssa",
+            "sup",
+            "pt-BR.srt",
+            "en.srt",
+            "pt.srt",
+            "es.srt",
+            "pt-BR.ass",
+            "en.ass",
+            "pt-BR.sup",
+            "en.sup",
         ];
 
         for ext in candidate_extensions {

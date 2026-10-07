@@ -9,17 +9,17 @@ import org.junit.Test
  * Executam em JVM pura testando a lógica de salto de campos invisíveis (ex.: convidado SMB, chave SFTP).
  */
 class VoidFormOrderTest {
-
     data class MockField(val name: String, var isVisible: Boolean = true)
 
     @Test
     fun `findNextVisibleItem avanca sequencialmente quando todos os campos estao visiveis`() {
-        val fields = listOf(
-            MockField("host"),
-            MockField("port"),
-            MockField("user"),
-            MockField("pass")
-        )
+        val fields =
+            listOf(
+                MockField("host"),
+                MockField("port"),
+                MockField("user"),
+                MockField("pass"),
+            )
 
         val nextFrom0 = VoidForm.findNextVisibleItem(fields, 0) { it.isVisible }
         assertEquals("port", nextFrom0?.name)
@@ -38,14 +38,15 @@ class VoidFormOrderTest {
     fun `findNextVisibleItem pula campos invisiveis no modo convidado do SMB`() {
         // No formulário SMB: [host, port, share, user, pass, domain]
         // Se checkbox "convidado" estiver marcado, user e pass ficam invisíveis (GONE).
-        val smbFields = listOf(
-            MockField("host", isVisible = true),
-            MockField("port", isVisible = true),
-            MockField("share", isVisible = true),
-            MockField("user", isVisible = false),
-            MockField("pass", isVisible = false),
-            MockField("domain", isVisible = true)
-        )
+        val smbFields =
+            listOf(
+                MockField("host", isVisible = true),
+                MockField("port", isVisible = true),
+                MockField("share", isVisible = true),
+                MockField("user", isVisible = false),
+                MockField("pass", isVisible = false),
+                MockField("domain", isVisible = true),
+            )
 
         // Ao dar Next a partir do campo 'share' (índice 2), deve ir direto para 'domain' (índice 5)
         val nextFromShare = VoidForm.findNextVisibleItem(smbFields, 2) { it.isVisible }
@@ -60,13 +61,14 @@ class VoidFormOrderTest {
     fun `findNextVisibleItem alterna entre senha e chave privada no SFTP`() {
         // No formulário SFTP: [host, port, user, pass, key]
         // Caso 1: Senha ativa (key invisível)
-        val sftpPasswordMode = listOf(
-            MockField("host", isVisible = true),
-            MockField("port", isVisible = true),
-            MockField("user", isVisible = true),
-            MockField("pass", isVisible = true),
-            MockField("key", isVisible = false)
-        )
+        val sftpPasswordMode =
+            listOf(
+                MockField("host", isVisible = true),
+                MockField("port", isVisible = true),
+                MockField("user", isVisible = true),
+                MockField("pass", isVisible = true),
+                MockField("key", isVisible = false),
+            )
 
         val nextFromUserInPassMode = VoidForm.findNextVisibleItem(sftpPasswordMode, 2) { it.isVisible }
         assertEquals("pass", nextFromUserInPassMode?.name)
@@ -75,13 +77,14 @@ class VoidFormOrderTest {
         assertNull(nextFromPass) // key está invisível, termina
 
         // Caso 2: Chave PEM ativa (pass invisível)
-        val sftpKeyMode = listOf(
-            MockField("host", isVisible = true),
-            MockField("port", isVisible = true),
-            MockField("user", isVisible = true),
-            MockField("pass", isVisible = false),
-            MockField("key", isVisible = true)
-        )
+        val sftpKeyMode =
+            listOf(
+                MockField("host", isVisible = true),
+                MockField("port", isVisible = true),
+                MockField("user", isVisible = true),
+                MockField("pass", isVisible = false),
+                MockField("key", isVisible = true),
+            )
 
         val nextFromUserInKeyMode = VoidForm.findNextVisibleItem(sftpKeyMode, 2) { it.isVisible }
         assertEquals("key", nextFromUserInKeyMode?.name) // pulou pass direto pra key

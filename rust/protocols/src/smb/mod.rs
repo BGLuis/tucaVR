@@ -67,7 +67,9 @@ const SMB_CHUNK_RETRY_BACKOFF_BASE: Duration = Duration::from_millis(200);
 const SMB_CHUNK_RETRY_BACKOFF_CAP: Duration = Duration::from_secs(2);
 
 fn new_runtime() -> io::Result<Runtime> {
-    tokio::runtime::Builder::new_current_thread().enable_all().build()
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
 }
 
 fn client_config(t: &SmbTarget, auto_reconnect: bool) -> ClientConfig {
@@ -81,6 +83,7 @@ fn client_config(t: &SmbTarget, auto_reconnect: bool) -> ClientConfig {
         compression: true,
         dfs_enabled: true,
         dfs_target_overrides: Default::default(),
+        connect_options: None,
     }
 }
 
@@ -91,7 +94,9 @@ fn client_config(t: &SmbTarget, auto_reconnect: bool) -> ClientConfig {
 pub fn list_shares(t: &SmbTarget) -> Result<Vec<String>, String> {
     let rt = new_runtime().map_err(|e| e.to_string())?;
     rt.block_on(async {
-        let mut client = SmbClient::connect(client_config(t, false)).await.map_err(|e| e.to_string())?;
+        let mut client = SmbClient::connect(client_config(t, false))
+            .await
+            .map_err(|e| e.to_string())?;
         let shares = client.list_shares().await.map_err(|e| e.to_string())?;
         Ok(shares.into_iter().map(|s| s.name).collect())
     })
@@ -108,14 +113,82 @@ pub struct SmbDirEntry {
 pub fn list_directory(t: &SmbTarget, path: &str) -> Result<Vec<SmbDirEntry>, String> {
     let rt = new_runtime().map_err(|e| e.to_string())?;
     rt.block_on(async {
-        let mut client = SmbClient::connect(client_config(t, false)).await.map_err(|e| e.to_string())?;
-        let mut tree = client.connect_share(&t.share).await.map_err(|e| e.to_string())?;
-        let entries = client.list_directory(&mut tree, path).await.map_err(|e| e.to_string())?;
+        let mut client = SmbClient::connect(client_config(t, false))
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut tree = client
+            .connect_share(&t.share)
+            .await
+            .map_err(|e| e.to_string())?;
+        let entries = client
+            .list_directory(&mut tree, path)
+            .await
+            .map_err(|e| e.to_string())?;
         let _ = client.disconnect_share(&tree).await;
         Ok(entries
             .into_iter()
-            .map(|e| SmbDirEntry { name: e.name, is_dir: e.is_directory, size: e.size })
+            .map(|e| SmbDirEntry {
+                name: e.name,
+                is_dir: e.is_directory,
+                size: e.size,
+            })
             .collect())
+    })
+}
+
+/// Varredura recursiva "esta pasta tem alguma midia reproduzivel?" (poda de
+/// pastas vazias na listagem, ver `crate::folder_scan`). Abre UMA conexao/
+/// share (nao uma por nivel, diferente de chamar `list_directory` repetidas
+/// vezes do lado Kotlin) e percorre as subpastas encontradas com uma pilha
+/// explicita, sem limite de profundidade fixo, parando no primeiro arquivo
+/// de midia encontrado ou no deadline de seguranca
+/// (`folder_scan::SCAN_DEADLINE`).
+pub fn scan_has_media(t: &SmbTarget, path: &str) -> Result<crate::folder_scan::ScanResult, String> {
+    let rt = new_runtime().map_err(|e| e.to_string())?;
+    rt.block_on(async {
+        let mut client = SmbClient::connect(client_config(t, false))
+            .await
+            .map_err(|e| e.to_string())?;
+        let mut tree = client
+            .connect_share(&t.share)
+            .await
+            .map_err(|e| e.to_string())?;
+        let deadline = crate::folder_scan::deadline_from_now();
+
+        let mut stack = vec![path.to_string()];
+        let mut result = crate::folder_scan::ScanResult::exhausted_empty();
+
+        while let Some(current) = stack.pop() {
+            if std::time::Instant::now() > deadline {
+                result = crate::folder_scan::ScanResult::timed_out_assume_has_media();
+                break;
+            }
+            let entries = match client.list_directory(&mut tree, &current).await {
+                Ok(e) => e,
+                Err(_) => continue, // pasta ilegivel/removida no meio do scan: pula, nao aborta tudo
+            };
+            let mut found = false;
+            for e in &entries {
+                if e.is_directory {
+                    let child = if current.is_empty() {
+                        e.name.clone()
+                    } else {
+                        format!("{}/{}", current, e.name)
+                    };
+                    stack.push(child);
+                } else if crate::folder_scan::is_media_filename(&e.name) {
+                    found = true;
+                    break;
+                }
+            }
+            if found {
+                result = crate::folder_scan::ScanResult::found();
+                break;
+            }
+        }
+
+        let _ = client.disconnect_share(&tree).await;
+        Ok(result)
     })
 }
 
@@ -136,12 +209,24 @@ impl SmbFileSource {
     pub fn open(t: &SmbTarget) -> Result<Self, String> {
         let runtime = new_runtime().map_err(|e| e.to_string())?;
         let reader = runtime.block_on(async {
-            let mut client = SmbClient::connect(client_config(t, true)).await.map_err(|e| e.to_string())?;
-            let tree = client.connect_share(&t.share).await.map_err(|e| e.to_string())?;
-            client.open_file_reader(&tree, &t.path).await.map_err(|e| e.to_string())
+            let mut client = SmbClient::connect(client_config(t, true))
+                .await
+                .map_err(|e| e.to_string())?;
+            let tree = client
+                .connect_share(&t.share)
+                .await
+                .map_err(|e| e.to_string())?;
+            client
+                .open_file_reader(&tree, &t.path)
+                .await
+                .map_err(|e| e.to_string())
         })?;
         let size = reader.size();
-        Ok(Self { runtime, reader: Some(reader), size })
+        Ok(Self {
+            runtime,
+            reader: Some(reader),
+            size,
+        })
     }
 }
 
@@ -150,7 +235,11 @@ impl RangeSource for SmbFileSource {
         let Some(reader) = self.reader.as_ref() else {
             return Err(io::Error::other("SmbFileSource ja fechado"));
         };
-        let want = if offset >= self.size { 0 } else { (buf.len() as u64).min(self.size - offset) as u32 };
+        let want = if offset >= self.size {
+            0
+        } else {
+            (buf.len() as u64).min(self.size - offset) as u32
+        };
         if want == 0 {
             return Ok(0);
         }
@@ -162,7 +251,9 @@ impl RangeSource for SmbFileSource {
             let mut results = match self.runtime.block_on(async {
                 tokio::time::timeout(
                     SMB_READ_TIMEOUT,
-                    join_all(batch.iter().map(|&(chunk_offset, chunk_len)| reader.read_at(chunk_offset, chunk_len as u64))),
+                    join_all(batch.iter().map(|&(chunk_offset, chunk_len)| {
+                        reader.read_at(chunk_offset, chunk_len as u64)
+                    })),
                 )
                 .await
             }) {
@@ -170,18 +261,27 @@ impl RangeSource for SmbFileSource {
                 Err(_elapsed) => {
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
-                        format!("SMB: sem resposta do servidor por {}s (leitura travada)", SMB_READ_TIMEOUT.as_secs()),
+                        format!(
+                            "SMB: sem resposta do servidor por {}s (leitura travada)",
+                            SMB_READ_TIMEOUT.as_secs()
+                        ),
                     ));
                 }
             };
 
             for attempt in 1..=SMB_CHUNK_RETRY_ATTEMPTS {
-                let retry_slots: Vec<usize> =
-                    results.iter().enumerate().filter_map(|(i, r)| if r.is_err() { Some(i) } else { None }).collect();
+                let retry_slots: Vec<usize> = results
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, r)| if r.is_err() { Some(i) } else { None })
+                    .collect();
                 if retry_slots.is_empty() {
                     break;
                 }
-                log::warn!("SMB: retentando {} chunk(s) falhos (tentativa {attempt}/{SMB_CHUNK_RETRY_ATTEMPTS})", retry_slots.len());
+                log::warn!(
+                    "SMB: retentando {} chunk(s) falhos (tentativa {attempt}/{SMB_CHUNK_RETRY_ATTEMPTS})",
+                    retry_slots.len()
+                );
                 std::thread::sleep(media_logic::retry_backoff::backoff_with_jitter(
                     attempt,
                     SMB_CHUNK_RETRY_BACKOFF_BASE,

@@ -1,6 +1,7 @@
 # Status do Projeto tucaVR
 
-Este documento consolida o estado atual do desenvolvimento do player de vídeo VR, focando na integração entre Android, Rust (Decodificação) e C++ (OpenXR).
+> **Historical document / Documento histórico:** Estado do desenvolvimento pré-MVP (Stage 1).
+> Todos os próximos passos citados neste relatório (file picker, sincronia A/V, streaming SMB/HTTP) já foram integralmente entregues e a engine gráfica padrão migrou para Vulkan (`vr_player_app_vulkan.cpp`).
 
 ## 1. O Que Foi Aprendido (Arquitetura e Lições)
 

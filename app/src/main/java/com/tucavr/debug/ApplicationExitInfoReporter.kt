@@ -11,13 +11,12 @@ import java.util.Date
 import java.util.Locale
 
 /**
- * F8 (docs/reports/TRIAGEM-TELEMETRIA-E-GRAFICOS.md, seção 8.2): "a maior lacuna de dados do
- * app inteiro, e a mais barata" — ANR e crash nativo (inclusive o abort do ART no teardown
- * Vulkan documentado em outro relatório) não produzem nada em `getExternalFilesDir("debug")`
- * hoje, porque o handler em [com.tucavr.VRActivity] só captura exceções da JVM em threads que
+ * F8: ANR e crash nativo (inclusive o abort do ART no teardown Vulkan) não
+ * produzem nada em `getExternalFilesDir("debug")` pelo handler padrão de exceções,
+ * porque o handler em [com.tucavr.VRActivity] só captura exceções da JVM em threads que
  * o próprio app possui (`Thread.setDefaultUncaughtExceptionHandler`). `ApplicationExitInfo` é
  * lida uma vez no arranque seguinte — custa zero em runtime — e cobre essas duas classes de
- * morte do processo que hoje são invisíveis.
+ * morte do processo que antes eram invisíveis.
  *
  * `[ExitReasonSummary]`/[formatReport]/[reasonName] são puros (sem `Context`/framework) de
  * propósito — [android.app.ApplicationExitInfo] é uma classe do framework sem construtor
@@ -32,15 +31,16 @@ object ApplicationExitInfoReporter {
         val reasonCode: Int,
         val timestampMs: Long,
         val pid: Int,
-        val description: String
+        val description: String,
     )
 
-    fun reasonName(reasonCode: Int): String = when (reasonCode) {
-        ApplicationExitInfo.REASON_ANR -> "ANR"
-        ApplicationExitInfo.REASON_CRASH_NATIVE -> "CRASH_NATIVE"
-        ApplicationExitInfo.REASON_CRASH -> "CRASH_JVM"
-        else -> "OTHER($reasonCode)"
-    }
+    fun reasonName(reasonCode: Int): String =
+        when (reasonCode) {
+            ApplicationExitInfo.REASON_ANR -> "ANR"
+            ApplicationExitInfo.REASON_CRASH_NATIVE -> "CRASH_NATIVE"
+            ApplicationExitInfo.REASON_CRASH -> "CRASH_JVM"
+            else -> "OTHER($reasonCode)"
+        }
 
     /** Só estas duas classes de morte são hoje invisíveis (JVM crash já é capturado pelo
      * handler existente em VRActivity) — ver rationale na doc da classe. */
@@ -49,7 +49,10 @@ object ApplicationExitInfoReporter {
 
     /** Filtra por [isRelevantReason] e por mais recente que [lastSeenTimestampMs] — evita
      * reportar o mesmo evento a cada reinício do app enquanto o histórico do sistema não gira. */
-    fun filterNewRelevant(all: List<ExitReasonSummary>, lastSeenTimestampMs: Long): List<ExitReasonSummary> =
+    fun filterNewRelevant(
+        all: List<ExitReasonSummary>,
+        lastSeenTimestampMs: Long,
+    ): List<ExitReasonSummary> =
         all.filter { it.timestampMs > lastSeenTimestampMs && isRelevantReason(it.reasonCode) }
             .sortedBy { it.timestampMs }
 
@@ -79,16 +82,18 @@ object ApplicationExitInfoReporter {
         val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val lastSeen = prefs.getLong(KEY_LAST_SEEN_TIMESTAMP_MS, 0L)
 
-        val all = try {
-            am.getHistoricalProcessExitReasons(null, 0, 0)
-        } catch (e: Exception) {
-            VRLog.w("ApplicationExitInfoReporter: falha ao ler histórico de saída", e)
-            return
-        }
+        val all =
+            try {
+                am.getHistoricalProcessExitReasons(null, 0, 0)
+            } catch (e: Exception) {
+                VRLog.w("ApplicationExitInfoReporter: falha ao ler histórico de saída", e)
+                return
+            }
 
-        val allSummaries = all.map {
-            ExitReasonSummary(it.reason, it.timestamp, it.pid, it.description ?: "")
-        }
+        val allSummaries =
+            all.map {
+                ExitReasonSummary(it.reason, it.timestamp, it.pid, it.description ?: "")
+            }
         val relevant = filterNewRelevant(allSummaries, lastSeen)
         if (relevant.isEmpty()) return
 

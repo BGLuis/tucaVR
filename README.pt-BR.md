@@ -18,7 +18,7 @@
 ![Android](https://www.shieldcn.dev/badge/Android-SDK%2034-3DDC84.svg?logo=android&variant=branded&size=sm)
 
   <h3>tucaVR</h3>
-  Player de vídeo 2D/3D totalmente imersivo para o Meta Quest 3, que reproduz direto do seu NAS por SMB, NFS, FTP, SFTP, DLNA ou HTTP(S).
+  Player de vídeo 2D/3D totalmente imersivo para o Meta Quest 3, que reproduz direto do seu NAS por SMB, NFS, FTP, SFTP, WebDAV, DLNA ou HTTP(S).
 
   [English](README.md) · **Português (BR)**
 
@@ -41,7 +41,7 @@ graph LR
 ```
 
 - **Kotlin** (`app/`) — shell Android e a UI, desenhada como `View`s comuns do Android dentro de um `android.app.Presentation` sobre um `VirtualDisplay`, e então projetada como textura em quads 3D pela camada nativa. Também cuida do armazenamento criptografado de credenciais, do histórico de reprodução (Room) e da localização.
-- **C++** (`native/`) — sessão OpenXR, swapchains e o loop de renderização em cima do `SampleXrFramework` (OVRFW) da Meta. Vulkan é o backend padrão, com o caminho OpenGL ES mantido como fallback. Os frames decodificados chegam como `AHardwareBuffer` e são ligados como texturas externas em zero-copy.
+- **C++** (`native/`, C++20) — sessão OpenXR, swapchains e o loop de renderização. Vulkan é o backend padrão (independente do OVRFW), com o caminho OpenGL ES mantido como fallback congelado construído sobre o `SampleXrFramework` (OVRFW) da Meta. Os frames decodificados chegam como `AHardwareBuffer` e são ligados como texturas externas em zero-copy.
 - **Rust** (`rust/`) — cross-compilado para `aarch64-linux-android`. Demuxing com `ffmpeg-next`, decodificação por hardware via `ndk::MediaCodec`, saída de áudio pelo Oboe, e todos os clientes de protocolo de rede escritos em Rust puro (sem libs nativas de TLS/SSH, para não sofrer no cross-compile).
 
 O Kotlin nunca chama o Rust diretamente: ele fala com o C++ por JNI, e o C++ é o único consumidor da API `extern "C"` da crate `bridge`.
@@ -54,7 +54,7 @@ O Kotlin nunca chama o Rust diretamente: ele fala com o C++ por JNI, e o C++ é 
 | **3D / VR** | Side-by-Side e Over/Under (half e full), 360° mono e estéreo, VR180 — com detecção automática de formato |
 | **Áudio** | Saída via Oboe com sincronia A/V, áudio espacial e seleção de faixa |
 | **Legendas** | Arquivos de legenda externos com detecção automática de charset (`chardetng`) |
-| **Streaming** | URLs diretas HTTP(S) e HLS (inclusive segmentos criptografados em AES-128) |
+| **Streaming** | URLs diretas HTTP(S), HLS (inclusive segmentos criptografados em AES-128) e DASH |
 | **Renderização** | Vulkan por padrão, OpenGL ES disponível como backend de fallback |
 
 ### De onde ele reproduz
@@ -65,6 +65,7 @@ O Kotlin nunca chama o Rust diretamente: ele fala com o C++ por JNI, e o C++ é 
 | **NFS** | Navegar e reproduzir a partir de exports NFS |
 | **FTP** | Cliente bloqueante em Rust puro |
 | **SFTP** | Sobre SSH via `russh` — sem dependência de `libssh2`/OpenSSL |
+| **WebDAV** | Sobre HTTP(S) com parsing XML PROPFIND (RFC 4918) |
 | **DLNA / UPnP** | Device description + browsing DIDL-Lite |
 | **HTTP / HTTPS** | URLs diretas, com `rustls` para TLS |
 | **Descoberta** | Descoberta automática de servidores na rede local via mDNS / DNS-SD |
@@ -201,14 +202,14 @@ O `scripts/build.sh` já define todas elas; você só precisa configurá-las man
 cd rust && cargo test -p protocols -p media-logic
 
 # Lint Rust (o CI roda isso com -D warnings)
-cd rust && cargo clippy -- -D warnings
+cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings
 
 # Testes unitários JVM do Kotlin + lint
 ./gradlew testDebugUnitTest
 ./gradlew ktlintCheck
 ```
 
-Os testes de integração dos protocolos de rede rodam contra servidores SMB/HTTP/HTTPS/FTP/SFTP reais em Docker — sem precisar de headset:
+Os testes de integração dos protocolos de rede rodam contra servidores SMB/HTTP/HTTPS/FTP/SFTP/WebDAV reais (mais fixtures DASH geradas) em Docker — sem precisar de headset:
 
 ```sh
 ./scripts/test-network-protocols.sh          # sobe os containers, roda e derruba

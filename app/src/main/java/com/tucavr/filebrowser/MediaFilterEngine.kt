@@ -6,7 +6,7 @@ enum class MediaTypeFilter {
     ALL,
     VIDEO,
     AUDIO,
-    IMAGE
+    IMAGE,
 }
 
 enum class Format3DFilter {
@@ -15,21 +15,20 @@ enum class Format3DFilter {
     SBS,
     OU,
     VR_180,
-    VR_360
+    VR_360,
 }
 
 enum class DateFilter {
     ALL,
     RECENT_24H,
     LAST_7_DAYS,
-    LAST_30_DAYS
+    LAST_30_DAYS,
 }
 
 /**
  * Motor de filtragem, busca e heurística de formato 3D da biblioteca de mídia (T12.1, T12.2).
  */
 object MediaFilterEngine {
-
     private const val MS_IN_24H = 24L * 60 * 60 * 1000
     private const val MS_IN_7_DAYS = 7L * MS_IN_24H
     private const val MS_IN_30_DAYS = 30L * MS_IN_24H
@@ -94,7 +93,7 @@ object MediaFilterEngine {
         format3DFilter: Format3DFilter = Format3DFilter.ALL,
         dateFilter: DateFilter = DateFilter.ALL,
         nowMs: Long = System.currentTimeMillis(),
-        folderSummary: FolderSummary? = null
+        folderSummary: FolderSummary? = null,
     ): Boolean {
         // Se for diretório, aplica regras de filtragem e poda inteligente de pastas
         if (entry.type == MediaType.DIRECTORY) {
@@ -104,7 +103,7 @@ object MediaFilterEngine {
                 query = query,
                 typeFilter = typeFilter,
                 format3DFilter = format3DFilter,
-                dateFilter = dateFilter
+                dateFilter = dateFilter,
             )
         }
 
@@ -155,7 +154,7 @@ object MediaFilterEngine {
         query: String,
         typeFilter: MediaTypeFilter = MediaTypeFilter.ALL,
         format3DFilter: Format3DFilter = Format3DFilter.ALL,
-        dateFilter: DateFilter = DateFilter.ALL
+        dateFilter: DateFilter = DateFilter.ALL,
     ): Boolean {
         // Se a busca estiver ativa e o nome da pasta não corresponder
         if (query.isNotBlank()) {
@@ -169,10 +168,10 @@ object MediaFilterEngine {
             return true
         }
 
-        val hasActiveFilter = query.isNotBlank() || typeFilter != MediaTypeFilter.ALL || format3DFilter != Format3DFilter.ALL || dateFilter != DateFilter.ALL
-
-        // Poda de pastas vazias se houver filtros ativos
-        if (summary.totalItems == 0 && hasActiveFilter) {
+        // Poda de pastas sem nenhuma mídia reproduzível (nos filhos imediatos OU dentro de
+        // subpastas, ver FolderSummary.hasPlayableMediaWithinDepth) -- vale SEMPRE, não só
+        // quando há filtro ativo, pra não poluir a listagem com pastas vazias por padrão.
+        if (!summary.hasPlayableMediaWithinDepth) {
             return false
         }
 
@@ -186,14 +185,15 @@ object MediaFilterEngine {
 
         // Filtro por Formato 3D aplicado a pastas
         if (format3DFilter != Format3DFilter.ALL) {
-            val targetFormat = when (format3DFilter) {
-                Format3DFilter.FLAT_2D -> Format3DType.FLAT_2D
-                Format3DFilter.SBS -> Format3DType.SBS
-                Format3DFilter.OU -> Format3DType.OU
-                Format3DFilter.VR_180 -> Format3DType.VR_180
-                Format3DFilter.VR_360 -> Format3DType.VR_360
-                Format3DFilter.ALL -> null
-            }
+            val targetFormat =
+                when (format3DFilter) {
+                    Format3DFilter.FLAT_2D -> Format3DType.FLAT_2D
+                    Format3DFilter.SBS -> Format3DType.SBS
+                    Format3DFilter.OU -> Format3DType.OU
+                    Format3DFilter.VR_180 -> Format3DType.VR_180
+                    Format3DFilter.VR_360 -> Format3DType.VR_360
+                    Format3DFilter.ALL -> null
+                }
             if (targetFormat != null && !summary.available3DFormats.contains(targetFormat)) {
                 return false
             }
@@ -205,7 +205,10 @@ object MediaFilterEngine {
     /**
      * Verifica se o nome do arquivo dá match na query de busca (substring ou todos os tokens presentes).
      */
-    fun matchesSearch(targetName: String, query: String): Boolean {
+    fun matchesSearch(
+        targetName: String,
+        query: String,
+    ): Boolean {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return true
 
@@ -223,7 +226,10 @@ object MediaFilterEngine {
     /**
      * Fuzzy matching tolerante a 1 erro de digitação para termos com mais de 3 caracteres.
      */
-    private fun fuzzyMatch(text: String, token: String): Boolean {
+    private fun fuzzyMatch(
+        text: String,
+        token: String,
+    ): Boolean {
         if (token.length <= 3) return text.contains(token)
 
         // Subsequência de caracteres ordenada
@@ -240,7 +246,10 @@ object MediaFilterEngine {
     /**
      * Encontra os intervalos de índice para destacar (*highlight*) visualmente na UI.
      */
-    fun findHighlightRanges(text: String, query: String): List<IntRange> {
+    fun findHighlightRanges(
+        text: String,
+        query: String,
+    ): List<IntRange> {
         val trimmed = query.trim()
         if (trimmed.isEmpty()) return emptyList()
 

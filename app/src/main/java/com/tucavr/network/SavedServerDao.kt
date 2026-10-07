@@ -11,7 +11,6 @@ import androidx.room.Update
  */
 @Dao
 interface SavedServerDao {
-
     @Query("SELECT * FROM saved_servers ORDER BY name COLLATE NOCASE ASC")
     suspend fun getAll(): List<SavedServer>
 
@@ -31,5 +30,8 @@ interface SavedServerDao {
     suspend fun delete(id: String)
 
     @Query("UPDATE saved_servers SET lastConnectedAt = :timestamp WHERE id = :id")
-    suspend fun updateLastConnected(id: String, timestamp: Long)
+    suspend fun updateLastConnected(
+        id: String,
+        timestamp: Long,
+    )
 }

@@ -5,8 +5,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PlaybackHistoryFilterTest {
-
-    private fun history(positionMs: Long, durationMs: Long) = PlaybackHistory(
+    private fun history(
+        positionMs: Long,
+        durationMs: Long,
+    ) = PlaybackHistory(
         historyKey = "key",
         title = "title",
         mediaPath = "/path/test.mp4",
@@ -15,7 +17,7 @@ class PlaybackHistoryFilterTest {
         lastPlayedAt = 1000L,
         thumbnailPath = null,
         sourceType = HistorySourceType.LOCAL,
-        serverInfo = null
+        serverInfo = null,
     )
 
     @Test

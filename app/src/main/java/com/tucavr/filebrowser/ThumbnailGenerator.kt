@@ -8,15 +8,16 @@ import android.os.Build
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.security.MessageDigest
 
 object ThumbnailGenerator {
-
     const val THUMB_WIDTH = 512
     const val THUMB_HEIGHT = 288
     private const val CACHE_DIR_NAME = "thumbnails_v2"
 
-    suspend fun getThumbnail(context: Context, entry: MediaEntry): Bitmap? {
+    suspend fun getThumbnail(
+        context: Context,
+        entry: MediaEntry,
+    ): Bitmap? {
         if (entry.type != MediaType.VIDEO && entry.type != MediaType.IMAGE) return null
 
         return withContext(Dispatchers.IO) {
@@ -25,11 +26,12 @@ object ThumbnailGenerator {
             val cached = if (cacheFile.exists()) BitmapFactory.decodeFile(cacheFile.absolutePath) else null
             if (cached != null) return@withContext cached
 
-            val bitmap = when (entry.type) {
-                MediaType.VIDEO -> generateFrame(entry.path)
-                MediaType.IMAGE -> com.tucavr.photos.PhotoDecoder.decodeThumbnail(entry.path, THUMB_WIDTH, THUMB_HEIGHT)
-                else -> null
-            } ?: return@withContext null
+            val bitmap =
+                when (entry.type) {
+                    MediaType.VIDEO -> generateFrame(entry.path)
+                    MediaType.IMAGE -> com.tucavr.photos.PhotoDecoder.decodeThumbnail(entry.path, THUMB_WIDTH, THUMB_HEIGHT)
+                    else -> null
+                } ?: return@withContext null
 
             writeToCache(bitmap, cacheFile)
             bitmap
@@ -84,37 +86,39 @@ object ThumbnailGenerator {
             val primaryTargetUs = targetTimeUs(durationMs)
 
             // Lista de timestamps candidatos para evitar miniaturas pretas (10%, 15s, 30s, 60s, 5s)
-            val candidateTargetsUs = listOf(
-                primaryTargetUs,
-                15_000_000L,
-                30_000_000L,
-                60_000_000L,
-                5_000_000L
-            ).distinct()
+            val candidateTargetsUs =
+                listOf(
+                    primaryTargetUs,
+                    15_000_000L,
+                    30_000_000L,
+                    60_000_000L,
+                    5_000_000L,
+                ).distinct()
 
             var bestBitmap: Bitmap? = null
 
             for (targetUs in candidateTargetsUs) {
                 if (durationMs > 0 && targetUs > durationMs * 1000L) continue
 
-                val candidate = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-                    retriever.getScaledFrameAtTime(
-                        targetUs,
-                        MediaMetadataRetriever.OPTION_CLOSEST,
-                        THUMB_WIDTH,
-                        THUMB_HEIGHT
-                    ) ?: retriever.getScaledFrameAtTime(
-                        targetUs,
-                        MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
-                        THUMB_WIDTH,
-                        THUMB_HEIGHT
-                    )
-                } else {
-                    null
-                } ?: retriever.getFrameAtTime(targetUs, MediaMetadataRetriever.OPTION_CLOSEST)
-                    ?.let { Bitmap.createScaledBitmap(it, THUMB_WIDTH, THUMB_HEIGHT, true) }
-                    ?: retriever.getFrameAtTime(targetUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
-                    ?.let { Bitmap.createScaledBitmap(it, THUMB_WIDTH, THUMB_HEIGHT, true) }
+                val candidate =
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+                        retriever.getScaledFrameAtTime(
+                            targetUs,
+                            MediaMetadataRetriever.OPTION_CLOSEST,
+                            THUMB_WIDTH,
+                            THUMB_HEIGHT,
+                        ) ?: retriever.getScaledFrameAtTime(
+                            targetUs,
+                            MediaMetadataRetriever.OPTION_CLOSEST_SYNC,
+                            THUMB_WIDTH,
+                            THUMB_HEIGHT,
+                        )
+                    } else {
+                        null
+                    } ?: retriever.getFrameAtTime(targetUs, MediaMetadataRetriever.OPTION_CLOSEST)
+                        ?.let { Bitmap.createScaledBitmap(it, THUMB_WIDTH, THUMB_HEIGHT, true) }
+                        ?: retriever.getFrameAtTime(targetUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                            ?.let { Bitmap.createScaledBitmap(it, THUMB_WIDTH, THUMB_HEIGHT, true) }
 
                 if (candidate != null) {
                     if (!isEffectivelyBlack(candidate)) {
@@ -134,7 +138,10 @@ object ThumbnailGenerator {
         }
     }
 
-    private fun writeToCache(bitmap: Bitmap, cacheFile: File) {
+    private fun writeToCache(
+        bitmap: Bitmap,
+        cacheFile: File,
+    ) {
         try {
             cacheFile.parentFile?.mkdirs()
             cacheFile.outputStream().use { out ->
@@ -146,7 +153,10 @@ object ThumbnailGenerator {
         }
     }
 
-    private fun cacheFileFor(context: Context, entry: MediaEntry): File {
+    private fun cacheFileFor(
+        context: Context,
+        entry: MediaEntry,
+    ): File {
         val cacheDir = File(context.cacheDir, CACHE_DIR_NAME)
         return File(cacheDir, "${cacheKeyFor(entry)}.jpg")
     }
@@ -156,15 +166,8 @@ object ThumbnailGenerator {
     // key, no collisions between unrelated files) can be unit-tested on the JVM without
     // Robolectric or a real Android cacheDir. Everything that touches real I/O
     // (MediaMetadataRetriever, disk reads/writes) stays out of this function on purpose.
-    internal fun cacheKeyFor(entry: MediaEntry): String {
-        // size + lastModified are included so a file replaced/edited at the same path
-        // doesn't reuse a stale thumbnail, while a plain rename does not collide with
-        // an unrelated file's cache entry.
-        return sha256("${entry.path}|${entry.sizeBytes}|${entry.lastModified}")
-    }
-
-    private fun sha256(input: String): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
-        return digest.joinToString("") { "%02x".format(it) }
-    }
+    // Delegates to CacheKeys.forLocalEntry (shared with the Room caches, see CacheKeys.kt)
+    // so the formula lives in one place; kept as `cacheKeyFor` here too since it's the
+    // established/tested name for this file's on-disk thumbnail cache key.
+    internal fun cacheKeyFor(entry: MediaEntry): String = CacheKeys.forLocalEntry(entry)
 }

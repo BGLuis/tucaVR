@@ -80,7 +80,8 @@ fn base_client() -> Result<reqwest::blocking::Client, String> {
     #[cfg(feature = "integration-tests")]
     {
         if let Ok(ca_path) = std::env::var("VRPLAYER_TEST_CA_CERT") {
-            let pem = std::fs::read(&ca_path).map_err(|e| format!("falha ao ler VRPLAYER_TEST_CA_CERT ({ca_path}): {e}"))?;
+            let pem = std::fs::read(&ca_path)
+                .map_err(|e| format!("falha ao ler VRPLAYER_TEST_CA_CERT ({ca_path}): {e}"))?;
             let cert = reqwest::Certificate::from_pem(&pem).map_err(|e| e.to_string())?;
             builder = builder.add_root_certificate(cert);
         }
@@ -127,7 +128,13 @@ pub fn probe(url: &str) -> HttpCapabilities {
     let client = match base_client() {
         Ok(c) => c,
         Err(e) => {
-            return HttpCapabilities { reachable: false, status: 0, seekable: false, content_length: None, error: Some(e) };
+            return HttpCapabilities {
+                reachable: false,
+                status: 0,
+                seekable: false,
+                content_length: None,
+                error: Some(e),
+            };
         }
     };
 
@@ -140,10 +147,20 @@ pub fn probe(url: &str) -> HttpCapabilities {
             .map(|v| v.to_str().unwrap_or("").eq_ignore_ascii_case("bytes"))
             .unwrap_or(false);
         let content_length = parse_content_length_header(resp.headers());
-        return HttpCapabilities { reachable: true, status: resp.status().as_u16(), seekable, content_length, error: None };
+        return HttpCapabilities {
+            reachable: true,
+            status: resp.status().as_u16(),
+            seekable,
+            content_length,
+            error: None,
+        };
     }
 
-    match client.get(url).header(reqwest::header::RANGE, "bytes=0-0").send() {
+    match client
+        .get(url)
+        .header(reqwest::header::RANGE, "bytes=0-0")
+        .send()
+    {
         Ok(resp) => {
             let status = resp.status().as_u16();
             let seekable = status == 206;
@@ -151,9 +168,21 @@ pub fn probe(url: &str) -> HttpCapabilities {
                 .or_else(|| parse_content_length_header(resp.headers()))
                 .or_else(|| resp.content_length());
             let reachable = resp.status().is_success() || status == 206;
-            HttpCapabilities { reachable, status, seekable, content_length, error: None }
+            HttpCapabilities {
+                reachable,
+                status,
+                seekable,
+                content_length,
+                error: None,
+            }
         }
-        Err(e) => HttpCapabilities { reachable: false, status: 0, seekable: false, content_length: None, error: Some(e.to_string()) },
+        Err(e) => HttpCapabilities {
+            reachable: false,
+            status: 0,
+            seekable: false,
+            content_length: None,
+            error: Some(e.to_string()),
+        },
     }
 }
 
@@ -173,7 +202,9 @@ impl HttpsRangeSource {
     pub fn new(url: &str) -> Result<Self, String> {
         let caps = probe(url);
         if !caps.reachable {
-            return Err(caps.error.unwrap_or_else(|| format!("URL inacessivel (status {})", caps.status)));
+            return Err(caps
+                .error
+                .unwrap_or_else(|| format!("URL inacessivel (status {})", caps.status)));
         }
         if !caps.seekable {
             return Err(
@@ -183,26 +214,43 @@ impl HttpsRangeSource {
                     .to_string(),
             );
         }
-        let len = caps
-            .content_length
-            .ok_or_else(|| "Content-Length desconhecido — nao da para alocar o buffer de leitura".to_string())?;
+        let len = caps.content_length.ok_or_else(|| {
+            "Content-Length desconhecido — nao da para alocar o buffer de leitura".to_string()
+        })?;
         let client = base_client()?;
-        Ok(Self { client, url: url.to_string(), len })
+        Ok(Self {
+            client,
+            url: url.to_string(),
+            len,
+        })
     }
 }
 
 /// Uma GET com `Range` para `[offset, offset+len)`. Extraida de `read_range`
 /// para poder ser chamada de dentro de threads escopadas (`fetch_range` nao
 /// captura `self`, so as pecas que precisa).
-fn fetch_range(client: &reqwest::blocking::Client, url: &str, offset: u64, len: u32) -> io::Result<Vec<u8>> {
+fn fetch_range(
+    client: &reqwest::blocking::Client,
+    url: &str,
+    offset: u64,
+    len: u32,
+) -> io::Result<Vec<u8>> {
     let end = offset + len as u64 - 1;
     let range = format!("bytes={offset}-{end}");
-    let resp = client.get(url).header(reqwest::header::RANGE, range).send().map_err(|e| io::Error::other(e.to_string()))?;
+    let resp = client
+        .get(url)
+        .header(reqwest::header::RANGE, range)
+        .send()
+        .map_err(|e| io::Error::other(e.to_string()))?;
     let status = resp.status();
     if status.as_u16() != 206 && !status.is_success() {
-        return Err(io::Error::other(format!("HTTP {status} ao ler range de {offset}")));
+        return Err(io::Error::other(format!(
+            "HTTP {status} ao ler range de {offset}"
+        )));
     }
-    resp.bytes().map(|b| b.to_vec()).map_err(|e| io::Error::other(e.to_string()))
+    resp.bytes()
+        .map(|b| b.to_vec())
+        .map_err(|e| io::Error::other(e.to_string()))
 }
 
 impl RangeSource for HttpsRangeSource {
@@ -226,17 +274,25 @@ impl RangeSource for HttpsRangeSource {
                     })
                     .collect();
                 for handle in handles {
-                    results.push(handle.join().unwrap_or_else(|_| Err(io::Error::other("thread de leitura HTTP entrou em panico"))));
+                    results.push(handle.join().unwrap_or_else(|_| {
+                        Err(io::Error::other("thread de leitura HTTP entrou em panico"))
+                    }));
                 }
             });
 
             for attempt in 1..=HTTP_CHUNK_RETRY_ATTEMPTS {
-                let retry_slots: Vec<usize> =
-                    results.iter().enumerate().filter_map(|(i, r)| if r.is_err() { Some(i) } else { None }).collect();
+                let retry_slots: Vec<usize> = results
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, r)| if r.is_err() { Some(i) } else { None })
+                    .collect();
                 if retry_slots.is_empty() {
                     break;
                 }
-                log::warn!("HTTP: retentando {} chunk(s) falhos (tentativa {attempt}/{HTTP_CHUNK_RETRY_ATTEMPTS})", retry_slots.len());
+                log::warn!(
+                    "HTTP: retentando {} chunk(s) falhos (tentativa {attempt}/{HTTP_CHUNK_RETRY_ATTEMPTS})",
+                    retry_slots.len()
+                );
                 std::thread::sleep(media_logic::retry_backoff::backoff_with_jitter(
                     attempt,
                     HTTP_CHUNK_RETRY_BACKOFF_BASE,
@@ -255,7 +311,11 @@ impl RangeSource for HttpsRangeSource {
                         .collect();
                     handles
                         .into_iter()
-                        .map(|h| h.join().unwrap_or_else(|_| Err(io::Error::other("thread de leitura HTTP entrou em panico"))))
+                        .map(|h| {
+                            h.join().unwrap_or_else(|_| {
+                                Err(io::Error::other("thread de leitura HTTP entrou em panico"))
+                            })
+                        })
                         .collect()
                 });
                 for (slot, result) in retry_slots.into_iter().zip(retried) {
@@ -342,8 +402,7 @@ mod tests {
             when.method("GET")
                 .path("/video.mp4")
                 .header("Range", "bytes=0-0");
-            then.status(206)
-                .header("Content-Range", "bytes 0-0/5000");
+            then.status(206).header("Content-Range", "bytes 0-0/5000");
         });
 
         let caps = probe(&server.url("/video.mp4"));
@@ -395,7 +454,7 @@ mod tests {
             when.method("GET")
                 .path("/video.mp4")
                 .header("Range", "bytes=2-5");
-            then.status(206).body(b"CDEF".to_vec());
+            then.status(206).body(b"CDEF");
         });
 
         let mut source = HttpsRangeSource::new(&server.url("/video.mp4")).unwrap();

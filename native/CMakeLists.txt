@@ -18,9 +18,12 @@ include_directories(include)
 # -----------------------------------------------------------------------------
 # Graphics API selection (ver docs/VULKAN-MIGRATION-PLAN.md)
 # -----------------------------------------------------------------------------
-# GLES = caminho de producao (default), usa o SampleXrFramework/OVRFW da Meta.
-# VULKAN = esqueleto do Estagio 1 do plano de migracao — caminho paralelo,
-# independente do OVRFW (que e GLES-only por construcao, ver o plano).
+# VULKAN = back-end padrao do app: app/build.gradle.kts sempre passa
+#   -DVRPLAYER_GRAPHICS_API=VULKAN, a menos que o build use
+#   -PvrplayerGraphicsApi=GLES. Independente do OVRFW (que e GLES-only por
+#   construcao, ver o plano).
+# GLES = fallback congelado, usa o SampleXrFramework/OVRFW da Meta. O default
+#   "GLES" abaixo so vale para quem invoca o CMake direto, sem o Gradle.
 set(VRPLAYER_GRAPHICS_API "GLES" CACHE STRING "Graphics API for VR rendering: GLES or VULKAN")
 option(ENABLE_VK_VALIDATION_LAYERS "Enable Vulkan validation layers" OFF)
 if(ENABLE_VK_VALIDATION_LAYERS)
@@ -91,6 +94,16 @@ if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
     # Fase 0.4 Seção 6: shaders de projeções avançadas Cubemap e EAC
     vrplayer_compile_shader(stereo_cubemap.vert kStereoCubemapVertSpirv)
     vrplayer_compile_shader(stereo_cubemap.frag kStereoCubemapFragSpirv)
+    # Ambientes Virtuais 3D & Skybox Cósmico
+    vrplayer_compile_shader(environment.vert kEnvironmentVertSpirv)
+    vrplayer_compile_shader(environment.frag kEnvironmentFragSpirv)
+    vrplayer_compile_shader(skybox.vert kSkyboxVertSpirv)
+    vrplayer_compile_shader(skybox.frag kSkyboxFragSpirv)
+    # Modo Ambiente: halo de luz derivado do frame (Fase 0.3)
+    vrplayer_compile_shader(ambient_downsample.vert kAmbientDownsampleVertSpirv)
+    vrplayer_compile_shader(ambient_downsample.frag kAmbientDownsampleFragSpirv)
+    vrplayer_compile_shader(ambient.vert kAmbientVertSpirv)
+    vrplayer_compile_shader(ambient.frag kAmbientFragSpirv)
 
     add_custom_target(vrplayer_shaders DEPENDS ${GENERATED_SHADER_HEADERS})
 endif()

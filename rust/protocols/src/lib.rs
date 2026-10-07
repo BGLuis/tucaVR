@@ -8,6 +8,7 @@ pub mod dash;
 pub mod discovery;
 pub mod dlna;
 pub mod download;
+pub mod folder_scan;
 pub mod ftp;
 pub mod hls;
 pub mod http;

@@ -14,7 +14,6 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
-import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.coroutineContext
 
@@ -24,7 +23,6 @@ import kotlin.coroutines.coroutineContext
 // -- ver vr_player_app.cpp) porque so o Rust tem acesso ao Demuxer
 // SMB/FTP/SFTP; este objeto so cuida de cache em disco + conversao RGBA -> Bitmap.
 object NetworkThumbnailGenerator {
-
     const val THUMB_WIDTH = 512
     const val THUMB_HEIGHT = 288
     private const val CACHE_DIR_NAME = "network_thumbnails_v2"
@@ -39,7 +37,11 @@ object NetworkThumbnailGenerator {
     // Gerador de tokens para cancelamento cooperativo instantâneo no Rust.
     private val nextCancelToken = AtomicLong(1L)
 
-    suspend fun getThumbnail(context: Context, activity: VRActivity, source: PlaybackSource): Bitmap? {
+    suspend fun getThumbnail(
+        context: Context,
+        activity: VRActivity,
+        source: PlaybackSource,
+    ): Bitmap? {
         return withContext(Dispatchers.IO) {
             val cacheFile = cacheFileFor(context, source)
 
@@ -67,14 +69,16 @@ object NetworkThumbnailGenerator {
             }
 
             // 4. Adquire orçamento no gate e decodifica
-            val rgba = budgetGate.withBudget(costBytes) {
-                if (!coroutineContext.isActive) return@withBudget null
-                generateRgba(activity, source, cancelToken)
-            } ?: return@withContext null
+            val rgba =
+                budgetGate.withBudget(costBytes) {
+                    if (!coroutineContext.isActive) return@withBudget null
+                    generateRgba(activity, source, cancelToken)
+                } ?: return@withContext null
 
-            val bitmap = Bitmap.createBitmap(THUMB_WIDTH, THUMB_HEIGHT, Bitmap.Config.ARGB_8888).apply {
-                copyPixelsFromBuffer(ByteBuffer.wrap(rgba))
-            }
+            val bitmap =
+                Bitmap.createBitmap(THUMB_WIDTH, THUMB_HEIGHT, Bitmap.Config.ARGB_8888).apply {
+                    copyPixelsFromBuffer(ByteBuffer.wrap(rgba))
+                }
             writeToCache(bitmap, cacheFile)
             bitmap
         }
@@ -89,11 +93,17 @@ object NetworkThumbnailGenerator {
                 val w = parts[0].toIntOrNull() ?: return null
                 val h = parts[1].toIntOrNull() ?: return null
                 Pair(w, h)
-            } else null
+            } else {
+                null
+            }
         }.getOrNull()
     }
 
-    private suspend fun probeDimensions(activity: VRActivity, source: PlaybackSource, metaFile: File): Pair<Int, Int> {
+    private suspend fun probeDimensions(
+        activity: VRActivity,
+        source: PlaybackSource,
+        metaFile: File,
+    ): Pair<Int, Int> {
         return probeSemaphore.withPermit {
             readCachedDimensions(metaFile)?.let { return@withPermit it }
 
@@ -105,7 +115,7 @@ object NetworkThumbnailGenerator {
             if (w > 0 && h > 0) {
                 runCatching {
                     metaFile.parentFile?.mkdirs()
-                    metaFile.writeText("${w}x${h}")
+                    metaFile.writeText("${w}x$h")
                 }
             }
             Pair(w, h)
@@ -115,25 +125,41 @@ object NetworkThumbnailGenerator {
     // Chamada BLOQUEANTE (rede + decode sincronos do lado Rust) -- so deve
     // ser chamada de Dispatchers.IO, mesma ressalva documentada em
     // rust/bridge/src/lib.rs junto de smb_generate_thumbnail.
-    private fun generateRgba(activity: VRActivity, source: PlaybackSource, cancelToken: Long): ByteArray? {
+    private fun generateRgba(
+        activity: VRActivity,
+        source: PlaybackSource,
+        cancelToken: Long,
+    ): ByteArray? {
         return when (source) {
-            is PlaybackSource.Smb -> activity.nativeSmbGenerateThumbnail(
-                source.server.host, source.server.port, source.server.username, source.server.password,
-                source.server.domain, source.server.share, source.path, THUMB_WIDTH, THUMB_HEIGHT, cancelToken
-            )
-            is PlaybackSource.Ftp -> activity.nativeFtpGenerateThumbnail(
-                source.server.host, source.server.port, source.server.username, source.server.password,
-                source.path, THUMB_WIDTH, THUMB_HEIGHT, cancelToken
-            )
-            is PlaybackSource.Sftp -> activity.nativeSftpGenerateThumbnail(
-                source.server.host, source.server.port, source.server.username, source.server.password,
-                source.server.privateKey ?: "", source.path, THUMB_WIDTH, THUMB_HEIGHT, cancelToken
-            )
+            is PlaybackSource.Smb ->
+                activity.nativeSmbGenerateThumbnail(
+                    source.server.host, source.server.port, source.server.username, source.server.password,
+                    source.server.domain, source.server.share, source.path, THUMB_WIDTH, THUMB_HEIGHT, cancelToken,
+                )
+            is PlaybackSource.Ftp ->
+                activity.nativeFtpGenerateThumbnail(
+                    source.server.host,
+                    source.server.port,
+                    source.server.username,
+                    source.server.password,
+                    source.path,
+                    THUMB_WIDTH,
+                    THUMB_HEIGHT,
+                    cancelToken,
+                )
+            is PlaybackSource.Sftp ->
+                activity.nativeSftpGenerateThumbnail(
+                    source.server.host, source.server.port, source.server.username, source.server.password,
+                    source.server.privateKey ?: "", source.path, THUMB_WIDTH, THUMB_HEIGHT, cancelToken,
+                )
             is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Dlna, is PlaybackSource.Webdav -> null
         }
     }
 
-    private fun writeToCache(bitmap: Bitmap, cacheFile: File) {
+    private fun writeToCache(
+        bitmap: Bitmap,
+        cacheFile: File,
+    ) {
         try {
             cacheFile.parentFile?.mkdirs()
             cacheFile.outputStream().use { out ->
@@ -145,7 +171,10 @@ object NetworkThumbnailGenerator {
         }
     }
 
-    private fun cacheFileFor(context: Context, source: PlaybackSource): File {
+    private fun cacheFileFor(
+        context: Context,
+        source: PlaybackSource,
+    ): File {
         val cacheDir = File(context.cacheDir, CACHE_DIR_NAME)
         return File(cacheDir, "${cacheKeyFor(source)}.jpg")
     }
@@ -157,25 +186,17 @@ object NetworkThumbnailGenerator {
     // um lastModified confiavel na listagem de rede (SMB/FTP/SFTP so
     // devolvem nome/tipo/tamanho -- ver loadNetworkDirectory), entao
     // tamanho e a unica pista de "arquivo mudou" disponivel aqui.
+    // Delega a formula pra CacheKeys.forSource (compartilhada com os caches Room, ver
+    // CacheKeys.kt), mas continua so aceitando os tipos com geracao de thumbnail suportada
+    // (Smb/Ftp/Sftp/Dlna) -- callers (getScrubStrip) dependem desse throw pra tratar os
+    // demais tipos como "sem thumbnail de rede" via runCatching { }.getOrNull().
     internal fun cacheKeyFor(source: PlaybackSource): String {
-        val raw = when (source) {
-            is PlaybackSource.Smb ->
-                "smb|${source.server.host}|${source.server.port}|${source.server.share}|${source.path}|${source.sizeBytes}"
-            is PlaybackSource.Ftp ->
-                "ftp|${source.server.host}|${source.server.port}|${source.path}|${source.sizeBytes}"
-            is PlaybackSource.Sftp ->
-                "sftp|${source.server.host}|${source.server.port}|${source.path}|${source.sizeBytes}"
-            is PlaybackSource.Dlna ->
-                "dlna|${source.server.host}|${source.url}|${source.sizeBytes}"
+        return when (source) {
+            is PlaybackSource.Smb, is PlaybackSource.Ftp, is PlaybackSource.Sftp, is PlaybackSource.Dlna ->
+                CacheKeys.forSource(source)
             is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Webdav ->
                 throw IllegalArgumentException("NetworkThumbnailGenerator nao suporta $source")
         }
-        return sha256(raw)
-    }
-
-    private fun sha256(input: String): String {
-        val digest = MessageDigest.getInstance("SHA-256").digest(input.toByteArray())
-        return digest.joinToString("") { "%02x".format(it) }
     }
 
     // --- Preview de arrasto no seekbar (T-seek-ux) ---
@@ -199,9 +220,13 @@ object NetworkThumbnailGenerator {
 
     // Cache em memoria dimensionado por bytes (64 MiB) para evitar vazamento
     // em sessões longas, com evicção automática LRU.
-    private val scrubMemoryCache = object : LruCache<String, ScrubStrip>(64 * 1024 * 1024) {
-        override fun sizeOf(key: String, value: ScrubStrip): Int = value.byteCount
-    }
+    private val scrubMemoryCache =
+        object : LruCache<String, ScrubStrip>(64 * 1024 * 1024) {
+            override fun sizeOf(
+                key: String,
+                value: ScrubStrip,
+            ): Int = value.byteCount
+        }
 
     /**
      * Gera (ou reaproveita do cache) a trilha de preview de arrasto pra
@@ -212,7 +237,11 @@ object NetworkThumbnailGenerator {
      * `Dispatchers.IO`; chamadas seguintes pro MESMO video (cache hit, em
      * memoria ou disco) retornam rapido.
      */
-    suspend fun getScrubStrip(context: Context, activity: VRActivity, source: PlaybackSource): ScrubStrip? {
+    suspend fun getScrubStrip(
+        context: Context,
+        activity: VRActivity,
+        source: PlaybackSource,
+    ): ScrubStrip? {
         val key = runCatching { cacheKeyFor(source) }.getOrNull() ?: return null
         scrubMemoryCache.get(key)?.let { return it }
 
@@ -226,23 +255,31 @@ object NetworkThumbnailGenerator {
         }
     }
 
-    private fun generateScrubRgba(activity: VRActivity, source: PlaybackSource): ByteArray? {
+    private fun generateScrubRgba(
+        activity: VRActivity,
+        source: PlaybackSource,
+    ): ByteArray? {
         return when (source) {
-            is PlaybackSource.Smb -> activity.nativeSmbGenerateThumbnailStrip(
-                source.server.host, source.server.port, source.server.username, source.server.password,
-                source.server.domain, source.server.share, source.path,
-                SCRUB_INTERVAL_SECONDS, SCRUB_WIDTH, SCRUB_HEIGHT
-            )
-            is PlaybackSource.Sftp -> activity.nativeSftpGenerateThumbnailStrip(
-                source.server.host, source.server.port, source.server.username, source.server.password,
-                source.server.privateKey ?: "", source.path,
-                SCRUB_INTERVAL_SECONDS, SCRUB_WIDTH, SCRUB_HEIGHT
-            )
+            is PlaybackSource.Smb ->
+                activity.nativeSmbGenerateThumbnailStrip(
+                    source.server.host, source.server.port, source.server.username, source.server.password,
+                    source.server.domain, source.server.share, source.path,
+                    SCRUB_INTERVAL_SECONDS, SCRUB_WIDTH, SCRUB_HEIGHT,
+                )
+            is PlaybackSource.Sftp ->
+                activity.nativeSftpGenerateThumbnailStrip(
+                    source.server.host, source.server.port, source.server.username, source.server.password,
+                    source.server.privateKey ?: "", source.path,
+                    SCRUB_INTERVAL_SECONDS, SCRUB_WIDTH, SCRUB_HEIGHT,
+                )
             is PlaybackSource.Ftp, is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Dlna, is PlaybackSource.Webdav -> null
         }
     }
 
-    private fun writeScrubCache(rgba: ByteArray, cacheFile: File) {
+    private fun writeScrubCache(
+        rgba: ByteArray,
+        cacheFile: File,
+    ) {
         try {
             cacheFile.parentFile?.mkdirs()
             cacheFile.writeBytes(rgba)
@@ -251,7 +288,10 @@ object NetworkThumbnailGenerator {
         }
     }
 
-    private fun scrubCacheFileFor(context: Context, key: String): File {
+    private fun scrubCacheFileFor(
+        context: Context,
+        key: String,
+    ): File {
         val cacheDir = File(context.cacheDir, SCRUB_CACHE_DIR_NAME)
         return File(cacheDir, "$key.rgba")
     }

@@ -10,8 +10,8 @@ import androidx.room.PrimaryKey
 @Entity(
     tableName = "downloads",
     indices = [
-        Index(value = ["state"])
-    ]
+        Index(value = ["state"]),
+    ],
 )
 data class Download(
     @PrimaryKey val id: String,
@@ -25,7 +25,7 @@ data class Download(
     val createdAt: Long,
     val completedAt: Long? = null,
     val errorMessage: String? = null,
-    val serverId: String? = null
+    val serverId: String? = null,
 )
 
 object DownloadStatus {

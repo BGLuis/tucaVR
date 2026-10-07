@@ -20,14 +20,13 @@ on:
         type: boolean
         default: true
 
-# Cancela runs anteriores em branches de PR e develop para evitar gasto desnecessário de runners
+# Cancela runs anteriores em branches de PR para economizar recursos dos runners
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Privilégio mínimo por padrão (segurança supply-chain)
-permissions:
-  contents: read
+# Privilégio mínimo no escopo global (segurança de supply-chain e OIDC)
+permissions: {}
 
 env:
   JAVA_VERSION: '17'
@@ -35,12 +34,116 @@ env:
   NDK_VERSION: '26.3.11579264'
 
 jobs:
-  build-and-lint:
+  security-and-workflows:
+    name: Security & Workflows
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
+    permissions:
+      contents: read # Necessário para checar fontes, workflows e licenças
     steps:
       - uses: actions/checkout@v4
-      
+        with:
+          persist-credentials: false
+
+      - name: Lint GitHub Actions workflows (actionlint)
+        run: |
+          bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -color
+
+      - name: Check Rust dependencies & licenses (cargo-deny)
+        run: |
+          curl -sL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.18.2/cargo-deny-0.18.2-x86_64-unknown-linux-musl.tar.gz | tar -xz
+          ./cargo-deny-0.18.2-x86_64-unknown-linux-musl/cargo-deny --manifest-path rust/Cargo.toml check --config deny.toml licenses bans sources
+          rm -rf cargo-deny-0.18.2-x86_64-unknown-linux-musl
+
+      - name: Scan repository for secrets (gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_SUMMARY: true
+        continue-on-error: true # Notifica no step summary sem abortar caso haja falso positivo em testes
+
+  rust-checks:
+    name: Rust Quality & Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # Necessário para compilação e testes no host
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust (Host)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "rust -> rust/target"
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
+
+      - name: Check Rust formatting (rustfmt)
+        run: cd rust && cargo fmt --check
+
+      - name: Lint Rust (clippy --all-targets --all-features)
+        run: cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings
+
+      - name: Run Rust unit tests (host-testable crates)
+        run: cd rust && cargo test -p protocols -p media-logic
+
+  cpp-checks:
+    name: C++ Native & Shaders
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # Necessário para checagens de formatação e shaders
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install C++ Host Dependencies
+        uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: libopenxr-dev glslc
+          version: 1.2
+
+      - name: Check C++ Code Formatting (clang-format)
+        run: |
+          clang-format --dry-run -Werror \
+            native/tests/*.cpp \
+            native/include/vk_math.h \
+            native/include/screen_mode.h \
+            native/include/subtitle_layout.h \
+            native/include/hand_tracking.h \
+            native/include/environment_config.h
+
+      - name: Validate Vulkan Shaders (glslc)
+        run: ./scripts/check-shaders.sh
+
+      - name: Cache ccache (host C++ tests)
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: host-tests-${{ runner.os }}
+          max-size: 200M
+
+      - name: Run C++ Host unit tests with AddressSanitizer
+        run: ENABLE_ASAN=1 ./scripts/test-native-host.sh
+
+  android-checks:
+    name: Android Lint & JVM Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read # Necessário para análise estática e execução dos testes JVM
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
       - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4
         with:
@@ -50,64 +153,40 @@ jobs:
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
         with:
-          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
-          
-      - name: Setup Rust (Host)
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-          
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: "rust -> rust/target"
-        
-      - name: Lint Rust (clippy)
-        run: cd rust && cargo clippy -p protocols -p media-logic -- -D warnings
-
-      # `core`, `audio` e `bridge` dependem de ndk/ndk-sys/oboe (Android-only) e nao
-      # rodam (nem compilam de forma confiavel) num host generico com `cargo test` —
-      # ver docs/TESTING-PLAN.md, secao "O que roda no host vs. so no Android". A logica
-      # pura que antes vivia dentro de `core` (SyncManager, matematica de resample de
-      # audio, clamps de velocidade/volume, contrato de "geracao" de playback) foi
-      # extraida para a crate `media-logic`, que tem zero dependencias Android e roda
-      # aqui normalmente. `protocols` (SMB URI/redact, prefetch, HTTP probe/range) ja
-      # era host-testable.
-      - name: Run Rust unit tests (host-testable crates)
-        run: cd rust && cargo test -p protocols -p media-logic
-
-      - name: Install C++ Host Test Dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y --no-install-recommends libopenxr-dev
-
-      - name: Run C++ Host unit tests
-        run: ./scripts/test-native-host.sh
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
 
       - name: Lint Kotlin (ktlint)
-        run: ./gradlew ktlintCheck || echo "ktlint not configured yet"
+        run: ./gradlew ktlintCheck
 
-      # Testes JVM puros do Kotlin (app/src/test) — file browser (MediaSorter,
-      # DirectoryNavigator, DirectoryLister, cache-key do ThumbnailGenerator). Rodam
-      # sem emulador/dispositivo, ver docs/TESTING-PLAN.md.
+      - name: Android Lint (lintDebug)
+        run: ./gradlew :app:lintDebug
+
       - name: Run Kotlin unit tests (JVM)
         run: ./gradlew testDebugUnitTest
 
-      - name: Upload Test Reports
+      - name: Upload Test & Lint Reports
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: unit-test-reports
-          path: app/build/reports/tests/testDebugUnitTest/
+          name: android-verification-reports
+          path: |
+            app/build/reports/tests/testDebugUnitTest/
+            app/build/reports/lint-results-debug.html
+            app/build/reports/ktlint/
           retention-days: 7
 
   build-apk:
-    needs: build-and-lint
-    if: github.repository == 'BGLuis/vr-multmidia' && (inputs.build_apk == true || inputs.build_apk == null)
+    name: Build Quest 3 APK
+    needs: [security-and-workflows, rust-checks, cpp-checks, android-checks]
+    if: (github.repository == 'BGLuis/vr-multmidia' || github.repository == 'BGLuis/tucaVR') && (inputs.build_apk == true || inputs.build_apk == null)
     runs-on: ubuntu-24.04
     timeout-minutes: 35
+    permissions:
+      contents: read # Necessário para compilar o APK
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Checkout Meta OpenXR SDK (Private Repo)
         uses: actions/checkout@v4
@@ -129,12 +208,21 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android
-          
+
       - name: Rust Cache
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: "rust -> rust/target"
-          
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Cache ccache (native C++ build)
+        uses: hendrikmuhs/ccache-action@v1
+        with:
+          key: native-build-${{ runner.os }}
+          max-size: 500M
+
       - name: Cache cargo-ndk
         id: cache-cargo-ndk
         uses: actions/cache@v4
@@ -145,7 +233,7 @@ jobs:
       - name: Install cargo-ndk
         if: steps.cache-cargo-ndk.outputs.cache-hit != 'true'
         run: cargo install cargo-ndk --locked
-        
+
       - name: Cache Android NDK
         id: cache-ndk
         uses: actions/cache@v4
@@ -156,12 +244,12 @@ jobs:
       - name: Setup Android NDK
         if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
-          echo "y" | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --install "ndk;${{ env.NDK_VERSION }}"
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${{ env.NDK_VERSION }}"
 
       - name: Configure Android NDK Environment
         run: |
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}" >> $GITHUB_ENV
-          echo "ANDROID_SDK_HOME=$ANDROID_HOME" >> $GITHUB_ENV
+          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${{ env.NDK_VERSION }}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
 
       - name: Cache FFmpeg Build
         id: cache-ffmpeg
@@ -175,8 +263,8 @@ jobs:
         run: |
           ./scripts/setup-deps.sh
           cd ffmpeg-android-maker
-          export ANDROID_SDK_HOME=$ANDROID_HOME
-          export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}
+          export ANDROID_SDK_HOME="$ANDROID_HOME"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}"
           ./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26
 
       - name: Build Unified Script (Rust + C++ + Gradle)
@@ -186,9 +274,17 @@ jobs:
           ANDROID_SDK_HOME: ${{ env.ANDROID_SDK_HOME }}
           PKG_CONFIG_PATH: ${{ github.workspace }}/ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/pkgconfig
           BINDGEN_EXTRA_CLANG_ARGS: "-I${{ github.workspace }}/ffmpeg-android-maker/output/include/arm64-v8a -I${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          RUSTC_WRAPPER: sccache
+          SCCACHE_GHA_ENABLED: "true"
+
+      - name: Sanitize artifact name
+        id: artifact-meta
+        run: |
+          SAFE_REF=$(echo "${GITHUB_REF_NAME}" | tr '/' '-')
+          echo "name=VR-Player-APK-${SAFE_REF}-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: VR-Player-APK-${{ github.ref_name }}
+          name: ${{ steps.artifact-meta.outputs.name }}
           path: app/build/outputs/apk/debug/app-debug.apk

@@ -77,14 +77,13 @@ data class NativeDebugStats(
     val perfDeviceCpuUtilWorst: Float = 0.0f,
     val perfDeviceGpuUtil: Float = 0.0f,
     // List (não IntArray): igualdade estrutural de graça no data class gerado.
-    val histBuckets: List<Int> = List(8) { 0 }
+    val histBuckets: List<Int> = List(8) { 0 },
 )
 
 /**
  * Parser puro e testável na JVM para a wire de estatísticas técnicas.
  */
 object DebugStatsParser {
-
     fun parse(wire: String): NativeDebugStats? {
         if (wire.isBlank() || wire.startsWith("ERROR:")) return null
 
@@ -173,85 +172,322 @@ object DebugStatsParser {
             val value = parts[1]
 
             when (key) {
-                "backend" -> { backend = value; recognizedKeys++ }
-                "screen_mode" -> { screenMode = value; recognizedKeys++ }
-                "stereo_layout" -> { stereoLayout = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "polar_180" -> { polar180 = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "swap_eyes" -> { swapEyes = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "has_frame" -> { hasFrame = value == "1"; recognizedKeys++ }
-                "frame_gap_ms" -> { frameGapMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "video_fps" -> { videoFps = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "decoded_fps" -> { decodedFps = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "output_fps" -> { outputFps = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "dropped_fps" -> { droppedFps = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "jitter_ms" -> { jitterMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "net_mbs" -> { netMBs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "queue_depth" -> { queueDepth = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "presentation_pending" -> { presentationPending = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "seek_latency_ms" -> { seekLatencyMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "smoothed_fps" -> { smoothedFps = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "frame_time_ms" -> { frameTimeMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "gpu_time_ms" -> { gpuTimeMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "smoothed_gpu_time_ms" -> { smoothedGpuTimeMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "upscaling_mode" -> { upscalingMode = value; recognizedKeys++ }
-                "upscaling_sharpness" -> { upscalingSharpness = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "mqsr_enabled" -> { mqsrEnabled = value == "1"; recognizedKeys++ }
-                "quality_level" -> { qualityLevel = value; recognizedKeys++ }
-                "quality_reason" -> { qualityReason = value; recognizedKeys++ }
-                "draw_call_count" -> { drawCallCount = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "triangle_count" -> { triangleCount = value.toLongOrNull() ?: 0L; recognizedKeys++ }
-                "stutter_count" -> { stutterCount = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "freeze_count" -> { freezeCount = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "thermal_level" -> { thermalLevel = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "render_scale" -> { renderScale = value.toFloatOrNull() ?: 1f; recognizedKeys++ }
-                "refresh_rate" -> { refreshRate = value.toFloatOrNull() ?: 90f; recognizedKeys++ }
-                "av_drift_ms" -> { avDriftMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "net_last_fetch_ms" -> { netLastFetchMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "net_blocks_fetched" -> { netBlocksFetched = value.toLongOrNull() ?: 0L; recognizedKeys++ }
-                "net_blocks_discarded" -> { netBlocksDiscarded = value.toLongOrNull() ?: 0L; recognizedKeys++ }
-                "foveation" -> { foveationEnabled = value == "1"; recognizedKeys++ }
-                "spatial_audio" -> { spatialAudioMode = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "head_tracking" -> { spatialHeadTracking = value == "1"; recognizedKeys++ }
-                "speed" -> { playbackSpeed = value.toFloatOrNull() ?: 1f; recognizedKeys++ }
-                "volume" -> { audioVolume = value.toFloatOrNull() ?: 1f; recognizedKeys++ }
-                "audio_track" -> { audioTrackIndex = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "audio_track_count" -> { audioTrackCount = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "sub_track" -> { subtitleTrackIndex = value.toIntOrNull() ?: -1; recognizedKeys++ }
-                "sub_offset_ms" -> { subtitleOffsetMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "video_stall_count" -> { videoStallCount = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "video_stats_age_ms" -> { videoStatsAgeMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "network_stats_age_ms" -> { networkStatsAgeMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "audio_stats_age_ms" -> { audioStatsAgeMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "render_stats_age_ms" -> { renderStatsAgeMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "network_fetch_failures" -> { networkFetchFailures = value.toLongOrNull() ?: 0L; recognizedKeys++ }
-                "network_sequential_streak" -> { networkSequentialStreak = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "network_throttled" -> { networkThrottled = value == "1"; recognizedKeys++ }
-                "audio_queue_depth" -> { audioQueueDepth = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "decode_error_count" -> { decodeErrorCount = value.toLongOrNull() ?: 0L; recognizedKeys++ }
-                "demux_corrupt_packet_count" -> { demuxCorruptPacketCount = value.toLongOrNull() ?: 0L; recognizedKeys++ }
-                "audio_underrun_count" -> { audioUnderrunCount = value.toLongOrNull() ?: 0L; recognizedKeys++ }
-                "load_phase_demux_open_ms" -> { loadPhaseDemuxOpenMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "load_phase_decoder_ready_ms" -> { loadPhaseDecoderReadyMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "load_phase_audio_ready_ms" -> { loadPhaseAudioReadyMs = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "perf_metrics_valid_mask" -> { perfMetricsValidMask = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "perf_app_cpu_frametime_ms" -> { perfAppCpuFrametimeMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "perf_app_gpu_frametime_ms" -> { perfAppGpuFrametimeMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "perf_motion_to_photon_latency_ms" -> { perfMotionToPhotonLatencyMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "perf_compositor_cpu_frametime_ms" -> { perfCompositorCpuFrametimeMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "perf_compositor_gpu_frametime_ms" -> { perfCompositorGpuFrametimeMs = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "perf_compositor_dropped_frame_count" -> { perfCompositorDroppedFrameCount = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "perf_compositor_spacewarp_mode" -> { perfCompositorSpacewarpMode = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "perf_device_cpu_util_average" -> { perfDeviceCpuUtilAverage = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "perf_device_cpu_util_worst" -> { perfDeviceCpuUtilWorst = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "perf_device_gpu_util" -> { perfDeviceGpuUtil = value.toFloatOrNull() ?: 0f; recognizedKeys++ }
-                "hist_bucket_0" -> { histBuckets[0] = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "hist_bucket_1" -> { histBuckets[1] = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "hist_bucket_2" -> { histBuckets[2] = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "hist_bucket_3" -> { histBuckets[3] = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "hist_bucket_4" -> { histBuckets[4] = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "hist_bucket_5" -> { histBuckets[5] = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "hist_bucket_6" -> { histBuckets[6] = value.toIntOrNull() ?: 0; recognizedKeys++ }
-                "hist_bucket_7" -> { histBuckets[7] = value.toIntOrNull() ?: 0; recognizedKeys++ }
+                "backend" -> {
+                    backend = value
+                    recognizedKeys++
+                }
+                "screen_mode" -> {
+                    screenMode = value
+                    recognizedKeys++
+                }
+                "stereo_layout" -> {
+                    stereoLayout = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "polar_180" -> {
+                    polar180 = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "swap_eyes" -> {
+                    swapEyes = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "has_frame" -> {
+                    hasFrame = value == "1"
+                    recognizedKeys++
+                }
+                "frame_gap_ms" -> {
+                    frameGapMs = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "video_fps" -> {
+                    videoFps = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "decoded_fps" -> {
+                    decodedFps = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "output_fps" -> {
+                    outputFps = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "dropped_fps" -> {
+                    droppedFps = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "jitter_ms" -> {
+                    jitterMs = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "net_mbs" -> {
+                    netMBs = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "queue_depth" -> {
+                    queueDepth = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "presentation_pending" -> {
+                    presentationPending = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "seek_latency_ms" -> {
+                    seekLatencyMs = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "smoothed_fps" -> {
+                    smoothedFps = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "frame_time_ms" -> {
+                    frameTimeMs = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "gpu_time_ms" -> {
+                    gpuTimeMs = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "smoothed_gpu_time_ms" -> {
+                    smoothedGpuTimeMs = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "upscaling_mode" -> {
+                    upscalingMode = value
+                    recognizedKeys++
+                }
+                "upscaling_sharpness" -> {
+                    upscalingSharpness = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "mqsr_enabled" -> {
+                    mqsrEnabled = value == "1"
+                    recognizedKeys++
+                }
+                "quality_level" -> {
+                    qualityLevel = value
+                    recognizedKeys++
+                }
+                "quality_reason" -> {
+                    qualityReason = value
+                    recognizedKeys++
+                }
+                "draw_call_count" -> {
+                    drawCallCount = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "triangle_count" -> {
+                    triangleCount = value.toLongOrNull() ?: 0L
+                    recognizedKeys++
+                }
+                "stutter_count" -> {
+                    stutterCount = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "freeze_count" -> {
+                    freezeCount = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "thermal_level" -> {
+                    thermalLevel = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "render_scale" -> {
+                    renderScale = value.toFloatOrNull() ?: 1f
+                    recognizedKeys++
+                }
+                "refresh_rate" -> {
+                    refreshRate = value.toFloatOrNull() ?: 90f
+                    recognizedKeys++
+                }
+                "av_drift_ms" -> {
+                    avDriftMs = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "net_last_fetch_ms" -> {
+                    netLastFetchMs = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "net_blocks_fetched" -> {
+                    netBlocksFetched = value.toLongOrNull() ?: 0L
+                    recognizedKeys++
+                }
+                "net_blocks_discarded" -> {
+                    netBlocksDiscarded = value.toLongOrNull() ?: 0L
+                    recognizedKeys++
+                }
+                "foveation" -> {
+                    foveationEnabled = value == "1"
+                    recognizedKeys++
+                }
+                "spatial_audio" -> {
+                    spatialAudioMode = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "head_tracking" -> {
+                    spatialHeadTracking = value == "1"
+                    recognizedKeys++
+                }
+                "speed" -> {
+                    playbackSpeed = value.toFloatOrNull() ?: 1f
+                    recognizedKeys++
+                }
+                "volume" -> {
+                    audioVolume = value.toFloatOrNull() ?: 1f
+                    recognizedKeys++
+                }
+                "audio_track" -> {
+                    audioTrackIndex = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "audio_track_count" -> {
+                    audioTrackCount = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "sub_track" -> {
+                    subtitleTrackIndex = value.toIntOrNull() ?: -1
+                    recognizedKeys++
+                }
+                "sub_offset_ms" -> {
+                    subtitleOffsetMs = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "video_stall_count" -> {
+                    videoStallCount = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "video_stats_age_ms" -> {
+                    videoStatsAgeMs = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "network_stats_age_ms" -> {
+                    networkStatsAgeMs = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "audio_stats_age_ms" -> {
+                    audioStatsAgeMs = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "render_stats_age_ms" -> {
+                    renderStatsAgeMs = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "network_fetch_failures" -> {
+                    networkFetchFailures = value.toLongOrNull() ?: 0L
+                    recognizedKeys++
+                }
+                "network_sequential_streak" -> {
+                    networkSequentialStreak = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "network_throttled" -> {
+                    networkThrottled = value == "1"
+                    recognizedKeys++
+                }
+                "audio_queue_depth" -> {
+                    audioQueueDepth = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "decode_error_count" -> {
+                    decodeErrorCount = value.toLongOrNull() ?: 0L
+                    recognizedKeys++
+                }
+                "demux_corrupt_packet_count" -> {
+                    demuxCorruptPacketCount = value.toLongOrNull() ?: 0L
+                    recognizedKeys++
+                }
+                "audio_underrun_count" -> {
+                    audioUnderrunCount = value.toLongOrNull() ?: 0L
+                    recognizedKeys++
+                }
+                "load_phase_demux_open_ms" -> {
+                    loadPhaseDemuxOpenMs = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "load_phase_decoder_ready_ms" -> {
+                    loadPhaseDecoderReadyMs = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "load_phase_audio_ready_ms" -> {
+                    loadPhaseAudioReadyMs = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "perf_metrics_valid_mask" -> {
+                    perfMetricsValidMask = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "perf_app_cpu_frametime_ms" -> {
+                    perfAppCpuFrametimeMs = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "perf_app_gpu_frametime_ms" -> {
+                    perfAppGpuFrametimeMs = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "perf_motion_to_photon_latency_ms" -> {
+                    perfMotionToPhotonLatencyMs = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "perf_compositor_cpu_frametime_ms" -> {
+                    perfCompositorCpuFrametimeMs = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "perf_compositor_gpu_frametime_ms" -> {
+                    perfCompositorGpuFrametimeMs = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "perf_compositor_dropped_frame_count" -> {
+                    perfCompositorDroppedFrameCount = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "perf_compositor_spacewarp_mode" -> {
+                    perfCompositorSpacewarpMode = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "perf_device_cpu_util_average" -> {
+                    perfDeviceCpuUtilAverage = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "perf_device_cpu_util_worst" -> {
+                    perfDeviceCpuUtilWorst = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "perf_device_gpu_util" -> {
+                    perfDeviceGpuUtil = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "hist_bucket_0" -> {
+                    histBuckets[0] = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "hist_bucket_1" -> {
+                    histBuckets[1] = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "hist_bucket_2" -> {
+                    histBuckets[2] = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "hist_bucket_3" -> {
+                    histBuckets[3] = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "hist_bucket_4" -> {
+                    histBuckets[4] = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "hist_bucket_5" -> {
+                    histBuckets[5] = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "hist_bucket_6" -> {
+                    histBuckets[6] = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "hist_bucket_7" -> {
+                    histBuckets[7] = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
             }
         }
 
@@ -329,7 +565,7 @@ object DebugStatsParser {
             perfDeviceCpuUtilAverage = perfDeviceCpuUtilAverage,
             perfDeviceCpuUtilWorst = perfDeviceCpuUtilWorst,
             perfDeviceGpuUtil = perfDeviceGpuUtil,
-            histBuckets = histBuckets.toList()
+            histBuckets = histBuckets.toList(),
         )
     }
 }

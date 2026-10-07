@@ -43,11 +43,11 @@ flowchart TB
     end
 
     subgraph JNI_BOUNDARY ["Fronteira JNI Bidirecional"]
-        JNI_Calls["• C++ -> Kotlin: setupVirtualDisplay, dispatchVRTouch, runOnUiThread\n• Kotlin -> C++: nativeTogglePlayPause, nativeSeek, nativeStartVideo"]
+        JNI_Calls["• C++ -> Kotlin: setupVirtualDisplay, dispatchVRTouch, runOnUiThread\n• Kotlin -> C++: nativeTogglePlayPause, nativeSeekVideo, nativePlayVideo"]
     end
 
     subgraph CPP ["2. Camada C++ (native/) — OpenXR Engine & Rendering"]
-        XrSession["OpenXR Session & Swapchain Loop (OVRFW)"]
+        XrSession["OpenXR Session & Swapchain Loop (Vulkan nativo / OVRFW no GLES fallback)"]
         VkPipeline["Vulkan Render Pipeline (vr_player_app_vulkan.cpp)"]
         GlesPipeline["OpenGL ES Fallback (vr_player_app.cpp)"]
         Raycast["Raycast Controller Input (vr_player_input_vulkan.h)"]
@@ -78,8 +78,8 @@ flowchart TB
 | Camada | Linguagem | Módulos Principais | Responsabilidade |
 | :--- | :--- | :--- | :--- |
 | **Shell & UI** | Kotlin | `VRActivity.kt`, `VRPresentation.kt`, `VRControlsPresentation.kt`, `history/` | Orquestração do Android OS, desenho de UI nativa via `VirtualDisplay`, persistência com Room, credenciais cifradas (`EncryptedSharedPreferences`). |
-| **XR Engine** | C++17 | `vr_player_app_vulkan.cpp`, `vr_player_app.cpp`, `vr_player_jni_vulkan.cpp` | Sessão OpenXR, swapchains, loop de desenho a 72/90/120 Hz, raycasting de controles Touch Plus, importação de `AHardwareBuffer` para Vulkan/GLES. |
-| **Media Core** | Rust 2021 | `core`, `media-logic`, `protocols`, `audio`, `bridge` | Demuxing de arquivos locais e remotos, decodificação acelerada por hardware via NDK `MediaCodec`, saída de áudio com `Oboe`, clientes de rede seguros. |
+| **XR Engine** | C++20 | `vr_player_app_vulkan.cpp`, `vr_player_app.cpp`, `vr_player_jni_vulkan.cpp` | Sessão OpenXR, swapchains, loop de desenho a 72/90/120 Hz, raycasting de controles Touch Plus, importação de `AHardwareBuffer` para Vulkan/GLES. |
+| **Media Core** | Rust (2021 workspace / 2024 protocols) | `core`, `media-logic`, `protocols`, `audio`, `bridge` | Demuxing de arquivos locais e remotos, decodificação acelerada por hardware via NDK `MediaCodec`, saída de áudio com `Oboe`, clientes de rede seguros. |
 
 ### 2.2 A Regra Crítica FFI (ADR-002: Kotlin $\leftrightarrow$ Rust)
 
@@ -116,19 +116,16 @@ O pipeline gráfico do tucaVR foi migrado para **Vulkan 1.1** como backend prim�
                   └──────────────────┬──────────────────┘
                                      ▼
                   ┌─────────────────────────────────────┐
-                  │   OpenXR Multiview Swapchain        │
+                  │   OpenXR Swapchains (Por Olho)      │
                   │  (Stereo Projections / VR Screen)   │
                   └─────────────────────────────────────┘
 ```
 
 ### 3.1 Backend Primário: Vulkan (`vr_player_app_vulkan.cpp`)
 
-1. **Extensões de Instância e Dispositivo:**
-   - `VK_KHR_android_surface`
-   - `VK_KHR_external_memory` e `VK_KHR_external_memory_fd`
-   - `VK_ANDROID_external_memory_android_hardware_buffer`
-   - `VK_KHR_sampler_ycbcr_conversion`
-   - `VK_KHR_dedicated_allocation`
+1. **Extensões de Instância e Dispositivo (`vr_player_app_vulkan.cpp:1454-1567`):**
+   - **Instância:** `VK_KHR_external_memory_capabilities`, `VK_KHR_get_physical_device_properties2`
+   - **Dispositivo:** `VK_ANDROID_external_memory_android_hardware_buffer`, `VK_KHR_sampler_ycbcr_conversion`, `VK_KHR_external_memory`, `VK_KHR_dedicated_allocation`, `VK_KHR_bind_memory2`, `VK_KHR_get_memory_requirements2`
 2. **Importação do Buffer do Vídeo (`GetOrImportVideoFrame`):**
    - O Rust fornece o ponteiro `AHardwareBuffer*` decodificado pelo MediaCodec.
    - O C++ consulta os requisitos de memória via `vkGetAndroidHardwareBufferPropertiesANDROID`.
@@ -151,19 +148,27 @@ O pipeline gráfico do tucaVR foi migrado para **Vulkan 1.1** como backend prim�
 
 ### 3.3 Modos de Projeção Estereoscópica (`ScreenMode`)
 
-A enumeração `ScreenMode` é sincronizada entre Rust, C++ e Kotlin:
+A enumeração `ScreenMode` é sincronizada entre Rust, C++ e Kotlin (ver `native/include/screen_mode.h:12-30`):
 
-| ID | Modo | Geometria de Render | Mapeamento UV por Olho |
+| ID | Modo (`ScreenModeName`) | Descrição e Geometria | Mapeamento UV por Olho |
 | :--- | :--- | :--- | :--- |
-| `0` | **2D Flat** | Painel Quad plano flutuante | Ambos os olhos veem a textura completa $[0..1, 0..1]$. |
-| `1` | **3D Side-by-Side (Half)** | Painel Quad plano | Olho Esquerdo: $U \in [0.0..0.5]$; Olho Direito: $U \in [0.5..1.0]$. |
-| `2` | **3D Side-by-Side (Full)** | Painel Quad plano estendido | Olho Esquerdo: $U \in [0.0..0.5]$; Olho Direito: $U \in [0.5..1.0]$. |
-| `3` | **3D Over/Under (Half)** | Painel Quad plano | Olho Esquerdo: $V \in [0.0..0.5]$; Olho Direito: $V \in [0.5..1.0]$. |
-| `4` | **3D Over/Under (Full)** | Painel Quad plano estendido | Olho Esquerdo: $V \in [0.0..0.5]$; Olho Direito: $V \in [0.5..1.0]$. |
-| `5` | **180° Monoscópico** | Cúpula Hemisférica 180° | Coordenadas esféricas projetadas igualmente para ambos os olhos. |
-| `6` | **180° SBS Estéreo** | Cúpula Hemisférica 180° | Hemisfério dividido horizontalmente entre olho esquerdo e direito. |
-| `7` | **360° Monoscópico** | Esfera Completa 360° | Projeção Equiretangular mapeada em esfera envolvente. |
-| `8` | **360° SBS Estéreo** | Esfera Completa 360° | Esfera completa com amostragem estéreo esquerda/direita. |
+| `0` | `Flat2D` | Painel Quad plano flutuante | Ambos os olhos veem a textura completa $[0..1, 0..1]$. |
+| `1` | `SBS` | 3D Side-by-Side (Full) em Quad plano | Olho Esquerdo: $U \in [0.0..0.5]$; Olho Direito: $U \in [0.5..1.0]$. |
+| `2` | `SBSHalf` | 3D Side-by-Side (Half) em Quad plano | Olho Esquerdo: $U \in [0.0..0.5]$; Olho Direito: $U \in [0.5..1.0]$. |
+| `3` | `OU` | 3D Over/Under (Full) em Quad plano | Olho Esquerdo: $V \in [0.0..0.5]$; Olho Direito: $V \in [0.5..1.0]$. |
+| `4` | `OUHalf` | 3D Over/Under (Half) em Quad plano | Olho Esquerdo: $V \in [0.0..0.5]$; Olho Direito: $V \in [0.5..1.0]$. |
+| `5` | `Sphere360` | Esfera Completa 360° Monoscópica | Projeção Equiretangular mapeada para ambos os olhos. |
+| `6` | `Sphere180` | Cúpula Hemisférica 180° Monoscópica | Coordenadas esféricas projetadas igualmente para ambos os olhos. |
+| `7` | `Sphere360SBS` | Esfera Completa 360° Estéreo SBS | Esfera equiretangular com divisão horizontal esquerda/direita. |
+| `8` | `Sphere360OU` | Esfera Completa 360° Estéreo OU | Esfera equiretangular com divisão vertical topo/base. |
+| `9` | `Vr180SBS` | Cúpula Hemisférica 180° Estéreo SBS | Hemisfério 180° dividido horizontalmente entre olho esquerdo e direito. |
+| `10` | `Cubemap3x2` | Projeção Cubemap 3x2 Monoscópica | 6 faces do cubo dispostas em layout 3x2. |
+| `11` | `Cubemap6x1` | Projeção Cubemap 6x1 Monoscópica | 6 faces do cubo em faixa horizontal contínua. |
+| `12` | `EAC3x2` | Equi-Angular Cubemap (EAC) 3x2 Mono | Otimização de densidade angular de pixels 3x2. |
+| `13` | `Cubemap3x2SBS` | Cubemap 3x2 Estéreo SBS | Cubemap estéreo dividido em metades esquerda e direita. |
+| `14` | `EAC3x2SBS` | EAC 3x2 Estéreo SBS | Equi-Angular Cubemap estéreo com divisão horizontal. |
+| `15` | `Fisheye190` | Projeção Olho de Peixe 190° Mono | Campo de visão ultra-largo hemisférico monoscópico. |
+| `16` | `Fisheye190SBS` | Projeção Olho de Peixe 190° Estéreo SBS | Campo de visão 190° estéreo lado a lado. |
 
 ---
 
@@ -199,10 +204,10 @@ sequenceDiagram
 
 ### 4.1 Tripla Superfície de UI
 
-O sistema aloca três `VirtualDisplay`s simultâneos e independentes:
-1. **File Browser / Biblioteca (`virtualDisplay`):** `kUiTexWidth = 1280`, `kUiTexHeight = 720` — gerenciado por `VRPresentation`. Contém a árvore de arquivos locais e compartilhamentos de rede.
-2. **Barra de Controles de Reprodução (`controlsVirtualDisplay`):** `kControlsTexWidth = 1024`, `kControlsTexHeight = 160` — gerenciado por `VRControlsPresentation`. Barra curva flutuante abaixo da tela com Play/Pause, Seek bar, volume e seletores.
-3. **Modais e Diálogos de Confirmação (`modalVirtualDisplay`):** `kModalTexWidth = 640`, `kModalTexHeight = 480` — gerenciado por `VRModalPresentation`.
+O sistema aloca três `VirtualDisplay`s simultâneos e independentes (ver constantes em `native/src/vr_player_app_vulkan.cpp:370-375`):
+1. **File Browser / Biblioteca (`virtualDisplay`):** `kUiTexWidth = 1024`, `kUiTexHeight = 768` — gerenciado por `VRPresentation`. Contém a árvore de arquivos locais e compartilhamentos de rede.
+2. **Barra de Controles de Reprodução (`controlsVirtualDisplay`):** `kControlsTexWidth = 1582`, `kControlsTexHeight = 800` — gerenciado por `VRControlsPresentation`. Barra curva flutuante abaixo da tela com Play/Pause, Seek bar, volume e seletores.
+3. **Modais e Diálogos de Confirmação (`modalVirtualDisplay`):** `kModalTexWidth = 1024`, `kModalTexHeight = 768` — gerenciado por `VRModalPresentation`.
 
 ### 4.2 Interação e Síntese de Toque (Raycasting de Controles)
 
@@ -320,7 +325,7 @@ pub extern "C" fn get_current_video_frame() -> *mut c_void {
 
 ### 6.2 Anel Circular de Erros (`ErrorRingBuffer`)
 
-Falhas de I/O em threads secundárias do Rust não devem disparar exceções nem causar pânicos no processo. A crate `media-logic` implementa o `ErrorRingBuffer`, que armazena atomicamente os últimos erros ocorridos. A camada Kotlin consome periodicamente essa fila via polling leve (`take_last_playback_error()`) e exibe Toasts na interface sem qualquer sincronização bloqueante.
+Falhas de I/O em threads secundárias do Rust não devem disparar exceções nem causar pânicos no processo. A crate `media-logic` implementa o `ErrorRingBuffer`, que armazena atomicamente os últimos erros ocorridos. A camada Kotlin consome periodicamente essa fila via polling leve JNI (`VRActivity.nativeTakeLastPlaybackError()`, respeitando o isolamento do ADR-002 onde Kotlin nunca acessa Rust diretamente) e exibe Toasts na interface sem qualquer sincronização bloqueante.
 
 ---
 
@@ -354,7 +359,7 @@ Servidores SMB, FTP e SFTP exigem armazenamento seguro de senhas e chaves privad
 
 ### 8.2 Histórico e Favoritos (Room Database)
 
-A persistência do progresso dos vídeos e da biblioteca é gerenciada pelo **Android Room DB** (`PlaybackHistoryDatabase`), utilizando KSP para geração de código.
+A persistência do progresso dos vídeos e da biblioteca é gerenciada pelo **Android Room DB** (`AppDatabase`, em `history/AppDatabase.kt:18`), utilizando KSP para geração de código.
 - As atualizações de progresso são throttled (estranguladas) para não gerar sobrecarga no disco de armazenamento flash do headset durante reproduções contínuas.
 
 ---
@@ -484,8 +489,8 @@ sequenceDiagram
 
 Para detalhes complementares sobre subsistemas específicos do tucaVR:
 
-- **[docs/REQUIREMENTS.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/REQUIREMENTS.md):** Requisitos de negócio, priorização de fases e registro histórico de ADRs (ADR-001 a ADR-006).
-- **[docs/VULKAN-MIGRATION-PLAN.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/VULKAN-MIGRATION-PLAN.md):** Arquitetura detalhada da transição do pipeline gráfico GLES para Vulkan.
-- **[docs/TESTING-PLAN.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/TESTING-PLAN.md):** Estratégia de isolamento de testes unitários host, testes Docker de protocolos de rede e testes em hardware real.
-- **[docs/DEBUGGING.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/DEBUGGING.md):** Guia de depuração em dispositivo, comandos ADB, overlay de HUD em VR e inspeção de métricas de playback.
-- **[docs/NETWORK-IO-PERFORMANCE.md](file:///home/luis/Documents/hand-on/vr-multmidia/docs/NETWORK-IO-PERFORMANCE.md):** Análise de buffers de streaming e comportamento do prefetcher de rede.
+- **[docs/REQUIREMENTS.md](REQUIREMENTS.md):** Requisitos de negócio, priorização de fases e registro histórico de ADRs (ADR-001 a ADR-006).
+- **[docs/VULKAN-MIGRATION-PLAN.md](VULKAN-MIGRATION-PLAN.md):** Arquitetura detalhada da transição do pipeline gráfico GLES para Vulkan.
+- **[docs/TESTING-PLAN.md](TESTING-PLAN.md):** Estratégia de isolamento de testes unitários host, testes Docker de protocolos de rede e testes em hardware real.
+- **[docs/DEBUGGING.md](DEBUGGING.md):** Guia de depuração em dispositivo, comandos ADB, overlay de HUD em VR e inspeção de métricas de playback.
+- **[docs/NETWORK-IO-PERFORMANCE.md](NETWORK-IO-PERFORMANCE.md):** Análise de buffers de streaming e comportamento do prefetcher de rede.

@@ -8,7 +8,7 @@
 //! exporta as env vars abaixo com os valores corretos e roda
 //! `cargo test -p protocols -- --ignored`.
 use protocols::prefetch::PrefetchReader;
-use protocols::smb::{list_directory, list_shares, SmbFileSource, SmbTarget};
+use protocols::smb::{SmbFileSource, SmbTarget, list_directory, list_shares, scan_has_media};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
@@ -19,7 +19,9 @@ fn env_or(key: &str, default: &str) -> String {
 fn auth_target() -> SmbTarget {
     SmbTarget {
         host: env_or("VRPLAYER_TEST_SMB_HOST", "127.0.0.1"),
-        port: env_or("VRPLAYER_TEST_SMB_PORT", "14450").parse().expect("VRPLAYER_TEST_SMB_PORT invalido"),
+        port: env_or("VRPLAYER_TEST_SMB_PORT", "14450")
+            .parse()
+            .expect("VRPLAYER_TEST_SMB_PORT invalido"),
         share: env_or("VRPLAYER_TEST_SMB_SHARE_AUTH", "authshare"),
         path: String::new(),
         username: env_or("VRPLAYER_TEST_SMB_USER", "vruser"),
@@ -42,8 +44,9 @@ fn test_file_name() -> String {
 }
 
 fn expected_sha256() -> String {
-    std::env::var("VRPLAYER_TEST_FILE_SHA256")
-        .expect("VRPLAYER_TEST_FILE_SHA256 nao definido — rode via scripts/test-network-protocols.sh")
+    std::env::var("VRPLAYER_TEST_FILE_SHA256").expect(
+        "VRPLAYER_TEST_FILE_SHA256 nao definido — rode via scripts/test-network-protocols.sh",
+    )
 }
 
 fn sha256_hex(data: &[u8]) -> String {
@@ -58,8 +61,14 @@ fn sha256_hex(data: &[u8]) -> String {
 #[ignore]
 fn list_shares_returns_configured_shares() {
     let shares = list_shares(&auth_target()).expect("list_shares falhou contra o servidor real");
-    assert!(shares.iter().any(|s| s == "authshare"), "shares retornados: {shares:?}");
-    assert!(shares.iter().any(|s| s == "guestshare"), "shares retornados: {shares:?}");
+    assert!(
+        shares.iter().any(|s| s == "authshare"),
+        "shares retornados: {shares:?}"
+    );
+    assert!(
+        shares.iter().any(|s| s == "guestshare"),
+        "shares retornados: {shares:?}"
+    );
 }
 
 /// Navegacao de diretorio dentro de um share autenticado (T6.1).
@@ -68,9 +77,28 @@ fn list_shares_returns_configured_shares() {
 fn list_directory_finds_test_file() {
     let entries = list_directory(&auth_target(), "").expect("list_directory falhou");
     let file = test_file_name();
-    let entry = entries.iter().find(|e| e.name == file).unwrap_or_else(|| panic!("{file} nao encontrado em: {entries:?}", entries = entries.iter().map(|e| &e.name).collect::<Vec<_>>()));
+    let entry = entries.iter().find(|e| e.name == file).unwrap_or_else(|| {
+        panic!(
+            "{file} nao encontrado em: {entries:?}",
+            entries = entries.iter().map(|e| &e.name).collect::<Vec<_>>()
+        )
+    });
     assert!(!entry.is_dir);
     assert!(entry.size > 0);
+}
+
+/// Varredura recursiva de poda de pastas (T-folder-pruning) contra o servidor real —
+/// a fixture so tem o arquivo de teste (nao-midia) na raiz do share autenticado,
+/// entao o resultado esperado e "nenhuma midia encontrada, varredura concluida por
+/// completo" — cobre o caminho de conexao+listagem real (connect_share/list_directory
+/// reusados, sem reconectar por nivel), nao so a logica pura de extensao.
+#[test]
+#[ignore]
+fn scan_has_media_reports_no_media_for_fixture_with_only_a_non_media_file() {
+    let result =
+        scan_has_media(&auth_target(), "").expect("scan_has_media falhou contra o servidor real");
+    assert!(!result.has_media);
+    assert!(result.completed_fully);
 }
 
 /// Leitura de arquivo via `SmbFileSource` + `PrefetchReader` (T6.3) num share
@@ -86,7 +114,9 @@ fn smb_file_source_reads_full_file_matching_sha256_authenticated() {
     let source = SmbFileSource::open(&target).expect("SmbFileSource::open falhou (auth)");
     let mut reader = PrefetchReader::new(source);
     let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).expect("leitura via PrefetchReader falhou");
+    reader
+        .read_to_end(&mut buf)
+        .expect("leitura via PrefetchReader falhou");
 
     assert_eq!(sha256_hex(&buf), expected_sha256());
 }
@@ -102,7 +132,9 @@ fn smb_file_source_reads_full_file_matching_sha256_guest() {
     let source = SmbFileSource::open(&target).expect("SmbFileSource::open falhou (guest)");
     let mut reader = PrefetchReader::new(source);
     let mut buf = Vec::new();
-    reader.read_to_end(&mut buf).expect("leitura via PrefetchReader falhou");
+    reader
+        .read_to_end(&mut buf)
+        .expect("leitura via PrefetchReader falhou");
 
     assert_eq!(sha256_hex(&buf), expected_sha256());
 }

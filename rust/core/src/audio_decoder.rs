@@ -191,7 +191,8 @@ impl AudioDecoder {
     /// `48000/speed` em vez de `48000`, mas continua tocando no stream
     /// de saida fixo em 48kHz.
     pub fn set_speed(&mut self, speed: f32) -> Result<(), ffmpeg::Error> {
-        let target_rate = media_logic::audio_resample::target_sample_rate(OUTPUT_SAMPLE_RATE, speed);
+        let target_rate =
+            media_logic::audio_resample::target_sample_rate(OUTPUT_SAMPLE_RATE, speed);
 
         self.resampler = Resampler::get(
             self.decoder.format(),
@@ -231,5 +232,10 @@ impl AudioDecoder {
         }
 
         Ok(samples)
+    }
+
+    /// Esvazia buffers internos do decoder FFmpeg (usado após seek/troca de epoch).
+    pub fn flush(&mut self) {
+        self.decoder.flush();
     }
 }

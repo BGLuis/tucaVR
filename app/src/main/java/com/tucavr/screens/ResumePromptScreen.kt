@@ -18,7 +18,7 @@ import kotlinx.coroutines.launch
 class ResumePromptScreen internal constructor(
     private val findHistory: suspend (PlaybackSource) -> PlaybackHistory?,
     private val showModal: (entry: PlaybackHistory, onResume: () -> Unit, onRestart: () -> Unit) -> Unit,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
 ) {
     @Suppress("UNUSED_PARAMETER")
     constructor(
@@ -26,11 +26,11 @@ class ResumePromptScreen internal constructor(
         activity: VRActivity,
         host: ScreenHost,
         scope: CoroutineScope,
-        onBack: () -> Unit
+        onBack: () -> Unit,
     ) : this(
         findHistory = { source -> activity.historyTracker.findExisting(source) },
         showModal = { entry, onResume, onRestart -> activity.openResumePromptModal(entry, onResume, onRestart) },
-        scope = scope
+        scope = scope,
     )
 
     /**
@@ -38,14 +38,17 @@ class ResumePromptScreen internal constructor(
      * o modal frontal "Retomar de XX:XX?"; caso contrário chama [onDecided] diretamente
      * com `null` (começa do zero).
      */
-    fun promptOrPlay(source: PlaybackSource, onDecided: (resumeAtMs: Long?) -> Unit) {
+    fun promptOrPlay(
+        source: PlaybackSource,
+        onDecided: (resumeAtMs: Long?) -> Unit,
+    ) {
         scope.launch {
             val existing = findHistory(source)
             if (existing != null && existing.isResumable()) {
                 showModal(
                     existing,
                     { onDecided(existing.positionMs) },
-                    { onDecided(null) }
+                    { onDecided(null) },
                 )
             } else {
                 onDecided(null)

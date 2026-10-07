@@ -1,4 +1,5 @@
 #include "hand_tracking.h"
+
 #include <cassert>
 #include <cmath>
 #include <iostream>
@@ -62,7 +63,7 @@ static void TestPinchHysteresis() {
 static void TestPointingRayDirection() {
     // 1. Apontando exatamente no eixo -Z (padrão frontal)
     XrVector3f distal = {0.0f, 1.2f, -0.20f};
-    XrVector3f tip    = {0.0f, 1.2f, -0.25f}; // ponta mais à frente no -Z
+    XrVector3f tip = {0.0f, 1.2f, -0.25f}; // ponta mais à frente no -Z
     XrVector3f dir = ComputePointingRayDirection(tip, distal);
 
     assert(fabs(dir.x) < 1e-5f);
@@ -163,9 +164,9 @@ static void TestHandTrackingFilterEndToEnd() {
 
     // Indicador apontando para -Z
     joints[XR_HAND_JOINT_INDEX_DISTAL_EXT].pose.position = {0.2f, 1.0f, -0.3f};
-    joints[XR_HAND_JOINT_INDEX_TIP_EXT].pose.position    = {0.2f, 1.0f, -0.35f};
+    joints[XR_HAND_JOINT_INDEX_TIP_EXT].pose.position = {0.2f, 1.0f, -0.35f};
     // Polegar afastado a 5cm
-    joints[XR_HAND_JOINT_THUMB_TIP_EXT].pose.position    = {0.25f, 1.0f, -0.35f};
+    joints[XR_HAND_JOINT_THUMB_TIP_EXT].pose.position = {0.25f, 1.0f, -0.35f};
 
     success = filter.Process(joints, XR_HAND_JOINT_COUNT_EXT, out);
     assert(success);

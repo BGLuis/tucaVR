@@ -11,30 +11,36 @@ import org.json.JSONObject
  * As credenciais NUNCA sao salvas em texto plano e nunca entram no banco Room.
  */
 class ServerCredentialStore(context: Context) {
-
-    private val prefs = run {
-        val masterKey = MasterKey.Builder(context)
-            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-            .build()
-        EncryptedSharedPreferences.create(
-            context,
-            PREFS_FILE_NAME,
-            masterKey,
-            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-        )
-    }
+    private val prefs =
+        run {
+            val masterKey =
+                MasterKey.Builder(context)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build()
+            EncryptedSharedPreferences.create(
+                context,
+                PREFS_FILE_NAME,
+                masterKey,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM,
+            )
+        }
 
     /**
      * Salva a senha e/ou chave privada (PEM) associadas ao [serverId].
      */
-    fun saveCredentials(serverId: String, password: String = "", privateKey: String? = null) {
-        val json = JSONObject().apply {
-            put("password", password)
-            if (!privateKey.isNullOrEmpty()) {
-                put("privateKey", privateKey)
+    fun saveCredentials(
+        serverId: String,
+        password: String = "",
+        privateKey: String? = null,
+    ) {
+        val json =
+            JSONObject().apply {
+                put("password", password)
+                if (!privateKey.isNullOrEmpty()) {
+                    put("privateKey", privateKey)
+                }
             }
-        }
         prefs.edit().putString(serverId, json.toString()).apply()
     }
 

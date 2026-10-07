@@ -1,7 +1,7 @@
 //! Pipeline de streaming e prefetching para HLS (T8.2, T8.3, T8.5).
 
 use super::abr::AdaptiveBitrateManager;
-use super::playlist::{parse_playlist, HlsMediaPlaylist, HlsPlaylist, HlsVariant};
+use super::playlist::{HlsMediaPlaylist, HlsPlaylist, HlsVariant, parse_playlist};
 use super::segment::fetch_segment;
 use crate::prefetch::RangeSource;
 use std::collections::HashMap;
@@ -36,20 +36,29 @@ impl HlsStreamSource {
             .map_err(|e| format!("Falha ao conectar ao servidor HLS ({url}): {e}"))?;
 
         if !resp.status().is_success() {
-            return Err(format!("Servidor HLS retornou HTTP status {}", resp.status()));
+            return Err(format!(
+                "Servidor HLS retornou HTTP status {}",
+                resp.status()
+            ));
         }
 
-        let body = resp.text().map_err(|e| format!("Falha ao ler playlist M3U8: {e}"))?;
+        let body = resp
+            .text()
+            .map_err(|e| format!("Falha ao ler playlist M3U8: {e}"))?;
         let parsed = parse_playlist(&body, url)?;
 
         let (abr, media_playlist) = match parsed {
             HlsPlaylist::Master(master) => {
                 let abr = AdaptiveBitrateManager::new(master.variants);
-                let active_variant = abr.current_variant().ok_or_else(|| "Nenhuma variante HLS válida".to_string())?;
-                let media_resp = client
-                    .get(&active_variant.url)
-                    .send()
-                    .map_err(|e| format!("Falha ao baixar media playlist HLS ({}): {e}", active_variant.url))?;
+                let active_variant = abr
+                    .current_variant()
+                    .ok_or_else(|| "Nenhuma variante HLS válida".to_string())?;
+                let media_resp = client.get(&active_variant.url).send().map_err(|e| {
+                    format!(
+                        "Falha ao baixar media playlist HLS ({}): {e}",
+                        active_variant.url
+                    )
+                })?;
                 let media_body = media_resp.text().map_err(|e| e.to_string())?;
                 let media_parsed = parse_playlist(&media_body, &active_variant.url)?;
                 match media_parsed {
@@ -180,11 +189,13 @@ impl HlsStreamSource {
         }
 
         let segment = self.media_playlist.segments[self.current_segment_idx].clone();
-        let (data, dur) = fetch_segment(&self.client, &segment, &mut self.key_cache)
-            .map_err(io::Error::other)?;
+        let (data, dur) =
+            fetch_segment(&self.client, &segment, &mut self.key_cache).map_err(io::Error::other)?;
 
         // Informa o ABR sobre a velocidade de download do segmento
-        let quality_changed = self.abr.record_segment_download(data.len(), dur, segment.duration);
+        let quality_changed = self
+            .abr
+            .record_segment_download(data.len(), dur, segment.duration);
         if quality_changed {
             let _ = self.reload_media_playlist();
         }
@@ -210,7 +221,9 @@ impl io::Read for HlsStreamSource {
         let available = self.buffer.len() - self.buffer_offset_in_segment;
         let to_copy = buf.len().min(available);
 
-        buf[..to_copy].copy_from_slice(&self.buffer[self.buffer_offset_in_segment..self.buffer_offset_in_segment + to_copy]);
+        buf[..to_copy].copy_from_slice(
+            &self.buffer[self.buffer_offset_in_segment..self.buffer_offset_in_segment + to_copy],
+        );
         self.buffer_offset_in_segment += to_copy;
         self.virtual_stream_position += to_copy as u64;
 
@@ -239,7 +252,10 @@ impl io::Seek for HlsStreamSource {
                 self.virtual_stream_position = new_pos;
                 Ok(new_pos)
             }
-            io::SeekFrom::End(_) => Err(io::Error::new(io::ErrorKind::Unsupported, "SeekFrom::End não suportado em HLS")),
+            io::SeekFrom::End(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "SeekFrom::End não suportado em HLS",
+            )),
         }
     }
 }

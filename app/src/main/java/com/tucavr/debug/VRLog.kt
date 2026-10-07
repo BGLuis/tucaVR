@@ -26,7 +26,10 @@ object VRLog {
         Log.i(TAG, formatMessage(message))
     }
 
-    fun w(message: String, throwable: Throwable? = null) {
+    fun w(
+        message: String,
+        throwable: Throwable? = null,
+    ) {
         if (throwable != null) {
             Log.w(TAG, formatMessage(message), throwable)
         } else {
@@ -34,7 +37,10 @@ object VRLog {
         }
     }
 
-    fun e(message: String, throwable: Throwable? = null) {
+    fun e(
+        message: String,
+        throwable: Throwable? = null,
+    ) {
         if (throwable != null) {
             Log.e(TAG, formatMessage(message), throwable)
         } else {

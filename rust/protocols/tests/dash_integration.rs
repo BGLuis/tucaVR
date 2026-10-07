@@ -1,5 +1,5 @@
-//! Teste de integracao DASH (Fase 0.4 Secao 2, achado R-04 de
-//! docs/reports/PHASE-0.4-08-VERIFICACAO-PROFUNDA.md) contra manifestos MPD reais, gerados por
+//! Teste de integracao DASH (Fase 0.4 Secao 2, achado R-04)
+//! contra manifestos MPD reais, gerados por
 //! ffmpeg e servidos por um nginx real em Docker — nao mocks `httpmock`. Cobre os dois modos de
 //! endereçamento que `rust/protocols/src/dash` suporta:
 //! - `template/manifest.mpd`: `SegmentTemplate` com `$Number$` (video com 3 segmentos + audio).
@@ -24,7 +24,9 @@ fn read_all(source: &mut DashStreamSource) -> usize {
     let mut total = 0usize;
     let mut buf = vec![0u8; 16 * 1024];
     loop {
-        let n = source.read(&mut buf).expect("read não deveria falhar contra o servidor real");
+        let n = source
+            .read(&mut buf)
+            .expect("read não deveria falhar contra o servidor real");
         if n == 0 {
             break;
         }
@@ -38,7 +40,8 @@ fn read_all(source: &mut DashStreamSource) -> usize {
 #[ignore]
 fn dash_segment_template_reads_init_and_all_segments_from_real_server() {
     let mpd_url = format!("{}/dash/template/manifest.mpd", base_url());
-    let mut source = DashStreamSource::open(&mpd_url).expect("open deveria funcionar contra o MPD real");
+    let mut source =
+        DashStreamSource::open(&mpd_url).expect("open deveria funcionar contra o MPD real");
 
     assert!(!source.representations().is_empty());
     assert!(source.total_duration() > 0.0);
@@ -46,7 +49,10 @@ fn dash_segment_template_reads_init_and_all_segments_from_real_server() {
     let total = read_all(&mut source);
     // init segment (algumas centenas de bytes) + pelo menos 3 segmentos de vídeo de ~15-20KB
     // cada (seg_duration=2s sobre um clipe de 6s) — bem mais que só o init sozinho.
-    assert!(total > 20_000, "esperava vários segmentos de mídia, só recebeu {total} bytes");
+    assert!(
+        total > 20_000,
+        "esperava vários segmentos de mídia, só recebeu {total} bytes"
+    );
 }
 
 /// SegmentBase de arquivo único contra um MPD real (achado R-02): antes do fix,
@@ -56,7 +62,8 @@ fn dash_segment_template_reads_init_and_all_segments_from_real_server() {
 #[ignore]
 fn dash_segment_base_downloads_media_from_real_server() {
     let mpd_url = format!("{}/dash/singlefile/manifest.mpd", base_url());
-    let mut source = DashStreamSource::open(&mpd_url).expect("open deveria funcionar contra o MPD SegmentBase real");
+    let mut source = DashStreamSource::open(&mpd_url)
+        .expect("open deveria funcionar contra o MPD SegmentBase real");
 
     assert!(!source.representations().is_empty());
 

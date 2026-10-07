@@ -1,3 +1,4 @@
+import java.io.File
 import java.util.Properties
 
 plugins {
@@ -5,20 +6,31 @@ plugins {
     id("org.jetbrains.kotlin.android")
     // T9.1: Room usa KSP em vez de kapt (ver justificativa no build.gradle.kts raiz).
     id("com.google.devtools.ksp")
+    id("org.jlleitschuh.gradle.ktlint")
 }
 
 // Sincronização de versão do sistema com version.properties na raiz
 val versionPropsFile = rootProject.file("version.properties")
-val versionProps = Properties().apply {
-    if (versionPropsFile.exists()) {
-        versionPropsFile.inputStream().use { load(it) }
+val versionProps =
+    Properties().apply {
+        if (versionPropsFile.exists()) {
+            versionPropsFile.inputStream().use { load(it) }
+        }
     }
-}
 val defaultVersionName = versionProps.getProperty("versionName", "0.4.7")
 val defaultVersionCode = versionProps.getProperty("versionCode", "470").toIntOrNull() ?: 470
 
 val appVersionName = (project.findProperty("appVersionName") as? String)?.takeIf { it.isNotBlank() } ?: defaultVersionName
 val appVersionCode = (project.findProperty("appVersionCode") as? String)?.toIntOrNull() ?: defaultVersionCode
+
+// ccache acelera recompilacoes do build nativo (CMake/NDK) quando disponivel no PATH
+// (ex.: hendrikmuhs/ccache-action no CI). Deteccao automatica em vez de flag manual —
+// nao afeta devs locais sem ccache instalado.
+val ccachePath =
+    System.getenv("PATH")
+        ?.split(File.pathSeparator)
+        ?.map { File(it, "ccache") }
+        ?.firstOrNull { it.canExecute() }
 
 android {
     namespace = "com.tucavr"
@@ -50,6 +62,11 @@ android {
                 if (project.findProperty("enableVulkanValidation") == "true") {
                     arguments += "-DENABLE_VK_VALIDATION_LAYERS=ON"
                 }
+                // Acelera rebuilds do build nativo (CI: hendrikmuhs/ccache-action popula o PATH).
+                if (ccachePath != null) {
+                    arguments += "-DCMAKE_C_COMPILER_LAUNCHER=${ccachePath.absolutePath}"
+                    arguments += "-DCMAKE_CXX_COMPILER_LAUNCHER=${ccachePath.absolutePath}"
+                }
             }
         }
         ndk {
@@ -70,7 +87,7 @@ android {
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
+                "proguard-rules.pro",
             )
         }
     }
@@ -91,14 +108,33 @@ android {
             version = "3.22.1"
         }
     }
+
+    lint {
+        abortOnError = true
+        checkReleaseBuilds = false
+        warningsAsErrors = false
+        baseline = file("lint-baseline.xml")
+        textReport = true
+        htmlReport = true
+    }
+}
+
+ktlint {
+    android.set(true)
+    ignoreFailures.set(false)
+    baseline.set(file("config/ktlint/baseline.xml"))
+    reporters {
+        reporter(org.jlleitschuh.gradle.ktlint.reporter.ReporterType.PLAIN)
+        reporter(org.jlleitschuh.gradle.ktlint.reporter.ReporterType.CHECKSTYLE)
+    }
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.12.0")
-    implementation("androidx.appcompat:appcompat:1.6.1")
-    implementation("com.google.android.material:material:1.11.0")
+    implementation("androidx.core:core-ktx:1.13.1")
+    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("com.google.android.material:material:1.12.0")
     implementation("org.khronos.openxr:openxr_loader_for_android:1.0.34")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
     // T6.4: EncryptedSharedPreferences para credenciais de servidores SMB —
     // NUNCA armazenar senha em texto plano (doc, secao 6, aviso "Credenciais").
     implementation("androidx.security:security-crypto:1.1.0")
@@ -113,7 +149,7 @@ dependencies {
     ksp("androidx.room:room-compiler:2.6.1")
 
     // T8.1 / T8.2: ExifInterface para metadados de fotos (orientação EXIF e XMP GPano 360)
-    implementation("androidx.exifinterface:exifinterface:1.3.7")
+    implementation("androidx.exifinterface:exifinterface:1.4.0")
 
     // JVM unit tests (app/src/test) — logica pura do file browser
     // (MediaSorter, DirectoryNavigator, DirectoryLister, cache-key do
@@ -121,7 +157,7 @@ dependencies {
     // porque nenhuma dessas classes toca em APIs Android reais nos
     // caminhos testados. Ver docs/TESTING-PLAN.md.
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.7.3")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
 
     // R-05 (PHASE-0.4-08-VERIFICACAO-PROFUNDA.md): driver SQLite puro-JVM (sem dependencia
     // Android) para exercitar o SQL bruto das migrations do Room (AppDatabase.MIGRATION_*_SQL)
