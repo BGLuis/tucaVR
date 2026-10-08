@@ -84,8 +84,8 @@ vr-multimedia/
   > Flat C-ABI bridge via `rust/bridge` crate consumed strictly by C++; Kotlin interacts with C++ via JNI.
 - [x] **T1.8** — Create unified build script (`scripts/build.sh`)
   > Builds Rust via `cargo ndk`, copies `.so` libraries to `jniLibs/arm64-v8a/`, and triggers Gradle build.
-- [x] **T1.9** — Configure GitHub Actions: build + lint (clippy + ktlint + clang-tidy)
-  > CI workflow configured in `.github/workflows/main.yml` with parallel quality jobs (`cargo clippy`, `ktlintCheck`, `cargo test`, `testDebugUnitTest`).
+- [x] **T1.9** — Configure GitHub Actions: build + lint (clippy + ktlint; clang-tidy discarded per REQUIREMENTS.md §5.5)
+  > CI workflow configured in `.github/workflows/main.yml` with parallel quality jobs (`cargo clippy`, `ktlintCheck`, `cargo test`, `testDebugUnitTest`). Note: `clang-tidy` was discarded in favour of `clang-format --dry-run -Werror` and `-Wall -Wextra` (see `REQUIREMENTS.md` §5.5, ADR, and #58).
 - [ ] **T1.10** — Test deployment of OpenXR hello world on Quest 3 via `adb`
   > Automated scripts and APK generation functional; physical verification pending on actual Quest 3 headset.
 
@@ -211,8 +211,7 @@ Implement the OpenXR render loop with a "void" environment (dark backdrop) and a
 - [x] **T3.5** — Implement texture pass from Rust to C++:
   - Zero-copy `AHardwareBuffer` import via Vulkan external memory
 - [x] **T3.6** — Implement screen resize and repositioning:
-  - Thumbstick to move (distance, elevation)
-  - Grip button + thumbstick to resize maintaining aspect ratio
+  - Grip button + thumbstick to move (distance, elevation) and resize maintaining aspect ratio (grip gates transformation per `native/src/vr_player_input_vulkan.h:1105`)
   - Comfort clamps applied (depth -0.75m to -8m, elevation 0.2m to 3.5m)
 - [x] **T3.7** — Configure Vulkan rendering pipeline:
   - Render pass with depth buffer

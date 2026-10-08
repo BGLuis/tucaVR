@@ -81,13 +81,13 @@ Fulfills **RF-ENV-004** (Cosmic space environment). Floating observation deck su
 ### Tasks
 
 - [ ] **T3.1** — Create 3D model of spatial platform (~5k triangles, baked lightmap)
-- [x] **T3.2** — Implement high-quality cubemap skybox in C++:
-  > Implemented in `native/src/vr_player_app_vulkan.cpp` (`CreateSkyboxPipeline`, `LoadEnvironmentSkybox`, `DrawSkyboxIfLoaded`) using SPIR-V shaders (`skybox.vert`, `skybox.frag`) and `EnvironmentStore.ENV_SPACE`.
+- [ ] **T3.2** — Implement high-quality skybox in C++ (partial — equirectangular implemented, cubemap pending; see #37):
+  > Implemented as an equirectangular 2D texture mapped onto a sphere (`native/shaders/vulkan/skybox.frag:3`, `sampler2D equirectMap`), not a native cubemap texture. Tracked in #37.
 - [ ] **T3.3** — Implement lightweight starfield particle system (~200 instanced billboards)
-- [x] **T3.4** — Implement ambient audio loop manager:
-  > Implemented in `app/src/main/java/com/tucavr/AmbientAudioManager.kt` with automatic ducking on video playback (`VRActivity.kt:1162,1429,1666`).
-- [x] **T3.5** — Environment registry and switching infrastructure:
-  > Implemented in `EnvironmentStore.kt` and `EnvironmentSelectorModal.kt`.
+- [ ] **T3.4** — Implement ambient audio loop manager (partial — loop and ducking functional, switch fade and config.ini volume pending; see #52):
+  > Basic looping and ducking implemented in `app/src/main/java/com/tucavr/AmbientAudioManager.kt`. Linear volume ramp on stop/switch (to prevent clicks) and reading `ambient_volume` from `config.ini` are tracked in #52.
+- [ ] **T3.5** — Environment registry and switching infrastructure (partial — hardcoded registry exists, dynamic config.ini registry pending; see #51):
+  > Implemented statically in `EnvironmentStore.kt` and `EnvironmentSelectorModal.kt`. Refactoring to a unified `EnvironmentRegistry` reading `assets/environments/*/config.ini` is tracked in #51.
 
 ---
 
@@ -128,8 +128,8 @@ Fulfills **RF-ENV-007** (Environment lighting and color temperature adjustment).
 - [ ] Anti-jitter filtering prevents false activations during saccades
 
 ### Environments
-- [x] Space cubemap skybox renders smoothly without motion judder
-- [x] Ambient audio loop plays seamlessly with automatic playback ducking
+- [ ] Space cubemap skybox renders smoothly without motion judder (partial: equirectangular implemented, see #37)
+- [ ] Ambient audio loop plays seamlessly with automatic playback ducking (partial: switch fade ramp pending, see #52)
 - [ ] Dedicated 3D platform mesh integration
 
 ### Lighting
