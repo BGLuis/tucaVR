@@ -1,5 +1,6 @@
 import java.io.File
 import java.util.Properties
+import org.gradle.api.tasks.Exec
 
 plugins {
     id("com.android.application")
@@ -39,6 +40,11 @@ android {
     buildFeatures {
         prefab = true
         buildConfig = true
+        compose = true
+    }
+
+    composeOptions {
+        kotlinCompilerExtensionVersion = "1.5.1"
     }
 
     defaultConfig {
@@ -151,6 +157,25 @@ dependencies {
     // T8.1 / T8.2: ExifInterface para metadados de fotos (orientação EXIF e XMP GPano 360)
     implementation("androidx.exifinterface:exifinterface:1.4.0")
 
+    // GeckoView Engine (Mozilla) for Widevine DRM and off-screen rendering support
+    implementation("org.mozilla.geckoview:geckoview-omni:122.0.20240205133611")
+
+    // Hilt / dependency injection
+    implementation("javax.inject:javax.inject:1")
+    implementation("com.google.dagger:hilt-android:2.48")
+
+    // Jetpack Compose and Material 3
+    implementation(platform("androidx.compose:compose-bom:2023.10.01"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.material:material-icons-core")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.compose.ui:ui-tooling-preview")
+    debugImplementation("androidx.compose.ui:ui-tooling")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
+
     // JVM unit tests (app/src/test) — logica pura do file browser
     // (MediaSorter, DirectoryNavigator, DirectoryLister, cache-key do
     // ThumbnailGenerator) roda direto na JVM, sem emulador/Robolectric,
@@ -166,11 +191,42 @@ dependencies {
     testImplementation("org.xerial:sqlite-jdbc:3.44.1.0")
 }
 
-// Placeholder for Rust integration (via Mozilla plugin or custom task)
-tasks.register("buildRust") {
+val localProperties = Properties().apply {
+    rootProject.file("local.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+val androidSdkDir = localProperties.getProperty("sdk.dir")
+    ?.let(::File)
+    ?: System.getenv("ANDROID_HOME")?.let(::File)
+    ?: System.getenv("ANDROID_SDK_ROOT")?.let(::File)
+
+val rustBuildMode = (project.findProperty("rustBuildMode") as? String)?.takeIf { it.isNotBlank() }
+    ?: System.getenv("RUST_BUILD_MODE")
+    ?: "auto"
+
+val buildRust = tasks.register<Exec>("buildRust") {
     group = "rust"
-    description = "Builds the Rust library."
-    doLast {
-        println("Executing Rust build placeholder...")
+    description = "Cross-compiles Rust libraries and prepares JNI libraries (Host or Docker)."
+    workingDir(rootProject.projectDir)
+    commandLine("bash", rootProject.file("scripts/build-rust.sh").absolutePath)
+    environment("RUST_BUILD_MODE", rustBuildMode)
+    androidSdkDir?.let {
+        environment("ANDROID_HOME", it.absolutePath)
+        environment("ANDROID_SDK_ROOT", it.absolutePath)
     }
+}
+
+val cleanRust = tasks.register<Exec>("cleanRust") {
+    group = "rust"
+    description = "Removes Rust build artifacts."
+    workingDir(rootProject.projectDir)
+    commandLine("bash", rootProject.file("scripts/build-rust.sh").absolutePath, "--clean")
+    environment("RUST_BUILD_MODE", rustBuildMode)
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(buildRust)
+}
+
+tasks.named("clean").configure {
+    dependsOn(cleanRust)
 }

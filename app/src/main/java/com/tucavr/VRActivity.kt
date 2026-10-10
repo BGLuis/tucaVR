@@ -16,6 +16,8 @@ import android.os.Environment
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.InputDevice
+import android.view.MotionEvent
 import android.view.Surface
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
@@ -23,6 +25,8 @@ import android.widget.EditText
 import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.tucavr.browser.engine.VRBrowserController
+import com.tucavr.browser.presentation.VRWebBrowserPresentation
 import com.tucavr.chroma.PackedAlphaDetector
 import com.tucavr.chroma.PassthroughMaskMode
 import com.tucavr.debug.DebugTelemetryExporter
@@ -57,6 +61,10 @@ class VRActivity : NativeActivity() {
 
     private var modalVirtualDisplay: android.hardware.display.VirtualDisplay? = null
     var modalPresentation: VRModalPresentation? = null
+
+    private var browserVirtualDisplay: android.hardware.display.VirtualDisplay? = null
+    var browserPresentation: VRWebBrowserPresentation? = null
+    var browserController: VRBrowserController? = null
 
     // ==================== TECLADO NATIVO (ver VRPresentation.buildVoidEditText) ====================
     // `nativeKeyboardProxy` e um EditText REAL, anexado direto na janela
@@ -544,6 +552,15 @@ class VRActivity : NativeActivity() {
         debugReceiver = null
 
         // R-01: Desmontagem ordenada e completa das Presentations e VirtualDisplays
+        nativeSetBrowserActive(false)
+        try {
+            browserPresentation?.dismiss()
+        } catch (_: Exception) {}
+        browserPresentation = null
+        browserVirtualDisplay?.release()
+        browserVirtualDisplay = null
+        browserController = null
+
         try {
             modalPresentation?.dismiss()
         } catch (_: Exception) {
@@ -781,6 +798,8 @@ class VRActivity : NativeActivity() {
         const val CONTROLS_DISPLAY_HEIGHT = 800
         const val MODAL_DISPLAY_WIDTH = 1024
         const val MODAL_DISPLAY_HEIGHT = 768
+        const val BROWSER_DISPLAY_WIDTH = 2560
+        const val BROWSER_DISPLAY_HEIGHT = 1440
 
         @JvmStatic
         fun openFilePicker(activity: VRActivity) {
@@ -1020,6 +1039,75 @@ class VRActivity : NativeActivity() {
         }
 
         @JvmStatic
+        fun setupBrowserVirtualDisplay(activity: VRActivity, surface: Surface, width: Int, height: Int) {
+            activity.runOnUiThread {
+                val displayManager = activity.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+                val dpi = VRBrowserController.DEFAULT_DPI
+                activity.browserVirtualDisplay = displayManager.createVirtualDisplay(
+                    "VR_Browser_Display",
+                    width, height, dpi,
+                    surface,
+                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
+                )
+
+                activity.browserVirtualDisplay?.display?.let { display ->
+                    val controller = VRBrowserController(activity, width, height, dpi)
+                    activity.browserController = controller
+                    activity.browserPresentation = VRWebBrowserPresentation(
+                        context = activity,
+                        display = display,
+                        browserController = controller
+                    )
+                    activity.browserPresentation?.show()
+                    activity.nativeSetBrowserActive(false)
+                }
+            }
+        }
+
+        private var lastBrowserDownTime: Long = 0
+
+        @JvmStatic
+        fun dispatchBrowserTouch(activity: VRActivity, normX: Float, normY: Float, action: Int) {
+            activity.runOnUiThread {
+                val now = android.os.SystemClock.uptimeMillis()
+                if (action == android.view.MotionEvent.ACTION_DOWN) {
+                    lastBrowserDownTime = now
+                }
+
+                val downTime = if (lastBrowserDownTime == 0L) now else lastBrowserDownTime
+                val event = MotionEvent.obtain(
+                    downTime,
+                    now,
+                    action,
+                    normX * BROWSER_DISPLAY_WIDTH.toFloat(),
+                    normY * BROWSER_DISPLAY_HEIGHT.toFloat(),
+                    0
+                )
+
+                event.source = InputDevice.SOURCE_TOUCHSCREEN
+
+                if (action == 7) {
+                    activity.browserPresentation?.dispatchGenericMotionEvent(event)
+                } else {
+                    activity.browserPresentation?.dispatchTouchEvent(event)
+                }
+
+                event.recycle()
+
+                if (action == MotionEvent.ACTION_UP) {
+                    lastBrowserDownTime = 0L
+                }
+            }
+        }
+
+        @JvmStatic
+        fun dispatchBrowserScroll(activity: VRActivity, normX: Float, normY: Float, scrollDeltaY: Float) {
+            activity.runOnUiThread {
+                activity.browserPresentation?.dispatchScroll(scrollDeltaY)
+            }
+        }
+
+        @JvmStatic
         fun dismissModalFromNative(activity: VRActivity) {
             activity.runOnUiThread {
                 activity.modalPresentation?.dismissModal()
@@ -1157,7 +1245,8 @@ class VRActivity : NativeActivity() {
         currentSessionId = sessionId
         sessionStartRealtimeMs = android.os.SystemClock.elapsedRealtime()
         VRLog.activeSessionId = sessionId
-        VRLog.i("Iniciando sessao de reproducao $sessionId para $source")
+        val (sourceType, sourceRedacted) = com.tucavr.debug.DebugTelemetryExporter.extractSourceInfo(source)
+        VRLog.i("Starting playback session $sessionId for $sourceType $sourceRedacted")
         nativeSetSessionId(sessionId)
         ambientAudioManager.setDucked(true)
         // T7.6: informa o idioma do sistema para a auto-selecao de faixa de
@@ -1683,6 +1772,24 @@ class VRActivity : NativeActivity() {
             nativeHideModalPanel()
             modalPresentation?.dismissModal()
         }
+    }
+
+    fun openBrowserSession() {
+        runOnUiThread {
+            browserPresentation?.navigateToHome()
+            nativeSetBrowserActive(true)
+        }
+    }
+
+    fun closeBrowserSession() {
+        runOnUiThread {
+            nativeSetBrowserActive(false)
+            browserPresentation?.navigateToHome()
+        }
+    }
+
+    fun setBrowserGeometryMode(isCurved: Boolean) {
+        nativeSetBrowserGeometryMode(isCurved)
     }
 
     /**
@@ -2267,6 +2374,8 @@ class VRActivity : NativeActivity() {
 
     // N1: Propaga o identificador de sessão ativo para C++ e Rust
     external fun nativeSetSessionId(sessionId: String)
+    external fun nativeSetBrowserGeometryMode(isCurved: Boolean)
+    external fun nativeSetBrowserActive(active: Boolean)
 
     // Upscaling de vídeo (Vulkan MQSR / SGSR1): 0=OFF, 1=QUALITY, 2=PERFORMANCE, 3=AUTO
     external fun nativeSetUpscalingMode(mode: Int)

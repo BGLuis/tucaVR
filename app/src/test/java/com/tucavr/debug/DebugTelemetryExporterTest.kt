@@ -464,9 +464,14 @@ class DebugTelemetryExporterTest {
         for (source in sources) {
             val (sourceType, sourceRedacted) = DebugTelemetryExporter.extractSourceInfo(source)
             val crashLine = "Current Source: $sourceType $sourceRedacted"
+            val startSessionLine = "Starting playback session sess1234 for $sourceType $sourceRedacted"
             assertFalse(
                 "Vazamento de senha para fonte $sourceType: $crashLine",
                 crashLine.contains("password=") || crashLine.contains(secretPassword),
+            )
+            assertFalse(
+                "Password leaked in startSession log for source $sourceType: $startSessionLine",
+                startSessionLine.contains("password=") || startSessionLine.contains(secretPassword)
             )
         }
     }

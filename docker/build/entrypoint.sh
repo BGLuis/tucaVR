@@ -20,9 +20,10 @@ cd /project
 [ -f build.gradle.kts ] || die "Código-fonte do projeto não encontrado em /project" \
     "Monte o projeto com: -v \"\$(pwd)\":/project"
 
-[ -d sdk/meta-openxr-sdk/Samples/SampleXrFramework ] || die "Meta OpenXR SDK não encontrado em sdk/meta-openxr-sdk/" \
-    "Esse SDK exige download manual com aceite de licença:" \
-    "https://developers.meta.com/horizon/downloads/package/oculus-openxr-mobile-sdk/"
+[ -d sdk/meta-openxr-sdk/Samples/SampleXrFramework ] &&
+[ -d sdk/meta-openxr-sdk/OpenXR ] || die "Meta OpenXR SDK não encontrado em sdk/meta-openxr-sdk/" \
+    "Baixe o último release público com: ./scripts/setup-deps.sh" \
+    "https://github.com/meta-quest/Meta-OpenXR-SDK/releases"
 
 # Num git worktree o .git é um arquivo que aponta para um caminho do host,
 # inexistente aqui; o Gradle usa git e falharia tarde e com erro confuso.

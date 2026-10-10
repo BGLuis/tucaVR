@@ -108,6 +108,10 @@ struct SceneTransforms {
     Mat4 screenModelNoScale;
     XrVector3f screenCenter;
     XrVector3f screenNormal;
+
+    Mat4 browserModelNoScale;
+    XrVector3f browserCenter;
+    XrVector3f browserNormal;
 };
 
 inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVector3f& headCenter) {
@@ -148,6 +152,35 @@ inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVec
     t.screenModelNoScale = Mat4Multiply(Mat4Translation(worldScreenPos.x, worldScreenPos.y, worldScreenPos.z), Mat4RotationY(state.sceneYawOffset));
     t.screenCenter = worldScreenPos;
     t.screenNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.sceneYawOffset);
+
+    // Browser: fixed pose on open, facing the user
+    XrVector3f worldBrowserPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY({0.0f, 1.5f, -2.2f}, state.sceneYawOffset));
+    XrVector3f toHeadB = Vec3Sub(headCenter, worldBrowserPos);
+    toHeadB.y = 0.0f;
+    float toHeadLenB = sqrtf(toHeadB.x * toHeadB.x + toHeadB.z * toHeadB.z);
+    float bYaw = (toHeadLenB > 1e-4f) ? atan2f(toHeadB.x / toHeadLenB, toHeadB.z / toHeadLenB) : state.sceneYawOffset;
+
+    if (!state.browserPoseInitialized && state.browserActive) {
+        const_cast<AppState&>(state).browserPosition = worldBrowserPos;
+        const_cast<AppState&>(state).browserYaw = bYaw;
+        const_cast<AppState&>(state).browserScaleX = kBrowserPanelScaleX;
+        const_cast<AppState&>(state).browserScaleY = kBrowserPanelScaleY;
+        const_cast<AppState&>(state).isBrowserGrabbed = false;
+        const_cast<AppState&>(state).browserPoseInitialized = true;
+    } else if (!state.browserActive) {
+        const_cast<AppState&>(state).browserPoseInitialized = false;
+        const_cast<AppState&>(state).isBrowserGrabbed = false;
+    }
+
+    if (state.browserPoseInitialized) {
+        t.browserCenter = state.browserPosition;
+        t.browserModelNoScale = Mat4Multiply(Mat4Translation(state.browserPosition.x, state.browserPosition.y, state.browserPosition.z), Mat4RotationY(state.browserYaw));
+        t.browserNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.browserYaw);
+    } else {
+        t.browserCenter = worldBrowserPos;
+        t.browserModelNoScale = Mat4Multiply(Mat4Translation(worldBrowserPos.x, worldBrowserPos.y, worldBrowserPos.z), Mat4RotationY(bYaw));
+        t.browserNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, bYaw);
+    }
 
     return t;
 }
@@ -321,6 +354,56 @@ inline float rayHitsQuad(const Mat4& transformNoScale, const XrVector3f& normal,
     return t;
 }
 
+inline float rayHitsCylinder(const Mat4& transformNoScale, float radius, float centralAngle, float aspectRatio,
+                            float& outU, float& outV, const XrVector3f& rayOrigin, const XrVector3f& rayDir) {
+    Mat4 inv = Mat4RigidInverse(transformNoScale);
+    XrVector3f oLoc = {
+        inv.m[0]*rayOrigin.x + inv.m[4]*rayOrigin.y + inv.m[8]*rayOrigin.z + inv.m[12],
+        inv.m[1]*rayOrigin.x + inv.m[5]*rayOrigin.y + inv.m[9]*rayOrigin.z + inv.m[13],
+        inv.m[2]*rayOrigin.x + inv.m[6]*rayOrigin.y + inv.m[10]*rayOrigin.z + inv.m[14]
+    };
+    XrVector3f dLoc = {
+        inv.m[0]*rayDir.x + inv.m[4]*rayDir.y + inv.m[8]*rayDir.z,
+        inv.m[1]*rayDir.x + inv.m[5]*rayDir.y + inv.m[9]*rayDir.z,
+        inv.m[2]*rayDir.x + inv.m[6]*rayDir.y + inv.m[10]*rayDir.z
+    };
+
+    float a = dLoc.x * dLoc.x + dLoc.z * dLoc.z;
+    if (a <= 1e-6f) return -1.0f;
+
+    float b = 2.0f * (oLoc.x * dLoc.x + (oLoc.z - radius) * dLoc.z);
+    float c = oLoc.x * oLoc.x + (oLoc.z - radius) * (oLoc.z - radius) - radius * radius;
+
+    float disc = b * b - 4.0f * a * c;
+    if (disc < 0.0f) return -1.0f;
+
+    float sqrtDisc = sqrtf(disc);
+    float t = (-b - sqrtDisc) / (2.0f * a);
+    if (t <= 0.0f) {
+        t = (-b + sqrtDisc) / (2.0f * a);
+        if (t <= 0.0f) return -1.0f;
+    }
+
+    float hitX = oLoc.x + t * dLoc.x;
+    float hitY = oLoc.y + t * dLoc.y;
+    float hitZ = oLoc.z + t * dLoc.z;
+
+    float phi = atan2f(hitX, radius - hitZ);
+    float halfAngle = centralAngle * 0.5f;
+
+    if (fabsf(phi) > halfAngle) return -1.0f;
+
+    float arcLength = radius * centralAngle;
+    float height = arcLength / aspectRatio;
+
+    if (fabsf(hitY) > height * 0.5f) return -1.0f;
+
+    outU = std::max(0.0f, std::min(1.0f, (phi / centralAngle) + 0.5f));
+    outV = std::max(0.0f, std::min(1.0f, 0.5f - (hitY / height)));
+
+    return t;
+}
+
 inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVector3f headCenter,
                                const XrQuaternionf& headOrientation) {
     XrActiveActionSet activeActionSet{};
@@ -472,7 +555,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
     SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
 
-    float uu = 0, vu = 0, uc = 0, vc = 0, um = 0, vm = 0;
+    float uu = 0, vu = 0, uc = 0, vc = 0, um = 0, vm = 0, ub = 0, vb = 0;
     float tUi = state.hasRay
         ? rayHitsQuad(scene.uiModelNoScale, scene.uiNormal, scene.uiCenter, kUiPanelScaleX, kUiPanelScaleY,
                       uu, vu, state.lastRayOrigin, state.lastRayDir)
@@ -485,8 +568,21 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         ? rayHitsQuad(scene.modalModelNoScale, scene.modalNormal, scene.modalCenter,
                       kModalPanelScaleX, kModalPanelScaleY, um, vm, state.lastRayOrigin, state.lastRayDir)
         : -1.0f;
+    float tBrowser = -1.0f;
+    if (state.hasRay && state.browserHasFrame && state.browserActive) {
+        float browserScaleFactor = state.browserScaleX / kBrowserPanelScaleX;
+        if (g_browserCurvedGeometry.load()) {
+            tBrowser = rayHitsCylinder(scene.browserModelNoScale, 2.3f * browserScaleFactor, 1.0435f,
+                                      (float)kBrowserTexWidth / (float)kBrowserTexHeight,
+                                      ub, vb, state.lastRayOrigin, state.lastRayDir);
+        } else {
+            tBrowser = rayHitsQuad(scene.browserModelNoScale, scene.browserNormal, scene.browserCenter,
+                                   state.browserScaleX, state.browserScaleY,
+                                   ub, vb, state.lastRayOrigin, state.lastRayDir);
+        }
+    }
 
-    int currentHitPanel = 0; // 0=none, 1=ui, 2=controls, 3=modal
+    int currentHitPanel = 0; // 0=none, 1=ui, 2=controls, 3=modal, 4=browser
     float hitU = 0, hitV = 0;
     state.lastHitDist = -1.0f;
 
@@ -500,7 +596,10 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.lastHitDist = -1.0f;
         }
     } else {
-        if (tControls > 0.0f) {
+        if (tBrowser > 0.0f) {
+            currentHitPanel = 4; hitU = ub; hitV = vb;
+            state.lastHitDist = tBrowser;
+        } else if (tControls > 0.0f) {
             currentHitPanel = 2; hitU = uc; hitV = vc;
             state.lastHitDist = tControls;
         } else if (tUi > 0.0f) {
@@ -630,9 +729,12 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     bool uiVisible = state.uiAlpha > 0.5f;
     bool controlsVisible = state.controlsAlpha > 0.5f;
     bool modalVisible = state.modalAlpha > 0.5f;
+    bool browserVisible = state.browserHasFrame && state.browserActive;
     int dispatchHitPanel = 0;
     if (currentHitPanel == 3 && modalVisible) {
         dispatchHitPanel = 3;
+    } else if (currentHitPanel == 4 && browserVisible) {
+        dispatchHitPanel = 4;
     } else if (currentHitPanel == 1 && uiVisible) {
         dispatchHitPanel = 1;
     } else if (currentHitPanel == 2 && controlsVisible) {
@@ -640,16 +742,16 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     }
 
     int action = -1;
-    if (currTrigger && !prevTrigger && dispatchHitPanel != 0) {
+    if (currTrigger && !prevTrigger && dispatchHitPanel != 0 && !state.isBrowserGrabbed) {
         action = 0; // DOWN
         state.isTouchDown = true;
         state.activePanel = dispatchHitPanel;
     } else if (!currTrigger && prevTrigger && state.isTouchDown) {
         action = 1; // UP
         state.isTouchDown = false;
-    } else if (currTrigger && state.isTouchDown) {
+    } else if (currTrigger && state.isTouchDown && !state.isBrowserGrabbed) {
         action = 2; // MOVE
-    } else if (dispatchHitPanel != 0 && !state.isTouchDown) {
+    } else if (dispatchHitPanel != 0 && !state.isTouchDown && !state.isBrowserGrabbed) {
         action = 7; // HOVER_MOVE
         state.activePanel = dispatchHitPanel;
     }
@@ -659,8 +761,9 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         state.app->activity->vm->AttachCurrentThread(&env, nullptr);
         if (env) {
             jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
-            const char* methodName = (dispatchHitPanel == 3) ? "dispatchModalVRTouch"
-                                   : ((dispatchHitPanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch");
+            const char* methodName = (dispatchHitPanel == 4) ? "dispatchBrowserTouch"
+                                   : ((dispatchHitPanel == 3) ? "dispatchModalVRTouch"
+                                   : ((dispatchHitPanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch"));
             jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
             if (touchMethod) {
                 env->CallStaticVoidMethod(vrActivityClass, touchMethod, state.app->activity->clazz, hitU, hitV, action);
@@ -1048,8 +1151,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
     }
 
-    // Rolagem por thumbstick no painel UI (Home/Arquivos) ou Modal
-    if ((dispatchHitPanel == 1 || dispatchHitPanel == 3) && !state.isScreenGrabbed && !state.isTouchDown) {
+    // Thumbstick scrolling on the UI (Home/Files), modal, or browser panel
+    if ((dispatchHitPanel == 1 || dispatchHitPanel == 3 || dispatchHitPanel == 4) && !state.isScreenGrabbed && !state.isBrowserGrabbed && !state.isTouchDown) {
         float stickY = (fabsf(rightStick.currentState.y) > 0.15f)
             ? rightStick.currentState.y
             : ((useLeft && fabsf(leftStick.currentState.y) > 0.15f) ? leftStick.currentState.y : 0.0f);
@@ -1060,7 +1163,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.app->activity->vm->AttachCurrentThread(&env, nullptr);
             if (env) {
                 jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
-                const char* methodName = (dispatchHitPanel == 3) ? "dispatchModalVRScroll" : "dispatchVRScroll";
+                const char* methodName = (dispatchHitPanel == 4) ? "dispatchBrowserScroll"
+                                       : ((dispatchHitPanel == 3) ? "dispatchModalVRScroll" : "dispatchVRScroll");
                 jmethodID scrollMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFF)V");
                 if (scrollMethod) {
                     env->CallStaticVoidMethod(vrActivityClass, scrollMethod, state.app->activity->clazz, state.lastUvX, state.lastUvY, scrollDeltaY);
@@ -1100,20 +1204,38 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             if (prevGrabbed && !state.isScreenGrabbed) {
                 NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
             }
+
+            // Hand tracking for the web browser
+            bool pinchGrabB = currTrigger && (currentHitPanel == 4) && !state.modalActive;
+            if (!state.isBrowserGrabbed && pinchGrabB && (tBrowser > 0.0f)) {
+                state.isBrowserGrabbed = true;
+                state.browserGrabDistance = std::max(0.8f, std::min(tBrowser, 8.0f));
+            } else if (state.isBrowserGrabbed) {
+                if (currTrigger && state.hasRay) {
+                    XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.browserGrabDistance));
+                    XrVector3f relPos = Vec3Sub(targetWorld, state.sceneTranslationOffset);
+                    state.browserPosition = Vec3RotateY(relPos, -state.sceneYawOffset);
+                    state.browserPosition.z = std::min(-0.8f, std::max(state.browserPosition.z, -10.0f));
+                    state.browserPosition.y = std::max(0.3f, std::min(state.browserPosition.y, 3.5f));
+                    state.browserPosition.x = std::max(-4.0f, std::min(state.browserPosition.x, 4.0f));
+
+                    XrVector3f toHead = Vec3Sub(headCenter, targetWorld);
+                    toHead.y = 0.0f;
+                    float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
+                    if (toHeadLen > 1e-4f) {
+                        state.browserYaw = atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen);
+                    }
+                } else {
+                    state.isBrowserGrabbed = false;
+                }
+            }
         } else {
             // Controller Touch Plus (Opção B):
-            // O thumbstick NUNCA move a tela quando desacompanhado de intenção expressa (elimina 100% de toques acidentais).
-            // Dois modos intencionais suportados:
-            // 1) Laser Grab & Drag: apontar o laser para a tela e segurar Grip.
-            //    - Movimento da mão translada a tela no espaço.
-            //    - Stick vertical (sy) redimensiona a escala proporcionalmente.
-            //    - Stick horizontal (sx) ajusta a distância (push/pull).
-            // 2) Ajuste Direto: segurar Grip + Trigger simultaneamente no controle direito.
-            //    - Stick vertical (sy) ajusta profundidade Z.
-            //    - Stick horizontal (sx) ajusta altura Y.
-
             bool isAimingScreen = (currentHitPanel == 0 && tScreen > 0.0f && !state.modalActive && !IsSphereMode(state.screenMode));
             bool directAdjustCombo = gripHeld && currTrigger && (currentHitPanel == 0) && !state.modalActive;
+
+            bool isAimingBrowser = (currentHitPanel == 4 && tBrowser > 0.0f && !state.modalActive);
+            bool directBrowserCombo = gripHeld && currTrigger && (currentHitPanel == 4 || state.isBrowserGrabbed) && !state.modalActive;
 
             if (directAdjustCombo) {
                 state.isScreenGrabbed = false;
@@ -1136,7 +1258,6 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                 }
 
                 if (state.isScreenGrabbed) {
-                    // Redimensionamento pelo stick enquanto segura o Grip na tela
                     if (sy != 0.0f) {
                         const float kResizeSpeedMetersPerSec = 1.2f;
                         float newWidth = state.screenScaleX + sy * kResizeSpeedMetersPerSec * dt;
@@ -1145,7 +1266,6 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                         state.screenScaleY = newWidth * (9.0f / 16.0f);
                     }
 
-                    // Push / pull de distância pelo stick horizontal
                     if (sx != 0.0f) {
                         const float kPushPullSpeed = 1.5f;
                         state.grabDistance -= sx * kPushPullSpeed * dt;
@@ -1165,7 +1285,59 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                 state.isScreenGrabbed = false;
             }
 
-            // Notifica encerramento de interação para persistir em SharedPreferences
+            // Grab & Drag / direct adjustment of the web browser
+            if (directBrowserCombo) {
+                state.isBrowserGrabbed = false;
+                if (sy != 0.0f || sx != 0.0f) {
+                    const float kMoveSpeedMetersPerSec = 1.5f;
+                    state.browserPosition.z -= sy * kMoveSpeedMetersPerSec * dt;
+                    state.browserPosition.y += sx * kMoveSpeedMetersPerSec * dt;
+                    state.browserPosition.z = std::min(-0.8f, std::max(state.browserPosition.z, -10.0f));
+                    state.browserPosition.y = std::max(0.3f, std::min(state.browserPosition.y, 3.5f));
+                    state.browserPosition.x = std::max(-4.0f, std::min(state.browserPosition.x, 4.0f));
+                }
+            } else if (gripHeld && (state.isBrowserGrabbed || isAimingBrowser)) {
+                if (!state.isBrowserGrabbed && isAimingBrowser) {
+                    state.isBrowserGrabbed = true;
+                    state.browserGrabDistance = std::max(0.8f, std::min(tBrowser, 8.0f));
+                    FireHaptic(state, rightPath, 0.4f, 20000000 /* 20ms */);
+                }
+
+                if (state.isBrowserGrabbed) {
+                    if (sy != 0.0f) {
+                        const float kResizeSpeedMetersPerSec = 1.2f;
+                        float newWidth = state.browserScaleX + sy * kResizeSpeedMetersPerSec * dt;
+                        newWidth = std::max(0.8f, std::min(newWidth, 8.0f));
+                        state.browserScaleX = newWidth;
+                        state.browserScaleY = newWidth * (1440.0f / 2560.0f);
+                    }
+
+                    if (sx != 0.0f) {
+                        const float kPushPullSpeed = 1.5f;
+                        state.browserGrabDistance -= sx * kPushPullSpeed * dt;
+                        state.browserGrabDistance = std::max(0.8f, std::min(state.browserGrabDistance, 8.0f));
+                    }
+
+                    if (state.hasRay) {
+                        XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.browserGrabDistance));
+                        XrVector3f relPos = Vec3Sub(targetWorld, state.sceneTranslationOffset);
+                        state.browserPosition = Vec3RotateY(relPos, -state.sceneYawOffset);
+                        state.browserPosition.z = std::min(-0.8f, std::max(state.browserPosition.z, -10.0f));
+                        state.browserPosition.y = std::max(0.3f, std::min(state.browserPosition.y, 3.5f));
+                        state.browserPosition.x = std::max(-4.0f, std::min(state.browserPosition.x, 4.0f));
+
+                        XrVector3f toHead = Vec3Sub(headCenter, targetWorld);
+                        toHead.y = 0.0f;
+                        float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
+                        if (toHeadLen > 1e-4f) {
+                            state.browserYaw = atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen);
+                        }
+                    }
+                }
+            } else {
+                state.isBrowserGrabbed = false;
+            }
+
             if (prevGrabbed && !state.isScreenGrabbed) {
                 FireHaptic(state, rightPath, 0.2f, 15000000 /* 15ms */);
                 NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
