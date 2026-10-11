@@ -636,5 +636,29 @@
     <string name="downloads_btn_cancel">Cancelar</string>
     <string name="downloads_btn_retry">Reintentar</string>
     <string name="downloads_btn_play">Reproducir</string>
+    <string name="home_btn_web_browser">Navegador web VR</string>
+    <string name="webbrowser_btn_back">Atrás</string>
+    <string name="webbrowser_btn_forward">Adelante</string>
+    <string name="webbrowser_btn_reload">Recargar</string>
+    <string name="webbrowser_btn_home">Inicio</string>
+    <string name="webbrowser_hint_url">Introduce una URL...</string>
+    <string name="webbrowser_btn_add_bookmark">Añadir marcador</string>
+    <string name="webbrowser_btn_remove_bookmark">Quitar marcador</string>
+    <string name="webbrowser_btn_toggle_curved">Alternar pantalla curva en VR</string>
+    <string name="webbrowser_btn_close">Cerrar navegador</string>
+    <string name="webbrowser_title_shortcuts">Accesos directos y marcadores</string>
+    <string name="webbrowser_btn_edit_bookmark">Editar marcador</string>
+    <string name="webbrowser_btn_delete_bookmark">Eliminar marcador</string>
+    <string name="webbrowser_btn_add_shortcut">Añadir acceso directo</string>
+    <string name="webbrowser_title_edit_bookmark">Editar marcador</string>
+    <string name="webbrowser_title_new_bookmark">Nuevo marcador</string>
+    <string name="webbrowser_label_title">Título</string>
+    <string name="webbrowser_label_url">URL</string>
+    <string name="webbrowser_btn_cancel">Cancelar</string>
+    <string name="webbrowser_btn_save">Guardar</string>
+    <string name="webbrowser_status_load_failed">Error al cargar la página</string>
+    <string name="webbrowser_status_error_format">Error al cargar la página: %1$s</string>
+    <string name="webbrowser_btn_dismiss_error">Descartar error</string>
+    <string name="webbrowser_btn_exit_fullscreen">✕ Salir de pantalla completa</string>
 
 </resources>

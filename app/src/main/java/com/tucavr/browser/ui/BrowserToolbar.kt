@@ -35,9 +35,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.tucavr.R
 import com.tucavr.browser.state.WebBrowserEvent
 import com.tucavr.browser.state.WebBrowserUiState
 
@@ -68,7 +70,7 @@ fun BrowserToolbar(
                 ) {
                     Icon(
                         imageVector = Icons.Default.ArrowBack,
-                        contentDescription = "Back",
+                        contentDescription = stringResource(R.string.webbrowser_btn_back),
                         tint = if (state.canGoBack) Color.White else Color.Gray,
                     )
                 }
@@ -80,7 +82,7 @@ fun BrowserToolbar(
                 ) {
                     Icon(
                         imageVector = Icons.Default.ArrowForward,
-                        contentDescription = "Forward",
+                        contentDescription = stringResource(R.string.webbrowser_btn_forward),
                         tint = if (state.canGoForward) Color.White else Color.Gray,
                     )
                 }
@@ -91,7 +93,7 @@ fun BrowserToolbar(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Refresh,
-                        contentDescription = "Reload",
+                        contentDescription = stringResource(R.string.webbrowser_btn_reload),
                         tint = Color.White,
                     )
                 }
@@ -102,7 +104,7 @@ fun BrowserToolbar(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Home,
-                        contentDescription = "Home",
+                        contentDescription = stringResource(R.string.webbrowser_btn_home),
                         tint = Color.White,
                     )
                 }
@@ -115,7 +117,7 @@ fun BrowserToolbar(
                     onValueChange = { urlTextFieldValue = it },
                     modifier = Modifier.weight(1f),
                     singleLine = true,
-                    placeholder = { Text("Enter a URL...", color = Color.Gray) },
+                    placeholder = { Text(stringResource(R.string.webbrowser_hint_url), color = Color.Gray) },
                     colors =
                         OutlinedTextFieldDefaults.colors(
                             focusedTextColor = Color.White,
@@ -146,7 +148,12 @@ fun BrowserToolbar(
                 ) {
                     Icon(
                         imageVector = if (state.isBookmarked) Icons.Default.Star else Icons.Default.StarBorder,
-                        contentDescription = if (state.isBookmarked) "Remove bookmark" else "Add bookmark",
+                        contentDescription =
+                            if (state.isBookmarked) {
+                                stringResource(R.string.webbrowser_btn_remove_bookmark)
+                            } else {
+                                stringResource(R.string.webbrowser_btn_add_bookmark)
+                            },
                         tint = if (state.isBookmarked) Color(0xFFFF6B00) else Color.White,
                     )
                 }
@@ -157,7 +164,7 @@ fun BrowserToolbar(
                 ) {
                     Icon(
                         imageVector = Icons.Default.PanoramaHorizontal,
-                        contentDescription = "Toggle curved VR geometry",
+                        contentDescription = stringResource(R.string.webbrowser_btn_toggle_curved),
                         tint = if (state.isCurvedGeometry) Color(0xFFFF6B00) else Color.White,
                     )
                 }
@@ -168,7 +175,7 @@ fun BrowserToolbar(
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
-                        contentDescription = "Close browser",
+                        contentDescription = stringResource(R.string.webbrowser_btn_close),
                         tint = Color.White,
                     )
                 }

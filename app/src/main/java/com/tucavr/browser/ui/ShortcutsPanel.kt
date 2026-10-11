@@ -46,11 +46,13 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.tucavr.R
 import com.tucavr.browser.data.BrowserBookmark
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -76,7 +78,7 @@ fun ShortcutsPanel(
                 .padding(24.dp),
     ) {
         Text(
-            text = "Shortcuts & Bookmarks",
+            text = stringResource(R.string.webbrowser_title_shortcuts),
             style = MaterialTheme.typography.headlineMedium,
             color = Color.White,
             fontWeight = FontWeight.Bold,
@@ -157,7 +159,7 @@ fun BookmarkCard(
                 IconButton(onClick = onEdit, modifier = Modifier.size(28.dp)) {
                     Icon(
                         imageVector = Icons.Default.Edit,
-                        contentDescription = "Edit bookmark",
+                        contentDescription = stringResource(R.string.webbrowser_btn_edit_bookmark),
                         tint = Color.LightGray,
                         modifier = Modifier.size(16.dp),
                     )
@@ -166,7 +168,7 @@ fun BookmarkCard(
                 IconButton(onClick = onDelete, modifier = Modifier.size(28.dp)) {
                     Icon(
                         imageVector = Icons.Default.Delete,
-                        contentDescription = "Delete bookmark",
+                        contentDescription = stringResource(R.string.webbrowser_btn_delete_bookmark),
                         tint = Color(0xFFFF5252),
                         modifier = Modifier.size(16.dp),
                     )
@@ -259,7 +261,7 @@ fun AddBookmarkCard(onClick: () -> Unit) {
                 )
                 Spacer(modifier = Modifier.padding(start = 8.dp))
                 Text(
-                    text = "Add Shortcut",
+                    text = stringResource(R.string.webbrowser_btn_add_shortcut),
                     color = Color.White,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Medium,

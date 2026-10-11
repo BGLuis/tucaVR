@@ -50,7 +50,7 @@ class HomeScreen(
             }
         val btnBrowser =
             VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-                text = "VR Web Browser"
+                text = context.getString(R.string.home_btn_web_browser).trim()
                 textSize = 24f
                 setIcon(R.drawable.ic_browser_home)
                 setOnClickListener { onOpenBrowser() }

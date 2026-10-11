@@ -32,9 +32,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import com.tucavr.R
 import com.tucavr.browser.data.BrowserBookmark
 
 @Composable
@@ -79,7 +81,10 @@ fun EditBookmarkModal(
                         .fillMaxWidth(),
             ) {
                 Text(
-                    text = if (bookmark != null) "Edit Bookmark" else "New Bookmark",
+                    text =
+                        stringResource(
+                            if (bookmark != null) R.string.webbrowser_title_edit_bookmark else R.string.webbrowser_title_new_bookmark,
+                        ),
                     style = MaterialTheme.typography.titleLarge,
                     color = Color.White,
                     fontWeight = FontWeight.Bold,
@@ -90,7 +95,7 @@ fun EditBookmarkModal(
                 OutlinedTextField(
                     value = titleText,
                     onValueChange = { titleText = it },
-                    label = { Text("Title", color = Color.Gray) },
+                    label = { Text(stringResource(R.string.webbrowser_label_title), color = Color.Gray) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     colors =
@@ -109,7 +114,7 @@ fun EditBookmarkModal(
                 OutlinedTextField(
                     value = urlText,
                     onValueChange = { urlText = it },
-                    label = { Text("URL", color = Color.Gray) },
+                    label = { Text(stringResource(R.string.webbrowser_label_url), color = Color.Gray) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     colors =
@@ -137,7 +142,7 @@ fun EditBookmarkModal(
                                 contentColor = Color.White,
                             ),
                     ) {
-                        Text("Cancel")
+                        Text(stringResource(R.string.webbrowser_btn_cancel))
                     }
 
                     Spacer(modifier = Modifier.width(12.dp))
@@ -154,7 +159,7 @@ fun EditBookmarkModal(
                                 contentColor = Color.White,
                             ),
                     ) {
-                        Text("Save")
+                        Text(stringResource(R.string.webbrowser_btn_save))
                     }
                 }
             }

@@ -34,9 +34,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import com.tucavr.R
 import com.tucavr.browser.data.BrowserBookmark
 import com.tucavr.browser.state.MediaCommand
 import com.tucavr.browser.state.WebBrowserEvent
@@ -70,6 +72,7 @@ fun WebBrowserScreen(
     ) -> Unit,
 ) {
     val isPreviewMode = LocalInspectionMode.current
+    val loadFailedMessage = stringResource(R.string.webbrowser_status_load_failed)
     var geckoViewRef by remember { mutableStateOf<GeckoView?>(null) }
 
     // Horizon OS native keyboard binding for sending text input to the web page
@@ -174,7 +177,7 @@ fun WebBrowserScreen(
                         null,
                         null,
                         null,
-                        if (!success) "Failed to load page" else null,
+                        if (!success) loadFailedMessage else null,
                     )
                 }
 
@@ -296,7 +299,7 @@ fun WebBrowserScreen(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "Error loading page: $error",
+                        text = stringResource(R.string.webbrowser_status_error_format, error),
                         color = Color.White,
                         modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.bodyMedium,
@@ -304,7 +307,7 @@ fun WebBrowserScreen(
                     IconButton(onClick = { onEvent(WebBrowserEvent.ClearError) }) {
                         Icon(
                             imageVector = Icons.Default.Close,
-                            contentDescription = "Dismiss error",
+                            contentDescription = stringResource(R.string.webbrowser_btn_dismiss_error),
                             tint = Color.White,
                         )
                     }
@@ -396,7 +399,7 @@ fun WebBrowserScreen(
                                 .align(Alignment.TopEnd)
                                 .padding(16.dp),
                     ) {
-                        Text("✕ Exit Fullscreen")
+                        Text(stringResource(R.string.webbrowser_btn_exit_fullscreen))
                     }
                 }
             }
