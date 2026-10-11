@@ -28,9 +28,8 @@ class VRBrowserController(
     context: Context,
     val width: Int = DEFAULT_WIDTH,
     val height: Int = DEFAULT_HEIGHT,
-    val densityDpi: Int = DEFAULT_DPI
+    val densityDpi: Int = DEFAULT_DPI,
 ) {
-
     companion object {
         const val DEFAULT_WIDTH = 2560
         const val DEFAULT_HEIGHT = 1440
@@ -46,13 +45,14 @@ class VRBrowserController(
         }
 
         private fun createRuntime(context: Context): GeckoRuntime {
-            val settings = GeckoRuntimeSettings.Builder()
-                .arguments(arrayOf("--enable-media-drm"))
-                .displayDensityOverride(2.2f)
-                .fontSizeFactor(1.5f)
-                .automaticFontSizeAdjustment(true)
-                .forceUserScalableEnabled(true)
-                .build()
+            val settings =
+                GeckoRuntimeSettings.Builder()
+                    .arguments(arrayOf("--enable-media-drm"))
+                    .displayDensityOverride(2.2f)
+                    .fontSizeFactor(1.5f)
+                    .automaticFontSizeAdjustment(true)
+                    .forceUserScalableEnabled(true)
+                    .build()
             return GeckoRuntime.create(context.applicationContext, settings)
         }
     }
@@ -87,11 +87,12 @@ class VRBrowserController(
     init {
         VRLog.d("[WEB-Browser] Initializing VRBrowserController")
 
-        val sessionSettings = GeckoSessionSettings.Builder()
-            .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
-            .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
-            .displayMode(GeckoSessionSettings.DISPLAY_MODE_BROWSER)
-            .build()
+        val sessionSettings =
+            GeckoSessionSettings.Builder()
+                .userAgentMode(GeckoSessionSettings.USER_AGENT_MODE_MOBILE)
+                .viewportMode(GeckoSessionSettings.VIEWPORT_MODE_MOBILE)
+                .displayMode(GeckoSessionSettings.DISPLAY_MODE_BROWSER)
+                .build()
 
         session = GeckoSession(sessionSettings)
         setupDelegates()
@@ -99,43 +100,64 @@ class VRBrowserController(
     }
 
     private fun setupDelegates() {
-        session.navigationDelegate = object : GeckoSession.NavigationDelegate {
-            override fun onLocationChange(
-                session: GeckoSession,
-                url: String?,
-                permissions: List<GeckoSession.PermissionDelegate.ContentPermission>
-            ) {
-                _currentUrl.value = url ?: ""
+        session.navigationDelegate =
+            object : GeckoSession.NavigationDelegate {
+                override fun onLocationChange(
+                    session: GeckoSession,
+                    url: String?,
+                    permissions: List<GeckoSession.PermissionDelegate.ContentPermission>,
+                ) {
+                    _currentUrl.value = url ?: ""
+                }
+
+                override fun onCanGoBack(
+                    session: GeckoSession,
+                    canGoBack: Boolean,
+                ) {
+                    _canGoBack.value = canGoBack
+                }
+
+                override fun onCanGoForward(
+                    session: GeckoSession,
+                    canGoForward: Boolean,
+                ) {
+                    _canGoForward.value = canGoForward
+                }
             }
 
-            override fun onCanGoBack(session: GeckoSession, canGoBack: Boolean) {
-                _canGoBack.value = canGoBack
+        session.progressDelegate =
+            object : GeckoSession.ProgressDelegate {
+                override fun onPageStart(
+                    session: GeckoSession,
+                    url: String,
+                ) {
+                    _isLoading.value = true
+                }
+
+                override fun onPageStop(
+                    session: GeckoSession,
+                    success: Boolean,
+                ) {
+                    _isLoading.value = false
+                }
             }
 
-            override fun onCanGoForward(session: GeckoSession, canGoForward: Boolean) {
-                _canGoForward.value = canGoForward
-            }
-        }
+        session.contentDelegate =
+            object : GeckoSession.ContentDelegate {
+                override fun onTitleChange(
+                    session: GeckoSession,
+                    title: String?,
+                ) {
+                    _pageTitle.value = title ?: ""
+                }
 
-        session.progressDelegate = object : GeckoSession.ProgressDelegate {
-            override fun onPageStart(session: GeckoSession, url: String) {
-                _isLoading.value = true
+                override fun onFullScreen(
+                    session: GeckoSession,
+                    fullScreen: Boolean,
+                ) {
+                    _isFullScreen.value = fullScreen
+                }
             }
-
-            override fun onPageStop(session: GeckoSession, success: Boolean) {
-                _isLoading.value = false
-            }
-        }
-
-        session.contentDelegate = object : GeckoSession.ContentDelegate {
-            override fun onTitleChange(session: GeckoSession, title: String?) {
-                _pageTitle.value = title ?: ""
-            }
-
-            override fun onFullScreen(session: GeckoSession, fullScreen: Boolean) {
-                _isFullScreen.value = fullScreen
-            }
-        }
     }
 
     /**
@@ -143,11 +165,12 @@ class VRBrowserController(
      * Supports direct navigation to HTTP/HTTPS URLs and internal pages (e.g., about:blank).
      */
     fun loadUrl(url: String) {
-        val formattedUrl = when {
-            url.isBlank() -> "about:blank"
-            !url.startsWith("http://") && !url.startsWith("https://") && !url.startsWith("about:") -> "https://$url"
-            else -> url
-        }
+        val formattedUrl =
+            when {
+                url.isBlank() -> "about:blank"
+                !url.startsWith("http://") && !url.startsWith("https://") && !url.startsWith("about:") -> "https://$url"
+                else -> url
+            }
         session.loadUri(formattedUrl)
     }
 

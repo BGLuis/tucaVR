@@ -10,7 +10,7 @@ import com.tucavr.browser.domain.BrowserBookmarkManager
  */
 class WebBrowserViewModelFactory(
     private val mediaController: BrowserMediaController,
-    private val bookmarkManager: BrowserBookmarkManager
+    private val bookmarkManager: BrowserBookmarkManager,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {

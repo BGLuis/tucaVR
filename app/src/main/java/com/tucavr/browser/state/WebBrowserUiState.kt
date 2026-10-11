@@ -18,5 +18,5 @@ data class WebBrowserUiState(
     val errorMessage: String? = null,
     val bookmarks: List<BrowserBookmark> = emptyList(),
     val showEditBookmarkModal: Boolean = false,
-    val editingBookmark: BrowserBookmark? = null
+    val editingBookmark: BrowserBookmark? = null,
 )

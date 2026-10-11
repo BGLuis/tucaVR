@@ -48,12 +48,13 @@ class HomeScreen(
                 setIcon(R.drawable.ic_network)
                 setOnClickListener { onNavigate(Destination.NetworkHome) }
             }
-        val btnBrowser = VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-            text = "VR Web Browser"
-            textSize = 24f
-            setIcon(R.drawable.ic_browser_home)
-            setOnClickListener { onOpenBrowser() }
-        }
+        val btnBrowser =
+            VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+                text = "VR Web Browser"
+                textSize = 24f
+                setIcon(R.drawable.ic_browser_home)
+                setOnClickListener { onOpenBrowser() }
+            }
         // T9.4: histórico implementado — botão ativo. A tela lida com lista
         // vazia internamente; não precisa consultar Room aqui.
         val btnContinueWatching =

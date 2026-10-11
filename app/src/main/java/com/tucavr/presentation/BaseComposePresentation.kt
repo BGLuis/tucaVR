@@ -32,12 +32,11 @@ abstract class BaseComposePresentation(
     theme: Int = android.R.style.Theme_NoTitleBar_Fullscreen,
     parentLifecycleOwner: LifecycleOwner? = null,
     private val parentViewModelStoreOwner: ViewModelStoreOwner? = null,
-    parentSavedStateRegistryOwner: SavedStateRegistryOwner? = null
+    parentSavedStateRegistryOwner: SavedStateRegistryOwner? = null,
 ) : Presentation(context, display, theme),
     LifecycleOwner,
     ViewModelStoreOwner,
     SavedStateRegistryOwner {
-
     private val lifecycleRegistry = LifecycleRegistry(this)
     private val store = ViewModelStore()
     private val savedStateRegistryController = SavedStateRegistryController.create(this)
@@ -73,12 +72,13 @@ abstract class BaseComposePresentation(
             decorView.setViewTreeSavedStateRegistryOwner(effectiveSavedStateRegistryOwner)
         }
 
-        val composeView = ComposeView(context).apply {
-            setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
-            setContent {
-                PresentationContent()
+        val composeView =
+            ComposeView(context).apply {
+                setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnViewTreeLifecycleDestroyed)
+                setContent {
+                    PresentationContent()
+                }
             }
-        }
 
         setContentView(composeView)
     }

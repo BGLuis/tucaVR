@@ -66,20 +66,21 @@ fun ShortcutsPanel(
     onBookmarkClick: (BrowserBookmark) -> Unit,
     onAddBookmarkClick: () -> Unit,
     onEditBookmarkClick: (BrowserBookmark) -> Unit,
-    onDeleteBookmarkClick: (BrowserBookmark) -> Unit
+    onDeleteBookmarkClick: (BrowserBookmark) -> Unit,
 ) {
     Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .background(Color(0xFF121212))
-            .padding(24.dp)
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .background(Color(0xFF121212))
+                .padding(24.dp),
     ) {
         Text(
             text = "Shortcuts & Bookmarks",
             style = MaterialTheme.typography.headlineMedium,
             color = Color.White,
             fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(bottom = 16.dp)
+            modifier = Modifier.padding(bottom = 16.dp),
         )
 
         LazyVerticalGrid(
@@ -87,14 +88,14 @@ fun ShortcutsPanel(
             contentPadding = PaddingValues(bottom = 24.dp),
             horizontalArrangement = Arrangement.spacedBy(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier.fillMaxSize(),
         ) {
             items(bookmarks, key = { it.id }) { bookmark ->
                 BookmarkCard(
                     bookmark = bookmark,
                     onClick = { onBookmarkClick(bookmark) },
                     onEdit = { onEditBookmarkClick(bookmark) },
-                    onDelete = { onDeleteBookmarkClick(bookmark) }
+                    onDelete = { onDeleteBookmarkClick(bookmark) },
                 )
             }
 
@@ -110,32 +111,35 @@ fun BookmarkCard(
     bookmark: BrowserBookmark,
     onClick: () -> Unit,
     onEdit: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
 ) {
     Card(
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF1E1E1E)
-        ),
+        colors =
+            CardDefaults.cardColors(
+                containerColor = Color(0xFF1E1E1E),
+            ),
         shape = RoundedCornerShape(12.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(110.dp)
-            .clickable { onClick() }
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .height(110.dp)
+                .clickable { onClick() },
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.SpaceBetween
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .padding(12.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.fillMaxWidth()
+                modifier = Modifier.fillMaxWidth(),
             ) {
                 // Site favicon with an asynchronous loading strategy
                 FaviconImage(
                     bookmark = bookmark,
-                    modifier = Modifier.size(36.dp)
+                    modifier = Modifier.size(36.dp),
                 )
 
                 Spacer(modifier = Modifier.width(10.dp))
@@ -147,7 +151,7 @@ fun BookmarkCard(
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f),
                 )
 
                 IconButton(onClick = onEdit, modifier = Modifier.size(28.dp)) {
@@ -155,7 +159,7 @@ fun BookmarkCard(
                         imageVector = Icons.Default.Edit,
                         contentDescription = "Edit bookmark",
                         tint = Color.LightGray,
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(16.dp),
                     )
                 }
 
@@ -164,7 +168,7 @@ fun BookmarkCard(
                         imageVector = Icons.Default.Delete,
                         contentDescription = "Delete bookmark",
                         tint = Color(0xFFFF5252),
-                        modifier = Modifier.size(16.dp)
+                        modifier = Modifier.size(16.dp),
                     )
                 }
             }
@@ -174,7 +178,7 @@ fun BookmarkCard(
                 color = Color.Gray,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
-                overflow = TextOverflow.Ellipsis
+                overflow = TextOverflow.Ellipsis,
             )
         }
     }
@@ -183,7 +187,7 @@ fun BookmarkCard(
 @Composable
 fun FaviconImage(
     bookmark: BrowserBookmark,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
 ) {
     val isPreview = LocalInspectionMode.current
     val host = remember(bookmark.url) { extractDomainHost(bookmark.url) }
@@ -191,9 +195,10 @@ fun FaviconImage(
 
     LaunchedEffect(bookmark.url, bookmark.faviconUrl) {
         if (isPreview || bitmap != null) return@LaunchedEffect
-        val loaded = withContext(Dispatchers.IO) {
-            fetchFaviconBitmap(bookmark.faviconUrl, host)
-        }
+        val loaded =
+            withContext(Dispatchers.IO) {
+                fetchFaviconBitmap(bookmark.faviconUrl, host)
+            }
         if (loaded != null) {
             faviconCache[host] = loaded
             bitmap = loaded
@@ -205,7 +210,7 @@ fun FaviconImage(
             bitmap = bitmap!!,
             contentDescription = bookmark.title,
             contentScale = ContentScale.Fit,
-            modifier = modifier.clip(CircleShape)
+            modifier = modifier.clip(CircleShape),
         )
     } else {
         // Fall back to an avatar with the site's initial
@@ -213,15 +218,16 @@ fun FaviconImage(
         val avatarBgColor = getAvatarColor(bookmark.title, bookmark.url)
 
         Box(
-            modifier = modifier
-                .background(avatarBgColor, CircleShape),
-            contentAlignment = Alignment.Center
+            modifier =
+                modifier
+                    .background(avatarBgColor, CircleShape),
+            contentAlignment = Alignment.Center,
         ) {
             Text(
                 text = initial,
                 color = Color.White,
                 fontWeight = FontWeight.Bold,
-                fontSize = 18.sp
+                fontSize = 18.sp,
             )
         }
     }
@@ -230,31 +236,33 @@ fun FaviconImage(
 @Composable
 fun AddBookmarkCard(onClick: () -> Unit) {
     Card(
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF2A2A2A)
-        ),
+        colors =
+            CardDefaults.cardColors(
+                containerColor = Color(0xFF2A2A2A),
+            ),
         shape = RoundedCornerShape(12.dp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(110.dp)
-            .clickable { onClick() }
+        modifier =
+            Modifier
+                .fillMaxWidth()
+                .height(110.dp)
+                .clickable { onClick() },
     ) {
         Box(
             modifier = Modifier.fillMaxSize(),
-            contentAlignment = Alignment.Center
+            contentAlignment = Alignment.Center,
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(
                     imageVector = Icons.Default.Add,
                     contentDescription = null,
-                    tint = Color(0xFFFF6B00)
+                    tint = Color(0xFFFF6B00),
                 )
                 Spacer(modifier = Modifier.padding(start = 8.dp))
                 Text(
                     text = "Add Shortcut",
                     color = Color.White,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Medium
+                    fontWeight = FontWeight.Medium,
                 )
             }
         }
@@ -270,7 +278,10 @@ private fun extractDomainHost(urlStr: String): String {
     }
 }
 
-private fun fetchFaviconBitmap(explicitFaviconUrl: String?, host: String): ImageBitmap? {
+private fun fetchFaviconBitmap(
+    explicitFaviconUrl: String?,
+    host: String,
+): ImageBitmap? {
     val urlsToTry = mutableListOf<String>()
     if (!explicitFaviconUrl.isNullOrBlank()) {
         urlsToTry.add(explicitFaviconUrl)
@@ -297,7 +308,10 @@ private fun fetchFaviconBitmap(explicitFaviconUrl: String?, host: String): Image
     return null
 }
 
-private fun getAvatarColor(title: String, url: String): Color {
+private fun getAvatarColor(
+    title: String,
+    url: String,
+): Color {
     val lower = (title + url).lowercase()
     return when {
         lower.contains("youtube") -> Color(0xFFFF0000)
@@ -315,16 +329,17 @@ private fun getAvatarColor(title: String, url: String): Color {
 fun ShortcutsPanelPreview() {
     MaterialTheme(colorScheme = darkColorScheme()) {
         ShortcutsPanel(
-            bookmarks = listOf(
-                BrowserBookmark(id = 1, title = "YouTube", url = "https://www.youtube.com"),
-                BrowserBookmark(id = 2, title = "Google", url = "https://www.google.com"),
-                BrowserBookmark(id = 3, title = "Twitch", url = "https://www.twitch.tv"),
-                BrowserBookmark(id = 4, title = "Netflix", url = "https://www.netflix.com")
-            ),
+            bookmarks =
+                listOf(
+                    BrowserBookmark(id = 1, title = "YouTube", url = "https://www.youtube.com"),
+                    BrowserBookmark(id = 2, title = "Google", url = "https://www.google.com"),
+                    BrowserBookmark(id = 3, title = "Twitch", url = "https://www.twitch.tv"),
+                    BrowserBookmark(id = 4, title = "Netflix", url = "https://www.netflix.com"),
+                ),
             onBookmarkClick = {},
             onAddBookmarkClick = {},
             onEditBookmarkClick = {},
-            onDeleteBookmarkClick = {}
+            onDeleteBookmarkClick = {},
         )
     }
 }

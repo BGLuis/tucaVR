@@ -5,7 +5,6 @@ import android.view.Display
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.LifecycleOwner
-import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStoreOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -22,7 +21,6 @@ import com.tucavr.history.AppDatabase
 import com.tucavr.presentation.BaseComposePresentation
 import org.mozilla.geckoview.GeckoSession
 
-
 /**
  * Concrete Presentation dialog for the VR 2D Web Browser panel.
  * Collects ViewModel state and renders the WebBrowserScreen Compose component with GeckoView session.
@@ -35,15 +33,14 @@ class VRWebBrowserPresentation(
     savedStateRegistryOwner: SavedStateRegistryOwner? = null,
     private val browserController: VRBrowserController = VRBrowserController(context),
     private val activity: VRActivity? = context as? VRActivity,
-    private val viewModelProvider: (() -> WebBrowserViewModel)? = null
+    private val viewModelProvider: (() -> WebBrowserViewModel)? = null,
 ) : BaseComposePresentation(
-    context = context,
-    display = display,
-    parentLifecycleOwner = lifecycleOwner,
-    parentViewModelStoreOwner = viewModelStoreOwner,
-    parentSavedStateRegistryOwner = savedStateRegistryOwner
-) {
-
+        context = context,
+        display = display,
+        parentLifecycleOwner = lifecycleOwner,
+        parentViewModelStoreOwner = viewModelStoreOwner,
+        parentSavedStateRegistryOwner = savedStateRegistryOwner,
+    ) {
     private val viewModel: WebBrowserViewModel by lazy {
         viewModelProvider?.invoke()
             ?: if (viewModelStoreOwner != null) {
@@ -94,9 +91,9 @@ class VRWebBrowserPresentation(
                     canGoBack = canGoBack,
                     canGoForward = canGoForward,
                     isFullScreen = isFullScreen,
-                    errorMessage = errorMessage
+                    errorMessage = errorMessage,
                 )
-            }
+            },
         )
     }
 

@@ -53,6 +53,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun folderMediaStatusDao(): FolderMediaStatusDao
 
     abstract fun mediaMetadataCacheDao(): MediaMetadataCacheDao
+
     abstract fun browserBookmarkDao(): BrowserBookmarkDao
 
     companion object {
@@ -159,19 +160,20 @@ abstract class AppDatabase : RoomDatabase() {
                 """.trimIndent(),
             )
 
-        internal val MIGRATION_5_6_SQL = listOf(
-            """
-            CREATE TABLE IF NOT EXISTS `browser_bookmarks` (
-                `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
-                `title` TEXT NOT NULL,
-                `url` TEXT NOT NULL,
-                `favicon_url` TEXT,
-                `display_order` INTEGER NOT NULL,
-                `is_preset` INTEGER NOT NULL,
-                `created_at_ms` INTEGER NOT NULL
+        internal val MIGRATION_5_6_SQL =
+            listOf(
+                """
+                CREATE TABLE IF NOT EXISTS `browser_bookmarks` (
+                    `id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL,
+                    `title` TEXT NOT NULL,
+                    `url` TEXT NOT NULL,
+                    `favicon_url` TEXT,
+                    `display_order` INTEGER NOT NULL,
+                    `is_preset` INTEGER NOT NULL,
+                    `created_at_ms` INTEGER NOT NULL
+                )
+                """.trimIndent(),
             )
-            """.trimIndent()
-        )
 
         val MIGRATION_1_2 =
             object : Migration(1, 2) {
@@ -201,49 +203,51 @@ abstract class AppDatabase : RoomDatabase() {
                 }
             }
 
-        val MIGRATION_5_6 = object : Migration(5, 6) {
-            override fun migrate(db: SupportSQLiteDatabase) {
-                MIGRATION_5_6_SQL.forEach { db.execSQL(it) }
+        val MIGRATION_5_6 =
+            object : Migration(5, 6) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    MIGRATION_5_6_SQL.forEach { db.execSQL(it) }
+                }
             }
-        }
 
-        val DEFAULT_PRESETS = listOf(
-            BrowserBookmark(
-                title = "YouTube",
-                url = "https://www.youtube.com",
-                faviconUrl = "https://www.youtube.com/favicon.ico",
-                displayOrder = 0,
-                isPreset = true
-            ),
-            BrowserBookmark(
-                title = "Netflix",
-                url = "https://www.netflix.com",
-                faviconUrl = "https://assets.nflxext.com/us/ffe/siteui/common/icons/nficon2016.ico",
-                displayOrder = 1,
-                isPreset = true
-            ),
-            BrowserBookmark(
-                title = "Disney+",
-                url = "https://www.disneyplus.com",
-                faviconUrl = "https://www.disneyplus.com/favicon.ico",
-                displayOrder = 2,
-                isPreset = true
-            ),
-            BrowserBookmark(
-                title = "Prime Video",
-                url = "https://www.primevideo.com",
-                faviconUrl = "https://www.primevideo.com/favicon.ico",
-                displayOrder = 3,
-                isPreset = true
-            ),
-            BrowserBookmark(
-                title = "Twitch",
-                url = "https://www.twitch.tv",
-                faviconUrl = "https://static.twitchcdn.net/assets/favicon-32x32-v2.png",
-                displayOrder = 4,
-                isPreset = true
+        val DEFAULT_PRESETS =
+            listOf(
+                BrowserBookmark(
+                    title = "YouTube",
+                    url = "https://www.youtube.com",
+                    faviconUrl = "https://www.youtube.com/favicon.ico",
+                    displayOrder = 0,
+                    isPreset = true,
+                ),
+                BrowserBookmark(
+                    title = "Netflix",
+                    url = "https://www.netflix.com",
+                    faviconUrl = "https://assets.nflxext.com/us/ffe/siteui/common/icons/nficon2016.ico",
+                    displayOrder = 1,
+                    isPreset = true,
+                ),
+                BrowserBookmark(
+                    title = "Disney+",
+                    url = "https://www.disneyplus.com",
+                    faviconUrl = "https://www.disneyplus.com/favicon.ico",
+                    displayOrder = 2,
+                    isPreset = true,
+                ),
+                BrowserBookmark(
+                    title = "Prime Video",
+                    url = "https://www.primevideo.com",
+                    faviconUrl = "https://www.primevideo.com/favicon.ico",
+                    displayOrder = 3,
+                    isPreset = true,
+                ),
+                BrowserBookmark(
+                    title = "Twitch",
+                    url = "https://www.twitch.tv",
+                    faviconUrl = "https://static.twitchcdn.net/assets/favicon-32x32-v2.png",
+                    displayOrder = 4,
+                    isPreset = true,
+                ),
             )
-        )
 
         fun getInstance(context: Context): AppDatabase =
             instance ?: synchronized(this) {
@@ -253,15 +257,17 @@ abstract class AppDatabase : RoomDatabase() {
                     "vrplayer_history.db",
                 )
                     .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
-                    .addCallback(object : Callback() {
-                        override fun onCreate(db: SupportSQLiteDatabase) {
-                            super.onCreate(db)
-                            // Seed default shortcuts when the database is first created
-                            CoroutineScope(Dispatchers.IO).launch {
-                                instance?.browserBookmarkDao()?.insertAll(DEFAULT_PRESETS)
+                    .addCallback(
+                        object : Callback() {
+                            override fun onCreate(db: SupportSQLiteDatabase) {
+                                super.onCreate(db)
+                                // Seed default shortcuts when the database is first created
+                                CoroutineScope(Dispatchers.IO).launch {
+                                    instance?.browserBookmarkDao()?.insertAll(DEFAULT_PRESETS)
+                                }
                             }
-                        }
-                    })
+                        },
+                    )
                     .build()
                     .also { instance = it }
             }

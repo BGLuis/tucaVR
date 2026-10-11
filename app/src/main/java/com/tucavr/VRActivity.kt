@@ -555,7 +555,8 @@ class VRActivity : NativeActivity() {
         nativeSetBrowserActive(false)
         try {
             browserPresentation?.dismiss()
-        } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
         browserPresentation = null
         browserVirtualDisplay?.release()
         browserVirtualDisplay = null
@@ -1039,25 +1040,32 @@ class VRActivity : NativeActivity() {
         }
 
         @JvmStatic
-        fun setupBrowserVirtualDisplay(activity: VRActivity, surface: Surface, width: Int, height: Int) {
+        fun setupBrowserVirtualDisplay(
+            activity: VRActivity,
+            surface: Surface,
+            width: Int,
+            height: Int,
+        ) {
             activity.runOnUiThread {
                 val displayManager = activity.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
                 val dpi = VRBrowserController.DEFAULT_DPI
-                activity.browserVirtualDisplay = displayManager.createVirtualDisplay(
-                    "VR_Browser_Display",
-                    width, height, dpi,
-                    surface,
-                    DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION
-                )
+                activity.browserVirtualDisplay =
+                    displayManager.createVirtualDisplay(
+                        "VR_Browser_Display",
+                        width, height, dpi,
+                        surface,
+                        DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION,
+                    )
 
                 activity.browserVirtualDisplay?.display?.let { display ->
                     val controller = VRBrowserController(activity, width, height, dpi)
                     activity.browserController = controller
-                    activity.browserPresentation = VRWebBrowserPresentation(
-                        context = activity,
-                        display = display,
-                        browserController = controller
-                    )
+                    activity.browserPresentation =
+                        VRWebBrowserPresentation(
+                            context = activity,
+                            display = display,
+                            browserController = controller,
+                        )
                     activity.browserPresentation?.show()
                     activity.nativeSetBrowserActive(false)
                 }
@@ -1067,7 +1075,12 @@ class VRActivity : NativeActivity() {
         private var lastBrowserDownTime: Long = 0
 
         @JvmStatic
-        fun dispatchBrowserTouch(activity: VRActivity, normX: Float, normY: Float, action: Int) {
+        fun dispatchBrowserTouch(
+            activity: VRActivity,
+            normX: Float,
+            normY: Float,
+            action: Int,
+        ) {
             activity.runOnUiThread {
                 val now = android.os.SystemClock.uptimeMillis()
                 if (action == android.view.MotionEvent.ACTION_DOWN) {
@@ -1075,14 +1088,15 @@ class VRActivity : NativeActivity() {
                 }
 
                 val downTime = if (lastBrowserDownTime == 0L) now else lastBrowserDownTime
-                val event = MotionEvent.obtain(
-                    downTime,
-                    now,
-                    action,
-                    normX * BROWSER_DISPLAY_WIDTH.toFloat(),
-                    normY * BROWSER_DISPLAY_HEIGHT.toFloat(),
-                    0
-                )
+                val event =
+                    MotionEvent.obtain(
+                        downTime,
+                        now,
+                        action,
+                        normX * BROWSER_DISPLAY_WIDTH.toFloat(),
+                        normY * BROWSER_DISPLAY_HEIGHT.toFloat(),
+                        0,
+                    )
 
                 event.source = InputDevice.SOURCE_TOUCHSCREEN
 
@@ -1101,7 +1115,12 @@ class VRActivity : NativeActivity() {
         }
 
         @JvmStatic
-        fun dispatchBrowserScroll(activity: VRActivity, normX: Float, normY: Float, scrollDeltaY: Float) {
+        fun dispatchBrowserScroll(
+            activity: VRActivity,
+            normX: Float,
+            normY: Float,
+            scrollDeltaY: Float,
+        ) {
             activity.runOnUiThread {
                 activity.browserPresentation?.dispatchScroll(scrollDeltaY)
             }
@@ -2374,7 +2393,9 @@ class VRActivity : NativeActivity() {
 
     // N1: Propaga o identificador de sessão ativo para C++ e Rust
     external fun nativeSetSessionId(sessionId: String)
+
     external fun nativeSetBrowserGeometryMode(isCurved: Boolean)
+
     external fun nativeSetBrowserActive(active: Boolean)
 
     // Upscaling de vídeo (Vulkan MQSR / SGSR1): 0=OFF, 1=QUALITY, 2=PERFORMANCE, 3=AUTO

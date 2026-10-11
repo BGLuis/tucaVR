@@ -44,65 +44,66 @@ import com.tucavr.browser.state.WebBrowserUiState
 @Composable
 fun BrowserToolbar(
     state: WebBrowserUiState,
-    onEvent: (WebBrowserEvent) -> Unit
+    onEvent: (WebBrowserEvent) -> Unit,
 ) {
     var urlTextFieldValue by remember(state.url) { mutableStateOf(state.url) }
     val focusManager = LocalFocusManager.current
 
     Surface(
         color = Color(0xFF1E1E1E),
-        modifier = Modifier.fillMaxWidth()
+        modifier = Modifier.fillMaxWidth(),
     ) {
         Column {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
             ) {
                 // Back
                 IconButton(
                     onClick = { onEvent(WebBrowserEvent.GoBack) },
-                    enabled = state.canGoBack
+                    enabled = state.canGoBack,
                 ) {
                     Icon(
                         imageVector = Icons.Default.ArrowBack,
                         contentDescription = "Back",
-                        tint = if (state.canGoBack) Color.White else Color.Gray
+                        tint = if (state.canGoBack) Color.White else Color.Gray,
                     )
                 }
 
                 // Forward
                 IconButton(
                     onClick = { onEvent(WebBrowserEvent.GoForward) },
-                    enabled = state.canGoForward
+                    enabled = state.canGoForward,
                 ) {
                     Icon(
                         imageVector = Icons.Default.ArrowForward,
                         contentDescription = "Forward",
-                        tint = if (state.canGoForward) Color.White else Color.Gray
+                        tint = if (state.canGoForward) Color.White else Color.Gray,
                     )
                 }
 
                 // Reload
                 IconButton(
-                    onClick = { onEvent(WebBrowserEvent.Reload) }
+                    onClick = { onEvent(WebBrowserEvent.Reload) },
                 ) {
                     Icon(
                         imageVector = Icons.Default.Refresh,
                         contentDescription = "Reload",
-                        tint = Color.White
+                        tint = Color.White,
                     )
                 }
 
                 // Home
                 IconButton(
-                    onClick = { onEvent(WebBrowserEvent.GoHome) }
+                    onClick = { onEvent(WebBrowserEvent.GoHome) },
                 ) {
                     Icon(
                         imageVector = Icons.Default.Home,
                         contentDescription = "Home",
-                        tint = Color.White
+                        tint = Color.White,
                     )
                 }
 
@@ -115,57 +116,60 @@ fun BrowserToolbar(
                     modifier = Modifier.weight(1f),
                     singleLine = true,
                     placeholder = { Text("Enter a URL...", color = Color.Gray) },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedTextColor = Color.White,
-                        unfocusedTextColor = Color.White,
-                        focusedBorderColor = Color(0xFFFF6B00),
-                        unfocusedBorderColor = Color(0xFF3A3A3A),
-                        focusedContainerColor = Color(0xFF2A2A2A),
-                        unfocusedContainerColor = Color(0xFF2A2A2A)
-                    ),
-                    keyboardOptions = KeyboardOptions(
-                        imeAction = ImeAction.Go
-                    ),
-                    keyboardActions = KeyboardActions(
-                        onGo = {
-                            focusManager.clearFocus()
-                            onEvent(WebBrowserEvent.OnUrlSubmitted(urlTextFieldValue))
-                        }
-                    )
+                    colors =
+                        OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = Color.White,
+                            unfocusedTextColor = Color.White,
+                            focusedBorderColor = Color(0xFFFF6B00),
+                            unfocusedBorderColor = Color(0xFF3A3A3A),
+                            focusedContainerColor = Color(0xFF2A2A2A),
+                            unfocusedContainerColor = Color(0xFF2A2A2A),
+                        ),
+                    keyboardOptions =
+                        KeyboardOptions(
+                            imeAction = ImeAction.Go,
+                        ),
+                    keyboardActions =
+                        KeyboardActions(
+                            onGo = {
+                                focusManager.clearFocus()
+                                onEvent(WebBrowserEvent.OnUrlSubmitted(urlTextFieldValue))
+                            },
+                        ),
                 )
 
                 Spacer(modifier = Modifier.width(8.dp))
 
                 // Bookmark button
                 IconButton(
-                    onClick = { onEvent(WebBrowserEvent.ToggleBookmark) }
+                    onClick = { onEvent(WebBrowserEvent.ToggleBookmark) },
                 ) {
                     Icon(
                         imageVector = if (state.isBookmarked) Icons.Default.Star else Icons.Default.StarBorder,
                         contentDescription = if (state.isBookmarked) "Remove bookmark" else "Add bookmark",
-                        tint = if (state.isBookmarked) Color(0xFFFF6B00) else Color.White
+                        tint = if (state.isBookmarked) Color(0xFFFF6B00) else Color.White,
                     )
                 }
 
                 // VR curved geometry button
                 IconButton(
-                    onClick = { onEvent(WebBrowserEvent.ToggleGeometry) }
+                    onClick = { onEvent(WebBrowserEvent.ToggleGeometry) },
                 ) {
                     Icon(
                         imageVector = Icons.Default.PanoramaHorizontal,
                         contentDescription = "Toggle curved VR geometry",
-                        tint = if (state.isCurvedGeometry) Color(0xFFFF6B00) else Color.White
+                        tint = if (state.isCurvedGeometry) Color(0xFFFF6B00) else Color.White,
                     )
                 }
 
                 // Close button
                 IconButton(
-                    onClick = { onEvent(WebBrowserEvent.CloseBrowser) }
+                    onClick = { onEvent(WebBrowserEvent.CloseBrowser) },
                 ) {
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = "Close browser",
-                        tint = Color.White
+                        tint = Color.White,
                     )
                 }
             }
@@ -175,7 +179,7 @@ fun BrowserToolbar(
                     progress = state.loadingProgress / 100f,
                     modifier = Modifier.fillMaxWidth(),
                     color = Color(0xFFFF6B00),
-                    trackColor = Color(0xFF2A2A2A)
+                    trackColor = Color(0xFF2A2A2A),
                 )
             }
         }
@@ -187,16 +191,17 @@ fun BrowserToolbar(
 fun BrowserToolbarPreview() {
     MaterialTheme(colorScheme = darkColorScheme()) {
         BrowserToolbar(
-            state = WebBrowserUiState(
-                url = "https://www.youtube.com",
-                isLoading = true,
-                loadingProgress = 70,
-                canGoBack = true,
-                canGoForward = false,
-                isBookmarked = true,
-                isCurvedGeometry = true
-            ),
-            onEvent = {}
+            state =
+                WebBrowserUiState(
+                    url = "https://www.youtube.com",
+                    isLoading = true,
+                    loadingProgress = 70,
+                    canGoBack = true,
+                    canGoForward = false,
+                    isBookmarked = true,
+                    isCurvedGeometry = true,
+                ),
+            onEvent = {},
         )
     }
 }

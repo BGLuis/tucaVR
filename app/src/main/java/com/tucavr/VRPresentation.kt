@@ -6,10 +6,14 @@ import android.os.Bundle
 import android.view.Display
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.ScrollView
+import androidx.recyclerview.widget.RecyclerView
 import com.tucavr.designsystem.KeyboardBinding
 import com.tucavr.designsystem.VoidTheme
 import com.tucavr.download.DownloadRepository
 import com.tucavr.filebrowser.DirectoryNavigator
+import com.tucavr.filebrowser.MediaType
+import com.tucavr.filebrowser.mediaTypeForExtension
 import com.tucavr.navigation.AppNavigator
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
@@ -230,10 +234,10 @@ class VRPresentation(
                 context = context,
                 host = host,
                 onNavigate = { dest -> navigateTo(dest) },
-            onOpenBrowser = {
-                activity.openBrowserSession()
-            }
-        )
+                onOpenBrowser = {
+                    activity.openBrowserSession()
+                },
+            )
 
         localFilesScreen =
             LocalFilesScreen(
@@ -248,7 +252,11 @@ class VRPresentation(
                     if (entry.type == com.tucavr.filebrowser.MediaType.IMAGE) {
                         val dirFiles =
                             dirNavigator.currentPath.listFiles()
-                                ?.filter { !it.isDirectory && com.tucavr.filebrowser.mediaTypeForExtension(it.extension) == com.tucavr.filebrowser.MediaType.IMAGE }
+                                ?.filter {
+                                    !it.isDirectory &&
+                                        mediaTypeForExtension(it.extension) ==
+                                        MediaType.IMAGE
+                                }
                                 ?.map {
                                     com.tucavr.filebrowser.MediaEntry(
                                         name = it.name,
@@ -601,7 +609,11 @@ class VRPresentation(
             }
         }
 
-        if (parent is android.widget.ScrollView || parent is androidx.recyclerview.widget.RecyclerView || parent.canScrollVertically(1) || parent.canScrollVertically(-1)) {
+        if (parent is ScrollView ||
+            parent is RecyclerView ||
+            parent.canScrollVertically(1) ||
+            parent.canScrollVertically(-1)
+        ) {
             return parent
         }
         return null

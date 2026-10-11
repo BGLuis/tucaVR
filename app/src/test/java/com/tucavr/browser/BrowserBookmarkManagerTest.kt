@@ -19,7 +19,6 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class BrowserBookmarkManagerTest {
-
     private val testDispatcher = StandardTestDispatcher()
     private val testScope = TestScope(testDispatcher)
 
@@ -69,7 +68,10 @@ class BrowserBookmarkManagerTest {
             flow.value = items.toList()
         }
 
-        override suspend fun updateDisplayOrder(id: Long, order: Int) {
+        override suspend fun updateDisplayOrder(
+            id: Long,
+            order: Int,
+        ) {
             val index = items.indexOfFirst { it.id == id }
             if (index != -1) {
                 items[index] = items[index].copy(displayOrder = order)
@@ -85,12 +87,13 @@ class BrowserBookmarkManagerTest {
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
         fakeDao = FakeBrowserBookmarkDao()
-        manager = BrowserBookmarkManager(
-            bookmarkDao = fakeDao,
-            scope = testScope,
-            ioDispatcher = testDispatcher,
-            mainDispatcher = testDispatcher
-        )
+        manager =
+            BrowserBookmarkManager(
+                bookmarkDao = fakeDao,
+                scope = testScope,
+                ioDispatcher = testDispatcher,
+                mainDispatcher = testDispatcher,
+            )
     }
 
     @After
@@ -108,40 +111,42 @@ class BrowserBookmarkManagerTest {
     }
 
     @Test
-    fun `addBookmark inserts new item when valid`() = runTest(testDispatcher) {
-        testScheduler.advanceUntilIdle()
+    fun `addBookmark inserts new item when valid`() =
+        runTest(testDispatcher) {
+            testScheduler.advanceUntilIdle()
 
-        val initialCount = fakeDao.items.size
+            val initialCount = fakeDao.items.size
 
-        manager.addBookmark("My Site", "example.com")
-        testScheduler.advanceUntilIdle()
+            manager.addBookmark("My Site", "example.com")
+            testScheduler.advanceUntilIdle()
 
-        assertEquals(initialCount + 1, fakeDao.items.size)
-        val added = fakeDao.items.last()
-        assertEquals("My Site", added.title)
-        assertEquals("https://example.com", added.url)
-    }
+            assertEquals(initialCount + 1, fakeDao.items.size)
+            val added = fakeDao.items.last()
+            assertEquals("My Site", added.title)
+            assertEquals("https://example.com", added.url)
+        }
 
     @Test
-    fun `toggleBookmark adds and removes bookmark as toggled`() = runTest(testDispatcher) {
-        testScheduler.advanceUntilIdle()
+    fun `toggleBookmark adds and removes bookmark as toggled`() =
+        runTest(testDispatcher) {
+            testScheduler.advanceUntilIdle()
 
-        val url = "https://customsite.org"
-        var isBookmarked = false
+            val url = "https://customsite.org"
+            var isBookmarked = false
 
-        manager.toggleBookmark(url, "Custom Site") { bookmarked, _ ->
-            isBookmarked = bookmarked
+            manager.toggleBookmark(url, "Custom Site") { bookmarked, _ ->
+                isBookmarked = bookmarked
+            }
+            testScheduler.advanceUntilIdle()
+
+            assertEquals(true, isBookmarked)
+
+            // Toggle again should delete it
+            manager.toggleBookmark(url, "Custom Site") { bookmarked, _ ->
+                isBookmarked = bookmarked
+            }
+            testScheduler.advanceUntilIdle()
+
+            assertEquals(false, isBookmarked)
         }
-        testScheduler.advanceUntilIdle()
-
-        assertEquals(true, isBookmarked)
-
-        // Toggle again should delete it
-        manager.toggleBookmark(url, "Custom Site") { bookmarked, _ ->
-            isBookmarked = bookmarked
-        }
-        testScheduler.advanceUntilIdle()
-
-        assertEquals(false, isBookmarked)
-    }
 }

@@ -28,7 +28,6 @@ import org.junit.Test
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class WebBrowserArchitectureTest {
-
     private val testDispatcher = StandardTestDispatcher()
     private val testScope = TestScope(testDispatcher)
 
@@ -38,7 +37,9 @@ class WebBrowserArchitectureTest {
         private var nextId = 1L
 
         override fun getAllBookmarksFlow(): Flow<List<BrowserBookmark>> = flow
+
         override suspend fun getAllBookmarks(): List<BrowserBookmark> = items.toList()
+
         override suspend fun getBookmarkById(id: Long): BrowserBookmark? = items.find { it.id == id }
 
         override suspend fun insertBookmark(bookmark: BrowserBookmark): Long {
@@ -76,7 +77,10 @@ class WebBrowserArchitectureTest {
             flow.value = items.toList()
         }
 
-        override suspend fun updateDisplayOrder(id: Long, order: Int) {
+        override suspend fun updateDisplayOrder(
+            id: Long,
+            order: Int,
+        ) {
             val index = items.indexOfFirst { it.id == id }
             if (index != -1) {
                 items[index] = items[index].copy(displayOrder = order)
@@ -92,12 +96,13 @@ class WebBrowserArchitectureTest {
     fun setUp() {
         Dispatchers.setMain(testDispatcher)
         fakeDao = FakeBrowserBookmarkDao()
-        bookmarkManager = BrowserBookmarkManager(
-            bookmarkDao = fakeDao,
-            scope = testScope,
-            ioDispatcher = testDispatcher,
-            mainDispatcher = testDispatcher
-        )
+        bookmarkManager =
+            BrowserBookmarkManager(
+                bookmarkDao = fakeDao,
+                scope = testScope,
+                ioDispatcher = testDispatcher,
+                mainDispatcher = testDispatcher,
+            )
     }
 
     @After
@@ -106,78 +111,82 @@ class WebBrowserArchitectureTest {
     }
 
     @Test
-    fun `test BrowserMediaController emits and receives commands`() = runTest {
-        val controller = BrowserMediaController()
-        val emitted = mutableListOf<MediaCommand>()
+    fun `test BrowserMediaController emits and receives commands`() =
+        runTest {
+            val controller = BrowserMediaController()
+            val emitted = mutableListOf<MediaCommand>()
 
-        backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
-            controller.commands.collect { emitted.add(it) }
+            backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
+                controller.commands.collect { emitted.add(it) }
+            }
+
+            controller.emitCommand(MediaCommand.Play)
+            controller.emitCommand(MediaCommand.Skip(15))
+
+            assertEquals(2, emitted.size)
+            assertEquals(MediaCommand.Play, emitted[0])
+            assertEquals(MediaCommand.Skip(15), emitted[1])
         }
 
-        controller.emitCommand(MediaCommand.Play)
-        controller.emitCommand(MediaCommand.Skip(15))
+    @Test
+    fun `test WebBrowserViewModel url normalization on event`() =
+        runTest {
+            val controller = BrowserMediaController()
+            val viewModel = WebBrowserViewModel(controller, bookmarkManager)
 
-        assertEquals(2, emitted.size)
-        assertEquals(MediaCommand.Play, emitted[0])
-        assertEquals(MediaCommand.Skip(15), emitted[1])
-    }
+            viewModel.handleEvent(WebBrowserEvent.OnUrlSubmitted("example.com"))
+            assertEquals("https://example.com", viewModel.uiState.value.url)
+
+            viewModel.handleEvent(WebBrowserEvent.OnUrlSubmitted("http://test.org"))
+            assertEquals("http://test.org", viewModel.uiState.value.url)
+        }
 
     @Test
-    fun `test WebBrowserViewModel url normalization on event`() = runTest {
-        val controller = BrowserMediaController()
-        val viewModel = WebBrowserViewModel(controller, bookmarkManager)
+    fun `test WebBrowserViewModel updates webview state`() =
+        runTest {
+            val controller = BrowserMediaController()
+            val viewModel = WebBrowserViewModel(controller, bookmarkManager)
 
-        viewModel.handleEvent(WebBrowserEvent.OnUrlSubmitted("example.com"))
-        assertEquals("https://example.com", viewModel.uiState.value.url)
+            viewModel.updateWebViewState(
+                url = "https://kotlinlang.org",
+                isLoading = true,
+                loadingProgress = 50,
+                pageTitle = "Kotlin Programming Language",
+                canGoBack = true,
+                canGoForward = false,
+                errorMessage = "Timeout",
+            )
 
-        viewModel.handleEvent(WebBrowserEvent.OnUrlSubmitted("http://test.org"))
-        assertEquals("http://test.org", viewModel.uiState.value.url)
-    }
+            val state = viewModel.uiState.value
+            assertEquals("https://kotlinlang.org", state.url)
+            assertTrue(state.isLoading)
+            assertEquals(50, state.loadingProgress)
+            assertEquals("Kotlin Programming Language", state.pageTitle)
+            assertTrue(state.canGoBack)
+            assertFalse(state.canGoForward)
+            assertEquals("Timeout", state.errorMessage)
 
-    @Test
-    fun `test WebBrowserViewModel updates webview state`() = runTest {
-        val controller = BrowserMediaController()
-        val viewModel = WebBrowserViewModel(controller, bookmarkManager)
-
-        viewModel.updateWebViewState(
-            url = "https://kotlinlang.org",
-            isLoading = true,
-            loadingProgress = 50,
-            pageTitle = "Kotlin Programming Language",
-            canGoBack = true,
-            canGoForward = false,
-            errorMessage = "Timeout"
-        )
-
-        val state = viewModel.uiState.value
-        assertEquals("https://kotlinlang.org", state.url)
-        assertTrue(state.isLoading)
-        assertEquals(50, state.loadingProgress)
-        assertEquals("Kotlin Programming Language", state.pageTitle)
-        assertTrue(state.canGoBack)
-        assertFalse(state.canGoForward)
-        assertEquals("Timeout", state.errorMessage)
-
-        viewModel.handleEvent(WebBrowserEvent.ClearError)
-        assertNull(viewModel.uiState.value.errorMessage)
-    }
+            viewModel.handleEvent(WebBrowserEvent.ClearError)
+            assertNull(viewModel.uiState.value.errorMessage)
+        }
 
     @Test
-    fun `test WebBrowserViewModel bookmark and modal events`() = runTest {
-        val controller = BrowserMediaController()
-        val viewModel = WebBrowserViewModel(controller, bookmarkManager)
+    fun `test WebBrowserViewModel bookmark and modal events`() =
+        runTest {
+            val controller = BrowserMediaController()
+            val viewModel = WebBrowserViewModel(controller, bookmarkManager)
 
-        viewModel.handleEvent(WebBrowserEvent.OpenAddBookmarkModal)
-        assertTrue(viewModel.uiState.value.showEditBookmarkModal)
-        assertNull(viewModel.uiState.value.editingBookmark)
+            viewModel.handleEvent(WebBrowserEvent.OpenAddBookmarkModal)
+            assertTrue(viewModel.uiState.value.showEditBookmarkModal)
+            assertNull(viewModel.uiState.value.editingBookmark)
 
-        viewModel.handleEvent(WebBrowserEvent.DismissBookmarkModal)
-        assertFalse(viewModel.uiState.value.showEditBookmarkModal)
+            viewModel.handleEvent(WebBrowserEvent.DismissBookmarkModal)
+            assertFalse(viewModel.uiState.value.showEditBookmarkModal)
 
-        viewModel.handleEvent(WebBrowserEvent.ToggleGeometry)
-        assertTrue(viewModel.uiState.value.isCurvedGeometry)
+            viewModel.handleEvent(WebBrowserEvent.ToggleGeometry)
+            assertTrue(viewModel.uiState.value.isCurvedGeometry)
 
-        viewModel.handleEvent(WebBrowserEvent.GoHome)
-        assertEquals("about:blank", viewModel.uiState.value.url)
-    }
+            viewModel.handleEvent(WebBrowserEvent.GoHome)
+            assertEquals("about:blank", viewModel.uiState.value.url)
+        }
 }

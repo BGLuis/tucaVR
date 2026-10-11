@@ -3,8 +3,6 @@ package com.tucavr.browser
 import com.tucavr.history.AppDatabase
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -16,10 +14,10 @@ import java.sql.DriverManager
  * CRUD/reordering operations, and default presets.
  */
 class BrowserBookmarkDatabaseTest {
-
     private lateinit var connection: Connection
 
-    private val v5Schema = """
+    private val v5Schema =
+        """
         CREATE TABLE IF NOT EXISTS `playback_history` (
             `historyKey` TEXT NOT NULL PRIMARY KEY,
             `title` TEXT NOT NULL,
@@ -94,7 +92,7 @@ class BrowserBookmarkDatabaseTest {
             `videoCodec` TEXT NOT NULL,
             `fetchedAt` INTEGER NOT NULL
         );
-    """.trimIndent()
+        """.trimIndent()
 
     @Before
     fun openInMemoryDatabase() {
@@ -146,7 +144,7 @@ class BrowserBookmarkDatabaseTest {
         assertTrue("browser_bookmarks should exist after MIGRATION_5_6", connection.tableExists("browser_bookmarks"))
         assertEquals(
             listOf("id", "title", "url", "favicon_url", "display_order", "is_preset", "created_at_ms"),
-            connection.columnNames("browser_bookmarks")
+            connection.columnNames("browser_bookmarks"),
         )
     }
 
@@ -159,7 +157,7 @@ class BrowserBookmarkDatabaseTest {
             """
             INSERT INTO browser_bookmarks (title, url, favicon_url, display_order, is_preset, created_at_ms)
             VALUES (?, ?, ?, ?, ?, ?)
-            """.trimIndent()
+            """.trimIndent(),
         ).use { stmt ->
             stmt.setString(1, "YouTube")
             stmt.setString(2, "https://www.youtube.com")

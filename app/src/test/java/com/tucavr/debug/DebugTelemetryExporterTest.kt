@@ -471,7 +471,7 @@ class DebugTelemetryExporterTest {
             )
             assertFalse(
                 "Password leaked in startSession log for source $sourceType: $startSessionLine",
-                startSessionLine.contains("password=") || startSessionLine.contains(secretPassword)
+                startSessionLine.contains("password=") || startSessionLine.contains(secretPassword),
             )
         }
     }

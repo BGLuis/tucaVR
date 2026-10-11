@@ -19,21 +19,28 @@ object VRLog {
     }
 
     fun d(message: String) {
-        Log.d(TAG, formatMessage(message))
+        runCatching { Log.d(TAG, formatMessage(message)) }
+            .onFailure { println("D/$TAG: ${formatMessage(message)}") }
     }
 
     fun i(message: String) {
-        Log.i(TAG, formatMessage(message))
+        runCatching { Log.i(TAG, formatMessage(message)) }
+            .onFailure { println("I/$TAG: ${formatMessage(message)}") }
     }
 
     fun w(
         message: String,
         throwable: Throwable? = null,
     ) {
-        if (throwable != null) {
-            Log.w(TAG, formatMessage(message), throwable)
-        } else {
-            Log.w(TAG, formatMessage(message))
+        runCatching {
+            if (throwable != null) {
+                Log.w(TAG, formatMessage(message), throwable)
+            } else {
+                Log.w(TAG, formatMessage(message))
+            }
+        }.onFailure {
+            println("W/$TAG: ${formatMessage(message)}")
+            throwable?.printStackTrace()
         }
     }
 
@@ -41,10 +48,15 @@ object VRLog {
         message: String,
         throwable: Throwable? = null,
     ) {
-        if (throwable != null) {
-            Log.e(TAG, formatMessage(message), throwable)
-        } else {
-            Log.e(TAG, formatMessage(message))
+        runCatching {
+            if (throwable != null) {
+                Log.e(TAG, formatMessage(message), throwable)
+            } else {
+                Log.e(TAG, formatMessage(message))
+            }
+        }.onFailure {
+            println("E/$TAG: ${formatMessage(message)}")
+            throwable?.printStackTrace()
         }
     }
 }

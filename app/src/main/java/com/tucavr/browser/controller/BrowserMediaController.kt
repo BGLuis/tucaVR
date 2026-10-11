@@ -12,12 +12,13 @@ import javax.inject.Singleton
  * Allows external panels (e.g., ControlsPresentation) to send HTML5 media commands.
  */
 @Singleton
-class BrowserMediaController @Inject constructor() {
+class BrowserMediaController
+    @Inject
+    constructor() {
+        private val _commands = MutableSharedFlow<MediaCommand>(extraBufferCapacity = 64)
+        val commands: SharedFlow<MediaCommand> = _commands.asSharedFlow()
 
-    private val _commands = MutableSharedFlow<MediaCommand>(extraBufferCapacity = 64)
-    val commands: SharedFlow<MediaCommand> = _commands.asSharedFlow()
-
-    fun emitCommand(command: MediaCommand) {
-        _commands.tryEmit(command)
+        fun emitCommand(command: MediaCommand) {
+            _commands.tryEmit(command)
+        }
     }
-}

@@ -14,7 +14,6 @@ import kotlinx.coroutines.flow.Flow
  */
 @Dao
 interface BrowserBookmarkDao {
-
     @Query("SELECT * FROM browser_bookmarks ORDER BY display_order ASC, id ASC")
     fun getAllBookmarksFlow(): Flow<List<BrowserBookmark>>
 
@@ -40,7 +39,10 @@ interface BrowserBookmarkDao {
     suspend fun deleteById(id: Long)
 
     @Query("UPDATE browser_bookmarks SET display_order = :order WHERE id = :id")
-    suspend fun updateDisplayOrder(id: Long, order: Int)
+    suspend fun updateDisplayOrder(
+        id: Long,
+        order: Int,
+    )
 
     @Transaction
     suspend fun reorderBookmarks(orderedIds: List<Long>) {

@@ -25,9 +25,8 @@ class BrowserBookmarkManager(
     private val bookmarkDao: BrowserBookmarkDao,
     private val scope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main),
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main
+    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
 ) {
-
     private val _bookmarks = MutableStateFlow<List<BrowserBookmark>>(emptyList())
     val bookmarks: StateFlow<List<BrowserBookmark>> = _bookmarks.asStateFlow()
 
@@ -67,7 +66,11 @@ class BrowserBookmarkManager(
     /**
      * Adds a new bookmark.
      */
-    fun addBookmark(title: String, rawUrl: String, onComplete: (() -> Unit)? = null) {
+    fun addBookmark(
+        title: String,
+        rawUrl: String,
+        onComplete: (() -> Unit)? = null,
+    ) {
         val url = normalizeUrl(rawUrl)
         if (url.isEmpty() || url == "https://" || url == "about:blank") return
 
@@ -80,8 +83,8 @@ class BrowserBookmarkManager(
                     title = finalTitle,
                     url = url,
                     displayOrder = currentList.size,
-                    isPreset = false
-                )
+                    isPreset = false,
+                ),
             )
             onComplete?.let {
                 withContext(mainDispatcher) { it() }
@@ -92,7 +95,12 @@ class BrowserBookmarkManager(
     /**
      * Updates an existing bookmark.
      */
-    fun updateBookmark(target: BrowserBookmark, title: String, rawUrl: String, onComplete: (() -> Unit)? = null) {
+    fun updateBookmark(
+        target: BrowserBookmark,
+        title: String,
+        rawUrl: String,
+        onComplete: (() -> Unit)? = null,
+    ) {
         val url = normalizeUrl(rawUrl)
         if (url.isEmpty() || url == "https://" || url == "about:blank") return
 
@@ -118,7 +126,10 @@ class BrowserBookmarkManager(
     /**
      * Reorders bookmarks by swapping an item's index.
      */
-    fun reorderBookmark(fromIndex: Int, toIndex: Int) {
+    fun reorderBookmark(
+        fromIndex: Int,
+        toIndex: Int,
+    ) {
         val currentList = _bookmarks.value
         if (fromIndex !in currentList.indices || toIndex !in currentList.indices) return
 
@@ -145,7 +156,11 @@ class BrowserBookmarkManager(
     /**
      * Toggles a URL's bookmark state (adds it if absent, deletes it if present).
      */
-    fun toggleBookmark(url: String, pageTitle: String, onResult: ((isBookmarked: Boolean, entry: BrowserBookmark?) -> Unit)? = null) {
+    fun toggleBookmark(
+        url: String,
+        pageTitle: String,
+        onResult: ((isBookmarked: Boolean, entry: BrowserBookmark?) -> Unit)? = null,
+    ) {
         if (url.isBlank() || url == "about:blank") return
 
         scope.launch(ioDispatcher) {
@@ -156,12 +171,13 @@ class BrowserBookmarkManager(
                     withContext(mainDispatcher) { it(false, null) }
                 }
             } else {
-                val newBookmark = BrowserBookmark(
-                    title = pageTitle.ifBlank { url },
-                    url = url,
-                    displayOrder = _bookmarks.value.size,
-                    isPreset = false
-                )
+                val newBookmark =
+                    BrowserBookmark(
+                        title = pageTitle.ifBlank { url },
+                        url = url,
+                        displayOrder = _bookmarks.value.size,
+                        isPreset = false,
+                    )
                 val id = bookmarkDao.insertBookmark(newBookmark)
                 val inserted = newBookmark.copy(id = id)
                 onResult?.let {

@@ -5,7 +5,10 @@ package com.tucavr.browser.state
  */
 sealed interface MediaCommand {
     data object Play : MediaCommand
+
     data object Pause : MediaCommand
+
     data object ToggleMute : MediaCommand
+
     data class Skip(val seconds: Int) : MediaCommand
 }
