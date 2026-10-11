@@ -1047,6 +1047,7 @@ class VRActivity : NativeActivity() {
             height: Int,
         ) {
             activity.runOnUiThread {
+                if (activity.isDestroyed || activity.isFinishing) return@runOnUiThread
                 val displayManager = activity.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
                 val dpi = VRBrowserController.DEFAULT_DPI
                 activity.browserVirtualDisplay =
@@ -1067,7 +1068,6 @@ class VRActivity : NativeActivity() {
                             browserController = controller,
                         )
                     activity.browserPresentation?.show()
-                    activity.nativeSetBrowserActive(false)
                 }
             }
         }
