@@ -14,8 +14,8 @@ import org.mozilla.geckoview.GeckoSessionSettings
  * Main manager for the GeckoView engine and web session.
  *
  * Responsibilities:
- * 1. Initialize the shared [GeckoRuntime] with Widevine DRM enabled (`--enable-media-drm`).
- * 2. Configure [GeckoSession] with a tablet/desktop user agent and desktop viewport.
+ * 1. Initialize the shared [GeckoRuntime] passing `--enable-media-drm` (effect on Widevine not confirmed).
+ * 2. Configure [GeckoSession] with mobile user agent and viewport mode.
  * 3. Expose navigation, lifecycle, and reactive state ([StateFlow]).
  *
  * FUTURE EXTENSION NOTE:
@@ -35,6 +35,10 @@ class VRBrowserController(
         const val DEFAULT_HEIGHT = 1440
         const val DEFAULT_DPI = 320
 
+        // Valores definidos no PR #107 para legibilidade em VR; não validados comparativamente no headset.
+        private const val DEFAULT_DISPLAY_DENSITY_OVERRIDE = 2.2f
+        private const val DEFAULT_FONT_SIZE_FACTOR = 1.5f
+
         @Volatile
         private var sharedRuntime: GeckoRuntime? = null
 
@@ -47,10 +51,12 @@ class VRBrowserController(
         private fun createRuntime(context: Context): GeckoRuntime {
             val settings =
                 GeckoRuntimeSettings.Builder()
+                    // Argumento passado no PR original; eficácia sobre Widevine EME não comprovada no headset
                     .arguments(arrayOf("--enable-media-drm"))
-                    .displayDensityOverride(2.2f)
-                    .fontSizeFactor(1.5f)
+                    .displayDensityOverride(DEFAULT_DISPLAY_DENSITY_OVERRIDE)
+                    .fontSizeFactor(DEFAULT_FONT_SIZE_FACTOR)
                     .automaticFontSizeAdjustment(true)
+                    // Habilita pinch-to-zoom mesmo quando a página define user-scalable=no
                     .forceUserScalableEnabled(true)
                     .build()
             return GeckoRuntime.create(context.applicationContext, settings)
