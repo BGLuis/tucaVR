@@ -255,6 +255,8 @@ fun WebBrowserScreen(
             if (!state.isFullScreen) {
                 BrowserToolbar(
                     state = state,
+                    onShowNativeKeyboard = onShowNativeKeyboard,
+                    onHideNativeKeyboard = onHideNativeKeyboard,
                     onEvent = { event ->
                         when (event) {
                             is WebBrowserEvent.GoBack -> geckoSession?.goBack()
@@ -408,6 +410,8 @@ fun WebBrowserScreen(
         if (state.showEditBookmarkModal) {
             EditBookmarkModal(
                 bookmark = state.editingBookmark,
+                onShowNativeKeyboard = onShowNativeKeyboard,
+                onHideNativeKeyboard = onHideNativeKeyboard,
                 onDismiss = { onEvent(WebBrowserEvent.DismissBookmarkModal) },
                 onSave = { title, url ->
                     onEvent(WebBrowserEvent.SaveBookmark(title, url))

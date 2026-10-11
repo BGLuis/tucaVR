@@ -1,5 +1,8 @@
 package com.tucavr.browser.ui
 
+import android.text.InputType
+import android.view.inputmethod.EditorInfo
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -41,14 +44,35 @@ import androidx.compose.ui.unit.dp
 import com.tucavr.R
 import com.tucavr.browser.state.WebBrowserEvent
 import com.tucavr.browser.state.WebBrowserUiState
+import com.tucavr.designsystem.KeyboardBinding
 
 @Composable
 fun BrowserToolbar(
     state: WebBrowserUiState,
     onEvent: (WebBrowserEvent) -> Unit,
+    onShowNativeKeyboard: ((KeyboardBinding) -> Unit)? = null,
+    onHideNativeKeyboard: (() -> Unit)? = null,
 ) {
     var urlTextFieldValue by remember(state.url) { mutableStateOf(state.url) }
     val focusManager = LocalFocusManager.current
+    val urlInteractionSource = remember { MutableInteractionSource() }
+
+    fun submitUrl() {
+        focusManager.clearFocus()
+        onHideNativeKeyboard?.invoke()
+        onEvent(WebBrowserEvent.OnUrlSubmitted(urlTextFieldValue))
+    }
+
+    NativeKeyboardEffect(
+        interactionSource = urlInteractionSource,
+        text = urlTextFieldValue,
+        onTextChange = { urlTextFieldValue = it },
+        keyboardInputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI,
+        keyboardImeOptions = EditorInfo.IME_ACTION_GO,
+        onImeAction = { actionId -> if (actionId == EditorInfo.IME_ACTION_GO) submitUrl() },
+        onShowNativeKeyboard = onShowNativeKeyboard,
+        onHideNativeKeyboard = onHideNativeKeyboard,
+    )
 
     Surface(
         color = BrowserColors.surface,
@@ -116,6 +140,7 @@ fun BrowserToolbar(
                     onValueChange = { urlTextFieldValue = it },
                     modifier = Modifier.weight(1f),
                     singleLine = true,
+                    interactionSource = urlInteractionSource,
                     placeholder = { Text(stringResource(R.string.webbrowser_hint_url), color = BrowserColors.textSecondary) },
                     colors =
                         OutlinedTextFieldDefaults.colors(
@@ -132,10 +157,7 @@ fun BrowserToolbar(
                         ),
                     keyboardActions =
                         KeyboardActions(
-                            onGo = {
-                                focusManager.clearFocus()
-                                onEvent(WebBrowserEvent.OnUrlSubmitted(urlTextFieldValue))
-                            },
+                            onGo = { submitUrl() },
                         ),
                 )
 

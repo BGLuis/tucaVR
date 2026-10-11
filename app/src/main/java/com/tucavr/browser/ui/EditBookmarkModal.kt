@@ -1,5 +1,7 @@
 package com.tucavr.browser.ui
 
+import android.text.InputType
+import android.view.inputmethod.EditorInfo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -31,22 +33,58 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import com.tucavr.R
 import com.tucavr.browser.data.BrowserBookmark
+import com.tucavr.designsystem.KeyboardBinding
 
 @Composable
 fun EditBookmarkModal(
     bookmark: BrowserBookmark?,
     onDismiss: () -> Unit,
     onSave: (title: String, url: String) -> Unit,
+    onShowNativeKeyboard: ((KeyboardBinding) -> Unit)? = null,
+    onHideNativeKeyboard: (() -> Unit)? = null,
 ) {
     var titleText by remember(bookmark) { mutableStateOf(bookmark?.title ?: "") }
     var urlText by remember(bookmark) { mutableStateOf(bookmark?.url ?: "") }
+    val focusManager = LocalFocusManager.current
+    val urlFocusRequester = remember { FocusRequester() }
+    val titleInteractionSource = remember { MutableInteractionSource() }
+    val urlInteractionSource = remember { MutableInteractionSource() }
+
+    NativeKeyboardEffect(
+        interactionSource = titleInteractionSource,
+        text = titleText,
+        onTextChange = { titleText = it },
+        keyboardInputType = InputType.TYPE_CLASS_TEXT,
+        keyboardImeOptions = EditorInfo.IME_ACTION_NEXT,
+        onImeAction = { actionId -> if (actionId == EditorInfo.IME_ACTION_NEXT) urlFocusRequester.requestFocus() },
+        onShowNativeKeyboard = onShowNativeKeyboard,
+        onHideNativeKeyboard = onHideNativeKeyboard,
+    )
+    NativeKeyboardEffect(
+        interactionSource = urlInteractionSource,
+        text = urlText,
+        onTextChange = { urlText = it },
+        keyboardInputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI,
+        keyboardImeOptions = EditorInfo.IME_ACTION_DONE,
+        onImeAction = { actionId ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                focusManager.clearFocus()
+                onHideNativeKeyboard?.invoke()
+            }
+        },
+        onShowNativeKeyboard = onShowNativeKeyboard,
+        onHideNativeKeyboard = onHideNativeKeyboard,
+    )
 
     Box(
         modifier =
@@ -95,6 +133,7 @@ fun EditBookmarkModal(
                 OutlinedTextField(
                     value = titleText,
                     onValueChange = { titleText = it },
+                    interactionSource = titleInteractionSource,
                     label = { Text(stringResource(R.string.webbrowser_label_title), color = BrowserColors.textSecondary) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
@@ -114,9 +153,10 @@ fun EditBookmarkModal(
                 OutlinedTextField(
                     value = urlText,
                     onValueChange = { urlText = it },
+                    interactionSource = urlInteractionSource,
                     label = { Text(stringResource(R.string.webbrowser_label_url), color = BrowserColors.textSecondary) },
                     singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().focusRequester(urlFocusRequester),
                     colors =
                         OutlinedTextFieldDefaults.colors(
                             focusedTextColor = BrowserColors.text,
