@@ -88,13 +88,9 @@ jobs:
 
       # ---- A partir daqui, todos os steps de build só rodam se o reuso acima não deu certo ----
 
-      - name: Checkout Meta OpenXR SDK (Private Repo)
+      - name: Setup External Dependencies (Meta OpenXR SDK)
         if: steps.reuse.outcome != 'success'
-        uses: actions/checkout@v4
-        with:
-          repository: BGLuis/meta-openxr-sdk-private
-          token: ${{ secrets.SDK_REPO_PAT }}
-          path: sdk/meta-openxr-sdk
+        run: ./scripts/setup-deps.sh
 
       - name: Set up JDK ${{ env.JAVA_VERSION }}
         if: steps.reuse.outcome != 'success'
