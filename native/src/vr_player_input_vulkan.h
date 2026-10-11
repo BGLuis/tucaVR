@@ -1208,23 +1208,6 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             if (prevGrabbed && !state.isScreenGrabbed) {
                 NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
             }
-
-            // Hand tracking for the web browser
-            bool pinchGrabB = currTrigger && (currentHitPanel == 4) && !state.modalActive;
-            if (!state.isBrowserGrabbed && pinchGrabB && (tBrowser > 0.0f)) {
-                state.isBrowserGrabbed = true;
-                state.browserGrabDistance = std::max(0.8f, std::min(tBrowser, 8.0f));
-            } else if (state.isBrowserGrabbed) {
-                if (currTrigger && state.hasRay) {
-                    XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.browserGrabDistance));
-                    state.browserPosition = vrplayer::BrowserWorldToLocal(targetWorld, state.sceneTranslationOffset, state.sceneYawOffset);
-                    state.browserPosition.z = std::min(-0.8f, std::max(state.browserPosition.z, -10.0f));
-                    state.browserPosition.y = std::max(0.3f, std::min(state.browserPosition.y, 3.5f));
-                    state.browserPosition.x = std::max(-4.0f, std::min(state.browserPosition.x, 4.0f));
-                } else {
-                    state.isBrowserGrabbed = false;
-                }
-            }
         } else {
             // Controller Touch Plus (Opção B):
             bool isAimingScreen = (currentHitPanel == 0 && tScreen > 0.0f && !state.modalActive && !IsSphereMode(state.screenMode));
