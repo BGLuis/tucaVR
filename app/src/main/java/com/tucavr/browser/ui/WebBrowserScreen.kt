@@ -304,6 +304,10 @@ fun WebBrowserScreen(
                                 geckoSession?.stop()
                                 onEvent(event)
                             }
+                            is WebBrowserEvent.GoHome -> {
+                                geckoSession?.loadUri("about:blank")
+                                onEvent(event)
+                            }
                             is WebBrowserEvent.CloseBrowser -> {
                                 onCloseBrowser?.invoke()
                                 onEvent(event)
