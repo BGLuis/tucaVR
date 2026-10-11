@@ -6,7 +6,7 @@ import com.tucavr.browser.controller.BrowserMediaController
 import com.tucavr.browser.domain.BrowserBookmarkManager
 
 /**
- * Fallback factory for creating WebBrowserViewModel when external dependency injection is unavailable.
+ * Factory for WebBrowserViewModel, which takes constructor arguments and has no default factory.
  */
 class WebBrowserViewModelFactory(
     private val mediaController: BrowserMediaController,

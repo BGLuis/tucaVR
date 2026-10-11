@@ -164,10 +164,6 @@ dependencies {
     // GeckoView Engine (Mozilla) for Widevine DRM and off-screen rendering support
     implementation("org.mozilla.geckoview:geckoview-omni:122.0.20240205133611")
 
-    // Hilt / dependency injection
-    implementation("javax.inject:javax.inject:1")
-    implementation("com.google.dagger:hilt-android:2.48")
-
     // Jetpack Compose and Material 3
     implementation(platform("androidx.compose:compose-bom:2023.10.01"))
     implementation("androidx.compose.ui:ui")
