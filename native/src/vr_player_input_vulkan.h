@@ -114,6 +114,40 @@ struct SceneTransforms {
     XrVector3f browserNormal;
 };
 
+// Pose inicial do navegador: a frente do usuario, virado para a cabeca.
+struct BrowserSpawnPose {
+    XrVector3f position;
+    float yaw;
+};
+
+inline BrowserSpawnPose ComputeBrowserSpawnPose(const AppState& state, const XrVector3f& headCenter) {
+    XrVector3f position = Vec3Add(state.sceneTranslationOffset, Vec3RotateY({0.0f, 1.5f, -2.2f}, state.sceneYawOffset));
+    XrVector3f toHead = Vec3Sub(headCenter, position);
+    toHead.y = 0.0f;
+    float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
+    float yaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : state.sceneYawOffset;
+    return {position, yaw};
+}
+
+// Inicializa/reseta a pose do navegador. Deve rodar uma vez por frame antes de
+// ComputeSceneTransforms, que apenas le o estado.
+inline void UpdateBrowserPose(AppState& state, const XrVector3f& headCenter) {
+    if (!state.browserActive) {
+        state.browserPoseInitialized = false;
+        state.isBrowserGrabbed = false;
+        return;
+    }
+    if (!state.browserPoseInitialized) {
+        const BrowserSpawnPose spawn = ComputeBrowserSpawnPose(state, headCenter);
+        state.browserPosition = spawn.position;
+        state.browserYaw = spawn.yaw;
+        state.browserScaleX = kBrowserPanelScaleX;
+        state.browserScaleY = kBrowserPanelScaleY;
+        state.isBrowserGrabbed = false;
+        state.browserPoseInitialized = true;
+    }
+}
+
 inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVector3f& headCenter) {
     SceneTransforms t{};
 
@@ -153,33 +187,16 @@ inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVec
     t.screenCenter = worldScreenPos;
     t.screenNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.sceneYawOffset);
 
-    // Browser: fixed pose on open, facing the user
-    XrVector3f worldBrowserPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY({0.0f, 1.5f, -2.2f}, state.sceneYawOffset));
-    XrVector3f toHeadB = Vec3Sub(headCenter, worldBrowserPos);
-    toHeadB.y = 0.0f;
-    float toHeadLenB = sqrtf(toHeadB.x * toHeadB.x + toHeadB.z * toHeadB.z);
-    float bYaw = (toHeadLenB > 1e-4f) ? atan2f(toHeadB.x / toHeadLenB, toHeadB.z / toHeadLenB) : state.sceneYawOffset;
-
-    if (!state.browserPoseInitialized && state.browserActive) {
-        const_cast<AppState&>(state).browserPosition = worldBrowserPos;
-        const_cast<AppState&>(state).browserYaw = bYaw;
-        const_cast<AppState&>(state).browserScaleX = kBrowserPanelScaleX;
-        const_cast<AppState&>(state).browserScaleY = kBrowserPanelScaleY;
-        const_cast<AppState&>(state).isBrowserGrabbed = false;
-        const_cast<AppState&>(state).browserPoseInitialized = true;
-    } else if (!state.browserActive) {
-        const_cast<AppState&>(state).browserPoseInitialized = false;
-        const_cast<AppState&>(state).isBrowserGrabbed = false;
-    }
+    const BrowserSpawnPose spawn = ComputeBrowserSpawnPose(state, headCenter);
 
     if (state.browserPoseInitialized) {
         t.browserCenter = state.browserPosition;
         t.browserModelNoScale = Mat4Multiply(Mat4Translation(state.browserPosition.x, state.browserPosition.y, state.browserPosition.z), Mat4RotationY(state.browserYaw));
         t.browserNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.browserYaw);
     } else {
-        t.browserCenter = worldBrowserPos;
-        t.browserModelNoScale = Mat4Multiply(Mat4Translation(worldBrowserPos.x, worldBrowserPos.y, worldBrowserPos.z), Mat4RotationY(bYaw));
-        t.browserNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, bYaw);
+        t.browserCenter = spawn.position;
+        t.browserModelNoScale = Mat4Multiply(Mat4Translation(spawn.position.x, spawn.position.y, spawn.position.z), Mat4RotationY(spawn.yaw));
+        t.browserNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, spawn.yaw);
     }
 
     return t;
@@ -572,7 +589,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     if (state.hasRay && state.browserHasFrame && state.browserActive) {
         float browserScaleFactor = state.browserScaleX / kBrowserPanelScaleX;
         if (g_browserCurvedGeometry.load()) {
-            tBrowser = rayHitsCylinder(scene.browserModelNoScale, 2.3f * browserScaleFactor, 1.0435f,
+            tBrowser = rayHitsCylinder(scene.browserModelNoScale, kBrowserCylinderRadius * browserScaleFactor, kBrowserCylinderCentralAngle,
                                       (float)kBrowserTexWidth / (float)kBrowserTexHeight,
                                       ub, vb, state.lastRayOrigin, state.lastRayDir);
         } else {
@@ -1309,7 +1326,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                         float newWidth = state.browserScaleX + sy * kResizeSpeedMetersPerSec * dt;
                         newWidth = std::max(0.8f, std::min(newWidth, 8.0f));
                         state.browserScaleX = newWidth;
-                        state.browserScaleY = newWidth * (1440.0f / 2560.0f);
+                        state.browserScaleY = newWidth * kBrowserTexAspect;
                     }
 
                     if (sx != 0.0f) {

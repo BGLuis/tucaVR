@@ -377,6 +377,9 @@ constexpr uint32_t kBrowserTexWidth = 2560;
 constexpr uint32_t kBrowserTexHeight = 1440;
 constexpr float kBrowserPanelScaleX = 2.4f;
 constexpr float kBrowserPanelScaleY = 1.35f;
+constexpr float kBrowserCylinderRadius = 2.3f;
+constexpr float kBrowserCylinderCentralAngle = 1.0435f;
+constexpr float kBrowserTexAspect = static_cast<float>(kBrowserTexHeight) / static_cast<float>(kBrowserTexWidth);
 
 // Metricas de performance (debug, ver docs/DEBUGGING.md).
 constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz
@@ -7285,6 +7288,7 @@ void RenderFrame(AppState& state) {
         }
 
         // Estagio 4/5: Processar interacoes apos obtermos a posicao da cabeca
+        UpdateBrowserPose(state, headCenter);
         UpdateInteraction(state, frameState.predictedDisplayTime, headCenter, views[0].pose.orientation);
 
         // Atualiza a orientação da cabeça para o pipeline de áudio espacial (Rust)
@@ -7670,7 +7674,7 @@ void RenderFrame(AppState& state) {
         browserQuad.size = {state.browserScaleX, state.browserScaleY};
 
         float browserScaleFactor = state.browserScaleX / kBrowserPanelScaleX;
-        float cylinderRadius = 2.3f * browserScaleFactor;
+        float cylinderRadius = kBrowserCylinderRadius * browserScaleFactor;
         XrCompositionLayerCylinderKHR browserCylinder{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
         browserCylinder.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
         browserCylinder.space = state.localSpace;
@@ -7681,7 +7685,7 @@ void RenderFrame(AppState& state) {
         browserCylinder.pose.position = Vec3Add(scene.browserCenter, Vec3RotateY({0.0f, 0.0f, cylinderRadius}, state.browserYaw));
         browserCylinder.pose.orientation = QuatFromYaw(state.browserYaw);
         browserCylinder.radius = cylinderRadius;
-        browserCylinder.centralAngle = 1.0435f;
+        browserCylinder.centralAngle = kBrowserCylinderCentralAngle;
         browserCylinder.aspectRatio = (float)kBrowserTexWidth / (float)kBrowserTexHeight;
 
         // Retículo do Laser no topo de todos os painéis

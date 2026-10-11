@@ -866,7 +866,7 @@ class VRActivity : NativeActivity() {
 
                 event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
 
-                if (action == 7) { // ACTION_HOVER_MOVE
+                if (action == android.view.MotionEvent.ACTION_HOVER_MOVE) {
                     activity.presentation?.dispatchGenericMotionEvent(event)
                 } else {
                     activity.presentation?.dispatchTouchEvent(event)
@@ -947,7 +947,7 @@ class VRActivity : NativeActivity() {
 
                 event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
 
-                if (action == 7) {
+                if (action == android.view.MotionEvent.ACTION_HOVER_MOVE) {
                     activity.controlsPresentation?.dispatchGenericMotionEvent(event)
                 } else {
                     activity.controlsPresentation?.dispatchTouchEvent(event)
@@ -1013,7 +1013,7 @@ class VRActivity : NativeActivity() {
 
                 event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
 
-                if (action == 7) {
+                if (action == android.view.MotionEvent.ACTION_HOVER_MOVE) {
                     activity.modalPresentation?.dispatchGenericMotionEvent(event)
                 } else {
                     activity.modalPresentation?.dispatchTouchEvent(event)
@@ -1100,7 +1100,7 @@ class VRActivity : NativeActivity() {
 
                 event.source = InputDevice.SOURCE_TOUCHSCREEN
 
-                if (action == 7) {
+                if (action == android.view.MotionEvent.ACTION_HOVER_MOVE) {
                     activity.browserPresentation?.dispatchGenericMotionEvent(event)
                 } else {
                     activity.browserPresentation?.dispatchTouchEvent(event)
