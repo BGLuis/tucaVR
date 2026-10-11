@@ -592,15 +592,21 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.lastHitDist = -1.0f;
         }
     } else {
-        if (tBrowser > 0.0f) {
-            currentHitPanel = 4; hitU = ub; hitV = vb;
-            state.lastHitDist = tBrowser;
-        } else if (tControls > 0.0f) {
-            currentHitPanel = 2; hitU = uc; hitV = vc;
-            state.lastHitDist = tControls;
-        } else if (tUi > 0.0f) {
-            currentHitPanel = 1; hitU = uu; hitV = vu;
-            state.lastHitDist = tUi;
+        switch (vrplayer::PickNearestPanel(tUi, tControls, tBrowser)) {
+            case vrplayer::Panel::Browser:
+                currentHitPanel = 4; hitU = ub; hitV = vb;
+                state.lastHitDist = tBrowser;
+                break;
+            case vrplayer::Panel::Controls:
+                currentHitPanel = 2; hitU = uc; hitV = vc;
+                state.lastHitDist = tControls;
+                break;
+            case vrplayer::Panel::Ui:
+                currentHitPanel = 1; hitU = uu; hitV = vu;
+                state.lastHitDist = tUi;
+                break;
+            default:
+                break;
         }
     }
     if (currentHitPanel != 0) {

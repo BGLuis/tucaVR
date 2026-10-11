@@ -49,6 +49,7 @@
 
 #include "vk_math.h"
 #include "browser_pose.h"
+#include "panel_pick.h"
 #include "hand_tracking.h"
 #include "screen_mode.h"
 #include "vr_player_feedback_overlay.h"
