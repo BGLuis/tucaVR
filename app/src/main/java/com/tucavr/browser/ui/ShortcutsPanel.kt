@@ -280,17 +280,21 @@ private fun extractDomainHost(urlStr: String): String {
     }
 }
 
+internal fun faviconCandidateUrls(
+    explicit: String?,
+    host: String,
+): List<String> {
+    val urls = mutableListOf<String>()
+    if (!explicit.isNullOrBlank()) urls.add(explicit)
+    if (host.isNotBlank() && host != "about:blank") urls.add("https://$host/favicon.ico")
+    return urls
+}
+
 private fun fetchFaviconBitmap(
     explicitFaviconUrl: String?,
     host: String,
 ): ImageBitmap? {
-    val urlsToTry = mutableListOf<String>()
-    if (!explicitFaviconUrl.isNullOrBlank()) {
-        urlsToTry.add(explicitFaviconUrl)
-    }
-    if (host.isNotBlank() && host != "about:blank") {
-        urlsToTry.add("https://www.google.com/s2/favicons?domain=$host&sz=128")
-    }
+    val urlsToTry = faviconCandidateUrls(explicitFaviconUrl, host)
 
     for (urlStr in urlsToTry) {
         try {
