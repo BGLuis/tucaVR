@@ -32,7 +32,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
@@ -249,7 +248,7 @@ fun WebBrowserScreen(
         modifier =
             Modifier
                 .fillMaxSize()
-                .background(Color(0xFF121212)),
+                .background(BrowserColors.background),
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
             // Hide the top bar in fullscreen mode
@@ -294,13 +293,13 @@ fun WebBrowserScreen(
                     modifier =
                         Modifier
                             .fillMaxWidth()
-                            .background(Color(0xFFB00020))
+                            .background(BrowserColors.errorBanner)
                             .padding(horizontal = 16.dp, vertical = 8.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
                         text = stringResource(R.string.webbrowser_status_error_format, error),
-                        color = Color.White,
+                        color = BrowserColors.text,
                         modifier = Modifier.weight(1f),
                         style = MaterialTheme.typography.bodyMedium,
                     )
@@ -308,7 +307,7 @@ fun WebBrowserScreen(
                         Icon(
                             imageVector = Icons.Default.Close,
                             contentDescription = stringResource(R.string.webbrowser_btn_dismiss_error),
-                            tint = Color.White,
+                            tint = BrowserColors.text,
                         )
                     }
                 }
@@ -343,19 +342,19 @@ fun WebBrowserScreen(
                         modifier =
                             Modifier
                                 .fillMaxSize()
-                                .background(Color(0xFF1A1A1A)),
+                                .background(BrowserColors.surface),
                         contentAlignment = Alignment.Center,
                     ) {
                         Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Text(
                                 text = "GeckoView Engine (Widevine DRM Enabled)",
-                                color = Color(0xFFFF6B00),
+                                color = BrowserColors.accent,
                                 style = MaterialTheme.typography.titleMedium,
                             )
                             Spacer(modifier = Modifier.width(8.dp))
                             Text(
                                 text = "URL: ${state.url}",
-                                color = Color.LightGray,
+                                color = BrowserColors.textSecondary,
                                 style = MaterialTheme.typography.bodyMedium,
                             )
                         }
@@ -391,8 +390,8 @@ fun WebBrowserScreen(
                         onClick = { geckoSession?.exitFullScreen() },
                         colors =
                             ButtonDefaults.buttonColors(
-                                containerColor = Color(0xCC1E1E1E),
-                                contentColor = Color.White,
+                                containerColor = BrowserColors.surface.copy(alpha = 0.8f),
+                                contentColor = BrowserColors.text,
                             ),
                         modifier =
                             Modifier

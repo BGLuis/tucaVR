@@ -62,7 +62,7 @@ fun EditBookmarkModal(
         Card(
             colors =
                 CardDefaults.cardColors(
-                    containerColor = Color(0xFF1E1E1E),
+                    containerColor = BrowserColors.surface,
                 ),
             shape = RoundedCornerShape(16.dp),
             modifier =
@@ -86,7 +86,7 @@ fun EditBookmarkModal(
                             if (bookmark != null) R.string.webbrowser_title_edit_bookmark else R.string.webbrowser_title_new_bookmark,
                         ),
                     style = MaterialTheme.typography.titleLarge,
-                    color = Color.White,
+                    color = BrowserColors.text,
                     fontWeight = FontWeight.Bold,
                 )
 
@@ -95,17 +95,17 @@ fun EditBookmarkModal(
                 OutlinedTextField(
                     value = titleText,
                     onValueChange = { titleText = it },
-                    label = { Text(stringResource(R.string.webbrowser_label_title), color = Color.Gray) },
+                    label = { Text(stringResource(R.string.webbrowser_label_title), color = BrowserColors.textSecondary) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     colors =
                         OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = Color(0xFFFF6B00),
-                            unfocusedBorderColor = Color(0xFF3A3A3A),
-                            focusedContainerColor = Color(0xFF2A2A2A),
-                            unfocusedContainerColor = Color(0xFF2A2A2A),
+                            focusedTextColor = BrowserColors.text,
+                            unfocusedTextColor = BrowserColors.text,
+                            focusedBorderColor = BrowserColors.accent,
+                            unfocusedBorderColor = BrowserColors.border,
+                            focusedContainerColor = BrowserColors.surfaceAlt,
+                            unfocusedContainerColor = BrowserColors.surfaceAlt,
                         ),
                 )
 
@@ -114,17 +114,17 @@ fun EditBookmarkModal(
                 OutlinedTextField(
                     value = urlText,
                     onValueChange = { urlText = it },
-                    label = { Text(stringResource(R.string.webbrowser_label_url), color = Color.Gray) },
+                    label = { Text(stringResource(R.string.webbrowser_label_url), color = BrowserColors.textSecondary) },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth(),
                     colors =
                         OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = Color(0xFFFF6B00),
-                            unfocusedBorderColor = Color(0xFF3A3A3A),
-                            focusedContainerColor = Color(0xFF2A2A2A),
-                            unfocusedContainerColor = Color(0xFF2A2A2A),
+                            focusedTextColor = BrowserColors.text,
+                            unfocusedTextColor = BrowserColors.text,
+                            focusedBorderColor = BrowserColors.accent,
+                            unfocusedBorderColor = BrowserColors.border,
+                            focusedContainerColor = BrowserColors.surfaceAlt,
+                            unfocusedContainerColor = BrowserColors.surfaceAlt,
                         ),
                 )
 
@@ -139,7 +139,7 @@ fun EditBookmarkModal(
                         onClick = onDismiss,
                         colors =
                             ButtonDefaults.outlinedButtonColors(
-                                contentColor = Color.White,
+                                contentColor = BrowserColors.text,
                             ),
                     ) {
                         Text(stringResource(R.string.webbrowser_btn_cancel))
@@ -155,8 +155,8 @@ fun EditBookmarkModal(
                         },
                         colors =
                             ButtonDefaults.buttonColors(
-                                containerColor = Color(0xFFFF6B00),
-                                contentColor = Color.White,
+                                containerColor = BrowserColors.accent,
+                                contentColor = BrowserColors.text,
                             ),
                     ) {
                         Text(stringResource(R.string.webbrowser_btn_save))
@@ -175,7 +175,7 @@ fun EditBookmarkModalPreview() {
             modifier =
                 Modifier
                     .fillMaxSize()
-                    .background(Color(0xFF121212)),
+                    .background(BrowserColors.background),
         ) {
             EditBookmarkModal(
                 bookmark = BrowserBookmark(id = 1, title = "YouTube VR", url = "https://www.youtube.com"),

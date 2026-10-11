@@ -33,7 +33,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.ImeAction
@@ -52,7 +51,7 @@ fun BrowserToolbar(
     val focusManager = LocalFocusManager.current
 
     Surface(
-        color = Color(0xFF1E1E1E),
+        color = BrowserColors.surface,
         modifier = Modifier.fillMaxWidth(),
     ) {
         Column {
@@ -71,7 +70,7 @@ fun BrowserToolbar(
                     Icon(
                         imageVector = Icons.Default.ArrowBack,
                         contentDescription = stringResource(R.string.webbrowser_btn_back),
-                        tint = if (state.canGoBack) Color.White else Color.Gray,
+                        tint = if (state.canGoBack) BrowserColors.text else BrowserColors.textSecondary,
                     )
                 }
 
@@ -83,7 +82,7 @@ fun BrowserToolbar(
                     Icon(
                         imageVector = Icons.Default.ArrowForward,
                         contentDescription = stringResource(R.string.webbrowser_btn_forward),
-                        tint = if (state.canGoForward) Color.White else Color.Gray,
+                        tint = if (state.canGoForward) BrowserColors.text else BrowserColors.textSecondary,
                     )
                 }
 
@@ -94,7 +93,7 @@ fun BrowserToolbar(
                     Icon(
                         imageVector = Icons.Default.Refresh,
                         contentDescription = stringResource(R.string.webbrowser_btn_reload),
-                        tint = Color.White,
+                        tint = BrowserColors.text,
                     )
                 }
 
@@ -105,7 +104,7 @@ fun BrowserToolbar(
                     Icon(
                         imageVector = Icons.Default.Home,
                         contentDescription = stringResource(R.string.webbrowser_btn_home),
-                        tint = Color.White,
+                        tint = BrowserColors.text,
                     )
                 }
 
@@ -117,15 +116,15 @@ fun BrowserToolbar(
                     onValueChange = { urlTextFieldValue = it },
                     modifier = Modifier.weight(1f),
                     singleLine = true,
-                    placeholder = { Text(stringResource(R.string.webbrowser_hint_url), color = Color.Gray) },
+                    placeholder = { Text(stringResource(R.string.webbrowser_hint_url), color = BrowserColors.textSecondary) },
                     colors =
                         OutlinedTextFieldDefaults.colors(
-                            focusedTextColor = Color.White,
-                            unfocusedTextColor = Color.White,
-                            focusedBorderColor = Color(0xFFFF6B00),
-                            unfocusedBorderColor = Color(0xFF3A3A3A),
-                            focusedContainerColor = Color(0xFF2A2A2A),
-                            unfocusedContainerColor = Color(0xFF2A2A2A),
+                            focusedTextColor = BrowserColors.text,
+                            unfocusedTextColor = BrowserColors.text,
+                            focusedBorderColor = BrowserColors.accent,
+                            unfocusedBorderColor = BrowserColors.border,
+                            focusedContainerColor = BrowserColors.surfaceAlt,
+                            unfocusedContainerColor = BrowserColors.surfaceAlt,
                         ),
                     keyboardOptions =
                         KeyboardOptions(
@@ -154,7 +153,7 @@ fun BrowserToolbar(
                             } else {
                                 stringResource(R.string.webbrowser_btn_add_bookmark)
                             },
-                        tint = if (state.isBookmarked) Color(0xFFFF6B00) else Color.White,
+                        tint = if (state.isBookmarked) BrowserColors.accent else BrowserColors.text,
                     )
                 }
 
@@ -165,7 +164,7 @@ fun BrowserToolbar(
                     Icon(
                         imageVector = Icons.Default.PanoramaHorizontal,
                         contentDescription = stringResource(R.string.webbrowser_btn_toggle_curved),
-                        tint = if (state.isCurvedGeometry) Color(0xFFFF6B00) else Color.White,
+                        tint = if (state.isCurvedGeometry) BrowserColors.accent else BrowserColors.text,
                     )
                 }
 
@@ -176,7 +175,7 @@ fun BrowserToolbar(
                     Icon(
                         imageVector = Icons.Default.Close,
                         contentDescription = stringResource(R.string.webbrowser_btn_close),
-                        tint = Color.White,
+                        tint = BrowserColors.text,
                     )
                 }
             }
@@ -185,8 +184,8 @@ fun BrowserToolbar(
                 LinearProgressIndicator(
                     progress = state.loadingProgress / 100f,
                     modifier = Modifier.fillMaxWidth(),
-                    color = Color(0xFFFF6B00),
-                    trackColor = Color(0xFF2A2A2A),
+                    color = BrowserColors.accent,
+                    trackColor = BrowserColors.surfaceAlt,
                 )
             }
         }

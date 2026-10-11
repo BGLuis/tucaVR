@@ -74,13 +74,13 @@ fun ShortcutsPanel(
         modifier =
             Modifier
                 .fillMaxSize()
-                .background(Color(0xFF121212))
+                .background(BrowserColors.background)
                 .padding(24.dp),
     ) {
         Text(
             text = stringResource(R.string.webbrowser_title_shortcuts),
             style = MaterialTheme.typography.headlineMedium,
-            color = Color.White,
+            color = BrowserColors.text,
             fontWeight = FontWeight.Bold,
             modifier = Modifier.padding(bottom = 16.dp),
         )
@@ -118,7 +118,7 @@ fun BookmarkCard(
     Card(
         colors =
             CardDefaults.cardColors(
-                containerColor = Color(0xFF1E1E1E),
+                containerColor = BrowserColors.surface,
             ),
         shape = RoundedCornerShape(12.dp),
         modifier =
@@ -148,7 +148,7 @@ fun BookmarkCard(
 
                 Text(
                     text = bookmark.title,
-                    color = Color.White,
+                    color = BrowserColors.text,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
@@ -160,7 +160,7 @@ fun BookmarkCard(
                     Icon(
                         imageVector = Icons.Default.Edit,
                         contentDescription = stringResource(R.string.webbrowser_btn_edit_bookmark),
-                        tint = Color.LightGray,
+                        tint = BrowserColors.textSecondary,
                         modifier = Modifier.size(16.dp),
                     )
                 }
@@ -169,7 +169,7 @@ fun BookmarkCard(
                     Icon(
                         imageVector = Icons.Default.Delete,
                         contentDescription = stringResource(R.string.webbrowser_btn_delete_bookmark),
-                        tint = Color(0xFFFF5252),
+                        tint = BrowserColors.danger,
                         modifier = Modifier.size(16.dp),
                     )
                 }
@@ -177,7 +177,7 @@ fun BookmarkCard(
 
             Text(
                 text = bookmark.url,
-                color = Color.Gray,
+                color = BrowserColors.textSecondary,
                 style = MaterialTheme.typography.bodySmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
@@ -227,7 +227,7 @@ fun FaviconImage(
         ) {
             Text(
                 text = initial,
-                color = Color.White,
+                color = BrowserColors.text,
                 fontWeight = FontWeight.Bold,
                 fontSize = 18.sp,
             )
@@ -240,7 +240,7 @@ fun AddBookmarkCard(onClick: () -> Unit) {
     Card(
         colors =
             CardDefaults.cardColors(
-                containerColor = Color(0xFF2A2A2A),
+                containerColor = BrowserColors.surfaceAlt,
             ),
         shape = RoundedCornerShape(12.dp),
         modifier =
@@ -257,12 +257,12 @@ fun AddBookmarkCard(onClick: () -> Unit) {
                 Icon(
                     imageVector = Icons.Default.Add,
                     contentDescription = null,
-                    tint = Color(0xFFFF6B00),
+                    tint = BrowserColors.accent,
                 )
                 Spacer(modifier = Modifier.padding(start = 8.dp))
                 Text(
                     text = stringResource(R.string.webbrowser_btn_add_shortcut),
-                    color = Color.White,
+                    color = BrowserColors.text,
                     style = MaterialTheme.typography.titleMedium,
                     fontWeight = FontWeight.Medium,
                 )
@@ -322,7 +322,7 @@ private fun getAvatarColor(
         lower.contains("netflix") -> Color(0xFFE50914)
         lower.contains("github") -> Color(0xFF24292E)
         lower.contains("reddit") -> Color(0xFFFF4500)
-        else -> Color(0xFFFF6B00)
+        else -> BrowserColors.accent
     }
 }
 
