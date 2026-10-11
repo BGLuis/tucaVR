@@ -660,5 +660,16 @@
     <string name="webbrowser_status_error_format">Error al cargar la página: %1$s</string>
     <string name="webbrowser_btn_dismiss_error">Descartar error</string>
     <string name="webbrowser_btn_exit_fullscreen">✕ Salir de pantalla completa</string>
+    <string name="webbrowser_btn_stop">Detener</string>
+    <string name="webbrowser_btn_retry">Reintentar</string>
+    <string name="webbrowser_error_title">No se puede cargar la página</string>
+    <string name="webbrowser_error_unknown_host">No encontramos este sitio. Comprueba que la dirección esté bien escrita.</string>
+    <string name="webbrowser_error_connection_refused">El sitio rechazó la conexión. Puede estar caído o bloqueando el acceso.</string>
+    <string name="webbrowser_error_timeout">El sitio tardó demasiado en responder. Inténtalo de nuevo en un momento.</string>
+    <string name="webbrowser_error_offline">Parece que no tienes conexión. Comprueba tu conexión a Internet.</string>
+    <string name="webbrowser_error_certificate">La conexión no es segura, por lo que se bloqueó la página.</string>
+    <string name="webbrowser_error_malformed_url">Esta dirección no es válida.</string>
+    <string name="webbrowser_error_generic">Algo salió mal al cargar esta página.</string>
+    <string name="webbrowser_error_label_url">Dirección</string>
 
 </resources>

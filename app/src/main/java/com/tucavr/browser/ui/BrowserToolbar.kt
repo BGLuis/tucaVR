@@ -112,11 +112,14 @@ fun BrowserToolbar(
 
                 // Reload
                 IconButton(
-                    onClick = { onEvent(WebBrowserEvent.Reload) },
+                    onClick = { onEvent(if (state.isLoading) WebBrowserEvent.Stop else WebBrowserEvent.Reload) },
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Refresh,
-                        contentDescription = stringResource(R.string.webbrowser_btn_reload),
+                        imageVector = if (state.isLoading) Icons.Default.Close else Icons.Default.Refresh,
+                        contentDescription =
+                            stringResource(
+                                if (state.isLoading) R.string.webbrowser_btn_stop else R.string.webbrowser_btn_reload,
+                            ),
                         tint = BrowserColors.text,
                     )
                 }

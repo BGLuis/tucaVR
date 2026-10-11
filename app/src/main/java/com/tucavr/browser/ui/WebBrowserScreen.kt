@@ -1,5 +1,6 @@
 package com.tucavr.browser.ui
 
+import android.net.Uri
 import android.text.InputType
 import android.view.KeyEvent
 import android.view.ViewGroup
@@ -32,6 +33,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalInspectionMode
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.tooling.preview.Preview
@@ -39,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.tucavr.R
 import com.tucavr.browser.data.BrowserBookmark
+import com.tucavr.browser.engine.BrowserErrorPage
 import com.tucavr.browser.state.MediaCommand
 import com.tucavr.browser.state.WebBrowserEvent
 import com.tucavr.browser.state.WebBrowserUiState
@@ -46,8 +49,13 @@ import com.tucavr.designsystem.KeyboardBinding
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.collectLatest
+import org.mozilla.geckoview.GeckoResult
 import org.mozilla.geckoview.GeckoSession
 import org.mozilla.geckoview.GeckoView
+import org.mozilla.geckoview.WebRequestError
+import java.util.concurrent.atomic.AtomicBoolean
+
+private const val ERROR_PAGE_SCHEME = "data:"
 
 @Composable
 fun WebBrowserScreen(
@@ -72,6 +80,9 @@ fun WebBrowserScreen(
 ) {
     val isPreviewMode = LocalInspectionMode.current
     val loadFailedMessage = stringResource(R.string.webbrowser_status_load_failed)
+    val context = LocalContext.current
+    val errorPageServed = remember { AtomicBoolean(false) }
+    val userStopped = remember { AtomicBoolean(false) }
     var geckoViewRef by remember { mutableStateOf<GeckoView?>(null) }
 
     // Horizon OS native keyboard binding for sending text input to the web page
@@ -137,7 +148,26 @@ fun WebBrowserScreen(
                     url: String?,
                     permissions: List<GeckoSession.PermissionDelegate.ContentPermission>,
                 ) {
+                    if (url?.startsWith(ERROR_PAGE_SCHEME) == true) return
                     updateWebViewState(url, null, null, null, null, null, null, null)
+                }
+
+                override fun onLoadError(
+                    session: GeckoSession,
+                    uri: String?,
+                    error: WebRequestError,
+                ): GeckoResult<String>? {
+                    errorPageServed.set(true)
+                    val kind = BrowserErrorPage.kindOf(error.category, error.code)
+                    val html =
+                        BrowserErrorPage.html(
+                            failedUrl = uri,
+                            title = context.getString(R.string.webbrowser_error_title),
+                            description = context.getString(kind.descriptionRes),
+                            urlLabel = context.getString(R.string.webbrowser_error_label_url),
+                            retryLabel = context.getString(R.string.webbrowser_btn_retry),
+                        )
+                    return GeckoResult.fromValue("${ERROR_PAGE_SCHEME}text/html;charset=utf-8," + Uri.encode(html))
                 }
 
                 override fun onCanGoBack(
@@ -161,13 +191,20 @@ fun WebBrowserScreen(
                     session: GeckoSession,
                     url: String,
                 ) {
-                    updateWebViewState(url, true, 0, null, null, null, null, null)
+                    val isErrorPage = url.startsWith(ERROR_PAGE_SCHEME)
+                    if (!isErrorPage) {
+                        errorPageServed.set(false)
+                        userStopped.set(false)
+                    }
+                    updateWebViewState(if (isErrorPage) null else url, true, 0, null, null, null, null, null)
                 }
 
                 override fun onPageStop(
                     session: GeckoSession,
                     success: Boolean,
                 ) {
+                    val stoppedByUser = userStopped.getAndSet(false)
+                    val showBanner = !success && !errorPageServed.get() && !stoppedByUser
                     updateWebViewState(
                         null,
                         false,
@@ -176,7 +213,7 @@ fun WebBrowserScreen(
                         null,
                         null,
                         null,
-                        if (!success) loadFailedMessage else null,
+                        if (showBanner) loadFailedMessage else null,
                     )
                 }
 
@@ -262,6 +299,11 @@ fun WebBrowserScreen(
                             is WebBrowserEvent.GoBack -> geckoSession?.goBack()
                             is WebBrowserEvent.GoForward -> geckoSession?.goForward()
                             is WebBrowserEvent.Reload -> geckoSession?.reload()
+                            is WebBrowserEvent.Stop -> {
+                                userStopped.set(true)
+                                geckoSession?.stop()
+                                onEvent(event)
+                            }
                             is WebBrowserEvent.CloseBrowser -> {
                                 onCloseBrowser?.invoke()
                                 onEvent(event)
@@ -271,17 +313,20 @@ fun WebBrowserScreen(
                                 onToggleGeometry?.invoke(!state.isCurvedGeometry)
                             }
                             is WebBrowserEvent.OnUrlSubmitted -> {
-                                onEvent(event)
+                                val submitted = event.url.trim()
                                 val targetUrl =
-                                    if (event.url.startsWith("http://") ||
-                                        event.url.startsWith("https://") ||
-                                        event.url.startsWith("about:")
+                                    if (submitted.startsWith("http://") ||
+                                        submitted.startsWith("https://") ||
+                                        submitted.startsWith("about:")
                                     ) {
-                                        event.url
+                                        submitted
                                     } else {
-                                        "https://${event.url}"
+                                        "https://$submitted"
                                     }
-                                geckoSession?.loadUri(targetUrl)
+                                if (!state.isLoadingUrl(targetUrl)) {
+                                    onEvent(event)
+                                    geckoSession?.loadUri(targetUrl)
+                                }
                             }
                             else -> onEvent(event)
                         }

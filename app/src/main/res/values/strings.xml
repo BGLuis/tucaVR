@@ -669,5 +669,16 @@
     <string name="webbrowser_status_error_format">Error loading page: %1$s</string>
     <string name="webbrowser_btn_dismiss_error">Dismiss error</string>
     <string name="webbrowser_btn_exit_fullscreen">✕ Exit Fullscreen</string>
+    <string name="webbrowser_btn_stop">Stop</string>
+    <string name="webbrowser_btn_retry">Try again</string>
+    <string name="webbrowser_error_title">Can’t load this page</string>
+    <string name="webbrowser_error_unknown_host">We couldn’t find this site. Check that the address is spelled correctly.</string>
+    <string name="webbrowser_error_connection_refused">The site refused the connection. It may be down or blocking access.</string>
+    <string name="webbrowser_error_timeout">The site took too long to respond. Try again in a moment.</string>
+    <string name="webbrowser_error_offline">You appear to be offline. Check your internet connection.</string>
+    <string name="webbrowser_error_certificate">The connection isn’t secure, so the page was blocked.</string>
+    <string name="webbrowser_error_malformed_url">This address isn’t valid.</string>
+    <string name="webbrowser_error_generic">Something went wrong while loading this page.</string>
+    <string name="webbrowser_error_label_url">Address</string>
 
 </resources>

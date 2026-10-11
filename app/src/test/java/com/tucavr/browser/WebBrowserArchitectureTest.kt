@@ -189,4 +189,37 @@ class WebBrowserArchitectureTest {
             viewModel.handleEvent(WebBrowserEvent.GoHome)
             assertEquals("about:blank", viewModel.uiState.value.url)
         }
+
+    @Test
+    fun `a new page load clears the error left by the previous failure`() =
+        runTest {
+            val viewModel = WebBrowserViewModel(BrowserMediaController(), bookmarkManager)
+            viewModel.updateWebViewState(isLoading = false, errorMessage = "Failed")
+
+            viewModel.updateWebViewState(url = "https://example.com", isLoading = true)
+
+            assertNull(viewModel.uiState.value.errorMessage)
+        }
+
+    @Test
+    fun `an error is kept while nothing new starts loading`() =
+        runTest {
+            val viewModel = WebBrowserViewModel(BrowserMediaController(), bookmarkManager)
+            viewModel.updateWebViewState(isLoading = false, errorMessage = "Failed")
+
+            viewModel.updateWebViewState(pageTitle = "Some title", canGoBack = true)
+
+            assertEquals("Failed", viewModel.uiState.value.errorMessage)
+        }
+
+    @Test
+    fun `stop ends the loading state without waiting for gecko`() =
+        runTest {
+            val viewModel = WebBrowserViewModel(BrowserMediaController(), bookmarkManager)
+            viewModel.updateWebViewState(url = "https://slow.example", isLoading = true)
+
+            viewModel.handleEvent(WebBrowserEvent.Stop)
+
+            assertFalse(viewModel.uiState.value.isLoading)
+        }
 }

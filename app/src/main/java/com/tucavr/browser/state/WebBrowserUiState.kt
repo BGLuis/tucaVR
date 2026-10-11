@@ -19,4 +19,6 @@ data class WebBrowserUiState(
     val bookmarks: List<BrowserBookmark> = emptyList(),
     val showEditBookmarkModal: Boolean = false,
     val editingBookmark: BrowserBookmark? = null,
-)
+) {
+    fun isLoadingUrl(target: String): Boolean = isLoading && url.trimEnd('/') == target.trimEnd('/')
+}

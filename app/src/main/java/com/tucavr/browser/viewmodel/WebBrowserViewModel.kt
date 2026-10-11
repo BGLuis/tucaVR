@@ -69,6 +69,9 @@ class WebBrowserViewModel
                 is WebBrowserEvent.GoBack -> { /* Tratado no GeckoSession */ }
                 is WebBrowserEvent.GoForward -> { /* Tratado no GeckoSession */ }
                 is WebBrowserEvent.Reload -> { /* Tratado no GeckoSession */ }
+                is WebBrowserEvent.Stop -> {
+                    _uiState.update { it.copy(isLoading = false) }
+                }
                 is WebBrowserEvent.GoHome -> {
                     _uiState.update { current ->
                         current.copy(
@@ -142,7 +145,7 @@ class WebBrowserViewModel
                     canGoForward = canGoForward ?: current.canGoForward,
                     isFullScreen = isFullScreen ?: current.isFullScreen,
                     isBookmarked = checkIfBookmarked(updatedUrl, current.bookmarks),
-                    errorMessage = if (errorMessage != null) errorMessage else current.errorMessage,
+                    errorMessage = errorMessage ?: if (isLoading == true) null else current.errorMessage,
                 )
             }
         }

@@ -14,6 +14,8 @@ sealed interface WebBrowserEvent {
 
     data object Reload : WebBrowserEvent
 
+    data object Stop : WebBrowserEvent
+
     data object GoHome : WebBrowserEvent
 
     data object ToggleBookmark : WebBrowserEvent
