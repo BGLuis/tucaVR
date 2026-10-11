@@ -112,35 +112,19 @@ struct SceneTransforms {
     Mat4 browserModelNoScale;
     XrVector3f browserCenter;
     XrVector3f browserNormal;
+    float browserYaw;
 };
-
-// Pose inicial do navegador: a frente do usuario, virado para a cabeca.
-struct BrowserSpawnPose {
-    XrVector3f position;
-    float yaw;
-};
-
-inline BrowserSpawnPose ComputeBrowserSpawnPose(const AppState& state, const XrVector3f& headCenter) {
-    XrVector3f position = Vec3Add(state.sceneTranslationOffset, Vec3RotateY({0.0f, 1.5f, -2.2f}, state.sceneYawOffset));
-    XrVector3f toHead = Vec3Sub(headCenter, position);
-    toHead.y = 0.0f;
-    float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
-    float yaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : state.sceneYawOffset;
-    return {position, yaw};
-}
 
 // Inicializa/reseta a pose do navegador. Deve rodar uma vez por frame antes de
 // ComputeSceneTransforms, que apenas le o estado.
-inline void UpdateBrowserPose(AppState& state, const XrVector3f& headCenter) {
+inline void UpdateBrowserPose(AppState& state) {
     if (!state.browserActive) {
         state.browserPoseInitialized = false;
         state.isBrowserGrabbed = false;
         return;
     }
     if (!state.browserPoseInitialized) {
-        const BrowserSpawnPose spawn = ComputeBrowserSpawnPose(state, headCenter);
-        state.browserPosition = spawn.position;
-        state.browserYaw = spawn.yaw;
+        state.browserPosition = vrplayer::kBrowserSpawnLocalPosition;
         state.browserScaleX = kBrowserPanelScaleX;
         state.browserScaleY = kBrowserPanelScaleY;
         state.isBrowserGrabbed = false;
@@ -187,17 +171,12 @@ inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVec
     t.screenCenter = worldScreenPos;
     t.screenNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.sceneYawOffset);
 
-    const BrowserSpawnPose spawn = ComputeBrowserSpawnPose(state, headCenter);
-
-    if (state.browserPoseInitialized) {
-        t.browserCenter = state.browserPosition;
-        t.browserModelNoScale = Mat4Multiply(Mat4Translation(state.browserPosition.x, state.browserPosition.y, state.browserPosition.z), Mat4RotationY(state.browserYaw));
-        t.browserNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.browserYaw);
-    } else {
-        t.browserCenter = spawn.position;
-        t.browserModelNoScale = Mat4Multiply(Mat4Translation(spawn.position.x, spawn.position.y, spawn.position.z), Mat4RotationY(spawn.yaw));
-        t.browserNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, spawn.yaw);
-    }
+    // Navegador: posicao em coordenadas da cena (acompanha o recenter) e billboard para a cabeca, como o Home.
+    const XrVector3f browserLocal = state.browserPoseInitialized ? state.browserPosition : vrplayer::kBrowserSpawnLocalPosition;
+    t.browserCenter = vrplayer::BrowserLocalToWorld(browserLocal, state.sceneTranslationOffset, state.sceneYawOffset);
+    t.browserYaw = vrplayer::BillboardYaw(t.browserCenter, headCenter, state.sceneYawOffset);
+    t.browserModelNoScale = Mat4Multiply(Mat4Translation(t.browserCenter.x, t.browserCenter.y, t.browserCenter.z), Mat4RotationY(t.browserYaw));
+    t.browserNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, t.browserYaw);
 
     return t;
 }
@@ -909,6 +888,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.sceneTranslationOffset.y = headCenter.y - 1.5f;
             state.screenPosition = {0.0f, 1.5f, -2.0f};
             state.isScreenGrabbed = false;
+            state.browserPosition = vrplayer::kBrowserSpawnLocalPosition;
+            state.isBrowserGrabbed = false;
             state.recenterFiredThisHold = true;
             FireHaptic(state, rightPath, 0.5f, 30000000 /* 30ms */);
         }
@@ -1230,18 +1211,10 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             } else if (state.isBrowserGrabbed) {
                 if (currTrigger && state.hasRay) {
                     XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.browserGrabDistance));
-                    XrVector3f relPos = Vec3Sub(targetWorld, state.sceneTranslationOffset);
-                    state.browserPosition = Vec3RotateY(relPos, -state.sceneYawOffset);
+                    state.browserPosition = vrplayer::BrowserWorldToLocal(targetWorld, state.sceneTranslationOffset, state.sceneYawOffset);
                     state.browserPosition.z = std::min(-0.8f, std::max(state.browserPosition.z, -10.0f));
                     state.browserPosition.y = std::max(0.3f, std::min(state.browserPosition.y, 3.5f));
                     state.browserPosition.x = std::max(-4.0f, std::min(state.browserPosition.x, 4.0f));
-
-                    XrVector3f toHead = Vec3Sub(headCenter, targetWorld);
-                    toHead.y = 0.0f;
-                    float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
-                    if (toHeadLen > 1e-4f) {
-                        state.browserYaw = atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen);
-                    }
                 } else {
                     state.isBrowserGrabbed = false;
                 }
@@ -1337,18 +1310,10 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
                     if (state.hasRay) {
                         XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.browserGrabDistance));
-                        XrVector3f relPos = Vec3Sub(targetWorld, state.sceneTranslationOffset);
-                        state.browserPosition = Vec3RotateY(relPos, -state.sceneYawOffset);
+                        state.browserPosition = vrplayer::BrowserWorldToLocal(targetWorld, state.sceneTranslationOffset, state.sceneYawOffset);
                         state.browserPosition.z = std::min(-0.8f, std::max(state.browserPosition.z, -10.0f));
                         state.browserPosition.y = std::max(0.3f, std::min(state.browserPosition.y, 3.5f));
                         state.browserPosition.x = std::max(-4.0f, std::min(state.browserPosition.x, 4.0f));
-
-                        XrVector3f toHead = Vec3Sub(headCenter, targetWorld);
-                        toHead.y = 0.0f;
-                        float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
-                        if (toHeadLen > 1e-4f) {
-                            state.browserYaw = atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen);
-                        }
                     }
                 }
             } else {

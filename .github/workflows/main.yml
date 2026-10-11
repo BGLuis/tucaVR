@@ -119,7 +119,8 @@ jobs:
             native/include/screen_mode.h \
             native/include/subtitle_layout.h \
             native/include/hand_tracking.h \
-            native/include/environment_config.h
+            native/include/environment_config.h \
+            native/include/browser_pose.h
 
       - name: Validate Vulkan Shaders (glslc)
         run: ./scripts/check-shaders.sh

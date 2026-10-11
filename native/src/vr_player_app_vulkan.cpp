@@ -48,6 +48,7 @@
 #include <vector>
 
 #include "vk_math.h"
+#include "browser_pose.h"
 #include "hand_tracking.h"
 #include "screen_mode.h"
 #include "vr_player_feedback_overlay.h"
@@ -826,8 +827,8 @@ struct AppState {
     float browserAlpha = 1.0f;
     bool browserHasFrame = false;
     bool browserActive = false;
-    XrVector3f browserPosition = {-1.3f, 1.5f, -1.0f};
-    float browserYaw = 0.0f;
+    // Coordenadas da cena (como screenPosition), nao do mundo.
+    XrVector3f browserPosition = vrplayer::kBrowserSpawnLocalPosition;
     bool browserPoseInitialized = false;
     float browserScaleX = kBrowserPanelScaleX;
     float browserScaleY = kBrowserPanelScaleY;
@@ -7288,7 +7289,7 @@ void RenderFrame(AppState& state) {
         }
 
         // Estagio 4/5: Processar interacoes apos obtermos a posicao da cabeca
-        UpdateBrowserPose(state, headCenter);
+        UpdateBrowserPose(state);
         UpdateInteraction(state, frameState.predictedDisplayTime, headCenter, views[0].pose.orientation);
 
         // Atualiza a orientação da cabeça para o pipeline de áudio espacial (Rust)
@@ -7670,7 +7671,7 @@ void RenderFrame(AppState& state) {
         browserQuad.subImage.imageRect.offset = {0, 0};
         browserQuad.subImage.imageRect.extent = {static_cast<int32_t>(kBrowserTexWidth), static_cast<int32_t>(kBrowserTexHeight)};
         browserQuad.pose.position = scene.browserCenter;
-        browserQuad.pose.orientation = QuatFromYaw(state.browserYaw);
+        browserQuad.pose.orientation = QuatFromYaw(scene.browserYaw);
         browserQuad.size = {state.browserScaleX, state.browserScaleY};
 
         float browserScaleFactor = state.browserScaleX / kBrowserPanelScaleX;
@@ -7682,8 +7683,8 @@ void RenderFrame(AppState& state) {
         browserCylinder.subImage.swapchain = state.browserPanelSwapchain.handle;
         browserCylinder.subImage.imageRect.offset = {0, 0};
         browserCylinder.subImage.imageRect.extent = {static_cast<int32_t>(kBrowserTexWidth), static_cast<int32_t>(kBrowserTexHeight)};
-        browserCylinder.pose.position = Vec3Add(scene.browserCenter, Vec3RotateY({0.0f, 0.0f, cylinderRadius}, state.browserYaw));
-        browserCylinder.pose.orientation = QuatFromYaw(state.browserYaw);
+        browserCylinder.pose.position = Vec3Add(scene.browserCenter, Vec3RotateY({0.0f, 0.0f, cylinderRadius}, scene.browserYaw));
+        browserCylinder.pose.orientation = QuatFromYaw(scene.browserYaw);
         browserCylinder.radius = cylinderRadius;
         browserCylinder.centralAngle = kBrowserCylinderCentralAngle;
         browserCylinder.aspectRatio = (float)kBrowserTexWidth / (float)kBrowserTexHeight;
