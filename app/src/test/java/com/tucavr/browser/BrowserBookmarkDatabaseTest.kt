@@ -213,6 +213,31 @@ class BrowserBookmarkDatabaseTest {
     }
 
     @Test
+    fun `seed statement matches the schema and yields exactly the default presets`() {
+        applyMigration(AppDatabase.MIGRATION_5_6_SQL)
+
+        connection.prepareStatement(AppDatabase.INSERT_PRESET_SQL).use { stmt ->
+            AppDatabase.DEFAULT_PRESETS.forEach { preset ->
+                stmt.setString(1, preset.title)
+                stmt.setString(2, preset.url)
+                stmt.setString(3, preset.faviconUrl)
+                stmt.setInt(4, preset.displayOrder)
+                stmt.setInt(5, if (preset.isPreset) 1 else 0)
+                stmt.setLong(6, preset.createdAtMs)
+                stmt.executeUpdate()
+            }
+        }
+
+        connection.createStatement().use { stmt ->
+            stmt.executeQuery("SELECT COUNT(*), COUNT(DISTINCT url) FROM browser_bookmarks").use { rs ->
+                assertTrue(rs.next())
+                assertEquals(5, rs.getInt(1))
+                assertEquals(5, rs.getInt(2))
+            }
+        }
+    }
+
+    @Test
     fun `default presets contain expected platforms`() {
         val presets = AppDatabase.DEFAULT_PRESETS
         assertEquals(5, presets.size)

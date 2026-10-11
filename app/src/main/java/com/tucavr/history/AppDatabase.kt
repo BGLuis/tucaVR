@@ -19,9 +19,6 @@ import com.tucavr.network.SavedServerDao
 import com.tucavr.playlist.Playlist
 import com.tucavr.playlist.PlaylistDao
 import com.tucavr.playlist.PlaylistItem
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.launch
 
 /**
  * Banco Room principal do aplicativo:
@@ -207,6 +204,7 @@ abstract class AppDatabase : RoomDatabase() {
             object : Migration(5, 6) {
                 override fun migrate(db: SupportSQLiteDatabase) {
                     MIGRATION_5_6_SQL.forEach { db.execSQL(it) }
+                    seedDefaultPresets(db)
                 }
             }
 
@@ -249,6 +247,28 @@ abstract class AppDatabase : RoomDatabase() {
                 ),
             )
 
+        internal const val INSERT_PRESET_SQL =
+            "INSERT INTO browser_bookmarks (title, url, favicon_url, display_order, is_preset, created_at_ms) " +
+                "VALUES (?, ?, ?, ?, ?, ?)"
+
+        // Única fonte da semente: roda dentro da transação de criação/migração, então não há corrida
+        // com o Flow do manager nem reinserção depois que o usuário apaga os atalhos.
+        internal fun seedDefaultPresets(db: SupportSQLiteDatabase) {
+            DEFAULT_PRESETS.forEach { preset ->
+                db.execSQL(
+                    INSERT_PRESET_SQL,
+                    arrayOf<Any?>(
+                        preset.title,
+                        preset.url,
+                        preset.faviconUrl,
+                        preset.displayOrder,
+                        if (preset.isPreset) 1 else 0,
+                        preset.createdAtMs,
+                    ),
+                )
+            }
+        }
+
         fun getInstance(context: Context): AppDatabase =
             instance ?: synchronized(this) {
                 instance ?: Room.databaseBuilder(
@@ -261,10 +281,7 @@ abstract class AppDatabase : RoomDatabase() {
                         object : Callback() {
                             override fun onCreate(db: SupportSQLiteDatabase) {
                                 super.onCreate(db)
-                                // Seed default shortcuts when the database is first created
-                                CoroutineScope(Dispatchers.IO).launch {
-                                    instance?.browserBookmarkDao()?.insertAll(DEFAULT_PRESETS)
-                                }
+                                seedDefaultPresets(db)
                             }
                         },
                     )

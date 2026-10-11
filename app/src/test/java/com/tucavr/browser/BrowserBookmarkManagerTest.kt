@@ -111,6 +111,29 @@ class BrowserBookmarkManagerTest {
     }
 
     @Test
+    fun `manager does not seed presets when the list is empty`() =
+        runTest(testDispatcher) {
+            testScheduler.advanceUntilIdle()
+
+            assertEquals(emptyList<BrowserBookmark>(), fakeDao.items)
+            assertEquals(emptyList<BrowserBookmark>(), manager.bookmarks.value)
+        }
+
+    @Test
+    fun `deleting the last bookmark empties the list without reseeding`() =
+        runTest(testDispatcher) {
+            manager.addBookmark("Only", "example.com")
+            testScheduler.advanceUntilIdle()
+            assertEquals(1, manager.bookmarks.value.size)
+
+            manager.deleteBookmark(manager.bookmarks.value.single())
+            testScheduler.advanceUntilIdle()
+
+            assertEquals(emptyList<BrowserBookmark>(), manager.bookmarks.value)
+            assertEquals(emptyList<BrowserBookmark>(), fakeDao.items)
+        }
+
+    @Test
     fun `addBookmark inserts new item when valid`() =
         runTest(testDispatcher) {
             testScheduler.advanceUntilIdle()

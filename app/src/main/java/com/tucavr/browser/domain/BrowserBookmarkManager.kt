@@ -3,7 +3,6 @@ package com.tucavr.browser.domain
 import com.tucavr.browser.data.BrowserBookmark
 import com.tucavr.browser.data.BrowserBookmarkDao
 import com.tucavr.debug.VRLog
-import com.tucavr.history.AppDatabase
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -39,13 +38,7 @@ class BrowserBookmarkManager(
         scope.launch {
             bookmarkDao.getAllBookmarksFlow().collectLatest { list ->
                 VRLog.d("[WEB-Browser] Observing bookmarks ${list.size} entries")
-                if (list.isEmpty()) {
-                    withContext(ioDispatcher) {
-                        bookmarkDao.insertAll(AppDatabase.DEFAULT_PRESETS)
-                    }
-                } else {
-                    _bookmarks.value = list
-                }
+                _bookmarks.value = list
             }
         }
     }
