@@ -1,7 +1,10 @@
 package com.tucavr.browser.presentation
 
 import android.content.Context
+import android.os.SystemClock
 import android.view.Display
+import android.view.InputDevice
+import android.view.MotionEvent
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.lifecycle.LifecycleOwner
@@ -12,6 +15,7 @@ import androidx.savedstate.SavedStateRegistryOwner
 import com.tucavr.VRActivity
 import com.tucavr.browser.controller.BrowserMediaController
 import com.tucavr.browser.domain.BrowserBookmarkManager
+import com.tucavr.browser.engine.BrowserScroll
 import com.tucavr.browser.engine.VRBrowserController
 import com.tucavr.browser.ui.WebBrowserScreen
 import com.tucavr.browser.viewmodel.WebBrowserViewModel
@@ -97,8 +101,35 @@ class VRWebBrowserPresentation(
         )
     }
 
-    fun dispatchScroll(scrollDeltaY: Float) {
-        geckoSession.loadUri("javascript:window.scrollBy(0, ${scrollDeltaY.toInt()});")
+    fun dispatchScroll(
+        normX: Float,
+        normY: Float,
+        scrollDeltaY: Float,
+    ) {
+        val wheel = BrowserScroll.wheelAxisValue(scrollDeltaY, geckoSession.panZoomController.scrollFactor)
+        val now = SystemClock.uptimeMillis()
+        val properties =
+            arrayOf(
+                MotionEvent.PointerProperties().apply {
+                    id = 0
+                    toolType = MotionEvent.TOOL_TYPE_MOUSE
+                },
+            )
+        val coords =
+            arrayOf(
+                MotionEvent.PointerCoords().apply {
+                    x = normX * browserController.width
+                    y = normY * browserController.height
+                    setAxisValue(MotionEvent.AXIS_VSCROLL, wheel)
+                },
+            )
+        val event =
+            MotionEvent.obtain(
+                now, now, MotionEvent.ACTION_SCROLL, 1, properties, coords,
+                0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0,
+            )
+        dispatchGenericMotionEvent(event)
+        event.recycle()
     }
 
     fun navigateToHome() {

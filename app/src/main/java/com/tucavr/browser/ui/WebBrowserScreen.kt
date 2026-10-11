@@ -42,6 +42,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.tucavr.R
 import com.tucavr.browser.data.BrowserBookmark
 import com.tucavr.browser.engine.BrowserErrorPage
+import com.tucavr.browser.engine.BrowserMediaScript
 import com.tucavr.browser.state.MediaCommand
 import com.tucavr.browser.state.WebBrowserEvent
 import com.tucavr.browser.state.WebBrowserUiState
@@ -270,14 +271,7 @@ fun WebBrowserScreen(
     LaunchedEffect(mediaCommands, geckoSession) {
         mediaCommands.collectLatest { command ->
             val session = geckoSession ?: return@collectLatest
-            val jsCode =
-                when (command) {
-                    is MediaCommand.Play -> "const v = document.querySelector('video'); if(v) v.play();"
-                    is MediaCommand.Pause -> "const v = document.querySelector('video'); if(v) v.pause();"
-                    is MediaCommand.ToggleMute -> "const v = document.querySelector('video'); if(v) v.muted = !v.muted;"
-                    is MediaCommand.Skip -> "const v = document.querySelector('video'); if(v) v.currentTime += ${command.seconds};"
-                }
-            session.loadUri("javascript:$jsCode")
+            session.loadUri(BrowserMediaScript.uriFor(command))
         }
     }
 

@@ -1122,7 +1122,7 @@ class VRActivity : NativeActivity() {
             scrollDeltaY: Float,
         ) {
             activity.runOnUiThread {
-                activity.browserPresentation?.dispatchScroll(scrollDeltaY)
+                activity.browserPresentation?.dispatchScroll(normX, normY, scrollDeltaY)
             }
         }
 
