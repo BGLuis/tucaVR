@@ -405,7 +405,7 @@ During the project's development, several libraries that had been preliminarily 
 
 | # | Risk | Prob. | Impact | Mitigation |
 |---|------|-------|--------|------------|
-| 1 | **8K decoding exceeds the XR2 Gen 2's capacity** | High | High | Adaptive downscale, tiling, foveated decode |
+| 1 | **8K decoding exceeds the XR2 Gen 2's capacity** | High | High | Adaptive quality (downscale of the render resolution scale), foveated rendering; tiling and foveated decode were pruned (see `docs/phases/PHASE-0.4-ADVANCED.md` T1.3/T5.4) |
 | 2 | **FFmpeg licensing (LGPL/GPL)** | Medium | High | Dynamic linking, audit of GPL features |
 | 3 | **Tri-layer complexity (Kotlin/Rust/C++)** | High | High | Minimal C API (`extern "C"`) Rust↔C++, limited manual JNI Kotlin↔C++ (see ADR-002) |
 | 4 | **Thermal throttling in long sessions** | High | Medium | Thermal monitor + adaptive quality + limit the environment |

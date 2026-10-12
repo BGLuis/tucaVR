@@ -1,6 +1,6 @@
 # Phase 1.0 — Release
 
-> **Objective**: Production stabilization and final polish. User-imported custom 3D environments, community translation contribution framework, unified UX onboarding and settings, Dokka/rustdoc contributor and architecture documentation, security and quality audits, and Meta Quest Store submission readiness.  
+> **Objective**: Production stabilization and final polish. User-imported custom 3D environments, community translation contribution framework, unified UX onboarding and settings, rustdoc contributor and architecture documentation (Dokka was dropped, see T4.2), security and quality audits, and Meta Quest Store submission readiness.  
 > **Prerequisite**: Phase 0.5 (Premium) and Phase 0.6 (Stabilization) complete and stable (with Phase 0.5 scope reconciled: Advanced Environments and Ambient Mode verified; Multiple Screens delivered at minimal 2-screen scope; Eye Tracking formally descoped to post-1.0).  
 > **Expected Outcome**: The player is a polished, production-ready product for public distribution — any user can install the APK, watch VR/2D content from local or network sources safely, and developers can clone, build, and contribute without friction.
 
@@ -28,7 +28,7 @@ Fulfills **RF-ENV-005** (User-customizable environments — 3D model importing).
 ### Tasks
 
 - [ ] **T1.1** — Implement **environment validator** in C++:
-  - Hardware budget validation before importing (triangles ≤ 100K, texture dimensions ≤ 4096², file size ≤ 100MB)
+  - Hardware budget validation before importing (triangles ≤ 100K, texture dimensions ≤ 4096², file size ≤ 100MB) — note that `PHASE-0.3-POLISH-AUDIO.md` keeps built-in environments under 50k triangles; decide whether imports should be held to the same budget
 - [ ] **T1.2** — Implement **environment installer** in Kotlin:
   - Import file handling, destination folder layout in app internal storage (`environments/custom_<uuid>/`)
 - [ ] **T1.3** — Interactive virtual screen configurator in VR (C++):
@@ -47,9 +47,9 @@ Enable community localization contributions with CI verification and translator 
 
 ### Tasks
 
-- [ ] **T2.1** — Translation validation script for CI (`scripts/validate_i18n.sh`)
-- [ ] **T2.2** — Automated CI step for translation key parity enforcement
-- [ ] **T2.3** — Contribution guide (`docs/CONTRIBUTING_I18N.md`)
+- [ ] **T2.1** — Translation validation script for CI (`scripts/validate_i18n.sh`) (key/order/placeholder parity is already enforced in CI by `I18nParityTest`; this script would only cover what that test does not)
+- [ ] **T2.2** — Automated CI step for translation key parity enforcement (partially met: `I18nParityTest` runs in the `android-checks` CI job)
+- [ ] **T2.3** — Contribution guide (`docs/CONTRIBUTING_I18N.md`) (`docs/i18n.md` and `CONTRIBUTING.md` already document the process; this would be a contributor-facing summary)
 - [ ] **T2.4** — "About" screen with translator credits in Kotlin
 - [ ] **T2.5** — Complete plural and positional parameter audit across all locales
 
@@ -61,7 +61,7 @@ Enable community localization contributions with CI verification and translator 
 
 - [ ] **T3.1** — First-run onboarding tutorial in VR (controller and gesture guidance)
 - [ ] **T3.2** — Consolidated unified settings panel
-- [ ] **T3.3** — Visual loading states and spinner overlays in C++
+- [ ] **T3.3** — Visual loading states and spinner overlays in C++ (a loading indicator already exists, driven by `get_playback_is_loading`; this task covers the remaining states)
 - [ ] **T3.4** — Friendly user-facing error handling and recovery recommendations
 - [ ] **T3.5** — Accessibility and comfort options (IPD adjustment hints, UI scale toggles)
 
@@ -72,10 +72,10 @@ Enable community localization contributions with CI verification and translator 
 ### Tasks
 
 - [ ] **T4.1** — Generate Rust API documentation via `cargo doc`
-- [ ] **T4.2** — Generate Kotlin documentation via Dokka
-- [ ] **T4.3** — Consolidate comprehensive `BUILD.md`
+- [ ] **T4.2** — ~~Generate Kotlin documentation via Dokka~~ *(dropped: `docs/REQUIREMENTS.md` §5.5 records Dokka as discarded; see issue #73)*
+- [ ] **T4.3** — Consolidate comprehensive build documentation (today it lives in `README.md` and `docker/build/README.md`; decide whether a separate `BUILD.md` is still wanted)
 - [ ] **T4.4** — Write end-user manual (`docs/USER_GUIDE.md`)
-- [ ] **T4.5** — Finalize root `README.md` with shields and showcase screenshots
+- [ ] **T4.5** — Finalize root `README.md` with showcase screenshots (the shields are already in place)
 - [ ] **T4.6** — Maintain canonical `docs/ARCHITECTURE.md`
 
 ---
@@ -118,7 +118,7 @@ Enable community localization contributions with CI verification and translator 
 - [ ] Custom glTF/GLB environments can be imported and validated
 - [ ] Community translation workflow validated by CI
 - [ ] Onboarding tutorial guides first-time headset users
-- [ ] Documentation complete (Dokka, rustdoc, USER_GUIDE.md, ARCHITECTURE.md)
+- [ ] Documentation complete (rustdoc, USER_GUIDE.md, ARCHITECTURE.md)
 - [ ] Meta VRC validation tests pass without errors
 - [ ] Security audit passes with zero plaintext credentials or telemetry
 - [ ] Automated CI pipeline passes cleanly on all branches

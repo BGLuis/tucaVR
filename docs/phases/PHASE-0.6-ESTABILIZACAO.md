@@ -105,7 +105,7 @@ Validation Campaign Flow:
 
 - [ ] **T2.3** — Upon successful validation of each feature, update `FeatureFlags.kt`: set `defaultEnabled = true` and remove the comment "never validated" (or replace with reference to validation session, e.g. "validated on physical Quest 3, see `docs/HARDWARE-VALIDATION-CHECKLIST.md`").
 
-- [ ] **T2.4** — Close specific comfort open item from `PHASE-0.3-POLISH-AUDIO.md`: session ≥ 30 min testing Ambisonics soundfield rotation + head tracking (the only comfort feature testable before this phase).
+- [ ] **T2.4** — Run a comfort session ≥ 30 min testing Ambisonics soundfield rotation + head tracking (the only comfort feature testable before this phase). Note: `PHASE-0.3-POLISH-AUDIO.md` has no such open item (its only open task is T10.4, the Spanish-locale check, which this phase does not track either), so this is a new task rather than the closure of an old one.
 
 ### ⚠️ Pitfalls and Considerations
 
@@ -124,13 +124,13 @@ Validation Campaign Flow:
 
 ### Concept
 
-The Vulkan migration lost 4× MSAA that the GLES/OVRFW path previously had. UI/environment pipelines in `vr_player_app_vulkan.cpp` use `VK_SAMPLE_COUNT_1_BIT` across multiple occurrences, with no `VK_SAMPLE_COUNT_2/4/8_BIT` present. This affects edge sharpness across **all** non-video content (2D panels, environment geometry) — visual noise that complicates Section 2 (evaluators cannot easily distinguish "poor environment look due to lack of MSAA" from an "actual environment mesh bug").
+The Vulkan migration is understood to have lost the 4× MSAA that the GLES/OVRFW path previously had (not re-verified against the GLES path). UI/environment pipelines in `vr_player_app_vulkan.cpp` use `VK_SAMPLE_COUNT_1_BIT` across multiple occurrences, with no `VK_SAMPLE_COUNT_2/4/8_BIT` present. This affects edge sharpness across **all** non-video content (2D panels, environment geometry) — visual noise that complicates Section 2 (evaluators cannot easily distinguish "poor environment look due to lack of MSAA" from an "actual environment mesh bug").
 
 ### Tasks
 
 - [ ] **T3.1** — Measure the cost of re-enabling `VK_SAMPLE_COUNT_4_BIT` in UI/environment pipelines (`vr_player_app_vulkan.cpp`) via debug HUD (`draw_call_count`, `smoothed_gpu_time_ms`, already instrumented) — before/after in the same scene.
 
-- [ ] **T3.2** — If GPU cost is acceptable on XR2 Gen 2 (does not exceed budget keeping ≥ 72 FPS): re-enable 4× MSAA on these pipelines. **Do not touch** 2D/stereo video pipelines — video is a textured quad via `samplerExternalOES`, already filtered, and intentionally avoids MSAA.
+- [ ] **T3.2** — If GPU cost is acceptable on XR2 Gen 2 (does not exceed budget keeping ≥ 72 FPS): re-enable 4× MSAA on these pipelines. **Do not touch** 2D/stereo video pipelines — video is a textured quad sampled through an immutable `VkSamplerYcbcrConversion` sampler (`video.frag`), already filtered, and intentionally avoids MSAA.
 
 - [ ] **T3.3** — If cost is prohibitive: explicitly document the decision (instead of leaving it as a silent regression) in `docs/VULKAN-MIGRATION-PLAN.md`, using measured numbers from T3.1 as justification.
 
@@ -145,13 +145,13 @@ The Vulkan migration lost 4× MSAA that the GLES/OVRFW path previously had. UI/e
 
 ### Concept
 
-Partially addresses **RF-2D-009** (priority 🟢 Low). `PHASE-0.5-PREMIUM.md` §1 specifies `MAX_SCREENS = 3` with a full configurator; currently zero lines of code exist (`m_screens`/`MAX_SCREENS` existed only as pseudocode in spec). Implementing the full spec would compete for the scarce hardware session resource. This section proposes a reduced scope that fulfills the requirement without full polish — explicitly leaving remainder for 1.0 or later.
+Partially addresses **RF-2D-009** (priority 🟢 Low). `PHASE-0.5-PREMIUM.md` §1 specifies multiple screens with a full configurator (a `MAX_SCREENS = 3` limit in an earlier draft of the spec); currently zero lines of code exist (no `m_screens`/`MAX_SCREENS` anywhere in the code). Implementing the full spec would compete for the scarce hardware session resource. This section proposes a reduced scope that fulfills the requirement without full polish — explicitly leaving remainder for 1.0 or later.
 
 ### Tasks
 
-- [ ] **T4.1** — Before duplicating positioning mechanics for a second screen, fix the existing defect: current flat screen (`PHASE-0.1-MVP.md` T3.6) moves without thumbstick confirmation lock and does not persist size/position across sessions. Fixing here avoids duplicating the defect.
+- [ ] **T4.1** — Before duplicating positioning mechanics for a second screen, fix the existing defect: the current flat screen (`PHASE-0.1-MVP.md` T3.6) is gated by the grip button and already persists its size/position per environment (`ScreenTransformStore.kt`, covered by `ScreenTransformStoreTest`; the overwrite-on-environment-switch defect was fixed in #124, closing #39). What remains is confirming that behavior on a headset before the mechanics are reused for a second screen.
 
-- [ ] **T4.2** — Implement `MAX_SCREENS = 2` (not 3): second screen reuses thumbstick move/resize mechanics fixed in T4.1, without glTF positioning ghost configurator from full 0.5 spec.
+- [ ] **T4.2** — Implement `MAX_SCREENS = 2` (not 3): second screen reuses thumbstick move/resize mechanics fixed in T4.1, without the glTF positioning ghost configurator of the full Phase 0.5 spec.
   ```cpp
   // Minimal scope: 2 screens, no auto-layout or positioning ghost.
   struct VirtualScreen {
@@ -170,7 +170,7 @@ Partially addresses **RF-2D-009** (priority 🟢 Low). `PHASE-0.5-PREMIUM.md` §
 ### ⚠️ Pitfalls and Considerations
 
 > [!IMPORTANT]
-> **T4.1 before T4.2, always.** Phase 0.5 T1.4 previously planned to reuse positioning mechanics as-is, which would duplicate defects. This is the opportunity to fix before duplicating.
+> **T4.1 before T4.2, always.** Phase 0.5 T1.4 plans independent spatial interaction per screen (raycast), which would duplicate those defects if built on the current mechanics. This is the opportunity to fix before duplicating.
 
 ---
 
@@ -178,7 +178,7 @@ Partially addresses **RF-2D-009** (priority 🟢 Low). `PHASE-0.5-PREMIUM.md` §
 
 ### Concept
 
-Addresses **RF-UI-006** (priority 🟢 Low). Zero lines of code exist (`XR_EXT_eye_gaze_interaction`/`EyeGaze` exist only as pseudocode in `PHASE-0.5-PREMIUM.md` §2). Unlike Section 4, the recommendation here is **explicit descope**, given calibration overhead + gaze-foveated UI relative to a 🟢 Low priority feature, while higher priority features are still awaiting physical validation (Section 2).
+Addresses **RF-UI-006** (priority 🟢 Low). Zero lines of code exist (`XR_EXT_eye_gaze_interaction` is only named in prose in `PHASE-0.5-PREMIUM.md` §2; there is no `eye_gaze` code anywhere). Unlike Section 4, the recommendation here is **explicit descope**, given calibration overhead + gaze-foveated UI relative to a 🟢 Low priority feature, while higher priority features are still awaiting physical validation (Section 2).
 
 ### Tasks
 
@@ -197,7 +197,7 @@ Addresses **RF-UI-006** (priority 🟢 Low). Zero lines of code exist (`XR_EXT_e
 > **Do not begin items from `PHASE-1.0-RELEASE.md` in parallel with this phase.** Onboarding, unified settings panel, store assets, and API docs presuppose a validated baseline. A VR bug found in Section 2 could invalidate completed onboarding screens or store screenshots.
 
 > [!WARNING]
-> **CI does not cover this phase automatically.** Native/C++ build is not run on CI (requires proprietary Meta SDK) — rendering, OpenXR, or MSAA regressions are not detectable without manual execution on headset. Section 2 and Section 3 (T3.1) are inherently manual.
+> **CI does not cover this phase's runtime behavior.** CI does compile the native layer (`cpp-checks` runs clang-format, shader validation and ASan host tests; `build-apk` runs the full native + Rust + Gradle build), but it cannot run OpenXR rendering, so rendering, OpenXR, or MSAA regressions are not detectable without manual execution on headset. Section 2 and Section 3 (T3.1) are inherently manual.
 
 > [!NOTE]
 > This phase does not strictly increment SemVer yet (strict SemVer starts at 1.0, see `PHASE-1.0-RELEASE.md` §7). `version.properties` may remain on `0.4.x`/`0.5.x` during this phase — phase numbering is organizational.

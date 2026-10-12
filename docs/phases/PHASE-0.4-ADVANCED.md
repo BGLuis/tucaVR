@@ -34,7 +34,7 @@ High-fidelity 360° VR content requires 8K resolution (7680×3840 or 7680×7680 
   - Implemented in `rust/media-logic/src/quality.rs` (`QualityController`) across 5 levels (`Ultra`, `High`, `Medium`, `Low`, `Emergency`)
   - Asymmetric hysteresis: rapid downgrade (≤2 samples) and conservative upgrade (30s stable window)
   - Exposed via C-ABI and consumed in Vulkan render loop (`vr_player_app_vulkan.cpp`)
-- [x] **T1.3** — ~~GPU texture downscaling~~ *(Pruned per ADR due to double memory bandwidth overhead)*
+- [x] **T1.3** — ~~GPU texture downscaling~~ *(Pruned: it would double the memory bandwidth overhead. The decision is recorded only here; there is no numbered ADR for it.)*
 - [x] **T1.4** — Implement **performance telemetry metrics** (C++):
   - Vulkan timestamp query tracking (`smoothedGpuTimeMs`), frame pacing lag, and dropped frame counts
 - [x] **T1.5** — **Debug HUD**:
@@ -121,9 +121,9 @@ Fixed Foveated Rendering (FFR) reduces fragment resolution towards visual periph
 
 - [x] **T5.1** — Enable Fixed Foveated Rendering via Meta OpenXR SDK:
   - Configured with `XR_FB_foveation` on Vulkan swapchains (`vr_player_app_vulkan.cpp`)
-- [x] **T5.2** — Configure dynamic foveation levels (`NONE`, `LOW`, `MEDIUM`, `HIGH`)
+- [x] **T5.2** — Configure dynamic foveation levels (Off, Low, Medium, High, Auto — modes 0-4 in `rust/bridge/src/lib.rs`)
 - [x] **T5.3** — Integrate foveation levels with Adaptive Quality Manager
-- [x] **T5.4** — ~~Foveated video decode~~ *(Pruned per ADR due to missing NDK motion-constrained tile support)*
+- [x] **T5.4** — ~~Foveated video decode~~ *(Pruned: the NDK has no motion-constrained tile support. The decision is recorded only here; there is no numbered ADR for it.)*
 - [x] **T5.5** — Settings menu granular foveation selector (`SettingsScreen.kt`, `FeatureFlags.kt`)
 
 ---
@@ -163,7 +163,7 @@ Equi-Angular Cubemap (EAC) and Cubemaps distribute pixels with greater angular u
 - [x] DASH streaming with MPD parsing and segment downloading
 - [x] WebDAV browsing and range streaming
 - [x] Offline download manager with resume support and Room persistence
-- [x] Fixed Foveated Rendering enabled on Vulkan swapchains
+- [x] Fixed Foveated Rendering implemented on Vulkan swapchains (off by default through `FeatureFlags.Flag.FOVEATED_RENDERING`; the default decision awaits the hardware validation of Phase 0.6)
 - [x] Cubemap and EAC advanced projection shaders
 - [x] Host unit tests and protocol integration test suites passing
 

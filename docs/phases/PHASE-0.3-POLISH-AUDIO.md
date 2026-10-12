@@ -53,7 +53,7 @@ Virtual Cinema:                         Virtual Living Room:
 - [x] **T1.4** — Create Living Room environment:
   > Domestic warm ambient setup with wall-mounted TV proportions (`EnvironmentStore.ENV_LIVING_ROOM`).
 - [x] **T1.5** — Implement environment selector in UI (`EnvironmentSelectorModal.kt`, `EnvironmentStore.kt`)
-- [x] **T1.6** — Anchor virtual screen according to active environment (`VRActivity.kt:1639`)
+- [x] **T1.6** — Anchor virtual screen according to active environment (the environment switch in `VRActivity.kt`, `setVirtualEnvironment`)
 - [x] **T1.7** — Vulkan environment rendering pipeline (`environment.vert`, `environment.frag`)
 
 ### ⚠️ Pitfalls and Considerations
@@ -130,7 +130,7 @@ Allow hands-free navigation using OpenXR natural hand tracking.
 - [x] **T5.4** — Index finger raycasting targeting UI panels
 - [x] **T5.5** — Action mapping (pinch = select/click)
 - [x] **T5.6** — Seamless fallback between Touch Plus controllers and hands
-- [x] **T5.7** — Visual hand joints and laser reticle overlay (`vr_player_feedback_overlay.h`)
+- [x] **T5.7** — Laser beam and cursor reticle for hand-tracking input (hand joints are used for pointing and pinch detection only; the joints themselves are not drawn). `vr_player_feedback_overlay.h` holds the play/pause/seek feedback geometry, not hand visuals.
 
 ---
 
