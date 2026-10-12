@@ -8,8 +8,8 @@ This file provides architectural context, build workflows, testing guidelines, a
 
 The **tucaVR** is an immersive 2D/3D video player built specifically for the **Meta Quest 3** (Qualcomm XR2 Gen 2 platform).
 
-- **Application Model:** 100% immersive OpenXR application (`NativeActivity`), declared with `<meta-data android:name="com.oculus.vr.mode" android:value="vr_only" />` in `AndroidManifest.xml`. There are **no** standard 2D Android activities or flat Compose windows.
-- **User Interface:** UI is rendered via `android.app.Presentation` on a `VirtualDisplay`. The resulting buffers are rendered to textures and projected onto interactive 3D quad panels in VR space by the C++ engine.
+- **Application Model:** 100% immersive OpenXR application (`NativeActivity`), declared with `<meta-data android:name="com.oculus.vr.mode" android:value="vr_only" />` in `AndroidManifest.xml`. There are **no** standard 2D Android activities or flat windows.
+- **User Interface:** UI is rendered via `android.app.Presentation`s on `VirtualDisplay`s (Android `View`s for the main panels, Jetpack Compose + GeckoView for the in-app web browser panel). The resulting buffers are rendered to textures and projected onto interactive 3D quad panels in VR space by the C++ engine.
 - **Specifications & Requirements:** Technical specifications and Architecture Decision Records (ADRs) live in `docs/REQUIREMENTS.md`. Phase tracking and task breakdowns (`T1.1`, `T6.3`, etc.) reside in `docs/phases/PHASE-0.*.md`.
 - **Code Language Conventions:** Source code comments, documentation (`docs/`), specifications, and commit messages are written in **English** (Conventional Commits) as the codebase is migrating entirely to English. User-facing UI strings remain localized under `res/values-*/`.
 
@@ -40,7 +40,7 @@ The system is strictly partitioned into three communicating layers:
 
 1. **Kotlin (`app/src/main/java/com/tucavr/`):**
    - Android application shell and lifecycle management (`VRActivity.kt`).
-   - UI views using pure Android `View`s inside `VRPresentation` / `VRControlsPresentation` hosted on a `VirtualDisplay` (no XML layouts, no Jetpack Compose).
+   - UI views using pure Android `View`s inside `VRPresentation` / `VRControlsPresentation` hosted on a `VirtualDisplay` (no XML layouts). The web browser panel (`browser/`) is the exception: Jetpack Compose + GeckoView in `VRWebBrowserPresentation`.
    - Custom UI design system in `com.tucavr.designsystem` (`VoidButton`, `VoidTheme`, `VoidPanelChrome`, etc.).
    - Secure credential storage using `androidx.security:security-crypto` (`EncryptedSharedPreferences` — **never** store passwords in plain text).
    - Playback history persistence via Android Room DB using KSP (`app/src/main/java/com/tucavr/history/`).
@@ -48,10 +48,10 @@ The system is strictly partitioned into three communicating layers:
 
 2. **C++ (`native/src/`, built via CMake `native/CMakeLists.txt`):**
    - OpenXR session, swapchains, tracking, reference spaces (`XR_REFERENCE_SPACE_TYPE_STAGE`), and frame render loop.
-   - Built on Meta's `SampleXrFramework` (OVRFW) from `sdk/meta-openxr-sdk/`.
+   - The default Vulkan path does not link OVRFW; only the frozen GLES fallback is built on Meta's `SampleXrFramework` (OVRFW) from `sdk/meta-openxr-sdk/`.
    - **Graphics Backends:**
      - **Vulkan (`vr_player_app_vulkan.cpp`):** Primary/default graphics backend (see `docs/VULKAN-MIGRATION-PLAN.md`).
-     - **OpenGL ES (`vr_player_app.cpp`):** Maintained fallback backend switchable via Gradle build property.
+     - **OpenGL ES (`vr_player_app.cpp`):** Frozen fallback backend switchable via Gradle build property; no new rendering work goes into it.
    - Input handling for Meta Quest Touch Plus controllers, raycast intersection with floating 3D panels, and haptic feedback.
    - Zero-copy video frame import from decoded `AHardwareBuffer` pointers into GPU textures (`samplerExternalOES` on GLES or `VkSamplerYcbcrConversion` / external memory on Vulkan).
 
@@ -77,7 +77,7 @@ The Rust codebase is organized into modular crates to isolate Android NDK depend
 | `audio` | Audio output stream via Oboe (NDK). | **NDK Only:** Requires Android NDK audio headers and runtime. |
 | `media-logic` | Pure logic extracted from `core`: A/V synchronization (`SyncManager`), audio resampling math, volume/speed clamps, seek generation tracking. | **Host Testable:** Zero Android/hardware dependencies. Executes directly under `cargo test` on development host and CI. |
 | `protocols` | Pure-Rust streaming clients and format parsers (SMB 2/3, HTTP(S), FTP, SFTP, NFS, WebDAV, DLNA/UPnP, HLS, DASH, chunking, discovery, download, folder_scan, prefetch; zero native C TLS/SSH dependencies). | **Host Testable:** Executes under `cargo test` and automated Docker integration tests. |
-| `bridge` | C-ABI `extern "C"` (`cdylib` / `staticlib`) consumed by C++ (`vr_player_app.cpp` / `vr_player_app_vulkan.cpp`). | **NDK Only:** Links into the native shared library for Android. |
+| `bridge` | C-ABI `extern "C"` (`cdylib` / `staticlib`) consumed by C++ (`vr_player_jni_vulkan.cpp` by default, `vr_player_app.cpp` in the GLES fallback). | **NDK Only:** Links into the native shared library for Android. |
 
 ### Synchronization of the `ScreenMode` Enum
 Stereoscopic/projection mode representation (2D, Side-by-Side, Over-Under, 180°, 360°, Cubemap, EAC, etc.) is a numeric enum that **must remain strictly synchronized across 4 locations**:
@@ -119,7 +119,7 @@ The Gradle build automatically handles Rust & FFmpeg cross-compilation via the `
    - Once installed, `scripts/build-rust.sh` automatically detects the host toolchain and builds directly on your host machine.
 
 3. **Explicitly Forcing Build Modes:**
-   Set `rustBuildMode` in `gradle.properties`, `local.properties`, env var `RUST_BUILD_MODE`, or CLI parameter:
+   Set `rustBuildMode` in `gradle.properties`, the env var `RUST_BUILD_MODE`, or a CLI parameter:
    ```bash
    ./gradlew assembleDebug -PrustBuildMode=docker # Force Docker
    ./gradlew assembleDebug -PrustBuildMode=host   # Force Host machine
@@ -127,7 +127,7 @@ The Gradle build automatically handles Rust & FFmpeg cross-compilation via the `
    ```
 
 ### Full Unified Build & Deploy
-Cross-compiles Rust (`cargo ndk` via Docker or Host), places `.so` artifacts in `app/src/main/jniLibs/arm64-v8a`, and executes Gradle assemble:
+Runs Gradle assemble, whose `buildRust` task (`scripts/build-rust.sh`) cross-compiles Rust (`cargo ndk` via Docker or Host) and places the `.so` artifacts in `app/src/main/jniLibs/arm64-v8a`:
 ```bash
 ./scripts/build.sh
 # or
@@ -181,11 +181,11 @@ cd rust && cargo test -p media-logic sync::tests::test_name
 ./gradlew :app:lintDebug
 
 # C++ code formatting and shader validation
-clang-format --dry-run -Werror native/tests/*.cpp native/include/vk_math.h native/include/screen_mode.h native/include/subtitle_layout.h native/include/hand_tracking.h native/include/environment_config.h
+clang-format --dry-run -Werror native/tests/*.cpp native/include/vk_math.h native/include/screen_mode.h native/include/subtitle_layout.h native/include/hand_tracking.h native/include/environment_config.h native/include/browser_pose.h native/include/panel_pick.h
 ./scripts/check-shaders.sh
 
-# C++ host unit tests (native math, screen mode, subtitle layout, hand tracking, environment config)
-# Requires cmake and libopenxr-dev (or run via ./scripts/test-native-host.sh)
+# C++ host unit tests (native math, input FSM, screen mode, subtitle layout, hand tracking, environment config, browser pose, panel pick)
+# Requires g++ and libopenxr-dev (or run via ./scripts/test-native-host.sh)
 ./scripts/test-native-host.sh
 
 # Run all host test suites (Rust + C++ host + Kotlin JVM; no lint)
@@ -193,7 +193,7 @@ make test
 ```
 
 ### 2. Network Protocol Integration Tests (Docker)
-Automated integration tests against real SMB, HTTP, HTTPS, FTP, and SFTP containers:
+Automated integration tests against real SMB, HTTP, HTTPS, FTP, SFTP and WebDAV containers, plus generated DASH fixtures:
 ```bash
 ./scripts/test-network-protocols.sh          # Spins up docker/network-tests/, runs tests, tears down
 ./scripts/test-network-protocols.sh --keep   # Leaves containers running for debugging
@@ -212,7 +212,7 @@ Features requiring true OpenXR swapchains, 6DoF controller tracking, haptics, an
 
 ## 6. Coding Conventions & Best Practices
 
-- **Language:** The codebase is being migrated entirely to English. All new and updated source code comments, documentation (`docs/`), PRs, and commit messages must be in **English** (Conventional Commits).
+- **Language:** Documentation (`docs/`), scripts, PRs, and commit messages must be in **English** (Conventional Commits), and so must new and edited source code comments (older source files still contain Portuguese comments while the migration continues). Exceptions: `README.pt-BR.md` and the localized UI strings.
 - **Internationalization (i18n):** User-facing strings must be declared in `app/src/main/res/values/strings.xml` (English default), `values-pt-rBR/strings.xml` (Portuguese), and `values-es/strings.xml` (Spanish). Always use positional placeholders (`%1$s`, `%1$d`) via `getString(R.string.xxx, arg1)` — never Kotlin string concatenation. Parity is enforced by `I18nParityTest`.
 - **Thread Management:** Calls originating from the C++ OpenXR render thread dispatched into Kotlin/Android via JNI must be executed on the UI thread using `runOnUiThread`.
 - **Decoder Control (Rust):** Playback state changes (`is_playing`) must suspend the thread (`sleep` / condition variables) rather than killing and re-spawning ffmpeg demux loops.
@@ -222,13 +222,15 @@ Features requiring true OpenXR swapchains, 6DoF controller tracking, haptics, an
 
 ## 7. Continuous Integration (CI)
 
-The GitHub Actions workflow (`.github/workflows/main.yml`) runs decoupled parallel quality jobs on PRs and pushes:
-1. `security-and-workflows`: `actionlint` (workflow syntax), `cargo-deny` (Rust licenses/advisories), `gitleaks` (secret scan).
+The GitHub Actions workflow (`.github/workflows/main.yml`) runs parallel quality jobs on PRs and pushes. On pull requests a `changes` job path-filters them; pushes and manual runs run everything:
+1. `security-and-workflows`: `actionlint` (workflow syntax), `cargo-deny` (`check licenses bans sources`), `gitleaks` (secret scan, non-blocking).
 2. `rust-checks`: `cargo fmt --check`, `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings`, `cargo test -p protocols -p media-logic`.
 3. `cpp-checks`: `clang-format --dry-run -Werror`, `./scripts/check-shaders.sh`, `ENABLE_ASAN=1 ./scripts/test-native-host.sh`.
-4. `android-checks`: `./gradlew ktlintCheck`, `./gradlew :app:lintDebug`, `./gradlew testDebugUnitTest`.
+4. `android-checks`: `./gradlew ktlintCheck`, `./gradlew :app:lintDebug`, `./gradlew testDebugUnitTest` (includes `UiSourceGuardsTest`, `ThemeContrastTest` and `I18nParityTest`).
+5. `markdown-checks`: `markdownlint-cli2`.
+6. `ci-gate`: the single required check; fails if any job failed, treats path-filter skips as success.
 
-A gated job, `build-apk`, depends on all above checks passing and runs the full native C++ + Rust + Gradle build to upload the Quest 3 APK. It runs on `main`/`develop` or via manual `workflow_dispatch`.
+A gated job, `build-apk`, runs only on `BGLuis/tucaVR` (or the legacy `BGLuis/vr-multmidia` name), when the APK path filter matches and the checks above did not fail. It runs the full native C++ + Rust + Gradle build and uploads the Quest 3 APK. `release.yml` reuses that APK for the exact commit and falls back to a full build when no matching CI run is found.
 
 ---
 

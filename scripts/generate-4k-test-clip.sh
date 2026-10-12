@@ -1,13 +1,13 @@
 #!/bin/bash
-# Gera um clipe H.264 4K sintetico (padrao de teste + tom senoidal), reprodutivel e
-# decodificavel pelo hardware do Quest 3 (H.264 High@5.2, doc secao 2: "H.264 ate
-# 4K@60fps"), para servir de carga de teste objetiva do criterio da DoD "Memoria <
-# 2.5GB durante reproducao de video 4K" (docs/phases/PHASE-0.1-MVP.md). Usado por
-# scripts/test-4k-memory.sh — nao precisa rodar isto na mao normalmente.
+# Generates a synthetic 4K H.264 clip (test pattern + sine tone), reproducible and
+# decodable by the Quest 3's hardware (H.264 High@5.2, doc section 2: "H.264 up to
+# 4K@60fps"), to serve as an objective test load for the DoD criterion "Memory <
+# 2.5GB during 4K video playback" (docs/phases/PHASE-0.1-MVP.md). Used by
+# scripts/test-4k-memory.sh — you normally do not need to run this by hand.
 #
-# Nao gera video "de verdade" (filmagem) de proposito: testsrc2 e sine sao
-# deterministicos, nao dependem de nenhum arquivo de midia externo, e geram em
-# segundos mesmo em 4K (medido: ~2.8s para 10s de conteudo com preset veryfast).
+# It deliberately does not generate "real" video (footage): testsrc2 and sine are
+# deterministic, depend on no external media file, and generate in seconds even at
+# 4K (measured: ~2.8s for 10s of content with the veryfast preset).
 set -euo pipefail
 
 DURATION_SEC=150
@@ -17,11 +17,11 @@ FORCE=0
 
 usage() {
     cat <<EOF
-Uso: $0 [opcoes]
-  --duration-sec N   Duracao do clipe em segundos (padrao: 150)
-  --bitrate RATE      Bitrate de video, formato ffmpeg (padrao: 25M)
-  --out PATH           Caminho de saida (padrao: testdata/4k-soak-clip.mp4)
-  --force               Regera mesmo se o arquivo ja existir
+Usage: $0 [options]
+  --duration-sec N   Clip duration in seconds (default: 150)
+  --bitrate RATE      Video bitrate, ffmpeg format (default: 25M)
+  --out PATH           Output path (default: testdata/4k-soak-clip.mp4)
+  --force               Regenerates even if the file already exists
 EOF
 }
 
@@ -32,23 +32,23 @@ while [[ $# -gt 0 ]]; do
         --out) OUT="$2"; shift 2 ;;
         --force) FORCE=1; shift ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "Opcao desconhecida: $1"; usage; exit 1 ;;
+        *) echo "Unknown option: $1"; usage; exit 1 ;;
     esac
 done
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
-    echo "ffmpeg nao encontrado no PATH — necessario para gerar o clipe de teste." >&2
+    echo "ffmpeg not found in PATH — required to generate the test clip." >&2
     exit 1
 fi
 
 if [[ -f "$OUT" && "$FORCE" -eq 0 ]]; then
-    echo "Ja existe: $OUT ($(du -h "$OUT" | cut -f1)). Use --force para regerar."
+    echo "Already exists: $OUT ($(du -h "$OUT" | cut -f1)). Use --force to regenerate."
     exit 0
 fi
 
 mkdir -p "$(dirname "$OUT")"
 
-echo "Gerando clipe 4K de teste (${DURATION_SEC}s @ ${BITRATE})..."
+echo "Generating the 4K test clip (${DURATION_SEC}s @ ${BITRATE})..."
 ffmpeg -y -hide_banner -loglevel warning \
     -f lavfi -i "testsrc2=size=3840x2160:rate=30" \
     -f lavfi -i "sine=frequency=440:sample_rate=48000" \
@@ -59,4 +59,4 @@ ffmpeg -y -hide_banner -loglevel warning \
     -movflags +faststart \
     "$OUT"
 
-echo "Gerado: $OUT ($(du -h "$OUT" | cut -f1))"
+echo "Generated: $OUT ($(du -h "$OUT" | cut -f1))"

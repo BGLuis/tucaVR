@@ -1,229 +1,262 @@
-# Plano de Testes Automatizados
+# Automated Testing Plan
 
-> Contexto: hoje toda validação é manual, no headset Quest 3 físico. Isso é
-> lento e caro para iterar em lógica que não depende de fato de
-> hardware/GPU/rede reais. Este documento mapeia o que dá para automatizar
-> hoje, o que continua exigindo o headset (e por quê), e registra o que já
-> foi implementado nesta rodada.
+> Context: all validation used to be manual, on the physical Quest 3 headset.
+> That is slow and expensive for iterating on logic that does not really depend
+> on real hardware/GPU/network. This document maps what can be automated today,
+> what still requires the headset (and why), and records what has been
+> implemented. Sections 1, 2 and 7 describe the first test round and are kept as
+> historical context; sections 3, 5 and 6 reflect the current state.
 
-## 1. Estado antes desta rodada
+## 1. State Before the First Round (historical)
 
-- Rust: só existiam testes em `rust/protocols/src/prefetch.rs` (fonte fake em
-  memória, leitura sequencial + seek) e `rust/protocols/src/smb/uri.rs`
-  (`redact_hides_credentials`, roundtrip). Nada em `rust/core` ou `rust/audio`.
-- Kotlin: nenhum teste em `app/src/test` nem `app/src/androidTest` — os
-  diretórios não existiam.
-- CI (`.github/workflows/main.yml`): rodava `cargo clippy` (funcional) e
-  `ktlintCheck` (fallback silencioso, nunca falha de verdade — ver
-  PHASE-0.1-MVP.md, T1.9). Nenhum teste automatizado rodava no CI.
+- Rust: the only tests were in `rust/protocols/src/prefetch.rs` (an in-memory
+  fake source, sequential read + seek) and `rust/protocols/src/smb/uri.rs`
+  (`redact_hides_credentials`, roundtrip). Nothing in `rust/core` or
+  `rust/audio`.
+- Kotlin: no tests in `app/src/test` or `app/src/androidTest` — the directories
+  did not exist.
+- CI (`.github/workflows/main.yml`): ran `cargo clippy` (functional) and
+  `ktlintCheck` (a silent fallback that never really failed — see
+  PHASE-0.1-MVP.md, T1.9). No automated test ran in CI.
 
-## 2. Uma restrição estrutural descoberta nesta rodada
+## 2. A Structural Constraint Discovered in the First Round
 
-`rust/core` **não compila num host comum** (confirmado nesta sessão, não
-suposto): ele depende diretamente de `ndk`/`ndk-sys` e, transitivamente via
-`audio`, de `oboe-sys`, cujo build script compila C++ contra os headers do
-Oboe esperando o toolchain do NDK Android.
+`rust/core` **does not compile on a regular host** (confirmed, not assumed): it
+depends directly on `ndk`/`ndk-sys` and, transitively through `audio`, on
+`oboe-sys`, whose build script compiles C++ against the Oboe headers expecting
+the Android NDK toolchain.
 
-- `cargo check -p audio` no host falha porque `ndk-sys`/`oboe-sys` não
-  compilam fora de um ambiente Android.
-- `cargo check -p core` falha pela mesma cadeia de dependências (`core` ->
+- `cargo check -p audio` on the host fails because `ndk-sys`/`oboe-sys` do not
+  compile outside an Android environment.
+- `cargo check -p core` fails through the same dependency chain (`core` ->
   `audio` -> `oboe-sys`).
-- Cross-compilando para `aarch64-linux-android` via `cargo ndk` (com
-  `ANDROID_NDK_HOME`/`ANDROID_NDK_ROOT` configurados e as libs do FFmpeg
-  cross-compiladas em `PKG_CONFIG_PATH`), o workspace inteiro (`core`,
-  `audio`, `protocols`, `bridge`) compila normalmente — mas um binário
-  `aarch64` não roda no runner x86_64 do CI nem no host de desenvolvimento,
-  então isso serve para **verificar que compila**, não para **rodar testes**.
+- Cross-compiling to `aarch64-linux-android` via `cargo ndk` (with
+  `ANDROID_NDK_HOME`/`ANDROID_NDK_ROOT` set and the FFmpeg libs cross-compiled
+  in `PKG_CONFIG_PATH`), the whole workspace (`core`, `audio`, `protocols`,
+  `bridge`) compiles normally — but an `aarch64` binary does not run on the
+  x86_64 CI runner or on the development host, so this serves to **verify it
+  compiles**, not to **run tests**.
 
-Isso significa: qualquer lógica que precise ser testada com `cargo test` num
-laptop/CI comum não pode viver dentro do módulo `core` como estava — mesmo
-que o módulo específico (ex: o antigo `core::sync`) não use nenhuma API
-Android diretamente, o *crate inteiro* falha ao compilar antes de chegar no
-código dele.
+This means: any logic that has to be tested with `cargo test` on a regular
+laptop/CI cannot live inside the `core` module — even if the specific module
+(e.g. the former `core::sync`) uses no Android API directly, the *whole crate*
+fails to compile before reaching its code.
 
-**Solução aplicada**: nova crate `rust/media-logic`, com **zero dependências
-Android/hardware**, para hospedar a lógica pura que antes vivia em `core`.
-`core` agora depende de `media-logic` e delega para lá em vez de reimplementar
-a mesma lógica — ver `rust/media-logic/src/lib.rs` para a justificativa
-completa. Isso não é uma camada de arquitetura nova arbitrária: é
-especificamente o mecanismo necessário para que "testável sem headset" seja
-possível de verdade para esse código, dado o formato do workspace existente.
+**Solution applied**: a new `rust/media-logic` crate, with **zero
+Android/hardware dependencies**, to host the pure logic that used to live in
+`core`. `core` now depends on `media-logic` and delegates to it instead of
+reimplementing the same logic — see `rust/media-logic/src/lib.rs` for the full
+rationale. This is not an arbitrary new architecture layer: it is specifically
+the mechanism needed so that "testable without a headset" is actually possible
+for this code, given the shape of the existing workspace.
 
-## 3. O que PODE ser (e foi) testado sem headset
+## 3. What CAN Be Tested Without a Headset (and Is)
 
-### 3.1 Rust — `rust/media-logic` (nova crate, roda com `cargo test` no host)
+### 3.1 Rust — `rust/media-logic` (runs with `cargo test` on the host)
 
-| Módulo | O que cobre | Extraído de |
+The crate grew well beyond the first four modules. Current modules (each with
+unit tests in the same file): `sync` (`SyncManager`), `audio_resample`,
+`playback_params`, `session`, `frame_timing` (`decide_frame_action`),
+`preroll`, `buffer_gate`, `focus_pause`, `error_ring` (`ErrorRingBuffer`),
+`retry_backoff`, `quality` (adaptive quality controller), `upscaling`,
+`format3d` (3D format detection and the `ScreenMode` index encoding),
+`metadata_wire`, `codec`, `av1`, `color`, `yuv_convert`, `subtitle`,
+`subtitle_ass`, `subtitle_pgs` and `spatial_audio/`.
+
+The original four modules, whose rationale is still relevant:
+
+| Module | What it covers | Extracted from |
 |---|---|---|
-| `sync.rs` | `SyncManager`: áudio como clock master, fallback de wall-clock, escala por velocidade, pause/resume sem contar o tempo pausado, reset | `core/src/sync.rs` (agora um re-export fino) |
-| `audio_resample.rs` | Matemática do controle de velocidade (`target_sample_rate = base/speed`, clamps) e do bug de padding/linesize do T2.6 (`valid_sample_count`) | `core/src/audio_decoder.rs::set_speed`/`decode` |
-| `playback_params.rs` | Clamps de velocidade (0.5x-2.0x) e volume (0.0-1.0) | `core/src/playback.rs::set_speed`/`set_volume` |
-| `session.rs` | Contrato de "geração" de playback do bug T2.6: gerações não compartilham flags `is_playing`/`is_running`; `stop_and_join` sinaliza parada, acorda threads pausadas, e só retorna depois do `join()` real | `core/src/playback.rs::PlaybackSession` (agora usa `Generation` internamente) |
+| `sync.rs` | `SyncManager`: audio as master clock, wall-clock fallback, speed scaling, pause/resume without counting paused time, reset | `core/src/sync.rs` (now a thin re-export) |
+| `audio_resample.rs` | The math of the speed control (`target_sample_rate = base/speed`, clamps) and of the T2.6 padding/linesize bug (`valid_sample_count`) | `core/src/audio_decoder.rs::set_speed`/`decode` |
+| `playback_params.rs` | Speed (0.5x-2.0x) and volume (0.0-1.0) clamps | `core/src/playback.rs::set_speed`/`set_volume` |
+| `session.rs` | The T2.6 playback "generation" contract: generations do not share `is_playing`/`is_running` flags; `stop_and_join` signals stop, wakes paused threads, and only returns after the real `join()` | `core/src/playback.rs::PlaybackSession` (now uses `Generation` internally) |
 
-`SyncManager` ganhou um ponto de injeção de clock (`trait Clock`, com
-`SystemClock` em produção e `FakeClock` nos testes) — sem isso, testar
-pause/resume e o fallback de wall-clock exigiria `sleep()`s reais e testes
-lentos/flaky. É a única mudança de comportamento em relação ao código
-original; a API pública (`new`, `start`, `pause`, `resume`,
-`update_audio_pts`, `get_master_clock`, ...) é idêntica.
+`SyncManager` gained a clock injection point (`trait Clock`, with `SystemClock`
+in production and `FakeClock` in tests) — without it, testing pause/resume and
+the wall-clock fallback would require real `sleep()`s and slow/flaky tests. It
+is the only behavior change relative to the original code; the public API
+(`new`, `start`, `pause`, `resume`, `update_audio_pts`, `get_master_clock`, ...)
+is identical.
 
-### 3.2 Rust — `rust/protocols` (já era host-testable, ganhou mais testes)
+### 3.2 Rust — `rust/protocols` (host-testable, with unit and integration tests)
 
-| Arquivo | O que cobre |
+Unit tests live next to the code in every module: `prefetch`, `chunking`,
+`retry`, `folder_scan`, `http`, `smb`, `ftp`, `sftp`, `nfs`, `webdav`, `dlna`,
+`hls`, `dash`, `discovery` and `download`. `http.rs` is tested with a real mock
+HTTP server (`httpmock`, a dev-dependency): `probe()` (HEAD with a fallback to
+GET+Range, `Accept-Ranges` detection, unreachable server) and
+`HttpsRangeSource` (range reads, failing early without range support, reading
+past EOF) — with no real server needed.
+
+Integration tests against real servers run in Docker (see section 6 and
+`docker/network-tests/README.md`): `rust/protocols/tests/{smb,http,https,ftp,sftp,webdav,dash}_integration.rs`,
+all `#[ignore]`d by default and driven by `./scripts/test-network-protocols.sh`.
+
+**A real production bug found and fixed while writing the first of these
+tests**: the HEAD branch of `probe()` used `reqwest::Response::content_length()`,
+which reqwest's own documentation describes as unreliable when the response has
+no body (exactly the HEAD case) — in practice this made `probe()` report
+`content_length: Some(0)` for ANY server, even one that correctly answered
+`Content-Length: 123456` on the HEAD, which in turn made
+`HttpsRangeSource::new`/`read_range` think every offset was past the end of the
+file and silently return 0 bytes. Fixed by reading the `Content-Length` header
+directly (`parse_content_length_header`) instead of trusting `content_length()`.
+This is relevant because T7.1 in PHASE-0.1-MVP.md explicitly documented that the
+HTTPS path had never been tested against a real server — this bug would have
+shown up exactly in that manual test, and the automated mock-server test caught
+it first.
+
+### 3.3 Kotlin — `app/src/test` (pure JVM, no emulator/Robolectric)
+
+61 test files (about 335 `@Test` methods; counted by grepping, not executed for
+this document) organized by package, among them: `filebrowser/` (`MediaSorterTest`,
+`DirectoryNavigatorTest`, `DirectoryListerTest`, `MediaFilterEngineTest`,
+thumbnail cache keys and `MemoryBudgetGateTest`), `history/` (mapping, filter,
+tracker, throttle and Room migration tests), `network/` (directory, discovery
+and DLNA parsing, saved-server mapping), `download/`, `playlist/`, `photos/`,
+`browser/` (bookmarks, error page, scroll, architecture rules), `debug/`
+(`DebugStatsParserTest`, `DebugEventLogTest`, `BottleneckStageAnalyzerTest`,
+`DebugTelemetryExporterTest`), `designsystem/` (form validators, `ThemeContrastTest`)
+and the repository-wide guards: `I18nParityTest` and `UiSourceGuardsTest`.
+
+`ThumbnailGenerator.getThumbnail()` still needs a real `Context` and
+`MediaMetadataRetriever` — only the cache-key logic (which is what effectively
+decides cache correctness: same file = same key, different/edited file =
+different key) was extracted as a pure `internal` function and tested
+(`ThumbnailGenerator.cacheKeyFor` now delegates to `CacheKeys.forLocalEntry`).
+The rest (decoding a frame, writing to disk) is real Android I/O, outside what
+is automatable without Robolectric — and even with Robolectric,
+`MediaMetadataRetriever.getFrameAtTime` would have no real video content to
+decode, so the test would be of questionable value; better left to manual
+verification (the thumbnail shows up correctly in the file browser).
+
+### 3.4 C++ — native host tests (`./scripts/test-native-host.sh`)
+
+C++ unit tests compiled natively on the host (x86_64), with no dependency on the
+Quest 3 runtime. The script builds 8 binaries from `native/tests/`:
+
+| Binary | What it covers |
 |---|---|
-| `prefetch.rs` (já existia) | Cache de leitura em blocos com fonte fake em memória |
-| `smb/uri.rs` (já existia) | Serialização/redação da URI interna SMB |
-| `http.rs` (novo) | `probe()` (HEAD com fallback para GET+Range, detecção de `Accept-Ranges`, servidor inalcançável) e `HttpsRangeSource` (leitura por range, falha cedo sem suporte a range, leitura além do EOF), usando um servidor HTTP mock real (`httpmock`, novo dev-dependency) — sem precisar de servidor de verdade |
+| `test_vk_math` | Vulkan vector and matrix math operations (`native/include/vk_math.h`) |
+| `test_input_fsm` | Controller button debouncing and edge detection (play/pause toggle on the rising edge), mirroring `vr_player_input_vulkan.h` |
+| `test_screen_mode` | Mapping and properties of the 17 stereo projection modes (`native/include/screen_mode.h`) |
+| `test_subtitle_layout` | Spatial placement, line wrapping and 3D layout of subtitles (`native/include/subtitle_layout.h`) |
+| `test_hand_tracking` | Hand tracking, pinch gestures and joint mapping (`native/include/hand_tracking.h`) |
+| `test_environment_config` | Virtual environment, skybox and ambient lighting configuration (`native/include/environment_config.h`) |
+| `test_browser_pose` | Placement of the in-app web browser panel (`native/include/browser_pose.h`) |
+| `test_panel_pick` | Ray-versus-panel picking (`native/include/panel_pick.h`) |
 
-**Bug de produção real encontrado e corrigido ao escrever esses testes**: o
-branch de HEAD de `probe()` usava `reqwest::Response::content_length()`, que
-a própria documentação do reqwest descreve como não confiável quando a
-resposta não tem corpo (exatamente o caso de HEAD) — na prática isso fazia
-`probe()` reportar `content_length: Some(0)` para QUALQUER servidor, mesmo um
-que respondesse `Content-Length: 123456` corretamente no HEAD, o que por sua
-vez fazia `HttpsRangeSource::new`/`read_range` achar que qualquer offset
-estava além do fim do arquivo e devolver 0 bytes silenciosamente. Corrigido
-lendo o header `Content-Length` diretamente (`parse_content_length_header`)
-em vez de confiar em `content_length()`. Isso é relevante porque T7.1 no
-PHASE-0.1-MVP.md documenta explicitamente que o caminho HTTPS "nunca foi
-testado contra um servidor real" — este bug teria aparecido exatamente
-nesse teste manual, e o teste automatizado com mock server pegou antes.
+They need `g++` and the `libopenxr-dev` package (`sudo apt-get install libopenxr-dev`) for the headers. They can be run with AddressSanitizer enabled through `ENABLE_ASAN=1 ./scripts/test-native-host.sh` (as configured in CI).
 
-### 3.3 Kotlin — `app/src/test` (novo, JVM puro, sem emulador/Robolectric)
+## 4. What STILL Requires the Physical Headset (and Why)
 
-| Arquivo | O que cobre |
-|---|---|
-| `MediaSorterTest.kt` | Ordenação por nome/data/tamanho/tipo, ascendente/descendente, diretórios sempre antes de arquivos em qualquer modo |
-| `DirectoryNavigatorTest.kt` | `enter`/`goBack`/`canGoBack`, pilha de navegação com múltiplos níveis, erro ao entrar num arquivo que não é diretório |
-| `DirectoryListerTest.kt` | Filtro por extensão (vídeo/áudio/imagem), case-insensitivity, diretórios não são reclassificados pela extensão do nome, listagem não-recursiva (um nível), diretório vazio, tamanho de arquivo vs. diretório, `mediaTypeForExtension` para todas as extensões declaradas |
-| `ThumbnailGeneratorCacheKeyTest.kt` | Lógica de cache-key (`ThumbnailGenerator.cacheKeyFor`, extraída como função pura `internal`): mesma entrada → mesma chave, path diferente → chave diferente, arquivo sobrescrito no mesmo path (tamanho/data mudou) → chave nova, colisão entre arquivos não relacionados com mesmo tamanho/data → chaves diferentes, formato do hash (SHA-256 hex, 64 chars) |
+- **Real OpenXR rendering** (`native/src/*.cpp`): swapchain, timing of
+  `xrWaitFrame`/`xrBeginFrame`/`xrEndFrame`, reprojection/ATW — it only exists
+  with the Quest's OpenXR runtime running.
+- **Physical controller input and haptics**: raycasting over real panels,
+  thumbstick/grip, vibration pulses — needs the controller hardware.
+- **Real hardware decoding through MediaCodec**: `HwDecoder`
+  (`rust/core/src/decoder.rs`) uses `AMediaCodec`, which only exists in the
+  real Android runtime; there is no way to faithfully simulate it without the
+  Quest 3's (XR2 Gen 2) hardware decoder behind it.
+- **Rust→C++ shared texture**: `AHardwareBuffer`/`ImageReader`
+  (`rust/core/src/texture.rs`) is a real Android system API with no host
+  equivalent.
+- **Oboe / real low-level audio**: `rust/audio` talks to Android's audio driver
+  through Oboe; the testable logic (resampling, clamps) was already extracted
+  into `media-logic` — what remains (`AudioOutput`, streams, the real callback)
+  is inherently hardware.
+- **Thermal behavior**: the Quest 3's throttling after prolonged use only shows
+  up on real hardware under real load.
+- **Real network conditions (Wi-Fi/SMB/NAS)**: the Docker integration suite
+  covers real SMB, HTTP(S), FTP, SFTP and WebDAV servers and generated DASH
+  fixtures, but real NTLMv2 authentication against a particular NAS/Samba,
+  reconnection on genuinely unstable Wi-Fi, and 4K streaming performance over
+  SMB/HTTPS still require a real server and network.
+- **UI rendered through `VirtualDisplay`/`Presentation`** projected as a quad in
+  VR (file browser, controls, network, web browser): the *event routing* (ray
+  → synthetic `MotionEvent` → `Presentation`) and the real look of the UI in VR
+  can only be confirmed on the headset. The data logic behind it (listing,
+  sorting, navigation, cache) is already covered by the JVM tests of section
+  3.3.
 
-`ThumbnailGenerator.getThumbnail()` continua precisando de `Context` e
-`MediaMetadataRetriever` reais — só a lógica de chave de cache (que é o que
-efetivamente decide corretude do cache: mesmo arquivo = mesma chave, arquivo
-diferente/editado = chave diferente) foi extraída como função `internal`
-pura e testada. O resto (decodificar frame, gravar em disco) é I/O real de
-Android, fora do escopo automatizável sem Robolectric — e mesmo com
-Robolectric, `MediaMetadataRetriever.getFrameAtTime` não teria conteúdo de
-vídeo real para decodificar, então o teste seria de valor questionável;
-melhor deixar para verificação manual (thumbnail aparece corretamente no
-file browser).
+See `docs/HARDWARE-VALIDATION-CHECKLIST.md` for the headset validation campaign.
 
-### 3.4 C++ — testes nativos no host (`./scripts/test-native-host.sh`)
-
-Testes de unidade em C++ compilados nativamente no host (x86_64) sem depender do runtime do Quest 3:
-
-| Binário | O que cobre |
-|---|---|
-| `vk_math_test` | Operações matemáticas vetoriais e matriciais Vulkan (`native/include/vk_math.h`) |
-| `screen_mode_test` | Mapeamento e propriedades dos 17 modos de projeção estéreo (`native/include/screen_mode.h`) |
-| `subtitle_layout_test` | Posicionamento espacial, quebra de linha e layout 3D de legendas (`native/include/subtitle_layout.h`) |
-| `hand_tracking_test` | Rastreamento de mãos, gestos de pinça e mapeamento de juntas (`native/include/hand_tracking.h`) |
-| `environment_config_test` | Configuração de ambientes virtuais, skybox e iluminação ambiente (`native/include/environment_config.h`) |
-| `test_subtitles` | Parser e formatação de legendas |
-
-Requer `cmake` e o pacote `libopenxr-dev` (`sudo apt-get install libopenxr-dev`). Podem ser executados com AddressSanitizer habilitado via `ENABLE_ASAN=1 ./scripts/test-native-host.sh` (como configurado no CI).
-
-## 4. O que CONTINUA exigindo o headset físico (e por quê)
-
-- **Renderização OpenXR real** (`native/src/*.cpp`): swapchain, timing de
-  `xrWaitFrame`/`xrBeginFrame`/`xrEndFrame`, reprojection/ATW, multiview —
-  só existe com o runtime OpenXR do Quest rodando.
-- **Input físico de controller e haptics**: raycasting sobre painéis reais,
-  thumbstick/grip, pulsos de vibração — precisa do hardware do controller.
-- **Decodificação de hardware via MediaCodec real**: `HwDecoder`
-  (`rust/core/src/decoder.rs`) usa `AMediaCodec`, que só existe no runtime
-  Android real; não há como simular fielmente sem o decoder de hardware do
-  Quest 3 (XR2 Gen 2) por trás.
-- **Textura compartilhada Rust→C++**: `AHardwareBuffer`/`ImageReader`
-  (`rust/core/src/texture.rs`) é uma API de sistema Android real, sem
-  equivalente em host.
-- **Oboe / áudio de baixo nível real**: `rust/audio` fala com o driver de
-  áudio do Android via Oboe; a lógica testável (resampling, clamps) já foi
-  extraída para `media-logic` — o que resta (`AudioOutput`, streams,
-  callback de verdade) é inerentemente hardware.
-- **Comportamento térmico**: throttling do Quest 3 após uso prolongado só
-  aparece em hardware real sob carga real.
-- **Condições reais de rede (Wi-Fi/SMB/NAS)**: os testes de SMB e HTTP(S)
-  cobrem a lógica de parsing/URI/redact/prefetch/probe com fakes e mock
-  server — mas autenticação NTLMv2 real, comportamento de um NAS/Samba real,
-  reconexão em Wi-Fi instável de verdade, e desempenho de streaming 4K via
-  SMB/HTTPS continuam exigindo um servidor real (documentado como gap
-  conhecido em T6.1/T7.1 do PHASE-0.1-MVP.md — este trabalho não muda essa
-  situação, só evita que ela contamine testes de lógica pura).
-- **UI renderizada via `VirtualDisplay`/`Presentation`** projetada como quad
-  OES em VR (file browser, controles, rede): o *roteamento de eventos* (ray
-  → `MotionEvent` sintético → `Presentation`) e a aparência real da UI em VR
-  só se confirmam no headset. A lógica de dados por trás (listagem,
-  ordenação, navegação, cache) já está coberta pelos testes JVM da seção 3.3.
-
-## 5. Como rodar
+## 5. How to Run
 
 ```bash
-# Rust — crates host-testable (protocols + media-logic)
+# Rust — host-testable crates (protocols + media-logic)
 cd rust && cargo test -p protocols -p media-logic
 
-# Rust — lint com escopo restrito aos crates testáveis no host
+# Rust — lint scoped to the host-testable crates
 cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings
 
-# C++ — testes de unidade nativos no host (requer cmake e libopenxr-dev)
+# C++ — native host unit tests (needs g++ and libopenxr-dev)
 ./scripts/test-native-host.sh
 
-# Kotlin — testes JVM puros e verificação estática
+# Kotlin — pure JVM tests and static checks
 ./gradlew testDebugUnitTest
 ./gradlew ktlintCheck
 ./gradlew :app:lintDebug
 
-# Executar todas as suítes de teste do host de uma vez
+# Run every host test suite at once
 make test
 
-# Rust — verificar que o workspace inteiro compila para Android
-# (não roda testes, apenas confirma que compila — precisa de NDK + FFmpeg
-# cross-compilado; ver scripts/build.sh para as variáveis de ambiente necessárias)
+# Network protocol integration tests (Docker; no headset needed)
+./scripts/test-network-protocols.sh
+
+# Rust — verify the whole workspace compiles for Android
+# (does not run tests, only confirms it compiles — needs the NDK + cross-compiled
+# FFmpeg; see scripts/build-rust.sh for the required environment variables)
 cd rust && cargo ndk -t aarch64-linux-android -P 26 build
 ```
 
-Todas as suítes de teste de unidade do host (Rust `media-logic` e `protocols`, Kotlin JVM e binários nativos C++) executam e passam localmente e no CI com 0 falhas. O workspace Rust completo cross-compila para `aarch64-linux-android` sem erros.
-
 ## 6. CI (`.github/workflows/main.yml`)
 
-O workflow de integração contínua executa 4 jobs paralelos desacoplados para validação rápida no host:
+The continuous integration workflow runs decoupled parallel jobs for fast host
+validation. On pull requests a `changes` job path-filters them, so a job is
+skipped when the diff cannot affect it; pushes and manual runs run everything.
 
-1. `security-and-workflows`: `actionlint` (validação de sintaxe dos workflows), `cargo-deny` (licenças e advisory de dependências Rust), `gitleaks` (varredura de segredos).
+1. `security-and-workflows`: `actionlint` (workflow syntax validation), `cargo-deny` (`check licenses bans sources` for Rust dependencies), `gitleaks` (secret scan, non-blocking).
 2. `rust-checks`: `cargo fmt --check`, `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings`, `cargo test -p protocols -p media-logic`.
-3. `cpp-checks`: `clang-format --dry-run -Werror`, `./scripts/check-shaders.sh` (validação GLSL e compilação SPIR-V), `ENABLE_ASAN=1 ./scripts/test-native-host.sh` (compilação e execução dos 6 binários C++ de host com AddressSanitizer).
-4. `android-checks`: `./gradlew ktlintCheck` (formatador com baseline XML), `./gradlew :app:lintDebug` (análise estática Android), `./gradlew testDebugUnitTest` (testes unitários JVM do Kotlin, incluindo `I18nParityTest`).
+3. `cpp-checks`: `clang-format --dry-run -Werror`, `./scripts/check-shaders.sh` (GLSL validation and SPIR-V compilation), `ENABLE_ASAN=1 ./scripts/test-native-host.sh` (compiles and runs the 8 host C++ binaries with AddressSanitizer).
+4. `android-checks`: `./gradlew ktlintCheck` (formatter with an XML baseline), `./gradlew :app:lintDebug` (Android static analysis), `./gradlew testDebugUnitTest` (Kotlin JVM unit tests, including `I18nParityTest`, `UiSourceGuardsTest` and `ThemeContrastTest`), run with `RUST_BUILD_MODE=skip`.
+5. `markdown-checks`: `markdownlint-cli2` over every `*.md`.
+6. `ci-gate`: the single check branch protection needs; it fails if any job failed and treats path-filter skips as success.
 
-O job de compilação do APK (`build-apk`) depende do sucesso de todos os 4 jobs acima e compila a aplicação completa (Rust via `cargo ndk`, C++ via CMake, e Gradle APK do Quest 3).
+The APK build job (`build-apk`) depends on `changes` and the four check jobs
+above not failing, runs only on `BGLuis/tucaVR` (or the legacy
+`BGLuis/vr-multmidia` name) when the APK path filter matches, and builds the
+full application (Rust via `cargo ndk`, C++ via CMake, and the Quest 3 APK via
+Gradle). The Docker network integration suite is not part of CI; run it locally.
 
-## 7. Pequenos refactors feitos para viabilizar os testes
+## 7. Small Refactors Done to Enable the Tests (first round, historical)
 
-1. **Nova crate `rust/media-logic`** (zero deps Android): hospeda
-   `SyncManager` (movido de `core::sync`, que virou um re-export),
-   `audio_resample::{target_sample_rate, valid_sample_count}` (extraído de
+1. **New `rust/media-logic` crate** (zero Android deps): hosts `SyncManager`
+   (moved from `core::sync`, which became a re-export),
+   `audio_resample::{target_sample_rate, valid_sample_count}` (extracted from
    `AudioDecoder::set_speed`/`decode`), `playback_params::{clamp_speed,
-   clamp_volume}` (extraído de `PlaybackController::set_speed`/`set_volume`),
-   e `session::Generation` (generaliza o contrato de "geração" que o
-   `PlaybackSession` de `core::playback` usa internamente desde esta rodada,
-   substituindo a bookkeeping manual de `is_playing`/`is_running` que existia
-   ali). Todas essas trocas em `core` são delegações mecânicas — mesma API
-   pública, mesma assinatura — verificadas com cross-compile real
-   (`cargo ndk build`, workspace inteiro) após cada mudança, já que `core`
-   não compila no host deste ambiente.
-2. **`SyncManager` ganhou injeção de clock** (`trait Clock` +
-   `SystemClock`/`FakeClock`) para poder testar pause/resume e o fallback de
-   wall-clock sem `sleep()` real. Não muda a API pública usada por
-   `core::playback`.
-3. **`ThumbnailGenerator.cacheKeyFor`** extraída como função `internal` pura
-   (antes era um bloco inline dentro de `cacheFileFor`), sem tocar em
-   `Context`/`MediaMetadataRetriever`/disco.
+   clamp_volume}` (extracted from `PlaybackController::set_speed`/`set_volume`),
+   and `session::Generation` (generalizes the playback "generation" contract
+   that `core::playback`'s `PlaybackSession` uses internally, replacing the
+   manual `is_playing`/`is_running` bookkeeping that existed there). All of
+   these swaps in `core` are mechanical delegations — same public API, same
+   signature — verified with a real cross-compile (`cargo ndk build`, whole
+   workspace) after each change, since `core` does not compile on the host.
+2. **`SyncManager` gained clock injection** (`trait Clock` +
+   `SystemClock`/`FakeClock`) to be able to test pause/resume and the
+   wall-clock fallback without a real `sleep()`. It does not change the public
+   API used by `core::playback`.
+3. **`ThumbnailGenerator.cacheKeyFor`** extracted as a pure `internal` function
+   (it used to be an inline block inside `cacheFileFor`), without touching
+   `Context`/`MediaMetadataRetriever`/disk.
 
-Nenhuma abstração nova além dessas foi introduzida — em particular, não foi
-criada nenhuma camada de trait/mock para `HwDecoder`/`AudioOutput`/
-`TextureOutput`/`Demuxer` em si; isso permitiria testar o
-`PlaybackController` de ponta a ponta, mas exigiria uma refatoração maior
-(esses tipos são usados com APIs Android concretas como `MediaFormat`,
-`NativeWindow`, `AHardwareBuffer` espalhadas por vários arquivos) — fora do
-orçamento desta rodada e desproporcional ao valor marginal, já que a lógica
-que mais importava testar ali (matemática de sync/velocidade, contrato de
-geração/shutdown) já foi extraída e coberta.
+No new abstraction beyond these was introduced — in particular, no trait/mock
+layer was created for `HwDecoder`/`AudioOutput`/`TextureOutput`/`Demuxer`
+themselves; that would allow testing the `PlaybackController` end to end, but
+would require a larger refactor (those types are used with concrete Android APIs
+such as `MediaFormat`, `NativeWindow`, `AHardwareBuffer` spread across several
+files) — outside the budget of that round and disproportionate to the marginal
+value, since the logic that mattered most to test there (sync/speed math, the
+generation/shutdown contract) was already extracted and covered.

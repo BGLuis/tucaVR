@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Diretório raiz do repositório
+# Repository root directory
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-echo "=== Verificando Integridade dos Shaders Vulkan (GLSL -> SPIR-V) ==="
+echo "=== Checking Vulkan Shader Integrity (GLSL -> SPIR-V) ==="
 
 GLSLC=""
 POSSIBLE_PATHS=(
@@ -30,14 +30,14 @@ if [ -z "$GLSLC" ] && [ -n "${ANDROID_HOME:-}" ] && [ -d "${ANDROID_HOME}/ndk" ]
 fi
 
 if [ -z "$GLSLC" ]; then
-    echo "⚠️  Aviso: glslc não encontrado no PATH nem no NDK. Tentando glslangValidator..."
+    echo "⚠️  Warning: glslc not found in PATH or in the NDK. Trying glslangValidator..."
     if command -v glslangValidator >/dev/null 2>&1; then
-        echo "-> Utilizando glslangValidator para validar shaders..."
+        echo "-> Using glslangValidator to validate shaders..."
         SHADERS=(native/shaders/vulkan/*.vert native/shaders/vulkan/*.frag)
         FAILED=0
         for s in "${SHADERS[@]}"; do
             if ! glslangValidator -V "$s" -o /dev/null >/dev/null 2>&1; then
-                echo "❌ Falha na validação do shader: $s" >&2
+                echo "❌ Shader validation failed: $s" >&2
                 FAILED=1
             else
                 echo "✓ $s"
@@ -46,22 +46,22 @@ if [ -z "$GLSLC" ]; then
         if [ "$FAILED" -ne 0 ]; then
             exit 1
         fi
-        echo "=== Todos os ${#SHADERS[@]} shaders validados com sucesso via glslangValidator! ==="
+        echo "=== All ${#SHADERS[@]} shaders validated successfully through glslangValidator! ==="
         exit 0
     else
-        echo "❌ Erro: glslc ou glslangValidator são necessários para verificar os shaders." >&2
+        echo "❌ Error: glslc or glslangValidator is required to check the shaders." >&2
         exit 1
     fi
 fi
 
-echo "-> Utilizando compilador: $GLSLC"
+echo "-> Using compiler: $GLSLC"
 SHADERS=(native/shaders/vulkan/*.vert native/shaders/vulkan/*.frag)
 FAILED=0
 TMP_OUT=$(mktemp)
 
 for s in "${SHADERS[@]}"; do
     if ! "$GLSLC" --target-env=vulkan1.1 -c "$s" -o "$TMP_OUT"; then
-        echo "❌ Erro de compilação no shader: $s" >&2
+        echo "❌ Shader compilation error: $s" >&2
         FAILED=1
     else
         echo "✓ $s"
@@ -71,8 +71,8 @@ done
 rm -f "$TMP_OUT"
 
 if [ "$FAILED" -ne 0 ]; then
-    echo "❌ Um ou mais shaders falharam na compilação." >&2
+    echo "❌ One or more shaders failed to compile." >&2
     exit 1
 fi
 
-echo "=== Todos os ${#SHADERS[@]} shaders Vulkan foram compilados e validados com sucesso! ==="
+echo "=== All ${#SHADERS[@]} Vulkan shaders were compiled and validated successfully! ==="

@@ -19,12 +19,12 @@ on:
         type: boolean
         default: true
 
-# Cancela runs anteriores em branches de PR para economizar recursos dos runners
+# Cancels earlier runs on PR branches to save runner resources
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Privilégio mínimo no escopo global (segurança de supply-chain e OIDC)
+# Least privilege at the global scope (supply-chain security and OIDC)
 permissions: {}
 
 env:
@@ -92,7 +92,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
-      contents: read # Necessário para checar fontes, workflows e licenças
+      contents: read # Needed to check sources, workflows and licenses
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -116,7 +116,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_SUMMARY: true
-        continue-on-error: true # Notifica no step summary sem abortar caso haja falso positivo em testes
+        continue-on-error: true # Reports in the step summary without aborting in case of a false positive in tests
 
   rust-checks:
     name: Rust Quality & Tests
@@ -125,7 +125,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: read # Necessário para compilação e testes no host
+      contents: read # Needed for building and testing on the host
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -159,7 +159,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: read # Necessário para checagens de formatação e shaders
+      contents: read # Needed for formatting and shader checks
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -202,7 +202,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
-      contents: read # Necessário para análise estática e execução dos testes JVM
+      contents: read # Needed for static analysis and running the JVM tests
     env:
       # Lint and JVM tests load no native library; without this, preBuild runs buildRust,
       # which builds a Docker image and cross-compiles Rust and FFmpeg (~8 min).
@@ -250,7 +250,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
-      contents: read # Necessário para ler os arquivos Markdown
+      contents: read # Needed to read the Markdown files
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -290,7 +290,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     permissions:
-      contents: read # Necessário para compilar o APK
+      contents: read # Needed to build the APK
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

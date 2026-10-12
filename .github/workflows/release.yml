@@ -1,16 +1,16 @@
 name: tucaVR Release (Auto & Manual)
 
 on:
-  # Dispara depois que o CI (tucaVR CI / main.yml) terminar com sucesso em main — a
+  # Triggers after the CI (tucaVR CI / main.yml) finishes successfully on main — the
   # pre-release so nasce apos a validacao, e reaproveitamos o APK que o CI ja compilou
-  # em vez de recompilar do zero (ver job build-and-release abaixo).
+  # instead of rebuilding from scratch (see the build-and-release job below).
   workflow_run:
     workflows: [ "tucaVR CI" ]
     types: [ completed ]
     branches: [ main ]
   push:
     tags:
-      - 'v*' # Dispara também quando uma tag começar com 'v' (ex: v1.0.0, v1.0.0-beta)
+      - 'v*' # Also triggers when a tag starts with 'v' (e.g. v1.0.0, v1.0.0-beta)
   workflow_dispatch:
     inputs:
       tag_name:
@@ -18,14 +18,14 @@ on:
         required: false
         type: string
       prerelease:
-        description: 'Marcar como pré-release'
+        description: 'Mark as a pre-release'
         required: false
         type: boolean
         default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: false # Releases não devem ser abortadas se novos commits entrarem
+  cancel-in-progress: false # Releases must not be aborted if new commits come in
 
 permissions:
   contents: read
@@ -36,8 +36,8 @@ env:
   NDK_VERSION: '26.3.11579264'
 
 jobs:
-  # Procura, para o commit sendo lançado, uma run bem-sucedida do tucaVR CI (main.yml)
-  # que já tenha compilado o mesmo APK — evita recompilar do zero em todo push em main.
+  # Looks for a successful tucaVR CI (main.yml) run, for the commit being released,
+  # that has already built the same APK — avoids rebuilding from scratch on every push to main.
   locate-artifact:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-24.04
@@ -64,29 +64,30 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
-      contents: write # Estritamente necessário apenas para criar o release
-      actions: read # Necessário para baixar artefato de outra run (reuso do APK do CI)
+      contents: write # Strictly needed only to create the release
+      actions: read # Needed to download an artifact from another run (reusing the CI's APK)
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-      # Caminho rápido: o tucaVR CI já compilou este commit exato — reaproveita o APK
-      # em vez de refazer todo o build Rust+FFmpeg+C+++Gradle. Se falhar (artefato
-      # expirado, run não encontrada etc.), os steps de build completo abaixo assumem.
+      # Fast path: the tucaVR CI already built this exact commit — reuse its APK
+      # instead of redoing the whole Rust+FFmpeg+C+++Gradle build. If it fails (artifact
+      # expired, run not found, etc.), the full-build steps below take over.
       - name: Try reusing APK already built by tucaVR CI
         id: reuse
         if: needs.locate-artifact.outputs.run_id != ''
         continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: VR-Player-APK-main
+          pattern: VR-Player-APK-*
+          merge-multiple: true
           run-id: ${{ needs.locate-artifact.outputs.run_id }}
           github-token: ${{ github.token }}
           path: app/build/outputs/apk/debug/
 
-      # ---- A partir daqui, todos os steps de build só rodam se o reuso acima não deu certo ----
+      # ---- From here on, all the build steps only run if the reuse above did not work out ----
 
       - name: Setup External Dependencies (Meta OpenXR SDK)
         if: steps.reuse.outcome != 'success'
@@ -185,7 +186,7 @@ jobs:
           INPUT_TAG: ${{ inputs.tag_name }}
           INPUT_PRERELEASE: ${{ inputs.prerelease }}
         run: |
-          # Carregar versão oficial do sistema a partir de version.properties
+          # Load the official system version from version.properties
           SYS_VERSION=$(grep -E '^versionName=' version.properties | cut -d'=' -f2 | tr -d '[:space:]')
           if [[ -z "$SYS_VERSION" ]]; then
             SYS_VERSION="0.4.7"
@@ -218,7 +219,7 @@ jobs:
               echo "APP_VERSION_CODE=$SYS_CODE"
             } >> "$GITHUB_ENV"
           else
-            # Push na branch main: utiliza a versão do sistema com número da build
+            # Push to the main branch: uses the system version with the build number
             {
               echo "rel_name=Release v${SYS_VERSION} (Build #${RUN_NUMBER})"
               echo "rel_tag=v${SYS_VERSION}-build.${RUN_NUMBER}"

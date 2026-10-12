@@ -26,7 +26,7 @@
 ### Structure
 
 ```text
-vr-multimedia/
+tucaVR/
 ├── app/                          # Main Android/Kotlin module
 │   ├── src/main/
 │   │   ├── java/com/tucavr/      # Kotlin code
@@ -41,6 +41,9 @@ vr-multimedia/
 │   ├── protocols/                # Protocols crate (SMB, HTTP, etc.)
 │   │   ├── Cargo.toml
 │   │   └── src/
+│   ├── media-logic/              # Pure logic, host-testable (sync, clamps, format3d, ...)
+│   │   ├── Cargo.toml
+│   │   └── src/
 │   ├── bridge/                   # C-ABI bridge crate (JNI / C exports)
 │   │   ├── Cargo.toml
 │   │   └── src/
@@ -50,12 +53,13 @@ vr-multimedia/
 ├── native/                       # C++ code (OpenXR rendering)
 │   ├── CMakeLists.txt
 │   ├── src/
-│   │   ├── main.cpp              # OpenXR entry point
-│   │   ├── xr_app.cpp            # OpenXR session management
-│   │   ├── renderer.cpp          # Vulkan/GLES render pipeline
-│   │   ├── environment.cpp       # Virtual environment (void)
-│   │   ├── screen_quad.cpp       # Virtual screen (3D quad)
-│   │   └── input.cpp             # Controller input
+│   │   ├── vr_player_app_vulkan.cpp   # OpenXR session + Vulkan render loop (default)
+│   │   ├── vr_player_jni_vulkan.cpp   # JNI entry points (Vulkan path)
+│   │   ├── vr_player_input_vulkan.h   # Controller raycasting and input
+│   │   ├── vr_player_ambient.h        # Ambient halo
+│   │   ├── vr_player_feedback_overlay.h  # Play/pause/seek feedback geometry
+│   │   ├── debug_stats.h              # Debug stats wire format
+│   │   └── vr_player_app.cpp          # Frozen GLES fallback (OVRFW)
 │   ├── include/
 │   └── shaders/                  # GLSL / SPIR-V shaders
 ├── docs/                         # Documentation
@@ -86,8 +90,8 @@ vr-multimedia/
   > Builds Rust via `cargo ndk`, copies `.so` libraries to `jniLibs/arm64-v8a/`, and triggers Gradle build.
 - [x] **T1.9** — Configure GitHub Actions: build + lint (clippy + ktlint; clang-tidy discarded per REQUIREMENTS.md §5.5)
   > CI workflow configured in `.github/workflows/main.yml` with parallel quality jobs (`cargo clippy`, `ktlintCheck`, `cargo test`, `testDebugUnitTest`). Note: `clang-tidy` was discarded in favour of `clang-format --dry-run -Werror` and `-Wall -Wextra` (see `REQUIREMENTS.md` §5.5, ADR, and #58).
-- [ ] **T1.10** — Test deployment of OpenXR hello world on Quest 3 via `adb`
-  > Automated scripts and APK generation functional; physical verification pending on actual Quest 3 headset.
+- [x] **T1.10** — Test deployment of OpenXR hello world on Quest 3 via `adb`
+  > Automated scripts and APK generation functional; the app has since been installed and run on a physical Quest 3 (see the hardware sessions in `docs/VULKAN-MIGRATION-PLAN.md` §4.1.1 and `docs/NETWORK-IO-PERFORMANCE.md` §7).
 
 ### ⚠️ Pitfalls and Considerations
 
@@ -132,7 +136,7 @@ File/Stream → Demuxer (FFmpeg) → Packets → Decoder (MediaCodec HW) → Fra
   - Configure surface output (direct decoding to GPU texture)
   - Manage buffer queue (input/output buffers)
   - Handle codec-specific data (SPS/PPS for H.264, VPS/SPS/PPS for HEVC)
-  > Surface mode verified: `HwDecoder::configure` receives `NativeWindow` from `ImageReader`. Buffer queue implemented with `dequeue_input_buffer`, `queue_input_buffer`, `dequeue_output_buffer`, `release_output_buffer`. Codec configuration handled via `BUFFER_FLAG_CODEC_CONFIG`.
+  > Surface mode verified: `HwDecoder::configure` receives `NativeWindow` from `ImageReader`. Buffer queue implemented with `dequeue_input_buffer`, `queue_input_buffer`, `dequeue_output_buffer`, `release_output_buffer`. The codec-specific data (SPS/PPS, VPS) is submitted with the MediaCodec codec-config flag (literal value `2`, `rust/core/src/playback.rs`).
 - [x] **T2.3** — Implement `AudioDecoder`:
   - Decode AAC, MP3, FLAC, Opus, AC3, DTS to PCM
   - Uses FFmpeg software decode (low CPU overhead for audio)
@@ -196,28 +200,28 @@ Implement the OpenXR render loop with a "void" environment (dark backdrop) and a
   - Create `XrSession` with Vulkan backend
   - Create `XrSwapchain` (stereo / array)
   - Configure `XrReferenceSpace` (`XR_REFERENCE_SPACE_TYPE_STAGE`)
-  > Managed via `OVRFW::XrApp` framework and extended in `VRPlayerApp`.
+  > In the default Vulkan path the session and swapchains are created directly in `vr_player_app_vulkan.cpp` (`android_main`, one swapchain per eye); the frozen GLES fallback manages them through `OVRFW::XrApp` extended in `VRPlayerApp`.
 - [x] **T3.2** — Implement main rendering loop:
   - `xrWaitFrame`, `xrBeginFrame`, eye views rendering, `xrEndFrame`
   > Managed inside `vr_player_app_vulkan.cpp` with predicted display time synchronization.
 - [x] **T3.3** — Implement `VoidEnvironment`:
-  - Deep black background (clear color #000000)
+  - Deep black background (the video pass clears to #000000; the Vulkan fallback quad clears to `0.02, 0.02, 0.05`)
   - No extraneous environment geometry
 - [x] **T3.4** — Implement `VirtualScreen` (3D quad):
   - Plane geometry matching video aspect ratio (16:9, 21:9, etc.)
-  - Default distance ~3m forward, ~1.5m eye height
-  - Default width ~3m (~100" virtual display equivalent)
+  - Default position `{0, 1.5, -2.4}` (about 2.4m forward, 1.5m eye height)
+  - Default width 2.8m (`screenScaleX`; ~100" virtual display equivalent)
   - Shader sampler for external texture
 - [x] **T3.5** — Implement texture pass from Rust to C++:
   - Zero-copy `AHardwareBuffer` import via Vulkan external memory
 - [x] **T3.6** — Implement screen resize and repositioning:
-  - Grip button + thumbstick to move (distance, elevation) and resize maintaining aspect ratio (grip gates transformation per `native/src/vr_player_input_vulkan.h:1105`)
-  - Comfort clamps applied (depth -0.75m to -8m, elevation 0.2m to 3.5m)
-- [x] **T3.7** — Configure Vulkan rendering pipeline:
+  - Grip button + thumbstick to move (distance, elevation) and resize maintaining aspect ratio (grip gates transformation, `squeezeState` in `native/src/vr_player_input_vulkan.h`)
+  - Comfort clamps applied (depth 0.8m to 8m when grabbing, elevation 0.3m to 3.5m)
+- [ ] **T3.7** — Configure Vulkan rendering pipeline (partially implemented: everything except multiview):
   - Render pass with depth buffer
   - Pipeline for textured video quad
   - Pipeline for UI overlay (controls)
-  - Multiview rendering (`VK_KHR_multiview`)
+  - ~~Multiview rendering (`VK_KHR_multiview`)~~ — not implemented: there is one swapchain per eye (`arraySize=1`) and the stereo shader selects the eye through an `eyeIndex` push constant
 
 ### ⚠️ Pitfalls and Considerations
 
@@ -225,7 +229,7 @@ Implement the OpenXR render loop with a "void" environment (dark backdrop) and a
 > **NEVER block the render thread**: The render loop must sustain ≥72 FPS. Any blocking operations (I/O, network, demuxing) must remain on worker threads. Exceeding 14ms per frame triggers ATW artifacts.
 
 > [!CAUTION]
-> **Multiview rendering is mandatory**: Rendering each eye separately wastes GPU cycles. Use `VK_KHR_multiview` to render both eyes in a single draw pass.
+> **Multiview rendering is recommended, not implemented**: Rendering each eye separately wastes GPU cycles; `VK_KHR_multiview` would render both eyes in a single draw pass. The current Vulkan path renders each eye separately (see T3.7).
 
 > [!WARNING]
 > **Reference Space**: Use `XR_REFERENCE_SPACE_TYPE_STAGE` (floor-anchored space). `LOCAL` (head-anchored space) makes the screen stick to head motion, inducing motion sickness.
@@ -244,7 +248,7 @@ Minimalist floating UI rendered on interactive 3D panels hosted on Android `Virt
   - Controller ray → intersection with UI panels
   - Visual feedback: laser beam + intersection reticle
   - Haptics on hover and trigger press
-  > Implemented with exponential smoothing of ray direction (`m_smoothedRayDir`) and OpenXR haptic vibration actions on hover-enter and trigger-down.
+  > Implemented with exponential smoothing of ray direction (`m_smoothedRayDir` in the GLES path) and OpenXR haptic vibration actions on hover-enter and trigger-down.
 - [x] **T4.2** — Implement **controls panel**:
   - Play/Pause toggle
   - Seek bar slider with time preview
@@ -256,7 +260,7 @@ Minimalist floating UI rendered on interactive 3D panels hosted on Android `Virt
   - Controls appear when pointing controller at screen or panel
   - Disappear after 5s of inactivity
   - Smooth alpha fade in/out animation
-  > Alpha blending via `uAlpha` uniform on UI quads. Panels with alpha ≤ 0.5 stop consuming touches; panels with alpha ≤ 0.01 skip GPU draw calls.
+  > Alpha blending via an alpha push constant on the Vulkan UI quads (`uAlpha` uniform in the GLES path). Panels with alpha ≤ 0.5 stop consuming touches; panels with alpha ≤ 0.01 skip GPU draw calls.
 - [x] **T4.4** — Implement physical controller button bindings:
   - Trigger: Select / Confirm
   - A/X: Play/Pause toggle
@@ -321,10 +325,10 @@ Connect to Windows network shares / NAS servers via SMB to browse directories an
 - [ ] **T6.2** — Implement automatic SMB server discovery:
   - NetBIOS name resolution, mDNS/DNS-SD (`.local`)
   - Fallback: manual IP address input
-  > Manual IP/host input is fully functional; automated background broadcast resolution is planned for Phase 0.2 discovery integration.
+  > Manual IP/host input is fully functional; mDNS/DNS-SD discovery of `_smb._tcp.local.` servers was delivered in Phase 0.2 (T10.2, `rust/protocols/src/discovery/`); NetBIOS name resolution is **not implemented** and is not tracked by any later phase.
 - [x] **T6.3** — Integrate SMB with FFmpeg Demuxer:
   - Custom I/O stream callback (`format::context::StreamIo::from_read_seek`)
-  - Read buffer with 4MB prefetch block (`PrefetchReader`)
+  - Read buffer with a prefetch block (`PrefetchReader`; 4MB when this was written, now 12MB for remote sources and 1MB after a seek, `REMOTE_PREFETCH_BLOCK_SIZE`/`SEEK_PREFETCH_BLOCK_SIZE` in `rust/core/src/demuxer.rs`)
   > Connects `SmbFileSource` to FFmpeg demuxing pipeline without disk caching.
 - [x] **T6.4** — Connection management UI:
   - Add server form (host, share, credentials)
@@ -358,7 +362,7 @@ Stream media directly from HTTP and HTTPS URLs.
   - Automatic redirect following
   - Probe method to check range support and content length
 - [x] **T7.2** — Integrate with FFmpeg via custom I/O:
-  - `StreamIo::from_read_seek` feeding `HttpsRangeSource` with 4MB `PrefetchReader`
+  - `StreamIo::from_read_seek` feeding `HttpsRangeSource` through a `PrefetchReader`
 - [x] **T7.3** — URL input UI:
   - Text input field
   - Recent URLs history (`UrlHistoryStore.kt`)

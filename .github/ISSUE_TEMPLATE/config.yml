@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Help, Questions & Setup
-    url: https://github.com/BGLuis/tucaVR/discussions
-    about: Please do not open issues for basic support requests. Use the Discussions area!
+  - name: Security vulnerability
+    url: https://github.com/BGLuis/tucaVR/security/advisories/new
+    about: Do not open a public issue for vulnerabilities. Report them privately, as described in SECURITY.md.
   - name: Contributing Guide
     url: https://github.com/BGLuis/tucaVR/blob/main/CONTRIBUTING.md
     about: Build setup, which layer does what, style rules and the PR workflow.

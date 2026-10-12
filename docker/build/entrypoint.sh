@@ -1,10 +1,10 @@
 #!/bin/bash
 # =============================================================================
-# tucaVR — Entrypoint do container de build
+# tucaVR — Build container entrypoint
 #
-# Só valida o ambiente e delega para scripts/build.sh, a única fonte de verdade
-# do pipeline (cargo ndk -> .so do FFmpeg -> gradle). O container roda com o
-# UID do host, então nada aqui precisa de chown nem toca em arquivos do projeto.
+# It only validates the environment and delegates to scripts/build.sh, the single source
+# of truth of the pipeline (cargo ndk -> FFmpeg .so -> gradle). The container runs with
+# the host's UID, so nothing here needs chown or touches the project's files.
 # =============================================================================
 set -euo pipefail
 
@@ -17,22 +17,22 @@ die() {
 
 cd /project
 
-[ -f build.gradle.kts ] || die "Código-fonte do projeto não encontrado em /project" \
-    "Monte o projeto com: -v \"\$(pwd)\":/project"
+[ -f build.gradle.kts ] || die "Project source code not found in /project" \
+    "Mount the project with: -v \"\$(pwd)\":/project"
 
 [ -d sdk/meta-openxr-sdk/Samples/SampleXrFramework ] &&
-[ -d sdk/meta-openxr-sdk/OpenXR ] || die "Meta OpenXR SDK não encontrado em sdk/meta-openxr-sdk/" \
-    "Baixe o último release público com: ./scripts/setup-deps.sh" \
+[ -d sdk/meta-openxr-sdk/OpenXR ] || die "Meta OpenXR SDK not found in sdk/meta-openxr-sdk/" \
+    "Download the latest public release with: ./scripts/setup-deps.sh" \
     "https://github.com/meta-quest/Meta-OpenXR-SDK/releases"
 
-# Num git worktree o .git é um arquivo que aponta para um caminho do host,
-# inexistente aqui; o Gradle usa git e falharia tarde e com erro confuso.
-[ ! -f .git ] || die "/project é um git worktree (.git é um arquivo)" \
-    "O caminho gitdir dele não existe dentro do container." \
-    "Use o checkout principal ou um clone completo (git clone)."
+# In a git worktree .git is a file that points to a host path that does not
+# exist here; Gradle uses git and would fail late, with a confusing error.
+[ ! -f .git ] || die "/project is a git worktree (.git is a file)" \
+    "Its gitdir path does not exist inside the container." \
+    "Use the main checkout or a full clone (git clone)."
 
-[ -d "${FFMPEG_MAKER_DIR}/build/ffmpeg/arm64-v8a/lib" ] || die "FFmpeg pré-compilado ausente em ${FFMPEG_MAKER_DIR}" \
-    "A imagem está corrompida; refaça com: scripts/docker-build.sh --rebuild"
+[ -d "${FFMPEG_MAKER_DIR}/build/ffmpeg/arm64-v8a/lib" ] || die "Prebuilt FFmpeg missing in ${FFMPEG_MAKER_DIR}" \
+    "The image is corrupted; rebuild it with: scripts/docker-build.sh --rebuild"
 
 echo "📋 NDK=${ANDROID_NDK_HOME}  FFMPEG_MAKER_DIR=${FFMPEG_MAKER_DIR}  UID=$(id -u):$(id -g)"
 

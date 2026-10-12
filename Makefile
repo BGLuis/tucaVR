@@ -5,7 +5,7 @@ all: deploy
 build:
 	./scripts/build.sh
 
-# Mesmo pipeline do `build`, dentro de um container (nada instalado no host).
+# The same pipeline as `build`, inside a container (nothing installed on the host).
 docker-build:
 	./scripts/docker-build.sh
 
@@ -15,9 +15,9 @@ install:
 deploy: build install
 
 test:
-	@echo "=== [1/3] Executando testes unitarios Rust (host) ==="
+	@echo "=== [1/3] Running the Rust unit tests (host) ==="
 	cd rust && cargo test -p protocols -p media-logic
-	@echo "=== [2/3] Executando testes unitarios nativos C++ (host) ==="
+	@echo "=== [2/3] Running the native C++ unit tests (host) ==="
 	./scripts/test-native-host.sh
-	@echo "=== [3/3] Executando testes unitarios Kotlin JVM ==="
+	@echo "=== [3/3] Running the Kotlin JVM unit tests ==="
 	./gradlew testDebugUnitTest

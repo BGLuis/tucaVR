@@ -22,6 +22,8 @@
 
   [English](README.md) · **Português (BR)**
 
+  > Esta é uma tradução do [README.md](README.md). A versão em inglês é a canônica; em caso de divergência, ela prevalece.
+
 </div>
 
 # 📖 Sobre
@@ -75,6 +77,8 @@ As leituras remotas passam por um leitor com prefetch e chunking, que dispara *r
 
 ### Qualidade de vida
 
+Navegador web embutido (GeckoView) em um painel próprio, visualização de fotos e fotos 360°/3D, hand tracking, passthrough, ambientes 3D selecionáveis, downloads e playlists.
+
 Histórico de reprodução com "continuar assistindo" e prompt de retomada, thumbnails geradas para arquivos locais e de rede, armazenamento criptografado de credenciais (`EncryptedSharedPreferences`), servidores salvos, ordenação e filtros no navegador de arquivos, monitoramento térmico e uma UI totalmente localizada (inglês, português-BR e espanhol; veja [`docs/i18n.md`](docs/i18n.md) para diretrizes de contribuição de tradução).
 
 # 📋 Motivo
@@ -121,7 +125,7 @@ O `./scripts/setup-deps.sh` baixa o último [release público do Meta OpenXR SDK
   cd tucaVR
   ```
 
-3. Prepare as dependências externas (clona o `ffmpeg-android-maker` e verifica o SDK da Meta):
+3. Prepare as dependências externas (clona o `ffmpeg-android-maker` e baixa o SDK da Meta se ele não estiver presente):
   ```sh
   ./scripts/setup-deps.sh
   ```
@@ -135,11 +139,11 @@ O `./scripts/setup-deps.sh` baixa o último [release público do Meta OpenXR SDK
   cd ..
   ```
 
-A partir daqui, você pode compilar de duas formas.
+A partir daqui, você pode compilar de duas formas. O passo 4 só é necessário no modo host (veja o Método B); o modo Docker compila o FFmpeg dentro da própria imagem.
 
 #### Método A — build unificado (recomendado)
 
-O script unificado cross-compila o Rust, copia os `.so` resultantes para `jniLibs` e então roda o Gradle:
+O script unificado roda o Gradle, cuja task `buildRust` (`scripts/build-rust.sh`) cross-compila o Rust e copia os `.so` resultantes para `jniLibs` antes da compilação nativa e da montagem do APK:
 
 ```sh
 ./scripts/build.sh          # Rust + C++ + Gradle
@@ -161,21 +165,14 @@ O sistema de build escolhe automaticamente entre **Docker** e **Host Machine**:
   2. `cargo-ndk` (`cargo install cargo-ndk`).
   3. Android NDK 26.3 (`26.3.11579264`).
   4. Bibliotecas do FFmpeg em `ffmpeg-android-maker` (`./scripts/setup-deps.sh` e depois `./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26`).
-- **Forçar Modo Especifico:** Use `-PrustBuildMode=docker`, `-PrustBuildMode=host` ou `-PrustBuildMode=skip` na linha de comando ou em `gradle.properties`/`local.properties`.
+- **Forçar Modo Específico:** Use `-PrustBuildMode=docker`, `-PrustBuildMode=host` ou `-PrustBuildMode=skip` na linha de comando ou em `gradle.properties`, ou exporte `RUST_BUILD_MODE`.
 
 1. Para compilar pelo terminal:
   ```sh
   ./gradlew assembleDebug
   ```
 
-2. Para compilar apenas o workspace Rust no host (se tiver a toolchain instalada):
-  ```sh
-  cd rust
-  cargo ndk -t aarch64-linux-android -P 26 -o ../app/src/main/jniLibs build --release
-  cd ..
-  ```
-
-3. Instale no headset:
+2. Instale no headset:
   ```sh
   adb install -r app/build/outputs/apk/debug/app-debug.apk
   ```
@@ -187,7 +184,7 @@ O sistema de build escolhe automaticamente entre **Docker** e **Host Machine**:
 
 #### Variáveis de ambiente do build
 
-O `scripts/build.sh` já define todas elas; você só precisa configurá-las manualmente se for rodar o build do Rust na mão:
+O `scripts/build-rust.sh` já define todas elas; você só precisa configurá-las manualmente se for rodar o build do Rust na mão:
 
 | Variável | Para que serve | Padrão usado pelo script |
 |----------|----------------|--------------------------|

@@ -48,9 +48,9 @@ Full SBS: each half maintains full resolution (video has 2x width)
 ### Tasks
 
 - [x] **T1.1** — Implement SBS separation shader (C++/GLSL):
-  - Multiview vertex/fragment shader mapping left half to view 0 and right half to view 1
+  - Stereo vertex/fragment shader (`stereo.vert`/`stereo.frag`) mapping the left half to the left eye and the right half to the right eye, selected per eye through an `eyeIndex` push constant (not `VK_KHR_multiview`)
 - [x] **T1.2** — Implement OU separation shader (C++/GLSL):
-  - Multiview vertex/fragment shader mapping top half to view 0 and bottom half to view 1
+  - The same stereo shader mapping the top half to the left eye and the bottom half to the right eye
 - [x] **T1.3** — Support Half and Full variants:
   - Quad aspect ratio calculation adjusted for Half vs Full SBS/OU
 - [x] **T1.4** — UI format mode selection:
@@ -87,7 +87,7 @@ Equirectangular projections mapped onto inside-out sphere or hemisphere geometry
 ### Tasks
 
 - [x] **T2.1** — Generate UV sphere geometry (C++):
-  - Inverted normals (inside-out rendering), 64 segments × 32 rings minimum
+  - Inverted normals (inside-out rendering), the Vulkan sphere uses 128 slices × 70 rings, above the original 64 × 32 minimum
 - [x] **T2.2** — Implement equirectangular shader:
   - 2:1 texture wrapping with `REPEAT` on U and `CLAMP_TO_EDGE` on V
 - [x] **T2.3** — Implement 180° VR hemisphere projection
@@ -124,11 +124,11 @@ Update the orientation of 360° spheres based on real-time OpenXR head tracking.
 ### Tasks
 
 - [x] **T4.1** — Query head pose per frame via OpenXR:
-  > Implemented: `vr_player_app_vulkan.cpp:7228` passes head orientation quaternion to `rust/bridge/src/lib.rs:2319` (`set_head_pose_orientation`).
+  > Implemented: `vr_player_app_vulkan.cpp` passes the head orientation quaternion to `set_head_pose_orientation` in `rust/bridge/src/lib.rs`.
 - [x] **T4.2** — Apply rotation to view camera inside 360° sphere:
   > Implemented in Vulkan rendering pipeline using OpenXR view matrices.
 - [x] **T4.3** — Implement recenter action:
-  > Implemented via controller Menu button long-press (`vr_player_app_vulkan.cpp:1058`).
+  > Implemented via controller Menu button long-press (`kRecenterHoldSeconds` = 0.6s in `vr_player_input_vulkan.h`).
 - [x] **T4.4** — Support 3DoF vs 6DoF handling for spherical media:
   > Implemented: translation is locked for infinite-depth 360° spheres to prevent visual distortion.
 

@@ -1,104 +1,113 @@
 # tucaVR — Docker Build
 
-Build do APK debug dentro de um container, sem instalar Android SDK, NDK, Rust
-ou FFmpeg no host. O container delega para `scripts/build.sh`, o mesmo pipeline
-do build local e do CI.
+Builds the debug APK inside a container, with no Android SDK, NDK, Rust or
+FFmpeg installed on the host. The container delegates to `scripts/build.sh`, the
+same pipeline as the local build and CI.
 
-## Pré-requisitos
+## Prerequisites
 
-1. **Docker** (ou Podman) funcionando: <https://docs.docker.com/engine/install/>.
-2. **Meta OpenXR SDK** em `sdk/meta-openxr-sdk/`. Rode
-   `./scripts/setup-deps.sh` para baixar o último release público do GitHub:
+1. A working **Docker** (or Podman): <https://docs.docker.com/engine/install/>.
+2. The **Meta OpenXR SDK** in `sdk/meta-openxr-sdk/`. Run
+   `./scripts/setup-deps.sh` to download the latest public GitHub release:
    <https://github.com/meta-quest/Meta-OpenXR-SDK/releases>
-3. Um **checkout normal ou clone** do repositório. `git worktree` não funciona:
-   o `.git` de um worktree aponta para um caminho que não existe no container
-   (o entrypoint detecta e avisa).
+3. A **normal checkout or clone** of the repository. `git worktree` does not
+   work: a worktree's `.git` points to a path that does not exist in the
+   container (the entrypoint detects this and warns).
 
-## Uso
+## Usage
 
-Da raiz do projeto:
+From the project root:
 
 ```bash
-./scripts/docker-build.sh            # constrói a imagem (cache) e compila o APK
-./scripts/docker-build.sh --clean    # descarta caches de compilação e recompila tudo
-./scripts/docker-build.sh --rebuild  # refaz a imagem do zero (--no-cache --pull)
-./scripts/docker-build.sh --shell    # shell interativo no container
-make docker-build                    # atalho para o primeiro
+./scripts/docker-build.sh            # builds the image (cached) and compiles the APK
+./scripts/docker-build.sh --clean    # discards build caches and recompiles everything
+./scripts/docker-build.sh --rebuild  # rebuilds the image from scratch (--no-cache --pull)
+./scripts/docker-build.sh --shell    # interactive shell in the container
+make docker-build                    # shortcut for the first one
 ```
 
-O APK sai em `app/build/outputs/apk/debug/app-debug.apk`.
+The APK ends up in `app/build/outputs/apk/debug/app-debug.apk`.
 
-`APP_VERSION_NAME` e `APP_VERSION_CODE`, se definidos no host, são repassados ao
-Gradle. `DOCKER=podman ./scripts/docker-build.sh` usa outro runtime (o caminho
-com Podman rootless não foi testado).
+`APP_VERSION_NAME` and `APP_VERSION_CODE`, if set on the host, are passed to
+Gradle. `DOCKER=podman ./scripts/docker-build.sh` uses another runtime (the
+rootless Podman path has not been tested).
 
-Para confirmar uma alteração com uma compilação sem artefatos anteriores, use
-`./scripts/docker-build.sh --clean`. Isso limpa o target do Cargo e o estado de
-build Android/CMake antes de compilar novamente. No host, o equivalente é
-`./scripts/build.sh --clean`. A compilação normal já rastreia alterações e
-recompila os arquivos afetados; a opção limpa é para diagnóstico ou conferência,
-não é necessária após cada edição.
+To confirm a change with a build that has no previous artifacts, use
+`./scripts/docker-build.sh --clean`. That cleans the Cargo target and the
+Android/CMake build state before compiling again. On the host, the equivalent is
+`./scripts/build.sh --clean`. The normal build already tracks changes and
+recompiles the affected files; the clean option is for diagnosis or double-checking,
+and is not needed after every edit.
 
-## Build pela Android Studio
+## Building From Android Studio
 
-Use **Build > Make Project** (ou execute `assembleDebug` na janela Gradle). A
-task `buildRust` é executada automaticamente durante a montagem do APK: compila
-Rust com Cargo NDK e atualiza `app/src/main/jniLibs/arm64-v8a` antes de empacotar
-o APK. São necessários no host o JDK/Android SDK/NDK configurados no projeto,
-Rust com `cargo-ndk` instalado (`cargo install cargo-ndk`) e o FFmpeg compilado
-conforme o passo de instalação no `README.md` (o `setup-deps.sh` baixa as fontes,
-mas não compila o FFmpeg). C++ continua sendo compilado pelo CMake/Android
-Gradle Plugin.
-Para uma compilação sem artefatos anteriores, execute a task Gradle `clean` e
-depois `assembleDebug` no Android Studio; `clean` também limpa os artefatos Cargo.
+Android Studio does not need Docker: the `buildRust` Gradle task
+(`scripts/build-rust.sh`) runs automatically while the APK is assembled. In the
+default `auto` mode it uses Docker when the host has no Rust toolchain and builds
+directly on the host when it does; override it with `-PrustBuildMode=docker`,
+`-PrustBuildMode=host` or `-PrustBuildMode=skip` (or the `RUST_BUILD_MODE`
+environment variable).
 
-## Como funciona
+Use **Build > Make Project** (or run `assembleDebug` in the Gradle window). The
+host always needs the JDK and the Android SDK/NDK configured in the project; C++
+is compiled by CMake/the Android Gradle Plugin. For **host mode** you additionally
+need Rust with `cargo-ndk` installed (`cargo install cargo-ndk`) and FFmpeg
+compiled as in the installation step of the `README.md` (`setup-deps.sh` downloads
+the sources but does not compile FFmpeg); in Docker mode, Rust and FFmpeg are
+compiled inside the image. For a build with no previous artifacts, run the Gradle
+`clean` task and then `assembleDebug` in Android Studio; `clean` also cleans the
+Cargo artifacts.
 
-- **Multi-stage**: `sdk`, `ffmpeg` e `rust` são independentes (o BuildKit os
-  constrói em paralelo). A imagem final leva só o necessário para compilar: sem
-  `nasm`/`yasm`/`curl`/`wget`, sem `.git` do `ffmpeg-android-maker` e sem fontes
-  do FFmpeg.
-- **Não-root**: o container roda com o UID/GID do host (`--user`), então tudo o
-  que ele gera já nasce seu, sem `chown` e sem arquivos de root no projeto.
-  Também usa `--cap-drop ALL` e `no-new-privileges`. Sem `--user`, a imagem usa
-  `10001:10001` (que não escreve no projeto montado).
-- **Alternância com Android Studio**: antes do build, o script guarda o estado
-  nativo do host (`app/.cxx` e `app/build/intermediates/cxx`) e restaura-o ao
-  sair. Se for detectado um cache com o caminho do Ninja indisponível no host,
-  ele será removido e recriado no container. Assim, caminhos absolutos do SDK do
-  container não quebram o `clean` nem os builds do Android Studio.
-- **Nada é escrito fora dos caches e do projeto**: o FFmpeg pré-compilado fica em
-  `/opt/ffmpeg-android-maker` e o `build.sh` o encontra por `FFMPEG_MAKER_DIR`; não há
-  symlink dentro do seu projeto.
-- **Reprodutível**: base Ubuntu por digest, Rust, `cargo-ndk`, `rustup-init` e
-  `commandlinetools` fixados (os dois últimos com SHA-256), FFmpeg no mesmo commit
-  de `scripts/setup-deps.sh`. Atualize os `ARG` do Dockerfile de propósito.
+## How It Works
 
-## Conteúdo da imagem
+- **Multi-stage**: `sdk`, `ffmpeg` and `rust` are independent (BuildKit builds
+  them in parallel). The final image carries only what is needed to compile: no
+  `nasm`/`yasm`/`curl`/`wget`, no `ffmpeg-android-maker` `.git` and no FFmpeg
+  sources.
+- **Non-root**: the container runs with the host's UID/GID (`--user`), so
+  everything it generates is already yours, with no `chown` and no root-owned
+  files in the project. It also uses `--cap-drop ALL` and `no-new-privileges`.
+  Without `--user`, the image uses `10001:10001` (which does not write to the
+  mounted project).
+- **Switching with Android Studio**: before the build, the script saves the host's
+  native state (`app/.cxx` and `app/build/intermediates/cxx`) and restores it on
+  exit. If a cache is detected with a Ninja path unavailable on the host, it is
+  removed and recreated in the container. That way, the container's absolute SDK
+  paths do not break `clean` or Android Studio builds.
+- **Nothing is written outside the caches and the project**: the prebuilt FFmpeg
+  lives in `/opt/ffmpeg-android-maker` and `build.sh` finds it through
+  `FFMPEG_MAKER_DIR`; there is no symlink inside your project.
+- **Reproducible**: an Ubuntu base by digest, with Rust, `cargo-ndk`, `rustup-init`
+  and `commandlinetools` pinned (the last two with SHA-256), and FFmpeg at the same
+  commit as `scripts/setup-deps.sh`. Update the Dockerfile `ARG`s on purpose.
+  Note that CI's Rust job uses the `stable` toolchain, while this image pins the
+  version listed below.
 
-| Componente | Versão |
-|------------|--------|
-| Ubuntu | 22.04 (por digest) |
+## Image Contents
+
+| Component | Version |
+|-----------|---------|
+| Ubuntu | 22.04 (by digest) |
 | JDK | 17 (OpenJDK headless) |
 | Android SDK | Platform 34, build-tools 34.0.0 |
 | Android NDK | 26.3.11579264 |
-| CMake | 3.22.1 (via SDK) |
+| CMake | 3.22.1 (via the SDK) |
 | Rust | 1.97.1 + `aarch64-linux-android` |
 | cargo-ndk | 4.1.2 |
 | FFmpeg | `arm64-v8a`, API 26 |
 
 ## Caches
 
-Volumes nomeados persistem entre builds:
+Named volumes persist between builds:
 
-| Volume | Conteúdo |
+| Volume | Contents |
 |--------|----------|
-| `tucavr-gradle-cache` | Dependências e cache do Gradle (`/cache/gradle`) |
-| `tucavr-cargo-cache` | Registry e git de crates (`/cache/cargo`) |
+| `tucavr-gradle-cache` | Gradle dependencies and cache (`/cache/gradle`) |
+| `tucavr-cargo-cache` | Crate registry and git (`/cache/cargo`) |
 
-Para limpar: `docker volume rm tucavr-gradle-cache tucavr-cargo-cache`.
+To clean them: `docker volume rm tucavr-gradle-cache tucavr-cargo-cache`.
 
-## Uso manual (sem o script)
+## Manual Use (without the script)
 
 ```bash
 docker build -t tucavr-builder docker/build/
@@ -110,8 +119,8 @@ docker run --rm --init --user "$(id -u):$(id -g)" \
   tucavr-builder
 ```
 
-## Solução de problemas
+## Troubleshooting
 
-- `/project é um git worktree`: use um clone completo (veja Pré-requisitos).
-- `Meta OpenXR SDK não encontrado`: rode `./scripts/setup-deps.sh`.
-- Cache corrompido ou lento: apague os volumes acima e rode com `--rebuild`.
+- `/project is a git worktree`: use a full clone (see Prerequisites).
+- `Meta OpenXR SDK not found`: run `./scripts/setup-deps.sh`.
+- A corrupted or slow cache: delete the volumes above and run with `--rebuild`.

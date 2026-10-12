@@ -1,7 +1,7 @@
 name: 🐛 Bug Report
 description: Create a structured bug report to help us improve tucaVR
 title: "[BUG] "
-labels: ["bug", "triage"]
+labels: ["bug"]
 body:
   - type: markdown
     attributes:
@@ -14,7 +14,7 @@ body:
       options:
         - label: I searched the existing issues and this has not been reported yet.
           required: true
-        - label: This is a bug report, not a setup/support question (those belong in Discussions).
+        - label: This is a bug report, not a setup/support question (open an issue with the `question` label for those).
           required: true
   - type: input
     id: version
@@ -32,8 +32,6 @@ body:
       options:
         - Meta Quest 3
         - Meta Quest 3s
-        - Meta Quest 2
-        - Meta Quest Pro
         - Emulator/Host only (Native C++/Rust tests)
     validations:
       required: true
@@ -57,9 +55,11 @@ body:
         - NFS
         - FTP
         - SFTP
+        - WebDAV
         - DLNA / UPnP
         - HTTP / HTTPS direct URL
         - HLS stream
+        - DASH stream
         - Not applicable (UI, menus, startup)
   - type: textarea
     id: media

@@ -2,13 +2,13 @@
 
 #include <cstdint>
 
-// Codificacao numerica (DEVE casar exatamente com SCREEN_MODE em
-// rust/bridge/src/lib.rs, rust/media-logic/src/format3d.rs e ScreenFormatCatalog.kt).
+// Numeric encoding (MUST match SCREEN_MODE in
+// rust/bridge/src/lib.rs, rust/media-logic/src/format3d.rs and ScreenFormatCatalog.kt exactly).
 //
-// Puramente projecao/layout — ortogonal a espaco de cor/HDR (ver
-// media_logic::color::TransferFunction e get_video_is_hdr() no bridge).
-// Nao adicionar um eixo de cor aqui: HDR e uma flag separada, valida para
-// qualquer um destes modos.
+// Purely projection/layout — orthogonal to color space/HDR (see
+// media_logic::color::TransferFunction and get_video_is_hdr() in the bridge).
+// Do not add a color axis here: HDR is a separate flag, valid for
+// any of these modes.
 enum class ScreenMode : uint32_t {
     Flat2D = 0,
     SBS = 1,
@@ -29,7 +29,7 @@ enum class ScreenMode : uint32_t {
     Fisheye190SBS = 16,
 };
 
-// Validacao em tempo de compilacao para garantir invariantes de contrato C-ABI
+// Compile-time validation to guarantee the C-ABI contract invariants
 static_assert(static_cast<uint32_t>(ScreenMode::Flat2D) == 0, "Flat2D deve ser 0");
 static_assert(static_cast<uint32_t>(ScreenMode::SBS) == 1, "SBS deve ser 1");
 static_assert(static_cast<uint32_t>(ScreenMode::SBSHalf) == 2, "SBSHalf deve ser 2");
@@ -48,7 +48,7 @@ static_assert(static_cast<uint32_t>(ScreenMode::EAC3x2SBS) == 14, "EAC3x2SBS dev
 static_assert(static_cast<uint32_t>(ScreenMode::Fisheye190) == 15, "Fisheye190 deve ser 15");
 static_assert(static_cast<uint32_t>(ScreenMode::Fisheye190SBS) == 16, "Fisheye190SBS deve ser 16");
 static_assert(static_cast<uint32_t>(ScreenMode::Fisheye190SBS) + 1 == 17,
-              "Total de modos de tela deve ser exatamente 17");
+              "The total number of screen modes must be exactly 17");
 
 inline const char *ScreenModeName(ScreenMode mode) {
     switch (mode) {
