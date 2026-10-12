@@ -12,7 +12,7 @@ O **tucaVR** é um player multimídia 2D e 3D estereoscópico projetado para a p
 
 A aplicação opera como uma `NativeActivity` 100% imersiva em OpenXR (`<meta-data android:name="com.oculus.vr.mode" android:value="vr_only" />`), sem o uso de janelas 2D planas ou Jetpack Compose.
 
-```
+```text
 ┌────────────────────────────────────────────────────────┐
 │                   Kotlin (app/)                        │
 │  UI (VirtualDisplay/Presentation), Room, Network Auth  │

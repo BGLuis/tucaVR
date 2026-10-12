@@ -8,7 +8,7 @@ tucaVR for Meta Quest 3 (Qualcomm XR2 Gen 2): a 2D/3D video player built as a fu
 
 ## Three-language architecture — know which layer you're in
 
-```
+```text
 Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocols/audio/media-logic)
 ```
 

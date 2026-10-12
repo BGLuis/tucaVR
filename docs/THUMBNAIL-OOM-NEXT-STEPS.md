@@ -16,7 +16,7 @@ usuário navegava por uma pasta SMB contendo majoritariamente vídeos 8K.
 
 Evidência (logcat do dispositivo, 2026-08-25):
 
-```
+```text
 23:18:41.455  killinfo: [15504,10062,0,201,4641532,3,242472,256272,...]
 23:18:42.452  oom_reaper: reaped process 15504 (com.tucavr)
 23:18:42.951  ActivityManager: Process com.tucavr (pid 15504) has died: fg TOP
@@ -157,7 +157,7 @@ frame nenhum**, e devolve `TrackInfo.width/height`
 
 ### Desenho
 
-```
+```text
 para cada item visível:
   1. cache em disco existe?  -> devolve, custo zero (curto-circuito já existe)
   2. probe  (gate leve: Semaphore(4))       ~1 MB de rede, sem decode
@@ -171,7 +171,7 @@ para cada item visível:
 
 Com `thread_count = 1` (Trabalho 3), a memória vira previsível:
 
-```
+```text
 frame_bytes = width * height * 1.5        (8 bits 4:2:0)
 frame_bytes = width * height * 3.0        (10 bits)
 custo       = frame_bytes * K

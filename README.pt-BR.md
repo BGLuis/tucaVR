@@ -227,7 +227,7 @@ Tudo que depende de renderização OpenXR real, haptics dos controles ou decode 
 Contribuições são bem-vindas — comece pelo [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
  <a href="https://github.com/bgluis/tucaVR/graphs/contributors">
-   <img src="https://contrib.rocks/image?repo=bgluis/tucaVR"/>
+   <img alt="Contributors" src="https://contrib.rocks/image?repo=bgluis/tucaVR"/>
  </a>
 
 # 📄 Licença

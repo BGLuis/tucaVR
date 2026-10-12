@@ -7,12 +7,11 @@ on:
       - '**/*.md'
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/PULL_REQUEST_TEMPLATE.md'
+  # No paths-ignore here: a workflow that never starts leaves its required checks
+  # "Pending" forever, so docs-only PRs could only merge with an admin bypass.
+  # The `changes` job below skips the heavy jobs instead.
   pull_request:
     branches: [ master, main, develop ]
-    paths-ignore:
-      - '**/*.md'
-      - '.github/ISSUE_TEMPLATE/**'
-      - '.github/PULL_REQUEST_TEMPLATE.md'
   workflow_dispatch:
     inputs:
       build_apk:
@@ -34,6 +33,60 @@ env:
   NDK_VERSION: '26.3.11579264'
 
 jobs:
+  # Only pull requests are filtered. Pushes and manual runs keep running everything, because
+  # release.yml reuses the APK built by the CI run of the pushed commit.
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read # paths-filter needs the repository metadata
+      pull-requests: read # paths-filter lists the PR files through the API
+    outputs:
+      rust: ${{ github.event_name != 'pull_request' || steps.filter.outputs.rust == 'true' }}
+      cpp: ${{ github.event_name != 'pull_request' || steps.filter.outputs.cpp == 'true' }}
+      android: ${{ github.event_name != 'pull_request' || steps.filter.outputs.android == 'true' }}
+      apk: ${{ github.event_name != 'pull_request' || steps.filter.outputs.apk == 'true' }}
+      docs: ${{ github.event_name != 'pull_request' || steps.filter.outputs.docs == 'true' }}
+    steps:
+      - name: Filter changed paths
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            rust:
+              - '.github/workflows/main.yml'
+              - 'rust/**'
+            cpp:
+              - '.github/workflows/main.yml'
+              - 'native/**'
+              - 'scripts/check-shaders.sh'
+              - 'scripts/test-native-host.sh'
+              - '.clang-format'
+            android:
+              - '.github/workflows/main.yml'
+              - 'app/**'
+              - 'gradle/**'
+              - '*.gradle.kts'
+              - 'gradle.properties'
+              - 'version.properties'
+            apk:
+              - '.github/workflows/main.yml'
+              - 'rust/**'
+              - 'native/**'
+              - 'app/**'
+              - 'gradle/**'
+              - 'scripts/**'
+              - 'docker/build/**'
+              - '*.gradle.kts'
+              - 'gradle.properties'
+              - 'version.properties'
+            docs:
+              - '.github/workflows/main.yml'
+              - '**/*.md'
+              - '.markdownlint-cli2.jsonc'
+
   security-and-workflows:
     name: Security & Workflows
     runs-on: ubuntu-24.04
@@ -65,6 +118,8 @@ jobs:
 
   rust-checks:
     name: Rust Quality & Tests
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -96,6 +151,8 @@ jobs:
 
   cpp-checks:
     name: C++ Native & Shaders
+    needs: changes
+    if: needs.changes.outputs.cpp == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -137,10 +194,16 @@ jobs:
 
   android-checks:
     name: Android Lint & JVM Tests
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read # Necessário para análise estática e execução dos testes JVM
+    env:
+      # Lint and JVM tests load no native library; without this, preBuild runs buildRust,
+      # which builds a Docker image and cross-compiles Rust and FFmpeg (~8 min).
+      RUST_BUILD_MODE: skip
     steps:
       - uses: actions/checkout@v4
         with:
@@ -177,10 +240,50 @@ jobs:
             app/build/reports/ktlint/
           retention-days: 7
 
+  markdown-checks:
+    name: Markdown Lint
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read # Necessário para ler os arquivos Markdown
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Lint Markdown (markdownlint-cli2)
+        run: npx --yes markdownlint-cli2@0.18.1
+
+  # The only check branch protection needs. A skipped job reports success, so without this a
+  # failed `changes` job would skip every dependent job and let the PR merge unchecked.
+  ci-gate:
+    name: CI Gate
+    if: always()
+    needs: [changes, security-and-workflows, rust-checks, cpp-checks, android-checks, markdown-checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require every job to have passed or been skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in success|skipped) ;; *) exit 1 ;; esac
+          done
+
   build-apk:
     name: Build Quest 3 APK
-    needs: [security-and-workflows, rust-checks, cpp-checks, android-checks]
-    if: (github.repository == 'BGLuis/vr-multmidia' || github.repository == 'BGLuis/tucaVR') && (inputs.build_apk == true || inputs.build_apk == null)
+    needs: [changes, security-and-workflows, rust-checks, cpp-checks, android-checks]
+    # A needed job skipped by the path filter must not skip the APK build.
+    if: >-
+      ${{ !cancelled() && !contains(needs.*.result, 'failure')
+      && needs.changes.outputs.apk == 'true'
+      && (github.repository == 'BGLuis/vr-multmidia' || github.repository == 'BGLuis/tucaVR')
+      && (inputs.build_apk == true || inputs.build_apk == null) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     permissions:
