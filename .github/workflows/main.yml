@@ -56,19 +56,23 @@ jobs:
         with:
           filters: |
             rust:
+              - '.github/workflows/main.yml'
               - 'rust/**'
             cpp:
+              - '.github/workflows/main.yml'
               - 'native/**'
               - 'scripts/check-shaders.sh'
               - 'scripts/test-native-host.sh'
               - '.clang-format'
             android:
+              - '.github/workflows/main.yml'
               - 'app/**'
               - 'gradle/**'
               - '*.gradle.kts'
               - 'gradle.properties'
               - 'version.properties'
             apk:
+              - '.github/workflows/main.yml'
               - 'rust/**'
               - 'native/**'
               - 'app/**'
@@ -79,6 +83,7 @@ jobs:
               - 'gradle.properties'
               - 'version.properties'
             docs:
+              - '.github/workflows/main.yml'
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
 
