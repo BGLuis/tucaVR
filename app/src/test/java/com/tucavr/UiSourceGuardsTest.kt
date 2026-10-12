@@ -6,9 +6,9 @@ import org.junit.Test
 import java.io.File
 
 /**
- * Impede texto e cor literais na UI: o Android Lint só checa `HardcodedText` em XML, então
- * `Text("...")` e `view.text = "..."` em Kotlin passariam. A dívida anterior fica no baseline
- * (`config/ui-guards/baseline.txt`); o teste falha para ocorrência nova e para entrada obsoleta.
+ * Blocks literal text and colors in the UI: Android Lint only checks `HardcodedText` in XML, so
+ * `Text("...")` and `view.text = "..."` in Kotlin would slip through. Earlier debt lives in the
+ * baseline (`config/ui-guards/baseline.txt`); the test fails on new findings and on stale entries.
  */
 class UiSourceGuardsTest {
     private data class Finding(
@@ -71,12 +71,12 @@ class UiSourceGuardsTest {
         val stale = minusEach(baseline, current)
 
         assertTrue(
-            "Ocorrências novas de '$rule' (use string resource / token, ou, só se for legítimo, " +
-                "acrescente ao baseline):\n${added.joinToString("\n")}",
+            "New '$rule' findings (use a string resource / theme token, or, only if legitimate, " +
+                "add them to the baseline):\n${added.joinToString("\n")}",
             added.isEmpty(),
         )
         assertTrue(
-            "Entradas de '$rule' no baseline que não existem mais (remova de " +
+            "'$rule' baseline entries that no longer exist (remove them from " +
                 "config/ui-guards/baseline.txt):\n${stale.joinToString("\n")}",
             stale.isEmpty(),
         )
@@ -102,7 +102,7 @@ class UiSourceGuardsTest {
 
     private fun readBaseline(): List<String> {
         val file = File(TestPaths.moduleDir, "config/ui-guards/baseline.txt")
-        assertTrue("Baseline não encontrado: ${file.absolutePath}", file.isFile)
+        assertTrue("Baseline not found: ${file.absolutePath}", file.isFile)
         return file.readLines().filter { it.isNotBlank() && !it.startsWith("#") }
     }
 

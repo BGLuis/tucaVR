@@ -9,8 +9,9 @@ import java.io.File
 import kotlin.math.pow
 
 /**
- * Contraste WCAG 2.x dos pares de cor que a UI realmente usa. Os hex vêm do código-fonte porque
- * `Color.parseColor` retorna 0 na JVM (`isReturnDefaultValues`). Pares fora da lista não são checados.
+ * WCAG 2.x contrast of the color pairs the UI actually uses. The hex values are read from the
+ * sources because `Color.parseColor` returns 0 on the JVM (`isReturnDefaultValues`). Pairs that are
+ * not listed are not checked.
  */
 class ThemeContrastTest {
     private data class ContrastPair(
@@ -29,7 +30,7 @@ class ThemeContrastTest {
     @Test
     fun `token extraction found the whole palette`() {
         val expected = setOf("background", "surface", "surfaceAlt", "text", "textSecondary", "accent", "border")
-        assertTrue("Tokens ausentes: ${expected - palette.keys}", palette.keys.containsAll(expected))
+        assertTrue("Missing tokens: ${expected - palette.keys}", palette.keys.containsAll(expected))
         assertTrue(palette.keys.containsAll(setOf("danger", "errorBanner")))
     }
 
@@ -43,13 +44,13 @@ class ThemeContrastTest {
         val failures =
             pairs.mapNotNull { pair ->
                 val ratio = contrastRatio(color(pair.foreground), color(pair.background))
-                "%s sobre %s = %.2f (mínimo %.1f)".format(pair.foreground, pair.background, ratio, pair.minRatio)
+                "%s on %s = %.2f (minimum %.1f)".format(pair.foreground, pair.background, ratio, pair.minRatio)
                     .takeIf { ratio < pair.minRatio }
             }
-        assertTrue("Contraste insuficiente:\n${failures.joinToString("\n")}", failures.isEmpty())
+        assertTrue("Insufficient contrast:\n${failures.joinToString("\n")}", failures.isEmpty())
     }
 
-    private fun color(token: String): Int = palette[token] ?: error("Token desconhecido: $token")
+    private fun color(token: String): Int = palette[token] ?: error("Unknown token: $token")
 
     private fun contrastRatio(
         first: Int,
@@ -68,7 +69,7 @@ class ThemeContrastTest {
     }
 
     companion object {
-        // Texto sobre accent usa `background` (como VoidButton ACTIVE); branco sobre accent dá 2,86:1.
+        // Text on accent uses `background` (like VoidButton ACTIVE); white on accent is 2.86:1.
         private val TEXT_PAIRS =
             listOf("background", "surface", "surfaceAlt").flatMap { surface ->
                 listOf("text", "textSecondary").map { ContrastPair(it, surface, 4.5) }

@@ -7,7 +7,7 @@ internal object TestPaths {
         val userDir = File(System.getProperty("user.dir") ?: ".")
         listOf(userDir, File(userDir, "app"))
             .firstOrNull { File(it, "src/main/java").isDirectory }
-            ?: error("Módulo app não encontrado a partir de: ${userDir.absolutePath}")
+            ?: error("app module not found from: ${userDir.absolutePath}")
     }
 
     val mainSources: File get() = File(moduleDir, "src/main/java")
