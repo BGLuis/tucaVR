@@ -363,7 +363,7 @@ class VRModalPresentation(
                     activity.detectCurrentVideoChromaKey(callback)
                 },
                 onResetScreenPosition = {
-                    activity.nativeResetScreenPosition()
+                    activity.resetScreenPosition()
                 },
                 onDismiss = { dismissModal() },
             )
