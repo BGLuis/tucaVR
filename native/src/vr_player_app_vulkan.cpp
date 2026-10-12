@@ -48,6 +48,8 @@
 #include <vector>
 
 #include "vk_math.h"
+#include "browser_pose.h"
+#include "panel_pick.h"
 #include "hand_tracking.h"
 #include "screen_mode.h"
 #include "vr_player_feedback_overlay.h"
@@ -306,6 +308,8 @@ std::atomic<bool> g_newVideoSessionRequested{false};
 std::atomic<bool> g_modalPanelActive{false};
 std::atomic<bool> g_modalPanelShowRequested{false};
 std::atomic<bool> g_modalPanelHideRequested{false};
+std::atomic<bool> g_browserCurvedGeometry{false};
+std::atomic<bool> g_browserActive{false};
 
 // Fase 0.3 Seção 8: Fotos 360° e 3D estéreo (T8.3, T8.4)
 std::atomic<bool> g_photoDirty{false};
@@ -371,6 +375,13 @@ constexpr uint32_t kControlsTexWidth = 1582;
 constexpr uint32_t kControlsTexHeight = 800;
 constexpr uint32_t kModalTexWidth = 1024;
 constexpr uint32_t kModalTexHeight = 768;
+constexpr uint32_t kBrowserTexWidth = 2560;
+constexpr uint32_t kBrowserTexHeight = 1440;
+constexpr float kBrowserPanelScaleX = 2.4f;
+constexpr float kBrowserPanelScaleY = 1.35f;
+constexpr float kBrowserCylinderRadius = 2.3f;
+constexpr float kBrowserCylinderCentralAngle = 1.0435f;
+constexpr float kBrowserTexAspect = static_cast<float>(kBrowserTexHeight) / static_cast<float>(kBrowserTexWidth);
 
 // Metricas de performance (debug, ver docs/DEBUGGING.md).
 constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz
@@ -808,6 +819,25 @@ struct AppState {
     bool modalHasFrame = false;
     bool modalActive = false;
 
+    // VR browser panel (kBrowserTexWidth x kBrowserTexHeight)
+    AImageReader* browserImageReader = nullptr;
+    VkImage browserImage = VK_NULL_HANDLE;
+    VkDeviceMemory browserImageMemory = VK_NULL_HANDLE;
+    VkImageView browserImageView = VK_NULL_HANDLE;
+    VkDescriptorSet browserDescriptorSet = VK_NULL_HANDLE;
+    float browserAlpha = 1.0f;
+    bool browserHasFrame = false;
+    bool browserActive = false;
+    // Reader e swapchain do navegador so sao criados na primeira abertura (CreateBrowserPipeline).
+    bool browserPipelineCreated = false;
+    // Coordenadas da cena (como screenPosition), nao do mundo.
+    XrVector3f browserPosition = vrplayer::kBrowserSpawnLocalPosition;
+    bool browserPoseInitialized = false;
+    float browserScaleX = kBrowserPanelScaleX;
+    float browserScaleY = kBrowserPanelScaleY;
+    bool isBrowserGrabbed = false;
+    float browserGrabDistance = 2.4f;
+
     // R-01 & R-06: Swapchains OpenXR dedicados para composição de painéis 2D como XrCompositionLayerQuad
     struct ImportedUiHwb {
         VkImage image = VK_NULL_HANDLE;
@@ -817,6 +847,7 @@ struct AppState {
     EyeSwapchain uiPanelSwapchain;
     EyeSwapchain controlsPanelSwapchain;
     EyeSwapchain modalPanelSwapchain;
+    EyeSwapchain browserPanelSwapchain;
     EyeSwapchain cursorSwapchain;
     EyeSwapchain beamSwapchain;
     VkCommandBuffer uiCopyCmd = VK_NULL_HANDLE;
@@ -1639,6 +1670,31 @@ void CreateReferenceSpace(AppState& state) {
 // Um swapchain Vulkan por olho (faceCount=1, arraySize=1), espelhando a
 // mesma topologia que Framebuffer.cpp usa no caminho GLES — nao um unico
 // swapchain com array de 2 camadas.
+// R-01: Swapchain OpenXR dedicado para composição de painéis 2D como XrCompositionLayerQuad
+void CreatePanelSwapchain(AppState& state, EyeSwapchain& chain, uint32_t width, uint32_t height) {
+    chain.width = static_cast<int32_t>(width);
+    chain.height = static_cast<int32_t>(height);
+    XrSwapchainCreateInfo pInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    pInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT |
+                       XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
+                       0x00000010; // XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT
+    pInfo.format = static_cast<int64_t>(state.swapchainFormat);
+    pInfo.sampleCount = 1;
+    pInfo.width = width;
+    pInfo.height = height;
+    pInfo.faceCount = 1;
+    pInfo.arraySize = 1;
+    pInfo.mipCount = 1;
+    OXR(xrCreateSwapchain(state.session, &pInfo, &chain.handle));
+
+    uint32_t imgCount = 0;
+    OXR(xrEnumerateSwapchainImages(chain.handle, 0, &imgCount, nullptr));
+    chain.images.assign(imgCount, XrSwapchainImageVulkanKHR{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
+    OXR(xrEnumerateSwapchainImages(
+        chain.handle, imgCount, &imgCount,
+        reinterpret_cast<XrSwapchainImageBaseHeader*>(chain.images.data())));
+}
+
 void CreateSwapchains(AppState& state) {
     uint32_t viewCount = 0;
     OXR(xrEnumerateViewConfigurationViews(
@@ -1704,29 +1760,8 @@ void CreateSwapchains(AppState& state) {
             reinterpret_cast<XrSwapchainImageBaseHeader*>(eyeChain.images.data())));
     }
 
-    // R-01: Swapchains OpenXR dedicados para composição de painéis 2D como XrCompositionLayerQuad
     auto createPanelChain = [&](EyeSwapchain& chain, uint32_t width, uint32_t height) {
-        chain.width = static_cast<int32_t>(width);
-        chain.height = static_cast<int32_t>(height);
-        XrSwapchainCreateInfo pInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-        pInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT |
-                           XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
-                           0x00000010; // XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT
-        pInfo.format = chosenFormat;
-        pInfo.sampleCount = 1;
-        pInfo.width = width;
-        pInfo.height = height;
-        pInfo.faceCount = 1;
-        pInfo.arraySize = 1;
-        pInfo.mipCount = 1;
-        OXR(xrCreateSwapchain(state.session, &pInfo, &chain.handle));
-
-        uint32_t imgCount = 0;
-        OXR(xrEnumerateSwapchainImages(chain.handle, 0, &imgCount, nullptr));
-        chain.images.assign(imgCount, XrSwapchainImageVulkanKHR{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
-        OXR(xrEnumerateSwapchainImages(
-            chain.handle, imgCount, &imgCount,
-            reinterpret_cast<XrSwapchainImageBaseHeader*>(chain.images.data())));
+        CreatePanelSwapchain(state, chain, width, height);
     };
 
     createPanelChain(state.uiPanelSwapchain, kUiTexWidth, kUiTexHeight);
@@ -3634,6 +3669,71 @@ void CreateUiPipeline(AppState& state, android_app* app) {
         kUiTexWidth, kUiTexHeight, kControlsTexWidth, kControlsTexHeight, kModalTexWidth, kModalTexHeight);
 }
 
+// Cria sob demanda (1a abertura do navegador) o AImageReader e a swapchain do painel
+// e entrega a Surface ao Kotlin, que so entao cria VirtualDisplay, Gecko e Presentation.
+// Roda na thread de render, entre frames, como as demais criacoes de swapchain.
+// Em falha o painel e desativado e nao ha nova tentativa (browserPipelineCreated ja esta true).
+void CreateBrowserPipeline(AppState& state, android_app* app) {
+    auto fail = [&](const char* reason) {
+        LOGE("Stage 4: browser pipeline failed: %s", reason);
+        ::g_browserActive.store(false);
+    };
+
+    media_status_t browserStatus = AImageReader_newWithUsage(
+        kBrowserTexWidth, kBrowserTexHeight, AIMAGE_FORMAT_RGBA_8888,
+        AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
+        AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT, 2,
+        &state.browserImageReader);
+    if (browserStatus != AMEDIA_OK || !state.browserImageReader) {
+        state.browserImageReader = nullptr;
+        fail("AImageReader_newWithUsage");
+        return;
+    }
+
+    ANativeWindow* browserWindow = nullptr;
+    AImageReader_getWindow(state.browserImageReader, &browserWindow);
+    if (!browserWindow) {
+        fail("AImageReader_getWindow returned null");
+        return;
+    }
+
+    if (!app || !app->activity || !app->activity->vm) {
+        fail("android_app is null");
+        return;
+    }
+
+    CreatePanelSwapchain(state, state.browserPanelSwapchain, kBrowserTexWidth, kBrowserTexHeight);
+
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (app->activity->vm->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+        app->activity->vm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    }
+    if (env) {
+        jobject activityObj = app->activity->clazz;
+        jclass vrActivityClass = env->GetObjectClass(activityObj);
+        jobject browserSurface = ANativeWindow_toSurface(env, browserWindow);
+        jmethodID setupBrowser = env->GetStaticMethodID(
+            vrActivityClass, "setupBrowserVirtualDisplay",
+            "(Lcom/tucavr/VRActivity;Landroid/view/Surface;II)V");
+        if (setupBrowser) {
+            env->CallStaticVoidMethod(vrActivityClass, setupBrowser,
+                activityObj, browserSurface, (jint)kBrowserTexWidth, (jint)kBrowserTexHeight);
+            LOGI("Stage 4: setupBrowserVirtualDisplay (%ux%u) called successfully", kBrowserTexWidth, kBrowserTexHeight);
+        } else {
+            fail("setupBrowserVirtualDisplay NOT FOUND");
+        }
+        env->DeleteLocalRef(browserSurface);
+        env->DeleteLocalRef(vrActivityClass);
+    } else {
+        fail("JNIEnv unavailable");
+    }
+    if (attached) {
+        app->activity->vm->DetachCurrentThread();
+    }
+}
+
 // Atualiza swapchains de UI/controles/modal a partir dos AImageReaders.
 // Chamado a cada frame antes de RenderFrame.
 void UpdateUiFrames(AppState& state) {
@@ -3654,6 +3754,18 @@ void UpdateUiFrames(AppState& state) {
     acquireAndUpdate(state.uiImageReader, state.uiPanelSwapchain, state.uiHasFrame, kUiTexWidth, kUiTexHeight);
     acquireAndUpdate(state.controlsImageReader, state.controlsPanelSwapchain, state.controlsHasFrame, kControlsTexWidth, kControlsTexHeight);
     acquireAndUpdate(state.modalImageReader, state.modalPanelSwapchain, state.modalHasFrame, kModalTexWidth, kModalTexHeight);
+    if (g_browserActive.load() && !state.browserPipelineCreated) {
+        state.browserPipelineCreated = true;
+        CreateBrowserPipeline(state, state.app);
+    }
+    if (g_browserActive.load()) {
+        acquireAndUpdate(state.browserImageReader, state.browserPanelSwapchain, state.browserHasFrame, kBrowserTexWidth, kBrowserTexHeight);
+        state.browserActive = state.browserHasFrame;
+    } else {
+        state.browserHasFrame = false;
+        state.browserActive = false;
+        state.browserPoseInitialized = false;
+    }
 }
 
 // ===========================================================================
@@ -7222,6 +7334,7 @@ void RenderFrame(AppState& state) {
         }
 
         // Estagio 4/5: Processar interacoes apos obtermos a posicao da cabeca
+        UpdateBrowserPose(state);
         UpdateInteraction(state, frameState.predictedDisplayTime, headCenter, views[0].pose.orientation);
 
         // Atualiza a orientação da cabeça para o pipeline de áudio espacial (Rust)
@@ -7594,6 +7707,33 @@ void RenderFrame(AppState& state) {
         modalQuad.pose.orientation = QuatFromYaw(state.sceneYawOffset);
         modalQuad.size = {kModalPanelScaleX, kModalPanelScaleY};
 
+        // Browser panel: quad and cylinder
+        XrCompositionLayerQuad browserQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+        browserQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        browserQuad.space = state.localSpace;
+        browserQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        browserQuad.subImage.swapchain = state.browserPanelSwapchain.handle;
+        browserQuad.subImage.imageRect.offset = {0, 0};
+        browserQuad.subImage.imageRect.extent = {static_cast<int32_t>(kBrowserTexWidth), static_cast<int32_t>(kBrowserTexHeight)};
+        browserQuad.pose.position = scene.browserCenter;
+        browserQuad.pose.orientation = QuatFromYaw(scene.browserYaw);
+        browserQuad.size = {state.browserScaleX, state.browserScaleY};
+
+        float browserScaleFactor = state.browserScaleX / kBrowserPanelScaleX;
+        float cylinderRadius = kBrowserCylinderRadius * browserScaleFactor;
+        XrCompositionLayerCylinderKHR browserCylinder{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+        browserCylinder.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        browserCylinder.space = state.localSpace;
+        browserCylinder.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        browserCylinder.subImage.swapchain = state.browserPanelSwapchain.handle;
+        browserCylinder.subImage.imageRect.offset = {0, 0};
+        browserCylinder.subImage.imageRect.extent = {static_cast<int32_t>(kBrowserTexWidth), static_cast<int32_t>(kBrowserTexHeight)};
+        browserCylinder.pose.position = Vec3Add(scene.browserCenter, Vec3RotateY({0.0f, 0.0f, cylinderRadius}, scene.browserYaw));
+        browserCylinder.pose.orientation = QuatFromYaw(scene.browserYaw);
+        browserCylinder.radius = cylinderRadius;
+        browserCylinder.centralAngle = kBrowserCylinderCentralAngle;
+        browserCylinder.aspectRatio = (float)kBrowserTexWidth / (float)kBrowserTexHeight;
+
         // Retículo do Laser no topo de todos os painéis
         // Raio Laser (Beam) como XrCompositionLayerQuad submetido após os painéis e antes do retículo do cursor (R-01)
         XrCompositionLayerQuad beamQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
@@ -7718,6 +7858,13 @@ void RenderFrame(AppState& state) {
 
         if (state.uiHasFrame && state.uiAlpha > 0.05f) {
             layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&uiQuad);
+        }
+        if (state.browserHasFrame && state.browserActive) {
+            if (g_browserCurvedGeometry.load()) {
+                layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&browserCylinder);
+            } else {
+                layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&browserQuad);
+            }
         }
         if (state.controlsHasFrame && state.controlsAlpha > 0.05f) {
             layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&controlsQuad);
@@ -8258,6 +8405,10 @@ void DestroyAppResources(AppState& state) {
         AImageReader_delete(state.modalImageReader);
         state.modalImageReader = nullptr;
     }
+    if (state.browserImageReader != nullptr) {
+        AImageReader_delete(state.browserImageReader);
+        state.browserImageReader = nullptr;
+    }
 }
 
 } // namespace
@@ -8440,6 +8591,7 @@ void android_main(android_app* app) {
     if (state.uiPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.uiPanelSwapchain.handle);
     if (state.controlsPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.controlsPanelSwapchain.handle);
     if (state.modalPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.modalPanelSwapchain.handle);
+    if (state.browserPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.browserPanelSwapchain.handle);
     if (state.cursorSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.cursorSwapchain.handle);
     if (state.beamSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.beamSwapchain.handle);
     if (state.localSpace != XR_NULL_HANDLE) xrDestroySpace(state.localSpace);

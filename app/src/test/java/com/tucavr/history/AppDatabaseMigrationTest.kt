@@ -188,13 +188,14 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
-    fun `full migration chain 1 to 5 preserves playback_history data untouched`() {
+    fun `full migration chain 1 to 6 preserves playback_history data untouched`() {
         insertSampleHistoryRow()
 
         applyMigration(AppDatabase.MIGRATION_1_2_SQL)
         applyMigration(AppDatabase.MIGRATION_2_3_SQL)
         applyMigration(AppDatabase.MIGRATION_3_4_SQL)
         applyMigration(AppDatabase.MIGRATION_4_5_SQL)
+        applyMigration(AppDatabase.MIGRATION_5_6_SQL)
 
         connection.createStatement().use { stmt ->
             stmt.executeQuery("SELECT title, mediaPath, positionMs, durationMs, sourceType FROM playback_history").use { rs ->
@@ -208,7 +209,7 @@ class AppDatabaseMigrationTest {
             }
         }
 
-        // As seis tabelas de todas as versões coexistem depois da cadeia completa.
+        // All seven tables from every version coexist after the complete migration chain.
         assertTrue(connection.tableExists("playback_history"))
         assertTrue(connection.tableExists("saved_servers"))
         assertTrue(connection.tableExists("playlists"))
@@ -216,6 +217,7 @@ class AppDatabaseMigrationTest {
         assertTrue(connection.tableExists("downloads"))
         assertTrue(connection.tableExists("folder_media_status"))
         assertTrue(connection.tableExists("media_metadata_cache"))
+        assertTrue(connection.tableExists("browser_bookmarks"))
     }
 
     @Test
@@ -229,11 +231,14 @@ class AppDatabaseMigrationTest {
         applyMigration(AppDatabase.MIGRATION_3_4_SQL)
         applyMigration(AppDatabase.MIGRATION_4_5_SQL)
         applyMigration(AppDatabase.MIGRATION_4_5_SQL)
+        applyMigration(AppDatabase.MIGRATION_5_6_SQL)
+        applyMigration(AppDatabase.MIGRATION_5_6_SQL)
 
         assertTrue(connection.tableExists("saved_servers"))
         assertTrue(connection.tableExists("playlists"))
         assertTrue(connection.tableExists("downloads"))
         assertTrue(connection.tableExists("folder_media_status"))
         assertTrue(connection.tableExists("media_metadata_cache"))
+        assertTrue(connection.tableExists("browser_bookmarks"))
     }
 }

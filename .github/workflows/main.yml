@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       build_apk:
-        description: 'Compilar APK completo (requer segredo do SDK)'
+        description: 'Compilar APK completo'
         type: boolean
         default: true
 
@@ -119,7 +119,9 @@ jobs:
             native/include/screen_mode.h \
             native/include/subtitle_layout.h \
             native/include/hand_tracking.h \
-            native/include/environment_config.h
+            native/include/environment_config.h \
+            native/include/browser_pose.h \
+            native/include/panel_pick.h
 
       - name: Validate Vulkan Shaders (glslc)
         run: ./scripts/check-shaders.sh
@@ -188,12 +190,8 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Checkout Meta OpenXR SDK (Private Repo)
-        uses: actions/checkout@v4
-        with:
-          repository: BGLuis/meta-openxr-sdk-private
-          token: ${{ secrets.SDK_REPO_PAT }}
-          path: sdk/meta-openxr-sdk
+      - name: Setup External Dependencies (Meta OpenXR SDK)
+        run: ./scripts/setup-deps.sh
 
       - name: Set up JDK ${{ env.JAVA_VERSION }}
         uses: actions/setup-java@v4

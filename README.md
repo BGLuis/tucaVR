@@ -107,9 +107,9 @@ The project was born so I could reach my own files on my own NAS, over any netwo
 
 > **Gradle is not in that list on purpose** — the repository ships the Gradle Wrapper (8.7), so `./gradlew` bootstraps it for you.
 
-**Manual dependency**
+**Meta OpenXR SDK**
 
-The [Meta OpenXR Mobile SDK](https://developers.meta.com/horizon/downloads/package/oculus-openxr-mobile-sdk/) cannot be downloaded automatically — it requires accepting a license on Meta's portal. Extract it into `sdk/meta-openxr-sdk/` so that `sdk/meta-openxr-sdk/Samples/SampleXrFramework/` and `sdk/meta-openxr-sdk/OpenXR/` exist. That folder is gitignored; every machine needs its own copy.
+`./scripts/setup-deps.sh` downloads the latest public [Meta OpenXR SDK GitHub release](https://github.com/meta-quest/Meta-OpenXR-SDK/releases) into `sdk/meta-openxr-sdk/` if it is not already present. That folder is gitignored, so each machine needs its own copy.
 
 ### Installation
 
@@ -125,7 +125,7 @@ git clone https://github.com/bgluis/tucaVR.git
 cd tucaVR
 ```
 
-3. Prepare the external dependencies (clones `ffmpeg-android-maker` and checks for the Meta SDK):
+3. Prepare the external dependencies (clones `ffmpeg-android-maker` and downloads the Meta SDK if missing):
 
 ```sh
 ./scripts/setup-deps.sh
@@ -158,29 +158,26 @@ The APK lands in `app/build/outputs/apk/debug/app-debug.apk`.
 
 #### Method B — step by step (manual)
 
-Useful when you are iterating on a single layer and do not want to rebuild everything.
+APK assembly automatically runs the Gradle `buildRust` task (`scripts/build-rust.sh`), so Android
+Studio's **Build > Make Project** and `./gradlew assembleDebug` include current
+Rust, C++, and Kotlin changes.
 
-1. Compile the Rust workspace (must be `cargo ndk`, **not** plain `cargo build` — `core`, `audio` and `bridge` need the Android NDK toolchain):
+The build system automatically selects between **Docker** and **Host Machine** for compiling Rust & FFmpeg:
+- **Docker Mode (Default when host Rust toolchain is absent):** No Rust, `cargo-ndk`, or `ffmpeg-android-maker` installation is needed on your host machine—only Docker (or Podman) is required.
+- **Host Machine Mode:** To compile natively on your host machine without Docker, install:
+  1. Rust with `aarch64-linux-android` target (`rustup target add aarch64-linux-android`).
+  2. `cargo-ndk` (`cargo install cargo-ndk`).
+  3. Android NDK 26.3 (`26.3.11579264`).
+  4. FFmpeg binaries in `ffmpeg-android-maker` (`./scripts/setup-deps.sh` followed by `./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26`).
+- **Overriding Build Mode:** Set `-PrustBuildMode=docker`, `-PrustBuildMode=host`, or `-PrustBuildMode=skip` on command line or in `gradle.properties`/`local.properties`.
 
-```sh
-cd rust
-cargo ndk -t aarch64-linux-android -P 26 -o ../app/src/main/jniLibs build --release
-cd ..
-```
-
-2. Copy the FFmpeg shared libraries next to them:
-
-```sh
-cp ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/*.so app/src/main/jniLibs/arm64-v8a/
-```
-
-3. Build the Android app (this also triggers the CMake build of the native C++ layer):
+To build manually from a terminal:
 
 ```sh
 ./gradlew assembleDebug
 ```
 
-4. Install it on the headset:
+Install it on the headset:
 
 ```sh
 adb install -r app/build/outputs/apk/debug/app-debug.apk

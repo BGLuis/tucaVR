@@ -1,0 +1,519 @@
+package com.tucavr.browser.ui
+
+import android.net.Uri
+import android.text.InputType
+import android.view.KeyEvent
+import android.view.ViewGroup
+import android.view.inputmethod.EditorInfo
+import android.widget.FrameLayout
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalInspectionMode
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import com.tucavr.R
+import com.tucavr.browser.data.BrowserBookmark
+import com.tucavr.browser.engine.BrowserErrorPage
+import com.tucavr.browser.engine.BrowserMediaScript
+import com.tucavr.browser.state.MediaCommand
+import com.tucavr.browser.state.WebBrowserEvent
+import com.tucavr.browser.state.WebBrowserUiState
+import com.tucavr.designsystem.KeyboardBinding
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.collectLatest
+import org.mozilla.geckoview.GeckoResult
+import org.mozilla.geckoview.GeckoSession
+import org.mozilla.geckoview.GeckoView
+import org.mozilla.geckoview.WebRequestError
+import java.util.concurrent.atomic.AtomicBoolean
+
+private const val ERROR_PAGE_SCHEME = "data:"
+
+@Composable
+fun WebBrowserScreen(
+    state: WebBrowserUiState,
+    mediaCommands: SharedFlow<MediaCommand>,
+    geckoSession: GeckoSession? = null,
+    onShowNativeKeyboard: ((KeyboardBinding) -> Unit)? = null,
+    onHideNativeKeyboard: (() -> Unit)? = null,
+    onCloseBrowser: (() -> Unit)? = null,
+    onToggleGeometry: ((Boolean) -> Unit)? = null,
+    onEvent: (WebBrowserEvent) -> Unit,
+    updateWebViewState: (
+        url: String?,
+        isLoading: Boolean?,
+        loadingProgress: Int?,
+        pageTitle: String?,
+        canGoBack: Boolean?,
+        canGoForward: Boolean?,
+        isFullScreen: Boolean?,
+        errorMessage: String?,
+    ) -> Unit,
+) {
+    val isPreviewMode = LocalInspectionMode.current
+    val loadFailedMessage = stringResource(R.string.webbrowser_status_load_failed)
+    val context = LocalContext.current
+    val errorPageServed = remember { AtomicBoolean(false) }
+    val userStopped = remember { AtomicBoolean(false) }
+    var geckoViewRef by remember { mutableStateOf<GeckoView?>(null) }
+
+    // Horizon OS native keyboard binding for sending text input to the web page
+    val webKeyboardBinding =
+        remember(geckoViewRef) {
+            object : KeyboardBinding {
+                private var webText = ""
+
+                override fun currentText(): CharSequence = webText
+
+                override fun onKeyboardText(
+                    text: CharSequence,
+                    selection: Int,
+                ) {
+                    val view = geckoViewRef ?: return
+                    val newStr = text.toString()
+                    if (newStr.length > webText.length) {
+                        val added = newStr.substring(webText.length)
+                        for (c in added) {
+                            val downEvent =
+                                KeyEvent(
+                                    android.os.SystemClock.uptimeMillis(),
+                                    c.toString(),
+                                    0,
+                                    0,
+                                )
+                            view.dispatchKeyEvent(downEvent)
+                        }
+                    } else if (newStr.length < webText.length) {
+                        val diff = webText.length - newStr.length
+                        for (i in 0 until diff) {
+                            val delDown = KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_DEL)
+                            val delUp = KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_DEL)
+                            view.dispatchKeyEvent(delDown)
+                            view.dispatchKeyEvent(delUp)
+                        }
+                    }
+                    webText = newStr
+                }
+
+                override fun onImeAction(actionId: Int) {
+                    val view = geckoViewRef ?: return
+                    val enterDown = KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ENTER)
+                    val enterUp = KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ENTER)
+                    view.dispatchKeyEvent(enterDown)
+                    view.dispatchKeyEvent(enterUp)
+                    onHideNativeKeyboard?.invoke()
+                }
+
+                override val inputType: Int = InputType.TYPE_CLASS_TEXT
+                override val imeOptions: Int = EditorInfo.IME_ACTION_DONE
+            }
+        }
+
+    // Configure GeckoSession delegates to update state, fullscreen, and native keyboard
+    DisposableEffect(geckoSession) {
+        val session = geckoSession ?: return@DisposableEffect onDispose {}
+
+        val navDelegate =
+            object : GeckoSession.NavigationDelegate {
+                override fun onLocationChange(
+                    session: GeckoSession,
+                    url: String?,
+                    permissions: List<GeckoSession.PermissionDelegate.ContentPermission>,
+                ) {
+                    if (url?.startsWith(ERROR_PAGE_SCHEME) == true) return
+                    updateWebViewState(url, null, null, null, null, null, null, null)
+                }
+
+                override fun onLoadError(
+                    session: GeckoSession,
+                    uri: String?,
+                    error: WebRequestError,
+                ): GeckoResult<String>? {
+                    errorPageServed.set(true)
+                    val kind = BrowserErrorPage.kindOf(error.category, error.code)
+                    val html =
+                        BrowserErrorPage.html(
+                            failedUrl = uri,
+                            title = context.getString(R.string.webbrowser_error_title),
+                            description = context.getString(kind.descriptionRes),
+                            urlLabel = context.getString(R.string.webbrowser_error_label_url),
+                            retryLabel = context.getString(R.string.webbrowser_btn_retry),
+                        )
+                    return GeckoResult.fromValue("${ERROR_PAGE_SCHEME}text/html;charset=utf-8," + Uri.encode(html))
+                }
+
+                override fun onCanGoBack(
+                    session: GeckoSession,
+                    canGoBack: Boolean,
+                ) {
+                    updateWebViewState(null, null, null, null, canGoBack, null, null, null)
+                }
+
+                override fun onCanGoForward(
+                    session: GeckoSession,
+                    canGoForward: Boolean,
+                ) {
+                    updateWebViewState(null, null, null, null, null, canGoForward, null, null)
+                }
+            }
+
+        val progressDelegate =
+            object : GeckoSession.ProgressDelegate {
+                override fun onPageStart(
+                    session: GeckoSession,
+                    url: String,
+                ) {
+                    val isErrorPage = url.startsWith(ERROR_PAGE_SCHEME)
+                    if (!isErrorPage) {
+                        errorPageServed.set(false)
+                        userStopped.set(false)
+                    }
+                    updateWebViewState(if (isErrorPage) null else url, true, 0, null, null, null, null, null)
+                }
+
+                override fun onPageStop(
+                    session: GeckoSession,
+                    success: Boolean,
+                ) {
+                    val stoppedByUser = userStopped.getAndSet(false)
+                    val showBanner = !success && !errorPageServed.get() && !stoppedByUser
+                    updateWebViewState(
+                        null,
+                        false,
+                        100,
+                        null,
+                        null,
+                        null,
+                        null,
+                        if (showBanner) loadFailedMessage else null,
+                    )
+                }
+
+                override fun onProgressChange(
+                    session: GeckoSession,
+                    progress: Int,
+                ) {
+                    updateWebViewState(null, null, progress, null, null, null, null, null)
+                }
+            }
+
+        val contentDelegate =
+            object : GeckoSession.ContentDelegate {
+                override fun onTitleChange(
+                    session: GeckoSession,
+                    title: String?,
+                ) {
+                    updateWebViewState(null, null, null, title, null, null, null, null)
+                }
+
+                override fun onFullScreen(
+                    session: GeckoSession,
+                    fullScreen: Boolean,
+                ) {
+                    updateWebViewState(null, null, null, null, null, null, fullScreen, null)
+                }
+            }
+
+        session.navigationDelegate = navDelegate
+        session.progressDelegate = progressDelegate
+        session.contentDelegate = contentDelegate
+
+        session.textInput.setDelegate(
+            object : GeckoSession.TextInputDelegate {
+                override fun showSoftInput(session: GeckoSession) {
+                    onShowNativeKeyboard?.invoke(webKeyboardBinding)
+                }
+
+                override fun hideSoftInput(session: GeckoSession) {
+                    onHideNativeKeyboard?.invoke()
+                }
+            },
+        )
+
+        onDispose {
+            if (session.navigationDelegate === navDelegate) session.navigationDelegate = null
+            if (session.progressDelegate === progressDelegate) session.progressDelegate = null
+            if (session.contentDelegate === contentDelegate) session.contentDelegate = null
+            session.textInput.setDelegate(null)
+        }
+    }
+
+    // Listen for cross-presentation media commands and inject JavaScript into GeckoSession
+    LaunchedEffect(mediaCommands, geckoSession) {
+        mediaCommands.collectLatest { command ->
+            val session = geckoSession ?: return@collectLatest
+            session.loadUri(BrowserMediaScript.uriFor(command))
+        }
+    }
+
+    Box(
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .background(BrowserColors.background),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Hide the top bar in fullscreen mode
+            if (!state.isFullScreen) {
+                BrowserToolbar(
+                    state = state,
+                    onShowNativeKeyboard = onShowNativeKeyboard,
+                    onHideNativeKeyboard = onHideNativeKeyboard,
+                    onEvent = { event ->
+                        when (event) {
+                            is WebBrowserEvent.GoBack -> geckoSession?.goBack()
+                            is WebBrowserEvent.GoForward -> geckoSession?.goForward()
+                            is WebBrowserEvent.Reload -> geckoSession?.reload()
+                            is WebBrowserEvent.Stop -> {
+                                userStopped.set(true)
+                                geckoSession?.stop()
+                                onEvent(event)
+                            }
+                            is WebBrowserEvent.GoHome -> {
+                                geckoSession?.loadUri("about:blank")
+                                onEvent(event)
+                            }
+                            is WebBrowserEvent.CloseBrowser -> {
+                                onCloseBrowser?.invoke()
+                                onEvent(event)
+                            }
+                            is WebBrowserEvent.ToggleGeometry -> {
+                                onEvent(event)
+                                onToggleGeometry?.invoke(!state.isCurvedGeometry)
+                            }
+                            is WebBrowserEvent.OnUrlSubmitted -> {
+                                val submitted = event.url.trim()
+                                val targetUrl =
+                                    if (submitted.startsWith("http://") ||
+                                        submitted.startsWith("https://") ||
+                                        submitted.startsWith("about:")
+                                    ) {
+                                        submitted
+                                    } else {
+                                        "https://$submitted"
+                                    }
+                                if (!state.isLoadingUrl(targetUrl)) {
+                                    onEvent(event)
+                                    geckoSession?.loadUri(targetUrl)
+                                }
+                            }
+                            else -> onEvent(event)
+                        }
+                    },
+                )
+            }
+
+            // Error message
+            state.errorMessage?.let { error ->
+                Row(
+                    modifier =
+                        Modifier
+                            .fillMaxWidth()
+                            .background(BrowserColors.errorBanner)
+                            .padding(horizontal = 16.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = stringResource(R.string.webbrowser_status_error_format, error),
+                        color = BrowserColors.text,
+                        modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    IconButton(onClick = { onEvent(WebBrowserEvent.ClearError) }) {
+                        Icon(
+                            imageVector = Icons.Default.Close,
+                            contentDescription = stringResource(R.string.webbrowser_btn_dismiss_error),
+                            tint = BrowserColors.text,
+                        )
+                    }
+                }
+            }
+
+            // Main content: shortcuts panel (about:blank) or GeckoView viewport
+            Box(
+                modifier =
+                    Modifier
+                        .fillMaxWidth()
+                        .weight(1f),
+            ) {
+                if (state.url == "about:blank" || state.url.isBlank()) {
+                    ShortcutsPanel(
+                        bookmarks = state.bookmarks,
+                        onBookmarkClick = { bookmark ->
+                            onEvent(WebBrowserEvent.OnUrlSubmitted(bookmark.url))
+                            geckoSession?.loadUri(bookmark.url)
+                        },
+                        onAddBookmarkClick = {
+                            onEvent(WebBrowserEvent.OpenAddBookmarkModal)
+                        },
+                        onEditBookmarkClick = { bookmark ->
+                            onEvent(WebBrowserEvent.OpenEditBookmarkModal(bookmark))
+                        },
+                        onDeleteBookmarkClick = { bookmark ->
+                            onEvent(WebBrowserEvent.DeleteBookmark(bookmark))
+                        },
+                    )
+                } else if (isPreviewMode) {
+                    Box(
+                        modifier =
+                            Modifier
+                                .fillMaxSize()
+                                .background(BrowserColors.surface),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(
+                                text = "GeckoView Engine (Widevine DRM Enabled)",
+                                color = BrowserColors.accent,
+                                style = MaterialTheme.typography.titleMedium,
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "URL: ${state.url}",
+                                color = BrowserColors.textSecondary,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
+                } else {
+                    AndroidView(
+                        factory = { context ->
+                            GeckoView(context).apply {
+                                layoutParams =
+                                    FrameLayout.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                    )
+                                isFocusable = true
+                                isFocusableInTouchMode = true
+                                geckoSession?.let { setSession(it) }
+                                geckoViewRef = this
+                            }
+                        },
+                        update = { geckoView ->
+                            geckoViewRef = geckoView
+                            geckoSession?.let { session ->
+                                geckoView.setSession(session)
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
+
+                // Floating button to exit fullscreen mode
+                if (state.isFullScreen) {
+                    Button(
+                        onClick = { geckoSession?.exitFullScreen() },
+                        colors =
+                            ButtonDefaults.buttonColors(
+                                containerColor = BrowserColors.surface.copy(alpha = 0.8f),
+                                contentColor = BrowserColors.text,
+                            ),
+                        modifier =
+                            Modifier
+                                .align(Alignment.TopEnd)
+                                .padding(16.dp),
+                    ) {
+                        Text(stringResource(R.string.webbrowser_btn_exit_fullscreen))
+                    }
+                }
+            }
+        }
+
+        // Add/edit bookmarks modal
+        if (state.showEditBookmarkModal) {
+            EditBookmarkModal(
+                bookmark = state.editingBookmark,
+                onShowNativeKeyboard = onShowNativeKeyboard,
+                onHideNativeKeyboard = onHideNativeKeyboard,
+                onDismiss = { onEvent(WebBrowserEvent.DismissBookmarkModal) },
+                onSave = { title, url ->
+                    onEvent(WebBrowserEvent.SaveBookmark(title, url))
+                },
+            )
+        }
+    }
+}
+
+@Preview(widthDp = 1280, heightDp = 720)
+@Composable
+fun WebBrowserScreenPreview() {
+    MaterialTheme(colorScheme = darkColorScheme()) {
+        WebBrowserScreen(
+            state =
+                WebBrowserUiState(
+                    url = "https://www.youtube.com",
+                    isLoading = true,
+                    loadingProgress = 65,
+                    pageTitle = "VR Browser Example",
+                    canGoBack = true,
+                    canGoForward = false,
+                    isBookmarked = true,
+                    isCurvedGeometry = true,
+                    bookmarks = listOf(),
+                ),
+            mediaCommands = MutableSharedFlow(),
+            geckoSession = null,
+            onEvent = {},
+            updateWebViewState = { _, _, _, _, _, _, _, _ -> },
+        )
+    }
+}
+
+@Preview(widthDp = 1280, heightDp = 720)
+@Composable
+fun WebBrowserScreenPreviewWithShortcuts() {
+    MaterialTheme(colorScheme = darkColorScheme()) {
+        WebBrowserScreen(
+            state =
+                WebBrowserUiState(
+                    url = "",
+                    isLoading = true,
+                    loadingProgress = 65,
+                    pageTitle = "VR Browser Example",
+                    canGoBack = true,
+                    canGoForward = false,
+                    isBookmarked = true,
+                    isCurvedGeometry = true,
+                    bookmarks =
+                        listOf(
+                            BrowserBookmark(id = 1, title = "YouTube", url = "https://www.youtube.com"),
+                            BrowserBookmark(id = 2, title = "Google", url = "https://www.google.com"),
+                        ),
+                ),
+            mediaCommands = MutableSharedFlow(),
+            geckoSession = null,
+            onEvent = {},
+            updateWebViewState = { _, _, _, _, _, _, _, _ -> },
+        )
+    }
+}

@@ -41,12 +41,12 @@ Follow the [Requirements and Installation sections of the README](README.md#-get
 ```sh
 git clone https://github.com/bgluis/tucaVR.git
 cd tucaVR
-./scripts/setup-deps.sh     # clones ffmpeg-android-maker, checks the Meta SDK
+./scripts/setup-deps.sh     # clones ffmpeg-android-maker and downloads the Meta SDK
 ```
 
 Two things commonly trip people up on the first build:
 
-1. **The Meta OpenXR Mobile SDK is not in the repository.** It requires accepting a license on Meta's portal, so you have to download and extract it into `sdk/meta-openxr-sdk/` yourself. Without it, the native C++ layer will not compile.
+1. **The Meta OpenXR SDK is not in the repository.** `./scripts/setup-deps.sh` downloads the latest public GitHub release into `sdk/meta-openxr-sdk/`. Without it, the native C++ layer will not compile.
 2. **FFmpeg has to be cross-compiled once** before the Rust build can link against it (see step 4 in the README). It takes several minutes but only needs to happen once.
 
 If you only intend to touch `protocols` or `media-logic`, you can skip both: those crates build and test with plain `cargo test` on any host.

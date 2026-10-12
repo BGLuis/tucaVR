@@ -23,6 +23,8 @@ TESTS=(
     "test_subtitle_layout"
     "test_hand_tracking"
     "test_environment_config"
+    "test_browser_pose"
+    "test_panel_pick"
 )
 
 EXTRA_FLAGS=()

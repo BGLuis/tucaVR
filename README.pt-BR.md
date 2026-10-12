@@ -105,9 +105,9 @@ O projeto foi criado com a ideia de poder acessar os meus próprios arquivos do 
 
 > **O Gradle não está nessa lista de propósito** — o repositório já traz o Gradle Wrapper (8.7), então o `./gradlew` cuida disso pra você.
 
-**Dependência manual**
+**Meta OpenXR SDK**
 
-O [Meta OpenXR Mobile SDK](https://developers.meta.com/horizon/downloads/package/oculus-openxr-mobile-sdk/) não pode ser baixado automaticamente — exige aceite de licença no portal da Meta. Extraia-o em `sdk/meta-openxr-sdk/` de forma que existam `sdk/meta-openxr-sdk/Samples/SampleXrFramework/` e `sdk/meta-openxr-sdk/OpenXR/`. Essa pasta é ignorada pelo git; cada máquina precisa da sua própria cópia.
+O `./scripts/setup-deps.sh` baixa o último [release público do Meta OpenXR SDK no GitHub](https://github.com/meta-quest/Meta-OpenXR-SDK/releases) para `sdk/meta-openxr-sdk/` se ele ainda não estiver presente. Essa pasta é ignorada pelo git; cada máquina precisa da sua própria cópia.
 
 ### Instalação
 
@@ -152,26 +152,30 @@ O APK sai em `app/build/outputs/apk/debug/app-debug.apk`.
 
 #### Método B — passo a passo (manual)
 
-Útil quando você está iterando em uma única camada e não quer recompilar tudo.
+O Gradle executa a task `buildRust` (`scripts/build-rust.sh`) automaticamente ao compilar o app no Android Studio ou pelo terminal.
 
-1. Compile o workspace Rust (tem que ser `cargo ndk`, **não** `cargo build` puro — `core`, `audio` e `bridge` precisam da toolchain do NDK):
+O sistema de build escolhe automaticamente entre **Docker** e **Host Machine**:
+- **Modo Docker (Padrão se a toolchain Rust não estiver no host):** Não exige instalação do Rust, `cargo-ndk` ou `ffmpeg-android-maker` no host—apenas o Docker (ou Podman) rodando.
+- **Modo Host Machine:** Para compilar nativamente na sua máquina host sem Docker, instale:
+  1. Rust com target `aarch64-linux-android` (`rustup target add aarch64-linux-android`).
+  2. `cargo-ndk` (`cargo install cargo-ndk`).
+  3. Android NDK 26.3 (`26.3.11579264`).
+  4. Bibliotecas do FFmpeg em `ffmpeg-android-maker` (`./scripts/setup-deps.sh` e depois `./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26`).
+- **Forçar Modo Especifico:** Use `-PrustBuildMode=docker`, `-PrustBuildMode=host` ou `-PrustBuildMode=skip` na linha de comando ou em `gradle.properties`/`local.properties`.
+
+1. Para compilar pelo terminal:
+  ```sh
+  ./gradlew assembleDebug
+  ```
+
+2. Para compilar apenas o workspace Rust no host (se tiver a toolchain instalada):
   ```sh
   cd rust
   cargo ndk -t aarch64-linux-android -P 26 -o ../app/src/main/jniLibs build --release
   cd ..
   ```
 
-2. Copie as bibliotecas compartilhadas do FFmpeg para o mesmo lugar:
-  ```sh
-  cp ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/*.so app/src/main/jniLibs/arm64-v8a/
-  ```
-
-3. Compile o app Android (isso também dispara o build CMake da camada nativa C++):
-  ```sh
-  ./gradlew assembleDebug
-  ```
-
-4. Instale no headset:
+3. Instale no headset:
   ```sh
   adb install -r app/build/outputs/apk/debug/app-debug.apk
   ```

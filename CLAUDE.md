@@ -32,7 +32,7 @@ Screen/stereo mode encoding (2D/SBS/OU/360/180/Cubemap/EAC/Fisheye variants) is 
 
 ## Build commands
 
-One-time setup after cloning (downloads `ffmpeg-android-maker` and prompts for the manually-licensed Meta OpenXR SDK):
+One-time setup after cloning (downloads `ffmpeg-android-maker` and the latest public Meta OpenXR SDK release):
 ```bash
 ./scripts/setup-deps.sh
 ```
@@ -45,12 +45,13 @@ make build      # same thing
 make deploy      # build + adb install
 ```
 
-Containerized build (no SDK/NDK/Rust/FFmpeg on the host; runs `scripts/build.sh` inside `docker/build/`, still needs the Meta SDK under `sdk/`; does not work from a `git worktree`):
-```bash
-./scripts/docker-build.sh   # or: make docker-build
-```
+Rust Cross-Compilation Modes (Gradle / Android Studio):
+- **Auto Mode (default):** Automatically uses Docker if host Rust/cargo toolchain is missing, or host directly if installed.
+- **Docker Only (no host Rust/NDK setup needed):** `./gradlew assembleDebug -PrustBuildMode=docker` or `./scripts/docker-build.sh`
+- **Host Machine Only (requires Rust, target `aarch64-linux-android`, `cargo-ndk`, NDK 26.3, and FFmpeg):** `./gradlew assembleDebug -PrustBuildMode=host`
+- **Skip Rust:** `./gradlew assembleDebug -PrustBuildMode=skip`
 
-Rust alone (must use `cargo ndk`, not plain `cargo build`, for anything touching `core`/`audio`/`bridge`):
+Rust alone on host:
 ```bash
 cd rust && cargo ndk -t aarch64-linux-android -P 26 -o ../app/src/main/jniLibs build --release
 ```
