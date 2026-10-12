@@ -165,7 +165,7 @@ Partially addresses **RF-2D-009** (priority 🟢 Low). `PHASE-0.5-PREMIUM.md` §
 
 - [ ] **T4.3** — Minimal UI to add/remove second screen (reuse existing modal pattern from `ScreenFormatModal.kt`/`EnvironmentSelectorModal.kt`, without a dedicated new tab).
 
-- [ ] **T4.4** — Explicitly document in `PHASE-0.5-PREMIUM.md` §1 that full scope (auto layout, ghost configurator, `MAX_SCREENS = 3`) is deferred — not left implicit.
+- [x] **T4.4** — Explicitly document in `PHASE-0.5-PREMIUM.md` §1 that full scope (auto layout, ghost configurator, `MAX_SCREENS = 3`) is deferred — not left implicit (recorded in #40).
 
 ### ⚠️ Pitfalls and Considerations
 
@@ -182,7 +182,7 @@ Addresses **RF-UI-006** (priority 🟢 Low). Zero lines of code exist (`XR_EXT_e
 
 ### Tasks
 
-- [ ] **T5.1** — Product decision: descope Eye Tracking from Phase 0.5/1.0, or accept cost and plan as dedicated post-1.0 phase. If descoped: update `REQUIREMENTS.md` (move RF-UI-006 to excluded items, along with DRM/Social/Cloud storage) and `PHASE-1.0-RELEASE.md` (prerequisite "Phase 0.5 complete" no longer strictly requires Eye Tracking).
+- [x] **T5.1** — Product decision: descope Eye Tracking from Phase 0.5/1.0, or accept cost and plan as dedicated post-1.0 phase. Eye Tracking formally descoped to post-1.0 backlog in `REQUIREMENTS.md` §9 and `PHASE-1.0-RELEASE.md` (recorded in #40).
 
 ### ⚠️ Pitfalls and Considerations
 
@@ -226,7 +226,7 @@ Addresses **RF-UI-006** (priority 🟢 Low). Zero lines of code exist (`XR_EXT_e
 - [ ] 2 simultaneous screens with independent sources, without noticeable framerate degradation
 
 ### Eye Tracking
-- [ ] Scope decision recorded in `REQUIREMENTS.md` and `PHASE-1.0-RELEASE.md` (implement post-1.0 or formally descope)
+- [x] Scope decision recorded in `REQUIREMENTS.md` and `PHASE-1.0-RELEASE.md` (formally descoped to post-1.0 in #40)
 
 ### General
 - [ ] No regressions in test suites from phases 0.1–0.5

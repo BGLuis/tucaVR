@@ -19,6 +19,10 @@
 
 ## 1. Multiple Virtual Screens
 
+> [!NOTE]
+> **Scope Notice (Phase 0.6 §4 / T4.4)**: The full multi-screen scope described below (`MAX_SCREENS = 3`, dynamic layout presets like PIP/Side-by-Side/Stacked, focus-based automatic audio mixing attenuation, and the 3D ghost positioning configurator) is **deferred to post-1.0**.
+> Phase 0.6 §4 delivers the minimal multi-screen milestone of **2 screens** (`MAX_SCREENS = 2`), reusing thumbstick positioning with independent sources (tracked in sub-issues #48, #49, and #50).
+
 ### Concept
 
 Fulfills requirement **RF-2D-009** (Multiple simultaneous virtual screens). The user can spawn 2-3 floating quad displays in VR space, each streaming independent media (e.g., picture-in-picture, side-by-side comparison).
@@ -55,6 +59,10 @@ Multiple Screens in VR Space:
 ---
 
 ## 2. Eye Tracking — Gaze Selection
+
+> [!WARNING]
+> **Scope Notice (Phase 0.6 §5 / T5.1)**: Eye Tracking (**RF-UI-006**) is **formally descoped from v0.5 and v1.0** and deferred to post-1.0 (see `REQUIREMENTS.md` §9).
+> Zero eye tracking code (`XR_EXT_eye_gaze_interaction`) exists in the codebase. Given calibration complexity, biometric sensitivity, and hardware absence on standard Quest 3, v1.0 prioritizes controller raycasting and hand tracking. The tasks below (T2.1–T2.7) are preserved strictly as a future specification reference.
 
 ### Concept
 
@@ -118,14 +126,15 @@ Fulfills **RF-ENV-007** (Environment lighting and color temperature adjustment).
 
 ## 6. Definition of Done — v0.5
 
-### Multiple Screens (Pending Phase 0.6 Minimal Scope)
-- [ ] User can open 2 simultaneous virtual screens streaming independent media
+### Multiple Screens (Minimal Scope via Phase 0.6; Full Scope Deferred to Post-1.0)
+- [ ] User can open 2 simultaneous virtual screens streaming independent media (Phase 0.6 minimal scope, #48–#50)
 - [ ] Primary screen audio at 100%, background screen attenuated to ~15%
-- [ ] Controller can move and resize each screen independently
+- [ ] Controller can move and resize each screen independently (Phase 0.6 §4)
+- [ ] ~~Full scope (3 screens, automatic layout presets, ghost configurator)~~ *(Deferred to post-1.0)*
 
-### Eye Tracking (Candidate for Phase 0.6 Descope)
-- [ ] UI navigation operable via gaze dwell time
-- [ ] Anti-jitter filtering prevents false activations during saccades
+### Eye Tracking (Descoped to Post-1.0 / Backlog)
+- [ ] ~~UI navigation operable via gaze dwell time~~ *(Descoped to post-1.0 per Phase 0.6 §5 / REQUIREMENTS.md §9)*
+- [ ] ~~Anti-jitter filtering prevents false activations during saccades~~ *(Descoped to post-1.0)*
 
 ### Environments
 - [ ] Space cubemap skybox renders smoothly without motion judder (partial: equirectangular implemented, see #37)

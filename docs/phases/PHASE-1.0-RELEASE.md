@@ -1,7 +1,7 @@
 # Phase 1.0 — Release
 
 > **Objective**: Production stabilization and final polish. User-imported custom 3D environments, community translation contribution framework, unified UX onboarding and settings, Dokka/rustdoc contributor and architecture documentation, security and quality audits, and Meta Quest Store submission readiness.  
-> **Prerequisite**: Phase 0.5 (Premium) and Phase 0.6 (Stabilization) complete and stable.  
+> **Prerequisite**: Phase 0.5 (Premium) and Phase 0.6 (Stabilization) complete and stable (with Phase 0.5 scope reconciled: Advanced Environments and Ambient Mode verified; Multiple Screens delivered at minimal 2-screen scope; Eye Tracking formally descoped to post-1.0).  
 > **Expected Outcome**: The player is a polished, production-ready product for public distribution — any user can install the APK, watch VR/2D content from local or network sources safely, and developers can clone, build, and contribute without friction.
 
 ---
