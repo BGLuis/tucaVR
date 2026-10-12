@@ -1080,6 +1080,9 @@ struct AppState {
     XrVector3f screenPosition = {0.0f, 1.5f, -2.4f};
     float screenScaleX = 2.8f;
     float screenScaleY = 1.575f;
+    XrVector3f defaultScreenPosition = {0.0f, 1.5f, -2.4f};
+    float defaultScreenScaleX = 2.8f;
+    float defaultScreenScaleY = 1.575f;
 
     // Fase 0.3 Seção 2: Grab & Drag da tela virtual (T2.5)
     bool isScreenGrabbed = false;
@@ -5415,6 +5418,9 @@ static bool LoadEnvironmentMesh(AppState& state, const std::string& envId) {
         state.screenPosition = {0.0f, 1.5f, -2.4f};
         state.screenScaleX = 2.8f;
         state.screenScaleY = 1.575f;
+        state.defaultScreenPosition = state.screenPosition;
+        state.defaultScreenScaleX = state.screenScaleX;
+        state.defaultScreenScaleY = state.screenScaleY;
         return true;
     }
 
@@ -5443,6 +5449,9 @@ static bool LoadEnvironmentMesh(AppState& state, const std::string& envId) {
             state.screenPosition.z = envConfig.screenPosZ;
             state.screenScaleX = envConfig.screenScaleX;
             state.screenScaleY = envConfig.screenScaleY;
+            state.defaultScreenPosition = state.screenPosition;
+            state.defaultScreenScaleX = state.screenScaleX;
+            state.defaultScreenScaleY = state.screenScaleY;
         }
         AAsset_close(cfgAsset);
     }

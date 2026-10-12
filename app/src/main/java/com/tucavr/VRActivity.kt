@@ -132,9 +132,11 @@ class VRActivity : NativeActivity() {
     val screenTransformStore: ScreenTransformStore by lazy { ScreenTransformStore(this) }
     val environmentStore: EnvironmentStore by lazy { EnvironmentStore(this) }
 
-    fun applySavedScreenTransform() {
-        val t = screenTransformStore.get()
-        nativeSetScreenTransform(t.posX, t.posY, t.posZ, t.scaleX, t.scaleY)
+    fun applySavedScreenTransform(environmentId: String = environmentStore.getActiveEnvironment()) {
+        val t = screenTransformStore.get(environmentId)
+        if (t.isCustomized) {
+            nativeSetScreenTransform(t.posX, t.posY, t.posZ, t.scaleX, t.scaleY)
+        }
     }
 
     // Último `quality_reason` visto em updateDebugHud (chamado ~10x/s pelo C++ via JNI) — usado
@@ -714,11 +716,11 @@ class VRActivity : NativeActivity() {
 
     override fun onResume() {
         super.onResume()
-        applySavedScreenTransform()
         val activeEnv = environmentStore.getActiveEnvironment()
         if (activeEnv != EnvironmentStore.ENV_PASSTHROUGH) {
             nativeSetEnvironment(activeEnv)
         }
+        applySavedScreenTransform(activeEnv)
         presentation?.loadFiles()
         thermalMonitor.startMonitoring(callback = thermalCallback)
         pendingAutoPlayPath?.let { path ->
@@ -759,7 +761,8 @@ class VRActivity : NativeActivity() {
             scaleY: Float,
         ) {
             activity.runOnUiThread {
-                activity.screenTransformStore.save(posX, posY, posZ, scaleX, scaleY)
+                val currentEnv = activity.environmentStore.getActiveEnvironment()
+                activity.screenTransformStore.save(currentEnv, posX, posY, posZ, scaleX, scaleY)
             }
         }
 
@@ -1744,24 +1747,17 @@ class VRActivity : NativeActivity() {
             }
             nativeSetEnvironment(environmentId)
 
-            // Reancoragem da tela virtual de acordo com o ambiente (T1.6)
-            when (environmentId) {
-                EnvironmentStore.ENV_CINEMA -> {
-                    screenTransformStore.save(0.0f, 2.5f, -7.5f, 6.0f, 3.375f)
-                    nativeSetScreenTransform(0.0f, 2.5f, -7.5f, 6.0f, 3.375f)
-                }
-                EnvironmentStore.ENV_LIVING_ROOM -> {
-                    screenTransformStore.save(0.0f, 1.85f, -2.8f, 2.4f, 1.35f)
-                    nativeSetScreenTransform(0.0f, 1.85f, -2.8f, 2.4f, 1.35f)
-                }
-                EnvironmentStore.ENV_SPACE -> {
-                    screenTransformStore.save(0.0f, 1.8f, -3.2f, 3.8f, 2.1375f)
-                    nativeSetScreenTransform(0.0f, 1.8f, -3.2f, 3.8f, 2.1375f)
-                }
-                EnvironmentStore.ENV_VOID -> {
-                    screenTransformStore.save(0.0f, 1.5f, -2.4f, 2.8f, 1.575f)
-                    nativeSetScreenTransform(0.0f, 1.5f, -2.4f, 2.8f, 1.575f)
-                }
+            // Aplica transform customizado se o usuário já tiver ajustado a tela para este ambiente.
+            // Se nunca customizou, o C++ já aplica o default de config.ini em LoadEnvironmentMesh.
+            val transform = screenTransformStore.get(environmentId)
+            if (transform.isCustomized) {
+                nativeSetScreenTransform(
+                    transform.posX,
+                    transform.posY,
+                    transform.posZ,
+                    transform.scaleX,
+                    transform.scaleY,
+                )
             }
 
             val volume =
@@ -1779,7 +1775,8 @@ class VRActivity : NativeActivity() {
     }
 
     fun resetScreenPosition() {
-        screenTransformStore.reset()
+        val currentEnv = environmentStore.getActiveEnvironment()
+        screenTransformStore.reset(currentEnv)
         nativeResetScreenPosition()
     }
 

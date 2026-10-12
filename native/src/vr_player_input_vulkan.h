@@ -1147,12 +1147,13 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
     // Redefinição de posição solicitada via JNI ou Reset
     if (::g_resetScreenPositionRequested.exchange(false)) {
-        state.screenPosition = {0.0f, 1.5f, -2.4f};
-        state.screenScaleX = 2.8f;
-        state.screenScaleY = 1.575f;
+        state.screenPosition = state.defaultScreenPosition;
+        state.screenScaleX = state.defaultScreenScaleX;
+        state.screenScaleY = state.defaultScreenScaleY;
         state.isScreenGrabbed = false;
-        LOGI("Screen: posição e escala redefinidas para o padrão cinematográfico {0, 1.5, -2.4}");
-        NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
+        LOGI("Screen: posição e escala redefinidas para o padrão do ambiente atual: pos={%.2f, %.2f, %.2f}, scale={%.2f, %.2f}",
+             state.screenPosition.x, state.screenPosition.y, state.screenPosition.z,
+             state.screenScaleX, state.screenScaleY);
     }
 
     // Thumbstick scrolling on the UI (Home/Files), modal, or browser panel
