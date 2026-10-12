@@ -86,7 +86,7 @@ graph TB
 | RF-2D-006 | Legendas externas: SRT, SSA/ASS, VTT | 🟡 Médio | v0.2 |
 | RF-2D-007 | Legendas embedded (MKV, MP4) + PGS bitmap | 🟡 Médio | v0.3 |
 | RF-2D-008 | Redimensionar e reposicionar tela virtual livremente no espaço 3D | 🔴 Crítico | v0.1 |
-| RF-2D-009 | Múltiplas telas virtuais simultâneas | 🟢 Baixo | v0.5 |
+| RF-2D-009 | Múltiplas telas virtuais simultâneas | 🟢 Baixo | v0.5 / v0.6 (2 telas; escopo completo de 3 telas adiado para pós-1.0) |
 | RF-2D-010 | Reproduzir imagens (JPEG, PNG, WebP, AVIF, RAW) | 🟡 Médio | v0.3 |
 | RF-2D-011 | Reproduzir áudio standalone (música, podcasts) | 🟡 Médio | v0.3 |
 
@@ -133,7 +133,7 @@ graph TB
 | RF-UI-003 | File browser com navegação hierárquica (local + rede) | 🔴 Crítico | v0.1 |
 | RF-UI-004 | **Interação via Controllers** do Quest 3 (raycasting + botões) | 🔴 Crítico | v0.1 |
 | RF-UI-005 | **Hand Tracking** — gestos naturais para controlar UI | 🟡 Médio | v0.3 |
-| RF-UI-006 | **Eye Tracking** — seleção por olhar + foveated UI | 🟢 Baixo | v0.5 |
+| RF-UI-006 | **Eye Tracking** — seleção por olhar + foveated UI | 🟢 Baixo | pós-1.0 (Descopado da v1; ver §9) |
 | RF-UI-007 | Teclado virtual para URLs, senhas, buscas | 🔴 Crítico | v0.1 |
 | RF-UI-008 | Exibição de metadados (título, duração, resolução, codec, capa) | 🟡 Médio | v0.2 |
 | RF-UI-009 | Gaze-based UI como fallback (sem controller) | 🟡 Médio | v0.4 |
@@ -277,7 +277,7 @@ graph TB
 | Fallback | OpenGL ES 3.x (via OVRFW, `-PvrplayerGraphicsApi=GLES`) | Mantido como caminho alternativo |
 | Passthrough | Meta Passthrough API (XR extension) | Mixed reality |
 | Hand tracking | XR_EXT_hand_tracking | Gestos naturais |
-| Eye tracking | XR_EXT_eye_gaze_interaction (não implementado — roadmap v0.5, "Eye tracking UI") | UI por olhar |
+| Eye tracking | XR_EXT_eye_gaze_interaction (descopado da v1 — adiado para pós-1.0, ver §9) | UI por olhar |
 | Environment | Meshes customizados + skyboxes | Ambientes 3D |
 | Shader lang | GLSL → SPIR-V (Vulkan, via `glslc`) / GLSL (GLES fallback) | Shaders em `native/shaders/vulkan/` |
 | Math | `native/include/vk_math.h` próprio (Vulkan); `OVR::` do SampleXrFramework só no fallback GLES (`glm` descartado, ver §5.5) | Primitivas matemáticas sem dependência externa |
@@ -363,8 +363,8 @@ Durante o desenvolvimento do projeto, várias bibliotecas preliminarmente consid
 ### v0.5 — Premium
 > Features diferenciadas
 
-- [ ] Múltiplas telas
-- [ ] Eye tracking UI
+- [ ] Múltiplas telas (escopo mínimo de 2 telas na Fase 0.6; escopo completo de 3 telas adiado para pós-1.0)
+- [ ] ~~Eye tracking UI~~ (descopado da v1 / adiado para pós-1.0, ver §9)
 - [ ] Ambientes Espaço + mais
 - [ ] Ajuste de iluminação do ambiente
 
@@ -433,6 +433,8 @@ Durante o desenvolvimento do projeto, várias bibliotecas preliminarmente consid
 | IPTV / Câmeras IP | Não necessário na v1 |
 | App companion (celular/desktop) | Gestão direto no headset |
 | Gravação/Captura de tela | Fora do escopo de player |
+| Eye Tracking (RF-UI-006) | Descopado da v0.5/v1.0 (complexidade de calibração e foveated UI desproporcional ao valor como prioridade 🟢 Baixo; Quest 3 básico foca em controllers e hand tracking; ver Fase 0.6 §5) |
+| Multi-screen completo (3 telas, presets, configurador fantasma) | Escopo reduzido na Fase 0.6 para 2 telas com posicionamento direto; recursos avançados adiados para pós-1.0 |
 
 ---
 
