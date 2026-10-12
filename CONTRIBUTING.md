@@ -80,7 +80,7 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 - **Rust** — `cargo fmt`, and `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings` must pass. CI enforces the clippy gate.
 - **Kotlin** — `./gradlew ktlintCheck` must pass; CI blocks on it. Pre-existing violations are frozen in `app/config/ktlint/baseline.xml`.
 - **C++** — C++20, matching the surrounding file. In the frozen GLES fallback, respect the OVRFW shader conventions (the framework injects `FragmentHeader`/`VertexHeader`); in the default Vulkan backend, shaders are written in standard GLSL and compiled to SPIR-V via `glslc`.
-- **Documentation (`docs/`) is written in English.** Issues, PRs, commit messages and this guide are in English. Source code comments remain in Portuguese (BR) across existing code — match that when adding comments to existing source files.
+- **Language is English.** Documentation (`docs/`), issues, PRs, commit messages, and source code comments are written in English as part of the repository-wide migration to English. User-facing strings remain externalized in `app/src/main/res/values-*/` for multilingual UI support.
 - Prefer explaining *why* in a comment over restating *what* the code does. The existing comments tend to record the reasoning behind a version pin or a workaround; that style has been genuinely useful here.
 
 ## Cross-cutting rules that are easy to get wrong
