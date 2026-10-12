@@ -196,7 +196,7 @@ fun EditBookmarkModal(
                         colors =
                             ButtonDefaults.buttonColors(
                                 containerColor = BrowserColors.accent,
-                                contentColor = BrowserColors.text,
+                                contentColor = BrowserColors.background,
                             ),
                     ) {
                         Text(stringResource(R.string.webbrowser_btn_save))
