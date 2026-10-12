@@ -58,7 +58,7 @@ Planning for this phase takes the canonical audit of documentation and code as i
 
 `FeatureFlags.kt` maintains three flags with `defaultEnabled = false` and the identical comment — "never validated on real headset so far": `FOVEATED_RENDERING`, `PASSTHROUGH`, `AMBIENT_MODE`. Hand tracking has no flag but is in the same boat: no feature built since Phase 0.3 (environments, passthrough with chroma key/packed alpha, hand tracking, HDR, fisheye/cubemap/EAC, MQSR/upscaling, ambient halo) has a confirmed session on physical Quest 3 — following project convention ("nothing in this set of implementations has been run on Quest 3"). This section formalizes that gap as planned work with acceptance criteria per item, rather than leaving it indefinitely implicit.
 
-```
+```text
 Validation Campaign Flow:
 
   Feature/Flag                  Script (T2.1)               Result

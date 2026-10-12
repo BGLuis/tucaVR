@@ -29,7 +29,7 @@
 
 Replace the empty dark void with immersive 3D environments where the video screen anchors naturally into a physical space:
 
-```
+```text
 Virtual Cinema:                         Virtual Living Room:
 ┌────────────────────────────────┐     ┌──────────────────────────────┐
 │          ┌──────────┐          │     │     🪟         🖼️            │

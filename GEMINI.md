@@ -19,7 +19,7 @@ The **tucaVR** is an immersive 2D/3D video player built specifically for the **M
 
 The system is strictly partitioned into three communicating layers:
 
-```
+```text
 ┌────────────────────────────────────────────────────────┐
 │                   Kotlin (app/)                        │
 │  UI (VirtualDisplay/Presentation), Room, Network Auth  │

@@ -100,7 +100,7 @@ bem mais rígido que `vsftpd`/`smbd` sobre isso):
 **`Permission denied` ao apagar `https-test/certs/`**: o certificado é gerado
 *dentro* do container como root, então o arquivo no host também fica com dono
 root. `rm -rf` direto do seu usuário falha. Use:
-```
+```text
 docker run --rm -v "$(pwd)/https-test/certs:/certs" alpine sh -c "rm -rf /certs/*"
 ```
 Isso só é necessário se quiser forçar a regeneração do certificado (ex: extensões

@@ -23,7 +23,7 @@
 
 Fulfills requirement **RF-2D-009** (Multiple simultaneous virtual screens). The user can spawn 2-3 floating quad displays in VR space, each streaming independent media (e.g., picture-in-picture, side-by-side comparison).
 
-```
+```text
 Multiple Screens in VR Space:
 
     PIP Layout (Picture-in-Picture):         Side-by-Side Layout:

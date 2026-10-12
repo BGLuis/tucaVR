@@ -17,7 +17,7 @@
 8. [Internationalization (i18n)](#8-internationalization-i18n)
 9. [Playback History](#9-playback-history)
 10. [Cross-Cutting Concerns](#10-cross-cutting-concerns)
-11. [Definition of Done — v0.1](#definition-of-done--v01)
+11. [Definition of Done — v0.1](#11-definition-of-done--v01)
 
 ---
 
@@ -25,7 +25,7 @@
 
 ### Structure
 
-```
+```text
 vr-multimedia/
 ├── app/                          # Main Android/Kotlin module
 │   ├── src/main/
@@ -114,7 +114,7 @@ vr-multimedia/
 
 Implement complete video decoding pipeline in Rust:
 
-```
+```text
 File/Stream → Demuxer (FFmpeg) → Packets → Decoder (MediaCodec HW) → Frames → Texture (GPU)
                                 → Audio Packets → Audio Decoder → PCM → Audio Output (Oboe)
 ```

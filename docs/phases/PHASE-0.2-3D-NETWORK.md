@@ -33,7 +33,7 @@
 
 Stereoscopic 3D media packages both eyes into a single container frame:
 
-```
+```text
 Side-by-Side (SBS):                Over/Under (OU):
 ┌────────┬────────┐               ┌────────────────┐
 │  Left  │ Right  │               │   Left Eye     │
@@ -74,7 +74,7 @@ Full SBS: each half maintains full resolution (video has 2x width)
 
 Equirectangular projections mapped onto inside-out sphere or hemisphere geometry:
 
-```
+```text
 360° Equirectangular:                180° VR:
     ┌────────────────────┐           ┌──────────┐
     │ 360° projection on │           │ Frontal  │
