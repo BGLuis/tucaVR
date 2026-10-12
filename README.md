@@ -56,7 +56,7 @@ Kotlin never calls Rust directly: it talks to C++ over JNI, and C++ is the only 
 | **3D / VR**   | Side-by-Side and Over/Under (half & full), 360° mono and stereo, VR180 — with automatic format detection |
 | **Audio**     | Oboe output with A/V sync, spatial audio, per-track selection                                            |
 | **Subtitles** | External subtitle files with automatic charset detection (`chardetng`)                                   |
-| **Streaming** | HTTP(S) direct URLs, HLS (including AES-128 encrypted segments) and DASH |
+| **Streaming** | HTTP(S) direct URLs, HLS (including AES-128 encrypted segments) and DASH                                 |
 | **Rendering** | Vulkan by default, OpenGL ES available as a fallback backend                                             |
 
 ### Where it plays from
@@ -76,6 +76,8 @@ Kotlin never calls Rust directly: it talks to C++ over JNI, and C++ is the only 
 Remote reads go through a prefetching, chunked reader that issues concurrent range requests over a single session, so seeking on a NAS share does not stall the render loop.
 
 ### Quality of life
+
+An in-app web browser (GeckoView) rendered on its own panel, photo and 360°/3D photo viewing, hand tracking, passthrough, selectable 3D environments, downloads and playlists.
 
 Playback history with "continue watching" and resume prompts, generated thumbnails for local and network files, encrypted credential storage (`EncryptedSharedPreferences`), saved servers, sorting and filtering in the file browser, thermal monitoring, and a fully localized UI (English, Portuguese-BR, and Spanish; see [`docs/i18n.md`](docs/i18n.md) for translation contribution guidelines).
 
@@ -141,11 +143,11 @@ export ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264
 cd ..
 ```
 
-From here you can build in one of two ways.
+From here you can build in one of two ways. Step 4 is only needed in host mode (see Method B); Docker mode compiles FFmpeg inside its image.
 
 #### Method A — unified build (recommended)
 
-The unified script cross-compiles Rust, copies the resulting `.so` files into `jniLibs`, and then runs Gradle:
+The unified script runs Gradle, whose `buildRust` task (`scripts/build-rust.sh`) cross-compiles Rust and copies the resulting `.so` files into `jniLibs` before the native build and APK assembly:
 
 ```sh
 ./scripts/build.sh          # Rust + C++ + Gradle
@@ -169,7 +171,7 @@ The build system automatically selects between **Docker** and **Host Machine** f
   2. `cargo-ndk` (`cargo install cargo-ndk`).
   3. Android NDK 26.3 (`26.3.11579264`).
   4. FFmpeg binaries in `ffmpeg-android-maker` (`./scripts/setup-deps.sh` followed by `./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26`).
-- **Overriding Build Mode:** Set `-PrustBuildMode=docker`, `-PrustBuildMode=host`, or `-PrustBuildMode=skip` on command line or in `gradle.properties`/`local.properties`.
+- **Overriding Build Mode:** Set `-PrustBuildMode=docker`, `-PrustBuildMode=host`, or `-PrustBuildMode=skip` on the command line or in `gradle.properties`, or export `RUST_BUILD_MODE`.
 
 To build manually from a terminal:
 
@@ -191,7 +193,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 #### Build environment variables
 
-`scripts/build.sh` sets these for you; you only need them when running the Rust build by hand:
+`scripts/build-rust.sh` sets these for you; you only need them when running the Rust build by hand:
 
 | Variable                   | Purpose                                             | Default used by the script                                  |
 | -------------------------- | --------------------------------------------------- | ----------------------------------------------------------- |
@@ -225,6 +227,10 @@ Network protocol integration tests run against real SMB/HTTP/HTTPS/FTP/SFTP/WebD
 ```
 
 Anything that needs actual OpenXR rendering, controller haptics or hardware `MediaCodec` decode has **no automated coverage** and must be verified on a physical Quest 3. For the on-device debug HUD, forcing screen modes over adb and the optional Vulkan validation layers, see [`docs/DEBUGGING.md`](docs/DEBUGGING.md).
+
+# 📄 License
+
+Released under the [MIT License](LICENSE).
 
 # 🤝 Contributors
 

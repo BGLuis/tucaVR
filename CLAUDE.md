@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-tucaVR for Meta Quest 3 (Qualcomm XR2 Gen 2): a 2D/3D video player built as a fully immersive OpenXR app (`com.oculus.vr.mode = vr_only`, `NativeActivity`, no classic 2D Android UI). Architecture documentation lives in `docs/ARCHITECTURE.md`; requirements/spec lives in `docs/REQUIREMENTS.md`; phase breakdown with task IDs (`T1.1`, `T6.3`, etc.) is in `docs/phases/PHASE-0.*.md`. The codebase is migrating entirely to English: documentation in `docs/`, code comments, PRs, and commit messages are written in English.
+tucaVR for Meta Quest 3 (Qualcomm XR2 Gen 2): a 2D/3D video player built as a fully immersive OpenXR app (`com.oculus.vr.mode = vr_only`, `NativeActivity`, no classic 2D Android UI). Architecture documentation lives in `docs/ARCHITECTURE.md`; requirements/spec lives in `docs/REQUIREMENTS.md`; phase breakdown with task IDs (`T1.1`, `T6.3`, etc.) is in `docs/phases/PHASE-0.*.md`. Everything is written in English: documentation in `docs/`, code and script comments, PRs, and commit messages. The only exceptions are `README.pt-BR.md` (a translation of `README.md`) and the localized UI strings in `app/src/main/res/values-*/`.
 
 ## Three-language architecture — know which layer you're in
 
@@ -12,7 +12,7 @@ tucaVR for Meta Quest 3 (Qualcomm XR2 Gen 2): a 2D/3D video player built as a fu
 Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocols/audio/media-logic)
 ```
 
-- **Kotlin** (`app/src/main/java/com/tucavr/`): Android app shell, UI (drawn as plain Android `View`s inside `android.app.Presentation` on a `VirtualDisplay`, projected as textures onto 3D quads by C++ — **not** XML layouts, **not** Compose), network credential storage, Room-based playback history, i18n resources.
+- **Kotlin** (`app/src/main/java/com/tucavr/`): Android app shell, UI (drawn inside `android.app.Presentation`s on `VirtualDisplay`s, projected as textures onto 3D quads by C++: plain Android `View`s for the main panels, Jetpack Compose + GeckoView for the in-app web browser panel — **not** XML layouts), network credential storage, Room-based playback history, i18n resources.
 - **C++** (`native/src/`, built via CMake, `native/CMakeLists.txt`): OpenXR session/swapchain/render loop, controller input, zero-copy import of decoded `AHardwareBuffer` frames. Two graphics back-ends, chosen at build time:
   - **Vulkan** (`vr_player_app_vulkan.cpp` + `vr_player_jni_vulkan.cpp`) is what every default build compiles: `app/build.gradle.kts` passes `-DVRPLAYER_GRAPHICS_API=VULKAN` unless `-PvrplayerGraphicsApi=GLES` is given, overriding the `GLES` default in `native/CMakeLists.txt`. Frames are imported via `VkSamplerYcbcrConversion`; this path does not link OVRFW.
   - **GLES** (`vr_player_app.cpp`, Meta's `SampleXrFramework`/OVRFW from `sdk/meta-openxr-sdk/`, frames via `eglCreateImageKHR` -> `GL_TEXTURE_EXTERNAL_OES`) stays compilable as a fallback until headset validation of the Vulkan cut (`docs/VULKAN-MIGRATION-PLAN.md`, Stage 6), but is frozen: rendering work goes into the Vulkan path only, with no mirroring into GLES.
@@ -37,7 +37,7 @@ One-time setup after cloning (downloads `ffmpeg-android-maker` and the latest pu
 ./scripts/setup-deps.sh
 ```
 
-Full unified build (Rust cross-compile -> copy `.so`s into `jniLibs` -> Gradle):
+Full unified build (`scripts/build.sh` runs Gradle, whose `buildRust` task calls `scripts/build-rust.sh` to cross-compile Rust and copy the `.so`s into `jniLibs`):
 ```bash
 ./scripts/build.sh
 # or
@@ -115,12 +115,14 @@ Android Lint's `HardcodedText` only checks XML, so `UiSourceGuardsTest` (in `tes
 
 ## CI (`.github/workflows/main.yml`)
 
-The CI workflow runs 4 parallel check jobs:
-1. `security-and-workflows`: `actionlint` (workflow lint), `cargo-deny` (Rust licenses and advisories), `gitleaks` (secret scan).
+The CI workflow (`tucaVR CI`) runs these parallel jobs. On pull requests a `changes` job path-filters them (Rust, C++, Android, APK, docs); pushes and manual runs run everything:
+1. `security-and-workflows`: `actionlint` (workflow lint), `cargo-deny` (`check licenses bans sources`), `gitleaks` (secret scan, non-blocking: `continue-on-error`).
 2. `rust-checks`: `cargo fmt --check`, `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings`, `cargo test -p protocols -p media-logic`.
 3. `cpp-checks`: `clang-format --dry-run -Werror`, `./scripts/check-shaders.sh`, `ENABLE_ASAN=1 ./scripts/test-native-host.sh`.
 4. `android-checks`: `./gradlew ktlintCheck`, `./gradlew :app:lintDebug`, `./gradlew testDebugUnitTest`.
+5. `markdown-checks`: `markdownlint-cli2` (config in `.markdownlint-cli2.jsonc`).
+6. `ci-gate`: the single check branch protection needs; it fails if any job failed and treats path-filter skips as success.
 
-`build-apk` (runs on `BGLuis/vr-multmidia` or `BGLuis/tucaVR` when SDK PAT is present) depends on all 4 check jobs passing, executes the real native/C++ + Rust + Gradle build, and uploads `VR-Player-APK-<ref>` as an artifact. Both native (CMake/NDK) and Rust (`cargo ndk`) compiles are wrapped with `hendrikmuhs/ccache-action` and `mozilla-actions/sccache-action` respectively to avoid full rebuilds from scratch on every run — see the `ccachePath` detection in `app/build.gradle.kts` (only activates when `ccache` is on `PATH`, so local dev builds are unaffected).
+`build-apk` (runs only on `BGLuis/vr-multmidia` or `BGLuis/tucaVR`, when the APK path filter matches) depends on `changes` and the four check jobs above not failing, executes the real native/C++ + Rust + Gradle build, and uploads `VR-Player-APK-<ref>-<run_id>` as an artifact. Both native (CMake/NDK) and Rust (`cargo ndk`) compiles are wrapped with `hendrikmuhs/ccache-action` and `mozilla-actions/sccache-action` respectively to avoid full rebuilds from scratch on every run — see the `ccachePath` detection in `app/build.gradle.kts` (only activates when `ccache` is on `PATH`, so local dev builds are unaffected).
 
-`.github/workflows/release.yml` reuses the CI build instead of compiling the APK itself: it triggers via `workflow_run` after `tucaVR CI` succeeds, looks up that CI run's `VR-Player-APK-main` artifact for the exact commit (`locate-artifact` job, via `gh api .../actions/runs?head_sha=...`) and publishes that. If no matching CI run is found (e.g. releasing an old tag whose artifact expired), it transparently falls back to the full build steps — same job, steps gated by `steps.reuse.outcome != 'success'`.
+`.github/workflows/release.yml` reuses the CI build instead of compiling the APK itself: it triggers via `workflow_run` after `tucaVR CI` succeeds, looks up that CI run's `VR-Player-APK-*` artifact for the exact commit (`locate-artifact` job, via `gh api .../actions/runs?head_sha=...`) and publishes that. If no matching CI run is found (e.g. releasing an old tag whose artifact expired), it transparently falls back to the full build steps — same job, steps gated by `steps.reuse.outcome != 'success'`.
