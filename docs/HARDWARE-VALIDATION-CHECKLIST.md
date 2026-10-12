@@ -19,9 +19,9 @@ Before and during any validation session on physical hardware, use the following
    Extracts both eye framebuffers (`.left.ppm` and `.right.ppm`) directly from the OpenXR swapchain into `captures/` on the host PC (see `docs/DEBUGGING.md` §8).
 
 2. **Performance HUD & Telemetry ("Stats for Nerds"):**
-   - Enable via **Settings > Advanced > Technical Statistics** or ADB toggle `DEBUG_STATS_PANEL`.
+   - Enable via **Settings > Advanced > Technical Statistics** (the `FeatureFlags.Flag.DEBUG_STATS_PANEL` toggle; there is no ADB broadcast for it).
    - Real-time readouts exported by `native/src/debug_stats.h`:
-     - `smoothed_gpu_time_ms` (target: $\le 11.5\text{ ms}$ at 72 Hz, $\le 9.5\text{ ms}$ at 90 Hz)
+     - `smoothed_gpu_time_ms` (target: the `QualityController` budget, `frame_interval × 0.85`: $\le 11.8\text{ ms}$ at 72 Hz, $\le 9.4\text{ ms}$ at 90 Hz)
      - `draw_call_count`
      - `video_fps`, `output_fps`, `decoded_fps`
      - `stutter_count`, `freeze_count`
@@ -37,7 +37,7 @@ Before and during any validation session on physical hardware, use the following
 
 ## Block 1: Foveated Rendering (`XR_FB_foveation`) — Sub-issue #41
 
-Validates fixed foveated rendering via the Vulkan pipeline (`vr_player_app_vulkan.cpp::ApplyFoveation`) to decide whether `FeatureFlags.FOVEATED_RENDERING` should default to `true`.
+Validates fixed foveated rendering via the Vulkan pipeline (`vr_player_app_vulkan.cpp::ApplyFoveation`) to decide whether `FeatureFlags.Flag.FOVEATED_RENDERING` should default to `true`.
 
 ### Session Metadata
 - **Date:** 
@@ -66,7 +66,7 @@ Validates fixed foveated rendering via the Vulkan pipeline (`vr_player_app_vulka
 ### Results & Metrics
 - `Off`  GPU Time: _____ ms | FPS: _____
 - `Low`  GPU Time: _____ ms | FPS: _____
-- `Med`  GPU Time: _____ ms | GPU Time: _____ ms
+- `Med`  GPU Time: _____ ms | FPS: _____
 - `High` GPU Time: _____ ms | FPS: _____
 - `Auto` GPU Time: _____ ms | FPS: _____
 - **Status:** [ ] PASSED | [ ] FAILED (Issue: #_____)
@@ -76,7 +76,7 @@ Validates fixed foveated rendering via the Vulkan pipeline (`vr_player_app_vulka
 
 ## Block 2: Passthrough, Chroma Key & Packed Alpha — Sub-issue #42
 
-Validates `XR_FB_passthrough`, background keying, and packed transparency to decide defaults for `FeatureFlags.PASSTHROUGH` and `FeatureFlags.CHROMA_KEY`.
+Validates `XR_FB_passthrough`, background keying, and packed transparency to decide defaults for `FeatureFlags.Flag.PASSTHROUGH` and `FeatureFlags.Flag.CHROMA_KEY`.
 
 ### Session Metadata
 - **Date:** 
@@ -146,7 +146,7 @@ Validates spatial soundfield stability and binaural rendering over extended sess
 
 ## Block 4: Ambient Mode (Reactive Lighting Halo) — Sub-issue #44
 
-Validates the bias lighting halo in the Void environment (`vr_player_app_vulkan.cpp::shouldDrawAmbientHalo`) to evaluate GPU overhead and determine the default for `FeatureFlags.AMBIENT_MODE`.
+Validates the bias lighting halo in the Void environment (the halo gating in `vr_player_input_vulkan.h`, which draws it only when `get_ambient_mode_enabled()` is set) to evaluate GPU overhead and determine the default for `FeatureFlags.Flag.AMBIENT_MODE`.
 
 ### Session Metadata
 - **Date:** 
@@ -165,7 +165,7 @@ Validates the bias lighting halo in the Void environment (`vr_player_app_vulkan.
 
 ### Objective Pass Criteria
 1. **Dynamic Color Latency:**
-   - Halo color updates within $\le 2$ presentation frames ($< 30\text{ ms}$) following scene color changes without noticeable flicker.
+   - The halo color converges to the new scene color within the implemented smoothing time (`kAmbientColorSmoothSeconds` = 0.6 s, sampled every `kAmbientDecimationFrames` = 3rd frame, `vr_player_ambient.h`) following scene color changes, without noticeable flicker.
 2. **Draw Call & GPU Overhead:**
    - Draw call count increase is $\le 2$ draw calls per eye with halo enabled.
    - `smoothed_gpu_time_ms` delta between halo ON and halo OFF is $< 0.8\text{ ms}$.
@@ -227,24 +227,24 @@ Validates stereoscopic spherical projections, HDR tonemapping, Meta Quest Super 
 ### Debug Switch & Setup
 - **Projection ADB Overrides (`docs/DEBUGGING.md` §2):**
   ```bash
-  # Fisheye 180 (mode 6 or 9), Cubemap, EAC
+  # Sphere180 (mode 6), Vr180SBS (9), Cubemap/EAC (10-14), Fisheye190 (15-16)
   adb shell am broadcast -a com.tucavr.debug.SET_SCREEN_MODE --ei mode 6
   adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id space
   ```
 - **Test Assets:**
   - 1 HDR10 (BT.2020 PQ) 4K clip.
-  - 1 Fisheye 180 stereoscopic clip.
+  - 1 stereoscopic 180° (VR180 SBS) clip and, if available, 1 Fisheye190 clip.
   - 1 Equirectangular / Cubemap / EAC clip.
 
 ### Objective Pass Criteria
 1. **HDR10 Playback:**
    - Plays without colorspace clipping, crushing, or pipeline crashes; luminance levels map appropriately without blown highlights.
 2. **Projection Geometry:**
-   - Fisheye 180, Cubemap, and EAC render straight lines without distortion or seam tears at texture boundaries.
+   - VR180, Fisheye190, Cubemap, and EAC render straight lines without distortion or seam tears at texture boundaries.
 3. **MQSR Upscaling:**
    - Toggling MQSR produces measurable edge contrast enhancement on text and video without dropping framerate below 72 FPS.
 4. **Space Environment Performance:**
-   - `space/model.glb` + skybox maintains $\ge 72\text{ FPS}$ sustained over $n \ge 3$ runs both idle and during 4K video playback (`smoothed_gpu_time_ms} \le 11.5\text{ ms}$).
+   - `space/model.glb` + skybox maintains $\ge 72\text{ FPS}$ sustained over $n \ge 3$ runs both idle and during 4K video playback ($\texttt{smoothed\_gpu\_time\_ms} \le 11.8\text{ ms}$ at 72 Hz).
 
 ### Results & Metrics
 - **HDR10 Render Status:** [ ] Clean color grading | [ ] Washed out / crashed
@@ -283,7 +283,7 @@ Executes the measurement protocol for 4× MSAA on geometry pipelines (`vr_player
    - Test prototype with 4× MSAA transient attachments and `pResolveAttachments`.
    - Check logcat: zero `VUID-VkGraphicsPipelineCreateInfo-multisampledRenderToSingleSampled-06853` errors.
 3. **Decision Threshold (T3.2 / T3.3):**
-   - If 4× MSAA maintains $\ge 72\text{ FPS}$ with `smoothed_gpu_time_ms} \le 11.5\text{ ms}$: merge 4× MSAA.
+   - If 4× MSAA maintains $\ge 72\text{ FPS}$ with $\texttt{smoothed\_gpu\_time\_ms} \le 11.8\text{ ms}$ (72 Hz budget): merge 4× MSAA.
    - If cost exceeds budget: record exact measured timings in `docs/VULKAN-MIGRATION-PLAN.md` with rationale.
 
 ### Results & Metrics
