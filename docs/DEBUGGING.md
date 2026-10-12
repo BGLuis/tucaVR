@@ -1,323 +1,360 @@
-# Ferramentas de Debug de Vídeo
+# Video Debugging Tools
 
-> Contexto: depurar os modos SBS/OU/360/180 exigia reproduzir um arquivo real
-> naquele formato, ler logcat sem filtro nenhum, e adivinhar que estado
-> interno (`ScreenMode`, `stereoLayout`, `polar180`, `swapEyes`) o app achava
-> que estava ativo — e não havia nenhum dado de performance (FPS, frames
-> lentos, travamentos) pra saber se um problema era de renderização ou de
-> desempenho. Este documento registra as ferramentas adicionadas pra isso:
-> logging de transição e performance, um jeito de forçar qualquer modo via
-> adb sem precisar do arquivo real naquele formato, um HUD na própria cena
-> mostrando o estado atual mais FPS/stutter/freeze, e suporte opcional a
-> Vulkan validation layers.
-> As ferramentas interativas (seções 2 e 3 — broadcast de debug e HUD na
-> cena) só existem em build debuggable. O logging (seções 1 e a parte de
-> FPS/stutter/freeze da seção 3) roda sempre, os dois caminhos, independente
-> de build type — são só `__android_log_print`, mesmo custo de qualquer log
-> já existente no projeto.
+> Context: debugging the SBS/OU/360/180 modes used to require playing a real
+> file in that format, reading unfiltered logcat, and guessing which internal
+> state (`ScreenMode`, `stereoLayout`, `polar180`, `swapEyes`) the app believed
+> was active — and there was no performance data (FPS, slow frames, freezes) to
+> tell whether a problem was one of rendering or of performance. This document
+> records the tools added for that: transition and performance logging, a way to
+> force any mode over adb without needing the real file in that format, a
+> technical-stats modal showing the current state plus FPS/stutter/freeze, and
+> optional Vulkan validation layer support.
+> The interactive tools (the debug broadcasts in section 2) only exist in
+> debuggable builds. The logging (section 1 and the FPS/stutter/freeze part of
+> section 3) always runs, on both paths, regardless of build type — it is just
+> `__android_log_print`, with the same cost as any log already in the project.
+> The log messages quoted below are emitted verbatim by the native code, which
+> still writes some of them in Portuguese; match on them as written.
 
-## 1. Logging de transição e performance (sempre ativo, os dois caminhos)
+## 1. Transition and Performance Logging (always on, both paths)
 
-Toda troca de `ScreenMode`, toda transição "sem frame de vídeo" ↔ "frame
-ativo", e todo frame anormalmente lento (stutter/freeze, ver seção 3) loga
-uma linha, em vez de silêncio total ou spam a cada frame:
+Every `ScreenMode` change, every "no video frame" ↔ "active frame" transition,
+and every abnormally slow frame (stutter/freeze, see section 3) logs one line,
+instead of total silence or per-frame spam:
 
 ```bash
-# Vulkan (caminho padrao)
+# Vulkan (default path)
 adb logcat -s VRPlayerAppVK:I VRPlayerAppVK:W VRPlayerAppVK:E
 
 # GLES (-PvrplayerGraphicsApi=GLES)
 adb logcat -s VRPlayerApp:I VRPlayerApp:W VRPlayerApp:E
 ```
 
-Procure por:
-- `ScreenMode -> <nome> (stereoLayout=... polar180=... swapEyes=...)` — toda
-  vez que o modo muda (botão 3D na UI, `nativeSetScreenMode`, ou o broadcast
-  de debug abaixo).
-- `video comecou a produzir frames` / `video parou de produzir frames` (ou
-  `sem frame disponivel, usando fallback quad solido` no Vulkan) — indica se
-  o problema é decode/rede (nunca chega a "comecou") ou renderização (chega,
-  mas nada aparece na tela).
-- `stutter — frame levou X.Xms` (WARN) / `FREEZE detectado — frame levou
-  Xms` (ERROR) — loop de render. `video sem frame novo ha Xms` (WARN) —
-  vídeo parado por muito tempo. `video judder — frame ficou Xms na tela
-  (media recente Yms)` (WARN) — cadência irregular do vídeo mesmo sem
-  parar. Os três últimos são do vídeo em si (decode/rede), diferente do
-  render. Ver seção 3 pros thresholds e a diferença entre eles.
-- `GetOrImportVideoFrame falhou` (só Vulkan) — falha ao importar o
-  `AHardwareBuffer` decodificado como `VkImage` (ver Estágio 3 em
+Look for:
+
+- `ScreenMode -> <name> (stereoLayout=... polar180=... swapEyes=...)` — every
+  time the mode changes (3D button in the UI, `nativeSetScreenMode`, or the
+  debug broadcast below).
+- `Video: comecou a produzir frames (1o AHardwareBuffer recebido)` ("started
+  producing frames") and `Video: sem frame disponivel, mantendo ultimo frame na
+  tela ate a proxima sessao produzir um novo` ("no frame available, keeping the
+  last frame on screen until the next session produces a new one") on Vulkan
+  (the GLES path logs `video comecou a produzir frames` / `video parou de
+  produzir frames`) — tells you whether the problem is decode/network (it never
+  reaches "started") or rendering (it does, but nothing shows up on screen).
+- `Video: stutter — frame levou X.Xms` (WARN) / `Video: FREEZE detectado —
+  frame levou Xms` (ERROR) — render loop. `Video: sem frame novo ha Xms
+  (decode/rede travado)` (WARN) — video stalled for a long time. `Video:
+  judder — frame ficou Xms na tela (media recente Yms)` (WARN) — irregular
+  video cadence even without stopping. The last two are about the video itself
+  (decode/network), unlike the render-loop ones. See section 3 for the
+  thresholds and the difference between them.
+- `GetOrImportVideoFrame falhou` (Vulkan only) — failure to import the decoded
+  `AHardwareBuffer` as a `VkImage` (see Stage 3 in
   `docs/VULKAN-MIGRATION-PLAN.md`).
 
-## 2. Forçar um ScreenMode via adb (só em build debuggable)
+## 2. Forcing a ScreenMode via adb (debuggable builds only)
 
-Útil pra testar todos os modos (SBS, OU, 360, 180, Vr180SBS) **no mesmo
-arquivo já carregado**, sem precisar de um arquivo real gravado naquele
-formato específico:
+Useful for testing every mode (SBS, OU, 360, 180, Vr180SBS, cubemaps, fisheye)
+**on the same already-loaded file**, without needing a real file recorded in
+that specific format:
 
 ```bash
 adb shell am broadcast -a com.tucavr.debug.SET_SCREEN_MODE --ei mode 6
 adb shell am broadcast -a com.tucavr.debug.CYCLE_SCREEN_MODE
 ```
 
-Índice de `mode` (precisa bater com `enum class ScreenMode` em
-`vr_player_app.cpp`/`vr_player_app_vulkan.cpp` e a codificação em
-`rust/bridge/src/lib.rs::cycle_3d_mode` — os três lugares mudam juntos):
+The `mode` index must match `enum class ScreenMode` in
+`native/include/screen_mode.h`. The four places that encode it (the
+`SCREEN_MODE` comments and `SCREEN_MODE_COUNT` in `rust/bridge/src/lib.rs`,
+`screen_mode.h`, `ScreenFormatCatalog.kt` and
+`Format3D::to_screen_mode_index` in `rust/media-logic/src/format3d.rs`) change
+together. `CYCLE_SCREEN_MODE` advances to `(current + 1) % SCREEN_MODE_COUNT`
+(`cycle_3d_mode` in `rust/bridge/src/lib.rs`).
 
-| mode | Nome | | mode | Nome |
+| mode | Name | | mode | Name |
 |---|---|---|---|---|
-| 0 | Flat2D | | 5 | Sphere360 |
-| 1 | SBS | | 6 | Sphere180 |
-| 2 | SBSHalf | | 7 | Sphere360SBS |
-| 3 | OU | | 8 | Sphere360OU |
-| 4 | OUHalf | | 9 | Vr180SBS |
+| 0 | Flat2D | | 9 | Vr180SBS |
+| 1 | SBS | | 10 | Cubemap3x2 |
+| 2 | SBSHalf | | 11 | Cubemap6x1 |
+| 3 | OU | | 12 | EAC3x2 |
+| 4 | OUHalf | | 13 | Cubemap3x2SBS |
+| 5 | Sphere360 | | 14 | EAC3x2SBS |
+| 6 | Sphere180 | | 15 | Fisheye190 |
+| 7 | Sphere360SBS | | 16 | Fisheye190SBS |
+| 8 | Sphere360OU | | | |
 
-Existe também um mecanismo mais antigo pra **lançar** o app já num modo
-específico com um arquivo (soak test, ver `scripts/soak-test.sh`):
+There is also an older mechanism to **launch** the app already in a specific
+mode with a file (soak test, see `scripts/soak-test.sh`):
 
 ```bash
 adb shell am start -n com.tucavr/.VRActivity \
-  -e video_path /sdcard/Movies/teste_8k_180.mp4 --ei screen_mode 9
+  -e video_path /sdcard/Movies/test_8k_180.mp4 --ei screen_mode 9
 ```
 
-Diferença: este último só dispara ~3s depois do cold start (delay
-heurístico, ver `AUTO_PLAY_DELAY_MS`) e só uma vez por processo; o broadcast
-acima funciona a qualquer momento, com o player já rodando.
+Difference: the latter only fires ~3s after cold start (a heuristic delay, see
+`AUTO_PLAY_DELAY_MS`) and only once per process; the broadcast above works at
+any time, with the player already running.
 
-O receiver só é registrado se `ApplicationInfo.FLAG_DEBUGGABLE` estiver
-setada (verdadeiro pro build `debug` do Gradle por padrão) — nunca existe
-num APK de release, então não é uma superfície de ataque nesse caso.
+The receiver is only registered if `ApplicationInfo.FLAG_DEBUGGABLE` is set
+(true for Gradle's `debug` build by default) — it never exists in a release
+APK, so it is not an attack surface in that case.
 
-### Trocar Ambiente Virtual via ADB (build debuggable)
+### Other debug broadcasts (debuggable builds)
 
-Permite trocar o ambiente 3D (e reancorar a tela virtual) a qualquer momento:
+| Action | Extras | Effect |
+|---|---|---|
+| `com.tucavr.debug.SET_THERMAL_STATUS` | `--ei status <int>` | Simulates a thermal status in `ThermalMonitor`. |
+| `com.tucavr.debug.SET_CAMERA_OFFSET` | `--ef yaw`, `pitch`, `x`, `y`, `z` | Offsets the debug camera (`nativeSetDebugCameraOffset`). |
+| `com.tucavr.debug.PLAY_SFTP` | `--es host`, `--ei port` (default 22), `--es path`, `--es user`, `--es password` | Starts SFTP playback without navigating the UI or wearing the headset (reproduces network-stall scenarios in an automated, repeatable way). |
+
+### Switching the Virtual Environment via ADB (debuggable builds)
+
+Lets you switch the 3D environment (and re-anchor the virtual screen) at any time:
 
 ```bash
-# cinema, living_room, space, void ou passthrough
+# cinema, living_room, space, void or passthrough
 adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id cinema
 adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id living_room
 adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id space
 adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id void
 ```
 
-### Visualização e Espelhamento na Tela do PC
+### Viewing and Mirroring on the PC Screen
 
-O projeto inclui três utilitários para visualizar o aplicativo e inspecionar os ambientes 3D diretamente no computador:
+The project includes three utilities to view the app and inspect the 3D environments directly on the computer:
 
-1. **Visualizador 3D Desktop/Web (100% Offline / Sem Headset):**
-   Abre um visualizador WebGL (Three.js) interativo no navegador do PC para inspecionar os ambientes 3D, navegar em primeira pessoa (WASD + mouse), testar a tela virtual ancorada e o áudio ambiente:
+1. **Desktop/Web 3D Viewer (100% Offline / No Headset):**
+   Opens an interactive WebGL (Three.js) viewer in the PC browser to inspect the 3D environments, walk around in first person (WASD + mouse), and test the anchored virtual screen and ambient audio:
+
    ```bash
    ./scripts/preview-environment.py
    ```
 
-2. **Espelhamento em Tempo Real via USB (com o Quest 3):**
-   Utiliza o `scrcpy` com parâmetros otimizados para o Quest 3 (recorte do olho direito, 90 FPS e baixa latência de ~20ms):
+2. **Real-Time Mirroring over USB (with the Quest 3):**
+   Uses `scrcpy` with parameters tuned for the Quest 3 (right-eye crop, 90 FPS and ~20ms low latency):
+
    ```bash
    ./scripts/quest-mirror.sh
-   # Opções: --right-eye (padrão), --left-eye, --full (ambos os olhos)
+   # Options: --right-eye (default), --left-eye, --full (both eyes)
    ```
 
-3. **Captura Instantânea de Frame Vulkan via ADB:**
-   Dispara a captura de framebuffer direto do motor gráfico do Quest 3, transfere para a pasta `captures/` do PC em PNG e abre no visualizador de imagens:
+3. **Instant Vulkan Frame Capture via ADB:**
+   Triggers a framebuffer capture straight from the Quest 3's graphics engine, transfers it to the PC's `captures/` folder as PNG and opens it in the image viewer:
+
    ```bash
    ./scripts/capture-screen.sh
-   # Ou via broadcast manual:
+   # Or via a manual broadcast:
    adb shell am broadcast -a com.tucavr.debug.CAPTURE_FRAME --es capture_path /sdcard/vr-frame-capture.ppm
    ```
 
+## 3. Technical Stats Modal ("Stats for Nerds")
 
+The app has a complete real-time diagnostics modal ("Stats for Nerds"), reachable through the stats button in the player's controls bar when enabled in **Settings > Advanced > Technical Stats**. This section documents the unified diagnostics architecture (phases F0–F8): a single field contract, per-group freshness, stage attribution, 5 charts and an event log.
 
-## 3. Modal de Estatísticas Técnicas ("Stats for Nerds")
+### Activation and Zero Overhead
 
-O app possui um modal completo de diagnóstico em tempo real ("Stats for Nerds"), acessível através do botão de estatísticas na barra de controles do player quando ativado em **Configurações > Avançado > Estatísticas Técnicas**. Esta seção documenta a arquitetura de diagnóstico unificada (fases F0–F8): contrato único de campos, frescor por grupo, atribuição de estágio, 5 gráficos e log de eventos.
+- **Settings**: the `DEBUG_STATS_PANEL` toggle persists the user's preference and instantly notifies the native engine through JNI (`nativeSetDebugStatsEnabled`). It is a Settings toggle (a `FeatureFlags.Flag`), not an adb broadcast, and it is available in release builds too.
+- **Zero Overhead**: when disabled, the native engine (C++/Rust) early-exits on an atomic flag (`g_debugStatsEnabled`), eliminating periodic JNI calls, string allocations and metric collection in the render loop.
 
-### Ativação e Zero Overhead
-- **Configurações**: O toggle `DEBUG_STATS_PANEL` persiste a preferência do usuário e notifica instantaneamente o motor nativo via JNI (`nativeSetDebugStatsEnabled`).
-- **Zero Overhead**: Quando desativado, o motor nativo (C++/Rust) realiza early-exit com flag atômica (`g_debugStatsEnabled`), eliminando chamadas JNI periódicas, alocações de string e coletas de métricas no loop de render.
+### Single Field Contract (F0)
 
-### Contrato único de campos (F0)
+Each wire field has exactly **2** definition points — no more:
 
-Cada campo do wire tem exatamente **2** pontos de definição — não mais:
-1. **`native/src/debug_stats.h`** (`struct DebugStats` + `SerializeDebugStats`) — dono da forma do wire TSV (`chave\tvalor`), populado em `native/src/vr_player_input_vulkan.h` (caminho Vulkan; o caminho GLES em `vr_player_app.cpp` não recebe campos novos — ver "O que não fazer" abaixo).
-2. **`app/.../debug/DebugStats.kt`** (`DebugStatsParser`) — único parser do TSV; `NativeDebugStats` é a representação estruturada usada por `DebugTelemetryExporter` (CSV) e `DebugStatsModal` (UI). Não existe mais um segundo `when(key)` reimplementando o parsing no exportador.
+1. **`native/src/debug_stats.h`** (`struct DebugStats` + `SerializeDebugStats`) — owns the shape of the TSV wire format (`key\tvalue`), populated in `native/src/vr_player_input_vulkan.h` (Vulkan path; the GLES path in `vr_player_app.cpp` gets no new fields — see "What not to do" below).
+2. **`app/.../debug/DebugStats.kt`** (`DebugStatsParser`) — the only TSV parser; `NativeDebugStats` is the structured representation used by `DebugTelemetryExporter` (CSV) and `DebugStatsModal` (UI). There is no longer a second `when(key)` reimplementing the parsing in the exporter.
 
-Para adicionar um campo novo: uma entrada em `DebugStats` (native), uma linha em `SerializeDebugStats`, um campo em `NativeDebugStats` + um `when` em `DebugStatsParser`, e (se for para o CSV) uma posição em `CSV_HEADER` — bump o `SCHEMA_VERSION` sempre que a forma do CSV mudar (D-05).
+To add a new field: one entry in `DebugStats` (native), one line in `SerializeDebugStats`, one field in `NativeDebugStats` + a `when` branch in `DebugStatsParser`, and (if it goes to the CSV) a position in `CSV_HEADER` — bump `SCHEMA_VERSION` whenever the CSV shape changes (D-05).
 
-### Frescor por grupo (D-04)
+### Per-Group Freshness (D-04)
 
-Quatro campos (`video_stats_age_ms`, `network_stats_age_ms`, `audio_stats_age_ms`, `render_stats_age_ms`) dizem há quanto tempo o grupo correspondente não recebe um dado genuinamente novo — `render` é sempre 0 (computado a cada frame no próprio loop de render). No modal, um valor com idade acima de ~2 amostras (~200ms a 10Hz) aparece esmaecido com a idade ao lado, em vez de parecer uma leitura atual quando não é.
+Four fields (`video_stats_age_ms`, `network_stats_age_ms`, `audio_stats_age_ms`, `render_stats_age_ms`) say how long ago the corresponding group last received genuinely new data — `render` is always 0 (computed every frame in the render loop itself). In the modal, a value older than ~2 samples (~200ms at 10Hz) appears dimmed with the age next to it, instead of looking like a current reading when it is not.
 
-### Seções e Métricas Disponíveis
+### Available Sections and Metrics
 
-1. **Vídeo & Renderização** (`DebugStatsModal.kt`, seção `debug_stats_section_video_render`):
-   - **Estágio do Gargalo** (`bottleneck` — F5, primeira linha do painel): `NONE`/`NETWORK`/`PRESENTATION`, derivado de `frame_gap_ms` + `video_q_depth` (ver [`BottleneckStageAnalyzer`](../app/src/main/java/com/tucavr/debug/BottleneckStageAnalyzer.kt)) — responde "onde travou" sem reconstruir a leitura à mão.
-   - **Resolução / Codec**, **Decodificador de Vídeo**, **Modo de Tela / Estéreo**, **Backend Gráfico**: metadados estáticos da sessão.
-   - **Framerate / Display** e **Quadros Descartados**: `decoded_fps` / `output_fps` / `dropped_fps`, com idade do grupo vídeo.
-   - **Stutter / Freeze**: contadores cumulativos do **loop de render** (>20ms / >250ms) — não confundir com stall de vídeo (D-02, ver Log de Eventos abaixo), que mede a apresentação de frames de vídeo, não o loop.
-   - **Jitter de Vídeo**, **Escala de Resolução / Foveation**.
-   - **Tempo de GPU**, **Qualidade Adaptativa**, **Upscaling**, **Draw Calls / Triângulos** (F5 G5): 7 campos que já eram coletados e trafegavam no wire, mas nunca apareciam no modal antes de F5.
+1. **Video & Rendering** (`DebugStatsModal.kt`, section `debug_stats_section_video_render`):
+   - **Bottleneck Stage** (`bottleneck` — F5, first line of the panel): `NONE`/`NETWORK`/`PRESENTATION`, derived from `frame_gap_ms` + `video_q_depth` (see [`BottleneckStageAnalyzer`](../app/src/main/java/com/tucavr/debug/BottleneckStageAnalyzer.kt)) — answers "where did it stall" without reconstructing the reading by hand.
+   - **Resolution / Codec**, **Video Decoder**, **Screen / Stereo Mode**, **Graphics Backend**: static session metadata.
+   - **Framerate / Display** and **Dropped Frames**: `decoded_fps` / `output_fps` / `dropped_fps`, with the age of the video group.
+   - **Stutter / Freeze**: cumulative counters of the **render loop** (>20ms / >250ms) — not to be confused with a video stall (D-02, see Event Log below), which measures the presentation of video frames, not the loop.
+   - **Video Jitter**, **Resolution Scale / Foveation**.
+   - **GPU Time**, **Adaptive Quality**, **Upscaling**, **Draw Calls / Triangles** (F5 G5): 7 fields that were already collected and traveled on the wire, but never appeared in the modal before F5.
 
-2. **Áudio & Sincronização**: codec/canais, **Desvio A/V** (`av_drift_ms`, agora EMA — ver F4 abaixo), áudio espacial, faixa e legendas.
+2. **Audio & Sync**: codec/channels, **A/V Drift** (`av_drift_ms`, now an EMA — see F4 below), spatial audio, track and subtitles.
 
-3. **Rede & Buffer**: origem/protocolo, taxa de rede, fila de buffer, latência por bloco, blocos buscados/descartados, latência do último seek.
+3. **Network & Buffer**: source/protocol, network rate, buffer queue, per-block latency, blocks fetched/discarded, last seek latency.
 
-4. **Sistema & Hardware**: status térmico, bateria, versão do app.
+4. **System & Hardware**: thermal status, battery, app version.
 
-5. **Gráficos** (F5 — `debug_stats_section_charts`, primeiro `View` com `onDraw` customizado do projeto, ver [`VoidChart.kt`](../app/src/main/java/com/tucavr/designsystem/VoidChart.kt)):
+5. **Charts** (F5 — `debug_stats_section_charts`, the project's first `View` with a custom `onDraw`, see [`VoidChart.kt`](../app/src/main/java/com/tucavr/designsystem/VoidChart.kt)):
 
-   | # | Gráfico | Responde | Fonte |
+   | # | Chart | Answers | Source |
    |---|---|---|---|
-   | G1 | Estágio do pipeline (60s) | Faixas coloridas por `bottleneck_stage`, histórico rolante acumulado em `DebugStatsModal` a partir das amostras de ~10Hz — nenhum campo novo no wire. | Verde=saudável, azul=`NETWORK`, vermelho=`PRESENTATION`. |
-   | G2 | Histograma de frame time | 8 buckets cumulativos (`hist_bucket_0..7`, bordas em 11.1/16.7/20/33.3/50/100/250ms) acumulados a cada frame no loop de render — captura a distribuição a 90Hz sem transportar 90 amostras/s. | `native/src/vr_player_app_vulkan.cpp` (`kFrameTimeHistogramEdgesMs`). |
-   | G3 | Saúde do buffer (s) / Rede (MB/s) | `video_q_depth / video_fps` (derivado no cliente) sobreposto a `net_mbs` — paridade com o "segundos de buffer" de players convencionais; `queue_depth` em pacotes não dizia nada por si só. | Kotlin (`DebugStatsModal.updateCharts`). |
-   | G4 | Drift A/V (ms) | `av_drift_ms` com banda de referência ±40ms. | Wire (EMA, ver F4). |
-   | G5 | GPU time vs. orçamento (ms) | `smoothed_gpu_time_ms` contra a mesma fórmula de orçamento do `QualityController` (`frame_interval_ms × 0.85`, `rust/media-logic/src/quality.rs`). | Wire + fórmula espelhada no cliente. |
+   | G1 | Pipeline stage (60s) | Colored bands per `bottleneck_stage`, a rolling history accumulated in `DebugStatsModal` from the ~10Hz samples — no new wire field. | Green=healthy, blue=`NETWORK`, red=`PRESENTATION`. |
+   | G2 | Frame time histogram | 8 cumulative buckets (`hist_bucket_0..7`, edges at 11.1/16.7/20/33.3/50/100/250ms) accumulated every frame in the render loop — captures the distribution at 90Hz without transporting 90 samples/s. | `native/src/vr_player_app_vulkan.cpp` (`kFrameTimeHistogramEdgesMs`). |
+   | G3 | Buffer health (s) / Network (MB/s) | `video_q_depth / video_fps` (derived on the client) overlaid on `net_mbs` — parity with the "seconds of buffer" of conventional players; `queue_depth` in packets said nothing by itself. | Kotlin (`DebugStatsModal.updateCharts`). |
+   | G4 | A/V Drift (ms) | `av_drift_ms` with a ±40ms reference band. | Wire (EMA, see F4). |
+   | G5 | GPU time vs. budget (ms) | `smoothed_gpu_time_ms` against the same budget formula as the `QualityController` (`frame_interval_ms × 0.85`, `rust/media-logic/src/quality.rs`). | Wire + formula mirrored on the client. |
 
-   Reprodutível offline (sem headset) a partir de qualquer CSV coletado: `scripts/plot-session.py` gera os mesmos 5 gráficos no PC (ver seção 6).
+   Reproducible offline (no headset) from any collected CSV: `scripts/plot-session.py` generates the same 5 charts on the PC (see section 6).
 
-### Log de Eventos (F6)
+### Event Log (F6)
 
-Além da série a 1Hz do CSV (que não vê um stutter de 20ms — são 90 frames por amostra), cada sessão grava `session-<id>-events.log` em paralelo ao CSV, com uma linha por episódio: `STUTTER`, `FREEZE`, `VIDEO_STALL_ENDED` (D-02 — duração aproximada pelo pico de `frame_gap_ms` da amostra anterior ao fim do stall) e `QUALITY_TRANSITION` (nível anterior/novo + motivo), cada um com o `bottleneck_stage` e um snapshot do pipeline (`frame_ms`, `gpu_ms`, `queue`, `net_mbs`, `drift_ms`, `quality`, `scale`) no momento detectado. Lógica pura e testável em [`DebugEventLog.kt`](../app/src/main/java/com/tucavr/debug/DebugEventLog.kt) (`detectEvents`/`formatEventLine`); a escrita em arquivo fica em `DebugEventLogWriter`, acionado do mesmo `updateDebugHud` que já alimenta o CSV.
+Besides the CSV's 1Hz series (which cannot see a 20ms stutter — that is 90 frames per sample), each session writes `session-<id>-events.log` alongside the CSV, with one line per episode: `STUTTER`, `FREEZE`, `VIDEO_STALL_ENDED` (D-02 — duration approximated by the peak `frame_gap_ms` of the sample before the stall ended) and `QUALITY_TRANSITION` (previous/new level + reason), each with the `bottleneck_stage` and a snapshot of the pipeline (`frame_ms`, `gpu_ms`, `queue`, `net_mbs`, `drift_ms`, `quality`, `scale`) at the moment of detection. Pure, testable logic lives in [`DebugEventLog.kt`](../app/src/main/java/com/tucavr/debug/DebugEventLog.kt) (`detectEvents`/`formatEventLine`); file writing is done by `DebugEventLogWriter`, driven from the same `updateDebugHud` that already feeds the CSV.
 
-### Fluxo de triagem recomendado
+### Recommended Triage Flow
 
-1. Cheque **Estágio do Gargalo** primeiro — se `NETWORK`/`PRESENTATION` aparecer com frequência, já aponta o lado certo do pipeline.
-2. Vá ao gráfico correspondente: G1 para ver quando/quanto tempo cada estágio dominou; G2 se a suspeita é uma cauda de frame time (não a média); G3/G4/G5 para os sinais clássicos de rede/sync/GPU.
-3. Consulte o log de eventos (`session-<id>-events.log`) para o snapshot exato do pipeline no início/fim de cada episódio — é o que permite reconstruir "o que estava acontecendo quando travou" sem grep manual no logcat.
+1. Check the **Bottleneck Stage** first — if `NETWORK`/`PRESENTATION` shows up often, it already points at the right side of the pipeline.
+2. Go to the matching chart: G1 to see when/for how long each stage dominated; G2 if the suspicion is a frame-time tail (not the average); G3/G4/G5 for the classic network/sync/GPU signals.
+3. Consult the event log (`session-<id>-events.log`) for the exact pipeline snapshot at the start/end of each episode — this is what lets you reconstruct "what was happening when it stalled" without manually grepping logcat.
 
-### O que não fazer (ver relatório, seção 2.6)
-- Não instrumentar o caminho GLES (`vr_player_app.cpp`) — backend congelado até 1.0, já falsifica `renderResolutionScale`/`displayRefreshRate` e não tem GPU timing.
-- Não portar o painel para C++ — já é Kotlin ponta a ponta, e o custo de composição do quad é o mesmo.
-- Não realimentar o `QualityController` com os contadores de `XR_META_performance_metrics` (seção 10) — a especificação Khronos proíbe isso explicitamente; são diagnóstico, nunca entrada de controle.
+### What Not to Do
 
-Implementação: `native/src/vr_player_app.cpp` / `vr_player_input_vulkan.h`
-chamam `VRActivity.updateDebugHud(texto)` via JNI no mesmo throttle que já
-existe pra `updateMediaProgress`; o texto é construído inteiramente do lado
-nativo (sem string de recurso/i18n — é diagnóstico técnico, não UI de
-produção). `VRActivity.isDebuggable` filtra antes de tocar a `View`; builds
-de release recebem a chamada mas ela é descartada sem custo.
+- Do not instrument the GLES path (`vr_player_app.cpp`) — the backend is frozen until 1.0, already fakes `renderResolutionScale`/`displayRefreshRate` and has no GPU timing.
+- Do not port the panel to C++ — it is already Kotlin end to end, and the quad compositing cost is the same.
+- Do not feed the `XR_META_performance_metrics` counters (section 10) back into the `QualityController` — the Khronos specification explicitly forbids it; they are diagnostics, never control input.
 
-## 4. Vulkan validation layers (opcional via build flag)
+Implementation: `native/src/vr_player_input_vulkan.h` calls
+`VRActivity.updateDebugHud(text)` through JNI at the same throttle that already
+exists for `updateMediaProgress`; the text is built entirely on the native side
+(no resource/i18n string — it is technical diagnostics, not production UI).
+When called, `updateDebugHud` feeds the CSV exporter and the event-log writer
+if a session is active; it only forwards the text to `modalPresentation.updateDebugStats`
+when `VRActivity.isDebugStatsEnabled` (the Settings toggle) is on. The modal is
+gated by that feature flag, not by `isDebuggable`.
 
-`CreateVulkanInstanceAndDevice` (`vr_player_app_vulkan.cpp`) checa em
-runtime (`vkEnumerateInstanceLayerProperties`) se `VK_LAYER_KHRONOS_validation`
-está disponível e, se estiver, habilita a layer + `VK_EXT_debug_utils` com um
-callback que loga pro logcat (`VkValidation: ...`, tag `VRPlayerAppVK`,
-níveis WARN/ERROR habilitados por padrão).
+## 4. Vulkan Validation Layers (optional via build flag)
 
-**Gating por flag de build:**
-A validation layer vem desabilitada por padrão tanto no código C++ quanto no empacotamento do APK. Para habilitá-la:
-1. Adicione o `.so` da layer em `app/src/main/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so`.
-2. Compile passando a flag Gradle `-PenableVulkanValidation=true`:
+`CreateVulkanInstanceAndDevice` (`vr_player_app_vulkan.cpp`) checks at runtime
+(`vkEnumerateInstanceLayerProperties`) whether `VK_LAYER_KHRONOS_validation` is
+available and, if it is, enables the layer + `VK_EXT_debug_utils` with a
+callback that logs to logcat (`VkValidation: ...`, tag `VRPlayerAppVK`,
+WARN/ERROR levels enabled by default).
+
+**Gating by build flag:**
+The validation layer is disabled by default both in the C++ code and in the APK packaging. To enable it:
+
+1. Add the layer's `.so` at `app/src/main/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so`.
+2. Build passing the Gradle flag `-PenableVulkanValidation=true`:
+
    ```bash
    ./gradlew assembleDebug -PenableVulkanValidation=true
    ```
-Sem essa flag, o Gradle exclui o `.so` do APK via `packaging.jniLibs.excludes` e o CMake não define `ENABLE_VK_VALIDATION_LAYERS`, garantindo que builds padrão e de produção não sofram sobrecarga de CPU/GPU nem interceptações no hot path de submissão de comandos e fences.
 
-**Obtendo o arquivo `.so` (não versionado):**
-`app/src/main/jniLibs/` está no `.gitignore`. Para reobter o binário arm64-v8a da layer:
-- Baixe uma release oficial de [`KhronosGroup/Vulkan-ValidationLayers`](https://github.com/KhronosGroup/Vulkan-ValidationLayers/releases) (asset Android, variante **arm64-v8a**) e copie para `app/src/main/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so`.
-- Ao compilar com `-PenableVulkanValidation=true`, o primeiro frame com a layer ativa exibirá no logcat: `Vulkan: VK_LAYER_KHRONOS_validation encontrada, habilitando`. Em builds comuns sem a flag, o log registrará: `Vulkan: Validation layers desabilitadas por configuracao de build`.
+Without this flag, Gradle excludes the `.so` from the APK through `packaging.jniLibs.excludes` and CMake does not define `ENABLE_VK_VALIDATION_LAYERS`, ensuring that default and production builds suffer no CPU/GPU overhead or interception on the hot path of command and fence submission.
 
-## 5. Session IDs e Rastreabilidade Multi-Camada (N1 e N6)
+**Obtaining the `.so` file (not versioned):**
+`app/src/main/jniLibs/` is in `.gitignore`. To get the layer's arm64-v8a binary again:
 
-Para rastrear o ciclo de vida completo de cada reprodução através das 3 linguagens do projeto (Kotlin $\rightarrow$ C++ $\rightarrow$ Rust), cada início de reprodução (`playFile`, `playUrl`, `playSmb`, etc.) gera um identificador de sessão pseudo-aleatório de 8 caracteres hexadecimais (ex: `a1b2c3d4`).
+- Download an official release of [`KhronosGroup/Vulkan-ValidationLayers`](https://github.com/KhronosGroup/Vulkan-ValidationLayers/releases) (Android asset, **arm64-v8a** variant) and copy it to `app/src/main/jniLibs/arm64-v8a/libVkLayer_khronos_validation.so`.
+- When building with `-PenableVulkanValidation=true`, the first frame with the layer active will show in logcat: `Vulkan: VK_LAYER_KHRONOS_validation encontrada, habilitando` ("found, enabling"). In regular builds without the flag, the log will record: `Vulkan: Validation layers desabilitadas por configuracao de build` ("disabled by build configuration").
 
-O Session ID é propagado imediatamente via JNI para o C++ e via C-ABI para a camada Rust. Todos os logs do sistema passam a incluir o prefixo `[s:<session_id>]`:
+## 5. Session IDs and Multi-Layer Traceability (N1 and N6)
 
-- **Kotlin (`VRPlayer_App`):** logs via `VRLog` (ex: `[s:a1b2c3d4] Iniciando sessao de reproducao...`).
-- **C++ (`VRPlayerApp` / `VRPlayerAppVK`):** macros `LOGI`, `LOGW`, `LOGE`.
-- **Rust (`VRPlayer_Rust`):** macros `log_info!`, `log_warn!`, `log_error!`, `log_debug!`.
+To trace the complete lifecycle of each playback across the project's 3 languages (Kotlin $\rightarrow$ C++ $\rightarrow$ Rust), every playback start (`playFile`, `playUrl`, `playSmb`, etc.) generates a pseudo-random session identifier of 8 hexadecimal characters (e.g. `a1b2c3d4`).
 
-### Histórico de Erros e Crash Reporter
-- **Rust Error Ring Buffer:** A bridge Rust mantém um buffer circular não destrutivo com capacidade para os últimos 16 erros (`ErrorRingBuffer`), preservando timestamp e session ID mesmo após consumo pelo Toast da UI.
-- **Crash Reporter:** Exceções não capturadas no Kotlin acionam o `UncaughtExceptionHandler`, gravando o stack trace e metadados da sessão em `/sdcard/Android/data/com.tucavr/files/debug/crash-<sessionId>-<timestamp>.txt`.
+The Session ID is immediately propagated through JNI to C++ and through the C-ABI to the Rust layer. All system logs then include the prefix `[s:<session_id>]`:
 
-## 6. Exportação de Séries Temporais de Telemetria em CSV (N2)
+- **Kotlin (`VRPlayer_App`):** logs through `VRLog` (e.g. `[s:a1b2c3d4] Iniciando sessao de reproducao...`, "starting playback session").
+- **C++ (`VRPlayerApp` / `VRPlayerAppVK`):** `LOGI`, `LOGW`, `LOGE` macros.
+- **Rust (`VRPlayer_Rust`):** `log_info!`, `log_warn!`, `log_error!`, `log_debug!` macros.
 
-O aplicativo suporta gravação periódica de métricas de desempenho em arquivos CSV para diagnóstico aprofundado sem necessidade de conexão USB em tempo real.
+### Error History and Crash Reporter
 
-### Ativação
-- Acesse **Configurações > Avançado > Exportar Telemetria de Debug (CSV)** ou ative via `FeatureFlags.Flag.DEBUG_STATS_EXPORT`.
-- Os arquivos são gravados em `/sdcard/Android/data/com.tucavr/files/debug/session-<sessionId>-<timestamp>.csv`.
+- **Rust Error Ring Buffer:** the Rust bridge keeps a non-destructive circular buffer with room for the last 16 errors (`ErrorRingBuffer`), preserving the timestamp and session ID even after being consumed by the UI Toast.
+- **Crash Reporter:** uncaught exceptions in Kotlin trigger the `UncaughtExceptionHandler`, writing the stack trace and session metadata to `/sdcard/Android/data/com.tucavr/files/debug/crash-<sessionId>-<timestamp>.txt`.
 
-### Formato do Arquivo CSV
+## 6. Telemetry Time-Series Export to CSV (N2)
 
-A 1ª coluna é sempre `schema_version` (D-05) — incrementada sempre que o formato muda de forma incompatível; ver `DebugTelemetryExporter.SCHEMA_VERSION` para o histórico de versões e o que cada uma adicionou. Cabeçalho completo (versão atual):
+The app supports periodically recording performance metrics to CSV files for in-depth diagnostics without needing a real-time USB connection.
+
+### Activation
+
+- Go to **Settings > Advanced > Export Debug Telemetry (CSV)** or enable it via `FeatureFlags.Flag.DEBUG_STATS_EXPORT`.
+- Files are written to `/sdcard/Android/data/com.tucavr/files/debug/session-<sessionId>-<timestamp>.csv`.
+
+### CSV File Format
+
+The 1st column is always `schema_version` (D-05) — incremented whenever the format changes incompatibly; see `DebugTelemetryExporter.SCHEMA_VERSION` for the version history and what each one added. Full header (current version):
+
 ```csv
 schema_version,timestamp_ms,session_id,elapsed_s,backend,screen_mode,stereo_layout,polar_180,swap_eyes,video_status,frame_gap_ms,video_fps,decoded_fps,output_fps,dropped_fps,jitter_ms,net_mbs,video_q_depth,video_presentation_pending,seek_ms,smoothed_fps,frame_ms,gpu_time_ms,smoothed_gpu_time_ms,upscaling_mode,upscaling_sharpness,mqsr_enabled,stutter_count,freeze_count,thermal_level,scale,refresh_rate,av_drift_ms,net_last_fetch_ms,net_blocks_fetched,net_blocks_discarded,foveation,spatial_audio,head_tracking,speed,volume,audio_track,audio_track_count,sub_track,sub_offset_ms,quality_level,quality_reason,draw_call_count,triangle_count,video_stall_count,video_stats_age_ms,network_stats_age_ms,audio_stats_age_ms,render_stats_age_ms,network_fetch_failures,network_sequential_streak,network_throttled,audio_queue_depth,decode_error_count,demux_corrupt_packet_count,audio_underrun_count,load_phase_demux_open_ms,load_phase_decoder_ready_ms,load_phase_audio_ready_ms,perf_metrics_valid_mask,perf_app_cpu_frametime_ms,perf_app_gpu_frametime_ms,perf_motion_to_photon_latency_ms,perf_compositor_cpu_frametime_ms,perf_compositor_gpu_frametime_ms,perf_compositor_dropped_frame_count,perf_compositor_spacewarp_mode,perf_device_cpu_util_average,perf_device_cpu_util_worst,perf_device_gpu_util,hist_bucket_0,hist_bucket_1,hist_bucket_2,hist_bucket_3,hist_bucket_4,hist_bucket_5,hist_bucket_6,hist_bucket_7,source_type,source_redacted
 ```
 
-Ao lado de cada CSV, a mesma sessão grava `session-<id>-events.log` (seção 3, Log de Eventos) — ver `scripts/plot-session.py` para regenerar os 5 gráficos do modal a partir do CSV, no PC, sem headset.
+Next to each CSV, the same session writes `session-<id>-events.log` (section 3, Event Log) — see `scripts/plot-session.py` to regenerate the modal's 5 charts from the CSV, on the PC, without a headset.
 
 > [!IMPORTANT]
-> **Privacidade:** Senhas e tokens em URLs de rede (SMB, FTP, SFTP, HTTP) são sanitizados automaticamente (`redactSource`) antes da gravação no CSV ou logcat.
+> **Privacy:** passwords and tokens in network URLs (SMB, FTP, SFTP, HTTP) are automatically sanitized (`redactSource`) before being written to the CSV or logcat.
 
-## 7. Coleta Automatizada de Pacote de Debug (`collect-debug.sh` - N3)
+## 7. Automated Debug Bundle Collection (`collect-debug.sh` - N3)
 
-Para obter um diagnóstico completo do headset com um único comando:
+To get a complete diagnosis of the headset with a single command:
 
 ```bash
 ./scripts/collect-debug.sh
-# ou com serial específico e bugreport do Android:
+# or with a specific serial and an Android bugreport:
 ./scripts/collect-debug.sh --serial <SERIAL> --bugreport
 ```
 
-O script gera um pacote `.tar.gz` contendo:
-1. `manifest.txt`: Metadados do Quest 3, versão do app, build e commit git.
-2. `logcat.txt` e `logcat-filtered.txt`: Registros completos e filtrados pelas tags do player.
-3. `telemetry/`: Arquivos CSV de telemetria e relatórios de crash transferidos do headset.
-4. `meminfo.txt` e `thermalservice.txt`: Diagnósticos de memória e estrangulamento térmico.
-5. `dropbox_crashes.txt`: Registros de falhas do sistema Android.
+The script generates a `.tar.gz` bundle containing:
 
-## 8. Captura Visual de Frames no Vulkan e GLES (N4)
+1. `manifest.txt`: Quest 3 metadata, app version, build and git commit.
+2. `logcat.txt` and `logcat-filtered.txt`: full logs and logs filtered by the player's tags.
+3. `telemetry/`: telemetry CSV files and crash reports pulled from the headset.
+4. `meminfo.txt` and `thermalservice.txt`: memory and thermal throttling diagnostics.
+5. `dropbox_crashes.txt`: Android system crash records.
 
-Como o compositor OpenXR desenha diretamente no display em modo `vr_only`, ferramentas padrão como `screencap` não capturam a cena do vídeo.
+## 8. Visual Frame Capture in Vulkan and GLES (N4)
 
-O player fornece captura direta de frames renderizados através de `nativeRequestFrameCapture`, suportado em ambos os backends (Vulkan e GLES):
-- Salva o frame do olho esquerdo e direito como imagens PPM (`.left.ppm` e `.right.ppm`) com escrita atômica e buffer de linha otimizado.
-- O script `scripts/capture-screen.sh` automatiza o disparo via broadcast `com.tucavr.debug.CAPTURE_FRAME`, extrai os PNGs diretamente para a pasta `captures/` no PC e os abre automaticamente.
-- O script `scripts/test-3d-playback.sh` utiliza esse mesmo mecanismo para validar projeções estereoscópicas e testes automatizados.
+Since the OpenXR compositor draws directly to the display in `vr_only` mode, standard tools such as `screencap` do not capture the video scene.
 
-## 9. Diagnóstico de Falhas Nativas e Ciclo de Vida (C-01 a C-04)
+The player provides direct capture of rendered frames through `nativeRequestFrameCapture`, supported on both backends (Vulkan and GLES):
+
+- It saves the left and right eye frames as PPM images (`.left.ppm` and `.right.ppm`) with atomic writes.
+- The `scripts/capture-screen.sh` script automates triggering through the `com.tucavr.debug.CAPTURE_FRAME` broadcast, extracts the PNGs straight into the `captures/` folder on the PC and opens them automatically.
+- The `scripts/test-3d-playback.sh` script uses the same mechanism to validate stereoscopic projections and for automated tests.
+
+## 9. Diagnosing Native Failures and Lifecycle (C-01 to C-04)
 
 > [!WARNING]
-> O manipulador de crash padrão da JVM (`Thread.setDefaultUncaughtExceptionHandler`, Seção 5) grava arquivos `crash-*.txt` **apenas** para exceções Java (`Throwable`). Falhas nativas em C++/Rust (como `SIGABRT` gerado pelo ART ou `SIGSEGV` no driver gráfico Adreno) são sinais POSIX que derrubam o processo imediatamente, sem passar pelo manipulador Kotlin.
+> The JVM's default crash handler (`Thread.setDefaultUncaughtExceptionHandler`, Section 5) writes `crash-*.txt` files **only** for Java exceptions (`Throwable`). Native C++/Rust failures (such as a `SIGABRT` raised by ART or a `SIGSEGV` in the Adreno graphics driver) are POSIX signals that bring the process down immediately, without going through the Kotlin handler.
 
-Para capturar e diagnosticar falhas nativas no Meta Quest:
+To capture and diagnose native failures on the Meta Quest:
 
 ```bash
-# 1. Visualizar o buffer de crash do logcat:
+# 1. View logcat's crash buffer:
 adb logcat -d -b crash
 
-# 2. Inspecionar arquivos de tombstone gerados pelo SO:
+# 2. Inspect tombstone files generated by the OS:
 adb shell ls -la /data/tombstones/
 
-# 3. Sessão de monitoramento focada em ciclo de vida e renderização:
+# 3. A monitoring session focused on lifecycle and rendering:
 adb logcat -c
-# execute a ação (ex: abrir, reproduzir, fechar pelo Horizon OS, reabrir)
+# perform the action (e.g. open, play, close through Horizon OS, reopen)
 adb logcat -d -b main -b crash -s \
   DEBUG:* AndroidRuntime:* libc:* art:* VRPlayerAppVK:* VkValidation:*
 ```
 
-### Interpretação dos Padrões de Falha:
-- `Native thread exited without calling DetachCurrentThread` (art): Indica que a thread nativa encerrou sem chamar `DetachCurrentThread` (**C-01**).
-- `SIGSEGV`/`SIGABRT` envolvendo `libvulkan.so` ou driver `adreno`: Trabalho pendente na GPU durante destruição do dispositivo por ausência de `vkDeviceWaitIdle` (**C-02**).
-- `VUID-vkDestroyDevice-device-05137` / `VUID-vkDestroyCommandPool-...`: Objetos Vulkan destruídos fora de ordem ou após o `VkDevice` (**C-03**).
-- `WindowLeaked` com `VRPresentation`: `Presentation` ou `VirtualDisplay` não foram liberadas no `onDestroy` da Activity (**R-01**).
-- Comportamento de reabertura suja (ex: tocar mídia anterior ou nascer em 3D incorreto): Variáveis estáticas retidas no processo em cache sem reset na reinicialização (**C-04**).
+### Interpreting Failure Patterns
+
+- `Native thread exited without calling DetachCurrentThread` (art): the native thread exited without calling `DetachCurrentThread` (**C-01**).
+- `SIGSEGV`/`SIGABRT` involving `libvulkan.so` or the `adreno` driver: GPU work still pending during device destruction because `vkDeviceWaitIdle` is missing (**C-02**).
+- `VUID-vkDestroyDevice-device-05137` / `VUID-vkDestroyCommandPool-...`: Vulkan objects destroyed out of order or after the `VkDevice` (**C-03**).
+- `WindowLeaked` with `VRPresentation`: a `Presentation` or `VirtualDisplay` was not released in the Activity's `onDestroy` (**R-01**).
+- Dirty-reopen behavior (e.g. playing the previous media or starting in the wrong 3D mode): static variables retained in the process cache without a reset on re-initialization (**C-04**).
 
 ## 10. `XR_META_performance_metrics` (F3)
 
-Extensão OpenXR habilitada em `CreateVulkanInstanceAndDevice` (`state.supportsPerfMetrics`), com o **sistema** de métricas habilitado separadamente logo após a criação da sessão (`SetupPerformanceMetrics`, `vr_player_app_vulkan.cpp`) via `xrSetPerformanceMetricsStateMETA` — habilitar só a extensão não é suficiente; sem essa segunda chamada, `xrQueryPerformanceMetricsCounterMETA` devolve `XR_ERROR_VALIDATION_FAILURE` para qualquer contador.
+An OpenXR extension enabled in `CreateVulkanInstanceAndDevice` (`state.supportsPerfMetrics`), with the metrics **system** enabled separately right after session creation (`SetupPerformanceMetrics`, `vr_player_app_vulkan.cpp`) via `xrSetPerformanceMetricsStateMETA` — enabling only the extension is not enough; without that second call, `xrQueryPerformanceMetricsCounterMETA` returns `XR_ERROR_VALIDATION_FAILURE` for any counter.
 
-10 contadores amostrados a ~1Hz (`PollPerformanceMetrics`, mesma cadência do poll de FPS/rede): `app/cpu_frametime`, `app/gpu_frametime`, `app/motion_to_photon_latency`, `compositor/cpu_frametime`, `compositor/gpu_frametime`, `compositor/dropped_frame_count`, `compositor/spacewarp_mode`, `device/cpu_utilization_average`, `device/cpu_utilization_worst`, `device/gpu_utilization` — per-core (`device/cpuN_utilization`) deliberadamente fora de escopo (custaria um campo por núcleo do XR2 Gen 2 pelo mesmo diagnóstico já coberto pelos agregados average/worst).
+10 counters sampled at ~1Hz (`PollPerformanceMetrics`, the same cadence as the FPS/network poll): `app/cpu_frametime`, `app/gpu_frametime`, `app/motion_to_photon_latency`, `compositor/cpu_frametime`, `compositor/gpu_frametime`, `compositor/dropped_frame_count`, `compositor/spacewarp_mode`, `device/cpu_utilization_average`, `device/cpu_utilization_worst`, `device/gpu_utilization` — per-core (`device/cpuN_utilization`) is deliberately out of scope (it would cost one field per XR2 Gen 2 core for the same diagnosis already covered by the average/worst aggregates).
 
-`perf_metrics_valid_mask` no wire/CSV é um bitmask — bit N = 1 quando o contador N trouxe um valor válido nesta amostra. Um contador "não suportado" ou momentaneamente indisponível fica com o bit **zerado**, nunca aparece como "0" ambíguo (D-04). `compositor/spacewarp_mode` é o contador de maior valor para stalls de vídeo com o loop de render aparentemente saudável: se o compositor estava reprojetando, o `frame_ms` do app não mostra isso.
+`perf_metrics_valid_mask` on the wire/CSV is a bitmask — bit N = 1 when counter N carried a valid value in this sample. A counter that is "unsupported" or momentarily unavailable has its bit **cleared**, and never shows up as an ambiguous "0" (D-04). `compositor/spacewarp_mode` is the highest-value counter for video stalls with an apparently healthy render loop: if the compositor was reprojecting, the app's `frame_ms` does not show it.
 
-**Restrição da especificação**: estes contadores são diagnóstico — nunca devem alimentar o `QualityController`. Os intervalos de amostragem são definidos pelo runtime, não pelo app.
+**Specification constraint**: these counters are diagnostics — they must never feed the `QualityController`. Sampling intervals are defined by the runtime, not by the app.
 
-## 11. `ApplicationExitInfo`, Thermal Headroom e ADPF (F8)
+## 11. `ApplicationExitInfo`, Thermal Headroom and ADPF (F8)
 
-- **`ApplicationExitInfo`** ([`ApplicationExitInfoReporter.kt`](../app/src/main/java/com/tucavr/debug/ApplicationExitInfoReporter.kt)): lido uma vez no arranque (`VRActivity.onCreate`, API 30+). Cobre `REASON_ANR` e `REASON_CRASH_NATIVE` — as duas classes de morte do processo que o `UncaughtExceptionHandler` da JVM (seção 5) não vê, por serem falhas fora do runtime Java. Grava `exit-info-<timestamp>.txt` em `getExternalFilesDir("debug")` e, a partir da API 31, o tombstone bruto em protobuf (`.pb`, não parseado — usar ferramenta externa). Deduplica via `SharedPreferences` (só reporta eventos mais recentes que o último processado).
-- **Thermal Headroom contínuo**: `ThermalMonitor.getThermalHeadroom(forecastSeconds)` (API 30+) complementa o nível térmico discreto 0–5 já existente com uma previsão de 0.0 (sem throttle) a 1.0 (limiar SEVERE). Devolve `null` se chamado mais rápido que ~1Hz (a própria API devolve `NaN` nesse caso) — não pollar por frame.
-- **ADPF** (`SetupAdpfSession`/`ReportAdpfWorkDuration`, `vr_player_app_vulkan.cpp`, API 33+): diferente dos itens acima, é uma API de **escrita** — o app declara a duração de frame alvo e reporta a real a cada frame; o sistema ajusta escalonamento/frequência de CPU/GPU. Os símbolos `APerformanceHint_*` são resolvidos via `dlopen("libandroid.so")`/`dlsym` (não chamada direta: o clang do NDK recusa compilar uma chamada direta a um símbolo `__INTRODUCED_IN(33)` com `minSdk=26`, mesmo dentro de um `if` checando a API em runtime — mesmo padrão já usado neste arquivo para funções de extensão OpenXR via `xrGetInstanceProcAddr`). Sessão criada na mesma thread já registrada como crítica ao runtime XR (`xrSetAndroidApplicationThreadKHR`) — este app não tem uma render thread separada.
+- **`ApplicationExitInfo`** ([`ApplicationExitInfoReporter.kt`](../app/src/main/java/com/tucavr/debug/ApplicationExitInfoReporter.kt)): read once at startup (`VRActivity.onCreate`, API 30+). It covers `REASON_ANR` and `REASON_CRASH_NATIVE` — the two classes of process death that the JVM's `UncaughtExceptionHandler` (section 5) does not see, because they are failures outside the Java runtime. It writes `exit-info-<timestamp>.txt` to `getExternalFilesDir("debug")` and, from API 31, the raw tombstone as protobuf (`.pb`, not parsed — use an external tool). It deduplicates through `SharedPreferences` (only reports events newer than the last one processed).
+- **Continuous Thermal Headroom**: `ThermalMonitor.getThermalHeadroom(forecastSeconds)` (API 30+) complements the existing discrete 0–5 thermal level with a forecast from 0.0 (no throttle) to 1.0 (SEVERE threshold). It returns `null` if called faster than ~1Hz (the API itself returns `NaN` in that case) — do not poll per frame.
+- **ADPF** (`SetupAdpfSession`/`ReportAdpfWorkDuration`, `vr_player_app_vulkan.cpp`, API 33+): unlike the items above, it is a **write** API — the app declares the target frame duration and reports the actual one every frame; the system adjusts CPU/GPU scheduling/frequency. The `APerformanceHint_*` symbols are resolved through `dlopen("libandroid.so")`/`dlsym` (not a direct call: the NDK's clang refuses to compile a direct call to an `__INTRODUCED_IN(33)` symbol with `minSdk=26`, even inside an `if` checking the API at runtime — the same pattern this file already uses for OpenXR extension functions via `xrGetInstanceProcAddr`). The session is created on the same thread already registered as critical to the XR runtime (`xrSetAndroidApplicationThreadKHR`) — this app has no separate render thread.
