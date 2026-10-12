@@ -13,7 +13,7 @@ O **tucaVR** é um reprodutor de vídeo imersivo (2D, 3D Estereoscópico SBS/OU,
 
 Diferente de aplicações Android móveis tradicionais com janelas 2D planas sobrepostas a um viewport VR, o tucaVR opera exclusivamente como uma `NativeActivity` em modo imersivo integral (`<meta-data android:name="com.oculus.vr.mode" android:value="vr_only" />`). Não existem janelas ou `Activity`s 2D secundárias no processo.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                           METAS DE ENGENHARIA                               │
 ├─────────────────────────────────────────────────────────────────────────────┤
@@ -95,7 +95,7 @@ flowchart TB
 
 O pipeline gráfico do tucaVR foi migrado para **Vulkan 1.1** como backend primário e padrão, mantendo um caminho completo em **OpenGL ES 3.2** para validação cruzada e fallback.
 
-```
+```text
                   ┌─────────────────────────────────────┐
                   │    OpenXR Runtime (Horizon OS)      │
                   └──────────────────┬──────────────────┘
@@ -246,7 +246,7 @@ graph TD
 
 ### 5.1 Pipeline de Vídeo Zero-Copy
 
-```
+```text
 ┌─────────────────┐     ┌─────────────────┐     ┌───────────────────┐     ┌──────────────────┐
 │  Fonte de Rede  │     │  Demuxer Rust   │     │ MediaCodec HW NDK │     │   ImageReader    │
 │  ou Local       │ ──> │ (ffmpeg-next)   │ ──> │ (H.264/HEVC/AV1)  │ ──> │  (Surface NDK)   │

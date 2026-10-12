@@ -231,5 +231,5 @@ Anything that needs actual OpenXR rendering, controller haptics or hardware `Med
 Contributions are welcome — start with [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
  <a href="https://github.com/bgluis/tucaVR/graphs/contributors">
-   <img src="https://contrib.rocks/image?repo=bgluis/tucaVR"/>
+   <img alt="Contributors" src="https://contrib.rocks/image?repo=bgluis/tucaVR"/>
  </a>

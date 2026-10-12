@@ -53,7 +53,7 @@ If you only intend to touch `protocols` or `media-logic`, you can skip both: tho
 
 ## Knowing which layer you are in
 
-```
+```text
 Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocols/audio/media-logic)
 ```
 

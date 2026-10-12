@@ -383,7 +383,7 @@ corrupção introduzida pelo laço novo) — todos passando.
 
 ## 8. Arquivos tocados
 
-```
+```text
 rust/protocols/Cargo.toml                  (+ futures-util, + libc)
 rust/protocols/src/lib.rs                  (+ pub mod chunking)
 rust/protocols/src/chunking.rs             (novo — split_range + testes)
