@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-tucaVR for Meta Quest 3 (Qualcomm XR2 Gen 2): a 2D/3D video player built as a fully immersive OpenXR app (`com.oculus.vr.mode = vr_only`, `NativeActivity`, no classic 2D Android UI). Architecture documentation lives in `docs/ARCHITECTURE.md`; requirements/spec lives in `docs/REQUIREMENTS.md`; phase breakdown with task IDs (`T1.1`, `T6.3`, etc.) is in `docs/phases/PHASE-0.*.md`. Everything is written in English: documentation in `docs/`, code and script comments, PRs, and commit messages. The only exceptions are `README.pt-BR.md` (a translation of `README.md`) and the localized UI strings in `app/src/main/res/values-*/`.
+tucaVR for Meta Quest 3 (Qualcomm XR2 Gen 2): a 2D/3D video player built as a fully immersive OpenXR app (`com.oculus.vr.mode = vr_only`, `NativeActivity`, no classic 2D Android UI). Architecture documentation lives in `docs/ARCHITECTURE.md`; requirements/spec lives in `docs/REQUIREMENTS.md`; phase breakdown with task IDs (`T1.1`, `T6.3`, etc.) is in `docs/phases/PHASE-0.*.md`. Documentation (`docs/`, READMEs), scripts, PRs, and commit messages are written in English; the codebase is migrating its source comments to English too, so write new and edited comments in English even though older Kotlin/C++/Rust files still contain Portuguese comments and log strings. The exceptions are `README.pt-BR.md` (a translation of `README.md`) and the localized UI strings in `app/src/main/res/values-*/`.
 
 ## Three-language architecture — know which layer you're in
 

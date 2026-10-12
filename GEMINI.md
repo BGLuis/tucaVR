@@ -212,7 +212,7 @@ Features requiring true OpenXR swapchains, 6DoF controller tracking, haptics, an
 
 ## 6. Coding Conventions & Best Practices
 
-- **Language:** All source code comments, scripts, documentation (`docs/`), PRs, and commit messages must be in **English** (Conventional Commits). Exceptions: `README.pt-BR.md` and the localized UI strings.
+- **Language:** Documentation (`docs/`), scripts, PRs, and commit messages must be in **English** (Conventional Commits), and so must new and edited source code comments (older source files still contain Portuguese comments while the migration continues). Exceptions: `README.pt-BR.md` and the localized UI strings.
 - **Internationalization (i18n):** User-facing strings must be declared in `app/src/main/res/values/strings.xml` (English default), `values-pt-rBR/strings.xml` (Portuguese), and `values-es/strings.xml` (Spanish). Always use positional placeholders (`%1$s`, `%1$d`) via `getString(R.string.xxx, arg1)` — never Kotlin string concatenation. Parity is enforced by `I18nParityTest`.
 - **Thread Management:** Calls originating from the C++ OpenXR render thread dispatched into Kotlin/Android via JNI must be executed on the UI thread using `runOnUiThread`.
 - **Decoder Control (Rust):** Playback state changes (`is_playing`) must suspend the thread (`sleep` / condition variables) rather than killing and re-spawning ffmpeg demux loops.

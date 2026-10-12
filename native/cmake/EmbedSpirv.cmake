@@ -1,17 +1,17 @@
-# Converte um binario SPIR-V (.spv) num header C++ com os bytes embutidos
-# como array estatico, para nao precisar empacotar assets/carregar arquivo
-# em runtime para um shader que nunca muda entre execucoes. Invocado via
-# `cmake -P` a partir de um add_custom_command (ver native/CMakeLists.txt)
-# — nao chamar diretamente.
+# Converts a SPIR-V binary (.spv) into a C++ header with the bytes embedded
+# as a static array, so there is no need to package assets/load a file
+# at runtime for a shader that never changes between runs. Invoked through
+# `cmake -P` from an add_custom_command (see native/CMakeLists.txt)
+# — do not call it directly.
 if(NOT DEFINED SPV OR NOT DEFINED HEADER OR NOT DEFINED VARNAME)
-    message(FATAL_ERROR "Uso: cmake -DSPV=<in.spv> -DHEADER=<out.h> -DVARNAME=<nome> -P EmbedSpirv.cmake")
+    message(FATAL_ERROR "Usage: cmake -DSPV=<in.spv> -DHEADER=<out.h> -DVARNAME=<name> -P EmbedSpirv.cmake")
 endif()
 
 file(READ ${SPV} hex_content HEX)
 string(REGEX REPLACE "(..)" "0x\\1," hex_bytes ${hex_content})
 
 file(WRITE ${HEADER}
-"// Gerado em build-time a partir de ${SPV} pelo EmbedSpirv.cmake — nao editar a mao.
+"// Generated at build time from ${SPV} by EmbedSpirv.cmake — do not edit by hand.
 #pragma once
 #include <cstdint>
 alignas(4) static const unsigned char ${VARNAME}[] = { ${hex_bytes} };

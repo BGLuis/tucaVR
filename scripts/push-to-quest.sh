@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # =============================================================================
-# push-to-quest.sh — Envia test vectors para o Meta Quest 3 via ADB
+# push-to-quest.sh — Pushes test vectors to the Meta Quest 3 over ADB
 # =============================================================================
 #
-# Uso:
-#   ./scripts/push-to-quest.sh                      # envia tudo
-#   ./scripts/push-to-quest.sh --wifi 192.168.1.X   # conecta por WiFi e envia
-#   ./scripts/push-to-quest.sh --only 2d hdr 360    # envia apenas categorias
-#   ./scripts/push-to-quest.sh --only youtube-downloads  # só os downloads do YT
-#   ./scripts/push-to-quest.sh --list               # lista o que está no Quest
-#   ./scripts/push-to-quest.sh --clean              # remove pasta do Quest
+# Usage:
+#   ./scripts/push-to-quest.sh                      # pushes everything
+#   ./scripts/push-to-quest.sh --wifi 192.168.1.X   # connects over WiFi and pushes
+#   ./scripts/push-to-quest.sh --only 2d hdr 360    # pushes only the given categories
+#   ./scripts/push-to-quest.sh --only youtube-downloads  # only the YouTube downloads
+#   ./scripts/push-to-quest.sh --list               # lists what is on the Quest
+#   ./scripts/push-to-quest.sh --clean              # removes the folder from the Quest
 #
-# Pré-requisitos:
-#   - Quest 3 em Developer Mode (Settings → Developer → USB Debugging: ON)
-#   - Conectado via USB *ou* WiFi (--wifi <IP>)
-#   - adb instalado: sudo apt install adb
+# Prerequisites:
+#   - Quest 3 in Developer Mode (Settings → Developer → USB Debugging: ON)
+#   - Connected over USB *or* WiFi (--wifi <IP>)
+#   - adb installed: sudo apt install adb
 # =============================================================================
 
 set -euo pipefail
@@ -22,9 +22,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 VECTORS_DIR="$REPO_ROOT/testdata/vectors"
-DOWNLOAD_DIR="$REPO_ROOT/testdata/download"  # vídeos reais do YouTube
+DOWNLOAD_DIR="$REPO_ROOT/testdata/download"  # real YouTube videos
 
-# Destino no Quest — aparece no File Manager e apps de mídia
+# Destination on the Quest — shows up in the File Manager and media apps
 QUEST_BASE="/sdcard/Movies/VRTestVectors"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -33,7 +33,7 @@ BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 info()    { echo -e "${BLUE}[INFO]${NC} $*"; }
 ok()      { echo -e "${GREEN}[ OK ]${NC} $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC} $*"; }
-err()     { echo -e "${RED}[ERRO]${NC} $*"; }
+err()     { echo -e "${RED}[ERR ]${NC} $*"; }
 section() {
     echo -e "\n${BOLD}${CYAN}══════════════════════════════════════════════${NC}"
     echo -e "${BOLD}${CYAN}  $*${NC}"
@@ -60,10 +60,10 @@ while [[ $# -gt 0 ]]; do
         --list)    DO_LIST=true; shift ;;
         --clean)   DO_CLEAN=true; shift ;;
         -h|--help)
-            echo "Uso: $0 [--wifi IP] [--only cat1 cat2...] [--list] [--clean]"
-            echo "Categorias: 2d 360 vr180 3d-sbs 3d-ou hdr 4k audio audio-spatial subtitles photos-360 streaming reference"
+            echo "Usage: $0 [--wifi IP] [--only cat1 cat2...] [--list] [--clean]"
+            echo "Categories: 2d 360 vr180 3d-sbs 3d-ou hdr 4k audio audio-spatial subtitles photos-360 streaming reference"
             exit 0 ;;
-        *) warn "Argumento desconhecido: $1"; shift ;;
+        *) warn "Unknown argument: $1"; shift ;;
     esac
 done
 
@@ -77,54 +77,54 @@ echo "╚═══════════════════════�
 echo -e "${NC}"
 
 # ---------------------------------------------------------------------------
-# Verificar ADB
+# Check ADB
 # ---------------------------------------------------------------------------
-section "Verificando ADB e Quest"
+section "Checking ADB and the Quest"
 
 if ! command -v adb &>/dev/null; then
-    err "adb não encontrado. Instale com: sudo apt install adb"
+    err "adb not found. Install it with: sudo apt install adb"
     exit 1
 fi
-ok "adb encontrado: $(adb version 2>/dev/null | head -1)"
+ok "adb found: $(adb version 2>/dev/null | head -1)"
 
-# Conectar via WiFi se solicitado
+# Connect over WiFi if requested
 if [[ -n "$WIFI_IP" ]]; then
-    info "Conectando via WiFi: $WIFI_IP:5555"
-    # Primeiro habilita ADB TCP no dispositivo USB conectado (se houver)
+    info "Connecting over WiFi: $WIFI_IP:5555"
+    # First enable ADB TCP on the connected USB device (if any)
     adb tcpip 5555 2>/dev/null || true
     sleep 2
     if adb connect "$WIFI_IP:5555" 2>&1 | grep -q "connected"; then
-        ok "Conectado via WiFi: $WIFI_IP"
+        ok "Connected over WiFi: $WIFI_IP"
     else
-        err "Falha ao conectar em $WIFI_IP:5555"
-        err "Certifique-se que:"
-        err "  1. Quest e PC estão na mesma rede WiFi"
-        err "  2. USB Debugging está habilitado no Quest"
-        err "  3. Se nunca usou WiFi ADB: conecte via USB primeiro, rode o script,"
-        err "     depois desconecte o USB e reconecte com --wifi <IP>"
+        err "Failed to connect to $WIFI_IP:5555"
+        err "Make sure that:"
+        err "  1. The Quest and the PC are on the same WiFi network"
+        err "  2. USB Debugging is enabled on the Quest"
+        err "  3. If you have never used WiFi ADB: connect over USB first, run the script,"
+        err "     then unplug the USB and reconnect with --wifi <IP>"
         exit 1
     fi
 fi
 
-# Verificar se há dispositivo conectado
+# Check whether a device is connected
 DEVICES=$(adb devices 2>/dev/null | grep -v "^List" | grep -v "^$" | grep "device$")
 if [[ -z "$DEVICES" ]]; then
-    err "Nenhum dispositivo ADB conectado."
+    err "No ADB device connected."
     echo ""
-    echo -e "${YELLOW}Para conectar o Quest 3:${NC}"
+    echo -e "${YELLOW}To connect the Quest 3:${NC}"
     echo "  1. Settings → Developer → USB Debugging: ON"
-    echo "  2. Conecte o cabo USB-C"
-    echo "  3. Aceite a permissão de debug que aparece no headset"
-    echo "  4. Execute novamente este script"
+    echo "  2. Plug in the USB-C cable"
+    echo "  3. Accept the debug permission that shows up on the headset"
+    echo "  4. Run this script again"
     echo ""
-    echo -e "${YELLOW}Para conectar por WiFi (sem cabo):${NC}"
-    echo "  1. Conecte via USB uma vez e rode: $0 --wifi <IP-do-Quest>"
-    echo "  2. IP do Quest: Settings → Wi-Fi → toque na rede conectada"
+    echo -e "${YELLOW}To connect over WiFi (no cable):${NC}"
+    echo "  1. Connect over USB once and run: $0 --wifi <Quest-IP>"
+    echo "  2. Quest IP: Settings → Wi-Fi → tap the connected network"
     exit 1
 fi
 
 DEVICE_COUNT=$(echo "$DEVICES" | wc -l)
-info "$DEVICE_COUNT dispositivo(s) encontrado(s):"
+info "$DEVICE_COUNT device(s) found:"
 echo "$DEVICES" | while IFS= read -r line; do
     SERIAL=$(echo "$line" | awk '{print $1}')
     MODEL=$(adb -s "$SERIAL" shell getprop ro.product.model 2>/dev/null | tr -d '\r' || echo "?")
@@ -132,52 +132,52 @@ echo "$DEVICES" | while IFS= read -r line; do
     ok "  $SERIAL → $MANUFACTURER $MODEL"
 done
 
-# Usa o primeiro dispositivo (ou o único)
+# Use the first device (or the only one)
 SERIAL=$(echo "$DEVICES" | head -1 | awk '{print $1}')
 ADB="adb -s $SERIAL"
 
-# Verifica espaço disponível
+# Check the available space
 AVAIL_KB=$($ADB shell df /sdcard 2>/dev/null | awk 'NR==2 {print $4}' | tr -d '\r' || echo "0")
 AVAIL_MB=$((AVAIL_KB / 1024))
 AVAIL_GB=$((AVAIL_MB / 1024))
-info "Espaço disponível no Quest: ~${AVAIL_GB}GB (${AVAIL_MB}MB)"
+info "Space available on the Quest: ~${AVAIL_GB}GB (${AVAIL_MB}MB)"
 
-# Calcula tamanho total a enviar
+# Compute the total size to push
 LOCAL_SIZE=$(du -sm "$VECTORS_DIR" 2>/dev/null | cut -f1 || echo "?")
-info "Tamanho total dos vectors locais: ~${LOCAL_SIZE}MB"
+info "Total size of the local vectors: ~${LOCAL_SIZE}MB"
 
 if [[ "$AVAIL_MB" -lt 500 ]]; then
-    warn "Pouco espaço disponível no Quest (<500MB). Considere usar --only para enviar categorias específicas."
+    warn "Little space available on the Quest (<500MB). Consider using --only to push specific categories."
 fi
 
 # ---------------------------------------------------------------------------
-# --list: mostrar o que está no Quest
+# --list: show what is on the Quest
 # ---------------------------------------------------------------------------
 if $DO_LIST; then
-    section "Arquivos em $QUEST_BASE"
-    $ADB shell ls -lhR "$QUEST_BASE" 2>/dev/null || warn "Pasta $QUEST_BASE não existe ainda no Quest"
+    section "Files in $QUEST_BASE"
+    $ADB shell ls -lhR "$QUEST_BASE" 2>/dev/null || warn "The folder $QUEST_BASE does not exist yet on the Quest"
     exit 0
 fi
 
 # ---------------------------------------------------------------------------
-# --clean: remover pasta do Quest
+# --clean: remove the folder from the Quest
 # ---------------------------------------------------------------------------
 if $DO_CLEAN; then
-    section "Removendo $QUEST_BASE do Quest"
-    warn "ATENÇÃO: Isso apagará TODOS os test vectors do Quest!"
-    read -rp "Confirmar remoção? [s/N] " confirm
-    if [[ "${confirm,,}" == "s" ]]; then
-        $ADB shell rm -rf "$QUEST_BASE" 2>/dev/null && ok "Removido: $QUEST_BASE" || err "Falha ao remover"
+    section "Removing $QUEST_BASE from the Quest"
+    warn "WARNING: This will delete ALL the test vectors on the Quest!"
+    read -rp "Confirm removal? [y/N] " confirm
+    if [[ "${confirm,,}" == "y" ]]; then
+        $ADB shell rm -rf "$QUEST_BASE" 2>/dev/null && ok "Removed: $QUEST_BASE" || err "Failed to remove"
     else
-        info "Cancelado."
+        info "Cancelled."
     fi
     exit 0
 fi
 
 # ---------------------------------------------------------------------------
-# Criar estrutura de diretórios no Quest
+# Create the directory structure on the Quest
 # ---------------------------------------------------------------------------
-section "Criando estrutura no Quest"
+section "Creating the structure on the Quest"
 
 CATEGORIES=(
     "2d"
@@ -196,7 +196,7 @@ CATEGORIES=(
     "reference"
 )
 
-# Filtra categorias se --only foi especificado
+# Filter the categories if --only was specified
 if [[ ${#ONLY_CATS[@]} -gt 0 ]]; then
     FILTERED=()
     for cat in "${CATEGORIES[@]}"; do
@@ -208,17 +208,17 @@ if [[ ${#ONLY_CATS[@]} -gt 0 ]]; then
         done
     done
     CATEGORIES=("${FILTERED[@]}")
-    info "Enviando apenas: ${CATEGORIES[*]}"
+    info "Pushing only: ${CATEGORIES[*]}"
 fi
 
-# Cria diretórios no Quest
+# Create the directories on the Quest
 for cat in "${CATEGORIES[@]}"; do
     $ADB shell mkdir -p "$QUEST_BASE/$cat" 2>/dev/null
 done
-ok "Estrutura criada em $QUEST_BASE"
+ok "Structure created in $QUEST_BASE"
 
 # ---------------------------------------------------------------------------
-# Função de push com verificação de integridade
+# Push function with an integrity check
 # ---------------------------------------------------------------------------
 push_file() {
     local src="$1"
@@ -229,32 +229,32 @@ push_file() {
     local src_size
     src_size=$(stat -c%s "$src" 2>/dev/null || echo 0)
 
-    # Verifica se já existe com tamanho correto
+    # Check whether it already exists with the right size
     local quest_size
     quest_size=$($ADB shell stat -c%s "$dest" 2>/dev/null | tr -d '\r\n' || echo "0")
 
     if [[ "$quest_size" == "$src_size" && "$src_size" -gt 0 ]]; then
         local sz_human; sz_human=$(du -sh "$src" | cut -f1)
-        warn "  JÁ EXISTE (${sz_human}): $filename"
+        warn "  ALREADY EXISTS (${sz_human}): $filename"
         ((SKIP_COUNT++)) || true
         return 0
     fi
 
     local sz_human; sz_human=$(du -sh "$src" | cut -f1)
-    info "  Enviando (${sz_human}): $filename"
+    info "  Pushing (${sz_human}): $filename"
 
     if $ADB push "$src" "$dest" 2>&1 | tail -1 | grep -qE "pushed|file pushed"; then
         ok "    → OK: $filename"
         ((PUSH_COUNT++)) || true
         TOTAL_BYTES=$((TOTAL_BYTES + src_size))
     else
-        # tenta de qualquer forma e verifica
+        # try anyway and verify
         if $ADB push "$src" "$dest" 2>/dev/null; then
             ok "    → OK: $filename"
             ((PUSH_COUNT++)) || true
             TOTAL_BYTES=$((TOTAL_BYTES + src_size))
         else
-            err "    → FALHA: $filename"
+            err "    → FAILED: $filename"
             ((FAIL_COUNT++)) || true
         fi
     fi
@@ -271,77 +271,77 @@ push_category() {
     file_count=$(find "$src_dir" -maxdepth 1 -type f | wc -l)
     [[ "$file_count" -eq 0 ]] && return 0
 
-    section "Enviando: $cat ($file_count arquivo(s))"
+    section "Pushing: $cat ($file_count file(s))"
 
     while IFS= read -r -d '' file; do
         local ext="${file##*.}"
-        # Pula logs
+        # Skip logs
         [[ "$ext" == "log" ]] && continue
         push_file "$file" "$dest_dir"
     done < <(find "$src_dir" -maxdepth 1 -type f -print0 | sort -z)
 }
 
 # ---------------------------------------------------------------------------
-# Push por categoria
+# Push per category
 # ---------------------------------------------------------------------------
 for cat in "${CATEGORIES[@]}"; do
     push_category "$cat"
 done
 
 # ---------------------------------------------------------------------------
-# Verificar no Quest o que foi enviado
+# Check on the Quest what was pushed
 # ---------------------------------------------------------------------------
-section "Verificando no Quest"
+section "Checking on the Quest"
 
 QUEST_COUNT=$($ADB shell find "$QUEST_BASE" -type f 2>/dev/null | wc -l | tr -d '\r' || echo "?")
 QUEST_SIZE=$($ADB shell du -sh "$QUEST_BASE" 2>/dev/null | cut -f1 | tr -d '\r' || echo "?")
 
-ok "Arquivos no Quest: $QUEST_COUNT"
-ok "Tamanho total no Quest: $QUEST_SIZE"
+ok "Files on the Quest: $QUEST_COUNT"
+ok "Total size on the Quest: $QUEST_SIZE"
 
-# Scaneia a mídia para aparecer nos apps do Quest
-info "Escaneando mídia no Quest (para aparecer no File Manager)..."
+# Scan the media so it shows up in the Quest's apps
+info "Scanning media on the Quest (so it shows up in the File Manager)..."
 $ADB shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE \
     -d "file://$QUEST_BASE" 2>/dev/null || true
-# Scan recursivo mais efetivo
+# A more effective recursive scan
 $ADB shell find "$QUEST_BASE" -name "*.mp4" -o -name "*.webm" -o -name "*.mkv" \
     2>/dev/null | while IFS= read -r f; do
     $ADB shell am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE \
         -d "file://$f" 2>/dev/null || true
 done
-ok "Media scan concluído"
+ok "Media scan finished"
 
 # ---------------------------------------------------------------------------
-# Resumo
+# Summary
 # ---------------------------------------------------------------------------
 TOTAL_MB=$((TOTAL_BYTES / 1024 / 1024))
 
 echo ""
 echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${GREEN}║                    PUSH CONCLUÍDO                           ║${NC}"
+echo -e "${BOLD}${GREEN}║                    PUSH FINISHED                            ║${NC}"
 echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "  ${GREEN}✔ Enviados:${NC}     $PUSH_COUNT arquivos (${TOTAL_MB}MB)"
-echo -e "  ${YELLOW}⊘ Pulados:${NC}      $SKIP_COUNT (já existiam)"
-echo -e "  ${RED}✘ Falhos:${NC}       $FAIL_COUNT"
+echo -e "  ${GREEN}✔ Pushed:${NC}      $PUSH_COUNT files (${TOTAL_MB}MB)"
+echo -e "  ${YELLOW}⊘ Skipped:${NC}     $SKIP_COUNT (already existed)"
+echo -e "  ${RED}✘ Failed:${NC}      $FAIL_COUNT"
 echo ""
 echo -e "  ${BLUE}📁 Quest:${NC}       $QUEST_BASE"
-echo -e "  ${BLUE}📊 Arquivos:${NC}    $QUEST_COUNT total | ${QUEST_SIZE} no headset"
+echo -e "  ${BLUE}📊 Files:${NC}      $QUEST_COUNT total | ${QUEST_SIZE} on the headset"
 echo ""
-echo -e "${CYAN}No Quest 3:${NC}"
+echo -e "${CYAN}On the Quest 3:${NC}"
 echo "  1. Files → VRTestVectors/"
-echo "     → para navegar e abrir arquivos diretamente"
+echo "     → to browse and open files directly"
 echo ""
-echo "  2. No player em desenvolvimento:"
+echo "  2. In the player under development:"
 echo "     → Browse → /sdcard/Movies/VRTestVectors/"
 echo ""
 if [[ -f "$VECTORS_DIR/vr180/vr180_placeholder_sbs.mp4" ]] && \
    ! [[ -f "$VECTORS_DIR/vr180/vr180_lightspeed_real.mp4" ]]; then
-    echo -e "  ${YELLOW}⚠ VR180 real ausente.${NC} Veja: testdata/vectors/vr180/COMO_BAIXAR.md"
+    echo -e "  ${YELLOW}⚠ Real VR180 missing.${NC} See: testdata/vectors/vr180/HOW_TO_DOWNLOAD.md"
     echo ""
 fi
-echo -e "${CYAN}Para conectar por WiFi (sem cabo):${NC}"
-echo "  1. IP do Quest: Settings → Wi-Fi → nome da rede → IP address"
-echo "  2. Rode: $0 --wifi <IP-DO-QUEST>"
+echo -e "${CYAN}To connect over WiFi (no cable):${NC}"
+echo "  1. Quest IP: Settings → Wi-Fi → network name → IP address"
+echo "  2. Run: $0 --wifi <QUEST-IP>"
 echo ""
-# (esta linha não é executada — o bloco acima é o script completo)
+# (this line is not executed — the block above is the complete script)

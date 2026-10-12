@@ -1,19 +1,19 @@
 #!/bin/bash
-# Teste objetivo e automatizado do criterio de DoD "Memoria < 2.5GB durante
-# reproducao de video 4K" (docs/phases/PHASE-0.1-MVP.md) — sem precisar de um
-# arquivo 4K real nem de interacao manual com o controller: gera um clipe H.264
-# 4K sintetico e reprodutivel, envia pro headset via adb, dispara playback
-# automatico (EXTRA_AUTO_PLAY_PATH, ver VRActivity.kt) e reusa a amostragem de
-# memoria de scripts/soak-test.sh.
+# Objective, automated test of the DoD criterion "Memory < 2.5GB during 4K video
+# playback" (docs/phases/PHASE-0.1-MVP.md) — with no need for a real 4K file or
+# manual interaction with the controller: it generates a synthetic, reproducible
+# 4K H.264 clip, sends it to the headset over adb, triggers automatic playback
+# (EXTRA_AUTO_PLAY_PATH, see VRActivity.kt) and reuses the memory sampling of
+# scripts/soak-test.sh.
 #
-# Uso:
-#   ./scripts/test-4k-memory.sh                         # padrao: clipe de 150s, monitora 2min
+# Usage:
+#   ./scripts/test-4k-memory.sh                         # default: 150s clip, monitors for 2min
 #   ./scripts/test-4k-memory.sh --duration-min 4 --clip-duration-sec 300
 #
-# Diferenca para scripts/soak-test.sh puro: aquele mede o app do jeito que
-# estiver quando chamado (idle, ou com --video-path se voce ja tiver um arquivo
-# no headset); este script garante uma carga de trabalho 4K real e reproduzivel
-# de ponta a ponta, o que o criterio da DoD pede especificamente.
+# Difference from plain scripts/soak-test.sh: that one measures the app however it
+# is when called (idle, or with --video-path if you already have a file on the
+# headset); this script guarantees a real, reproducible end-to-end 4K workload,
+# which is what the DoD criterion specifically asks for.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -30,16 +30,16 @@ DEVICE_PATH="/sdcard/Movies/vrplayer-4k-soak-test.mp4"
 
 usage() {
     cat <<EOF
-Uso: $0 [opcoes]
-  --duration-min N        Duracao do monitoramento de memoria (padrao: 2)
-  --interval-sec N        Intervalo entre amostras (padrao: 10)
-  --clip-duration-sec N   Duracao do clipe 4K gerado (padrao: 150; deve ser
-                           maior que duration-min*60 + ~30s de folga)
-  --bitrate RATE           Bitrate do clipe, formato ffmpeg (padrao: 25M)
-  --serial SERIAL          Serial do dispositivo adb
-  --force-regen             Regera o clipe mesmo se ja existir em testdata/
-  --keep-on-device          Nao apaga o clipe do headset ao final
-  -h, --help                 Mostra esta ajuda
+Usage: $0 [options]
+  --duration-min N        Duration of the memory monitoring (default: 2)
+  --interval-sec N        Interval between samples (default: 10)
+  --clip-duration-sec N   Duration of the generated 4K clip (default: 150; must be
+                           greater than duration-min*60 + ~30s of margin)
+  --bitrate RATE           Clip bitrate, ffmpeg format (default: 25M)
+  --serial SERIAL          adb device serial
+  --force-regen             Regenerates the clip even if it already exists in testdata/
+  --keep-on-device          Does not delete the clip from the headset at the end
+  -h, --help                 Shows this help
 EOF
 }
 
@@ -53,14 +53,14 @@ while [[ $# -gt 0 ]]; do
         --force-regen) FORCE_REGEN=1; shift ;;
         --keep-on-device) KEEP_ON_DEVICE=1; shift ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "Opcao desconhecida: $1"; usage; exit 1 ;;
+        *) echo "Unknown option: $1"; usage; exit 1 ;;
     esac
 done
 
 NEEDED_SEC=$((DURATION_MIN * 60 + 30))
 if [[ "$CLIP_DURATION_SEC" -lt "$NEEDED_SEC" ]]; then
-    echo "AVISO: clip-duration-sec ($CLIP_DURATION_SEC) e menor que duration-min*60+30 ($NEEDED_SEC)." >&2
-    echo "         O video pode acabar antes do monitoramento terminar, medindo o app parado no fim." >&2
+    echo "WARNING: clip-duration-sec ($CLIP_DURATION_SEC) is smaller than duration-min*60+30 ($NEEDED_SEC)." >&2
+    echo "         The video may end before the monitoring finishes, measuring the idle app at the end." >&2
 fi
 
 ADB=(adb)
@@ -70,17 +70,17 @@ fi
 
 DEVICE_COUNT=$("${ADB[@]}" devices | grep -c -E "device$" || true)
 if [[ "$DEVICE_COUNT" -eq 0 ]]; then
-    echo "Nenhum dispositivo adb encontrado. Conecte o Quest 3 via USB e autorize a Depuracao USB." >&2
+    echo "No adb device found. Connect the Quest 3 over USB and authorize USB debugging." >&2
     exit 1
 fi
 
-echo "== Gerando clipe 4K de teste =="
+echo "== Generating the 4K test clip =="
 GEN_ARGS=(--duration-sec "$CLIP_DURATION_SEC" --bitrate "$BITRATE")
 [[ "$FORCE_REGEN" -eq 1 ]] && GEN_ARGS+=(--force)
 "$SCRIPT_DIR/generate-4k-test-clip.sh" "${GEN_ARGS[@]}"
 CLIP="$REPO_ROOT/testdata/4k-soak-clip.mp4"
 
-echo "== Enviando clipe para o headset ($DEVICE_PATH) =="
+echo "== Sending the clip to the headset ($DEVICE_PATH) =="
 "${ADB[@]}" shell mkdir -p /sdcard/Movies
 "${ADB[@]}" push "$CLIP" "$DEVICE_PATH"
 
@@ -91,7 +91,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "== Rodando soak-test.sh com auto-play do clipe 4K =="
+echo "== Running soak-test.sh with auto-play of the 4K clip =="
 SOAK_ARGS=(--video-path "$DEVICE_PATH" --duration-min "$DURATION_MIN" --interval-sec "$INTERVAL_SEC")
 [[ -n "$SERIAL" ]] && SOAK_ARGS+=(--serial "$SERIAL")
 

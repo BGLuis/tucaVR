@@ -3,25 +3,25 @@
 # download-test-vectors.sh — tucaVR Test Vectors v3
 # =============================================================================
 #
-# Baixa vídeos REAIS para teste, cobrindo docs/REQUIREMENTS.md.
+# Downloads REAL videos for testing, covering docs/REQUIREMENTS.md.
 #
-# Fontes:
+# Sources:
 #  - test-videos.co.uk : H.264, H.265, VP9 (Big Buck Bunny, CC BY 3.0)
 #  - ExoPlayer GCS     : Congo 360° mono, VP9 360° WebM
-#  - archive.org       : Doctor Who 3D SBS real (domínio público / upload livre)
+#  - archive.org       : Doctor Who 3D SBS real (public domain / free upload)
 #  - Apple CDN         : HLS manifests
 #  - wvmedia (Google)  : DASH VP9 manifests
-#  - YouTube (manual)  : VR180 — requer cookies (instrução ao final)
-#  - ffmpeg            : Apenas para formatos sem fonte pública verificada:
-#                        Over/Under (OU) e 4K stress test
+#  - YouTube (manual)  : VR180 — requires cookies (instructions at the end)
+#  - ffmpeg            : Only for formats with no verified public source:
+#                        Over/Under (OU) and the 4K stress test
 #
-# Uso:
+# Usage:
 #   chmod +x scripts/download-test-vectors.sh
 #   ./scripts/download-test-vectors.sh
 #
-# Para VR180 real do YouTube, veja: testdata/vectors/vr180/COMO_BAIXAR.md
+# For real VR180 from YouTube, see: testdata/vectors/vr180/HOW_TO_DOWNLOAD.md
 #
-# Dependências: curl, ffmpeg, ffprobe
+# Dependencies: curl, ffmpeg, ffprobe
 # =============================================================================
 
 set -euo pipefail
@@ -37,7 +37,7 @@ BLUE='\033[0;34m'; CYAN='\033[0;36m'; BOLD='\033[1m'; NC='\033[0m'
 info()    { echo -e "${BLUE}[INFO]${NC} $*" | tee -a "$LOG"; }
 ok()      { echo -e "${GREEN}[ OK ]${NC} $*" | tee -a "$LOG"; }
 warn()    { echo -e "${YELLOW}[WARN]${NC} $*" | tee -a "$LOG"; }
-err()     { echo -e "${RED}[ERRO]${NC} $*" | tee -a "$LOG"; }
+err()     { echo -e "${RED}[ERR ]${NC} $*" | tee -a "$LOG"; }
 gen()     { echo -e "${CYAN}[GEN ]${NC} $*" | tee -a "$LOG"; }
 section() {
     echo -e "\n${BOLD}${CYAN}══════════════════════════════════════════════════${NC}" | tee -a "$LOG"
@@ -52,16 +52,16 @@ dl() {
     local dest="$OUTDIR/$rel"
     mkdir -p "$(dirname "$dest")"
     if [[ -f "$dest" && -s "$dest" ]]; then
-        warn "JÁ EXISTE: $rel  ($(du -sh "$dest" | cut -f1))"; ((SKIP++)) || true; return 0
+        warn "ALREADY EXISTS: $rel  ($(du -sh "$dest" | cut -f1))"; ((SKIP++)) || true; return 0
     fi
-    info "Baixando: ${desc:-$rel}"
+    info "Downloading: ${desc:-$rel}"
     info "  URL: $url"
     if curl -fsSL --retry 3 --retry-delay 3 --connect-timeout 20 \
             --max-time "$maxtime" -L -o "$dest" "$url" 2>>"$LOG"; then
         local sz; sz=$(du -sh "$dest" | cut -f1)
         ok "  → $rel ($sz)"; ((DL++)) || true
     else
-        err "  → FALHA: $rel"; rm -f "$dest"; ((FAIL++)) || true
+        err "  → FAILED: $rel"; rm -f "$dest"; ((FAIL++)) || true
     fi
 }
 
@@ -70,13 +70,13 @@ gen_ff() {
     local dest="$OUTDIR/$rel"
     mkdir -p "$(dirname "$dest")"
     if [[ -f "$dest" && -s "$dest" ]]; then
-        warn "JÁ EXISTE: $rel"; ((SKIP++)) || true; return 0
+        warn "ALREADY EXISTS: $rel"; ((SKIP++)) || true; return 0
     fi
-    gen "Gerando: $desc"
+    gen "Generating: $desc"
     if ffmpeg -y -hide_banner -loglevel error "$@" "$dest" 2>>"$LOG"; then
         ok "  → $rel ($(du -sh "$dest" | cut -f1))"; ((GEN_COUNT++)) || true
     else
-        err "  → FALHA ao gerar: $rel"; rm -f "$dest"
+        err "  → FAILED to generate: $rel"; rm -f "$dest"
     fi
 }
 
@@ -86,15 +86,15 @@ echo "# Log — $(date)" > "$LOG"
 echo -e "${BOLD}"
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║   tucaVR — Test Vector Downloader v3                      ║"
-echo "║   Vídeos reais + ffmpeg apenas onde não há fonte pública  ║"
+echo "║   Real videos + ffmpeg only where there is no public source║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
 # =============================================================================
-# SEÇÃO 1 — 2D Básico: H.264, H.265, VP9  (RF-2D-001/003/004)
+# SECTION 1 — Basic 2D: H.264, H.265, VP9  (RF-2D-001/003/004)
 # Fonte: test-videos.co.uk — BigBuckBunny CC BY 3.0 Blender Foundation
 # =============================================================================
-section "2D — H.264 / H.265 / VP9 reais (RF-2D-001/003/004)"
+section "2D — real H.264 / H.265 / VP9 (RF-2D-001/003/004)"
 
 BASE="https://test-videos.co.uk/vids/bigbuckbunny"
 
@@ -105,27 +105,27 @@ dl "$BASE/mp4/h264/720/Big_Buck_Bunny_720_10s_1MB.mp4" \
    "2d/h264_bbb_720p.mp4" "H.264 720p — BigBuckBunny (RF-2D-003)"
 
 dl "$BASE/mp4/h265/1080/Big_Buck_Bunny_1080_10s_5MB.mp4" \
-   "2d/h265_bbb_1080p.mp4" "H.265/HEVC 1080p — HW decode obrigatório (RF-2D-003)"
+   "2d/h265_bbb_1080p.mp4" "H.265/HEVC 1080p — mandatory HW decode (RF-2D-003)"
 
 dl "$BASE/webm/vp9/1080/Big_Buck_Bunny_1080_10s_5MB.webm" \
    "2d/vp9_bbb_1080p.webm" "VP9 WebM 1080p — BigBuckBunny (RF-2D-004)"
 
-# Sintel trailer — W3C, H.264, ~52s, cena real de animação Blender
+# Sintel trailer — W3C, H.264, ~52s, a real Blender animation scene
 dl "https://media.w3.org/2010/05/sintel/trailer.mp4" \
    "2d/h264_sintel_trailer.mp4" "H.264 — Sintel trailer 854x480 52s (RF-2D-001)"
 
-# BigBuckBunny completo (apenas 720p — ~64MB, real movie)
+# Full BigBuckBunny (720p only — ~64MB, a real movie)
 dl "$BASE/mp4/h264/720/Big_Buck_Bunny_720_10s_30MB.mp4" \
-   "2d/h264_bbb_720p_long.mp4" "H.264 720p 30MB — versão longa (RF-2D-001)" 120 || \
-info "  Versão longa não disponível — apenas clipes de 10s"
+   "2d/h264_bbb_720p_long.mp4" "H.264 720p 30MB — long version (RF-2D-001)" 120 || \
+info "  Long version not available — only 10s clips"
 
 # =============================================================================
-# SEÇÃO 2 — 360° Monoscópico REAL (RF-3D-003)
-# Fontes: ExoPlayer GCS — únicos buckets ainda públicos
+# SECTION 2 — REAL Monoscopic 360° (RF-3D-003)
+# Sources: ExoPlayer GCS — the only buckets still public
 # =============================================================================
-section "360° Monoscópico — Vídeos reais (RF-3D-003)"
+section "Monoscopic 360° — Real videos (RF-3D-003)"
 
-# Congo 360° — ExoPlayer, cena de natureza REAL filmada em 360°
+# Congo 360° — ExoPlayer, a REAL nature scene filmed in 360°
 dl "https://storage.googleapis.com/exoplayer-test-media-1/360/congo.mp4" \
    "360/360_mono_congo_h264.mp4" "360° REAL — Congo H.264 1080p (RF-3D-003)"
 
@@ -134,25 +134,25 @@ dl "https://storage.googleapis.com/exoplayer-test-media-1/gen-3/screens/dash-vod
    "360/360_mono_vp9_640p.webm" "360° VP9 WebM — ExoPlayer screen (RF-3D-003)"
 
 # =============================================================================
-# SEÇÃO 3 — 3D Side-by-Side REAL (RF-3D-001)
+# SECTION 3 — REAL 3D Side-by-Side (RF-3D-001)
 # Fonte: archive.org — Doctor Who Dimensions in Time 3D (SBS real)
-# Nota: 379MB — vídeo real filmado em 3D estereoscópico
+# Note: 379MB — real video filmed in stereoscopic 3D
 # =============================================================================
-section "3D Side-by-Side — Vídeo REAL de arquivo (RF-3D-001)"
+section "3D Side-by-Side — REAL archive video (RF-3D-001)"
 
-warn "Baixando Doctor Who 3D SBS (~379MB) — vídeo 3D REAL de arquivo..."
-warn "Isso pode levar alguns minutos dependendo da sua conexão."
+warn "Downloading Doctor Who 3D SBS (~379MB) — REAL archive 3D video..."
+warn "This can take a few minutes depending on your connection."
 
 dl "https://archive.org/download/doctor-who-dimensions-in-time-3-d-sbs-cross-eye/Doctor%20Who%20-%20Dimensions%20in%20time%203D%20(SBS%20%26%20cross%20eye).mp4" \
    "3d-sbs/doctor_who_3d_sbs_real.mp4" \
    "3D SBS REAL — Doctor Who Dimensions in Time (archive.org)" \
    900
 
-# Complemento: SBS half (half-width por olho) compacto com ffmpeg
-# Usa o Congo 360° como base para criar um SBS realista com conteúdo real
+# Complement: a compact SBS half (half-width per eye) made with ffmpeg
+# Uses the Congo 360° as a base to create a realistic SBS with real content
 if [[ -f "$OUTDIR/360/360_mono_congo_h264.mp4" ]]; then
     gen_ff "3d-sbs/sbs_half_from_360_congo.mp4" \
-        "3D SBS half gerado a partir do Congo 360° real (RF-3D-001)" \
+        "3D SBS half generated from the real Congo 360° (RF-3D-001)" \
         -i "$OUTDIR/360/360_mono_congo_h264.mp4" \
         -i "$OUTDIR/360/360_mono_congo_h264.mp4" \
         -filter_complex "[0:v]crop=iw/2:ih:0:0[left];[1:v]crop=iw/2:ih:iw/2:0[right];[left][right]hstack[v]" \
@@ -163,15 +163,15 @@ if [[ -f "$OUTDIR/360/360_mono_congo_h264.mp4" ]]; then
 fi
 
 # =============================================================================
-# SEÇÃO 4 — 3D Over/Under REAL (RF-3D-002)
-# Sem fonte HTTP pública verificada para OU — gerado a partir de conteúdo real
+# SECTION 4 — REAL 3D Over/Under (RF-3D-002)
+# No verified public HTTP source for OU — generated from real content
 # =============================================================================
-section "3D Over/Under — Gerado de conteúdo real (RF-3D-002)"
+section "3D Over/Under — Generated from real content (RF-3D-002)"
 
-# OU gerado a partir do Doctor Who SBS — converte SBS→OU para ter conteúdo real
+# OU generated from the Doctor Who SBS — converts SBS→OU to have real content
 if [[ -f "$OUTDIR/3d-sbs/doctor_who_3d_sbs_real.mp4" ]]; then
     gen_ff "3d-ou/ou_from_doctorwho_sbs.mp4" \
-        "3D OU convertido do Doctor Who SBS — conteúdo real (RF-3D-002)" \
+        "3D OU converted from the Doctor Who SBS — real content (RF-3D-002)" \
         -i "$OUTDIR/3d-sbs/doctor_who_3d_sbs_real.mp4" \
         -filter_complex \
         "[0:v]crop=iw/2:ih:0:0,scale=iw:ih[left];[0:v]crop=iw/2:ih:iw/2:0,scale=iw:ih[right];[left][right]vstack[v]" \
@@ -180,10 +180,10 @@ if [[ -f "$OUTDIR/3d-sbs/doctor_who_3d_sbs_real.mp4" ]]; then
         -c:a copy \
         -movflags +faststart
 else
-    warn "Doctor Who SBS não baixado — usando fallback para OU"
-    # OU a partir do Congo 360° real (metade esquerda em cima, metade direita embaixo)
+    warn "Doctor Who SBS not downloaded — using the OU fallback"
+    # OU from the real Congo 360° (left half on top, right half on the bottom)
     gen_ff "3d-ou/ou_half_from_congo_360.mp4" \
-        "3D OU gerado do Congo 360° real (RF-3D-002)" \
+        "3D OU generated from the real Congo 360° (RF-3D-002)" \
         -i "$OUTDIR/360/360_mono_congo_h264.mp4" \
         -i "$OUTDIR/360/360_mono_congo_h264.mp4" \
         -filter_complex "[0:v]crop=iw:ih/2:0:0[top];[1:v]crop=iw:ih/2:0:ih/2[bot];[top][bot]vstack[v]" \
@@ -193,22 +193,22 @@ else
 fi
 
 # =============================================================================
-# SEÇÃO 5 — VR180 (RF-3D-005)
+# SECTION 5 — VR180 (RF-3D-005)
 # =============================================================================
-section "VR180 — Instruções para download manual (RF-3D-005)"
+section "VR180 — Manual download instructions (RF-3D-005)"
 
 mkdir -p "$OUTDIR/vr180"
 
-# Tentar yt-dlp com cookies do Firefox (se disponível e funcionando)
+# Try yt-dlp with Firefox cookies (if available and working)
 if command -v yt-dlp &>/dev/null; then
-    info "Tentando VR180 via yt-dlp..."
+    info "Trying VR180 through yt-dlp..."
     
     VR180_DEST="$OUTDIR/vr180/vr180_lightspeed_real.mp4"
     
     if [[ -f "$VR180_DEST" && -s "$VR180_DEST" ]]; then
-        warn "JÁ EXISTE: vr180/vr180_lightspeed_real.mp4"; ((SKIP++)) || true
+        warn "ALREADY EXISTS: vr180/vr180_lightspeed_real.mp4"; ((SKIP++)) || true
     else
-        # Tenta com Firefox cookies
+        # Try with Firefox cookies
         if yt-dlp \
             --cookies-from-browser firefox \
             -f "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best[height<=1080]" \
@@ -217,19 +217,19 @@ if command -v yt-dlp &>/dev/null; then
             -o "$VR180_DEST" \
             "https://www.youtube.com/watch?v=SqhLi11UWWM" \
             2>>"$LOG"; then
-            ok "  → VR180 baixado via yt-dlp"
+            ok "  → VR180 downloaded through yt-dlp"
             ((DL++)) || true
         else
-            warn "  → yt-dlp com Firefox falhou — VR180 precisa de ação manual"
+            warn "  → yt-dlp with Firefox failed — VR180 needs a manual step"
         fi
     fi
 fi
 
-# Gera placeholder informativo para VR180 (vídeo curto com instruções)
+# Generates an informative placeholder for VR180 (a short video with instructions)
 if [[ ! -f "$OUTDIR/vr180/vr180_lightspeed_real.mp4" || \
       ! -s "$OUTDIR/vr180/vr180_lightspeed_real.mp4" ]]; then
     gen_ff "vr180/vr180_placeholder_sbs.mp4" \
-        "VR180 SBS placeholder — aguardando download manual" \
+        "VR180 SBS placeholder — waiting for the manual download" \
         -f lavfi -i "color=c=0x1a1a2e:duration=5:size=3840x2160:rate=30" \
         -f lavfi -i "sine=frequency=440:duration=5" \
         -filter_complex \
@@ -240,34 +240,34 @@ if [[ ! -f "$OUTDIR/vr180/vr180_lightspeed_real.mp4" || \
         -movflags +faststart
 fi
 
-# Cria guia detalhado para download manual de VR180
-cat > "$OUTDIR/vr180/COMO_BAIXAR.md" << 'EOF'
-# Como baixar VR180 real para testes
+# Creates a detailed guide for the manual VR180 download
+cat > "$OUTDIR/vr180/HOW_TO_DOWNLOAD.md" << 'EOF'
+# How to download real VR180 for testing
 
-## Problema
-YouTube bloqueia yt-dlp sem autenticação válida (rate-limit / bot detection).
-VR180 real só existe em quantidade no YouTube.
+## Problem
+YouTube blocks yt-dlp without valid authentication (rate limiting / bot detection).
+Real VR180 only exists in quantity on YouTube.
 
-## Opção 1 — yt-dlp com cookies exportados manualmente (recomendado)
+## Option 1 — yt-dlp with manually exported cookies (recommended)
 
-### No browser (Chrome/Firefox):
-1. Instalar extensão: "Get cookies.txt LOCALLY" (Chrome) ou "cookies.txt" (Firefox)
-2. Acessar youtube.com logado na sua conta
-3. Exportar cookies para arquivo `youtube_cookies.txt`
+### In the browser (Chrome/Firefox):
+1. Install the extension: "Get cookies.txt LOCALLY" (Chrome) or "cookies.txt" (Firefox)
+2. Open youtube.com logged into your account
+3. Export the cookies to a `youtube_cookies.txt` file
 
-### No terminal:
+### In the terminal:
 ```bash
 yt-dlp \
-  --cookies /caminho/para/youtube_cookies.txt \
+  --cookies /path/to/youtube_cookies.txt \
   -f "bestvideo[height<=1080]+bestaudio/best" \
   --no-playlist \
   -o "testdata/vectors/vr180/%(title)s.%(ext)s" \
   "https://www.youtube.com/watch?v=SqhLi11UWWM"
 ```
 
-## Opção 2 — yt-dlp com browser aberto (mais simples)
+## Option 2 — yt-dlp with the browser (simpler)
 ```bash
-# Feche o Chrome primeiro, depois:
+# Close Chrome first, then:
 yt-dlp \
   --cookies-from-browser chrome \
   -f "bestvideo[height<=1080]+bestaudio/best" \
@@ -275,45 +275,45 @@ yt-dlp \
   "https://www.youtube.com/watch?v=SqhLi11UWWM"
 ```
 
-## Vídeos VR180 recomendados para baixar
+## Recommended VR180 videos to download
 
-| ID YouTube | Título | Duração | Resolução |
+| YouTube ID | Title | Duration | Resolution |
 |------------|--------|---------|-----------|
 | SqhLi11UWWM | Experience LIGHTSPEED in VR180 3D | 67s | 4K |
 | arMYi_93nXs | Introduction to Stereoscopic 3D 180° VR (Canon) | 494s | 4K |
 | 0M4ce-0VSZg | URSA Cine Immersive vs Canon EOS VR | 682s | 8K |
 
-## Como identificar VR180 vs 360° no player
-- **VR180**: Proporção 2:1, apenas metade frontal mapeada na esfera (180°)
-- **360°**: Proporção 2:1, esfera completa, head tracking em todas direções
-- **3D SBS**: Metade esquerda = olho esq, metade direita = olho dir
+## How to tell VR180 from 360° in the player
+- **VR180**: 2:1 aspect ratio, only the front half mapped onto the sphere (180°)
+- **360°**: 2:1 aspect ratio, full sphere, head tracking in every direction
+- **3D SBS**: Left half = left eye, right half = right eye
 
-## O que o player deve fazer com VR180:
-1. Detectar o formato (metadados ou heurística 2:1 + projeção="equirectangular")
-2. Dividir horizontalmente ao meio
-3. Enviar metade esquerda para o olho esquerdo
-4. Enviar metade direita para o olho direito
-5. Mapear cada metade em hemisfério de 180° (não esfera completa)
+## What the player should do with VR180:
+1. Detect the format (metadata or the 2:1 + projection="equirectangular" heuristic)
+2. Split horizontally in half
+3. Send the left half to the left eye
+4. Send the right half to the right eye
+5. Map each half onto a 180° hemisphere (not a full sphere)
 EOF
-ok "  → vr180/COMO_BAIXAR.md"
+ok "  → vr180/HOW_TO_DOWNLOAD.md"
 
 # =============================================================================
-# SEÇÃO 6 — 4K Stress Test (RF-3D-006)
+# SECTION 6 — 4K Stress Test (RF-3D-006)
 # =============================================================================
-section "4K — Stress test decode hardware (RF-3D-006)"
+section "4K — Hardware decode stress test (RF-3D-006)"
 
-# 4K H.265 a 60fps — sem fonte pública pequena, usado ffmpeg
+# 4K H.265 at 60fps — no small public source, so ffmpeg is used
 gen_ff "4k/h265_4k_60fps_5s.mp4" \
-    "H.265 4K@60fps — stress test máximo do decoder HW (RF-3D-006)" \
+    "H.265 4K@60fps — maximum stress test of the HW decoder (RF-3D-006)" \
     -f lavfi -i "testsrc2=duration=5:size=3840x2160:rate=60" \
     -f lavfi -i "sine=frequency=440:duration=5" \
     -c:v libx265 -crf 22 -preset fast \
     -c:a aac -b:a 128k \
     -movflags +faststart
 
-# 4K H.264 (para comparação de decoder load)
+# 4K H.264 (for comparing decoder load)
 gen_ff "4k/h264_4k_30fps_5s.mp4" \
-    "H.264 4K@30fps — comparação decode load (RF-3D-006)" \
+    "H.264 4K@30fps — decode load comparison (RF-3D-006)" \
     -f lavfi -i "testsrc2=duration=5:size=3840x2160:rate=30" \
     -f lavfi -i "sine=frequency=440:duration=5" \
     -c:v libx264 -crf 22 -preset fast \
@@ -321,13 +321,13 @@ gen_ff "4k/h264_4k_30fps_5s.mp4" \
     -movflags +faststart
 
 # =============================================================================
-# SEÇÃO 7 — HDR10 / HLG (RF contexto de qualidade no Quest 3)
+# SECTION 7 — HDR10 / HLG (RF quality context on the Quest 3)
 # =============================================================================
-section "HDR — HDR10 / HLG com metadata reais embutidos"
+section "HDR — HDR10 / HLG with real embedded metadata"
 
-# HDR10 H.265 10-bit com master display metadata reais
+# HDR10 H.265 10-bit with real master display metadata
 gen_ff "hdr/hdr10_hevc_10bit_pq.mp4" \
-    "HDR10 H.265 10-bit BT.2020 PQ — metadata SMPTE ST.2086 reais" \
+    "HDR10 H.265 10-bit BT.2020 PQ — real SMPTE ST.2086 metadata" \
     -f lavfi -i "testsrc2=duration=10:size=1920x1080:rate=30" \
     -f lavfi -i "sine=frequency=440:duration=10" \
     -c:v libx265 -crf 22 -preset medium \
@@ -348,9 +348,9 @@ gen_ff "hdr/hlg_hevc_10bit_bt2100.mp4" \
     -movflags +faststart
 
 # =============================================================================
-# SEÇÃO 8 — Áudio (RF-2D-005)
+# SECTION 8 — Audio (RF-2D-005)
 # =============================================================================
-section "Áudio — AAC / MP3 / FLAC / Opus / AC3 (RF-2D-005)"
+section "Audio — AAC / MP3 / FLAC / Opus / AC3 (RF-2D-005)"
 
 dl "https://storage.googleapis.com/exoplayer-test-media-1/ogg/play.ogg" \
    "audio/sample_opus.ogg" "Opus/Vorbis — ExoPlayer sample (RF-2D-005)"
@@ -366,7 +366,7 @@ gen_ff "audio/sample_flac.flac" "FLAC 24-bit lossless (RF-2D-005)" \
     -f lavfi -i "sine=frequency=440:duration=10:sample_rate=96000" \
     -c:a flac -sample_fmt s32
 
-gen_ff "audio/sample_5_1_ac3.mp4" "AC3 5.1 surround — 6 canais distintos (RF-2D-005, RF-3D-010)" \
+gen_ff "audio/sample_5_1_ac3.mp4" "AC3 5.1 surround — 6 distinct channels (RF-2D-005, RF-3D-010)" \
     -f lavfi -i "color=c=black:duration=10:size=640x360:rate=30" \
     -f lavfi -i "sine=frequency=200:duration=10:sample_rate=48000" \
     -f lavfi -i "sine=frequency=440:duration=10:sample_rate=48000" \
@@ -381,21 +381,22 @@ gen_ff "audio/sample_5_1_ac3.mp4" "AC3 5.1 surround — 6 canais distintos (RF-2
     -movflags +faststart
 
 # =============================================================================
-# SEÇÃO 9 — Ambisonics (RF-3D-009)
+# SECTION 9 — Ambisonics (RF-3D-009)
 # =============================================================================
-section "Áudio Espacial — Ambisonics (RF-3D-009)"
+section "Spatial Audio — Ambisonics (RF-3D-009)"
 
-# Congo já tem ambisonics — link simbólico ou re-download
+# Congo already has ambisonics — symlink or re-download
 dl "https://storage.googleapis.com/exoplayer-test-media-1/360/congo.mp4" \
-   "audio-spatial/ambisonics_congo_360.mp4" "Ambisonics embutido no Congo 360° (RF-3D-009)"
+   "audio-spatial/ambisonics_congo_360.mp4" "Ambisonics embedded in the Congo 360° (RF-3D-009)"
 
 # =============================================================================
-# SEÇÃO 10 — Legendas (RF-2D-006, RF-2D-007)
+# SECTION 10 — Subtitles (RF-2D-006, RF-2D-007)
 # =============================================================================
-section "Legendas — SRT / VTT / ASS (RF-2D-006/007)"
+section "Subtitles — SRT / VTT / ASS (RF-2D-006/007)"
 
 mkdir -p "$OUTDIR/subtitles"
 
+# test_pt_br.srt is deliberately in Portuguese: it exercises UTF-8 handling of accented characters.
 cat > "$OUTDIR/subtitles/test_pt_br.srt" << 'EOF'
 1
 00:00:00,500 --> 00:00:02,500
@@ -442,25 +443,25 @@ ScriptType: v4.00+
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
 Style: Default,Arial,20,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1
-Style: Destaque,Arial,26,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1
+Style: Highlight,Arial,26,&H0000FFFF,&H000000FF,&H00000000,&H80000000,1,0,0,0,100,100,0,0,1,2,2,2,10,10,10,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
-Dialogue: 0,0:00:00.50,0:00:02.50,Default,,0,0,0,,Teste ASS — estilos avançados (RF-2D-007)
-Dialogue: 0,0:00:03.00,0:00:05.50,Destaque,,0,0,0,,{\b1}Negrito ciano{\b0} com outline branco
-Dialogue: 0,0:00:06.00,0:00:08.50,Default,,0,0,0,,{\i1}Itálico{\i0} e {\c&H0000FF&}azul{\c} e {\c&H00FF00&}verde{\c}
-Dialogue: 0,0:00:09.00,0:00:10.00,Default,,0,0,0,,{\an8}Topo (an8) — fim do teste ASS
+Dialogue: 0,0:00:00.50,0:00:02.50,Default,,0,0,0,,ASS test — advanced styles (RF-2D-007)
+Dialogue: 0,0:00:03.00,0:00:05.50,Highlight,,0,0,0,,{\b1}Bold cyan{\b0} with a white outline
+Dialogue: 0,0:00:06.00,0:00:08.50,Default,,0,0,0,,{\i1}Italic{\i0} and {\c&H0000FF&}blue{\c} and {\c&H00FF00&}green{\c}
+Dialogue: 0,0:00:09.00,0:00:10.00,Default,,0,0,0,,{\an8}Top (an8) — end of the ASS test
 EOF
 ok "  → subtitles/test_style.ass"
 
 # =============================================================================
-# SEÇÃO 11 — Fotos 360° (RF-3D-008)
+# SECTION 11 — 360° Photos (RF-3D-008)
 # =============================================================================
-section "Fotos 360° e 3D (RF-3D-008)"
+section "360° and 3D Photos (RF-3D-008)"
 
 mkdir -p "$OUTDIR/photos-360"
 
-# Gera panorama equirectangular com conteúdo de gradiente colorido (mais realista que testsrc2)
+# Generates an equirectangular panorama with colored gradient content (more realistic than testsrc2)
 ffmpeg -y -hide_banner -loglevel error \
     -f lavfi -i "gradients=size=4096x2048:x0=0:y0=0:x1=4096:y1=2048:c0=0x1a1a5e:c1=0x0d7c8c:c2=0x2d6a4f:c3=0x95d5b2:speed=0:duration=0:rate=1" \
     -frames:v 1 \
@@ -474,9 +475,9 @@ drawtext=text='180°':x=w/2-20:y=(h/2-60):fontsize=28:fontcolor=white,
 drawtext=text='360°':x=w-60:y=(h/2-60):fontsize=28:fontcolor=white" \
     "$OUTDIR/photos-360/equirect_4k_reference.jpg" 2>>"$LOG" \
     && ok "  → photos-360/equirect_4k_reference.jpg (4096x2048)" \
-    || err "  → Falha ao gerar equirect"
+    || err "  → Failed to generate the equirect"
 
-# Gera foto SBS 3D (espelha a equirect para simular parallax)
+# Generates a 3D SBS photo (mirrors the equirect to simulate parallax)
 if [[ -f "$OUTDIR/photos-360/equirect_4k_reference.jpg" ]]; then
     ffmpeg -y -hide_banner -loglevel error \
         -i "$OUTDIR/photos-360/equirect_4k_reference.jpg" \
@@ -484,30 +485,30 @@ if [[ -f "$OUTDIR/photos-360/equirect_4k_reference.jpg" ]]; then
         -filter_complex "[0:v]drawtext=text='L':x=50:y=50:fontsize=120:fontcolor=red[l];[1:v]drawtext=text='R':x=50:y=50:fontsize=120:fontcolor=blue[r];[l][r]hstack" \
         "$OUTDIR/photos-360/sbs_3d_photo.jpg" 2>>"$LOG" \
         && ok "  → photos-360/sbs_3d_photo.jpg (8192x2048 SBS)" \
-        || err "  → Falha ao gerar SBS photo"
+        || err "  → Failed to generate the SBS photo"
 fi
 
 cat > "$OUTDIR/photos-360/README.txt" << 'EOF'
-# Fotos 360° e 3D (RF-3D-008)
+# 360° and 3D Photos (RF-3D-008)
 
-## equirect_4k_reference.jpg (4096x2048 — proporção 2:1)
-  Panorama equirectangular com grade de referência.
-  O player deve mapear na esfera. Polos devem coincidir (topo/base).
-  Use para verificar: distorção nos polos, equador correto, north/south labels visíveis.
+## equirect_4k_reference.jpg (4096x2048 — 2:1 aspect ratio)
+  Equirectangular panorama with a reference grid.
+  The player must map it onto the sphere. The poles must meet (top/bottom).
+  Use it to check: distortion at the poles, a correct equator, visible north/south labels.
 
 ## sbs_3d_photo.jpg (8192x2048 — SBS 3D)
-  Metade esquerda = olho esquerdo (marcado "L" vermelho)
-  Metade direita = olho direito (marcado "R" azul)
-  Player deve dividir ao meio e enviar para cada olho.
+  Left half = left eye (marked with a red "L")
+  Right half = right eye (marked with a blue "R")
+  The player must split it in half and send each half to its eye.
 
-## Para fotos 360° reais (CC0):
-  - https://polyhaven.com/hdris — HDRIs profissionais panorâmicos
-  - Qualquer câmera 360° (Insta360, GoPro MAX, Ricoh Theta)
+## For real 360° photos (CC0):
+  - https://polyhaven.com/hdris — professional panoramic HDRIs
+  - Any 360° camera (Insta360, GoPro MAX, Ricoh Theta)
 EOF
 ok "  → photos-360/README.txt"
 
 # =============================================================================
-# SEÇÃO 12 — Streaming HLS/DASH (RF-NET-008/009)
+# SECTION 12 — HLS/DASH Streaming (RF-NET-008/009)
 # =============================================================================
 section "Streaming HLS/DASH — Manifests (RF-NET-008/009)"
 
@@ -516,30 +517,30 @@ mkdir -p "$OUTDIR/streaming/hls" "$OUTDIR/streaming/dash"
 curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
     -o "$OUTDIR/streaming/hls/apple_h264_ts.m3u8" \
     "https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8" \
-    2>>"$LOG" && ok "  → HLS: apple_h264_ts.m3u8" || warn "  → Apple HLS indisponível"
+    2>>"$LOG" && ok "  → HLS: apple_h264_ts.m3u8" || warn "  → Apple HLS unavailable"
 
 curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
     -o "$OUTDIR/streaming/hls/apple_hevc_fmp4.m3u8" \
     "https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_adv_example_hevc/master.m3u8" \
-    2>>"$LOG" && ok "  → HLS: apple_hevc_fmp4.m3u8" || warn "  → Apple HLS HEVC indisponível"
+    2>>"$LOG" && ok "  → HLS: apple_hevc_fmp4.m3u8" || warn "  → Apple HLS HEVC unavailable"
 
 curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
     -o "$OUTDIR/streaming/dash/tears_vp9_hd.mpd" \
     "https://storage.googleapis.com/wvmedia/clear/vp9/tears/tears.mpd" \
-    2>>"$LOG" && ok "  → DASH: tears_vp9_hd.mpd" || warn "  → wvmedia DASH indisponível"
+    2>>"$LOG" && ok "  → DASH: tears_vp9_hd.mpd" || warn "  → wvmedia DASH unavailable"
 
 curl -fsSL --retry 3 --connect-timeout 10 --max-time 30 \
     -o "$OUTDIR/streaming/dash/tears_vp9_uhd.mpd" \
     "https://storage.googleapis.com/wvmedia/clear/vp9/tears/tears_uhd.mpd" \
-    2>>"$LOG" && ok "  → DASH: tears_vp9_uhd.mpd (4K)" || warn "  → wvmedia UHD indisponível"
+    2>>"$LOG" && ok "  → DASH: tears_vp9_uhd.mpd (4K)" || warn "  → wvmedia UHD unavailable"
 
 cat > "$OUTDIR/streaming/hls/README-urls.txt" << 'EOF'
-# HLS para colar diretamente no player (RF-NET-008)
+# HLS to paste directly into the player (RF-NET-008)
 
-# H.264 + AAC em TS (baseline)
+# H.264 + AAC in TS (baseline)
 https://devstreaming-cdn.apple.com/videos/streaming/examples/img_bipbop_adv_example_ts/master.m3u8
 
-# HEVC + AAC em fMP4 (avançado)
+# HEVC + AAC in fMP4 (advanced)
 https://devstreaming-cdn.apple.com/videos/streaming/examples/bipbop_adv_example_hevc/master.m3u8
 
 # 4K HDR Dolby Vision + Atmos
@@ -550,12 +551,12 @@ https://multiplatform-f.akamaihd.net/i/multi/april11/sintel/sintel-hd_,512x288_4
 EOF
 
 cat > "$OUTDIR/streaming/dash/README-urls.txt" << 'EOF'
-# DASH para colar diretamente no player (RF-NET-009)
+# DASH to paste directly into the player (RF-NET-009)
 
-# Tears of Steel VP9 HD (sem DRM)
+# Tears of Steel VP9 HD (no DRM)
 https://storage.googleapis.com/wvmedia/clear/vp9/tears/tears.mpd
 
-# Tears of Steel VP9 UHD/4K (sem DRM)
+# Tears of Steel VP9 UHD/4K (no DRM)
 https://storage.googleapis.com/wvmedia/clear/vp9/tears/tears_uhd.mpd
 
 # Akamai multi-resolution
@@ -564,16 +565,16 @@ https://dash.akamaized.net/dash264/TestCases/1b/qualcomm/1/MultiResMPEG2.mpd
 # BBC testcard (AVC)
 https://rdmedia.bbc.co.uk/testcard/vod/manifests/avc-full.mpd
 EOF
-ok "  → streaming README-urls.txt criados"
+ok "  → streaming README-urls.txt created"
 
 # =============================================================================
-# SEÇÃO 13 — Referências SMB/NFS
+# SECTION 13 — SMB/NFS References
 # =============================================================================
-section "Referências SMB/NFS/HTTP (RF-NET-001/002/007)"
+section "SMB/NFS/HTTP References (RF-NET-001/002/007)"
 
 mkdir -p "$OUTDIR/reference"
 cat > "$OUTDIR/reference/http-direct-urls.txt" << 'EOF'
-# URLs HTTP verificadas (testadas 2026-08)
+# Verified HTTP URLs (tested 2026-08)
 
 ## 2D — H.264
 https://test-videos.co.uk/vids/bigbuckbunny/mp4/h264/1080/Big_Buck_Bunny_1080_10s_5MB.mp4
@@ -600,41 +601,41 @@ EOF
 ok "  → reference/http-direct-urls.txt"
 
 cat > "$OUTDIR/reference/smb-nfs-guide.txt" << 'EOF'
-# Guia SMB/NFS para testes (RF-NET-001, RF-NET-002)
+# SMB/NFS guide for testing (RF-NET-001, RF-NET-002)
 
-## Servidor SMB rápido (Samba)
+## Quick SMB server (Samba)
 sudo apt install samba
-# Adicionar ao /etc/samba/smb.conf:
+# Add to /etc/samba/smb.conf:
 # [vr-test]
 #   path = /path/to/testdata/vectors
 #   read only = yes
 #   guest ok = yes
 sudo systemctl restart smbd
-# Acessar: smb://<seu-IP>/vr-test
+# Access: smb://<your-IP>/vr-test
 
-## Servidor NFS rápido
+## Quick NFS server
 sudo apt install nfs-kernel-server
 echo "/path/to/testdata/vectors *(ro,sync,no_subtree_check)" | sudo tee -a /etc/exports
 sudo exportfs -ra
-# Acessar: nfs://<seu-IP>/path/to/testdata/vectors
+# Access: nfs://<your-IP>/path/to/testdata/vectors
 EOF
 ok "  → reference/smb-nfs-guide.txt"
 
 # =============================================================================
-# SEÇÃO 14 — Relatório ffprobe + README
+# SECTION 14 — ffprobe Report + README
 # =============================================================================
-section "Relatório ffprobe + README"
+section "ffprobe Report + README"
 
 REPORT="$OUTDIR/REPORT.md"
 cat > "$REPORT" << 'EOF'
 # Test Vector Report — tucaVR
 
-| Arquivo | Requisito | Codec Vídeo | Codec Áudio | Resolução | Duração | Fonte |
+| File | Requirement | Video Codec | Audio Codec | Resolution | Duration | Source |
 |---------|-----------|-------------|-------------|-----------|---------|-------|
 EOF
 
 if command -v ffprobe &>/dev/null; then
-    info "Analisando com ffprobe..."
+    info "Analyzing with ffprobe..."
     while IFS= read -r -d '' file; do
         rel="${file#"$OUTDIR/"}"
         ext="${file##*.}"
@@ -678,94 +679,94 @@ if command -v ffprobe &>/dev/null; then
 
         echo "| \`$rel\` | $req | \`$vcodec\` | \`$acodec\` | $res | $dur | $src |" >> "$REPORT"
     done < <(find "$OUTDIR" -type f -print0 | sort -z)
-    ok "  → REPORT.md gerado"
+    ok "  → REPORT.md generated"
 fi
 
 cat > "$OUTDIR/README.md" << 'MDEOF'
 # 🎬 Test Vectors — tucaVR
 
-Vídeos de teste para cobrir `docs/REQUIREMENTS.md`.
-Gerado por `scripts/download-test-vectors.sh`.
+Test videos covering `docs/REQUIREMENTS.md`.
+Generated by `scripts/download-test-vectors.sh`.
 
-## 📂 Estrutura
+## 📂 Structure
 
 ```
 testdata/vectors/
-├── 2d/           H.264, H.265, VP9 REAIS (BigBuckBunny, Sintel)   RF-2D-001/003/004
+├── 2d/           H.264, H.265, VP9 REAL (BigBuckBunny, Sintel)   RF-2D-001/003/004
 ├── audio/        AAC, MP3, FLAC, Opus, AC3 5.1                     RF-2D-005
-├── 360/          Congo 360° REAL + VP9 screen                       RF-3D-003
-├── vr180/        Placeholder + COMO_BAIXAR.md (requer cookies)      RF-3D-005
-├── 3d-sbs/       Doctor Who SBS REAL (archive.org) + derivado        RF-3D-001
-├── 3d-ou/        Over/Under derivado do Doctor Who SBS               RF-3D-002
-├── hdr/          HDR10 + HLG com metadata reais embutidos            HDR Quality
+├── 360/          REAL Congo 360° + VP9 screen                       RF-3D-003
+├── vr180/        Placeholder + HOW_TO_DOWNLOAD.md (requires cookies)      RF-3D-005
+├── 3d-sbs/       REAL Doctor Who SBS (archive.org) + derived        RF-3D-001
+├── 3d-ou/        Over/Under derived from the Doctor Who SBS               RF-3D-002
+├── hdr/          HDR10 + HLG with real embedded metadata            HDR Quality
 ├── 4k/           H.264 + H.265 4K stress test                       RF-3D-006
 ├── streaming/
 │   ├── hls/     Apple manifests + README-urls.txt                   RF-NET-008
 │   └── dash/    wvmedia VP9 manifests + README-urls.txt             RF-NET-009
-├── subtitles/   SRT, VTT, ASS sincronizados (10s)                   RF-2D-006/007
-├── audio-spatial/ Ambisonics Congo 360°                              RF-3D-009
-├── photos-360/  Equirect 4K + SBS foto                              RF-3D-008
-├── reference/   URLs HTTP, guia SMB/NFS                             RF-NET-001/002/007
-├── REPORT.md    Análise ffprobe automática
-└── README.md    Este arquivo
+├── subtitles/   Synchronized SRT, VTT, ASS (10s)                   RF-2D-006/007
+├── audio-spatial/ Congo 360° Ambisonics                              RF-3D-009
+├── photos-360/  4K equirect + SBS photo                              RF-3D-008
+├── reference/   HTTP URLs, SMB/NFS guide                             RF-NET-001/002/007
+├── REPORT.md    Automatic ffprobe analysis
+└── README.md    This file
 ```
 
-## ✅ Checklist de Testes
+## ✅ Test Checklist
 
 ### v0.1 MVP
-- [ ] `2d/h264_bbb_1080p.mp4` → tela plana no VR (RF-2D-001)
+- [ ] `2d/h264_bbb_1080p.mp4` → flat screen in VR (RF-2D-001)
 - [ ] `2d/h265_bbb_1080p.mp4` → HEVC HW decode (RF-2D-003)
 - [ ] `2d/vp9_bbb_1080p.webm` → VP9 decode (RF-2D-004)
 - [ ] URLs em `reference/http-direct-urls.txt` → HTTP playback (RF-NET-007)
 
 ### v0.2 3D & Network
-- [ ] `360/360_mono_congo_h264.mp4` → 360° real, head tracking < 20ms
-- [ ] `3d-sbs/doctor_who_3d_sbs_real.mp4` → 3D SBS com conteúdo real filmado
-- [ ] `3d-ou/ou_from_doctorwho_sbs.mp4` → Over/Under correto
-- [ ] **VR180**: Seguir `vr180/COMO_BAIXAR.md` para obter vídeo real
+- [ ] `360/360_mono_congo_h264.mp4` → real 360°, head tracking < 20ms
+- [ ] `3d-sbs/doctor_who_3d_sbs_real.mp4` → 3D SBS with real filmed content
+- [ ] `3d-ou/ou_from_doctorwho_sbs.mp4` → correct Over/Under
+- [ ] **VR180**: Follow `vr180/HOW_TO_DOWNLOAD.md` to get a real video
 - [ ] URLs HLS em `streaming/hls/README-urls.txt` (RF-NET-008)
 - [ ] URLs DASH em `streaming/dash/README-urls.txt` (RF-NET-009)
-- [ ] `subtitles/test_pt_br.srt` + qualquer vídeo (RF-2D-006)
+- [ ] `subtitles/test_pt_br.srt` + any video (RF-2D-006)
 
 ### v0.3 Audio & Polish
-- [ ] `audio/sample_5_1_ac3.mp4` → 5.1 surround virtualizado (RF-3D-010)
+- [ ] `audio/sample_5_1_ac3.mp4` → virtualized 5.1 surround (RF-3D-010)
 - [ ] `audio-spatial/ambisonics_congo_360.mp4` → Ambisonics (RF-3D-009)
-- [ ] `subtitles/test_style.ass` → ASS com estilos (RF-2D-007)
-- [ ] `photos-360/equirect_4k_reference.jpg` → foto 360° na esfera (RF-3D-008)
+- [ ] `subtitles/test_style.ass` → ASS with styles (RF-2D-007)
+- [ ] `photos-360/equirect_4k_reference.jpg` → 360° photo on the sphere (RF-3D-008)
 
 ### v0.4 Advanced
-- [ ] `4k/h265_4k_60fps_5s.mp4` → 4K@60fps, sem drop de frames (RF-3D-006)
-- [ ] `hdr/hdr10_hevc_10bit_pq.mp4` → HDR10, cores não lavadas no Quest 3
+- [ ] `4k/h265_4k_60fps_5s.mp4` → 4K@60fps, no dropped frames (RF-3D-006)
+- [ ] `hdr/hdr10_hevc_10bit_pq.mp4` → HDR10, colors not washed out on the Quest 3
 - [ ] `hdr/hlg_hevc_10bit_bt2100.mp4` → HLG broadcast HDR
 
-## 📌 VR180 — Ação necessária
-O VR180 real (RF-3D-005) requer cookies do YouTube para download.
-Veja as instruções em [`vr180/COMO_BAIXAR.md`](vr180/COMO_BAIXAR.md).
+## 📌 VR180 — Action required
+Real VR180 (RF-3D-005) requires YouTube cookies to download.
+See the instructions in [`vr180/HOW_TO_DOWNLOAD.md`](vr180/HOW_TO_DOWNLOAD.md).
 MDEOF
-ok "  → README.md atualizado"
+ok "  → README.md updated"
 
 # =============================================================================
-# RESUMO FINAL
+# FINAL SUMMARY
 # =============================================================================
 echo ""
 echo -e "${BOLD}${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${GREEN}║                  CONCLUÍDO                                ║${NC}"
+echo -e "${BOLD}${GREEN}║                  DONE                                     ║${NC}"
 echo -e "${BOLD}${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
 echo ""
-echo -e "  ${GREEN}✔ Downloads:${NC}  $DL  (vídeos reais de fontes verificadas)"
-echo -e "  ${CYAN}⚙ Gerados:${NC}    $GEN_COUNT  (ffmpeg — apenas onde não há fonte pública)"
-echo -e "  ${YELLOW}⊘ Pulados:${NC}    $SKIP  (já existiam)"
-echo -e "  ${RED}✘ Falhos:${NC}     $FAIL"
+echo -e "  ${GREEN}✔ Downloads:${NC}  $DL  (real videos from verified sources)"
+echo -e "  ${CYAN}⚙ Generated:${NC}  $GEN_COUNT  (ffmpeg — only where there is no public source)"
+echo -e "  ${YELLOW}⊘ Skipped:${NC}    $SKIP  (already existed)"
+echo -e "  ${RED}✘ Failed:${NC}      $FAIL"
 echo ""
-echo -e "  ${BLUE}📁 Destino:${NC}   $OUTDIR"
-echo -e "  ${BLUE}📊 Relatório:${NC} $OUTDIR/REPORT.md"
+echo -e "  ${BLUE}📁 Target:${NC}      $OUTDIR"
+echo -e "  ${BLUE}📊 Report:${NC}    $OUTDIR/REPORT.md"
 echo ""
 if [[ ! -f "$OUTDIR/vr180/vr180_lightspeed_real.mp4" || \
       ! -s "$OUTDIR/vr180/vr180_lightspeed_real.mp4" ]]; then
-    echo -e "  ${YELLOW}⚠ VR180 real ausente.${NC} Veja: testdata/vectors/vr180/COMO_BAIXAR.md"
+    echo -e "  ${YELLOW}⚠ Real VR180 missing.${NC} See: testdata/vectors/vr180/HOW_TO_DOWNLOAD.md"
 fi
 echo ""
-echo -e "${CYAN}Próximos passos:${NC}"
+echo -e "${CYAN}Next steps:${NC}"
 echo "  cat testdata/vectors/REPORT.md"
-echo "  cat testdata/vectors/vr180/COMO_BAIXAR.md  # para VR180 real"
+echo "  cat testdata/vectors/vr180/HOW_TO_DOWNLOAD.md  # for real VR180"
 echo ""

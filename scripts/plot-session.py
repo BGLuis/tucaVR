@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Regenera no PC os 5 gráficos do painel de estatísticas (F5/F6)
-a partir de um CSV de telemetria versionado, sem precisar do headset — mesmos dados,
-mesmas 5 visões (app/src/main/java/com/tucavr/designsystem/VoidChart.kt), pra triagem offline.
+"""Regenerates on the PC the 5 charts of the stats panel (F5/F6)
+from a versioned telemetry CSV, with no headset needed — the same data and the
+same 5 views (app/src/main/java/com/tucavr/designsystem/VoidChart.kt), for offline triage.
 
-Uso:
-    python3 scripts/plot-session.py caminho/para/session-XXXX.csv [--out saida.png]
+Usage:
+    python3 scripts/plot-session.py path/to/session-XXXX.csv [--out output.png]
 
-Requer: matplotlib (pip install matplotlib). Nenhuma outra dependência — lê o CSV
-com o módulo padrão `csv`, não `pandas`, de propósito (script standalone, sem
-depender do resto do toolchain do projeto).
+Requires: matplotlib (pip install matplotlib). No other dependency — it reads the CSV
+with the standard `csv` module, not `pandas`, on purpose (a standalone script that does
+not depend on the rest of the project's toolchain).
 
-D-05/schema_version: cada linha do CSV carrega a versão do schema na 1ª coluna
-(ver DebugTelemetryExporter.SCHEMA_VERSION). Colunas que não existiam em versões
-antigas (ex.: v1 não tem video_stall_count, introduzido em v2) simplesmente
-resultam no gráfico correspondente sendo pulado com um aviso — nunca um crash.
+D-05/schema_version: each CSV row carries the schema version in the 1st column
+(see DebugTelemetryExporter.SCHEMA_VERSION). Columns that did not exist in older
+versions (e.g. v1 has no video_stall_count, introduced in v2) simply result in the
+corresponding chart being skipped with a warning — never a crash.
 """
 import argparse
 import csv
@@ -22,10 +22,10 @@ import sys
 try:
     import matplotlib.pyplot as plt
 except ImportError:
-    print("Erro: matplotlib não instalado. Rode: pip install matplotlib", file=sys.stderr)
+    print("Error: matplotlib is not installed. Run: pip install matplotlib", file=sys.stderr)
     sys.exit(1)
 
-# Mesmos limiares/bordas usados nativamente — ver BottleneckStageAnalyzer.kt e
+# The same thresholds/edges used natively — see BottleneckStageAnalyzer.kt and
 # vr_player_app_vulkan.cpp (kFrameTimeHistogramEdgesMs).
 STALL_THRESHOLD_MS = 500.0
 QUEUE_EMPTY_THRESHOLD = 5
@@ -41,9 +41,9 @@ def read_rows(csv_path):
         reader = csv.DictReader(f)
         rows = list(reader)
     if not rows:
-        raise ValueError(f"CSV vazio: {csv_path}")
+        raise ValueError(f"Empty CSV: {csv_path}")
     versions = sorted({row.get("schema_version", "?") for row in rows})
-    print(f"Lidas {len(rows)} amostras. schema_version presente(s): {', '.join(versions)}")
+    print(f"Read {len(rows)} samples. schema_version present: {', '.join(versions)}")
     return rows
 
 
@@ -80,33 +80,33 @@ def bottleneck_stage(row):
 def plot_g1_timeline(ax, rows):
     if not has_columns(rows, "frame_gap_ms", "video_q_depth"):
         ax.set_visible(False)
-        print("G1 pulado: frame_gap_ms/video_q_depth ausentes neste schema.")
+        print("G1 skipped: frame_gap_ms/video_q_depth are absent in this schema.")
         return
     stages = [bottleneck_stage(r) for r in rows]
     for i, stage in enumerate(stages):
         ax.axvspan(i, i + 1, color=STAGE_COLORS[stage], linewidth=0)
     ax.set_xlim(0, len(stages))
     ax.set_yticks([])
-    ax.set_title("G1 — Estágio do pipeline (bottleneck_stage)")
+    ax.set_title("G1 — Pipeline stage (bottleneck_stage)")
 
 
 def plot_g2_histogram(ax, rows):
     bucket_keys = [f"hist_bucket_{i}" for i in range(8)]
     if not has_columns(rows, *bucket_keys):
         ax.set_visible(False)
-        print("G2 pulado: hist_bucket_0..7 ausentes neste schema (introduzidos em v5).")
+        print("G2 skipped: hist_bucket_0..7 are absent in this schema (introduced in v5).")
         return
-    last = rows[-1]  # contadores cumulativos — a última amostra já tem o total da sessão.
+    last = rows[-1]  # cumulative counters — the last sample already holds the session total.
     counts = [col_int(last, k) for k in bucket_keys]
     ax.bar(HIST_BUCKET_LABELS, counts, color="#4A90D9")
-    ax.set_title("G2 — Histograma de frame time (ms, cumulativo da sessão)")
+    ax.set_title("G2 — Frame time histogram (ms, cumulative over the session)")
     ax.tick_params(axis="x", rotation=45)
 
 
 def plot_g3_buffer_and_network(ax, rows):
     if not has_columns(rows, "video_q_depth", "video_fps", "net_mbs"):
         ax.set_visible(False)
-        print("G3 pulado: video_q_depth/video_fps/net_mbs ausentes neste schema.")
+        print("G3 skipped: video_q_depth/video_fps/net_mbs are absent in this schema.")
         return
     buffer_health = []
     net_mbs = []
@@ -118,8 +118,8 @@ def plot_g3_buffer_and_network(ax, rows):
     x = range(len(rows))
     ax.fill_between(x, buffer_health, color="#4CAF50", alpha=0.4, label="Buffer health (s)")
     ax2 = ax.twinx()
-    ax2.plot(x, net_mbs, color="#B388FF", label="Rede (MB/s)")
-    ax.set_title("G3 — Saúde do buffer (s) / Rede (MB/s)")
+    ax2.plot(x, net_mbs, color="#B388FF", label="Network (MB/s)")
+    ax.set_title("G3 — Buffer health (s) / Network (MB/s)")
     ax.legend(loc="upper left")
     ax2.legend(loc="upper right")
 
@@ -127,7 +127,7 @@ def plot_g3_buffer_and_network(ax, rows):
 def plot_g4_av_drift(ax, rows):
     if not has_columns(rows, "av_drift_ms"):
         ax.set_visible(False)
-        print("G4 pulado: av_drift_ms ausente neste schema.")
+        print("G4 skipped: av_drift_ms is absent in this schema.")
         return
     drift = [col_float(r, "av_drift_ms") for r in rows]
     x = range(len(rows))
@@ -135,30 +135,30 @@ def plot_g4_av_drift(ax, rows):
     ax.axhline(0, color="gray", linewidth=1)
     ax.axhline(40, color="gray", linestyle="--", linewidth=1)
     ax.axhline(-40, color="gray", linestyle="--", linewidth=1)
-    ax.set_title("G4 — Drift A/V (ms), banda ±40ms")
+    ax.set_title("G4 — A/V drift (ms), ±40ms band")
 
 
 def plot_g5_gpu_vs_budget(ax, rows):
     if not has_columns(rows, "smoothed_gpu_time_ms", "refresh_rate"):
         ax.set_visible(False)
-        print("G5 pulado: smoothed_gpu_time_ms/refresh_rate ausentes neste schema.")
+        print("G5 skipped: smoothed_gpu_time_ms/refresh_rate are absent in this schema.")
         return
     gpu_ms = [col_float(r, "smoothed_gpu_time_ms") for r in rows]
     x = range(len(rows))
     ax.plot(x, gpu_ms, color="#4A90D9", label="GPU time (ms)")
     refresh_rate = col_float(rows[-1], "refresh_rate", 90.0) or 90.0
     frame_interval_ms = 1000.0 / refresh_rate
-    # Mesma formula de gpu_budget_ms do QualityController (rust/media-logic/src/quality.rs).
+    # The same gpu_budget_ms formula as the QualityController (rust/media-logic/src/quality.rs).
     budget_ms = frame_interval_ms * 0.85
     ax.axhline(budget_ms, color="#FF6B00", linestyle="--", label=f"budget ({budget_ms:.1f}ms)")
-    ax.set_title("G5 — GPU time vs. orçamento (ms)")
+    ax.set_title("G5 — GPU time vs. budget (ms)")
     ax.legend()
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("csv_path", help="Caminho do CSV de sessão (session-*.csv)")
-    parser.add_argument("--out", help="Caminho do PNG de saída (padrão: mostra interativamente)")
+    parser.add_argument("csv_path", help="Path of the session CSV (session-*.csv)")
+    parser.add_argument("--out", help="Path of the output PNG (default: shows interactively)")
     args = parser.parse_args()
 
     rows = read_rows(args.csv_path)
@@ -174,7 +174,7 @@ def main():
 
     if args.out:
         fig.savefig(args.out, dpi=150)
-        print(f"Salvo em {args.out}")
+        print(f"Saved to {args.out}")
     else:
         plt.show()
 

@@ -9,22 +9,22 @@ for arg in "$@"; do
     case "$arg" in
         --clean) FORCE_CLEAN=true ;;
         *)
-            echo "❌ Argumento desconhecido: $arg (use --clean)" >&2
+            echo "❌ Unknown argument: $arg (use --clean)" >&2
             exit 1
             ;;
     esac
 done
 
-echo "🚀 Iniciando o build unificado (tucaVR)..."
+echo "🚀 Starting the unified build (tucaVR)..."
 
 if $FORCE_CLEAN; then
-    echo "🧹 Limpando artefatos Android..."
+    echo "🧹 Cleaning Android artifacts..."
     # Remove CMake state explicitly: its Ninja/SDK paths can belong to Docker.
     rm -rf -- app/.cxx app/build
 fi
 
 # Gradle runs buildRust before preBuild, then builds the native C++ layer and APK.
-echo "🤖 Compilando Android App..."
+echo "🤖 Building the Android app..."
 GRADLE_ARGS=()
 if $FORCE_CLEAN; then
     ./gradlew clean
@@ -38,4 +38,4 @@ fi
 
 ./gradlew assembleDebug "${GRADLE_ARGS[@]}"
 
-echo "✅ Build concluído com sucesso!"
+echo "✅ Build finished successfully!"

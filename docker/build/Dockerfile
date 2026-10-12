@@ -1,27 +1,27 @@
 # syntax=docker/dockerfile:1
 # =============================================================================
-# tucaVR — imagem de build do APK debug
+# tucaVR — debug APK build image
 #
-# Estágios independentes (o BuildKit constrói sdk, ffmpeg e rust em paralelo):
+# Independent stages (BuildKit builds sdk, ffmpeg and rust in parallel):
 #   sdk    -> Android SDK 34, NDK 26.3, CMake 3.22.1, build-tools
-#   ffmpeg -> FFmpeg cross-compilado para arm64-v8a (ffmpeg-android-maker)
-#   rust   -> Rust fixo + target aarch64-linux-android + cargo-ndk
-#   final  -> só o que o build precisa em runtime (sem nasm/yasm/curl/wget,
-#             sem .git nem fontes do FFmpeg)
+#   ffmpeg -> FFmpeg cross-compiled for arm64-v8a (ffmpeg-android-maker)
+#   rust   -> Pinned Rust + the aarch64-linux-android target + cargo-ndk
+#   final  -> only what the build needs at runtime (no nasm/yasm/curl/wget,
+#             no .git or FFmpeg sources)
 #
-# O código-fonte e o Meta OpenXR SDK são montados em /project por volume.
-# O container roda como usuário não-root; use scripts/docker-build.sh, que
-# passa --user com o UID/GID do host (arquivos gerados ficam seus, sem chown).
+# The source code and the Meta OpenXR SDK are mounted into /project as a volume.
+# The container runs as a non-root user; use scripts/docker-build.sh, which
+# passes --user with the host's UID/GID (generated files stay yours, with no chown).
 # =============================================================================
 
-# Pins. Atualize digest/versões de propósito, nunca "latest".
+# Pins. Update digests/versions on purpose, never "latest".
 ARG UBUNTU_IMAGE=ubuntu:22.04@sha256:b8b6ee6aa931ecd9d0d952abc34dc0e5f7c6a30c6bb71b079fe399fde0329c02
 
 FROM ${UBUNTU_IMAGE} AS base
 ENV DEBIAN_FRONTEND=noninteractive \
     LANG=C.UTF-8 \
     LC_ALL=C.UTF-8
-# Sem isso o docker-clean apaga o cache do apt e o cache mount fica vazio.
+# Without this, docker-clean wipes the apt cache and the cache mount stays empty.
 RUN rm -f /etc/apt/apt.conf.d/docker-clean
 
 # ── sdk: Android SDK + NDK + CMake ───────────────────────────────────────────
@@ -54,13 +54,13 @@ RUN <<EOT
         "build-tools;34.0.0" \
         "ndk;${NDK_VERSION}" \
         "cmake;3.22.1"
-    # Nada aqui escreve no SDK depois; deixa legível para qualquer UID.
+    # Nothing here writes to the SDK afterwards; make it readable by any UID.
     chmod -R a+rX "${ANDROID_HOME}"
 EOT
 
-# ── ffmpeg: cross-compile para arm64-v8a ─────────────────────────────────────
+# ── ffmpeg: cross-compile for arm64-v8a ─────────────────────────────────────
 FROM base AS ffmpeg
-# Mesmo commit de scripts/setup-deps.sh (FFMPEG_MAKER_COMMIT).
+# The same commit as scripts/setup-deps.sh (FFMPEG_MAKER_COMMIT).
 ARG FFMPEG_MAKER_REF=dd72b161ae5c759fd25a5cab971a3ff710f0bdba
 ARG NDK_VERSION=26.3.11579264
 ENV ANDROID_SDK_HOME=/opt/android-sdk \
@@ -82,25 +82,25 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
         wget \
         yasm
 
-# Só o NDK: o resto do SDK não participa do build do FFmpeg.
+# Only the NDK: the rest of the SDK takes no part in the FFmpeg build.
 COPY --from=sdk /opt/android-sdk/ndk /opt/android-sdk/ndk
 
-# O prefixo dos .pc gerados é /opt/ffmpeg-android-maker/...; o estágio final
-# copia para o mesmo caminho para o pkg-config continuar resolvendo.
+# The prefix of the generated .pc files is /opt/ffmpeg-android-maker/...; the final stage
+# copies it to the same path so pkg-config keeps resolving.
 RUN <<EOT
     set -eux
     git clone https://github.com/Javernaut/ffmpeg-android-maker.git /opt/ffmpeg-android-maker
     cd /opt/ffmpeg-android-maker
     git checkout "${FFMPEG_MAKER_REF}"
     ./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26
-    # Só o resultado: sem fontes, .git nem o script do maker.
+    # Only the result: no sources, .git or the maker script.
     mkdir -p /out/build/ffmpeg /out/output/include
     cp -a build/ffmpeg/arm64-v8a /out/build/ffmpeg/arm64-v8a
-    # scripts/build.sh referencia output/include/arm64-v8a (symlink relativo).
+    # scripts/build-rust.sh references output/include/arm64-v8a (a relative symlink).
     ln -s ../../build/ffmpeg/arm64-v8a/include /out/output/include/arm64-v8a
 EOT
 
-# ── rust: toolchain fixo + cargo-ndk ─────────────────────────────────────────
+# ── rust: pinned toolchain + cargo-ndk ─────────────────────────────────────────
 FROM base AS rust
 ARG RUSTUP_VERSION=1.28.2
 ARG RUSTUP_INIT_SHA256=20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c
@@ -141,7 +141,7 @@ LABEL org.opencontainers.image.title="tucaVR builder" \
       org.opencontainers.image.description="Toolchain de build do APK debug do tucaVR" \
       org.opencontainers.image.source="https://github.com/BGLuis/tucaVR"
 
-# build-essential: linker do host para build.rs/proc-macros. libclang-dev: bindgen.
+# build-essential: the host linker for build.rs/proc-macros. libclang-dev: bindgen.
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt,sharing=locked \
     apt-get update && apt-get install -y --no-install-recommends \
@@ -157,8 +157,8 @@ COPY --link --from=rust /opt/rustup /opt/rustup
 COPY --link --from=rust /opt/cargo/bin /opt/cargo/bin
 COPY --link --from=ffmpeg /out/ /opt/ffmpeg-android-maker/
 
-# Caches e HOME num caminho gravável por qualquer UID (o container roda com o
-# UID do host via --user). Volumes nomeados herdam estas permissões.
+# Caches and HOME at a path writable by any UID (the container runs with the
+# host's UID through --user). Named volumes inherit these permissions.
 RUN mkdir -p -m 1777 /cache/gradle /cache/cargo /cache/android /cache/home
 
 ENV ANDROID_HOME=/opt/android-sdk \
@@ -179,7 +179,7 @@ ENV ANDROID_HOME=/opt/android-sdk \
 WORKDIR /project
 COPY --chmod=755 entrypoint.sh /usr/local/bin/entrypoint.sh
 
-# UID estático e não-root por padrão; scripts/docker-build.sh sobrescreve com
-# o UID/GID do host. Sem HEALTHCHECK: é um container de build, não um serviço.
+# A static, non-root UID by default; scripts/docker-build.sh overrides it with
+# the host's UID/GID. No HEALTHCHECK: this is a build container, not a service.
 USER 10001:10001
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
