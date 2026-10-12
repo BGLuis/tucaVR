@@ -117,6 +117,7 @@ android {
 
     testOptions {
         unitTests.isReturnDefaultValues = true
+        unitTests.all { it.inputs.file("config/ui-guards/baseline.txt") }
     }
 
     lint {
