@@ -79,7 +79,7 @@ Validation Campaign Flow:
 
 ### Tasks
 
-- [ ] **T2.1** — Write `docs/HARDWARE-VALIDATION-CHECKLIST.md`, one item per feature/axis, with objective acceptance criteria (verifiable and recordable, not "looks good"):
+- [x] **T2.1** — Write `docs/HARDWARE-VALIDATION-CHECKLIST.md`, one item per feature/axis, with objective acceptance criteria (verifiable and recordable, not "looks good"):
   ```markdown
   ## Foveated Rendering (XR_FB_foveation)
   - [ ] Enables without crash across all 5 levels (Off/Low/Med/High/Auto)
