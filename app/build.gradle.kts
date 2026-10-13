@@ -175,6 +175,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
+    // Epic #102 / R4 / #106: Lottie intro animation sequence on main VR presentation panel
+    implementation("com.airbnb.android:lottie:6.7.1")
 
     // JVM unit tests (app/src/test) — the file browser's pure logic
     // (MediaSorter, DirectoryNavigator, DirectoryLister, the ThumbnailGenerator
