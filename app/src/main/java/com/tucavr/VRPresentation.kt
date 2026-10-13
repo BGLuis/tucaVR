@@ -15,6 +15,7 @@ import android.widget.FrameLayout
 import android.widget.ScrollView
 import androidx.recyclerview.widget.RecyclerView
 import com.airbnb.lottie.LottieAnimationView
+import com.airbnb.lottie.LottieCompositionFactory
 import com.tucavr.designsystem.KeyboardBinding
 import com.tucavr.designsystem.VoidTheme
 import com.tucavr.download.DownloadRepository
@@ -239,7 +240,6 @@ class VRPresentation(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                         )
                     setBackgroundColor(VoidTheme.colorBackground)
-                    setAnimation("intro.json")
                     repeatCount = 0
                     addAnimatorListener(
                         object : Animator.AnimatorListener {
@@ -254,16 +254,26 @@ class VRPresentation(
                             override fun onAnimationRepeat(animation: Animator) {}
                         },
                     )
-                    setFailureListener { error ->
-                        Log.w("VRPresentation", "Failed to load intro.json: ${error.message}, falling back to Home")
-                        introController?.skip()
-                    }
                     setOnClickListener {
                         skipIntro()
                     }
                 }
             introView = lottie
             screenHost.addView(lottie)
+
+            LottieCompositionFactory.fromAsset(context, "intro.json")
+                .addListener { composition ->
+                    try {
+                        lottie.setComposition(composition)
+                    } catch (e: Throwable) {
+                        Log.w("VRPresentation", "Failed applying Lottie composition: ${e.message}, falling back to Home", e)
+                        introController?.skip()
+                    }
+                }
+                .addFailureListener { error ->
+                    Log.w("VRPresentation", "Failed to load intro.json: ${error.message}, falling back to Home")
+                    introController?.skip()
+                }
 
             introController =
                 IntroSequenceController(

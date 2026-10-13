@@ -1,6 +1,7 @@
-import sys
-sys.dont_write_bytecode = True
 #!/usr/bin/env python3
+import sys
+
+sys.dont_write_bytecode = True
 """
 Brand Asset Orchestrator CLI for tucaVR (Epic #102 / Milestone 1).
 Generates static vector assets (simbolo.svg, logo_final.svg),
@@ -116,7 +117,7 @@ def main():
     lottie_data = scene.build_lottie_animation(letters_data)
     intro_path = os.path.join(output_dir, "intro.json")
     with open(intro_path, "w", encoding="utf-8") as f:
-        json.dump(lottie_data, f, indent=2, sort_keys=True)
+        json.dump(lottie_data, f, indent=2)
         f.write("\n")
 
     print("[4/4] Rendering 1400x560 Horizon OS system splash vr_splash.png...")
@@ -124,11 +125,14 @@ def main():
     splash_png_path = os.path.join(output_dir, "vr_splash.png")
     render_svg_to_png(splash_svg, splash_png_path, width=1400, height=560)
 
-    # Sync vr_splash.png to app/src/main/assets/
+    # Sync assets to app/src/main/assets/
     if os.path.exists(assets_dir):
         app_splash_path = os.path.join(assets_dir, "vr_splash.png")
         shutil.copyfile(splash_png_path, app_splash_path)
         print(f"      Copied vr_splash.png to {app_splash_path}")
+        app_intro_path = os.path.join(assets_dir, "intro.json")
+        shutil.copyfile(intro_path, app_intro_path)
+        print(f"      Copied intro.json to {app_intro_path}")
 
     print("\n✓ Brand assets successfully generated:")
     print(f"  - {simbolo_path}")
@@ -137,6 +141,7 @@ def main():
     print(f"  - {splash_png_path}")
     if os.path.exists(assets_dir):
         print(f"  - {os.path.join(assets_dir, 'vr_splash.png')}")
+        print(f"  - {os.path.join(assets_dir, 'intro.json')}")
 
 
 if __name__ == "__main__":

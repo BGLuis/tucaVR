@@ -620,7 +620,29 @@ def test_t1_r4_03():
     if not isinstance(data.get("layers"), list) or len(data.get("layers")) == 0:
         return False, "intro.json layers is empty or not a list"
 
-    return True, "intro.json conforms strictly to Lottie schema (60 fps, 96 frames, 1400x560)"
+    # Verify shape elements adhere to Bodymovin/Lottie streaming parser constraint (ty is first key)
+    def verify_shape_keys(item, path=""):
+        if isinstance(item, dict):
+            if "ty" in item and isinstance(item["ty"], str):
+                first_key = next(iter(item.keys()))
+                if first_key != "ty":
+                    return False, f"Shape '{item.get('nm', 'unnamed')}' at {path} has first key '{first_key}', expected 'ty'"
+            for k, v in item.items():
+                ok, err = verify_shape_keys(v, f"{path}.{k}" if path else k)
+                if not ok:
+                    return False, err
+        elif isinstance(item, list):
+            for i, elem in enumerate(item):
+                ok, err = verify_shape_keys(elem, f"{path}[{i}]")
+                if not ok:
+                    return False, err
+        return True, ""
+
+    ok, err = verify_shape_keys(data.get("layers", []))
+    if not ok:
+        return False, f"intro.json violates shape key order constraint: {err}"
+
+    return True, "intro.json conforms strictly to Lottie schema (60 fps, 96 frames, 1400x560, ty-first shapes)"
 
 
 @register_test(
