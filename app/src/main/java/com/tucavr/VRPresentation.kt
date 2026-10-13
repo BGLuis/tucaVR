@@ -83,7 +83,7 @@ class VRPresentation(
     // ContextThemeWrapper derivado do display-context. Guardamos a Activity
     // de verdade para poder chamar nativeX()/playFile()/playUrl() etc.
     private val activity: VRActivity,
-) : Presentation(outerContext, display, android.R.style.Theme_NoTitleBar_Fullscreen) {
+) : Presentation(outerContext, display, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen) {
     // ---- Infraestrutura de navegação ----
 
     private val appNav = AppNavigator()
@@ -213,7 +213,10 @@ class VRPresentation(
         setContentView(screenHost)
         window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+        window?.decorView?.background = null
         window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        window?.setDimAmount(0.0f)
+        window?.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
 
         initScreens()
         if (IntroSequenceController.hasCompletedIntroOnce) {
@@ -242,16 +245,22 @@ class VRPresentation(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                         )
                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
-                    speed = 0.5f
+                    background = null
+                    @Suppress("DEPRECATION")
+                    setIgnoreDisabledSystemAnimations(true)
+                    speed = 0.35f
                     repeatCount = 0
                     addAnimatorListener(
                         object : Animator.AnimatorListener {
-                            override fun onAnimationStart(animation: Animator) {}
+                            override fun onAnimationStart(animation: Animator) {
+                                Log.i("VRPresentation", "Intro Lottie animation started (speed=$speed)")
+                            }
 
                             override fun onAnimationEnd(animation: Animator) {
+                                Log.i("VRPresentation", "Intro Lottie animation ended, holding static lock before Home")
                                 introHandler.postDelayed({
                                     introController?.onAnimationComplete()
-                                }, 800L)
+                                }, 2000L)
                             }
 
                             override fun onAnimationCancel(animation: Animator) {}
@@ -270,6 +279,11 @@ class VRPresentation(
                 .addListener { composition ->
                     try {
                         lottie.setComposition(composition)
+                        lottie.speed = 0.35f
+                        Log.i("VRPresentation", "Intro composition loaded: ${composition.duration}ms, state=${introController?.state}")
+                        if (introController?.state == IntroSequenceController.State.PLAYING_ANIMATION) {
+                            lottie.playAnimation()
+                        }
                     } catch (e: Throwable) {
                         Log.w("VRPresentation", "Failed applying Lottie composition: ${e.message}, falling back to Home", e)
                         introController?.skip()
@@ -284,7 +298,11 @@ class VRPresentation(
                 IntroSequenceController(
                     isReducedMotion = { IntroSequenceController.isReducedMotionEnabled(context) },
                     onPlayAnimation = {
-                        introView?.playAnimation()
+                        introView?.let { v ->
+                            if (v.composition != null) {
+                                v.playAnimation()
+                            }
+                        }
                     },
                     onShowStaticFinalFrame = { durationMs ->
                         introView?.let { it.progress = 1.0f }
