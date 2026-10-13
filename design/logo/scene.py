@@ -298,12 +298,12 @@ def build_logo_final_svg(letters_data: dict) -> str:
 def build_splash_svg(letters_data: dict) -> str:
     lines = [
         "<svg width=\"1400\" height=\"560\" viewBox=\"0 0 1400 560\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">",
-        "<rect width=\"1400\" height=\"560\" fill=\"#121212\"/>",
     ]
     # Center 778x300 horizontal logo in 1400x560 canvas
     # tx = (1400 - 778)/2 = 311, ty = (560 - 300)/2 = 130
+    # No background: the Horizon OS compositor shows an opaque #121212 plate as a
+    # grey box, and the intro that follows has a transparent background too.
     lines.append("<g transform=\"translate(311, 130)\">")
-    lines.append("<rect width=\"778\" height=\"300\" rx=\"28\" fill=\"#121212\"/>")
 
     scale = 220.0 / 512.0
     tx = 44.0

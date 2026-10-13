@@ -20,7 +20,7 @@ design/logo/
 ├── simbolo.svg              # 512×512 master symbol
 ├── logo_final.svg           # 778×300 horizontal logo with #121212 background and rx=28
 ├── intro.json               # 1400×560 Lottie animation (96 frames @ 60 fps / 1.6 s)
-└── vr_splash.png            # 1400×560 Meta Horizon OS system splash image on #121212
+└── vr_splash.png            # 1400×560 Meta Horizon OS system splash image, transparent background
 ```
 
 Associated runtime asset targets:

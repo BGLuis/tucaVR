@@ -25,6 +25,7 @@ import struct
 import subprocess
 import sys
 import time
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -344,27 +345,32 @@ def test_t1_r2_03():
 
 
 @register_test(
-    "T1_R2_04_splash_background_hex_color",
+    "T1_R2_04_splash_transparent_background",
     1,
     "M1",
     "R2",
-    "Verify vr_splash.png uses #121212 dark void background",
+    "Verify vr_splash.png is RGBA with a fully transparent background",
 )
 def test_t1_r2_04():
     splash_path = REPO_ROOT / "app" / "src" / "main" / "assets" / "vr_splash.png"
     if not splash_path.exists():
         return False, f"{splash_path} does not exist"
-    # Inspect design/logo/logo.py or vr_splash generation code or sample bytes
-    # Background must be #121212 (RGB 18, 18, 18)
-    with open(splash_path, "rb") as f:
-        data = f.read()
-    # If uncompressed text or metadata contains background, check it, or check scene background
-    scene_file = REPO_ROOT / "design" / "logo" / "scene.py"
-    if scene_file.exists():
-        scene_code = scene_file.read_text(encoding="utf-8")
-        if "#121212" not in scene_code and "0x12, 0x12, 0x12" not in scene_code:
-            return False, "scene.py does not define #121212 background"
-    return True, "vr_splash.png background adheres to #121212 void theme"
+    _, _, bit_depth, color_type, _ = read_png_dimensions(splash_path)
+    if bit_depth != 8 or color_type != 6:
+        return False, f"vr_splash.png must be 8-bit RGBA (got depth {bit_depth}, color type {color_type})"
+    data = splash_path.read_bytes()
+    idat = b""
+    pos = 8
+    while pos < len(data):
+        length, chunk_type = struct.unpack(">I4s", data[pos : pos + 8])
+        if chunk_type == b"IDAT":
+            idat += data[pos + 8 : pos + 8 + length]
+        pos += 12 + length
+    # Every PNG filter predicts 0 for the top-left pixel, so its raw bytes are the pixel.
+    top_left = zlib.decompress(idat)[1:5]
+    if top_left[3] != 0:
+        return False, f"vr_splash.png top-left pixel is not transparent: RGBA {tuple(top_left)}"
+    return True, "vr_splash.png background is fully transparent"
 
 
 @register_test(
@@ -1343,7 +1349,7 @@ def test_t3_pair_03():
     3,
     "M3",
     "R2+R4",
-    "Verify vr_splash.png and intro.json share identical 1400x560 canvas and #121212 background",
+    "Verify vr_splash.png and intro.json share an identical 1400x560 canvas",
 )
 def test_t3_pair_04():
     splash_path = REPO_ROOT / "app" / "src" / "main" / "assets" / "vr_splash.png"
