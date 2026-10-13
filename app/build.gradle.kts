@@ -211,6 +211,17 @@ val buildRust =
         group = "rust"
         description = "Cross-compiles Rust libraries and prepares JNI libraries (Host or Docker)."
         workingDir(rootProject.projectDir)
+
+        inputs.files(
+            rootProject.fileTree("rust") {
+                exclude("**/target/**")
+            },
+        )
+        inputs.file(rootProject.file("scripts/build-rust.sh"))
+        inputs.property("rustBuildMode", rustBuildMode)
+
+        outputs.dir(project.file("src/main/jniLibs/arm64-v8a"))
+
         commandLine("bash", rootProject.file("scripts/build-rust.sh").absolutePath)
         environment("RUST_BUILD_MODE", rustBuildMode)
         androidSdkDir?.let {

@@ -7,3 +7,6 @@ members = [
     "media-logic"
 ]
 resolver = "2"
+
+[profile.release]
+strip = "debuginfo"

@@ -56,6 +56,28 @@ has_prebuilt_libs() {
     return 0
 }
 
+copy_if_changed() {
+    local src="$1"
+    local dst="$2"
+    mkdir -p "$(dirname "$dst")"
+    if [[ ! -f "$dst" ]] || ! cmp -s "$src" "$dst"; then
+        cp -p "$src" "$dst"
+    fi
+}
+
+copy_all_if_changed() {
+    local src_dir="$1"
+    local dst_dir="$2"
+    local pattern="$3"
+    mkdir -p "$dst_dir"
+    for src in "$src_dir"/$pattern; do
+        [[ -f "$src" ]] || continue
+        local filename
+        filename="$(basename "$src")"
+        copy_if_changed "$src" "$dst_dir/$filename"
+    done
+}
+
 if $IS_CLEAN; then
     if $INSIDE_DOCKER || [[ "$RUST_BUILD_MODE" == "host" ]] || { [[ "$RUST_BUILD_MODE" == "auto" ]] && has_host_toolchain; }; then
         if command -v cargo &>/dev/null; then
@@ -123,8 +145,8 @@ if $USE_DOCKER_RUN; then
         tucavr-builder -c "bash ./scripts/build-rust.sh --inside-docker"
 
     mkdir -p "$ROOT_DIR/rust/target/aarch64-linux-android/release"
-    if [[ -f "$ROOT_DIR/app/src/main/jniLibs/arm64-v8a/libbridge.so" && ! -f "$ROOT_DIR/rust/target/aarch64-linux-android/release/libbridge.so" ]]; then
-        cp "$ROOT_DIR/app/src/main/jniLibs/arm64-v8a/libbridge.so" "$ROOT_DIR/rust/target/aarch64-linux-android/release/libbridge.so"
+    if [[ -f "$ROOT_DIR/app/src/main/jniLibs/arm64-v8a/libbridge.so" ]]; then
+        copy_if_changed "$ROOT_DIR/app/src/main/jniLibs/arm64-v8a/libbridge.so" "$ROOT_DIR/rust/target/aarch64-linux-android/release/libbridge.so"
     fi
     exit 0
 fi
@@ -155,9 +177,9 @@ export BINDGEN_EXTRA_CLANG_ARGS="-I$FFMPEG_MAKER_DIR/output/include/arm64-v8a -I
 cd rust
 cargo ndk -t aarch64-linux-android -P 26 -o ../app/src/main/jniLibs build --release
 
-cp "$FFMPEG_MAKER_DIR"/build/ffmpeg/arm64-v8a/lib/*.so ../app/src/main/jniLibs/arm64-v8a/
+copy_all_if_changed "$FFMPEG_MAKER_DIR/build/ffmpeg/arm64-v8a/lib" "../app/src/main/jniLibs/arm64-v8a" "*.so"
 
 mkdir -p "$ROOT_DIR/rust/target/aarch64-linux-android/release"
-if [[ -f "$ROOT_DIR/app/src/main/jniLibs/arm64-v8a/libbridge.so" && ! -f "$ROOT_DIR/rust/target/aarch64-linux-android/release/libbridge.so" ]]; then
-    cp "$ROOT_DIR/app/src/main/jniLibs/arm64-v8a/libbridge.so" "$ROOT_DIR/rust/target/aarch64-linux-android/release/libbridge.so"
+if [[ -f "$ROOT_DIR/app/src/main/jniLibs/arm64-v8a/libbridge.so" ]]; then
+    copy_if_changed "$ROOT_DIR/app/src/main/jniLibs/arm64-v8a/libbridge.so" "$ROOT_DIR/rust/target/aarch64-linux-android/release/libbridge.so"
 fi
