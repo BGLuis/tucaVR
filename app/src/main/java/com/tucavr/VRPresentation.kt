@@ -208,14 +208,16 @@ class VRPresentation(
 
         screenHost =
             FrameLayout(context).apply {
-                setBackgroundColor(VoidTheme.colorBackground)
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
             }
         setContentView(screenHost)
         window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+        window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
 
         initScreens()
         if (IntroSequenceController.hasCompletedIntroOnce) {
+            screenHost.setBackgroundColor(VoidTheme.colorBackground)
             render()
         } else {
             setupIntroSequence()
@@ -239,14 +241,17 @@ class VRPresentation(
                             ViewGroup.LayoutParams.MATCH_PARENT,
                             ViewGroup.LayoutParams.MATCH_PARENT,
                         )
-                    setBackgroundColor(VoidTheme.colorBackground)
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    speed = 0.5f
                     repeatCount = 0
                     addAnimatorListener(
                         object : Animator.AnimatorListener {
                             override fun onAnimationStart(animation: Animator) {}
 
                             override fun onAnimationEnd(animation: Animator) {
-                                introController?.onAnimationComplete()
+                                introHandler.postDelayed({
+                                    introController?.onAnimationComplete()
+                                }, 800L)
                             }
 
                             override fun onAnimationCancel(animation: Animator) {}
@@ -290,6 +295,7 @@ class VRPresentation(
                     },
                     onTransitionToHome = {
                         disposeIntro()
+                        screenHost.setBackgroundColor(VoidTheme.colorBackground)
                         render()
                     },
                 )
@@ -297,6 +303,7 @@ class VRPresentation(
         } catch (e: Exception) {
             Log.w("VRPresentation", "Error during intro setup: ${e.message}, falling back to Home", e)
             disposeIntro()
+            screenHost.setBackgroundColor(VoidTheme.colorBackground)
             render()
         }
     }

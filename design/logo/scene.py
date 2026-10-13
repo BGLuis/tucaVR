@@ -439,34 +439,6 @@ def build_lottie_animation(letters_data: dict) -> dict:
     """
     layers = []
 
-    # Layer 0: Solid #121212 background (1400x560)
-    bg_rect = {
-        "ty": "rc",
-        "nm": "Background Rect",
-        "p": {"a": 0, "k": [700.0, 280.0]},
-        "s": {"a": 0, "k": [1400.0, 560.0]},
-        "r": {"a": 0, "k": 0},
-    }
-    bg_layer = {
-        "ddd": 0,
-        "ind": 1,
-        "ty": 4,
-        "nm": "Background",
-        "sr": 1,
-        "st": 0,
-        "ip": 0,
-        "op": 96,
-        "ks": {
-            "a": {"a": 0, "k": [0, 0, 0]},
-            "p": {"a": 0, "k": [0, 0, 0]},
-            "s": {"a": 0, "k": [100, 100, 100]},
-            "r": {"a": 0, "k": 0},
-            "o": {"a": 0, "k": 100},
-        },
-        "shapes": [bg_rect, make_lottie_fill("Bg Fill", VOID_BG), make_lottie_transform()],
-    }
-    layers.append(bg_layer)
-
     # Layer 1: Wordmark Layer (tucaVR)
     # Rises from Y+30 to Y and fades in 0% to 100% during frames 66-90, then locks
     wm_shapes = []
