@@ -55,6 +55,7 @@ import java.io.File
 class VRActivity : NativeActivity() {
     private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
     private var presentation: VRPresentation? = null
+    private var xrSessionFocused = false
 
     private var controlsVirtualDisplay: android.hardware.display.VirtualDisplay? = null
     private var controlsPresentation: VRControlsPresentation? = null
@@ -837,7 +838,16 @@ class VRActivity : NativeActivity() {
                 activity.virtualDisplay?.display?.let { display ->
                     activity.presentation = VRPresentation(activity, display, activity)
                     activity.presentation?.show()
+                    if (activity.xrSessionFocused) activity.presentation?.onXrSessionFocused()
                 }
+            }
+        }
+
+        @JvmStatic
+        fun onXrSessionFocused(activity: VRActivity) {
+            activity.runOnUiThread {
+                activity.xrSessionFocused = true
+                activity.presentation?.onXrSessionFocused()
             }
         }
 

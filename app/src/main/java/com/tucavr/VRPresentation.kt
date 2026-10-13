@@ -286,12 +286,12 @@ class VRPresentation(
                         }
                     } catch (e: Throwable) {
                         Log.w("VRPresentation", "Failed applying Lottie composition: ${e.message}, falling back to Home", e)
-                        introController?.skip()
+                        abortIntro()
                     }
                 }
                 .addFailureListener { error ->
                     Log.w("VRPresentation", "Failed to load intro.json: ${error.message}, falling back to Home")
-                    introController?.skip()
+                    abortIntro()
                 }
 
             introController =
@@ -317,13 +317,32 @@ class VRPresentation(
                         render()
                     },
                 )
-            introController?.start()
+            // The GLES backend is frozen and never sends onXrSessionFocused.
+            if (BuildConfig.GRAPHICS_API != "VULKAN") introController?.start()
         } catch (e: Exception) {
             Log.w("VRPresentation", "Error during intro setup: ${e.message}, falling back to Home", e)
             disposeIntro()
             screenHost.setBackgroundColor(VoidTheme.colorBackground)
             render()
         }
+    }
+
+    fun onXrSessionFocused() {
+        if (introController?.state == IntroSequenceController.State.IDLE) {
+            introController?.start()
+        }
+    }
+
+    // skip() is a no-op while the intro still waits for XR focus (IDLE).
+    private fun abortIntro() {
+        if (introController?.isIntroActive == true) {
+            introController?.skip()
+            return
+        }
+        introController = null
+        disposeIntro()
+        screenHost.setBackgroundColor(VoidTheme.colorBackground)
+        render()
     }
 
     fun skipIntro(): Boolean {
@@ -338,10 +357,10 @@ class VRPresentation(
     private fun disposeIntro() {
         introHandler.removeCallbacksAndMessages(null)
         introView?.let { view ->
-            view.cancelAnimation()
-            view.clearAnimation()
             view.removeAllAnimatorListeners()
             view.removeAllUpdateListeners()
+            view.cancelAnimation()
+            view.clearAnimation()
             view.setImageDrawable(null)
             screenHost.removeView(view)
         }
