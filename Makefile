@@ -9,8 +9,17 @@ build:
 docker-build:
 	./scripts/docker-build.sh
 
+FAST       ?= 0
+LAUNCH     ?= 1
+KEEP_AWAKE ?= 0
+
+DEPLOY_ARGS := $(if $(filter 0,$(FAST)),--no-fast,) \
+               $(if $(filter 0,$(LAUNCH)),--no-launch,) \
+               $(if $(filter 1,$(KEEP_AWAKE)),--keep-awake,) \
+               $(if $(DEVICE_SERIAL),-s $(DEVICE_SERIAL),)
+
 install:
-	adb install -r app/build/outputs/apk/debug/app-debug.apk
+	./scripts/deploy.sh $(DEPLOY_ARGS)
 
 launch:
 	adb shell am force-stop com.tucavr
