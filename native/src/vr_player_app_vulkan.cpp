@@ -7936,6 +7936,36 @@ void PollAndroidEvents(AppState& state) {
     }
 }
 
+// The UI Presentation exists long before the headset shows any frame (system splash,
+// headset asleep after `make deploy`), so the intro waits for this signal to start.
+static void NotifyKotlinSessionFocused(AppState& state) {
+    android_app* app = state.app;
+    if (!app || !app->activity || !app->activity->vm) return;
+
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (app->activity->vm->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+        app->activity->vm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    }
+    if (env) {
+        jobject activityObj = app->activity->clazz;
+        jclass vrActivityClass = env->GetObjectClass(activityObj);
+        jmethodID onFocused = env->GetStaticMethodID(
+            vrActivityClass, "onXrSessionFocused", "(Lcom/tucavr/VRActivity;)V");
+        if (onFocused) {
+            env->CallStaticVoidMethod(vrActivityClass, onFocused, activityObj);
+        } else {
+            env->ExceptionClear();
+            LOGE("onXrSessionFocused NOT FOUND");
+        }
+        env->DeleteLocalRef(vrActivityClass);
+    }
+    if (attached) {
+        app->activity->vm->DetachCurrentThread();
+    }
+}
+
 void PollXrEvents(AppState& state) {
     for (;;) {
         XrEventDataBuffer eventBuffer{XR_TYPE_EVENT_DATA_BUFFER};
@@ -7956,6 +7986,7 @@ void PollXrEvents(AppState& state) {
             switch (event->state) {
                 case XR_SESSION_STATE_FOCUSED:
                     on_app_focus_gained();
+                    NotifyKotlinSessionFocused(state);
                     break;
                 case XR_SESSION_STATE_READY: {
                     XrSessionBeginInfo beginInfo{XR_TYPE_SESSION_BEGIN_INFO};

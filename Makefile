@@ -1,4 +1,4 @@
-.PHONY: all build docker-build install deploy test
+.PHONY: all build docker-build install launch deploy test
 
 all: deploy
 
@@ -12,7 +12,11 @@ docker-build:
 install:
 	adb install -r app/build/outputs/apk/debug/app-debug.apk
 
-deploy: build install
+launch:
+	adb shell am force-stop com.tucavr
+	adb shell am start -n com.tucavr/.VRActivity
+
+deploy: build install launch
 
 test:
 	@echo "=== [1/3] Running the Rust unit tests (host) ==="

@@ -1,13 +1,21 @@
 package com.tucavr
 
+import android.animation.Animator
 import android.app.Presentation
 import android.content.Context
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
 import android.view.Display
+import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.ScrollView
 import androidx.recyclerview.widget.RecyclerView
+import com.airbnb.lottie.LottieAnimationView
+import com.airbnb.lottie.LottieCompositionFactory
 import com.tucavr.designsystem.KeyboardBinding
 import com.tucavr.designsystem.VoidTheme
 import com.tucavr.download.DownloadRepository
@@ -75,7 +83,7 @@ class VRPresentation(
     // ContextThemeWrapper derivado do display-context. Guardamos a Activity
     // de verdade para poder chamar nativeX()/playFile()/playUrl() etc.
     private val activity: VRActivity,
-) : Presentation(outerContext, display, android.R.style.Theme_NoTitleBar_Fullscreen) {
+) : Presentation(outerContext, display, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen) {
     // ---- Infraestrutura de navegação ----
 
     private val appNav = AppNavigator()
@@ -94,6 +102,11 @@ class VRPresentation(
     // ---- Host de tela (contrato mínimo que as screens conhecem) ----
 
     private lateinit var screenHost: FrameLayout
+
+    // ---- Intro sequence (Epic #102 / R4 / #106) ----
+    private var introController: IntroSequenceController? = null
+    private var introView: LottieAnimationView? = null
+    private val introHandler = Handler(Looper.getMainLooper())
 
     // Rastreia o KeyboardBinding com foco para fechar o teclado ao trocar de tela.
     private var keyboardTarget: KeyboardBinding? = null
@@ -195,19 +208,179 @@ class VRPresentation(
 
         screenHost =
             FrameLayout(context).apply {
-                setBackgroundColor(VoidTheme.colorBackground)
+                setBackgroundColor(android.graphics.Color.TRANSPARENT)
             }
         setContentView(screenHost)
         window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+        window?.decorView?.background = null
+        window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+        window?.setDimAmount(0.0f)
+        window?.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
 
         initScreens()
-        render()
+        if (IntroSequenceController.hasCompletedIntroOnce) {
+            screenHost.setBackgroundColor(VoidTheme.colorBackground)
+            render()
+        } else {
+            setupIntroSequence()
+        }
     }
 
     override fun dismiss() {
+        disposeIntro()
         scope.cancel()
         super.dismiss()
+    }
+
+    // ---- Intro sequence lifecycle & input handlers ----
+
+    private fun setupIntroSequence() {
+        try {
+            val lottie =
+                LottieAnimationView(context).apply {
+                    layoutParams =
+                        FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                        )
+                    setBackgroundColor(android.graphics.Color.TRANSPARENT)
+                    background = null
+                    @Suppress("DEPRECATION")
+                    setIgnoreDisabledSystemAnimations(true)
+                    speed = 0.35f
+                    repeatCount = 0
+                    addAnimatorListener(
+                        object : Animator.AnimatorListener {
+                            override fun onAnimationStart(animation: Animator) {
+                                Log.i("VRPresentation", "Intro Lottie animation started (speed=$speed)")
+                            }
+
+                            override fun onAnimationEnd(animation: Animator) {
+                                Log.i("VRPresentation", "Intro Lottie animation ended, holding static lock before Home")
+                                introHandler.postDelayed({
+                                    introController?.onAnimationComplete()
+                                }, 2000L)
+                            }
+
+                            override fun onAnimationCancel(animation: Animator) {}
+
+                            override fun onAnimationRepeat(animation: Animator) {}
+                        },
+                    )
+                    setOnClickListener {
+                        skipIntro()
+                    }
+                }
+            introView = lottie
+            screenHost.addView(lottie)
+
+            LottieCompositionFactory.fromAsset(context, "intro.json")
+                .addListener { composition ->
+                    try {
+                        lottie.setComposition(composition)
+                        lottie.speed = 0.35f
+                        Log.i("VRPresentation", "Intro composition loaded: ${composition.duration}ms, state=${introController?.state}")
+                        if (introController?.state == IntroSequenceController.State.PLAYING_ANIMATION) {
+                            lottie.playAnimation()
+                        }
+                    } catch (e: Throwable) {
+                        Log.w("VRPresentation", "Failed applying Lottie composition: ${e.message}, falling back to Home", e)
+                        abortIntro()
+                    }
+                }
+                .addFailureListener { error ->
+                    Log.w("VRPresentation", "Failed to load intro.json: ${error.message}, falling back to Home")
+                    abortIntro()
+                }
+
+            introController =
+                IntroSequenceController(
+                    isReducedMotion = { IntroSequenceController.isReducedMotionEnabled(context) },
+                    onPlayAnimation = {
+                        introView?.let { v ->
+                            if (v.composition != null) {
+                                v.playAnimation()
+                            }
+                        }
+                    },
+                    onShowStaticFinalFrame = { durationMs ->
+                        introView?.let { it.progress = 1.0f }
+                        introHandler.postDelayed(
+                            { introController?.onReducedMotionTimerComplete() },
+                            durationMs,
+                        )
+                    },
+                    onTransitionToHome = {
+                        disposeIntro()
+                        screenHost.setBackgroundColor(VoidTheme.colorBackground)
+                        render()
+                    },
+                )
+            // The GLES backend is frozen and never sends onXrSessionFocused.
+            if (BuildConfig.GRAPHICS_API != "VULKAN") introController?.start()
+        } catch (e: Exception) {
+            Log.w("VRPresentation", "Error during intro setup: ${e.message}, falling back to Home", e)
+            disposeIntro()
+            screenHost.setBackgroundColor(VoidTheme.colorBackground)
+            render()
+        }
+    }
+
+    fun onXrSessionFocused() {
+        if (introController?.state == IntroSequenceController.State.IDLE) {
+            introController?.start()
+        }
+    }
+
+    // skip() is a no-op while the intro still waits for XR focus (IDLE).
+    private fun abortIntro() {
+        if (introController?.isIntroActive == true) {
+            introController?.skip()
+            return
+        }
+        introController = null
+        disposeIntro()
+        screenHost.setBackgroundColor(VoidTheme.colorBackground)
+        render()
+    }
+
+    fun skipIntro(): Boolean {
+        val controller = introController
+        if (controller != null && controller.isIntroActive) {
+            controller.skip()
+            return true
+        }
+        return false
+    }
+
+    private fun disposeIntro() {
+        introHandler.removeCallbacksAndMessages(null)
+        introView?.let { view ->
+            view.removeAllAnimatorListeners()
+            view.removeAllUpdateListeners()
+            view.cancelAnimation()
+            view.clearAnimation()
+            view.setImageDrawable(null)
+            screenHost.removeView(view)
+        }
+        introView = null
+    }
+
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (introController?.isIntroActive == true) {
+            skipIntro()
+            return true
+        }
+        return super.dispatchTouchEvent(ev)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (introController?.isIntroActive == true) {
+            skipIntro()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
     }
 
     /** Chamado por VRActivity.onResume() — recarrega a listagem local, se ativa. */

@@ -33,6 +33,8 @@ val ccachePath =
         ?.map { File(it, "ccache") }
         ?.firstOrNull { it.canExecute() }
 
+val graphicsApi = project.findProperty("vrplayerGraphicsApi")?.toString() ?: "VULKAN"
+
 android {
     namespace = "com.tucavr"
     compileSdk = 34
@@ -53,6 +55,7 @@ android {
         targetSdk = 34
         versionCode = appVersionCode
         versionName = appVersionName
+        buildConfigField("String", "GRAPHICS_API", "\"$graphicsApi\"")
 
         externalNativeBuild {
             cmake {
@@ -64,7 +67,7 @@ android {
                 // fallback/regression path in case of unexpected behavior on the Quest 3 hardware.
                 // See the revised ADR-003: the decision to keep GLES as a real fallback (two
                 // paths kept) until complete validation on a headset.
-                arguments += "-DVRPLAYER_GRAPHICS_API=${project.findProperty("vrplayerGraphicsApi") ?: "VULKAN"}"
+                arguments += "-DVRPLAYER_GRAPHICS_API=$graphicsApi"
                 if (project.findProperty("enableVulkanValidation") == "true") {
                     arguments += "-DENABLE_VK_VALIDATION_LAYERS=ON"
                 }
@@ -175,6 +178,8 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:2.7.0")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:2.7.0")
+    // Epic #102 / R4 / #106: Lottie intro animation sequence on main VR presentation panel
+    implementation("com.airbnb.android:lottie:6.7.1")
 
     // JVM unit tests (app/src/test) — the file browser's pure logic
     // (MediaSorter, DirectoryNavigator, DirectoryLister, the ThumbnailGenerator
