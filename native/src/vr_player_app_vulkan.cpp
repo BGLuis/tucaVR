@@ -989,6 +989,7 @@ struct AppState {
     float lastUvX = 0.0f;
     float lastUvY = 0.0f;
     float lastHitDist = -1.0f;
+    bool hasActiveMedia = false;
 
     // Estagio 5 — pipeline estereo/esfera (SBS/OU/360/180 com CAS sharpening).
     // Reusa o videoDescriptorSetLayout (mesmo sampler YCbCr) mas pipeline separado.
@@ -6891,12 +6892,19 @@ void UpdateVideoFrame(AppState& state) {
         state.controlsIdleTime = kUiAutoHideSeconds;
         ClearVideoImageCache(state);
         if (stopRequested) {
+            state.hasActiveMedia = false;
             g_requestUiPanelVisible.store(true);
             return;
+        }
+        if (newSessionRequested) {
+            state.hasActiveMedia = true;
         }
     }
 
     AHardwareBuffer* buffer = get_current_video_frame();
+    if (buffer != nullptr && !state.hasActiveMedia) {
+        state.hasActiveMedia = true;
+    }
 
     if (buffer == nullptr) {
         // Sem frame: NAO limpa state.activeVideoFrame — mantem o ultimo

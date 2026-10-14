@@ -3060,6 +3060,27 @@ pub extern "C" fn get_subtitle_track_count() -> u32 {
 }
 
 #[no_mangle]
+pub extern "C" fn get_subtitle_track_info_wire() -> *mut std::os::raw::c_char {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        let count = controller.get_subtitle_track_count();
+        let mut lines = Vec::with_capacity(count);
+        for i in 0..count {
+            if let Some(info) = controller.get_subtitle_track_info(i) {
+                lines.push(format!(
+                    "{}\t{}\t{}",
+                    info.language.replace(['\t', '\n'], " "),
+                    info.title.replace(['\t', '\n'], " "),
+                    if info.is_external { 1 } else { 0 }
+                ));
+            }
+        }
+        string_to_c_char(lines.join("\n"))
+    } else {
+        string_to_c_char(String::new())
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn get_active_subtitle_text(
     out_buf: *mut std::os::raw::c_char,
     max_len: usize,

@@ -15,10 +15,11 @@ import com.tucavr.filebrowser.TrackInfo
 import com.tucavr.filebrowser.TrackKind
 
 /**
- * Modal flutuante de seleção de trilha de áudio.
+ * Floating modal for selecting audio tracks.
  *
- * Exibido no 3º Quad frontal flutuante (VRModalPresentation) a 1,35 m à frente do usuário.
- * Apresenta as faixas de áudio disponíveis com idioma, codec, canais e título, com realce da trilha ativa.
+ * Rendered on the floating Quad in VR space (VRModalPresentation) at 1.35m in front of the user.
+ * Displays available audio tracks with circular country flags, track type badges (5.1 surround, stereo, commentary),
+ * language name, and details line (PT-BR · 5.1 surround · AAC), ensuring a minimum touch target of 72 px.
  */
 class AudioTrackModal(
     context: Context,
@@ -52,10 +53,10 @@ class AudioTrackModal(
                 val pad = VoidTheme.dpToPx(context, 24f)
                 setPadding(pad, pad, pad, pad)
                 isClickable = true
-                setOnClickListener { /* Consumir clique dentro do card */ }
+                setOnClickListener { /* Consume clicks within the panel */ }
             }
 
-        // Header: Título + Botão Fechar
+        // Header: Title + Close Button
         val header =
             LinearLayout(context).apply {
                 orientation = LinearLayout.HORIZONTAL
@@ -129,7 +130,7 @@ class AudioTrackModal(
                     layoutParams =
                         LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT,
-                            VoidTheme.dpToPx(context, 300f),
+                            VoidTheme.dpToPx(context, 320f),
                         )
                     isFillViewport = true
                     addView(trackListContainer)
@@ -142,13 +143,27 @@ class AudioTrackModal(
     }
 
     private fun buildAudioTrackRow(track: TrackInfo): LinearLayout {
+        val displayInfo =
+            LanguageRegionHelper.resolveTrackDisplayInfo(
+                context = context,
+                language = track.language,
+                title = track.title,
+                ordinal = track.ordinal,
+                kind = TrackKind.AUDIO,
+                channels = track.channels,
+                codec = track.codec,
+            )
+
+        val rowHeight = maxOf(72, VoidTheme.dpToPx(context, 72f))
+
         return LinearLayout(context).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
+            minimumHeight = 72
             layoutParams =
                 LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
-                    VoidTheme.dpToPx(context, 60f),
+                    rowHeight,
                 ).apply {
                     bottomMargin = VoidTheme.dpToPx(context, 6f)
                 }
@@ -156,10 +171,11 @@ class AudioTrackModal(
             setPadding(padH, 0, padH, 0)
             isClickable = true
 
+            // Circular language / country flag icon
             val icon =
                 ImageView(context).apply {
-                    setImageResource(R.drawable.ic_audio)
-                    val s = VoidTheme.dpToPx(context, 22f)
+                    setImageResource(displayInfo.flagResId)
+                    val s = VoidTheme.dpToPx(context, 32f)
                     layoutParams =
                         LinearLayout.LayoutParams(s, s).apply {
                             rightMargin = VoidTheme.dpToPx(context, 14f)
@@ -174,27 +190,74 @@ class AudioTrackModal(
                     layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
                 }
 
+            // Top row: Language title + Type badge (5.1 surround / stereo / commentary)
+            val topRow =
+                LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    layoutParams =
+                        LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                        )
+                }
+
             val trackTitle =
                 TextView(context).apply {
-                    val codecPart = if (track.codec.isNotEmpty()) " · ${track.codec}" else ""
-                    text = context.getString(R.string.file_detail_track_audio_format, track.ordinal + 1, codecPart.trimStart(' ', '·'))
+                    text = displayInfo.titleText
                     typeface = VoidTheme.typefaceBody
                     textSize = 16f
+                    layoutParams =
+                        LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT,
+                        )
                 }
-            textColumn.addView(trackTitle)
+            topRow.addView(trackTitle)
 
-            val descParts = mutableListOf<String>()
-            if (track.language.isNotEmpty()) descParts.add(track.language.uppercase())
-            if (track.title.isNotEmpty()) descParts.add(track.title)
-            if (track.channels > 0) descParts.add("${track.channels} ch")
+            if (displayInfo.badgeText.isNotEmpty()) {
+                val badge =
+                    TextView(context).apply {
+                        text = displayInfo.badgeText
+                        typeface = VoidTheme.typefaceMono
+                        textSize = 11f
+                        setTextColor(VoidTheme.colorAccent)
+                        background =
+                            GradientDrawable().apply {
+                                setColor(VoidTheme.colorSurfaceAlt)
+                                cornerRadius = VoidTheme.dp(context, 4f)
+                                setStroke(VoidTheme.dpToPx(context, 1f), VoidTheme.colorBorder)
+                            }
+                        val bPadH = VoidTheme.dpToPx(context, 6f)
+                        val bPadV = VoidTheme.dpToPx(context, 2f)
+                        setPadding(bPadH, bPadV, bPadH, bPadV)
+                        layoutParams =
+                            LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.WRAP_CONTENT,
+                                LinearLayout.LayoutParams.WRAP_CONTENT,
+                            ).apply {
+                                leftMargin = VoidTheme.dpToPx(context, 8f)
+                            }
+                    }
+                topRow.addView(badge)
+            }
+            textColumn.addView(topRow)
 
-            if (descParts.isNotEmpty()) {
+            // Details line: "PT-BR · 5.1 surround · AAC"
+            if (displayInfo.detailsText.isNotEmpty()) {
                 val trackDesc =
                     TextView(context).apply {
-                        text = descParts.joinToString(" · ")
+                        text = displayInfo.detailsText
                         typeface = VoidTheme.typefaceMono
                         textSize = 13f
                         setTextColor(VoidTheme.colorTextSecondary)
+                        layoutParams =
+                            LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                LinearLayout.LayoutParams.WRAP_CONTENT,
+                            ).apply {
+                                topMargin = VoidTheme.dpToPx(context, 2f)
+                            }
                     }
                 textColumn.addView(trackDesc)
             }
@@ -220,9 +283,9 @@ class AudioTrackModal(
     private fun refreshTrackHighlight() {
         for ((ordinal, row) in trackButtons) {
             val isSelected = (ordinal == activeOrdinal)
-            val icon = row.getChildAt(0) as? ImageView
             val textColumn = row.getChildAt(1) as? LinearLayout
-            val title = textColumn?.getChildAt(0) as? TextView
+            val topRow = textColumn?.getChildAt(0) as? LinearLayout
+            val title = topRow?.getChildAt(0) as? TextView
             val check = row.getChildAt(2) as? ImageView
 
             if (isSelected) {
@@ -233,7 +296,6 @@ class AudioTrackModal(
                         setStroke(VoidTheme.dpToPx(context, 1.5f), VoidTheme.colorAccent)
                     }
                 title?.setTextColor(VoidTheme.colorAccent)
-                icon?.setColorFilter(VoidTheme.colorAccent)
                 check?.visibility = View.VISIBLE
             } else {
                 row.background =
@@ -242,7 +304,6 @@ class AudioTrackModal(
                         cornerRadius = VoidTheme.dp(context, 8f)
                     }
                 title?.setTextColor(VoidTheme.colorText)
-                icon?.setColorFilter(VoidTheme.colorTextSecondary)
                 check?.visibility = View.GONE
             }
         }

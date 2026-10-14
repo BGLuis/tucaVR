@@ -451,9 +451,11 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
             // T5.5: Mapeamento de gestos de palma (Palm Up = mostrar controles, Palm Down = ocultar)
             if (activeHandOut.isPalmUp) {
-                state.controlsIdleTime = 0.0f;
-                state.controlsAlpha = 1.0f;
-                state.controlsExplicitlyDismissed = false;
+                if (state.hasActiveMedia) {
+                    state.controlsIdleTime = 0.0f;
+                    state.controlsAlpha = 1.0f;
+                    state.controlsExplicitlyDismissed = false;
+                }
             } else if (activeHandOut.isPalmDown) {
                 if (state.controlsAlpha > 0.5f) {
                     state.controlsIdleTime = kUiAutoHideSeconds;
@@ -480,18 +482,23 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     // T5.6: Fallback graceful — se perdeu o raio enquanto segurava toque/pinch, soltar para evitar drag preso
     if (!state.hasRay && state.isTouchDown) {
         state.isTouchDown = false;
-        JNIEnv* env = nullptr;
-        state.app->activity->vm->AttachCurrentThread(&env, nullptr);
-        if (env) {
-            jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
-            const char* methodName = (state.activePanel == 3) ? "dispatchModalVRTouch"
-                                   : ((state.activePanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch");
-            jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
-            if (touchMethod) {
-                env->CallStaticVoidMethod(vrActivityClass, touchMethod, state.app->activity->clazz, state.lastUvX, state.lastUvY, 1 /* UP */);
+        int targetPanel = state.activePanel;
+        if (targetPanel != 0) {
+            JNIEnv* env = nullptr;
+            state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+            if (env) {
+                jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+                const char* methodName = (targetPanel == 4) ? "dispatchBrowserTouch"
+                                       : ((targetPanel == 3) ? "dispatchModalVRTouch"
+                                       : ((targetPanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch"));
+                jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
+                if (touchMethod) {
+                    env->CallStaticVoidMethod(vrActivityClass, touchMethod, state.app->activity->clazz, state.lastUvX, state.lastUvY, 1 /* UP */);
+                }
+                env->DeleteLocalRef(vrActivityClass);
             }
-            env->DeleteLocalRef(vrActivityClass);
         }
+        state.activePanel = 0;
     }
     if (!state.hasRay) {
         state.isScreenGrabbed = false;
@@ -567,7 +574,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                 break;
         }
     }
-    if (currentHitPanel != 0) {
+    if (currentHitPanel != 0 && (!state.isTouchDown || currentHitPanel == state.activePanel)) {
         state.lastUvX = hitU;
         state.lastUvY = hitV;
     }
@@ -652,9 +659,11 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         }
     }
     if (::g_requestControlsPanelVisible.exchange(false)) {
-        state.controlsIdleTime = 0.0f;
-        state.controlsAlpha = 1.0f;
-        state.controlsExplicitlyDismissed = false;
+        if (state.hasActiveMedia) {
+            state.controlsIdleTime = 0.0f;
+            state.controlsAlpha = 1.0f;
+            state.controlsExplicitlyDismissed = false;
+        }
     }
 
     if (state.uiAlpha > 0.01f && (currentHitPanel == 1 || keyboardActive)) {
@@ -676,9 +685,9 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     // - Se o vídeo estiver pausado, mantém visível a menos que o usuário tenha dispensado explicitamente.
     bool activeScreenHover = hitScreen && !state.isControllerStationary && !state.controlsExplicitlyDismissed;
     bool activePanelHover = (currentHitPanel == 2) && !state.controlsExplicitlyDismissed && (!state.isControllerStationary || !isPlaying);
-    bool keepPausedVisible = !isPlaying && !state.controlsExplicitlyDismissed;
+    bool keepPausedVisible = state.hasActiveMedia && !isPlaying && !state.controlsExplicitlyDismissed;
 
-    if (activePanelHover || activeScreenHover || keepPausedVisible) {
+    if (state.hasActiveMedia && (activePanelHover || activeScreenHover || keepPausedVisible)) {
         state.controlsIdleTime = 0.0f;
     } else {
         state.controlsIdleTime += dt;
@@ -691,7 +700,12 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     float effectiveUiTimeout = state.isControllerStationary ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
 
     float uiTargetAlpha = (state.uiIdleTime < effectiveUiTimeout) ? 1.0f : 0.0f;
-    float controlsTargetAlpha = (state.controlsIdleTime < effectiveControlsTimeout) ? 1.0f : 0.0f;
+    float controlsTargetAlpha = (state.hasActiveMedia && state.controlsIdleTime < effectiveControlsTimeout) ? 1.0f : 0.0f;
+    if (!state.hasActiveMedia) {
+        controlsTargetAlpha = 0.0f;
+        state.controlsIdleTime = kUiAutoHideSeconds;
+        state.controlsAlpha = 0.0f;
+    }
     float modalTargetAlpha = state.modalActive ? 1.0f : 0.0f;
     float fadeStep = (kUiFadeDuration > 0.0f) ? dt / kUiFadeDuration : 1.0f;
     state.uiAlpha = MoveTowards(state.uiAlpha, uiTargetAlpha, fadeStep);
@@ -782,18 +796,26 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     }
 
     if (action >= 0) {
-        JNIEnv* env = nullptr;
-        state.app->activity->vm->AttachCurrentThread(&env, nullptr);
-        if (env) {
-            jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
-            const char* methodName = (dispatchHitPanel == 4) ? "dispatchBrowserTouch"
-                                   : ((dispatchHitPanel == 3) ? "dispatchModalVRTouch"
-                                   : ((dispatchHitPanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch"));
-            jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
-            if (touchMethod) {
-                env->CallStaticVoidMethod(vrActivityClass, touchMethod, state.app->activity->clazz, hitU, hitV, action);
+        int targetPanel = (action == 7) ? dispatchHitPanel : state.activePanel;
+        if (targetPanel != 0) {
+            float sendU = (currentHitPanel == targetPanel) ? hitU : state.lastUvX;
+            float sendV = (currentHitPanel == targetPanel) ? hitV : state.lastUvY;
+            JNIEnv* env = nullptr;
+            state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+            if (env) {
+                jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+                const char* methodName = (targetPanel == 4) ? "dispatchBrowserTouch"
+                                       : ((targetPanel == 3) ? "dispatchModalVRTouch"
+                                       : ((targetPanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch"));
+                jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
+                if (touchMethod) {
+                    env->CallStaticVoidMethod(vrActivityClass, touchMethod, state.app->activity->clazz, sendU, sendV, action);
+                }
+                env->DeleteLocalRef(vrActivityClass);
             }
-            env->DeleteLocalRef(vrActivityClass);
+        }
+        if (action == 1) {
+            state.activePanel = 0;
         }
     }
 
@@ -890,9 +912,11 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
         if ((buttonPlayPause || triggerPlayPause) && !keyboardActive) {
             toggle_play_pause();
-            state.controlsIdleTime = 0.0f;
-            state.controlsAlpha = 1.0f;
-            state.controlsExplicitlyDismissed = false;
+            if (state.hasActiveMedia) {
+                state.controlsIdleTime = 0.0f;
+                state.controlsAlpha = 1.0f;
+                state.controlsExplicitlyDismissed = false;
+            }
         }
 
         // B (direita) ou Y (esquerda) = navegação hierárquica para trás (Issue #87).
@@ -929,10 +953,12 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                     state.dismissRayDir = state.lastRayDir;
                 } else {
                     state.uiIdleTime = 0.0f;
-                    state.controlsIdleTime = 0.0f;
-                    state.controlsAlpha = 1.0f;
                     state.uiAlpha = 1.0f;
-                    state.controlsExplicitlyDismissed = false;
+                    if (state.hasActiveMedia) {
+                        state.controlsIdleTime = 0.0f;
+                        state.controlsAlpha = 1.0f;
+                        state.controlsExplicitlyDismissed = false;
+                    }
                 }
             }
         }
@@ -978,10 +1004,12 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                 state.dismissRayDir = state.lastRayDir;
             } else {
                 state.uiIdleTime = 0.0f;
-                state.controlsIdleTime = 0.0f;
-                state.controlsAlpha = 1.0f;
                 state.uiAlpha = 1.0f;
-                state.controlsExplicitlyDismissed = false;
+                if (state.hasActiveMedia) {
+                    state.controlsIdleTime = 0.0f;
+                    state.controlsAlpha = 1.0f;
+                    state.controlsExplicitlyDismissed = false;
+                }
             }
         }
         state.menuHoldTime = 0.0f;
@@ -1412,9 +1440,11 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         float ly = (fabsf(leftStick.currentState.y) < kDeadzone) ? 0.0f : leftStick.currentState.y;
 
         if (lx != 0.0f || ly != 0.0f) {
-            state.controlsIdleTime = 0.0f;
-            state.controlsAlpha = 1.0f;
-            state.controlsExplicitlyDismissed = false;
+            if (state.hasActiveMedia) {
+                state.controlsIdleTime = 0.0f;
+                state.controlsAlpha = 1.0f;
+                state.controlsExplicitlyDismissed = false;
+            }
         }
 
         bool leftAimingUi = useLeft && (dispatchHitPanel == 1 || dispatchHitPanel == 3);

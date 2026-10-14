@@ -16,6 +16,7 @@ import com.tucavr.designsystem.PassthroughSettingsModal
 import com.tucavr.designsystem.ResumePromptModal
 import com.tucavr.designsystem.ScreenFormatModal
 import com.tucavr.designsystem.SubtitleSelectionModal
+import com.tucavr.designsystem.SubtitleTrackItem
 import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.history.PlaybackHistory
 import com.tucavr.history.historyKey
@@ -189,6 +190,37 @@ class VRModalPresentation(
         val currentTrack = activity.nativeGetSubtitleTrack()
         val currentOffsetMs = activity.nativeGetSubtitleOffsetMs()
 
+        val items = mutableListOf<SubtitleTrackItem>()
+        val wire = activity.nativeGetSubtitleTrackInfoWire()
+        if (!wire.isNullOrBlank()) {
+            wire.lines().forEachIndexed { index, line ->
+                val parts = line.split('\t')
+                if (parts.size >= 3) {
+                    val lang = parts[0]
+                    val title = parts[1]
+                    val isExternal = parts[2] == "1"
+                    items.add(SubtitleTrackItem(index, lang, title, isExternal))
+                }
+            }
+        }
+
+        if (items.isEmpty() && trackCount > 0) {
+            val meta = activity.currentMediaMetadata
+            val subTracks = meta?.subtitleTracks ?: emptyList()
+            for (i in 0 until trackCount) {
+                val track = subTracks.getOrNull(i)
+                items.add(
+                    SubtitleTrackItem(
+                        index = i,
+                        language = track?.language ?: "",
+                        title = track?.title ?: "",
+                        isExternal = false,
+                        codec = track?.codec ?: "",
+                    ),
+                )
+            }
+        }
+
         val modal =
             SubtitleSelectionModal(
                 context = context,
@@ -202,6 +234,7 @@ class VRModalPresentation(
                     activity.nativeSetSubtitleOffsetMs(offsetMs)
                 },
                 onDismiss = { dismissModal() },
+                trackItems = items,
             )
         showModal(modal)
     }

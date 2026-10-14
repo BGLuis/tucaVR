@@ -1165,7 +1165,9 @@ class VRActivity : NativeActivity() {
             var handled = false
             activity.runOnUiThread {
                 try {
-                    if (activity.modalPresentation?.isShowing == true) {
+                    if (activity.controlsPresentation?.hasOpenPopup() == true) {
+                        handled = activity.controlsPresentation?.dismissOpenPopup() ?: false
+                    } else if (activity.modalPresentation?.isShowing == true) {
                         activity.modalPresentation?.dismissModal()
                         handled = true
                     } else {
@@ -2477,6 +2479,8 @@ class VRActivity : NativeActivity() {
     external fun nativeLoadExternalSubtitle(path: String): Boolean
 
     external fun nativeGetSubtitleTrackCount(): Int
+
+    external fun nativeGetSubtitleTrackInfoWire(): String?
 
     // T7.6: idioma do sistema para auto-selecao de faixa embutida.
     external fun nativeSetPreferredSubtitleLanguage(lang: String)
