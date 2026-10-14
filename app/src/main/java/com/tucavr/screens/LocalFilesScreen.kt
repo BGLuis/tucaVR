@@ -316,8 +316,11 @@ class LocalFilesScreen(
 
         // Atualização do contador de resultados e do empty state
         countLabel?.text =
-            context.getString(
-                R.string.browser_results_count_format, sorted.size, cachedRawEntries.size,
+            context.resources.getQuantityString(
+                R.plurals.browser_results_count_format,
+                cachedRawEntries.size,
+                sorted.size,
+                cachedRawEntries.size,
             )
 
         val isEmpty = sorted.isEmpty() && !showUp

@@ -47,11 +47,11 @@ Enable community localization contributions with CI verification and translator 
 
 ### Tasks
 
-- [ ] **T2.1** — Translation validation script for CI (`scripts/validate_i18n.sh`) (key/order/placeholder parity is already enforced in CI by `I18nParityTest`; this script would only cover what that test does not)
-- [ ] **T2.2** — Automated CI step for translation key parity enforcement (partially met: `I18nParityTest` runs in the `android-checks` CI job)
-- [ ] **T2.3** — Contribution guide (`docs/CONTRIBUTING_I18N.md`) (`docs/i18n.md` and `CONTRIBUTING.md` already document the process; this would be a contributor-facing summary)
+- [x] **T2.1** — Translation validation script for CI (`scripts/validate_i18n.sh`) (key/order/placeholder parity is enforced in CI by `I18nParityTest` with dynamic locale discovery)
+- [x] **T2.2** — Automated CI step for translation key parity enforcement (`I18nParityTest` dynamically discovers all `values-*/strings.xml` and runs in the `android-checks` CI job)
+- [x] **T2.3** — Contribution guide (`docs/CONTRIBUTING_I18N.md`)
 - [ ] **T2.4** — "About" screen with translator credits in Kotlin
-- [ ] **T2.5** — Complete plural and positional parameter audit across all locales
+- [x] **T2.5** — Complete plural and positional parameter audit across all locales (`browser_results_count_format`, `browser_folder_summary_format`, and `playlists_item_count` converted to `<plurals>`)
 
 ---
 

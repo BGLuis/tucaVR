@@ -259,7 +259,15 @@ class FileAdapter(
 
         val meta =
             when {
-                isDir -> entry.itemCount?.let { context.getString(R.string.browser_folder_summary_format, "", it).removePrefix(" · ") }
+                isDir ->
+                    entry.itemCount?.let { count ->
+                        context.resources.getQuantityString(
+                            R.plurals.browser_folder_summary_format,
+                            count,
+                            "",
+                            count,
+                        ).removePrefix(" · ")
+                    }
                 isVideo -> formatFileSize(context, entry.sizeBytes)
                 entry.sizeBytes > 0 -> formatFileSize(context, entry.sizeBytes)
                 else -> null

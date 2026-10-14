@@ -7,6 +7,7 @@ import org.junit.Test
 import org.w3c.dom.Element
 import org.w3c.dom.Node
 import java.io.File
+import java.util.Locale
 import javax.xml.parsers.DocumentBuilderFactory
 
 /**
@@ -23,7 +24,8 @@ class I18nParityTest {
     data class StringEntry(
         val name: String,
         val isPlural: Boolean,
-        val texts: Map<String, String>, // "default" -> texto para <string>; quantity -> texto para <plurals>
+        // "default" -> texto para <string>; quantity -> texto para <plurals>
+        val texts: Map<String, String>,
     )
 
     data class LocaleResources(
@@ -31,6 +33,7 @@ class I18nParityTest {
         val file: File,
         val entries: List<StringEntry>,
     ) {
+        val parentDirName: String = file.parentFile?.name ?: file.name
         val keys: List<String> = entries.map { it.name }
         val keySet: Set<String> = keys.toSet()
         val entryMap: Map<String, StringEntry> = entries.associateBy { it.name }
@@ -38,8 +41,8 @@ class I18nParityTest {
 
     companion object {
         private lateinit var defaultRes: LocaleResources
-        private lateinit var ptBrRes: LocaleResources
-        private lateinit var esRes: LocaleResources
+        private lateinit var translationLocales: List<LocaleResources>
+        private lateinit var allLocales: List<LocaleResources>
 
         private val POSITIONAL_PLACEHOLDER_REGEX = Regex("%[0-9]+\\$[-#+ 0,(]*\\d*(?:\\.\\d+)?[a-zA-Z]")
         private val NON_POSITIONAL_PLACEHOLDER_REGEX = Regex("%(?![0-9]+\\$)[-#+ 0,(]*\\d*(?:\\.\\d+)?[a-zA-Z]")
@@ -49,8 +52,19 @@ class I18nParityTest {
         fun setUp() {
             val resDir = resolveResDirectory()
             defaultRes = parseStringsXml("en (default)", File(resDir, "values/strings.xml"))
-            ptBrRes = parseStringsXml("pt-rBR", File(resDir, "values-pt-rBR/strings.xml"))
-            esRes = parseStringsXml("es", File(resDir, "values-es/strings.xml"))
+
+            val candidateDirs =
+                resDir.listFiles { dir ->
+                    dir.isDirectory && dir.name.startsWith("values-") && File(dir, "strings.xml").isFile
+                }?.sortedBy { it.name } ?: emptyList()
+
+            translationLocales =
+                candidateDirs.map { dir ->
+                    val localeTag = dir.name.removePrefix("values-")
+                    parseStringsXml(localeTag, File(dir, "strings.xml"))
+                }
+            assertTrue("Pelo menos uma tradução deve existir em ${resDir.absolutePath}", translationLocales.isNotEmpty())
+            allLocales = listOf(defaultRes) + translationLocales
         }
 
         private fun resolveResDirectory(): File {
@@ -107,52 +121,44 @@ class I18nParityTest {
     @Test
     fun `all locales have the exact same set of keys`() {
         val defaultKeys = defaultRes.keySet
-        val ptBrKeys = ptBrRes.keySet
-        val esKeys = esRes.keySet
 
-        val missingInPt = defaultKeys - ptBrKeys
-        val extraInPt = ptBrKeys - defaultKeys
-        assertTrue(
-            "Discrepância de chaves em values-pt-rBR/strings.xml: faltantes=$missingInPt, extras=$extraInPt",
-            missingInPt.isEmpty() && extraInPt.isEmpty(),
-        )
-
-        val missingInEs = defaultKeys - esKeys
-        val extraInEs = esKeys - defaultKeys
-        assertTrue(
-            "Discrepância de chaves em values-es/strings.xml: faltantes=$missingInEs, extras=$extraInEs",
-            missingInEs.isEmpty() && extraInEs.isEmpty(),
-        )
-
-        assertEquals("Total de chaves em pt-BR deve ser idêntico ao default", defaultKeys.size, ptBrKeys.size)
-        assertEquals("Total de chaves em ES deve ser idêntico ao default", defaultKeys.size, esKeys.size)
+        for (trans in translationLocales) {
+            val transKeys = trans.keySet
+            val missing = defaultKeys - transKeys
+            val extra = transKeys - defaultKeys
+            assertTrue(
+                "Discrepância de chaves em ${trans.parentDirName}/strings.xml (${trans.locale}): faltantes=$missing, extras=$extra",
+                missing.isEmpty() && extra.isEmpty(),
+            )
+            assertEquals(
+                "Total de chaves em ${trans.parentDirName}/strings.xml (${trans.locale}) deve ser idêntico ao default",
+                defaultKeys.size,
+                transKeys.size,
+            )
+        }
     }
 
     @Test
     fun `key declaration order strictly mirrors default values strings_xml`() {
-        assertEquals(
-            "A ordem das chaves em values-pt-rBR/strings.xml deve espelhar exatamente values/strings.xml",
-            defaultRes.keys,
-            ptBrRes.keys,
-        )
-        assertEquals(
-            "A ordem das chaves em values-es/strings.xml deve espelhar exatamente values/strings.xml",
-            defaultRes.keys,
-            esRes.keys,
-        )
+        for (trans in translationLocales) {
+            assertEquals(
+                "A ordem das chaves em ${trans.parentDirName}/strings.xml (${trans.locale}) deve espelhar exatamente values/strings.xml",
+                defaultRes.keys,
+                trans.keys,
+            )
+        }
     }
 
     @Test
     fun `no non-positional placeholders are used in any locale`() {
-        val locales = listOf(defaultRes, ptBrRes, esRes)
-
-        for (loc in locales) {
+        for (loc in allLocales) {
             for (entry in loc.entries) {
                 for ((subKey, text) in entry.texts) {
                     val cleanText = text.replace("%%", "")
                     val nonPositional = NON_POSITIONAL_PLACEHOLDER_REGEX.findAll(cleanText).map { it.value }.toList()
                     assertTrue(
-                        "Placeholder não-posicional encontrado em ${loc.file.name} na chave '${entry.name}' ($subKey): $nonPositional. " +
+                        "Placeholder não-posicional encontrado em ${loc.parentDirName}/${loc.file.name} " +
+                            "(${loc.locale}) na chave '${entry.name}' ($subKey): $nonPositional. " +
                             "Use placeholders posicionais (%1\$s, %2\$d, etc.) para suportar reordenação gramatical.",
                         nonPositional.isEmpty(),
                     )
@@ -163,16 +169,15 @@ class I18nParityTest {
 
     @Test
     fun `all positional placeholders present in english default exist in translations`() {
-        val translations = listOf(ptBrRes, esRes)
-
-        for (trans in translations) {
+        for (trans in translationLocales) {
             for (defaultEntry in defaultRes.entries) {
                 val transEntry =
                     trans.entryMap[defaultEntry.name]
-                        ?: error("Chave '${defaultEntry.name}' não encontrada em ${trans.locale}")
+                        ?: error("Chave '${defaultEntry.name}' não encontrada em ${trans.parentDirName}/strings.xml (${trans.locale})")
 
                 assertEquals(
-                    "Tipo de recurso (string vs plurals) diverge para '${defaultEntry.name}' em ${trans.locale}",
+                    "Tipo de recurso (string vs plurals) diverge para '${defaultEntry.name}' em " +
+                        "${trans.parentDirName}/strings.xml (${trans.locale})",
                     defaultEntry.isPlural,
                     transEntry.isPlural,
                 )
@@ -185,22 +190,44 @@ class I18nParityTest {
                     val transPlaceholders = POSITIONAL_PLACEHOLDER_REGEX.findAll(transText).map { it.value }.sorted().toList()
 
                     assertEquals(
-                        "Placeholders posicionais divergem para chave '${defaultEntry.name}' em ${trans.locale}",
+                        "Placeholders posicionais divergem para chave '${defaultEntry.name}' em " +
+                            "${trans.parentDirName}/strings.xml (${trans.locale})",
                         defaultPlaceholders,
                         transPlaceholders,
                     )
                 } else {
+                    val defaultPlaceholders =
+                        defaultEntry.texts.values.firstOrNull()?.let {
+                            POSITIONAL_PLACEHOLDER_REGEX.findAll(it.replace("%%", "")).map { m -> m.value }.sorted().toList()
+                        } ?: emptyList()
+
                     for ((quantity, defaultText) in defaultEntry.texts) {
                         val transText =
                             transEntry.texts[quantity]?.replace("%%", "")
-                                ?: error("Forma de plural '$quantity' ausente para '${defaultEntry.name}' em ${trans.locale}")
+                                ?: error(
+                                    "Forma de plural '$quantity' ausente para '${defaultEntry.name}' em " +
+                                        "${trans.parentDirName}/strings.xml (${trans.locale})",
+                                )
                         val cleanDefault = defaultText.replace("%%", "")
 
-                        val defaultPlaceholders = POSITIONAL_PLACEHOLDER_REGEX.findAll(cleanDefault).map { it.value }.sorted().toList()
+                        val expectedPlaceholders = POSITIONAL_PLACEHOLDER_REGEX.findAll(cleanDefault).map { it.value }.sorted().toList()
                         val transPlaceholders = POSITIONAL_PLACEHOLDER_REGEX.findAll(transText).map { it.value }.sorted().toList()
 
                         assertEquals(
-                            "Placeholders posicionais divergem no plural '${defaultEntry.name}' [$quantity] em ${trans.locale}",
+                            "Placeholders posicionais divergem no plural '${defaultEntry.name}' [$quantity] em " +
+                                "${trans.parentDirName}/strings.xml (${trans.locale})",
+                            expectedPlaceholders,
+                            transPlaceholders,
+                        )
+                    }
+
+                    for ((quantity, transText) in transEntry.texts) {
+                        val cleanTrans = transText.replace("%%", "")
+                        val transPlaceholders = POSITIONAL_PLACEHOLDER_REGEX.findAll(cleanTrans).map { it.value }.sorted().toList()
+
+                        assertEquals(
+                            "Placeholders posicionais divergem no plural '${defaultEntry.name}' [$quantity] em " +
+                                "${trans.parentDirName}/strings.xml (${trans.locale})",
                             defaultPlaceholders,
                             transPlaceholders,
                         )
@@ -212,18 +239,126 @@ class I18nParityTest {
 
     @Test
     fun `all plurals have required one and other forms across all locales`() {
-        val locales = listOf(defaultRes, ptBrRes, esRes)
-
-        for (loc in locales) {
+        for (loc in allLocales) {
             val plurals = loc.entries.filter { it.isPlural }
             for (p in plurals) {
                 assertTrue(
-                    "Plural '${p.name}' em ${loc.locale} deve conter a forma 'one'",
+                    "Plural '${p.name}' em ${loc.parentDirName}/strings.xml (${loc.locale}) deve conter a forma 'one'",
                     p.texts.containsKey("one"),
                 )
                 assertTrue(
-                    "Plural '${p.name}' em ${loc.locale} deve conter a forma 'other'",
+                    "Plural '${p.name}' em ${loc.parentDirName}/strings.xml (${loc.locale}) deve conter a forma 'other'",
                     p.texts.containsKey("other"),
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `plurals format valid singular and plural outputs across all locales`() {
+        val expectedSingular =
+            mapOf(
+                "en (default)" to
+                    mapOf(
+                        "browser_results_count_format" to "Showing 1 of 1 item",
+                        "browser_folder_summary_format" to "1 item",
+                        "playlists_item_count" to "1 video",
+                        "network_smb_form_status_connected" to "Connected (1 share found)",
+                    ),
+                "pt-rBR" to
+                    mapOf(
+                        "browser_results_count_format" to "Exibindo 1 de 1 item",
+                        "browser_folder_summary_format" to "1 item",
+                        "playlists_item_count" to "1 vídeo",
+                        "network_smb_form_status_connected" to "Conectado (1 share encontrado)",
+                    ),
+                "es" to
+                    mapOf(
+                        "browser_results_count_format" to "Mostrando 1 de 1 elemento",
+                        "browser_folder_summary_format" to "1 elemento",
+                        "playlists_item_count" to "1 video",
+                        "network_smb_form_status_connected" to "Conectado (1 share encontrado)",
+                    ),
+            )
+
+        val expectedPlural =
+            mapOf(
+                "en (default)" to
+                    mapOf(
+                        "browser_results_count_format" to "Showing 1 of 2 items",
+                        "browser_folder_summary_format" to "2 items",
+                        "playlists_item_count" to "2 videos",
+                        "network_smb_form_status_connected" to "Connected (2 shares found)",
+                    ),
+                "pt-rBR" to
+                    mapOf(
+                        "browser_results_count_format" to "Exibindo 1 de 2 itens",
+                        "browser_folder_summary_format" to "2 itens",
+                        "playlists_item_count" to "2 vídeos",
+                        "network_smb_form_status_connected" to "Conectado (2 shares encontrados)",
+                    ),
+                "es" to
+                    mapOf(
+                        "browser_results_count_format" to "Mostrando 1 de 2 elementos",
+                        "browser_folder_summary_format" to "2 elementos",
+                        "playlists_item_count" to "2 videos",
+                        "network_smb_form_status_connected" to "Conectado (2 shares encontrados)",
+                    ),
+            )
+
+        for (loc in allLocales) {
+            val resultsEntry =
+                loc.entryMap["browser_results_count_format"]
+                    ?: error("browser_results_count_format ausente em ${loc.parentDirName}/strings.xml (${loc.locale})")
+            val summaryEntry =
+                loc.entryMap["browser_folder_summary_format"]
+                    ?: error("browser_folder_summary_format ausente em ${loc.parentDirName}/strings.xml (${loc.locale})")
+            val playlistsEntry =
+                loc.entryMap["playlists_item_count"]
+                    ?: error("playlists_item_count ausente em ${loc.parentDirName}/strings.xml (${loc.locale})")
+            val smbEntry =
+                loc.entryMap["network_smb_form_status_connected"]
+                    ?: error("network_smb_form_status_connected ausente em ${loc.parentDirName}/strings.xml (${loc.locale})")
+
+            val formattedResults1 = String.format(Locale.ROOT, resultsEntry.texts["one"] ?: "", 1, 1)
+            val formattedSummary1 = String.format(Locale.ROOT, summaryEntry.texts["one"] ?: "", "", 1).removePrefix(" · ")
+            val formattedPlaylists1 = String.format(Locale.ROOT, playlistsEntry.texts["one"] ?: "", 1)
+            val formattedSmb1 = String.format(Locale.ROOT, smbEntry.texts["one"] ?: "", 1)
+
+            val formattedResults2 = String.format(Locale.ROOT, resultsEntry.texts["other"] ?: "", 1, 2)
+            val formattedSummary2 = String.format(Locale.ROOT, summaryEntry.texts["other"] ?: "", "", 2).removePrefix(" · ")
+            val formattedPlaylists2 = String.format(Locale.ROOT, playlistsEntry.texts["other"] ?: "", 2)
+            val formattedSmb2 = String.format(Locale.ROOT, smbEntry.texts["other"] ?: "", 2)
+
+            expectedSingular[loc.locale]?.let { expected ->
+                assertEquals(expected["browser_results_count_format"], formattedResults1)
+                assertEquals(expected["browser_folder_summary_format"], formattedSummary1)
+                assertEquals(expected["playlists_item_count"], formattedPlaylists1)
+                assertEquals(expected["network_smb_form_status_connected"], formattedSmb1)
+            }
+
+            expectedPlural[loc.locale]?.let { expected ->
+                assertEquals(expected["browser_results_count_format"], formattedResults2)
+                assertEquals(expected["browser_folder_summary_format"], formattedSummary2)
+                assertEquals(expected["playlists_item_count"], formattedPlaylists2)
+                assertEquals(expected["network_smb_form_status_connected"], formattedSmb2)
+            }
+
+            for (formatted in listOf(
+                formattedResults1,
+                formattedSummary1,
+                formattedPlaylists1,
+                formattedSmb1,
+                formattedResults2,
+                formattedSummary2,
+                formattedPlaylists2,
+                formattedSmb2,
+            )) {
+                assertTrue(
+                    "Formatação de plural em ${loc.parentDirName}/strings.xml (${loc.locale}) " +
+                        "contém placeholder não resolvido: '$formatted'",
+                    !formatted.contains("%1$") && !formatted.contains("%2$") &&
+                        !formatted.contains("%d") && !formatted.contains("%s"),
                 )
             }
         }

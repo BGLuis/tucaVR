@@ -63,11 +63,11 @@ class PlaylistDetailScreen(
             currentPlaylist = playlist
 
             val subtitleText =
-                if (playlist.itemCount == 1) {
-                    context.getString(R.string.playlists_item_count_singular, playlist.itemCount)
-                } else {
-                    context.getString(R.string.playlists_item_count_plural, playlist.itemCount)
-                }
+                context.resources.getQuantityString(
+                    R.plurals.playlists_item_count,
+                    playlist.itemCount,
+                    playlist.itemCount,
+                )
 
             root.addView(
                 VoidPanelChrome.buildHeader(

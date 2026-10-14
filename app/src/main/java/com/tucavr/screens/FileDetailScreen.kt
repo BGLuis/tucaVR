@@ -572,11 +572,11 @@ class FileDetailScreen(
                                     ViewGroup.LayoutParams.WRAP_CONTENT,
                                 ).also { it.bottomMargin = VoidTheme.dpToPx(context, 6f) }
                             val metaText =
-                                if (pl.itemCount == 1) {
-                                    context.getString(R.string.playlists_item_count_singular, pl.itemCount)
-                                } else {
-                                    context.getString(R.string.playlists_item_count_plural, pl.itemCount)
-                                }
+                                context.resources.getQuantityString(
+                                    R.plurals.playlists_item_count,
+                                    pl.itemCount,
+                                    pl.itemCount,
+                                )
                             bind(
                                 title = pl.name,
                                 meta = metaText,

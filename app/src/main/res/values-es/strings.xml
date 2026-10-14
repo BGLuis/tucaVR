@@ -180,10 +180,16 @@
     <string name="browser_filter_date_recent">24 horas</string>
     <string name="browser_filter_date_week">7 días</string>
     <string name="browser_filter_date_month">30 días</string>
-    <string name="browser_results_count_format">Mostrando %1$d de %2$d elementos</string>
+    <plurals name="browser_results_count_format">
+        <item quantity="one">Mostrando %1$d de %2$d elemento</item>
+        <item quantity="other">Mostrando %1$d de %2$d elementos</item>
+    </plurals>
     <string name="browser_empty_search">Ningún archivo coincide con los criterios de búsqueda</string>
     <string name="browser_btn_clear_filters">Limpiar filtros</string>
-    <string name="browser_folder_summary_format">%1$s · %2$d elementos</string>
+    <plurals name="browser_folder_summary_format">
+        <item quantity="one">%1$s · %2$d elemento</item>
+        <item quantity="other">%1$s · %2$d elementos</item>
+    </plurals>
     <string name="history_filter_resumable">En curso</string>
     <string name="history_filter_all">Todo el historial</string>
     <string name="player_now_playing_title">Reproduciendo ahora</string>
@@ -620,8 +626,10 @@
     <string name="playlists_delete">Eliminar lista de reproducción</string>
     <string name="playlists_delete_confirm">¿Seguro que deseas eliminar esta lista de reproducción?</string>
     <string name="playlists_play_all">Reproducir todo</string>
-    <string name="playlists_item_count_singular">%1$d video</string>
-    <string name="playlists_item_count_plural">%1$d videos</string>
+    <plurals name="playlists_item_count">
+        <item quantity="one">%1$d video</item>
+        <item quantity="other">%1$d videos</item>
+    </plurals>
     <string name="playlists_add_to_playlist">Añadir a lista de reproducción</string>
     <string name="playlists_added_success">Añadido a la lista %1$s</string>
     <string name="playlists_select_playlist">Selecciona una lista de reproducción</string>
