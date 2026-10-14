@@ -686,4 +686,26 @@
     <string name="webbrowser_error_generic">Something went wrong while loading this page.</string>
     <string name="webbrowser_error_label_url">Address</string>
 
+    <!-- Sidebar navigation -->
+    <string name="sidebar_item_home">Home</string>
+    <string name="sidebar_item_files">Files</string>
+    <string name="sidebar_item_network">Network</string>
+    <string name="sidebar_item_playlists">Playlists</string>
+    <string name="sidebar_item_downloads">Downloads</string>
+    <string name="sidebar_item_settings">Settings</string>
+
+    <!-- Context Rail -->
+    <string name="context_rail_now_playing">Now Playing</string>
+    <string name="context_rail_back_to_video">Back to video</string>
+    <string name="context_rail_no_video">No video playing</string>
+    <string name="context_rail_queue_title">Up Next</string>
+    <string name="context_rail_empty_queue">Queue is empty</string>
+
+    <!-- Home Screen Sections -->
+    <string name="home_section_continue_watching">Continue Watching</string>
+    <string name="home_section_recent_sources">Recent Sources</string>
+    <string name="home_section_recently_added">Recently Added</string>
+    <string name="home_no_recent_videos">No recently watched videos</string>
+    <string name="home_no_recent_files">No recent files</string>
+
 </resources>

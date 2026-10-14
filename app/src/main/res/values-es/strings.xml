@@ -677,4 +677,26 @@
     <string name="webbrowser_error_generic">Algo salió mal al cargar esta página.</string>
     <string name="webbrowser_error_label_url">Dirección</string>
 
+    <!-- Sidebar navigation -->
+    <string name="sidebar_item_home">Inicio</string>
+    <string name="sidebar_item_files">Archivos</string>
+    <string name="sidebar_item_network">Red</string>
+    <string name="sidebar_item_playlists">Listas de reproducción</string>
+    <string name="sidebar_item_downloads">Descargas</string>
+    <string name="sidebar_item_settings">Configuración</string>
+
+    <!-- Context Rail -->
+    <string name="context_rail_now_playing">Reproduciendo ahora</string>
+    <string name="context_rail_back_to_video">Volver al vídeo</string>
+    <string name="context_rail_no_video">No hay vídeo en reproducción</string>
+    <string name="context_rail_queue_title">A continuación</string>
+    <string name="context_rail_empty_queue">Cola vacía</string>
+
+    <!-- Home Screen Sections -->
+    <string name="home_section_continue_watching">Continuar Viendo</string>
+    <string name="home_section_recent_sources">Fuentes Recientes</string>
+    <string name="home_section_recently_added">Agregados Recientemente</string>
+    <string name="home_no_recent_videos">Ningún vídeo reciente</string>
+    <string name="home_no_recent_files">Ningún archivo reciente</string>
+
 </resources>

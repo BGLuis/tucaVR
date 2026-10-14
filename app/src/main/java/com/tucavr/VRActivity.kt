@@ -241,6 +241,9 @@ class VRActivity : NativeActivity() {
                 currentMediaMetadata = com.tucavr.filebrowser.MediaMetadataReader.read(this@VRActivity, source)
             }
         }
+        runOnUiThread {
+            presentation?.updateMediaState(false, source != null)
+        }
     }
 
     // Ferramenta de debug (ver docs/DEBUGGING.md): troca o ScreenMode de um
@@ -800,8 +803,8 @@ class VRActivity : NativeActivity() {
         private const val PLAYBACK_ERROR_POLL_MS = 1000L
 
         // Dimensões nominais dos VirtualDisplays de UI e Controles (devem bater com o nativo C++).
-        const val UI_DISPLAY_WIDTH = 1024
-        const val UI_DISPLAY_HEIGHT = 768
+        const val UI_DISPLAY_WIDTH = 1920
+        const val UI_DISPLAY_HEIGHT = 960
         const val CONTROLS_DISPLAY_WIDTH = 1582
         const val CONTROLS_DISPLAY_HEIGHT = 800
         const val MODAL_DISPLAY_WIDTH = 1024
@@ -870,13 +873,15 @@ class VRActivity : NativeActivity() {
                 }
 
                 val downTime = if (lastDownTime == 0L) now else lastDownTime
+                val scaledX = (x * UI_DISPLAY_WIDTH.toFloat()).coerceIn(0f, UI_DISPLAY_WIDTH.toFloat())
+                val scaledY = (y * UI_DISPLAY_HEIGHT.toFloat()).coerceIn(0f, UI_DISPLAY_HEIGHT.toFloat())
                 val event =
                     android.view.MotionEvent.obtain(
                         downTime,
                         now,
                         action,
-                        x * UI_DISPLAY_WIDTH.toFloat(),
-                        y * UI_DISPLAY_HEIGHT.toFloat(),
+                        scaledX,
+                        scaledY,
                         0,
                     )
 
@@ -1159,6 +1164,7 @@ class VRActivity : NativeActivity() {
                 activity.lastMediaProgressCurrent = currentSec
                 activity.lastMediaProgressTotal = totalSec
                 activity.controlsPresentation?.updateProgress(currentSec, totalSec)
+                activity.presentation?.updatePlaybackProgress(currentSec, totalSec)
                 // T9.2: mesmo hook que ja existia para a UI de controles —
                 // chamado pelo C++ via JNI ~10x/segundo (ver
                 // native/src/vr_player_app.cpp, `frameCount % 6 == 0` a
@@ -1208,6 +1214,7 @@ class VRActivity : NativeActivity() {
         ) {
             activity.runOnUiThread {
                 activity.controlsPresentation?.updateMediaState(isLoading, isPlaying)
+                activity.presentation?.updateMediaState(isLoading, isPlaying)
             }
         }
 
@@ -1569,6 +1576,7 @@ class VRActivity : NativeActivity() {
             if (!isFinishing && !isDestroyed) {
                 nativeRequestUiPanelVisible()
                 presentation?.loadFiles()
+                presentation?.onPlaybackStopped()
             }
         }
     }

@@ -25,6 +25,8 @@ TESTS=(
     "test_environment_config"
     "test_browser_pose"
     "test_panel_pick"
+    "test_cylinder_hit"
+    "test_controls_pose"
 )
 
 EXTRA_FLAGS=()

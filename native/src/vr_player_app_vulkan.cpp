@@ -48,6 +48,8 @@
 #include <vector>
 
 #include "vk_math.h"
+#include "cylinder_hit.h"
+#include "controls_pose.h"
 #include "browser_pose.h"
 #include "panel_pick.h"
 #include "hand_tracking.h"
@@ -369,8 +371,8 @@ constexpr float kSphereRadius = 20.0f;
 // bater exatamente com as constantes em
 // VRActivity.dispatchVRTouch/dispatchControlsVRTouch (1024x768 e 1582x800)
 // para que as coordenadas normalizadas do raycast casem com a janela Android.
-constexpr uint32_t kUiTexWidth = 1024;
-constexpr uint32_t kUiTexHeight = 768;
+constexpr uint32_t kUiTexWidth = 1920;
+constexpr uint32_t kUiTexHeight = 960;
 constexpr uint32_t kControlsTexWidth = 1582;
 constexpr uint32_t kControlsTexHeight = 800;
 constexpr uint32_t kModalTexWidth = 1024;
@@ -382,6 +384,15 @@ constexpr float kBrowserPanelScaleY = 1.35f;
 constexpr float kBrowserCylinderRadius = 2.3f;
 constexpr float kBrowserCylinderCentralAngle = 1.0435f;
 constexpr float kBrowserTexAspect = static_cast<float>(kBrowserTexHeight) / static_cast<float>(kBrowserTexWidth);
+
+// Constantes cilíndricas de UI (1.6m, 80°) e Controles (1.3m, 48°)
+using vrplayer::kBaseControlsPos;
+using vrplayer::kBaseUiPos;
+using vrplayer::kControlsCylinderCentralAngle;
+using vrplayer::kControlsCylinderRadius;
+using vrplayer::kControlsPitch;
+using vrplayer::kUiCylinderCentralAngle;
+using vrplayer::kUiCylinderRadius;
 
 // Metricas de performance (debug, ver docs/DEBUGGING.md).
 constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz
@@ -697,6 +708,7 @@ struct AppState {
     float upscalingSharpness = 0.0f;
     bool upscalingEnabled = false;
     bool supportsMqsr = false;
+    bool supportsCylinder = false;
     bool supportsPerfMetrics = false;
     // F3: XR_META_performance_metrics.
     // `supportsPerfMetrics` acima so significa que a EXTENSAO foi habilitada — o SISTEMA de
@@ -800,6 +812,7 @@ struct AppState {
     VkDescriptorSet uiDescriptorSet = VK_NULL_HANDLE;
     float uiAlpha = 1.0f;
     bool uiHasFrame = false;
+    bool prevIsPlaying = false;
 
     // Painel de controles (kControlsTexWidth x kControlsTexHeight)
     AImageReader* controlsImageReader = nullptr;
@@ -1348,6 +1361,15 @@ void CreateXrInstance(AppState& state) {
         extensions.push_back(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME);
     if (isExtensionSupported(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME))
         extensions.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+
+    // Cylinder composition layer (XR_KHR_composition_layer_cylinder)
+    state.supportsCylinder = isExtensionSupported(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+    if (state.supportsCylinder) {
+        extensions.push_back(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+        LOGI("OpenXR: Extensão XR_KHR_composition_layer_cylinder detectada e habilitada");
+    } else {
+        LOGI("OpenXR: Extensão XR_KHR_composition_layer_cylinder nao encontrada neste runtime");
+    }
 
     // F2: Meta Quest Super Resolution (XR_FB_composition_layer_settings)
     state.supportsMqsr = isExtensionSupported(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
@@ -7683,33 +7705,37 @@ void RenderFrame(AppState& state) {
         SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
 
         // Painel 1: Home (UI / File Browser)
-        XrCompositionLayerQuad uiQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
-        uiQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-        uiQuad.space = state.localSpace;
-        uiQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-        uiQuad.subImage.swapchain = state.uiPanelSwapchain.handle;
-        uiQuad.subImage.imageRect.offset = {0, 0};
-        uiQuad.subImage.imageRect.extent = {static_cast<int32_t>(kUiTexWidth), static_cast<int32_t>(kUiTexHeight)};
-        uiQuad.pose.position = scene.uiCenter;
+        XrCompositionLayerCylinderKHR uiCylinder{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+        uiCylinder.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        uiCylinder.space = state.localSpace;
+        uiCylinder.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        uiCylinder.subImage.swapchain = state.uiPanelSwapchain.handle;
+        uiCylinder.subImage.imageRect.offset = {0, 0};
+        uiCylinder.subImage.imageRect.extent = {static_cast<int32_t>(kUiTexWidth), static_cast<int32_t>(kUiTexHeight)};
         XrVector3f toHead = Vec3Sub(headCenter, scene.uiCenter);
         toHead.y = 0.0f;
         float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
-        float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : 0.7f;
-        uiQuad.pose.orientation = QuatFromYaw(uiYaw);
-        uiQuad.size = {kUiPanelScaleX, kUiPanelScaleY};
+        float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : state.sceneYawOffset;
+        uiCylinder.pose.position = Vec3Add(scene.uiCenter, Vec3RotateY({0.0f, 0.0f, kUiCylinderRadius}, uiYaw));
+        uiCylinder.pose.orientation = QuatFromYaw(uiYaw);
+        uiCylinder.radius = kUiCylinderRadius;
+        uiCylinder.centralAngle = kUiCylinderCentralAngle;
+        uiCylinder.aspectRatio = static_cast<float>(kUiTexWidth) / static_cast<float>(kUiTexHeight);
 
         // Painel 2: Controls
-        XrCompositionLayerQuad controlsQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
-        controlsQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-        controlsQuad.space = state.localSpace;
-        controlsQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-        controlsQuad.subImage.swapchain = state.controlsPanelSwapchain.handle;
-        controlsQuad.subImage.imageRect.offset = {0, 0};
-        controlsQuad.subImage.imageRect.extent = {static_cast<int32_t>(kControlsTexWidth), static_cast<int32_t>(kControlsTexHeight)};
-        controlsQuad.pose.position = scene.controlsCenter;
+        XrCompositionLayerCylinderKHR controlsCylinder{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+        controlsCylinder.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        controlsCylinder.space = state.localSpace;
+        controlsCylinder.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        controlsCylinder.subImage.swapchain = state.controlsPanelSwapchain.handle;
+        controlsCylinder.subImage.imageRect.offset = {0, 0};
+        controlsCylinder.subImage.imageRect.extent = {static_cast<int32_t>(kControlsTexWidth), static_cast<int32_t>(kControlsTexHeight)};
         Mat4 controlsRot = Mat4Multiply(Mat4RotationY(state.sceneYawOffset), Mat4RotationX(kControlsPitch));
-        controlsQuad.pose.orientation = QuatFromMat4(controlsRot);
-        controlsQuad.size = {kControlsPanelScaleX, kControlsPanelScaleY};
+        controlsCylinder.pose.position = vrplayer::ComputeControlsCylinderCenter(scene.controlsCenter, state.sceneYawOffset, kControlsCylinderRadius, kControlsPitch);
+        controlsCylinder.pose.orientation = QuatFromMat4(controlsRot);
+        controlsCylinder.radius = kControlsCylinderRadius;
+        controlsCylinder.centralAngle = kControlsCylinderCentralAngle;
+        controlsCylinder.aspectRatio = static_cast<float>(kControlsTexWidth) / static_cast<float>(kControlsTexHeight);
 
         // Painel 3: Modal frontal (3o Quad flutuante)
         XrCompositionLayerQuad modalQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
@@ -7840,23 +7866,23 @@ void RenderFrame(AppState& state) {
         // billboard dinâmico (uiYaw) do painel Home, causando deformação
         // perspectiva que estica o retículo verticalmente.
         if (state.lastHoverPanel == 1) {
-            cursorQuad.pose.orientation = uiQuad.pose.orientation;
+            cursorQuad.pose.orientation = uiCylinder.pose.orientation;
         } else if (state.lastHoverPanel == 2) {
-            cursorQuad.pose.orientation = controlsQuad.pose.orientation;
+            cursorQuad.pose.orientation = controlsCylinder.pose.orientation;
         } else {
             cursorQuad.pose.orientation = QuatFromYaw(state.sceneYawOffset);
         }
         cursorQuad.size = {0.025f, 0.025f}; // 2.5 cm diâmetro
 
-        // MQSR Sharpening nos quads de UI para dobrar o ganho de nitidez nas fontes
+        // MQSR Sharpening nos quads e cilindros de UI para dobrar o ganho de nitidez nas fontes
         XrCompositionLayerSettingsFB uiMqsr{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
         XrCompositionLayerSettingsFB ctrlMqsr{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
         XrCompositionLayerSettingsFB modalMqsr{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
         if (state.supportsMqsr) {
             uiMqsr.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
-            uiQuad.next = &uiMqsr;
+            uiCylinder.next = &uiMqsr;
             ctrlMqsr.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
-            controlsQuad.next = &ctrlMqsr;
+            controlsCylinder.next = &ctrlMqsr;
             modalMqsr.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
             modalQuad.next = &modalMqsr;
         }
@@ -7873,7 +7899,7 @@ void RenderFrame(AppState& state) {
         layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projectionLayer);
 
         if (state.uiHasFrame && state.uiAlpha > 0.05f) {
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&uiQuad);
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&uiCylinder);
         }
         if (state.browserHasFrame && state.browserActive) {
             if (g_browserCurvedGeometry.load()) {
@@ -7883,7 +7909,7 @@ void RenderFrame(AppState& state) {
             }
         }
         if (state.controlsHasFrame && state.controlsAlpha > 0.05f) {
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&controlsQuad);
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&controlsCylinder);
         }
         if (state.modalHasFrame && state.modalAlpha > 0.05f) {
             layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&modalQuad);

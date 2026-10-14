@@ -3,6 +3,8 @@
 #include <jni.h>
 #include <android_native_app_glue.h>
 #include "vk_math.h"
+#include "cylinder_hit.h"
+#include "controls_pose.h"
 #include "hand_tracking.h"
 #include "vr_player_feedback_overlay.h"
 #include "vr_player_ambient.h"
@@ -68,20 +70,7 @@ inline void FireHaptic(AppState& state, XrPath hand, float amplitude, XrDuration
 // dois caminhos comparaveis visualmente. Transformadas por
 // sceneTranslationOffset/sceneYawOffset em ComputeSceneTransforms abaixo.
 //
-// Distancia/escala aumentadas na revisao pos-migracao — os valores
-// originais (-2.2,1.5,-1.5 / escala 0.8x0.6) colocavam o painel a ~2.66m
-// com so 0.8m de largura, angulo visual pequeno demais (~17 graus) pro
-// texto ficar legivel — bug reportado em teste real de hardware ("muito
-// longe, nao da pra ler o texto"). Agora ~1.64m de distancia, 50% maior,
-// mantendo a proporcao da textura (4:3 pro UI/kUiTexWidth/kUiTexHeight,
-// 1582:800 pros controles/kControlsTexWidth/kControlsTexHeight).
-constexpr XrVector3f kBaseUiPos = {-1.3f, 1.5f, -1.0f};
-constexpr float kUiPanelScaleX = 1.2f;
-constexpr float kUiPanelScaleY = 0.9f;
-constexpr XrVector3f kBaseControlsPos = {0.0f, 0.4f, -1.3f};
-constexpr float kControlsPanelScaleX = 1.2f;
-constexpr float kControlsPanelScaleY = 1.2f * (800.0f / 1582.0f); // ~0.607m (aspect ratio 1582:800)
-constexpr float kControlsPitch = -0.3f;
+// As posições base e parâmetros cilíndricos de UI e Controles são definidos em controls_pose.h.
 constexpr XrVector3f kBaseModalPos = {0.0f, 1.35f, -1.35f};
 constexpr float kModalPanelScaleX = 1.2f;
 constexpr float kModalPanelScaleY = 0.9f;
@@ -142,15 +131,14 @@ inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVec
     XrVector3f toHead = Vec3Sub(headCenter, worldUiPos);
     toHead.y = 0.0f;
     float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
-    float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : 0.7f;
+    float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : state.sceneYawOffset;
     t.uiModelNoScale = Mat4Multiply(Mat4Translation(worldUiPos.x, worldUiPos.y, worldUiPos.z), Mat4RotationY(uiYaw));
     t.uiCenter = worldUiPos;
     t.uiNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, uiYaw);
 
     // Controles: segue o yaw da cena (recenter) mais uma inclinacao fixa.
-    XrVector3f worldControlsPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(kBaseControlsPos, state.sceneYawOffset));
-    Mat4 controlsRot = Mat4Multiply(Mat4RotationY(state.sceneYawOffset), Mat4RotationX(kControlsPitch));
-    t.controlsModelNoScale = Mat4Multiply(Mat4Translation(worldControlsPos.x, worldControlsPos.y, worldControlsPos.z), controlsRot);
+    XrVector3f worldControlsPos = vrplayer::ComputeControlsCenter(state.sceneTranslationOffset, state.sceneYawOffset, kBaseControlsPos);
+    t.controlsModelNoScale = vrplayer::ComputeControlsModelNoScale(worldControlsPos, state.sceneYawOffset, kControlsPitch);
     t.controlsCenter = worldControlsPos;
     // RotationX(kControlsPitch).Transform(0,0,1) = (0, -sin(pitch), cos(pitch))
     // (ver convencao de Mat4RotationX em vk_math.h), depois rotacionado pelo yaw da cena.
@@ -351,55 +339,6 @@ inline float rayHitsQuad(const Mat4& transformNoScale, const XrVector3f& normal,
     return t;
 }
 
-inline float rayHitsCylinder(const Mat4& transformNoScale, float radius, float centralAngle, float aspectRatio,
-                            float& outU, float& outV, const XrVector3f& rayOrigin, const XrVector3f& rayDir) {
-    Mat4 inv = Mat4RigidInverse(transformNoScale);
-    XrVector3f oLoc = {
-        inv.m[0]*rayOrigin.x + inv.m[4]*rayOrigin.y + inv.m[8]*rayOrigin.z + inv.m[12],
-        inv.m[1]*rayOrigin.x + inv.m[5]*rayOrigin.y + inv.m[9]*rayOrigin.z + inv.m[13],
-        inv.m[2]*rayOrigin.x + inv.m[6]*rayOrigin.y + inv.m[10]*rayOrigin.z + inv.m[14]
-    };
-    XrVector3f dLoc = {
-        inv.m[0]*rayDir.x + inv.m[4]*rayDir.y + inv.m[8]*rayDir.z,
-        inv.m[1]*rayDir.x + inv.m[5]*rayDir.y + inv.m[9]*rayDir.z,
-        inv.m[2]*rayDir.x + inv.m[6]*rayDir.y + inv.m[10]*rayDir.z
-    };
-
-    float a = dLoc.x * dLoc.x + dLoc.z * dLoc.z;
-    if (a <= 1e-6f) return -1.0f;
-
-    float b = 2.0f * (oLoc.x * dLoc.x + (oLoc.z - radius) * dLoc.z);
-    float c = oLoc.x * oLoc.x + (oLoc.z - radius) * (oLoc.z - radius) - radius * radius;
-
-    float disc = b * b - 4.0f * a * c;
-    if (disc < 0.0f) return -1.0f;
-
-    float sqrtDisc = sqrtf(disc);
-    float t = (-b - sqrtDisc) / (2.0f * a);
-    if (t <= 0.0f) {
-        t = (-b + sqrtDisc) / (2.0f * a);
-        if (t <= 0.0f) return -1.0f;
-    }
-
-    float hitX = oLoc.x + t * dLoc.x;
-    float hitY = oLoc.y + t * dLoc.y;
-    float hitZ = oLoc.z + t * dLoc.z;
-
-    float phi = atan2f(hitX, radius - hitZ);
-    float halfAngle = centralAngle * 0.5f;
-
-    if (fabsf(phi) > halfAngle) return -1.0f;
-
-    float arcLength = radius * centralAngle;
-    float height = arcLength / aspectRatio;
-
-    if (fabsf(hitY) > height * 0.5f) return -1.0f;
-
-    outU = std::max(0.0f, std::min(1.0f, (phi / centralAngle) + 0.5f));
-    outV = std::max(0.0f, std::min(1.0f, 0.5f - (hitY / height)));
-
-    return t;
-}
 
 inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVector3f headCenter,
                                const XrQuaternionf& headOrientation) {
@@ -570,12 +509,14 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
     float uu = 0, vu = 0, uc = 0, vc = 0, um = 0, vm = 0, ub = 0, vb = 0;
     float tUi = (state.hasRay && state.uiAlpha > 0.01f)
-        ? rayHitsQuad(scene.uiModelNoScale, scene.uiNormal, scene.uiCenter, kUiPanelScaleX, kUiPanelScaleY,
-                      uu, vu, state.lastRayOrigin, state.lastRayDir)
+        ? rayHitsCylinder(scene.uiModelNoScale, kUiCylinderRadius, kUiCylinderCentralAngle,
+                          (float)kUiTexWidth / (float)kUiTexHeight,
+                          uu, vu, state.lastRayOrigin, state.lastRayDir)
         : -1.0f;
     float tControls = (state.hasRay && state.controlsAlpha > 0.01f)
-        ? rayHitsQuad(scene.controlsModelNoScale, scene.controlsNormal, scene.controlsCenter,
-                      kControlsPanelScaleX, kControlsPanelScaleY, uc, vc, state.lastRayOrigin, state.lastRayDir)
+        ? rayHitsCylinder(scene.controlsModelNoScale, kControlsCylinderRadius, kControlsCylinderCentralAngle,
+                          (float)kControlsTexWidth / (float)kControlsTexHeight,
+                          uc, vc, state.lastRayOrigin, state.lastRayDir)
         : -1.0f;
     float tModal = (state.hasRay && state.modalAlpha > 0.01f)
         ? rayHitsQuad(scene.modalModelNoScale, scene.modalNormal, scene.modalCenter,
@@ -715,6 +656,11 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     }
 
     bool isPlaying = get_playback_is_playing() != 0;
+    if (isPlaying && !state.prevIsPlaying) {
+        state.uiIdleTime = kUiAutoHideSeconds;
+        state.uiAlpha = 0.0f;
+    }
+    state.prevIsPlaying = isPlaying;
     // Interação ativa com a tela ou painel de controles:
     // - Se o controle estiver em repouso sobre uma mesa (isControllerStationary) ou se os controles
     //   foram explicitamente dispensados (controlsExplicitlyDismissed), apontar para a tela (hitScreen)
@@ -990,9 +936,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         }
     } else {
         if (state.prevMenu && !state.recenterFiredThisHold) {
-            bool controlsVisible = (state.controlsAlpha > 0.05f) || (state.controlsIdleTime < kUiAutoHideSeconds);
             bool uiVisible = (state.uiAlpha > 0.05f) || (state.uiIdleTime < kUiAutoHideSeconds);
-            if (controlsVisible || uiVisible) {
+            if (uiVisible) {
                 state.uiIdleTime = kUiAutoHideSeconds;
                 state.controlsIdleTime = kUiAutoHideSeconds;
                 state.controlsAlpha = 0.0f;

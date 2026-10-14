@@ -7,9 +7,9 @@ import com.tucavr.designsystem.KeyboardBinding
  * Contrato que [VRPresentation] implementa e injeta nas screens.
  *
  * Separa o que cada tela precisa saber sobre o host (mostrar uma view,
- * gerenciar teclado e exibir overlays) do restante da lógica de navegação.
+ * gerenciar teclado, exibir overlays e alimentar a zona de contexto).
  */
-interface ScreenHost {
+interface ScreenHost : ContextRailHost {
     /** Substitui a view atual pelo conteúdo da tela. */
     fun showScreen(view: View)
 

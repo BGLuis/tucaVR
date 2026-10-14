@@ -11,6 +11,7 @@ struct InputFsmState {
     bool prevY = false;
     bool prevMenu = false;
     bool prevTrigger = false;
+    bool prevIsPlaying = false;
     float menuHoldTime = 0.0f;
     bool recenterFiredThisHold = false;
     float uiIdleTime = 0.0f;
@@ -81,9 +82,8 @@ inline void ProcessButtonInputs(InputFsmState &state, bool currA, bool currX, bo
         }
     } else {
         if (state.prevMenu && !state.recenterFiredThisHold) {
-            bool controlsVisible = (state.controlsAlpha > 0.05f) || (state.controlsIdleTime < kUiAutoHideSeconds);
             bool uiVisible = (state.uiAlpha > 0.05f) || (state.uiIdleTime < kUiAutoHideSeconds);
-            if (controlsVisible || uiVisible) {
+            if (uiVisible) {
                 state.uiIdleTime = kUiAutoHideSeconds;
                 state.controlsIdleTime = kUiAutoHideSeconds;
                 state.controlsAlpha = 0.0f;
@@ -139,6 +139,12 @@ inline void UpdateIdleAndAlpha(InputFsmState &state, bool hitScreen, int current
     constexpr float kUiAutoHideSeconds = 5.0f;
     constexpr float kUiAutoHideStationarySeconds = 1.0f;
     constexpr float kUiFadeDuration = 0.35f;
+
+    if (isPlaying && !state.prevIsPlaying) {
+        state.uiIdleTime = kUiAutoHideSeconds;
+        state.uiAlpha = 0.0f;
+    }
+    state.prevIsPlaying = isPlaying;
 
     bool activeScreenHover = hitScreen && !state.isControllerStationary && !state.controlsExplicitlyDismissed;
     bool activePanelHover =
@@ -438,6 +444,35 @@ static void TestStationaryControllerAcceleratesAutoHide() {
     std::cout << "[PASS] TestStationaryControllerAcceleratesAutoHide\n";
 }
 
+static void TestMenuHidesOnPlaybackStartAndReopensOnMenuButton() {
+    InputFsmState state;
+    const float dt = 1.0f / 90.0f;
+
+    // Início: parado no menu Home com vídeo não iniciado
+    state.uiAlpha = 1.0f;
+    state.uiIdleTime = 0.0f;
+    state.controlsAlpha = 1.0f;
+    state.controlsIdleTime = 0.0f;
+    state.prevIsPlaying = false;
+
+    // Transição para reprodução: menu é ocultado imediatamente
+    UpdateIdleAndAlpha(state, /*hitScreen=*/false, /*currentHitPanel=*/0, /*isPlaying=*/true, dt);
+    assert(state.uiAlpha == 0.0f);
+    assert(state.uiIdleTime >= 5.0f);
+
+    // Vídeo tocando, menu oculto. Usuário aperta o botão Menu (short press release)
+    // Deve reabrir o menu (uiAlpha -> 1.0f)
+    for (int i = 0; i < 5; i++) {
+        ProcessButtonInputs(state, false, false, false, false, /*currMenu=*/true, dt);
+    }
+    ProcessButtonInputs(state, false, false, false, false, /*currMenu=*/false, dt);
+    assert(state.uiAlpha == 1.0f);
+    assert(state.uiIdleTime == 0.0f);
+    assert(state.controlsAlpha == 1.0f);
+
+    std::cout << "[PASS] TestMenuHidesOnPlaybackStartAndReopensOnMenuButton\n";
+}
+
 int main() {
     std::cout << "--- Executando testes unitarios de Input FSM (C-01) ---\n";
     TestButtonAHoldTriggersOnlyOnce();
@@ -447,6 +482,7 @@ int main() {
     TestButtonBAndYDismissControlsInstantly();
     TestMenuButtonShortPressDismissesControls();
     TestStationaryControllerAcceleratesAutoHide();
+    TestMenuHidesOnPlaybackStartAndReopensOnMenuButton();
     std::cout << "--- Todos os testes de Input FSM passaram com sucesso! ---\n";
     return 0;
 }

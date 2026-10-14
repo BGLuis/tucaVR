@@ -671,4 +671,26 @@
     <string name="webbrowser_error_generic">Algo deu errado ao carregar esta página.</string>
     <string name="webbrowser_error_label_url">Endereço</string>
 
+    <!-- Sidebar navigation -->
+    <string name="sidebar_item_home">Início</string>
+    <string name="sidebar_item_files">Arquivos</string>
+    <string name="sidebar_item_network">Rede</string>
+    <string name="sidebar_item_playlists">Playlists</string>
+    <string name="sidebar_item_downloads">Downloads</string>
+    <string name="sidebar_item_settings">Configurações</string>
+
+    <!-- Context Rail -->
+    <string name="context_rail_now_playing">Tocando Agora</string>
+    <string name="context_rail_back_to_video">Voltar ao vídeo</string>
+    <string name="context_rail_no_video">Nenhum vídeo em reprodução</string>
+    <string name="context_rail_queue_title">A Seguir</string>
+    <string name="context_rail_empty_queue">Fila vazia</string>
+
+    <!-- Home Screen Sections -->
+    <string name="home_section_continue_watching">Continuar Assistindo</string>
+    <string name="home_section_recent_sources">Fontes Recentes</string>
+    <string name="home_section_recently_added">Adicionados Recentemente</string>
+    <string name="home_no_recent_videos">Nenhum vídeo recente</string>
+    <string name="home_no_recent_files">Nenhum arquivo recente</string>
+
 </resources>

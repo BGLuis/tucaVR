@@ -122,6 +122,8 @@ class VRControlsPresentation(
     // Resolucao pedida pro decode escalado de scrub local (ver updateScrubPreview) —
     // rapido o bastante pra acompanhar arrastos continuos, ainda reconhecivel.
     companion object {
+        const val MIN_INTERACTIVE_BUTTON_DP = 72f
+        const val PRIMARY_INTERACTIVE_BUTTON_DP = 88f
         const val LOCAL_SCRUB_WIDTH = 320
         const val LOCAL_SCRUB_HEIGHT = 180
         const val SEEK_BAR_MAX = 10000
@@ -328,7 +330,8 @@ class VRControlsPresentation(
     private fun updateScrubPreview(positionSeconds: Float) {
         android.util.Log.i(
             "VRPlayer_Scrub",
-            "updateScrubPreview: pos=$positionSeconds networkScrubStrip=${networkScrubStrip != null} localScrubRetriever=${localScrubRetriever != null} mode=$lastKnownMode",
+            "updateScrubPreview: pos=$positionSeconds networkScrubStrip=${networkScrubStrip != null} " +
+                "localScrubRetriever=${localScrubRetriever != null} mode=$lastKnownMode",
         )
         networkScrubStrip?.let { strip ->
             if (isSphereMode(lastKnownMode)) {
@@ -452,7 +455,9 @@ class VRControlsPresentation(
                         val level = intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
                         val scale = intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
                         val status = intent.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
-                        val isCharging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING || status == android.os.BatteryManager.BATTERY_STATUS_FULL
+                        val isCharging =
+                            status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                                status == android.os.BatteryManager.BATTERY_STATUS_FULL
 
                         if (level >= 0 && scale > 0) {
                             val pct = (level * 100) / scale
@@ -470,7 +475,12 @@ class VRControlsPresentation(
                                 }
                             if (::batteryIcon.isInitialized) batteryIcon.setImageResource(iconRes)
 
-                            val color = if (!isCharging && pct <= 15) android.graphics.Color.parseColor("#FF4444") else com.tucavr.designsystem.VoidTheme.colorText
+                            val color =
+                                if (!isCharging && pct <= 15) {
+                                    android.graphics.Color.parseColor("#FF4444")
+                                } else {
+                                    com.tucavr.designsystem.VoidTheme.colorText
+                                }
                             if (::batteryIcon.isInitialized) batteryIcon.setColorFilter(color)
                             if (::batteryLabel.isInitialized) batteryLabel.setTextColor(color)
                         }
@@ -515,7 +525,10 @@ class VRControlsPresentation(
         // legendas/audio/stats) — usados bem menos vezes por sessao do que
         // play/seek, que mantem o alvo de toque grande original (ver comentario
         // em VoidButton sobre precisao de raycast em VR).
-        val secondaryIconPx = VoidTheme.dpToPx(context, 72f)
+        // Garantia de dimensao minima de 72 dp (~2.7° no headset).
+        val minButtonPx = VoidTheme.dpToPx(context, MIN_INTERACTIVE_BUTTON_DP)
+        val primaryButtonPx = VoidTheme.dpToPx(context, PRIMARY_INTERACTIVE_BUTTON_DP)
+        val secondaryIconPx = minButtonPx
 
         // Zona esquerda e direita do cabecalho com o MESMO peso (1f) — e' isso
         // que garante o statusBadge (bateria/relogio) sempre centralizado,
@@ -532,7 +545,9 @@ class VRControlsPresentation(
         val btnClose =
             VoidIconButton(context, R.drawable.icon_x, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
                 setOnClickListener { activity.stopPlayback() }
-                layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
+                minimumWidth = minButtonPx
+                minimumHeight = minButtonPx
+                layoutParams = LinearLayout.LayoutParams(primaryButtonPx, primaryButtonPx)
             }
         leftZone.addView(btnClose)
         headerRow.addView(leftZone)
@@ -665,6 +680,8 @@ class VRControlsPresentation(
             }
         val btnGlass =
             VoidIconButton(context, R.drawable.icon_vr_headset, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+                minimumWidth = minButtonPx
+                minimumHeight = minButtonPx
                 setOnClickListener {
                     activity.openScreenFormatModal()
                 }
@@ -674,6 +691,8 @@ class VRControlsPresentation(
 
         val btnSwapEyes =
             VoidIconButton(context, R.drawable.icon_glasses, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+                minimumWidth = minButtonPx
+                minimumHeight = minButtonPx
                 setOnClickListener {
                     activity.nativeToggleSwapEyes()
                     // Efeito visual de confirmacao rapida
@@ -720,6 +739,8 @@ class VRControlsPresentation(
                 isCircular = true,
                 isTransparent = true,
             ).apply {
+                minimumWidth = minButtonPx
+                minimumHeight = minButtonPx
                 layoutParams =
                     LinearLayout.LayoutParams(secondaryIconPx, secondaryIconPx).apply {
                         leftMargin = VoidTheme.dpToPx(context, 8f)
@@ -748,6 +769,8 @@ class VRControlsPresentation(
                 isCircular = true,
                 isTransparent = true,
             ).apply {
+                minimumWidth = minButtonPx
+                minimumHeight = minButtonPx
                 layoutParams =
                     LinearLayout.LayoutParams(secondaryIconPx, secondaryIconPx).apply {
                         leftMargin = VoidTheme.dpToPx(context, 8f)
@@ -811,6 +834,8 @@ class VRControlsPresentation(
             }
         val btnPlaylist =
             VoidIconButton(context, R.drawable.ic_view_list, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+                minimumWidth = minButtonPx
+                minimumHeight = minButtonPx
                 layoutParams =
                     LinearLayout.LayoutParams(secondaryIconPx, secondaryIconPx).apply {
                         rightMargin = VoidTheme.dpToPx(context, 8f)
@@ -824,6 +849,8 @@ class VRControlsPresentation(
 
         val btnSubtitles =
             VoidIconButton(context, R.drawable.icon_subtitles, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+                minimumWidth = minButtonPx
+                minimumHeight = minButtonPx
                 layoutParams = LinearLayout.LayoutParams(secondaryIconPx, secondaryIconPx)
                 contentDescription = context.getString(R.string.player_btn_subtitles)
                 setOnClickListener {
@@ -843,7 +870,9 @@ class VRControlsPresentation(
             }
         val btnRewind =
             VoidIconButton(context, R.drawable.icon_skip_back, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
-                layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
+                minimumWidth = minButtonPx
+                minimumHeight = minButtonPx
+                layoutParams = LinearLayout.LayoutParams(primaryButtonPx, primaryButtonPx)
                 setOnClickListener {
                     val newTarget = kotlin.math.max(0f, lastKnownCurrentSec - 10f)
                     activity.nativeSeekVideo(newTarget)
@@ -853,8 +882,10 @@ class VRControlsPresentation(
 
         btnPlayPause =
             VoidIconButton(context, R.drawable.icon_pause, VoidButtonStyle.PRIMARY, isCircular = true, isTransparent = true).apply {
+                minimumWidth = minButtonPx
+                minimumHeight = minButtonPx
                 layoutParams =
-                    LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f)).apply {
+                    LinearLayout.LayoutParams(primaryButtonPx, primaryButtonPx).apply {
                         leftMargin = VoidTheme.dpToPx(context, 24f)
                         rightMargin = VoidTheme.dpToPx(context, 24f)
                     }
@@ -870,7 +901,9 @@ class VRControlsPresentation(
                 isCircular = true,
                 isTransparent = true,
             ).apply {
-                layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 88f), VoidTheme.dpToPx(context, 88f))
+                minimumWidth = minButtonPx
+                minimumHeight = minButtonPx
+                layoutParams = LinearLayout.LayoutParams(primaryButtonPx, primaryButtonPx)
                 setOnClickListener {
                     val newTarget = kotlin.math.min(totalDuration, lastKnownCurrentSec + 10f)
                     activity.nativeSeekVideo(newTarget)
@@ -892,6 +925,8 @@ class VRControlsPresentation(
             }
         val btnAudio =
             VoidIconButton(context, R.drawable.ic_audio, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+                minimumWidth = minButtonPx
+                minimumHeight = minButtonPx
                 layoutParams =
                     LinearLayout.LayoutParams(secondaryIconPx, secondaryIconPx).apply {
                         rightMargin = VoidTheme.dpToPx(context, 8f)
@@ -905,6 +940,8 @@ class VRControlsPresentation(
 
         btnDebugStats =
             VoidIconButton(context, R.drawable.icon_stats, VoidButtonStyle.SECONDARY, isCircular = true, isTransparent = true).apply {
+                minimumWidth = minButtonPx
+                minimumHeight = minButtonPx
                 layoutParams = LinearLayout.LayoutParams(secondaryIconPx, secondaryIconPx)
                 contentDescription = context.getString(R.string.player_btn_debug_stats)
                 visibility = if (activity.isDebugStatsEnabled) View.VISIBLE else View.GONE
