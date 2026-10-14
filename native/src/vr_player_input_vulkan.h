@@ -514,9 +514,13 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             if (activeHandOut.isPalmUp) {
                 state.controlsIdleTime = 0.0f;
                 state.controlsAlpha = 1.0f;
+                state.controlsExplicitlyDismissed = false;
             } else if (activeHandOut.isPalmDown) {
                 if (state.controlsAlpha > 0.5f) {
                     state.controlsIdleTime = kUiAutoHideSeconds;
+                    state.controlsAlpha = 0.0f;
+                    state.controlsExplicitlyDismissed = true;
+                    state.dismissRayDir = state.lastRayDir;
                 }
             }
         } else {
@@ -565,11 +569,11 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
 
     float uu = 0, vu = 0, uc = 0, vc = 0, um = 0, vm = 0, ub = 0, vb = 0;
-    float tUi = state.hasRay
+    float tUi = (state.hasRay && state.uiAlpha > 0.01f)
         ? rayHitsQuad(scene.uiModelNoScale, scene.uiNormal, scene.uiCenter, kUiPanelScaleX, kUiPanelScaleY,
                       uu, vu, state.lastRayOrigin, state.lastRayDir)
         : -1.0f;
-    float tControls = state.hasRay
+    float tControls = (state.hasRay && state.controlsAlpha > 0.01f)
         ? rayHitsQuad(scene.controlsModelNoScale, scene.controlsNormal, scene.controlsCenter,
                       kControlsPanelScaleX, kControlsPanelScaleY, uc, vc, state.lastRayOrigin, state.lastRayDir)
         : -1.0f;
@@ -637,6 +641,41 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     }
     state.lastPredictedDisplayTime = predictedDisplayTime;
 
+    // Detecção de repouso: verifica se o controle está apoiado imóvel em uma superfície.
+    // O tremor fisiológico natural da mão humana viva gera jitter angular e espacial contínuo;
+    // um controle descansando numa mesa ou sofá apresenta apenas ruído infinitesimal de sensor
+    // (posDeltaSq < 2e-6 m² e dirDot > 0.9999f).
+    if (state.hasRay) {
+        float posDeltaSq = Vec3LengthSq(Vec3Sub(state.lastRayOrigin, state.prevRayOrigin));
+        float dirDot = Vec3Dot(state.lastRayDir, state.prevRayDir);
+        bool isStill = (posDeltaSq < 2e-6f) && (dirDot > 0.9999f);
+
+        if (isStill) {
+            state.controllerStationaryTime += dt;
+            if (state.controllerStationaryTime >= 1.0f) {
+                state.isControllerStationary = true;
+            }
+        } else {
+            state.controllerStationaryTime = 0.0f;
+            state.isControllerStationary = false;
+        }
+
+        // Se os controles foram explicitamente dispensados por botão (B/Y/Menu), movimento intencional
+        // da mão (> 10° de deflexão angular do raio) limpa o estado de dispensa para permitir reabertura.
+        if (state.controlsExplicitlyDismissed) {
+            float dismissDot = Vec3Dot(state.lastRayDir, state.dismissRayDir);
+            if (dismissDot < 0.985f) {
+                state.controlsExplicitlyDismissed = false;
+            }
+        }
+    } else {
+        state.controllerStationaryTime = 0.0f;
+        state.isControllerStationary = false;
+        state.controlsExplicitlyDismissed = false;
+    }
+    state.prevRayOrigin = state.lastRayOrigin;
+    state.prevRayDir = state.lastRayDir;
+
     // Auto-hide com fade (Estagio 6, paridade com GLES kUiAutoHideSeconds/
     // kUiFadeDuration): aponta pro Home -> mantem visivel; aponta pra tela
     // ou pros controles -> mantem os controles visiveis; sem atividade por
@@ -661,10 +700,12 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     bool keyboardActive = get_keyboard_active() != 0;
     if (::g_requestUiPanelVisible.exchange(false)) {
         state.uiIdleTime = 0.0f;
+        state.controlsExplicitlyDismissed = false;
     }
     if (::g_requestControlsPanelVisible.exchange(false)) {
         state.controlsIdleTime = 0.0f;
         state.controlsAlpha = 1.0f;
+        state.controlsExplicitlyDismissed = false;
     }
 
     if (currentHitPanel == 1 || keyboardActive) {
@@ -674,14 +715,29 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     }
 
     bool isPlaying = get_playback_is_playing() != 0;
-    // Se o vídeo estiver pausado, o painel de controles e o botão de pause não devem sumir por auto-hide
-    if (currentHitPanel == 2 || hitScreen || !isPlaying) {
+    // Interação ativa com a tela ou painel de controles:
+    // - Se o controle estiver em repouso sobre uma mesa (isControllerStationary) ou se os controles
+    //   foram explicitamente dispensados (controlsExplicitlyDismissed), apontar para a tela (hitScreen)
+    //   NÃO reseta o idle time.
+    // - Se o vídeo estiver pausado, mantém visível a menos que o usuário tenha dispensado explicitamente.
+    bool activeScreenHover = hitScreen && !state.isControllerStationary && !state.controlsExplicitlyDismissed;
+    bool activePanelHover = (currentHitPanel == 2) && !state.controlsExplicitlyDismissed && (!state.isControllerStationary || !isPlaying);
+    bool keepPausedVisible = !isPlaying && !state.controlsExplicitlyDismissed;
+
+    if (activePanelHover || activeScreenHover || keepPausedVisible) {
         state.controlsIdleTime = 0.0f;
     } else {
         state.controlsIdleTime += dt;
     }
-    float uiTargetAlpha = (state.uiIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
-    float controlsTargetAlpha = (state.controlsIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
+
+    // Quando o controle for solto em repouso sobre uma superfície durante a reprodução,
+    // o auto-hide dos controles acelera para 1.0s (somando ~1.35s total com o fade-out).
+    constexpr float kUiAutoHideStationarySeconds = 1.0f;
+    float effectiveControlsTimeout = (state.isControllerStationary && isPlaying) ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
+    float effectiveUiTimeout = state.isControllerStationary ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
+
+    float uiTargetAlpha = (state.uiIdleTime < effectiveUiTimeout) ? 1.0f : 0.0f;
+    float controlsTargetAlpha = (state.controlsIdleTime < effectiveControlsTimeout) ? 1.0f : 0.0f;
     float modalTargetAlpha = state.modalActive ? 1.0f : 0.0f;
     float fadeStep = (kUiFadeDuration > 0.0f) ? dt / kUiFadeDuration : 1.0f;
     state.uiAlpha = MoveTowards(state.uiAlpha, uiTargetAlpha, fadeStep);
@@ -873,18 +929,38 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         bool triggerPlayPause = triggerOutsideUi && !handTrackingGrabPinch;
         bool buttonPlayPause = (currA && !state.prevA) || (currX && !state.prevX);
 
+        // Limpa a dispensa explícita quando uma ação intencional do usuário ocorrer
+        if ((currA && !state.prevA) || (currX && !state.prevX) || (currTrigger && !prevTrigger)) {
+            state.controlsExplicitlyDismissed = false;
+        }
+
         if ((buttonPlayPause || triggerPlayPause) && !keyboardActive) {
             toggle_play_pause();
             state.controlsIdleTime = 0.0f;
             state.controlsAlpha = 1.0f;
+            state.controlsExplicitlyDismissed = false;
         }
 
-        // B (direita) ou Y (esquerda) = alterna a visibilidade do painel Home
-        // instantaneamente (sem esperar o auto-hide).
+        // B (direita) ou Y (esquerda) = alterna a visibilidade dos controles e do painel Home.
+        // Se qualquer um dos painéis estiver visível, oculta imediatamente (dispensa rápida).
+        // Se ambos estiverem ocultos, reabre-os instantaneamente.
         if ((currB && !state.prevB) || (currY && !state.prevY)) {
-            bool isCurrentlyVisible = state.uiIdleTime < kUiAutoHideSeconds;
-            state.uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
-            state.controlsIdleTime = 0.0f;
+            bool controlsVisible = (state.controlsAlpha > 0.05f) || (state.controlsIdleTime < kUiAutoHideSeconds);
+            bool uiVisible = (state.uiAlpha > 0.05f) || (state.uiIdleTime < kUiAutoHideSeconds);
+            if (controlsVisible || uiVisible) {
+                state.uiIdleTime = kUiAutoHideSeconds;
+                state.controlsIdleTime = kUiAutoHideSeconds;
+                state.controlsAlpha = 0.0f;
+                state.uiAlpha = 0.0f;
+                state.controlsExplicitlyDismissed = true;
+                state.dismissRayDir = state.lastRayDir;
+            } else {
+                state.uiIdleTime = 0.0f;
+                state.controlsIdleTime = 0.0f;
+                state.controlsAlpha = 1.0f;
+                state.uiAlpha = 1.0f;
+                state.controlsExplicitlyDismissed = false;
+            }
         }
     }
     state.prevA = currA;
@@ -893,8 +969,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     state.prevY = currY;
 
     // Menu: long-press = recenter da cena inteira; short-press (no RELEASE,
-    // e so se o long-press nao tiver disparado durante o hold) = mesmo
-    // toggle de B/Y — mesma logica do GLES.
+    // e so se o long-press nao tiver disparado durante o hold) = alterna
+    // controles e Home da mesma forma que B/Y.
     if (currMenu) {
         state.menuHoldTime += dt;
         if (!state.recenterFiredThisHold && state.menuHoldTime >= kRecenterHoldSeconds) {
@@ -914,8 +990,22 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         }
     } else {
         if (state.prevMenu && !state.recenterFiredThisHold) {
-            bool isCurrentlyVisible = state.uiIdleTime < kUiAutoHideSeconds;
-            state.uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
+            bool controlsVisible = (state.controlsAlpha > 0.05f) || (state.controlsIdleTime < kUiAutoHideSeconds);
+            bool uiVisible = (state.uiAlpha > 0.05f) || (state.uiIdleTime < kUiAutoHideSeconds);
+            if (controlsVisible || uiVisible) {
+                state.uiIdleTime = kUiAutoHideSeconds;
+                state.controlsIdleTime = kUiAutoHideSeconds;
+                state.controlsAlpha = 0.0f;
+                state.uiAlpha = 0.0f;
+                state.controlsExplicitlyDismissed = true;
+                state.dismissRayDir = state.lastRayDir;
+            } else {
+                state.uiIdleTime = 0.0f;
+                state.controlsIdleTime = 0.0f;
+                state.controlsAlpha = 1.0f;
+                state.uiAlpha = 1.0f;
+                state.controlsExplicitlyDismissed = false;
+            }
         }
         state.menuHoldTime = 0.0f;
         state.recenterFiredThisHold = false;
@@ -1197,6 +1287,9 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         const float kDeadzone = 0.15f;
         float sx = (fabsf(rightStick.currentState.x) < kDeadzone) ? 0.0f : rightStick.currentState.x;
         float sy = (fabsf(rightStick.currentState.y) < kDeadzone) ? 0.0f : rightStick.currentState.y;
+        if (sx != 0.0f || sy != 0.0f) {
+            state.controlsExplicitlyDismissed = false;
+        }
         bool gripHeld = squeezeState.currentState > 0.5f;
         bool prevGrabbed = state.isScreenGrabbed;
         static bool s_prevDirectAdjustActive = false;
@@ -1340,6 +1433,12 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         const float kDeadzone = 0.2f;
         float lx = (fabsf(leftStick.currentState.x) < kDeadzone) ? 0.0f : leftStick.currentState.x;
         float ly = (fabsf(leftStick.currentState.y) < kDeadzone) ? 0.0f : leftStick.currentState.y;
+
+        if (lx != 0.0f || ly != 0.0f) {
+            state.controlsIdleTime = 0.0f;
+            state.controlsAlpha = 1.0f;
+            state.controlsExplicitlyDismissed = false;
+        }
 
         bool leftAimingUi = useLeft && (dispatchHitPanel == 1 || dispatchHitPanel == 3);
         if (ly != 0.0f && !leftAimingUi) {

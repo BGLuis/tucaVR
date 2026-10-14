@@ -1,8 +1,9 @@
 #include <cassert>
+#include <cmath>
 #include <iostream>
 
 // Maquina de estados pura de debouncing e deteccao de borda
-// reproduzindo exatamente o contrato de vr_player_input_vulkan.h:600-635.
+// reproduzindo exatamente o contrato de vr_player_input_vulkan.h.
 struct InputFsmState {
     bool prevA = false;
     bool prevX = false;
@@ -15,6 +16,10 @@ struct InputFsmState {
     float uiIdleTime = 0.0f;
     float controlsIdleTime = 0.0f;
     float controlsAlpha = 1.0f;
+    float uiAlpha = 1.0f;
+    bool controlsExplicitlyDismissed = false;
+    float controllerStationaryTime = 0.0f;
+    bool isControllerStationary = false;
 
     // Metricas de observabilidade do teste
     int playPauseToggleCount = 0;
@@ -27,18 +32,37 @@ inline void ProcessButtonInputs(InputFsmState &state, bool currA, bool currX, bo
     constexpr float kRecenterHoldSeconds = 0.75f;
     constexpr float kUiAutoHideSeconds = 5.0f;
 
+    // Borda de subida de acoes intencionais limpa dispensa explicita
+    if ((currA && !state.prevA) || (currX && !state.prevX)) {
+        state.controlsExplicitlyDismissed = false;
+    }
+
     // A (direita) ou X (esquerda) = alterna Play/Pause na borda de subida (curr && !prev)
     if ((currA && !state.prevA) || (currX && !state.prevX)) {
         state.playPauseToggleCount++;
         state.controlsIdleTime = 0.0f;
         state.controlsAlpha = 1.0f;
+        state.controlsExplicitlyDismissed = false;
     }
 
-    // B (direita) ou Y (esquerda) = alterna visibilidade da UI na borda de subida
+    // B (direita) ou Y (esquerda) = alterna visibilidade dos controles e UI na borda de subida.
+    // Se visiveis, oculta imediatamente (dispensa rapida). Se ocultos, reabre-os instantaneamente.
     if ((currB && !state.prevB) || (currY && !state.prevY)) {
-        bool isCurrentlyVisible = state.uiIdleTime < kUiAutoHideSeconds;
-        state.uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
-        state.controlsIdleTime = 0.0f;
+        bool controlsVisible = (state.controlsAlpha > 0.05f) || (state.controlsIdleTime < kUiAutoHideSeconds);
+        bool uiVisible = (state.uiAlpha > 0.05f) || (state.uiIdleTime < kUiAutoHideSeconds);
+        if (controlsVisible || uiVisible) {
+            state.uiIdleTime = kUiAutoHideSeconds;
+            state.controlsIdleTime = kUiAutoHideSeconds;
+            state.controlsAlpha = 0.0f;
+            state.uiAlpha = 0.0f;
+            state.controlsExplicitlyDismissed = true;
+        } else {
+            state.uiIdleTime = 0.0f;
+            state.controlsIdleTime = 0.0f;
+            state.controlsAlpha = 1.0f;
+            state.uiAlpha = 1.0f;
+            state.controlsExplicitlyDismissed = false;
+        }
         state.uiToggleCount++;
     }
 
@@ -48,7 +72,7 @@ inline void ProcessButtonInputs(InputFsmState &state, bool currA, bool currX, bo
     state.prevB = currB;
     state.prevY = currY;
 
-    // Menu: long-press >= 0.75s faz recenter; short-press no RELEASE faz toggle UI
+    // Menu: long-press >= 0.75s faz recenter; short-press no RELEASE faz toggle UI e controles
     if (currMenu) {
         state.menuHoldTime += dt;
         if (!state.recenterFiredThisHold && state.menuHoldTime >= kRecenterHoldSeconds) {
@@ -57,6 +81,21 @@ inline void ProcessButtonInputs(InputFsmState &state, bool currA, bool currX, bo
         }
     } else {
         if (state.prevMenu && !state.recenterFiredThisHold) {
+            bool controlsVisible = (state.controlsAlpha > 0.05f) || (state.controlsIdleTime < kUiAutoHideSeconds);
+            bool uiVisible = (state.uiAlpha > 0.05f) || (state.uiIdleTime < kUiAutoHideSeconds);
+            if (controlsVisible || uiVisible) {
+                state.uiIdleTime = kUiAutoHideSeconds;
+                state.controlsIdleTime = kUiAutoHideSeconds;
+                state.controlsAlpha = 0.0f;
+                state.uiAlpha = 0.0f;
+                state.controlsExplicitlyDismissed = true;
+            } else {
+                state.uiIdleTime = 0.0f;
+                state.controlsIdleTime = 0.0f;
+                state.controlsAlpha = 1.0f;
+                state.uiAlpha = 1.0f;
+                state.controlsExplicitlyDismissed = false;
+            }
             state.uiToggleCount++;
         }
         state.menuHoldTime = 0.0f;
@@ -67,6 +106,10 @@ inline void ProcessButtonInputs(InputFsmState &state, bool currA, bool currX, bo
 
 inline void ProcessTriggerInputs(InputFsmState &state, bool currTrigger, int dispatchHitPanel, bool handTrackingActive,
                                  bool isHoveringScreen, bool isSphereMode) {
+    if (currTrigger && !state.prevTrigger) {
+        state.controlsExplicitlyDismissed = false;
+    }
+
     bool triggerOutsideUi = currTrigger && !state.prevTrigger && (dispatchHitPanel == 0);
     bool handTrackingGrabPinch = handTrackingActive && isHoveringScreen && !isSphereMode;
     bool triggerPlayPause = triggerOutsideUi && !handTrackingGrabPinch;
@@ -75,8 +118,60 @@ inline void ProcessTriggerInputs(InputFsmState &state, bool currTrigger, int dis
         state.playPauseToggleCount++;
         state.controlsIdleTime = 0.0f;
         state.controlsAlpha = 1.0f;
+        state.controlsExplicitlyDismissed = false;
     }
     state.prevTrigger = currTrigger;
+}
+
+inline void UpdateStationaryDetection(InputFsmState &state, bool isStill, float dt) {
+    if (isStill) {
+        state.controllerStationaryTime += dt;
+        if (state.controllerStationaryTime >= 1.0f) {
+            state.isControllerStationary = true;
+        }
+    } else {
+        state.controllerStationaryTime = 0.0f;
+        state.isControllerStationary = false;
+    }
+}
+
+inline void UpdateIdleAndAlpha(InputFsmState &state, bool hitScreen, int currentHitPanel, bool isPlaying, float dt) {
+    constexpr float kUiAutoHideSeconds = 5.0f;
+    constexpr float kUiAutoHideStationarySeconds = 1.0f;
+    constexpr float kUiFadeDuration = 0.35f;
+
+    bool activeScreenHover = hitScreen && !state.isControllerStationary && !state.controlsExplicitlyDismissed;
+    bool activePanelHover =
+        (currentHitPanel == 2) && !state.controlsExplicitlyDismissed && (!state.isControllerStationary || !isPlaying);
+    bool keepPausedVisible = !isPlaying && !state.controlsExplicitlyDismissed;
+
+    if (activePanelHover || activeScreenHover || keepPausedVisible) {
+        state.controlsIdleTime = 0.0f;
+    } else {
+        state.controlsIdleTime += dt;
+    }
+
+    if (currentHitPanel == 1) {
+        state.uiIdleTime = 0.0f;
+    } else {
+        state.uiIdleTime += dt;
+    }
+
+    float effectiveControlsTimeout =
+        (state.isControllerStationary && isPlaying) ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
+    float effectiveUiTimeout = state.isControllerStationary ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
+
+    float uiTargetAlpha = (state.uiIdleTime < effectiveUiTimeout) ? 1.0f : 0.0f;
+    float controlsTargetAlpha = (state.controlsIdleTime < effectiveControlsTimeout) ? 1.0f : 0.0f;
+
+    float fadeStep = (kUiFadeDuration > 0.0f) ? dt / kUiFadeDuration : 1.0f;
+    auto MoveTowards = [](float current, float target, float maxDelta) {
+        if (std::abs(target - current) <= maxDelta)
+            return target;
+        return current + ((target > current) ? maxDelta : -maxDelta);
+    };
+    state.uiAlpha = MoveTowards(state.uiAlpha, uiTargetAlpha, fadeStep);
+    state.controlsAlpha = MoveTowards(state.controlsAlpha, controlsTargetAlpha, fadeStep);
 }
 
 static void TestButtonAHoldTriggersOnlyOnce() {
@@ -212,12 +307,146 @@ static void TestTriggerPlayPauseInSphericalAnd2DModes() {
     std::cout << "[PASS] TestTriggerPlayPauseInSphericalAnd2DModes\n";
 }
 
+static void TestButtonBAndYDismissControlsInstantly() {
+    InputFsmState state;
+    const float dt = 1.0f / 90.0f;
+
+    // Inicialmente controles e UI estão visíveis
+    state.controlsAlpha = 1.0f;
+    state.uiAlpha = 1.0f;
+    state.controlsIdleTime = 0.0f;
+    state.uiIdleTime = 0.0f;
+
+    // Frame 1: Pressiona B -> deve dispensar imediatamente
+    ProcessButtonInputs(state, false, false, /*currB=*/true, false, false, dt);
+    assert(state.controlsAlpha == 0.0f);
+    assert(state.uiAlpha == 0.0f);
+    assert(state.controlsIdleTime >= 5.0f);
+    assert(state.uiIdleTime >= 5.0f);
+    assert(state.controlsExplicitlyDismissed == true);
+
+    // Frame 2-30: Ray paira sobre a tela (hitScreen = true).
+    // Como controlsExplicitlyDismissed é true, NÃO reseta o idle time e não reabre os controles.
+    for (int i = 0; i < 30; i++) {
+        UpdateIdleAndAlpha(state, /*hitScreen=*/true, /*currentHitPanel=*/0, /*isPlaying=*/true, dt);
+        assert(state.controlsAlpha == 0.0f);
+        assert(state.controlsExplicitlyDismissed == true);
+    }
+
+    // Solta o botão B
+    ProcessButtonInputs(state, false, false, /*currB=*/false, false, false, dt);
+
+    // Pressiona Y (controle esquerdo) -> deve reabrir imediatamente
+    ProcessButtonInputs(state, false, false, false, /*currY=*/true, false, dt);
+    assert(state.controlsAlpha == 1.0f);
+    assert(state.uiAlpha == 1.0f);
+    assert(state.controlsIdleTime == 0.0f);
+    assert(state.controlsExplicitlyDismissed == false);
+
+    // Solta Y
+    ProcessButtonInputs(state, false, false, false, /*currY=*/false, false, dt);
+
+    // Pressiona Y novamente para dispensar
+    ProcessButtonInputs(state, false, false, false, /*currY=*/true, false, dt);
+    assert(state.controlsAlpha == 0.0f);
+    assert(state.controlsExplicitlyDismissed == true);
+
+    // Ação intencional do usuário: pressiona A (play/pause) -> limpa dispensa explícita e reabre controles
+    ProcessButtonInputs(state, /*currA=*/true, false, false, false, false, dt);
+    assert(state.controlsExplicitlyDismissed == false);
+    assert(state.controlsAlpha == 1.0f);
+
+    std::cout << "[PASS] TestButtonBAndYDismissControlsInstantly\n";
+}
+
+static void TestMenuButtonShortPressDismissesControls() {
+    InputFsmState state;
+    const float dt = 1.0f / 90.0f;
+
+    state.controlsAlpha = 1.0f;
+    state.uiAlpha = 1.0f;
+    state.controlsIdleTime = 0.0f;
+    state.uiIdleTime = 0.0f;
+
+    // Pressiona Menu por 5 frames (~55ms) e solta
+    for (int i = 0; i < 5; i++) {
+        ProcessButtonInputs(state, false, false, false, false, /*currMenu=*/true, dt);
+    }
+    // Ao soltar (release), deve dispensar controles e UI
+    ProcessButtonInputs(state, false, false, false, false, /*currMenu=*/false, dt);
+    assert(state.controlsAlpha == 0.0f);
+    assert(state.uiAlpha == 0.0f);
+    assert(state.controlsExplicitlyDismissed == true);
+
+    // Pressiona Menu novamente por 5 frames e solta -> reabre
+    for (int i = 0; i < 5; i++) {
+        ProcessButtonInputs(state, false, false, false, false, /*currMenu=*/true, dt);
+    }
+    ProcessButtonInputs(state, false, false, false, false, /*currMenu=*/false, dt);
+    assert(state.controlsAlpha == 1.0f);
+    assert(state.uiAlpha == 1.0f);
+    assert(state.controlsExplicitlyDismissed == false);
+
+    std::cout << "[PASS] TestMenuButtonShortPressDismissesControls\n";
+}
+
+static void TestStationaryControllerAcceleratesAutoHide() {
+    InputFsmState state;
+    const float dt = 1.0f / 90.0f;
+
+    state.controlsAlpha = 1.0f;
+    state.controlsIdleTime = 0.0f;
+    state.isControllerStationary = false;
+    state.controllerStationaryTime = 0.0f;
+
+    // Caso 1: Na mão com tremor fisiológico (isStill = false) apontando para a tela durante reprodução
+    // Controles devem permanecer visíveis indefinidamente
+    for (int i = 0; i < 200; i++) {
+        UpdateStationaryDetection(state, /*isStill=*/false, dt);
+        UpdateIdleAndAlpha(state, /*hitScreen=*/true, /*currentHitPanel=*/0, /*isPlaying=*/true, dt);
+    }
+    assert(state.isControllerStationary == false);
+    assert(state.controlsIdleTime == 0.0f);
+    assert(state.controlsAlpha == 1.0f);
+
+    // Caso 2: Controle é solto sobre a mesa (isStill = true)
+    // Nos primeiros 90 frames (~1.0s), o estado stationary é detectado
+    for (int i = 0; i < 90; i++) {
+        UpdateStationaryDetection(state, /*isStill=*/true, dt);
+        UpdateIdleAndAlpha(state, /*hitScreen=*/true, /*currentHitPanel=*/0, /*isPlaying=*/true, dt);
+    }
+    assert(state.isControllerStationary == true);
+
+    // Uma vez estacionário, mesmo que a ponta do raio atinja a tela (hitScreen = true),
+    // o idleTime começa a acumular porque não há mão viva operando.
+    // O timeout acelerado de repouso é de 1.0s.
+    // Após 1.0s + tempo de fade (0.35s = ~32 frames), os controles devem sumir (alpha -> 0.0f)
+    for (int i = 0; i < 150; i++) { // ~1.66s adicionais
+        UpdateStationaryDetection(state, /*isStill=*/true, dt);
+        UpdateIdleAndAlpha(state, /*hitScreen=*/true, /*currentHitPanel=*/0, /*isPlaying=*/true, dt);
+    }
+    assert(state.controlsAlpha <= 0.01f);
+
+    // Caso 3: Usuário pega o controle de volta (isStill = false)
+    UpdateStationaryDetection(state, /*isStill=*/false, dt);
+    assert(state.isControllerStationary == false);
+
+    // Agora apontar para a tela acorda os controles imediatamente
+    UpdateIdleAndAlpha(state, /*hitScreen=*/true, /*currentHitPanel=*/0, /*isPlaying=*/true, dt);
+    assert(state.controlsIdleTime == 0.0f);
+
+    std::cout << "[PASS] TestStationaryControllerAcceleratesAutoHide\n";
+}
+
 int main() {
     std::cout << "--- Executando testes unitarios de Input FSM (C-01) ---\n";
     TestButtonAHoldTriggersOnlyOnce();
     TestButtonXHoldTriggersOnlyOnce();
     TestMenuButtonShortPressVsLongPress();
     TestTriggerPlayPauseInSphericalAnd2DModes();
+    TestButtonBAndYDismissControlsInstantly();
+    TestMenuButtonShortPressDismissesControls();
+    TestStationaryControllerAcceleratesAutoHide();
     std::cout << "--- Todos os testes de Input FSM passaram com sucesso! ---\n";
     return 0;
 }

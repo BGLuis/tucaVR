@@ -136,6 +136,13 @@ static void TestVec3Operations() {
     assert(FloatNear(rotated.y, 0.0f));
     assert(FloatNear(rotated.z, 0.0f));
 
+    float dot = Vec3Dot(a, b);
+    assert(FloatNear(dot, 4.0f - 2.0f + 6.0f)); // 8.0f
+    float lenSq = Vec3LengthSq(a);
+    assert(FloatNear(lenSq, 1.0f + 4.0f + 9.0f)); // 14.0f
+    float len = Vec3Length(a);
+    assert(FloatNear(len, sqrtf(14.0f)));
+
     std::cout << "[PASS] TestVec3Operations\n";
 }
 

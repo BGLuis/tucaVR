@@ -962,6 +962,12 @@ struct AppState {
     int activePanel = 0; // 0=none, 1=UI, 2=controls
     XrVector3f lastRayOrigin = {0,0,0};
     XrVector3f lastRayDir = {0,0,-1};
+    XrVector3f prevRayOrigin = {0,0,0};
+    XrVector3f prevRayDir = {0,0,-1};
+    float controllerStationaryTime = 0.0f;
+    bool isControllerStationary = false;
+    bool controlsExplicitlyDismissed = false;
+    XrVector3f dismissRayDir = {0,0,-1};
     bool isTriggerPressed = false;
     float uiIdleTime = 0.0f;
     float controlsIdleTime = 0.0f;
