@@ -94,7 +94,10 @@ class NetworkWebdavScreen(
 
     // ---- Formulario "Adicionar servidor" (usado pela lista unificada em NetworkHomeScreen) ----
 
-    fun buildAddServerForm(onSaved: () -> Unit): View {
+    fun buildAddServerForm(
+        onSaved: () -> Unit,
+        prefill: ServerPrefill? = null,
+    ): View {
         val form = VoidForm(context)
 
         val hostInput =
@@ -135,6 +138,13 @@ class NetworkWebdavScreen(
                 kind = VoidFieldKind.TEXT,
             ).apply { setText("/") }
         formBasePathField = basePathInput
+
+        if (prefill != null) {
+            if (prefill.host.isNotEmpty()) hostInput.setText(prefill.host)
+            if (prefill.port > 0) portInput.setText(prefill.port.toString())
+            if (prefill.name.isNotEmpty()) nameInput.setText(prefill.name)
+            if (prefill.path.isNotEmpty()) basePathInput.setText(prefill.path)
+        }
 
         val userInput =
             form.field(
@@ -623,7 +633,12 @@ class NetworkWebdavScreen(
                     val name = parts.getOrNull(0) ?: return@mapNotNull null
                     val isDir = parts.getOrNull(1) == "1"
                     val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
-                    val type = if (isDir) MediaType.DIRECTORY else (mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO)
+                    val type =
+                        if (isDir) {
+                            MediaType.DIRECTORY
+                        } else {
+                            mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO
+                        }
                     val f3d = if (type == MediaType.VIDEO) MediaFilterEngine.detectFormat3DFromFilename(name) else Format3DType.FLAT_2D
                     val childPath = if (subPath.isEmpty()) name else "$subPath/$name"
 

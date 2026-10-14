@@ -531,13 +531,15 @@ class VRPresentation(
                         nameStr: String,
                         pathStr: String,
                     ->
-                    if (protocol == com.tucavr.network.ServerProtocol.WEBDAV) {
-                        networkWebdavScreen.prefill(hostStr, portNum, nameStr, pathStr)
-                    }
-                    // Abre o formulario de cadastro daquele protocolo dentro da propria
-                    // NetworkHomeScreen (DLNA nao tem formulario manual, so descoberta —
-                    // openAddForm ignora silenciosamente nesse caso).
-                    networkHomeScreen.openAddForm(protocol)
+                    networkHomeScreen.openAddForm(
+                        protocol,
+                        com.tucavr.screens.ServerPrefill(
+                            host = hostStr,
+                            port = portNum,
+                            name = nameStr,
+                            path = pathStr,
+                        ),
+                    )
                 },
             )
 
@@ -563,11 +565,11 @@ class VRPresentation(
                 savedServerDao = savedServerDao,
                 credentialStore = serverCredentials,
                 discoveryPageBuilder = { networkDiscoveryScreen.buildPage() },
-                smbAddFormBuilder = { onSaved -> networkSmbScreen.buildAddServerForm(onSaved) },
-                ftpAddFormBuilder = { onSaved -> networkFtpScreen.buildAddServerForm(onSaved) },
-                sftpAddFormBuilder = { onSaved -> networkSftpScreen.buildAddServerForm(onSaved) },
-                nfsAddFormBuilder = { onSaved -> networkNfsScreen.buildAddServerForm(onSaved) },
-                webdavAddFormBuilder = { onSaved -> networkWebdavScreen.buildAddServerForm(onSaved) },
+                smbAddFormBuilder = { onSaved, prefill -> networkSmbScreen.buildAddServerForm(onSaved, prefill) },
+                ftpAddFormBuilder = { onSaved, prefill -> networkFtpScreen.buildAddServerForm(onSaved, prefill) },
+                sftpAddFormBuilder = { onSaved, prefill -> networkSftpScreen.buildAddServerForm(onSaved, prefill) },
+                nfsAddFormBuilder = { onSaved, prefill -> networkNfsScreen.buildAddServerForm(onSaved, prefill) },
+                webdavAddFormBuilder = { onSaved, prefill -> networkWebdavScreen.buildAddServerForm(onSaved, prefill) },
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
             )

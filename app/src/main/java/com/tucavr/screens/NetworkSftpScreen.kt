@@ -85,7 +85,10 @@ class NetworkSftpScreen(
 
     // ---- Formulario "Adicionar servidor" (usado pela lista unificada em NetworkHomeScreen) ----
 
-    fun buildAddServerForm(onSaved: () -> Unit): View {
+    fun buildAddServerForm(
+        onSaved: () -> Unit,
+        prefill: ServerPrefill? = null,
+    ): View {
         val form = VoidForm(context)
 
         val fieldHost =
@@ -104,6 +107,12 @@ class NetworkSftpScreen(
                 kind = VoidFieldKind.NUMBER,
                 validator = FieldValidators.port(context.getString(R.string.field_error_invalid_port)),
             )
+
+        if (prefill != null) {
+            if (prefill.host.isNotEmpty()) fieldHost.setText(prefill.host)
+            if (prefill.port > 0) fieldPort.setText(prefill.port.toString())
+        }
+
         val fieldUser =
             form.field(
                 host = host,
@@ -548,7 +557,12 @@ class NetworkSftpScreen(
                     val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
                     val childPath = if (requestedPath.isEmpty()) name else "$requestedPath/$name"
 
-                    val type = if (isDir) MediaType.DIRECTORY else (mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO)
+                    val type =
+                        if (isDir) {
+                            MediaType.DIRECTORY
+                        } else {
+                            mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO
+                        }
                     val f3d =
                         if (type == MediaType.VIDEO) {
                             MediaFilterEngine.detectFormat3DFromFilename(

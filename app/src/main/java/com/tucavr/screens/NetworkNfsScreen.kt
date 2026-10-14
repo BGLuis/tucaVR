@@ -81,7 +81,10 @@ class NetworkNfsScreen(
 
     // ---- Formulario "Adicionar servidor" (usado pela lista unificada em NetworkHomeScreen) ----
 
-    fun buildAddServerForm(onSaved: () -> Unit): View {
+    fun buildAddServerForm(
+        onSaved: () -> Unit,
+        prefill: ServerPrefill? = null,
+    ): View {
         val form = VoidForm(context)
 
         val hostInput =
@@ -112,6 +115,12 @@ class NetworkNfsScreen(
                 kind = VoidFieldKind.TEXT,
                 validator = FieldValidators.required(context.getString(R.string.network_nfs_form_status_export_required)),
             )
+
+        if (prefill != null) {
+            if (prefill.host.isNotEmpty()) hostInput.setText(prefill.host)
+            if (prefill.port > 0) portInput.setText(prefill.port.toString())
+            if (prefill.path.isNotEmpty()) exportInput.setText(prefill.path)
+        }
 
         val nameInput =
             form.field(
@@ -152,7 +161,11 @@ class NetworkNfsScreen(
                                 activity.nativeNfsListExports(h, p)
                             }
                         if (result.startsWith("ERROR:")) {
-                            statusText.text = context.getString(R.string.network_nfs_form_status_error_format, result.removePrefix("ERROR:"))
+                            statusText.text =
+                                context.getString(
+                                    R.string.network_nfs_form_status_error_format,
+                                    result.removePrefix("ERROR:"),
+                                )
                         } else {
                             val firstExport = result.lines().firstOrNull { it.isNotBlank() }
                             if (firstExport != null) {
@@ -502,7 +515,12 @@ class NetworkNfsScreen(
                     val name = parts.getOrNull(0) ?: return@mapNotNull null
                     val isDir = parts.getOrNull(1) == "1"
                     val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
-                    val type = if (isDir) MediaType.DIRECTORY else (mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO)
+                    val type =
+                        if (isDir) {
+                            MediaType.DIRECTORY
+                        } else {
+                            mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO
+                        }
                     val f3d = if (type == MediaType.VIDEO) MediaFilterEngine.detectFormat3DFromFilename(name) else Format3DType.FLAT_2D
                     val childPath = if (subPath.isEmpty()) name else "$subPath/$name"
 
