@@ -195,7 +195,7 @@ object NetworkThumbnailGenerator {
             is PlaybackSource.Smb, is PlaybackSource.Ftp, is PlaybackSource.Sftp, is PlaybackSource.Dlna ->
                 CacheKeys.forSource(source)
             is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Webdav ->
-                throw IllegalArgumentException("NetworkThumbnailGenerator nao suporta $source")
+                throw IllegalArgumentException("NetworkThumbnailGenerator nao suporta ${source::class.simpleName}")
         }
     }
 
