@@ -262,7 +262,7 @@ class NetworkNfsScreen(
                 subPath.substringAfterLast('/')
             }
 
-        val header = VoidPanelChrome.buildHeader(context, title = titleText, onBack = { handleBack(server) })
+        val header = VoidPanelChrome.buildHeader(context, title = titleText, onBack = { onBack() })
         root.addView(header)
 
         // Toolbar de busca e ordenacao

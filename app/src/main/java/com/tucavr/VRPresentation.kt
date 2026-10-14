@@ -674,7 +674,23 @@ class VRPresentation(
     }
 
     fun onNavigateToPlayer(source: PlaybackSource) {
-        navigateTo(Destination.Player(source))
+        if (appNav.current is Destination.Player) {
+            appNav.replaceTop(Destination.Player(source))
+            render()
+        } else {
+            navigateTo(Destination.Player(source))
+        }
+    }
+
+    fun popTo(predicate: (Destination) -> Boolean) {
+        if (appNav.popTo(predicate)) {
+            render()
+        }
+    }
+
+    /** Pops any active Player destination from the navigation stack. */
+    fun popPlayer() {
+        popTo { it !is Destination.Player }
     }
 
     private fun navigateTo(destination: Destination) {
@@ -700,7 +716,12 @@ class VRPresentation(
                 is PlaybackSource.Sftp -> activity.playSftp(source.server, source.path, source.sizeBytes, resumeAtMs)
                 is PlaybackSource.Webdav -> activity.playWebdav(source.server, source.path, source.sizeBytes, resumeAtMs)
             }
-            navigateTo(Destination.Player(source))
+            if (appNav.current is Destination.Player) {
+                appNav.replaceTop(Destination.Player(source))
+                render()
+            } else {
+                navigateTo(Destination.Player(source))
+            }
         }
     }
 
@@ -717,22 +738,11 @@ class VRPresentation(
             when {
                 current is Destination.LocalFiles -> localFilesScreen.handleBack()
                 current is Destination.NetworkFiles -> networkSmbScreen.handleBack(current.server)
-                current is Destination.NetworkNfsFiles -> {
-                    networkNfsScreen.handleBack()
-                    true
-                }
+                current is Destination.NetworkNfsFiles -> networkNfsScreen.handleBack(current.server)
                 current is Destination.NetworkFtpFiles -> networkFtpScreen.handleBack(current.server)
                 current is Destination.NetworkSftpFiles -> networkSftpScreen.handleBack(current.server)
                 current is Destination.NetworkWebdavFiles -> networkWebdavScreen.handleBack(current.server)
-                current is Destination.NetworkHome -> {
-                    if (networkHomeScreen.handleBack()) {
-                        true
-                    } else {
-                        appNav.navigateTo(Destination.Home)
-                        render()
-                        true
-                    }
-                }
+                current is Destination.NetworkHome -> networkHomeScreen.handleBack()
                 else -> false
             }
         if (!handled) {

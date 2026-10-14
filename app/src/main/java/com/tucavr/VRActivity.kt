@@ -1568,6 +1568,7 @@ class VRActivity : NativeActivity() {
             // Se a Activity estiver finalizando ou destruída, não tenta recarregar painéis
             if (!isFinishing && !isDestroyed) {
                 nativeRequestUiPanelVisible()
+                presentation?.popPlayer()
                 presentation?.loadFiles()
             }
         }
