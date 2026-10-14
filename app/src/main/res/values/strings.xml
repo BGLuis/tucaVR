@@ -700,6 +700,9 @@
     <string name="context_rail_no_video">No video playing</string>
     <string name="context_rail_queue_title">Up Next</string>
     <string name="context_rail_empty_queue">Queue is empty</string>
+    <string name="context_rail_file_details">File Details</string>
+    <string name="context_rail_tab_details">Details</string>
+    <string name="context_rail_btn_from_start">From start</string>
 
     <!-- Home Screen Sections -->
     <string name="home_section_continue_watching">Continue Watching</string>

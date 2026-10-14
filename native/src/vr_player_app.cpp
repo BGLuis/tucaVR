@@ -348,6 +348,7 @@ Java_com_tucavr_VRActivity_nativeSetPhotoPan(JNIEnv*, jobject, jfloat, jfloat) {
 // Solicitação explícita para acordar e manter o painel de UI visível (reset de m_uiIdleTime),
 // por exemplo ao abrir modais como o seletor de formato de tela (T3.4).
 static std::atomic<bool> g_requestUiPanelVisible{false};
+static std::atomic<bool> g_requestUiPanelHidden{false};
 static std::atomic<bool> g_requestControlsPanelVisible{false};
 static std::atomic<bool> g_stopVideoRequested{false};
 static std::atomic<bool> g_modalPanelActive{false};
@@ -363,6 +364,11 @@ Java_com_tucavr_VRActivity_nativeStopVideo(JNIEnv* env, jobject thiz) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeRequestUiPanelVisible(JNIEnv* env, jobject thiz) {
     g_requestUiPanelVisible.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRequestUiPanelHidden(JNIEnv* env, jobject thiz) {
+    g_requestUiPanelHidden.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -2354,11 +2360,18 @@ public:
         if (g_requestUiPanelVisible.exchange(false)) {
             m_uiIdleTime = 0.0f;
         }
+        if (g_requestUiPanelHidden.exchange(false)) {
+            m_uiAlpha = 0.0f;
+            m_uiIdleTime = kUiAutoHideSeconds;
+            if (currentHitPanel == 1) {
+                currentHitPanel = 0;
+            }
+        }
         if (g_requestControlsPanelVisible.exchange(false)) {
             m_controlsIdleTime = 0.0f;
             m_controlsAlpha = 1.0f;
         }
-        if (currentHitPanel == 1 || keyboardActive) {
+        if (m_uiAlpha > 0.01f && (currentHitPanel == 1 || keyboardActive)) {
             m_uiIdleTime = 0.0f;
         } else {
             m_uiIdleTime += in.DeltaSeconds;

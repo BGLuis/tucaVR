@@ -643,13 +643,21 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         state.uiIdleTime = 0.0f;
         state.controlsExplicitlyDismissed = false;
     }
+    if (::g_requestUiPanelHidden.exchange(false)) {
+        state.uiAlpha = 0.0f;
+        state.uiIdleTime = kUiAutoHideSeconds;
+        if (currentHitPanel == 1) {
+            currentHitPanel = 0;
+            state.lastHitDist = -1.0f;
+        }
+    }
     if (::g_requestControlsPanelVisible.exchange(false)) {
         state.controlsIdleTime = 0.0f;
         state.controlsAlpha = 1.0f;
         state.controlsExplicitlyDismissed = false;
     }
 
-    if (currentHitPanel == 1 || keyboardActive) {
+    if (state.uiAlpha > 0.01f && (currentHitPanel == 1 || keyboardActive)) {
         state.uiIdleTime = 0.0f;
     } else {
         state.uiIdleTime += dt;

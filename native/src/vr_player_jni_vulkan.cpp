@@ -311,6 +311,7 @@ extern uint32_t g_scrubOverlayWidth;
 extern uint32_t g_scrubOverlayHeight;
 extern std::mutex g_scrubOverlayMutex;
 extern std::atomic<bool> g_requestUiPanelVisible;
+extern std::atomic<bool> g_requestUiPanelHidden;
 extern std::atomic<bool> g_requestControlsPanelVisible;
 extern std::atomic<bool> g_stopVideoRequested;
 extern std::atomic<bool> g_newVideoSessionRequested;
@@ -381,6 +382,11 @@ Java_com_tucavr_VRActivity_nativeStopVideo(JNIEnv*, jobject) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeRequestUiPanelVisible(JNIEnv*, jobject) {
     g_requestUiPanelVisible.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRequestUiPanelHidden(JNIEnv*, jobject) {
+    g_requestUiPanelHidden.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL

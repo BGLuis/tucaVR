@@ -21,6 +21,7 @@ import com.tucavr.designsystem.KeyboardBinding
 import com.tucavr.designsystem.VoidTheme
 import com.tucavr.download.DownloadRepository
 import com.tucavr.filebrowser.DirectoryNavigator
+import com.tucavr.filebrowser.MediaEntry
 import com.tucavr.filebrowser.MediaType
 import com.tucavr.filebrowser.mediaTypeForExtension
 import com.tucavr.navigation.AppNavigator
@@ -46,7 +47,6 @@ import com.tucavr.screens.NetworkNfsScreen
 import com.tucavr.screens.NetworkSftpScreen
 import com.tucavr.screens.NetworkSmbScreen
 import com.tucavr.screens.NetworkWebdavScreen
-import com.tucavr.screens.PlayerScreen
 import com.tucavr.screens.PlaylistDetailScreen
 import com.tucavr.screens.PlaylistsScreen
 import com.tucavr.screens.ResumePromptScreen
@@ -175,6 +175,18 @@ class VRPresentation(
             override fun resetContextContent() {
                 this@VRPresentation.resetContextContent()
             }
+
+            override fun showFileDetail(
+                entry: MediaEntry,
+                source: PlaybackSource,
+                onPlay: (resumeAtMs: Long?) -> Unit,
+            ) {
+                this@VRPresentation.showFileDetail(entry, source, onPlay)
+            }
+
+            override fun clearFileDetail() {
+                this@VRPresentation.clearFileDetail()
+            }
         }
     }
 
@@ -194,6 +206,7 @@ class VRPresentation(
     override fun resetContextContent() {
         if (::contextRailContainer.isInitialized && ::contextRailView.isInitialized) {
             contextRailContainer.removeAllViews()
+            contextRailView.clearFileDetail()
             contextRailView.updateState()
             contextRailContainer.addView(
                 contextRailView,
@@ -202,6 +215,32 @@ class VRPresentation(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                 ),
             )
+        }
+    }
+
+    override fun showFileDetail(
+        entry: MediaEntry,
+        source: PlaybackSource,
+        onPlay: (resumeAtMs: Long?) -> Unit,
+    ) {
+        if (::contextRailContainer.isInitialized && ::contextRailView.isInitialized) {
+            if (contextRailContainer.indexOfChild(contextRailView) < 0) {
+                contextRailContainer.removeAllViews()
+                contextRailContainer.addView(
+                    contextRailView,
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    ),
+                )
+            }
+            contextRailView.showFileDetail(entry, source, onPlay)
+        }
+    }
+
+    override fun clearFileDetail() {
+        if (::contextRailView.isInitialized) {
+            contextRailView.clearFileDetail()
         }
     }
 
@@ -223,7 +262,6 @@ class VRPresentation(
     private lateinit var networkHomeScreen: NetworkHomeScreen
     private lateinit var networkWebdavScreen: NetworkWebdavScreen
     private lateinit var continueWatchingScreen: ContinueWatchingScreen
-    private lateinit var playerScreen: PlayerScreen
     private lateinit var resumePromptScreen: ResumePromptScreen
     private lateinit var settingsScreen: SettingsScreen
     private lateinit var playlistsScreen: PlaylistsScreen
@@ -334,7 +372,7 @@ class VRPresentation(
                 context = context,
                 activity = activity,
                 scope = scope,
-                onBackToVideo = { source -> onNavigateToPlayer(source) },
+                onBackToVideo = { activity.requestUiPanelHidden() },
             )
         contextRailContainer.addView(
             contextRailView,
@@ -711,15 +749,6 @@ class VRPresentation(
                 onBack = { handleBack() },
             )
 
-        playerScreen =
-            PlayerScreen(
-                context = context,
-                activity = activity,
-                host = host,
-                scope = scope,
-                onBack = { handleBack() },
-            )
-
         settingsScreen =
             SettingsScreen(
                 context = context,
@@ -767,11 +796,13 @@ class VRPresentation(
                 repository = DownloadRepository(context),
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
+                onPlaySource = { source -> playSource(source) },
             )
     }
 
     // ---- Máquina de telas ----
 
+    @Suppress("DEPRECATION")
     private fun render() {
         if (::sidebarView.isInitialized) {
             sidebarView.updateActiveDestination(appNav.current)
@@ -793,7 +824,9 @@ class VRPresentation(
             is Destination.ContinueWatching -> continueWatchingScreen.render()
             is Destination.Playlists -> playlistsScreen.render()
             is Destination.PlaylistDetail -> playlistDetailScreen.render(destination.playlistId)
-            is Destination.Player -> playerScreen.render(destination.source)
+            is Destination.Player -> {
+                activity.requestUiPanelHidden()
+            }
             is Destination.PhotoViewer ->
                 photoViewerScreen.render(
                     destination.initialEntry,
@@ -805,8 +838,11 @@ class VRPresentation(
         }
     }
 
-    fun onNavigateToPlayer(source: PlaybackSource) {
-        navigateTo(Destination.Player(source))
+    @Deprecated("Now playing screen removed; use activity.requestUiPanelHidden() directly")
+    fun onNavigateToPlayer(
+        @Suppress("UNUSED_PARAMETER") source: PlaybackSource? = null,
+    ) {
+        activity.requestUiPanelHidden()
     }
 
     fun updatePlaybackProgress(
@@ -842,7 +878,7 @@ class VRPresentation(
     /**
      * Ponto único de "tocar [source]": pergunta se retoma (via
      * [resumePromptScreen]), despacha pro `nativePlayXxx` certo por tipo de
-     * fonte, e navega pro Player. Usado tanto pelo double-click local quanto
+     * fonte, e oculta o painel de UI para assistir ao vídeo. Usado tanto pelo double-click local quanto
      * pelo botão Reproduzir de [FileDetailScreen] (local e rede).
      */
     private fun playSource(source: PlaybackSource) {
@@ -857,7 +893,7 @@ class VRPresentation(
                 is PlaybackSource.Sftp -> activity.playSftp(source.server, source.path, source.sizeBytes, resumeAtMs)
                 is PlaybackSource.Webdav -> activity.playWebdav(source.server, source.path, source.sizeBytes, resumeAtMs)
             }
-            navigateTo(Destination.Player(source))
+            activity.requestUiPanelHidden()
         }
     }
 

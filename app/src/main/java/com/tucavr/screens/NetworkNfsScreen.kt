@@ -431,10 +431,19 @@ class NetworkNfsScreen(
                     renderFiles(server, browsePath)
                 },
                 onVideoClick = { entry ->
-                    val source = PlaybackSource.Nfs(server, entry.path, entry.sizeBytes)
-                    activity.playNfs(server, entry.path, resumeAtMs = 0L)
-                    onNavigate(Destination.Player(source))
+                    activity.playNfs(server, entry.path, entry.sizeBytes, resumeAtMs = null)
                 },
+                onFileSelected = { entry ->
+                    val source = PlaybackSource.Nfs(server, entry.path, entry.sizeBytes)
+                    host.showFileDetail(
+                        entry = entry,
+                        source = source,
+                        onPlay = { resumeAtMs ->
+                            activity.playNfs(server, entry.path, entry.sizeBytes, resumeAtMs)
+                        },
+                    )
+                },
+                contextRailHost = host,
             )
         adapter = fileAdapter
         recycler.adapter = fileAdapter
@@ -502,8 +511,18 @@ class NetworkNfsScreen(
                     val name = parts.getOrNull(0) ?: return@mapNotNull null
                     val isDir = parts.getOrNull(1) == "1"
                     val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
-                    val type = if (isDir) MediaType.DIRECTORY else (mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO)
-                    val f3d = if (type == MediaType.VIDEO) MediaFilterEngine.detectFormat3DFromFilename(name) else Format3DType.FLAT_2D
+                    val type =
+                        if (isDir) {
+                            MediaType.DIRECTORY
+                        } else {
+                            mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO
+                        }
+                    val f3d =
+                        if (type == MediaType.VIDEO) {
+                            MediaFilterEngine.detectFormat3DFromFilename(name)
+                        } else {
+                            Format3DType.FLAT_2D
+                        }
                     val childPath = if (subPath.isEmpty()) name else "$subPath/$name"
 
                     MediaEntry(

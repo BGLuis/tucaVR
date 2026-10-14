@@ -304,6 +304,7 @@ uint32_t g_scrubOverlayWidth = 0;
 uint32_t g_scrubOverlayHeight = 0;
 std::mutex g_scrubOverlayMutex;
 std::atomic<bool> g_requestUiPanelVisible{false};
+std::atomic<bool> g_requestUiPanelHidden{false};
 std::atomic<bool> g_requestControlsPanelVisible{false};
 std::atomic<bool> g_stopVideoRequested{false};
 std::atomic<bool> g_newVideoSessionRequested{false};
@@ -335,6 +336,7 @@ void ResetGlobalState() {
         g_scrubOverlayHeight = 0;
     }
     g_requestUiPanelVisible.store(false);
+    g_requestUiPanelHidden.store(false);
     g_requestControlsPanelVisible.store(false);
     g_stopVideoRequested.store(false);
     g_newVideoSessionRequested.store(false);

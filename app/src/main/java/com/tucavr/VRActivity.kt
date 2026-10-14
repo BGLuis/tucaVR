@@ -1374,6 +1374,7 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayVideo(filePath, (resumeAtMs ?: 0L) / 1000f)
+        requestUiPanelHidden()
     }
 
     // T7: URL HTTP(S) reusa o mesmo entry point que arquivo local — o
@@ -1389,6 +1390,7 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayVideo(url, (resumeAtMs ?: 0L) / 1000f)
+        requestUiPanelHidden()
     }
 
     // T6.4: playback SMB tem entry point JNI dedicado porque as credenciais
@@ -1416,6 +1418,7 @@ class VRActivity : NativeActivity() {
             server.domain,
             (resumeAtMs ?: 0L) / 1000f,
         )
+        requestUiPanelHidden()
     }
 
     // T6.4: mesma logica de playSmb acima, so que sem `share`/`domain` (FTP
@@ -1433,6 +1436,7 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayFtp(server.host, server.port, path, server.username, server.password, (resumeAtMs ?: 0L) / 1000f)
+        requestUiPanelHidden()
     }
 
     // T6.4: mesma logica acima, com `privateKey` (conteudo PEM, ver
@@ -1458,6 +1462,7 @@ class VRActivity : NativeActivity() {
             server.privateKey ?: "",
             (resumeAtMs ?: 0L) / 1000f,
         )
+        requestUiPanelHidden()
     }
 
     // T5.4: playback NFS
@@ -1474,6 +1479,7 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayNfs(server.host, server.port, server.path, path, 3, (resumeAtMs ?: 0L) / 1000f)
+        requestUiPanelHidden()
     }
 
     // T7.4: playback DLNA
@@ -1491,6 +1497,7 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayVideo(url, (resumeAtMs ?: 0L) / 1000f)
+        requestUiPanelHidden()
     }
 
     // T3.2/T3.4: playback WebDAV
@@ -1531,6 +1538,7 @@ class VRActivity : NativeActivity() {
             acceptInvalidCerts,
             (resumeAtMs ?: 0L) / 1000f,
         )
+        requestUiPanelHidden()
     }
 
     private fun processVideoUri(uri: Uri) {
@@ -1613,6 +1621,12 @@ class VRActivity : NativeActivity() {
     external fun nativeToggleSwapEyes(): Int
 
     external fun nativeRequestUiPanelVisible()
+
+    external fun nativeRequestUiPanelHidden()
+
+    fun requestUiPanelHidden() {
+        nativeRequestUiPanelHidden()
+    }
 
     external fun nativeRequestControlsPanelVisible()
 
@@ -1939,7 +1953,6 @@ class VRActivity : NativeActivity() {
                 is PlaybackSource.Sftp -> playSftp(source.server, source.path, source.sizeBytes)
                 is PlaybackSource.Webdav -> playWebdav(source.server, source.path, source.sizeBytes)
             }
-            presentation?.onNavigateToPlayer(source)
         }
     }
 

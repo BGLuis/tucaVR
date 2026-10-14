@@ -472,7 +472,7 @@ class NetworkHomeScreen(
         val source = PlaybackSource.Http(url)
         promptResumeOrPlay(source) { resumeAtMs ->
             activity.playUrl(url, resumeAtMs)
-            onNavigate(Destination.Player(source))
+            activity.requestUiPanelHidden()
         }
     }
 

@@ -261,6 +261,22 @@ class LocalFilesScreen(
                     renderLocalFiles()
                 },
                 onVideoClick = { entry -> onPlayLocalVideo(entry) },
+                onFileSelected = { entry ->
+                    val source = PlaybackSource.LocalFile(entry.path, entry.sizeBytes)
+                    host.showFileDetail(
+                        entry = entry,
+                        source = source,
+                        onPlay = { resumeAtMs ->
+                            if (entry.type == com.tucavr.filebrowser.MediaType.IMAGE) {
+                                onPlayLocalVideo(entry)
+                            } else {
+                                activity.playFile(entry.path, entry.sizeBytes, resumeAtMs)
+                                activity.requestUiPanelHidden()
+                            }
+                        },
+                    )
+                },
+                contextRailHost = host,
                 metadataBadgeLoader = { entry ->
                     MediaMetadataReader.readCachedSummary(context, PlaybackSource.LocalFile(entry.path, entry.sizeBytes))
                 },

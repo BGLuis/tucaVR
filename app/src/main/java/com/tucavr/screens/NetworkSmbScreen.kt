@@ -438,10 +438,19 @@ class NetworkSmbScreen(
                     renderFiles(server)
                 },
                 onVideoClick = { entry ->
-                    val source = PlaybackSource.Smb(server, entry.path, entry.sizeBytes)
-                    activity.playSmb(server, entry.path, resumeAtMs = 0L)
-                    onNavigate(Destination.Player(source))
+                    activity.playSmb(server, entry.path, entry.sizeBytes, resumeAtMs = null)
                 },
+                onFileSelected = { entry ->
+                    val source = PlaybackSource.Smb(server, entry.path, entry.sizeBytes)
+                    host.showFileDetail(
+                        entry = entry,
+                        source = source,
+                        onPlay = { resumeAtMs ->
+                            activity.playSmb(server, entry.path, entry.sizeBytes, resumeAtMs)
+                        },
+                    )
+                },
+                contextRailHost = host,
                 thumbnailLoader = { entry ->
                     val source = PlaybackSource.Smb(server, entry.path, entry.sizeBytes)
                     NetworkThumbnailGenerator.getThumbnail(context, activity, source)
@@ -559,7 +568,12 @@ class NetworkSmbScreen(
                     val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
                     val childPath = if (requestedPath.isEmpty()) name else "$requestedPath/$name"
 
-                    val type = if (isDir) MediaType.DIRECTORY else (mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO)
+                    val type =
+                        if (isDir) {
+                            MediaType.DIRECTORY
+                        } else {
+                            mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO
+                        }
                     val f3d =
                         if (type == MediaType.VIDEO) {
                             MediaFilterEngine.detectFormat3DFromFilename(

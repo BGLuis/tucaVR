@@ -636,49 +636,38 @@ class HomeScreen(
     private fun resumeFromHistory(entry: PlaybackHistory) {
         when (entry.sourceType) {
             HistorySourceType.LOCAL -> {
-                val source = PlaybackSource.LocalFile(entry.mediaPath)
                 activity.playFile(entry.mediaPath, resumeAtMs = entry.positionMs)
-                onNavigate(Destination.Player(source))
             }
             HistorySourceType.HTTP -> {
-                val source = PlaybackSource.Http(entry.mediaPath)
                 activity.playUrl(entry.mediaPath, resumeAtMs = entry.positionMs)
-                onNavigate(Destination.Player(source))
             }
             HistorySourceType.SMB -> {
                 val server =
                     resolveServer(entry.serverInfo) { id ->
                         com.tucavr.network.SmbCredentialStore(activity).list().find { it.id == id }
                     } ?: return
-                val source = PlaybackSource.Smb(server, entry.mediaPath)
                 activity.playSmb(server, entry.mediaPath, resumeAtMs = entry.positionMs)
-                onNavigate(Destination.Player(source))
             }
             HistorySourceType.FTP -> {
                 val server =
                     resolveServer(entry.serverInfo) { id ->
                         com.tucavr.network.FtpCredentialStore(activity).list().find { it.id == id }
                     } ?: return
-                val source = PlaybackSource.Ftp(server, entry.mediaPath)
                 activity.playFtp(server, entry.mediaPath, resumeAtMs = entry.positionMs)
-                onNavigate(Destination.Player(source))
             }
             HistorySourceType.SFTP -> {
                 val server =
                     resolveServer(entry.serverInfo) { id ->
                         com.tucavr.network.SftpCredentialStore(activity).list().find { it.id == id }
                     } ?: return
-                val source = PlaybackSource.Sftp(server, entry.mediaPath)
                 activity.playSftp(server, entry.mediaPath, resumeAtMs = entry.positionMs)
-                onNavigate(Destination.Player(source))
             }
             HistorySourceType.NFS -> {
                 scope.launch {
                     val server = resolveServerAsync(entry.serverInfo) { id -> savedServerDao.getById(id) } ?: return@launch
-                    val source = PlaybackSource.Nfs(server, entry.mediaPath)
                     withContext(Dispatchers.Main) {
                         activity.playNfs(server, entry.mediaPath, resumeAtMs = entry.positionMs)
-                        onNavigate(Destination.Player(source))
+                        activity.requestUiPanelHidden()
                     }
                 }
             }
@@ -687,24 +676,23 @@ class HomeScreen(
                     val server =
                         resolveServerAsync(entry.serverInfo) { id -> savedServerDao.getById(id) }
                             ?: SavedServer(name = entry.title, protocol = ServerProtocol.DLNA, host = "", port = 0, path = "")
-                    val source = PlaybackSource.Dlna(server, entry.title, entry.mediaPath)
                     withContext(Dispatchers.Main) {
                         activity.playDlna(server, entry.title, entry.mediaPath, resumeAtMs = entry.positionMs)
-                        onNavigate(Destination.Player(source))
+                        activity.requestUiPanelHidden()
                     }
                 }
             }
             HistorySourceType.WEBDAV -> {
                 scope.launch {
                     val server = resolveServerAsync(entry.serverInfo) { id -> savedServerDao.getById(id) } ?: return@launch
-                    val source = PlaybackSource.Webdav(server, entry.mediaPath)
                     withContext(Dispatchers.Main) {
                         activity.playWebdav(server, entry.mediaPath, resumeAtMs = entry.positionMs)
-                        onNavigate(Destination.Player(source))
+                        activity.requestUiPanelHidden()
                     }
                 }
             }
         }
+        activity.requestUiPanelHidden()
     }
 
     private fun navigateToSavedServer(server: SavedServer) {

@@ -157,7 +157,7 @@ inline void UpdateIdleAndAlpha(InputFsmState &state, bool hitScreen, int current
         state.controlsIdleTime += dt;
     }
 
-    if (currentHitPanel == 1) {
+    if (state.uiAlpha > 0.01f && currentHitPanel == 1) {
         state.uiIdleTime = 0.0f;
     } else {
         state.uiIdleTime += dt;
@@ -473,6 +473,41 @@ static void TestMenuHidesOnPlaybackStartAndReopensOnMenuButton() {
     std::cout << "[PASS] TestMenuHidesOnPlaybackStartAndReopensOnMenuButton\n";
 }
 
+static void TestUiPanelExplicitHideWithHover() {
+    InputFsmState state;
+    const float dt = 1.0f / 90.0f;
+
+    // Menu aberto, controle apontando para o botão da UI (currentHitPanel = 1)
+    state.uiAlpha = 1.0f;
+    state.uiIdleTime = 0.0f;
+    state.controlsAlpha = 1.0f;
+    state.controlsIdleTime = 0.0f;
+
+    // Frame 1: ray aponta para painel 1
+    UpdateIdleAndAlpha(state, /*hitScreen=*/false, /*currentHitPanel=*/1, /*isPlaying=*/false, dt);
+    assert(state.uiAlpha == 1.0f);
+    assert(state.uiIdleTime == 0.0f);
+
+    // Usuário aperta botão "Play" ou "Back to video", solicitando hide explícito
+    int currentHitPanel = 1;
+    // Simula lógica de vr_player_input_vulkan.h:
+    state.uiAlpha = 0.0f;
+    state.uiIdleTime = 5.0f; // kUiAutoHideSeconds
+    if (currentHitPanel == 1) {
+        currentHitPanel = 0;
+    }
+
+    // Frames seguintes: o ray ainda pode estar geograficamente na área, mas como uiAlpha <= 0.01f,
+    // a UI NÃO pode acordar ou ter rebote de alpha
+    for (int i = 0; i < 30; i++) {
+        UpdateIdleAndAlpha(state, /*hitScreen=*/false, currentHitPanel, /*isPlaying=*/true, dt);
+        assert(state.uiAlpha == 0.0f);
+        assert(state.uiIdleTime >= 5.0f);
+    }
+
+    std::cout << "[PASS] TestUiPanelExplicitHideWithHover\n";
+}
+
 int main() {
     std::cout << "--- Executando testes unitarios de Input FSM (C-01) ---\n";
     TestButtonAHoldTriggersOnlyOnce();
@@ -483,6 +518,7 @@ int main() {
     TestMenuButtonShortPressDismissesControls();
     TestStationaryControllerAcceleratesAutoHide();
     TestMenuHidesOnPlaybackStartAndReopensOnMenuButton();
+    TestUiPanelExplicitHideWithHover();
     std::cout << "--- Todos os testes de Input FSM passaram com sucesso! ---\n";
     return 0;
 }

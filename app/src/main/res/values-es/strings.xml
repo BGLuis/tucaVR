@@ -691,6 +691,9 @@
     <string name="context_rail_no_video">No hay vídeo en reproducción</string>
     <string name="context_rail_queue_title">A continuación</string>
     <string name="context_rail_empty_queue">Cola vacía</string>
+    <string name="context_rail_file_details">Detalles del Archivo</string>
+    <string name="context_rail_tab_details">Detalles</string>
+    <string name="context_rail_btn_from_start">Desde el inicio</string>
 
     <!-- Home Screen Sections -->
     <string name="home_section_continue_watching">Continuar Viendo</string>

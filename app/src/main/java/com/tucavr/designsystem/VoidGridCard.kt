@@ -187,6 +187,13 @@ class VoidGridCard(context: Context) : LinearLayout(context) {
             setStroke(VoidTheme.dpToPx(context, 2f), Color.parseColor("#E5A93C"))
         }
 
+    private fun createSelectedBorder() =
+        GradientDrawable().apply {
+            setColor(VoidTheme.colorSurfaceAlt)
+            cornerRadius = VoidTheme.dp(context, VoidTheme.cornerRadiusDp)
+            setStroke(VoidTheme.dpToPx(context, 2f), VoidTheme.colorAccent)
+        }
+
     /**
      * Vincula dados de exibição ao Card.
      */
@@ -197,6 +204,7 @@ class VoidGridCard(context: Context) : LinearLayout(context) {
         iconResId: Int = 0,
         isFolder: Boolean = false,
         progressFraction: Float? = null,
+        isSelected: Boolean = false,
     ) {
         titleView.text = title
 
@@ -214,7 +222,7 @@ class VoidGridCard(context: Context) : LinearLayout(context) {
             badgeType.visibility = View.GONE
             progressBar.visibility = View.GONE
         } else {
-            background = createNormalBorder()
+            background = if (isSelected) createSelectedBorder() else createNormalBorder()
             badgeFolder.visibility = View.GONE
 
             // Formato 3D badge
