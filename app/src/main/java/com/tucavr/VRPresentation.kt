@@ -639,6 +639,7 @@ class VRPresentation(
                 host = host,
                 scope = scope,
                 repository = DownloadRepository(context),
+                onPlay = { source -> playSource(source) },
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
             )
