@@ -260,4 +260,21 @@ class VoidGridCard(context: Context) : LinearLayout(context) {
 
         thumbnail.setImageDrawable(null)
     }
+
+    /**
+     * Updates only the selection border of the grid card without altering thumbnail or metadata.
+     */
+    fun setSelectedCard(
+        selected: Boolean,
+        isFolder: Boolean = false,
+    ) {
+        background =
+            if (isFolder) {
+                createFolderBorder()
+            } else if (selected) {
+                createSelectedBorder()
+            } else {
+                createNormalBorder()
+            }
+    }
 }

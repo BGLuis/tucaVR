@@ -69,6 +69,11 @@ class ContextRailView(
     private var selectedDetail: FileDetailData? = null
     private var activeTab: RailTab = RailTab.NOW_PLAYING
 
+    private var renderedTab: RailTab? = null
+    private var renderedDetailPath: String? = null
+    private var renderedSource: PlaybackSource? = null
+    private var renderedHasHeader: Boolean = false
+
     init {
         orientation = HORIZONTAL
         layoutParams =
@@ -107,7 +112,7 @@ class ContextRailView(
         scroll.addView(contentLayout)
         addView(scroll)
 
-        updateState()
+        updateState(force = true)
     }
 
     fun showFileDetail(
@@ -115,24 +120,45 @@ class ContextRailView(
         source: PlaybackSource,
         onPlay: (resumeAtMs: Long?) -> Unit,
     ) {
+        val isDifferentEntry = selectedDetail?.entry?.path != entry.path
         selectedDetail = FileDetailData(entry, source, onPlay)
         activeTab = RailTab.FILE_DETAIL
-        updateState()
+        updateState(force = isDifferentEntry)
     }
 
     fun clearFileDetail() {
+        if (selectedDetail == null && activeTab == RailTab.NOW_PLAYING) {
+            return
+        }
         selectedDetail = null
         activeTab = RailTab.NOW_PLAYING
-        updateState()
+        updateState(force = true)
     }
 
-    fun updateState() {
+    fun updateState(force: Boolean = false) {
+        val currentSource = activity.currentPlaybackSource
+        val detail = selectedDetail
+        val hasHeader = currentSource != null && detail != null
+        val targetTab = activeTab
+        val detailPath = detail?.entry?.path
+
+        if (!force &&
+            renderedHasHeader == hasHeader &&
+            renderedTab == targetTab &&
+            renderedSource == currentSource &&
+            renderedDetailPath == detailPath
+        ) {
+            return
+        }
+
+        renderedHasHeader = hasHeader
+        renderedTab = targetTab
+        renderedSource = currentSource
+        renderedDetailPath = detailPath
+
         contentLayout.removeAllViews()
         progressLabel = null
         progressBar = null
-
-        val currentSource = activity.currentPlaybackSource
-        val detail = selectedDetail
 
         if (currentSource != null && detail != null) {
             buildTabHeader()

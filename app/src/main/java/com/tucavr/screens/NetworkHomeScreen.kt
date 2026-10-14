@@ -8,6 +8,7 @@ import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
+import android.widget.TextView
 import com.tucavr.R
 import com.tucavr.VRActivity
 import com.tucavr.designsystem.FieldValidators
@@ -101,6 +102,11 @@ class NetworkHomeScreen(
 
     private var discoveredServers: List<DiscoveredServerItem> = emptyList()
     private var isScanningDiscovery: Boolean = false
+    private var hasRunInitialDiscovery: Boolean = false
+    private var currentSavedServers: List<SavedServer> = emptyList()
+    private var discoveryContainer: LinearLayout? = null
+    private var discoveryProgressBar: ProgressBar? = null
+    private var discoveryStatusLabel: TextView? = null
 
     /** Formulários manuais de cadastro disponíveis — DLNA não entra aqui (só via descoberta). */
     private val addFormBuilders: Map<ServerProtocol, (onSaved: () -> Unit, prefill: ServerPrefill?) -> View> =
@@ -202,7 +208,7 @@ class NetworkHomeScreen(
                 setIcon(R.drawable.ic_search)
                 textSize = 14f
                 setOnClickListener {
-                    startInlineDiscovery(refreshUI = true)
+                    startInlineDiscovery()
                 }
             }
         discoveryHeaderRow.addView(btnRescan)
@@ -233,6 +239,7 @@ class NetworkHomeScreen(
                         marginEnd = VoidTheme.dpToPx(context, 8f)
                     }
             }
+        discoveryProgressBar = progressBar
         progressRow.addView(progressBar)
 
         val statusLabel =
@@ -242,38 +249,13 @@ class NetworkHomeScreen(
                 sizeSp = 14f,
                 secondary = true,
             )
+        discoveryStatusLabel = statusLabel
         progressRow.addView(statusLabel)
         content.addView(progressRow)
 
-        val discoveryContainer = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(discoveryContainer)
-
-        var currentSavedServers: List<SavedServer> = emptyList()
-
-        fun updateDiscoveredList() {
-            discoveryContainer.removeAllViews()
-            if (discoveredServers.isEmpty()) {
-                if (!isScanningDiscovery) {
-                    discoveryContainer.addView(
-                        VoidText.body(context, context.getString(R.string.network_discovery_empty), sizeSp = 16f, secondary = true),
-                    )
-                }
-            } else {
-                discoveredServers.forEach { item ->
-                    val isAlreadySaved =
-                        currentSavedServers.any { saved ->
-                            saved.protocol == item.protocol && saved.host == item.host && (saved.port == item.port || item.port == 0)
-                        }
-                    val matchedSavedServer =
-                        currentSavedServers.find { saved ->
-                            saved.protocol == item.protocol && saved.host == item.host && (saved.port == item.port || item.port == 0)
-                        }
-                    discoveryContainer.addView(
-                        buildDiscoveredServerRow(item, isAlreadySaved, matchedSavedServer),
-                    )
-                }
-            }
-        }
+        val discContainer = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        discoveryContainer = discContainer
+        content.addView(discContainer)
 
         fun refresh() {
             serversContainer.removeAllViews()
@@ -296,22 +278,56 @@ class NetworkHomeScreen(
                         serversContainer.addView(buildServerRow(server) { refresh() })
                     }
                 }
-                updateDiscoveredList()
+                updateDiscoveredUI()
             }
         }
         refresh()
 
-        if (discoveredServers.isEmpty() && !isScanningDiscovery) {
-            startInlineDiscovery(refreshUI = true)
+        if (!hasRunInitialDiscovery && !isScanningDiscovery) {
+            hasRunInitialDiscovery = true
+            startInlineDiscovery()
         }
 
         root.addView(wrapInScroll(content), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         host.showScreen(root)
     }
 
-    private fun startInlineDiscovery(refreshUI: Boolean = false) {
+    private fun updateDiscoveredUI() {
+        val container = discoveryContainer ?: return
+        val pBar = discoveryProgressBar
+        val sLabel = discoveryStatusLabel
+
+        pBar?.visibility = if (isScanningDiscovery) View.VISIBLE else View.GONE
+        sLabel?.text = if (isScanningDiscovery) context.getString(R.string.network_discovery_scanning) else ""
+
+        container.removeAllViews()
+        if (discoveredServers.isEmpty()) {
+            if (!isScanningDiscovery) {
+                container.addView(
+                    VoidText.body(context, context.getString(R.string.network_discovery_empty), sizeSp = 16f, secondary = true),
+                )
+            }
+        } else {
+            discoveredServers.forEach { item ->
+                val isAlreadySaved =
+                    currentSavedServers.any { saved ->
+                        saved.protocol == item.protocol && saved.host == item.host && (saved.port == item.port || item.port == 0)
+                    }
+                val matchedSavedServer =
+                    currentSavedServers.find { saved ->
+                        saved.protocol == item.protocol && saved.host == item.host && (saved.port == item.port || item.port == 0)
+                    }
+                container.addView(
+                    buildDiscoveredServerRow(item, isAlreadySaved, matchedSavedServer),
+                )
+            }
+        }
+    }
+
+    private fun startInlineDiscovery() {
         if (isScanningDiscovery) return
         isScanningDiscovery = true
+        updateDiscoveredUI()
 
         scope.launch {
             lockManager?.acquire()
@@ -326,9 +342,9 @@ class NetworkHomeScreen(
             } finally {
                 lockManager?.release()
                 isScanningDiscovery = false
-                if (mode is HomeMode.List && refreshUI) {
+                if (mode is HomeMode.List) {
                     withContext(Dispatchers.Main) {
-                        renderCurrent()
+                        updateDiscoveredUI()
                     }
                 }
             }
@@ -397,7 +413,7 @@ class NetworkHomeScreen(
             renderCurrent()
         }
         addAction(R.drawable.ic_search, context.getString(R.string.network_discovery_btn_rescan)) {
-            startInlineDiscovery(refreshUI = true)
+            startInlineDiscovery()
         }
 
         return HorizontalScrollView(context).apply {

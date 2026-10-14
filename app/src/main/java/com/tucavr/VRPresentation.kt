@@ -869,19 +869,28 @@ class VRPresentation(
         }
     }
 
-    @Suppress("UNUSED_PARAMETER")
+    private var lastMediaIsLoading: Boolean? = null
+    private var lastMediaIsPlaying: Boolean? = null
+
     fun updateMediaState(
         isLoading: Boolean,
         isPlaying: Boolean,
     ) {
+        if (isLoading == lastMediaIsLoading && isPlaying == lastMediaIsPlaying) {
+            return
+        }
+        lastMediaIsLoading = isLoading
+        lastMediaIsPlaying = isPlaying
         if (::contextRailView.isInitialized) {
-            contextRailView.updateState()
+            contextRailView.updateState(force = false)
         }
     }
 
     fun onPlaybackStopped() {
+        lastMediaIsLoading = false
+        lastMediaIsPlaying = false
         if (::contextRailView.isInitialized) {
-            contextRailView.updateState()
+            contextRailView.updateState(force = true)
         }
     }
 

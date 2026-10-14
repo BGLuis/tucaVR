@@ -72,21 +72,18 @@ class FileAdapter(
         private const val VIEW_TYPE_UP = 0
         private const val VIEW_TYPE_LIST_ITEM = 1
         private const val VIEW_TYPE_GRID_ITEM = 2
+        private const val PAYLOAD_SELECTION_CHANGED = "PAYLOAD_SELECTION_CHANGED"
+    }
+
+    override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
+        super.onAttachedToRecyclerView(recyclerView)
+        recyclerView.itemAnimator = null
     }
 
     fun selectEntry(entry: MediaEntry) {
         val previousSelectedPath = selectedEntryPath
         if (previousSelectedPath == entry.path) {
-            onFileSelected?.invoke(entry)
-            if (onFileSelected == null && contextRailHost != null) {
-                contextRailHost.showFileDetail(
-                    entry = entry,
-                    source = PlaybackSource.LocalFile(entry.path, entry.sizeBytes),
-                    onPlay = { _ ->
-                        onVideoClick(entry)
-                    },
-                )
-            }
+            onVideoClick(entry)
             return
         }
 
@@ -94,10 +91,10 @@ class FileAdapter(
 
         if (previousSelectedPath != null) {
             val oldIndex = rows.indexOfFirst { it is Row.Item && it.entry.path == previousSelectedPath }
-            if (oldIndex >= 0) notifyItemChanged(oldIndex)
+            if (oldIndex >= 0) notifyItemChanged(oldIndex, PAYLOAD_SELECTION_CHANGED)
         }
         val newIndex = rows.indexOfFirst { it is Row.Item && it.entry.path == entry.path }
-        if (newIndex >= 0) notifyItemChanged(newIndex)
+        if (newIndex >= 0) notifyItemChanged(newIndex, PAYLOAD_SELECTION_CHANGED)
 
         onFileSelected?.invoke(entry)
         if (onFileSelected == null && contextRailHost != null) {
@@ -116,7 +113,7 @@ class FileAdapter(
         selectedEntryPath = null
         if (previousSelectedPath != null) {
             val oldIndex = rows.indexOfFirst { it is Row.Item && it.entry.path == previousSelectedPath }
-            if (oldIndex >= 0) notifyItemChanged(oldIndex)
+            if (oldIndex >= 0) notifyItemChanged(oldIndex, PAYLOAD_SELECTION_CHANGED)
         }
     }
 
@@ -181,6 +178,33 @@ class FileAdapter(
                 else -> VoidListRow(parent.context)
             }
         return ViewHolder(view)
+    }
+
+    override fun onBindViewHolder(
+        holder: ViewHolder,
+        position: Int,
+        payloads: MutableList<Any>,
+    ) {
+        if (payloads.isNotEmpty() && payloads.contains(PAYLOAD_SELECTION_CHANGED)) {
+            val row = rows.getOrNull(position)
+            if (row is Row.Item) {
+                val isSelected = row.entry.path == selectedEntryPath
+                val isDir = row.entry.type == MediaType.DIRECTORY
+                if (holder.view is VoidListRow) {
+                    val onPlayRowAction: (() -> Unit)? =
+                        if (!isDir) {
+                            { onVideoClick(row.entry) }
+                        } else {
+                            null
+                        }
+                    holder.view.setSelectedRow(isSelected, onPlayRowAction)
+                } else if (holder.view is VoidGridCard) {
+                    holder.view.setSelectedCard(isSelected, isFolder = isDir)
+                }
+                return
+            }
+        }
+        super.onBindViewHolder(holder, position, payloads)
     }
 
     override fun onBindViewHolder(

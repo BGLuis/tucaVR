@@ -144,6 +144,7 @@ class LocalFilesScreen(
         val recycler =
             RecyclerView(context).apply {
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+                itemAnimator = null
             }
         recyclerView = recycler
         updateLayoutManager()
