@@ -161,11 +161,11 @@ class PlaylistsScreen(
             VoidListRow(context).apply {
                 layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 val itemCountText =
-                    if (playlist.itemCount == 1) {
-                        context.getString(R.string.playlists_item_count_singular, playlist.itemCount)
-                    } else {
-                        context.getString(R.string.playlists_item_count_plural, playlist.itemCount)
-                    }
+                    context.resources.getQuantityString(
+                        R.plurals.playlists_item_count,
+                        playlist.itemCount,
+                        playlist.itemCount,
+                    )
                 bind(
                     title = playlist.name,
                     meta = itemCountText,

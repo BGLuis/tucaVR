@@ -506,8 +506,11 @@ class NetworkFtpScreen(
         currentAdapter.submit(sorted, showUp, currentConfig.viewMode, searchQuery)
 
         countLabel?.text =
-            context.getString(
-                R.string.browser_results_count_format, sorted.size, cachedRawEntries.size,
+            context.resources.getQuantityString(
+                R.plurals.browser_results_count_format,
+                cachedRawEntries.size,
+                sorted.size,
+                cachedRawEntries.size,
             )
 
         val isEmpty = sorted.isEmpty() && !showUp
