@@ -159,7 +159,7 @@ if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
         OpenXR::openxr_loader
         # Rust bridge: get_current_video_frame and other playback functions
         # (Stage 3 needs get_current_video_frame for the video texture)
-        ${CMAKE_CURRENT_SOURCE_DIR}/../rust/target/aarch64-linux-android/release/libbridge.so
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/src/main/jniLibs/arm64-v8a/libbridge.so
     )
 else()
     target_link_libraries(vrplayer_native
@@ -174,7 +174,7 @@ else()
         # OpenXR library from prefab
         OpenXR::openxr_loader
         # Rust bridge dynamic library
-        ${CMAKE_CURRENT_SOURCE_DIR}/../rust/target/aarch64-linux-android/release/libbridge.so
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/src/main/jniLibs/arm64-v8a/libbridge.so
         samplexrframework
     )
 endif()
