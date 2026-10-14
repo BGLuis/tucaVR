@@ -67,6 +67,7 @@ class NetworkWebdavScreen(
     private val credentialStore: ServerCredentialStore,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
+    private val onPlay: (PlaybackSource) -> Unit = { source -> onNavigate(Destination.Player(source)) },
 ) {
     var browsingServer: SavedServer? = null
     var browsePath: String = ""
@@ -536,9 +537,7 @@ class NetworkWebdavScreen(
                     renderFiles(server, browsePath)
                 },
                 onVideoClick = { entry ->
-                    val source = PlaybackSource.Webdav(server, entry.path, entry.sizeBytes)
-                    activity.playWebdav(server, entry.path, sizeBytes = entry.sizeBytes, resumeAtMs = 0L)
-                    onNavigate(Destination.Player(source))
+                    onPlay(PlaybackSource.Webdav(server, entry.path, entry.sizeBytes))
                 },
             )
         adapter = fileAdapter

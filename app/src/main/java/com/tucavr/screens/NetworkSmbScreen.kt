@@ -68,6 +68,7 @@ class NetworkSmbScreen(
     private val credentialStore: SmbCredentialStore,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
+    private val onPlay: (PlaybackSource) -> Unit = { source -> onNavigate(Destination.Player(source)) },
 ) {
     var browsingServer: SmbServer? = null
     var browsePath: String = ""
@@ -447,9 +448,7 @@ class NetworkSmbScreen(
                     renderFiles(server)
                 },
                 onVideoClick = { entry ->
-                    val source = PlaybackSource.Smb(server, entry.path, entry.sizeBytes)
-                    activity.playSmb(server, entry.path, resumeAtMs = 0L)
-                    onNavigate(Destination.Player(source))
+                    onPlay(PlaybackSource.Smb(server, entry.path, entry.sizeBytes))
                 },
                 thumbnailLoader = { entry ->
                     val source = PlaybackSource.Smb(server, entry.path, entry.sizeBytes)

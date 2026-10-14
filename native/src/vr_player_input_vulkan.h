@@ -941,25 +941,45 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.controlsExplicitlyDismissed = false;
         }
 
-        // B (direita) ou Y (esquerda) = alterna a visibilidade dos controles e do painel Home.
-        // Se qualquer um dos painéis estiver visível, oculta imediatamente (dispensa rápida).
-        // Se ambos estiverem ocultos, reabre-os instantaneamente.
-        if ((currB && !state.prevB) || (currY && !state.prevY)) {
+        // B (direita) ou Y (esquerda) = navegação hierárquica para trás (Issue #87).
+        // 1. Se o teclado virtual estiver ativo, B/Y não altera visibilidade.
+        // 2. Se a UI principal estiver visível, chama handleBackFromNative: se tratado, mantém a UI visível.
+        // 3. Se não foi tratado pela UI (ou já está na raiz), oculta os painéis (dispensa rápida).
+        // 4. Se os painéis estavam ocultos, reabre-os instantaneamente.
+        if (((currB && !state.prevB) || (currY && !state.prevY)) && !keyboardActive) {
             bool controlsVisible = (state.controlsAlpha > 0.05f) || (state.controlsIdleTime < kUiAutoHideSeconds);
             bool uiVisible = (state.uiAlpha > 0.05f) || (state.uiIdleTime < kUiAutoHideSeconds);
-            if (controlsVisible || uiVisible) {
-                state.uiIdleTime = kUiAutoHideSeconds;
-                state.controlsIdleTime = kUiAutoHideSeconds;
-                state.controlsAlpha = 0.0f;
-                state.uiAlpha = 0.0f;
-                state.controlsExplicitlyDismissed = true;
-                state.dismissRayDir = state.lastRayDir;
-            } else {
-                state.uiIdleTime = 0.0f;
-                state.controlsIdleTime = 0.0f;
-                state.controlsAlpha = 1.0f;
-                state.uiAlpha = 1.0f;
-                state.controlsExplicitlyDismissed = false;
+
+            bool backHandled = false;
+            if (uiVisible) {
+                JNIEnv* env = nullptr;
+                state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+                if (env) {
+                    jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+                    jmethodID backMethod = env->GetStaticMethodID(vrActivityClass, "handleBackFromNative", "(Lcom/tucavr/VRActivity;)Z");
+                    if (backMethod) {
+                        jboolean res = env->CallStaticBooleanMethod(vrActivityClass, backMethod, state.app->activity->clazz);
+                        backHandled = (res == JNI_TRUE);
+                    }
+                    env->DeleteLocalRef(vrActivityClass);
+                }
+            }
+
+            if (!backHandled) {
+                if (controlsVisible || uiVisible) {
+                    state.uiIdleTime = kUiAutoHideSeconds;
+                    state.controlsIdleTime = kUiAutoHideSeconds;
+                    state.controlsAlpha = 0.0f;
+                    state.uiAlpha = 0.0f;
+                    state.controlsExplicitlyDismissed = true;
+                    state.dismissRayDir = state.lastRayDir;
+                } else {
+                    state.uiIdleTime = 0.0f;
+                    state.controlsIdleTime = 0.0f;
+                    state.controlsAlpha = 1.0f;
+                    state.uiAlpha = 1.0f;
+                    state.controlsExplicitlyDismissed = false;
+                }
             }
         }
     }
@@ -981,7 +1001,10 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.sceneYawOffset = atan2f(-fwd.x, -fwd.z);
             state.sceneTranslationOffset = headCenter;
             state.sceneTranslationOffset.y = headCenter.y - 1.5f;
-            state.screenPosition = {0.0f, 1.5f, -2.0f};
+            state.screenPosition = state.defaultScreenPosition;
+            state.screenScaleX = state.defaultScreenScaleX;
+            state.screenScaleY = state.defaultScreenScaleY;
+            ::g_resetScreenPositionRequested.store(true);
             state.isScreenGrabbed = false;
             state.browserPosition = vrplayer::kBrowserSpawnLocalPosition;
             state.isBrowserGrabbed = false;
@@ -989,7 +1012,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             FireHaptic(state, rightPath, 0.5f, 30000000 /* 30ms */);
         }
     } else {
-        if (state.prevMenu && !state.recenterFiredThisHold) {
+        if (state.prevMenu && !state.recenterFiredThisHold && !keyboardActive) {
             bool controlsVisible = (state.controlsAlpha > 0.05f) || (state.controlsIdleTime < kUiAutoHideSeconds);
             bool uiVisible = (state.uiAlpha > 0.05f) || (state.uiIdleTime < kUiAutoHideSeconds);
             if (controlsVisible || uiVisible) {

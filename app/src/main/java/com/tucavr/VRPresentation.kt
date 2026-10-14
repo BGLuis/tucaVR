@@ -467,6 +467,7 @@ class VRPresentation(
                 credentialStore = smbCredentials,
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
+                onPlay = { source -> playSource(source) },
             )
 
         networkNfsScreen =
@@ -478,6 +479,7 @@ class VRPresentation(
                 savedServerDao = savedServerDao,
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
+                onPlay = { source -> playSource(source) },
             )
 
         networkFtpScreen =
@@ -489,6 +491,7 @@ class VRPresentation(
                 credentialStore = ftpCredentials,
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
+                onPlay = { source -> playSource(source) },
             )
 
         networkSftpScreen =
@@ -500,6 +503,7 @@ class VRPresentation(
                 credentialStore = sftpCredentials,
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
+                onPlay = { source -> playSource(source) },
             )
 
         networkDlnaScreen =
@@ -553,6 +557,7 @@ class VRPresentation(
                 credentialStore = serverCredentials,
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
+                onPlay = { source -> playSource(source) },
             )
 
         networkHomeScreen =
@@ -572,6 +577,7 @@ class VRPresentation(
                 webdavAddFormBuilder = { onSaved, prefill -> networkWebdavScreen.buildAddServerForm(onSaved, prefill) },
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
+                onPlay = { source -> playSource(source) },
             )
 
         continueWatchingScreen =
@@ -735,7 +741,7 @@ class VRPresentation(
      * pelas próprias screens — elas sobem um nível sem tocar no AppNavigator.
      * Quando já na raiz, o AppNavigator faz o pop e [render] re-renderiza.
      */
-    private fun handleBack() {
+    fun handleBack(): Boolean {
         val current = appNav.current
         val handled =
             when {
@@ -751,8 +757,11 @@ class VRPresentation(
         if (!handled) {
             if (appNav.back()) {
                 render()
+                return true
             }
+            return false
         }
+        return true
     }
 
     /**

@@ -1155,6 +1155,30 @@ class VRActivity : NativeActivity() {
         }
 
         @JvmStatic
+        fun handleBackFromNative(activity: VRActivity): Boolean {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var handled = false
+            activity.runOnUiThread {
+                try {
+                    if (activity.modalPresentation?.isShowing == true) {
+                        activity.modalPresentation?.dismissModal()
+                        handled = true
+                    } else {
+                        handled = activity.presentation?.handleBack() ?: false
+                    }
+                } finally {
+                    latch.countDown()
+                }
+            }
+            try {
+                latch.await(100, java.util.concurrent.TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            return handled
+        }
+
+        @JvmStatic
         fun updateMediaProgress(
             activity: VRActivity,
             currentSec: Float,

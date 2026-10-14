@@ -64,6 +64,7 @@ class NetworkFtpScreen(
     private val credentialStore: FtpCredentialStore,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
+    private val onPlay: (PlaybackSource) -> Unit = { source -> onNavigate(Destination.Player(source)) },
 ) {
     var browsingServer: FtpServer? = null
     var browsePath: String = ""
@@ -417,9 +418,7 @@ class NetworkFtpScreen(
                     renderFiles(server)
                 },
                 onVideoClick = { entry ->
-                    val source = PlaybackSource.Ftp(server, entry.path, entry.sizeBytes)
-                    activity.playFtp(server, entry.path, resumeAtMs = 0L)
-                    onNavigate(Destination.Player(source))
+                    onPlay(PlaybackSource.Ftp(server, entry.path, entry.sizeBytes))
                 },
                 thumbnailLoader = { entry ->
                     val source = PlaybackSource.Ftp(server, entry.path, entry.sizeBytes)

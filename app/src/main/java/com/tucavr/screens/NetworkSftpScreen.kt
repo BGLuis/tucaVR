@@ -64,6 +64,7 @@ class NetworkSftpScreen(
     private val credentialStore: SftpCredentialStore,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
+    private val onPlay: (PlaybackSource) -> Unit = { source -> onNavigate(Destination.Player(source)) },
 ) {
     var browsingServer: SftpServer? = null
     var browsePath: String = ""
@@ -437,9 +438,7 @@ class NetworkSftpScreen(
                     renderFiles(server)
                 },
                 onVideoClick = { entry ->
-                    val source = PlaybackSource.Sftp(server, entry.path, entry.sizeBytes)
-                    activity.playSftp(server, entry.path, resumeAtMs = 0L)
-                    onNavigate(Destination.Player(source))
+                    onPlay(PlaybackSource.Sftp(server, entry.path, entry.sizeBytes))
                 },
                 thumbnailLoader = { entry ->
                     val source = PlaybackSource.Sftp(server, entry.path, entry.sizeBytes)

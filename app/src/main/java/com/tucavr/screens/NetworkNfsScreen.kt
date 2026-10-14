@@ -60,6 +60,7 @@ class NetworkNfsScreen(
     private val savedServerDao: SavedServerDao,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
+    private val onPlay: (PlaybackSource) -> Unit = { source -> onNavigate(Destination.Player(source)) },
 ) {
     var browsingServer: SavedServer? = null
     var browsePath: String = ""
@@ -444,9 +445,7 @@ class NetworkNfsScreen(
                     renderFiles(server, browsePath)
                 },
                 onVideoClick = { entry ->
-                    val source = PlaybackSource.Nfs(server, entry.path, entry.sizeBytes)
-                    activity.playNfs(server, entry.path, resumeAtMs = 0L)
-                    onNavigate(Destination.Player(source))
+                    onPlay(PlaybackSource.Nfs(server, entry.path, entry.sizeBytes))
                 },
             )
         adapter = fileAdapter
