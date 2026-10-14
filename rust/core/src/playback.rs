@@ -1753,6 +1753,13 @@ impl PlaybackController {
         self.available_subtitle_tracks.len()
     }
 
+    pub fn get_subtitle_track_info(
+        &self,
+        index: usize,
+    ) -> Option<&crate::subtitle_loader::SubtitleTrackInfo> {
+        self.available_subtitle_tracks.get(index)
+    }
+
     pub fn load_external_subtitle(&mut self, path: &str) -> Result<u32, String> {
         let loaded = crate::subtitle_loader::load_subtitle_from_path(path)?;
         let count = match &loaded {
@@ -1762,13 +1769,17 @@ impl PlaybackController {
         };
         self.apply_loaded_subtitle(loaded);
         let idx = self.available_subtitle_tracks.len();
+        let file_name = std::path::Path::new(path)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or_else(|| "External".into());
+        let lang = media_logic::track_info::parse_subtitle_file_suffix(&file_name)
+            .map(|info| info.tag)
+            .unwrap_or_default();
         self.available_subtitle_tracks
             .push(crate::subtitle_loader::SubtitleTrackInfo {
-                title: std::path::Path::new(path)
-                    .file_name()
-                    .map(|f| f.to_string_lossy().to_string())
-                    .unwrap_or_else(|| "External".into()),
-                language: String::new(),
+                title: file_name,
+                language: lang,
                 is_external: true,
                 source_path: Some(path.to_string()),
                 stream_index: None,

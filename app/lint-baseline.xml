@@ -2461,27 +2461,6 @@
             column="33"/>
     </issue>
 
-    <issue
-        id="SetTextI18n"
-        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
-        errorLine1="                    text = &quot;$kindLabel ($desc)&quot;"
-        errorLine2="                           ~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/tucavr/screens/PlayerScreen.kt"
-            line="233"
-            column="28"/>
-    </issue>
-
-    <issue
-        id="SetTextI18n"
-        message="Do not concatenate text displayed with `setText`. Use resource string with placeholders."
-        errorLine1="                    text = &quot;$kindLabel ($desc)&quot;"
-        errorLine2="                           ~~~~~~~~~~~~~~~~~~~~">
-        <location
-            file="src/main/java/com/tucavr/screens/PlayerScreen.kt"
-            line="248"
-            column="28"/>
-    </issue>
 
     <issue
         id="SetTextI18n"

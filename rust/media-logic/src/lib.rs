@@ -36,5 +36,6 @@ pub mod subtitle;
 pub mod subtitle_ass;
 pub mod subtitle_pgs;
 pub mod sync;
+pub mod track_info;
 pub mod upscaling;
 pub mod yuv_convert;

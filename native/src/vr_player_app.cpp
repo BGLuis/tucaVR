@@ -348,7 +348,9 @@ Java_com_tucavr_VRActivity_nativeSetPhotoPan(JNIEnv*, jobject, jfloat, jfloat) {
 // Solicitação explícita para acordar e manter o painel de UI visível (reset de m_uiIdleTime),
 // por exemplo ao abrir modais como o seletor de formato de tela (T3.4).
 static std::atomic<bool> g_requestUiPanelVisible{false};
+static std::atomic<bool> g_requestUiPanelHidden{false};
 static std::atomic<bool> g_requestControlsPanelVisible{false};
+static std::atomic<bool> g_newVideoSessionRequested{false};
 static std::atomic<bool> g_stopVideoRequested{false};
 static std::atomic<bool> g_modalPanelActive{false};
 static std::atomic<bool> g_modalPanelShowRequested{false};
@@ -363,6 +365,11 @@ Java_com_tucavr_VRActivity_nativeStopVideo(JNIEnv* env, jobject thiz) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeRequestUiPanelVisible(JNIEnv* env, jobject thiz) {
     g_requestUiPanelVisible.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRequestUiPanelHidden(JNIEnv* env, jobject thiz) {
+    g_requestUiPanelHidden.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -460,6 +467,7 @@ Java_com_tucavr_VRActivity_nativePlayVideo(JNIEnv* env, jobject thiz, jstring pa
     start_video_playback(pathStr, startTimeSec);
     env->ReleaseStringUTFChars(path, pathStr);
     g_requestControlsPanelVisible.store(true);
+    g_newVideoSessionRequested.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -2314,8 +2322,10 @@ public:
                 currentHitPanel = 3;
                 minT = tModal;
                 pointerEnd = rayOrigin + rayDir * tModal;
-                lastUvX = u;
-                lastUvY = v;
+                if (!isTouchDown || activePanel == 3) {
+                    lastUvX = u;
+                    lastUvY = v;
+                }
             } else {
                 currentHitPanel = 0;
             }
@@ -2325,8 +2335,10 @@ public:
                 currentHitPanel = 1;
                 minT = tUi;
                 pointerEnd = rayOrigin + rayDir * tUi;
-                lastUvX = u;
-                lastUvY = v;
+                if (!isTouchDown || activePanel == 1) {
+                    lastUvX = u;
+                    lastUvY = v;
+                }
             }
 
             float tControls = rayHitsQuad(m_controlsTransform, cPlaneNormal, cPlaneCenter, u, v);
@@ -2334,8 +2346,10 @@ public:
                 currentHitPanel = 2;
                 minT = tControls;
                 pointerEnd = rayOrigin + rayDir * tControls;
-                lastUvX = u;
-                lastUvY = v;
+                if (!isTouchDown || activePanel == 2) {
+                    lastUvX = u;
+                    lastUvY = v;
+                }
             }
         }
 
@@ -2354,11 +2368,20 @@ public:
         if (g_requestUiPanelVisible.exchange(false)) {
             m_uiIdleTime = 0.0f;
         }
-        if (g_requestControlsPanelVisible.exchange(false)) {
-            m_controlsIdleTime = 0.0f;
-            m_controlsAlpha = 1.0f;
+        if (g_requestUiPanelHidden.exchange(false)) {
+            m_uiAlpha = 0.0f;
+            m_uiIdleTime = kUiAutoHideSeconds;
+            if (currentHitPanel == 1) {
+                currentHitPanel = 0;
+            }
         }
-        if (currentHitPanel == 1 || keyboardActive) {
+        if (g_requestControlsPanelVisible.exchange(false)) {
+            if (m_isVideoActive) {
+                m_controlsIdleTime = 0.0f;
+                m_controlsAlpha = 1.0f;
+            }
+        }
+        if (m_uiAlpha > 0.01f && (currentHitPanel == 1 || keyboardActive)) {
             m_uiIdleTime = 0.0f;
         } else {
             m_uiIdleTime += in.DeltaSeconds;
@@ -2366,13 +2389,18 @@ public:
 
         bool isPlaying = get_playback_is_playing() != 0;
         // Se o vídeo estiver pausado, o painel de controles e o botão de pause não devem sumir por auto-hide
-        if (currentHitPanel == 2 || hitScreen || !isPlaying) {
+        if (m_isVideoActive && (currentHitPanel == 2 || hitScreen || !isPlaying)) {
             m_controlsIdleTime = 0.0f;
         } else {
             m_controlsIdleTime += in.DeltaSeconds;
         }
         float uiTargetAlpha = (m_uiIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
         float controlsTargetAlpha = (m_controlsIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
+        if (!m_isVideoActive) {
+            controlsTargetAlpha = 0.0f;
+            m_controlsIdleTime = kUiAutoHideSeconds;
+            m_controlsAlpha = 0.0f;
+        }
         float modalTargetAlpha = m_modalActive ? 1.0f : 0.0f;
         float fadeStep = in.DeltaSeconds / kUiFadeDuration;
         m_uiAlpha = MoveTowards(m_uiAlpha, uiTargetAlpha, fadeStep);
@@ -2412,22 +2440,28 @@ public:
             activePanel = dispatchHitPanel;
         }
 
-        if (action != -1 && activePanel != 0) {
-            const xrJava* java = GetContext();
-            JNIEnv* env = nullptr;
-            if (java && java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
-                jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
-                // Fase 2: o painel de rede nao tem mais quad/dispatch proprio —
-                // sua UI agora mora dentro do mesmo quad do Home/File Browser
-                // (activePanel == 1), entao todo toque nesse painel (incluindo
-                // as telas de Rede) roteia por "dispatchVRTouch", igual antes.
-                const char* methodName = (activePanel == 3) ? "dispatchModalVRTouch"
-                                       : ((activePanel == 1) ? "dispatchVRTouch" : "dispatchControlsVRTouch");
-                jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
-                if (touchMethod) {
-                    env->CallStaticVoidMethod(vrActivityClass, touchMethod, java->ActivityObject, lastUvX, lastUvY, action);
+        if (action != -1) {
+            int targetPanel = (action == 7) ? dispatchHitPanel : activePanel;
+            if (targetPanel != 0) {
+                const xrJava* java = GetContext();
+                JNIEnv* env = nullptr;
+                if (java && java->Vm->AttachCurrentThread(&env, nullptr) == JNI_OK) {
+                    jclass vrActivityClass = env->GetObjectClass(java->ActivityObject);
+                    // Fase 2: o painel de rede nao tem mais quad/dispatch proprio —
+                    // sua UI agora mora dentro do mesmo quad do Home/File Browser
+                    // (activePanel == 1), entao todo toque nesse painel (incluindo
+                    // as telas de Rede) roteia por "dispatchVRTouch", igual antes.
+                    const char* methodName = (targetPanel == 3) ? "dispatchModalVRTouch"
+                                           : ((targetPanel == 1) ? "dispatchVRTouch" : "dispatchControlsVRTouch");
+                    jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
+                    if (touchMethod) {
+                        env->CallStaticVoidMethod(vrActivityClass, touchMethod, java->ActivityObject, lastUvX, lastUvY, action);
+                    }
+                    env->DeleteLocalRef(vrActivityClass);
                 }
-                env->DeleteLocalRef(vrActivityClass);
+            }
+            if (action == 1) {
+                activePanel = 0;
             }
         }
 
@@ -2749,6 +2783,10 @@ public:
             (PFNEGLCREATEIMAGEKHRPROC)eglGetProcAddress("eglCreateImageKHR");
         static PFNEGLDESTROYIMAGEKHRPROC eglDestroyImageKHR = 
             (PFNEGLDESTROYIMAGEKHRPROC)eglGetProcAddress("eglDestroyImageKHR");
+
+        if (g_newVideoSessionRequested.exchange(false)) {
+            m_isVideoActive = true;
+        }
 
         if (g_stopVideoRequested.exchange(false)) {
             LOGI("VRPlayerApp: parada solicitada — limpando buffers e encerrando renderizacao do video");

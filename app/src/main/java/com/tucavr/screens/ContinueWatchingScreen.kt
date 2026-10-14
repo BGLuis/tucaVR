@@ -17,7 +17,6 @@ import com.tucavr.history.HistorySourceType
 import com.tucavr.history.PlaybackHistory
 import com.tucavr.history.isResumable
 import com.tucavr.navigation.Destination
-import com.tucavr.navigation.PlaybackSource
 import com.tucavr.network.FtpCredentialStore
 import com.tucavr.network.SftpCredentialStore
 import com.tucavr.network.SmbCredentialStore
@@ -150,41 +149,31 @@ class ContinueWatchingScreen(
     private fun resumeFromHistory(entry: PlaybackHistory) {
         when (entry.sourceType) {
             HistorySourceType.LOCAL -> {
-                val source = PlaybackSource.LocalFile(entry.mediaPath)
                 activity.playFile(entry.mediaPath, resumeAtMs = entry.positionMs)
-                onNavigate(Destination.Player(source))
             }
             HistorySourceType.HTTP -> {
-                val source = PlaybackSource.Http(entry.mediaPath)
                 activity.playUrl(entry.mediaPath, resumeAtMs = entry.positionMs)
-                onNavigate(Destination.Player(source))
             }
             HistorySourceType.SMB -> {
                 val server =
                     resolveServer(entry.serverInfo) { id ->
                         smbCredentials.list().find { it.id == id }
                     } ?: return
-                val source = PlaybackSource.Smb(server, entry.mediaPath)
                 activity.playSmb(server, entry.mediaPath, resumeAtMs = entry.positionMs)
-                onNavigate(Destination.Player(source))
             }
             HistorySourceType.FTP -> {
                 val server =
                     resolveServer(entry.serverInfo) { id ->
                         ftpCredentials.list().find { it.id == id }
                     } ?: return
-                val source = PlaybackSource.Ftp(server, entry.mediaPath)
                 activity.playFtp(server, entry.mediaPath, resumeAtMs = entry.positionMs)
-                onNavigate(Destination.Player(source))
             }
             HistorySourceType.SFTP -> {
                 val server =
                     resolveServer(entry.serverInfo) { id ->
                         sftpCredentials.list().find { it.id == id }
                     } ?: return
-                val source = PlaybackSource.Sftp(server, entry.mediaPath)
                 activity.playSftp(server, entry.mediaPath, resumeAtMs = entry.positionMs)
-                onNavigate(Destination.Player(source))
             }
             HistorySourceType.NFS -> {
                 val server =
@@ -197,9 +186,7 @@ class ContinueWatchingScreen(
                             }
                         }
                     } ?: return
-                val source = PlaybackSource.Nfs(server, entry.mediaPath)
                 activity.playNfs(server, entry.mediaPath, resumeAtMs = entry.positionMs)
-                onNavigate(Destination.Player(source))
             }
             HistorySourceType.DLNA -> {
                 val server =
@@ -211,10 +198,14 @@ class ContinueWatchingScreen(
                                 null
                             }
                         }
-                    } ?: com.tucavr.network.SavedServer(name = entry.title, protocol = com.tucavr.network.ServerProtocol.DLNA, host = "", port = 0, path = "")
-                val source = PlaybackSource.Dlna(server, entry.title, entry.mediaPath)
+                    } ?: com.tucavr.network.SavedServer(
+                        name = entry.title,
+                        protocol = com.tucavr.network.ServerProtocol.DLNA,
+                        host = "",
+                        port = 0,
+                        path = "",
+                    )
                 activity.playDlna(server, entry.title, entry.mediaPath, resumeAtMs = entry.positionMs)
-                onNavigate(Destination.Player(source))
             }
             HistorySourceType.WEBDAV -> {
                 val server =
@@ -227,11 +218,10 @@ class ContinueWatchingScreen(
                             }
                         }
                     } ?: return
-                val source = PlaybackSource.Webdav(server, entry.mediaPath)
                 activity.playWebdav(server, entry.mediaPath, resumeAtMs = entry.positionMs)
-                onNavigate(Destination.Player(source))
             }
         }
+        activity.requestUiPanelHidden()
     }
 
     private fun <T> resolveServer(

@@ -105,6 +105,7 @@ extern "C" {
     extern int64_t get_subtitle_offset_ms();
     extern uint32_t load_external_subtitle(const char* path);
     extern uint32_t get_subtitle_track_count();
+    extern char* get_subtitle_track_info_wire();
     extern uint32_t get_active_subtitle_text(char* out_buf, size_t max_len);
     extern void set_preferred_subtitle_language(const char* lang); // T7.6
     extern char* take_last_playback_error();
@@ -311,6 +312,7 @@ extern uint32_t g_scrubOverlayWidth;
 extern uint32_t g_scrubOverlayHeight;
 extern std::mutex g_scrubOverlayMutex;
 extern std::atomic<bool> g_requestUiPanelVisible;
+extern std::atomic<bool> g_requestUiPanelHidden;
 extern std::atomic<bool> g_requestControlsPanelVisible;
 extern std::atomic<bool> g_stopVideoRequested;
 extern std::atomic<bool> g_newVideoSessionRequested;
@@ -381,6 +383,11 @@ Java_com_tucavr_VRActivity_nativeStopVideo(JNIEnv*, jobject) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeRequestUiPanelVisible(JNIEnv*, jobject) {
     g_requestUiPanelVisible.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRequestUiPanelHidden(JNIEnv*, jobject) {
+    g_requestUiPanelHidden.store(true);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -1402,6 +1409,12 @@ Java_com_tucavr_VRActivity_nativeLoadExternalSubtitle(JNIEnv* env, jobject, jstr
 extern "C" JNIEXPORT jint JNICALL
 Java_com_tucavr_VRActivity_nativeGetSubtitleTrackCount(JNIEnv* env, jobject) {
     return (jint)get_subtitle_track_count();
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeGetSubtitleTrackInfoWire(JNIEnv* env, jobject) {
+    char* result = get_subtitle_track_info_wire();
+    return RustStringToJStringAndFree(env, result);
 }
 
 // T7.6: idioma do sistema (BCP-47, ex.: "pt-BR") para auto-seleção de faixa

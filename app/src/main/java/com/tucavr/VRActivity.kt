@@ -241,6 +241,9 @@ class VRActivity : NativeActivity() {
                 currentMediaMetadata = com.tucavr.filebrowser.MediaMetadataReader.read(this@VRActivity, source)
             }
         }
+        runOnUiThread {
+            presentation?.updateMediaState(false, source != null)
+        }
     }
 
     // Ferramenta de debug (ver docs/DEBUGGING.md): troca o ScreenMode de um
@@ -805,8 +808,8 @@ class VRActivity : NativeActivity() {
         private const val PLAYBACK_ERROR_POLL_MS = 1000L
 
         // Dimensões nominais dos VirtualDisplays de UI e Controles (devem bater com o nativo C++).
-        const val UI_DISPLAY_WIDTH = 1024
-        const val UI_DISPLAY_HEIGHT = 768
+        const val UI_DISPLAY_WIDTH = 1920
+        const val UI_DISPLAY_HEIGHT = 960
         const val CONTROLS_DISPLAY_WIDTH = 1582
         const val CONTROLS_DISPLAY_HEIGHT = 800
         const val MODAL_DISPLAY_WIDTH = 1024
@@ -875,13 +878,15 @@ class VRActivity : NativeActivity() {
                 }
 
                 val downTime = if (lastDownTime == 0L) now else lastDownTime
+                val scaledX = (x * UI_DISPLAY_WIDTH.toFloat()).coerceIn(0f, UI_DISPLAY_WIDTH.toFloat())
+                val scaledY = (y * UI_DISPLAY_HEIGHT.toFloat()).coerceIn(0f, UI_DISPLAY_HEIGHT.toFloat())
                 val event =
                     android.view.MotionEvent.obtain(
                         downTime,
                         now,
                         action,
-                        x * UI_DISPLAY_WIDTH.toFloat(),
-                        y * UI_DISPLAY_HEIGHT.toFloat(),
+                        scaledX,
+                        scaledY,
                         0,
                     )
 
@@ -1160,7 +1165,9 @@ class VRActivity : NativeActivity() {
             var handled = false
             activity.runOnUiThread {
                 try {
-                    if (activity.modalPresentation?.isShowing == true) {
+                    if (activity.controlsPresentation?.hasOpenPopup() == true) {
+                        handled = activity.controlsPresentation?.dismissOpenPopup() ?: false
+                    } else if (activity.modalPresentation?.isShowing == true) {
                         activity.modalPresentation?.dismissModal()
                         handled = true
                     } else {
@@ -1188,6 +1195,7 @@ class VRActivity : NativeActivity() {
                 activity.lastMediaProgressCurrent = currentSec
                 activity.lastMediaProgressTotal = totalSec
                 activity.controlsPresentation?.updateProgress(currentSec, totalSec)
+                activity.presentation?.updatePlaybackProgress(currentSec, totalSec)
                 // T9.2: mesmo hook que ja existia para a UI de controles —
                 // chamado pelo C++ via JNI ~10x/segundo (ver
                 // native/src/vr_player_app.cpp, `frameCount % 6 == 0` a
@@ -1237,6 +1245,7 @@ class VRActivity : NativeActivity() {
         ) {
             activity.runOnUiThread {
                 activity.controlsPresentation?.updateMediaState(isLoading, isPlaying)
+                activity.presentation?.updateMediaState(isLoading, isPlaying)
             }
         }
 
@@ -1396,6 +1405,7 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayVideo(filePath, (resumeAtMs ?: 0L) / 1000f)
+        requestUiPanelHidden()
     }
 
     // T7: URL HTTP(S) reusa o mesmo entry point que arquivo local — o
@@ -1411,6 +1421,7 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayVideo(url, (resumeAtMs ?: 0L) / 1000f)
+        requestUiPanelHidden()
     }
 
     // T6.4: playback SMB tem entry point JNI dedicado porque as credenciais
@@ -1438,6 +1449,7 @@ class VRActivity : NativeActivity() {
             server.domain,
             (resumeAtMs ?: 0L) / 1000f,
         )
+        requestUiPanelHidden()
     }
 
     // T6.4: mesma logica de playSmb acima, so que sem `share`/`domain` (FTP
@@ -1455,6 +1467,7 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayFtp(server.host, server.port, path, server.username, server.password, (resumeAtMs ?: 0L) / 1000f)
+        requestUiPanelHidden()
     }
 
     // T6.4: mesma logica acima, com `privateKey` (conteudo PEM, ver
@@ -1480,6 +1493,7 @@ class VRActivity : NativeActivity() {
             server.privateKey ?: "",
             (resumeAtMs ?: 0L) / 1000f,
         )
+        requestUiPanelHidden()
     }
 
     // T5.4: playback NFS
@@ -1496,6 +1510,7 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayNfs(server.host, server.port, server.path, path, 3, (resumeAtMs ?: 0L) / 1000f)
+        requestUiPanelHidden()
     }
 
     // T7.4: playback DLNA
@@ -1513,6 +1528,7 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayVideo(url, (resumeAtMs ?: 0L) / 1000f)
+        requestUiPanelHidden()
     }
 
     // T3.2/T3.4: playback WebDAV
@@ -1553,6 +1569,7 @@ class VRActivity : NativeActivity() {
             acceptInvalidCerts,
             (resumeAtMs ?: 0L) / 1000f,
         )
+        requestUiPanelHidden()
     }
 
     private fun processVideoUri(uri: Uri) {
@@ -1599,6 +1616,7 @@ class VRActivity : NativeActivity() {
                 nativeRequestUiPanelVisible()
                 presentation?.popPlayer()
                 presentation?.loadFiles()
+                presentation?.onPlaybackStopped()
             }
         }
     }
@@ -1635,6 +1653,12 @@ class VRActivity : NativeActivity() {
     external fun nativeToggleSwapEyes(): Int
 
     external fun nativeRequestUiPanelVisible()
+
+    external fun nativeRequestUiPanelHidden()
+
+    fun requestUiPanelHidden() {
+        nativeRequestUiPanelHidden()
+    }
 
     external fun nativeRequestControlsPanelVisible()
 
@@ -1921,6 +1945,28 @@ class VRActivity : NativeActivity() {
     }
 
     /**
+     * Exibe o modal de confirmação de exclusão no 3º Quad frontal (VRModalPresentation).
+     */
+    fun openConfirmDeleteModal(
+        title: String,
+        message: String,
+        confirmText: String = getString(R.string.network_delete_server_confirm),
+        cancelText: String = getString(R.string.network_delete_server_cancel),
+        onConfirm: () -> Unit,
+    ) {
+        runOnUiThread {
+            nativeShowModalPanel()
+            modalPresentation?.showConfirmDeleteModal(
+                title = title,
+                message = message,
+                confirmText = confirmText,
+                cancelText = cancelText,
+                onConfirm = onConfirm,
+            )
+        }
+    }
+
+    /**
      * Exibe o modal de fila de reprodução / playlist no 3º Quad frontal (VRModalPresentation).
      */
     fun openPlaylistModal() {
@@ -1975,7 +2021,6 @@ class VRActivity : NativeActivity() {
                 is PlaybackSource.Sftp -> playSftp(source.server, source.path, source.sizeBytes)
                 is PlaybackSource.Webdav -> playWebdav(source.server, source.path, source.sizeBytes)
             }
-            presentation?.onNavigateToPlayer(source)
         }
     }
 
@@ -2434,6 +2479,8 @@ class VRActivity : NativeActivity() {
     external fun nativeLoadExternalSubtitle(path: String): Boolean
 
     external fun nativeGetSubtitleTrackCount(): Int
+
+    external fun nativeGetSubtitleTrackInfoWire(): String?
 
     // T7.6: idioma do sistema para auto-selecao de faixa embutida.
     external fun nativeSetPreferredSubtitleLanguage(lang: String)

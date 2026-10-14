@@ -33,6 +33,50 @@ class UiSourceGuardsTest {
     }
 
     @Test
+    fun `file adapter re-selection triggers video play and uses payloads`() {
+        val fileAdapter = File("src/main/java/com/tucavr/screens/adapters/FileAdapter.kt")
+        val target = if (fileAdapter.exists()) fileAdapter else File("app/src/main/java/com/tucavr/screens/adapters/FileAdapter.kt")
+        assertTrue(target.exists())
+        val content = target.readText()
+        assertTrue(
+            "FileAdapter selectEntry must trigger onVideoClick when item was already selected",
+            content.contains("if (previousSelectedPath == entry.path) {\n            onVideoClick(entry)"),
+        )
+        assertTrue(
+            "FileAdapter must notify selection changes with PAYLOAD_SELECTION_CHANGED to prevent flicker",
+            content.contains("PAYLOAD_SELECTION_CHANGED"),
+        )
+    }
+
+    @Test
+    fun `context rail view updateState is idempotent and guarded against repetitive destructions`() {
+        val file = File("src/main/java/com/tucavr/screens/components/ContextRailView.kt")
+        val target = if (file.exists()) file else File("app/src/main/java/com/tucavr/screens/components/ContextRailView.kt")
+        assertTrue(target.exists())
+        val content = target.readText()
+        assertTrue(
+            "ContextRailView must track renderedTab and renderedDetailPath to avoid destructive 15Hz rebuilds",
+            content.contains("renderedTab") && content.contains("renderedDetailPath"),
+        )
+    }
+
+    @Test
+    fun `network home screen does not run infinite discovery loop on empty server list`() {
+        val file = File("src/main/java/com/tucavr/screens/NetworkHomeScreen.kt")
+        val target = if (file.exists()) file else File("app/src/main/java/com/tucavr/screens/NetworkHomeScreen.kt")
+        assertTrue(target.exists())
+        val content = target.readText()
+        assertTrue(
+            "NetworkHomeScreen must track hasRunInitialDiscovery",
+            content.contains("hasRunInitialDiscovery"),
+        )
+        assertFalse(
+            "NetworkHomeScreen must not call renderCurrent on discovery completion to avoid screen swapping loop",
+            content.contains("startInlineDiscovery(refreshUI = true)"),
+        )
+    }
+
+    @Test
     fun `user-facing text comes from string resources`() = assertMatchesBaseline(RULE_TEXT)
 
     @Test

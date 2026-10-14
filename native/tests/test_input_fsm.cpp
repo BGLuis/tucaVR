@@ -11,6 +11,7 @@ struct InputFsmState {
     bool prevY = false;
     bool prevMenu = false;
     bool prevTrigger = false;
+    bool prevIsPlaying = false;
     float menuHoldTime = 0.0f;
     bool recenterFiredThisHold = false;
     float uiIdleTime = 0.0f;
@@ -20,6 +21,11 @@ struct InputFsmState {
     bool controlsExplicitlyDismissed = false;
     float controllerStationaryTime = 0.0f;
     bool isControllerStationary = false;
+    bool hasActiveMedia = true;
+    bool isTouchDown = false;
+    int activePanel = 0;
+    float lastUvX = 0.0f;
+    float lastUvY = 0.0f;
 
     // Metricas de observabilidade do teste
     int playPauseToggleCount = 0;
@@ -45,9 +51,11 @@ inline void ProcessButtonInputs(InputFsmState &state, bool currA, bool currX, bo
     // A (direita) ou X (esquerda) = alterna Play/Pause na borda de subida (curr && !prev)
     if (((currA && !state.prevA) || (currX && !state.prevX)) && !keyboardActive) {
         state.playPauseToggleCount++;
-        state.controlsIdleTime = 0.0f;
-        state.controlsAlpha = 1.0f;
-        state.controlsExplicitlyDismissed = false;
+        if (state.hasActiveMedia) {
+            state.controlsIdleTime = 0.0f;
+            state.controlsAlpha = 1.0f;
+            state.controlsExplicitlyDismissed = false;
+        }
     }
 
     // B (direita) ou Y (esquerda) = navegação hierárquica para trás (Issue #87).
@@ -66,10 +74,12 @@ inline void ProcessButtonInputs(InputFsmState &state, bool currA, bool currX, bo
                 state.controlsExplicitlyDismissed = true;
             } else {
                 state.uiIdleTime = 0.0f;
-                state.controlsIdleTime = 0.0f;
-                state.controlsAlpha = 1.0f;
                 state.uiAlpha = 1.0f;
-                state.controlsExplicitlyDismissed = false;
+                if (state.hasActiveMedia) {
+                    state.controlsIdleTime = 0.0f;
+                    state.controlsAlpha = 1.0f;
+                    state.controlsExplicitlyDismissed = false;
+                }
             }
             state.uiToggleCount++;
         }
@@ -103,10 +113,12 @@ inline void ProcessButtonInputs(InputFsmState &state, bool currA, bool currX, bo
                 state.controlsExplicitlyDismissed = true;
             } else {
                 state.uiIdleTime = 0.0f;
-                state.controlsIdleTime = 0.0f;
-                state.controlsAlpha = 1.0f;
                 state.uiAlpha = 1.0f;
-                state.controlsExplicitlyDismissed = false;
+                if (state.hasActiveMedia) {
+                    state.controlsIdleTime = 0.0f;
+                    state.controlsAlpha = 1.0f;
+                    state.controlsExplicitlyDismissed = false;
+                }
             }
             state.uiToggleCount++;
         }
@@ -128,9 +140,11 @@ inline void ProcessTriggerInputs(InputFsmState &state, bool currTrigger, int dis
 
     if (triggerPlayPause) {
         state.playPauseToggleCount++;
-        state.controlsIdleTime = 0.0f;
-        state.controlsAlpha = 1.0f;
-        state.controlsExplicitlyDismissed = false;
+        if (state.hasActiveMedia) {
+            state.controlsIdleTime = 0.0f;
+            state.controlsAlpha = 1.0f;
+            state.controlsExplicitlyDismissed = false;
+        }
     }
     state.prevTrigger = currTrigger;
 }
@@ -152,18 +166,24 @@ inline void UpdateIdleAndAlpha(InputFsmState &state, bool hitScreen, int current
     constexpr float kUiAutoHideStationarySeconds = 1.0f;
     constexpr float kUiFadeDuration = 0.35f;
 
+    if (isPlaying && !state.prevIsPlaying) {
+        state.uiIdleTime = kUiAutoHideSeconds;
+        state.uiAlpha = 0.0f;
+    }
+    state.prevIsPlaying = isPlaying;
+
     bool activeScreenHover = hitScreen && !state.isControllerStationary && !state.controlsExplicitlyDismissed;
     bool activePanelHover =
         (currentHitPanel == 2) && !state.controlsExplicitlyDismissed && (!state.isControllerStationary || !isPlaying);
-    bool keepPausedVisible = !isPlaying && !state.controlsExplicitlyDismissed;
+    bool keepPausedVisible = state.hasActiveMedia && !isPlaying && !state.controlsExplicitlyDismissed;
 
-    if (activePanelHover || activeScreenHover || keepPausedVisible) {
+    if (state.hasActiveMedia && (activePanelHover || activeScreenHover || keepPausedVisible)) {
         state.controlsIdleTime = 0.0f;
     } else {
         state.controlsIdleTime += dt;
     }
 
-    if (currentHitPanel == 1) {
+    if (state.uiAlpha > 0.01f && currentHitPanel == 1) {
         state.uiIdleTime = 0.0f;
     } else {
         state.uiIdleTime += dt;
@@ -174,7 +194,13 @@ inline void UpdateIdleAndAlpha(InputFsmState &state, bool hitScreen, int current
     float effectiveUiTimeout = state.isControllerStationary ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
 
     float uiTargetAlpha = (state.uiIdleTime < effectiveUiTimeout) ? 1.0f : 0.0f;
-    float controlsTargetAlpha = (state.controlsIdleTime < effectiveControlsTimeout) ? 1.0f : 0.0f;
+    float controlsTargetAlpha =
+        (state.hasActiveMedia && state.controlsIdleTime < effectiveControlsTimeout) ? 1.0f : 0.0f;
+    if (!state.hasActiveMedia) {
+        controlsTargetAlpha = 0.0f;
+        state.controlsIdleTime = kUiAutoHideSeconds;
+        state.controlsAlpha = 0.0f;
+    }
 
     float fadeStep = (kUiFadeDuration > 0.0f) ? dt / kUiFadeDuration : 1.0f;
     auto MoveTowards = [](float current, float target, float maxDelta) {
@@ -184,6 +210,67 @@ inline void UpdateIdleAndAlpha(InputFsmState &state, bool hitScreen, int current
     };
     state.uiAlpha = MoveTowards(state.uiAlpha, uiTargetAlpha, fadeStep);
     state.controlsAlpha = MoveTowards(state.controlsAlpha, controlsTargetAlpha, fadeStep);
+}
+
+struct TouchDispatchResult {
+    int action = -1;
+    int targetPanel = 0;
+    float u = 0.0f;
+    float v = 0.0f;
+};
+
+inline TouchDispatchResult ProcessTouchRouting(InputFsmState &state, bool currTrigger, int currentHitPanel, float hitU,
+                                               float hitV, bool uiVisible = true, bool controlsVisible = true,
+                                               bool modalVisible = false, bool browserVisible = false,
+                                               bool isBrowserGrabbed = false) {
+    if (currentHitPanel != 0 && (!state.isTouchDown || currentHitPanel == state.activePanel)) {
+        state.lastUvX = hitU;
+        state.lastUvY = hitV;
+    }
+
+    int dispatchHitPanel = 0;
+    if (currentHitPanel == 3 && modalVisible) {
+        dispatchHitPanel = 3;
+    } else if (currentHitPanel == 4 && browserVisible) {
+        dispatchHitPanel = 4;
+    } else if (currentHitPanel == 1 && uiVisible) {
+        dispatchHitPanel = 1;
+    } else if (currentHitPanel == 2 && controlsVisible) {
+        dispatchHitPanel = 2;
+    }
+
+    int action = -1;
+    if (currTrigger && !state.prevTrigger && dispatchHitPanel != 0 && !isBrowserGrabbed) {
+        action = 0; // DOWN
+        state.isTouchDown = true;
+        state.activePanel = dispatchHitPanel;
+    } else if (!currTrigger && state.prevTrigger && state.isTouchDown) {
+        action = 1; // UP
+        state.isTouchDown = false;
+    } else if (currTrigger && state.isTouchDown && !isBrowserGrabbed) {
+        action = 2; // MOVE
+    } else if (dispatchHitPanel != 0 && !state.isTouchDown && !isBrowserGrabbed) {
+        action = 7; // HOVER_MOVE
+        state.activePanel = dispatchHitPanel;
+    }
+
+    TouchDispatchResult result;
+    if (action >= 0) {
+        int targetPanel = (action == 7) ? dispatchHitPanel : state.activePanel;
+        if (targetPanel != 0) {
+            float sendU = (currentHitPanel == targetPanel) ? hitU : state.lastUvX;
+            float sendV = (currentHitPanel == targetPanel) ? hitV : state.lastUvY;
+            result.action = action;
+            result.targetPanel = targetPanel;
+            result.u = sendU;
+            result.v = sendV;
+        }
+        if (action == 1) {
+            state.activePanel = 0;
+        }
+    }
+    state.prevTrigger = currTrigger;
+    return result;
 }
 
 static void TestButtonAHoldTriggersOnlyOnce() {
@@ -450,6 +537,72 @@ static void TestStationaryControllerAcceleratesAutoHide() {
     std::cout << "[PASS] TestStationaryControllerAcceleratesAutoHide\n";
 }
 
+static void TestMenuHidesOnPlaybackStartAndReopensOnMenuButton() {
+    InputFsmState state;
+    const float dt = 1.0f / 90.0f;
+
+    // Início: parado no menu Home com vídeo não iniciado
+    state.uiAlpha = 1.0f;
+    state.uiIdleTime = 0.0f;
+    state.controlsAlpha = 1.0f;
+    state.controlsIdleTime = 0.0f;
+    state.prevIsPlaying = false;
+
+    // Transição para reprodução: menu é ocultado imediatamente e controles auto-hide
+    UpdateIdleAndAlpha(state, /*hitScreen=*/false, /*currentHitPanel=*/0, /*isPlaying=*/true, dt);
+    assert(state.uiAlpha == 0.0f);
+    assert(state.uiIdleTime >= 5.0f);
+    state.controlsAlpha = 0.0f;
+    state.controlsIdleTime = 5.0f;
+
+    // Vídeo tocando, menu oculto. Usuário aperta o botão Menu (short press release)
+    // Deve reabrir o menu (uiAlpha -> 1.0f)
+    for (int i = 0; i < 5; i++) {
+        ProcessButtonInputs(state, false, false, false, false, /*currMenu=*/true, dt);
+    }
+    ProcessButtonInputs(state, false, false, false, false, /*currMenu=*/false, dt);
+    assert(state.uiAlpha == 1.0f);
+    assert(state.uiIdleTime == 0.0f);
+    assert(state.controlsAlpha == 1.0f);
+
+    std::cout << "[PASS] TestMenuHidesOnPlaybackStartAndReopensOnMenuButton\n";
+}
+
+static void TestUiPanelExplicitHideWithHover() {
+    InputFsmState state;
+    const float dt = 1.0f / 90.0f;
+
+    // Menu aberto, controle apontando para o botão da UI (currentHitPanel = 1)
+    state.uiAlpha = 1.0f;
+    state.uiIdleTime = 0.0f;
+    state.controlsAlpha = 1.0f;
+    state.controlsIdleTime = 0.0f;
+
+    // Frame 1: ray aponta para painel 1
+    UpdateIdleAndAlpha(state, /*hitScreen=*/false, /*currentHitPanel=*/1, /*isPlaying=*/false, dt);
+    assert(state.uiAlpha == 1.0f);
+    assert(state.uiIdleTime == 0.0f);
+
+    // Usuário aperta botão "Play" ou "Back to video", solicitando hide explícito
+    int currentHitPanel = 1;
+    // Simula lógica de vr_player_input_vulkan.h:
+    state.uiAlpha = 0.0f;
+    state.uiIdleTime = 5.0f; // kUiAutoHideSeconds
+    if (currentHitPanel == 1) {
+        currentHitPanel = 0;
+    }
+
+    // Frames seguintes: o ray ainda pode estar geograficamente na área, mas como uiAlpha <= 0.01f,
+    // a UI NÃO pode acordar ou ter rebote de alpha
+    for (int i = 0; i < 30; i++) {
+        UpdateIdleAndAlpha(state, /*hitScreen=*/false, currentHitPanel, /*isPlaying=*/true, dt);
+        assert(state.uiAlpha == 0.0f);
+        assert(state.uiIdleTime >= 5.0f);
+    }
+
+    std::cout << "[PASS] TestUiPanelExplicitHideWithHover\n";
+}
+
 static void TestButtonBYHierarchicalBackAndKeyboard() {
     InputFsmState state;
     const float dt = 1.0f / 90.0f;
@@ -507,6 +660,114 @@ static void TestRecenterUsesDefaultPosition() {
     std::cout << "[PASS] TestRecenterUsesDefaultPosition\n";
 }
 
+static void TestControlsHiddenWhenNoActiveMedia() {
+    InputFsmState state;
+    const float dt = 1.0f / 90.0f;
+
+    // Cenário 1: Inicialização do app sem mídia carregada
+    state.hasActiveMedia = false;
+    state.controlsAlpha = 0.0f;
+    state.controlsIdleTime = 5.0f;
+
+    // Mesmo com vídeo "não reproduzindo" (isPlaying = false), raio pairando sobre
+    // a tela (hitScreen = true) ou sobre o cilindro de controles (currentHitPanel = 2),
+    // os controles DEVEM permanecer em alpha 0.0f e idleTime >= 5.0s.
+    for (int i = 0; i < 60; i++) {
+        UpdateIdleAndAlpha(state, /*hitScreen=*/true, /*currentHitPanel=*/2, /*isPlaying=*/false, dt);
+        assert(state.controlsAlpha == 0.0f);
+        assert(state.controlsIdleTime >= 5.0f);
+    }
+
+    // Ações de botões (Play/Pause, B/Y, Menu) não devem acordar controles sem mídia ativa
+    ProcessButtonInputs(state, /*currA=*/true, false, false, false, false, dt);
+    assert(state.controlsAlpha == 0.0f);
+    ProcessButtonInputs(state, /*currA=*/false, false, false, false, false, dt);
+
+    // Cenário 2: Usuário abre um vídeo (hasActiveMedia = true, pausa inicial)
+    state.hasActiveMedia = true;
+    // Com vídeo carregado e pausado, keepPausedVisible mantém controles visíveis
+    for (int i = 0; i < 40; i++) {
+        UpdateIdleAndAlpha(state, /*hitScreen=*/false, /*currentHitPanel=*/0, /*isPlaying=*/false, dt);
+    }
+    assert(state.controlsIdleTime == 0.0f);
+    assert(state.controlsAlpha > 0.99f);
+
+    // Cenário 3: Mídia encerrada (stopRequested -> hasActiveMedia = false)
+    state.hasActiveMedia = false;
+    UpdateIdleAndAlpha(state, /*hitScreen=*/false, /*currentHitPanel=*/0, /*isPlaying=*/false, dt);
+    assert(state.controlsAlpha == 0.0f);
+    assert(state.controlsIdleTime >= 5.0f);
+
+    std::cout << "[PASS] TestControlsHiddenWhenNoActiveMedia\n";
+}
+
+static void TestTouchUpPreservesActivePanelAndCoordinatesWhenRayLeavesPanel() {
+    InputFsmState state;
+
+    // Cenário 1: Clique no painel principal da UI (1)
+    // DOWN em (0.45, 0.60)
+    auto downRes = ProcessTouchRouting(state, /*currTrigger=*/true, /*currentHitPanel=*/1,
+                                       /*hitU=*/0.45f, /*hitV=*/0.60f);
+    assert(downRes.action == 0); // DOWN
+    assert(downRes.targetPanel == 1);
+    assert(std::abs(downRes.u - 0.45f) < 1e-5f);
+    assert(std::abs(downRes.v - 0.60f) < 1e-5f);
+    assert(state.activePanel == 1);
+    assert(state.isTouchDown == true);
+
+    // MOVE enquanto ainda no painel: (0.48, 0.62)
+    auto moveRes1 = ProcessTouchRouting(state, /*currTrigger=*/true, /*currentHitPanel=*/1,
+                                        /*hitU=*/0.48f, /*hitV=*/0.62f);
+    assert(moveRes1.action == 2); // MOVE
+    assert(moveRes1.targetPanel == 1);
+    assert(std::abs(moveRes1.u - 0.48f) < 1e-5f);
+    assert(std::abs(moveRes1.v - 0.62f) < 1e-5f);
+
+    // O raio escorrega para FORA do painel enquanto segura o gatilho (currentHitPanel = 0, hitU/V = 0.0)
+    auto moveRes2 = ProcessTouchRouting(state, /*currTrigger=*/true, /*currentHitPanel=*/0,
+                                        /*hitU=*/0.0f, /*hitV=*/0.0f);
+    assert(moveRes2.action == 2);                 // MOVE
+    assert(moveRes2.targetPanel == 1);            // Continua direcionado ao painel ativo!
+    assert(std::abs(moveRes2.u - 0.48f) < 1e-5f); // Mantém as últimas coordenadas válidas, NUNCA pula pra 0.0!
+    assert(std::abs(moveRes2.v - 0.62f) < 1e-5f);
+
+    // O usuário solta o gatilho fora do painel (release com ray fora)
+    auto upRes = ProcessTouchRouting(state, /*currTrigger=*/false, /*currentHitPanel=*/0,
+                                     /*hitU=*/0.0f, /*hitV=*/0.0f);
+    assert(upRes.action == 1);                 // UP
+    assert(upRes.targetPanel == 1);            // Deve despachar para o activePanel original (1), não 0!
+    assert(std::abs(upRes.u - 0.48f) < 1e-5f); // Não pode ser 0.0f (que acionaria o botão Voltar)!
+    assert(std::abs(upRes.v - 0.62f) < 1e-5f);
+    assert(state.activePanel == 0); // Resetado após o dispatch do UP
+    assert(state.isTouchDown == false);
+
+    // Cenário 2: Clique no painel de controles (2), raio deriva para a UI principal (1) antes do release
+    auto downControls = ProcessTouchRouting(state, /*currTrigger=*/true, /*currentHitPanel=*/2,
+                                            /*hitU=*/0.30f, /*hitV=*/0.50f);
+    assert(downControls.action == 0);
+    assert(downControls.targetPanel == 2);
+    assert(state.activePanel == 2);
+
+    // Raio deriva para o painel 1 (UI) com coordenadas (0.80, 0.20)
+    auto moveCross = ProcessTouchRouting(state, /*currTrigger=*/true, /*currentHitPanel=*/1,
+                                         /*hitU=*/0.80f, /*hitV=*/0.20f);
+    assert(moveCross.action == 2);
+    assert(moveCross.targetPanel == 2);            // Continua sendo Controls (painel onde o toque começou)
+    assert(std::abs(moveCross.u - 0.30f) < 1e-5f); // Usa coordenadas do painel 2, não do painel 1!
+    assert(std::abs(moveCross.v - 0.50f) < 1e-5f);
+
+    // Solta gatilho sobre o painel 1
+    auto upCross = ProcessTouchRouting(state, /*currTrigger=*/false, /*currentHitPanel=*/1,
+                                       /*hitU=*/0.80f, /*hitV=*/0.20f);
+    assert(upCross.action == 1);
+    assert(upCross.targetPanel == 2); // Roteia para Controls, não para UI principal!
+    assert(std::abs(upCross.u - 0.30f) < 1e-5f);
+    assert(std::abs(upCross.v - 0.50f) < 1e-5f);
+    assert(state.activePanel == 0);
+
+    std::cout << "[PASS] TestTouchUpPreservesActivePanelAndCoordinatesWhenRayLeavesPanel\n";
+}
+
 int main() {
     std::cout << "--- Executando testes unitarios de Input FSM (C-01) ---\n";
     TestButtonAHoldTriggersOnlyOnce();
@@ -518,6 +779,10 @@ int main() {
     TestRecenterUsesDefaultPosition();
     TestMenuButtonShortPressDismissesControls();
     TestStationaryControllerAcceleratesAutoHide();
+    TestMenuHidesOnPlaybackStartAndReopensOnMenuButton();
+    TestUiPanelExplicitHideWithHover();
+    TestControlsHiddenWhenNoActiveMedia();
+    TestTouchUpPreservesActivePanelAndCoordinatesWhenRayLeavesPanel();
     std::cout << "--- Todos os testes de Input FSM passaram com sucesso! ---\n";
     return 0;
 }

@@ -5,7 +5,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -17,12 +16,8 @@ import com.tucavr.designsystem.VoidButton
 import com.tucavr.designsystem.VoidButtonStyle
 import com.tucavr.designsystem.VoidFieldAction
 import com.tucavr.designsystem.VoidFieldKind
-import com.tucavr.designsystem.VoidFilterChip
 import com.tucavr.designsystem.VoidForm
-import com.tucavr.designsystem.VoidIconButton
 import com.tucavr.designsystem.VoidPanelChrome
-import com.tucavr.designsystem.VoidSearchBar
-import com.tucavr.designsystem.VoidSortSelector
 import com.tucavr.designsystem.VoidText
 import com.tucavr.designsystem.VoidTextField
 import com.tucavr.designsystem.VoidTheme
@@ -46,6 +41,7 @@ import com.tucavr.navigation.PlaybackSource
 import com.tucavr.network.SmbCredentialStore
 import com.tucavr.network.SmbServer
 import com.tucavr.screens.adapters.FileAdapter
+import com.tucavr.screens.components.MediaBrowserToolbar
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -78,7 +74,7 @@ class NetworkSmbScreen(
     private var recyclerView: RecyclerView? = null
     private var countLabel: android.widget.TextView? = null
     private var emptyContainer: LinearLayout? = null
-    private var searchBar: VoidSearchBar? = null
+    private var mediaToolbar: MediaBrowserToolbar? = null
 
     // Estados de busca e filtros de rede
     private var searchQuery = ""
@@ -282,140 +278,44 @@ class NetworkSmbScreen(
             ),
         )
 
-        // Barra de Ferramentas
+        // Barra de Ferramentas Compartilhada (Busca + Ordenação + Visualização + Filtros)
         val toolbar =
-            LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                layoutParams =
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                        it.bottomMargin = VoidTheme.dpToPx(context, 10f)
-                    }
-            }
-
-        searchBar =
-            VoidSearchBar(
+            MediaBrowserToolbar(
                 context = context,
                 host = host,
-                scope = scope,
-                hintText = context.getString(R.string.browser_search_hint),
                 activity = activity,
+                scope = scope,
+                initialSortBy = currentConfig.sortBy,
+                initialAscending = currentConfig.ascending,
+                initialViewMode = currentConfig.viewMode,
+                initialTypeFilter = currentTypeFilter,
+                initialFormat3DFilter = currentFormat3DFilter,
+                initialDateFilter = currentDateFilter,
+                showDateFilter = false,
                 onQueryChanged = { query ->
                     searchQuery = query
                     applyFiltersAndSort()
                 },
-            ).apply {
-                layoutParams =
-                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).also {
-                        it.marginEnd = VoidTheme.dpToPx(context, 8f)
-                    }
-            }
-        toolbar.addView(searchBar)
-
-        val sortSelector =
-            VoidSortSelector(
-                context = context,
-                currentSortBy = currentConfig.sortBy,
-                currentAscending = currentConfig.ascending,
                 onSortChanged = { newSort, newAscending ->
                     currentConfig = currentConfig.copy(sortBy = newSort, ascending = newAscending)
                     folderConfigStore.saveConfigFor(folderKey, currentConfig)
                     applyFiltersAndSort()
                 },
-            ).apply {
-                layoutParams =
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                        it.marginEnd = VoidTheme.dpToPx(context, 8f)
-                    }
-            }
-        toolbar.addView(sortSelector)
-
-        val viewModeBtn =
-            VoidIconButton(
-                context,
-                if (currentConfig.viewMode == ViewMode.GRID) R.drawable.ic_view_list else R.drawable.ic_view_grid,
-                VoidButtonStyle.SECONDARY,
-                isCircular = false,
-            ).apply {
-                layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 48f), VoidTheme.dpToPx(context, 48f))
-                setOnClickListener {
-                    val nextMode = if (currentConfig.viewMode == ViewMode.GRID) ViewMode.LIST else ViewMode.GRID
+                onViewModeChanged = { nextMode ->
                     currentConfig = currentConfig.copy(viewMode = nextMode)
                     folderConfigStore.saveConfigFor(folderKey, currentConfig)
-                    setImageResource(if (nextMode == ViewMode.GRID) R.drawable.ic_view_list else R.drawable.ic_view_grid)
                     updateLayoutManager()
                     applyFiltersAndSort()
-                }
-            }
-        toolbar.addView(viewModeBtn)
+                },
+                onFilterChanged = { newType, newFormat3D, newDate ->
+                    currentTypeFilter = newType
+                    currentFormat3DFilter = newFormat3D
+                    currentDateFilter = newDate
+                    applyFiltersAndSort()
+                },
+            )
+        mediaToolbar = toolbar
         root.addView(toolbar)
-
-        // Chips de Filtro
-        val filterScrollView =
-            HorizontalScrollView(context).apply {
-                layoutParams =
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                        it.bottomMargin = VoidTheme.dpToPx(context, 8f)
-                    }
-                isHorizontalScrollBarEnabled = false
-            }
-        val filterChipRow =
-            LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-
-        // Chips de Tipo
-        val typeChips = mutableListOf<Pair<MediaTypeFilter, VoidFilterChip>>()
-        listOf(
-            MediaTypeFilter.ALL to R.string.browser_filter_all,
-            MediaTypeFilter.VIDEO to R.string.browser_filter_video,
-            MediaTypeFilter.AUDIO to R.string.browser_filter_audio,
-            MediaTypeFilter.IMAGE to R.string.browser_filter_image,
-        ).forEach { (type, res) ->
-            val chip =
-                VoidFilterChip(context, context.getString(res), isSelectedChip = currentTypeFilter == type).apply {
-                    layoutParams =
-                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                            it.marginEnd = VoidTheme.dpToPx(context, 8f)
-                        }
-                }
-            typeChips.add(type to chip)
-            chip.setOnClickListener {
-                currentTypeFilter = type
-                typeChips.forEach { (t, c) -> c.setSelectedState(t == currentTypeFilter) }
-                applyFiltersAndSort()
-            }
-            filterChipRow.addView(chip)
-        }
-
-        // Chips de Formato 3D
-        val format3DChips = mutableListOf<Pair<Format3DFilter, VoidFilterChip>>()
-        listOf(
-            Format3DFilter.ALL to R.string.browser_filter_3d_all,
-            Format3DFilter.SBS to R.string.browser_filter_3d_sbs,
-            Format3DFilter.OU to R.string.browser_filter_3d_ou,
-            Format3DFilter.VR_180 to R.string.browser_filter_3d_180,
-            Format3DFilter.VR_360 to R.string.browser_filter_3d_360,
-        ).forEach { (f3d, res) ->
-            val chip =
-                VoidFilterChip(context, context.getString(res), isSelectedChip = currentFormat3DFilter == f3d).apply {
-                    layoutParams =
-                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                            it.marginEnd = VoidTheme.dpToPx(context, 8f)
-                        }
-                }
-            format3DChips.add(f3d to chip)
-            chip.setOnClickListener {
-                currentFormat3DFilter = f3d
-                format3DChips.forEach { (f, c) -> c.setSelectedState(f == currentFormat3DFilter) }
-                applyFiltersAndSort()
-            }
-            filterChipRow.addView(chip)
-        }
-
-        filterScrollView.addView(filterChipRow)
-        root.addView(filterScrollView)
 
         // Contador de Resultados
         val counterView =
@@ -443,13 +343,25 @@ class NetworkSmbScreen(
                 onUpClick = { onBack() },
                 onDirectoryClick = { entry ->
                     browsePath = entry.path
-                    searchBar?.clear()
+                    mediaToolbar?.clearSearch()
                     searchQuery = ""
                     renderFiles(server)
                 },
                 onVideoClick = { entry ->
                     onPlay(PlaybackSource.Smb(server, entry.path, entry.sizeBytes))
                 },
+                onFileSelected = { entry ->
+                    val source = PlaybackSource.Smb(server, entry.path, entry.sizeBytes)
+                    host.showFileDetail(
+                        entry = entry,
+                        source = source,
+                        onPlay = { resumeAtMs ->
+                            activity.playSmb(server, entry.path, entry.sizeBytes, resumeAtMs)
+                            activity.requestUiPanelHidden()
+                        },
+                    )
+                },
+                contextRailHost = host,
                 thumbnailLoader = { entry ->
                     val source = PlaybackSource.Smb(server, entry.path, entry.sizeBytes)
                     NetworkThumbnailGenerator.getThumbnail(context, activity, source)
@@ -485,13 +397,11 @@ class NetworkSmbScreen(
                         val padV = VoidTheme.dpToPx(context, 10f)
                         setPadding(padH, padV, padH, padV)
                         setOnClickListener {
-                            searchBar?.clear()
+                            mediaToolbar?.resetFilters()
                             searchQuery = ""
                             currentTypeFilter = MediaTypeFilter.ALL
                             currentFormat3DFilter = Format3DFilter.ALL
                             currentDateFilter = DateFilter.ALL
-                            typeChips.forEach { (t, c) -> c.setSelectedState(t == MediaTypeFilter.ALL) }
-                            format3DChips.forEach { (f, c) -> c.setSelectedState(f == Format3DFilter.ALL) }
                             applyFiltersAndSort()
                         }
                     },
@@ -527,7 +437,7 @@ class NetworkSmbScreen(
     fun handleBack(server: SmbServer): Boolean {
         if (browsePath.isNotEmpty()) {
             browsePath = browsePath.substringBeforeLast('/', missingDelimiterValue = "")
-            searchBar?.clear()
+            mediaToolbar?.clearSearch()
             searchQuery = ""
             renderFiles(server)
             return true

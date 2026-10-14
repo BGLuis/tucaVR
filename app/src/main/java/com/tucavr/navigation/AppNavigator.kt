@@ -69,4 +69,20 @@ class AppNavigator(private val home: Destination = Destination.Home) {
         backStack.clear()
         current = home
     }
+
+    /** Representa a pilha completa em ordem cronológica: histórico do back-stack seguido de [current]. */
+    val stack: List<Destination>
+        get() = backStack.toList() + current
+
+    /**
+     * Troca de seção a partir da barra lateral (Sidebar).
+     * Retorna a pilha para a raiz ([home]) e, se o destino não for [home], navega para [destination].
+     * Garante que a pilha resultante contenha exatamente [home, destination] (ou apenas [home] se o destino for [home]).
+     */
+    fun selectSection(destination: Destination) {
+        backToHome()
+        if (destination != home) {
+            navigateTo(destination)
+        }
+    }
 }

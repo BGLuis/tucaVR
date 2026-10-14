@@ -6,7 +6,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
+import android.widget.TextView
 import com.tucavr.R
 import com.tucavr.VRActivity
 import com.tucavr.designsystem.FieldValidators
@@ -21,6 +23,7 @@ import com.tucavr.designsystem.VoidTextField
 import com.tucavr.designsystem.VoidTheme
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
+import com.tucavr.network.MulticastLockManager
 import com.tucavr.network.SavedServer
 import com.tucavr.network.SavedServerDao
 import com.tucavr.network.ServerCredentialStore
@@ -50,17 +53,11 @@ data class ServerPrefill(
  * Landing da seção "Rede".
  *
  * Fase de unificação: em vez de abas por protocolo, mostra uma ÚNICA lista com
- * todos os servidores salvos (`SavedServerDao.getAll()`), de qualquer protocolo.
- * A separação por protocolo só aparece no fluxo de CADASTRAR um novo servidor
- * (fileira de ícones no topo da lista) — reaproveita, sem reescrever, o
- * `buildAddServerForm()` já existente em cada `NetworkXScreen` (SMB/FTP/SFTP/
- * NFS/WebDAV). DLNA não tem formulário manual — só é adicionado via descoberta
- * automática (`NetworkDiscoveryScreen`).
+ * todos os servidores salvos (`SavedServerDao.getAll()`), de qualquer protocolo,
+ * e uma seção inline inferior "Encontrados na rede" alimentada dinamicamente pelo
+ * scan de descoberta (mDNS/SSDP) sem perder o foco nem navegar para outra tela.
  *
- * Não há Compose/NavHost neste app (View system puro) — o "modo" atual
- * ([HomeMode]) é estado local simples, trocado chamando [host.showScreen] de
- * novo, no mesmo padrão já usado por `browsingServer`/`browsePath` nas telas
- * de protocolo.
+ * A exclusão de servidores salvos abre um modal de confirmação no 3º Quad.
  */
 class NetworkHomeScreen(
     private val context: Context,
@@ -70,6 +67,7 @@ class NetworkHomeScreen(
     private val urlHistory: UrlHistoryStore,
     private val savedServerDao: SavedServerDao,
     private val credentialStore: ServerCredentialStore,
+    private val lockManager: MulticastLockManager? = null,
     private val discoveryPageBuilder: () -> View,
     private val smbAddFormBuilder: (onSaved: () -> Unit, prefill: ServerPrefill?) -> View,
     private val ftpAddFormBuilder: (onSaved: () -> Unit, prefill: ServerPrefill?) -> View,
@@ -77,8 +75,17 @@ class NetworkHomeScreen(
     private val nfsAddFormBuilder: (onSaved: () -> Unit, prefill: ServerPrefill?) -> View,
     private val webdavAddFormBuilder: (onSaved: () -> Unit, prefill: ServerPrefill?) -> View,
     private val onNavigate: (Destination) -> Unit,
-    private val onBack: () -> Unit,
-    private val onPlay: (PlaybackSource) -> Unit = { source -> onNavigate(Destination.Player(source)) },
+    private val onBack: () -> Unit = {},
+    private val onPlay: (PlaybackSource) -> Unit,
+    private val onConfigureDiscoveredServer: (
+        (
+            protocol: ServerProtocol,
+            host: String,
+            port: Int,
+            name: String,
+            path: String,
+        ) -> Unit
+    )? = null,
 ) {
     private sealed class HomeMode {
         object List : HomeMode()
@@ -92,6 +99,14 @@ class NetworkHomeScreen(
 
     private var mode: HomeMode = HomeMode.List
     private var pendingPrefill: ServerPrefill? = null
+
+    private var discoveredServers: List<DiscoveredServerItem> = emptyList()
+    private var isScanningDiscovery: Boolean = false
+    private var hasRunInitialDiscovery: Boolean = false
+    private var currentSavedServers: List<SavedServer> = emptyList()
+    private var discoveryContainer: LinearLayout? = null
+    private var discoveryProgressBar: ProgressBar? = null
+    private var discoveryStatusLabel: TextView? = null
 
     /** Formulários manuais de cadastro disponíveis — DLNA não entra aqui (só via descoberta). */
     private val addFormBuilders: Map<ServerProtocol, (onSaved: () -> Unit, prefill: ServerPrefill?) -> View> =
@@ -140,7 +155,7 @@ class NetworkHomeScreen(
         }
     }
 
-    // ---- Modo Lista: todos os servidores salvos, cross-protocolo ----
+    // ---- Modo Lista: todos os servidores salvos, cross-protocolo + Descoberta Inline ----
 
     private fun renderList() {
         val root = VoidPanelChrome.newRoot(context)
@@ -156,6 +171,7 @@ class NetworkHomeScreen(
 
         content.addView(buildActionsRow())
 
+        // 1. Seção de Servidores Salvos
         content.addView(
             VoidText.title(context, context.getString(R.string.network_saved_servers_header), sizeSp = 20f).apply {
                 setPadding(0, VoidTheme.dpToPx(context, 16f), 0, VoidTheme.dpToPx(context, 8f))
@@ -164,6 +180,82 @@ class NetworkHomeScreen(
 
         val serversContainer = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
         content.addView(serversContainer)
+
+        // 2. Seção de Descoberta Inline ("Encontrados na rede")
+        val discoveryHeaderRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        topMargin = VoidTheme.dpToPx(context, 24f)
+                        bottomMargin = VoidTheme.dpToPx(context, 8f)
+                    }
+            }
+
+        val discoveryTitle =
+            VoidText.title(context, context.getString(R.string.network_discovery_inline_header), sizeSp = 20f).apply {
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            }
+        discoveryHeaderRow.addView(discoveryTitle)
+
+        val btnRescan =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.network_discovery_btn_rescan)
+                setIcon(R.drawable.ic_search)
+                textSize = 14f
+                setOnClickListener {
+                    startInlineDiscovery()
+                }
+            }
+        discoveryHeaderRow.addView(btnRescan)
+        content.addView(discoveryHeaderRow)
+
+        val progressRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 8f)
+                    }
+            }
+
+        val progressBar =
+            ProgressBar(context).apply {
+                isIndeterminate = true
+                visibility = if (isScanningDiscovery) View.VISIBLE else View.GONE
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        VoidTheme.dpToPx(context, 20f),
+                        VoidTheme.dpToPx(context, 20f),
+                    ).apply {
+                        marginEnd = VoidTheme.dpToPx(context, 8f)
+                    }
+            }
+        discoveryProgressBar = progressBar
+        progressRow.addView(progressBar)
+
+        val statusLabel =
+            VoidText.body(
+                context,
+                if (isScanningDiscovery) context.getString(R.string.network_discovery_scanning) else "",
+                sizeSp = 14f,
+                secondary = true,
+            )
+        discoveryStatusLabel = statusLabel
+        progressRow.addView(statusLabel)
+        content.addView(progressRow)
+
+        val discContainer = LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+        discoveryContainer = discContainer
+        content.addView(discContainer)
 
         fun refresh() {
             serversContainer.removeAllViews()
@@ -176,6 +268,7 @@ class NetworkHomeScreen(
                             emptyList()
                         }
                     }
+                currentSavedServers = servers
                 if (servers.isEmpty()) {
                     serversContainer.addView(
                         VoidText.body(context, context.getString(R.string.network_saved_servers_empty), sizeSp = 16f, secondary = true),
@@ -185,12 +278,106 @@ class NetworkHomeScreen(
                         serversContainer.addView(buildServerRow(server) { refresh() })
                     }
                 }
+                updateDiscoveredUI()
             }
         }
         refresh()
 
+        if (!hasRunInitialDiscovery && !isScanningDiscovery) {
+            hasRunInitialDiscovery = true
+            startInlineDiscovery()
+        }
+
         root.addView(wrapInScroll(content), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         host.showScreen(root)
+    }
+
+    private fun updateDiscoveredUI() {
+        val container = discoveryContainer ?: return
+        val pBar = discoveryProgressBar
+        val sLabel = discoveryStatusLabel
+
+        pBar?.visibility = if (isScanningDiscovery) View.VISIBLE else View.GONE
+        sLabel?.text = if (isScanningDiscovery) context.getString(R.string.network_discovery_scanning) else ""
+
+        container.removeAllViews()
+        if (discoveredServers.isEmpty()) {
+            if (!isScanningDiscovery) {
+                container.addView(
+                    VoidText.body(context, context.getString(R.string.network_discovery_empty), sizeSp = 16f, secondary = true),
+                )
+            }
+        } else {
+            discoveredServers.forEach { item ->
+                val isAlreadySaved =
+                    currentSavedServers.any { saved ->
+                        saved.protocol == item.protocol && saved.host == item.host && (saved.port == item.port || item.port == 0)
+                    }
+                val matchedSavedServer =
+                    currentSavedServers.find { saved ->
+                        saved.protocol == item.protocol && saved.host == item.host && (saved.port == item.port || item.port == 0)
+                    }
+                container.addView(
+                    buildDiscoveredServerRow(item, isAlreadySaved, matchedSavedServer),
+                )
+            }
+        }
+    }
+
+    private fun startInlineDiscovery() {
+        if (isScanningDiscovery) return
+        isScanningDiscovery = true
+        updateDiscoveredUI()
+
+        scope.launch {
+            lockManager?.acquire()
+            try {
+                val raw =
+                    withContext(Dispatchers.IO) {
+                        activity.nativeDiscoveryScan(2500)
+                    }
+                discoveredServers = parseScanResults(raw)
+            } catch (e: Exception) {
+                // Manter lista atual
+            } finally {
+                lockManager?.release()
+                isScanningDiscovery = false
+                if (mode is HomeMode.List) {
+                    withContext(Dispatchers.Main) {
+                        updateDiscoveredUI()
+                    }
+                }
+            }
+        }
+    }
+
+    private fun parseScanResults(raw: String): List<DiscoveredServerItem> {
+        if (raw.isBlank() || raw.startsWith("ERROR:")) {
+            return emptyList()
+        }
+
+        return raw.lines().filter { it.isNotBlank() }.mapNotNull { line ->
+            val parts = line.split("\t")
+            val protoStr = parts.getOrNull(0)?.uppercase() ?: return@mapNotNull null
+            val proto =
+                try {
+                    ServerProtocol.valueOf(protoStr)
+                } catch (e: Exception) {
+                    return@mapNotNull null
+                }
+            val name = parts.getOrNull(1) ?: "Server"
+            val host = parts.getOrNull(2) ?: return@mapNotNull null
+            val port = parts.getOrNull(3)?.toIntOrNull() ?: 0
+            val path = parts.getOrNull(4) ?: ""
+
+            DiscoveredServerItem(
+                protocol = proto,
+                name = name,
+                host = host,
+                port = port,
+                path = path,
+            )
+        }
     }
 
     private fun buildActionsRow(): View {
@@ -221,13 +408,12 @@ class NetworkHomeScreen(
         addFormBuilders.keys.forEach { protocol ->
             addAction(protocol.iconRes, context.getString(protocol.labelRes)) { openAddForm(protocol) }
         }
-        addAction(R.drawable.ic_search, context.getString(R.string.network_tab_discovery)) {
-            mode = HomeMode.Discovery
-            renderCurrent()
-        }
         addAction(R.drawable.ic_link, context.getString(R.string.network_tab_url)) {
             mode = HomeMode.Url
             renderCurrent()
+        }
+        addAction(R.drawable.ic_search, context.getString(R.string.network_discovery_btn_rescan)) {
+            startInlineDiscovery()
         }
 
         return HorizontalScrollView(context).apply {
@@ -261,17 +447,23 @@ class NetworkHomeScreen(
             addView(
                 VoidButton(context, VoidButtonStyle.SECONDARY).apply {
                     text = ""
-                    setIcon(R.drawable.icon_x)
+                    setIcon(R.drawable.ic_delete)
                     textSize = 16f
                     minHeight = 0
                     val pad = VoidTheme.dpToPx(context, 12f)
                     setPadding(pad, pad, pad, pad)
                     setOnClickListener {
-                        scope.launch(Dispatchers.IO) {
-                            savedServerDao.delete(server.id)
-                            credentialStore.removeCredentials(server.id)
-                            withContext(Dispatchers.Main) { onChanged() }
-                        }
+                        activity.openConfirmDeleteModal(
+                            title = context.getString(R.string.network_delete_server_title),
+                            message = context.getString(R.string.network_delete_server_message, server.name),
+                            onConfirm = {
+                                scope.launch(Dispatchers.IO) {
+                                    savedServerDao.delete(server.id)
+                                    credentialStore.removeCredentials(server.id)
+                                    withContext(Dispatchers.Main) { onChanged() }
+                                }
+                            },
+                        )
                     }
                 },
                 LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -279,6 +471,128 @@ class NetworkHomeScreen(
                 },
             )
         }
+
+    private fun buildDiscoveredServerRow(
+        item: DiscoveredServerItem,
+        isAlreadySaved: Boolean,
+        matchedSavedServer: SavedServer?,
+    ): View =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutParams =
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).also { it.bottomMargin = VoidTheme.dpToPx(context, 8f) }
+
+            val iconRes =
+                when (item.protocol) {
+                    ServerProtocol.SMB -> R.drawable.ic_storage
+                    ServerProtocol.NFS -> R.drawable.ic_storage
+                    ServerProtocol.FTP -> R.drawable.ic_broadcast
+                    ServerProtocol.SFTP -> R.drawable.ic_lock
+                    ServerProtocol.DLNA -> R.drawable.ic_movie
+                    ServerProtocol.WEBDAV -> R.drawable.ic_link
+                }
+
+            val savedSuffix = if (isAlreadySaved) " · [${context.getString(R.string.network_server_saved_badge)}]" else ""
+            val metaText = "[${item.protocol.name}] ${item.host}:${item.port} ${item.path}$savedSuffix".trim()
+
+            addView(
+                VoidListRow(context).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    bind(item.name, meta = metaText, showThumbnailSlot = false, iconResId = iconRes)
+                    setOnClickListener {
+                        if (isAlreadySaved && matchedSavedServer != null) {
+                            connectTo(matchedSavedServer)
+                        } else {
+                            handleDiscoveredServerClick(item)
+                        }
+                    }
+                },
+            )
+
+            val actionBtn =
+                VoidButton(context, if (isAlreadySaved) VoidButtonStyle.SECONDARY else VoidButtonStyle.PRIMARY).apply {
+                    text =
+                        if (isAlreadySaved) {
+                            context.getString(R.string.network_server_saved_badge)
+                        } else if (item.protocol == ServerProtocol.NFS || item.protocol == ServerProtocol.DLNA) {
+                            context.getString(R.string.network_discovery_action_connect)
+                        } else {
+                            context.getString(R.string.network_discovery_action_configure)
+                        }
+                    textSize = 14f
+                    layoutParams =
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ).also {
+                            it.marginStart = VoidTheme.dpToPx(context, 8f)
+                        }
+                    setOnClickListener {
+                        if (isAlreadySaved && matchedSavedServer != null) {
+                            connectTo(matchedSavedServer)
+                        } else {
+                            handleDiscoveredServerClick(item)
+                        }
+                    }
+                }
+            addView(actionBtn)
+        }
+
+    private fun handleDiscoveredServerClick(item: DiscoveredServerItem) {
+        when (item.protocol) {
+            ServerProtocol.NFS -> {
+                val server =
+                    SavedServer(
+                        name = item.name,
+                        protocol = ServerProtocol.NFS,
+                        host = item.host,
+                        port = item.port,
+                        path = item.path.ifEmpty { "/" },
+                        isAutoDiscovered = true,
+                        lastConnectedAt = System.currentTimeMillis(),
+                    )
+                scope.launch(Dispatchers.IO) {
+                    savedServerDao.insert(server)
+                }
+                onNavigate(Destination.NetworkNfsFiles(server, ""))
+            }
+            ServerProtocol.DLNA -> {
+                scope.launch {
+                    val rawDesc =
+                        withContext(Dispatchers.IO) {
+                            activity.nativeDlnaGetDevice(item.path)
+                        }
+                    val parts = rawDesc.split("\t")
+                    val friendlyName = if (parts.size >= 2 && parts[0] == "OK" && parts[1].isNotBlank()) parts[1] else item.name
+                    val controlUrl = if (parts.size >= 3 && parts[0] == "OK") parts[2] else item.path
+
+                    val server =
+                        SavedServer(
+                            name = friendlyName,
+                            protocol = ServerProtocol.DLNA,
+                            host = item.host,
+                            port = item.port,
+                            path = controlUrl,
+                            isAutoDiscovered = true,
+                            lastConnectedAt = System.currentTimeMillis(),
+                        )
+                    withContext(Dispatchers.IO) {
+                        savedServerDao.insert(server)
+                    }
+                    onNavigate(Destination.NetworkDlnaFiles(server, "0", friendlyName))
+                }
+            }
+            ServerProtocol.SMB, ServerProtocol.FTP, ServerProtocol.SFTP, ServerProtocol.WEBDAV -> {
+                if (onConfigureDiscoveredServer != null) {
+                    onConfigureDiscoveredServer.invoke(item.protocol, item.host, item.port, item.name, item.path)
+                } else {
+                    openAddForm(item.protocol)
+                }
+            }
+        }
+    }
 
     /** Monta a Destination correta por protocolo, buscando credenciais quando necessário. */
     private fun connectTo(server: SavedServer) {
@@ -466,10 +780,7 @@ class NetworkHomeScreen(
 
     /**
      * Valida a URL, adiciona ao histórico, inicia probe HTTP assíncrono para
-     * informar se seek vai funcionar, e navega para o Player.
-     *
-     * T7.1: o probe HEAD-based NÃO bloqueia o play — o usuário pode tocar
-     * mesmo sem range requests, só sem poder buscar.
+     * informar se seek vai funcionar, e inicia a reprodução direta.
      */
     private fun playUrl(
         url: String,
@@ -508,8 +819,7 @@ class NetworkHomeScreen(
     }
 
     // Scroll wrapper necessário: páginas de rede têm conteúdo mais alto que
-    // o canvas de 1024×768 da Presentation. Ver wrapNetworkPageInScroll no
-    // original para o raciocínio completo.
+    // o canvas da Presentation.
     internal fun wrapInScroll(page: View): View =
         ScrollView(context).apply {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)

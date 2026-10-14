@@ -12,6 +12,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ViewGroup
 import android.widget.FrameLayout
+import android.widget.LinearLayout
 import android.widget.ScrollView
 import androidx.recyclerview.widget.RecyclerView
 import com.airbnb.lottie.LottieAnimationView
@@ -20,6 +21,7 @@ import com.tucavr.designsystem.KeyboardBinding
 import com.tucavr.designsystem.VoidTheme
 import com.tucavr.download.DownloadRepository
 import com.tucavr.filebrowser.DirectoryNavigator
+import com.tucavr.filebrowser.MediaEntry
 import com.tucavr.filebrowser.MediaType
 import com.tucavr.filebrowser.mediaTypeForExtension
 import com.tucavr.navigation.AppNavigator
@@ -31,6 +33,7 @@ import com.tucavr.network.SftpCredentialStore
 import com.tucavr.network.SmbCredentialStore
 import com.tucavr.network.UrlHistoryStore
 import com.tucavr.playlist.PlaylistDao
+import com.tucavr.screens.ContextRailHost
 import com.tucavr.screens.ContinueWatchingScreen
 import com.tucavr.screens.DownloadsScreen
 import com.tucavr.screens.FileDetailScreen
@@ -44,12 +47,13 @@ import com.tucavr.screens.NetworkNfsScreen
 import com.tucavr.screens.NetworkSftpScreen
 import com.tucavr.screens.NetworkSmbScreen
 import com.tucavr.screens.NetworkWebdavScreen
-import com.tucavr.screens.PlayerScreen
 import com.tucavr.screens.PlaylistDetailScreen
 import com.tucavr.screens.PlaylistsScreen
 import com.tucavr.screens.ResumePromptScreen
 import com.tucavr.screens.ScreenHost
 import com.tucavr.screens.SettingsScreen
+import com.tucavr.screens.components.ContextRailView
+import com.tucavr.screens.components.SidebarView
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -60,20 +64,12 @@ import kotlinx.coroutines.cancel
  * e do painel de Controles (VRControlsPresentation). Hospeda o fluxo
  * completo Home → (Arquivos locais | Rede) → Player.
  *
- * **Papel deste arquivo após a refatoração:**
- * Orquestrador puro — instancia as dependências compartilhadas (stores,
- * coroutine scope, navigator) e conecta as screens via injeção de lambdas.
- * Toda a lógica de renderização e estado específico de cada tela foi movida
- * para `com.tucavr.screens.*`. Ver cada arquivo para detalhes.
+ * **Canvas de 3 Zonas Proporcionais (1920x960):**
+ * - Navegação (esquerda, 288 px / ~12°): SidebarView persistente
+ * - Conteúdo (centro, 1200 px / ~50°): telas de lista, grade, detalhe
+ * - Contexto (direita, 432 px / ~18°): ContextRailView ("Now Playing", fila e status)
  *
- * **Navegação:** conduzida por [AppNavigator] (Kotlin puro, testável sem
- * Android). O botão físico B/Y continua alternando a visibilidade do quad;
- * o botão "Voltar" Void dentro do painel anda pelo back-stack do navigator.
- *
- * **Teclado nativo:** VirtualDisplay não recebe IME do sistema (restrição
- * AOSP de segurança). A solução usa um proxy de teclado real na Activity —
- * ver VRActivity.showNativeKeyboardFor() e a seção "TECLADO NATIVO" no
- * histórico de commits para o raciocínio completo.
+ * Expondo [ContextRailHost] para que telas possam alimentar a zona de contexto.
  */
 class VRPresentation(
     outerContext: Context,
@@ -83,7 +79,13 @@ class VRPresentation(
     // ContextThemeWrapper derivado do display-context. Guardamos a Activity
     // de verdade para poder chamar nativeX()/playFile()/playUrl() etc.
     private val activity: VRActivity,
-) : Presentation(outerContext, display, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen) {
+) : Presentation(outerContext, display, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen), ContextRailHost {
+    companion object {
+        const val ZONE_NAV_WIDTH_PX = 288
+        const val ZONE_CONTENT_WIDTH_PX = 1200
+        const val ZONE_CONTEXT_WIDTH_PX = 432
+    }
+
     // ---- Infraestrutura de navegação ----
 
     private val appNav = AppNavigator()
@@ -99,9 +101,16 @@ class VRPresentation(
     private lateinit var sftpCredentials: SftpCredentialStore
     private lateinit var urlHistory: UrlHistoryStore
 
-    // ---- Host de tela (contrato mínimo que as screens conhecem) ----
+    // ---- Layout de 3 Zonas e Contêiner Raiz ----
 
-    private lateinit var screenHost: FrameLayout
+    private lateinit var rootContainer: FrameLayout
+    private lateinit var canvasLayout: LinearLayout
+    private lateinit var navContainer: FrameLayout
+    private lateinit var contentContainer: FrameLayout
+    private lateinit var contextRailContainer: FrameLayout
+
+    private lateinit var sidebarView: SidebarView
+    private lateinit var contextRailView: ContextRailView
 
     // ---- Intro sequence (Epic #102 / R4 / #106) ----
     private var introController: IntroSequenceController? = null
@@ -117,8 +126,8 @@ class VRPresentation(
                 // Fecha o teclado do campo que está prestes a ser destruído.
                 keyboardTarget = null
                 activity.hideNativeKeyboard()
-                screenHost.removeAllViews()
-                screenHost.addView(
+                contentContainer.removeAllViews()
+                contentContainer.addView(
                     view,
                     FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
@@ -145,7 +154,7 @@ class VRPresentation(
 
             override fun showOverlay(view: android.view.View) {
                 if (view.parent == null) {
-                    screenHost.addView(
+                    rootContainer.addView(
                         view,
                         FrameLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT,
@@ -156,8 +165,82 @@ class VRPresentation(
             }
 
             override fun hideOverlay(view: android.view.View) {
-                screenHost.removeView(view)
+                rootContainer.removeView(view)
             }
+
+            override fun setContextContent(view: android.view.View) {
+                this@VRPresentation.setContextContent(view)
+            }
+
+            override fun resetContextContent() {
+                this@VRPresentation.resetContextContent()
+            }
+
+            override fun showFileDetail(
+                entry: MediaEntry,
+                source: PlaybackSource,
+                onPlay: (resumeAtMs: Long?) -> Unit,
+            ) {
+                this@VRPresentation.showFileDetail(entry, source, onPlay)
+            }
+
+            override fun clearFileDetail() {
+                this@VRPresentation.clearFileDetail()
+            }
+        }
+    }
+
+    override fun setContextContent(view: android.view.View) {
+        if (::contextRailContainer.isInitialized) {
+            contextRailContainer.removeAllViews()
+            contextRailContainer.addView(
+                view,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+        }
+    }
+
+    override fun resetContextContent() {
+        if (::contextRailContainer.isInitialized && ::contextRailView.isInitialized) {
+            contextRailContainer.removeAllViews()
+            contextRailView.clearFileDetail()
+            contextRailView.updateState()
+            contextRailContainer.addView(
+                contextRailView,
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                ),
+            )
+        }
+    }
+
+    override fun showFileDetail(
+        entry: MediaEntry,
+        source: PlaybackSource,
+        onPlay: (resumeAtMs: Long?) -> Unit,
+    ) {
+        if (::contextRailContainer.isInitialized && ::contextRailView.isInitialized) {
+            if (contextRailContainer.indexOfChild(contextRailView) < 0) {
+                contextRailContainer.removeAllViews()
+                contextRailContainer.addView(
+                    contextRailView,
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    ),
+                )
+            }
+            contextRailView.showFileDetail(entry, source, onPlay)
+        }
+    }
+
+    override fun clearFileDetail() {
+        if (::contextRailView.isInitialized) {
+            contextRailView.clearFileDetail()
         }
     }
 
@@ -179,7 +262,6 @@ class VRPresentation(
     private lateinit var networkHomeScreen: NetworkHomeScreen
     private lateinit var networkWebdavScreen: NetworkWebdavScreen
     private lateinit var continueWatchingScreen: ContinueWatchingScreen
-    private lateinit var playerScreen: PlayerScreen
     private lateinit var resumePromptScreen: ResumePromptScreen
     private lateinit var settingsScreen: SettingsScreen
     private lateinit var playlistsScreen: PlaylistsScreen
@@ -206,11 +288,11 @@ class VRPresentation(
         serverCredentials = ServerCredentialStore(activity)
         urlHistory = UrlHistoryStore(activity)
 
-        screenHost =
+        rootContainer =
             FrameLayout(context).apply {
                 setBackgroundColor(android.graphics.Color.TRANSPARENT)
             }
-        setContentView(screenHost)
+        setContentView(rootContainer)
         window?.setLayout(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
         window?.decorView?.background = null
@@ -218,13 +300,90 @@ class VRPresentation(
         window?.setDimAmount(0.0f)
         window?.setFormat(android.graphics.PixelFormat.TRANSLUCENT)
 
+        buildCanvasHierarchy()
         initScreens()
+
         if (IntroSequenceController.hasCompletedIntroOnce) {
-            screenHost.setBackgroundColor(VoidTheme.colorBackground)
+            canvasLayout.visibility = android.view.View.VISIBLE
             render()
         } else {
             setupIntroSequence()
         }
+    }
+
+    private fun buildCanvasHierarchy() {
+        canvasLayout =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams =
+                    FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+                setBackgroundColor(VoidTheme.colorBackground)
+            }
+
+        // Zona 1: Navegação (esquerda, 288 px / ~12°)
+        navContainer =
+            FrameLayout(context).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ZONE_NAV_WIDTH_PX,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+            }
+        sidebarView =
+            SidebarView(
+                context = context,
+                appNav = appNav,
+                onDestinationChanged = { render() },
+            )
+        navContainer.addView(
+            sidebarView,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        canvasLayout.addView(navContainer)
+
+        // Zona 2: Conteúdo (centro, 1200 px / ~50°)
+        contentContainer =
+            FrameLayout(context).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ZONE_CONTENT_WIDTH_PX,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+            }
+        canvasLayout.addView(contentContainer)
+
+        // Zona 3: Contexto (direita, 432 px / ~18°)
+        contextRailContainer =
+            FrameLayout(context).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ZONE_CONTEXT_WIDTH_PX,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+            }
+        contextRailView =
+            ContextRailView(
+                context = context,
+                activity = activity,
+                scope = scope,
+                onBackToVideo = { activity.requestUiPanelHidden() },
+            )
+        contextRailContainer.addView(
+            contextRailView,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        canvasLayout.addView(contextRailContainer)
+
+        rootContainer.addView(canvasLayout)
     }
 
     override fun dismiss() {
@@ -237,6 +396,7 @@ class VRPresentation(
 
     private fun setupIntroSequence() {
         try {
+            canvasLayout.visibility = android.view.View.INVISIBLE
             val lottie =
                 LottieAnimationView(context).apply {
                     layoutParams =
@@ -273,7 +433,7 @@ class VRPresentation(
                     }
                 }
             introView = lottie
-            screenHost.addView(lottie)
+            rootContainer.addView(lottie)
 
             LottieCompositionFactory.fromAsset(context, "intro.json")
                 .addListener { composition ->
@@ -313,7 +473,7 @@ class VRPresentation(
                     },
                     onTransitionToHome = {
                         disposeIntro()
-                        screenHost.setBackgroundColor(VoidTheme.colorBackground)
+                        canvasLayout.visibility = android.view.View.VISIBLE
                         render()
                     },
                 )
@@ -322,7 +482,7 @@ class VRPresentation(
         } catch (e: Exception) {
             Log.w("VRPresentation", "Error during intro setup: ${e.message}, falling back to Home", e)
             disposeIntro()
-            screenHost.setBackgroundColor(VoidTheme.colorBackground)
+            canvasLayout.visibility = android.view.View.VISIBLE
             render()
         }
     }
@@ -341,7 +501,7 @@ class VRPresentation(
         }
         introController = null
         disposeIntro()
-        screenHost.setBackgroundColor(VoidTheme.colorBackground)
+        canvasLayout.visibility = android.view.View.VISIBLE
         render()
     }
 
@@ -362,7 +522,7 @@ class VRPresentation(
             view.cancelAnimation()
             view.clearAnimation()
             view.setImageDrawable(null)
-            screenHost.removeView(view)
+            rootContainer.removeView(view)
         }
         introView = null
     }
@@ -405,8 +565,12 @@ class VRPresentation(
         homeScreen =
             HomeScreen(
                 context = context,
+                activity = activity,
                 host = host,
+                scope = scope,
+                savedServerDao = savedServerDao,
                 onNavigate = { dest -> navigateTo(dest) },
+                onPlaySource = { source -> playSource(source) },
                 onOpenBrowser = {
                     activity.openBrowserSession()
                 },
@@ -569,6 +733,7 @@ class VRPresentation(
                 urlHistory = urlHistory,
                 savedServerDao = savedServerDao,
                 credentialStore = serverCredentials,
+                lockManager = multicastLockManager,
                 discoveryPageBuilder = { networkDiscoveryScreen.buildPage() },
                 smbAddFormBuilder = { onSaved, prefill -> networkSmbScreen.buildAddServerForm(onSaved, prefill) },
                 ftpAddFormBuilder = { onSaved, prefill -> networkFtpScreen.buildAddServerForm(onSaved, prefill) },
@@ -578,6 +743,12 @@ class VRPresentation(
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
                 onPlay = { source -> playSource(source) },
+                onConfigureDiscoveredServer = { protocol, hostStr, portNum, nameStr, pathStr ->
+                    if (protocol == com.tucavr.network.ServerProtocol.WEBDAV) {
+                        networkWebdavScreen.prefill(hostStr, portNum, nameStr, pathStr)
+                    }
+                    networkHomeScreen.openAddForm(protocol)
+                },
             )
 
         continueWatchingScreen =
@@ -590,15 +761,6 @@ class VRPresentation(
                 ftpCredentials = ftpCredentials,
                 sftpCredentials = sftpCredentials,
                 onNavigate = { dest -> navigateTo(dest) },
-                onBack = { handleBack() },
-            )
-
-        playerScreen =
-            PlayerScreen(
-                context = context,
-                activity = activity,
-                host = host,
-                scope = scope,
                 onBack = { handleBack() },
             )
 
@@ -655,7 +817,14 @@ class VRPresentation(
 
     // ---- Máquina de telas ----
 
+    @Suppress("DEPRECATION")
     private fun render() {
+        if (::sidebarView.isInitialized) {
+            sidebarView.updateActiveDestination(appNav.current)
+        }
+        if (::contextRailView.isInitialized) {
+            contextRailView.updateState()
+        }
         when (val destination = appNav.current) {
             is Destination.Home -> homeScreen.render()
             is Destination.LocalFiles -> localFilesScreen.renderLocalFiles()
@@ -670,7 +839,9 @@ class VRPresentation(
             is Destination.ContinueWatching -> continueWatchingScreen.render()
             is Destination.Playlists -> playlistsScreen.render()
             is Destination.PlaylistDetail -> playlistDetailScreen.render(destination.playlistId)
-            is Destination.Player -> playerScreen.render(destination.source)
+            is Destination.Player -> {
+                activity.requestUiPanelHidden()
+            }
             is Destination.PhotoViewer ->
                 photoViewerScreen.render(
                     destination.initialEntry,
@@ -682,12 +853,44 @@ class VRPresentation(
         }
     }
 
-    fun onNavigateToPlayer(source: PlaybackSource) {
-        if (appNav.current is Destination.Player) {
-            appNav.replaceTop(Destination.Player(source))
-            render()
-        } else {
-            navigateTo(Destination.Player(source))
+    @Deprecated("Now playing screen removed; use activity.requestUiPanelHidden() directly")
+    fun onNavigateToPlayer(
+        @Suppress("UNUSED_PARAMETER") source: PlaybackSource? = null,
+    ) {
+        activity.requestUiPanelHidden()
+    }
+
+    fun updatePlaybackProgress(
+        currentSec: Float,
+        totalSec: Float,
+    ) {
+        if (::contextRailView.isInitialized) {
+            contextRailView.updateProgress(currentSec, totalSec)
+        }
+    }
+
+    private var lastMediaIsLoading: Boolean? = null
+    private var lastMediaIsPlaying: Boolean? = null
+
+    fun updateMediaState(
+        isLoading: Boolean,
+        isPlaying: Boolean,
+    ) {
+        if (isLoading == lastMediaIsLoading && isPlaying == lastMediaIsPlaying) {
+            return
+        }
+        lastMediaIsLoading = isLoading
+        lastMediaIsPlaying = isPlaying
+        if (::contextRailView.isInitialized) {
+            contextRailView.updateState(force = false)
+        }
+    }
+
+    fun onPlaybackStopped() {
+        lastMediaIsLoading = false
+        lastMediaIsPlaying = false
+        if (::contextRailView.isInitialized) {
+            contextRailView.updateState(force = true)
         }
     }
 
@@ -710,7 +913,7 @@ class VRPresentation(
     /**
      * Ponto único de "tocar [source]": pergunta se retoma (via
      * [resumePromptScreen]), despacha pro `nativePlayXxx` certo por tipo de
-     * fonte, e navega pro Player. Usado tanto pelo double-click local quanto
+     * fonte, e oculta o painel de UI para assistir ao vídeo. Usado tanto pelo double-click local quanto
      * pelo botão Reproduzir de [FileDetailScreen] (local e rede).
      */
     private fun playSource(source: PlaybackSource) {
@@ -725,12 +928,7 @@ class VRPresentation(
                 is PlaybackSource.Sftp -> activity.playSftp(source.server, source.path, source.sizeBytes, resumeAtMs)
                 is PlaybackSource.Webdav -> activity.playWebdav(source.server, source.path, source.sizeBytes, resumeAtMs)
             }
-            if (appNav.current is Destination.Player) {
-                appNav.replaceTop(Destination.Player(source))
-                render()
-            } else {
-                navigateTo(Destination.Player(source))
-            }
+            activity.requestUiPanelHidden()
         }
     }
 
@@ -772,10 +970,13 @@ class VRPresentation(
         y: Float,
         scrollDeltaY: Float,
     ) {
-        if (!::screenHost.isInitialized) return
-        val pixelX = x * VRActivity.UI_DISPLAY_WIDTH
-        val pixelY = y * VRActivity.UI_DISPLAY_HEIGHT
-        val target = findScrollableViewAt(screenHost, pixelX, pixelY) ?: findAnyScrollableView(screenHost)
+        if (!::rootContainer.isInitialized) return
+        val pixelX = (x * VRActivity.UI_DISPLAY_WIDTH).coerceIn(0f, VRActivity.UI_DISPLAY_WIDTH.toFloat())
+        val pixelY = (y * VRActivity.UI_DISPLAY_HEIGHT).coerceIn(0f, VRActivity.UI_DISPLAY_HEIGHT.toFloat())
+        val target =
+            findScrollableViewAt(rootContainer, pixelX, pixelY)
+                ?: (if (::contentContainer.isInitialized) findAnyScrollableView(contentContainer) else null)
+                ?: findAnyScrollableView(rootContainer)
         target?.scrollBy(0, scrollDeltaY.toInt())
     }
 

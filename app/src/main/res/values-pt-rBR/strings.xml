@@ -413,6 +413,32 @@
     <string name="player_controls_time_format">%1$s / %2$s</string>
     <string name="player_controls_volume_format">%1$d%%</string>
     <string name="player_controls_speed_format">%1$.2fx</string>
+    <string name="player_btn_stop">Sair</string>
+    <string name="player_btn_format">Formato 3D</string>
+    <string name="player_btn_screen">Tela</string>
+    <string name="player_btn_environment">Ambiente</string>
+    <string name="player_btn_rewind">Voltar 10s</string>
+    <string name="player_btn_forward">Avançar 10s</string>
+    <string name="player_btn_previous">Anterior</string>
+    <string name="player_btn_next">Próximo</string>
+    <string name="player_btn_speed">Velocidade</string>
+    <string name="player_btn_volume">Volume</string>
+    <string name="player_menu_screen_title">Tela</string>
+    <string name="player_menu_screen_size">TAMANHO</string>
+    <string name="player_menu_screen_size_small">Pequena</string>
+    <string name="player_menu_screen_size_medium">Média</string>
+    <string name="player_menu_screen_size_large">Grande</string>
+    <string name="player_menu_screen_size_huge">Enorme</string>
+    <string name="player_menu_screen_distance">DISTÂNCIA</string>
+    <string name="player_menu_screen_distance_near">Perto</string>
+    <string name="player_menu_screen_distance_default">Padrão</string>
+    <string name="player_menu_screen_distance_far">Longe</string>
+    <string name="player_menu_screen_curve">CURVATURA</string>
+    <string name="player_menu_screen_curve_flat">Plana</string>
+    <string name="player_menu_screen_curve_curved">Curva</string>
+    <string name="player_menu_speed_title">Velocidade</string>
+    <string name="player_menu_volume_title">Volume</string>
+    <string name="player_menu_volume_hint">O stick esquerdo também muda o volume</string>
 
     <!-- T1.4/T2: modo de exibicao 3D (VRControlsPresentation/ScreenFormatCatalog) -->
     <string name="player_mode_2d">2D</string>
@@ -478,11 +504,20 @@
     <string name="audio_tracks_modal_title">Trilhas de Áudio</string>
     <string name="audio_tracks_empty">Nenhuma trilha de áudio encontrada</string>
     <string name="audio_tracks_active_badge">Ativo</string>
+    <string name="audio_track_badge_surround_51">5.1 surround</string>
+    <string name="audio_track_badge_surround_71">7.1 surround</string>
+    <string name="audio_track_badge_surround">Surround</string>
+    <string name="audio_track_badge_stereo">Estéreo</string>
+    <string name="audio_track_badge_mono">Mono</string>
+    <string name="audio_track_badge_commentary">Comentário</string>
 
     <!-- Legendas (T9.1-T9.6) -->
     <string name="player_btn_subtitles">Legendas</string>
     <string name="subtitles_modal_title">Legendas</string>
     <string name="subtitles_option_off">Desativado</string>
+    <string name="subtitles_badge_embedded">Embutida</string>
+    <string name="subtitles_badge_external">Arquivo externo</string>
+    <string name="track_unknown_language_format">Idioma desconhecido · faixa %1$d</string>
     <string name="subtitles_track_format">Faixa %1$d: %2$s</string>
     <string name="subtitles_sync_label">Sincronização</string>
     <string name="subtitles_sync_value_format">%1$+.1f s</string>
@@ -670,5 +705,38 @@
     <string name="webbrowser_error_malformed_url">Este endereço não é válido.</string>
     <string name="webbrowser_error_generic">Algo deu errado ao carregar esta página.</string>
     <string name="webbrowser_error_label_url">Endereço</string>
+
+    <!-- Sidebar navigation -->
+    <string name="sidebar_item_home">Início</string>
+    <string name="sidebar_item_files">Arquivos</string>
+    <string name="sidebar_item_network">Rede</string>
+    <string name="sidebar_item_playlists">Playlists</string>
+    <string name="sidebar_item_downloads">Downloads</string>
+    <string name="sidebar_item_settings">Configurações</string>
+
+    <!-- Context Rail -->
+    <string name="context_rail_now_playing">Tocando Agora</string>
+    <string name="context_rail_back_to_video">Voltar ao vídeo</string>
+    <string name="context_rail_no_video">Nenhum vídeo em reprodução</string>
+    <string name="context_rail_queue_title">A Seguir</string>
+    <string name="context_rail_empty_queue">Fila vazia</string>
+    <string name="context_rail_file_details">Detalhes do Arquivo</string>
+    <string name="context_rail_tab_details">Detalhes</string>
+    <string name="context_rail_btn_from_start">Do início</string>
+
+    <!-- Home Screen Sections -->
+    <string name="home_section_continue_watching">Continuar Assistindo</string>
+    <string name="home_section_recent_sources">Fontes Recentes</string>
+    <string name="home_section_recently_added">Adicionados Recentemente</string>
+    <string name="home_no_recent_videos">Nenhum vídeo recente</string>
+    <string name="home_no_recent_files">Nenhum arquivo recente</string>
+
+    <!-- Issue #94: Network unified sources, inline discovery and delete confirmation -->
+    <string name="network_delete_server_title">Excluir servidor</string>
+    <string name="network_delete_server_message">Tem certeza de que deseja excluir o servidor \"%1$s\"?</string>
+    <string name="network_delete_server_confirm">Excluir</string>
+    <string name="network_delete_server_cancel">Cancelar</string>
+    <string name="network_discovery_inline_header">Encontrados na rede</string>
+    <string name="network_server_saved_badge">Salvo</string>
 
 </resources>

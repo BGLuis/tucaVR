@@ -89,7 +89,8 @@ sealed class Destination {
     /** T3.1/T3.4: listagem de um diretório num servidor WebDAV já conectado. */
     data class NetworkWebdavFiles(val server: SavedServer, val path: String) : Destination()
 
-    /** Reproduzindo [source]. */
+    /** @deprecated Now Playing screen foi removida (Epic #81 / Issue #93). Reprodução direta via callbacks. */
+    @Deprecated("Now Playing screen foi removida na Issue #93. Use reprodução direta via callbacks.")
     data class Player(val source: PlaybackSource) : Destination()
 
     /** T9.2: listagem de playlists criadas pelo usuário. */
@@ -113,7 +114,7 @@ sealed class Destination {
 }
 
 /**
- * De onde vem a midia que esta tocando — usado por [Destination.Player].
+ * De onde vem a midia que esta tocando.
  *
  * [LocalFile.sizeBytes]/[Smb.sizeBytes] (T9, ver `com.tucavr.history`):
  * tamanho do arquivo em bytes, `0L` quando desconhecido no ponto de
