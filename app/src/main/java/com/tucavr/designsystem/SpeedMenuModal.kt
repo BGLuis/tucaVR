@@ -67,7 +67,7 @@ class SpeedMenuModal(
 
         val icon =
             ImageView(context).apply {
-                setImageResource(R.drawable.icon_gauge)
+                setImageResource(R.drawable.speed)
                 setColorFilter(VoidTheme.colorText)
                 val iconSize = VoidTheme.dpToPx(context, 28f)
                 layoutParams =

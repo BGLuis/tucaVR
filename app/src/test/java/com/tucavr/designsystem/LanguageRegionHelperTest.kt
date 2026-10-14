@@ -23,7 +23,7 @@ class LanguageRegionHelperTest {
         val region = LanguageRegionHelper.extractRegionFromTag("pt-PT")
         assertEquals("PT", region?.first)
         assertEquals("Portugal", region?.second)
-        assertEquals(R.drawable.ic_flag_pt, LanguageRegionHelper.resolveFlagDrawable(region?.first))
+        assertEquals(R.drawable.flag_pt, LanguageRegionHelper.resolveFlagDrawable(region?.first))
     }
 
     @Test
@@ -31,7 +31,7 @@ class LanguageRegionHelperTest {
         val defaultRegion = LanguageRegionHelper.defaultRegionForLanguage("pt")
         assertEquals("BR", defaultRegion?.first)
         assertEquals("Brasil", defaultRegion?.second)
-        assertEquals(R.drawable.ic_flag_br, LanguageRegionHelper.resolveFlagDrawable(defaultRegion?.first))
+        assertEquals(R.drawable.flag_br, LanguageRegionHelper.resolveFlagDrawable(defaultRegion?.first))
     }
 
     @Test
@@ -51,17 +51,17 @@ class LanguageRegionHelperTest {
 
     @Test
     fun `flags map to corresponding drawables and fallback to globe`() {
-        assertEquals(R.drawable.ic_flag_br, LanguageRegionHelper.resolveFlagDrawable("BR"))
-        assertEquals(R.drawable.ic_flag_pt, LanguageRegionHelper.resolveFlagDrawable("PT"))
-        assertEquals(R.drawable.ic_flag_us, LanguageRegionHelper.resolveFlagDrawable("US"))
-        assertEquals(R.drawable.ic_flag_gb, LanguageRegionHelper.resolveFlagDrawable("GB"))
-        assertEquals(R.drawable.ic_flag_es, LanguageRegionHelper.resolveFlagDrawable("ES"))
+        assertEquals(R.drawable.flag_br, LanguageRegionHelper.resolveFlagDrawable("BR"))
+        assertEquals(R.drawable.flag_pt, LanguageRegionHelper.resolveFlagDrawable("PT"))
+        assertEquals(R.drawable.flag_us, LanguageRegionHelper.resolveFlagDrawable("US"))
+        assertEquals(R.drawable.flag_gb, LanguageRegionHelper.resolveFlagDrawable("GB"))
+        assertEquals(R.drawable.flag_es, LanguageRegionHelper.resolveFlagDrawable("ES"))
         assertEquals(R.drawable.ic_flag_mx, LanguageRegionHelper.resolveFlagDrawable("MX"))
         assertEquals(R.drawable.ic_flag_fr, LanguageRegionHelper.resolveFlagDrawable("FR"))
         assertEquals(R.drawable.ic_flag_de, LanguageRegionHelper.resolveFlagDrawable("DE"))
-        assertEquals(R.drawable.ic_flag_jp, LanguageRegionHelper.resolveFlagDrawable("JP"))
-        assertEquals(R.drawable.ic_flag_globe, LanguageRegionHelper.resolveFlagDrawable("UNKNOWN"))
-        assertEquals(R.drawable.ic_flag_globe, LanguageRegionHelper.resolveFlagDrawable(null))
+        assertEquals(R.drawable.flag_jp, LanguageRegionHelper.resolveFlagDrawable("JP"))
+        assertEquals(R.drawable.flag_und, LanguageRegionHelper.resolveFlagDrawable("UNKNOWN"))
+        assertEquals(R.drawable.flag_und, LanguageRegionHelper.resolveFlagDrawable(null))
     }
 
     @Test

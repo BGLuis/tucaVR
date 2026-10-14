@@ -227,16 +227,16 @@ object LanguageRegionHelper {
      */
     fun resolveFlagDrawable(regionCode: String?): Int {
         return when (regionCode?.uppercase()) {
-            "BR" -> R.drawable.ic_flag_br
-            "PT" -> R.drawable.ic_flag_pt
-            "US" -> R.drawable.ic_flag_us
-            "GB", "UK" -> R.drawable.ic_flag_gb
-            "ES" -> R.drawable.ic_flag_es
+            "BR" -> R.drawable.flag_br
+            "PT" -> R.drawable.flag_pt
+            "US" -> R.drawable.flag_us
+            "GB", "UK" -> R.drawable.flag_gb
+            "ES" -> R.drawable.flag_es
             "MX" -> R.drawable.ic_flag_mx
             "FR" -> R.drawable.ic_flag_fr
             "DE" -> R.drawable.ic_flag_de
-            "JP" -> R.drawable.ic_flag_jp
-            else -> R.drawable.ic_flag_globe
+            "JP" -> R.drawable.flag_jp
+            else -> R.drawable.flag_und
         }
     }
 
