@@ -157,6 +157,22 @@ class SettingsScreen(
             ),
         )
 
+        // Seção Controles
+        content.addView(
+            VoidText.title(context, context.getString(R.string.settings_section_controls), sizeSp = 18f).apply {
+                setPadding(0, VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 8f))
+            },
+        )
+
+        content.addView(
+            buildFlagRow(
+                labelRes = R.string.settings_hand_tracking_label,
+                descriptionRes = R.string.settings_hand_tracking_description,
+                flag = FeatureFlags.Flag.HAND_TRACKING,
+                onChanged = { enabled -> activity.nativeSetHandTrackingEnabled(enabled) },
+            ),
+        )
+
         // Seção Avançado (Diagnóstico e Telemetria)
         content.addView(
             VoidText.title(context, context.getString(R.string.settings_section_advanced), sizeSp = 18f).apply {

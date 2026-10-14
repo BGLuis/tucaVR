@@ -63,6 +63,9 @@ object FeatureFlags {
 
         // RF-ENV-007: Modo Noturno (aquecimento ~3000K para redução de luz azul)
         NIGHT_MODE("night_mode", defaultEnabled = false),
+
+        // Fase 0.3 Seção 5: Rastreamento de mãos e controle por gestos (XR_EXT_hand_tracking).
+        HAND_TRACKING("hand_tracking", defaultEnabled = true),
     }
 
     /** Chave usada para persistir o brilho do ambiente 3D/Skybox (0.0f a 1.0f). Padrão: 1.0f (100%). */

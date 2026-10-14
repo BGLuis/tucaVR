@@ -556,6 +556,15 @@ Java_com_tucavr_VRActivity_nativeGetFoveationMode(JNIEnv* env, jobject thiz) {
     return static_cast<jint>(get_foveation_mode());
 }
 
+// Fase 0.3 Seção 5: Hand Tracking / Gestos (no-op no caminho GLES congelado)
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetHandTrackingEnabled(JNIEnv*, jobject, jboolean) {}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetHandTrackingEnabled(JNIEnv*, jobject) {
+    return JNI_FALSE;
+}
+
 // Fase 0.3 Seção 2: Passthrough / Mixed Reality (no-op efetivo no caminho GLES,
 // ver comentário no bloco extern acima).
 extern "C" JNIEXPORT void JNICALL

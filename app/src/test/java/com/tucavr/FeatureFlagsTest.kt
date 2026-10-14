@@ -62,5 +62,8 @@ class FeatureFlagsTest {
 
         // RF-ENV-007: Modo Noturno deve iniciar desabilitado por padrão
         org.junit.Assert.assertFalse("NIGHT_MODE deve iniciar desabilitado por padrão", FeatureFlags.Flag.NIGHT_MODE.defaultEnabled)
+
+        // Hand tracking habilitado por padrão
+        assertTrue("HAND_TRACKING deve vir habilitado por padrão", FeatureFlags.Flag.HAND_TRACKING.defaultEnabled)
     }
 }

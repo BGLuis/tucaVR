@@ -499,6 +499,9 @@ class VRActivity : NativeActivity() {
         // T4.4: inicializa o modo screen-locked a partir da preferência persistida
         nativeSetAudioScreenLocked(FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_SCREEN_LOCKED))
 
+        // Fase 0.3 Seção 5: empurra valor persistido de Hand Tracking / Gestos pro nativo
+        nativeSetHandTrackingEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.HAND_TRACKING))
+
         // Painel de Estatísticas Técnicas / Stats for Nerds (ver docs/DEBUGGING.md)
         isDebugStatsEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.DEBUG_STATS_PANEL)
         nativeSetDebugStatsEnabled(isDebugStatsEnabled)
@@ -2275,6 +2278,11 @@ class VRActivity : NativeActivity() {
     external fun nativeSetColorTemperature(kelvin: Float)
 
     external fun nativeSetNightMode(enabled: Boolean)
+
+    // Fase 0.3 Seção 5: Hand Tracking / Gestos (XR_EXT_hand_tracking).
+    external fun nativeSetHandTrackingEnabled(enabled: Boolean)
+
+    external fun nativeGetHandTrackingEnabled(): Boolean
 
     // Fase 0.3 Seção 2: Passthrough / Mixed Reality (Vulkan-only, XR_FB_passthrough).
     external fun nativeSetPassthroughEnabled(enabled: Boolean)

@@ -627,6 +627,7 @@ struct AppState {
 
     // Fase 0.3 Seção 5: Hand Tracking (XR_EXT_hand_tracking) — ver SetupHandTracking / DestroyHandTracking
     bool supportsHandTracking = false;
+    bool handTrackingEnabled = true;
     PFN_xrCreateHandTrackerEXT pfnCreateHandTrackerEXT = nullptr;
     PFN_xrDestroyHandTrackerEXT pfnDestroyHandTrackerEXT = nullptr;
     PFN_xrLocateHandJointsEXT pfnLocateHandJointsEXT = nullptr;

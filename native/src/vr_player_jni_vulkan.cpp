@@ -735,6 +735,23 @@ Java_com_tucavr_VRActivity_nativeSetNightMode(JNIEnv*, jobject, jboolean enabled
     g_nightModeEnabled.store(enabled != JNI_FALSE, std::memory_order_relaxed);
 }
 
+// Fase 0.3 Seção 5: Hand Tracking / Gestos (XR_EXT_hand_tracking)
+static std::atomic<bool> g_handTrackingEnabled{true};
+
+extern "C" bool get_hand_tracking_enabled() {
+    return g_handTrackingEnabled.load(std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetHandTrackingEnabled(JNIEnv*, jobject, jboolean enabled) {
+    g_handTrackingEnabled.store(enabled != JNI_FALSE, std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetHandTrackingEnabled(JNIEnv*, jobject) {
+    return g_handTrackingEnabled.load(std::memory_order_relaxed) ? JNI_TRUE : JNI_FALSE;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetUpscalingMode(JNIEnv*, jobject, jint mode) {
     set_upscaling_mode(static_cast<uint32_t>(mode < 0 ? 0 : mode));

@@ -201,6 +201,14 @@ static void TestTriggerPlayPauseInSphericalAnd2DModes() {
         assert(state.playPauseToggleCount == 0);
     }
 
+    // Caso 4: Hand Tracking desativado (handTrackingActive=false) em modo esférico - trigger alterna reprodução
+    {
+        InputFsmState state;
+        ProcessTriggerInputs(state, /*currTrigger=*/true, /*dispatchHitPanel=*/0,
+                             /*handTrackingActive=*/false, /*isHoveringScreen=*/true, /*isSphereMode=*/true);
+        assert(state.playPauseToggleCount == 1);
+    }
+
     std::cout << "[PASS] TestTriggerPlayPauseInSphericalAnd2DModes\n";
 }
 

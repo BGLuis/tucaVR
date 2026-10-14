@@ -505,6 +505,11 @@
     <string name="settings_subtitles_auto_load_label">Cargar subtítulos automáticamente</string>
     <string name="settings_subtitles_auto_load_description">Detecta y carga automáticamente archivos de subtítulos (.srt, .vtt) junto al video.</string>
 
+    <!-- Settings: Controls -->
+    <string name="settings_section_controls">Controles</string>
+    <string name="settings_hand_tracking_label">Control por gestos</string>
+    <string name="settings_hand_tracking_description">Permite usar las manos y gestos de pellizco para interactuar con la reproducción y los paneles de interfaz sin mandos físicos.</string>
+
     <!-- Settings: Advanced -->
     <string name="settings_section_advanced">Avanzado</string>
     <string name="settings_debug_stats_label">Estadísticas técnicas (Stats for Nerds)</string>

@@ -499,6 +499,11 @@
     <string name="settings_subtitles_auto_load_label">Carregar Legendas Automaticamente</string>
     <string name="settings_subtitles_auto_load_description">Detecta e carrega automaticamente arquivos de legenda (.srt, .vtt) ao lado do vídeo.</string>
 
+    <!-- Configurações: Controles -->
+    <string name="settings_section_controls">Controles</string>
+    <string name="settings_hand_tracking_label">Controle por gestos</string>
+    <string name="settings_hand_tracking_description">Permite usar as mãos e gestos de pinça para interagir com a reprodução e painéis de interface sem controles físicos.</string>
+
     <!-- Configurações: Avançado -->
     <string name="settings_section_advanced">Avançado</string>
     <string name="settings_debug_stats_label">Estatísticas Técnicas (Stats for Nerds)</string>

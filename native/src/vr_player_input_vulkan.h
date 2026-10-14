@@ -19,6 +19,7 @@ extern std::atomic<float> g_requestedScreenPosY;
 extern std::atomic<float> g_requestedScreenPosZ;
 extern std::atomic<float> g_requestedScreenScaleX;
 extern std::atomic<float> g_requestedScreenScaleY;
+extern "C" bool get_hand_tracking_enabled();
 
 inline void NotifyScreenTransformChanged(AppState& state, const XrVector3f& pos, float scaleX, float scaleY) {
     if (!state.app || !state.app->activity || !state.app->activity->vm) return;
@@ -438,6 +439,18 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     bool currTrigger = false;
     bool useLeft = false;
 
+    bool prevHandTrackingEnabled = state.handTrackingEnabled;
+    state.handTrackingEnabled = get_hand_tracking_enabled();
+    if (prevHandTrackingEnabled && !state.handTrackingEnabled) {
+        state.leftHandFilter.Reset();
+        state.rightHandFilter.Reset();
+        if (state.handTrackingActive && state.isScreenGrabbed) {
+            state.isScreenGrabbed = false;
+            NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
+        }
+        state.handTrackingActive = false;
+    }
+
     if (controllerActive) {
         state.handTrackingActive = false;
         // Mesma preferencia do caminho GLES (vr_player_app.cpp): usa a
@@ -454,7 +467,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             Mat4 rot = Mat4FromXrPose(spaceLocation.pose);
             state.lastRayDir = {-rot.m[8], -rot.m[9], -rot.m[10]}; // -Z axis
         }
-    } else if (state.supportsHandTracking && state.pfnLocateHandJointsEXT != nullptr) {
+    } else if (state.supportsHandTracking && state.handTrackingEnabled && state.pfnLocateHandJointsEXT != nullptr) {
         // T5.2: Leitura de juntas das mãos via XR_EXT_hand_tracking a cada frame
         XrHandJointLocationEXT jointLocationsL[XR_HAND_JOINT_COUNT_EXT];
         XrHandJointLocationsEXT locationsL{XR_TYPE_HAND_JOINT_LOCATIONS_EXT};
