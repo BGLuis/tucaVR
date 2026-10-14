@@ -10,8 +10,8 @@
 use core::playback::PlaybackController;
 use once_cell::sync::Lazy;
 use std::os::raw::c_void;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 // Nenhum backend de `log` (facade usada por `protocols`, ex.
 // `log::warn!("SftpFileSource: reconectando...")`) era inicializado em
@@ -993,12 +993,23 @@ pub extern "C" fn get_last_av_drift_ms() -> f32 {
 
 #[no_mangle]
 pub extern "C" fn toggle_play_pause() {
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.toggle_play_pause();
         emit_playback_feedback(if controller.is_playing() {
             FEEDBACK_PLAY
         } else {
             FEEDBACK_PAUSE
+        });
+    } else {
+        std::thread::spawn(|| {
+            if let Ok(mut controller) = CONTROLLER.lock() {
+                controller.toggle_play_pause();
+                emit_playback_feedback(if controller.is_playing() {
+                    FEEDBACK_PLAY
+                } else {
+                    FEEDBACK_PAUSE
+                });
+            }
         });
     }
 }
@@ -1008,15 +1019,27 @@ pub extern "C" fn on_app_focus_lost() {
     if !PAUSE_ON_EXIT.load(Ordering::Relaxed) {
         return;
     }
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.on_focus_lost();
+    } else {
+        std::thread::spawn(|| {
+            if let Ok(mut controller) = CONTROLLER.lock() {
+                controller.on_focus_lost();
+            }
+        });
     }
 }
 
 #[no_mangle]
 pub extern "C" fn on_app_focus_gained() {
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.on_focus_gained();
+    } else {
+        std::thread::spawn(|| {
+            if let Ok(mut controller) = CONTROLLER.lock() {
+                controller.on_focus_gained();
+            }
+        });
     }
 }
 
@@ -1106,6 +1129,32 @@ pub extern "C" fn get_all_playback_errors() -> *mut std::os::raw::c_char {
     string_to_c_char(ERROR_RING.all_as_tsv())
 }
 
+// ============================================================================
+// Lock-free Playback Preferences (T7.6, Audio, Subtitle, Speed)
+// Decoupled from CONTROLLER mutex to prevent UI/render thread ANR deadlocks.
+// ============================================================================
+
+static PREFERRED_SUBTITLE_LANGUAGE: Lazy<RwLock<Option<String>>> = Lazy::new(|| RwLock::new(None));
+static DESIRED_AUDIO_TRACK: AtomicU32 = AtomicU32::new(0);
+static PLAYBACK_SPEED_BITS: AtomicU32 = AtomicU32::new(0x3F800000); // 1.0f32
+static SUBTITLE_OFFSET_MS: AtomicI64 = AtomicI64::new(0);
+
+fn apply_playback_preferences_before_load(controller: &mut PlaybackController) {
+    if let Ok(pref) = PREFERRED_SUBTITLE_LANGUAGE.read() {
+        if let Some(ref l) = *pref {
+            controller.set_preferred_subtitle_language(l);
+        } else {
+            controller.set_preferred_subtitle_language("");
+        }
+    }
+    let desired_audio = DESIRED_AUDIO_TRACK.load(Ordering::Relaxed) as usize;
+    controller.select_audio_track(desired_audio);
+    let speed = f32::from_bits(PLAYBACK_SPEED_BITS.load(Ordering::Relaxed));
+    controller.set_speed(speed);
+    let offset_ms = SUBTITLE_OFFSET_MS.load(Ordering::Relaxed);
+    controller.set_subtitle_offset_ms(offset_ms);
+}
+
 /// T6.4: inicia playback de um arquivo via SMB. Recebe host/share/caminho/
 /// credenciais como parametros SEPARADOS (nunca uma URI unica com a senha
 /// embutida cruzando a fronteira JNI) — o Kotlin resolve as credenciais
@@ -1175,6 +1224,7 @@ pub extern "C" fn start_smb_playback(
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
+            apply_playback_preferences_before_load(&mut controller);
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
                 unsafe {
                     log(6, &format!("Error loading SMB video: {:?}", e));
@@ -1378,6 +1428,7 @@ pub extern "C" fn start_ftp_playback(
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
+            apply_playback_preferences_before_load(&mut controller);
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
                 unsafe {
                     log(6, &format!("Error loading FTP video: {:?}", e));
@@ -1532,6 +1583,7 @@ pub extern "C" fn start_sftp_playback(
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
+            apply_playback_preferences_before_load(&mut controller);
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
                 unsafe {
                     log(6, &format!("Error loading SFTP video: {:?}", e));
@@ -1685,6 +1737,7 @@ pub extern "C" fn start_nfs_playback(
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
+            apply_playback_preferences_before_load(&mut controller);
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
                 unsafe {
                     log(6, &format!("Error loading NFS video: {:?}", e));
@@ -1854,6 +1907,7 @@ pub extern "C" fn start_webdav_playback(
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
+            apply_playback_preferences_before_load(&mut controller);
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
                 unsafe {
                     log(6, &format!("Error loading WebDAV video: {:?}", e));
@@ -2179,6 +2233,7 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
         }
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
+            apply_playback_preferences_before_load(&mut controller);
             if let Err(e) = controller.load_at(&path_str, f64::from(start_time_sec)) {
                 unsafe {
                     log(6, &format!("Error loading video: {:?}", e));
@@ -2209,8 +2264,14 @@ pub extern "C" fn stop_video_playback() {
 #[no_mangle]
 pub extern "C" fn reset_process_state() {
     DOWNLOAD_MANAGER.set_playback_active(false);
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.stop();
+    } else {
+        std::thread::spawn(|| {
+            if let Ok(mut controller) = CONTROLLER.lock() {
+                controller.stop();
+            }
+        });
     }
     LOADING_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
     FEEDBACK_EVENT.store(0, std::sync::atomic::Ordering::SeqCst);
@@ -2222,6 +2283,9 @@ pub extern "C" fn reset_process_state() {
     LAST_FRAMES_OUTPUT.store(0, std::sync::atomic::Ordering::SeqCst);
     LAST_FRAMES_DROPPED.store(0, std::sync::atomic::Ordering::SeqCst);
     LAST_NETWORK_BYTES.store(0, std::sync::atomic::Ordering::SeqCst);
+    DESIRED_AUDIO_TRACK.store(0, std::sync::atomic::Ordering::Relaxed);
+    SUBTITLE_OFFSET_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+    PLAYBACK_SPEED_BITS.store(0x3F800000, std::sync::atomic::Ordering::Relaxed);
     ERROR_RING.clear();
 }
 
@@ -2270,16 +2334,17 @@ pub extern "C" fn get_video_volume() -> f32 {
 
 #[no_mangle]
 pub extern "C" fn set_playback_speed(speed: f32) {
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    let speed = speed.clamp(0.25, 4.0);
+    PLAYBACK_SPEED_BITS.store(speed.to_bits(), Ordering::Relaxed);
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.set_speed(speed);
     }
 }
 
 #[no_mangle]
 pub extern "C" fn get_playback_speed() -> f32 {
-    // try_sample_or: chamada periodica do render loop (C++ HUD / telemetry a 90Hz).
-    // Se o lock estiver ocupado (load_at em background), devolve 1.0 sem bloquear a render thread.
-    media_logic::session::try_sample_or(&CONTROLLER, 1.0, |controller| controller.get_speed())
+    let fallback = f32::from_bits(PLAYBACK_SPEED_BITS.load(Ordering::Relaxed));
+    media_logic::session::try_sample_or(&CONTROLLER, fallback, |controller| controller.get_speed())
 }
 
 #[no_mangle]
@@ -2308,7 +2373,8 @@ pub extern "C" fn get_audio_track_count() -> u32 {
 /// escolha feita num arquivo vaza silenciosamente pro proximo.
 #[no_mangle]
 pub extern "C" fn set_desired_audio_track(ordinal: u32) {
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    DESIRED_AUDIO_TRACK.store(ordinal, Ordering::Relaxed);
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.select_audio_track(ordinal as usize);
     }
 }
@@ -2914,8 +2980,14 @@ pub extern "C" fn get_video_progress(current: *mut f32, total: *mut f32) {
 
 #[no_mangle]
 pub extern "C" fn set_subtitle_track(track_index: i32) {
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.set_subtitle_track(track_index);
+    } else {
+        std::thread::spawn(move || {
+            if let Ok(mut controller) = CONTROLLER.lock() {
+                controller.set_subtitle_track(track_index);
+            }
+        });
     }
 }
 
@@ -2930,7 +3002,8 @@ pub extern "C" fn get_subtitle_track() -> i32 {
 
 #[no_mangle]
 pub extern "C" fn set_subtitle_offset_ms(offset_ms: i64) {
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    SUBTITLE_OFFSET_MS.store(offset_ms, Ordering::Relaxed);
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.set_subtitle_offset_ms(offset_ms);
     }
 }
@@ -2940,7 +3013,7 @@ pub extern "C" fn get_subtitle_offset_ms() -> i64 {
     if let Ok(controller) = CONTROLLER.try_lock() {
         controller.get_subtitle_offset_ms()
     } else {
-        0
+        SUBTITLE_OFFSET_MS.load(Ordering::Relaxed)
     }
 }
 
@@ -2950,7 +3023,7 @@ pub extern "C" fn load_external_subtitle(path: *const std::os::raw::c_char) -> u
         Some(s) => s,
         None => return 0,
     };
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.load_external_subtitle(&path_str).unwrap_or(0)
     } else {
         0
@@ -2960,11 +3033,20 @@ pub extern "C" fn load_external_subtitle(path: *const std::os::raw::c_char) -> u
 /// Define o idioma do sistema (ex.: `"pt-BR"`) para a auto-seleção de faixa de
 /// legenda embutida — T7.6. Deve ser chamado antes de `load_video_playback`
 /// para ter efeito no arquivo carregado a seguir.
+/// Totalmente lock-free em relação ao CONTROLLER para nunca travar a thread de UI do Android.
 #[no_mangle]
 pub extern "C" fn set_preferred_subtitle_language(lang: *const std::os::raw::c_char) {
     let lang_str = unsafe { cstr_to_string(lang) }.unwrap_or_default();
-    if let Ok(mut controller) = CONTROLLER.lock() {
-        controller.set_preferred_subtitle_language(&lang_str);
+    let trimmed = lang_str.trim().to_string();
+    if let Ok(mut pref) = PREFERRED_SUBTITLE_LANGUAGE.write() {
+        *pref = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.clone())
+        };
+    }
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
+        controller.set_preferred_subtitle_language(&trimmed);
     }
 }
 
