@@ -316,8 +316,7 @@ class VRModalPresentation(
                 currentPackedAlphaCutoff = packedAlphaCutoff,
                 currentPackedAlphaChoke = packedAlphaChoke,
                 onTogglePassthrough = { enabled ->
-                    FeatureFlags.setEnabled(context, FeatureFlags.Flag.PASSTHROUGH, enabled)
-                    activity.nativeSetPassthroughEnabled(enabled)
+                    activity.setPassthroughEnabled(enabled)
                 },
                 onOpacityChanged = { newOpacity ->
                     FeatureFlags.setPassthroughOpacity(context, newOpacity)
@@ -479,11 +478,10 @@ class VRModalPresentation(
             }
         }
 
-        if (parent is android.widget.ScrollView ||
-            parent is androidx.recyclerview.widget.RecyclerView ||
-            parent.canScrollVertically(1) ||
-            parent.canScrollVertically(-1)
-        ) {
+        val isScrollableType =
+            parent is android.widget.ScrollView ||
+                parent is androidx.recyclerview.widget.RecyclerView
+        if (isScrollableType || parent.canScrollVertically(1) || parent.canScrollVertically(-1)) {
             return parent
         }
         return null

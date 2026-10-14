@@ -42,9 +42,9 @@ class DownloadsScreen(
     private val scope: CoroutineScope,
     private val repository: DownloadRepository,
     private val diskSpaceManager: DiskSpaceManager = DiskSpaceManager(),
+    private val onPlay: (PlaybackSource) -> Unit,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
-    private val onPlaySource: (PlaybackSource) -> Unit = {},
 ) {
     private lateinit var listContainer: LinearLayout
     private lateinit var storageInfoText: View
@@ -412,7 +412,7 @@ class DownloadsScreen(
                         textSize = 14f
                         setOnClickListener {
                             livePollJob?.cancel()
-                            onPlaySource(PlaybackSource.LocalFile(item.destinationPath, item.totalBytes))
+                            onPlay(PlaybackSource.LocalFile(item.destinationPath, item.totalBytes))
                         }
                     }
                 val btnDelete =

@@ -60,6 +60,7 @@ class NetworkFtpScreen(
     private val credentialStore: FtpCredentialStore,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
+    private val onPlay: (PlaybackSource) -> Unit = { source -> onNavigate(Destination.Player(source)) },
 ) {
     var browsingServer: FtpServer? = null
     var browsePath: String = ""
@@ -81,7 +82,10 @@ class NetworkFtpScreen(
 
     // ---- Formulario "Adicionar servidor" (usado pela lista unificada em NetworkHomeScreen) ----
 
-    fun buildAddServerForm(onSaved: () -> Unit): View {
+    fun buildAddServerForm(
+        onSaved: () -> Unit,
+        prefill: ServerPrefill? = null,
+    ): View {
         val form = VoidForm(context)
 
         val fieldHost =
@@ -100,6 +104,11 @@ class NetworkFtpScreen(
                 kind = VoidFieldKind.NUMBER,
                 validator = FieldValidators.port(context.getString(R.string.field_error_invalid_port)),
             )
+
+        if (prefill != null) {
+            if (prefill.host.isNotEmpty()) fieldHost.setText(prefill.host)
+            if (prefill.port > 0) fieldPort.setText(prefill.port.toString())
+        }
 
         val fieldUser =
             VoidTextField(
@@ -309,8 +318,7 @@ class NetworkFtpScreen(
                     renderFiles(server)
                 },
                 onVideoClick = { entry ->
-                    activity.playFtp(server, entry.path, entry.sizeBytes, resumeAtMs = null)
-                    activity.requestUiPanelHidden()
+                    onPlay(PlaybackSource.Ftp(server, entry.path, entry.sizeBytes))
                 },
                 onFileSelected = { entry ->
                     val source = PlaybackSource.Ftp(server, entry.path, entry.sizeBytes)

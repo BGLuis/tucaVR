@@ -39,6 +39,23 @@ data class DiscoveredServerItem(
 )
 
 /**
+ * Localiza um servidor salvo existente que coincida com o servidor descoberto
+ * por protocolo, host (case-insensitive) e porta. O nome de exibição é ignorado
+ * pois varia com frequência entre mDNS e SSDP.
+ */
+fun findSavedServer(
+    saved: List<SavedServer>,
+    discovered: DiscoveredServerItem,
+): SavedServer? {
+    val cleanHost = discovered.host.trim()
+    return saved.firstOrNull { existing ->
+        existing.protocol == discovered.protocol &&
+            existing.host.trim().equals(cleanHost, ignoreCase = true) &&
+            existing.port == discovered.port
+    }
+}
+
+/**
  * T10.4: Tela de Descoberta Automatica de Servidores na Rede Local (mDNS e SSDP).
  * Localiza e lista servidores SMB, NFS, FTP, SFTP, WebDAV e DLNA.
  */
@@ -280,20 +297,31 @@ class NetworkDiscoveryScreen(
     private fun onServerSelected(item: DiscoveredServerItem) {
         when (item.protocol) {
             ServerProtocol.NFS -> {
-                val server =
-                    SavedServer(
-                        name = item.name,
-                        protocol = ServerProtocol.NFS,
-                        host = item.host,
-                        port = item.port,
-                        path = item.path.ifEmpty { "/" },
-                        isAutoDiscovered = true,
-                        lastConnectedAt = System.currentTimeMillis(),
-                    )
-                scope.launch(Dispatchers.IO) {
-                    savedServerDao.insert(server)
+                scope.launch {
+                    val saved = withContext(Dispatchers.IO) { savedServerDao.getByProtocol(ServerProtocol.NFS) }
+                    val existing = findSavedServer(saved, item)
+                    val server =
+                        if (existing != null) {
+                            existing.copy(
+                                path = if (existing.path.isNotEmpty()) existing.path else item.path.ifEmpty { "/" },
+                                lastConnectedAt = System.currentTimeMillis(),
+                            )
+                        } else {
+                            SavedServer(
+                                name = item.name,
+                                protocol = ServerProtocol.NFS,
+                                host = item.host,
+                                port = item.port,
+                                path = item.path.ifEmpty { "/" },
+                                isAutoDiscovered = true,
+                                lastConnectedAt = System.currentTimeMillis(),
+                            )
+                        }
+                    withContext(Dispatchers.IO) {
+                        savedServerDao.insert(server)
+                    }
+                    onNavigate(Destination.NetworkNfsFiles(server, ""))
                 }
-                onNavigate(Destination.NetworkNfsFiles(server, ""))
             }
             ServerProtocol.DLNA -> {
                 scope.launch {
@@ -305,16 +333,26 @@ class NetworkDiscoveryScreen(
                     val friendlyName = if (parts.size >= 2 && parts[0] == "OK" && parts[1].isNotBlank()) parts[1] else item.name
                     val controlUrl = if (parts.size >= 3 && parts[0] == "OK") parts[2] else item.path
 
+                    val saved = withContext(Dispatchers.IO) { savedServerDao.getByProtocol(ServerProtocol.DLNA) }
+                    val existing = findSavedServer(saved, item)
                     val server =
-                        SavedServer(
-                            name = friendlyName,
-                            protocol = ServerProtocol.DLNA,
-                            host = item.host,
-                            port = item.port,
-                            path = controlUrl,
-                            isAutoDiscovered = true,
-                            lastConnectedAt = System.currentTimeMillis(),
-                        )
+                        if (existing != null) {
+                            existing.copy(
+                                name = friendlyName,
+                                path = controlUrl,
+                                lastConnectedAt = System.currentTimeMillis(),
+                            )
+                        } else {
+                            SavedServer(
+                                name = friendlyName,
+                                protocol = ServerProtocol.DLNA,
+                                host = item.host,
+                                port = item.port,
+                                path = controlUrl,
+                                isAutoDiscovered = true,
+                                lastConnectedAt = System.currentTimeMillis(),
+                            )
+                        }
                     withContext(Dispatchers.IO) {
                         savedServerDao.insert(server)
                     }

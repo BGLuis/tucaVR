@@ -56,6 +56,7 @@ class NetworkNfsScreen(
     private val savedServerDao: SavedServerDao,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
+    private val onPlay: (PlaybackSource) -> Unit = { source -> onNavigate(Destination.Player(source)) },
 ) {
     var browsingServer: SavedServer? = null
     var browsePath: String = ""
@@ -77,7 +78,10 @@ class NetworkNfsScreen(
 
     // ---- Formulario "Adicionar servidor" (usado pela lista unificada em NetworkHomeScreen) ----
 
-    fun buildAddServerForm(onSaved: () -> Unit): View {
+    fun buildAddServerForm(
+        onSaved: () -> Unit,
+        prefill: ServerPrefill? = null,
+    ): View {
         val form = VoidForm(context)
 
         val hostInput =
@@ -108,6 +112,12 @@ class NetworkNfsScreen(
                 kind = VoidFieldKind.TEXT,
                 validator = FieldValidators.required(context.getString(R.string.network_nfs_form_status_export_required)),
             )
+
+        if (prefill != null) {
+            if (prefill.host.isNotEmpty()) hostInput.setText(prefill.host)
+            if (prefill.port > 0) portInput.setText(prefill.port.toString())
+            if (prefill.path.isNotEmpty()) exportInput.setText(prefill.path)
+        }
 
         val nameInput =
             form.field(
@@ -262,7 +272,7 @@ class NetworkNfsScreen(
                 subPath.substringAfterLast('/')
             }
 
-        val header = VoidPanelChrome.buildHeader(context, title = titleText, onBack = { handleBack(server) })
+        val header = VoidPanelChrome.buildHeader(context, title = titleText, onBack = { onBack() })
         root.addView(header)
 
         // Barra de Ferramentas Compartilhada (Busca + Ordenação + Visualização + Filtros)
@@ -335,8 +345,7 @@ class NetworkNfsScreen(
                     renderFiles(server, browsePath)
                 },
                 onVideoClick = { entry ->
-                    activity.playNfs(server, entry.path, entry.sizeBytes, resumeAtMs = null)
-                    activity.requestUiPanelHidden()
+                    onPlay(PlaybackSource.Nfs(server, entry.path, entry.sizeBytes))
                 },
                 onFileSelected = { entry ->
                     val source = PlaybackSource.Nfs(server, entry.path, entry.sizeBytes)

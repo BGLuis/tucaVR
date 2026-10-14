@@ -25,11 +25,16 @@ struct InputFsmState {
     // Metricas de observabilidade do teste
     int playPauseToggleCount = 0;
     int uiToggleCount = 0;
+    int hierarchicalBackCount = 0;
     int recenterCount = 0;
+    float screenPosX = 0.0f;
+    float screenPosY = 0.0f;
+    float screenPosZ = 0.0f;
 };
 
 inline void ProcessButtonInputs(InputFsmState &state, bool currA, bool currX, bool currB, bool currY, bool currMenu,
-                                float dt) {
+                                float dt, bool keyboardActive = false, bool backHandledByUi = false,
+                                float defaultPosX = 0.0f, float defaultPosY = 1.5f, float defaultPosZ = -2.0f) {
     constexpr float kRecenterHoldSeconds = 0.75f;
     constexpr float kUiAutoHideSeconds = 5.0f;
 
@@ -39,32 +44,36 @@ inline void ProcessButtonInputs(InputFsmState &state, bool currA, bool currX, bo
     }
 
     // A (direita) ou X (esquerda) = alterna Play/Pause na borda de subida (curr && !prev)
-    if ((currA && !state.prevA) || (currX && !state.prevX)) {
+    if (((currA && !state.prevA) || (currX && !state.prevX)) && !keyboardActive) {
         state.playPauseToggleCount++;
         state.controlsIdleTime = 0.0f;
         state.controlsAlpha = 1.0f;
         state.controlsExplicitlyDismissed = false;
     }
 
-    // B (direita) ou Y (esquerda) = alterna visibilidade dos controles e UI na borda de subida.
-    // Se visiveis, oculta imediatamente (dispensa rapida). Se ocultos, reabre-os instantaneamente.
-    if ((currB && !state.prevB) || (currY && !state.prevY)) {
+    // B (direita) ou Y (esquerda) = navegação hierárquica para trás (Issue #87).
+    if (((currB && !state.prevB) || (currY && !state.prevY)) && !keyboardActive) {
         bool controlsVisible = (state.controlsAlpha > 0.05f) || (state.controlsIdleTime < kUiAutoHideSeconds);
         bool uiVisible = (state.uiAlpha > 0.05f) || (state.uiIdleTime < kUiAutoHideSeconds);
-        if (controlsVisible || uiVisible) {
-            state.uiIdleTime = kUiAutoHideSeconds;
-            state.controlsIdleTime = kUiAutoHideSeconds;
-            state.controlsAlpha = 0.0f;
-            state.uiAlpha = 0.0f;
-            state.controlsExplicitlyDismissed = true;
+
+        if (uiVisible && backHandledByUi) {
+            state.hierarchicalBackCount++;
         } else {
-            state.uiIdleTime = 0.0f;
-            state.controlsIdleTime = 0.0f;
-            state.controlsAlpha = 1.0f;
-            state.uiAlpha = 1.0f;
-            state.controlsExplicitlyDismissed = false;
+            if (controlsVisible || uiVisible) {
+                state.uiIdleTime = kUiAutoHideSeconds;
+                state.controlsIdleTime = kUiAutoHideSeconds;
+                state.controlsAlpha = 0.0f;
+                state.uiAlpha = 0.0f;
+                state.controlsExplicitlyDismissed = true;
+            } else {
+                state.uiIdleTime = 0.0f;
+                state.controlsIdleTime = 0.0f;
+                state.controlsAlpha = 1.0f;
+                state.uiAlpha = 1.0f;
+                state.controlsExplicitlyDismissed = false;
+            }
+            state.uiToggleCount++;
         }
-        state.uiToggleCount++;
     }
 
     // Regra C-01: salvar estado anterior obrigatoriamente a cada frame
@@ -78,12 +87,16 @@ inline void ProcessButtonInputs(InputFsmState &state, bool currA, bool currX, bo
         state.menuHoldTime += dt;
         if (!state.recenterFiredThisHold && state.menuHoldTime >= kRecenterHoldSeconds) {
             state.recenterCount++;
+            state.screenPosX = defaultPosX;
+            state.screenPosY = defaultPosY;
+            state.screenPosZ = defaultPosZ;
             state.recenterFiredThisHold = true;
         }
     } else {
-        if (state.prevMenu && !state.recenterFiredThisHold) {
+        if (state.prevMenu && !state.recenterFiredThisHold && !keyboardActive) {
+            bool controlsVisible = (state.controlsAlpha > 0.05f) || (state.controlsIdleTime < kUiAutoHideSeconds);
             bool uiVisible = (state.uiAlpha > 0.05f) || (state.uiIdleTime < kUiAutoHideSeconds);
-            if (uiVisible) {
+            if (controlsVisible || uiVisible) {
                 state.uiIdleTime = kUiAutoHideSeconds;
                 state.controlsIdleTime = kUiAutoHideSeconds;
                 state.controlsAlpha = 0.0f;
@@ -455,10 +468,12 @@ static void TestMenuHidesOnPlaybackStartAndReopensOnMenuButton() {
     state.controlsIdleTime = 0.0f;
     state.prevIsPlaying = false;
 
-    // Transição para reprodução: menu é ocultado imediatamente
+    // Transição para reprodução: menu é ocultado imediatamente e controles auto-hide
     UpdateIdleAndAlpha(state, /*hitScreen=*/false, /*currentHitPanel=*/0, /*isPlaying=*/true, dt);
     assert(state.uiAlpha == 0.0f);
     assert(state.uiIdleTime >= 5.0f);
+    state.controlsAlpha = 0.0f;
+    state.controlsIdleTime = 5.0f;
 
     // Vídeo tocando, menu oculto. Usuário aperta o botão Menu (short press release)
     // Deve reabrir o menu (uiAlpha -> 1.0f)
@@ -508,6 +523,63 @@ static void TestUiPanelExplicitHideWithHover() {
     std::cout << "[PASS] TestUiPanelExplicitHideWithHover\n";
 }
 
+static void TestButtonBYHierarchicalBackAndKeyboard() {
+    InputFsmState state;
+    const float dt = 1.0f / 90.0f;
+
+    state.controlsAlpha = 1.0f;
+    state.uiAlpha = 1.0f;
+
+    // Cenário 1: Teclado ativo -> B e Y são ignorados pela UI FSM
+    ProcessButtonInputs(state, false, false, /*currB=*/true, false, false, dt, /*keyboardActive=*/true);
+    assert(state.uiToggleCount == 0);
+    assert(state.hierarchicalBackCount == 0);
+    assert(state.uiAlpha == 1.0f);
+    ProcessButtonInputs(state, false, false, /*currB=*/false, false, false, dt, /*keyboardActive=*/true);
+
+    // Cenário 2: UI aberta numa subpasta (backHandledByUi = true)
+    // Pressionar B deve ser consumido pela UI sem fechar o painel
+    ProcessButtonInputs(state, false, false, /*currB=*/true, false, false, dt, /*keyboardActive=*/false,
+                        /*backHandledByUi=*/true);
+    assert(state.hierarchicalBackCount == 1);
+    assert(state.uiToggleCount == 0);
+    assert(state.uiAlpha == 1.0f);
+    ProcessButtonInputs(state, false, false, /*currB=*/false, false, false, dt);
+
+    // Cenário 3: UI na raiz (backHandledByUi = false)
+    // Pressionar B agora fecha os painéis (dispensa rápida)
+    ProcessButtonInputs(state, false, false, /*currB=*/true, false, false, dt, /*keyboardActive=*/false,
+                        /*backHandledByUi=*/false);
+    assert(state.uiToggleCount == 1);
+    assert(state.uiAlpha == 0.0f);
+    ProcessButtonInputs(state, false, false, /*currB=*/false, false, false, dt);
+
+    // Cenário 4: Painéis fechados -> pressionar Y reabre
+    ProcessButtonInputs(state, false, false, false, /*currY=*/true, false, dt, /*keyboardActive=*/false,
+                        /*backHandledByUi=*/false);
+    assert(state.uiToggleCount == 2);
+    assert(state.uiAlpha == 1.0f);
+    ProcessButtonInputs(state, false, false, false, /*currY=*/false, false, dt);
+
+    std::cout << "[PASS] TestButtonBYHierarchicalBackAndKeyboard\n";
+}
+
+static void TestRecenterUsesDefaultPosition() {
+    InputFsmState state;
+    const float dt = 1.0f / 90.0f;
+
+    // Segura Menu por 0.8s com ambiente configurado para z = -3.5m
+    for (int i = 0; i < 75; i++) {
+        ProcessButtonInputs(state, false, false, false, false, /*currMenu=*/true, dt,
+                            /*keyboardActive=*/false, /*backHandledByUi=*/false,
+                            /*defaultPosX=*/0.0f, /*defaultPosY=*/1.5f, /*defaultPosZ=*/-3.5f);
+    }
+    assert(state.recenterCount == 1);
+    assert(state.screenPosZ == -3.5f);
+
+    std::cout << "[PASS] TestRecenterUsesDefaultPosition\n";
+}
+
 int main() {
     std::cout << "--- Executando testes unitarios de Input FSM (C-01) ---\n";
     TestButtonAHoldTriggersOnlyOnce();
@@ -515,6 +587,8 @@ int main() {
     TestMenuButtonShortPressVsLongPress();
     TestTriggerPlayPauseInSphericalAnd2DModes();
     TestButtonBAndYDismissControlsInstantly();
+    TestButtonBYHierarchicalBackAndKeyboard();
+    TestRecenterUsesDefaultPosition();
     TestMenuButtonShortPressDismissesControls();
     TestStationaryControllerAcceleratesAutoHide();
     TestMenuHidesOnPlaybackStartAndReopensOnMenuButton();

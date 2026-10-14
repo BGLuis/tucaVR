@@ -63,6 +63,7 @@ class NetworkWebdavScreen(
     private val credentialStore: ServerCredentialStore,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
+    private val onPlay: (PlaybackSource) -> Unit = { source -> onNavigate(Destination.Player(source)) },
 ) {
     var browsingServer: SavedServer? = null
     var browsePath: String = ""
@@ -90,7 +91,10 @@ class NetworkWebdavScreen(
 
     // ---- Formulario "Adicionar servidor" (usado pela lista unificada em NetworkHomeScreen) ----
 
-    fun buildAddServerForm(onSaved: () -> Unit): View {
+    fun buildAddServerForm(
+        onSaved: () -> Unit,
+        prefill: ServerPrefill? = null,
+    ): View {
         val form = VoidForm(context)
 
         val hostInput =
@@ -131,6 +135,13 @@ class NetworkWebdavScreen(
                 kind = VoidFieldKind.TEXT,
             ).apply { setText("/") }
         formBasePathField = basePathInput
+
+        if (prefill != null) {
+            if (prefill.host.isNotEmpty()) hostInput.setText(prefill.host)
+            if (prefill.port > 0) portInput.setText(prefill.port.toString())
+            if (prefill.name.isNotEmpty()) nameInput.setText(prefill.name)
+            if (prefill.path.isNotEmpty()) basePathInput.setText(prefill.path)
+        }
 
         val userInput =
             form.field(
@@ -426,8 +437,7 @@ class NetworkWebdavScreen(
                     renderFiles(server, browsePath)
                 },
                 onVideoClick = { entry ->
-                    activity.playWebdav(server, entry.path, sizeBytes = entry.sizeBytes, resumeAtMs = null)
-                    activity.requestUiPanelHidden()
+                    onPlay(PlaybackSource.Webdav(server, entry.path, entry.sizeBytes))
                 },
                 onFileSelected = { entry ->
                     val source = PlaybackSource.Webdav(server, entry.path, entry.sizeBytes)

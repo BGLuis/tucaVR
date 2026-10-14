@@ -64,6 +64,7 @@ class NetworkSmbScreen(
     private val credentialStore: SmbCredentialStore,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
+    private val onPlay: (PlaybackSource) -> Unit = { source -> onNavigate(Destination.Player(source)) },
 ) {
     var browsingServer: SmbServer? = null
     var browsePath: String = ""
@@ -85,7 +86,10 @@ class NetworkSmbScreen(
 
     // ---- Formulario "Adicionar servidor" (usado pela lista unificada em NetworkHomeScreen) ----
 
-    fun buildAddServerForm(onSaved: () -> Unit): View {
+    fun buildAddServerForm(
+        onSaved: () -> Unit,
+        prefill: ServerPrefill? = null,
+    ): View {
         val form = VoidForm(context)
 
         val fieldHost =
@@ -111,6 +115,12 @@ class NetworkSmbScreen(
                 hint = "Videos",
                 kind = VoidFieldKind.TEXT,
             )
+
+        if (prefill != null) {
+            if (prefill.host.isNotEmpty()) fieldHost.setText(prefill.host)
+            if (prefill.port > 0) fieldPort.setText(prefill.port.toString())
+            if (prefill.path.isNotEmpty()) fieldShare.setText(prefill.path.trimStart('/'))
+        }
 
         val fieldUser =
             VoidTextField(
@@ -338,8 +348,7 @@ class NetworkSmbScreen(
                     renderFiles(server)
                 },
                 onVideoClick = { entry ->
-                    activity.playSmb(server, entry.path, entry.sizeBytes, resumeAtMs = null)
-                    activity.requestUiPanelHidden()
+                    onPlay(PlaybackSource.Smb(server, entry.path, entry.sizeBytes))
                 },
                 onFileSelected = { entry ->
                     val source = PlaybackSource.Smb(server, entry.path, entry.sizeBytes)

@@ -20,7 +20,6 @@ import com.tucavr.designsystem.VoidPanelChrome
 import com.tucavr.designsystem.VoidText
 import com.tucavr.designsystem.VoidTextField
 import com.tucavr.designsystem.VoidTheme
-import com.tucavr.history.isResumable
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
 import com.tucavr.network.MulticastLockManager
@@ -38,6 +37,16 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+/**
+ * Dados de preenchimento automático para formulários de adição de servidor (vindos da descoberta).
+ */
+data class ServerPrefill(
+    val host: String = "",
+    val port: Int = 0,
+    val name: String = "",
+    val path: String = "",
+)
 
 /**
  * Landing da seção "Rede".
@@ -59,13 +68,14 @@ class NetworkHomeScreen(
     private val credentialStore: ServerCredentialStore,
     private val lockManager: MulticastLockManager? = null,
     private val discoveryPageBuilder: () -> View,
-    private val smbAddFormBuilder: (onSaved: () -> Unit) -> View,
-    private val ftpAddFormBuilder: (onSaved: () -> Unit) -> View,
-    private val sftpAddFormBuilder: (onSaved: () -> Unit) -> View,
-    private val nfsAddFormBuilder: (onSaved: () -> Unit) -> View,
-    private val webdavAddFormBuilder: (onSaved: () -> Unit) -> View,
+    private val smbAddFormBuilder: (onSaved: () -> Unit, prefill: ServerPrefill?) -> View,
+    private val ftpAddFormBuilder: (onSaved: () -> Unit, prefill: ServerPrefill?) -> View,
+    private val sftpAddFormBuilder: (onSaved: () -> Unit, prefill: ServerPrefill?) -> View,
+    private val nfsAddFormBuilder: (onSaved: () -> Unit, prefill: ServerPrefill?) -> View,
+    private val webdavAddFormBuilder: (onSaved: () -> Unit, prefill: ServerPrefill?) -> View,
     private val onNavigate: (Destination) -> Unit,
-    private val onBack: () -> Unit,
+    private val onBack: () -> Unit = {},
+    private val onPlay: (PlaybackSource) -> Unit,
     private val onConfigureDiscoveredServer: (
         (
             protocol: ServerProtocol,
@@ -87,12 +97,13 @@ class NetworkHomeScreen(
     }
 
     private var mode: HomeMode = HomeMode.List
+    private var pendingPrefill: ServerPrefill? = null
 
     private var discoveredServers: List<DiscoveredServerItem> = emptyList()
     private var isScanningDiscovery: Boolean = false
 
     /** Formulários manuais de cadastro disponíveis — DLNA não entra aqui (só via descoberta). */
-    private val addFormBuilders: Map<ServerProtocol, (onSaved: () -> Unit) -> View> =
+    private val addFormBuilders: Map<ServerProtocol, (onSaved: () -> Unit, prefill: ServerPrefill?) -> View> =
         linkedMapOf(
             ServerProtocol.SMB to smbAddFormBuilder,
             ServerProtocol.FTP to ftpAddFormBuilder,
@@ -103,13 +114,18 @@ class NetworkHomeScreen(
 
     /** Ponto de entrada externo (navegação vinda de outra tela) — sempre reseta para a lista. */
     fun render() {
+        pendingPrefill = null
         mode = HomeMode.List
         renderCurrent()
     }
 
     /** Abre o formulário de cadastro daquele protocolo (usado também pela Descoberta, com prefill). */
-    fun openAddForm(protocol: ServerProtocol) {
+    fun openAddForm(
+        protocol: ServerProtocol,
+        prefill: ServerPrefill? = null,
+    ) {
         if (addFormBuilders.containsKey(protocol)) {
+            pendingPrefill = prefill
             mode = HomeMode.AddForm(protocol)
             renderCurrent()
         }
@@ -118,6 +134,7 @@ class NetworkHomeScreen(
     /** @return true se consumiu o "Voltar" internamente (voltou pra lista); false = deixa o AppNavigator agir. */
     fun handleBack(): Boolean {
         if (mode is HomeMode.List) return false
+        pendingPrefill = null
         mode = HomeMode.List
         renderCurrent()
         return true
@@ -606,10 +623,14 @@ class NetworkHomeScreen(
             VoidPanelChrome.buildHeader(context, title = context.getString(protocol.labelRes), onBack = { handleBack() }),
         )
         val formView =
-            builder {
-                mode = HomeMode.List
-                renderCurrent()
-            }
+            builder(
+                {
+                    pendingPrefill = null
+                    mode = HomeMode.List
+                    renderCurrent()
+                },
+                pendingPrefill,
+            )
         root.addView(wrapInScroll(formView), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         host.showScreen(root)
     }
@@ -765,10 +786,7 @@ class NetworkHomeScreen(
         }
 
         val source = PlaybackSource.Http(url)
-        promptResumeOrPlay(source) { resumeAtMs ->
-            activity.playUrl(url, resumeAtMs)
-            activity.requestUiPanelHidden()
-        }
+        onPlay(source)
     }
 
     private fun describeProbe(result: String): String {
@@ -784,20 +802,8 @@ class NetworkHomeScreen(
         }
     }
 
-    private fun promptResumeOrPlay(
-        source: PlaybackSource,
-        onDecided: (resumeAtMs: Long?) -> Unit,
-    ) {
-        scope.launch {
-            val existing = activity.historyTracker.findExisting(source)
-            if (existing != null && existing.isResumable()) {
-                onDecided(existing.positionMs)
-            } else {
-                onDecided(null)
-            }
-        }
-    }
-
+    // Scroll wrapper necessário: páginas de rede têm conteúdo mais alto que
+    // o canvas da Presentation.
     internal fun wrapInScroll(page: View): View =
         ScrollView(context).apply {
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)

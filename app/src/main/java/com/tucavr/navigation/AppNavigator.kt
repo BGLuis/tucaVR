@@ -28,8 +28,17 @@ class AppNavigator(private val home: Destination = Destination.Home) {
     val canGoBack: Boolean
         get() = backStack.isNotEmpty()
 
+    /** Profundidade da pilha de navegação (número de destinos anteriores). */
+    val stackDepth: Int
+        get() = backStack.size
+
     fun navigateTo(destination: Destination) {
         backStack.addLast(current)
+        current = destination
+    }
+
+    /** Substitui o destino atual sem empilhar o anterior. */
+    fun replaceTop(destination: Destination) {
         current = destination
     }
 
@@ -37,6 +46,22 @@ class AppNavigator(private val home: Destination = Destination.Home) {
     fun back(): Boolean {
         val previous = backStack.removeLastOrNull() ?: return false
         current = previous
+        return true
+    }
+
+    /**
+     * Desempilha até que [current] satisfaça [predicate].
+     * Se esvaziar a pilha sem encontrar correspondência, redefine para [home].
+     * Retorna `true` se a navegação mudou, `false` se [current] já satisfazia o predicado.
+     */
+    fun popTo(predicate: (Destination) -> Boolean): Boolean {
+        if (predicate(current)) return false
+        while (backStack.isNotEmpty() && !predicate(current)) {
+            current = backStack.removeLast()
+        }
+        if (!predicate(current)) {
+            current = home
+        }
         return true
     }
 

@@ -101,7 +101,7 @@ class SettingsScreen(
                     flag = FeatureFlags.Flag.PASSTHROUGH,
                     actionButtonTextRes = R.string.settings_passthrough_open_button,
                     onActionClicked = { activity.openPassthroughSettingsModal() },
-                    onChanged = { enabled -> activity.nativeSetPassthroughEnabled(enabled) },
+                    onChanged = { enabled -> activity.setPassthroughEnabled(enabled, updatePrefs = false) },
                 ),
             )
         }

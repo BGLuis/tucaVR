@@ -6,47 +6,166 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Testes unitários para [AppNavigator] e para o comportamento de navegação da Sidebar.
- * Valida a garantia arquitetural de que trocar de seção a partir de qualquer profundidade
- * redefine a pilha para `[Home, <destino>]`.
+ * Unit tests for [AppNavigator].
+ * Guards back-stack integrity, single-player depth during playlist advance,
+ * proper stack clearing on stopPlayback (Issues #82 and #83), and section
+ * selection guarantees for the 3-zone curved spatial UI.
  */
 class AppNavigatorTest {
     @Test
-    fun `initial state has Home as current and stack is only Home`() {
+    fun initialStateStartsAtHomeWithEmptyStack() {
         val nav = AppNavigator()
         assertEquals(Destination.Home, nav.current)
+        assertEquals(0, nav.stackDepth)
         assertEquals(listOf(Destination.Home), nav.stack)
         assertFalse(nav.canGoBack)
     }
 
     @Test
-    fun `navigateTo pushes destination onto stack and canGoBack becomes true`() {
+    fun navigateToPushesPreviousDestinationAndUpdatesCurrent() {
         val nav = AppNavigator()
-        nav.navigateTo(Destination.LocalFiles("/movies"))
+        val localFiles = Destination.LocalFiles("/sdcard/Movies")
 
-        assertEquals(Destination.LocalFiles("/movies"), nav.current)
-        assertEquals(listOf(Destination.Home, Destination.LocalFiles("/movies")), nav.stack)
+        nav.navigateTo(localFiles)
+
+        assertEquals(localFiles, nav.current)
+        assertEquals(1, nav.stackDepth)
+        assertEquals(listOf(Destination.Home, localFiles), nav.stack)
         assertTrue(nav.canGoBack)
+
+        assertTrue(nav.back())
+        assertEquals(Destination.Home, nav.current)
+        assertEquals(0, nav.stackDepth)
+        assertFalse(nav.canGoBack)
     }
 
     @Test
-    fun `back pops last destination and restores previous`() {
+    fun roundTripBetweenHomeAndNetworkLeavesStackEmptyAndCurrentAtHome() {
         val nav = AppNavigator()
-        nav.navigateTo(Destination.LocalFiles("/movies"))
-        nav.navigateTo(Destination.LocalFiles("/movies/action"))
 
-        assertEquals(Destination.LocalFiles("/movies/action"), nav.current)
+        // Home -> NetworkHome
+        nav.navigateTo(Destination.NetworkHome)
+        assertEquals(Destination.NetworkHome, nav.current)
+        assertEquals(1, nav.stackDepth)
 
-        assertTrue(nav.back())
-        assertEquals(Destination.LocalFiles("/movies"), nav.current)
-
+        // Back from NetworkHome should pop back to Home (stack size 0)
         assertTrue(nav.back())
         assertEquals(Destination.Home, nav.current)
-        assertFalse(nav.canGoBack)
+        assertEquals(0, nav.stackDepth)
 
-        // Tentar voltar na raiz não faz nada e retorna false
+        // Multiple round trips must not accumulate stack entries
+        for (i in 1..5) {
+            nav.navigateTo(Destination.NetworkHome)
+            assertTrue(nav.back())
+        }
+        assertEquals(Destination.Home, nav.current)
+        assertEquals(0, nav.stackDepth)
+    }
+
+    @Test
+    fun replaceTopUpdatesCurrentWithoutGrowingStack() {
+        val nav = AppNavigator()
+        val folder = Destination.LocalFiles("/sdcard/Movies")
+        nav.navigateTo(folder)
+        assertEquals(1, nav.stackDepth)
+
+        val player1 = Destination.Player(PlaybackSource.LocalFile("/sdcard/Movies/ep1.mp4", 1000L))
+        nav.navigateTo(player1)
+        assertEquals(2, nav.stackDepth)
+        assertEquals(player1, nav.current)
+
+        val player2 = Destination.Player(PlaybackSource.LocalFile("/sdcard/Movies/ep2.mp4", 1000L))
+        nav.replaceTop(player2)
+        assertEquals(2, nav.stackDepth)
+        assertEquals(player2, nav.current)
+
+        // Back from player2 should go directly to folder, not player1
+        assertTrue(nav.back())
+        assertEquals(folder, nav.current)
+        assertEquals(1, nav.stackDepth)
+    }
+
+    @Test
+    fun advancingPlaylistLeavesExactlyOnePlayerOnStack() {
+        val nav = AppNavigator()
+        val folder = Destination.LocalFiles("/sdcard/Series/Season1")
+        nav.navigateTo(folder)
+
+        // First item navigates to player
+        val ep1 = Destination.Player(PlaybackSource.LocalFile("ep1.mp4", 100L))
+        nav.navigateTo(ep1)
+        assertEquals(2, nav.stackDepth)
+
+        // Advancing playlist items uses replaceTop
+        val ep2 = Destination.Player(PlaybackSource.LocalFile("ep2.mp4", 100L))
+        nav.replaceTop(ep2)
+        val ep3 = Destination.Player(PlaybackSource.LocalFile("ep3.mp4", 100L))
+        nav.replaceTop(ep3)
+
+        assertEquals(ep3, nav.current)
+        assertEquals(2, nav.stackDepth)
+
+        // Pop player should reveal folder directly
+        assertTrue(nav.popTo { it !is Destination.Player })
+        assertEquals(folder, nav.current)
+        assertEquals(1, nav.stackDepth)
+    }
+
+    @Test
+    fun popToRestoresOriginatingFolderOnStopPlayback() {
+        val nav = AppNavigator()
+        val folder = Destination.LocalFiles("/sdcard/Anime")
+        nav.navigateTo(folder)
+        nav.navigateTo(Destination.Player(PlaybackSource.LocalFile("movie.mkv", 5000L)))
+
+        val popped = nav.popTo { it !is Destination.Player }
+        assertTrue(popped)
+        assertEquals(folder, nav.current)
+        assertEquals(1, nav.stackDepth)
+    }
+
+    @Test
+    fun popToFallsBackToHomeWhenNoMatchingDestinationInStack() {
+        val nav = AppNavigator()
+        // If launched directly into Player from an external intent
+        nav.replaceTop(Destination.Player(PlaybackSource.LocalFile("external.mp4", 100L)))
+
+        val popped = nav.popTo { it !is Destination.Player }
+        assertTrue(popped)
+        assertEquals(Destination.Home, nav.current)
+        assertEquals(0, nav.stackDepth)
+    }
+
+    @Test
+    fun popToReturnsFalseIfPredicateAlreadyMatchesCurrent() {
+        val nav = AppNavigator()
+        val folder = Destination.LocalFiles("/sdcard/Downloads")
+        nav.navigateTo(folder)
+
+        val popped = nav.popTo { it is Destination.LocalFiles }
+        assertFalse(popped)
+        assertEquals(folder, nav.current)
+    }
+
+    @Test
+    fun backReturnsFalseWhenAlreadyAtHome() {
+        val nav = AppNavigator()
         assertFalse(nav.back())
         assertEquals(Destination.Home, nav.current)
+    }
+
+    @Test
+    fun backToHomeClearsEntireStack() {
+        val nav = AppNavigator()
+        nav.navigateTo(Destination.LocalFiles("/a"))
+        nav.navigateTo(Destination.LocalFiles("/a/b"))
+        nav.navigateTo(Destination.LocalFiles("/a/b/c"))
+        assertEquals(3, nav.stackDepth)
+
+        nav.backToHome()
+        assertEquals(Destination.Home, nav.current)
+        assertEquals(0, nav.stackDepth)
+        assertFalse(nav.canGoBack)
     }
 
     @Test

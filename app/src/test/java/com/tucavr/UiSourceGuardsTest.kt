@@ -1,6 +1,7 @@
 package com.tucavr
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.File
@@ -17,6 +18,18 @@ class UiSourceGuardsTest {
         val snippet: String,
     ) {
         val key: String get() = "$rule|$path|$snippet"
+    }
+
+    @Test
+    fun `file list does not use onSingleTapConfirmed`() {
+        val fileAdapter = File("src/main/java/com/tucavr/screens/adapters/FileAdapter.kt")
+        val target = if (fileAdapter.exists()) fileAdapter else File("app/src/main/java/com/tucavr/screens/adapters/FileAdapter.kt")
+        assertTrue(target.exists())
+        val content = target.readText()
+        assertFalse(
+            "FileAdapter must not use onSingleTapConfirmed (Issue #86)",
+            content.contains("onSingleTapConfirmed"),
+        )
     }
 
     @Test
