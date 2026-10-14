@@ -467,6 +467,7 @@ class VRPresentation(
                 credentialStore = smbCredentials,
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
+                onPlay = { source -> playSource(source) },
             )
 
         networkNfsScreen =
@@ -478,6 +479,7 @@ class VRPresentation(
                 savedServerDao = savedServerDao,
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
+                onPlay = { source -> playSource(source) },
             )
 
         networkFtpScreen =
@@ -489,6 +491,7 @@ class VRPresentation(
                 credentialStore = ftpCredentials,
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
+                onPlay = { source -> playSource(source) },
             )
 
         networkSftpScreen =
@@ -500,6 +503,7 @@ class VRPresentation(
                 credentialStore = sftpCredentials,
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
+                onPlay = { source -> playSource(source) },
             )
 
         networkDlnaScreen =
@@ -531,13 +535,15 @@ class VRPresentation(
                         nameStr: String,
                         pathStr: String,
                     ->
-                    if (protocol == com.tucavr.network.ServerProtocol.WEBDAV) {
-                        networkWebdavScreen.prefill(hostStr, portNum, nameStr, pathStr)
-                    }
-                    // Abre o formulario de cadastro daquele protocolo dentro da propria
-                    // NetworkHomeScreen (DLNA nao tem formulario manual, so descoberta —
-                    // openAddForm ignora silenciosamente nesse caso).
-                    networkHomeScreen.openAddForm(protocol)
+                    networkHomeScreen.openAddForm(
+                        protocol,
+                        com.tucavr.screens.ServerPrefill(
+                            host = hostStr,
+                            port = portNum,
+                            name = nameStr,
+                            path = pathStr,
+                        ),
+                    )
                 },
             )
 
@@ -551,6 +557,7 @@ class VRPresentation(
                 credentialStore = serverCredentials,
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
+                onPlay = { source -> playSource(source) },
             )
 
         networkHomeScreen =
@@ -563,13 +570,14 @@ class VRPresentation(
                 savedServerDao = savedServerDao,
                 credentialStore = serverCredentials,
                 discoveryPageBuilder = { networkDiscoveryScreen.buildPage() },
-                smbAddFormBuilder = { onSaved -> networkSmbScreen.buildAddServerForm(onSaved) },
-                ftpAddFormBuilder = { onSaved -> networkFtpScreen.buildAddServerForm(onSaved) },
-                sftpAddFormBuilder = { onSaved -> networkSftpScreen.buildAddServerForm(onSaved) },
-                nfsAddFormBuilder = { onSaved -> networkNfsScreen.buildAddServerForm(onSaved) },
-                webdavAddFormBuilder = { onSaved -> networkWebdavScreen.buildAddServerForm(onSaved) },
+                smbAddFormBuilder = { onSaved, prefill -> networkSmbScreen.buildAddServerForm(onSaved, prefill) },
+                ftpAddFormBuilder = { onSaved, prefill -> networkFtpScreen.buildAddServerForm(onSaved, prefill) },
+                sftpAddFormBuilder = { onSaved, prefill -> networkSftpScreen.buildAddServerForm(onSaved, prefill) },
+                nfsAddFormBuilder = { onSaved, prefill -> networkNfsScreen.buildAddServerForm(onSaved, prefill) },
+                webdavAddFormBuilder = { onSaved, prefill -> networkWebdavScreen.buildAddServerForm(onSaved, prefill) },
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
+                onPlay = { source -> playSource(source) },
             )
 
         continueWatchingScreen =
@@ -639,6 +647,7 @@ class VRPresentation(
                 host = host,
                 scope = scope,
                 repository = DownloadRepository(context),
+                onPlay = { source -> playSource(source) },
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
             )
@@ -674,7 +683,23 @@ class VRPresentation(
     }
 
     fun onNavigateToPlayer(source: PlaybackSource) {
-        navigateTo(Destination.Player(source))
+        if (appNav.current is Destination.Player) {
+            appNav.replaceTop(Destination.Player(source))
+            render()
+        } else {
+            navigateTo(Destination.Player(source))
+        }
+    }
+
+    fun popTo(predicate: (Destination) -> Boolean) {
+        if (appNav.popTo(predicate)) {
+            render()
+        }
+    }
+
+    /** Pops any active Player destination from the navigation stack. */
+    fun popPlayer() {
+        popTo { it !is Destination.Player }
     }
 
     private fun navigateTo(destination: Destination) {
@@ -700,7 +725,12 @@ class VRPresentation(
                 is PlaybackSource.Sftp -> activity.playSftp(source.server, source.path, source.sizeBytes, resumeAtMs)
                 is PlaybackSource.Webdav -> activity.playWebdav(source.server, source.path, source.sizeBytes, resumeAtMs)
             }
-            navigateTo(Destination.Player(source))
+            if (appNav.current is Destination.Player) {
+                appNav.replaceTop(Destination.Player(source))
+                render()
+            } else {
+                navigateTo(Destination.Player(source))
+            }
         }
     }
 
@@ -711,35 +741,27 @@ class VRPresentation(
      * pelas próprias screens — elas sobem um nível sem tocar no AppNavigator.
      * Quando já na raiz, o AppNavigator faz o pop e [render] re-renderiza.
      */
-    private fun handleBack() {
+    fun handleBack(): Boolean {
         val current = appNav.current
         val handled =
             when {
                 current is Destination.LocalFiles -> localFilesScreen.handleBack()
                 current is Destination.NetworkFiles -> networkSmbScreen.handleBack(current.server)
-                current is Destination.NetworkNfsFiles -> {
-                    networkNfsScreen.handleBack()
-                    true
-                }
+                current is Destination.NetworkNfsFiles -> networkNfsScreen.handleBack(current.server)
                 current is Destination.NetworkFtpFiles -> networkFtpScreen.handleBack(current.server)
                 current is Destination.NetworkSftpFiles -> networkSftpScreen.handleBack(current.server)
                 current is Destination.NetworkWebdavFiles -> networkWebdavScreen.handleBack(current.server)
-                current is Destination.NetworkHome -> {
-                    if (networkHomeScreen.handleBack()) {
-                        true
-                    } else {
-                        appNav.navigateTo(Destination.Home)
-                        render()
-                        true
-                    }
-                }
+                current is Destination.NetworkHome -> networkHomeScreen.handleBack()
                 else -> false
             }
         if (!handled) {
             if (appNav.back()) {
                 render()
+                return true
             }
+            return false
         }
+        return true
     }
 
     /**

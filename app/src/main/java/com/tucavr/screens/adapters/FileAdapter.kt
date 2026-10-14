@@ -6,8 +6,6 @@ import android.graphics.Typeface
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import android.view.GestureDetector
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.widget.LinearLayout
@@ -89,21 +87,6 @@ class FileAdapter(
     inner class ViewHolder(val view: View) : RecyclerView.ViewHolder(view) {
         var thumbnailJob: Job? = null
         var boundEntry: MediaEntry? = null
-        val gestureDetector =
-            GestureDetector(
-                view.context,
-                object : GestureDetector.SimpleOnGestureListener() {
-                    override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                        boundEntry?.let(onVideoClick)
-                        return true
-                    }
-
-                    override fun onDoubleTap(e: MotionEvent): Boolean {
-                        boundEntry?.let(onVideoDoubleClick)
-                        return true
-                    }
-                },
-            )
     }
 
     override fun getItemViewType(position: Int): Int {
@@ -262,14 +245,7 @@ class FileAdapter(
                 }
         } else if (isVideo || isImage) {
             holder.boundEntry = entry
-            if (isVideo) {
-                holder.itemView.setOnTouchListener { _, event ->
-                    holder.gestureDetector.onTouchEvent(event)
-                    true
-                }
-            } else {
-                holder.itemView.setOnClickListener { onVideoClick(entry) }
-            }
+            holder.itemView.setOnClickListener { onVideoClick(entry) }
 
             // Carregamento de miniatura da mídia (vídeo ou imagem)
             holder.thumbnailJob =

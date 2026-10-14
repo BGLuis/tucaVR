@@ -64,6 +64,7 @@ class NetworkFtpScreen(
     private val credentialStore: FtpCredentialStore,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
+    private val onPlay: (PlaybackSource) -> Unit = { source -> onNavigate(Destination.Player(source)) },
 ) {
     var browsingServer: FtpServer? = null
     var browsePath: String = ""
@@ -85,7 +86,10 @@ class NetworkFtpScreen(
 
     // ---- Formulario "Adicionar servidor" (usado pela lista unificada em NetworkHomeScreen) ----
 
-    fun buildAddServerForm(onSaved: () -> Unit): View {
+    fun buildAddServerForm(
+        onSaved: () -> Unit,
+        prefill: ServerPrefill? = null,
+    ): View {
         val form = VoidForm(context)
 
         val fieldHost =
@@ -104,6 +108,11 @@ class NetworkFtpScreen(
                 kind = VoidFieldKind.NUMBER,
                 validator = FieldValidators.port(context.getString(R.string.field_error_invalid_port)),
             )
+
+        if (prefill != null) {
+            if (prefill.host.isNotEmpty()) fieldHost.setText(prefill.host)
+            if (prefill.port > 0) fieldPort.setText(prefill.port.toString())
+        }
 
         val fieldUser =
             VoidTextField(
@@ -409,9 +418,7 @@ class NetworkFtpScreen(
                     renderFiles(server)
                 },
                 onVideoClick = { entry ->
-                    val source = PlaybackSource.Ftp(server, entry.path, entry.sizeBytes)
-                    activity.playFtp(server, entry.path, resumeAtMs = 0L)
-                    onNavigate(Destination.Player(source))
+                    onPlay(PlaybackSource.Ftp(server, entry.path, entry.sizeBytes))
                 },
                 thumbnailLoader = { entry ->
                     val source = PlaybackSource.Ftp(server, entry.path, entry.sizeBytes)
@@ -528,7 +535,12 @@ class NetworkFtpScreen(
                     val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
                     val childPath = if (requestedPath.isEmpty()) name else "$requestedPath/$name"
 
-                    val type = if (isDir) MediaType.DIRECTORY else (mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO)
+                    val type =
+                        if (isDir) {
+                            MediaType.DIRECTORY
+                        } else {
+                            mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO
+                        }
                     val f3d =
                         if (type == MediaType.VIDEO) {
                             MediaFilterEngine.detectFormat3DFromFilename(
