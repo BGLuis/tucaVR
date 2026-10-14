@@ -23,6 +23,12 @@ data class SmbServer(
     val domain: String,
 ) {
     val isGuest: Boolean get() = username.isEmpty()
+
+    override fun toString(): String {
+        val passRedacted = if (password.isEmpty()) "" else "[REDACTED]"
+        return "SmbServer(id=$id, name=$name, host=$host, port=$port, share=$share, " +
+            "username=$username, password=$passRedacted, domain=$domain)"
+    }
 }
 
 /**

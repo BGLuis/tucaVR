@@ -22,6 +22,18 @@ data class SftpServer(
     val privateKey: String?,
 ) {
     val usesKeyAuth: Boolean get() = !privateKey.isNullOrEmpty()
+
+    override fun toString(): String {
+        val passRedacted = if (password.isEmpty()) "" else "[REDACTED]"
+        val keyRedacted =
+            when {
+                privateKey == null -> "null"
+                privateKey.isEmpty() -> ""
+                else -> "[REDACTED]"
+            }
+        return "SftpServer(id=$id, name=$name, host=$host, port=$port, " +
+            "username=$username, password=$passRedacted, privateKey=$keyRedacted)"
+    }
 }
 
 /**
