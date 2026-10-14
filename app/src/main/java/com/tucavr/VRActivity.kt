@@ -1899,6 +1899,28 @@ class VRActivity : NativeActivity() {
     }
 
     /**
+     * Exibe o modal de confirmação de exclusão no 3º Quad frontal (VRModalPresentation).
+     */
+    fun openConfirmDeleteModal(
+        title: String,
+        message: String,
+        confirmText: String = getString(R.string.network_delete_server_confirm),
+        cancelText: String = getString(R.string.network_delete_server_cancel),
+        onConfirm: () -> Unit,
+    ) {
+        runOnUiThread {
+            nativeShowModalPanel()
+            modalPresentation?.showConfirmDeleteModal(
+                title = title,
+                message = message,
+                confirmText = confirmText,
+                cancelText = cancelText,
+                onConfirm = onConfirm,
+            )
+        }
+    }
+
+    /**
      * Exibe o modal de fila de reprodução / playlist no 3º Quad frontal (VRModalPresentation).
      */
     fun openPlaylistModal() {

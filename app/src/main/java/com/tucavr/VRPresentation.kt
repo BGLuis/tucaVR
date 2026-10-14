@@ -726,6 +726,7 @@ class VRPresentation(
                 urlHistory = urlHistory,
                 savedServerDao = savedServerDao,
                 credentialStore = serverCredentials,
+                lockManager = multicastLockManager,
                 discoveryPageBuilder = { networkDiscoveryScreen.buildPage() },
                 smbAddFormBuilder = { onSaved -> networkSmbScreen.buildAddServerForm(onSaved) },
                 ftpAddFormBuilder = { onSaved -> networkFtpScreen.buildAddServerForm(onSaved) },
@@ -734,6 +735,12 @@ class VRPresentation(
                 webdavAddFormBuilder = { onSaved -> networkWebdavScreen.buildAddServerForm(onSaved) },
                 onNavigate = { dest -> navigateTo(dest) },
                 onBack = { handleBack() },
+                onConfigureDiscoveredServer = { protocol, hostStr, portNum, nameStr, pathStr ->
+                    if (protocol == com.tucavr.network.ServerProtocol.WEBDAV) {
+                        networkWebdavScreen.prefill(hostStr, portNum, nameStr, pathStr)
+                    }
+                    networkHomeScreen.openAddForm(protocol)
+                },
             )
 
         continueWatchingScreen =

@@ -10,6 +10,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import com.tucavr.designsystem.AudioTrackModal
+import com.tucavr.designsystem.ConfirmDeleteModal
 import com.tucavr.designsystem.DebugStatsModal
 import com.tucavr.designsystem.PassthroughSettingsModal
 import com.tucavr.designsystem.ResumePromptModal
@@ -256,6 +257,32 @@ class VRModalPresentation(
     }
 
     /**
+     * Prepara e exibe o modal de confirmação de exclusão ([ConfirmDeleteModal]).
+     */
+    fun showConfirmDeleteModal(
+        title: String,
+        message: String,
+        confirmText: String = context.getString(R.string.network_delete_server_confirm),
+        cancelText: String = context.getString(R.string.network_delete_server_cancel),
+        onConfirm: () -> Unit,
+    ) {
+        val modal =
+            ConfirmDeleteModal(
+                context = context,
+                title = title,
+                message = message,
+                confirmText = confirmText,
+                cancelText = cancelText,
+                onConfirm = {
+                    dismissModal()
+                    onConfirm()
+                },
+                onDismiss = { dismissModal() },
+            )
+        showModal(modal)
+    }
+
+    /**
      * Prepara e exibe o modal de configurações e estilo do Passthrough ([PassthroughSettingsModal]).
      */
     fun showPassthroughSettingsModal() {
@@ -452,7 +479,11 @@ class VRModalPresentation(
             }
         }
 
-        if (parent is android.widget.ScrollView || parent is androidx.recyclerview.widget.RecyclerView || parent.canScrollVertically(1) || parent.canScrollVertically(-1)) {
+        if (parent is android.widget.ScrollView ||
+            parent is androidx.recyclerview.widget.RecyclerView ||
+            parent.canScrollVertically(1) ||
+            parent.canScrollVertically(-1)
+        ) {
             return parent
         }
         return null

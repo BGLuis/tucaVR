@@ -696,4 +696,12 @@
     <string name="home_no_recent_videos">Nenhum vídeo recente</string>
     <string name="home_no_recent_files">Nenhum arquivo recente</string>
 
+    <!-- Issue #94: Network unified sources, inline discovery and delete confirmation -->
+    <string name="network_delete_server_title">Excluir servidor</string>
+    <string name="network_delete_server_message">Tem certeza de que deseja excluir o servidor \"%1$s\"?</string>
+    <string name="network_delete_server_confirm">Excluir</string>
+    <string name="network_delete_server_cancel">Cancelar</string>
+    <string name="network_discovery_inline_header">Encontrados na rede</string>
+    <string name="network_server_saved_badge">Salvo</string>
+
 </resources>

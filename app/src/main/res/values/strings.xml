@@ -711,4 +711,12 @@
     <string name="home_no_recent_videos">No recently watched videos</string>
     <string name="home_no_recent_files">No recent files</string>
 
+    <!-- Issue #94: Network unified sources, inline discovery and delete confirmation -->
+    <string name="network_delete_server_title">Delete server</string>
+    <string name="network_delete_server_message">Are you sure you want to delete server \"%1$s\"?</string>
+    <string name="network_delete_server_confirm">Delete</string>
+    <string name="network_delete_server_cancel">Cancel</string>
+    <string name="network_discovery_inline_header">Found on the network</string>
+    <string name="network_server_saved_badge">Saved</string>
+
 </resources>
