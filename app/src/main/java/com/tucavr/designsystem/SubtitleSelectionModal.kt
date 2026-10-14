@@ -272,7 +272,7 @@ class SubtitleSelectionModal(
 
             val icon =
                 ImageView(context).apply {
-                    setImageResource(R.drawable.icon_eye_off)
+                    setImageResource(R.drawable.sub_off)
                     val s = VoidTheme.dpToPx(context, 24f)
                     layoutParams =
                         LinearLayout.LayoutParams(s, s).apply {
