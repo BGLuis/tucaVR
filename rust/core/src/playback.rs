@@ -1753,7 +1753,10 @@ impl PlaybackController {
         self.available_subtitle_tracks.len()
     }
 
-    pub fn get_subtitle_track_info(&self, index: usize) -> Option<&crate::subtitle_loader::SubtitleTrackInfo> {
+    pub fn get_subtitle_track_info(
+        &self,
+        index: usize,
+    ) -> Option<&crate::subtitle_loader::SubtitleTrackInfo> {
         self.available_subtitle_tracks.get(index)
     }
 
