@@ -250,6 +250,7 @@ class ScreenSettingsModal(
         val btnRecenter =
             VoidButton(context, VoidButtonStyle.SECONDARY).apply {
                 text = context.getString(R.string.player_btn_recenter)
+                setIcon(R.drawable.recenter)
                 layoutParams =
                     LinearLayout.LayoutParams(
                         LinearLayout.LayoutParams.MATCH_PARENT,

@@ -125,7 +125,7 @@ class VolumeMenuModal(
         muteButton =
             VoidIconButton(
                 context,
-                R.drawable.icon_volume_2,
+                if (currentVolume <= 0.01f) R.drawable.volume_mute else R.drawable.icon_volume_2,
                 if (currentVolume <= 0.01f) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY,
                 isCircular = true,
                 isTransparent = true,
@@ -245,8 +245,9 @@ class VolumeMenuModal(
         currentVolume = volume
         val percent = (volume * 100f).toInt().coerceIn(0, 200)
         volumeSeekBar.progress = percent
-        volumeLabel.text = context.getString(R.string.player_controls_volume_format, percent)
-        muteButton.style = if (volume <= 0.01f) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
+        val isMuted = volume <= 0.01f
+        muteButton.style = if (isMuted) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
+        muteButton.setImageResource(if (isMuted) R.drawable.volume_mute else R.drawable.icon_volume_2)
 
         for ((pct, btn) in presetButtons) {
             val isSelected = kotlin.math.abs(percent - pct) < 3
