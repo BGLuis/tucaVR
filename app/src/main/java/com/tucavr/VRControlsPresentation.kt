@@ -91,6 +91,7 @@ class VRControlsPresentation(
     private lateinit var loadingSpinner: ProgressBar
     private lateinit var scrubPreview: ImageView
     private lateinit var btnDebugStats: VoidIconButton
+    private var btnPassthrough: VoidIconButton? = null
     private var lastKnownBatteryPercent: Int = 100
     private var lastKnownIsCharging: Boolean = false
     private var isDragging = false
@@ -328,7 +329,8 @@ class VRControlsPresentation(
     private fun updateScrubPreview(positionSeconds: Float) {
         android.util.Log.i(
             "VRPlayer_Scrub",
-            "updateScrubPreview: pos=$positionSeconds networkScrubStrip=${networkScrubStrip != null} localScrubRetriever=${localScrubRetriever != null} mode=$lastKnownMode",
+            "updateScrubPreview: pos=$positionSeconds networkScrubStrip=${networkScrubStrip != null} " +
+                "localScrubRetriever=${localScrubRetriever != null} mode=$lastKnownMode",
         )
         networkScrubStrip?.let { strip ->
             if (isSphereMode(lastKnownMode)) {
@@ -452,7 +454,9 @@ class VRControlsPresentation(
                         val level = intent.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
                         val scale = intent.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
                         val status = intent.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1)
-                        val isCharging = status == android.os.BatteryManager.BATTERY_STATUS_CHARGING || status == android.os.BatteryManager.BATTERY_STATUS_FULL
+                        val isCharging =
+                            status == android.os.BatteryManager.BATTERY_STATUS_CHARGING ||
+                                status == android.os.BatteryManager.BATTERY_STATUS_FULL
 
                         if (level >= 0 && scale > 0) {
                             val pct = (level * 100) / scale
@@ -470,7 +474,12 @@ class VRControlsPresentation(
                                 }
                             if (::batteryIcon.isInitialized) batteryIcon.setImageResource(iconRes)
 
-                            val color = if (!isCharging && pct <= 15) android.graphics.Color.parseColor("#FF4444") else com.tucavr.designsystem.VoidTheme.colorText
+                            val color =
+                                if (!isCharging && pct <= 15) {
+                                    android.graphics.Color.parseColor("#FF4444")
+                                } else {
+                                    com.tucavr.designsystem.VoidTheme.colorText
+                                }
                             if (::batteryIcon.isInitialized) batteryIcon.setColorFilter(color)
                             if (::batteryLabel.isInitialized) batteryLabel.setTextColor(color)
                         }
@@ -708,7 +717,7 @@ class VRControlsPresentation(
         val passthroughSupported = activity.nativeIsPassthroughSupported()
         val passthroughInitiallyOn =
             passthroughSupported && FeatureFlags.isEnabled(context, FeatureFlags.Flag.PASSTHROUGH)
-        val btnPassthrough =
+        btnPassthrough =
             VoidIconButton(
                 context,
                 R.drawable.icon_eye_dashed,
@@ -727,9 +736,7 @@ class VRControlsPresentation(
                 if (passthroughSupported) {
                     setOnClickListener {
                         val newState = !FeatureFlags.isEnabled(context, FeatureFlags.Flag.PASSTHROUGH)
-                        FeatureFlags.setEnabled(context, FeatureFlags.Flag.PASSTHROUGH, newState)
-                        activity.nativeSetPassthroughEnabled(newState)
-                        style = if (newState) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
+                        activity.setPassthroughEnabled(newState)
                     }
                     setOnLongClickListener {
                         activity.openPassthroughSettingsModal()
@@ -1073,5 +1080,15 @@ class VRControlsPresentation(
 
         window?.setLayout(android.view.ViewGroup.LayoutParams.MATCH_PARENT, android.view.ViewGroup.LayoutParams.MATCH_PARENT)
         window?.setBackgroundDrawable(android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT))
+    }
+
+    fun updatePassthroughState(enabled: Boolean) {
+        val passthroughSupported = activity.nativeIsPassthroughSupported()
+        btnPassthrough?.style =
+            when {
+                !passthroughSupported -> VoidButtonStyle.DISABLED
+                enabled -> VoidButtonStyle.ACTIVE
+                else -> VoidButtonStyle.SECONDARY
+            }
     }
 }

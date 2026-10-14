@@ -721,9 +721,14 @@ class VRActivity : NativeActivity() {
     override fun onResume() {
         super.onResume()
         val activeEnv = environmentStore.getActiveEnvironment()
-        if (activeEnv != EnvironmentStore.ENV_PASSTHROUGH) {
-            nativeSetEnvironment(activeEnv)
-        }
+        val isPassthrough =
+            PassthroughSyncPolicy.isPassthroughActive(
+                activeEnvironmentId = activeEnv,
+                isFlagEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.PASSTHROUGH),
+            )
+        nativeSetEnvironment(PassthroughSyncPolicy.resolveEffectiveEnvironment(activeEnv))
+        nativeSetPassthroughEnabled(isPassthrough)
+        controlsPresentation?.updatePassthroughState(isPassthrough)
         applySavedScreenTransform(activeEnv)
         presentation?.loadFiles()
         thermalMonitor.startMonitoring(callback = thermalCallback)
@@ -1749,15 +1754,29 @@ class VRActivity : NativeActivity() {
 
     val ambientAudioManager: AmbientAudioManager by lazy { AmbientAudioManager(this) }
 
+    fun setPassthroughEnabled(
+        enabled: Boolean,
+        updatePrefs: Boolean = true,
+    ) {
+        if (updatePrefs) {
+            FeatureFlags.setEnabled(this, FeatureFlags.Flag.PASSTHROUGH, enabled)
+        }
+        nativeSetPassthroughEnabled(enabled)
+        runOnUiThread {
+            controlsPresentation?.updatePassthroughState(enabled)
+        }
+    }
+
     fun setVirtualEnvironment(environmentId: String) {
         environmentStore.setActiveEnvironment(environmentId)
-        if (environmentId == EnvironmentStore.ENV_PASSTHROUGH) {
-            nativeSetPassthroughEnabled(true)
-            nativeSetEnvironment(EnvironmentStore.ENV_VOID)
+        val requiresPassthrough = PassthroughSyncPolicy.shouldEnablePassthroughForEnvironment(environmentId)
+        if (requiresPassthrough) {
+            setPassthroughEnabled(true)
+            nativeSetEnvironment(PassthroughSyncPolicy.resolveEffectiveEnvironment(environmentId))
             ambientAudioManager.stopAmbient()
         } else {
             if (nativeIsPassthroughSupported()) {
-                nativeSetPassthroughEnabled(false)
+                setPassthroughEnabled(false)
             }
             nativeSetEnvironment(environmentId)
 
