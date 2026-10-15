@@ -17,6 +17,7 @@
     <string name="common_warning_format">%1$s</string>
     <string name="common_row_dir_format">%1$s</string>
     <string name="common_row_video_format">%1$s</string>
+    <string name="common_close">Cerrar</string>
 
     <!-- Acoes de texto / Menu de contexto / Validacao (VoidTextField, VoidContextMenu, VoidForm) -->
     <string name="text_action_copy">Copiar</string>
@@ -260,6 +261,10 @@
     <string name="network_dlna_no_items">(no se encontraron elementos multimedia en la carpeta)</string>
     <string name="network_dlna_error_format">Error al explorar: %1$s</string>
     <string name="network_dlna_folder_tag">Carpeta</string>
+    <string name="network_dlna_edit_title">Editar servidor DLNA</string>
+    <string name="network_dlna_form_name_label">Nombre amigable</string>
+    <string name="network_dlna_form_name_hint">Servidor Multimedia de Sala</string>
+    <string name="network_dlna_edit_host_info">Dirección del servidor: %1$s</string>
 
     <!-- HLS Streaming -->
     <string name="player_hls_quality_auto">Auto (%1$s)</string>
@@ -289,6 +294,8 @@
     <string name="network_smb_form_port_label">Puerto</string>
     <string name="network_smb_form_share_label">Share</string>
     <string name="network_smb_form_share_hint">Videos</string>
+    <string name="network_smb_form_name_label">Nombre amigable</string>
+    <string name="network_smb_form_name_hint">Mi PC / Carpeta compartida</string>
     <string name="network_smb_form_guest_checkbox">Invitado / anónimo (sin usuario/contraseña)</string>
     <string name="network_smb_form_user_label">Usuario</string>
     <string name="network_smb_form_user_hint">usuario</string>
@@ -323,6 +330,8 @@
     <!-- Rede: aba FTP — formulario de adicionar servidor (VRPresentation.buildAddFtpServerForm) -->
     <string name="network_ftp_form_host_label">Host / IP</string>
     <string name="network_ftp_form_port_label">Puerto</string>
+    <string name="network_ftp_form_name_label">Nombre amigable</string>
+    <string name="network_ftp_form_name_hint">Mi Servidor FTP</string>
     <string name="network_ftp_form_anonymous_checkbox">Anónimo (sin usuario/contraseña)</string>
     <string name="network_ftp_form_user_label">Usuario</string>
     <string name="network_ftp_form_user_hint">usuario</string>
@@ -343,6 +352,8 @@
     <string name="network_sftp_btn_add_server">+ Añadir servidor</string>
     <string name="network_sftp_form_host_label">Host / IP</string>
     <string name="network_sftp_form_port_label">Puerto</string>
+    <string name="network_sftp_form_name_label">Nombre amigable</string>
+    <string name="network_sftp_form_name_hint">Mi Servidor SSH / SFTP</string>
     <string name="network_sftp_form_use_key_checkbox">Usar clave privada en lugar de contraseña</string>
     <string name="network_sftp_form_user_label">Usuario</string>
     <string name="network_sftp_form_user_hint">usuario</string>
@@ -507,6 +518,7 @@
     <string name="quality_warning_gpu_overload">Reduciendo calidad debido a la alta carga de GPU</string>
     <string name="quality_warning_frame_pacing_lag">Reduciendo calidad debido a problemas de ritmo de cuadros</string>
     <string name="thermal_level_normal">Normal</string>
+    <string name="thermal_level_light">Leve</string>
     <string name="thermal_level_moderate">Moderado</string>
     <string name="thermal_level_severe">Grave</string>
     <string name="thermal_level_critical">Crítico</string>
@@ -594,6 +606,9 @@
     <string name="debug_stats_label_spatial_audio">Audio espacial</string>
     <string name="debug_stats_label_audio_track">Pista de audio</string>
     <string name="debug_stats_label_subtitles">Subtítulos / Sincronía</string>
+    <string name="debug_stats_label_head_tracking">Seguimiento de Cabeza</string>
+    <string name="debug_stats_label_audio_underruns">Underruns de Audio</string>
+    <string name="debug_stats_label_audio_queue">Cola de Búfer de Audio</string>
 
     <string name="debug_stats_label_source">Origen / Protocolo</string>
     <string name="debug_stats_label_network_speed">Rendimiento de red</string>
@@ -602,10 +617,13 @@
     <string name="debug_stats_label_fetch_latency">Latencia de bloque</string>
     <string name="debug_stats_label_blocks">Bloques obtenidos / descartados</string>
     <string name="debug_stats_label_seek_latency">Latencia del último seek</string>
+    <string name="debug_stats_label_net_failures">Fallos de Red</string>
 
     <string name="debug_stats_label_thermal">Estado térmico</string>
     <string name="debug_stats_label_battery">Batería</string>
     <string name="debug_stats_label_app_version">Versión de la app</string>
+    <string name="debug_stats_label_cpu_util">Uso de CPU</string>
+    <string name="debug_stats_label_gpu_util">Uso de GPU</string>
 
     <!-- Codec capability & hardware acceleration (T6.1, T6.5) -->
     <string name="codec_hw_unsupported_error">Este dispositivo no tiene soporte de hardware para este códec.</string>
@@ -752,5 +770,66 @@
     <string name="network_delete_server_cancel">Cancelar</string>
     <string name="network_discovery_inline_header">Encontrados en la red</string>
     <string name="network_server_saved_badge">Guardado</string>
+
+    <!-- Issue #95: Add network source wizard and editing saved servers -->
+    <string name="network_btn_add_source">Agregar fuente</string>
+    <string name="network_btn_edit">Editar</string>
+    <string name="network_wizard_title">Agregar Fuente de Red</string>
+    <string name="network_wizard_subtitle">Seleccione el protocolo de almacenamiento de red:</string>
+    <string name="network_protocol_desc_smb">Recurso compartido Windows / Samba (CIFS)</string>
+    <string name="network_protocol_desc_nfs">Sistema de Archivos de Red (Linux / Unix)</string>
+    <string name="network_protocol_desc_ftp">Protocolo Estándar de Transferencia de Archivos</string>
+    <string name="network_protocol_desc_sftp">Protocolo de Transferencia por SSH</string>
+    <string name="network_protocol_desc_webdav">WebDAV por HTTP/HTTPS (Nextcloud, NAS)</string>
+    <string name="network_btn_test_connection">Probar conexión</string>
+    <string name="network_btn_save">Guardar</string>
+    <string name="network_edit_server_title">Editar Servidor</string>
+
+    <!-- Issue #99: Stats for nerds compact and full modes -->
+    <string name="stats_mode_closed">Cerrado</string>
+    <string name="stats_mode_compact">Estadísticas Compactas</string>
+    <string name="stats_mode_full">Estadísticas Completas</string>
+    <string name="stats_compact_title">Estadísticas para Nerds</string>
+    <string name="stats_full_title">Estadísticas para Nerds · Telemetría Completa</string>
+    <string name="stats_metric_fps">FPS</string>
+    <string name="stats_metric_dropped">Cuadros Perdidos</string>
+    <string name="stats_metric_gpu_time">Tiempo de GPU</string>
+    <string name="stats_metric_cpu_time">Tiempo de CPU</string>
+    <string name="stats_metric_resolution">Resolución</string>
+    <string name="stats_metric_decoder">Decodificador</string>
+    <string name="stats_metric_buffer">Búfer</string>
+    <string name="stats_chart_gpu_title">Tiempo de GPU (ms)</string>
+    <string name="stats_chart_dropped_title">Cuadros Perdidos</string>
+    <string name="stats_chart_bottleneck_title">Etapas de Cuello de Botella</string>
+    <string name="stats_chart_buffer_title">Salud del Búfer (s)</string>
+    <string name="stats_chart_network_title">Tasa de Red (MB/s)</string>
+
+    <!-- Issue #100: Settings 3-column layout & dynamic cylinder options -->
+    <string name="settings_section_playback">Reproducción</string>
+    <string name="settings_resume_policy_label">Política de Reanudación</string>
+    <string name="settings_resume_policy_desc">Acción realizada al abrir un vídeo iniciado anteriormente.</string>
+    <string name="settings_resume_ask">Preguntar</string>
+    <string name="settings_resume_always">Reanudar</string>
+    <string name="settings_resume_never">Desde el principio</string>
+    <string name="settings_panel_fov_label">Campo de Visión del Panel</string>
+    <string name="settings_panel_fov_desc">Ancho angular horizontal de la superficie cilíndrica de la interfaz.</string>
+    <string name="settings_panel_fov_50">Compacto (50°)</string>
+    <string name="settings_panel_fov_80">Estándar (80°)</string>
+    <string name="settings_panel_fov_100">Amplio (100°)</string>
+    <string name="settings_panel_distance_label">Distancia del Panel</string>
+    <string name="settings_panel_distance_desc">Distancia radial del panel de la interfaz respecto al usuario.</string>
+    <string name="settings_panel_dist_13">Cerca (1,3m)</string>
+    <string name="settings_panel_dist_16">Estándar (1,6m)</string>
+    <string name="settings_panel_dist_20">Lejos (2,0m)</string>
+    <string name="settings_by_back_label">Botones B/Y para Volver</string>
+    <string name="settings_by_back_desc">Presionar B o Y en los mandos retrocede jerárquicamente en la navegación.</string>
+    <string name="settings_hover_haptics_label">Vibración al Apuntar</string>
+    <string name="settings_hover_haptics_desc">Vibración háptica suave en los mandos cuando el rayo apunta a botones interactivos.</string>
+    <string name="settings_live_preview_title">Vista Previa en Vivo</string>
+    <string name="settings_live_preview_empty">Apunte o seleccione una opción para ver detalles y comportamiento en vivo.</string>
+    <string name="settings_telemetry_title">Telemetría del Sistema</string>
+    <string name="settings_telemetry_gpu">Tiempo de GPU: %1$s</string>
+    <string name="settings_telemetry_temp">Estado Térmico: %1$s</string>
+    <string name="settings_telemetry_refresh">Tasa de Refresco: %1$s</string>
 
 </resources>

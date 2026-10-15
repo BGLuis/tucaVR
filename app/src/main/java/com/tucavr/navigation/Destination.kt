@@ -6,18 +6,17 @@ import com.tucavr.network.SftpServer
 import com.tucavr.network.SmbServer
 
 /**
- * Fase 1+2 do redesign "Void" (ver docs/phases): consolida o que originalmente
- * eram 3 paineis 3D desconectados (VRPresentation / NetworkPresentation /
- * VRControlsPresentation, cada um seu proprio quad OES em
- * `native/src/vr_player_app.cpp`) num unico fluxo de navegacao logico, todo
- * hospedado no mesmo quad (`VRPresentation`):
+ * Fase 1+2 do redesign "Void" (ver docs/phases): consolida o fluxo de navegacao
+ * num unico canvas cilindrico de 1920x960 (`VRPresentation`), organizado em 3 zonas
+ * simultaneas (Zona 1: Sidebar de navegacao [288px], Zona 2: Conteudo principal [1200px],
+ * Zona 3: Context Rail [432px]):
  *
- *   Home -> (LocalFiles | NetworkHome -> NetworkFiles | ContinueWatching) -> Player
+ *   Home -> (LocalFiles | NetworkHome -> NetworkFiles | ContinueWatching | Settings) -> Direct Playback
  *
  * O painel de Controles (`VRControlsPresentation`) continua sendo seu proprio
  * quad — ele e contextual (aparece ao apontar pra tela de video durante a
  * reproducao) e nao fazia parte da duplicacao Local/Rede que motivou esta
- * consolidacao.
+ * consolidacao. Modal e estatisticas compactas vivem no quad frontal flutuante (`VRModalPresentation`).
  *
  * Este arquivo e [AppNavigator] sao Kotlin puro (sem `Context`/`View`/nenhum
  * import `android.*`) de proposito: precisam ser exercitaveis com JUnit puro
@@ -47,11 +46,16 @@ sealed class Destination {
     /**
      * Detalhe de um video (local OU de rede): thumbnail + metadados
      * (tamanho, data de modificacao se conhecida, duracao, container,
-     * bitrate, codecs, trilhas) + botao Reproduzir. Single-click num video
-     * na listagem local (`FileAdapter.onVideoClick`) ou nas listagens de
-     * rede (SMB/FTP/SFTP) chega aqui; double-click no local continua tocando
-     * direto (`onVideoDoubleClick`), sem empilhar esta tela — as listagens
-     * de rede nao tem double-click (ver `FileDetailScreen`).
+     * bitrate, codecs, trilhas) + botao Reproduzir.
+     *
+     * Na arquitetura de 3 zonas da UI Void (Epic #81 / #93):
+     * O primeiro clique em um item na listagem (Zone 2) seleciona o arquivo e
+     * popula o painel lateral de contexto (Zone 3, Context Rail) com seus detalhes
+     * e previa sem abandonar a listagem.
+     * O segundo clique no mesmo item selecionado (ou o clique no botao Reproduzir
+     * do Context Rail) inicia a reproducao diretamente.
+     * Esta destinacao [FileDetail] permanece disponivel para exibicao dedicada em
+     * tela cheia quando invocada explicitamente.
      *
      * [lastModified] e `0L` (desconhecido) pra fontes de rede — SMB/FTP/SFTP
      * so devolvem nome/tipo/tamanho na listagem, ver `NetworkThumbnailGenerator`.

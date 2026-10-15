@@ -113,12 +113,6 @@ class NetworkNfsScreen(
                 validator = FieldValidators.required(context.getString(R.string.network_nfs_form_status_export_required)),
             )
 
-        if (prefill != null) {
-            if (prefill.host.isNotEmpty()) hostInput.setText(prefill.host)
-            if (prefill.port > 0) portInput.setText(prefill.port.toString())
-            if (prefill.path.isNotEmpty()) exportInput.setText(prefill.path)
-        }
-
         val nameInput =
             form.field(
                 host = host,
@@ -126,6 +120,13 @@ class NetworkNfsScreen(
                 hint = context.getString(R.string.network_nfs_form_name_hint),
                 kind = VoidFieldKind.TEXT,
             )
+
+        if (prefill != null) {
+            if (prefill.host.isNotEmpty()) hostInput.setText(prefill.host)
+            if (prefill.port > 0) portInput.setText(prefill.port.toString())
+            if (prefill.path.isNotEmpty()) exportInput.setText(prefill.path)
+            if (prefill.name.isNotEmpty()) nameInput.setText(prefill.name)
+        }
 
         val statusText =
             VoidText.body(context, "", sizeSp = 14f, secondary = true).apply {
@@ -142,7 +143,7 @@ class NetworkNfsScreen(
             VoidButton(context, VoidButtonStyle.SECONDARY).apply {
                 text = context.getString(R.string.network_nfs_form_btn_find_exports)
                 setIcon(R.drawable.ic_search)
-                textSize = 16f
+                textSize = 15f
                 setOnClickListener {
                     val h = hostInput.getText().trim()
                     val p = portInput.getText().toIntOrNull() ?: 2049
@@ -176,11 +177,48 @@ class NetworkNfsScreen(
                 }
             }
 
+        val btnTest =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.network_btn_test_connection)
+                setIcon(R.drawable.ic_network)
+                textSize = 15f
+                setOnClickListener {
+                    val h = hostInput.getText().trim()
+                    val p = portInput.getText().toIntOrNull() ?: 2049
+                    val exp = exportInput.getText().trim()
+                    if (h.isEmpty()) {
+                        hostInput.setError(context.getString(R.string.network_nfs_form_status_host_required))
+                        statusText.text = context.getString(R.string.network_nfs_form_status_host_required)
+                        return@setOnClickListener
+                    }
+                    statusText.text = context.getString(R.string.network_nfs_form_status_connecting)
+                    scope.launch {
+                        val result =
+                            withContext(Dispatchers.IO) {
+                                if (exp.isNotEmpty()) {
+                                    activity.nativeNfsListDirectory(h, p, exp, "", 3)
+                                } else {
+                                    activity.nativeNfsListExports(h, p)
+                                }
+                            }
+                        if (result.startsWith("ERROR:")) {
+                            statusText.text =
+                                context.getString(
+                                    R.string.network_nfs_form_status_error_format,
+                                    result.removePrefix("ERROR:"),
+                                )
+                        } else {
+                            statusText.text = context.getString(R.string.network_nfs_form_status_connected)
+                        }
+                    }
+                }
+            }
+
         val btnSave =
             VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-                text = context.getString(R.string.network_nfs_btn_test_save)
+                text = context.getString(R.string.network_btn_save)
                 setIcon(R.drawable.ic_check)
-                textSize = 16f
+                textSize = 15f
                 setOnClickListener {
                     if (!form.validate()) return@setOnClickListener
 
@@ -188,10 +226,25 @@ class NetworkNfsScreen(
                     val p = portInput.getText().toIntOrNull() ?: 2049
                     val exp = exportInput.getText().trim()
                     val name = nameInput.getText().trim()
-                    testAndSave(h, p, exp, name, statusText) {
+                    val n = name.ifEmpty { h }
+
+                    val serverId = prefill?.existingServerId ?: java.util.UUID.randomUUID().toString()
+                    val server =
+                        SavedServer(
+                            id = serverId,
+                            name = n,
+                            protocol = ServerProtocol.NFS,
+                            host = h,
+                            port = p,
+                            path = exp,
+                            lastConnectedAt = System.currentTimeMillis(),
+                        )
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            savedServerDao.insert(server)
+                        }
                         form.clearAll()
                         portInput.setText("2049")
-                        statusText.text = context.getString(R.string.network_nfs_form_status_connected)
                         onSaved()
                     }
                 }
@@ -204,53 +257,12 @@ class NetworkNfsScreen(
                 it.marginEnd = VoidTheme.dpToPx(context, 8f)
             }
         btnRow.addView(btnBrowseExports, margin)
+        btnRow.addView(btnTest, margin)
         btnRow.addView(btnSave, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
         form.addView(statusText)
         form.addView(btnRow)
         return form
-    }
-
-    private fun testAndSave(
-        h: String,
-        p: Int,
-        exp: String,
-        name: String,
-        statusView: android.widget.TextView,
-        onSaved: () -> Unit,
-    ) {
-        val n = name.ifEmpty { h }
-
-        statusView.text = context.getString(R.string.network_nfs_form_status_connecting)
-
-        scope.launch {
-            val result =
-                withContext(Dispatchers.IO) {
-                    activity.nativeNfsListDirectory(h, p, exp, "", 3)
-                }
-            if (result.startsWith("ERROR:")) {
-                statusView.text = context.getString(R.string.network_nfs_form_status_error_format, result.removePrefix("ERROR:"))
-                return@launch
-            }
-
-            val server =
-                SavedServer(
-                    name = n,
-                    protocol = ServerProtocol.NFS,
-                    host = h,
-                    port = p,
-                    path = exp,
-                    isAutoDiscovered = false,
-                    lastConnectedAt = System.currentTimeMillis(),
-                )
-
-            withContext(Dispatchers.IO) {
-                savedServerDao.insert(server)
-            }
-
-            statusView.text = context.getString(R.string.network_nfs_form_status_connected)
-            onSaved()
-        }
     }
 
     // ---- Navegacao de arquivos NFS ----

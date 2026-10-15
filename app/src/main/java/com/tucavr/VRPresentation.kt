@@ -17,6 +17,7 @@ import android.widget.ScrollView
 import androidx.recyclerview.widget.RecyclerView
 import com.airbnb.lottie.LottieAnimationView
 import com.airbnb.lottie.LottieCompositionFactory
+import com.tucavr.designsystem.FullDebugStatsView
 import com.tucavr.designsystem.KeyboardBinding
 import com.tucavr.designsystem.VoidTheme
 import com.tucavr.download.DownloadRepository
@@ -744,10 +745,16 @@ class VRPresentation(
                 onBack = { handleBack() },
                 onPlay = { source -> playSource(source) },
                 onConfigureDiscoveredServer = { protocol, hostStr, portNum, nameStr, pathStr ->
-                    if (protocol == com.tucavr.network.ServerProtocol.WEBDAV) {
-                        networkWebdavScreen.prefill(hostStr, portNum, nameStr, pathStr)
-                    }
-                    networkHomeScreen.openAddForm(protocol)
+                    networkHomeScreen.openAddForm(
+                        protocol,
+                        com.tucavr.screens.ServerPrefill(
+                            host = hostStr,
+                            port = portNum,
+                            name = nameStr,
+                            path = pathStr,
+                        ),
+                        fromWizard = false,
+                    )
                 },
             )
 
@@ -895,6 +902,9 @@ class VRPresentation(
     }
 
     fun popTo(predicate: (Destination) -> Boolean) {
+        if (appNav.current is Destination.Settings) {
+            settingsScreen.cleanup()
+        }
         if (appNav.popTo(predicate)) {
             render()
         }
@@ -906,6 +916,9 @@ class VRPresentation(
     }
 
     private fun navigateTo(destination: Destination) {
+        if (appNav.current is Destination.Settings && destination !is Destination.Settings) {
+            settingsScreen.cleanup()
+        }
         appNav.navigateTo(destination)
         render()
     }
@@ -932,6 +945,60 @@ class VRPresentation(
         }
     }
 
+    private var fullDebugStatsView: FullDebugStatsView? = null
+    private var lastStatsWire: String? = null
+
+    fun isFullStatsActive(): Boolean = fullDebugStatsView != null
+
+    fun showFullDebugStats() {
+        if (fullDebugStatsView != null) return
+        val view =
+            FullDebugStatsView(
+                context = context,
+                onClose = {
+                    hideFullDebugStats()
+                    activity.onFullStatsDismissed()
+                },
+            )
+        fullDebugStatsView = view
+        rootContainer.addView(
+            view,
+            FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        lastStatsWire?.let { wire ->
+            view.updateStats(
+                text = wire,
+                meta = activity.currentMediaMetadata,
+                source = activity.currentPlaybackSource,
+                isCharging = activity.isBatteryCharging(),
+                batteryPercent = activity.getBatteryPercent(),
+                isDebuggable = activity.isDebuggable,
+            )
+        }
+    }
+
+    fun hideFullDebugStats() {
+        val view = fullDebugStatsView ?: return
+        rootContainer.removeView(view)
+        fullDebugStatsView = null
+    }
+
+    fun updateFullDebugStats(text: String) {
+        lastStatsWire = text
+        val view = fullDebugStatsView ?: return
+        view.updateStats(
+            text = text,
+            meta = activity.currentMediaMetadata,
+            source = activity.currentPlaybackSource,
+            isCharging = activity.isBatteryCharging(),
+            batteryPercent = activity.getBatteryPercent(),
+            isDebuggable = activity.isDebuggable,
+        )
+    }
+
     /**
      * Único ponto de "Voltar" do painel.
      *
@@ -940,6 +1007,12 @@ class VRPresentation(
      * Quando já na raiz, o AppNavigator faz o pop e [render] re-renderiza.
      */
     fun handleBack(): Boolean {
+        if (isFullStatsActive()) {
+            hideFullDebugStats()
+            activity.onFullStatsDismissed()
+            return true
+        }
+
         val current = appNav.current
         val handled =
             when {
@@ -950,6 +1023,10 @@ class VRPresentation(
                 current is Destination.NetworkSftpFiles -> networkSftpScreen.handleBack(current.server)
                 current is Destination.NetworkWebdavFiles -> networkWebdavScreen.handleBack(current.server)
                 current is Destination.NetworkHome -> networkHomeScreen.handleBack()
+                current is Destination.Settings -> {
+                    settingsScreen.cleanup()
+                    false
+                }
                 else -> false
             }
         if (!handled) {

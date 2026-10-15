@@ -136,13 +136,6 @@ class NetworkWebdavScreen(
             ).apply { setText("/") }
         formBasePathField = basePathInput
 
-        if (prefill != null) {
-            if (prefill.host.isNotEmpty()) hostInput.setText(prefill.host)
-            if (prefill.port > 0) portInput.setText(prefill.port.toString())
-            if (prefill.name.isNotEmpty()) nameInput.setText(prefill.name)
-            if (prefill.path.isNotEmpty()) basePathInput.setText(prefill.path)
-        }
-
         val userInput =
             form.field(
                 host = host,
@@ -205,6 +198,30 @@ class NetworkWebdavScreen(
             }
         form.addView(selfSignedCheckbox)
 
+        if (prefill != null) {
+            if (prefill.host.isNotEmpty()) hostInput.setText(prefill.host)
+            if (prefill.port > 0) portInput.setText(prefill.port.toString())
+            if (prefill.name.isNotEmpty()) nameInput.setText(prefill.name)
+            if (prefill.path.isNotEmpty()) basePathInput.setText(prefill.path)
+            if (prefill.username.isNotEmpty()) userInput.setText(prefill.username)
+            if (prefill.password.isNotEmpty()) passInput.setText(prefill.password)
+            if (prefill.extraJson != null) {
+                try {
+                    val json = JSONObject(prefill.extraJson)
+                    if (json.optBoolean("useHttps", false)) {
+                        httpsCheckbox.isChecked = true
+                        useHttps = true
+                    }
+                    if (json.optBoolean("acceptInvalidCerts", false)) {
+                        selfSignedCheckbox.isChecked = true
+                        acceptInvalidCerts = true
+                    }
+                } catch (_: Exception) {
+                    // Ignore malformed extraJson
+                }
+            }
+        }
+
         val warningText =
             VoidText.body(
                 context,
@@ -222,10 +239,67 @@ class NetworkWebdavScreen(
             }
         form.addView(statusText)
 
+        val buttonsRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = VoidTheme.dpToPx(context, 8f) }
+            }
+
+        val btnTest =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.network_btn_test_connection)
+                setIcon(R.drawable.ic_network)
+                textSize = 15f
+                minHeight = VoidTheme.dpToPx(context, 48f)
+                setOnClickListener {
+                    val hostText = hostInput.getText().trim()
+                    if (hostText.isEmpty()) {
+                        statusText.text = context.getString(R.string.network_webdav_form_status_host_required)
+                        return@setOnClickListener
+                    }
+
+                    val portVal = portInput.getText().toIntOrNull() ?: if (useHttps) 5006 else 5005
+                    val basePathVal = basePathInput.getText().trim().ifEmpty { "/" }
+                    val userVal = userInput.getText().trim()
+                    val passVal = passInput.getText()
+
+                    statusText.text = context.getString(R.string.network_webdav_form_status_connecting)
+                    scope.launch {
+                        val result =
+                            withContext(Dispatchers.IO) {
+                                activity.nativeWebdavListDirectory(
+                                    hostText,
+                                    portVal,
+                                    basePathVal,
+                                    "",
+                                    userVal,
+                                    passVal,
+                                    useHttps,
+                                    acceptInvalidCerts,
+                                )
+                            }
+                        if (result.startsWith("ERROR:")) {
+                            statusText.text =
+                                context.getString(
+                                    R.string.network_webdav_form_status_error_format,
+                                    result.removePrefix("ERROR:"),
+                                )
+                        } else {
+                            statusText.text = context.getString(R.string.network_webdav_form_status_connected)
+                        }
+                    }
+                }
+            }
+
         val btnSave =
             VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-                text = context.getString(R.string.network_webdav_btn_test_save)
-                textSize = 16f
+                text = context.getString(R.string.network_btn_save)
+                setIcon(R.drawable.ic_check)
+                textSize = 15f
                 minHeight = VoidTheme.dpToPx(context, 48f)
                 setOnClickListener {
                     if (!form.validate()) return@setOnClickListener
@@ -242,37 +316,55 @@ class NetworkWebdavScreen(
                     val passVal = passInput.getText()
                     val nameVal = nameInput.getText().trim()
 
-                    testAndSaveWebdavServer(
-                        h = hostText,
-                        p = portVal,
-                        basePath = basePathVal,
-                        user = userVal,
-                        pass = passVal,
-                        useHttps = useHttps,
-                        acceptInvalidCerts = acceptInvalidCerts,
-                        name = nameVal,
-                        statusView = statusText,
-                        onSaved = {
-                            form.clearAll()
-                            basePathInput.setText("/")
-                            portInput.setText(if (useHttps) "5006" else "5005")
-                            statusText.text = context.getString(R.string.network_webdav_form_status_connected)
-                            onSaved()
-                        },
-                    )
+                    val serverId = prefill?.existingServerId ?: java.util.UUID.randomUUID().toString()
+                    val n = nameVal.ifEmpty { hostText }
+                    val extraJson =
+                        JSONObject().apply {
+                            put("useHttps", useHttps)
+                            put("acceptInvalidCerts", acceptInvalidCerts)
+                        }.toString()
+
+                    val server =
+                        SavedServer(
+                            id = serverId,
+                            name = n,
+                            protocol = ServerProtocol.WEBDAV,
+                            host = hostText,
+                            port = portVal,
+                            path = basePathVal,
+                            username = userVal,
+                            isAutoDiscovered = false,
+                            lastConnectedAt = System.currentTimeMillis(),
+                            extraJson = extraJson,
+                        )
+
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            savedServerDao.insert(server)
+                            credentialStore.saveCredentials(server.id, passVal)
+                        }
+                        form.clearAll()
+                        basePathInput.setText("/")
+                        portInput.setText(if (useHttps) "5006" else "5005")
+                        onSaved()
+                    }
                 }
             }
 
         form.onFormSubmit = { btnSave.performClick() }
 
-        form.addView(
+        buttonsRow.addView(
+            btnTest,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = VoidTheme.dpToPx(context, 8f)
+            },
+        )
+        buttonsRow.addView(
             btnSave,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = VoidTheme.dpToPx(context, 8f) },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
 
+        form.addView(buttonsRow)
         return form
     }
 

@@ -35,11 +35,21 @@ static void TestTieKeepsPriority() {
     std::cout << "[PASS] TestTieKeepsPriority\n";
 }
 
+static void TestModalPanelPick() {
+    assert(PickNearestPanel(-1.0f, -1.0f, -1.0f, 2.0f) == Panel::Modal);
+    assert(PickNearestPanel(3.0f, 2.5f, -1.0f, 1.8f) == Panel::Modal);
+    assert(PickNearestPanel(-1.0f, 1.5f, -1.0f, 2.0f) == Panel::Controls);
+    assert(PickNearestPanel(2.0f, 2.0f, 2.0f, 2.0f) == Panel::Browser);
+    assert(PickNearestPanel(2.0f, 2.0f, -1.0f, 2.0f) == Panel::Modal);
+    std::cout << "[PASS] TestModalPanelPick\n";
+}
+
 int main() {
     TestNoHit();
     TestSinglePanel();
     TestBrowserBehindControlsIsNotHit();
     TestBrowserInFrontWins();
     TestTieKeepsPriority();
+    TestModalPanelPick();
     return 0;
 }

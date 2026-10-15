@@ -409,7 +409,8 @@ Persist video playback progress across sessions to allow seamless resumption.
   - Implemented with KSP in `app/src/main/java/com/tucavr/history/`
 - [x] **T9.2** — Automatically save position periodically during playback:
   - Throttled to ~10s intervals (`PlaybackProgressThrottle.kt`) to avoid continuous disk writes
-- [x] **T9.3** — Prompt to resume ("Resume from XX:XX?" / "Start Over") when reopening media (`ResumePromptModal.kt`)
+- [x] **T9.3** — Prompt to resume ("Resume from XX:XX?" / "Start Over") when reopening media (`ResumePromptModal.kt`):
+  - *Note (2026-10-15 / Epic #81 #100):* Extended with multi-protocol configurable resume policy (`PlaybackResumePolicy`: `ASK` / `RESUME` / `START`) unified across local storage and network protocols (SMB, FTP, SFTP, NFS, WebDAV, DLNA, HTTP). Configurable in Settings (`SettingsScreen.kt` and `FeatureFlags.kt`).
 - [x] **T9.4** — "Continue Watching" row and screen on home menu (`ContinueWatchingScreen.kt`)
 
 ### ⚠️ Pitfalls and Considerations
