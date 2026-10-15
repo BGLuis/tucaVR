@@ -66,6 +66,12 @@ object FeatureFlags {
 
         // Fase 0.3 Seção 5: Rastreamento de mãos e controle por gestos (XR_EXT_hand_tracking).
         HAND_TRACKING("hand_tracking", defaultEnabled = true),
+
+        // B/Y como botão Voltar hierárquico (Issue #100)
+        BY_BUTTON_AS_BACK("by_button_as_back", defaultEnabled = true),
+
+        // Vibração háptica no hover ao apontar controles (Issue #100)
+        HOVER_HAPTICS("hover_haptics", defaultEnabled = true),
     }
 
     /** Chave usada para persistir o brilho do ambiente 3D/Skybox (0.0f a 1.0f). Padrão: 1.0f (100%). */
@@ -393,5 +399,64 @@ object FeatureFlags {
         enabled: Boolean,
     ) {
         setEnabled(context, Flag.NIGHT_MODE, enabled)
+    }
+
+    const val KEY_UI_PANEL_FOV = "ui_panel_fov"
+    const val KEY_UI_PANEL_DISTANCE = "ui_panel_distance"
+    const val KEY_PLAYBACK_RESUME_POLICY = "playback_resume_policy"
+
+    /** Lê o FOV angular horizontal da superfície cilíndrica da UI em graus (50°, 80°, 100°). Padrão: 80°. */
+    fun getUiPanelFov(context: Context): Float =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getFloat(KEY_UI_PANEL_FOV, 80.0f)
+
+    /** Persiste o FOV angular horizontal da UI. */
+    fun setUiPanelFov(
+        context: Context,
+        fovDeg: Float,
+    ) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putFloat(KEY_UI_PANEL_FOV, fovDeg)
+            .apply()
+    }
+
+    /** Lê a distância radial da UI ao usuário em metros (1.3m, 1.6m, 2.0m). Padrão: 1.6m. */
+    fun getUiPanelDistance(context: Context): Float =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getFloat(KEY_UI_PANEL_DISTANCE, 1.6f)
+
+    /** Persiste a distância radial da UI. */
+    fun setUiPanelDistance(
+        context: Context,
+        distance: Float,
+    ) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putFloat(KEY_UI_PANEL_DISTANCE, distance)
+            .apply()
+    }
+
+    /** Lê a política de retomada de reprodução. Padrão: ASK. */
+    fun getPlaybackResumePolicy(context: Context): com.tucavr.history.PlaybackResumePolicy {
+        val str =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getString(KEY_PLAYBACK_RESUME_POLICY, com.tucavr.history.PlaybackResumePolicy.ASK.name)
+        return try {
+            com.tucavr.history.PlaybackResumePolicy.valueOf(str ?: com.tucavr.history.PlaybackResumePolicy.ASK.name)
+        } catch (_: Exception) {
+            com.tucavr.history.PlaybackResumePolicy.ASK
+        }
+    }
+
+    /** Persiste a política de retomada de reprodução. */
+    fun setPlaybackResumePolicy(
+        context: Context,
+        policy: com.tucavr.history.PlaybackResumePolicy,
+    ) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_PLAYBACK_RESUME_POLICY, policy.name)
+            .apply()
     }
 }
