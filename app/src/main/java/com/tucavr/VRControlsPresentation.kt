@@ -1356,7 +1356,7 @@ class VRControlsPresentation(
                     }
                 contentDescription = context.getString(R.string.player_btn_debug_stats)
                 visibility = if (activity.isDebugStatsEnabled) View.VISIBLE else View.GONE
-                setOnClickListener { activity.openDebugStatsModal() }
+                setOnClickListener { activity.cycleDebugStatsMode() }
             }
         rightGroup.addView(btnDebugStats)
 

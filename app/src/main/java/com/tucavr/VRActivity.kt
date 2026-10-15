@@ -509,6 +509,13 @@ class VRActivity : NativeActivity() {
         isDebugStatsEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.DEBUG_STATS_PANEL)
         nativeSetDebugStatsEnabled(isDebugStatsEnabled)
 
+        // Issue #100: Geometria dinâmica da superfície cilíndrica da UI e preferências de controle
+        val fovDeg = FeatureFlags.getUiPanelFov(this)
+        val distanceM = FeatureFlags.getUiPanelDistance(this)
+        nativeSetUiPanelGeometry(distanceM, fovDeg)
+        nativeSetByButtonAsBack(FeatureFlags.isEnabled(this, FeatureFlags.Flag.BY_BUTTON_AS_BACK))
+        nativeSetHoverHapticsEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.HOVER_HAPTICS))
+
         // F8: ANR e crash nativo (inclusive o abort do ART no teardown Vulkan)
         // não deixam rastro no handler de exceções da JVM abaixo — ApplicationExitInfo
         // é a única fonte pra essas duas classes de morte do processo. Custo: uma leitura no arranque, zero em runtime.
@@ -1155,6 +1162,7 @@ class VRActivity : NativeActivity() {
         @JvmStatic
         fun dismissModalFromNative(activity: VRActivity) {
             activity.runOnUiThread {
+                activity.onModalDismissedFromNative()
                 activity.modalPresentation?.dismissModal()
             }
         }
@@ -1168,6 +1176,7 @@ class VRActivity : NativeActivity() {
                     if (activity.controlsPresentation?.hasOpenPopup() == true) {
                         handled = activity.controlsPresentation?.dismissOpenPopup() ?: false
                     } else if (activity.modalPresentation?.isShowing == true) {
+                        activity.onModalDismissedFromNative()
                         activity.modalPresentation?.dismissModal()
                         handled = true
                     } else {
@@ -1286,6 +1295,8 @@ class VRActivity : NativeActivity() {
             if (!activity.isDebugStatsEnabled) return
             activity.runOnUiThread {
                 activity.modalPresentation?.updateDebugStats(text)
+                activity.presentation?.updateFullDebugStats(text)
+                activity.statsTelemetryListeners.forEach { it(text) }
             }
         }
     }
@@ -1668,6 +1679,22 @@ class VRActivity : NativeActivity() {
 
     external fun nativeIsModalActive(): Boolean
 
+    external fun nativeSetModalDocked(
+        docked: Boolean,
+        azimuthDeg: Float,
+    )
+
+    external fun nativeSetFullStatsActive(active: Boolean)
+
+    external fun nativeSetUiPanelGeometry(
+        radius: Float,
+        centralAngleDeg: Float,
+    )
+
+    external fun nativeSetByButtonAsBack(enabled: Boolean)
+
+    external fun nativeSetHoverHapticsEnabled(enabled: Boolean)
+
     external fun nativeRequestFrameCapture(path: String)
 
     external fun nativeSetDebugCameraOffset(
@@ -1889,14 +1916,76 @@ class VRActivity : NativeActivity() {
         nativeSetBrowserGeometryMode(isCurved)
     }
 
+    enum class DebugStatsDisplayMode {
+        CLOSED,
+        COMPACT,
+        FULL,
+    }
+
+    var debugStatsMode: DebugStatsDisplayMode = DebugStatsDisplayMode.CLOSED
+        private set
+
+    val statsTelemetryListeners = mutableListOf<(String) -> Unit>()
+
     /**
-     * Exibe o modal de Estatísticas Técnicas no 3º Quad dedicado frontal (VRModalPresentation).
+     * Alterna o modo de exibição de estatísticas técnicas no ciclo de 3 estados (#99):
+     * CLOSED -> COMPACT -> FULL -> CLOSED.
+     */
+    fun cycleDebugStatsMode() {
+        runOnUiThread {
+            when (debugStatsMode) {
+                DebugStatsDisplayMode.CLOSED -> {
+                    debugStatsMode = DebugStatsDisplayMode.COMPACT
+                    nativeSetModalDocked(true, 38.0f)
+                    nativeSetFullStatsActive(false)
+                    nativeShowModalPanel()
+                    modalPresentation?.showCompactDebugStats()
+                    presentation?.hideFullDebugStats()
+                }
+                DebugStatsDisplayMode.COMPACT -> {
+                    debugStatsMode = DebugStatsDisplayMode.FULL
+                    modalPresentation?.dismissModal()
+                    nativeSetModalDocked(false, 0.0f)
+                    nativeSetFullStatsActive(true)
+                    nativeRequestUiPanelVisible()
+                    presentation?.showFullDebugStats()
+                }
+                DebugStatsDisplayMode.FULL -> {
+                    debugStatsMode = DebugStatsDisplayMode.CLOSED
+                    presentation?.hideFullDebugStats()
+                    nativeSetFullStatsActive(false)
+                    modalPresentation?.dismissModal()
+                }
+            }
+        }
+    }
+
+    fun onCompactStatsDismissed() {
+        if (debugStatsMode == DebugStatsDisplayMode.COMPACT) {
+            debugStatsMode = DebugStatsDisplayMode.CLOSED
+            nativeSetModalDocked(false, 0.0f)
+        }
+    }
+
+    fun onFullStatsDismissed() {
+        if (debugStatsMode == DebugStatsDisplayMode.FULL) {
+            debugStatsMode = DebugStatsDisplayMode.CLOSED
+            nativeSetFullStatsActive(false)
+        }
+    }
+
+    fun onModalDismissedFromNative() {
+        if (debugStatsMode == DebugStatsDisplayMode.COMPACT) {
+            debugStatsMode = DebugStatsDisplayMode.CLOSED
+            nativeSetModalDocked(false, 0.0f)
+        }
+    }
+
+    /**
+     * Exibe o modal de Estatísticas Técnicas no ciclo de 3 estados (ou modal frontal avulso).
      */
     fun openDebugStatsModal() {
-        runOnUiThread {
-            nativeShowModalPanel()
-            modalPresentation?.showDebugStatsModal()
-        }
+        cycleDebugStatsMode()
     }
 
     /**

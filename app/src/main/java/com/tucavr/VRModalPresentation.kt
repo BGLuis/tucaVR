@@ -10,6 +10,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import com.tucavr.designsystem.AudioTrackModal
+import com.tucavr.designsystem.CompactDebugStatsView
 import com.tucavr.designsystem.ConfirmDeleteModal
 import com.tucavr.designsystem.DebugStatsModal
 import com.tucavr.designsystem.PassthroughSettingsModal
@@ -43,6 +44,7 @@ class VRModalPresentation(
     private lateinit var rootContainer: FrameLayout
     private var currentModalView: View? = null
     private var currentDebugStatsModal: DebugStatsModal? = null
+    private var currentCompactStatsView: CompactDebugStatsView? = null
     private var lastStatsWire: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,8 +94,36 @@ class VRModalPresentation(
         rootContainer.removeAllViews()
         currentModalView = null
         currentDebugStatsModal = null
+        currentCompactStatsView = null
         rootContainer.setBackgroundColor(Color.TRANSPARENT)
         activity.nativeHideModalPanel()
+    }
+
+    /**
+     * Prepara e exibe o card de estatísticas técnicas compacto acoplado ([CompactDebugStatsView]).
+     */
+    fun showCompactDebugStats() {
+        val view =
+            CompactDebugStatsView(
+                context = context,
+                onDismiss = {
+                    dismissModal()
+                    activity.onCompactStatsDismissed()
+                },
+            )
+        currentCompactStatsView = view
+        showModal(view)
+
+        lastStatsWire?.let { wire ->
+            view.updateStats(
+                text = wire,
+                meta = activity.currentMediaMetadata,
+                source = activity.currentPlaybackSource,
+                isCharging = activity.isBatteryCharging(),
+                batteryPercent = activity.getBatteryPercent(),
+                isDebuggable = activity.isDebuggable,
+            )
+        }
     }
 
     /**
@@ -125,10 +155,19 @@ class VRModalPresentation(
      */
     fun updateDebugStats(text: String) {
         lastStatsWire = text
-        val modal = currentDebugStatsModal ?: return
         val batteryPct = activity.getBatteryPercent()
         val isCharging = activity.isBatteryCharging()
-        modal.updateStats(
+
+        currentDebugStatsModal?.updateStats(
+            text = text,
+            meta = activity.currentMediaMetadata,
+            source = activity.currentPlaybackSource,
+            isCharging = isCharging,
+            batteryPercent = batteryPct,
+            isDebuggable = activity.isDebuggable,
+        )
+
+        currentCompactStatsView?.updateStats(
             text = text,
             meta = activity.currentMediaMetadata,
             source = activity.currentPlaybackSource,
