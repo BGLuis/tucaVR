@@ -206,11 +206,14 @@ sequenceDiagram
 
 ### 4.1 Quadruple UI Surface
 
-The system allocates four simultaneous, independent `VirtualDisplay`s (see the constants in `native/src/vr_player_app_vulkan.cpp:372-379`; `VRActivity.kt` calls `createVirtualDisplay` once per surface):
+The system allocates four simultaneous, independent `VirtualDisplay`s (see the constants in `native/src/vr_player_app_vulkan.cpp`; `VRActivity.kt` calls `createVirtualDisplay` once per surface):
 
-1. **File Browser / Library (`virtualDisplay`):** `kUiTexWidth = 1024`, `kUiTexHeight = 768`, managed by `VRPresentation`. It hosts the screens (`screens/*`, driven by `AppNavigator`): home, local files, network shares, settings and the player.
-2. **Playback Controls Bar (`controlsVirtualDisplay`):** `kControlsTexWidth = 1582`, `kControlsTexHeight = 800`, managed by `VRControlsPresentation`. A floating curved bar below the screen with Play/Pause, seek bar, volume and selectors.
-3. **Modals and Confirmation Dialogs (`modalVirtualDisplay`):** `kModalTexWidth = 1024`, `kModalTexHeight = 768`, managed by `VRModalPresentation`.
+1. **Main UI Canvas (`virtualDisplay`):** `kUiTexWidth = 1920`, `kUiTexHeight = 960`, managed by `VRPresentation`. Projected onto an OpenXR cylinder layer (`XrCompositionLayerCylinderKHR`) with configurable radius (1.3m, 1.6m, 2.0m) and central angle / horizontal FOV (50°, 80°, 100°). The 1920x960 surface is partitioned into 3 simultaneous zones:
+   - **Zone 1: Sidebar (288px):** Persistent navigation rail (Home, Local Files, Network, Playlists, History, Settings).
+   - **Zone 2: Content (1200px):** Primary browsing viewport (file lists/grids, server catalogs, settings option categories).
+   - **Zone 3: Context Rail (432px):** Dynamic context pane (selected file details with metadata/preview, live telemetry preview rail in settings, direct action buttons). Single tap on a file selects and populates Zone 3; a second tap or the Play button in Zone 3 begins playback directly.
+2. **Playback Controls Bar (`controlsVirtualDisplay`):** `kControlsTexWidth = 1582`, `kControlsTexHeight = 800`, managed by `VRControlsPresentation`. A floating curved bar below the screen with Play/Pause, seek bar, volume, audio/subtitle selectors, and Stats for Nerds 3-state cycle toggle.
+3. **Modals, Dialogs & Docked Stats (`modalVirtualDisplay`):** `kModalTexWidth = 1024`, `kModalTexHeight = 768`, managed by `VRModalPresentation`. Floating quad for confirmation dialogs, resume prompts ("Retomar de XX:XX?"), and docked Stats for Nerds. In docked mode, the panel is positioned at radius 2.4m at an azimuth of ~38° to the right of the video screen, oriented with yaw facing $(0, y, 0)$ directly toward the viewer.
 4. **In-app Web Browser (browser `VirtualDisplay`):** `kBrowserTexWidth = 2560`, `kBrowserTexHeight = 1440`, managed by `VRWebBrowserPresentation` (Jetpack Compose + GeckoView, in `browser/`).
 
 ### 4.2 Interaction and Touch Synthesis (Controller Raycasting)
@@ -219,15 +222,19 @@ Interaction with the UI follows a real-time geometric precision pipeline:
 
 1. C++ obtains the 6DoF pose of the right/left Touch Plus controller through `xrLocateSpace`.
 2. It projects a geometric laser ray $\vec{R}(t) = \vec{O} + t \cdot \vec{D}$ into 3D space.
-3. It performs the ray-plane intersection test against the floating UI quad.
-4. It converts the three-dimensional hit point into normalized UV coordinates $x, y \in [0.0, 1.0]$.
-5. If there is a hit and the user pulls the trigger, C++ invokes through JNI:
+3. It performs geometric intersection testing:
+   - **Cylindrical Canvas:** Uses `rayHitsCylinder` (`native/include/cylinder_hit.h` and `vr_player_input_vulkan.h`), solving the ray-cylinder quadratic equation for radius $R$ and angular span $[-\theta/2, +\theta/2]$, mapping intersections to UV coordinates $u = 0.5 - \text{atan2}(x, -z)/\text{centralAngle}$ and $v = 0.5 - y / \text{height}$.
+   - **Planar Quads:** Uses `rayHitsQuad` for the floating playback controls, browser, and modal panels (including azimuth-rotated docked stats quad at $+38^\circ$).
+4. Converts the three-dimensional hit point into normalized UV coordinates $x, y \in [0.0, 1.0]$.
+5. **Haptic Feedback:** When a controller ray enters a clickable element or interactive surface, optional hover haptics (`HOVER_HAPTICS`) emit a subtle 15ms pulse (amplitude 0.15).
+6. **Physical Back Controls:** The secondary B/Y controller buttons synthesize Back events when enabled (`BY_BUTTON_AS_BACK`), routed to the active presentation or navigation stack.
+7. If there is a hit and the user pulls the trigger, C++ invokes through JNI:
 
    ```kotlin
-   VRActivity.dispatchVRTouch(activity, normX, normY, action)
+   VRActivity.dispatchVRTouch(activity, targetDisplay, normX, normY, action)
    ```
 
-6. The Kotlin method runs on the UI thread (`runOnUiThread`), scales the coordinates to the virtual display resolution (`normX * UI_WIDTH`, `normY * UI_HEIGHT`), creates a genuine `android.view.MotionEvent` (`ACTION_DOWN`, `ACTION_MOVE`, `ACTION_UP` or `ACTION_HOVER_MOVE`) and dispatches it directly to `presentation.dispatchTouchEvent(event)`.
+8. The Kotlin method runs on the UI thread (`runOnUiThread`), scales the coordinates to the virtual display resolution (`normX * UI_WIDTH`, `normY * UI_HEIGHT`), creates a genuine `android.view.MotionEvent` (`ACTION_DOWN`, `ACTION_MOVE`, `ACTION_UP` or `ACTION_HOVER_MOVE`) and dispatches it directly to `presentation.dispatchTouchEvent(event)`.
 
 ---
 
