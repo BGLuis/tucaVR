@@ -16,6 +16,7 @@ import com.tucavr.designsystem.VoidButton
 import com.tucavr.designsystem.VoidButtonStyle
 import com.tucavr.designsystem.VoidFieldAction
 import com.tucavr.designsystem.VoidFieldKind
+import com.tucavr.designsystem.VoidForm
 import com.tucavr.designsystem.VoidListRow
 import com.tucavr.designsystem.VoidPanelChrome
 import com.tucavr.designsystem.VoidText
@@ -40,13 +41,20 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Dados de preenchimento automático para formulários de adição de servidor (vindos da descoberta).
+ * Dados de preenchimento automático para formulários de adição/edição de servidor.
  */
 data class ServerPrefill(
     val host: String = "",
     val port: Int = 0,
     val name: String = "",
     val path: String = "",
+    val username: String = "",
+    val password: String = "",
+    val domain: String = "",
+    val privateKey: String? = null,
+    val isAnonymousOrGuest: Boolean = false,
+    val existingServerId: String? = null,
+    val extraJson: String? = null,
 )
 
 /**
@@ -90,7 +98,15 @@ class NetworkHomeScreen(
     private sealed class HomeMode {
         object List : HomeMode()
 
-        data class AddForm(val protocol: ServerProtocol) : HomeMode()
+        object WizardSelectProtocol : HomeMode()
+
+        data class AddForm(
+            val protocol: ServerProtocol,
+            val editingServerId: String? = null,
+            val fromWizard: Boolean = false,
+        ) : HomeMode()
+
+        data class EditDlna(val server: SavedServer) : HomeMode()
 
         object Discovery : HomeMode()
 
@@ -129,17 +145,30 @@ class NetworkHomeScreen(
     fun openAddForm(
         protocol: ServerProtocol,
         prefill: ServerPrefill? = null,
+        fromWizard: Boolean = false,
     ) {
         if (addFormBuilders.containsKey(protocol)) {
             pendingPrefill = prefill
-            mode = HomeMode.AddForm(protocol)
+            mode = HomeMode.AddForm(protocol, prefill?.existingServerId, fromWizard)
             renderCurrent()
         }
     }
 
-    /** @return true se consumiu o "Voltar" internamente (voltou pra lista); false = deixa o AppNavigator agir. */
+    /** @return true se consumiu o "Voltar" internamente (voltou pra lista ou wizard); false = deixa o AppNavigator agir. */
     fun handleBack(): Boolean {
         if (mode is HomeMode.List) return false
+        if (mode is HomeMode.EditDlna) {
+            mode = HomeMode.List
+            renderCurrent()
+            return true
+        }
+        val currentAddForm = mode as? HomeMode.AddForm
+        if (currentAddForm != null && currentAddForm.fromWizard) {
+            pendingPrefill = null
+            mode = HomeMode.WizardSelectProtocol
+            renderCurrent()
+            return true
+        }
         pendingPrefill = null
         mode = HomeMode.List
         renderCurrent()
@@ -149,7 +178,9 @@ class NetworkHomeScreen(
     private fun renderCurrent() {
         when (val m = mode) {
             is HomeMode.List -> renderList()
-            is HomeMode.AddForm -> renderAddForm(m.protocol)
+            is HomeMode.WizardSelectProtocol -> renderWizardSelectProtocol()
+            is HomeMode.AddForm -> renderAddForm(m.protocol, m.editingServerId)
+            is HomeMode.EditDlna -> renderEditDlna(m.server)
             is HomeMode.Discovery -> renderDiscovery()
             is HomeMode.Url -> renderUrl()
         }
@@ -387,34 +418,54 @@ class NetworkHomeScreen(
                 gravity = Gravity.CENTER_VERTICAL
             }
 
-        fun addAction(
-            iconResId: Int,
-            label: String,
-            onClick: () -> Unit,
-        ) {
-            row.addView(
-                VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-                    text = label
-                    setIcon(iconResId)
-                    textSize = 14f
-                    setOnClickListener { onClick() }
-                },
-                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    marginEnd = VoidTheme.dpToPx(context, 8f)
-                },
-            )
-        }
+        val btnAddSource =
+            VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+                text = context.getString(R.string.network_btn_add_source)
+                setIcon(R.drawable.ic_add)
+                textSize = 15f
+                setOnClickListener {
+                    pendingPrefill = null
+                    mode = HomeMode.WizardSelectProtocol
+                    renderCurrent()
+                }
+            }
+        row.addView(
+            btnAddSource,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = VoidTheme.dpToPx(context, 10f)
+            },
+        )
 
-        addFormBuilders.keys.forEach { protocol ->
-            addAction(protocol.iconRes, context.getString(protocol.labelRes)) { openAddForm(protocol) }
-        }
-        addAction(R.drawable.ic_link, context.getString(R.string.network_tab_url)) {
-            mode = HomeMode.Url
-            renderCurrent()
-        }
-        addAction(R.drawable.ic_search, context.getString(R.string.network_discovery_btn_rescan)) {
-            startInlineDiscovery()
-        }
+        val btnUrl =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.network_tab_url)
+                setIcon(R.drawable.ic_link)
+                textSize = 14f
+                setOnClickListener {
+                    mode = HomeMode.Url
+                    renderCurrent()
+                }
+            }
+        row.addView(
+            btnUrl,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                marginEnd = VoidTheme.dpToPx(context, 10f)
+            },
+        )
+
+        val btnScan =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.network_discovery_btn_rescan)
+                setIcon(R.drawable.ic_search)
+                textSize = 14f
+                setOnClickListener {
+                    startInlineDiscovery()
+                }
+            }
+        row.addView(
+            btnScan,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT),
+        )
 
         return HorizontalScrollView(context).apply {
             isHorizontalScrollBarEnabled = false
@@ -441,6 +492,53 @@ class NetworkHomeScreen(
                     layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                     bind(server.name, meta = meta, showThumbnailSlot = false, iconResId = server.protocol.iconRes)
                     setOnClickListener { connectTo(server) }
+                },
+            )
+
+            val btnEdit =
+                VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                    text = ""
+                    setIcon(R.drawable.ic_edit)
+                    textSize = 16f
+                    minHeight = 0
+                    val pad = VoidTheme.dpToPx(context, 12f)
+                    setPadding(pad, pad, pad, pad)
+                    contentDescription = context.getString(R.string.network_btn_edit)
+                    setOnClickListener {
+                        if (server.protocol == ServerProtocol.DLNA) {
+                            mode = HomeMode.EditDlna(server)
+                            renderCurrent()
+                            return@setOnClickListener
+                        }
+                        scope.launch {
+                            val password = withContext(Dispatchers.IO) { credentialStore.getPassword(server.id) }
+                            val privateKey = withContext(Dispatchers.IO) { credentialStore.getPrivateKey(server.id) }
+                            val prefill =
+                                ServerPrefill(
+                                    host = server.host,
+                                    port = server.port,
+                                    name = server.name,
+                                    path = server.path,
+                                    username = server.username,
+                                    password = password,
+                                    domain = server.domain,
+                                    privateKey = privateKey,
+                                    isAnonymousOrGuest = server.isGuest,
+                                    existingServerId = server.id,
+                                    extraJson = server.extraJson,
+                                )
+                            withContext(Dispatchers.Main) {
+                                pendingPrefill = prefill
+                                mode = HomeMode.AddForm(server.protocol, editingServerId = server.id)
+                                renderCurrent()
+                            }
+                        }
+                    }
+                }
+            addView(
+                btnEdit,
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    marginStart = VoidTheme.dpToPx(context, 8f)
                 },
             )
 
@@ -588,7 +686,11 @@ class NetworkHomeScreen(
                 if (onConfigureDiscoveredServer != null) {
                     onConfigureDiscoveredServer.invoke(item.protocol, item.host, item.port, item.name, item.path)
                 } else {
-                    openAddForm(item.protocol)
+                    openAddForm(
+                        item.protocol,
+                        ServerPrefill(host = item.host, port = item.port, name = item.name, path = item.path),
+                        fromWizard = false,
+                    )
                 }
             }
         }
@@ -624,9 +726,68 @@ class NetworkHomeScreen(
         }
     }
 
-    // ---- Modo Formulário: cadastrar servidor de um protocolo específico ----
+    // ---- Modo Wizard: seleção de protocolo ----
 
-    private fun renderAddForm(protocol: ServerProtocol) {
+    private fun renderWizardSelectProtocol() {
+        val root = VoidPanelChrome.newRoot(context)
+        root.addView(
+            VoidPanelChrome.buildHeader(context, title = context.getString(R.string.network_wizard_title), onBack = {
+                mode = HomeMode.List
+                renderCurrent()
+            }),
+        )
+
+        val content =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            }
+
+        content.addView(
+            VoidText.body(context, context.getString(R.string.network_wizard_subtitle), sizeSp = 16f, secondary = true).apply {
+                setPadding(0, VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 16f))
+            },
+        )
+
+        val protocols =
+            listOf(
+                ServerProtocol.SMB to R.string.network_protocol_desc_smb,
+                ServerProtocol.NFS to R.string.network_protocol_desc_nfs,
+                ServerProtocol.FTP to R.string.network_protocol_desc_ftp,
+                ServerProtocol.SFTP to R.string.network_protocol_desc_sftp,
+                ServerProtocol.WEBDAV to R.string.network_protocol_desc_webdav,
+            )
+
+        protocols.forEach { (protocol, descRes) ->
+            val row =
+                VoidListRow(context).apply {
+                    layoutParams =
+                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
+                            it.bottomMargin = VoidTheme.dpToPx(context, 8f)
+                        }
+                    bind(
+                        title = context.getString(protocol.labelRes),
+                        meta = context.getString(descRes),
+                        showThumbnailSlot = false,
+                        iconResId = protocol.iconRes,
+                    )
+                    setOnClickListener {
+                        openAddForm(protocol, fromWizard = true)
+                    }
+                }
+            content.addView(row)
+        }
+
+        root.addView(wrapInScroll(content), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        host.showScreen(root)
+    }
+
+    // ---- Modo Formulário: cadastrar ou editar servidor de um protocolo específico ----
+
+    private fun renderAddForm(
+        protocol: ServerProtocol,
+        editingServerId: String? = null,
+    ) {
         val builder = addFormBuilders[protocol]
         if (builder == null) {
             mode = HomeMode.List
@@ -635,8 +796,14 @@ class NetworkHomeScreen(
         }
 
         val root = VoidPanelChrome.newRoot(context)
+        val formTitle =
+            if (editingServerId != null) {
+                context.getString(R.string.network_edit_server_title)
+            } else {
+                context.getString(protocol.labelRes)
+            }
         root.addView(
-            VoidPanelChrome.buildHeader(context, title = context.getString(protocol.labelRes), onBack = { handleBack() }),
+            VoidPanelChrome.buildHeader(context, title = formTitle, onBack = { handleBack() }),
         )
         val formView =
             builder(
@@ -648,6 +815,80 @@ class NetworkHomeScreen(
                 pendingPrefill,
             )
         root.addView(wrapInScroll(formView), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        host.showScreen(root)
+    }
+
+    // ---- Modo Edição de Servidor DLNA (descoberto via UPnP/SSDP) ----
+
+    private fun renderEditDlna(server: SavedServer) {
+        val root = VoidPanelChrome.newRoot(context)
+        root.addView(
+            VoidPanelChrome.buildHeader(context, title = context.getString(R.string.network_dlna_edit_title), onBack = { handleBack() }),
+        )
+
+        val form = VoidForm(context)
+
+        val hostInfo = if (server.port > 0) "${server.host}:${server.port}" else server.host
+        val addressText =
+            VoidText.body(
+                context,
+                context.getString(R.string.network_dlna_edit_host_info, hostInfo),
+                sizeSp = 14f,
+                secondary = true,
+            ).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 16f))
+            }
+        form.addView(addressText)
+
+        val fieldName =
+            form.field(
+                host = host,
+                label = context.getString(R.string.network_dlna_form_name_label),
+                hint = context.getString(R.string.network_dlna_form_name_hint),
+                kind = VoidFieldKind.TEXT,
+            ).apply {
+                setText(server.name)
+            }
+
+        val btnSave =
+            VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+                text = context.getString(R.string.network_btn_save)
+                setIcon(R.drawable.ic_check)
+                textSize = 15f
+                minHeight = VoidTheme.dpToPx(context, 48f)
+                setOnClickListener {
+                    val nameText = fieldName.getText().trim()
+                    val finalName = if (nameText.isNotEmpty()) nameText else (server.host.ifEmpty { server.name })
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            savedServerDao.update(server.copy(name = finalName))
+                        }
+                        withContext(Dispatchers.Main) {
+                            mode = HomeMode.List
+                            renderCurrent()
+                        }
+                    }
+                }
+            }
+
+        form.onFormSubmit = { btnSave.performClick() }
+
+        val buttonsRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = VoidTheme.dpToPx(context, 16f) }
+            }
+        buttonsRow.addView(
+            btnSave,
+            LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT),
+        )
+        form.addView(buttonsRow)
+
+        root.addView(wrapInScroll(form), LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         host.showScreen(root)
     }
 

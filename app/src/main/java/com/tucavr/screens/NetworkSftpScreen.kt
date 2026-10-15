@@ -104,11 +104,13 @@ class NetworkSftpScreen(
                 kind = VoidFieldKind.NUMBER,
                 validator = FieldValidators.port(context.getString(R.string.field_error_invalid_port)),
             )
-
-        if (prefill != null) {
-            if (prefill.host.isNotEmpty()) fieldHost.setText(prefill.host)
-            if (prefill.port > 0) fieldPort.setText(prefill.port.toString())
-        }
+        val fieldName =
+            form.field(
+                host = host,
+                label = context.getString(R.string.network_sftp_form_name_label),
+                hint = context.getString(R.string.network_sftp_form_name_hint),
+                kind = VoidFieldKind.TEXT,
+            )
 
         val fieldUser =
             form.field(
@@ -118,13 +120,12 @@ class NetworkSftpScreen(
                 kind = VoidFieldKind.TEXT,
                 validator = FieldValidators.required(context.getString(R.string.field_error_required)),
             )
-
         val fieldPass =
             VoidTextField(
                 context = context,
                 host = host,
                 label = context.getString(R.string.network_sftp_form_pass_label),
-                hint = "",
+                hint = "••••••••",
                 kind = VoidFieldKind.PASSWORD,
                 actions = setOf(VoidFieldAction.PASTE, VoidFieldAction.REVEAL, VoidFieldAction.CONTEXT_MENU),
             )
@@ -157,20 +158,51 @@ class NetworkSftpScreen(
         form.addField(fieldPass)
         form.addField(fieldKey)
 
+        if (prefill != null) {
+            if (prefill.host.isNotEmpty()) fieldHost.setText(prefill.host)
+            if (prefill.port > 0) fieldPort.setText(prefill.port.toString())
+            if (prefill.name.isNotEmpty()) fieldName.setText(prefill.name)
+            if (prefill.username.isNotEmpty()) fieldUser.setText(prefill.username)
+            if (!prefill.privateKey.isNullOrEmpty()) {
+                keyCheckbox.isChecked = true
+                fieldKey.setText(prefill.privateKey)
+                fieldPass.visibility = View.GONE
+                fieldKey.visibility = View.VISIBLE
+            } else if (prefill.password.isNotEmpty()) {
+                keyCheckbox.isChecked = false
+                fieldPass.setText(prefill.password)
+                fieldPass.visibility = View.VISIBLE
+                fieldKey.visibility = View.GONE
+            }
+        }
+
         val statusText =
             VoidText.body(context, "", sizeSp = 14f, secondary = true).apply {
                 setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f))
             }
 
-        val btnSave =
-            VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-                text = context.getString(R.string.network_sftp_btn_test_save)
-                textSize = 16f
+        val buttonsRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = VoidTheme.dpToPx(context, 8f) }
+            }
+
+        val btnTest =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.network_btn_test_connection)
+                setIcon(R.drawable.ic_network)
+                textSize = 15f
                 minHeight = VoidTheme.dpToPx(context, 48f)
                 setOnClickListener {
-                    if (!form.validate()) return@setOnClickListener
-
                     val hostStr = fieldHost.getText().trim()
+                    if (hostStr.isEmpty()) {
+                        statusText.text = context.getString(R.string.network_sftp_form_status_host_required)
+                        return@setOnClickListener
+                    }
                     val portStr = fieldPort.getText().trim()
                     val port = if (portStr.isEmpty()) 22 else (portStr.toIntOrNull() ?: 22)
                     val user = fieldUser.getText().trim()
@@ -182,10 +214,65 @@ class NetworkSftpScreen(
                         fieldKey.setError(context.getString(R.string.network_sftp_form_status_auth_required))
                         return@setOnClickListener
                     }
+                    statusText.text = context.getString(R.string.network_sftp_form_status_connecting)
+                    scope.launch {
+                        val result =
+                            withContext(Dispatchers.IO) {
+                                activity.nativeSftpListDirectory(hostStr, port, user, pass, key, "")
+                            }
+                        if (result.startsWith("ERROR:")) {
+                            statusText.text =
+                                context.getString(
+                                    R.string.network_sftp_form_status_error_format,
+                                    result.removePrefix("ERROR:"),
+                                )
+                        } else {
+                            statusText.text = context.getString(R.string.network_sftp_form_status_connected)
+                        }
+                    }
+                }
+            }
 
-                    testAndSave(hostStr, port, user, pass, key, statusText) {
+        val btnSave =
+            VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+                text = context.getString(R.string.network_btn_save)
+                setIcon(R.drawable.ic_check)
+                textSize = 15f
+                minHeight = VoidTheme.dpToPx(context, 48f)
+                setOnClickListener {
+                    if (!form.validate()) return@setOnClickListener
+
+                    val hostStr = fieldHost.getText().trim()
+                    val portStr = fieldPort.getText().trim()
+                    val port = if (portStr.isEmpty()) 22 else (portStr.toIntOrNull() ?: 22)
+                    val user = fieldUser.getText().trim()
+                    val useKey = keyCheckbox.isChecked
+                    val pass = if (useKey) "" else fieldPass.getText().trim()
+                    val key = if (useKey) fieldKey.getText().trim() else ""
+                    val nameText = fieldName.getText().trim()
+                    val finalName = if (nameText.isNotEmpty()) nameText else hostStr
+
+                    if (useKey && key.isEmpty()) {
+                        fieldKey.setError(context.getString(R.string.network_sftp_form_status_auth_required))
+                        return@setOnClickListener
+                    }
+
+                    val serverId = prefill?.existingServerId ?: credentialStore.newId()
+                    val server =
+                        SftpServer(
+                            id = serverId,
+                            name = finalName,
+                            host = hostStr,
+                            port = port,
+                            username = user,
+                            password = pass,
+                            privateKey = if (useKey) key else null,
+                        )
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            credentialStore.save(server)
+                        }
                         form.clearAll()
-                        statusText.text = context.getString(R.string.network_sftp_form_status_connected)
                         onSaved()
                     }
                 }
@@ -193,62 +280,21 @@ class NetworkSftpScreen(
 
         form.onFormSubmit = { btnSave.performClick() }
 
-        form.addView(statusText)
-        form.addView(
+        buttonsRow.addView(
+            btnTest,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = VoidTheme.dpToPx(context, 8f)
+            },
+        )
+        buttonsRow.addView(
             btnSave,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = VoidTheme.dpToPx(context, 8f) },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
 
-        return form
-    }
+        form.addView(statusText)
+        form.addView(buttonsRow)
 
-    private fun testAndSave(
-        host: String,
-        port: Int,
-        username: String,
-        password: String,
-        privateKey: String,
-        statusView: android.widget.TextView,
-        onSaved: () -> Unit,
-    ) {
-        if (host.isEmpty()) {
-            statusView.text = context.getString(R.string.network_sftp_form_status_host_required)
-            return
-        }
-        if (password.isEmpty() && privateKey.isEmpty()) {
-            statusView.text = context.getString(R.string.network_sftp_form_status_auth_required)
-            return
-        }
-        statusView.text = context.getString(R.string.network_sftp_form_status_connecting)
-        scope.launch {
-            val result =
-                withContext(Dispatchers.IO) {
-                    activity.nativeSftpListDirectory(host, port, username, password, privateKey, "")
-                }
-            if (result.startsWith("ERROR:")) {
-                statusView.text =
-                    context.getString(
-                        R.string.network_sftp_form_status_error_format, result.removePrefix("ERROR:"),
-                    )
-                return@launch
-            }
-            statusView.text = context.getString(R.string.network_ftp_form_status_connected)
-            val server =
-                SftpServer(
-                    id = credentialStore.newId(),
-                    name = host,
-                    host = host,
-                    port = port,
-                    username = username,
-                    password = password,
-                    privateKey = privateKey.ifEmpty { null },
-                )
-            credentialStore.save(server)
-            onSaved()
-        }
+        return form
     }
 
     // ---- Navegação de diretório SFTP moderna ----

@@ -115,12 +115,13 @@ class NetworkSmbScreen(
                 hint = "Videos",
                 kind = VoidFieldKind.TEXT,
             )
-
-        if (prefill != null) {
-            if (prefill.host.isNotEmpty()) fieldHost.setText(prefill.host)
-            if (prefill.port > 0) fieldPort.setText(prefill.port.toString())
-            if (prefill.path.isNotEmpty()) fieldShare.setText(prefill.path.trimStart('/'))
-        }
+        val fieldName =
+            form.field(
+                host = host,
+                label = context.getString(R.string.network_smb_form_name_label),
+                hint = context.getString(R.string.network_smb_form_name_hint),
+                kind = VoidFieldKind.TEXT,
+            )
 
         val fieldUser =
             VoidTextField(
@@ -166,15 +167,85 @@ class NetworkSmbScreen(
                 kind = VoidFieldKind.TEXT,
             )
 
+        if (prefill != null) {
+            if (prefill.host.isNotEmpty()) fieldHost.setText(prefill.host)
+            if (prefill.port > 0) fieldPort.setText(prefill.port.toString())
+            if (prefill.name.isNotEmpty()) fieldName.setText(prefill.name)
+            if (prefill.path.isNotEmpty()) fieldShare.setText(prefill.path.trimStart('/'))
+            if (prefill.username.isNotEmpty()) fieldUser.setText(prefill.username)
+            if (prefill.password.isNotEmpty()) fieldPass.setText(prefill.password)
+            if (prefill.domain.isNotEmpty()) fieldDomain.setText(prefill.domain)
+            if (prefill.existingServerId != null && prefill.username.isEmpty()) {
+                guestCheckbox.isChecked = true
+            }
+        }
+
         val statusText =
             VoidText.body(context, "", sizeSp = 14f, secondary = true).apply {
                 setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f))
             }
 
+        val buttonsRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = VoidTheme.dpToPx(context, 8f) }
+            }
+
+        val btnTest =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.network_btn_test_connection)
+                setIcon(R.drawable.ic_network)
+                textSize = 15f
+                minHeight = VoidTheme.dpToPx(context, 48f)
+                setOnClickListener {
+                    val hostStr = fieldHost.getText().trim()
+                    if (hostStr.isEmpty()) {
+                        statusText.text = context.getString(R.string.network_smb_form_status_host_required)
+                        return@setOnClickListener
+                    }
+                    val portStr = fieldPort.getText().trim()
+                    val port = if (portStr.isEmpty()) 445 else (portStr.toIntOrNull() ?: 445)
+                    val isGuest = guestCheckbox.isChecked
+                    val user = if (isGuest) "" else fieldUser.getText().trim()
+                    val pass = if (isGuest) "" else fieldPass.getText().trim()
+                    val domain = fieldDomain.getText().trim()
+                    statusText.text = context.getString(R.string.network_smb_form_status_connecting)
+                    scope.launch {
+                        val result =
+                            withContext(Dispatchers.IO) {
+                                activity.nativeSmbListShares(hostStr, port, user, pass, domain)
+                            }
+                        if (result.startsWith("ERROR:")) {
+                            statusText.text =
+                                context.getString(
+                                    R.string.network_smb_form_status_error_format,
+                                    result.removePrefix("ERROR:"),
+                                )
+                        } else {
+                            val shares = result.split("\n").filter { it.isNotBlank() }
+                            statusText.text =
+                                context.resources.getQuantityString(
+                                    R.plurals.network_smb_form_status_connected,
+                                    shares.size,
+                                    shares.size,
+                                )
+                            if (fieldShare.getText().trim().isEmpty() && shares.isNotEmpty()) {
+                                fieldShare.setText(shares.first())
+                            }
+                        }
+                    }
+                }
+            }
+
         val btnSave =
             VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-                text = context.getString(R.string.network_smb_btn_test_save)
-                textSize = 16f
+                text = context.getString(R.string.network_btn_save)
+                setIcon(R.drawable.ic_check)
+                textSize = 15f
                 minHeight = VoidTheme.dpToPx(context, 48f)
                 setOnClickListener {
                     if (!form.validate()) return@setOnClickListener
@@ -184,12 +255,30 @@ class NetworkSmbScreen(
                     val port = if (portStr.isEmpty()) 445 else (portStr.toIntOrNull() ?: 445)
                     val share = fieldShare.getText().trim()
                     val isGuest = guestCheckbox.isChecked
-                    val user = fieldUser.getText().trim()
-                    val pass = fieldPass.getText().trim()
+                    val user = if (isGuest) "" else fieldUser.getText().trim()
+                    val pass = if (isGuest) "" else fieldPass.getText().trim()
                     val domain = fieldDomain.getText().trim()
-                    testAndSave(hostStr, port, share, isGuest, user, pass, domain, statusText) {
+
+                    val serverId = prefill?.existingServerId ?: credentialStore.newId()
+                    val nameText = fieldName.getText().trim()
+                    val defaultName = if (share.isNotEmpty()) "$hostStr/$share" else hostStr
+                    val finalName = if (nameText.isNotEmpty()) nameText else defaultName
+                    val server =
+                        SmbServer(
+                            id = serverId,
+                            name = finalName,
+                            host = hostStr,
+                            port = port,
+                            share = share,
+                            username = user,
+                            password = pass,
+                            domain = domain,
+                        )
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            credentialStore.save(server)
+                        }
                         form.clearAll()
-                        statusText.text = context.resources.getQuantityString(R.plurals.network_smb_form_status_connected, 1, 1)
                         onSaved()
                     }
                 }
@@ -197,68 +286,21 @@ class NetworkSmbScreen(
 
         form.onFormSubmit = { btnSave.performClick() }
 
-        form.addView(statusText)
-        form.addView(
+        buttonsRow.addView(
+            btnTest,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = VoidTheme.dpToPx(context, 8f)
+            },
+        )
+        buttonsRow.addView(
             btnSave,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = VoidTheme.dpToPx(context, 8f) },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
 
+        form.addView(statusText)
+        form.addView(buttonsRow)
+
         return form
-    }
-
-    private fun testAndSave(
-        host: String,
-        port: Int,
-        share: String,
-        guest: Boolean,
-        username: String,
-        password: String,
-        domain: String,
-        statusView: android.widget.TextView,
-        onSaved: () -> Unit,
-    ) {
-        val effectiveUser = if (guest) "" else username
-        val effectivePass = if (guest) "" else password
-
-        if (host.isEmpty()) {
-            statusView.text = context.getString(R.string.network_smb_form_status_host_required)
-            return
-        }
-        statusView.text = context.getString(R.string.network_smb_form_status_connecting)
-        scope.launch {
-            val result =
-                withContext(Dispatchers.IO) {
-                    activity.nativeSmbListShares(host, port, effectiveUser, effectivePass, domain)
-                }
-            if (result.startsWith("ERROR:")) {
-                statusView.text =
-                    context.getString(
-                        R.string.network_smb_form_status_error_format, result.removePrefix("ERROR:"),
-                    )
-                return@launch
-            }
-            val shares = result.split("\n").filter { it.isNotBlank() }
-            statusView.text =
-                context.resources.getQuantityString(
-                    R.plurals.network_smb_form_status_connected, shares.size, shares.size,
-                )
-            val server =
-                SmbServer(
-                    id = credentialStore.newId(),
-                    name = if (share.isNotEmpty()) "$host/$share" else host,
-                    host = host,
-                    port = port,
-                    share = share.ifEmpty { shares.firstOrNull() ?: "" },
-                    username = effectiveUser,
-                    password = effectivePass,
-                    domain = domain,
-                )
-            credentialStore.save(server)
-            onSaved()
-        }
     }
 
     // ---- Navegação de diretório SMB moderna ----

@@ -104,11 +104,13 @@ class NetworkFtpScreen(
                 kind = VoidFieldKind.NUMBER,
                 validator = FieldValidators.port(context.getString(R.string.field_error_invalid_port)),
             )
-
-        if (prefill != null) {
-            if (prefill.host.isNotEmpty()) fieldHost.setText(prefill.host)
-            if (prefill.port > 0) fieldPort.setText(prefill.port.toString())
-        }
+        val fieldName =
+            form.field(
+                host = host,
+                label = context.getString(R.string.network_ftp_form_name_label),
+                hint = context.getString(R.string.network_ftp_form_name_hint),
+                kind = VoidFieldKind.TEXT,
+            )
 
         val fieldUser =
             VoidTextField(
@@ -117,13 +119,14 @@ class NetworkFtpScreen(
                 label = context.getString(R.string.network_ftp_form_user_label),
                 hint = "anonymous",
                 kind = VoidFieldKind.TEXT,
+                actions = setOf(VoidFieldAction.PASTE, VoidFieldAction.CLEAR, VoidFieldAction.CONTEXT_MENU),
             )
         val fieldPass =
             VoidTextField(
                 context = context,
                 host = host,
                 label = context.getString(R.string.network_ftp_form_pass_label),
-                hint = "",
+                hint = "••••••••",
                 kind = VoidFieldKind.PASSWORD,
                 actions = setOf(VoidFieldAction.PASTE, VoidFieldAction.REVEAL, VoidFieldAction.CONTEXT_MENU),
             )
@@ -149,15 +152,78 @@ class NetworkFtpScreen(
         form.addField(fieldUser)
         form.addField(fieldPass)
 
+        if (prefill != null) {
+            if (prefill.host.isNotEmpty()) fieldHost.setText(prefill.host)
+            if (prefill.port > 0) fieldPort.setText(prefill.port.toString())
+            if (prefill.name.isNotEmpty()) fieldName.setText(prefill.name)
+            if (prefill.username.isNotEmpty()) {
+                fieldUser.setText(prefill.username)
+                anonCheckbox.isChecked = false
+            }
+            if (prefill.password.isNotEmpty()) fieldPass.setText(prefill.password)
+            if (prefill.existingServerId != null && prefill.username.isEmpty()) {
+                anonCheckbox.isChecked = true
+            }
+            fieldUser.visibility = if (anonCheckbox.isChecked) View.GONE else View.VISIBLE
+            fieldPass.visibility = if (anonCheckbox.isChecked) View.GONE else View.VISIBLE
+        }
+
         val statusText =
             VoidText.body(context, "", sizeSp = 14f, secondary = true).apply {
                 setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 4f))
             }
 
+        val buttonsRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = VoidTheme.dpToPx(context, 8f) }
+            }
+
+        val btnTest =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.network_btn_test_connection)
+                setIcon(R.drawable.ic_network)
+                textSize = 15f
+                minHeight = VoidTheme.dpToPx(context, 48f)
+                setOnClickListener {
+                    val hostStr = fieldHost.getText().trim()
+                    if (hostStr.isEmpty()) {
+                        statusText.text = context.getString(R.string.network_ftp_form_status_host_required)
+                        return@setOnClickListener
+                    }
+                    val portStr = fieldPort.getText().trim()
+                    val port = if (portStr.isEmpty()) 21 else (portStr.toIntOrNull() ?: 21)
+                    val isAnon = anonCheckbox.isChecked
+                    val user = if (isAnon) "anonymous" else fieldUser.getText().trim()
+                    val pass = if (isAnon) "guest@example.com" else fieldPass.getText().trim()
+                    statusText.text = context.getString(R.string.network_ftp_form_status_connecting)
+                    scope.launch {
+                        val result =
+                            withContext(Dispatchers.IO) {
+                                activity.nativeFtpListDirectory(hostStr, port, user, pass, "")
+                            }
+                        if (result.startsWith("ERROR:")) {
+                            statusText.text =
+                                context.getString(
+                                    R.string.network_ftp_form_status_error_format,
+                                    result.removePrefix("ERROR:"),
+                                )
+                        } else {
+                            statusText.text = context.getString(R.string.network_ftp_form_status_connected)
+                        }
+                    }
+                }
+            }
+
         val btnSave =
             VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-                text = context.getString(R.string.network_ftp_btn_test_save)
-                textSize = 16f
+                text = context.getString(R.string.network_btn_save)
+                setIcon(R.drawable.ic_check)
+                textSize = 15f
                 minHeight = VoidTheme.dpToPx(context, 48f)
                 setOnClickListener {
                     if (!form.validate()) return@setOnClickListener
@@ -168,9 +234,24 @@ class NetworkFtpScreen(
                     val isAnon = anonCheckbox.isChecked
                     val user = if (isAnon) "anonymous" else fieldUser.getText().trim()
                     val pass = if (isAnon) "guest@example.com" else fieldPass.getText().trim()
-                    testAndSave(hostStr, port, isAnon, user, pass, statusText) {
+                    val nameText = fieldName.getText().trim()
+                    val finalName = if (nameText.isNotEmpty()) nameText else hostStr
+
+                    val serverId = prefill?.existingServerId ?: credentialStore.newId()
+                    val server =
+                        FtpServer(
+                            id = serverId,
+                            name = finalName,
+                            host = hostStr,
+                            port = port,
+                            username = user,
+                            password = pass,
+                        )
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            credentialStore.save(server)
+                        }
                         form.clearAll()
-                        statusText.text = context.getString(R.string.network_ftp_form_status_connected)
                         onSaved()
                     }
                 }
@@ -178,57 +259,21 @@ class NetworkFtpScreen(
 
         form.onFormSubmit = { btnSave.performClick() }
 
-        form.addView(statusText)
-        form.addView(
+        buttonsRow.addView(
+            btnTest,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = VoidTheme.dpToPx(context, 8f)
+            },
+        )
+        buttonsRow.addView(
             btnSave,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = VoidTheme.dpToPx(context, 8f) },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
 
-        return form
-    }
+        form.addView(statusText)
+        form.addView(buttonsRow)
 
-    private fun testAndSave(
-        host: String,
-        port: Int,
-        isAnon: Boolean,
-        username: String,
-        password: String,
-        statusView: android.widget.TextView,
-        onSaved: () -> Unit,
-    ) {
-        if (host.isEmpty()) {
-            statusView.text = context.getString(R.string.network_ftp_form_status_host_required)
-            return
-        }
-        statusView.text = context.getString(R.string.network_ftp_form_status_connecting)
-        scope.launch {
-            val result =
-                withContext(Dispatchers.IO) {
-                    activity.nativeFtpListDirectory(host, port, username, password, "")
-                }
-            if (result.startsWith("ERROR:")) {
-                statusView.text =
-                    context.getString(
-                        R.string.network_ftp_form_status_error_format, result.removePrefix("ERROR:"),
-                    )
-                return@launch
-            }
-            statusView.text = context.getString(R.string.network_ftp_form_status_connected)
-            val server =
-                FtpServer(
-                    id = credentialStore.newId(),
-                    name = host,
-                    host = host,
-                    port = port,
-                    username = username,
-                    password = password,
-                )
-            credentialStore.save(server)
-            onSaved()
-        }
+        return form
     }
 
     // ---- Navegação de diretório FTP moderna ----
