@@ -26,6 +26,7 @@ struct InputFsmState {
     int activePanel = 0;
     float lastUvX = 0.0f;
     float lastUvY = 0.0f;
+    bool byButtonAsBack = true;
 
     // Metricas de observabilidade do teste
     int playPauseToggleCount = 0;
@@ -58,8 +59,8 @@ inline void ProcessButtonInputs(InputFsmState &state, bool currA, bool currX, bo
         }
     }
 
-    // B (direita) ou Y (esquerda) = navegação hierárquica para trás (Issue #87).
-    if (((currB && !state.prevB) || (currY && !state.prevY)) && !keyboardActive) {
+    // B (direita) ou Y (esquerda) = navegação hierárquica para trás (Issue #87, controlada por byButtonAsBack).
+    if (((currB && !state.prevB) || (currY && !state.prevY)) && !keyboardActive && state.byButtonAsBack) {
         bool controlsVisible = (state.controlsAlpha > 0.05f) || (state.controlsIdleTime < kUiAutoHideSeconds);
         bool uiVisible = (state.uiAlpha > 0.05f) || (state.uiIdleTime < kUiAutoHideSeconds);
 
@@ -768,6 +769,30 @@ static void TestTouchUpPreservesActivePanelAndCoordinatesWhenRayLeavesPanel() {
     std::cout << "[PASS] TestTouchUpPreservesActivePanelAndCoordinatesWhenRayLeavesPanel\n";
 }
 
+static void TestButtonBAndYDisabledWhenByButtonAsBackFalse() {
+    InputFsmState state;
+    state.byButtonAsBack = false;
+    state.uiAlpha = 1.0f;
+    state.controlsAlpha = 1.0f;
+
+    // Pressionar B não deve acionar nada
+    ProcessButtonInputs(state, false, false, true, false, false, 0.016f);
+    assert(state.hierarchicalBackCount == 0);
+    assert(state.uiToggleCount == 0);
+    assert(state.uiAlpha == 1.0f);
+    assert(state.controlsAlpha == 1.0f);
+
+    // Soltar B e pressionar Y também não deve acionar nada
+    ProcessButtonInputs(state, false, false, false, false, false, 0.016f);
+    ProcessButtonInputs(state, false, false, false, true, false, 0.016f);
+    assert(state.hierarchicalBackCount == 0);
+    assert(state.uiToggleCount == 0);
+    assert(state.uiAlpha == 1.0f);
+    assert(state.controlsAlpha == 1.0f);
+
+    std::cout << "[PASS] TestButtonBAndYDisabledWhenByButtonAsBackFalse\n";
+}
+
 int main() {
     std::cout << "--- Executando testes unitarios de Input FSM (C-01) ---\n";
     TestButtonAHoldTriggersOnlyOnce();
@@ -776,6 +801,7 @@ int main() {
     TestTriggerPlayPauseInSphericalAnd2DModes();
     TestButtonBAndYDismissControlsInstantly();
     TestButtonBYHierarchicalBackAndKeyboard();
+    TestButtonBAndYDisabledWhenByButtonAsBackFalse();
     TestRecenterUsesDefaultPosition();
     TestMenuButtonShortPressDismissesControls();
     TestStationaryControllerAcceleratesAutoHide();

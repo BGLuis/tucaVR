@@ -94,6 +94,7 @@ struct SceneTransforms {
     Mat4 modalModelNoScale;
     XrVector3f modalCenter;
     XrVector3f modalNormal;
+    float modalYaw;
 
     Mat4 screenModelNoScale;
     XrVector3f screenCenter;
@@ -127,7 +128,8 @@ inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVec
 
     // UI: billboard - sempre virado pra cabeca (mesma logica do GLES:
     // vr_player_app.cpp, calculo de uiYaw a partir de toHead).
-    XrVector3f worldUiPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(kBaseUiPos, state.sceneYawOffset));
+    XrVector3f baseUiPos = {0.0f, 1.36f, -state.uiCylinderRadius};
+    XrVector3f worldUiPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(baseUiPos, state.sceneYawOffset));
     XrVector3f toHead = Vec3Sub(headCenter, worldUiPos);
     toHead.y = 0.0f;
     float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
@@ -145,14 +147,23 @@ inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVec
     XrVector3f pitchedNormal = {0.0f, -sinf(kControlsPitch), cosf(kControlsPitch)};
     t.controlsNormal = Vec3RotateY(pitchedNormal, state.sceneYawOffset);
 
-    // Modal (3o Quad frontal): alinhado com a tela de video e controles no centro da cena
-    XrVector3f worldModalPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(kBaseModalPos, state.sceneYawOffset));
+    // Modal (3o Quad frontal): alinhado com a tela de video e controles no centro da cena,
+    // ou ancorado em azimute lateral (~38°) quando modalDocked estiver ativo (#99).
+    XrVector3f localModalPos = kBaseModalPos;
+    float modalYaw = state.sceneYawOffset;
+    if (state.modalDocked) {
+        float rad = state.modalDockedAzimuth * (3.14159265358979323846f / 180.0f);
+        localModalPos = { 2.4f * sinf(rad), 1.35f, -2.4f * cosf(rad) };
+        modalYaw = state.sceneYawOffset - rad;
+    }
+    XrVector3f worldModalPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(localModalPos, state.sceneYawOffset));
     t.modalModelNoScale = Mat4Multiply(
         Mat4Translation(worldModalPos.x, worldModalPos.y, worldModalPos.z),
-        Mat4RotationY(state.sceneYawOffset)
+        Mat4RotationY(modalYaw)
     );
     t.modalCenter = worldModalPos;
-    t.modalNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.sceneYawOffset);
+    t.modalNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, modalYaw);
+    t.modalYaw = modalYaw;
 
     // Tela virtual: posicao/escala ajustaveis via thumbstick (Estagio 6).
     XrVector3f worldScreenPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(state.screenPosition, state.sceneYawOffset));
@@ -504,6 +515,14 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         state.isScreenGrabbed = false;
     }
 
+    state.modalDocked = ::g_modalDocked.load();
+    state.modalDockedAzimuth = ::g_modalDockedAzimuth.load();
+    state.statsFullActive = ::g_statsFullActive.load();
+    state.uiCylinderRadius = ::g_uiCylinderRadius.load();
+    state.uiCylinderCentralAngle = ::g_uiCylinderCentralAngle.load();
+    state.byButtonAsBack = ::g_byButtonAsBack.load();
+    state.hoverHapticsEnabled = ::g_hoverHapticsEnabled.load();
+
     if (::g_modalPanelShowRequested.exchange(false)) {
         state.modalActive = true;
     }
@@ -516,7 +535,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
     float uu = 0, vu = 0, uc = 0, vc = 0, um = 0, vm = 0, ub = 0, vb = 0;
     float tUi = (state.hasRay && state.uiAlpha > 0.01f)
-        ? rayHitsCylinder(scene.uiModelNoScale, kUiCylinderRadius, kUiCylinderCentralAngle,
+        ? rayHitsCylinder(scene.uiModelNoScale, state.uiCylinderRadius, state.uiCylinderCentralAngle,
                           (float)kUiTexWidth / (float)kUiTexHeight,
                           uu, vu, state.lastRayOrigin, state.lastRayDir)
         : -1.0f;
@@ -547,8 +566,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     float hitU = 0, hitV = 0;
     state.lastHitDist = -1.0f;
 
-    // Foco exclusivo no modal se estiver ativo e visível
-    if (state.modalActive && state.modalAlpha > 0.5f) {
+    // Foco exclusivo no modal se estiver ativo, visível e NÃO acoplado (modal centralizado de bloqueio)
+    if (state.modalActive && !state.modalDocked && state.modalAlpha > 0.5f) {
         if (tModal > 0.0f) {
             currentHitPanel = 3; hitU = um; hitV = vm;
             state.lastHitDist = tModal;
@@ -557,10 +576,15 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.lastHitDist = -1.0f;
         }
     } else {
-        switch (vrplayer::PickNearestPanel(tUi, tControls, tBrowser)) {
+        float effectiveModalT = (state.modalActive && state.modalDocked && state.modalAlpha > 0.01f) ? tModal : -1.0f;
+        switch (vrplayer::PickNearestPanel(tUi, tControls, tBrowser, effectiveModalT)) {
             case vrplayer::Panel::Browser:
                 currentHitPanel = 4; hitU = ub; hitV = vb;
                 state.lastHitDist = tBrowser;
+                break;
+            case vrplayer::Panel::Modal:
+                currentHitPanel = 3; hitU = um; hitV = vm;
+                state.lastHitDist = tModal;
                 break;
             case vrplayer::Panel::Controls:
                 currentHitPanel = 2; hitU = uc; hitV = vc;
@@ -699,7 +723,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     float effectiveControlsTimeout = (state.isControllerStationary && isPlaying) ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
     float effectiveUiTimeout = state.isControllerStationary ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
 
-    float uiTargetAlpha = (state.uiIdleTime < effectiveUiTimeout) ? 1.0f : 0.0f;
+    float uiTargetAlpha = (state.uiIdleTime < effectiveUiTimeout || state.statsFullActive) ? 1.0f : 0.0f;
     float controlsTargetAlpha = (state.hasActiveMedia && state.controlsIdleTime < effectiveControlsTimeout) ? 1.0f : 0.0f;
     if (!state.hasActiveMedia) {
         controlsTargetAlpha = 0.0f;
@@ -839,7 +863,9 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     // click) — sempre na mao direita, igual ao FireHaptic(RightHandPath,...)
     // do GLES (nao acompanha useLeft).
     if (dispatchHitPanel != 0 && dispatchHitPanel != state.lastHoverPanel) {
-        FireHaptic(state, rightPath, 0.25f, XR_MIN_HAPTIC_DURATION);
+        if (state.hoverHapticsEnabled) {
+            FireHaptic(state, rightPath, 0.25f, XR_MIN_HAPTIC_DURATION);
+        }
     }
     state.lastHoverPanel = dispatchHitPanel;
     if (action == 0) {
@@ -878,10 +904,10 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     bool currY = yState.currentState == XR_TRUE;
     bool currMenu = menuState.currentState == XR_TRUE;
 
-    // Se o modal estiver ativo, fechar modal ao clicar fora ou ao pressionar B/Y
-    if (state.modalActive) {
+    // Se o modal estiver ativo e NÃO acoplado, fechar modal ao clicar fora ou ao pressionar B/Y (se habilitado)
+    if (state.modalActive && !state.modalDocked) {
         if (((currTrigger && !prevTrigger && dispatchHitPanel == 0) ||
-             (currB && !state.prevB) || (currY && !state.prevY)) && !keyboardActive) {
+             (((currB && !state.prevB) || (currY && !state.prevY)) && state.byButtonAsBack)) && !keyboardActive) {
             state.modalActive = false;
             ::g_modalPanelActive.store(false);
             JNIEnv* env = nullptr;
@@ -919,12 +945,12 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             }
         }
 
-        // B (direita) ou Y (esquerda) = navegação hierárquica para trás (Issue #87).
-        // 1. Se o teclado virtual estiver ativo, B/Y não altera visibilidade.
+        // B (direita) ou Y (esquerda) = navegação hierárquica para trás (Issue #87, controlada por byButtonAsBack).
+        // 1. Se o teclado virtual estiver ativo ou byButtonAsBack estiver desativado, B/Y não altera visibilidade.
         // 2. Se a UI principal estiver visível, chama handleBackFromNative: se tratado, mantém a UI visível.
         // 3. Se não foi tratado pela UI (ou já está na raiz), oculta os painéis (dispensa rápida).
         // 4. Se os painéis estavam ocultos, reabre-os instantaneamente.
-        if (((currB && !state.prevB) || (currY && !state.prevY)) && !keyboardActive) {
+        if (((currB && !state.prevB) || (currY && !state.prevY)) && !keyboardActive && state.byButtonAsBack) {
             bool controlsVisible = (state.controlsAlpha > 0.05f) || (state.controlsIdleTime < kUiAutoHideSeconds);
             bool uiVisible = (state.uiAlpha > 0.05f) || (state.uiIdleTime < kUiAutoHideSeconds);
 

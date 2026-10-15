@@ -314,6 +314,17 @@ std::atomic<bool> g_modalPanelHideRequested{false};
 std::atomic<bool> g_browserCurvedGeometry{false};
 std::atomic<bool> g_browserActive{false};
 
+// Stats for Nerds docking & full stats (#99)
+std::atomic<bool> g_modalDocked{false};
+std::atomic<float> g_modalDockedAzimuth{38.0f};
+std::atomic<bool> g_statsFullActive{false};
+
+// Dynamic cylindrical UI geometry & input options (#100)
+std::atomic<float> g_uiCylinderRadius{vrplayer::kUiCylinderRadius};
+std::atomic<float> g_uiCylinderCentralAngle{vrplayer::kUiCylinderCentralAngle};
+std::atomic<bool> g_byButtonAsBack{true};
+std::atomic<bool> g_hoverHapticsEnabled{true};
+
 // Fase 0.3 Seção 8: Fotos 360° e 3D estéreo (T8.3, T8.4)
 std::atomic<bool> g_photoDirty{false};
 std::atomic<bool> g_photoActive{false};
@@ -343,6 +354,9 @@ void ResetGlobalState() {
     g_modalPanelActive.store(false);
     g_modalPanelShowRequested.store(false);
     g_modalPanelHideRequested.store(false);
+    g_modalDocked.store(false);
+    g_modalDockedAzimuth.store(38.0f);
+    g_statsFullActive.store(false);
 
     g_photoDirty.store(false);
     g_photoActive.store(false);
@@ -834,6 +848,13 @@ struct AppState {
     float modalAlpha = 0.0f;
     bool modalHasFrame = false;
     bool modalActive = false;
+    bool modalDocked = false;
+    float modalDockedAzimuth = 38.0f;
+    bool statsFullActive = false;
+    float uiCylinderRadius = vrplayer::kUiCylinderRadius;
+    float uiCylinderCentralAngle = vrplayer::kUiCylinderCentralAngle;
+    bool byButtonAsBack = true;
+    bool hoverHapticsEnabled = true;
 
     // VR browser panel (kBrowserTexWidth x kBrowserTexHeight)
     AImageReader* browserImageReader = nullptr;
@@ -7726,10 +7747,10 @@ void RenderFrame(AppState& state) {
         toHead.y = 0.0f;
         float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
         float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : state.sceneYawOffset;
-        uiCylinder.pose.position = Vec3Add(scene.uiCenter, Vec3RotateY({0.0f, 0.0f, kUiCylinderRadius}, uiYaw));
+        uiCylinder.pose.position = Vec3Add(scene.uiCenter, Vec3RotateY({0.0f, 0.0f, state.uiCylinderRadius}, uiYaw));
         uiCylinder.pose.orientation = QuatFromYaw(uiYaw);
-        uiCylinder.radius = kUiCylinderRadius;
-        uiCylinder.centralAngle = kUiCylinderCentralAngle;
+        uiCylinder.radius = state.uiCylinderRadius;
+        uiCylinder.centralAngle = state.uiCylinderCentralAngle;
         uiCylinder.aspectRatio = static_cast<float>(kUiTexWidth) / static_cast<float>(kUiTexHeight);
 
         // Painel 2: Controls
@@ -7756,7 +7777,7 @@ void RenderFrame(AppState& state) {
         modalQuad.subImage.imageRect.offset = {0, 0};
         modalQuad.subImage.imageRect.extent = {static_cast<int32_t>(kModalTexWidth), static_cast<int32_t>(kModalTexHeight)};
         modalQuad.pose.position = scene.modalCenter;
-        modalQuad.pose.orientation = QuatFromYaw(state.sceneYawOffset);
+        modalQuad.pose.orientation = QuatFromYaw(scene.modalYaw);
         modalQuad.size = {kModalPanelScaleX, kModalPanelScaleY};
 
         // Browser panel: quad and cylinder

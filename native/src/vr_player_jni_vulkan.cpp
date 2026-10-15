@@ -319,6 +319,13 @@ extern std::atomic<bool> g_newVideoSessionRequested;
 extern std::atomic<bool> g_modalPanelActive;
 extern std::atomic<bool> g_modalPanelShowRequested;
 extern std::atomic<bool> g_modalPanelHideRequested;
+extern std::atomic<bool> g_modalDocked;
+extern std::atomic<float> g_modalDockedAzimuth;
+extern std::atomic<bool> g_statsFullActive;
+extern std::atomic<float> g_uiCylinderRadius;
+extern std::atomic<float> g_uiCylinderCentralAngle;
+extern std::atomic<bool> g_byButtonAsBack;
+extern std::atomic<bool> g_hoverHapticsEnabled;
 
 // Fase 0.3 Seção 8: Fotos 360° e 3D estéreo (T8.3, T8.4)
 extern std::atomic<bool> g_photoDirty;
@@ -408,6 +415,34 @@ Java_com_tucavr_VRActivity_nativeHideModalPanel(JNIEnv*, jobject) {
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_tucavr_VRActivity_nativeIsModalActive(JNIEnv*, jobject) {
     return g_modalPanelActive.load() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetModalDocked(JNIEnv*, jobject, jboolean docked, jfloat azimuthDeg) {
+    g_modalDocked.store(docked == JNI_TRUE);
+    g_modalDockedAzimuth.store(static_cast<float>(azimuthDeg));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetFullStatsActive(JNIEnv*, jobject, jboolean active) {
+    g_statsFullActive.store(active == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetUiPanelGeometry(JNIEnv*, jobject, jfloat radius, jfloat centralAngleDeg) {
+    g_uiCylinderRadius.store(static_cast<float>(radius));
+    float angleRad = static_cast<float>(centralAngleDeg) * (3.14159265358979323846f / 180.0f);
+    g_uiCylinderCentralAngle.store(angleRad);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetByButtonAsBack(JNIEnv*, jobject, jboolean enabled) {
+    g_byButtonAsBack.store(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetHoverHapticsEnabled(JNIEnv*, jobject, jboolean enabled) {
+    g_hoverHapticsEnabled.store(enabled == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT void JNICALL
