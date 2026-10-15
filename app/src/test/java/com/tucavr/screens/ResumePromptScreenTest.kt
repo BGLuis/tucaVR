@@ -2,6 +2,7 @@ package com.tucavr.screens
 
 import com.tucavr.history.HistorySourceType
 import com.tucavr.history.PlaybackHistory
+import com.tucavr.history.PlaybackResumePolicy
 import com.tucavr.navigation.PlaybackSource
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -182,5 +183,65 @@ class ResumePromptScreenTest {
 
             // Assert
             assertFalse("Não deve iniciar reprodução caso o modal seja cancelado ou fechado", callbackInvoked)
+        }
+
+    @Test
+    fun `resumes saved position directly without prompt when policy is RESUME`() =
+        runTest {
+            // Arrange
+            val testDispatcher = StandardTestDispatcher(testScheduler)
+            val testScope = TestScope(testDispatcher)
+            var modalShown = false
+            var decidedPosition: Long? = -1L
+
+            val resumableEntry = createHistoryEntry(positionMs = 45_000L, durationMs = 100_000L)
+            val screen =
+                ResumePromptScreen(
+                    findHistory = { resumableEntry },
+                    showModal = { _, _, _ -> modalShown = true },
+                    getPolicy = { PlaybackResumePolicy.RESUME },
+                    scope = testScope,
+                )
+            val source = PlaybackSource.LocalFile("/sdcard/Movies/matrix.mp4")
+
+            // Act
+            screen.promptOrPlay(source) { resumeAtMs ->
+                decidedPosition = resumeAtMs
+            }
+            testScheduler.advanceUntilIdle()
+
+            // Assert
+            assertFalse("Modal não deve ser exibido quando policy é RESUME", modalShown)
+            assertEquals("Deve retomar diretamente na posição salva", 45_000L, decidedPosition)
+        }
+
+    @Test
+    fun `starts from beginning directly without prompt when policy is START`() =
+        runTest {
+            // Arrange
+            val testDispatcher = StandardTestDispatcher(testScheduler)
+            val testScope = TestScope(testDispatcher)
+            var modalShown = false
+            var decidedPosition: Long? = -1L
+
+            val resumableEntry = createHistoryEntry(positionMs = 45_000L, durationMs = 100_000L)
+            val screen =
+                ResumePromptScreen(
+                    findHistory = { resumableEntry },
+                    showModal = { _, _, _ -> modalShown = true },
+                    getPolicy = { PlaybackResumePolicy.START },
+                    scope = testScope,
+                )
+            val source = PlaybackSource.LocalFile("/sdcard/Movies/matrix.mp4")
+
+            // Act
+            screen.promptOrPlay(source) { resumeAtMs ->
+                decidedPosition = resumeAtMs
+            }
+            testScheduler.advanceUntilIdle()
+
+            // Assert
+            assertFalse("Modal não deve ser exibido quando policy é START", modalShown)
+            assertNull("Deve reiniciar do começo (null) quando policy é START", decidedPosition)
         }
 }
