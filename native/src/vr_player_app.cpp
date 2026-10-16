@@ -2396,13 +2396,20 @@ public:
                 m_controlsAlpha = 1.0f;
             }
         }
-        if (m_uiAlpha > 0.01f && (currentHitPanel == 1 || keyboardActive)) {
-            m_uiIdleTime = 0.0f;
+        bool isPlaying = get_playback_is_playing() != 0;
+        bool isVideoPlaying = m_isVideoActive && isPlaying;
+        if (!isVideoPlaying) {
+            if (m_uiAlpha > 0.01f) {
+                m_uiIdleTime = 0.0f;
+            }
         } else {
-            m_uiIdleTime += in.DeltaSeconds;
+            if (m_uiAlpha > 0.01f && (currentHitPanel == 1 || keyboardActive)) {
+                m_uiIdleTime = 0.0f;
+            } else {
+                m_uiIdleTime += in.DeltaSeconds;
+            }
         }
 
-        bool isPlaying = get_playback_is_playing() != 0;
         // Se o vídeo estiver pausado, o painel de controles e o botão de pause não devem sumir por auto-hide
         if (m_isVideoActive && (currentHitPanel == 2 || hitScreen || !isPlaying)) {
             m_controlsIdleTime = 0.0f;
