@@ -97,6 +97,8 @@ if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
     # 3D Virtual Environments & Cosmic Skybox
     vrplayer_compile_shader(environment.vert kEnvironmentVertSpirv)
     vrplayer_compile_shader(environment.frag kEnvironmentFragSpirv)
+    vrplayer_compile_shader(particles.vert kParticlesVertSpirv)
+    vrplayer_compile_shader(particles.frag kParticlesFragSpirv)
     vrplayer_compile_shader(skybox.vert kSkyboxVertSpirv)
     vrplayer_compile_shader(skybox.frag kSkyboxFragSpirv)
     # Ambient Mode: a light halo derived from the frame (Phase 0.3)

@@ -443,6 +443,7 @@ class VRActivity : NativeActivity() {
         }
 
         registerDebugReceiverIfDebuggable()
+        EnvironmentRegistry.loadFromAssets(assets)
 
         // "Buffer estilo YouTube" (ver media_logic::buffer_gate no lado
         // Rust): reporta a RAM total do aparelho uma vez no startup, pra o
@@ -1868,12 +1869,7 @@ class VRActivity : NativeActivity() {
                 )
             }
 
-            val volume =
-                when (environmentId) {
-                    EnvironmentStore.ENV_SPACE -> 0.25f
-                    EnvironmentStore.ENV_CINEMA -> 0.15f
-                    else -> 0.0f
-                }
+            val volume = EnvironmentRegistry.get(environmentId)?.ambientVolume ?: 0.0f
             if (volume > 0.0f) {
                 ambientAudioManager.playAmbient(environmentId, volume)
             } else {
