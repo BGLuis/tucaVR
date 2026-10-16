@@ -690,18 +690,30 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         }
     }
 
-    if (state.uiAlpha > 0.01f && (currentHitPanel == 1 || keyboardActive)) {
-        state.uiIdleTime = 0.0f;
-    } else {
-        state.uiIdleTime += dt;
-    }
-
     bool isPlaying = get_playback_is_playing() != 0;
     if (isPlaying && !state.prevIsPlaying) {
         state.uiIdleTime = kUiAutoHideSeconds;
         state.uiAlpha = 0.0f;
     }
     state.prevIsPlaying = isPlaying;
+
+    // Auto-hide da UI principal:
+    // Suprimido completamente quando não há vídeo tocando (ex: na Home, navegando arquivos,
+    // ou com o vídeo pausado). Só faz auto-hide por inatividade se o vídeo estiver
+    // ativamente reproduzindo em segundo plano (hasActiveMedia && isPlaying).
+    bool isVideoPlaying = state.hasActiveMedia && isPlaying;
+    if (!isVideoPlaying) {
+        if (state.uiAlpha > 0.01f) {
+            state.uiIdleTime = 0.0f;
+        }
+    } else {
+        if (state.uiAlpha > 0.01f && (currentHitPanel == 1 || keyboardActive)) {
+            state.uiIdleTime = 0.0f;
+        } else {
+            state.uiIdleTime += dt;
+        }
+    }
+
     // Interação ativa com a tela ou painel de controles:
     // - Se o controle estiver em repouso sobre uma mesa (isControllerStationary) ou se os controles
     //   foram explicitamente dispensados (controlsExplicitlyDismissed), apontar para a tela (hitScreen)
@@ -718,10 +730,10 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     }
 
     // Quando o controle for solto em repouso sobre uma superfície durante a reprodução,
-    // o auto-hide dos controles acelera para 1.0s (somando ~1.35s total com o fade-out).
+    // o auto-hide dos controles e da UI acelera para 1.0s (somando ~1.35s total com o fade-out).
     constexpr float kUiAutoHideStationarySeconds = 1.0f;
     float effectiveControlsTimeout = (state.isControllerStationary && isPlaying) ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
-    float effectiveUiTimeout = state.isControllerStationary ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
+    float effectiveUiTimeout = (state.isControllerStationary && isVideoPlaying) ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
 
     float uiTargetAlpha = (state.uiIdleTime < effectiveUiTimeout || state.statsFullActive) ? 1.0f : 0.0f;
     float controlsTargetAlpha = (state.hasActiveMedia && state.controlsIdleTime < effectiveControlsTimeout) ? 1.0f : 0.0f;

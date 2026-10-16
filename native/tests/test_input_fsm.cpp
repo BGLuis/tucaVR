@@ -184,15 +184,23 @@ inline void UpdateIdleAndAlpha(InputFsmState &state, bool hitScreen, int current
         state.controlsIdleTime += dt;
     }
 
-    if (state.uiAlpha > 0.01f && currentHitPanel == 1) {
-        state.uiIdleTime = 0.0f;
+    bool isVideoPlaying = state.hasActiveMedia && isPlaying;
+    if (!isVideoPlaying) {
+        if (state.uiAlpha > 0.01f) {
+            state.uiIdleTime = 0.0f;
+        }
     } else {
-        state.uiIdleTime += dt;
+        if (state.uiAlpha > 0.01f && currentHitPanel == 1) {
+            state.uiIdleTime = 0.0f;
+        } else {
+            state.uiIdleTime += dt;
+        }
     }
 
     float effectiveControlsTimeout =
         (state.isControllerStationary && isPlaying) ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
-    float effectiveUiTimeout = state.isControllerStationary ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
+    float effectiveUiTimeout =
+        (state.isControllerStationary && isVideoPlaying) ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
 
     float uiTargetAlpha = (state.uiIdleTime < effectiveUiTimeout) ? 1.0f : 0.0f;
     float controlsTargetAlpha =
@@ -793,6 +801,102 @@ static void TestButtonBAndYDisabledWhenByButtonAsBackFalse() {
     std::cout << "[PASS] TestButtonBAndYDisabledWhenByButtonAsBackFalse\n";
 }
 
+static void TestUiDoesNotAutoHideInHomeWhenIdle() {
+    InputFsmState state;
+    const float dt = 1.0f / 90.0f;
+
+    // Cenário: Usuário na Home sem mídia ativa (hasActiveMedia = false, isPlaying = false)
+    state.hasActiveMedia = false;
+    state.uiAlpha = 1.0f;
+    state.uiIdleTime = 0.0f;
+
+    // Simula 900 frames (~10 segundos a 90 FPS) sem apontar o laser para nenhum painel (currentHitPanel = 0, hitScreen
+    // = false)
+    for (int i = 0; i < 900; i++) {
+        UpdateIdleAndAlpha(state, /*hitScreen=*/false, /*currentHitPanel=*/0, /*isPlaying=*/false, dt);
+        assert(state.uiAlpha == 1.0f);
+        assert(state.uiIdleTime == 0.0f);
+    }
+
+    std::cout << "[PASS] TestUiDoesNotAutoHideInHomeWhenIdle\n";
+}
+
+static void TestUiDoesNotAutoHideInHomeWhenStationary() {
+    InputFsmState state;
+    const float dt = 1.0f / 90.0f;
+
+    // Cenário: Usuário na Home sem mídia ativa, apoia os controles sobre a mesa (isStill = true)
+    state.hasActiveMedia = false;
+    state.uiAlpha = 1.0f;
+    state.uiIdleTime = 0.0f;
+    state.isControllerStationary = false;
+    state.controllerStationaryTime = 0.0f;
+
+    // 90 frames (~1.0s) para detectar repouso (isControllerStationary)
+    for (int i = 0; i < 90; i++) {
+        UpdateStationaryDetection(state, /*isStill=*/true, dt);
+        UpdateIdleAndAlpha(state, /*hitScreen=*/false, /*currentHitPanel=*/0, /*isPlaying=*/false, dt);
+    }
+    assert(state.isControllerStationary == true);
+
+    // Próximos 450 frames (~5.0s) em repouso: a UI NÃO deve sofrer auto-hide
+    for (int i = 0; i < 450; i++) {
+        UpdateStationaryDetection(state, /*isStill=*/true, dt);
+        UpdateIdleAndAlpha(state, /*hitScreen=*/false, /*currentHitPanel=*/0, /*isPlaying=*/false, dt);
+        assert(state.uiAlpha == 1.0f);
+        assert(state.uiIdleTime == 0.0f);
+    }
+
+    std::cout << "[PASS] TestUiDoesNotAutoHideInHomeWhenStationary\n";
+}
+
+static void TestUiDoesNotAutoHideWhenMediaPaused() {
+    InputFsmState state;
+    const float dt = 1.0f / 90.0f;
+
+    // Cenário: Vídeo pausado (hasActiveMedia = true, isPlaying = false) com UI aberta
+    state.hasActiveMedia = true;
+    state.uiAlpha = 1.0f;
+    state.uiIdleTime = 0.0f;
+
+    // Usuário não está apontando para o painel de UI (currentHitPanel = 0)
+    for (int i = 0; i < 900; i++) {
+        UpdateIdleAndAlpha(state, /*hitScreen=*/false, /*currentHitPanel=*/0, /*isPlaying=*/false, dt);
+        assert(state.uiAlpha == 1.0f);
+        assert(state.uiIdleTime == 0.0f);
+    }
+
+    std::cout << "[PASS] TestUiDoesNotAutoHideWhenMediaPaused\n";
+}
+
+static void TestUiAutoHidesDuringPlaybackWhenIdle() {
+    InputFsmState state;
+    const float dt = 1.0f / 90.0f;
+
+    // Cenário: Vídeo tocando (hasActiveMedia = true, isPlaying = true) e UI aberta pelo botão Menu
+    state.hasActiveMedia = true;
+    state.uiAlpha = 1.0f;
+    state.uiIdleTime = 0.0f;
+    state.prevIsPlaying = true;
+
+    // Primeiros 4.5s (405 frames a 90 FPS) sem apontar para a UI (currentHitPanel = 0):
+    // uiIdleTime acumula, mas uiAlpha permanece 1.0f (ainda dentro dos 5.0s)
+    for (int i = 0; i < 405; i++) {
+        UpdateIdleAndAlpha(state, /*hitScreen=*/false, /*currentHitPanel=*/0, /*isPlaying=*/true, dt);
+        assert(state.uiAlpha == 1.0f);
+    }
+    assert(state.uiIdleTime >= 4.4f && state.uiIdleTime < 5.0f);
+
+    // Após 5.0s + tempo de fade (0.35s = ~32 frames), totalizando mais 80 frames (~0.88s), a UI deve sofrer fade-out
+    for (int i = 0; i < 80; i++) {
+        UpdateIdleAndAlpha(state, /*hitScreen=*/false, /*currentHitPanel=*/0, /*isPlaying=*/true, dt);
+    }
+    assert(state.uiAlpha <= 0.01f);
+    assert(state.uiIdleTime >= 5.0f);
+
+    std::cout << "[PASS] TestUiAutoHidesDuringPlaybackWhenIdle\n";
+}
+
 int main() {
     std::cout << "--- Executando testes unitarios de Input FSM (C-01) ---\n";
     TestButtonAHoldTriggersOnlyOnce();
@@ -809,6 +913,10 @@ int main() {
     TestUiPanelExplicitHideWithHover();
     TestControlsHiddenWhenNoActiveMedia();
     TestTouchUpPreservesActivePanelAndCoordinatesWhenRayLeavesPanel();
+    TestUiDoesNotAutoHideInHomeWhenIdle();
+    TestUiDoesNotAutoHideInHomeWhenStationary();
+    TestUiDoesNotAutoHideWhenMediaPaused();
+    TestUiAutoHidesDuringPlaybackWhenIdle();
     std::cout << "--- Todos os testes de Input FSM passaram com sucesso! ---\n";
     return 0;
 }
