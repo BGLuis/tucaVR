@@ -8,7 +8,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
-import com.tucavr.EnvironmentStore
+import com.tucavr.EnvironmentRegistry
 import com.tucavr.R
 
 /**
@@ -26,44 +26,35 @@ class EnvironmentSelectorModal(
 ) : FrameLayout(context) {
     private data class EnvironmentOption(
         val id: String,
-        val titleRes: Int,
-        val descRes: Int,
+        val title: String,
+        val desc: String,
         val iconRes: Int,
     )
 
     private val options =
-        listOf(
+        EnvironmentRegistry.getAll().map { env ->
+            val titleRes =
+                context.resources.getIdentifier(
+                    "env_${env.id}_title",
+                    "string",
+                    context.packageName,
+                )
+            val descRes =
+                context.resources.getIdentifier(
+                    "env_${env.id}_desc",
+                    "string",
+                    context.packageName,
+                )
+            val title = if (titleRes != 0) context.getString(titleRes) else env.name
+            val desc = if (descRes != 0) context.getString(descRes) else ""
+            val iconRes = EnvironmentRegistry.resolveIcon(context, env.id)
             EnvironmentOption(
-                EnvironmentStore.ENV_VOID,
-                R.string.env_void_title,
-                R.string.env_void_desc,
-                R.drawable.env_void,
-            ),
-            EnvironmentOption(
-                EnvironmentStore.ENV_SPACE,
-                R.string.env_space_title,
-                R.string.env_space_desc,
-                R.drawable.env_espaco,
-            ),
-            EnvironmentOption(
-                EnvironmentStore.ENV_CINEMA,
-                R.string.env_cinema_title,
-                R.string.env_cinema_desc,
-                R.drawable.env_cinema,
-            ),
-            EnvironmentOption(
-                EnvironmentStore.ENV_LIVING_ROOM,
-                R.string.env_living_room_title,
-                R.string.env_living_room_desc,
-                R.drawable.env_sala,
-            ),
-            EnvironmentOption(
-                EnvironmentStore.ENV_PASSTHROUGH,
-                R.string.env_passthrough_title,
-                R.string.env_passthrough_desc,
-                R.drawable.icon_eye_dashed,
-            ),
-        )
+                id = env.id,
+                title = title,
+                desc = desc,
+                iconRes = iconRes,
+            )
+        }
 
     private val cardViews = mutableListOf<Pair<String, LinearLayout>>()
 
@@ -236,21 +227,23 @@ class EnvironmentSelectorModal(
 
             val titleView =
                 TextView(context).apply {
-                    text = context.getString(option.titleRes)
+                    text = option.title
                     typeface = VoidTheme.typefaceTitle
                     textSize = 17f
                     setTextColor(VoidTheme.colorText)
                 }
             textCol.addView(titleView)
 
-            val descView =
-                TextView(context).apply {
-                    text = context.getString(option.descRes)
-                    typeface = VoidTheme.typefaceBody
-                    textSize = 13f
-                    setTextColor(VoidTheme.colorTextSecondary)
-                }
-            textCol.addView(descView)
+            if (option.desc.isNotEmpty()) {
+                val descView =
+                    TextView(context).apply {
+                        text = option.desc
+                        typeface = VoidTheme.typefaceBody
+                        textSize = 13f
+                        setTextColor(VoidTheme.colorTextSecondary)
+                    }
+                textCol.addView(descView)
+            }
             addView(textCol)
 
             setOnClickListener {

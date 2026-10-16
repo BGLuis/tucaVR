@@ -190,52 +190,25 @@ class ScreenTransformStore(
         const val MAX_SCALE_X = 8.0f
 
         fun getDefaultTransform(environmentId: String): ScreenTransform {
-            return when (environmentId) {
-                EnvironmentStore.ENV_CINEMA ->
-                    ScreenTransform(
-                        posX = 0.0f,
-                        posY = 2.5f,
-                        posZ = -7.5f,
-                        scaleX = 6.0f,
-                        scaleY = 3.375f,
-                        isCustomized = false,
-                    )
-                EnvironmentStore.ENV_LIVING_ROOM ->
-                    ScreenTransform(
-                        posX = 0.0f,
-                        posY = 1.85f,
-                        posZ = -2.8f,
-                        scaleX = 2.4f,
-                        scaleY = 1.35f,
-                        isCustomized = false,
-                    )
-                EnvironmentStore.ENV_SPACE ->
-                    ScreenTransform(
-                        posX = 0.0f,
-                        posY = 1.8f,
-                        posZ = -3.2f,
-                        scaleX = 3.8f,
-                        scaleY = 2.1375f,
-                        isCustomized = false,
-                    )
-                EnvironmentStore.ENV_VOID, EnvironmentStore.ENV_PASSTHROUGH ->
-                    ScreenTransform(
-                        posX = DEFAULT_POS_X,
-                        posY = DEFAULT_POS_Y,
-                        posZ = DEFAULT_POS_Z,
-                        scaleX = DEFAULT_SCALE_X,
-                        scaleY = DEFAULT_SCALE_Y,
-                        isCustomized = false,
-                    )
-                else ->
-                    ScreenTransform(
-                        posX = DEFAULT_POS_X,
-                        posY = DEFAULT_POS_Y,
-                        posZ = DEFAULT_POS_Z,
-                        scaleX = DEFAULT_SCALE_X,
-                        scaleY = DEFAULT_SCALE_Y,
-                        isCustomized = false,
-                    )
+            val env = EnvironmentRegistry.get(environmentId)
+            return if (env != null) {
+                ScreenTransform(
+                    posX = env.screenPosX,
+                    posY = env.screenPosY,
+                    posZ = env.screenPosZ,
+                    scaleX = env.screenScaleX,
+                    scaleY = env.screenScaleY,
+                    isCustomized = false,
+                )
+            } else {
+                ScreenTransform(
+                    posX = DEFAULT_POS_X,
+                    posY = DEFAULT_POS_Y,
+                    posZ = DEFAULT_POS_Z,
+                    scaleX = DEFAULT_SCALE_X,
+                    scaleY = DEFAULT_SCALE_Y,
+                    isCustomized = false,
+                )
             }
         }
     }
