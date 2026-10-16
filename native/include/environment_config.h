@@ -24,6 +24,9 @@ struct EnvironmentConfig {
     std::string ambientAudio = "";
     float ambientVolume = 0.3f;
     bool particlesEnabled = false;
+    float spawnPosX = 0.0f;
+    float spawnPosY = 0.0f;
+    float spawnPosZ = 0.0f;
 
     static inline std::string Trim(const std::string &str) {
         size_t first = str.find_first_not_of(" \t\r\n");
@@ -82,6 +85,15 @@ struct EnvironmentConfig {
                 config.ambientVolume = std::strtof(val.c_str(), nullptr);
             } else if (key == "particles_enabled") {
                 config.particlesEnabled = (val == "true" || val == "1" || val == "yes");
+            } else if (key == "spawn_pos") {
+                std::istringstream valStream(val);
+                std::string item;
+                if (std::getline(valStream, item, ','))
+                    config.spawnPosX = std::strtof(item.c_str(), nullptr);
+                if (std::getline(valStream, item, ','))
+                    config.spawnPosY = std::strtof(item.c_str(), nullptr);
+                if (std::getline(valStream, item, ','))
+                    config.spawnPosZ = std::strtof(item.c_str(), nullptr);
             }
         }
 

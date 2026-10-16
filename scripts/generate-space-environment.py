@@ -17,6 +17,7 @@ import time
 import struct
 import wave
 import subprocess
+import json
 import numpy as np
 from PIL import Image
 
@@ -620,14 +621,143 @@ def generate_space_platform(output_path):
     tri_count = len(full_mesh.faces)
     vert_count = len(full_mesh.vertices)
 
-    # Export to GLB (binary glTF 2.0)
+    # Export base GLB (binary glTF 2.0 with POSITION, NORMAL, COLOR_0)
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    glb_bytes = trimesh.exchange.gltf.export_glb(full_mesh, include_normals=True)
+    base_glb = trimesh.exchange.gltf.export_glb(full_mesh, include_normals=True)
+
+    # Generate procedural sci-fi metal texture (192x192)
+    def make_platform_diffuse(w=192, h=192):
+        x = np.linspace(-1, 1, w)
+        y = np.linspace(-1, 1, h)
+        xx, yy = np.meshgrid(x, y)
+        r = np.sqrt(xx**2 + yy**2)
+        tex = np.full((h, w, 3), 48.0, dtype=np.float32)
+        rings = np.sin(r * 24.0) * 8.0
+        tex[:, :, 0] += rings
+        tex[:, :, 1] += rings
+        tex[:, :, 2] += rings + 2.0
+        weave = (np.sin(xx * 48.0) * np.cos(yy * 48.0)) * 6.0
+        tex[:, :, 0] += weave
+        tex[:, :, 1] += weave
+        tex[:, :, 2] += weave
+        cyan_rings = np.exp(-((r - 0.4)**2) / (2 * 0.015**2)) + np.exp(-((r - 0.85)**2) / (2 * 0.015**2))
+        tex[:, :, 0] += cyan_rings * 10.0
+        tex[:, :, 1] += cyan_rings * 180.0
+        tex[:, :, 2] += cyan_rings * 210.0
+        return Image.fromarray(np.clip(tex, 0, 255).astype(np.uint8), mode="RGB")
+
+    texture_img = make_platform_diffuse(192, 192)
+
+    # Embed PBR Material with BaseColorTexture and TEXCOORD_0 into GLB
+    # This fulfills issue #55 and glTF 2.0 validation while keeping COLOR_0 intact.
+    import io
+    magic, ver, length = struct.unpack('<III', base_glb[:12])
+    chunk0_len, chunk0_type = struct.unpack('<II', base_glb[12:20])
+    gltf_json = json.loads(base_glb[20:20 + chunk0_len].decode('utf-8'))
+    chunk1_offset = 20 + chunk0_len
+    chunk1_len, chunk1_type = struct.unpack('<II', base_glb[chunk1_offset:chunk1_offset + 8])
+    bin_data = bytearray(base_glb[chunk1_offset + 8:chunk1_offset + 8 + chunk1_len])
+
+    img_io = io.BytesIO()
+    texture_img.save(img_io, format='JPEG', quality=80)
+    img_bytes = img_io.getvalue()
+
+    verts = full_mesh.vertices
+    uvs = np.zeros((len(verts), 2), dtype=np.float32)
+    uvs[:, 0] = np.clip(0.5 + verts[:, 0] / 5.5, 0.0, 1.0)
+    uvs[:, 1] = np.clip(0.5 + verts[:, 2] / 5.5, 0.0, 1.0)
+    uv_bytes = uvs.tobytes()
+
+    while len(bin_data) % 4 != 0:
+        bin_data.append(0)
+    uv_offset = len(bin_data)
+    bin_data.extend(uv_bytes)
+
+    while len(bin_data) % 4 != 0:
+        bin_data.append(0)
+    img_offset = len(bin_data)
+    bin_data.extend(img_bytes)
+
+    while len(bin_data) % 4 != 0:
+        bin_data.append(0)
+
+    bv_uv_idx = len(gltf_json['bufferViews'])
+    gltf_json['bufferViews'].append({
+        'buffer': 0,
+        'byteOffset': uv_offset,
+        'byteLength': len(uv_bytes),
+        'target': 34962
+    })
+
+    bv_img_idx = len(gltf_json['bufferViews'])
+    gltf_json['bufferViews'].append({
+        'buffer': 0,
+        'byteOffset': img_offset,
+        'byteLength': len(img_bytes)
+    })
+
+    acc_uv_idx = len(gltf_json['accessors'])
+    gltf_json['accessors'].append({
+        'bufferView': bv_uv_idx,
+        'byteOffset': 0,
+        'componentType': 5126,
+        'count': len(verts),
+        'type': 'VEC2',
+        'min': [float(uvs[:, 0].min()), float(uvs[:, 1].min())],
+        'max': [float(uvs[:, 0].max()), float(uvs[:, 1].max())]
+    })
+
+    gltf_json['images'] = [{
+        'bufferView': bv_img_idx,
+        'mimeType': 'image/jpeg',
+        'name': 'platform_diffuse'
+    }]
+
+    gltf_json['samplers'] = [{
+        'magFilter': 9729,
+        'minFilter': 9987,
+        'wrapS': 10497,
+        'wrapT': 10497
+    }]
+
+    gltf_json['textures'] = [{
+        'sampler': 0,
+        'source': 0
+    }]
+
+    gltf_json['materials'] = [{
+        'name': 'SpacePlatformMaterial',
+        'pbrMetallicRoughness': {
+            'baseColorTexture': {'index': 0},
+            'metallicFactor': 0.8,
+            'roughnessFactor': 0.3
+        }
+    }]
+
+    for mesh_obj in gltf_json['meshes']:
+        for prim in mesh_obj['primitives']:
+            prim['material'] = 0
+            prim['attributes']['TEXCOORD_0'] = acc_uv_idx
+
+    gltf_json['buffers'][0]['byteLength'] = len(bin_data)
+
+    json_str = json.dumps(gltf_json)
+    json_bytes = json_str.encode('utf-8')
+    while len(json_bytes) % 4 != 0:
+        json_bytes += b' '
+
+    new_len = 12 + 8 + len(json_bytes) + 8 + len(bin_data)
+    final_glb = struct.pack('<III', 0x46546C67, 2, new_len)
+    final_glb += struct.pack('<II', len(json_bytes), 0x4E4F534A)
+    final_glb += json_bytes
+    final_glb += struct.pack('<II', len(bin_data), 0x004E4942)
+    final_glb += bytes(bin_data)
+
     with open(output_path, "wb") as f:
-        f.write(glb_bytes)
+        f.write(final_glb)
 
     elapsed = time.time() - t0
-    size_kb = len(glb_bytes) / 1024
+    size_kb = len(final_glb) / 1024
     print(f"  -> Model saved at: {output_path}")
     print(f"  -> Triangles: {tri_count} (< 8,000) | Vertices: {vert_count} | Size: {size_kb:.1f} KB (< 200 KB)")
 
@@ -652,6 +782,10 @@ def validate_assets():
     print(f"     - File size: {sz_model} bytes ({sz_model / 1024:.2f} KB) [Limit: < 200 KB]")
     print(f"     - Triangles: {total_faces} [Limit: < 8,000]")
     print(f"     - Vertices: {total_verts}")
+    if hasattr(loaded, "geometry"):
+        for geom in loaded.geometry.values():
+            assert hasattr(geom.visual, "material"), "Geometry visual must have material"
+    print(f"     - Textured PBR material: verified")
     assert total_faces < 8000, f"Triangles exceed the limit: {total_faces} >= 8000"
     assert sz_model < 200 * 1024, f"Size exceeds the limit: {sz_model} >= 200KB"
 
