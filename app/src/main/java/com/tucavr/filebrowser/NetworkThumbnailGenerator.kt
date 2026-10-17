@@ -9,8 +9,6 @@ import com.tucavr.navigation.PlaybackSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
-import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
@@ -31,9 +29,6 @@ object NetworkThumbnailGenerator {
     // e impedir OOM em pastas contendo múltiplos vídeos 8K.
     internal val budgetGate = MemoryBudgetGate()
 
-    // Gate leve para operações de probe de metadados antes da decodificação.
-    private val probeSemaphore = Semaphore(4)
-
     // Gerador de tokens para cancelamento cooperativo instantâneo no Rust.
     private val nextCancelToken = AtomicLong(1L)
 
@@ -50,10 +45,17 @@ object NetworkThumbnailGenerator {
 
             if (!coroutineContext.isActive) return@withContext null
 
-            // 1. Fase de Probe com cache em disco do resultado (.meta)
+            // 1. Obter dimensões se disponíveis em cache (disco .meta ou Room cache);
+            // se não estiver em cache, usa fallback seguro de orçamento (0, 0) sem abrir
+            // o arquivo remotamente antes da hora (#144).
             val key = cacheKeyFor(source)
             val metaCacheFile = File(context.cacheDir, "$CACHE_DIR_NAME/$key.meta")
-            val (width, height) = readCachedDimensions(metaCacheFile) ?: probeDimensions(activity, source, metaCacheFile)
+            val cachedDims =
+                readCachedDimensions(metaCacheFile)
+                    ?: MediaMetadataReader.readCachedSummary(context, source)?.let {
+                        if (it.videoWidth > 0 && it.videoHeight > 0) Pair(it.videoWidth, it.videoHeight) else null
+                    }
+            val (width, height) = cachedDims ?: Pair(0, 0)
 
             if (!coroutineContext.isActive) return@withContext null
 
@@ -99,29 +101,6 @@ object NetworkThumbnailGenerator {
         }.getOrNull()
     }
 
-    private suspend fun probeDimensions(
-        activity: VRActivity,
-        source: PlaybackSource,
-        metaFile: File,
-    ): Pair<Int, Int> {
-        return probeSemaphore.withPermit {
-            readCachedDimensions(metaFile)?.let { return@withPermit it }
-
-            val meta = runCatching { MediaMetadataReader.read(activity, source) }.getOrNull()
-            val videoTrack = meta?.videoTracks?.firstOrNull()
-            val w = videoTrack?.width ?: 0
-            val h = videoTrack?.height ?: 0
-
-            if (w > 0 && h > 0) {
-                runCatching {
-                    metaFile.parentFile?.mkdirs()
-                    metaFile.writeText("${w}x$h")
-                }
-            }
-            Pair(w, h)
-        }
-    }
-
     // Chamada BLOQUEANTE (rede + decode sincronos do lado Rust) -- so deve
     // ser chamada de Dispatchers.IO, mesma ressalva documentada em
     // rust/bridge/src/lib.rs junto de smb_generate_thumbnail.
@@ -152,7 +131,44 @@ object NetworkThumbnailGenerator {
                     source.server.host, source.server.port, source.server.username, source.server.password,
                     source.server.privateKey ?: "", source.path, THUMB_WIDTH, THUMB_HEIGHT, cancelToken,
                 )
-            is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Dlna, is PlaybackSource.Webdav -> null
+            is PlaybackSource.Nfs ->
+                activity.nativeNfsGenerateThumbnail(
+                    source.server.host,
+                    source.server.port,
+                    source.server.path,
+                    source.path,
+                    3,
+                    THUMB_WIDTH,
+                    THUMB_HEIGHT,
+                    cancelToken,
+                )
+            is PlaybackSource.Webdav -> {
+                val password = com.tucavr.network.ServerCredentialStore(activity).getPassword(source.server.id)
+                var useHttps = false
+                var acceptInvalidCerts = false
+                if (!source.server.extraJson.isNullOrEmpty()) {
+                    try {
+                        val json = org.json.JSONObject(source.server.extraJson)
+                        useHttps = json.optBoolean("useHttps", false)
+                        acceptInvalidCerts = json.optBoolean("acceptInvalidCerts", false)
+                    } catch (_: Exception) {
+                    }
+                }
+                activity.nativeWebdavGenerateThumbnail(
+                    source.server.host,
+                    source.server.port,
+                    source.server.path,
+                    source.path,
+                    source.server.username,
+                    password,
+                    useHttps,
+                    acceptInvalidCerts,
+                    THUMB_WIDTH,
+                    THUMB_HEIGHT,
+                    cancelToken,
+                )
+            }
+            is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Dlna -> null
         }
     }
 
@@ -188,13 +204,15 @@ object NetworkThumbnailGenerator {
     // tamanho e a unica pista de "arquivo mudou" disponivel aqui.
     // Delega a formula pra CacheKeys.forSource (compartilhada com os caches Room, ver
     // CacheKeys.kt), mas continua so aceitando os tipos com geracao de thumbnail suportada
-    // (Smb/Ftp/Sftp/Dlna) -- callers (getScrubStrip) dependem desse throw pra tratar os
+    // (Smb/Ftp/Sftp/Dlna/Nfs/Webdav) -- callers (getScrubStrip) dependem desse throw pra tratar os
     // demais tipos como "sem thumbnail de rede" via runCatching { }.getOrNull().
     internal fun cacheKeyFor(source: PlaybackSource): String {
         return when (source) {
-            is PlaybackSource.Smb, is PlaybackSource.Ftp, is PlaybackSource.Sftp, is PlaybackSource.Dlna ->
+            is PlaybackSource.Smb, is PlaybackSource.Ftp, is PlaybackSource.Sftp,
+            is PlaybackSource.Dlna, is PlaybackSource.Nfs, is PlaybackSource.Webdav,
+            ->
                 CacheKeys.forSource(source)
-            is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Webdav ->
+            is PlaybackSource.LocalFile, is PlaybackSource.Http ->
                 throw IllegalArgumentException("NetworkThumbnailGenerator nao suporta ${source::class.simpleName}")
         }
     }
@@ -272,7 +290,13 @@ object NetworkThumbnailGenerator {
                     source.server.privateKey ?: "", source.path,
                     SCRUB_INTERVAL_SECONDS, SCRUB_WIDTH, SCRUB_HEIGHT,
                 )
-            is PlaybackSource.Ftp, is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Dlna, is PlaybackSource.Webdav -> null
+            is PlaybackSource.Ftp,
+            is PlaybackSource.LocalFile,
+            is PlaybackSource.Http,
+            is PlaybackSource.Nfs,
+            is PlaybackSource.Dlna,
+            is PlaybackSource.Webdav,
+            -> null
         }
     }
 

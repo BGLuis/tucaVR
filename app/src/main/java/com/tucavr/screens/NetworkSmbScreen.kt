@@ -29,12 +29,12 @@ import com.tucavr.filebrowser.Format3DFilter
 import com.tucavr.filebrowser.MediaEntry
 import com.tucavr.filebrowser.MediaFilterEngine
 import com.tucavr.filebrowser.MediaMetadataReader
-import com.tucavr.filebrowser.MediaType
 import com.tucavr.filebrowser.MediaTypeFilter
+import com.tucavr.filebrowser.NetworkDirectoryLoader
+import com.tucavr.filebrowser.NetworkDirectoryState
 import com.tucavr.filebrowser.NetworkFolderProber
 import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ViewMode
-import com.tucavr.filebrowser.mediaTypeForExtension
 import com.tucavr.filebrowser.sortMediaEntries
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
@@ -69,11 +69,15 @@ class NetworkSmbScreen(
     var browsingServer: SmbServer? = null
     var browsePath: String = ""
 
+    private val directoryLoader = NetworkDirectoryLoader(scope)
     private val folderConfigStore = FolderConfigStore(context)
     private var adapter: FileAdapter? = null
     private var recyclerView: RecyclerView? = null
+    private var rootLayout: LinearLayout? = null
     private var countLabel: android.widget.TextView? = null
     private var emptyContainer: LinearLayout? = null
+    private var emptyLabel: android.widget.TextView? = null
+    private var clearFiltersButton: VoidButton? = null
     private var mediaToolbar: MediaBrowserToolbar? = null
 
     // Estados de busca e filtros de rede
@@ -306,11 +310,21 @@ class NetworkSmbScreen(
     // ---- Navegação de diretório SMB moderna ----
 
     fun renderFiles(server: SmbServer) {
+        val sameServer = (browsingServer == server && rootLayout != null && recyclerView != null)
         browsingServer = server
         val folderKey = "smb://${server.name}/${server.share}/$browsePath"
         currentConfig = folderConfigStore.getConfigFor(folderKey)
 
+        if (sameServer) {
+            rootLayout?.findViewById<android.widget.TextView>(VoidPanelChrome.ID_SUBTITLE)?.text = "${server.share}/$browsePath"
+            mediaToolbar?.clearSearch()
+            searchQuery = ""
+            loadDirectory(server)
+            return
+        }
+
         val root = VoidPanelChrome.newRoot(context)
+        rootLayout = root
         root.addView(
             VoidPanelChrome.buildHeader(
                 context,
@@ -333,7 +347,7 @@ class NetworkSmbScreen(
                 initialTypeFilter = currentTypeFilter,
                 initialFormat3DFilter = currentFormat3DFilter,
                 initialDateFilter = currentDateFilter,
-                showDateFilter = false,
+                showDateFilter = true,
                 onQueryChanged = { query ->
                     searchQuery = query
                     applyFiltersAndSort()
@@ -354,6 +368,9 @@ class NetworkSmbScreen(
                     currentFormat3DFilter = newFormat3D
                     currentDateFilter = newDate
                     applyFiltersAndSort()
+                },
+                onRefresh = {
+                    reloadDirectory(server, forceRefresh = true)
                 },
             )
         mediaToolbar = toolbar
@@ -417,36 +434,40 @@ class NetworkSmbScreen(
         root.addView(recycler)
 
         // Empty State View
+        val label =
+            VoidText.body(context, context.getString(R.string.network_files_empty), sizeSp = 16f, secondary = true).apply {
+                gravity = Gravity.CENTER
+            }
+        emptyLabel = label
+
+        val clearBtn =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.browser_btn_clear_filters)
+                textSize = 15f
+                minHeight = VoidTheme.dpToPx(context, 48f)
+                val padH = VoidTheme.dpToPx(context, 16f)
+                val padV = VoidTheme.dpToPx(context, 10f)
+                setPadding(padH, padV, padH, padV)
+                setOnClickListener {
+                    mediaToolbar?.resetFilters()
+                    searchQuery = ""
+                    currentTypeFilter = MediaTypeFilter.ALL
+                    currentFormat3DFilter = Format3DFilter.ALL
+                    currentDateFilter = DateFilter.ALL
+                    applyFiltersAndSort()
+                }
+            }
+        clearFiltersButton = clearBtn
+
         emptyContainer =
             LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
                 visibility = View.GONE
-
+                addView(label)
                 addView(
-                    VoidText.body(context, context.getString(R.string.network_files_empty), sizeSp = 16f, secondary = true).apply {
-                        gravity = Gravity.CENTER
-                    },
-                )
-
-                addView(
-                    VoidButton(context, VoidButtonStyle.SECONDARY).apply {
-                        text = context.getString(R.string.browser_btn_clear_filters)
-                        textSize = 15f
-                        minHeight = VoidTheme.dpToPx(context, 48f)
-                        val padH = VoidTheme.dpToPx(context, 16f)
-                        val padV = VoidTheme.dpToPx(context, 10f)
-                        setPadding(padH, padV, padH, padV)
-                        setOnClickListener {
-                            mediaToolbar?.resetFilters()
-                            searchQuery = ""
-                            currentTypeFilter = MediaTypeFilter.ALL
-                            currentFormat3DFilter = Format3DFilter.ALL
-                            currentDateFilter = DateFilter.ALL
-                            applyFiltersAndSort()
-                        }
-                    },
+                    clearBtn,
                     LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
                         topMargin = VoidTheme.dpToPx(context, 12f)
                     },
@@ -487,70 +508,39 @@ class NetworkSmbScreen(
         return false
     }
 
-    private fun loadDirectory(server: SmbServer) {
-        val requestedPath = browsePath
-        scope.launch {
-            val result =
-                withContext(Dispatchers.IO) {
-                    activity.nativeSmbListDirectory(
-                        server.host,
-                        server.port,
-                        server.username,
-                        server.password,
-                        server.domain,
-                        server.share,
-                        requestedPath,
-                    )
-                }
-            if (browsingServer != server || browsePath != requestedPath) return@launch
-
-            if (result.startsWith("ERROR:")) {
-                cachedRawEntries = emptyList()
-                applyFiltersAndSort()
-                return@launch
+    private fun reloadDirectory(
+        server: SmbServer,
+        forceRefresh: Boolean = false,
+    ) {
+        if (forceRefresh) {
+            val keyPrefix = CacheKeys.forFolder("smb", server.host, server.port, server.share, "")
+            scope.launch {
+                NetworkFolderProber.clearFolderCache(context, keyPrefix)
+                loadDirectory(server)
             }
+        } else {
+            loadDirectory(server)
+        }
+    }
 
-            val lines = result.split("\n").filter { it.isNotBlank() }
-            val entries =
-                lines.mapNotNull { line ->
-                    val parts = line.split("\t")
-                    val name = parts.getOrNull(0) ?: return@mapNotNull null
-                    val isDir = parts.getOrNull(1) == "1"
-                    val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
-                    val childPath = if (requestedPath.isEmpty()) name else "$requestedPath/$name"
-
-                    val type =
-                        if (isDir) {
-                            MediaType.DIRECTORY
-                        } else {
-                            mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO
-                        }
-                    val f3d =
-                        if (type == MediaType.VIDEO) {
-                            MediaFilterEngine.detectFormat3DFromFilename(
-                                name,
-                            )
-                        } else {
-                            com.tucavr.filebrowser.Format3DType.FLAT_2D
-                        }
-
-                    MediaEntry(
-                        name = name,
-                        path = childPath,
-                        sizeBytes = sizeBytes,
-                        lastModified = 0L,
-                        type = type,
-                        format3DHint = f3d,
-                    )
-                }
-
-            // Poda pastas sem mídia reprodutível (ver NetworkFolderProber) -- espera
-            // resolver na primeira visita, cache-first nas seguintes.
-            val pruned =
-                NetworkFolderProber.pruneEmptyFolders(
+    private fun loadDirectory(server: SmbServer) {
+        directoryLoader.loadDirectory(
+            path = browsePath,
+            fetchRaw = {
+                activity.nativeSmbListDirectory(
+                    server.host,
+                    server.port,
+                    server.username,
+                    server.password,
+                    server.domain,
+                    server.share,
+                    browsePath,
+                )
+            },
+            proberConfig =
+                NetworkDirectoryLoader.FolderProberConfig(
                     context = context,
                     sourceKind = "smb",
-                    entries = entries,
                     folderKeyFor = { entry -> CacheKeys.forFolder("smb", server.host, server.port, server.share, entry.path) },
                     scanFnFor = { entry ->
                         {
@@ -565,11 +555,35 @@ class NetworkSmbScreen(
                             )
                         }
                     },
-                )
-            if (browsingServer != server || browsePath != requestedPath) return@launch
+                ),
+            onStateChange = { state ->
+                renderState(state)
+            },
+        )
+    }
 
-            cachedRawEntries = pruned
-            applyFiltersAndSort()
+    private fun renderState(state: NetworkDirectoryState) {
+        when (state) {
+            is NetworkDirectoryState.Loading -> {
+                // Mantém a visualização atual durante carregamento
+            }
+            is NetworkDirectoryState.Error -> {
+                cachedRawEntries = emptyList()
+                val msg = context.getString(R.string.network_smb_form_status_error_format, state.message)
+                countLabel?.text = msg
+                emptyLabel?.text = msg
+                clearFiltersButton?.visibility = View.GONE
+                recyclerView?.visibility = View.GONE
+                emptyContainer?.visibility = View.VISIBLE
+            }
+            is NetworkDirectoryState.Empty -> {
+                cachedRawEntries = emptyList()
+                applyFiltersAndSort()
+            }
+            is NetworkDirectoryState.Success -> {
+                cachedRawEntries = state.entries
+                applyFiltersAndSort()
+            }
         }
     }
 
@@ -599,8 +613,20 @@ class NetworkSmbScreen(
                 cachedRawEntries.size,
             )
 
+        val hasActiveFilters =
+            searchQuery.isNotEmpty() ||
+                currentTypeFilter != MediaTypeFilter.ALL ||
+                currentFormat3DFilter != Format3DFilter.ALL ||
+                currentDateFilter != DateFilter.ALL
+
+        emptyLabel?.text =
+            context.getString(
+                if (hasActiveFilters) R.string.browser_empty_search else R.string.network_files_empty,
+            )
+        clearFiltersButton?.visibility = if (hasActiveFilters) View.VISIBLE else View.GONE
+
         val isEmpty = sorted.isEmpty() && !showUp
         recyclerView?.visibility = if (isEmpty) View.GONE else View.VISIBLE
-        emptyContainer?.visibility = if (isEmpty) View.GONE else View.GONE
+        emptyContainer?.visibility = if (isEmpty) View.VISIBLE else View.GONE
     }
 }

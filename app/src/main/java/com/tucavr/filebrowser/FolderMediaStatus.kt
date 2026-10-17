@@ -37,4 +37,7 @@ interface FolderMediaStatusDao {
 
     @Query("DELETE FROM folder_media_status WHERE sourceKind = :sourceKind")
     suspend fun clearForSource(sourceKind: String)
+
+    @Query("DELETE FROM folder_media_status WHERE folderKey LIKE :prefix || '%'")
+    suspend fun clearForPrefix(prefix: String)
 }

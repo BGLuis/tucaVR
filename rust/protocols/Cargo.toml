@@ -10,7 +10,7 @@ edition = "2024"
 # smb/mod.rs sobre como isso e ponte para o mundo sincrono que o FFmpeg
 # custom I/O exige.
 smb2 = "0.27"
-tokio = { version = "1", features = ["rt", "net", "time", "macros"] }
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time", "macros"] }
 # Cliente HTTPS para o fallback de custom I/O (T7.2) — usado apenas quando o
 # libavformat bundled neste projeto nao tem suporte nativo a TLS (ver nota em
 # demuxer.rs). rustls em vez de openssl/native-tls: evita depender de uma lib
@@ -46,6 +46,8 @@ quick-xml = "0.37"
 aes = "0.8"
 # Codificação de paths para WebDAV (T3.1)
 percent-encoding = "2.3"
+# Parsing de RFC 2822 / getlastmodified para WebDAV (T3.1 / #142)
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 # Backoff com jitter compartilhado entre demux (core) e retry por chunk
 # (SMB/HTTP/FTP aqui) — logica pura, zero dependencia de Android/rede, ver
 # rust/media-logic/src/retry_backoff.rs.

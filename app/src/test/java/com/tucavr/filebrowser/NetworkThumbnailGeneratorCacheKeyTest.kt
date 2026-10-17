@@ -81,4 +81,35 @@ class NetworkThumbnailGeneratorCacheKeyTest {
         assertEquals(64, key.length) // SHA-256 -> 32 bytes -> 64 hex chars
         assertTrue(key.all { it.isDigit() || it in 'a'..'f' })
     }
+
+    @Test
+    fun nfsAndWebdavProduceValidCacheKeys() {
+        val nfsServer =
+            com.tucavr.network.SavedServer(
+                id = "n1",
+                name = "NFS",
+                protocol = com.tucavr.network.ServerProtocol.NFS,
+                host = "192.168.1.50",
+                port = 2049,
+                path = "/export",
+            )
+        val webdavServer =
+            com.tucavr.network.SavedServer(
+                id = "w1",
+                name = "WebDAV",
+                protocol = com.tucavr.network.ServerProtocol.WEBDAV,
+                host = "192.168.1.60",
+                port = 8080,
+                path = "/dav",
+            )
+        val nfsSource = PlaybackSource.Nfs(nfsServer, "clip.mkv", 5000L)
+        val webdavSource = PlaybackSource.Webdav(webdavServer, "clip.mkv", 5000L)
+
+        val nfsKey = NetworkThumbnailGenerator.cacheKeyFor(nfsSource)
+        val webdavKey = NetworkThumbnailGenerator.cacheKeyFor(webdavSource)
+
+        assertEquals(64, nfsKey.length)
+        assertEquals(64, webdavKey.length)
+        assertNotEquals(nfsKey, webdavKey)
+    }
 }

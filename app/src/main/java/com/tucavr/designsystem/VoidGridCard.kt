@@ -66,13 +66,13 @@ class VoidGridCard(context: Context) : LinearLayout(context) {
                 typeface = Typeface.DEFAULT_BOLD
                 textSize = 12f
                 setTextColor(Color.parseColor("#121214"))
-                text = "📁 PASTA"
+                text = context.getString(com.tucavr.R.string.browser_badge_folder)
                 val bPadH = VoidTheme.dpToPx(context, 8f)
                 val bPadV = VoidTheme.dpToPx(context, 4f)
                 setPadding(bPadH, bPadV, bPadH, bPadV)
                 background =
                     GradientDrawable().apply {
-                        setColor(Color.parseColor("#E5A93C")) // Âmbar destacado
+                        setColor(VoidTheme.colorFolder) // Âmbar destacado
                         cornerRadius = VoidTheme.dp(context, 4f)
                     }
                 layoutParams =
@@ -184,7 +184,7 @@ class VoidGridCard(context: Context) : LinearLayout(context) {
         GradientDrawable().apply {
             setColor(VoidTheme.colorSurface)
             cornerRadius = VoidTheme.dp(context, VoidTheme.cornerRadiusDp)
-            setStroke(VoidTheme.dpToPx(context, 2f), Color.parseColor("#E5A93C"))
+            setStroke(VoidTheme.dpToPx(context, 2f), VoidTheme.colorFolder)
         }
 
     private fun createSelectedBorder() =
@@ -221,9 +221,20 @@ class VoidGridCard(context: Context) : LinearLayout(context) {
             badge3D.visibility = View.GONE
             badgeType.visibility = View.GONE
             progressBar.visibility = View.GONE
+
+            thumbnail.scaleType = ImageView.ScaleType.CENTER_INSIDE
+            val pad = VoidTheme.dpToPx(context, 32f)
+            thumbnail.setPadding(pad, pad, pad, pad)
+            thumbnail.setImageResource(com.tucavr.R.drawable.ic_folder)
+            thumbnail.setColorFilter(VoidTheme.colorFolder, PorterDuff.Mode.SRC_IN)
         } else {
             background = if (isSelected) createSelectedBorder() else createNormalBorder()
             badgeFolder.visibility = View.GONE
+
+            thumbnail.scaleType = ImageView.ScaleType.CENTER_CROP
+            thumbnail.setPadding(0, 0, 0, 0)
+            thumbnail.colorFilter = null
+            thumbnail.setImageDrawable(null)
 
             // Formato 3D badge
             if (format3D != Format3DType.FLAT_2D) {
@@ -257,8 +268,6 @@ class VoidGridCard(context: Context) : LinearLayout(context) {
                 progressBar.visibility = View.GONE
             }
         }
-
-        thumbnail.setImageDrawable(null)
     }
 
     /**

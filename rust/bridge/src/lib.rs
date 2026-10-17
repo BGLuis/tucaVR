@@ -1319,7 +1319,15 @@ pub extern "C" fn smb_list_directory(
         Ok(entries) => {
             let lines: Vec<String> = entries
                 .into_iter()
-                .map(|e| format!("{}\t{}\t{}", e.name, if e.is_dir { 1 } else { 0 }, e.size))
+                .map(|e| {
+                    format!(
+                        "{}\t{}\t{}\t{}",
+                        e.name,
+                        if e.is_dir { 1 } else { 0 },
+                        e.size,
+                        e.mtime
+                    )
+                })
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
@@ -1476,7 +1484,15 @@ pub extern "C" fn ftp_list_directory(
         Ok(entries) => {
             let lines: Vec<String> = entries
                 .into_iter()
-                .map(|e| format!("{}\t{}\t{}", e.name, if e.is_dir { 1 } else { 0 }, e.size))
+                .map(|e| {
+                    format!(
+                        "{}\t{}\t{}\t{}",
+                        e.name,
+                        if e.is_dir { 1 } else { 0 },
+                        e.size,
+                        e.mtime
+                    )
+                })
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
@@ -1636,7 +1652,15 @@ pub extern "C" fn sftp_list_directory(
         Ok(entries) => {
             let lines: Vec<String> = entries
                 .into_iter()
-                .map(|e| format!("{}\t{}\t{}", e.name, if e.is_dir { 1 } else { 0 }, e.size))
+                .map(|e| {
+                    format!(
+                        "{}\t{}\t{}\t{}",
+                        e.name,
+                        if e.is_dir { 1 } else { 0 },
+                        e.size,
+                        e.mtime
+                    )
+                })
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
@@ -1784,7 +1808,15 @@ pub extern "C" fn nfs_list_directory(
         Ok(entries) => {
             let lines: Vec<String> = entries
                 .into_iter()
-                .map(|e| format!("{}\t{}\t{}", e.name, if e.is_dir { 1 } else { 0 }, e.size))
+                .map(|e| {
+                    format!(
+                        "{}\t{}\t{}\t{}",
+                        e.name,
+                        if e.is_dir { 1 } else { 0 },
+                        e.size,
+                        e.mtime
+                    )
+                })
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
@@ -1962,7 +1994,15 @@ pub extern "C" fn webdav_list_directory(
         Ok(entries) => {
             let lines: Vec<String> = entries
                 .into_iter()
-                .map(|e| format!("{}\t{}\t{}", e.name, if e.is_dir { 1 } else { 0 }, e.size))
+                .map(|e| {
+                    format!(
+                        "{}\t{}\t{}\t{}",
+                        e.name,
+                        if e.is_dir { 1 } else { 0 },
+                        e.size,
+                        e.mtime
+                    )
+                })
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
@@ -2627,6 +2667,96 @@ pub extern "C" fn sftp_generate_thumbnail(
     write_thumbnail(image, out_width, out_height, out_len)
 }
 
+/// Mesma logica de `smb_generate_thumbnail`, para um arquivo num servidor NFS.
+#[no_mangle]
+pub extern "C" fn nfs_generate_thumbnail(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    export_path: *const std::os::raw::c_char,
+    file_path: *const std::os::raw::c_char,
+    version: i32,
+    max_width: u32,
+    max_height: u32,
+    cancel_token: u64,
+    out_width: *mut u32,
+    out_height: *mut u32,
+    out_len: *mut usize,
+) -> *mut u8 {
+    let target = unsafe {
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return write_thumbnail(None, out_width, out_height, out_len),
+        };
+        let export_path = match cstr_to_string(export_path) {
+            Some(s) => s,
+            None => return write_thumbnail(None, out_width, out_height, out_len),
+        };
+        let file_path = match cstr_to_string(file_path) {
+            Some(s) => s,
+            None => return write_thumbnail(None, out_width, out_height, out_len),
+        };
+        protocols::nfs::NfsTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            export_path,
+            file_path,
+            version: version.clamp(3, 4) as u8,
+        }
+    };
+    let internal_uri = target.to_internal();
+    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
+    write_thumbnail(image, out_width, out_height, out_len)
+}
+
+/// Mesma logica de `smb_generate_thumbnail`, para um arquivo num servidor WebDAV.
+#[no_mangle]
+pub extern "C" fn webdav_generate_thumbnail(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    base_path: *const std::os::raw::c_char,
+    file_path: *const std::os::raw::c_char,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    use_https: i32,
+    accept_invalid_certs: i32,
+    max_width: u32,
+    max_height: u32,
+    cancel_token: u64,
+    out_width: *mut u32,
+    out_height: *mut u32,
+    out_len: *mut usize,
+) -> *mut u8 {
+    let target = unsafe {
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return write_thumbnail(None, out_width, out_height, out_len),
+        };
+        let base_path = match cstr_to_string(base_path) {
+            Some(s) => s,
+            None => return write_thumbnail(None, out_width, out_height, out_len),
+        };
+        let file_path = match cstr_to_string(file_path) {
+            Some(s) => s,
+            None => return write_thumbnail(None, out_width, out_height, out_len),
+        };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        protocols::webdav::WebdavTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            base_path,
+            file_path,
+            username,
+            password,
+            use_https: use_https != 0,
+            accept_invalid_certs: accept_invalid_certs != 0,
+        }
+    };
+    let internal_uri = target.to_internal();
+    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
+    write_thumbnail(image, out_width, out_height, out_len)
+}
+
 /// Cancela a geração de um thumbnail de listagem em andamento identificada por `cancel_token`.
 #[no_mangle]
 pub extern "C" fn cancel_thumbnail_generation(cancel_token: u64) {
@@ -2950,6 +3080,80 @@ pub extern "C" fn sftp_read_metadata(
     if target.validate().is_err() {
         return string_to_c_char("ERROR:credenciais SFTP invalidas".to_string());
     }
+    metadata_to_c_char(&target.to_internal())
+}
+
+/// Mesma logica de `read_media_metadata`, para um arquivo num servidor NFS.
+#[no_mangle]
+pub extern "C" fn nfs_read_metadata(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    export_path: *const std::os::raw::c_char,
+    file_path: *const std::os::raw::c_char,
+    version: i32,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".to_string()),
+        };
+        let export_path = match cstr_to_string(export_path) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:export invalido".to_string()),
+        };
+        let file_path = match cstr_to_string(file_path) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:caminho invalido".to_string()),
+        };
+        protocols::nfs::NfsTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            export_path,
+            file_path,
+            version: version.clamp(3, 4) as u8,
+        }
+    };
+    metadata_to_c_char(&target.to_internal())
+}
+
+/// Mesma logica de `read_media_metadata`, para um arquivo num servidor WebDAV.
+#[no_mangle]
+pub extern "C" fn webdav_read_metadata(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    base_path: *const std::os::raw::c_char,
+    file_path: *const std::os::raw::c_char,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    use_https: i32,
+    accept_invalid_certs: i32,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".to_string()),
+        };
+        let base_path = match cstr_to_string(base_path) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:base_path invalido".to_string()),
+        };
+        let file_path = match cstr_to_string(file_path) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:caminho invalido".to_string()),
+        };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        protocols::webdav::WebdavTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            base_path,
+            file_path,
+            username,
+            password,
+            use_https: use_https != 0,
+            accept_invalid_certs: accept_invalid_certs != 0,
+        }
+    };
     metadata_to_c_char(&target.to_internal())
 }
 

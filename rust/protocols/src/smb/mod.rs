@@ -30,8 +30,10 @@ use crate::chunking::split_range;
 use crate::prefetch::RangeSource;
 use futures_util::future::join_all;
 use smb2::{ClientConfig, SmbClient};
+use std::collections::HashMap;
 use std::io;
-use std::time::Duration;
+use std::sync::{Arc, LazyLock, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 
 /// Tamanho de cada sub-leitura concorrente dentro de um `read_range` (T6.3,
@@ -106,53 +108,131 @@ pub struct SmbDirEntry {
     pub name: String,
     pub is_dir: bool,
     pub size: u64,
+    pub mtime: i64,
+}
+
+type SmbPoolKey = (String, u16, String, String, String);
+
+struct PooledSmbSession {
+    client: Option<SmbClient>,
+    tree: Option<smb2::client::Tree>,
+    last_used: Instant,
+}
+
+const SESSION_TTL: Duration = Duration::from_secs(30);
+
+static SMB_POOL: LazyLock<
+    StdMutex<HashMap<SmbPoolKey, Arc<tokio::sync::Mutex<PooledSmbSession>>>>,
+> = LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+fn get_smb_session(t: &SmbTarget) -> Arc<tokio::sync::Mutex<PooledSmbSession>> {
+    let key = (
+        t.host.clone(),
+        t.port,
+        t.share.clone(),
+        t.username.clone(),
+        t.domain.clone(),
+    );
+    let mut pool = SMB_POOL.lock().unwrap();
+    pool.entry(key)
+        .or_insert_with(|| {
+            Arc::new(tokio::sync::Mutex::new(PooledSmbSession {
+                client: None,
+                tree: None,
+                last_used: Instant::now() - Duration::from_secs(60),
+            }))
+        })
+        .clone()
+}
+
+impl PooledSmbSession {
+    async fn get_connection<'a>(
+        &'a mut self,
+        t: &SmbTarget,
+    ) -> Result<(&'a mut SmbClient, &'a mut smb2::client::Tree), String> {
+        let is_valid =
+            self.client.is_some() && self.tree.is_some() && self.last_used.elapsed() < SESSION_TTL;
+
+        if !is_valid {
+            self.invalidate().await;
+            let mut client = SmbClient::connect(client_config(t, false))
+                .await
+                .map_err(|e| e.to_string())?;
+            let tree = client
+                .connect_share(&t.share)
+                .await
+                .map_err(|e| e.to_string())?;
+            self.client = Some(client);
+            self.tree = Some(tree);
+        }
+        self.last_used = Instant::now();
+        Ok((self.client.as_mut().unwrap(), self.tree.as_mut().unwrap()))
+    }
+
+    async fn invalidate(&mut self) {
+        if let (Some(mut c), Some(tr)) = (self.client.take(), self.tree.take()) {
+            let _ = c.disconnect_share(&tr).await;
+        }
+    }
 }
 
 /// Lista um diretorio dentro de um share (T6.1 "navegar diretorios").
-/// `path` vazio = raiz do share.
+/// Reusa a conexao/sessao SMB em pool com TTL curto (30s) para evitar
+/// handshakes repetidos durante navegacao e probing.
 pub fn list_directory(t: &SmbTarget, path: &str) -> Result<Vec<SmbDirEntry>, String> {
-    let rt = new_runtime().map_err(|e| e.to_string())?;
-    rt.block_on(async {
-        let mut client = SmbClient::connect(client_config(t, false))
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut tree = client
-            .connect_share(&t.share)
-            .await
-            .map_err(|e| e.to_string())?;
-        let entries = client
-            .list_directory(&mut tree, path)
-            .await
-            .map_err(|e| e.to_string())?;
-        let _ = client.disconnect_share(&tree).await;
+    crate::POOL_RUNTIME.block_on(async {
+        let session_arc = get_smb_session(t);
+        let mut session = session_arc.lock().await;
+
+        let entries = match session.get_connection(t).await {
+            Ok((client, tree)) => match client.list_directory(tree, path).await {
+                Ok(entries) => entries,
+                Err(e) => {
+                    log::warn!("SMB: list_directory em sessao falhou ({e}), reconectando...");
+                    session.invalidate().await;
+                    let (client, tree) = session.get_connection(t).await?;
+                    client
+                        .list_directory(tree, path)
+                        .await
+                        .map_err(|e| e.to_string())?
+                }
+            },
+            Err(e) => return Err(e),
+        };
+
         Ok(entries
             .into_iter()
-            .map(|e| SmbDirEntry {
-                name: e.name,
-                is_dir: e.is_directory,
-                size: e.size,
+            .map(|e| {
+                let mtime = e
+                    .modified
+                    .to_system_time()
+                    .and_then(|st| st.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+                SmbDirEntry {
+                    name: e.name,
+                    is_dir: e.is_directory,
+                    size: e.size,
+                    mtime,
+                }
             })
             .collect())
     })
 }
 
 /// Varredura recursiva "esta pasta tem alguma midia reproduzivel?" (poda de
-/// pastas vazias na listagem, ver `crate::folder_scan`). Abre UMA conexao/
-/// share (nao uma por nivel, diferente de chamar `list_directory` repetidas
-/// vezes do lado Kotlin) e percorre as subpastas encontradas com uma pilha
-/// explicita, sem limite de profundidade fixo, parando no primeiro arquivo
-/// de midia encontrado ou no deadline de seguranca
-/// (`folder_scan::SCAN_DEADLINE`).
+/// pastas vazias na listagem, ver `crate::folder_scan`).
+/// Reusa a conexao do pool SMB compartilhada, parando no primeiro arquivo
+/// de midia encontrado ou no deadline de seguranca (`folder_scan::SCAN_DEADLINE`).
 pub fn scan_has_media(t: &SmbTarget, path: &str) -> Result<crate::folder_scan::ScanResult, String> {
-    let rt = new_runtime().map_err(|e| e.to_string())?;
-    rt.block_on(async {
-        let mut client = SmbClient::connect(client_config(t, false))
-            .await
-            .map_err(|e| e.to_string())?;
-        let mut tree = client
-            .connect_share(&t.share)
-            .await
-            .map_err(|e| e.to_string())?;
+    crate::POOL_RUNTIME.block_on(async {
+        let session_arc = get_smb_session(t);
+        let mut session = session_arc.lock().await;
+
+        let (client, tree) = match session.get_connection(t).await {
+            Ok(c) => c,
+            Err(e) => return Err(e),
+        };
         let deadline = crate::folder_scan::deadline_from_now();
 
         let mut stack = vec![path.to_string()];
@@ -163,7 +243,7 @@ pub fn scan_has_media(t: &SmbTarget, path: &str) -> Result<crate::folder_scan::S
                 result = crate::folder_scan::ScanResult::timed_out_assume_has_media();
                 break;
             }
-            let entries = match client.list_directory(&mut tree, &current).await {
+            let entries = match client.list_directory(tree, &current).await {
                 Ok(e) => e,
                 Err(_) => continue, // pasta ilegivel/removida no meio do scan: pula, nao aborta tudo
             };
@@ -187,7 +267,6 @@ pub fn scan_has_media(t: &SmbTarget, path: &str) -> Result<crate::folder_scan::S
             }
         }
 
-        let _ = client.disconnect_share(&tree).await;
         Ok(result)
     })
 }

@@ -18,6 +18,8 @@ import android.widget.TextView
 import com.tucavr.R
 import com.tucavr.VRActivity
 import com.tucavr.VRControlsPresentation
+import com.tucavr.codec.CodecCapabilityManager
+import com.tucavr.codec.CodecSupportStatus
 import com.tucavr.designsystem.VoidButton
 import com.tucavr.designsystem.VoidButtonStyle
 import com.tucavr.designsystem.VoidTheme
@@ -27,10 +29,12 @@ import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.filebrowser.MediaType
 import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ThumbnailGenerator
+import com.tucavr.filebrowser.TrackInfo
 import com.tucavr.history.formatDurationMs
 import com.tucavr.history.isResumable
 import com.tucavr.navigation.PlaybackSource
 import com.tucavr.playlist.PlaylistItem
+import com.tucavr.screens.ScreenFormatCatalog
 import com.tucavr.screens.formatFileSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -690,46 +694,161 @@ class ContextRailView(
             metaColumn.addView(formatRow)
         }
 
-        val resolutionRow =
-            TextView(context).apply {
-                typeface = VoidTheme.typefaceMono
-                textSize = 13f
-                setTextColor(VoidTheme.colorTextSecondary)
+        val metaRowsContainer =
+            LinearLayout(context).apply {
+                orientation = VERTICAL
+            }
+        metaColumn.addView(metaRowsContainer)
+
+        val audioTracksSection =
+            LinearLayout(context).apply {
+                orientation = VERTICAL
+                val topPad = VoidTheme.dpToPx(context, 8f)
+                setPadding(0, topPad, 0, 0)
                 visibility = View.GONE
             }
-        metaColumn.addView(resolutionRow)
+        val audioTracksTitle =
+            TextView(context).apply {
+                text = context.getString(R.string.file_detail_section_tracks)
+                typeface = VoidTheme.typefaceTitle
+                textSize = 14f
+                setTextColor(VoidTheme.colorAccent)
+                val bPad = VoidTheme.dpToPx(context, 4f)
+                setPadding(0, 0, 0, bPad)
+            }
+        audioTracksSection.addView(audioTracksTitle)
+        val audioTracksList =
+            LinearLayout(context).apply {
+                orientation = VERTICAL
+            }
+        audioTracksSection.addView(audioTracksList)
+        metaColumn.addView(audioTracksSection)
         card.addView(metaColumn)
 
-        // Carrega resolução e duração em background a partir do cache
+        fun updateMetadataViews(
+            videoWidth: Int,
+            videoHeight: Int,
+            durationMs: Long,
+            container: String,
+            bitRate: Long,
+            videoCodec: String,
+            format3dIndex: Int,
+            audioTracks: List<TrackInfo> = emptyList(),
+        ) {
+            metaRowsContainer.removeAllViews()
+
+            fun addMetaRow(
+                labelRes: Int,
+                value: String,
+                isAccent: Boolean = false,
+            ) {
+                if (value.isBlank()) return
+                val row =
+                    TextView(context).apply {
+                        text = context.getString(R.string.file_detail_row_format, context.getString(labelRes), value)
+                        typeface = VoidTheme.typefaceMono
+                        textSize = 13f
+                        setTextColor(if (isAccent) VoidTheme.colorAccent else VoidTheme.colorTextSecondary)
+                        val bPad = VoidTheme.dpToPx(context, 2f)
+                        setPadding(0, 0, 0, bPad)
+                    }
+                metaRowsContainer.addView(row)
+            }
+
+            if (videoWidth > 0 && videoHeight > 0) {
+                addMetaRow(R.string.file_detail_label_resolution, "$videoWidth×$videoHeight")
+            }
+            if (durationMs > 0) {
+                addMetaRow(R.string.file_detail_label_duration, formatDurationMs(durationMs))
+            }
+            if (container.isNotBlank()) {
+                addMetaRow(R.string.file_detail_label_container, container)
+            }
+            if (bitRate > 0) {
+                val mbps = bitRate / 1_000_000.0
+                addMetaRow(
+                    R.string.file_detail_label_bitrate,
+                    context.getString(R.string.file_detail_value_bitrate_format, mbps),
+                )
+            }
+            if (videoCodec.isNotBlank()) {
+                val status = CodecCapabilityManager.getStatus(videoCodec)
+                val hwBadge =
+                    when {
+                        status.isHardwareAccelerated -> " [HW]"
+                        status is CodecSupportStatus.SoftwareOnly -> " [SW]"
+                        else -> ""
+                    }
+                addMetaRow(R.string.file_detail_label_video_codec, "${videoCodec.uppercase()}$hwBadge")
+            }
+            if (format3dIndex > 0 && ScreenFormatCatalog.isValid(format3dIndex)) {
+                val modeName = context.getString(ScreenFormatCatalog.getLabelResId(format3dIndex))
+                addMetaRow(R.string.file_detail_label_format3d, modeName, isAccent = true)
+            }
+
+            if (audioTracks.isNotEmpty()) {
+                audioTracksList.removeAllViews()
+                audioTracks.forEach { track ->
+                    val lang = track.language.ifBlank { context.getString(R.string.file_detail_track_lang_unknown) }
+                    val parts = mutableListOf(track.codec.uppercase())
+                    if (track.channels > 0) parts.add("${track.channels}ch")
+                    if (track.sampleRate > 0) parts.add("${track.sampleRate / 1000} kHz")
+                    val trackDetails = parts.joinToString(" · ")
+                    val trackText =
+                        context.getString(
+                            R.string.file_detail_track_audio_format,
+                            track.ordinal + 1,
+                            "$lang ($trackDetails)",
+                        )
+                    val trackRow =
+                        TextView(context).apply {
+                            text = trackText
+                            typeface = VoidTheme.typefaceMono
+                            textSize = 12f
+                            setTextColor(VoidTheme.colorTextSecondary)
+                            val bPad = VoidTheme.dpToPx(context, 2f)
+                            setPadding(0, 0, 0, bPad)
+                        }
+                    audioTracksList.addView(trackRow)
+                }
+                audioTracksSection.visibility = View.VISIBLE
+            }
+        }
+
+        // Carrega metadados ricos em segundo plano (cache miss dispara MediaMetadataReader.read)
         scope.launch {
             val summary =
                 withContext(Dispatchers.IO) {
                     MediaMetadataReader.readCachedSummary(context, detail.source)
                 }
             if (summary != null) {
-                val parts = mutableListOf<String>()
-                if (summary.videoWidth > 0 && summary.videoHeight > 0) {
-                    parts.add(
-                        context.getString(
-                            R.string.file_detail_row_format,
-                            context.getString(R.string.file_detail_label_resolution),
-                            "${summary.videoWidth}x${summary.videoHeight}",
-                        ),
-                    )
+                updateMetadataViews(
+                    videoWidth = summary.videoWidth,
+                    videoHeight = summary.videoHeight,
+                    durationMs = summary.durationMs,
+                    container = summary.containerLong.ifEmpty { summary.container },
+                    bitRate = summary.bitRate,
+                    videoCodec = summary.videoCodec,
+                    format3dIndex = summary.format3dIndex,
+                )
+            }
+
+            val fullMeta =
+                withContext(Dispatchers.IO) {
+                    MediaMetadataReader.read(activity, detail.source)
                 }
-                if (summary.durationMs > 0) {
-                    parts.add(
-                        context.getString(
-                            R.string.file_detail_row_format,
-                            context.getString(R.string.file_detail_label_duration),
-                            formatDurationMs(summary.durationMs),
-                        ),
-                    )
-                }
-                if (parts.isNotEmpty()) {
-                    resolutionRow.text = parts.joinToString("\n")
-                    resolutionRow.visibility = View.VISIBLE
-                }
+            if (fullMeta != null) {
+                val video = fullMeta.videoTracks.firstOrNull()
+                updateMetadataViews(
+                    videoWidth = video?.width ?: 0,
+                    videoHeight = video?.height ?: 0,
+                    durationMs = fullMeta.durationMs,
+                    container = fullMeta.containerLong.ifEmpty { fullMeta.container },
+                    bitRate = fullMeta.bitRate,
+                    videoCodec = video?.codec ?: "",
+                    format3dIndex = fullMeta.format3dIndex,
+                    audioTracks = fullMeta.audioTracks,
+                )
             }
         }
 
@@ -855,6 +974,8 @@ class ContextRailView(
                             is PlaybackSource.Smb,
                             is PlaybackSource.Ftp,
                             is PlaybackSource.Sftp,
+                            is PlaybackSource.Nfs,
+                            is PlaybackSource.Webdav,
                             -> {
                                 NetworkThumbnailGenerator.getThumbnail(context, activity, source)
                             }

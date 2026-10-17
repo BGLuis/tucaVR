@@ -2370,6 +2370,31 @@ class VRActivity : NativeActivity() {
         cancelToken: Long,
     ): ByteArray?
 
+    external fun nativeNfsGenerateThumbnail(
+        host: String,
+        port: Int,
+        exportPath: String,
+        filePath: String,
+        version: Int,
+        maxWidth: Int,
+        maxHeight: Int,
+        cancelToken: Long,
+    ): ByteArray?
+
+    external fun nativeWebdavGenerateThumbnail(
+        host: String,
+        port: Int,
+        basePath: String,
+        filePath: String,
+        username: String,
+        password: String,
+        useHttps: Boolean,
+        acceptInvalidCerts: Boolean,
+        maxWidth: Int,
+        maxHeight: Int,
+        cancelToken: Long,
+    ): ByteArray?
+
     // Cancela a geração de um thumbnail em andamento associada ao cancelToken
     external fun nativeCancelThumbnailGeneration(cancelToken: Long)
 
@@ -2537,6 +2562,25 @@ class VRActivity : NativeActivity() {
         password: String,
         privateKey: String,
         path: String,
+    ): String
+
+    external fun nativeNfsReadMetadata(
+        host: String,
+        port: Int,
+        exportPath: String,
+        filePath: String,
+        version: Int,
+    ): String
+
+    external fun nativeWebdavReadMetadata(
+        host: String,
+        port: Int,
+        basePath: String,
+        filePath: String,
+        username: String,
+        password: String,
+        useHttps: Boolean,
+        acceptInvalidCerts: Boolean,
     ): String
 
     // T13.2: seleciona a trilha de audio pro PROXIMO load — so tem efeito

@@ -5,7 +5,6 @@ hardcoded-text|com/tucavr/browser/ui/WebBrowserScreen.kt|URL: ${state.url}
 hardcoded-text|com/tucavr/designsystem/DebugStatsModal.kt|${BuildConfig.VERSION_NAME} (${if (isDebuggable) 
 hardcoded-text|com/tucavr/designsystem/DebugStatsModal.kt|${stats.seekLatencyMs} ms
 hardcoded-text|com/tucavr/designsystem/DebugStatsModal.kt|$text (${ageMs}ms atrás)
-hardcoded-text|com/tucavr/designsystem/VoidGridCard.kt|📁 PASTA
 hardcoded-text|com/tucavr/screens/NetworkFtpScreen.kt|anonymous
 hardcoded-text|com/tucavr/screens/NetworkFtpScreen.kt|ftp.example.com
 hardcoded-text|com/tucavr/screens/NetworkSftpScreen.kt|sftp.example.com

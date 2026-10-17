@@ -127,6 +127,8 @@ class ContinueWatchingScreen(
 
         adapter =
             HistoryAdapter(
+                activity = activity,
+                scope = scope,
                 onItemClick = { entry -> resumeFromHistory(entry) },
                 onRemoveClick = { entry ->
                     scope.launch {
