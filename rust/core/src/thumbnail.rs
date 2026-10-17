@@ -152,7 +152,7 @@ pub fn generate(
     let _guard = TokenGuard(cancel_token);
 
     ffmpeg::init().ok()?;
-    let mut demuxer = Demuxer::new(path).ok()?;
+    let mut demuxer = Demuxer::open_probe(path).ok()?;
     let video_stream_index = demuxer.video_stream_index?;
 
     let stream = demuxer.input_context.stream(video_stream_index)?;

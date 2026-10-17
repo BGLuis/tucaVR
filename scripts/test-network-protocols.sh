@@ -47,6 +47,11 @@ head -c 262144 /dev/urandom > "$FIXTURE"
 SHA256=$(sha256sum "$FIXTURE" | cut -d' ' -f1)
 echo "testfile.bin: $((262144 / 1024))KB, sha256=$SHA256"
 
+# NFS: file with more than one READ RPC (1 MiB) and a size that is not a multiple of it, to exercise reassembly.
+NFS_MULTIBLOCK="$COMPOSE_DIR/fixtures/nfs-multiblock.bin"
+head -c $((3 * 1024 * 1024 + 12345)) /dev/urandom > "$NFS_MULTIBLOCK"
+NFS_MULTIBLOCK_SHA256=$(sha256sum "$NFS_MULTIBLOCK" | cut -d' ' -f1)
+
 echo "== Generating the WebDAV fixture =="
 mkdir -p "$COMPOSE_DIR/fixtures/webdav"
 WEBDAV_FIXTURE="$COMPOSE_DIR/fixtures/webdav/testfile.bin"
@@ -104,7 +109,7 @@ EOF
 rm -f "$TINY_MP4"
 echo "dash/template and dash/singlefile generated ($(du -sh "$DASH_DIR" | cut -f1))"
 
-echo "== Starting containers (smb-test, http-test, https-test, ftp-test, sftp-test, webdav-test) =="
+echo "== Starting containers (smb-test, http-test, https-test, ftp-test, sftp-test, webdav-test, nfs-test) =="
 "${DC[@]}" up -d --build
 
 echo "== Waiting for HTTP (nginx) =="
@@ -199,6 +204,22 @@ for _ in $(seq 1 30); do
 done
 curl -sf -u vruser:vrpass123 -o /dev/null "http://127.0.0.1:18099/testfile.bin" || { echo "webdav-test did not respond in time"; "${DC[@]}" logs webdav-test; exit 1; }
 
+echo "== Waiting for NFS (NFS-Ganesha + rpcbind) =="
+# Ganesha registers NFS and MOUNT with rpcbind only after starting: wait for MOUNT (100005) to appear.
+NFS_UP=0
+for _ in $(seq 1 30); do
+    if "${DC[@]}" exec -T nfs-test rpcinfo -p 2>/dev/null | grep -q " 100005 "; then
+        NFS_UP=1
+        break
+    fi
+    sleep 1
+done
+if [[ "$NFS_UP" -eq 0 ]]; then
+    echo "nfs-test did not register MOUNT with rpcbind in time"
+    "${DC[@]}" logs nfs-test
+    exit 1
+fi
+
 echo "== Running the Rust integration tests =="
 export VRPLAYER_TEST_HTTP_URL="http://127.0.0.1:18080/testfile.bin"
 export VRPLAYER_TEST_HTTPS_URL="https://127.0.0.1:18443/testfile.bin"
@@ -222,6 +243,12 @@ export VRPLAYER_TEST_SFTP_USER="vruser"
 export VRPLAYER_TEST_SFTP_PASS="vrpass123"
 export VRPLAYER_TEST_SFTP_FILE="testfile.bin"
 export VRPLAYER_TEST_SFTP_KEY_PATH="$COMPOSE_DIR/ssh-keys/vrplayer_test_key"
+export VRPLAYER_TEST_NFS_HOST="127.0.0.1"
+export VRPLAYER_TEST_NFS_PORT="2049"
+export VRPLAYER_TEST_NFS_EXPORT="/export"
+export VRPLAYER_TEST_NFS_FILE="testfile.bin"
+export VRPLAYER_TEST_NFS_MULTIBLOCK_FILE="nfs-multiblock.bin"
+export VRPLAYER_TEST_NFS_MULTIBLOCK_SHA256="$NFS_MULTIBLOCK_SHA256"
 export VRPLAYER_TEST_HTTP_URL_BASE="http://127.0.0.1:18080"
 export VRPLAYER_TEST_WEBDAV_HOST="127.0.0.1"
 export VRPLAYER_TEST_WEBDAV_PORT="18099"

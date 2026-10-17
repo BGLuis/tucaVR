@@ -1,6 +1,6 @@
 use ffmpeg::format::context::{Input, StreamIo};
 use ffmpeg_next as ffmpeg;
-use protocols::prefetch::{PrefetchReader, PrefetchStats, SharedRangeSource};
+use protocols::prefetch::{PrefetchReader, PrefetchStats, RangeSource, SharedRangeSource};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -8,6 +8,33 @@ use std::sync::{Arc, Mutex};
 const REMOTE_PREFETCH_BLOCK_SIZE: usize = 12 * 1024 * 1024;
 // Bloco pequeno so pro PRIMEIRO fetch pos-seek — ver doc de protocols::prefetch sobre a rampa.
 const SEEK_PREFETCH_BLOCK_SIZE: usize = 1024 * 1024;
+
+// Bloco do acesso pontual (miniatura, metadados), buscado so quando alguem le dentro dele. Medido no Quest 3
+// por Wi-Fi (SFTP, 1 abertura de metadados + 1 miniatura): 1 MiB transferia 6,2 MB num 4K de 80 Mbps e
+// 256 KiB, 2,9 MB, sem custar tempo (0,47 s nos dois); um quadro-chave tipico de 1080p cabe em poucos blocos.
+const PROBE_BLOCK_SIZE: usize = 256 * 1024;
+
+/// Como o `PrefetchReader` de uma fonte remota busca bytes. `Playback` le sequencialmente por minutos
+/// e ganha com blocos grandes e read-ahead; `Probe` le uma fracao minuscula do arquivo (cabecalho e um
+/// quadro) e o bloco seguinte especulativo, que ninguem le, era a maior parte dos bytes transferidos.
+#[derive(Clone, Copy)]
+enum FetchProfile {
+    Playback,
+    Probe,
+}
+
+impl FetchProfile {
+    fn reader<S: RangeSource + 'static>(self, source: S) -> PrefetchReader<S> {
+        match self {
+            FetchProfile::Playback => PrefetchReader::with_block_sizes(
+                source,
+                REMOTE_PREFETCH_BLOCK_SIZE,
+                SEEK_PREFETCH_BLOCK_SIZE,
+            ),
+            FetchProfile::Probe => PrefetchReader::without_read_ahead(source, PROBE_BLOCK_SIZE),
+        }
+    }
+}
 
 /// `probesize`/`analyzeduration` do libavformat (default 5MB / 5s) controlam
 /// quanto o `avformat_find_stream_info` le antes de devolver o controle —
@@ -110,17 +137,27 @@ impl Demuxer {
     /// `PlaybackController::load_at` (seek), nao por chamadores avulsos
     /// como `thumbnail::generate`.
     pub fn open(path: &str, cache: Option<&mut ConnectionCache>) -> Result<Self, String> {
+        Self::open_with(path, cache, FetchProfile::Playback)
+    }
+
+    /// Como `new()`, para quem le so o cabecalho e um ou poucos quadros (miniatura, metadados): as
+    /// fontes remotas usam blocos pequenos e nao buscam nada que nao seja lido.
+    pub fn open_probe(path: &str) -> Result<Self, String> {
+        Self::open_with(path, None, FetchProfile::Probe)
+    }
+
+    fn open_with(
+        path: &str,
+        cache: Option<&mut ConnectionCache>,
+        profile: FetchProfile,
+    ) -> Result<Self, String> {
         ffmpeg::init().map_err(|e| e.to_string())?;
 
         let mut network_stats = None;
 
         let ictx = if let Some(target) = protocols::smb::SmbTarget::from_internal(path) {
             let shared = Self::smb_source(path, &target, cache)?;
-            let reader = PrefetchReader::with_block_sizes(
-                shared,
-                REMOTE_PREFETCH_BLOCK_SIZE,
-                SEEK_PREFETCH_BLOCK_SIZE,
-            );
+            let reader = profile.reader(shared);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(
@@ -131,11 +168,7 @@ impl Demuxer {
             .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::ftp::FtpTarget::from_internal(path) {
             let source = protocols::ftp::FtpFileSource::open(&target)?;
-            let reader = PrefetchReader::with_block_sizes(
-                source,
-                REMOTE_PREFETCH_BLOCK_SIZE,
-                SEEK_PREFETCH_BLOCK_SIZE,
-            );
+            let reader = profile.reader(source);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(
@@ -146,11 +179,7 @@ impl Demuxer {
             .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::sftp::SftpTarget::from_internal(path) {
             let shared = Self::sftp_source(path, &target, cache)?;
-            let reader = PrefetchReader::with_block_sizes(
-                shared,
-                REMOTE_PREFETCH_BLOCK_SIZE,
-                SEEK_PREFETCH_BLOCK_SIZE,
-            );
+            let reader = profile.reader(shared);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(
@@ -161,11 +190,7 @@ impl Demuxer {
             .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::nfs::NfsTarget::from_internal(path) {
             let source = protocols::nfs::NfsFileSource::open(&target)?;
-            let reader = PrefetchReader::with_block_sizes(
-                source,
-                REMOTE_PREFETCH_BLOCK_SIZE,
-                SEEK_PREFETCH_BLOCK_SIZE,
-            );
+            let reader = profile.reader(source);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(
@@ -176,11 +201,7 @@ impl Demuxer {
             .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::webdav::WebdavTarget::from_internal(path) {
             let shared = Self::webdav_source(path, &target, cache)?;
-            let reader = PrefetchReader::with_block_sizes(
-                shared,
-                REMOTE_PREFETCH_BLOCK_SIZE,
-                SEEK_PREFETCH_BLOCK_SIZE,
-            );
+            let reader = profile.reader(shared);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(
@@ -201,11 +222,7 @@ impl Demuxer {
                 .map_err(|e| e.to_string())?
         } else if path.starts_with("https://") {
             let shared = Self::https_source(path, cache)?;
-            let reader = PrefetchReader::with_block_sizes(
-                shared,
-                REMOTE_PREFETCH_BLOCK_SIZE,
-                SEEK_PREFETCH_BLOCK_SIZE,
-            );
+            let reader = profile.reader(shared);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
             ffmpeg::format::input_from_stream(stream_io, Some(path), Some(fast_probe_options()))

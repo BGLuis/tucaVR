@@ -8,10 +8,18 @@ use std::time::Duration;
 static XID_COUNTER: AtomicU32 = AtomicU32::new(100);
 
 pub const PROG_PORTMAP: u32 = 100000;
+/// Porta fixa do portmapper/rpcbind (RFC 1833 §3): o unico servico RPC cujo endereco
+/// e conhecido de antemao — os demais (MOUNT) se registram nele.
+pub const PORTMAP_PORT: u16 = 111;
 pub const PROG_NFS: u32 = 100003;
 pub const PROG_MOUNT: u32 = 100005;
 
+pub const VERSION_2: u32 = 2;
 pub const VERSION_3: u32 = 3;
+
+// Procedimentos PORTMAP v2
+pub const PMAPPROC_GETPORT: u32 = 3;
+pub const IPPROTO_TCP: u32 = 6;
 
 // Procedimentos MOUNT v3
 pub const MOUNTPROC3_MNT: u32 = 1;
@@ -21,8 +29,9 @@ pub const MOUNTPROC3_EXPORT: u32 = 5;
 pub const NFSPROC3_GETATTR: u32 = 1;
 pub const NFSPROC3_LOOKUP: u32 = 3;
 pub const NFSPROC3_READ: u32 = 6;
-pub const NFSPROC3_READDIRPLUS: u32 = 16;
-pub const NFSPROC3_READDIR: u32 = 17;
+pub const NFSPROC3_READDIR: u32 = 16;
+pub const NFSPROC3_READDIRPLUS: u32 = 17;
+pub const NFSPROC3_FSINFO: u32 = 19;
 
 pub const AUTH_NONE: u32 = 0;
 pub const AUTH_UNIX: u32 = 1;
@@ -183,6 +192,9 @@ impl RpcClient {
         let stream = TcpStream::connect_timeout(&addrs[0], timeout)
             .map_err(|e| format!("Falha ao conectar em {host}:{port}: {e}"))?;
 
+        // Sem isto o Nagle segura a escrita seguinte ate o ACK da anterior e o delayed ACK do servidor
+        // soma ~40 ms a cada RPC (medido: 64 KiB por RPC caia para ~1,5 MB/s em loopback).
+        stream.set_nodelay(true).map_err(|e| e.to_string())?;
         stream
             .set_read_timeout(Some(timeout))
             .map_err(|e| e.to_string())?;
@@ -215,14 +227,14 @@ impl RpcClient {
         let payload = msg.into_bytes();
         let fragment_header = 0x80000000u32 | (payload.len() as u32);
 
-        // Envia record mark + payload
+        // Record mark + payload numa unica escrita: em duas, o segmento de 4 bytes do cabecalho
+        // e enviado sozinho e o restante espera o ACK dele.
+        let mut record = Vec::with_capacity(4 + payload.len());
+        record.extend_from_slice(&fragment_header.to_be_bytes());
+        record.extend_from_slice(&payload);
         self.stream
-            .write_all(&fragment_header.to_be_bytes())
-            .map_err(|e| format!("Erro ao enviar cabecalho RPC: {e}"))?;
-        self.stream
-            .write_all(&payload)
-            .map_err(|e| format!("Erro ao enviar payload RPC: {e}"))?;
-        self.stream.flush().map_err(|e| e.to_string())?;
+            .write_all(&record)
+            .map_err(|e| format!("Erro ao enviar requisicao RPC: {e}"))?;
 
         // Recebe resposta
         let mut resp_header = [0u8; 4];

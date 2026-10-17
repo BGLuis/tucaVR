@@ -14,7 +14,7 @@ const TAG_WHITELIST: &[&str] = &["title", "artist", "album", "date", "genre", "c
 /// header/index, nenhum frame; mesma ressalva de `thumbnail::generate`
 /// sobre rodar sempre numa thread de fundo do lado chamador.
 pub fn extract(path: &str) -> Result<MediaMetadata, String> {
-    let demuxer = Demuxer::new(path)?;
+    let demuxer = Demuxer::open_probe(path)?;
     let ictx = &demuxer.input_context;
 
     let format = ictx.format();

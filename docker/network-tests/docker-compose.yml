@@ -131,3 +131,23 @@ services:
       - ./fixtures/webdav:/var/lib/dav/data
     ports:
       - "18099:80"
+
+  nfs-test:
+    build: ./nfs-test
+    container_name: vrplayer-nfs-test
+    # Ganesha em espaco de usuario ainda pede algumas capabilities (chown/dac
+    # dos arquivos exportados, bind de portas < 1024 para o rpcbind).
+    cap_add:
+      - SYS_ADMIN
+      - DAC_READ_SEARCH
+      - CHOWN
+      - SETUID
+      - SETGID
+    security_opt:
+      - seccomp:unconfined
+    volumes:
+      - ./fixtures:/export:ro
+    ports:
+      - "111:111"
+      - "2049:2049"
+      - "20048:20048"
