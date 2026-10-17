@@ -1,9 +1,8 @@
 //! Testes de integracao NFS (T5.1/T5.2) contra um servidor NFSv3 REAL
 //! (NFS-Ganesha em `docker/network-tests/nfs-test`), nao um mock. O MOUNT fica
 //! numa porta diferente da 2049 do NFS, como num `nfs-kernel-server`, entao
-//! estes testes so passam se o cliente consultar o rpcbind (achado U-01 de
-//! `docs/reports/ACESSO-A-ARQUIVOS-AUDITORIA.md`) e decodificar as listagens
-//! do `READDIRPLUS` corretamente (U-02).
+//! estes testes so passam se o cliente consultar o rpcbind e decodificar as
+//! listagens do `READDIRPLUS` corretamente.
 //!
 //! Nao rodam com `cargo test` normal (marcados `#[ignore]`): use
 //! `./scripts/test-network-protocols.sh`, que sobe os containers e exporta as

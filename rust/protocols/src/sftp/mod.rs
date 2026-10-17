@@ -109,8 +109,7 @@ const SFTP_SUB_READ_ROUNDS: usize = 4;
 /// deslizante: cada chunk que termina libera o proximo, sem esperar os
 /// demais. Antes eram lotes de 4 com barreira (o lote seguinte so saia quando
 /// o mais lento do anterior voltava); medido no Quest 3, a janela de 16 subiu
-/// a vazao de ~49 para ~70 MB/s (docs/reports/ACESSO-A-ARQUIVOS-AUDITORIA.md,
-/// secao 3.5).
+/// a vazao de ~49 para ~70 MB/s.
 ///
 /// Historico do limite antigo: disparar os 48 chunks de um bloco de 12MB de
 /// uma vez coincidiu com uma regressao no Quest 3 (decFps ~30 -> 10). A causa
