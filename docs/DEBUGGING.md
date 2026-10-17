@@ -60,7 +60,7 @@ Useful for testing every mode (SBS, OU, 360, 180, Vr180SBS, cubemaps, fisheye)
 that specific format:
 
 ```bash
-adb shell am broadcast -a com.tucavr.debug.SET_SCREEN_MODE --ei mode 6
+adb shell am broadcast -a com.tucavr.debug.SET_SCREEN_MODE --ei screen_mode 6
 adb shell am broadcast -a com.tucavr.debug.CYCLE_SCREEN_MODE
 ```
 
