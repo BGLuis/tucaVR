@@ -23,14 +23,13 @@ import com.tucavr.filebrowser.DateFilter
 import com.tucavr.filebrowser.FolderConfig
 import com.tucavr.filebrowser.FolderConfigStore
 import com.tucavr.filebrowser.Format3DFilter
-import com.tucavr.filebrowser.Format3DType
 import com.tucavr.filebrowser.MediaEntry
 import com.tucavr.filebrowser.MediaFilterEngine
-import com.tucavr.filebrowser.MediaType
 import com.tucavr.filebrowser.MediaTypeFilter
+import com.tucavr.filebrowser.NetworkDirectoryLoader
+import com.tucavr.filebrowser.NetworkDirectoryState
 import com.tucavr.filebrowser.NetworkFolderProber
 import com.tucavr.filebrowser.ViewMode
-import com.tucavr.filebrowser.mediaTypeForExtension
 import com.tucavr.filebrowser.sortMediaEntries
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
@@ -61,10 +60,14 @@ class NetworkNfsScreen(
     var browsingServer: SavedServer? = null
     var browsePath: String = ""
 
+    private val directoryLoader = NetworkDirectoryLoader(scope)
     private val folderConfigStore = FolderConfigStore(context)
     private var adapter: FileAdapter? = null
     private var recyclerView: RecyclerView? = null
+    private var rootLayout: LinearLayout? = null
     private var countLabel: android.widget.TextView? = null
+    private var emptyLabel: android.widget.TextView? = null
+    private var clearFiltersButton: VoidButton? = null
     private var emptyContainer: LinearLayout? = null
     private var mediaToolbar: MediaBrowserToolbar? = null
 
@@ -271,20 +274,36 @@ class NetworkNfsScreen(
         server: SavedServer,
         subPath: String = browsePath,
     ) {
+        val sameServer = (browsingServer == server && rootLayout != null && recyclerView != null)
         browsingServer = server
         browsePath = subPath
         val folderKey = folderKey(server, subPath)
         currentConfig = folderConfigStore.getConfigFor(folderKey)
 
-        val root = VoidPanelChrome.newRoot(context)
-        val titleText =
-            if (subPath.isEmpty()) {
-                "${server.name} (${server.path})"
-            } else {
-                subPath.substringAfterLast('/')
-            }
+        val subtitleText = if (subPath.isEmpty()) "${server.host}:${server.port}${server.path}" else "${server.path}/$subPath"
 
-        val header = VoidPanelChrome.buildHeader(context, title = titleText, onBack = { onBack() })
+        if (sameServer) {
+            val subtitleView = rootLayout?.findViewById<android.widget.TextView>(VoidPanelChrome.ID_SUBTITLE)
+            subtitleView?.text = subtitleText
+            mediaToolbar?.clearSearch()
+            searchQuery = ""
+            loadDirectory(server)
+            return
+        }
+
+        val root = VoidPanelChrome.newRoot(context)
+        rootLayout = root
+        val header =
+            VoidPanelChrome.buildHeader(
+                context,
+                title = server.name,
+                subtitle = subtitleText,
+                onBack = {
+                    if (!handleBack(server)) {
+                        onBack()
+                    }
+                },
+            )
         root.addView(header)
 
         // Barra de Ferramentas Compartilhada (Busca + Ordenação + Visualização + Filtros)
@@ -300,7 +319,7 @@ class NetworkNfsScreen(
                 initialTypeFilter = currentTypeFilter,
                 initialFormat3DFilter = currentFormat3DFilter,
                 initialDateFilter = currentDateFilter,
-                showDateFilter = false,
+                showDateFilter = true,
                 onQueryChanged = { query ->
                     searchQuery = query
                     applyFiltersAndSort()
@@ -321,6 +340,9 @@ class NetworkNfsScreen(
                     currentFormat3DFilter = newFormat3D
                     currentDateFilter = newDate
                     applyFiltersAndSort()
+                },
+                onRefresh = {
+                    reloadDirectory(server, forceRefresh = true)
                 },
             )
         mediaToolbar = toolbar
@@ -349,7 +371,11 @@ class NetworkNfsScreen(
             FileAdapter(
                 context = context,
                 scope = scope,
-                onUpClick = { onBack() },
+                onUpClick = {
+                    if (!handleBack(server)) {
+                        onBack()
+                    }
+                },
                 onDirectoryClick = { entry ->
                     browsePath = entry.path
                     mediaToolbar?.clearSearch()
@@ -377,23 +403,49 @@ class NetworkNfsScreen(
         root.addView(recycler)
 
         // Empty State View
+        val label =
+            VoidText.body(context, context.getString(R.string.network_files_empty), sizeSp = 16f, secondary = true).apply {
+                gravity = Gravity.CENTER
+            }
+        emptyLabel = label
+
+        val clearBtn =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.browser_btn_clear_filters)
+                textSize = 15f
+                minHeight = VoidTheme.dpToPx(context, 48f)
+                val padH = VoidTheme.dpToPx(context, 16f)
+                val padV = VoidTheme.dpToPx(context, 10f)
+                setPadding(padH, padV, padH, padV)
+                setOnClickListener {
+                    mediaToolbar?.resetFilters()
+                    searchQuery = ""
+                    currentTypeFilter = MediaTypeFilter.ALL
+                    currentFormat3DFilter = Format3DFilter.ALL
+                    currentDateFilter = DateFilter.ALL
+                    applyFiltersAndSort()
+                }
+            }
+        clearFiltersButton = clearBtn
+
         emptyContainer =
             LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
                 visibility = View.GONE
-
+                addView(label)
                 addView(
-                    VoidText.body(context, context.getString(R.string.network_files_empty), sizeSp = 16f, secondary = true).apply {
-                        gravity = Gravity.CENTER
+                    clearBtn,
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = VoidTheme.dpToPx(context, 12f)
                     },
                 )
             }
         root.addView(emptyContainer)
 
         host.showScreen(root)
-        loadDirectory(server, subPath)
+        loadDirectory(server)
     }
 
     private fun updateLayoutManager() {
@@ -414,67 +466,64 @@ class NetworkNfsScreen(
         }
     }
 
-    private fun loadDirectory(
+    private fun reloadDirectory(
         server: SavedServer,
-        subPath: String,
+        forceRefresh: Boolean = false,
     ) {
-        scope.launch {
-            val raw =
-                withContext(Dispatchers.IO) {
-                    activity.nativeNfsListDirectory(server.host, server.port, server.path, subPath, 3)
-                }
-
-            if (raw.startsWith("ERROR:")) {
-                countLabel?.text = context.getString(R.string.network_nfs_form_status_error_format, raw.removePrefix("ERROR:"))
-                cachedRawEntries = emptyList()
-                applyFiltersAndSort()
-                return@launch
+        if (forceRefresh) {
+            val keyPrefix = CacheKeys.forFolder("nfs", server.host, server.port, server.path, "")
+            scope.launch {
+                NetworkFolderProber.clearFolderCache(context, keyPrefix)
+                loadDirectory(server)
             }
+        } else {
+            loadDirectory(server)
+        }
+    }
 
-            val lines = raw.split("\n").filter { it.isNotBlank() }
-            val entries =
-                lines.mapNotNull { line ->
-                    val parts = line.split("\t")
-                    val name = parts.getOrNull(0) ?: return@mapNotNull null
-                    val isDir = parts.getOrNull(1) == "1"
-                    val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
-                    val type =
-                        if (isDir) {
-                            MediaType.DIRECTORY
-                        } else {
-                            mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO
-                        }
-                    val f3d =
-                        if (type == MediaType.VIDEO) {
-                            MediaFilterEngine.detectFormat3DFromFilename(name)
-                        } else {
-                            Format3DType.FLAT_2D
-                        }
-                    val childPath = if (subPath.isEmpty()) name else "$subPath/$name"
-
-                    MediaEntry(
-                        name = name,
-                        path = childPath,
-                        sizeBytes = sizeBytes,
-                        lastModified = 0L,
-                        type = type,
-                        format3DHint = f3d,
-                    )
-                }
-
-            val pruned =
-                NetworkFolderProber.pruneEmptyFolders(
+    private fun loadDirectory(server: SavedServer) {
+        directoryLoader.loadDirectory(
+            path = browsePath,
+            fetchRaw = {
+                activity.nativeNfsListDirectory(server.host, server.port, server.path, browsePath, 3)
+            },
+            proberConfig =
+                NetworkDirectoryLoader.FolderProberConfig(
                     context = context,
                     sourceKind = "nfs",
-                    entries = entries,
                     folderKeyFor = { entry -> CacheKeys.forFolder("nfs", server.host, server.port, server.path, entry.path) },
                     scanFnFor = { entry ->
                         { activity.nativeNfsScanFolderHasMedia(server.host, server.port, server.path, entry.path, 3) }
                     },
-                )
+                ),
+            onStateChange = { state ->
+                renderState(state)
+            },
+        )
+    }
 
-            cachedRawEntries = pruned
-            applyFiltersAndSort()
+    private fun renderState(state: NetworkDirectoryState) {
+        when (state) {
+            is NetworkDirectoryState.Loading -> {
+                // Mantém a visualização atual durante carregamento
+            }
+            is NetworkDirectoryState.Error -> {
+                cachedRawEntries = emptyList()
+                val msg = context.getString(R.string.network_nfs_form_status_error_format, state.message)
+                countLabel?.text = msg
+                emptyLabel?.text = msg
+                clearFiltersButton?.visibility = View.GONE
+                recyclerView?.visibility = View.GONE
+                emptyContainer?.visibility = View.VISIBLE
+            }
+            is NetworkDirectoryState.Empty -> {
+                cachedRawEntries = emptyList()
+                applyFiltersAndSort()
+            }
+            is NetworkDirectoryState.Success -> {
+                cachedRawEntries = state.entries
+                applyFiltersAndSort()
+            }
         }
     }
 
@@ -504,9 +553,21 @@ class NetworkNfsScreen(
                 cachedRawEntries.size,
             )
 
+        val hasActiveFilters =
+            searchQuery.isNotEmpty() ||
+                currentTypeFilter != MediaTypeFilter.ALL ||
+                currentFormat3DFilter != Format3DFilter.ALL ||
+                currentDateFilter != DateFilter.ALL
+
+        emptyLabel?.text =
+            context.getString(
+                if (hasActiveFilters) R.string.browser_empty_search else R.string.network_files_empty,
+            )
+        clearFiltersButton?.visibility = if (hasActiveFilters) View.VISIBLE else View.GONE
+
         val isEmpty = sorted.isEmpty() && !showUp
         recyclerView?.visibility = if (isEmpty) View.GONE else View.VISIBLE
-        emptyContainer?.visibility = if (isEmpty) View.GONE else View.GONE
+        emptyContainer?.visibility = if (isEmpty) View.VISIBLE else View.GONE
     }
 
     fun handleBack(server: SavedServer? = browsingServer): Boolean {

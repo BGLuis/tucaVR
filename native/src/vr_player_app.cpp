@@ -180,6 +180,18 @@ extern "C" {
                                              uint32_t max_width, uint32_t max_height,
                                              uint64_t cancel_token,
                                              uint32_t* out_width, uint32_t* out_height, size_t* out_len);
+    extern uint8_t* nfs_generate_thumbnail(const char* host, int32_t port, const char* export_path,
+                                            const char* file_path, int32_t version,
+                                            uint32_t max_width, uint32_t max_height,
+                                            uint64_t cancel_token,
+                                            uint32_t* out_width, uint32_t* out_height, size_t* out_len);
+    extern uint8_t* webdav_generate_thumbnail(const char* host, int32_t port, const char* base_path,
+                                              const char* file_path, const char* username,
+                                              const char* password, int32_t use_https,
+                                              int32_t accept_invalid_certs,
+                                              uint32_t max_width, uint32_t max_height,
+                                              uint64_t cancel_token,
+                                              uint32_t* out_width, uint32_t* out_height, size_t* out_len);
     extern void cancel_thumbnail_generation(uint64_t cancel_token);
     extern void free_rust_thumbnail_buffer(uint8_t* ptr, size_t len);
 
@@ -267,6 +279,12 @@ extern "C" {
                                     const char* password, const char* path);
     extern char* sftp_read_metadata(const char* host, int32_t port, const char* username,
                                      const char* password, const char* private_key, const char* path);
+    extern char* nfs_read_metadata(const char* host, int32_t port, const char* export_path,
+                                    const char* file_path, int32_t version);
+    extern char* webdav_read_metadata(const char* host, int32_t port, const char* base_path,
+                                       const char* file_path, const char* username,
+                                       const char* password, int32_t use_https,
+                                       int32_t accept_invalid_certs);
     // T13.2: seleciona a trilha de audio pro PROXIMO load_at() — chamar
     // sempre antes de tocar (inclusive ordinal 0), ver rust/bridge/src/lib.rs.
     extern void set_desired_audio_track(uint32_t ordinal);
@@ -1063,6 +1081,55 @@ Java_com_tucavr_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject thiz
     return RustThumbnailToJByteArrayAndFree(env, data, outLen);
 }
 
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_tucavr_VRActivity_nativeNfsGenerateThumbnail(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                                         jstring exportPath, jstring filePath, jint version,
+                                                         jint maxWidth, jint maxHeight, jlong cancelToken) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* exportStr = env->GetStringUTFChars(exportPath, nullptr);
+    const char* pathStr = env->GetStringUTFChars(filePath, nullptr);
+
+    uint32_t outWidth = 0, outHeight = 0;
+    size_t outLen = 0;
+    uint8_t* data = nfs_generate_thumbnail(hostStr, (int32_t)port, exportStr, pathStr, (int32_t)version,
+                                           (uint32_t)maxWidth, (uint32_t)maxHeight, (uint64_t)cancelToken,
+                                           &outWidth, &outHeight, &outLen);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(exportPath, exportStr);
+    env->ReleaseStringUTFChars(filePath, pathStr);
+
+    return RustThumbnailToJByteArrayAndFree(env, data, outLen);
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_tucavr_VRActivity_nativeWebdavGenerateThumbnail(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                                            jstring basePath, jstring filePath,
+                                                            jstring username, jstring password,
+                                                            jboolean useHttps, jboolean acceptInvalidCerts,
+                                                            jint maxWidth, jint maxHeight, jlong cancelToken) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* baseStr = env->GetStringUTFChars(basePath, nullptr);
+    const char* pathStr = env->GetStringUTFChars(filePath, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+
+    uint32_t outWidth = 0, outHeight = 0;
+    size_t outLen = 0;
+    uint8_t* data = webdav_generate_thumbnail(hostStr, (int32_t)port, baseStr, pathStr, userStr, passStr,
+                                              useHttps ? 1 : 0, acceptInvalidCerts ? 1 : 0,
+                                              (uint32_t)maxWidth, (uint32_t)maxHeight, (uint64_t)cancelToken,
+                                              &outWidth, &outHeight, &outLen);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(basePath, baseStr);
+    env->ReleaseStringUTFChars(filePath, pathStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
+
+    return RustThumbnailToJByteArrayAndFree(env, data, outLen);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeCancelThumbnailGeneration(JNIEnv* env, jobject, jlong cancelToken) {
     cancel_thumbnail_generation((uint64_t)cancelToken);
@@ -1248,6 +1315,45 @@ Java_com_tucavr_VRActivity_nativeSftpReadMetadata(JNIEnv* env, jobject thiz, jst
     env->ReleaseStringUTFChars(password, passStr);
     env->ReleaseStringUTFChars(privateKey, keyStr);
     env->ReleaseStringUTFChars(path, pathStr);
+
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeNfsReadMetadata(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                                    jstring exportPath, jstring filePath, jint version) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* exportStr = env->GetStringUTFChars(exportPath, nullptr);
+    const char* pathStr = env->GetStringUTFChars(filePath, nullptr);
+
+    char* result = nfs_read_metadata(hostStr, (int32_t)port, exportStr, pathStr, (int32_t)version);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(exportPath, exportStr);
+    env->ReleaseStringUTFChars(filePath, pathStr);
+
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeWebdavReadMetadata(JNIEnv* env, jobject thiz, jstring host, jint port,
+                                                       jstring basePath, jstring filePath,
+                                                       jstring username, jstring password,
+                                                       jboolean useHttps, jboolean acceptInvalidCerts) {
+    const char* hostStr = env->GetStringUTFChars(host, nullptr);
+    const char* baseStr = env->GetStringUTFChars(basePath, nullptr);
+    const char* pathStr = env->GetStringUTFChars(filePath, nullptr);
+    const char* userStr = env->GetStringUTFChars(username, nullptr);
+    const char* passStr = env->GetStringUTFChars(password, nullptr);
+
+    char* result = webdav_read_metadata(hostStr, (int32_t)port, baseStr, pathStr, userStr, passStr,
+                                        useHttps ? 1 : 0, acceptInvalidCerts ? 1 : 0);
+
+    env->ReleaseStringUTFChars(host, hostStr);
+    env->ReleaseStringUTFChars(basePath, baseStr);
+    env->ReleaseStringUTFChars(filePath, pathStr);
+    env->ReleaseStringUTFChars(username, userStr);
+    env->ReleaseStringUTFChars(password, passStr);
 
     return RustStringToJStringAndFree(env, result);
 }

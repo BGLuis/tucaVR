@@ -111,13 +111,20 @@ pub struct FtpDirEntry {
     pub name: String,
     pub is_dir: bool,
     pub size: u64,
+    pub mtime: i64,
 }
 
 fn from_list_file(f: FtpListFile) -> FtpDirEntry {
+    let mtime = f
+        .modified()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
     FtpDirEntry {
         name: f.name().to_string(),
         is_dir: f.is_directory(),
         size: f.size() as u64,
+        mtime,
     }
 }
 

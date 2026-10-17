@@ -132,10 +132,11 @@ class VoidListRow(context: Context) : LinearLayout(context) {
         iconResId: Int = 0,
         isSelected: Boolean = false,
         onPlayClick: (() -> Unit)? = null,
+        isFolder: Boolean = false,
     ) {
         titleView.text = title
 
-        if (iconResId != 0) {
+        if (iconResId != 0 && !isFolder) {
             val icon = context.getDrawable(iconResId)?.mutate()
             icon?.colorFilter = android.graphics.PorterDuffColorFilter(VoidTheme.colorText, android.graphics.PorterDuff.Mode.SRC_IN)
             if (icon != null) {
@@ -154,8 +155,21 @@ class VoidListRow(context: Context) : LinearLayout(context) {
         } else {
             metaView.visibility = View.GONE
         }
-        thumbnail.setImageDrawable(null)
-        thumbnail.visibility = if (showThumbnailSlot) View.INVISIBLE else View.GONE
+
+        if (isFolder) {
+            thumbnail.scaleType = ImageView.ScaleType.CENTER_INSIDE
+            val pad = VoidTheme.dpToPx(context, 8f)
+            thumbnail.setPadding(pad, pad, pad, pad)
+            thumbnail.setImageResource(com.tucavr.R.drawable.ic_folder)
+            thumbnail.setColorFilter(VoidTheme.colorFolder, android.graphics.PorterDuff.Mode.SRC_IN)
+            thumbnail.visibility = View.VISIBLE
+        } else {
+            thumbnail.scaleType = ImageView.ScaleType.CENTER_CROP
+            thumbnail.setPadding(0, 0, 0, 0)
+            thumbnail.colorFilter = null
+            thumbnail.setImageDrawable(null)
+            thumbnail.visibility = if (showThumbnailSlot) View.INVISIBLE else View.GONE
+        }
 
         setSelectedRow(isSelected, onPlayClick)
     }

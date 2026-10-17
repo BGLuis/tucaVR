@@ -45,6 +45,7 @@ class MediaBrowserToolbar(
     private val onSortChanged: (SortBy, Boolean) -> Unit,
     private val onViewModeChanged: (ViewMode) -> Unit,
     private val onFilterChanged: (MediaTypeFilter, Format3DFilter, DateFilter) -> Unit,
+    private val onRefresh: (() -> Unit)? = null,
 ) : LinearLayout(context) {
     private val searchBar: VoidSearchBar
     private val sortSelector: VoidSortSelector
@@ -138,6 +139,30 @@ class MediaBrowserToolbar(
                 }
             }
         topRow.addView(viewModeBtn)
+
+        if (onRefresh != null) {
+            val refreshBtn =
+                VoidIconButton(
+                    context,
+                    R.drawable.ic_browser_refresh,
+                    VoidButtonStyle.SECONDARY,
+                    isCircular = false,
+                ).apply {
+                    contentDescription = context.getString(R.string.browser_btn_refresh)
+                    layoutParams =
+                        LayoutParams(
+                            VoidTheme.dpToPx(context, 48f),
+                            VoidTheme.dpToPx(context, 48f),
+                        ).also {
+                            it.marginStart = VoidTheme.dpToPx(context, 8f)
+                        }
+                    setOnClickListener {
+                        onRefresh.invoke()
+                    }
+                }
+            topRow.addView(refreshBtn)
+        }
+
         addView(topRow)
 
         // 2. Linha Inferior: Chips de Filtro

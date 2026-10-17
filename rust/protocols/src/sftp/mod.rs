@@ -83,9 +83,10 @@ use russh::keys::{PrivateKeyWithHashAlg, PublicKeyOrCertificate};
 use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::{RawSftpSession, SftpSession};
 use russh_sftp::protocol::{Data, FileAttributes, OpenFlags, StatusCode};
+use std::collections::HashMap;
 use std::io;
-use std::sync::Arc;
-use std::time::Duration;
+use std::sync::{Arc, LazyLock, Mutex as StdMutex};
+use std::time::{Duration, Instant};
 use tokio::runtime::Runtime;
 
 fn new_runtime() -> io::Result<Runtime> {
@@ -298,28 +299,87 @@ pub struct SftpDirEntry {
     pub name: String,
     pub is_dir: bool,
     pub size: u64,
+    pub mtime: i64,
 }
 
-/// Lista um diretorio remoto (T6.2 "opendir, readdir, stat") — tambem serve
-/// como "testar conexao"/"status de conexao" para a UI (T6.4), igual ao
-/// `smb::list_shares`/`smb::list_directory`: se autenticar e listar
-/// funcionam, a conexao esta OK. Conexao curta, sem keepalive (nao vale a
-/// pena para uma chamada de UI de poucos segundos). `path` vazio = diretorio
-/// home do usuario SSH (`.`).
-///
-/// Usa `SftpSession::read_dir` de alto nivel: ja faz `OPENDIR`+`READDIR` em
-/// laco e devolve os atributos (tamanho, tipo) que ja vem embutidos em cada
-/// entrada da resposta `SSH_FXP_NAME` — ao contrario do SMB
-/// (`smb::list_directory`), SFTP nao exige um `STAT`/`FSTAT` extra por
-/// arquivo so pra descobrir tamanho/tipo.
+type SftpPoolKey = (String, u16, String);
+
+struct PooledSftpSession {
+    session: Option<client::Handle<SftpHandler>>,
+    sftp: Option<SftpSession>,
+    last_used: Instant,
+}
+
+const SESSION_TTL: Duration = Duration::from_secs(30);
+
+static SFTP_POOL: LazyLock<
+    StdMutex<HashMap<SftpPoolKey, Arc<tokio::sync::Mutex<PooledSftpSession>>>>,
+> = LazyLock::new(|| StdMutex::new(HashMap::new()));
+
+fn get_sftp_session(t: &SftpTarget) -> Arc<tokio::sync::Mutex<PooledSftpSession>> {
+    let key = (t.host.clone(), t.port, t.username.clone());
+    let mut pool = SFTP_POOL.lock().unwrap();
+    pool.entry(key)
+        .or_insert_with(|| {
+            Arc::new(tokio::sync::Mutex::new(PooledSftpSession {
+                session: None,
+                sftp: None,
+                last_used: Instant::now() - Duration::from_secs(60),
+            }))
+        })
+        .clone()
+}
+
+impl PooledSftpSession {
+    async fn get_connection<'a>(
+        &'a mut self,
+        t: &SftpTarget,
+    ) -> Result<&'a mut SftpSession, String> {
+        let is_valid =
+            self.session.is_some() && self.sftp.is_some() && self.last_used.elapsed() < SESSION_TTL;
+
+        if !is_valid {
+            self.invalidate().await;
+            let session = connect_and_auth(t, false).await?;
+            let sftp = open_sftp_session(&session).await?;
+            self.session = Some(session);
+            self.sftp = Some(sftp);
+        }
+        self.last_used = Instant::now();
+        Ok(self.sftp.as_mut().unwrap())
+    }
+
+    async fn invalidate(&mut self) {
+        if let Some(sftp) = self.sftp.take() {
+            let _ = sftp.close().await;
+        }
+        if let Some(session) = self.session.take() {
+            disconnect_best_effort(&session).await;
+        }
+    }
+}
+
+/// Lista um diretorio remoto (T6.2 "opendir, readdir, stat").
+/// Reusa a sessao SFTP em pool com TTL curto (30s) para evitar
+/// novos handshakes SSH/SFTP em cada pasta.
 pub fn list_directory(t: &SftpTarget, path: &str) -> Result<Vec<SftpDirEntry>, String> {
-    let rt = new_runtime().map_err(|e| e.to_string())?;
-    rt.block_on(async {
-        let session = connect_and_auth(t, false).await?;
-        let sftp = open_sftp_session(&session).await?;
+    crate::POOL_RUNTIME.block_on(async {
+        let session_arc = get_sftp_session(t);
+        let mut session = session_arc.lock().await;
 
         let dir_path = if path.is_empty() { "." } else { path };
-        let entries = sftp.read_dir(dir_path).await.map_err(|e| e.to_string())?;
+        let entries = match session.get_connection(t).await {
+            Ok(sftp) => match sftp.read_dir(dir_path).await {
+                Ok(entries) => entries,
+                Err(e) => {
+                    log::warn!("SFTP: read_dir em sessao falhou ({e}), reconectando...");
+                    session.invalidate().await;
+                    let sftp = session.get_connection(t).await?;
+                    sftp.read_dir(dir_path).await.map_err(|e| e.to_string())?
+                }
+            },
+            Err(e) => return Err(e),
+        };
 
         let result = entries
             .map(|entry| {
@@ -328,29 +388,31 @@ pub fn list_directory(t: &SftpTarget, path: &str) -> Result<Vec<SftpDirEntry>, S
                     name: entry.file_name(),
                     is_dir: metadata.file_type().is_dir(),
                     size: metadata.len(),
+                    mtime: metadata.mtime.map(|m| m as i64).unwrap_or(0),
                 }
             })
             .collect();
 
-        let _ = sftp.close().await;
-        disconnect_best_effort(&session).await;
         Ok(result)
     })
 }
 
 /// Varredura recursiva "esta pasta tem alguma midia reproduzivel?" -- ver
-/// `crate::folder_scan`. Reusa a MESMA sessao SFTP pra todas as subpastas
-/// visitadas (nao reconecta por nivel), pilha explicita, sem limite de
-/// profundidade fixo, para no primeiro arquivo de midia ou no deadline de
-/// seguranca.
+/// `crate::folder_scan`. Reusa a sessao SFTP do pool compartilhada pra todas as subpastas
+/// visitadas, pilha explicita, sem limite de profundidade fixo, para no primeiro arquivo
+/// de midia ou no deadline de seguranca.
 pub fn scan_has_media(
     t: &SftpTarget,
     path: &str,
 ) -> Result<crate::folder_scan::ScanResult, String> {
-    let rt = new_runtime().map_err(|e| e.to_string())?;
-    rt.block_on(async {
-        let session = connect_and_auth(t, false).await?;
-        let sftp = open_sftp_session(&session).await?;
+    crate::POOL_RUNTIME.block_on(async {
+        let session_arc = get_sftp_session(t);
+        let mut session = session_arc.lock().await;
+
+        let sftp = match session.get_connection(t).await {
+            Ok(s) => s,
+            Err(e) => return Err(e),
+        };
         let deadline = crate::folder_scan::deadline_from_now();
 
         let start = if path.is_empty() {
@@ -392,8 +454,6 @@ pub fn scan_has_media(
             }
         }
 
-        let _ = sftp.close().await;
-        disconnect_best_effort(&session).await;
         Ok(result)
     })
 }

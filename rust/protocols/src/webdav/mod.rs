@@ -39,6 +39,7 @@ pub struct WebdavDirEntry {
     pub name: String,
     pub is_dir: bool,
     pub size: u64,
+    pub mtime: i64,
 }
 
 /// Cria um cliente HTTP `reqwest::blocking::Client` com as configurações do `WebdavTarget`.
@@ -96,6 +97,7 @@ pub fn parse_multistatus_xml<R: io::BufRead>(
     let mut current_href = String::new();
     let mut current_display_name: Option<String> = None;
     let mut current_content_length: Option<u64> = None;
+    let mut current_last_modified: i64 = 0;
     let mut is_collection = false;
     let mut current_status = String::new();
 
@@ -115,6 +117,7 @@ pub fn parse_multistatus_xml<R: io::BufRead>(
                     current_href.clear();
                     current_display_name = None;
                     current_content_length = None;
+                    current_last_modified = 0;
                     is_collection = false;
                     current_status.clear();
                 } else if local.eq_ignore_ascii_case(b"propstat") {
@@ -145,6 +148,13 @@ pub fn parse_multistatus_xml<R: io::BufRead>(
                 } else if current_tag.eq_ignore_ascii_case(b"getcontentlength") && in_propstat {
                     if let Ok(len) = text.trim().parse::<u64>() {
                         current_content_length = Some(len);
+                    }
+                } else if current_tag.eq_ignore_ascii_case(b"getlastmodified") && in_propstat {
+                    let trimmed = text.trim();
+                    if let Ok(dt) = chrono::DateTime::parse_from_rfc2822(trimmed)
+                        .or_else(|_| chrono::DateTime::parse_from_rfc3339(trimmed))
+                    {
+                        current_last_modified = dt.timestamp();
                     }
                 } else if current_tag.eq_ignore_ascii_case(b"status") && in_propstat {
                     current_status = text;
@@ -192,6 +202,7 @@ pub fn parse_multistatus_xml<R: io::BufRead>(
                                 name,
                                 is_dir: is_collection,
                                 size,
+                                mtime: current_last_modified,
                             });
                         }
                     }
@@ -511,6 +522,7 @@ mod tests {
       <d:prop>
         <d:resourcetype/>
         <d:getcontentlength>12345678</d:getcontentlength>
+        <d:getlastmodified>Thu, 12 Oct 2023 07:20:50 GMT</d:getlastmodified>
         <d:displayname>filme_final (3D).mp4</d:displayname>
       </d:prop>
       <d:status>HTTP/1.1 200 OK</d:status>
@@ -526,11 +538,13 @@ mod tests {
         assert_eq!(entries[0].name, "VR 180");
         assert!(entries[0].is_dir);
         assert_eq!(entries[0].size, 0);
+        assert_eq!(entries[0].mtime, 0);
 
         // Arquivo de vídeo
         assert_eq!(entries[1].name, "filme_final (3D).mp4");
         assert!(!entries[1].is_dir);
         assert_eq!(entries[1].size, 12345678);
+        assert_eq!(entries[1].mtime, 1697095250);
     }
 
     #[test]

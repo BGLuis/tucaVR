@@ -37,7 +37,6 @@ import com.tucavr.playlist.PlaylistDao
 import com.tucavr.screens.ContextRailHost
 import com.tucavr.screens.ContinueWatchingScreen
 import com.tucavr.screens.DownloadsScreen
-import com.tucavr.screens.FileDetailScreen
 import com.tucavr.screens.HomeScreen
 import com.tucavr.screens.LocalFilesScreen
 import com.tucavr.screens.NetworkDiscoveryScreen
@@ -253,7 +252,6 @@ class VRPresentation(
 
     private lateinit var homeScreen: HomeScreen
     private lateinit var localFilesScreen: LocalFilesScreen
-    private lateinit var fileDetailScreen: FileDetailScreen
     private lateinit var networkSmbScreen: NetworkSmbScreen
     private lateinit var networkNfsScreen: NetworkNfsScreen
     private lateinit var networkFtpScreen: NetworkFtpScreen
@@ -613,16 +611,6 @@ class VRPresentation(
                 },
             )
 
-        fileDetailScreen =
-            FileDetailScreen(
-                context = context,
-                activity = activity,
-                host = host,
-                scope = scope,
-                onBack = { handleBack() },
-                onPlay = { source -> playSource(source) },
-            )
-
         networkSmbScreen =
             NetworkSmbScreen(
                 context = context,
@@ -835,7 +823,29 @@ class VRPresentation(
         when (val destination = appNav.current) {
             is Destination.Home -> homeScreen.render()
             is Destination.LocalFiles -> localFilesScreen.renderLocalFiles()
-            is Destination.FileDetail -> fileDetailScreen.render(destination)
+            is Destination.FileDetail -> {
+                val entry =
+                    MediaEntry(
+                        name = destination.displayName,
+                        path =
+                            when (val src = destination.source) {
+                                is PlaybackSource.LocalFile -> src.path
+                                is PlaybackSource.Http -> src.url
+                                is PlaybackSource.Smb -> src.path
+                                is PlaybackSource.Ftp -> src.path
+                                is PlaybackSource.Sftp -> src.path
+                                is PlaybackSource.Nfs -> src.path
+                                is PlaybackSource.Dlna -> src.url
+                                is PlaybackSource.Webdav -> src.path
+                            },
+                        sizeBytes = destination.sizeBytes,
+                        lastModified = destination.lastModified,
+                        type = MediaType.VIDEO,
+                    )
+                contextRailView.showFileDetail(entry, destination.source) { resumeAtMs ->
+                    playSource(destination.source, resumeAtMs)
+                }
+            }
             is Destination.NetworkHome -> networkHomeScreen.render()
             is Destination.NetworkFiles -> networkSmbScreen.renderFiles(destination.server)
             is Destination.NetworkNfsFiles -> networkNfsScreen.renderFiles(destination.server, destination.path)
@@ -927,10 +937,13 @@ class VRPresentation(
      * Ponto único de "tocar [source]": pergunta se retoma (via
      * [resumePromptScreen]), despacha pro `nativePlayXxx` certo por tipo de
      * fonte, e oculta o painel de UI para assistir ao vídeo. Usado tanto pelo double-click local quanto
-     * pelo botão Reproduzir de [FileDetailScreen] (local e rede).
+     * pelo botão Reproduzir de [ContextRailView] (local e rede).
      */
-    private fun playSource(source: PlaybackSource) {
-        resumePromptScreen.promptOrPlay(source) { resumeAtMs ->
+    private fun playSource(
+        source: PlaybackSource,
+        resumeAtMs: Long? = null,
+    ) {
+        if (resumeAtMs != null) {
             when (source) {
                 is PlaybackSource.LocalFile -> activity.playFile(source.path, source.sizeBytes, resumeAtMs)
                 is PlaybackSource.Http -> activity.playUrl(source.url, resumeAtMs)
@@ -940,6 +953,20 @@ class VRPresentation(
                 is PlaybackSource.Ftp -> activity.playFtp(source.server, source.path, source.sizeBytes, resumeAtMs)
                 is PlaybackSource.Sftp -> activity.playSftp(source.server, source.path, source.sizeBytes, resumeAtMs)
                 is PlaybackSource.Webdav -> activity.playWebdav(source.server, source.path, source.sizeBytes, resumeAtMs)
+            }
+            activity.requestUiPanelHidden()
+            return
+        }
+        resumePromptScreen.promptOrPlay(source) { promptResumeAtMs ->
+            when (source) {
+                is PlaybackSource.LocalFile -> activity.playFile(source.path, source.sizeBytes, promptResumeAtMs)
+                is PlaybackSource.Http -> activity.playUrl(source.url, promptResumeAtMs)
+                is PlaybackSource.Smb -> activity.playSmb(source.server, source.path, source.sizeBytes, promptResumeAtMs)
+                is PlaybackSource.Nfs -> activity.playNfs(source.server, source.path, source.sizeBytes, promptResumeAtMs)
+                is PlaybackSource.Dlna -> activity.playDlna(source.server, source.title, source.url, source.sizeBytes, promptResumeAtMs)
+                is PlaybackSource.Ftp -> activity.playFtp(source.server, source.path, source.sizeBytes, promptResumeAtMs)
+                is PlaybackSource.Sftp -> activity.playSftp(source.server, source.path, source.sizeBytes, promptResumeAtMs)
+                is PlaybackSource.Webdav -> activity.playWebdav(source.server, source.path, source.sizeBytes, promptResumeAtMs)
             }
             activity.requestUiPanelHidden()
         }

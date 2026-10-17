@@ -91,6 +91,83 @@ object NetworkFolderProber {
         }
 
     /**
+     * Filtra rapidamente pastas já conhecidas no cache persistente (Room) como sem mídia.
+     * Pastas sem registro no cache são mantidas provisoriamente para evitar travar a listagem.
+     */
+    suspend fun pruneCachedEmptyFolders(
+        context: Context,
+        entries: List<MediaEntry>,
+        folderKeyFor: (MediaEntry) -> String,
+    ): List<MediaEntry> =
+        withContext(Dispatchers.IO) {
+            val directories = entries.filter { it.type == MediaType.DIRECTORY }
+            if (directories.isEmpty()) return@withContext entries
+
+            val dao = AppDatabase.getInstance(context).folderMediaStatusDao()
+            val emptyFolderPaths =
+                directories
+                    .filter { entry ->
+                        val cached = dao.find(folderKeyFor(entry))
+                        cached != null && !cached.hasPlayableMedia
+                    }.map { it.path }
+                    .toSet()
+
+            if (emptyFolderPaths.isEmpty()) entries else entries.filterNot { it.path in emptyFolderPaths }
+        }
+
+    /**
+     * Sondagem assíncrona progressiva de pastas ainda não cacheadas.
+     * Executa em segundo plano com controle de concorrência ([activeFolderSemaphore]).
+     * Notifica via [onFolderEmpty] sempre que uma pasta for confirmada vazia, permitindo
+     * atualizar a UI de forma não-bloqueante.
+     */
+    suspend fun probeUncachedFoldersProgressive(
+        context: Context,
+        sourceKind: String,
+        entries: List<MediaEntry>,
+        folderKeyFor: (MediaEntry) -> String,
+        scanFnFor: (MediaEntry) -> suspend () -> String,
+        onFolderEmpty: suspend (emptyPath: String) -> Unit,
+    ) = coroutineScope {
+        val directories = entries.filter { it.type == MediaType.DIRECTORY }
+        if (directories.isEmpty()) return@coroutineScope
+
+        val dao = AppDatabase.getInstance(context).folderMediaStatusDao()
+        for (entry in directories) {
+            val folderKey = folderKeyFor(entry)
+            val cached = withContext(Dispatchers.IO) { dao.find(folderKey) }
+            if (cached != null) {
+                val ttl = if (cached.scanCompletedFully) TTL_FRESH_MS else TTL_TIMED_OUT_MS
+                val isStale = System.currentTimeMillis() - cached.lastCheckedAt >= ttl
+                if (isStale) {
+                    revalidateInBackground(context, sourceKind, folderKey, scanFnFor(entry))
+                }
+            } else {
+                launch {
+                    val hasMedia =
+                        activeFolderSemaphore.withPermit {
+                            val freshCached = withContext(Dispatchers.IO) { dao.find(folderKey) }
+                            freshCached?.hasPlayableMedia ?: scanAndCache(context, sourceKind, folderKey, scanFnFor(entry))
+                        }
+                    if (!hasMedia) {
+                        onFolderEmpty(entry.path)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * Limpa o cache de status de mídia de pastas com prefixo correspondente (ex. ao atualizar manualmente).
+     */
+    suspend fun clearFolderCache(
+        context: Context,
+        keyPrefix: String,
+    ) = withContext(Dispatchers.IO) {
+        AppDatabase.getInstance(context).folderMediaStatusDao().clearForPrefix(keyPrefix)
+    }
+
+    /**
      * Resolve se a pasta identificada por `folderKey` tem mídia, priorizando o cache.
      * `scanFn` só é invocada em cache miss (pasta nunca vista, ou TTL expirado) — nesse
      * caso a chamada é bloqueante e usa a concorrência "pasta atual" ([activeFolderSemaphore]).

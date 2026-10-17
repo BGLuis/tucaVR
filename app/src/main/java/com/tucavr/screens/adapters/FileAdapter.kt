@@ -8,6 +8,7 @@ import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.LinearLayout
 import androidx.recyclerview.widget.RecyclerView
 import com.tucavr.R
@@ -222,6 +223,13 @@ class FileAdapter(
         }
     }
 
+    override fun onViewRecycled(holder: ViewHolder) {
+        super.onViewRecycled(holder)
+        holder.thumbnailJob?.cancel()
+        holder.thumbnailJob = null
+        holder.boundEntry = null
+    }
+
     private fun bindUpRow(holder: ViewHolder) {
         if (holder.view is VoidListRow) {
             holder.view.thumbnail.setImageBitmap(null)
@@ -282,7 +290,6 @@ class FileAdapter(
             }
 
         if (holder.view is VoidListRow) {
-            holder.view.thumbnail.setImageBitmap(null)
             holder.view.bind(
                 title = displayName.toString(),
                 meta = meta,
@@ -290,10 +297,10 @@ class FileAdapter(
                 iconResId = iconRes,
                 isSelected = isSelected,
                 onPlayClick = onPlayRowAction,
+                isFolder = isDir,
             )
             holder.view.titleView.text = displayName
         } else if (holder.view is VoidGridCard) {
-            holder.view.thumbnail.setImageBitmap(null)
             holder.view.bind(
                 title = displayName,
                 meta = meta,
@@ -319,9 +326,25 @@ class FileAdapter(
                     if (summary != null && holder.adapterPosition == position) {
                         val summaryMeta =
                             if (summary.videoCount > 0) {
-                                "${summary.totalItems} itens · ${summary.videoCount} vídeos"
+                                val items =
+                                    context.resources.getQuantityString(
+                                        R.plurals.browser_folder_summary_items_count,
+                                        summary.totalItems,
+                                        summary.totalItems,
+                                    )
+                                val videos =
+                                    context.resources.getQuantityString(
+                                        R.plurals.browser_folder_summary_videos_count,
+                                        summary.videoCount,
+                                        summary.videoCount,
+                                    )
+                                context.getString(R.string.browser_folder_summary_combined, items, videos)
                             } else {
-                                "${summary.totalItems} itens"
+                                context.resources.getQuantityString(
+                                    R.plurals.browser_folder_summary_items_count,
+                                    summary.totalItems,
+                                    summary.totalItems,
+                                )
                             }
 
                         if (holder.view is VoidListRow) {
@@ -342,9 +365,15 @@ class FileAdapter(
 
                     if (folderMosaic != null && holder.adapterPosition == position) {
                         if (holder.view is VoidListRow) {
+                            holder.view.thumbnail.scaleType = ImageView.ScaleType.CENTER_CROP
+                            holder.view.thumbnail.setPadding(0, 0, 0, 0)
+                            holder.view.thumbnail.colorFilter = null
                             holder.view.thumbnail.setImageBitmap(folderMosaic)
                             holder.view.thumbnail.visibility = View.VISIBLE
                         } else if (holder.view is VoidGridCard) {
+                            holder.view.thumbnail.scaleType = ImageView.ScaleType.CENTER_CROP
+                            holder.view.thumbnail.setPadding(0, 0, 0, 0)
+                            holder.view.thumbnail.colorFilter = null
                             holder.view.thumbnail.setImageBitmap(folderMosaic)
                         }
                     }

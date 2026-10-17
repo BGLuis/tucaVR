@@ -31,6 +31,7 @@ pub struct NfsDirEntry {
     pub name: String,
     pub is_dir: bool,
     pub size: u64,
+    pub mtime: i64,
 }
 
 /// Atributos de `fattr3` (RFC 1813 §2.5) que o app usa.
@@ -38,6 +39,7 @@ pub struct NfsDirEntry {
 struct Fattr3 {
     is_dir: bool,
     size: u64,
+    mtime: i64,
 }
 
 /// Le um `fattr3` inteiro (84 bytes): type, mode, nlink, uid, gid (5 x u32), size, used,
@@ -46,10 +48,13 @@ fn read_fattr3(reader: &mut XdrReader) -> io::Result<Fattr3> {
     let ftype = reader.read_u32()?;
     reader.skip(16); // mode, nlink, uid, gid
     let size = reader.read_u64()?;
-    reader.skip(56); // used, rdev, fsid, fileid, atime, mtime, ctime
+    reader.skip(40); // used, rdev, fsid, fileid, atime (5 x 8 bytes)
+    let mtime = reader.read_u32()? as i64;
+    reader.skip(12); // mtime.nseconds (4 bytes), ctime (8 bytes)
     Ok(Fattr3 {
         is_dir: ftype == NF3DIR,
         size,
+        mtime,
     })
 }
 
@@ -289,7 +294,7 @@ impl NfsClient {
         &mut self,
         dir_handle: &[u8],
         name: &str,
-    ) -> Result<(Vec<u8>, u64, bool), String> {
+    ) -> Result<(Vec<u8>, u64, bool, i64), String> {
         let mut args = XdrWriter::new();
         args.write_bytes(dir_handle);
         args.write_string(name);
@@ -308,9 +313,9 @@ impl NfsClient {
         let obj_handle = reader.read_bytes().map_err(|e| e.to_string())?.to_vec();
 
         let attrs = read_post_op_attr(&mut reader).map_err(|e| e.to_string())?;
-        let (size, is_dir) = attrs.map_or((0, false), |a| (a.size, a.is_dir));
+        let (size, is_dir, mtime) = attrs.map_or((0, false, 0), |a| (a.size, a.is_dir, a.mtime));
 
-        Ok((obj_handle, size, is_dir))
+        Ok((obj_handle, size, is_dir, mtime))
     }
 
     /// Resolve um caminho hierarquico ("pasta/subpasta/arquivo.mkv") a partir do handle raiz
@@ -334,7 +339,7 @@ impl NfsClient {
         let mut current_is_dir = true;
 
         for seg in segments {
-            let (next_handle, size, is_dir) = self.lookup(&current_handle, seg)?;
+            let (next_handle, size, is_dir, _) = self.lookup(&current_handle, seg)?;
             current_handle = next_handle;
             current_size = size;
             current_is_dir = is_dir;
@@ -385,14 +390,19 @@ impl NfsClient {
                 let attrs = match raw.attrs {
                     Some(attrs) => attrs,
                     None => {
-                        let (_, size, is_dir) = self.lookup(dir_handle, &raw.name)?;
-                        Fattr3 { is_dir, size }
+                        let (_, size, is_dir, mtime) = self.lookup(dir_handle, &raw.name)?;
+                        Fattr3 {
+                            is_dir,
+                            size,
+                            mtime,
+                        }
                     }
                 };
                 entries.push(NfsDirEntry {
                     name: raw.name,
                     is_dir: attrs.is_dir,
                     size: attrs.size,
+                    mtime: attrs.mtime,
                 });
             }
             cookieverf = page.cookieverf;
@@ -469,9 +479,12 @@ mod tests {
             w.write_u32(marker); // mode, nlink, uid, gid
         }
         w.write_u64(size);
-        for marker in 0..7u64 {
-            w.write_u64(0xAAAA_0000 + marker); // used, rdev, fsid, fileid, atime, mtime, ctime
+        for marker in 0..5u64 {
+            w.write_u64(0xAAAA_0000 + marker); // used, rdev, fsid, fileid, atime
         }
+        w.write_u32(1_700_000_000); // mtime.seconds
+        w.write_u32(0); // mtime.nseconds
+        w.write_u64(0xAAAA_0006); // ctime
         let bytes = w.into_bytes();
         assert_eq!(bytes.len(), 84);
         bytes
@@ -566,7 +579,8 @@ mod tests {
                     1,
                     Some(Fattr3 {
                         is_dir: false,
-                        size: 7_000_000_000
+                        size: 7_000_000_000,
+                        mtime: 1_700_000_000,
                     })
                 ),
                 (
@@ -574,7 +588,8 @@ mod tests {
                     2,
                     Some(Fattr3 {
                         is_dir: true,
-                        size: 4096
+                        size: 4096,
+                        mtime: 1_700_000_000,
                     })
                 ),
                 ("sem-atributos.mp4", 3, None),
@@ -667,7 +682,8 @@ mod tests {
             attrs,
             Fattr3 {
                 is_dir: true,
-                size: 123
+                size: 123,
+                mtime: 1_700_000_000,
             }
         );
         assert_eq!(

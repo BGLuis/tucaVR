@@ -187,10 +187,21 @@
     </plurals>
     <string name="browser_empty_search">Ningún archivo coincide con los criterios de búsqueda</string>
     <string name="browser_btn_clear_filters">Limpiar filtros</string>
+    <string name="browser_btn_refresh">Actualizar</string>
     <plurals name="browser_folder_summary_format">
         <item quantity="one">%1$s · %2$d elemento</item>
         <item quantity="other">%1$s · %2$d elementos</item>
     </plurals>
+    <plurals name="browser_folder_summary_items_count">
+        <item quantity="one">%1$d elemento</item>
+        <item quantity="other">%1$d elementos</item>
+    </plurals>
+    <plurals name="browser_folder_summary_videos_count">
+        <item quantity="one">%1$d vídeo</item>
+        <item quantity="other">%1$d vídeos</item>
+    </plurals>
+    <string name="browser_folder_summary_combined">%1$s · %2$s</string>
+    <string name="browser_badge_folder">📁 CARPETA</string>
     <string name="history_filter_resumable">En curso</string>
     <string name="history_filter_all">Todo el historial</string>
     <string name="player_now_playing_title">Reproduciendo ahora</string>
