@@ -111,14 +111,22 @@ class UiSourceGuardsTest {
             val content = target.readText()
             val resumeFn =
                 content.substringAfter("private fun resumeFromHistory(entry: PlaybackHistory) {")
-                    .substringBefore("activity.requestUiPanelHidden()")
+                    .substringBefore("\n    private fun ")
             assertTrue(
                 "$fileName resumeFromHistory must extract sizeBytes via sizeBytesFromKey",
                 resumeFn.contains("entry.sizeBytesFromKey()"),
             )
+            val playMethods = listOf("playFile", "playSmb", "playFtp", "playSftp", "playNfs", "playDlna", "playWebdav")
+            playMethods.forEach { method ->
+                val callRegex = Regex("""activity\.$method\([^)]*sizeBytes\s*=\s*sizeBytes[^)]*\)""", RegexOption.DOT_MATCHES_ALL)
+                assertTrue(
+                    "$fileName resumeFromHistory must pass sizeBytes = sizeBytes in activity.$method()",
+                    callRegex.containsMatchIn(resumeFn),
+                )
+            }
             assertTrue(
-                "$fileName resumeFromHistory must pass sizeBytes to playSmb",
-                resumeFn.contains("activity.playSmb(") && resumeFn.contains("sizeBytes = sizeBytes"),
+                "$fileName resumeFromHistory must call activity.playUrl for HTTP",
+                resumeFn.contains("activity.playUrl("),
             )
         }
     }

@@ -684,6 +684,7 @@ class HomeScreen(
                         activity.requestUiPanelHidden()
                     }
                 }
+                return
             }
             HistorySourceType.DLNA -> {
                 scope.launch {
@@ -695,6 +696,7 @@ class HomeScreen(
                         activity.requestUiPanelHidden()
                     }
                 }
+                return
             }
             HistorySourceType.WEBDAV -> {
                 scope.launch {
@@ -704,6 +706,7 @@ class HomeScreen(
                         activity.requestUiPanelHidden()
                     }
                 }
+                return
             }
         }
         activity.requestUiPanelHidden()

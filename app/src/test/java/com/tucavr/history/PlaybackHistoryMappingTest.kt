@@ -1,6 +1,10 @@
 package com.tucavr.history
 
 import com.tucavr.navigation.PlaybackSource
+import com.tucavr.network.FtpServer
+import com.tucavr.network.SavedServer
+import com.tucavr.network.ServerProtocol
+import com.tucavr.network.SftpServer
 import com.tucavr.network.SmbServer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -192,14 +196,59 @@ class PlaybackHistoryMappingTest {
     }
 
     @Test
-    fun `size recovered from the key matches the size the source was played with`() {
-        val source = PlaybackSource.Smb(smbServer(), "dir/a|b.mkv", 987_654_321L)
-        val entry = historyOf(0L, 0L).copy(historyKey = source.historyKey())
-        assertEquals(987_654_321L, entry.sizeBytesFromKey())
+    fun `size recovered from the key matches the size the source was played with for all sources`() {
+        val smb = PlaybackSource.Smb(smbServer(), "dir/a|b.mkv", 987_654_321L)
+        assertEquals(987_654_321L, historyOf(0L, 0L).copy(historyKey = smb.historyKey()).sizeBytesFromKey())
+
+        val local = PlaybackSource.LocalFile("/sdcard/Movies/clip.mp4", 12_345_678L)
+        assertEquals(12_345_678L, historyOf(0L, 0L).copy(historyKey = local.historyKey()).sizeBytesFromKey())
+
+        val ftp =
+            PlaybackSource.Ftp(
+                FtpServer(id = "1", name = "FTP", host = "1.2.3.4", port = 21, username = "u", password = "p"),
+                "video.mp4",
+                55_667_788L,
+            )
+        assertEquals(55_667_788L, historyOf(0L, 0L).copy(historyKey = ftp.historyKey()).sizeBytesFromKey())
+
+        val sftp =
+            PlaybackSource.Sftp(
+                SftpServer(id = "2", name = "SFTP", host = "1.2.3.4", port = 22, username = "u", password = "p", privateKey = null),
+                "video.mp4",
+                99_887_766L,
+            )
+        assertEquals(99_887_766L, historyOf(0L, 0L).copy(historyKey = sftp.historyKey()).sizeBytesFromKey())
+
+        val nfs =
+            PlaybackSource.Nfs(
+                SavedServer(name = "NFS", protocol = ServerProtocol.NFS, host = "1.2.3.4", port = 2049, path = "/exports"),
+                "video.mp4",
+                33_445_566L,
+            )
+        assertEquals(33_445_566L, historyOf(0L, 0L).copy(historyKey = nfs.historyKey()).sizeBytesFromKey())
+
+        val dlna =
+            PlaybackSource.Dlna(
+                SavedServer(name = "DLNA", protocol = ServerProtocol.DLNA, host = "1.2.3.4", port = 8200, path = "/control"),
+                "Title",
+                "http://1.2.3.4/1.mp4",
+                77_665_544L,
+            )
+        assertEquals(77_665_544L, historyOf(0L, 0L).copy(historyKey = dlna.historyKey()).sizeBytesFromKey())
+
+        val webdav =
+            PlaybackSource.Webdav(
+                SavedServer(name = "WebDAV", protocol = ServerProtocol.WEBDAV, host = "1.2.3.4", port = 80, path = "/webdav"),
+                "video.mp4",
+                11_223_344L,
+            )
+        assertEquals(11_223_344L, historyOf(0L, 0L).copy(historyKey = webdav.historyKey()).sizeBytesFromKey())
     }
 
     @Test
-    fun `size from key is zero when the key has no numeric tail`() {
+    fun `size from key is zero when the key has no numeric tail or has invalid format`() {
         assertEquals(0L, historyOf(0L, 0L).copy(historyKey = "http|https://example.com/v.mp4").sizeBytesFromKey())
+        assertEquals(0L, historyOf(0L, 0L).copy(historyKey = "smb|server|share|path|").sizeBytesFromKey())
+        assertEquals(0L, historyOf(0L, 0L).copy(historyKey = "invalid-key").sizeBytesFromKey())
     }
 }
