@@ -103,6 +103,27 @@ class UiSourceGuardsTest {
     }
 
     @Test
+    fun `history resume passes sizeBytes from history key to avoid split records`() {
+        listOf("HomeScreen.kt", "ContinueWatchingScreen.kt").forEach { fileName ->
+            val file = File("src/main/java/com/tucavr/screens/$fileName")
+            val target = if (file.exists()) file else File("app/src/main/java/com/tucavr/screens/$fileName")
+            assertTrue(target.exists())
+            val content = target.readText()
+            val resumeFn =
+                content.substringAfter("private fun resumeFromHistory(entry: PlaybackHistory) {")
+                    .substringBefore("activity.requestUiPanelHidden()")
+            assertTrue(
+                "$fileName resumeFromHistory must extract sizeBytes via sizeBytesFromKey",
+                resumeFn.contains("entry.sizeBytesFromKey()"),
+            )
+            assertTrue(
+                "$fileName resumeFromHistory must pass sizeBytes to playSmb",
+                resumeFn.contains("activity.playSmb(") && resumeFn.contains("sizeBytes = sizeBytes"),
+            )
+        }
+    }
+
+    @Test
     fun `user-facing text comes from string resources`() = assertMatchesBaseline(RULE_TEXT)
 
     @Test

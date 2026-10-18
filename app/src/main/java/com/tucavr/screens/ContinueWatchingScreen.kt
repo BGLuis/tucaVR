@@ -16,6 +16,7 @@ import com.tucavr.designsystem.VoidTheme
 import com.tucavr.history.HistorySourceType
 import com.tucavr.history.PlaybackHistory
 import com.tucavr.history.isResumable
+import com.tucavr.history.sizeBytesFromKey
 import com.tucavr.navigation.Destination
 import com.tucavr.network.FtpCredentialStore
 import com.tucavr.network.SftpCredentialStore
@@ -149,9 +150,10 @@ class ContinueWatchingScreen(
      * Retoma a reprodução diretamente na posição salva.
      */
     private fun resumeFromHistory(entry: PlaybackHistory) {
+        val sizeBytes = entry.sizeBytesFromKey()
         when (entry.sourceType) {
             HistorySourceType.LOCAL -> {
-                activity.playFile(entry.mediaPath, resumeAtMs = entry.positionMs)
+                activity.playFile(entry.mediaPath, sizeBytes = sizeBytes, resumeAtMs = entry.positionMs)
             }
             HistorySourceType.HTTP -> {
                 activity.playUrl(entry.mediaPath, resumeAtMs = entry.positionMs)
@@ -161,21 +163,21 @@ class ContinueWatchingScreen(
                     resolveServer(entry.serverInfo) { id ->
                         smbCredentials.list().find { it.id == id }
                     } ?: return
-                activity.playSmb(server, entry.mediaPath, resumeAtMs = entry.positionMs)
+                activity.playSmb(server, entry.mediaPath, sizeBytes = sizeBytes, resumeAtMs = entry.positionMs)
             }
             HistorySourceType.FTP -> {
                 val server =
                     resolveServer(entry.serverInfo) { id ->
                         ftpCredentials.list().find { it.id == id }
                     } ?: return
-                activity.playFtp(server, entry.mediaPath, resumeAtMs = entry.positionMs)
+                activity.playFtp(server, entry.mediaPath, sizeBytes = sizeBytes, resumeAtMs = entry.positionMs)
             }
             HistorySourceType.SFTP -> {
                 val server =
                     resolveServer(entry.serverInfo) { id ->
                         sftpCredentials.list().find { it.id == id }
                     } ?: return
-                activity.playSftp(server, entry.mediaPath, resumeAtMs = entry.positionMs)
+                activity.playSftp(server, entry.mediaPath, sizeBytes = sizeBytes, resumeAtMs = entry.positionMs)
             }
             HistorySourceType.NFS -> {
                 val server =
@@ -188,7 +190,7 @@ class ContinueWatchingScreen(
                             }
                         }
                     } ?: return
-                activity.playNfs(server, entry.mediaPath, resumeAtMs = entry.positionMs)
+                activity.playNfs(server, entry.mediaPath, sizeBytes = sizeBytes, resumeAtMs = entry.positionMs)
             }
             HistorySourceType.DLNA -> {
                 val server =
@@ -207,7 +209,7 @@ class ContinueWatchingScreen(
                         port = 0,
                         path = "",
                     )
-                activity.playDlna(server, entry.title, entry.mediaPath, resumeAtMs = entry.positionMs)
+                activity.playDlna(server, entry.title, entry.mediaPath, sizeBytes = sizeBytes, resumeAtMs = entry.positionMs)
             }
             HistorySourceType.WEBDAV -> {
                 val server =
@@ -220,7 +222,7 @@ class ContinueWatchingScreen(
                             }
                         }
                     } ?: return
-                activity.playWebdav(server, entry.mediaPath, resumeAtMs = entry.positionMs)
+                activity.playWebdav(server, entry.mediaPath, sizeBytes = sizeBytes, resumeAtMs = entry.positionMs)
             }
         }
         activity.requestUiPanelHidden()

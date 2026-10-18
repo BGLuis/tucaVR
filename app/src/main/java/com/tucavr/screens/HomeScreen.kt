@@ -28,6 +28,7 @@ import com.tucavr.history.HistorySourceResolver
 import com.tucavr.history.HistorySourceType
 import com.tucavr.history.PlaybackHistory
 import com.tucavr.history.isResumable
+import com.tucavr.history.sizeBytesFromKey
 import com.tucavr.history.watchedPercent
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
@@ -646,9 +647,10 @@ class HomeScreen(
     }
 
     private fun resumeFromHistory(entry: PlaybackHistory) {
+        val sizeBytes = entry.sizeBytesFromKey()
         when (entry.sourceType) {
             HistorySourceType.LOCAL -> {
-                activity.playFile(entry.mediaPath, resumeAtMs = entry.positionMs)
+                activity.playFile(entry.mediaPath, sizeBytes = sizeBytes, resumeAtMs = entry.positionMs)
             }
             HistorySourceType.HTTP -> {
                 activity.playUrl(entry.mediaPath, resumeAtMs = entry.positionMs)
@@ -658,27 +660,27 @@ class HomeScreen(
                     resolveServer(entry.serverInfo) { id ->
                         com.tucavr.network.SmbCredentialStore(activity).list().find { it.id == id }
                     } ?: return
-                activity.playSmb(server, entry.mediaPath, resumeAtMs = entry.positionMs)
+                activity.playSmb(server, entry.mediaPath, sizeBytes = sizeBytes, resumeAtMs = entry.positionMs)
             }
             HistorySourceType.FTP -> {
                 val server =
                     resolveServer(entry.serverInfo) { id ->
                         com.tucavr.network.FtpCredentialStore(activity).list().find { it.id == id }
                     } ?: return
-                activity.playFtp(server, entry.mediaPath, resumeAtMs = entry.positionMs)
+                activity.playFtp(server, entry.mediaPath, sizeBytes = sizeBytes, resumeAtMs = entry.positionMs)
             }
             HistorySourceType.SFTP -> {
                 val server =
                     resolveServer(entry.serverInfo) { id ->
                         com.tucavr.network.SftpCredentialStore(activity).list().find { it.id == id }
                     } ?: return
-                activity.playSftp(server, entry.mediaPath, resumeAtMs = entry.positionMs)
+                activity.playSftp(server, entry.mediaPath, sizeBytes = sizeBytes, resumeAtMs = entry.positionMs)
             }
             HistorySourceType.NFS -> {
                 scope.launch {
                     val server = resolveServerAsync(entry.serverInfo) { id -> savedServerDao.getById(id) } ?: return@launch
                     withContext(Dispatchers.Main) {
-                        activity.playNfs(server, entry.mediaPath, resumeAtMs = entry.positionMs)
+                        activity.playNfs(server, entry.mediaPath, sizeBytes = sizeBytes, resumeAtMs = entry.positionMs)
                         activity.requestUiPanelHidden()
                     }
                 }
@@ -689,7 +691,7 @@ class HomeScreen(
                         resolveServerAsync(entry.serverInfo) { id -> savedServerDao.getById(id) }
                             ?: SavedServer(name = entry.title, protocol = ServerProtocol.DLNA, host = "", port = 0, path = "")
                     withContext(Dispatchers.Main) {
-                        activity.playDlna(server, entry.title, entry.mediaPath, resumeAtMs = entry.positionMs)
+                        activity.playDlna(server, entry.title, entry.mediaPath, sizeBytes = sizeBytes, resumeAtMs = entry.positionMs)
                         activity.requestUiPanelHidden()
                     }
                 }
@@ -698,7 +700,7 @@ class HomeScreen(
                 scope.launch {
                     val server = resolveServerAsync(entry.serverInfo) { id -> savedServerDao.getById(id) } ?: return@launch
                     withContext(Dispatchers.Main) {
-                        activity.playWebdav(server, entry.mediaPath, resumeAtMs = entry.positionMs)
+                        activity.playWebdav(server, entry.mediaPath, sizeBytes = sizeBytes, resumeAtMs = entry.positionMs)
                         activity.requestUiPanelHidden()
                     }
                 }
