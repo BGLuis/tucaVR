@@ -70,6 +70,7 @@ fn list_directory_decodes_names_types_and_sizes() {
         "tamanho de {} (fixture de 256 KiB)",
         t.file_path
     );
+    assert!(file.mtime > 0, "mtime de {} nao decodificado", t.file_path);
 
     for dir in ["dash", "webdav"] {
         let e = entries

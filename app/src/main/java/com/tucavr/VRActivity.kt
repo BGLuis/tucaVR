@@ -2236,6 +2236,17 @@ class VRActivity : NativeActivity() {
         path: String,
     ): String
 
+    // Drops the pooled SMB/SFTP sessions of a removed server (does not block).
+    external fun nativeSmbClosePooledSessions(
+        host: String,
+        port: Int,
+    )
+
+    external fun nativeSftpClosePooledSessions(
+        host: String,
+        port: Int,
+    )
+
     // T5.1/T5.4: playback NFS
     external fun nativePlayNfs(
         host: String,

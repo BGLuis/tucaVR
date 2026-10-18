@@ -124,6 +124,9 @@ extern "C" {
     extern char* sftp_list_directory(const char* host, int32_t port, const char* username,
                                       const char* password, const char* private_key, const char* path);
 
+    extern void smb_close_pooled_sessions(const char* host, int32_t port);
+    extern void sftp_close_pooled_sessions(const char* host, int32_t port);
+
     // T5.1/T5.2/T5.4: NFS
     extern void start_nfs_playback(const char* host, int32_t port, const char* export_path,
                                     const char* file_path, int32_t version, float startTimeSec);
@@ -879,6 +882,23 @@ Java_com_tucavr_VRActivity_nativeSftpListDirectory(JNIEnv* env, jobject thiz, js
     env->ReleaseStringUTFChars(path, pathStr);
 
     return RustStringToJStringAndFree(env, result);
+}
+
+// Drops the pooled SMB/SFTP sessions of a removed server. Does not block.
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSmbClosePooledSessions(JNIEnv* env, jobject,
+                                                          jstring host, jint port) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    smb_close_pooled_sessions(h, (int32_t)port);
+    env->ReleaseStringUTFChars(host, h);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSftpClosePooledSessions(JNIEnv* env, jobject,
+                                                           jstring host, jint port) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    sftp_close_pooled_sessions(h, (int32_t)port);
+    env->ReleaseStringUTFChars(host, h);
 }
 
 // T5.1/T5.4: Playback NFS

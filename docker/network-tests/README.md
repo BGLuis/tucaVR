@@ -31,6 +31,15 @@ The `smb-test`, `sftp-test` and `webdav-test` images are pulled as `:latest`
 update. The SFTP key under `ssh-keys/` is a disposable test key committed on
 purpose (see below); secret scanners may flag it.
 
+## Folder-Scan Fixtures and Pool Tests
+
+The script also generates `fixtures/scan/` (`empty-a/nested`, `empty-b`, `empty-c` with only
+`.txt` files, and `with-media` with a `clip.mp4` placeholder). The fixtures root cannot be used for
+"no media" scans because it also holds `dash/`. The SMB and SFTP session-pool tests count
+authentications and simulate dropped links through a small TCP proxy in
+`rust/protocols/tests/common/mod.rs` (one accepted connection = one authentication) instead of
+parsing container logs.
+
 ## HTTPS Certificate
 
 `https-test` generates a self-signed certificate (`CN=localhost`) the first time it
