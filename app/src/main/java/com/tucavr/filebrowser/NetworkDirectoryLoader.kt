@@ -75,6 +75,8 @@ class NetworkDirectoryLoader(
 ) {
     private var currentRequestId: Long = 0L
     private var activeJob: Job? = null
+
+    @Volatile
     private var userInteracted = false
 
     data class FolderProberConfig(
