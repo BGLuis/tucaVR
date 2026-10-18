@@ -51,7 +51,7 @@ class SidebarView(
                 destination = Destination.LocalFiles(Environment.getExternalStorageDirectory().absolutePath),
                 iconRes = R.drawable.ic_folder,
                 titleRes = R.string.sidebar_item_files,
-                isMatchesCurrent = { it is Destination.LocalFiles || it is Destination.FileDetail },
+                isMatchesCurrent = { it is Destination.LocalFiles },
             ),
             SidebarItem(
                 destination = Destination.NetworkHome,

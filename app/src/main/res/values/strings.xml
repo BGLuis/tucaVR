@@ -216,48 +216,21 @@
     <string name="player_now_playing_title">Now Playing</string>
 
 
-    <!-- File detail (FileDetailScreen) — an intermediate screen between the
-         listing (local or network) and the Player: a single click on a video
-         lands here (thumbnail + metadata + tracks + Play button);
-         a double click in the local listing still plays directly. -->
+    <!-- File detail rows shown in ContextRailView -->
     <string name="file_detail_row_format">%1$s: %2$s</string>
     <string name="file_detail_label_size">Size</string>
-    <string name="file_detail_label_modified">Modified</string>
     <string name="file_detail_label_duration">Duration</string>
     <string name="file_detail_label_resolution">Resolution</string>
-    <string name="file_detail_label_path">Path</string>
     <string name="file_detail_btn_play">Play</string>
-    <string name="file_detail_section_file">File</string>
-    <string name="file_detail_section_media">Media</string>
-    <string name="file_detail_section_tags">Tags</string>
     <string name="file_detail_section_tracks">Tracks</string>
     <string name="file_detail_label_container">Container</string>
     <string name="file_detail_label_bitrate">Bitrate</string>
     <string name="file_detail_label_video_codec">Video codec</string>
-    <string name="file_detail_label_decoder">Decoder</string>
-    <string name="file_detail_label_audio_codec">Audio codec</string>
     <string name="file_detail_label_format3d">3D Format</string>
-    <string name="file_detail_format3d_low_confidence_suffix"> (estimated)</string>
     <string name="file_detail_value_bitrate_format">%1$.1f Mbps</string>
-    <string name="file_detail_track_video_format">%1$d. Video — %2$s</string>
     <string name="file_detail_track_audio_format">%1$d. Audio — %2$s</string>
     <string name="file_detail_track_subtitle_format">%1$d. Subtitle — %2$s</string>
     <string name="file_detail_track_lang_unknown">Unknown language</string>
-    <string name="file_detail_tracks_empty">No tracks found</string>
-    <string name="file_detail_tracks_subtitle_note">Subtitle rendering is not available yet</string>
-    <string name="file_detail_metadata_loading">Loading media info…</string>
-    <string name="file_detail_metadata_error">Media info unavailable</string>
-    <string name="file_detail_subtitle_local">Local</string>
-    <string name="file_detail_subtitle_http">HTTP</string>
-    <string name="file_detail_subtitle_smb_format">SMB · %1$s</string>
-    <string name="file_detail_subtitle_ftp_format">FTP · %1$s</string>
-    <string name="file_detail_subtitle_sftp_format">SFTP · %1$s</string>
-    <string name="file_detail_tag_title">Title</string>
-    <string name="file_detail_tag_artist">Artist</string>
-    <string name="file_detail_tag_album">Album</string>
-    <string name="file_detail_tag_date">Date</string>
-    <string name="file_detail_tag_genre">Genre</string>
-    <string name="file_detail_tag_comment">Comment</string>
 
     <!-- Network: landing with URL / SMB / NFS / FTP / SFTP / Discovery tabs (VRPresentation.renderNetworkHome) -->
     <string name="network_title">Network</string>
@@ -703,7 +676,6 @@
 
     <!-- Offline Downloads (Phase 0.4 Section 4) -->
     <string name="home_btn_downloads">Downloads</string>
-    <string name="file_detail_btn_download">Download</string>
     <string name="download_error_insufficient_space">Insufficient storage space</string>
     <string name="download_started_toast">Downloading %1$s…</string>
     <string name="downloads_title">Downloads</string>

@@ -190,4 +190,16 @@ class PlaybackHistoryMappingTest {
     fun `not resumable when duration is unknown (zero)`() {
         assertFalse(historyOf(positionMs = 10_000L, durationMs = 0L).isResumable())
     }
+
+    @Test
+    fun `size recovered from the key matches the size the source was played with`() {
+        val source = PlaybackSource.Smb(smbServer(), "dir/a|b.mkv", 987_654_321L)
+        val entry = historyOf(0L, 0L).copy(historyKey = source.historyKey())
+        assertEquals(987_654_321L, entry.sizeBytesFromKey())
+    }
+
+    @Test
+    fun `size from key is zero when the key has no numeric tail`() {
+        assertEquals(0L, historyOf(0L, 0L).copy(historyKey = "http|https://example.com/v.mp4").sizeBytesFromKey())
+    }
 }

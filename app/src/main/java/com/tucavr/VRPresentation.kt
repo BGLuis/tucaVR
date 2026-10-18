@@ -823,29 +823,6 @@ class VRPresentation(
         when (val destination = appNav.current) {
             is Destination.Home -> homeScreen.render()
             is Destination.LocalFiles -> localFilesScreen.renderLocalFiles()
-            is Destination.FileDetail -> {
-                val entry =
-                    MediaEntry(
-                        name = destination.displayName,
-                        path =
-                            when (val src = destination.source) {
-                                is PlaybackSource.LocalFile -> src.path
-                                is PlaybackSource.Http -> src.url
-                                is PlaybackSource.Smb -> src.path
-                                is PlaybackSource.Ftp -> src.path
-                                is PlaybackSource.Sftp -> src.path
-                                is PlaybackSource.Nfs -> src.path
-                                is PlaybackSource.Dlna -> src.url
-                                is PlaybackSource.Webdav -> src.path
-                            },
-                        sizeBytes = destination.sizeBytes,
-                        lastModified = destination.lastModified,
-                        type = MediaType.VIDEO,
-                    )
-                contextRailView.showFileDetail(entry, destination.source) { resumeAtMs ->
-                    playSource(destination.source, resumeAtMs)
-                }
-            }
             is Destination.NetworkHome -> networkHomeScreen.render()
             is Destination.NetworkFiles -> networkSmbScreen.renderFiles(destination.server)
             is Destination.NetworkNfsFiles -> networkNfsScreen.renderFiles(destination.server, destination.path)

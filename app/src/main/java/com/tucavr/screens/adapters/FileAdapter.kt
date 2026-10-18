@@ -364,18 +364,14 @@ class FileAdapter(
                         }
 
                     if (folderMosaic != null && holder.adapterPosition == position) {
-                        if (holder.view is VoidListRow) {
-                            holder.view.thumbnail.scaleType = ImageView.ScaleType.CENTER_CROP
-                            holder.view.thumbnail.setPadding(0, 0, 0, 0)
-                            holder.view.thumbnail.colorFilter = null
-                            holder.view.thumbnail.setImageBitmap(folderMosaic)
-                            holder.view.thumbnail.visibility = View.VISIBLE
-                        } else if (holder.view is VoidGridCard) {
-                            holder.view.thumbnail.scaleType = ImageView.ScaleType.CENTER_CROP
-                            holder.view.thumbnail.setPadding(0, 0, 0, 0)
-                            holder.view.thumbnail.colorFilter = null
-                            holder.view.thumbnail.setImageBitmap(folderMosaic)
+                        val thumbView = (holder.view as? VoidListRow)?.thumbnail ?: (holder.view as? VoidGridCard)?.thumbnail
+                        thumbView?.apply {
+                            scaleType = ImageView.ScaleType.CENTER_CROP
+                            setPadding(0, 0, 0, 0)
+                            colorFilter = null
+                            setImageBitmap(folderMosaic)
                         }
+                        if (holder.view is VoidListRow) holder.view.thumbnail.visibility = View.VISIBLE
                     }
                 }
         } else {

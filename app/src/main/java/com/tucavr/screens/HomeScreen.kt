@@ -22,7 +22,9 @@ import com.tucavr.designsystem.VoidTheme
 import com.tucavr.filebrowser.DirectoryLister
 import com.tucavr.filebrowser.MediaEntry
 import com.tucavr.filebrowser.MediaType
+import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ThumbnailGenerator
+import com.tucavr.history.HistorySourceResolver
 import com.tucavr.history.HistorySourceType
 import com.tucavr.history.PlaybackHistory
 import com.tucavr.history.isResumable
@@ -620,7 +622,17 @@ class HomeScreen(
                                     null
                                 }
                             }
-                            else -> null
+                            HistorySourceType.SMB,
+                            HistorySourceType.FTP,
+                            HistorySourceType.SFTP,
+                            HistorySourceType.NFS,
+                            HistorySourceType.WEBDAV,
+                            -> {
+                                HistorySourceResolver.resolveNetworkSource(context, entry)?.let {
+                                    NetworkThumbnailGenerator.getThumbnail(context, activity, it)
+                                }
+                            }
+                            HistorySourceType.HTTP, HistorySourceType.DLNA -> null
                         }
                     } catch (e: Exception) {
                         null

@@ -16,11 +16,11 @@ import com.tucavr.filebrowser.MediaEntry
 import com.tucavr.filebrowser.MediaType
 import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ThumbnailGenerator
+import com.tucavr.history.HistorySourceResolver
 import com.tucavr.history.HistorySourceType
 import com.tucavr.history.PlaybackHistory
 import com.tucavr.history.formatDurationMs
 import com.tucavr.history.watchedPercent
-import com.tucavr.navigation.PlaybackSource
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -135,10 +135,11 @@ class HistoryAdapter(
         holder.listRow.thumbnail.setImageBitmap(null)
         holder.listRow.thumbnail.visibility = View.GONE
 
-        holder.listRow.bind(titleWithIcon, meta = meta, showThumbnailSlot = true, iconResId = iconRes)
+        val loadsThumbnail = scope != null && activity != null && entry.sourceType.hasThumbnail()
+        holder.listRow.bind(titleWithIcon, meta = meta, showThumbnailSlot = loadsThumbnail, iconResId = iconRes)
         holder.listRow.setOnClickListener { onItemClick(entry) }
 
-        if (scope != null && activity != null) {
+        if (scope != null && activity != null && loadsThumbnail) {
             holder.thumbnailJob =
                 scope.launch {
                     val bitmap: Bitmap? =
@@ -163,7 +164,7 @@ class HistoryAdapter(
                                     HistorySourceType.NFS,
                                     HistorySourceType.WEBDAV,
                                     -> {
-                                        val source = resolvePlaybackSource(context, entry)
+                                        val source = HistorySourceResolver.resolveNetworkSource(context, entry)
                                         if (source != null) {
                                             NetworkThumbnailGenerator.getThumbnail(context, activity, source)
                                         } else {
@@ -196,89 +197,5 @@ class HistoryAdapter(
 
     override fun getItemCount() = items.size
 
-    private suspend fun resolvePlaybackSource(
-        context: android.content.Context,
-        entry: PlaybackHistory,
-    ): PlaybackSource? {
-        val jsonString = entry.serverInfo ?: return null
-        return try {
-            val json = org.json.JSONObject(jsonString)
-            val serverId = json.optString("serverId")
-            when (entry.sourceType) {
-                HistorySourceType.LOCAL -> PlaybackSource.LocalFile(entry.mediaPath)
-                HistorySourceType.SMB -> {
-                    val server =
-                        com.tucavr.network.SmbCredentialStore(context).list().find { it.id == serverId }
-                            ?: com.tucavr.network.SmbServer(
-                                id = serverId,
-                                name = json.optString("name", entry.title),
-                                host = json.optString("host"),
-                                port = json.optInt("port", 445),
-                                share = json.optString("share"),
-                                username = "",
-                                password = "",
-                                domain = json.optString("domain"),
-                            )
-                    PlaybackSource.Smb(server, entry.mediaPath)
-                }
-                HistorySourceType.FTP -> {
-                    val server =
-                        com.tucavr.network.FtpCredentialStore(context).list().find { it.id == serverId }
-                            ?: com.tucavr.network.FtpServer(
-                                id = serverId,
-                                name = json.optString("name", entry.title),
-                                host = json.optString("host"),
-                                port = json.optInt("port", 21),
-                                username = "",
-                                password = "",
-                            )
-                    PlaybackSource.Ftp(server, entry.mediaPath)
-                }
-                HistorySourceType.SFTP -> {
-                    val server =
-                        com.tucavr.network.SftpCredentialStore(context).list().find { it.id == serverId }
-                            ?: com.tucavr.network.SftpServer(
-                                id = serverId,
-                                name = json.optString("name", entry.title),
-                                host = json.optString("host"),
-                                port = json.optInt("port", 22),
-                                username = "",
-                                password = "",
-                                privateKey = null,
-                            )
-                    PlaybackSource.Sftp(server, entry.mediaPath)
-                }
-                HistorySourceType.NFS -> {
-                    val server =
-                        com.tucavr.history.AppDatabase.getInstance(context).savedServerDao().getById(serverId)
-                            ?: com.tucavr.network.SavedServer(
-                                id = serverId,
-                                name = json.optString("name", entry.title),
-                                protocol = com.tucavr.network.ServerProtocol.NFS,
-                                host = json.optString("host"),
-                                port = json.optInt("port", 2049),
-                                path = json.optString("exportPath"),
-                            )
-                    PlaybackSource.Nfs(server, entry.mediaPath)
-                }
-                HistorySourceType.WEBDAV -> {
-                    val server =
-                        com.tucavr.history.AppDatabase.getInstance(context).savedServerDao().getById(serverId)
-                            ?: com.tucavr.network.SavedServer(
-                                id = serverId,
-                                name = json.optString("name", entry.title),
-                                protocol = com.tucavr.network.ServerProtocol.WEBDAV,
-                                host = json.optString("host"),
-                                port = json.optInt("port", 80),
-                                path = json.optString("basePath"),
-                                extraJson = if (json.has("extraJson")) json.optString("extraJson") else null,
-                            )
-                    PlaybackSource.Webdav(server, entry.mediaPath)
-                }
-                else -> null
-            }
-        } catch (e: Exception) {
-            null
-        }
-    }
+    private fun HistorySourceType.hasThumbnail() = this != HistorySourceType.HTTP && this != HistorySourceType.DLNA
 }
