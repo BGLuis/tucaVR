@@ -179,34 +179,26 @@ extern "C" {
     extern char* hls_probe_variants(const char* url);
     // DASH
     extern char* dash_probe_representations(const char* url);
-    // Thumbnails de rede — mesmo contrato de vr_player_app.cpp.
-    extern uint8_t* smb_generate_thumbnail(const char* host, int32_t port, const char* username,
-                                            const char* password, const char* domain, const char* share,
-                                            const char* path, uint32_t max_width, uint32_t max_height,
-                                            uint64_t cancel_token,
-                                            uint32_t* out_width, uint32_t* out_height, size_t* out_len);
-    extern uint8_t* ftp_generate_thumbnail(const char* host, int32_t port, const char* username,
-                                            const char* password, const char* path,
-                                            uint32_t max_width, uint32_t max_height,
-                                            uint64_t cancel_token,
-                                            uint32_t* out_width, uint32_t* out_height, size_t* out_len);
-    extern uint8_t* sftp_generate_thumbnail(const char* host, int32_t port, const char* username,
-                                             const char* password, const char* private_key, const char* path,
-                                             uint32_t max_width, uint32_t max_height,
-                                             uint64_t cancel_token,
+    // Network thumbnails: one remote open per video (session handle, 0 on failure), then metadata
+    // and decode from the same session -- see rust/bridge/src/lib.rs.
+    extern uint64_t smb_thumbnail_open(const char* host, int32_t port, const char* username,
+                                       const char* password, const char* domain, const char* share,
+                                       const char* path, uint64_t cancel_token);
+    extern uint64_t ftp_thumbnail_open(const char* host, int32_t port, const char* username,
+                                       const char* password, const char* path, uint64_t cancel_token);
+    extern uint64_t sftp_thumbnail_open(const char* host, int32_t port, const char* username,
+                                        const char* password, const char* private_key, const char* path,
+                                        uint64_t cancel_token);
+    extern uint64_t nfs_thumbnail_open(const char* host, int32_t port, const char* export_path,
+                                       const char* file_path, int32_t version, uint64_t cancel_token);
+    extern uint64_t webdav_thumbnail_open(const char* host, int32_t port, const char* base_path,
+                                          const char* file_path, const char* username,
+                                          const char* password, int32_t use_https,
+                                          int32_t accept_invalid_certs, uint64_t cancel_token);
+    extern char* thumbnail_session_metadata(uint64_t handle);
+    extern uint8_t* thumbnail_session_decode(uint64_t handle, uint32_t max_width, uint32_t max_height,
                                              uint32_t* out_width, uint32_t* out_height, size_t* out_len);
-    extern uint8_t* nfs_generate_thumbnail(const char* host, int32_t port, const char* export_path,
-                                            const char* file_path, int32_t version,
-                                            uint32_t max_width, uint32_t max_height,
-                                            uint64_t cancel_token,
-                                            uint32_t* out_width, uint32_t* out_height, size_t* out_len);
-    extern uint8_t* webdav_generate_thumbnail(const char* host, int32_t port, const char* base_path,
-                                              const char* file_path, const char* username,
-                                              const char* password, int32_t use_https,
-                                              int32_t accept_invalid_certs,
-                                              uint32_t max_width, uint32_t max_height,
-                                              uint64_t cancel_token,
-                                              uint32_t* out_width, uint32_t* out_height, size_t* out_len);
+    extern void thumbnail_session_close(uint64_t handle);
     extern void cancel_thumbnail_generation(uint64_t cancel_token);
     extern void free_rust_thumbnail_buffer(uint8_t* ptr, size_t len);
     // Preview de arrasto no seekbar (T-seek-ux) — mesmo contrato de
@@ -1150,126 +1142,113 @@ Java_com_tucavr_VRActivity_nativeDiscoveryScan(JNIEnv* env, jobject,
     return RustStringToJStringAndFree(env, result);
 }
 
-extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_tucavr_VRActivity_nativeSmbGenerateThumbnail(JNIEnv* env, jobject,
-                                                         jstring host, jint port,
-                                                         jstring username, jstring password,
-                                                         jstring domain, jstring share, jstring path,
-                                                         jint maxWidth, jint maxHeight,
-                                                         jlong cancelToken) {
+// Network thumbnails: open once, then read metadata and decode from the same session.
+// BLOCKING (network + decode) -- Kotlin always calls from Dispatchers.IO.
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_tucavr_VRActivity_nativeSmbThumbnailOpen(JNIEnv* env, jobject,
+        jstring host, jint port, jstring username, jstring password, jstring domain,
+        jstring share, jstring path, jlong cancelToken) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* u = env->GetStringUTFChars(username, nullptr);
     const char* pw = env->GetStringUTFChars(password, nullptr);
     const char* d = env->GetStringUTFChars(domain, nullptr);
     const char* sh = env->GetStringUTFChars(share, nullptr);
     const char* p = env->GetStringUTFChars(path, nullptr);
-    uint32_t outWidth = 0, outHeight = 0;
-    size_t outLen = 0;
-    uint8_t* data = smb_generate_thumbnail(h, (int32_t)port, u, pw, d, sh, p,
-                                            (uint32_t)maxWidth, (uint32_t)maxHeight, (uint64_t)cancelToken,
-                                            &outWidth, &outHeight, &outLen);
+    uint64_t handle = smb_thumbnail_open(h, (int32_t)port, u, pw, d, sh, p, (uint64_t)cancelToken);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
     env->ReleaseStringUTFChars(domain, d);
     env->ReleaseStringUTFChars(share, sh);
     env->ReleaseStringUTFChars(path, p);
-    return RustThumbnailToJByteArrayAndFree(env, data, outLen);
+    return (jlong)handle;
 }
 
-extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_tucavr_VRActivity_nativeFtpGenerateThumbnail(JNIEnv* env, jobject,
-                                                         jstring host, jint port,
-                                                         jstring username, jstring password, jstring path,
-                                                         jint maxWidth, jint maxHeight,
-                                                         jlong cancelToken) {
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_tucavr_VRActivity_nativeFtpThumbnailOpen(JNIEnv* env, jobject,
+        jstring host, jint port, jstring username, jstring password, jstring path,
+        jlong cancelToken) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* u = env->GetStringUTFChars(username, nullptr);
     const char* pw = env->GetStringUTFChars(password, nullptr);
     const char* p = env->GetStringUTFChars(path, nullptr);
-    uint32_t outWidth = 0, outHeight = 0;
-    size_t outLen = 0;
-    uint8_t* data = ftp_generate_thumbnail(h, (int32_t)port, u, pw, p,
-                                            (uint32_t)maxWidth, (uint32_t)maxHeight, (uint64_t)cancelToken,
-                                            &outWidth, &outHeight, &outLen);
+    uint64_t handle = ftp_thumbnail_open(h, (int32_t)port, u, pw, p, (uint64_t)cancelToken);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
     env->ReleaseStringUTFChars(path, p);
-    return RustThumbnailToJByteArrayAndFree(env, data, outLen);
+    return (jlong)handle;
 }
 
-extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_tucavr_VRActivity_nativeSftpGenerateThumbnail(JNIEnv* env, jobject,
-                                                          jstring host, jint port,
-                                                          jstring username, jstring password,
-                                                          jstring privateKey, jstring path,
-                                                          jint maxWidth, jint maxHeight,
-                                                          jlong cancelToken) {
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_tucavr_VRActivity_nativeSftpThumbnailOpen(JNIEnv* env, jobject,
+        jstring host, jint port, jstring username, jstring password, jstring privateKey,
+        jstring path, jlong cancelToken) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* u = env->GetStringUTFChars(username, nullptr);
     const char* pw = env->GetStringUTFChars(password, nullptr);
     const char* k = env->GetStringUTFChars(privateKey, nullptr);
     const char* p = env->GetStringUTFChars(path, nullptr);
-    uint32_t outWidth = 0, outHeight = 0;
-    size_t outLen = 0;
-    uint8_t* data = sftp_generate_thumbnail(h, (int32_t)port, u, pw, k, p,
-                                             (uint32_t)maxWidth, (uint32_t)maxHeight, (uint64_t)cancelToken,
-                                             &outWidth, &outHeight, &outLen);
+    uint64_t handle = sftp_thumbnail_open(h, (int32_t)port, u, pw, k, p, (uint64_t)cancelToken);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
     env->ReleaseStringUTFChars(privateKey, k);
     env->ReleaseStringUTFChars(path, p);
-    return RustThumbnailToJByteArrayAndFree(env, data, outLen);
+    return (jlong)handle;
 }
 
-extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_tucavr_VRActivity_nativeNfsGenerateThumbnail(JNIEnv* env, jobject,
-                                                         jstring host, jint port,
-                                                         jstring exportPath, jstring filePath,
-                                                         jint version,
-                                                         jint maxWidth, jint maxHeight,
-                                                         jlong cancelToken) {
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_tucavr_VRActivity_nativeNfsThumbnailOpen(JNIEnv* env, jobject,
+        jstring host, jint port, jstring exportPath, jstring filePath, jint version,
+        jlong cancelToken) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* ep = env->GetStringUTFChars(exportPath, nullptr);
     const char* fp = env->GetStringUTFChars(filePath, nullptr);
-    uint32_t outWidth = 0, outHeight = 0;
-    size_t outLen = 0;
-    uint8_t* data = nfs_generate_thumbnail(h, (int32_t)port, ep, fp, (int32_t)version,
-                                           (uint32_t)maxWidth, (uint32_t)maxHeight, (uint64_t)cancelToken,
-                                           &outWidth, &outHeight, &outLen);
+    uint64_t handle = nfs_thumbnail_open(h, (int32_t)port, ep, fp, (int32_t)version, (uint64_t)cancelToken);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(exportPath, ep);
     env->ReleaseStringUTFChars(filePath, fp);
-    return RustThumbnailToJByteArrayAndFree(env, data, outLen);
+    return (jlong)handle;
 }
 
-extern "C" JNIEXPORT jbyteArray JNICALL
-Java_com_tucavr_VRActivity_nativeWebdavGenerateThumbnail(JNIEnv* env, jobject,
-                                                            jstring host, jint port,
-                                                            jstring basePath, jstring filePath,
-                                                            jstring username, jstring password,
-                                                            jboolean useHttps, jboolean acceptInvalidCerts,
-                                                            jint maxWidth, jint maxHeight,
-                                                            jlong cancelToken) {
+extern "C" JNIEXPORT jlong JNICALL
+Java_com_tucavr_VRActivity_nativeWebdavThumbnailOpen(JNIEnv* env, jobject,
+        jstring host, jint port, jstring basePath, jstring filePath, jstring username,
+        jstring password, jboolean useHttps, jboolean acceptInvalidCerts, jlong cancelToken) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* bp = env->GetStringUTFChars(basePath, nullptr);
     const char* fp = env->GetStringUTFChars(filePath, nullptr);
     const char* u = env->GetStringUTFChars(username, nullptr);
     const char* pw = env->GetStringUTFChars(password, nullptr);
-    uint32_t outWidth = 0, outHeight = 0;
-    size_t outLen = 0;
-    uint8_t* data = webdav_generate_thumbnail(h, (int32_t)port, bp, fp, u, pw,
-                                              useHttps ? 1 : 0, acceptInvalidCerts ? 1 : 0,
-                                              (uint32_t)maxWidth, (uint32_t)maxHeight, (uint64_t)cancelToken,
-                                              &outWidth, &outHeight, &outLen);
+    uint64_t handle = webdav_thumbnail_open(h, (int32_t)port, bp, fp, u, pw,
+        useHttps ? 1 : 0, acceptInvalidCerts ? 1 : 0, (uint64_t)cancelToken);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(basePath, bp);
     env->ReleaseStringUTFChars(filePath, fp);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
+    return (jlong)handle;
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeThumbnailSessionMetadata(JNIEnv* env, jobject, jlong handle) {
+    return RustStringToJStringAndFree(env, thumbnail_session_metadata((uint64_t)handle));
+}
+
+extern "C" JNIEXPORT jbyteArray JNICALL
+Java_com_tucavr_VRActivity_nativeThumbnailSessionDecode(JNIEnv* env, jobject, jlong handle,
+        jint maxWidth, jint maxHeight) {
+    uint32_t outWidth = 0, outHeight = 0;
+    size_t outLen = 0;
+    uint8_t* data = thumbnail_session_decode((uint64_t)handle, (uint32_t)maxWidth, (uint32_t)maxHeight,
+                                             &outWidth, &outHeight, &outLen);
     return RustThumbnailToJByteArrayAndFree(env, data, outLen);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeThumbnailSessionClose(JNIEnv*, jobject, jlong handle) {
+    thumbnail_session_close((uint64_t)handle);
 }
 
 extern "C" JNIEXPORT void JNICALL

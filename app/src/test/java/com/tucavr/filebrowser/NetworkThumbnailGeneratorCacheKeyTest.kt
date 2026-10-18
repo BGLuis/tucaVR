@@ -11,7 +11,7 @@ import org.junit.Test
 
 // T9: cache-key logic used by NetworkThumbnailGenerator to name cached network
 // thumbnail files on disk -- same rationale as ThumbnailGeneratorCacheKeyTest,
-// see that file. The rest (nativeSmb/Ftp/SftpGenerateThumbnail JNI calls, real
+// see that file. The rest (native*ThumbnailOpen JNI calls, real
 // disk I/O, android.graphics.Bitmap) needs a real device and is left for
 // manual/on-device testing.
 class NetworkThumbnailGeneratorCacheKeyTest {
