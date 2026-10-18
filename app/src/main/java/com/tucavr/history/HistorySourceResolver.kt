@@ -3,8 +3,12 @@ package com.tucavr.history
 import android.content.Context
 import com.tucavr.navigation.PlaybackSource
 import com.tucavr.network.FtpCredentialStore
+import com.tucavr.network.FtpServer
+import com.tucavr.network.SavedServer
 import com.tucavr.network.SftpCredentialStore
+import com.tucavr.network.SftpServer
 import com.tucavr.network.SmbCredentialStore
+import com.tucavr.network.SmbServer
 import org.json.JSONObject
 
 object HistorySourceResolver {
@@ -12,32 +16,47 @@ object HistorySourceResolver {
     suspend fun resolveNetworkSource(
         context: Context,
         entry: PlaybackHistory,
+    ): PlaybackSource? =
+        resolveNetworkSourceInternal(
+            entry = entry,
+            findSmb = { id -> SmbCredentialStore(context).list().find { it.id == id } },
+            findFtp = { id -> FtpCredentialStore(context).list().find { it.id == id } },
+            findSftp = { id -> SftpCredentialStore(context).list().find { it.id == id } },
+            findNfs = { id -> AppDatabase.getInstance(context).savedServerDao().getById(id) },
+            findWebdav = { id -> AppDatabase.getInstance(context).savedServerDao().getById(id) },
+        )
+
+    internal suspend fun resolveNetworkSourceInternal(
+        entry: PlaybackHistory,
+        findSmb: suspend (String) -> SmbServer?,
+        findFtp: suspend (String) -> FtpServer?,
+        findSftp: suspend (String) -> SftpServer?,
+        findNfs: suspend (String) -> SavedServer?,
+        findWebdav: suspend (String) -> SavedServer?,
     ): PlaybackSource? {
-        val serverId =
-            try {
-                JSONObject(entry.serverInfo ?: return null).optString("serverId")
-            } catch (e: Exception) {
-                return null
-            }
-        if (serverId.isEmpty()) return null
+        val serverId = extractServerId(entry.serverInfo) ?: return null
         val sizeBytes = entry.sizeBytesFromKey()
         return when (entry.sourceType) {
             HistorySourceType.SMB ->
-                SmbCredentialStore(context).list().find { it.id == serverId }
-                    ?.let { PlaybackSource.Smb(it, entry.mediaPath, sizeBytes) }
+                findSmb(serverId)?.let { PlaybackSource.Smb(it, entry.mediaPath, sizeBytes) }
             HistorySourceType.FTP ->
-                FtpCredentialStore(context).list().find { it.id == serverId }
-                    ?.let { PlaybackSource.Ftp(it, entry.mediaPath, sizeBytes) }
+                findFtp(serverId)?.let { PlaybackSource.Ftp(it, entry.mediaPath, sizeBytes) }
             HistorySourceType.SFTP ->
-                SftpCredentialStore(context).list().find { it.id == serverId }
-                    ?.let { PlaybackSource.Sftp(it, entry.mediaPath, sizeBytes) }
+                findSftp(serverId)?.let { PlaybackSource.Sftp(it, entry.mediaPath, sizeBytes) }
             HistorySourceType.NFS ->
-                AppDatabase.getInstance(context).savedServerDao().getById(serverId)
-                    ?.let { PlaybackSource.Nfs(it, entry.mediaPath, sizeBytes) }
+                findNfs(serverId)?.let { PlaybackSource.Nfs(it, entry.mediaPath, sizeBytes) }
             HistorySourceType.WEBDAV ->
-                AppDatabase.getInstance(context).savedServerDao().getById(serverId)
-                    ?.let { PlaybackSource.Webdav(it, entry.mediaPath, sizeBytes) }
+                findWebdav(serverId)?.let { PlaybackSource.Webdav(it, entry.mediaPath, sizeBytes) }
             HistorySourceType.LOCAL, HistorySourceType.HTTP, HistorySourceType.DLNA -> null
+        }
+    }
+
+    internal fun extractServerId(serverInfo: String?): String? {
+        if (serverInfo.isNullOrBlank()) return null
+        return try {
+            JSONObject(serverInfo).optString("serverId").takeIf { it.isNotEmpty() }
+        } catch (e: Exception) {
+            null
         }
     }
 }

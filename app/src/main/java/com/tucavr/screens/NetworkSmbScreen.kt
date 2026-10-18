@@ -320,7 +320,7 @@ class NetworkSmbScreen(
         val folderKey = "smb://${server.name}/${server.share}/$browsePath"
         currentConfig = folderConfigStore.getConfigFor(folderKey)
 
-        val subtitleText = if (browsePath.isEmpty()) server.share else "${server.share}/$browsePath"
+        val subtitleText = formatSubtitle(server.share, browsePath)
 
         if (canReuseBrowser(sameServer, rootLayout?.parent != null, previousConfig, currentConfig)) {
             rootLayout?.findViewById<android.widget.TextView>(VoidPanelChrome.ID_SUBTITLE)?.text = subtitleText
@@ -628,5 +628,17 @@ class NetworkSmbScreen(
         val isEmpty = sorted.isEmpty() && !showUp
         recyclerView?.visibility = if (isEmpty) View.GONE else View.VISIBLE
         emptyContainer?.visibility = if (isEmpty) View.VISIBLE else View.GONE
+    }
+
+    companion object {
+        fun formatSubtitle(
+            share: String,
+            browsePath: String,
+        ): String {
+            val normalized = normalizePath(browsePath)
+            return if (normalized.isEmpty()) share else "$share/$normalized"
+        }
+
+        fun normalizePath(path: String): String = path.trim().trim('/')
     }
 }

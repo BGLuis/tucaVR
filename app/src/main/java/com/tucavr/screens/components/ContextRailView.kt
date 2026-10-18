@@ -807,22 +807,22 @@ class ContextRailView(
                 }
 
                 audioTracks.forEach { track ->
-                    val lang = track.language.ifBlank { context.getString(R.string.file_detail_track_lang_unknown) }
-                    val parts = mutableListOf(track.codec.uppercase())
-                    if (track.channels > 0) parts.add("${track.channels}ch")
-                    if (track.sampleRate > 0) parts.add("${track.sampleRate / 1000} kHz")
                     addTrackRow(
                         context.getString(
                             R.string.file_detail_track_audio_format,
                             track.ordinal + 1,
-                            "$lang (${parts.joinToString(" · ")})",
+                            formatAudioTrack(context, track),
                         ),
                     )
                 }
                 subtitleTracks.forEach { track ->
-                    val lang = track.language.ifBlank { context.getString(R.string.file_detail_track_lang_unknown) }
-                    val details = if (track.codec.isBlank()) lang else "$lang (${track.codec.uppercase()})"
-                    addTrackRow(context.getString(R.string.file_detail_track_subtitle_format, track.ordinal + 1, details))
+                    addTrackRow(
+                        context.getString(
+                            R.string.file_detail_track_subtitle_format,
+                            track.ordinal + 1,
+                            formatSubtitleTrack(context, track),
+                        ),
+                    )
                 }
                 tracksSection.visibility = View.VISIBLE
             }
@@ -1006,6 +1006,54 @@ class ContextRailView(
                 imageView.clearColorFilter()
                 imageView.setImageBitmap(bitmap)
             }
+        }
+    }
+
+    companion object {
+        fun formatAudioTrack(
+            context: Context,
+            track: TrackInfo,
+        ): String {
+            val unknownLang =
+                try {
+                    context.getString(R.string.file_detail_track_lang_unknown)
+                } catch (e: Exception) {
+                    null
+                }?.takeIf { it.isNotEmpty() } ?: "Unknown language"
+            return formatAudioTrack(track, unknownLang)
+        }
+
+        fun formatAudioTrack(
+            track: TrackInfo,
+            unknownLanguage: String = "Unknown language",
+        ): String {
+            val lang = track.language.ifBlank { unknownLanguage }
+            val parts = mutableListOf<String>()
+            if (track.codec.isNotBlank()) parts.add(track.codec.uppercase())
+            if (track.channels > 0) parts.add("${track.channels}ch")
+            if (track.sampleRate > 0) parts.add("${track.sampleRate / 1000} kHz")
+            return if (parts.isEmpty()) lang else "$lang (${parts.joinToString(" · ")})"
+        }
+
+        fun formatSubtitleTrack(
+            context: Context,
+            track: TrackInfo,
+        ): String {
+            val unknownLang =
+                try {
+                    context.getString(R.string.file_detail_track_lang_unknown)
+                } catch (e: Exception) {
+                    null
+                }?.takeIf { it.isNotEmpty() } ?: "Unknown language"
+            return formatSubtitleTrack(track, unknownLang)
+        }
+
+        fun formatSubtitleTrack(
+            track: TrackInfo,
+            unknownLanguage: String = "Unknown language",
+        ): String {
+            val lang = track.language.ifBlank { unknownLanguage }
+            return if (track.codec.isBlank()) lang else "$lang (${track.codec.uppercase()})"
         }
     }
 }

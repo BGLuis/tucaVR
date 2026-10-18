@@ -245,4 +245,92 @@ mod tests {
             Some(4)
         );
     }
+
+    #[test]
+    fn multithreaded_concurrent_checkouts_and_checkins() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let pool = Arc::new(SessionPool::new(TTL, 4));
+        let session_seq = Arc::new(AtomicU32::new(1));
+        let closed_count = Arc::new(AtomicU32::new(0));
+
+        let thread_count = 8;
+        let iters_per_thread = 50;
+
+        let handles: Vec<_> = (0..thread_count)
+            .map(|_| {
+                let pool = Arc::clone(&pool);
+                let seq = Arc::clone(&session_seq);
+                let closed = Arc::clone(&closed_count);
+                std::thread::spawn(move || {
+                    let mut local_closed = 0u32;
+                    for _ in 0..iters_per_thread {
+                        let (checked_out, expired) = pool.checkout(&key("concurrent"));
+                        local_closed += expired.len() as u32;
+
+                        let session =
+                            checked_out.unwrap_or_else(|| seq.fetch_add(1, Ordering::Relaxed));
+                        std::thread::yield_now();
+
+                        let overflow = pool.checkin(key("concurrent"), session);
+                        local_closed += overflow.len() as u32;
+                    }
+                    closed.fetch_add(local_closed, Ordering::Relaxed);
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("thread panicked");
+        }
+
+        let remaining = pool.idle_count(&key("concurrent"));
+        assert!(
+            remaining <= 4,
+            "idle count ({remaining}) must not exceed max_idle (4)"
+        );
+
+        let created_count = session_seq.load(Ordering::Relaxed) - 1;
+        let closed = closed_count.load(Ordering::Relaxed);
+        assert_eq!(
+            created_count,
+            closed + remaining as u32,
+            "every created session must either remain in pool or have been closed"
+        );
+    }
+
+    #[test]
+    fn checkin_beyond_capacity_returns_overflow_immediately() {
+        let pool = SessionPool::new(TTL, 2);
+        assert_eq!(pool.checkin(key("p"), 10), Vec::<u32>::new());
+        assert_eq!(pool.checkin(key("p"), 20), Vec::<u32>::new());
+        assert_eq!(pool.idle_count(&key("p")), 2);
+
+        let overflow1 = pool.checkin(key("p"), 30);
+        assert_eq!(overflow1, vec![30]);
+        assert_eq!(pool.idle_count(&key("p")), 2);
+
+        let overflow2 = pool.checkin(key("p"), 40);
+        assert_eq!(overflow2, vec![40]);
+        assert_eq!(pool.idle_count(&key("p")), 2);
+
+        assert_eq!(pool.checkout(&key("p")).0, Some(20));
+        assert_eq!(pool.checkout(&key("p")).0, Some(10));
+        assert_eq!(pool.checkout(&key("p")).0, None);
+    }
+
+    #[test]
+    fn drain_nonexistent_server_returns_empty() {
+        let pool = pool();
+        pool.checkin(PoolKey::new("nas", 445, &["share"]), 1);
+
+        assert!(pool.drain_server("other_host", 445).is_empty());
+        assert!(pool.drain_server("nas", 9999).is_empty());
+        assert_eq!(pool.idle_count(&PoolKey::new("nas", 445, &["share"])), 1);
+
+        let drained = pool.drain_server("nas", 445);
+        assert_eq!(drained, vec![1]);
+        assert_eq!(pool.idle_count(&PoolKey::new("nas", 445, &["share"])), 0);
+    }
 }
