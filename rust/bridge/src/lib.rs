@@ -2487,10 +2487,7 @@ pub extern "C" fn set_screen_orientation(x: f32, y: f32, z: f32, w: f32) {
     media_logic::spatial_audio::set_global_screen_orientation(x, y, z, w);
 }
 
-/// Libera o buffer retornado por `thumbnail_session_decode`. `len` precisa ser
-/// exatamente o valor escrito em `out_len` por essas chamadas — o buffer foi
-/// alocado com essa capacidade exata (ver `write_thumbnail` abaixo), entao
-/// reconstruir o `Vec` com um `len` diferente e undefined behavior.
+/// Frees the buffer returned by `thumbnail_session_decode`. `len` must match `out_len`.
 #[no_mangle]
 pub extern "C" fn free_rust_thumbnail_buffer(ptr: *mut u8, len: usize) {
     if ptr.is_null() {
@@ -2501,11 +2498,7 @@ pub extern "C" fn free_rust_thumbnail_buffer(ptr: *mut u8, len: usize) {
     }
 }
 
-/// Converte o resultado de `core::thumbnail::decode_session` num ponteiro cru RGBA
-/// (ou nulo em qualquer falha) + as dimensoes/tamanho via out-params —
-/// mesmo padrao dos out-params de `get_video_progress` abaixo, escolhido em
-/// vez de um struct `#[repr(C)]` pra manter a fronteira C ABI so com tipos
-/// primitivos (mesma razao documentada em `toggle_swap_eyes` sobre `bool`).
+/// Converts `ThumbnailImage` into a raw RGBA pointer and out-params (null on failure).
 fn write_thumbnail(
     image: Option<core::thumbnail::ThumbnailImage>,
     out_width: *mut u32,

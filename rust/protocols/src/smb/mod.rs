@@ -205,9 +205,7 @@ async fn list_on_session(
     }
 }
 
-/// Lista um diretorio dentro de um share (T6.1 "navegar diretorios").
-/// Reusa uma sessao SMB ociosa do pool (TTL curto) para evitar handshakes
-/// repetidos durante navegacao e probing.
+/// Lists a directory inside an SMB share, reusing an idle pooled session to avoid handshakes.
 pub fn list_directory(t: &SmbTarget, path: &str) -> Result<Vec<SmbDirEntry>, String> {
     crate::POOL_RUNTIME.block_on(async {
         let (session, entries) = list_on_session(t, path).await?;
@@ -233,10 +231,7 @@ pub fn list_directory(t: &SmbTarget, path: &str) -> Result<Vec<SmbDirEntry>, Str
     })
 }
 
-/// Varredura recursiva "esta pasta tem alguma midia reproduzivel?" (poda de
-/// pastas vazias na listagem, ver `crate::folder_scan`).
-/// Usa uma sessao do pool so para si durante a varredura, parando no primeiro
-/// arquivo de midia encontrado ou no deadline de seguranca (`folder_scan::SCAN_DEADLINE`).
+/// Recursive folder walk checking for media files, using a dedicated session from the pool.
 pub fn scan_has_media(t: &SmbTarget, path: &str) -> Result<crate::folder_scan::ScanResult, String> {
     crate::POOL_RUNTIME.block_on(async {
         let deadline = crate::folder_scan::deadline_from_now();

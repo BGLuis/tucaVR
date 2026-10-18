@@ -32,7 +32,7 @@ object NetworkThumbnailGenerator {
     // e impedir OOM em pastas contendo múltiplos vídeos 8K.
     internal val budgetGate = MemoryBudgetGate()
 
-    // Limita aberturas remotas simultaneas (sessoes abertas aguardando orcamento de memoria).
+    // Limits concurrent remote open sessions waiting for memory budget.
     private val openGate = Semaphore(4)
 
     // Gerador de tokens para cancelamento cooperativo instantâneo no Rust.

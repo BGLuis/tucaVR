@@ -18,7 +18,7 @@ pub fn extract(path: &str) -> Result<MediaMetadata, String> {
     Ok(extract_from(&demuxer, path))
 }
 
-/// Como `extract`, reaproveitando um `Demuxer` ja aberto (evita reabrir a fonte remota).
+/// Like `extract`, reusing an already open `Demuxer` (avoids reopening the remote source).
 pub fn extract_from(demuxer: &Demuxer, path: &str) -> MediaMetadata {
     let ictx = &demuxer.input_context;
 

@@ -389,9 +389,7 @@ async fn read_dir_on_session(
     }
 }
 
-/// Lista um diretorio remoto (T6.2 "opendir, readdir, stat").
-/// Reusa uma sessao SFTP ociosa do pool (TTL curto) para evitar
-/// novos handshakes SSH/SFTP em cada pasta.
+/// Lists a remote directory, reusing an idle pooled SFTP session to avoid new handshakes.
 pub fn list_directory(t: &SftpTarget, path: &str) -> Result<Vec<SftpDirEntry>, String> {
     crate::POOL_RUNTIME.block_on(async {
         let dir_path = if path.is_empty() { "." } else { path };
@@ -414,10 +412,7 @@ pub fn list_directory(t: &SftpTarget, path: &str) -> Result<Vec<SftpDirEntry>, S
     })
 }
 
-/// Varredura recursiva "esta pasta tem alguma midia reproduzivel?" -- ver
-/// `crate::folder_scan`. Usa uma sessao do pool so para si em todas as subpastas
-/// visitadas, pilha explicita, sem limite de profundidade fixo, para no primeiro arquivo
-/// de midia ou no deadline de seguranca.
+/// Recursive folder walk checking for media files, using a dedicated session from the pool.
 pub fn scan_has_media(
     t: &SftpTarget,
     path: &str,

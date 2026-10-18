@@ -136,7 +136,7 @@ fn take_session(id: u64) -> Option<ThumbnailSession> {
     SESSIONS.lock().ok()?.as_mut()?.remove(&id)
 }
 
-/// Abre a fonte remota uma unica vez; metadados e frame saem da mesma sessao (liberar com `close_session`).
+/// Opens the remote source once; metadata and frame come from the same session (release with `close_session`).
 pub fn open_session(path: &str, cancel_token: u64) -> Option<u64> {
     ffmpeg::init().ok()?;
     let opened = Demuxer::open_probe(path);
@@ -171,7 +171,7 @@ pub fn session_metadata_wire(id: u64) -> Option<String> {
     Some(guard.as_ref()?.get(&id)?.metadata_wire.clone())
 }
 
-/// Idempotente: `decode_session` ja consome a sessao.
+/// Idempotent: `decode_session` already consumes the session.
 pub fn close_session(id: u64) {
     drop(take_session(id));
 }
@@ -181,8 +181,7 @@ pub fn decode_session(id: u64, max_width: u32, max_height: u32) -> Option<Thumbn
     generate_from_session(&mut session, max_width, max_height)
 }
 
-/// Decodifica UM frame por software (sem MediaCodec) da fonte ja aberta; `None` em qualquer falha,
-/// sem popup de erro (mesmo contrato do `ThumbnailGenerator` local).
+/// Software-decodes one frame without MediaCodec from the open session; None on failure.
 fn generate_from_session(
     session: &mut ThumbnailSession,
     max_width: u32,
