@@ -305,10 +305,12 @@ pub struct SftpDirEntry {
 struct SftpPooledSession {
     session: client::Handle<SftpHandler>,
     sftp: SftpSession,
+    epoch: u64,
 }
 
 impl SftpPooledSession {
     async fn connect(t: &SftpTarget) -> Result<Self, String> {
+        let epoch = SFTP_POOL.epoch(&t.host, t.port);
         let session = connect_and_auth(t, false).await?;
         let sftp = match open_sftp_session(&session).await {
             Ok(sftp) => sftp,
@@ -317,7 +319,11 @@ impl SftpPooledSession {
                 return Err(e);
             }
         };
-        Ok(Self { session, sftp })
+        Ok(Self {
+            session,
+            sftp,
+            epoch,
+        })
     }
 
     async fn close(self) {
@@ -355,7 +361,8 @@ fn checkout(t: &SftpTarget) -> Option<SftpPooledSession> {
 }
 
 fn checkin(t: &SftpTarget, session: SftpPooledSession) {
-    dispose(SFTP_POOL.checkin(pool_key(t), session));
+    let epoch = session.epoch;
+    dispose(SFTP_POOL.checkin(pool_key(t), session, epoch));
 }
 
 /// Drops every pooled session of a server (called when the user deletes it).

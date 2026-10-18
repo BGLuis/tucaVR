@@ -43,8 +43,14 @@ struct Idle<S> {
     since: Instant,
 }
 
+struct State<S> {
+    idle: HashMap<PoolKey, Vec<Idle<S>>>,
+    /// Bumped by `drain_server`; sessions opened under an older value are not pooled again.
+    epochs: HashMap<(String, u16), u64>,
+}
+
 pub(crate) struct SessionPool<S> {
-    idle: Mutex<HashMap<PoolKey, Vec<Idle<S>>>>,
+    state: Mutex<State<S>>,
     ttl: Duration,
     max_idle: usize,
 }
@@ -52,14 +58,27 @@ pub(crate) struct SessionPool<S> {
 impl<S> SessionPool<S> {
     pub(crate) fn new(ttl: Duration, max_idle: usize) -> Self {
         Self {
-            idle: Mutex::new(HashMap::new()),
+            state: Mutex::new(State {
+                idle: HashMap::new(),
+                epochs: HashMap::new(),
+            }),
             ttl,
             max_idle,
         }
     }
 
-    fn lock(&self) -> MutexGuard<'_, HashMap<PoolKey, Vec<Idle<S>>>> {
-        self.idle.lock().unwrap_or_else(PoisonError::into_inner)
+    fn lock(&self) -> MutexGuard<'_, State<S>> {
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Generation of a server's pooled sessions. Read it before opening a session and hand it
+    /// back to `checkin`, so a server removed in the meantime does not get its session pooled.
+    pub(crate) fn epoch(&self, host: &str, port: u16) -> u64 {
+        self.lock()
+            .epochs
+            .get(&(host.to_string(), port))
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Returns an idle session for `key` (if any) plus every expired session found
@@ -69,9 +88,10 @@ impl<S> SessionPool<S> {
     }
 
     fn checkout_at(&self, key: &PoolKey, now: Instant) -> (Option<S>, Vec<S>) {
-        let mut map = self.lock();
-        let expired = self.sweep(&mut map, now);
-        let session = map
+        let mut state = self.lock();
+        let expired = self.sweep(&mut state.idle, now);
+        let session = state
+            .idle
             .get_mut(key)
             .and_then(|list| list.pop())
             .map(|idle| idle.session);
@@ -79,16 +99,22 @@ impl<S> SessionPool<S> {
     }
 
     /// Hands a healthy session back. Returns sessions the caller must close: the
-    /// expired ones and `session` itself when the key already holds `max_idle`.
-    pub(crate) fn checkin(&self, key: PoolKey, session: S) -> Vec<S> {
-        self.checkin_at(key, session, Instant::now())
+    /// expired ones and `session` itself when the key already holds `max_idle` or
+    /// when its server was drained after `epoch` was read.
+    pub(crate) fn checkin(&self, key: PoolKey, session: S, epoch: u64) -> Vec<S> {
+        self.checkin_at(key, session, epoch, Instant::now())
     }
 
-    fn checkin_at(&self, key: PoolKey, session: S, now: Instant) -> Vec<S> {
-        let mut map = self.lock();
-        let mut to_close = self.sweep(&mut map, now);
-        let list = map.entry(key).or_default();
-        if list.len() >= self.max_idle {
+    fn checkin_at(&self, key: PoolKey, session: S, epoch: u64, now: Instant) -> Vec<S> {
+        let mut state = self.lock();
+        let mut to_close = self.sweep(&mut state.idle, now);
+        let current = state
+            .epochs
+            .get(&(key.host.clone(), key.port))
+            .copied()
+            .unwrap_or(0);
+        let list = state.idle.entry(key).or_default();
+        if epoch != current || list.len() >= self.max_idle {
             to_close.push(session);
         } else {
             list.push(Idle {
@@ -101,14 +127,16 @@ impl<S> SessionPool<S> {
 
     /// Removes every idle session of a server, whatever its credentials.
     pub(crate) fn drain_server(&self, host: &str, port: u16) -> Vec<S> {
-        let mut map = self.lock();
-        let keys: Vec<PoolKey> = map
+        let mut state = self.lock();
+        *state.epochs.entry((host.to_string(), port)).or_insert(0) += 1;
+        let keys: Vec<PoolKey> = state
+            .idle
             .keys()
             .filter(|k| k.host == host && k.port == port)
             .cloned()
             .collect();
         keys.into_iter()
-            .filter_map(|k| map.remove(&k))
+            .filter_map(|k| state.idle.remove(&k))
             .flatten()
             .map(|idle| idle.session)
             .collect()
@@ -129,7 +157,7 @@ impl<S> SessionPool<S> {
 
     #[cfg(test)]
     fn idle_count(&self, key: &PoolKey) -> usize {
-        self.lock().get(key).map_or(0, Vec::len)
+        self.lock().idle.get(key).map_or(0, Vec::len)
     }
 }
 
@@ -161,7 +189,7 @@ mod tests {
     #[test]
     fn wrong_password_does_not_reuse_a_session_authenticated_with_the_right_one() {
         let pool = pool();
-        pool.checkin(key("right"), 1);
+        pool.checkin(key("right"), 1, 0);
         let (session, _) = pool.checkout(&key("wrong"));
         assert_eq!(session, None);
         let (session, _) = pool.checkout(&key("right"));
@@ -172,7 +200,7 @@ mod tests {
     fn expired_sessions_are_not_reused_and_are_returned_for_closing() {
         let pool = pool();
         let t0 = Instant::now();
-        pool.checkin_at(key("p"), 7, t0);
+        pool.checkin_at(key("p"), 7, 0, t0);
 
         let (session, expired) = pool.checkout_at(&key("p"), t0 + TTL);
 
@@ -185,7 +213,7 @@ mod tests {
     fn sessions_inside_the_ttl_are_reused() {
         let pool = pool();
         let t0 = Instant::now();
-        pool.checkin_at(key("p"), 7, t0);
+        pool.checkin_at(key("p"), 7, 0, t0);
 
         let (session, expired) = pool.checkout_at(&key("p"), t0 + TTL - Duration::from_secs(1));
 
@@ -197,7 +225,7 @@ mod tests {
     fn expired_sessions_of_other_servers_are_swept_on_any_access() {
         let pool = pool();
         let t0 = Instant::now();
-        pool.checkin_at(PoolKey::new("other", 22, &["u"]), 9, t0);
+        pool.checkin_at(PoolKey::new("other", 22, &["u"]), 9, 0, t0);
 
         let (_, expired) = pool.checkout_at(&key("p"), t0 + TTL);
 
@@ -207,17 +235,17 @@ mod tests {
     #[test]
     fn idle_list_is_capped_and_the_overflow_is_returned_for_closing() {
         let pool = pool();
-        assert!(pool.checkin(key("p"), 1).is_empty());
-        assert!(pool.checkin(key("p"), 2).is_empty());
-        assert_eq!(pool.checkin(key("p"), 3), vec![3]);
+        assert!(pool.checkin(key("p"), 1, 0).is_empty());
+        assert!(pool.checkin(key("p"), 2, 0).is_empty());
+        assert_eq!(pool.checkin(key("p"), 3, 0), vec![3]);
         assert_eq!(pool.idle_count(&key("p")), 2);
     }
 
     #[test]
     fn concurrent_callers_each_get_their_own_session() {
         let pool = pool();
-        pool.checkin(key("p"), 1);
-        pool.checkin(key("p"), 2);
+        pool.checkin(key("p"), 1, 0);
+        pool.checkin(key("p"), 2, 0);
 
         let (a, _) = pool.checkout(&key("p"));
         let (b, _) = pool.checkout(&key("p"));
@@ -233,10 +261,10 @@ mod tests {
     #[test]
     fn drain_server_removes_every_credential_variant_of_that_server_only() {
         let pool = pool();
-        pool.checkin(key("a"), 1);
-        pool.checkin(key("b"), 2);
-        pool.checkin(PoolKey::new("nas", 22, &["u"]), 3);
-        pool.checkin(PoolKey::new("other", 445, &["u"]), 4);
+        pool.checkin(key("a"), 1, 0);
+        pool.checkin(key("b"), 2, 0);
+        pool.checkin(PoolKey::new("nas", 22, &["u"]), 3, 0);
+        pool.checkin(PoolKey::new("other", 445, &["u"]), 4, 0);
 
         let mut drained = pool.drain_server("nas", 445);
         drained.sort();
@@ -246,6 +274,32 @@ mod tests {
         assert_eq!(
             pool.checkout(&PoolKey::new("other", 445, &["u"])).0,
             Some(4)
+        );
+    }
+
+    #[test]
+    fn a_session_checked_out_before_its_server_was_drained_is_not_pooled_again() {
+        let pool = pool();
+        let epoch = pool.epoch("nas", 445);
+
+        pool.drain_server("nas", 445);
+
+        assert_eq!(pool.checkin(key("p"), 1, epoch), vec![1]);
+        assert_eq!(pool.idle_count(&key("p")), 0);
+        let fresh = pool.epoch("nas", 445);
+        assert!(pool.checkin(key("p"), 2, fresh).is_empty());
+    }
+
+    #[test]
+    fn draining_one_server_does_not_invalidate_another() {
+        let pool = pool();
+        let epoch = pool.epoch("other", 445);
+
+        pool.drain_server("nas", 445);
+
+        assert!(
+            pool.checkin(PoolKey::new("other", 445, &["u"]), 1, epoch)
+                .is_empty()
         );
     }
 
@@ -276,7 +330,7 @@ mod tests {
                             checked_out.unwrap_or_else(|| seq.fetch_add(1, Ordering::Relaxed));
                         std::thread::yield_now();
 
-                        let overflow = pool.checkin(key("concurrent"), session);
+                        let overflow = pool.checkin(key("concurrent"), session, 0);
                         local_closed += overflow.len() as u32;
                     }
                     closed.fetch_add(local_closed, Ordering::Relaxed);
@@ -306,15 +360,15 @@ mod tests {
     #[test]
     fn checkin_beyond_capacity_returns_overflow_immediately() {
         let pool = SessionPool::new(TTL, 2);
-        assert_eq!(pool.checkin(key("p"), 10), Vec::<u32>::new());
-        assert_eq!(pool.checkin(key("p"), 20), Vec::<u32>::new());
+        assert_eq!(pool.checkin(key("p"), 10, 0), Vec::<u32>::new());
+        assert_eq!(pool.checkin(key("p"), 20, 0), Vec::<u32>::new());
         assert_eq!(pool.idle_count(&key("p")), 2);
 
-        let overflow1 = pool.checkin(key("p"), 30);
+        let overflow1 = pool.checkin(key("p"), 30, 0);
         assert_eq!(overflow1, vec![30]);
         assert_eq!(pool.idle_count(&key("p")), 2);
 
-        let overflow2 = pool.checkin(key("p"), 40);
+        let overflow2 = pool.checkin(key("p"), 40, 0);
         assert_eq!(overflow2, vec![40]);
         assert_eq!(pool.idle_count(&key("p")), 2);
 
@@ -329,7 +383,7 @@ mod tests {
         // Drain on completely empty pool
         assert!(pool.drain_server("any_host", 445).is_empty());
 
-        pool.checkin(PoolKey::new("nas", 445, &["share"]), 1);
+        pool.checkin(PoolKey::new("nas", 445, &["share"]), 1, 0);
 
         assert!(pool.drain_server("other_host", 445).is_empty());
         assert!(pool.drain_server("nas", 9999).is_empty());
@@ -343,8 +397,8 @@ mod tests {
     #[test]
     fn checkin_with_zero_max_idle_always_overflows() {
         let pool = SessionPool::new(TTL, 0);
-        assert_eq!(pool.checkin(key("zero"), 100), vec![100]);
-        assert_eq!(pool.checkin(key("zero"), 200), vec![200]);
+        assert_eq!(pool.checkin(key("zero"), 100, 0), vec![100]);
+        assert_eq!(pool.checkin(key("zero"), 200, 0), vec![200]);
         assert_eq!(pool.idle_count(&key("zero")), 0);
         assert_eq!(pool.checkout(&key("zero")).0, None);
     }
@@ -392,7 +446,7 @@ mod tests {
                         }
                         std::thread::yield_now();
 
-                        let overflow = pool.checkin(pool_key, session);
+                        let overflow = pool.checkin(pool_key, session, 0);
                         local_closed += overflow.len() as u32;
                     }
                     closed.fetch_add(local_closed, Ordering::Relaxed);

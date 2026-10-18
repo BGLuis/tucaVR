@@ -114,10 +114,12 @@ pub struct SmbDirEntry {
 struct SmbSession {
     client: SmbClient,
     tree: smb2::client::Tree,
+    epoch: u64,
 }
 
 impl SmbSession {
     async fn connect(t: &SmbTarget) -> Result<Self, String> {
+        let epoch = SMB_POOL.epoch(&t.host, t.port);
         let mut client = SmbClient::connect(client_config(t, false))
             .await
             .map_err(|e| e.to_string())?;
@@ -125,7 +127,11 @@ impl SmbSession {
             .connect_share(&t.share)
             .await
             .map_err(|e| e.to_string())?;
-        Ok(Self { client, tree })
+        Ok(Self {
+            client,
+            tree,
+            epoch,
+        })
     }
 
     async fn list(&mut self, path: &str) -> Result<Vec<smb2::client::DirectoryEntry>, String> {
@@ -171,7 +177,8 @@ fn checkout(t: &SmbTarget) -> Option<SmbSession> {
 }
 
 fn checkin(t: &SmbTarget, session: SmbSession) {
-    dispose(SMB_POOL.checkin(pool_key(t), session));
+    let epoch = session.epoch;
+    dispose(SMB_POOL.checkin(pool_key(t), session, epoch));
 }
 
 /// Drops every pooled session of a server (called when the user deletes it).
