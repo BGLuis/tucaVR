@@ -15,6 +15,7 @@ pub mod http;
 pub mod nfs;
 pub mod prefetch;
 mod retry;
+mod session_pool;
 pub mod sftp;
 pub mod smb;
 pub mod webdav;

@@ -7,8 +7,13 @@
 //! `./scripts/test-network-protocols.sh` na raiz do repo, que sobe os containers,
 //! exporta as env vars abaixo com os valores corretos e roda
 //! `cargo test -p protocols -- --ignored`.
+mod common;
+
+use common::TcpProxy;
 use protocols::prefetch::PrefetchReader;
-use protocols::smb::{SmbFileSource, SmbTarget, list_directory, list_shares, scan_has_media};
+use protocols::smb::{
+    SmbFileSource, SmbTarget, close_pooled_sessions, list_directory, list_shares, scan_has_media,
+};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
@@ -85,20 +90,121 @@ fn list_directory_finds_test_file() {
     });
     assert!(!entry.is_dir);
     assert!(entry.size > 0);
+    assert!(entry.mtime > 0, "mtime ausente em {}", entry.name);
+    assert!(entries.iter().all(|e| e.name != "." && e.name != ".."));
 }
 
 /// Varredura recursiva de poda de pastas (T-folder-pruning) contra o servidor real —
-/// a fixture so tem o arquivo de teste (nao-midia) na raiz do share autenticado,
-/// entao o resultado esperado e "nenhuma midia encontrada, varredura concluida por
-/// completo" — cobre o caminho de conexao+listagem real (connect_share/list_directory
-/// reusados, sem reconectar por nivel), nao so a logica pura de extensao.
+/// `scan/empty-a` only holds `.txt` files (non-media) on the authenticated share, so the
+/// expected result is "no media, scan fully completed" — exercises real connect + listing
+/// on one reused session, not just the pure extension logic.
 #[test]
 #[ignore]
 fn scan_has_media_reports_no_media_for_fixture_with_only_a_non_media_file() {
-    let result =
-        scan_has_media(&auth_target(), "").expect("scan_has_media falhou contra o servidor real");
+    let result = scan_has_media(&auth_target(), "scan/empty-a")
+        .expect("scan_has_media falhou contra o servidor real");
     assert!(!result.has_media);
     assert!(result.completed_fully);
+}
+
+/// Target going through a local TCP proxy, to count authentications (one TCP
+/// connection = one SMB handshake + NTLM) and cut the connection mid-test.
+fn proxied_target(proxy: &TcpProxy) -> SmbTarget {
+    SmbTarget {
+        host: "127.0.0.1".to_string(),
+        port: proxy.port(),
+        ..auth_target()
+    }
+}
+
+fn proxy_to_server() -> TcpProxy {
+    let direct = auth_target();
+    TcpProxy::start(&direct.host, direct.port)
+}
+
+/// #146 acceptance: listing the root and scanning three subfolders reuses ONE authenticated session.
+#[test]
+#[ignore]
+fn listing_root_and_scanning_three_folders_authenticates_once() {
+    let proxy = proxy_to_server();
+    let target = proxied_target(&proxy);
+
+    list_directory(&target, "").expect("list_directory da raiz falhou");
+    for folder in ["empty-a", "empty-b", "empty-c"] {
+        let result = scan_has_media(&target, &format!("scan/{folder}")).expect("scan falhou");
+        assert!(!result.has_media && result.completed_fully, "{folder}");
+    }
+
+    assert_eq!(
+        proxy.connections(),
+        1,
+        "as 4 chamadas deveriam reusar a sessao"
+    );
+    close_pooled_sessions(&target.host, target.port);
+}
+
+#[test]
+#[ignore]
+fn close_pooled_sessions_forces_a_new_authentication() {
+    let proxy = proxy_to_server();
+    let target = proxied_target(&proxy);
+
+    list_directory(&target, "").expect("primeira listagem falhou");
+    close_pooled_sessions(&target.host, target.port);
+    list_directory(&target, "").expect("listagem apos fechar falhou");
+
+    assert_eq!(proxy.connections(), 2);
+    close_pooled_sessions(&target.host, target.port);
+}
+
+/// Regression: with a dead pooled session the scan must NOT conclude "empty folder"
+/// (Kotlin would hide the folder for 24 h). It has to reconnect and find the media.
+#[test]
+#[ignore]
+fn scan_has_media_does_not_report_empty_when_the_pooled_connection_is_dropped() {
+    let proxy = proxy_to_server();
+    let target = proxied_target(&proxy);
+
+    list_directory(&target, "").expect("primeira listagem falhou");
+    proxy.drop_connections();
+    let result =
+        scan_has_media(&target, "scan/with-media").expect("scan apos queda deveria reconectar");
+
+    assert!(result.has_media, "a pasta tem clip.mp4");
+    assert!(result.completed_fully);
+    assert_eq!(proxy.connections(), 2);
+    close_pooled_sessions(&target.host, target.port);
+}
+
+#[test]
+#[ignore]
+fn list_directory_recovers_after_the_pooled_connection_is_dropped() {
+    let proxy = proxy_to_server();
+    let target = proxied_target(&proxy);
+
+    list_directory(&target, "").expect("primeira listagem falhou");
+    proxy.drop_connections();
+    let entries = list_directory(&target, "").expect("listagem apos queda deveria reconectar");
+
+    assert!(entries.iter().any(|e| e.name == test_file_name()));
+    assert_eq!(proxy.connections(), 2, "uma reconexao, nao mais");
+    close_pooled_sessions(&target.host, target.port);
+}
+
+/// The pool key includes the password: a wrong password must not reuse the right one's session.
+#[test]
+#[ignore]
+fn wrong_password_does_not_reuse_a_pooled_session() {
+    let proxy = proxy_to_server();
+    let good = proxied_target(&proxy);
+    let bad = SmbTarget {
+        password: "wrong-password".to_string(),
+        ..good.clone()
+    };
+
+    list_directory(&good, "").expect("listagem com a senha certa falhou");
+    assert!(list_directory(&bad, "").is_err());
+    close_pooled_sessions(&good.host, good.port);
 }
 
 /// Leitura de arquivo via `SmbFileSource` + `PrefetchReader` (T6.3) num share

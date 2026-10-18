@@ -1710,6 +1710,22 @@ pub extern "C" fn sftp_scan_folder_has_media(
     }
 }
 
+/// Drops the pooled SMB/SFTP sessions of a server (called when the user removes it).
+/// Does not block: the sessions are closed in the background.
+#[no_mangle]
+pub extern "C" fn smb_close_pooled_sessions(host: *const std::os::raw::c_char, port: i32) {
+    if let Some(host) = unsafe { cstr_to_string(host) } {
+        protocols::smb::close_pooled_sessions(&host, port.clamp(1, u16::MAX as i32) as u16);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn sftp_close_pooled_sessions(host: *const std::os::raw::c_char, port: i32) {
+    if let Some(host) = unsafe { cstr_to_string(host) } {
+        protocols::sftp::close_pooled_sessions(&host, port.clamp(1, u16::MAX as i32) as u16);
+    }
+}
+
 /// T5.1/T5.4: Inicia playback de vídeo a partir de um compartilhamento NFS.
 #[no_mangle]
 pub extern "C" fn start_nfs_playback(

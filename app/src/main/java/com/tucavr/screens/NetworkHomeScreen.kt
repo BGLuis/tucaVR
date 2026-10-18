@@ -558,6 +558,11 @@ class NetworkHomeScreen(
                                 scope.launch(Dispatchers.IO) {
                                     savedServerDao.delete(server.id)
                                     credentialStore.removeCredentials(server.id)
+                                    when (server.protocol) {
+                                        ServerProtocol.SMB -> activity.nativeSmbClosePooledSessions(server.host, server.port)
+                                        ServerProtocol.SFTP -> activity.nativeSftpClosePooledSessions(server.host, server.port)
+                                        else -> Unit
+                                    }
                                     withContext(Dispatchers.Main) { onChanged() }
                                 }
                             },
