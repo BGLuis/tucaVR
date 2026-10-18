@@ -54,8 +54,12 @@ fun PlaybackSource.historyKey(): String =
         is PlaybackSource.Webdav -> "webdav|${server.name}|${server.path}|$path|$sizeBytes"
     }
 
-/** Every [historyKey] variant ends with `|<sizeBytes>`; thumbnail cache keys need that size to hit. */
-fun PlaybackHistory.sizeBytesFromKey(): Long = historyKey.substringAfterLast('|').toLongOrNull() ?: 0L
+/**
+ * Every [historyKey] variant except `http|<url>` ends with `|<sizeBytes>`; thumbnail cache keys need
+ * that size to hit. HTTP keys carry no size, so they return 0 instead of parsing the URL tail.
+ */
+fun PlaybackHistory.sizeBytesFromKey(): Long =
+    if (historyKey.startsWith("http|")) 0L else historyKey.substringAfterLast('|').toLongOrNull() ?: 0L
 
 /** Ver [PlaybackHistory.mediaPath]. */
 fun PlaybackSource.mediaPath(): String =

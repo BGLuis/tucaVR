@@ -246,6 +246,11 @@ class PlaybackHistoryMappingTest {
     }
 
     @Test
+    fun `size from key ignores a numeric tail inside an http url`() {
+        assertEquals(0L, historyOf(0L, 0L).copy(historyKey = "http|https://example.com/v.mp4?a=b|123").sizeBytesFromKey())
+    }
+
+    @Test
     fun `size from key is zero when the key has no numeric tail or has invalid format`() {
         assertEquals(0L, historyOf(0L, 0L).copy(historyKey = "http|https://example.com/v.mp4").sizeBytesFromKey())
         assertEquals(0L, historyOf(0L, 0L).copy(historyKey = "smb|server|share|path|").sizeBytesFromKey())
