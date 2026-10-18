@@ -1,6 +1,9 @@
 //! Idle-session pool shared by SMB and SFTP. Sessions are checked out for the
 //! duration of one call, so concurrent callers never wait on each other: a
 //! caller reuses an idle session or the module opens a new one.
+//!
+//! The TTL limits reuse, not lifetime: expired sessions are closed on the next
+//! pool access, so an idle session can outlive it until something touches the pool.
 
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};

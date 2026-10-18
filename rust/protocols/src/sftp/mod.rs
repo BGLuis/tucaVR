@@ -374,7 +374,7 @@ async fn read_dir_on_session(
         match session.sftp.read_dir(dir_path).await {
             Ok(entries) => return Ok((session, entries)),
             Err(e) => {
-                log::warn!("SFTP: read_dir em sessao falhou ({e}), reconectando...");
+                log::warn!("SFTP: read_dir failed on a pooled session ({e}), reconnecting...");
                 dispose(vec![session]);
             }
         }

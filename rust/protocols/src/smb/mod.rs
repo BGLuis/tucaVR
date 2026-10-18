@@ -190,7 +190,7 @@ async fn list_on_session(
         match session.list(path).await {
             Ok(entries) => return Ok((session, entries)),
             Err(e) => {
-                log::warn!("SMB: list_directory em sessao falhou ({e}), reconectando...");
+                log::warn!("SMB: list_directory failed on a pooled session ({e}), reconnecting...");
                 dispose(vec![session]);
             }
         }
