@@ -303,10 +303,14 @@ class NetworkSftpScreen(
 
     // ---- Navegação de diretório SFTP moderna ----
 
-    fun renderFiles(server: SftpServer) {
+    fun renderFiles(
+        server: SftpServer,
+        subPath: String = browsePath,
+    ) {
         val sameServer = browsingServer == server && recyclerView != null
         val previousConfig = currentConfig
         browsingServer = server
+        browsePath = subPath
         val folderKey = "sftp://${server.name}/$browsePath"
         currentConfig = folderConfigStore.getConfigFor(folderKey)
 

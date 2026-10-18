@@ -309,15 +309,21 @@ class NetworkSmbScreen(
 
     // ---- Navegação de diretório SMB moderna ----
 
-    fun renderFiles(server: SmbServer) {
+    fun renderFiles(
+        server: SmbServer,
+        subPath: String = browsePath,
+    ) {
         val sameServer = browsingServer == server && recyclerView != null
         val previousConfig = currentConfig
         browsingServer = server
+        browsePath = subPath
         val folderKey = "smb://${server.name}/${server.share}/$browsePath"
         currentConfig = folderConfigStore.getConfigFor(folderKey)
 
+        val subtitleText = if (browsePath.isEmpty()) server.share else "${server.share}/$browsePath"
+
         if (canReuseBrowser(sameServer, rootLayout?.parent != null, previousConfig, currentConfig)) {
-            rootLayout?.findViewById<android.widget.TextView>(VoidPanelChrome.ID_SUBTITLE)?.text = "${server.share}/$browsePath"
+            rootLayout?.findViewById<android.widget.TextView>(VoidPanelChrome.ID_SUBTITLE)?.text = subtitleText
             mediaToolbar?.clearSearch()
             searchQuery = ""
             mediaToolbar?.setViewMode(currentConfig.viewMode)
@@ -332,7 +338,7 @@ class NetworkSmbScreen(
             VoidPanelChrome.buildHeader(
                 context,
                 title = server.name,
-                subtitle = "${server.share}/$browsePath",
+                subtitle = subtitleText,
                 onBack = { onBack() },
             ),
         )

@@ -282,10 +282,14 @@ class NetworkFtpScreen(
 
     // ---- Navegação de diretório FTP moderna ----
 
-    fun renderFiles(server: FtpServer) {
+    fun renderFiles(
+        server: FtpServer,
+        subPath: String = browsePath,
+    ) {
         val sameServer = browsingServer == server && recyclerView != null
         val previousConfig = currentConfig
         browsingServer = server
+        browsePath = subPath
         val folderKey = "ftp://${server.name}/$browsePath"
         currentConfig = folderConfigStore.getConfigFor(folderKey)
 

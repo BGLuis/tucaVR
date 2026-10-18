@@ -2816,11 +2816,8 @@ fn write_thumbnail_strip(
     ptr
 }
 
-/// Gera uma trilha de thumbnails (preview de arrasto no seekbar, T-seek-ux)
-/// de um video num share SMB — ver `core::thumbnail::generate_strip`.
-/// Mesmas ressalvas de `smb_thumbnail_open` (chamada BLOQUEANTE, so de
-/// `Dispatchers.IO`, retorna nulo em qualquer falha); o ponteiro retornado
-/// (se nao nulo) DEVE ser liberado com `free_rust_thumbnail_strip`.
+/// Generates a thumbnail strip for seekbar preview from an SMB share (see `core::thumbnail::generate_strip`).
+/// Same blocking constraints as `smb_thumbnail_open` (call from Dispatchers.IO); free with `free_rust_thumbnail_strip`.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn smb_generate_thumbnail_strip(
@@ -2878,9 +2875,8 @@ pub extern "C" fn smb_generate_thumbnail_strip(
     write_thumbnail_strip(strip, out_width, out_height, out_count, out_len)
 }
 
-/// Mesma logica de `smb_generate_thumbnail_strip`, para um arquivo num
-/// servidor SFTP — `private_key` segue a mesma convencao de
-/// `sftp_thumbnail_open` (conteudo PEM, nao caminho de arquivo).
+/// Generates a thumbnail strip for seekbar preview from an SFTP server.
+/// `private_key` is the PEM content (matching `sftp_thumbnail_open`).
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn sftp_generate_thumbnail_strip(
@@ -2941,12 +2937,9 @@ pub extern "C" fn cancel_thumbnail_strip_generation() {
     core::thumbnail::cancel_strip_generation();
 }
 
-/// Roda `core::metadata::extract` e serializa o resultado (ver
-/// `media_logic::metadata_wire`) numa string liberada com `free_rust_string`,
-/// ou `"ERROR:<msg>"` em qualquer falha — mesmo contrato de erro de
-/// `smb_list_directory`/`probe_http_url`. Reusado pelas 4 funcoes de
-/// metadados abaixo (local e as 3 de rede) — so o marshalling de credenciais
-/// difere entre elas.
+/// Runs `core::metadata::extract` and serializes the result into a wire string
+/// (freed with `free_rust_string`), or `"ERROR:<msg>"` on failure. Reused across
+/// local and network metadata functions.
 fn metadata_to_c_char(internal_uri: &str) -> *mut std::os::raw::c_char {
     match core::metadata::extract(internal_uri) {
         Ok(meta) => string_to_c_char(media_logic::metadata_wire::encode(&meta)),
@@ -2971,9 +2964,7 @@ pub extern "C" fn read_media_metadata(
     metadata_to_c_char(&path)
 }
 
-/// Mesma logica de `read_media_metadata`, para um arquivo num share SMB —
-/// credenciais como parametros separados, mesma justificativa de
-/// `smb_thumbnail_open`.
+/// Reads media metadata from an SMB share.
 #[no_mangle]
 pub extern "C" fn smb_read_metadata(
     host: *const std::os::raw::c_char,
@@ -3044,9 +3035,8 @@ pub extern "C" fn ftp_read_metadata(
     metadata_to_c_char(&target.to_internal())
 }
 
-/// Mesma logica de `read_media_metadata`, para um arquivo num servidor SFTP.
-/// `private_key` e o CONTEUDO PEM (nao um caminho), mesma convencao de
-/// `sftp_thumbnail_open`.
+/// Reads media metadata from an SFTP server.
+/// `private_key` is the PEM content (matching `sftp_thumbnail_open`).
 #[no_mangle]
 pub extern "C" fn sftp_read_metadata(
     host: *const std::os::raw::c_char,
