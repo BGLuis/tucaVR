@@ -207,48 +207,21 @@
     <string name="player_now_playing_title">Reproduciendo ahora</string>
 
 
-    <!-- Detalhe de arquivo (FileDetailScreen) — tela intermediaria entre a
-         listagem (local ou de rede) e o Player: single-click num video
-         chega aqui (thumbnail + metadados + trilhas + botao Reproduzir);
-         double-click na listagem local continua tocando direto. -->
+    <!-- Filas de detalle de archivo mostradas en ContextRailView -->
     <string name="file_detail_row_format">%1$s: %2$s</string>
     <string name="file_detail_label_size">Tamaño</string>
-    <string name="file_detail_label_modified">Modificado</string>
     <string name="file_detail_label_duration">Duración</string>
     <string name="file_detail_label_resolution">Resolución</string>
-    <string name="file_detail_label_path">Ruta</string>
     <string name="file_detail_btn_play">Reproducir</string>
-    <string name="file_detail_section_file">Archivo</string>
-    <string name="file_detail_section_media">Multimedia</string>
-    <string name="file_detail_section_tags">Etiquetas</string>
     <string name="file_detail_section_tracks">Pistas</string>
     <string name="file_detail_label_container">Contenedor</string>
     <string name="file_detail_label_bitrate">Tasa de bits</string>
     <string name="file_detail_label_video_codec">Códec de video</string>
-    <string name="file_detail_label_decoder">Decodificador</string>
-    <string name="file_detail_label_audio_codec">Códec de audio</string>
     <string name="file_detail_label_format3d">Formato 3D</string>
-    <string name="file_detail_format3d_low_confidence_suffix"> (estimado)</string>
     <string name="file_detail_value_bitrate_format">%1$.1f Mbps</string>
-    <string name="file_detail_track_video_format">%1$d. Video — %2$s</string>
     <string name="file_detail_track_audio_format">%1$d. Audio — %2$s</string>
     <string name="file_detail_track_subtitle_format">%1$d. Subtítulo — %2$s</string>
     <string name="file_detail_track_lang_unknown">Idioma desconocido</string>
-    <string name="file_detail_tracks_empty">No se encontraron pistas</string>
-    <string name="file_detail_tracks_subtitle_note">La renderización de subtítulos aún no está disponible</string>
-    <string name="file_detail_metadata_loading">Cargando información multimedia…</string>
-    <string name="file_detail_metadata_error">Información multimedia no disponible</string>
-    <string name="file_detail_subtitle_local">Local</string>
-    <string name="file_detail_subtitle_http">HTTP</string>
-    <string name="file_detail_subtitle_smb_format">SMB · %1$s</string>
-    <string name="file_detail_subtitle_ftp_format">FTP · %1$s</string>
-    <string name="file_detail_subtitle_sftp_format">SFTP · %1$s</string>
-    <string name="file_detail_tag_title">Título</string>
-    <string name="file_detail_tag_artist">Artista</string>
-    <string name="file_detail_tag_album">Álbum</string>
-    <string name="file_detail_tag_date">Fecha</string>
-    <string name="file_detail_tag_genre">Género</string>
-    <string name="file_detail_tag_comment">Comentario</string>
 
     <!-- Rede: landing com abas URL / SMB / NFS / FTP / SFTP / Descoberta (VRPresentation.renderNetworkHome) -->
     <string name="network_title">Red</string>
@@ -694,7 +667,6 @@
 
     <!-- Descargas sin conexión (Fase 0.4 Sección 4) -->
     <string name="home_btn_downloads">Descargas</string>
-    <string name="file_detail_btn_download">Descargar</string>
     <string name="download_error_insufficient_space">Espacio de almacenamiento insuficiente</string>
     <string name="download_started_toast">Descargando %1$s…</string>
     <string name="downloads_title">Descargas</string>

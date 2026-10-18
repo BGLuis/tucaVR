@@ -207,45 +207,21 @@
     <string name="player_now_playing_title">Tocando Agora</string>
 
 
-    <!-- Detalhe de arquivo (FileDetailScreen) — local e rede -->
+    <!-- Linhas de detalhe de arquivo exibidas no ContextRailView -->
     <string name="file_detail_row_format">%1$s: %2$s</string>
     <string name="file_detail_label_size">Tamanho</string>
-    <string name="file_detail_label_modified">Modificado em</string>
     <string name="file_detail_label_duration">Duracao</string>
     <string name="file_detail_label_resolution">Resolucao</string>
-    <string name="file_detail_label_path">Caminho</string>
     <string name="file_detail_btn_play">Reproduzir</string>
-    <string name="file_detail_section_file">Arquivo</string>
-    <string name="file_detail_section_media">Midia</string>
-    <string name="file_detail_section_tags">Tags</string>
     <string name="file_detail_section_tracks">Trilhas</string>
     <string name="file_detail_label_container">Container</string>
     <string name="file_detail_label_bitrate">Bitrate</string>
     <string name="file_detail_label_video_codec">Codec de video</string>
-    <string name="file_detail_label_decoder">Decodificador</string>
-    <string name="file_detail_label_audio_codec">Codec de audio</string>
     <string name="file_detail_label_format3d">Formato 3D</string>
-    <string name="file_detail_format3d_low_confidence_suffix"> (estimado)</string>
     <string name="file_detail_value_bitrate_format">%1$.1f Mbps</string>
-    <string name="file_detail_track_video_format">%1$d. Video — %2$s</string>
     <string name="file_detail_track_audio_format">%1$d. Audio — %2$s</string>
     <string name="file_detail_track_subtitle_format">%1$d. Legenda — %2$s</string>
     <string name="file_detail_track_lang_unknown">Idioma desconhecido</string>
-    <string name="file_detail_tracks_empty">Nenhuma trilha encontrada</string>
-    <string name="file_detail_tracks_subtitle_note">Renderizacao de legenda ainda nao disponivel</string>
-    <string name="file_detail_metadata_loading">Carregando informacoes de midia…</string>
-    <string name="file_detail_metadata_error">Informacoes de midia indisponiveis</string>
-    <string name="file_detail_subtitle_local">Local</string>
-    <string name="file_detail_subtitle_http">HTTP</string>
-    <string name="file_detail_subtitle_smb_format">SMB · %1$s</string>
-    <string name="file_detail_subtitle_ftp_format">FTP · %1$s</string>
-    <string name="file_detail_subtitle_sftp_format">SFTP · %1$s</string>
-    <string name="file_detail_tag_title">Titulo</string>
-    <string name="file_detail_tag_artist">Artista</string>
-    <string name="file_detail_tag_album">Album</string>
-    <string name="file_detail_tag_date">Data</string>
-    <string name="file_detail_tag_genre">Genero</string>
-    <string name="file_detail_tag_comment">Comentario</string>
 
     <!-- Rede: landing com abas URL / SMB / NFS / FTP / SFTP / Descoberta (VRPresentation.renderNetworkHome) -->
     <string name="network_title">Rede</string>
@@ -688,7 +664,6 @@
 
     <!-- Downloads Offline (Fase 0.4 Seção 4) -->
     <string name="home_btn_downloads">Downloads</string>
-    <string name="file_detail_btn_download">Baixar</string>
     <string name="download_error_insufficient_space">Espaço de armazenamento insuficiente</string>
     <string name="download_started_toast">Baixando %1$s…</string>
     <string name="downloads_title">Downloads</string>

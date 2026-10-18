@@ -44,30 +44,6 @@ sealed class Destination {
     data class LocalFiles(val path: String) : Destination()
 
     /**
-     * Detalhe de um video (local OU de rede): thumbnail + metadados
-     * (tamanho, data de modificacao se conhecida, duracao, container,
-     * bitrate, codecs, trilhas) + botao Reproduzir.
-     *
-     * Na arquitetura de 3 zonas da UI Void (Epic #81 / #93):
-     * O primeiro clique em um item na listagem (Zone 2) seleciona o arquivo e
-     * popula o painel lateral de contexto (Zone 3, Context Rail) com seus detalhes
-     * e previa sem abandonar a listagem.
-     * O segundo clique no mesmo item selecionado (ou o clique no botao Reproduzir
-     * do Context Rail) inicia a reproducao diretamente.
-     * Esta destinacao [FileDetail] permanece disponivel para exibicao dedicada em
-     * tela cheia quando invocada explicitamente.
-     *
-     * [lastModified] e `0L` (desconhecido) pra fontes de rede — SMB/FTP/SFTP
-     * so devolvem nome/tipo/tamanho na listagem, ver `NetworkThumbnailGenerator`.
-     */
-    data class FileDetail(
-        val source: PlaybackSource,
-        val displayName: String,
-        val sizeBytes: Long = 0L,
-        val lastModified: Long = 0L,
-    ) : Destination()
-
-    /**
      * Landing da secao "Rede" (abas URL / SMB), renderizada dentro do mesmo
      * quad do Home (ver `VRPresentation.renderNetworkHome()`). Reaproveita a
      * logica de estado que antes vivia em `NetworkPresentation` (removida):

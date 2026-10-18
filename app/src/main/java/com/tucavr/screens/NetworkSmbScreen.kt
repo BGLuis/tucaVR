@@ -32,9 +32,9 @@ import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.filebrowser.MediaTypeFilter
 import com.tucavr.filebrowser.NetworkDirectoryLoader
 import com.tucavr.filebrowser.NetworkDirectoryState
-import com.tucavr.filebrowser.NetworkFolderProber
 import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ViewMode
+import com.tucavr.filebrowser.canReuseBrowser
 import com.tucavr.filebrowser.sortMediaEntries
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
@@ -309,16 +309,25 @@ class NetworkSmbScreen(
 
     // ---- Navegação de diretório SMB moderna ----
 
-    fun renderFiles(server: SmbServer) {
-        val sameServer = (browsingServer == server && rootLayout != null && recyclerView != null)
+    fun renderFiles(
+        server: SmbServer,
+        subPath: String = browsePath,
+    ) {
+        val sameServer = browsingServer == server && recyclerView != null
+        val previousConfig = currentConfig
         browsingServer = server
+        browsePath = subPath
         val folderKey = "smb://${server.name}/${server.share}/$browsePath"
         currentConfig = folderConfigStore.getConfigFor(folderKey)
 
-        if (sameServer) {
-            rootLayout?.findViewById<android.widget.TextView>(VoidPanelChrome.ID_SUBTITLE)?.text = "${server.share}/$browsePath"
+        val subtitleText = formatSubtitle(server.share, browsePath)
+
+        if (canReuseBrowser(sameServer, rootLayout?.parent != null, previousConfig, currentConfig)) {
+            rootLayout?.findViewById<android.widget.TextView>(VoidPanelChrome.ID_SUBTITLE)?.text = subtitleText
             mediaToolbar?.clearSearch()
             searchQuery = ""
+            mediaToolbar?.setViewMode(currentConfig.viewMode)
+            updateLayoutManager()
             loadDirectory(server)
             return
         }
@@ -329,7 +338,7 @@ class NetworkSmbScreen(
             VoidPanelChrome.buildHeader(
                 context,
                 title = server.name,
-                subtitle = "${server.share}/$browsePath",
+                subtitle = subtitleText,
                 onBack = { onBack() },
             ),
         )
@@ -370,7 +379,7 @@ class NetworkSmbScreen(
                     applyFiltersAndSort()
                 },
                 onRefresh = {
-                    reloadDirectory(server, forceRefresh = true)
+                    loadDirectory(server, forceRefresh = true)
                 },
             )
         mediaToolbar = toolbar
@@ -393,6 +402,7 @@ class NetworkSmbScreen(
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
             }
         recyclerView = recycler
+        directoryLoader.trackUserInteraction(recycler)
         updateLayoutManager()
 
         val fileAdapter =
@@ -508,23 +518,13 @@ class NetworkSmbScreen(
         return false
     }
 
-    private fun reloadDirectory(
+    private fun loadDirectory(
         server: SmbServer,
         forceRefresh: Boolean = false,
     ) {
-        if (forceRefresh) {
-            val keyPrefix = CacheKeys.forFolder("smb", server.host, server.port, server.share, "")
-            scope.launch {
-                NetworkFolderProber.clearFolderCache(context, keyPrefix)
-                loadDirectory(server)
-            }
-        } else {
-            loadDirectory(server)
-        }
-    }
-
-    private fun loadDirectory(server: SmbServer) {
         directoryLoader.loadDirectory(
+            forceRefresh = forceRefresh,
+            historyFor = { entry -> activity.historyTracker.findExisting(PlaybackSource.Smb(server, entry.path, entry.sizeBytes)) },
             path = browsePath,
             fetchRaw = {
                 activity.nativeSmbListDirectory(
@@ -628,5 +628,22 @@ class NetworkSmbScreen(
         val isEmpty = sorted.isEmpty() && !showUp
         recyclerView?.visibility = if (isEmpty) View.GONE else View.VISIBLE
         emptyContainer?.visibility = if (isEmpty) View.VISIBLE else View.GONE
+    }
+
+    companion object {
+        fun formatSubtitle(
+            share: String,
+            browsePath: String,
+        ): String {
+            val cleanShare = share.trim().trim('/')
+            val normalized = normalizePath(browsePath)
+            return when {
+                cleanShare.isEmpty() -> normalized
+                normalized.isEmpty() -> cleanShare
+                else -> "$cleanShare/$normalized"
+            }
+        }
+
+        fun normalizePath(path: String): String = path.trim().trim('/')
     }
 }

@@ -137,7 +137,7 @@ object MediaMetadataReader {
             AppDatabase.getInstance(context).mediaMetadataCacheDao().find(key)
         }
 
-    private suspend fun cacheSummary(
+    internal suspend fun cacheSummary(
         context: Context,
         source: PlaybackSource,
         metadata: MediaMetadata,

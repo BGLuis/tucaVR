@@ -82,6 +82,18 @@ impl ScanResult {
             completed_fully: false,
         }
     }
+
+    /// Outcome of a finished walk. A skipped folder (listing error mid-walk) means
+    /// "empty" cannot be claimed: report the same short-TTL "assume media" result as a timeout.
+    pub fn from_walk(found: bool, timed_out: bool, skipped_unreadable: bool) -> Self {
+        if found {
+            Self::found()
+        } else if timed_out || skipped_unreadable {
+            Self::timed_out_assume_has_media()
+        } else {
+            Self::exhausted_empty()
+        }
+    }
 }
 
 #[cfg(test)]
@@ -127,6 +139,26 @@ mod tests {
                 has_media: true,
                 completed_fully: false
             }
+        );
+    }
+
+    #[test]
+    fn a_walk_that_skipped_unreadable_folders_never_claims_empty() {
+        assert_eq!(
+            ScanResult::from_walk(false, false, true),
+            ScanResult::timed_out_assume_has_media()
+        );
+        assert_eq!(
+            ScanResult::from_walk(false, true, false),
+            ScanResult::timed_out_assume_has_media()
+        );
+        assert_eq!(
+            ScanResult::from_walk(false, false, false),
+            ScanResult::exhausted_empty()
+        );
+        assert_eq!(
+            ScanResult::from_walk(true, false, true),
+            ScanResult::found()
         );
     }
 }

@@ -1,8 +1,8 @@
 use ffmpeg::format::Pixel;
 use ffmpeg::software::scaling::{context::Context as ScalingContext, flag::Flags};
 use ffmpeg_next as ffmpeg;
-use std::collections::HashSet;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::decoder::{HwDecoder, RawFrame};
@@ -116,43 +116,87 @@ fn is_effectively_black(rgba: &[u8]) -> bool {
     count == 0 || (sum / (count * 3)) < BRIGHTNESS_THRESHOLD
 }
 
-/// Gera um thumbnail RGBA decodificando UM frame de video, por software
-/// (ffmpeg puro via `sws_scale`, SEM MediaCodec) — decode de hardware exige
-/// Surface/AHardwareBuffer/GL, peso desnecessario para um frame estatico e
-/// pouco frequente (o lado Kotlin cacheia em disco, ver
-/// `NetworkThumbnailGenerator.kt`). Reaproveita o mesmo `Demuxer` (e por
-/// tabela, o mesmo I/O customizado SMB/FTP/SFTP/HTTPS) usado pela reproducao
-/// de verdade — ver demuxer.rs.
-///
-/// `path` e a URI interna ja resolvida
-/// (`protocols::{smb,ftp,sftp}::Target::to_internal()`). Retorna `None` em
-/// qualquer falha (sem faixa de video, decode falhou, arquivo inacessivel,
-/// etc.) — mesmo contrato de silencio do `ThumbnailGenerator` local: a UI so
-/// deixa de mostrar a miniatura, sem popup de erro.
-pub fn generate(
-    path: &str,
+struct ThumbnailSession {
+    demuxer: Demuxer,
+    path: String,
+    metadata_wire: String,
+    cancel_token: u64,
+}
+
+impl Drop for ThumbnailSession {
+    fn drop(&mut self) {
+        clear_cancelled_thumbnail(self.cancel_token);
+    }
+}
+
+static SESSIONS: Mutex<Option<HashMap<u64, ThumbnailSession>>> = Mutex::new(None);
+static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
+fn take_session(id: u64) -> Option<ThumbnailSession> {
+    SESSIONS.lock().ok()?.as_mut()?.remove(&id)
+}
+
+/// Opens the remote source once; metadata and frame come from the same session (release with `close_session`).
+pub fn open_session(path: &str, cancel_token: u64) -> Option<u64> {
+    ffmpeg::init().ok()?;
+    let opened = Demuxer::open_probe(path);
+    let demuxer = match opened {
+        Ok(demuxer) => demuxer,
+        Err(_) => {
+            clear_cancelled_thumbnail(cancel_token);
+            return None;
+        }
+    };
+    let metadata = crate::metadata::extract_from(&demuxer, path);
+    let session = ThumbnailSession {
+        demuxer,
+        path: path.to_string(),
+        metadata_wire: media_logic::metadata_wire::encode(&metadata),
+        cancel_token,
+    };
+    if is_thumbnail_cancelled(cancel_token) {
+        return None;
+    }
+    let id = NEXT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
+    SESSIONS
+        .lock()
+        .ok()?
+        .get_or_insert_with(HashMap::new)
+        .insert(id, session);
+    Some(id)
+}
+
+pub fn session_metadata_wire(id: u64) -> Option<String> {
+    let guard = SESSIONS.lock().ok()?;
+    Some(guard.as_ref()?.get(&id)?.metadata_wire.clone())
+}
+
+/// Idempotent: `decode_session` already consumes the session.
+pub fn close_session(id: u64) {
+    drop(take_session(id));
+}
+
+pub fn decode_session(id: u64, max_width: u32, max_height: u32) -> Option<ThumbnailImage> {
+    let mut session = take_session(id)?;
+    generate_from_session(&mut session, max_width, max_height)
+}
+
+/// Software-decodes one frame without MediaCodec from the open session; None on failure.
+fn generate_from_session(
+    session: &mut ThumbnailSession,
     max_width: u32,
     max_height: u32,
-    cancel_token: u64,
 ) -> Option<ThumbnailImage> {
     if max_width == 0 || max_height == 0 {
         return None;
     }
+    let cancel_token = session.cancel_token;
     if is_thumbnail_cancelled(cancel_token) {
-        clear_cancelled_thumbnail(cancel_token);
         return None;
     }
 
-    struct TokenGuard(u64);
-    impl Drop for TokenGuard {
-        fn drop(&mut self) {
-            clear_cancelled_thumbnail(self.0);
-        }
-    }
-    let _guard = TokenGuard(cancel_token);
-
-    ffmpeg::init().ok()?;
-    let mut demuxer = Demuxer::open_probe(path).ok()?;
+    let path = session.path.as_str();
+    let demuxer = &mut session.demuxer;
     let video_stream_index = demuxer.video_stream_index?;
 
     let stream = demuxer.input_context.stream(video_stream_index)?;
@@ -172,14 +216,14 @@ pub fn generate(
 
     // Trabalho 4: detecção 3D gratuita antes de borrows mutáveis do demuxer
     let (format_3d, _) =
-        crate::format3d_detect::detect(&demuxer, path, decoder.width(), decoder.height());
+        crate::format3d_detect::detect(demuxer, path, decoder.width(), decoder.height());
 
     let primary_target_us = primary_seek_target_us(demuxer.input_context.duration());
     let _ = demuxer
         .input_context
         .seek(primary_target_us, ..primary_target_us);
     let mut image = decode_and_scale(
-        &mut demuxer,
+        demuxer,
         &mut decoder,
         video_stream_index,
         max_width,
@@ -211,7 +255,7 @@ pub fn generate(
         // referencia de antes do seek, produzindo lixo em vez de so falhar.
         decoder.flush();
         image = decode_and_scale(
-            &mut demuxer,
+            demuxer,
             &mut decoder,
             video_stream_index,
             max_width,

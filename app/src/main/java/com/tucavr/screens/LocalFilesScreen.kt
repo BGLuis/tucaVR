@@ -103,7 +103,7 @@ class LocalFilesScreen(
                 initialTypeFilter = currentTypeFilter,
                 initialFormat3DFilter = currentFormat3DFilter,
                 initialDateFilter = currentDateFilter,
-                showDateFilter = false,
+                showDateFilter = true,
                 onQueryChanged = { query ->
                     searchQuery = query
                     applyFiltersAndSort()

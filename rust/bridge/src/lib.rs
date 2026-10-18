@@ -1710,6 +1710,22 @@ pub extern "C" fn sftp_scan_folder_has_media(
     }
 }
 
+/// Drops the pooled SMB/SFTP sessions of a server (called when the user removes it).
+/// Does not block: the sessions are closed in the background.
+#[no_mangle]
+pub extern "C" fn smb_close_pooled_sessions(host: *const std::os::raw::c_char, port: i32) {
+    if let Some(host) = unsafe { cstr_to_string(host) } {
+        protocols::smb::close_pooled_sessions(&host, port.clamp(1, u16::MAX as i32) as u16);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn sftp_close_pooled_sessions(host: *const std::os::raw::c_char, port: i32) {
+    if let Some(host) = unsafe { cstr_to_string(host) } {
+        protocols::sftp::close_pooled_sessions(&host, port.clamp(1, u16::MAX as i32) as u16);
+    }
+}
+
 /// T5.1/T5.4: Inicia playback de vídeo a partir de um compartilhamento NFS.
 #[no_mangle]
 pub extern "C" fn start_nfs_playback(
@@ -2471,11 +2487,7 @@ pub extern "C" fn set_screen_orientation(x: f32, y: f32, z: f32, w: f32) {
     media_logic::spatial_audio::set_global_screen_orientation(x, y, z, w);
 }
 
-/// Libera o buffer retornado por `smb_generate_thumbnail`/
-/// `ftp_generate_thumbnail`/`sftp_generate_thumbnail`. `len` precisa ser
-/// exatamente o valor escrito em `out_len` por essas chamadas — o buffer foi
-/// alocado com essa capacidade exata (ver `write_thumbnail` abaixo), entao
-/// reconstruir o `Vec` com um `len` diferente e undefined behavior.
+/// Frees the buffer returned by `thumbnail_session_decode`. `len` must match `out_len`.
 #[no_mangle]
 pub extern "C" fn free_rust_thumbnail_buffer(ptr: *mut u8, len: usize) {
     if ptr.is_null() {
@@ -2486,11 +2498,7 @@ pub extern "C" fn free_rust_thumbnail_buffer(ptr: *mut u8, len: usize) {
     }
 }
 
-/// Converte o resultado de `core::thumbnail::generate` num ponteiro cru RGBA
-/// (ou nulo em qualquer falha) + as dimensoes/tamanho via out-params —
-/// mesmo padrao dos out-params de `get_video_progress` abaixo, escolhido em
-/// vez de um struct `#[repr(C)]` pra manter a fronteira C ABI so com tipos
-/// primitivos (mesma razao documentada em `toggle_swap_eyes` sobre `bool`).
+/// Converts `ThumbnailImage` into a raw RGBA pointer and out-params (null on failure).
 fn write_thumbnail(
     image: Option<core::thumbnail::ThumbnailImage>,
     out_width: *mut u32,
@@ -2522,18 +2530,12 @@ fn write_thumbnail(
     ptr
 }
 
-/// Gera um thumbnail (RGBA cru, `max_width * max_height * 4` bytes) de um
-/// video num share SMB, decodificando UM frame por software — ver
-/// `core::thumbnail::generate` para os detalhes (seek de 1s pra dentro,
-/// limite de pacotes, sem MediaCodec). Chamada BLOQUEANTE (rede + decode
-/// sincronos) — Kotlin SEMPRE de `Dispatchers.IO`, uma por item de video
-/// visivel na listagem (mesmo cuidado de "nunca gerar pra pasta inteira de
-/// uma vez" do `ThumbnailGenerator` local). Retorna nulo em qualquer falha
-/// (sem popup de erro — mesmo contrato de silencio do lado local); o
-/// ponteiro retornado (se nao nulo) DEVE ser liberado com
-/// `free_rust_thumbnail_buffer`.
+/// Opens a video on an SMB share once and returns a session handle (0 on failure). The same
+/// session yields the metadata (`thumbnail_session_metadata`) and the frame
+/// (`thumbnail_session_decode`); always release it with `thumbnail_session_close`. BLOCKING
+/// (network + container probe), so Kotlin must call it from `Dispatchers.IO`.
 #[no_mangle]
-pub extern "C" fn smb_generate_thumbnail(
+pub extern "C" fn smb_thumbnail_open(
     host: *const std::os::raw::c_char,
     port: i32,
     username: *const std::os::raw::c_char,
@@ -2541,25 +2543,20 @@ pub extern "C" fn smb_generate_thumbnail(
     domain: *const std::os::raw::c_char,
     share: *const std::os::raw::c_char,
     path: *const std::os::raw::c_char,
-    max_width: u32,
-    max_height: u32,
     cancel_token: u64,
-    out_width: *mut u32,
-    out_height: *mut u32,
-    out_len: *mut usize,
-) -> *mut u8 {
+) -> u64 {
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let share = match cstr_to_string(share) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let path = match cstr_to_string(path) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -2575,34 +2572,27 @@ pub extern "C" fn smb_generate_thumbnail(
         }
     };
     let internal_uri = target.to_internal();
-    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
-    write_thumbnail(image, out_width, out_height, out_len)
+    core::thumbnail::open_session(&internal_uri, cancel_token).unwrap_or(0)
 }
 
-/// Mesma logica de `smb_generate_thumbnail`, para um arquivo num servidor
-/// FTP. Ver esse comentario para a justificativa completa (identica aqui).
+/// Same as `smb_thumbnail_open`, for a file on an FTP server.
 #[no_mangle]
-pub extern "C" fn ftp_generate_thumbnail(
+pub extern "C" fn ftp_thumbnail_open(
     host: *const std::os::raw::c_char,
     port: i32,
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     path: *const std::os::raw::c_char,
-    max_width: u32,
-    max_height: u32,
     cancel_token: u64,
-    out_width: *mut u32,
-    out_height: *mut u32,
-    out_len: *mut usize,
-) -> *mut u8 {
+) -> u64 {
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let path = match cstr_to_string(path) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -2615,37 +2605,29 @@ pub extern "C" fn ftp_generate_thumbnail(
         }
     };
     let internal_uri = target.to_internal();
-    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
-    write_thumbnail(image, out_width, out_height, out_len)
+    core::thumbnail::open_session(&internal_uri, cancel_token).unwrap_or(0)
 }
 
-/// Mesma logica de `smb_generate_thumbnail`, para um arquivo num servidor
-/// SFTP. `private_key` e o CONTEUDO PEM (nao um caminho de arquivo — mesma
-/// convencao de `start_sftp_playback`), ponteiro nulo ou string vazia =
-/// autenticacao por senha em vez de chave.
+/// Same as `smb_thumbnail_open`, for an SFTP server. `private_key` is the PEM content (not a
+/// path, like `start_sftp_playback`); null or empty selects password authentication.
 #[no_mangle]
-pub extern "C" fn sftp_generate_thumbnail(
+pub extern "C" fn sftp_thumbnail_open(
     host: *const std::os::raw::c_char,
     port: i32,
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     private_key: *const std::os::raw::c_char,
     path: *const std::os::raw::c_char,
-    max_width: u32,
-    max_height: u32,
     cancel_token: u64,
-    out_width: *mut u32,
-    out_height: *mut u32,
-    out_len: *mut usize,
-) -> *mut u8 {
+) -> u64 {
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let path = match cstr_to_string(path) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -2660,40 +2642,34 @@ pub extern "C" fn sftp_generate_thumbnail(
         }
     };
     if target.validate().is_err() {
-        return write_thumbnail(None, out_width, out_height, out_len);
+        return 0;
     }
     let internal_uri = target.to_internal();
-    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
-    write_thumbnail(image, out_width, out_height, out_len)
+    core::thumbnail::open_session(&internal_uri, cancel_token).unwrap_or(0)
 }
 
-/// Mesma logica de `smb_generate_thumbnail`, para um arquivo num servidor NFS.
+/// Same as `smb_thumbnail_open`, for a file on an NFS server.
 #[no_mangle]
-pub extern "C" fn nfs_generate_thumbnail(
+pub extern "C" fn nfs_thumbnail_open(
     host: *const std::os::raw::c_char,
     port: i32,
     export_path: *const std::os::raw::c_char,
     file_path: *const std::os::raw::c_char,
     version: i32,
-    max_width: u32,
-    max_height: u32,
     cancel_token: u64,
-    out_width: *mut u32,
-    out_height: *mut u32,
-    out_len: *mut usize,
-) -> *mut u8 {
+) -> u64 {
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let export_path = match cstr_to_string(export_path) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let file_path = match cstr_to_string(file_path) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         protocols::nfs::NfsTarget {
             host,
@@ -2704,13 +2680,12 @@ pub extern "C" fn nfs_generate_thumbnail(
         }
     };
     let internal_uri = target.to_internal();
-    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
-    write_thumbnail(image, out_width, out_height, out_len)
+    core::thumbnail::open_session(&internal_uri, cancel_token).unwrap_or(0)
 }
 
-/// Mesma logica de `smb_generate_thumbnail`, para um arquivo num servidor WebDAV.
+/// Same as `smb_thumbnail_open`, for a file on a WebDAV server.
 #[no_mangle]
-pub extern "C" fn webdav_generate_thumbnail(
+pub extern "C" fn webdav_thumbnail_open(
     host: *const std::os::raw::c_char,
     port: i32,
     base_path: *const std::os::raw::c_char,
@@ -2719,25 +2694,20 @@ pub extern "C" fn webdav_generate_thumbnail(
     password: *const std::os::raw::c_char,
     use_https: i32,
     accept_invalid_certs: i32,
-    max_width: u32,
-    max_height: u32,
     cancel_token: u64,
-    out_width: *mut u32,
-    out_height: *mut u32,
-    out_len: *mut usize,
-) -> *mut u8 {
+) -> u64 {
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let base_path = match cstr_to_string(base_path) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let file_path = match cstr_to_string(file_path) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -2753,14 +2723,44 @@ pub extern "C" fn webdav_generate_thumbnail(
         }
     };
     let internal_uri = target.to_internal();
-    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
-    write_thumbnail(image, out_width, out_height, out_len)
+    core::thumbnail::open_session(&internal_uri, cancel_token).unwrap_or(0)
 }
 
 /// Cancela a geração de um thumbnail de listagem em andamento identificada por `cancel_token`.
 #[no_mangle]
 pub extern "C" fn cancel_thumbnail_generation(cancel_token: u64) {
     core::thumbnail::cancel_thumbnail_generation(cancel_token);
+}
+
+/// Metadata wire string (`media_logic::metadata_wire`) of an open thumbnail session, or null for an
+/// unknown handle. Free with `free_rust_string`.
+#[no_mangle]
+pub extern "C" fn thumbnail_session_metadata(handle: u64) -> *mut std::os::raw::c_char {
+    match core::thumbnail::session_metadata_wire(handle) {
+        Some(wire) => string_to_c_char(wire),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Decodes one RGBA frame (`max_width * max_height * 4` bytes) from an open session, consuming it.
+/// BLOCKING. Null on any failure; free the buffer with `free_rust_thumbnail_buffer`.
+#[no_mangle]
+pub extern "C" fn thumbnail_session_decode(
+    handle: u64,
+    max_width: u32,
+    max_height: u32,
+    out_width: *mut u32,
+    out_height: *mut u32,
+    out_len: *mut usize,
+) -> *mut u8 {
+    let image = core::thumbnail::decode_session(handle, max_width, max_height);
+    write_thumbnail(image, out_width, out_height, out_len)
+}
+
+/// Releases a thumbnail session; safe to call after `thumbnail_session_decode` or twice.
+#[no_mangle]
+pub extern "C" fn thumbnail_session_close(handle: u64) {
+    core::thumbnail::close_session(handle);
 }
 
 /// Libera o buffer retornado por `smb_generate_thumbnail_strip`/
@@ -2816,11 +2816,8 @@ fn write_thumbnail_strip(
     ptr
 }
 
-/// Gera uma trilha de thumbnails (preview de arrasto no seekbar, T-seek-ux)
-/// de um video num share SMB — ver `core::thumbnail::generate_strip`.
-/// Mesmas ressalvas de `smb_generate_thumbnail` (chamada BLOQUEANTE, so de
-/// `Dispatchers.IO`, retorna nulo em qualquer falha); o ponteiro retornado
-/// (se nao nulo) DEVE ser liberado com `free_rust_thumbnail_strip`.
+/// Generates a thumbnail strip for seekbar preview from an SMB share (see `core::thumbnail::generate_strip`).
+/// Same blocking constraints as `smb_thumbnail_open` (call from Dispatchers.IO); free with `free_rust_thumbnail_strip`.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn smb_generate_thumbnail_strip(
@@ -2878,9 +2875,8 @@ pub extern "C" fn smb_generate_thumbnail_strip(
     write_thumbnail_strip(strip, out_width, out_height, out_count, out_len)
 }
 
-/// Mesma logica de `smb_generate_thumbnail_strip`, para um arquivo num
-/// servidor SFTP — `private_key` segue a mesma convencao de
-/// `sftp_generate_thumbnail` (conteudo PEM, nao caminho de arquivo).
+/// Generates a thumbnail strip for seekbar preview from an SFTP server.
+/// `private_key` is the PEM content (matching `sftp_thumbnail_open`).
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn sftp_generate_thumbnail_strip(
@@ -2941,12 +2937,9 @@ pub extern "C" fn cancel_thumbnail_strip_generation() {
     core::thumbnail::cancel_strip_generation();
 }
 
-/// Roda `core::metadata::extract` e serializa o resultado (ver
-/// `media_logic::metadata_wire`) numa string liberada com `free_rust_string`,
-/// ou `"ERROR:<msg>"` em qualquer falha — mesmo contrato de erro de
-/// `smb_list_directory`/`probe_http_url`. Reusado pelas 4 funcoes de
-/// metadados abaixo (local e as 3 de rede) — so o marshalling de credenciais
-/// difere entre elas, ver justificativa em `smb_generate_thumbnail`.
+/// Runs `core::metadata::extract` and serializes the result into a wire string
+/// (freed with `free_rust_string`), or `"ERROR:<msg>"` on failure. Reused across
+/// local and network metadata functions.
 fn metadata_to_c_char(internal_uri: &str) -> *mut std::os::raw::c_char {
     match core::metadata::extract(internal_uri) {
         Ok(meta) => string_to_c_char(media_logic::metadata_wire::encode(&meta)),
@@ -2971,9 +2964,7 @@ pub extern "C" fn read_media_metadata(
     metadata_to_c_char(&path)
 }
 
-/// Mesma logica de `read_media_metadata`, para um arquivo num share SMB —
-/// credenciais como parametros separados, mesma justificativa de
-/// `smb_generate_thumbnail`.
+/// Reads media metadata from an SMB share.
 #[no_mangle]
 pub extern "C" fn smb_read_metadata(
     host: *const std::os::raw::c_char,
@@ -3044,9 +3035,8 @@ pub extern "C" fn ftp_read_metadata(
     metadata_to_c_char(&target.to_internal())
 }
 
-/// Mesma logica de `read_media_metadata`, para um arquivo num servidor SFTP.
-/// `private_key` e o CONTEUDO PEM (nao um caminho), mesma convencao de
-/// `sftp_generate_thumbnail`.
+/// Reads media metadata from an SFTP server.
+/// `private_key` is the PEM content (matching `sftp_thumbnail_open`).
 #[no_mangle]
 pub extern "C" fn sftp_read_metadata(
     host: *const std::os::raw::c_char,
@@ -3083,7 +3073,7 @@ pub extern "C" fn sftp_read_metadata(
     metadata_to_c_char(&target.to_internal())
 }
 
-/// Mesma logica de `read_media_metadata`, para um arquivo num servidor NFS.
+/// Same as `read_media_metadata`, for a file on an NFS server.
 #[no_mangle]
 pub extern "C" fn nfs_read_metadata(
     host: *const std::os::raw::c_char,
@@ -3116,7 +3106,7 @@ pub extern "C" fn nfs_read_metadata(
     metadata_to_c_char(&target.to_internal())
 }
 
-/// Mesma logica de `read_media_metadata`, para um arquivo num servidor WebDAV.
+/// Same as `read_media_metadata`, for a file on a WebDAV server.
 #[no_mangle]
 pub extern "C" fn webdav_read_metadata(
     host: *const std::os::raw::c_char,

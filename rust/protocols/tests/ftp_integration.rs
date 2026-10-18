@@ -62,19 +62,16 @@ fn list_directory_finds_test_file() {
     });
     assert!(!entry.is_dir);
     assert!(entry.size > 0);
+    assert!(entry.mtime > 0, "mtime ausente em {}", entry.name);
 }
 
-/// Varredura recursiva de poda de pastas (T-folder-pruning) contra o servidor real —
-/// a fixture so tem `testfile.bin` na raiz, que NAO e uma extensao de midia
-/// reconhecida (`protocols::folder_scan::is_media_filename`), entao o resultado
-/// esperado e "nenhuma midia encontrada, varredura concluida por completo" — cobre
-/// o caminho de conexao+listagem real, nao so a logica pura de extensao (ja coberta
-/// em folder_scan::tests).
+/// `scan/empty-a` only holds `.txt` files (non-media), so the expected result is
+/// "no media, scan fully completed" — exercises real connect + listing on FTP.
 #[test]
 #[ignore]
 fn scan_has_media_reports_no_media_for_fixture_with_only_a_non_media_file() {
-    let result =
-        scan_has_media(&target(), "").expect("scan_has_media falhou contra o servidor real");
+    let result = scan_has_media(&target(), "scan/empty-a")
+        .expect("scan_has_media falhou contra o servidor real");
     assert!(!result.has_media);
     assert!(result.completed_fully);
 }

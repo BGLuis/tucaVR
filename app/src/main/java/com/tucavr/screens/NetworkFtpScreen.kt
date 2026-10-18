@@ -32,9 +32,9 @@ import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.filebrowser.MediaTypeFilter
 import com.tucavr.filebrowser.NetworkDirectoryLoader
 import com.tucavr.filebrowser.NetworkDirectoryState
-import com.tucavr.filebrowser.NetworkFolderProber
 import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ViewMode
+import com.tucavr.filebrowser.canReuseBrowser
 import com.tucavr.filebrowser.sortMediaEntries
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
@@ -282,17 +282,24 @@ class NetworkFtpScreen(
 
     // ---- Navegação de diretório FTP moderna ----
 
-    fun renderFiles(server: FtpServer) {
-        val sameServer = (browsingServer == server && rootLayout != null && recyclerView != null)
+    fun renderFiles(
+        server: FtpServer,
+        subPath: String = browsePath,
+    ) {
+        val sameServer = browsingServer == server && recyclerView != null
+        val previousConfig = currentConfig
         browsingServer = server
+        browsePath = subPath
         val folderKey = "ftp://${server.name}/$browsePath"
         currentConfig = folderConfigStore.getConfigFor(folderKey)
 
-        if (sameServer) {
+        if (canReuseBrowser(sameServer, rootLayout?.parent != null, previousConfig, currentConfig)) {
             val subtitleText = if (browsePath.isEmpty()) "/" else browsePath
             rootLayout?.findViewById<android.widget.TextView>(VoidPanelChrome.ID_SUBTITLE)?.text = subtitleText
             mediaToolbar?.clearSearch()
             searchQuery = ""
+            mediaToolbar?.setViewMode(currentConfig.viewMode)
+            updateLayoutManager()
             loadDirectory(server)
             return
         }
@@ -344,7 +351,7 @@ class NetworkFtpScreen(
                     applyFiltersAndSort()
                 },
                 onRefresh = {
-                    reloadDirectory(server, forceRefresh = true)
+                    loadDirectory(server, forceRefresh = true)
                 },
             )
         mediaToolbar = toolbar
@@ -367,6 +374,7 @@ class NetworkFtpScreen(
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
             }
         recyclerView = recycler
+        directoryLoader.trackUserInteraction(recycler)
         updateLayoutManager()
 
         val fileAdapter =
@@ -482,23 +490,13 @@ class NetworkFtpScreen(
         return false
     }
 
-    private fun reloadDirectory(
+    private fun loadDirectory(
         server: FtpServer,
         forceRefresh: Boolean = false,
     ) {
-        if (forceRefresh) {
-            val keyPrefix = CacheKeys.forFolder("ftp", server.host, server.port, null, "")
-            scope.launch {
-                NetworkFolderProber.clearFolderCache(context, keyPrefix)
-                loadDirectory(server)
-            }
-        } else {
-            loadDirectory(server)
-        }
-    }
-
-    private fun loadDirectory(server: FtpServer) {
         directoryLoader.loadDirectory(
+            forceRefresh = forceRefresh,
+            historyFor = { entry -> activity.historyTracker.findExisting(PlaybackSource.Ftp(server, entry.path, entry.sizeBytes)) },
             path = browsePath,
             fetchRaw = {
                 activity.nativeFtpListDirectory(

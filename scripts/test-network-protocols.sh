@@ -47,12 +47,27 @@ head -c 262144 /dev/urandom > "$FIXTURE"
 SHA256=$(sha256sum "$FIXTURE" | cut -d' ' -f1)
 echo "testfile.bin: $((262144 / 1024))KB, sha256=$SHA256"
 
+# Folder-scan fixtures: three folders without media (one with a nested level) and one with a
+# media file. They live under scan/ because the fixtures root also holds dash/, which has media.
+echo "== Generating the folder-scan fixtures =="
+SCAN_DIR="$COMPOSE_DIR/fixtures/scan"
+rm -rf "$SCAN_DIR"
+mkdir -p "$SCAN_DIR/empty-a/nested" "$SCAN_DIR/empty-b" "$SCAN_DIR/empty-c" "$SCAN_DIR/with-media"
+for note in empty-a/nested empty-b empty-c with-media; do
+    echo "not media" > "$SCAN_DIR/$note/note.txt"
+done
+echo "placeholder" > "$SCAN_DIR/with-media/clip.mp4"
+
 # NFS: file with more than one READ RPC (1 MiB) and a size that is not a multiple of it, to exercise reassembly.
 NFS_MULTIBLOCK="$COMPOSE_DIR/fixtures/nfs-multiblock.bin"
 head -c $((3 * 1024 * 1024 + 12345)) /dev/urandom > "$NFS_MULTIBLOCK"
 NFS_MULTIBLOCK_SHA256=$(sha256sum "$NFS_MULTIBLOCK" | cut -d' ' -f1)
 
 echo "== Generating the WebDAV fixture =="
+# The bytemark/webdav entrypoint chowns this directory to uid 82, so a previous run leaves it unwritable.
+if [[ -d "$COMPOSE_DIR/fixtures/webdav" && ! -w "$COMPOSE_DIR/fixtures/webdav" ]]; then
+    docker run --rm -v "$COMPOSE_DIR/fixtures:/fixtures" alpine rm -rf /fixtures/webdav
+fi
 mkdir -p "$COMPOSE_DIR/fixtures/webdav"
 WEBDAV_FIXTURE="$COMPOSE_DIR/fixtures/webdav/testfile.bin"
 head -c 131072 /dev/urandom > "$WEBDAV_FIXTURE"
@@ -258,7 +273,7 @@ export VRPLAYER_TEST_WEBDAV_FILE="testfile.bin"
 export VRPLAYER_TEST_WEBDAV_FILE_SHA256="$WEBDAV_SHA256"
 
 set +e
-(cd "$REPO_ROOT/rust" && cargo test -p protocols --features integration-tests -- --ignored --nocapture --test-threads=1)
+(cd "$REPO_ROOT/rust" && cargo test -p protocols --features integration-tests --no-fail-fast -- --ignored --nocapture --test-threads=1)
 RESULT=$?
 set -e
 

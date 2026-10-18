@@ -38,6 +38,7 @@ import com.tucavr.screens.ScreenFormatCatalog
 import com.tucavr.screens.formatFileSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -70,6 +71,7 @@ class ContextRailView(
     private var progressLabel: TextView? = null
     private var progressBar: ProgressBar? = null
     private var lastLoadedSourceKey: String? = null
+    private var metadataJob: Job? = null
     private var selectedDetail: FileDetailData? = null
     private var activeTab: RailTab = RailTab.NOW_PLAYING
 
@@ -160,6 +162,7 @@ class ContextRailView(
         renderedSource = currentSource
         renderedDetailPath = detailPath
 
+        metadataJob?.cancel()
         contentLayout.removeAllViews()
         progressLabel = null
         progressBar = null
@@ -700,14 +703,14 @@ class ContextRailView(
             }
         metaColumn.addView(metaRowsContainer)
 
-        val audioTracksSection =
+        val tracksSection =
             LinearLayout(context).apply {
                 orientation = VERTICAL
                 val topPad = VoidTheme.dpToPx(context, 8f)
                 setPadding(0, topPad, 0, 0)
                 visibility = View.GONE
             }
-        val audioTracksTitle =
+        val tracksTitle =
             TextView(context).apply {
                 text = context.getString(R.string.file_detail_section_tracks)
                 typeface = VoidTheme.typefaceTitle
@@ -716,13 +719,13 @@ class ContextRailView(
                 val bPad = VoidTheme.dpToPx(context, 4f)
                 setPadding(0, 0, 0, bPad)
             }
-        audioTracksSection.addView(audioTracksTitle)
-        val audioTracksList =
+        tracksSection.addView(tracksTitle)
+        val tracksList =
             LinearLayout(context).apply {
                 orientation = VERTICAL
             }
-        audioTracksSection.addView(audioTracksList)
-        metaColumn.addView(audioTracksSection)
+        tracksSection.addView(tracksList)
+        metaColumn.addView(tracksSection)
         card.addView(metaColumn)
 
         fun updateMetadataViews(
@@ -734,6 +737,7 @@ class ContextRailView(
             videoCodec: String,
             format3dIndex: Int,
             audioTracks: List<TrackInfo> = emptyList(),
+            subtitleTracks: List<TrackInfo> = emptyList(),
         ) {
             metaRowsContainer.removeAllViews()
 
@@ -786,71 +790,83 @@ class ContextRailView(
                 addMetaRow(R.string.file_detail_label_format3d, modeName, isAccent = true)
             }
 
-            if (audioTracks.isNotEmpty()) {
-                audioTracksList.removeAllViews()
-                audioTracks.forEach { track ->
-                    val lang = track.language.ifBlank { context.getString(R.string.file_detail_track_lang_unknown) }
-                    val parts = mutableListOf(track.codec.uppercase())
-                    if (track.channels > 0) parts.add("${track.channels}ch")
-                    if (track.sampleRate > 0) parts.add("${track.sampleRate / 1000} kHz")
-                    val trackDetails = parts.joinToString(" · ")
-                    val trackText =
-                        context.getString(
-                            R.string.file_detail_track_audio_format,
-                            track.ordinal + 1,
-                            "$lang ($trackDetails)",
-                        )
-                    val trackRow =
+            if (audioTracks.isNotEmpty() || subtitleTracks.isNotEmpty()) {
+                tracksList.removeAllViews()
+
+                fun addTrackRow(text: String) {
+                    tracksList.addView(
                         TextView(context).apply {
-                            text = trackText
+                            this.text = text
                             typeface = VoidTheme.typefaceMono
                             textSize = 12f
                             setTextColor(VoidTheme.colorTextSecondary)
                             val bPad = VoidTheme.dpToPx(context, 2f)
                             setPadding(0, 0, 0, bPad)
-                        }
-                    audioTracksList.addView(trackRow)
+                        },
+                    )
                 }
-                audioTracksSection.visibility = View.VISIBLE
+
+                audioTracks.forEach { track ->
+                    addTrackRow(
+                        context.getString(
+                            R.string.file_detail_track_audio_format,
+                            track.ordinal + 1,
+                            formatAudioTrack(context, track),
+                        ),
+                    )
+                }
+                subtitleTracks.forEach { track ->
+                    addTrackRow(
+                        context.getString(
+                            R.string.file_detail_track_subtitle_format,
+                            track.ordinal + 1,
+                            formatSubtitleTrack(context, track),
+                        ),
+                    )
+                }
+                tracksSection.visibility = View.VISIBLE
             }
         }
 
         // Carrega metadados ricos em segundo plano (cache miss dispara MediaMetadataReader.read)
-        scope.launch {
-            val summary =
-                withContext(Dispatchers.IO) {
-                    MediaMetadataReader.readCachedSummary(context, detail.source)
+        metadataJob?.cancel()
+        metadataJob =
+            scope.launch {
+                val summary =
+                    withContext(Dispatchers.IO) {
+                        MediaMetadataReader.readCachedSummary(context, detail.source)
+                    }
+                if (summary != null) {
+                    updateMetadataViews(
+                        videoWidth = summary.videoWidth,
+                        videoHeight = summary.videoHeight,
+                        durationMs = summary.durationMs,
+                        container = summary.containerLong.ifEmpty { summary.container },
+                        bitRate = summary.bitRate,
+                        videoCodec = summary.videoCodec,
+                        format3dIndex = summary.format3dIndex,
+                    )
                 }
-            if (summary != null) {
-                updateMetadataViews(
-                    videoWidth = summary.videoWidth,
-                    videoHeight = summary.videoHeight,
-                    durationMs = summary.durationMs,
-                    container = summary.containerLong.ifEmpty { summary.container },
-                    bitRate = summary.bitRate,
-                    videoCodec = summary.videoCodec,
-                    format3dIndex = summary.format3dIndex,
-                )
-            }
 
-            val fullMeta =
-                withContext(Dispatchers.IO) {
-                    MediaMetadataReader.read(activity, detail.source)
+                val fullMeta =
+                    withContext(Dispatchers.IO) {
+                        MediaMetadataReader.read(activity, detail.source)
+                    }
+                if (fullMeta != null) {
+                    val video = fullMeta.videoTracks.firstOrNull()
+                    updateMetadataViews(
+                        videoWidth = video?.width ?: 0,
+                        videoHeight = video?.height ?: 0,
+                        durationMs = fullMeta.durationMs,
+                        container = fullMeta.containerLong.ifEmpty { fullMeta.container },
+                        bitRate = fullMeta.bitRate,
+                        videoCodec = video?.codec ?: "",
+                        format3dIndex = fullMeta.format3dIndex,
+                        audioTracks = fullMeta.audioTracks,
+                        subtitleTracks = fullMeta.subtitleTracks,
+                    )
                 }
-            if (fullMeta != null) {
-                val video = fullMeta.videoTracks.firstOrNull()
-                updateMetadataViews(
-                    videoWidth = video?.width ?: 0,
-                    videoHeight = video?.height ?: 0,
-                    durationMs = fullMeta.durationMs,
-                    container = fullMeta.containerLong.ifEmpty { fullMeta.container },
-                    bitRate = fullMeta.bitRate,
-                    videoCodec = video?.codec ?: "",
-                    format3dIndex = fullMeta.format3dIndex,
-                    audioTracks = fullMeta.audioTracks,
-                )
             }
-        }
 
         // Botões de Ação: "Play/Resume" e "From start"
         val buttonColumn =
@@ -990,6 +1006,54 @@ class ContextRailView(
                 imageView.clearColorFilter()
                 imageView.setImageBitmap(bitmap)
             }
+        }
+    }
+
+    companion object {
+        fun formatAudioTrack(
+            context: Context,
+            track: TrackInfo,
+        ): String {
+            val unknownLang =
+                try {
+                    context.getString(R.string.file_detail_track_lang_unknown)
+                } catch (e: Exception) {
+                    null
+                }?.takeIf { it.isNotBlank() } ?: "Unknown language"
+            return formatAudioTrack(track, unknownLang)
+        }
+
+        fun formatAudioTrack(
+            track: TrackInfo,
+            unknownLanguage: String = "Unknown language",
+        ): String {
+            val lang = track.language.ifBlank { unknownLanguage }
+            val parts = mutableListOf<String>()
+            if (track.codec.isNotBlank()) parts.add(track.codec.uppercase())
+            if (track.channels > 0) parts.add("${track.channels}ch")
+            if (track.sampleRate > 0) parts.add("${track.sampleRate / 1000} kHz")
+            return if (parts.isEmpty()) lang else "$lang (${parts.joinToString(" · ")})"
+        }
+
+        fun formatSubtitleTrack(
+            context: Context,
+            track: TrackInfo,
+        ): String {
+            val unknownLang =
+                try {
+                    context.getString(R.string.file_detail_track_lang_unknown)
+                } catch (e: Exception) {
+                    null
+                }?.takeIf { it.isNotBlank() } ?: "Unknown language"
+            return formatSubtitleTrack(track, unknownLang)
+        }
+
+        fun formatSubtitleTrack(
+            track: TrackInfo,
+            unknownLanguage: String = "Unknown language",
+        ): String {
+            val lang = track.language.ifBlank { unknownLanguage }
+            return if (track.codec.isBlank()) lang else "$lang (${track.codec.uppercase()})"
         }
     }
 }

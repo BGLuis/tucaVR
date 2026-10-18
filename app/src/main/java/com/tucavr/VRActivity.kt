@@ -2236,6 +2236,17 @@ class VRActivity : NativeActivity() {
         path: String,
     ): String
 
+    // Drops the pooled SMB/SFTP sessions of a removed server (does not block).
+    external fun nativeSmbClosePooledSessions(
+        host: String,
+        port: Int,
+    )
+
+    external fun nativeSftpClosePooledSessions(
+        host: String,
+        port: Int,
+    )
+
     // T5.1/T5.4: playback NFS
     external fun nativePlayNfs(
         host: String,
@@ -2328,13 +2339,10 @@ class VRActivity : NativeActivity() {
     // T2.1/T2.6: Probe de representações DASH (bloqueante — SEMPRE de Dispatchers.IO).
     external fun nativeDashProbeRepresentations(url: String): String
 
-    // T9: thumbnail de arquivo de video num share/servidor de rede — decode
-    // de UM frame por software do lado Rust (core::thumbnail::generate, ver
-    // rust/bridge/src/lib.rs). Bloqueante (rede + decode sincronos) — SEMPRE
-    // de Dispatchers.IO, nunca da UI thread (ver NetworkThumbnailGenerator.kt).
-    // Retorno: RGBA cru (maxWidth*maxHeight*4 bytes, sem padding de linha) ou
-    // null em qualquer falha (sem faixa de video, arquivo inacessivel, etc.).
-    external fun nativeSmbGenerateThumbnail(
+    // Network thumbnails: open the remote file once (handle, 0 on failure), then read the metadata
+    // wire string and decode one RGBA frame from that same session. Blocking, Dispatchers.IO only.
+    // The handle must always be released with nativeThumbnailSessionClose (decode also consumes it).
+    external fun nativeSmbThumbnailOpen(
         host: String,
         port: Int,
         username: String,
@@ -2342,46 +2350,38 @@ class VRActivity : NativeActivity() {
         domain: String,
         share: String,
         path: String,
-        maxWidth: Int,
-        maxHeight: Int,
         cancelToken: Long,
-    ): ByteArray?
+    ): Long
 
-    external fun nativeFtpGenerateThumbnail(
+    external fun nativeFtpThumbnailOpen(
         host: String,
         port: Int,
         username: String,
         password: String,
         path: String,
-        maxWidth: Int,
-        maxHeight: Int,
         cancelToken: Long,
-    ): ByteArray?
+    ): Long
 
-    external fun nativeSftpGenerateThumbnail(
+    external fun nativeSftpThumbnailOpen(
         host: String,
         port: Int,
         username: String,
         password: String,
         privateKey: String,
         path: String,
-        maxWidth: Int,
-        maxHeight: Int,
         cancelToken: Long,
-    ): ByteArray?
+    ): Long
 
-    external fun nativeNfsGenerateThumbnail(
+    external fun nativeNfsThumbnailOpen(
         host: String,
         port: Int,
         exportPath: String,
         filePath: String,
         version: Int,
-        maxWidth: Int,
-        maxHeight: Int,
         cancelToken: Long,
-    ): ByteArray?
+    ): Long
 
-    external fun nativeWebdavGenerateThumbnail(
+    external fun nativeWebdavThumbnailOpen(
         host: String,
         port: Int,
         basePath: String,
@@ -2390,10 +2390,18 @@ class VRActivity : NativeActivity() {
         password: String,
         useHttps: Boolean,
         acceptInvalidCerts: Boolean,
+        cancelToken: Long,
+    ): Long
+
+    external fun nativeThumbnailSessionMetadata(handle: Long): String
+
+    external fun nativeThumbnailSessionDecode(
+        handle: Long,
         maxWidth: Int,
         maxHeight: Int,
-        cancelToken: Long,
     ): ByteArray?
+
+    external fun nativeThumbnailSessionClose(handle: Long)
 
     // Cancela a geração de um thumbnail em andamento associada ao cancelToken
     external fun nativeCancelThumbnailGeneration(cancelToken: Long)
