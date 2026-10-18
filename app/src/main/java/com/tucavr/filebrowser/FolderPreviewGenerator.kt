@@ -26,7 +26,7 @@ data class FolderSummary(
      */
     val hasPlayableMediaWithinDepth: Boolean,
 ) {
-    val firstVideo: MediaEntry? get() = previewEntries.firstOrNull()
+    val firstVideo: MediaEntry? get() = previewEntries.firstOrNull { it.type == MediaType.VIDEO }
 }
 
 /**
@@ -34,6 +34,8 @@ data class FolderSummary(
  * para pastas da biblioteca.
  */
 object FolderPreviewGenerator {
+    private const val PREVIEW_LIMIT = 4
+
     // Caches limitados para evitar vazamento de memória nativa com bitmaps de mosaicos
     private val summaryCache = android.util.LruCache<String, FolderSummary>(200)
     private val mosaicCache =
@@ -56,7 +58,7 @@ object FolderPreviewGenerator {
             var videoCount = 0
             var audioCount = 0
             var imageCount = 0
-            val previewVideos = mutableListOf<MediaEntry>()
+            val previewCandidates = mutableListOf<MediaEntry>()
             val formats3D = mutableSetOf<Format3DType>()
 
             for (file in children) {
@@ -68,8 +70,8 @@ object FolderPreviewGenerator {
                         videoCount++
                         val f3d = MediaFilterEngine.detectFormat3DFromFilename(file.name)
                         formats3D.add(f3d)
-                        if (previewVideos.size < 4) {
-                            previewVideos.add(
+                        if (previewCandidates.count { it.type == MediaType.VIDEO } < PREVIEW_LIMIT) {
+                            previewCandidates.add(
                                 MediaEntry(
                                     name = file.name,
                                     path = file.absolutePath,
@@ -82,7 +84,20 @@ object FolderPreviewGenerator {
                         }
                     }
                     MediaType.AUDIO -> audioCount++
-                    MediaType.IMAGE -> imageCount++
+                    MediaType.IMAGE -> {
+                        imageCount++
+                        if (previewCandidates.count { it.type == MediaType.IMAGE } < PREVIEW_LIMIT) {
+                            previewCandidates.add(
+                                MediaEntry(
+                                    name = file.name,
+                                    path = file.absolutePath,
+                                    sizeBytes = file.length(),
+                                    lastModified = file.lastModified(),
+                                    type = MediaType.IMAGE,
+                                ),
+                            )
+                        }
+                    }
                     MediaType.DIRECTORY, null -> {}
                 }
             }
@@ -100,7 +115,7 @@ object FolderPreviewGenerator {
                     videoCount = videoCount,
                     audioCount = audioCount,
                     imageCount = imageCount,
-                    previewEntries = previewVideos,
+                    previewEntries = selectPreviewEntries(previewCandidates),
                     available3DFormats = formats3D,
                     hasPlayableMediaWithinDepth = hasPlayableMediaWithinDepth,
                 )
@@ -108,6 +123,11 @@ object FolderPreviewGenerator {
             summaryCache.put(dirPath, summary)
             summary
         }
+
+    internal fun selectPreviewEntries(
+        candidates: List<MediaEntry>,
+        limit: Int = PREVIEW_LIMIT,
+    ): List<MediaEntry> = (candidates.filter { it.type == MediaType.VIDEO } + candidates.filter { it.type == MediaType.IMAGE }).take(limit)
 
     // `levelsRemaining` = quantas subpastas ainda podem ser descidas a partir de `dir`.
     // Chamada com 0 a partir de getSummary (dir já é uma subpasta de 1 nível abaixo da

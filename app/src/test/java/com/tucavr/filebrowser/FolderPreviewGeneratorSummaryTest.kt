@@ -48,4 +48,59 @@ class FolderPreviewGeneratorSummaryTest {
         assertNull(summary.firstVideo)
         assertEquals(0, summary.previewEntries.size)
     }
+
+    private fun entry(
+        name: String,
+        type: MediaType,
+    ) = MediaEntry(name, "/dir/$name", 1, 1, type)
+
+    @Test
+    fun photoOnlyFolderGetsImagePreviewEntries() {
+        val photos = (1..6).map { entry("p$it.jpg", MediaType.IMAGE) }
+
+        val selected = FolderPreviewGenerator.selectPreviewEntries(photos)
+
+        assertEquals(photos.take(4), selected)
+    }
+
+    @Test
+    fun previewPrefersVideosThenFillsWithImagesUpToCap() {
+        val candidates =
+            listOf(
+                entry("a.jpg", MediaType.IMAGE),
+                entry("b.jpg", MediaType.IMAGE),
+                entry("v1.mp4", MediaType.VIDEO),
+                entry("c.jpg", MediaType.IMAGE),
+                entry("v2.mp4", MediaType.VIDEO),
+            )
+
+        val selected = FolderPreviewGenerator.selectPreviewEntries(candidates)
+
+        assertEquals(listOf("v1.mp4", "v2.mp4", "a.jpg", "b.jpg"), selected.map { it.name })
+    }
+
+    @Test
+    fun previewIgnoresNonVisualEntries() {
+        val candidates = listOf(entry("song.mp3", MediaType.AUDIO), entry("sub", MediaType.DIRECTORY))
+
+        assertEquals(emptyList<MediaEntry>(), FolderPreviewGenerator.selectPreviewEntries(candidates))
+    }
+
+    @Test
+    fun firstVideoSkipsImagePreviewEntries() {
+        val image = entry("a.jpg", MediaType.IMAGE)
+        val video = entry("v.mp4", MediaType.VIDEO)
+        val summary =
+            FolderSummary(
+                totalItems = 2,
+                videoCount = 1,
+                audioCount = 0,
+                imageCount = 1,
+                previewEntries = listOf(image, video),
+                available3DFormats = emptySet(),
+                hasPlayableMediaWithinDepth = true,
+            )
+
+        assertEquals(video, summary.firstVideo)
+    }
 }

@@ -34,8 +34,8 @@ object VoidTheme {
     }
 
     // ---------- Formas ----------
-    val cornerRadiusDp = 12f
-    val borderWidthDp = 1.5f
+    const val cornerRadiusDp = 12f
+    const val borderWidthDp = 1.5f
 
     fun dp(
         context: Context,

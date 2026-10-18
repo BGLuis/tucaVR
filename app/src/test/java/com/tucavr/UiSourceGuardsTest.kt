@@ -49,6 +49,32 @@ class UiSourceGuardsTest {
     }
 
     @Test
+    fun `file adapter cancels the thumbnail job when a row is recycled`() {
+        val fileAdapter = File("src/main/java/com/tucavr/screens/adapters/FileAdapter.kt")
+        val target = if (fileAdapter.exists()) fileAdapter else File("app/src/main/java/com/tucavr/screens/adapters/FileAdapter.kt")
+        assertTrue(target.exists())
+        val content = target.readText()
+        val recycled = content.substringAfter("override fun onViewRecycled(holder: ViewHolder) {", missingDelimiterValue = "")
+        assertTrue("FileAdapter must override onViewRecycled (Issue #144)", recycled.isNotEmpty())
+        assertTrue(
+            "FileAdapter.onViewRecycled must cancel holder.thumbnailJob so off-screen rows free budget and connections",
+            recycled.substringBefore("\n    }\n").contains("holder.thumbnailJob?.cancel()"),
+        )
+    }
+
+    @Test
+    fun `context rail view cancels the previous metadata job on re-selection`() {
+        val file = File("src/main/java/com/tucavr/screens/components/ContextRailView.kt")
+        val target = if (file.exists()) file else File("app/src/main/java/com/tucavr/screens/components/ContextRailView.kt")
+        assertTrue(target.exists())
+        val content = target.readText()
+        assertTrue(
+            "ContextRailView must cancel metadataJob before rebuilding the detail card (Issue #141)",
+            content.substringAfter("fun updateState(force: Boolean = false) {").contains("metadataJob?.cancel()"),
+        )
+    }
+
+    @Test
     fun `context rail view updateState is idempotent and guarded against repetitive destructions`() {
         val file = File("src/main/java/com/tucavr/screens/components/ContextRailView.kt")
         val target = if (file.exists()) file else File("app/src/main/java/com/tucavr/screens/components/ContextRailView.kt")

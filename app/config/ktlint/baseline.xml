@@ -38,8 +38,8 @@
         <error line="63" column="1" source="standard:max-line-length" />
     </file>
     <file name="src/main/java/com/tucavr/designsystem/VoidTheme.kt">
-        <error line="36" column="15" source="standard:property-naming" />
         <error line="37" column="15" source="standard:property-naming" />
+        <error line="38" column="15" source="standard:property-naming" />
     </file>
     <file name="src/main/java/com/tucavr/filebrowser/MemoryBudgetGate.kt">
         <error line="48" column="17" source="standard:property-naming" />
