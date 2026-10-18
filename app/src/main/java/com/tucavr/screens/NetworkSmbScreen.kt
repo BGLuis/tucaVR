@@ -32,9 +32,9 @@ import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.filebrowser.MediaTypeFilter
 import com.tucavr.filebrowser.NetworkDirectoryLoader
 import com.tucavr.filebrowser.NetworkDirectoryState
-import com.tucavr.filebrowser.NetworkFolderProber
 import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ViewMode
+import com.tucavr.filebrowser.canReuseBrowser
 import com.tucavr.filebrowser.sortMediaEntries
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
@@ -310,15 +310,18 @@ class NetworkSmbScreen(
     // ---- Navegação de diretório SMB moderna ----
 
     fun renderFiles(server: SmbServer) {
-        val sameServer = (browsingServer == server && rootLayout != null && recyclerView != null)
+        val sameServer = browsingServer == server && recyclerView != null
+        val previousConfig = currentConfig
         browsingServer = server
         val folderKey = "smb://${server.name}/${server.share}/$browsePath"
         currentConfig = folderConfigStore.getConfigFor(folderKey)
 
-        if (sameServer) {
+        if (canReuseBrowser(sameServer, rootLayout?.parent != null, previousConfig, currentConfig)) {
             rootLayout?.findViewById<android.widget.TextView>(VoidPanelChrome.ID_SUBTITLE)?.text = "${server.share}/$browsePath"
             mediaToolbar?.clearSearch()
             searchQuery = ""
+            mediaToolbar?.setViewMode(currentConfig.viewMode)
+            updateLayoutManager()
             loadDirectory(server)
             return
         }
@@ -370,7 +373,7 @@ class NetworkSmbScreen(
                     applyFiltersAndSort()
                 },
                 onRefresh = {
-                    reloadDirectory(server, forceRefresh = true)
+                    loadDirectory(server, forceRefresh = true)
                 },
             )
         mediaToolbar = toolbar
@@ -393,6 +396,7 @@ class NetworkSmbScreen(
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
             }
         recyclerView = recycler
+        directoryLoader.trackUserInteraction(recycler)
         updateLayoutManager()
 
         val fileAdapter =
@@ -508,23 +512,13 @@ class NetworkSmbScreen(
         return false
     }
 
-    private fun reloadDirectory(
+    private fun loadDirectory(
         server: SmbServer,
         forceRefresh: Boolean = false,
     ) {
-        if (forceRefresh) {
-            val keyPrefix = CacheKeys.forFolder("smb", server.host, server.port, server.share, "")
-            scope.launch {
-                NetworkFolderProber.clearFolderCache(context, keyPrefix)
-                loadDirectory(server)
-            }
-        } else {
-            loadDirectory(server)
-        }
-    }
-
-    private fun loadDirectory(server: SmbServer) {
         directoryLoader.loadDirectory(
+            forceRefresh = forceRefresh,
+            historyFor = { entry -> activity.historyTracker.findExisting(PlaybackSource.Smb(server, entry.path, entry.sizeBytes)) },
             path = browsePath,
             fetchRaw = {
                 activity.nativeSmbListDirectory(

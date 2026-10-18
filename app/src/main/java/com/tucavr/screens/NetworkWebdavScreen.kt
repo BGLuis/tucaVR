@@ -28,11 +28,13 @@ import com.tucavr.filebrowser.FolderConfigStore
 import com.tucavr.filebrowser.Format3DFilter
 import com.tucavr.filebrowser.MediaEntry
 import com.tucavr.filebrowser.MediaFilterEngine
+import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.filebrowser.MediaTypeFilter
 import com.tucavr.filebrowser.NetworkDirectoryLoader
 import com.tucavr.filebrowser.NetworkDirectoryState
-import com.tucavr.filebrowser.NetworkFolderProber
+import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ViewMode
+import com.tucavr.filebrowser.canReuseBrowser
 import com.tucavr.filebrowser.sortMediaEntries
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
@@ -446,7 +448,8 @@ class NetworkWebdavScreen(
         server: SavedServer,
         subPath: String = browsePath,
     ) {
-        val sameServer = (browsingServer == server && rootLayout != null && recyclerView != null)
+        val sameServer = browsingServer == server && recyclerView != null
+        val previousConfig = currentConfig
         browsingServer = server
         browsePath = subPath
         val folderKey = folderKey(server, subPath)
@@ -454,11 +457,13 @@ class NetworkWebdavScreen(
 
         val subtitleText = if (subPath.isEmpty()) "${server.host}:${server.port}${server.path}" else "${server.path}/$subPath"
 
-        if (sameServer) {
+        if (canReuseBrowser(sameServer, rootLayout?.parent != null, previousConfig, currentConfig)) {
             val subtitleView = rootLayout?.findViewById<android.widget.TextView>(VoidPanelChrome.ID_SUBTITLE)
             subtitleView?.text = subtitleText
             mediaToolbar?.clearSearch()
             searchQuery = ""
+            mediaToolbar?.setViewMode(currentConfig.viewMode)
+            updateLayoutManager()
             loadDirectory(server)
             return
         }
@@ -514,7 +519,7 @@ class NetworkWebdavScreen(
                     applyFiltersAndSort()
                 },
                 onRefresh = {
-                    reloadDirectory(server, forceRefresh = true)
+                    loadDirectory(server, forceRefresh = true)
                 },
             )
         mediaToolbar = toolbar
@@ -537,6 +542,7 @@ class NetworkWebdavScreen(
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
             }
         recyclerView = recycler
+        directoryLoader.trackUserInteraction(recycler)
         updateLayoutManager()
 
         val fileAdapter =
@@ -569,6 +575,12 @@ class NetworkWebdavScreen(
                     )
                 },
                 contextRailHost = host,
+                thumbnailLoader = { entry ->
+                    NetworkThumbnailGenerator.getThumbnail(context, activity, PlaybackSource.Webdav(server, entry.path, entry.sizeBytes))
+                },
+                metadataBadgeLoader = { entry ->
+                    MediaMetadataReader.readCachedSummary(context, PlaybackSource.Webdav(server, entry.path, entry.sizeBytes))
+                },
             )
         adapter = fileAdapter
         recycler.adapter = fileAdapter
@@ -638,23 +650,13 @@ class NetworkWebdavScreen(
         }
     }
 
-    private fun reloadDirectory(
+    private fun loadDirectory(
         server: SavedServer,
         forceRefresh: Boolean = false,
     ) {
-        if (forceRefresh) {
-            val keyPrefix = CacheKeys.forFolder("webdav", server.host, server.port, server.path, "")
-            scope.launch {
-                NetworkFolderProber.clearFolderCache(context, keyPrefix)
-                loadDirectory(server)
-            }
-        } else {
-            loadDirectory(server)
-        }
-    }
-
-    private fun loadDirectory(server: SavedServer) {
         directoryLoader.loadDirectory(
+            forceRefresh = forceRefresh,
+            historyFor = { entry -> activity.historyTracker.findExisting(PlaybackSource.Webdav(server, entry.path, entry.sizeBytes)) },
             path = browsePath,
             fetchRaw = {
                 val password = credentialStore.getPassword(server.id)

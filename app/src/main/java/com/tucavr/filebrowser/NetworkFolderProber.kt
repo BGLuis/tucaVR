@@ -35,7 +35,8 @@ import kotlinx.coroutines.withContext
  * [pruneEmptyFolders] filtra diretamente a lista de entradas antes dela chegar em
  * `MediaFilterEngine`, preservando o comportamento de filtro por tipo/3D já existente.
  */
-object NetworkFolderProber {
+object NetworkFolderProber : FolderCache {
+    private const val INVALIDATE_CHUNK_SIZE = 500
     private const val TTL_FRESH_MS = 24L * 60 * 60 * 1000 // resultado definitivo (scanCompletedFully)
     private const val TTL_TIMED_OUT_MS = 60L * 60 * 1000 // resultado por deadline: revalida bem mais cedo
 
@@ -94,7 +95,7 @@ object NetworkFolderProber {
      * Filtra rapidamente pastas já conhecidas no cache persistente (Room) como sem mídia.
      * Pastas sem registro no cache são mantidas provisoriamente para evitar travar a listagem.
      */
-    suspend fun pruneCachedEmptyFolders(
+    override suspend fun pruneCachedEmptyFolders(
         context: Context,
         entries: List<MediaEntry>,
         folderKeyFor: (MediaEntry) -> String,
@@ -121,7 +122,7 @@ object NetworkFolderProber {
      * Notifica via [onFolderEmpty] sempre que uma pasta for confirmada vazia, permitindo
      * atualizar a UI de forma não-bloqueante.
      */
-    suspend fun probeUncachedFoldersProgressive(
+    override suspend fun probeUncachedFoldersProgressive(
         context: Context,
         sourceKind: String,
         entries: List<MediaEntry>,
@@ -157,14 +158,13 @@ object NetworkFolderProber {
         }
     }
 
-    /**
-     * Limpa o cache de status de mídia de pastas com prefixo correspondente (ex. ao atualizar manualmente).
-     */
-    suspend fun clearFolderCache(
+    // Chunked to stay under SQLite's bound-variable limit.
+    override suspend fun invalidateFolders(
         context: Context,
-        keyPrefix: String,
+        folderKeys: List<String>,
     ) = withContext(Dispatchers.IO) {
-        AppDatabase.getInstance(context).folderMediaStatusDao().clearForPrefix(keyPrefix)
+        val dao = AppDatabase.getInstance(context).folderMediaStatusDao()
+        folderKeys.chunked(INVALIDATE_CHUNK_SIZE).forEach { dao.deleteByKeys(it) }
     }
 
     /**

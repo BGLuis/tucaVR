@@ -32,9 +32,9 @@ import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.filebrowser.MediaTypeFilter
 import com.tucavr.filebrowser.NetworkDirectoryLoader
 import com.tucavr.filebrowser.NetworkDirectoryState
-import com.tucavr.filebrowser.NetworkFolderProber
 import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ViewMode
+import com.tucavr.filebrowser.canReuseBrowser
 import com.tucavr.filebrowser.sortMediaEntries
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
@@ -304,16 +304,19 @@ class NetworkSftpScreen(
     // ---- Navegação de diretório SFTP moderna ----
 
     fun renderFiles(server: SftpServer) {
-        val sameServer = (browsingServer == server && rootLayout != null && recyclerView != null)
+        val sameServer = browsingServer == server && recyclerView != null
+        val previousConfig = currentConfig
         browsingServer = server
         val folderKey = "sftp://${server.name}/$browsePath"
         currentConfig = folderConfigStore.getConfigFor(folderKey)
 
-        if (sameServer) {
+        if (canReuseBrowser(sameServer, rootLayout?.parent != null, previousConfig, currentConfig)) {
             val subtitleText = if (browsePath.isEmpty()) "/" else browsePath
             rootLayout?.findViewById<android.widget.TextView>(VoidPanelChrome.ID_SUBTITLE)?.text = subtitleText
             mediaToolbar?.clearSearch()
             searchQuery = ""
+            mediaToolbar?.setViewMode(currentConfig.viewMode)
+            updateLayoutManager()
             loadDirectory(server)
             return
         }
@@ -365,7 +368,7 @@ class NetworkSftpScreen(
                     applyFiltersAndSort()
                 },
                 onRefresh = {
-                    reloadDirectory(server, forceRefresh = true)
+                    loadDirectory(server, forceRefresh = true)
                 },
             )
         mediaToolbar = toolbar
@@ -388,6 +391,7 @@ class NetworkSftpScreen(
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
             }
         recyclerView = recycler
+        directoryLoader.trackUserInteraction(recycler)
         updateLayoutManager()
 
         val fileAdapter =
@@ -503,23 +507,13 @@ class NetworkSftpScreen(
         return false
     }
 
-    private fun reloadDirectory(
+    private fun loadDirectory(
         server: SftpServer,
         forceRefresh: Boolean = false,
     ) {
-        if (forceRefresh) {
-            val keyPrefix = CacheKeys.forFolder("sftp", server.host, server.port, null, "")
-            scope.launch {
-                NetworkFolderProber.clearFolderCache(context, keyPrefix)
-                loadDirectory(server)
-            }
-        } else {
-            loadDirectory(server)
-        }
-    }
-
-    private fun loadDirectory(server: SftpServer) {
         directoryLoader.loadDirectory(
+            forceRefresh = forceRefresh,
+            historyFor = { entry -> activity.historyTracker.findExisting(PlaybackSource.Sftp(server, entry.path, entry.sizeBytes)) },
             path = browsePath,
             fetchRaw = {
                 activity.nativeSftpListDirectory(
