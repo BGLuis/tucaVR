@@ -6,8 +6,9 @@ import org.junit.Test
 class NetworkPathFormattingTest {
     @Test
     fun `formats root SMB subtitle as share name without trailing slash`() {
-        val subtitle = NetworkSmbScreen.formatSubtitle(share = "Videos", browsePath = "")
-        assertEquals("Videos", subtitle)
+        assertEquals("Videos", NetworkSmbScreen.formatSubtitle(share = "Videos", browsePath = ""))
+        assertEquals("Videos", NetworkSmbScreen.formatSubtitle(share = "Videos/", browsePath = ""))
+        assertEquals("Videos", NetworkSmbScreen.formatSubtitle(share = "/Videos/", browsePath = ""))
     }
 
     @Test
@@ -20,8 +21,18 @@ class NetworkPathFormattingTest {
     fun `formats subtitle cleanly when subpath has leading or trailing slashes`() {
         assertEquals("Videos/Movies", NetworkSmbScreen.formatSubtitle("Videos", "/Movies"))
         assertEquals("Videos/Movies", NetworkSmbScreen.formatSubtitle("Videos", "Movies/"))
+        assertEquals("Videos/Movies", NetworkSmbScreen.formatSubtitle("Videos/", "/Movies/"))
         assertEquals("Videos/Movies/4K", NetworkSmbScreen.formatSubtitle("Videos", "/Movies/4K/"))
         assertEquals("Videos/Movies/4K", NetworkSmbScreen.formatSubtitle("Videos", "///Movies/4K///"))
+        assertEquals("Videos/Movies/4K", NetworkSmbScreen.formatSubtitle("/Videos/", "///Movies/4K///"))
+    }
+
+    @Test
+    fun `formats subtitle gracefully when share or browsePath is empty`() {
+        assertEquals("Movies", NetworkSmbScreen.formatSubtitle("", "Movies"))
+        assertEquals("Movies", NetworkSmbScreen.formatSubtitle("   ", "/Movies/"))
+        assertEquals("", NetworkSmbScreen.formatSubtitle("", ""))
+        assertEquals("", NetworkSmbScreen.formatSubtitle("   ", "   "))
     }
 
     @Test

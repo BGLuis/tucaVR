@@ -254,6 +254,9 @@ class HistorySourceResolverTest {
                     "{corrupted json",
                     "{}",
                     """{"serverId":""}""",
+                    """{"serverId":"   "}""",
+                    """{"serverId":null}""",
+                    """{"serverId":"null"}""",
                 )
 
             for (serverInfo in testCases) {
@@ -277,7 +280,7 @@ class HistorySourceResolverTest {
         }
 
     @Test
-    fun `returns null for non-network history types`() =
+    fun `returns null for non-network history types without invoking finders`() =
         runTest {
             val nonNetworkTypes =
                 listOf(
@@ -286,6 +289,7 @@ class HistorySourceResolverTest {
                     HistorySourceType.DLNA,
                 )
 
+            var findCalled = false
             for (type in nonNetworkTypes) {
                 val entry =
                     createEntry(
@@ -296,14 +300,30 @@ class HistorySourceResolverTest {
                 val resolved =
                     HistorySourceResolver.resolveNetworkSourceInternal(
                         entry = entry,
-                        findSmb = { smbServer },
-                        findFtp = { ftpServer },
-                        findSftp = { sftpServer },
-                        findNfs = { nfsServer },
-                        findWebdav = { webdavServer },
+                        findSmb = {
+                            findCalled = true
+                            smbServer
+                        },
+                        findFtp = {
+                            findCalled = true
+                            ftpServer
+                        },
+                        findSftp = {
+                            findCalled = true
+                            sftpServer
+                        },
+                        findNfs = {
+                            findCalled = true
+                            nfsServer
+                        },
+                        findWebdav = {
+                            findCalled = true
+                            webdavServer
+                        },
                     )
                 assertNull("Expected null for non-network type: $type", resolved)
             }
+            assertTrue("Finders must never be called for non-network history types", !findCalled)
         }
 
     @Test
@@ -348,5 +368,8 @@ class HistorySourceResolverTest {
         assertNull(HistorySourceResolver.extractServerId("{invalid"))
         assertNull(HistorySourceResolver.extractServerId("{}"))
         assertNull(HistorySourceResolver.extractServerId("""{"serverId":""}"""))
+        assertNull(HistorySourceResolver.extractServerId("""{"serverId":"   "}"""))
+        assertNull(HistorySourceResolver.extractServerId("""{"serverId":null}"""))
+        assertNull(HistorySourceResolver.extractServerId("""{"serverId":"null"}"""))
     }
 }

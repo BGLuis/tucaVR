@@ -323,6 +323,9 @@ mod tests {
     #[test]
     fn drain_nonexistent_server_returns_empty() {
         let pool = pool();
+        // Drain on completely empty pool
+        assert!(pool.drain_server("any_host", 445).is_empty());
+
         pool.checkin(PoolKey::new("nas", 445, &["share"]), 1);
 
         assert!(pool.drain_server("other_host", 445).is_empty());
@@ -332,5 +335,80 @@ mod tests {
         let drained = pool.drain_server("nas", 445);
         assert_eq!(drained, vec![1]);
         assert_eq!(pool.idle_count(&PoolKey::new("nas", 445, &["share"])), 0);
+    }
+
+    #[test]
+    fn checkin_with_zero_max_idle_always_overflows() {
+        let pool = SessionPool::new(TTL, 0);
+        assert_eq!(pool.checkin(key("zero"), 100), vec![100]);
+        assert_eq!(pool.checkin(key("zero"), 200), vec![200]);
+        assert_eq!(pool.idle_count(&key("zero")), 0);
+        assert_eq!(pool.checkout(&key("zero")).0, None);
+    }
+
+    #[test]
+    fn multithreaded_concurrent_checkouts_and_checkins_multi_key() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicU32, Ordering};
+
+        let pool = Arc::new(SessionPool::new(TTL, 4));
+        let seq1 = Arc::new(AtomicU32::new(100));
+        let seq2 = Arc::new(AtomicU32::new(200));
+        let closed1 = Arc::new(AtomicU32::new(0));
+        let closed2 = Arc::new(AtomicU32::new(0));
+
+        let handles: Vec<_> = (0..8)
+            .map(|i| {
+                let pool = Arc::clone(&pool);
+                let is_server1 = i % 2 == 0;
+                let seq = if is_server1 {
+                    Arc::clone(&seq1)
+                } else {
+                    Arc::clone(&seq2)
+                };
+                let closed = if is_server1 {
+                    Arc::clone(&closed1)
+                } else {
+                    Arc::clone(&closed2)
+                };
+                let key_name = if is_server1 { "server1" } else { "server2" };
+
+                std::thread::spawn(move || {
+                    let mut local_closed = 0u32;
+                    for _ in 0..40 {
+                        let pool_key = key(key_name);
+                        let (checked_out, expired) = pool.checkout(&pool_key);
+                        local_closed += expired.len() as u32;
+
+                        let session =
+                            checked_out.unwrap_or_else(|| seq.fetch_add(1, Ordering::Relaxed));
+                        if is_server1 {
+                            assert!((100..200).contains(&session));
+                        } else {
+                            assert!(session >= 200);
+                        }
+                        std::thread::yield_now();
+
+                        let overflow = pool.checkin(pool_key, session);
+                        local_closed += overflow.len() as u32;
+                    }
+                    closed.fetch_add(local_closed, Ordering::Relaxed);
+                })
+            })
+            .collect();
+
+        for h in handles {
+            h.join().expect("thread panicked");
+        }
+
+        let rem1 = pool.idle_count(&key("server1"));
+        let rem2 = pool.idle_count(&key("server2"));
+        assert!(rem1 <= 4);
+        assert!(rem2 <= 4);
+
+        let created1 = seq1.load(Ordering::Relaxed) - 100;
+        let created2 = seq2.load(Ordering::Relaxed) - 200;
+        assert_eq!(created1, closed1.load(Ordering::Relaxed) + rem1 as u32);
+        assert_eq!(created2, closed2.load(Ordering::Relaxed) + rem2 as u32);
     }
 }

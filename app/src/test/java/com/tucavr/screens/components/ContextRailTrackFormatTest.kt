@@ -115,6 +115,45 @@ class ContextRailTrackFormatTest {
     }
 
     @Test
+    fun `formats audio track with sample rate only`() {
+        val track =
+            createAudioTrack(
+                language = "English",
+                codec = "aac",
+                channels = 0,
+                sampleRate = 44100,
+            )
+        val formatted = ContextRailView.formatAudioTrack(track)
+        assertEquals("English (AAC · 44 kHz)", formatted)
+    }
+
+    @Test
+    fun `formats audio track with single channel and sample rate`() {
+        val track =
+            createAudioTrack(
+                language = "German",
+                codec = "opus",
+                channels = 1,
+                sampleRate = 48000,
+            )
+        val formatted = ContextRailView.formatAudioTrack(track)
+        assertEquals("German (OPUS · 1ch · 48 kHz)", formatted)
+    }
+
+    @Test
+    fun `formats audio track with blank codec but valid channels and sample rate`() {
+        val track =
+            createAudioTrack(
+                language = "English",
+                codec = "",
+                channels = 2,
+                sampleRate = 48000,
+            )
+        val formatted = ContextRailView.formatAudioTrack(track)
+        assertEquals("English (2ch · 48 kHz)", formatted)
+    }
+
+    @Test
     fun `formats subtitle track with codec and language`() {
         val track =
             createSubtitleTrack(

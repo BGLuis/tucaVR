@@ -34,6 +34,19 @@ object HistorySourceResolver {
         findNfs: suspend (String) -> SavedServer?,
         findWebdav: suspend (String) -> SavedServer?,
     ): PlaybackSource? {
+        when (entry.sourceType) {
+            HistorySourceType.SMB,
+            HistorySourceType.FTP,
+            HistorySourceType.SFTP,
+            HistorySourceType.NFS,
+            HistorySourceType.WEBDAV,
+            -> Unit
+            HistorySourceType.LOCAL,
+            HistorySourceType.HTTP,
+            HistorySourceType.DLNA,
+            -> return null
+        }
+
         val serverId = extractServerId(entry.serverInfo) ?: return null
         val sizeBytes = entry.sizeBytesFromKey()
         return when (entry.sourceType) {
@@ -54,7 +67,9 @@ object HistorySourceResolver {
     internal fun extractServerId(serverInfo: String?): String? {
         if (serverInfo.isNullOrBlank()) return null
         return try {
-            JSONObject(serverInfo).optString("serverId").takeIf { it.isNotEmpty() }
+            val json = JSONObject(serverInfo)
+            if (json.isNull("serverId")) return null
+            json.optString("serverId").trim().takeIf { it.isNotEmpty() && it != "null" }
         } catch (e: Exception) {
             null
         }

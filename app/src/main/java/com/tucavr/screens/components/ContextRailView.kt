@@ -1019,7 +1019,7 @@ class ContextRailView(
                     context.getString(R.string.file_detail_track_lang_unknown)
                 } catch (e: Exception) {
                     null
-                }?.takeIf { it.isNotEmpty() } ?: "Unknown language"
+                }?.takeIf { it.isNotBlank() } ?: "Unknown language"
             return formatAudioTrack(track, unknownLang)
         }
 
@@ -1044,7 +1044,7 @@ class ContextRailView(
                     context.getString(R.string.file_detail_track_lang_unknown)
                 } catch (e: Exception) {
                     null
-                }?.takeIf { it.isNotEmpty() } ?: "Unknown language"
+                }?.takeIf { it.isNotBlank() } ?: "Unknown language"
             return formatSubtitleTrack(track, unknownLang)
         }
 

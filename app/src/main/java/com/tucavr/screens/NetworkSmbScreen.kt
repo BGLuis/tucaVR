@@ -635,8 +635,13 @@ class NetworkSmbScreen(
             share: String,
             browsePath: String,
         ): String {
+            val cleanShare = share.trim().trim('/')
             val normalized = normalizePath(browsePath)
-            return if (normalized.isEmpty()) share else "$share/$normalized"
+            return when {
+                cleanShare.isEmpty() -> normalized
+                normalized.isEmpty() -> cleanShare
+                else -> "$cleanShare/$normalized"
+            }
         }
 
         fun normalizePath(path: String): String = path.trim().trim('/')
