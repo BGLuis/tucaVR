@@ -43,7 +43,7 @@ mdns-sd = "0.21"
 # Parser XML leve para Device Description UPnP e DIDL-Lite (T7.2, T7.3)
 quick-xml = "0.37"
 # Descriptografia HLS AES-128 (T8.1)
-aes = "0.8"
+aes = "0.9"
 # Codificação de paths para WebDAV (T3.1)
 percent-encoding = "2.3"
 # Parsing de RFC 2822 / getlastmodified para WebDAV (T3.1 / #142)
