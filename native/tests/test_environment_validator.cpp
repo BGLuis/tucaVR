@@ -64,9 +64,39 @@ static std::vector<uint8_t> CreateMinimalPng(uint32_t width, uint32_t height) {
     return png;
 }
 
+// Helper to construct a minimal valid JPEG image header in memory
+static std::vector<uint8_t> CreateMinimalJpeg(uint16_t width, uint16_t height) {
+    std::vector<uint8_t> jpg = {
+        0xFF,
+        0xD8, // SOI
+        0xFF,
+        0xC0, // SOF0
+        0x00,
+        0x11, // length (17)
+        0x08, // 8 bits precision
+        static_cast<uint8_t>((height >> 8) & 0xFF),
+        static_cast<uint8_t>(height & 0xFF),
+        static_cast<uint8_t>((width >> 8) & 0xFF),
+        static_cast<uint8_t>(width & 0xFF),
+        0x03, // 3 components
+        0x01,
+        0x11,
+        0x00,
+        0x02,
+        0x11,
+        0x00,
+        0x03,
+        0x11,
+        0x00,
+        0xFF,
+        0xD9 // EOI
+    };
+    return jpg;
+}
+
 // Builds a valid .glb binary model in memory with the requested triangle count and optional embedded image
 static std::vector<uint8_t> BuildGlb(size_t triangleCount, const std::vector<uint8_t> &imageBytes = {},
-                                     bool indexed = true) {
+                                     bool indexed = true, const std::string &mimeType = "image/png") {
     size_t indexCount = indexed ? (triangleCount * 3) : 0;
     size_t vertexCount = indexed ? 3 : (triangleCount * 3);
     size_t vertexByteSize = vertexCount * 3 * sizeof(float);
@@ -109,7 +139,7 @@ static std::vector<uint8_t> BuildGlb(size_t triangleCount, const std::vector<uin
         json += ",{\"buffer\":0,\"byteOffset\":" + std::to_string(imgOffset) +
                 ",\"byteLength\":" + std::to_string(imageBytes.size()) + "}";
         json += "]";
-        json += ",\"images\":[{\"bufferView\":" + std::to_string(imgViewIdx) + ",\"mimeType\":\"image/png\"}]";
+        json += ",\"images\":[{\"bufferView\":" + std::to_string(imgViewIdx) + ",\"mimeType\":\"" + mimeType + "\"}]";
     } else {
         json += "]";
     }
@@ -226,6 +256,20 @@ static void TestTexture4097Rejected() {
     std::cout << "[PASS] TestTexture4097Rejected (4097px texture rejected)\n";
 }
 
+static void TestTextureJpegAccepted() {
+    auto jpg = CreateMinimalJpeg(2048, 1024);
+    auto glb = BuildGlb(10, jpg, true, "image/jpeg");
+    EnvironmentValidationReport report;
+    EnvironmentValidationResult res = ValidateEnvironmentMemory(glb.data(), glb.size(), &report);
+
+    assert(res == EnvironmentValidationResult::Ok);
+    assert(report.result == EnvironmentValidationResult::Ok);
+    assert(report.maxTextureWidth == 2048);
+    assert(report.maxTextureHeight == 1024);
+    assert(std::string(report.messageKey) == "env_validate_ok");
+    std::cout << "[PASS] TestTextureJpegAccepted (JPEG texture accepted)\n";
+}
+
 static void TestCorruptFileRejected() {
     std::vector<uint8_t> corruptData = {0x00, 0x01, 0x02, 0x03, 0xFF, 0xFE};
     EnvironmentValidationReport report;
@@ -334,6 +378,7 @@ int main() {
     Test100kPlusOneTrianglesRejected();
     TestTexture4096Accepted();
     TestTexture4097Rejected();
+    TestTextureJpegAccepted();
     TestCorruptFileRejected();
     TestCorruptTextureRejected();
     TestInvalidGltfRejected();

@@ -84,11 +84,11 @@
 #include "ambient.vert.h"
 #include "ambient.frag.h"
 #define STB_IMAGE_IMPLEMENTATION
-#define STBI_ONLY_PNG
 #define STBI_NO_STDIO
 #include "stb_image.h"
 #define CGLTF_IMPLEMENTATION
 #include "cgltf.h"
+#undef CGLTF_IMPLEMENTATION
 #include "environment_validator.h"
 #include <android/asset_manager.h>
 

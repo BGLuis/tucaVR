@@ -1,6 +1,8 @@
 #pragma once
 
+#ifndef CGLTF_H_INCLUDED__
 #include "cgltf.h"
+#endif
 #ifndef STBI_INCLUDE_STB_IMAGE_H
 #include "stb_image.h"
 #endif
@@ -118,8 +120,8 @@ inline EnvironmentValidationResult ValidateEnvironment(cgltf_data *data,
         const uint8_t *imgBuffer = nullptr;
         size_t imgBufferSize = 0;
 
-        if (img.buffer_view && img.buffer_view->buffer && img.buffer_view->buffer->data) {
-            imgBuffer = reinterpret_cast<const uint8_t *>(img.buffer_view->buffer->data) + img.buffer_view->offset;
+        if (img.buffer_view) {
+            imgBuffer = cgltf_buffer_view_data(img.buffer_view);
             imgBufferSize = img.buffer_view->size;
         }
 
