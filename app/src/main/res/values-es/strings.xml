@@ -154,6 +154,14 @@
     <string name="env_passthrough_desc">Realidad Mixta mostrando su habitación física como fondo.</string>
     <string name="env_reset_anchor_button">Restablecer a anclaje de entorno</string>
 
+    <!-- Environment Validation (Phase 1.0 §1 T1.1 / Issue #62) -->
+    <string name="env_validate_ok">El entorno es válido</string>
+    <string name="env_error_corrupt_file">Archivo de entorno 3D no válido o dañado</string>
+    <string name="env_error_invalid_gltf">El modelo 3D no cumple con la especificación glTF</string>
+    <string name="env_error_too_many_triangles">El modelo 3D supera el límite de 100.000 triángulos</string>
+    <string name="env_error_texture_too_large">Las texturas del entorno no deben superar los 4096×4096 píxeles</string>
+    <string name="env_error_corrupt_texture">Textura dañada en el entorno 3D</string>
+
     <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
     <string name="browser_title_local_files">Archivos locales</string>
     <string name="browser_row_up">Subir un nivel</string>

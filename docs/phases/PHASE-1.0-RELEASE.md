@@ -27,7 +27,7 @@ Fulfills **RF-ENV-005** (User-customizable environments — 3D model importing).
 
 ### Tasks
 
-- [ ] **T1.1** — Implement **environment validator** in C++:
+- [x] **T1.1** — Implement **environment validator** in C++:
   - Hardware budget validation before importing (triangles ≤ 100K, texture dimensions ≤ 4096², file size ≤ 100MB) — note that `PHASE-0.3-POLISH-AUDIO.md` keeps built-in environments under 50k triangles; decide whether imports should be held to the same budget
 - [ ] **T1.2** — Implement **environment installer** in Kotlin:
   - Import file handling, destination folder layout in app internal storage (`environments/custom_<uuid>/`)

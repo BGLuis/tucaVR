@@ -163,6 +163,14 @@
     <string name="env_passthrough_desc">Mixed Reality displaying your physical room as background.</string>
     <string name="env_reset_anchor_button">Reset to Environment Anchor</string>
 
+    <!-- Environment Validation (Phase 1.0 §1 T1.1 / Issue #62) -->
+    <string name="env_validate_ok">Environment is valid</string>
+    <string name="env_error_corrupt_file">Invalid or corrupted 3D environment file</string>
+    <string name="env_error_invalid_gltf">The 3D model does not comply with the glTF specification</string>
+    <string name="env_error_too_many_triangles">The 3D model exceeds the 100,000 triangle limit</string>
+    <string name="env_error_texture_too_large">Environment textures must not exceed 4096×4096 pixels</string>
+    <string name="env_error_corrupt_texture">Corrupted texture in 3D environment</string>
+
     <!-- Local file browser (VRPresentation.renderLocalFiles / FileAdapter) -->
     <string name="browser_title_local_files">Local Files</string>
     <string name="browser_row_up">Go up one level</string>
