@@ -37,19 +37,18 @@
 //! remontados na ordem original; um `StatusCode::Eof`/short-read no meio do
 //! range para a remontagem ali (o resto, se buscado, e descartado).
 //!
-//! ## Verificacao de host key: aceita qualquer uma, DE PROPOSITO
+//! ## Verificação e fixação de host key (TOFU - Trust On First Use, T6.2 / #57)
 //!
-//! `SftpHandler::check_server_key` sempre retorna `Ok(true)` — ou seja, NAO
-//! ha verificacao de host key (equivalente a
-//! `ssh -o StrictHostKeyChecking=no`, vulneravel a
-//! man-in-the-middle-na-rede-local). Decisao deliberada e documentada, nao
-//! um descuido: nao existe infraestrutura de `known_hosts`/TOFU nesta app
-//! (nem para SMB nem para NFS — mesmo padrao ja aceito no doc para "sem
-//! infra de auth real para NAS domestico"), e o caso de uso e uma rede
-//! Wi-Fi domestica onde o Quest 3 fala com um NAS/servidor SFTP na mesma
-//! LAN. Se isto algum dia mudar (uso fora de uma LAN confiavel), a
-//! mitigacao correta e fixacao de chave (guardar o fingerprint na primeira
-//! conexao e comparar nas seguintes), nao "confiar em tudo" como agora.
+//! Conexões SFTP realizam verificação estrita de identidade do servidor:
+//! 1. Na primeira conexão sem fingerprint armazenado (`expected_fingerprint: None`),
+//!    a negociação KEX captura a chave pública do servidor e aborta com
+//!    `ERROR:HOST_KEY_CONFIRM:<fingerprint>` (ou erro `needs confirmation: <fingerprint>`),
+//!    retornando o fingerprint SHA-256 apresentado pelo servidor para confirmação do usuário.
+//! 2. Uma vez confirmado e fixado (`expected_fingerprint: Some(fp)`), as conexões
+//!    seguintes comparam o fingerprint da chave do servidor contra o valor fixado.
+//!    Se a chave divergir, a conexão é abortada com
+//!    `ERROR:HOST_KEY_CHANGED:expected ..., server presented ...` (proteção contra
+//!    ataques man-in-the-middle / MITM).
 //!
 //! ## Keepalive e reconexao (T6.4, doc secao 6 `[!NOTE]` "Timeout agressivo")
 //!
@@ -65,13 +64,18 @@
 //! erro sobe para o chamador (`Demuxer`).
 //!
 //! **O que NAO esta implementado** (fora do escopo desta sessao, documentado
-//! honestamente em vez de fingido): escrita de arquivos, `known_hosts`,
+//! honestamente em vez de fingido): escrita de arquivos, `known_hosts` em arquivo plano,
 //! agentes SSH (`ssh-agent`), certificados OpenSSH. Autenticacao por chave
 //! privada (T6.2 "avancado") esta implementada (`SftpTarget::private_key`,
 //! PEM em memoria — ver `uri.rs`), password auth e o caminho principal.
 
+pub mod host_key;
 pub mod uri;
 
+pub use host_key::{
+    HostKeyError, compute_fingerprint, normalize_fingerprint, verify_host_key_fingerprint,
+    verify_server_public_key,
+};
 pub use uri::{SftpTarget, is_sftp_uri, redact};
 
 use crate::chunking::split_range;
@@ -145,20 +149,26 @@ const SFTP_STALL_TIMEOUT: Duration = Duration::from_millis(3500);
 /// Teto de tempo para retentativa de chunks individuais falhos dentro da janela.
 const SFTP_CHUNK_RETRY_TIMEOUT: Duration = Duration::from_millis(2000);
 
-/// Handler minimo exigido pelo `russh::client` para receber eventos da
-/// sessao SSH (banner, checagem de host key, etc). `check_server_key`
-/// aceita QUALQUER chave — ver `[!WARNING]` no doc do modulo. Todos os
-/// outros callbacks usam a implementacao default do trait.
-struct SftpHandler;
+/// Handler do `russh::client` para eventos de sessao SSH.
+/// Realiza a verificacao da host key do servidor (T6.2 / #57 TOFU).
+struct SftpHandler {
+    expected_fingerprint: Option<String>,
+    check_result: Arc<std::sync::Mutex<Option<Result<String, HostKeyError>>>>,
+}
 
 impl Handler for SftpHandler {
     type Error = russh::Error;
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &PublicKeyOrCertificate,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        Ok(true)
+        let res = verify_server_public_key(self.expected_fingerprint.as_deref(), server_public_key);
+        let ok = res.is_ok();
+        if let Ok(mut lock) = self.check_result.lock() {
+            *lock = Some(res);
+        }
+        Ok(ok)
     }
 }
 
@@ -186,9 +196,32 @@ async fn connect_nodelay(
         .await
         .map_err(|e| e.to_string())?;
     socket.set_nodelay(true).map_err(|e| e.to_string())?;
-    client::connect_stream(Arc::new(client_config(keepalive)), socket, SftpHandler)
-        .await
-        .map_err(|e| e.to_string())
+    let check_result = Arc::new(std::sync::Mutex::new(None));
+    let handler = SftpHandler {
+        expected_fingerprint: t.expected_fingerprint.clone(),
+        check_result: check_result.clone(),
+    };
+    match client::connect_stream(Arc::new(client_config(keepalive)), socket, handler).await {
+        Ok(handle) => Ok(handle),
+        Err(e) => {
+            if let Ok(guard) = check_result.lock() {
+                match &*guard {
+                    Some(Err(HostKeyError::NeedsConfirmation { fingerprint })) => {
+                        return Err(format!(
+                            "ERROR:HOST_KEY_CONFIRM:{fingerprint}\nneeds confirmation: {fingerprint}"
+                        ));
+                    }
+                    Some(Err(HostKeyError::IdentityChanged { expected, actual })) => {
+                        return Err(format!(
+                            "ERROR:HOST_KEY_CHANGED:expected {expected}, server presented {actual}\nserver identity changed: expected fingerprint {expected}, server presented {actual}"
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            Err(e.to_string())
+        }
+    }
 }
 
 /// Conecta e autentica — senha OU chave privada (T6.2 "avancado"), conforme
@@ -295,6 +328,7 @@ async fn disconnect_best_effort(session: &client::Handle<SftpHandler>) {
         .await;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SftpDirEntry {
     pub name: String,
     pub is_dir: bool,
@@ -343,6 +377,7 @@ fn pool_key(t: &SftpTarget) -> PoolKey {
             &t.username,
             &t.password,
             t.private_key.as_deref().unwrap_or(""),
+            t.expected_fingerprint.as_deref().unwrap_or(""),
         ],
     )
 }
@@ -368,6 +403,36 @@ fn checkin(t: &SftpTarget, session: SftpPooledSession) {
 /// Drops every pooled session of a server (called when the user deletes it).
 pub fn close_pooled_sessions(host: &str, port: u16) {
     dispose(SFTP_POOL.drain_server(host, port));
+}
+
+/// Obtém o fingerprint SHA-256 da host key do servidor SFTP sem autenticar.
+/// Conecta via TCP, aguarda a troca de chaves SSH (KEX) e extrai o fingerprint retornado.
+pub async fn probe_server_fingerprint(host: &str, port: u16) -> Result<String, String> {
+    let target = SftpTarget {
+        host: host.to_string(),
+        port,
+        ..Default::default()
+    };
+    match connect_nodelay(&target, false).await {
+        Ok(session) => {
+            let _ = session.disconnect(Disconnect::ByApplication, "", "").await;
+            Err("SFTP: probe obteve conexao inesperada sem confirmacao de chave".to_string())
+        }
+        Err(e) => {
+            if let Some(idx) = e.find("ERROR:HOST_KEY_CONFIRM:") {
+                let rest = &e[idx + "ERROR:HOST_KEY_CONFIRM:".len()..];
+                let fp = rest.lines().next().unwrap_or(rest).trim();
+                Ok(fp.to_string())
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// Versão bloqueante de [`probe_server_fingerprint`].
+pub fn probe_host_key(host: &str, port: u16) -> Result<String, String> {
+    crate::POOL_RUNTIME.block_on(probe_server_fingerprint(host, port))
 }
 
 /// Lists `dir_path` on a pooled session; a pooled session may be dead (server

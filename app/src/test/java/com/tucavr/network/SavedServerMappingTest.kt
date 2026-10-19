@@ -93,12 +93,18 @@ class SavedServerMappingTest {
         assertEquals(2222, saved.port)
         assertEquals("root", saved.username)
 
-        val recovered = saved.toSftpServer(password = "", privateKey = sftp.privateKey)
+        val recovered =
+            saved.toSftpServer(
+                password = "",
+                privateKey = sftp.privateKey,
+                hostKeyFingerprint = "SHA256:fingerprint_hash_abc123",
+            )
         assertEquals(sftp.id, recovered.id)
         assertEquals(sftp.name, recovered.name)
         assertEquals(sftp.host, recovered.host)
         assertEquals(sftp.port, recovered.port)
         assertEquals(sftp.privateKey, recovered.privateKey)
+        assertEquals("SHA256:fingerprint_hash_abc123", recovered.hostKeyFingerprint)
         assertTrue(recovered.usesKeyAuth)
     }
 

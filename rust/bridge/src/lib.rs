@@ -1572,6 +1572,7 @@ pub extern "C" fn start_sftp_playback(
             username,
             password,
             private_key,
+            expected_fingerprint: None,
         }
     };
     if let Err(e) = target.validate() {
@@ -1641,6 +1642,7 @@ pub extern "C" fn sftp_list_directory(
             username,
             password,
             private_key,
+            expected_fingerprint: None,
         }
     };
     if let Err(e) = target.validate() {
@@ -1694,6 +1696,7 @@ pub extern "C" fn sftp_scan_folder_has_media(
             username,
             password,
             private_key,
+            expected_fingerprint: None,
         }
     };
     if let Err(e) = target.validate() {
@@ -2639,6 +2642,7 @@ pub extern "C" fn sftp_thumbnail_open(
             username,
             password,
             private_key,
+            expected_fingerprint: None,
         }
     };
     if target.validate().is_err() {
@@ -2913,6 +2917,7 @@ pub extern "C" fn sftp_generate_thumbnail_strip(
             username,
             password,
             private_key,
+            expected_fingerprint: None,
         }
     };
     if target.validate().is_err() {
@@ -3065,6 +3070,7 @@ pub extern "C" fn sftp_read_metadata(
             username,
             password,
             private_key,
+            expected_fingerprint: None,
         }
     };
     if target.validate().is_err() {

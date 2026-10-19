@@ -27,18 +27,22 @@ class ServerCredentialStore(context: Context) {
         }
 
     /**
-     * Salva a senha e/ou chave privada (PEM) associadas ao [serverId].
+     * Salva a senha, chave privada (PEM) e/ou fingerprint da host key (T6.2 / #57 TOFU) associadas ao [serverId].
      */
     fun saveCredentials(
         serverId: String,
         password: String = "",
         privateKey: String? = null,
+        hostKeyFingerprint: String? = null,
     ) {
         val json =
             JSONObject().apply {
                 put("password", password)
                 if (!privateKey.isNullOrEmpty()) {
                     put("privateKey", privateKey)
+                }
+                if (!hostKeyFingerprint.isNullOrEmpty()) {
+                    put("hostKeyFingerprint", hostKeyFingerprint)
                 }
             }
         prefs.edit().putString(serverId, json.toString()).apply()
@@ -64,6 +68,19 @@ class ServerCredentialStore(context: Context) {
         return try {
             val key = JSONObject(raw).optString("privateKey", "")
             if (key.isNotEmpty()) key else null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Retorna o fingerprint da host key SFTP fixado para o [serverId] (T6.2 / #57 TOFU), ou null se nao houver.
+     */
+    fun getHostKeyFingerprint(serverId: String): String? {
+        val raw = prefs.getString(serverId, null) ?: return null
+        return try {
+            val fp = JSONObject(raw).optString("hostKeyFingerprint", "")
+            if (fp.isNotEmpty()) fp else null
         } catch (e: Exception) {
             null
         }

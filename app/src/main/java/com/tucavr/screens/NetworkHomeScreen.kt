@@ -719,7 +719,11 @@ class NetworkHomeScreen(
                             )
                         ServerProtocol.SFTP ->
                             Destination.NetworkSftpFiles(
-                                server.toSftpServer(credentialStore.getPassword(server.id), credentialStore.getPrivateKey(server.id)),
+                                server.toSftpServer(
+                                    password = credentialStore.getPassword(server.id),
+                                    privateKey = credentialStore.getPrivateKey(server.id),
+                                    hostKeyFingerprint = credentialStore.getHostKeyFingerprint(server.id),
+                                ),
                                 "",
                             )
                         ServerProtocol.NFS -> Destination.NetworkNfsFiles(server, "")

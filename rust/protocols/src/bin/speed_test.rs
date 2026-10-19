@@ -171,6 +171,7 @@ fn build_internal_uri(protocol: &str, args: &Args) -> String {
                 username: args.get_or("user", ""),
                 password: args.get_or("password", ""),
                 private_key: None,
+                expected_fingerprint: None,
             };
             target.to_internal()
         }
