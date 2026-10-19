@@ -1,70 +1,71 @@
-# 📐 Arquitetura do Sistema — tucaVR
+# 📐 System Architecture — tucaVR
 
-> **Documento de Arquitetura Técnica Canônico**  
-> **Plataforma Primária:** Meta Quest 3 (Qualcomm Snapdragon XR2 Gen 2 / Horizon OS)  
-> **Modelo de Execução:** 100% Imersivo OpenXR (`NativeActivity`, `vr_only`)  
-> **Padrão Tri-Layer:** Kotlin (Shell & UI) $\leftrightarrow$ C++ (OpenXR Engine & Vulkan/GLES) $\leftrightarrow$ Rust (Media & Streaming Engine)
+> **Canonical Technical Architecture Document**  
+> **Primary Platform:** Meta Quest 3 (Qualcomm Snapdragon XR2 Gen 2 / Horizon OS)  
+> **Execution Model:** 100% immersive OpenXR (`NativeActivity`, `vr_only`)  
+> **Tri-Layer Pattern:** Kotlin (Shell & UI) $\leftrightarrow$ C++ (OpenXR Engine & Vulkan/GLES) $\leftrightarrow$ Rust (Media & Streaming Engine)
 
 ---
 
-## 1. Visão Geral e Metas de Engenharia
+## 1. Overview and Engineering Goals
 
-O **tucaVR** é um reprodutor de vídeo imersivo (2D, 3D Estereoscópico SBS/OU, 180° e 360°) concebido especificamente para headsets autônomos baseados na plataforma Qualcomm Snapdragon XR2 Gen 2 (Meta Quest 3).
+**tucaVR** is an immersive video player (2D, stereoscopic 3D SBS/OU, 180° and 360°) designed specifically for standalone headsets based on the Qualcomm Snapdragon XR2 Gen 2 platform (Meta Quest 3).
 
-Diferente de aplicações Android móveis tradicionais com janelas 2D planas sobrepostas a um viewport VR, o tucaVR opera exclusivamente como uma `NativeActivity` em modo imersivo integral (`<meta-data android:name="com.oculus.vr.mode" android:value="vr_only" />`). Não existem janelas ou `Activity`s 2D secundárias no processo.
+Unlike traditional mobile Android applications, which overlay flat 2D windows on a VR viewport, tucaVR runs exclusively as a `NativeActivity` in fully immersive mode (`<meta-data android:name="com.oculus.vr.mode" android:value="vr_only" />`). There are no secondary 2D windows or `Activity`s in the process.
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                           METAS DE ENGENHARIA                               │
+│                           ENGINEERING GOALS                                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
-│  ⚡ Zero-Copy Streaming: Pipeline direto Decodificador HW -> GPU VRAM         │
-│  🎯 72/90/120 Hz Sustentados: Loop de render OpenXR livre de bloqueios de E/S │
-│  ⏱️ A/V Sync Estrito: Áudio como relógio mestre com correção proativa de drift│
-│  👓 UI Espacial Flutuante: Telas do Android renderizadas em texturas 3D     │
-│  🔒 Segurança e Isolamento: Credenciais cifradas e Rust memory-safe na rede  │
+│  ⚡ Zero-Copy Streaming: direct HW decoder -> GPU VRAM pipeline              │
+│  🎯 Sustained 72/90/120 Hz: OpenXR render loop free of I/O blocking          │
+│  ⏱️ Strict A/V Sync: audio as master clock with proactive drift correction   │
+│  👓 Floating Spatial UI: Android screens rendered onto 3D textures           │
+│  🔒 Security and Isolation: encrypted credentials, memory-safe Rust network  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## 2. Topologia Tri-Layer e Contratos FFI
+## 2. Tri-Layer Topology and FFI Contracts
 
-O sistema é estritamente particionado em três camadas concêntricas de software. Cada linguagem é designada para a sua zona de máxima eficiência:
+The system is strictly partitioned into three concentric software layers. Each language is assigned to the zone where it is most efficient:
 
 ```mermaid
 flowchart TB
-    subgraph KOTLIN ["1. Camada Kotlin (app/) — Shell, UI & Persistência"]
+    subgraph KOTLIN ["1. Kotlin Layer (app/) — Shell, UI & Persistence"]
         VRActivity["VRActivity (NativeActivity Shell)"]
-        VRPres["VRPresentation (UI do File Browser)"]
-        VRCtrl["VRControlsPresentation (Barra de Controles VR)"]
-        VRModal["VRModalPresentation (Diálogos e Modais)"]
-        Crypto["EncryptedSharedPreferences (Credenciais)"]
-        RoomDB["Room DB (Histórico de Reprodução)"]
+        VRPres["VRPresentation (screen host: AppNavigator + screens/*)"]
+        VRCtrl["VRControlsPresentation (VR Controls Bar)"]
+        VRModal["VRModalPresentation (Dialogs and Modals)"]
+        VRBrowser["VRWebBrowserPresentation (Compose + GeckoView)"]
+        Crypto["EncryptedSharedPreferences (Credentials)"]
+        RoomDB["Room DB (Playback History)"]
     end
 
-    subgraph JNI_BOUNDARY ["Fronteira JNI Bidirecional"]
+    subgraph JNI_BOUNDARY ["Bidirectional JNI Boundary"]
         JNI_Calls["• C++ -> Kotlin: setupVirtualDisplay, dispatchVRTouch, runOnUiThread\n• Kotlin -> C++: nativeTogglePlayPause, nativeSeekVideo, nativePlayVideo"]
     end
 
-    subgraph CPP ["2. Camada C++ (native/) — OpenXR Engine & Rendering"]
-        XrSession["OpenXR Session & Swapchain Loop (Vulkan nativo / OVRFW no GLES fallback)"]
+    subgraph CPP ["2. C++ Layer (native/) — OpenXR Engine & Rendering"]
+        XrSession["OpenXR Session & Swapchain Loop (native Vulkan / OVRFW in the GLES fallback)"]
         VkPipeline["Vulkan Render Pipeline (vr_player_app_vulkan.cpp)"]
-        GlesPipeline["OpenGL ES Fallback (vr_player_app.cpp)"]
+        GlesPipeline["OpenGL ES Fallback, frozen (vr_player_app.cpp)"]
         Raycast["Raycast Controller Input (vr_player_input_vulkan.h)"]
-        UiCapture["AImageReader Capture (UI/Controles/Modais -> Texturas)"]
+        UiCapture["AImageReader Capture (UI/Controls/Modals/Browser -> Textures)"]
     end
 
-    subgraph CABI_BOUNDARY ["Fronteira C-ABI Plana (extern \"C\")"]
-        CABI_Calls["• C++ -> Rust: get_current_video_frame, start_video_playback, seek_video_playback\n• Kotlin NUNCA chama Rust diretamente (ADR-002)"]
+    subgraph CABI_BOUNDARY ["Flat C-ABI Boundary (extern \"C\")"]
+        CABI_Calls["• C++ -> Rust: get_current_video_frame, start_video_playback, seek_video_playback\n• Kotlin NEVER calls Rust directly (ADR-002)"]
     end
 
-    subgraph RUST ["3. Camada Rust (rust/) — Núcleo de Mídia e Streaming"]
+    subgraph RUST ["3. Rust Layer (rust/) — Media and Streaming Core"]
         Bridge["rust/bridge (C-ABI libbridge.so)"]
         Demuxer["rust/core::demuxer (ffmpeg-next + Custom I/O)"]
         MediaCodec["rust/core::decoder (ndk::MediaCodec HW Decoder)"]
         SyncMgr["rust/media-logic::sync (SyncManager A/V Clock)"]
         AudioOut["rust/audio (Oboe NDK Low-Latency Audio)"]
-        NetClients["rust/protocols (SMB 2/3, HTTP/S, FTP, SFTP em pure-Rust)"]
+        NetClients["rust/protocols (SMB 2/3, NFS, FTP, SFTP, WebDAV, DLNA, HTTP(S), HLS, DASH — pure Rust)"]
     end
 
     KOTLIN <--> JNI_BOUNDARY
@@ -73,108 +74,109 @@ flowchart TB
     CABI_BOUNDARY <--> RUST
 ```
 
-### 2.1 Papéis e Responsabilidades por Camada
+### 2.1 Roles and Responsibilities per Layer
 
-| Camada | Linguagem | Módulos Principais | Responsabilidade |
+| Layer | Language | Main Modules | Responsibility |
 | :--- | :--- | :--- | :--- |
-| **Shell & UI** | Kotlin | `VRActivity.kt`, `VRPresentation.kt`, `VRControlsPresentation.kt`, `history/` | Orquestração do Android OS, desenho de UI nativa via `VirtualDisplay`, persistência com Room, credenciais cifradas (`EncryptedSharedPreferences`). |
-| **XR Engine** | C++20 | `vr_player_app_vulkan.cpp`, `vr_player_app.cpp`, `vr_player_jni_vulkan.cpp` | Sessão OpenXR, swapchains, loop de desenho a 72/90/120 Hz, raycasting de controles Touch Plus, importação de `AHardwareBuffer` para Vulkan/GLES. |
-| **Media Core** | Rust (2021 workspace / 2024 protocols) | `core`, `media-logic`, `protocols`, `audio`, `bridge` | Demuxing de arquivos locais e remotos, decodificação acelerada por hardware via NDK `MediaCodec`, saída de áudio com `Oboe`, clientes de rede seguros. |
+| **Shell & UI** | Kotlin | `VRActivity.kt`, `VRPresentation.kt`, `VRControlsPresentation.kt`, `screens/`, `browser/`, `history/` | Android OS orchestration, UI drawing via `VirtualDisplay`, Room persistence, encrypted credentials (`EncryptedSharedPreferences`). |
+| **XR Engine** | C++20 | `vr_player_app_vulkan.cpp`, `vr_player_jni_vulkan.cpp`, `vr_player_app.cpp` (frozen GLES fallback) | OpenXR session, swapchains, 72/90/120 Hz draw loop, Touch Plus controller raycasting, `AHardwareBuffer` import into Vulkan/GLES. |
+| **Media Core** | Rust (2021 workspace / 2024 protocols) | `core`, `media-logic`, `protocols`, `audio`, `bridge` | Demuxing of local and remote files, hardware-accelerated decoding through NDK `MediaCodec`, audio output with `Oboe`, secure network clients. |
 
-### 2.2 A Regra Crítica FFI (ADR-002: Kotlin $\leftrightarrow$ Rust)
+### 2.2 The Critical FFI Rule (ADR-002: Kotlin $\leftrightarrow$ Rust)
 
 > [!IMPORTANT]
-> **O Kotlin NUNCA chama o Rust diretamente.**
-> Toda comunicação entre Kotlin e Rust passa obrigatoriamente pela camada C++. 
-> 
-> **Razão Arquitetural:** O render loop em C++ busca o ponteiro de frame decodificado (`get_current_video_frame()`) a cada quadro do headset (até 120 vezes por segundo). Uma chamada direta Kotlin $\leftrightarrow$ Rust via UniFFI adicionaria overhead desnecessário e isolaria o sincronismo do render loop gráfico do ciclo de vida dos buffers. C++ atua como o regente em tempo real entre os dados decodificados pelo Rust e a exibição no visor do Quest.
+> **Kotlin NEVER calls Rust directly.**
+> All communication between Kotlin and Rust necessarily goes through the C++ layer.
+>
+> **Architectural reason:** the C++ render loop fetches the decoded frame pointer (`get_current_video_frame()`) on every headset frame (up to 120 times per second). A direct Kotlin $\leftrightarrow$ Rust call via UniFFI would add needless overhead and detach the synchronization of the graphics render loop from the buffer lifecycle. C++ acts as the real-time conductor between the data decoded by Rust and what is shown in the Quest display.
 
 ---
 
-## 3. Pipeline Gráfico e OpenXR (Vulkan Primário & GLES Fallback)
+## 3. Graphics and OpenXR Pipeline (Vulkan Primary, GLES Frozen Fallback)
 
-O pipeline gráfico do tucaVR foi migrado para **Vulkan 1.1** como backend primário e padrão, mantendo um caminho completo em **OpenGL ES 3.2** para validação cruzada e fallback.
+tucaVR's graphics pipeline was migrated to **Vulkan 1.1** as the primary, default backend. A complete **OpenGL ES 3.x** path is kept as a fallback until the Vulkan cut is validated on a headset; it is **frozen**: rendering work goes into the Vulkan path only, and several features (ambient halo, foveation, performance metrics, ADPF, MQSR/SGSR upscaling) exist only there.
 
-```
+```text
                   ┌─────────────────────────────────────┐
                   │    OpenXR Runtime (Horizon OS)      │
                   └──────────────────┬──────────────────┘
-                                     │ xrGetVulkanGraphicsRequirements2KHR
+                                     │ xrGetVulkanGraphicsRequirementsKHR
                                      ▼
                   ┌─────────────────────────────────────┐
                   │      VkInstance / VkDevice          │
-                  │   (Habilitadas extensões Android)   │
+                  │   (Android extensions enabled)      │
                   └───────┬─────────────────────┬───────┘
                           │                     │
           VK_ANDROID_external_memory            │ VK_KHR_sampler_ycbcr_conversion
                           ▼                     ▼
 ┌───────────────────────────────────┐ ┌───────────────────────────────────┐
-│     AHardwareBuffer Importado     │ │  Sampler YCbCr Imutável (GPU)     │
-│   (Zero-Copy do MediaCodec NDK)   │ │ (Conversão direta de espaço cores)│
+│     Imported AHardwareBuffer      │ │  Immutable YCbCr Sampler (GPU)    │
+│   (Zero-Copy from NDK MediaCodec) │ │ (Direct color-space conversion)   │
 └─────────────────┬─────────────────┘ └─────────────────┬─────────────────┘
                   │                                     │
                   └──────────────────┬──────────────────┘
                                      ▼
                   ┌─────────────────────────────────────┐
-                  │   OpenXR Swapchains (Por Olho)      │
+                  │   OpenXR Swapchains (Per Eye)       │
                   │  (Stereo Projections / VR Screen)   │
                   └─────────────────────────────────────┘
 ```
 
-### 3.1 Backend Primário: Vulkan (`vr_player_app_vulkan.cpp`)
+### 3.1 Primary Backend: Vulkan (`vr_player_app_vulkan.cpp`)
 
-1. **Extensões de Instância e Dispositivo (`vr_player_app_vulkan.cpp:1454-1567`):**
-   - **Instância:** `VK_KHR_external_memory_capabilities`, `VK_KHR_get_physical_device_properties2`
-   - **Dispositivo:** `VK_ANDROID_external_memory_android_hardware_buffer`, `VK_KHR_sampler_ycbcr_conversion`, `VK_KHR_external_memory`, `VK_KHR_dedicated_allocation`, `VK_KHR_bind_memory2`, `VK_KHR_get_memory_requirements2`
-2. **Importação do Buffer do Vídeo (`GetOrImportVideoFrame`):**
-   - O Rust fornece o ponteiro `AHardwareBuffer*` decodificado pelo MediaCodec.
-   - O C++ consulta os requisitos de memória via `vkGetAndroidHardwareBufferPropertiesANDROID`.
-   - Cria uma `VkImage` vinculada utilizando `VkExternalMemoryImageCreateInfo` e formato `VK_FORMAT_UNDEFINED` (o hardware decodificador gerencia o formato raw YUV).
-   - Aloca `VkDeviceMemory` vinculada com `VkImportAndroidHardwareBufferInfoANDROID` usando `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT`.
-3. **Conversão de Cores YUV $\rightarrow$ RGB Zero-Overhead:**
-   - Utiliza `VkSamplerYcbcrConversion` para permitir que o fragment shader amostre a `VkImage` externa diretamente como RGB via um sampler combinado, sem requerer múltiplos passes de shader na GPU.
-4. **Cache de Frames (`videoImageCache`):**
-   - O `MediaCodec` do Android reutiliza um conjunto fixo de instâncias de `AHardwareBuffer` (pool interno).
-   - O C++ mantém um cache indexado pelo ponteiro `AHardwareBuffer*`, eliminando a recriação custosa de `VkImage` e alocações de memória a cada frame.
-5. **Otimizações Específicas do Quest 3:**
-   - **Foveated Rendering (`XR_FB_foveation`):** Reduz o custo de amostragem na visão periférica.
-   - **Upscaling Vulkan (MQSR & SGSR1):** Filtros de super-resolução para manter nitidez em vídeos 1080p projetados em telas virtuais de alta densidade.
+1. **Instance and Device Extensions (`CreateVulkanInstanceAndDevice`, `vr_player_app_vulkan.cpp:1449`):** the Vulkan instance and physical device are the ones the OpenXR runtime asks for (`xrGetVulkanGraphicsRequirementsKHR`, `xrGetVulkanInstanceExtensionsKHR`, `xrGetVulkanGraphicsDeviceKHR`, `xrGetVulkanDeviceExtensionsKHR`), plus:
+   - **Instance:** `VK_KHR_external_memory_capabilities`, `VK_KHR_get_physical_device_properties2`
+   - **Device:** `VK_ANDROID_external_memory_android_hardware_buffer`, `VK_KHR_sampler_ycbcr_conversion`, `VK_KHR_external_memory`, `VK_KHR_dedicated_allocation`, `VK_KHR_bind_memory2`, `VK_KHR_get_memory_requirements2`
+2. **Video Buffer Import (`GetOrImportVideoFrame`):**
+   - Rust provides the `AHardwareBuffer*` pointer decoded by MediaCodec.
+   - C++ queries the memory requirements through `vkGetAndroidHardwareBufferPropertiesANDROID`.
+   - It creates a `VkImage` bound with `VkExternalMemoryImageCreateInfo` and format `VK_FORMAT_UNDEFINED` (the decoder hardware manages the raw YUV format).
+   - It allocates `VkDeviceMemory` bound with `VkImportAndroidHardwareBufferInfoANDROID` using `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT`.
+3. **Zero-Overhead YUV $\rightarrow$ RGB Color Conversion:**
+   - It uses `VkSamplerYcbcrConversion` so the fragment shader can sample the external `VkImage` directly as RGB through a combined sampler, without requiring multiple GPU shader passes.
+4. **Frame Cache (`videoImageCache`):**
+   - Android's `MediaCodec` reuses a fixed set of `AHardwareBuffer` instances (an internal pool).
+   - C++ keeps a cache indexed by the `AHardwareBuffer*` pointer, avoiding the costly re-creation of `VkImage`s and memory allocations on every frame.
+5. **Quest 3 Specific Optimizations:**
+   - **Foveated Rendering (`XR_FB_foveation`):** reduces sampling cost in the peripheral vision.
+   - **Vulkan Upscaling (MQSR & SGSR1):** super-resolution filters to keep 1080p video sharp when projected onto high-density virtual screens.
 
-### 3.2 Backend de Fallback: OpenGL ES (`vr_player_app.cpp`)
+### 3.2 Fallback Backend: OpenGL ES (`vr_player_app.cpp`, frozen)
 
-- Utiliza `eglCreateImageKHR` com `EGL_NATIVE_BUFFER_ANDROID` apontando para o `AHardwareBuffer*`.
-- Vincula a imagem com `glEGLImageTargetTexture2DOESTO` para uma textura `GL_TEXTURE_EXTERNAL_OES`.
-- Fragment shaders customizados do OVRFW processam a amostragem via `samplerExternalOES`.
+- Uses `eglCreateImageKHR` with `EGL_NATIVE_BUFFER_ANDROID` pointing at the `AHardwareBuffer*`.
+- Binds the image with `glEGLImageTargetTexture2DOES` to a `GL_TEXTURE_EXTERNAL_OES` texture.
+- Custom OVRFW fragment shaders do the sampling through `samplerExternalOES`.
+- Selected at build time with `-PvrplayerGraphicsApi=GLES`; no new rendering features are mirrored into it.
 
-### 3.3 Modos de Projeção Estereoscópica (`ScreenMode`)
+### 3.3 Stereoscopic Projection Modes (`ScreenMode`)
 
-A enumeração `ScreenMode` é sincronizada entre Rust, C++ e Kotlin (ver `native/include/screen_mode.h:12-30`):
+The `ScreenMode` enumeration is synchronized across Rust, C++ and Kotlin (see `native/include/screen_mode.h`, the `SCREEN_MODE` comments and `SCREEN_MODE_COUNT` in `rust/bridge/src/lib.rs`, `ScreenFormatCatalog.kt` and `Format3D::to_screen_mode_index` in `rust/media-logic/src/format3d.rs`):
 
-| ID | Modo (`ScreenModeName`) | Descrição e Geometria | Mapeamento UV por Olho |
+| ID | Mode (`ScreenModeName`) | Description and Geometry | Per-Eye UV Mapping |
 | :--- | :--- | :--- | :--- |
-| `0` | `Flat2D` | Painel Quad plano flutuante | Ambos os olhos veem a textura completa $[0..1, 0..1]$. |
-| `1` | `SBS` | 3D Side-by-Side (Full) em Quad plano | Olho Esquerdo: $U \in [0.0..0.5]$; Olho Direito: $U \in [0.5..1.0]$. |
-| `2` | `SBSHalf` | 3D Side-by-Side (Half) em Quad plano | Olho Esquerdo: $U \in [0.0..0.5]$; Olho Direito: $U \in [0.5..1.0]$. |
-| `3` | `OU` | 3D Over/Under (Full) em Quad plano | Olho Esquerdo: $V \in [0.0..0.5]$; Olho Direito: $V \in [0.5..1.0]$. |
-| `4` | `OUHalf` | 3D Over/Under (Half) em Quad plano | Olho Esquerdo: $V \in [0.0..0.5]$; Olho Direito: $V \in [0.5..1.0]$. |
-| `5` | `Sphere360` | Esfera Completa 360° Monoscópica | Projeção Equiretangular mapeada para ambos os olhos. |
-| `6` | `Sphere180` | Cúpula Hemisférica 180° Monoscópica | Coordenadas esféricas projetadas igualmente para ambos os olhos. |
-| `7` | `Sphere360SBS` | Esfera Completa 360° Estéreo SBS | Esfera equiretangular com divisão horizontal esquerda/direita. |
-| `8` | `Sphere360OU` | Esfera Completa 360° Estéreo OU | Esfera equiretangular com divisão vertical topo/base. |
-| `9` | `Vr180SBS` | Cúpula Hemisférica 180° Estéreo SBS | Hemisfério 180° dividido horizontalmente entre olho esquerdo e direito. |
-| `10` | `Cubemap3x2` | Projeção Cubemap 3x2 Monoscópica | 6 faces do cubo dispostas em layout 3x2. |
-| `11` | `Cubemap6x1` | Projeção Cubemap 6x1 Monoscópica | 6 faces do cubo em faixa horizontal contínua. |
-| `12` | `EAC3x2` | Equi-Angular Cubemap (EAC) 3x2 Mono | Otimização de densidade angular de pixels 3x2. |
-| `13` | `Cubemap3x2SBS` | Cubemap 3x2 Estéreo SBS | Cubemap estéreo dividido em metades esquerda e direita. |
-| `14` | `EAC3x2SBS` | EAC 3x2 Estéreo SBS | Equi-Angular Cubemap estéreo com divisão horizontal. |
-| `15` | `Fisheye190` | Projeção Olho de Peixe 190° Mono | Campo de visão ultra-largo hemisférico monoscópico. |
-| `16` | `Fisheye190SBS` | Projeção Olho de Peixe 190° Estéreo SBS | Campo de visão 190° estéreo lado a lado. |
+| `0` | `Flat2D` | Floating flat quad panel | Both eyes see the full texture $[0..1, 0..1]$. |
+| `1` | `SBS` | Side-by-Side 3D (Full) on a flat quad | Left Eye: $U \in [0.0..0.5]$; Right Eye: $U \in [0.5..1.0]$. |
+| `2` | `SBSHalf` | Side-by-Side 3D (Half) on a flat quad | Left Eye: $U \in [0.0..0.5]$; Right Eye: $U \in [0.5..1.0]$. |
+| `3` | `OU` | Over/Under 3D (Full) on a flat quad | Left Eye: $V \in [0.0..0.5]$; Right Eye: $V \in [0.5..1.0]$. |
+| `4` | `OUHalf` | Over/Under 3D (Half) on a flat quad | Left Eye: $V \in [0.0..0.5]$; Right Eye: $V \in [0.5..1.0]$. |
+| `5` | `Sphere360` | Full 360° monoscopic sphere | Equirectangular projection mapped to both eyes. |
+| `6` | `Sphere180` | 180° monoscopic hemispherical dome | Spherical coordinates projected identically to both eyes. |
+| `7` | `Sphere360SBS` | Full 360° stereo SBS sphere | Equirectangular sphere with a horizontal left/right split. |
+| `8` | `Sphere360OU` | Full 360° stereo OU sphere | Equirectangular sphere with a vertical top/bottom split. |
+| `9` | `Vr180SBS` | 180° stereo SBS hemispherical dome | 180° hemisphere split horizontally between the left and right eye. |
+| `10` | `Cubemap3x2` | 3x2 monoscopic cubemap projection | 6 cube faces laid out in a 3x2 grid. |
+| `11` | `Cubemap6x1` | 6x1 monoscopic cubemap projection | 6 cube faces in a continuous horizontal strip. |
+| `12` | `EAC3x2` | 3x2 Equi-Angular Cubemap (EAC), mono | 3x2 angular pixel-density optimization. |
+| `13` | `Cubemap3x2SBS` | 3x2 stereo SBS cubemap | Stereo cubemap split into left and right halves. |
+| `14` | `EAC3x2SBS` | 3x2 stereo SBS EAC | Stereo Equi-Angular Cubemap with a horizontal split. |
+| `15` | `Fisheye190` | 190° monoscopic fisheye projection | Ultra-wide monoscopic hemispherical field of view. |
+| `16` | `Fisheye190SBS` | 190° stereo SBS fisheye projection | 190° side-by-side stereo field of view. |
 
 ---
 
-## 4. Pipeline de Interface de Usuário (VirtualDisplay & Presentation)
+## 4. User Interface Pipeline (VirtualDisplay & Presentation)
 
-Para garantir uma interface de usuário rica, dinâmica e consistente no Quest sem quebrar o modo `NativeActivity vr_only`, o tucaVR renderiza interfaces Android padrão (Views clássicas do pacote `com.tucavr.designsystem`) diretamente em `VirtualDisplay`s gerenciados pelo sistema operacional.
+To provide a rich, dynamic and consistent user interface on the Quest without breaking the `NativeActivity vr_only` mode, tucaVR renders standard Android interfaces directly into operating-system-managed `VirtualDisplay`s. The main panels use classic Views (`com.tucavr.designsystem`); the in-app web browser panel uses Jetpack Compose hosting a GeckoView.
 
 ```mermaid
 sequenceDiagram
@@ -185,131 +187,148 @@ sequenceDiagram
     participant VD as DisplayManager (VirtualDisplay)
     participant P as VRPresentation / VRControlsPresentation
 
-    Note over C,AR: 1. Setup da Superfície de Captura
+    Note over C,AR: 1. Capture Surface Setup
     C->>AR: AImageReader_newWithUsage(RGBA_8888, GPU_SAMPLED)
     C->>AR: AImageReader_getWindow(&uiWindow)
     C->>K: JNI: setupVirtualDisplay(activity, Surface, w, h)
-    
-    Note over K,P: 2. Criação do Display Virtual Android
+
+    Note over K,P: 2. Android Virtual Display Creation
     K->>VD: createVirtualDisplay("VR_UI_Display", surface)
-    K->>P: Instancia VRPresentation(context, display)
-    P->>P: Renderiza hierarquia de Views (VoidButton, etc.)
-    
-    Note over P,C: 3. Desenho de UI para Textura 3D
-    P-->>AR: Buffer RGBA renderizado na Surface
+    K->>P: Instantiates VRPresentation(context, display)
+    P->>P: Renders the View hierarchy (VoidButton, etc.)
+
+    Note over P,C: 3. UI Drawing to a 3D Texture
+    P-->>AR: RGBA buffer rendered into the Surface
     C->>AR: AImageReader_acquireLatestImage()
-    AR-->>C: AHardwareBuffer* da UI
-    C->>C: Importa como VkImage e desenha no Quad flutuante da UI
+    AR-->>C: UI AHardwareBuffer*
+    C->>C: Imports it as a VkImage and draws it on the floating UI quad
 ```
 
-### 4.1 Tripla Superfície de UI
+### 4.1 Quadruple UI Surface
 
-O sistema aloca três `VirtualDisplay`s simultâneos e independentes (ver constantes em `native/src/vr_player_app_vulkan.cpp:370-375`):
-1. **File Browser / Biblioteca (`virtualDisplay`):** `kUiTexWidth = 1024`, `kUiTexHeight = 768` — gerenciado por `VRPresentation`. Contém a árvore de arquivos locais e compartilhamentos de rede.
-2. **Barra de Controles de Reprodução (`controlsVirtualDisplay`):** `kControlsTexWidth = 1582`, `kControlsTexHeight = 800` — gerenciado por `VRControlsPresentation`. Barra curva flutuante abaixo da tela com Play/Pause, Seek bar, volume e seletores.
-3. **Modais e Diálogos de Confirmação (`modalVirtualDisplay`):** `kModalTexWidth = 1024`, `kModalTexHeight = 768` — gerenciado por `VRModalPresentation`.
+The system allocates four simultaneous, independent `VirtualDisplay`s (see the constants in `native/src/vr_player_app_vulkan.cpp`; `VRActivity.kt` calls `createVirtualDisplay` once per surface):
 
-### 4.2 Interação e Síntese de Toque (Raycasting de Controles)
+1. **Main UI Canvas (`virtualDisplay`):** `kUiTexWidth = 1920`, `kUiTexHeight = 960`, managed by `VRPresentation`. Projected onto an OpenXR cylinder layer (`XrCompositionLayerCylinderKHR`) with configurable radius (1.3m, 1.6m, 2.0m) and central angle / horizontal FOV (50°, 80°, 100°). The 1920x960 surface is partitioned into 3 simultaneous zones:
+   - **Zone 1: Sidebar (288px):** Persistent navigation rail (Home, Local Files, Network, Playlists, History, Settings).
+   - **Zone 2: Content (1200px):** Primary browsing viewport (file lists/grids, server catalogs, settings option categories).
+   - **Zone 3: Context Rail (432px):** Dynamic context pane (selected file details with metadata/preview, live telemetry preview rail in settings, direct action buttons). Single tap on a file selects and populates Zone 3; a second tap or the Play button in Zone 3 begins playback directly.
+2. **Playback Controls Bar (`controlsVirtualDisplay`):** `kControlsTexWidth = 1582`, `kControlsTexHeight = 800`, managed by `VRControlsPresentation`. A floating curved bar below the screen with Play/Pause, seek bar, volume, audio/subtitle selectors, and Stats for Nerds 3-state cycle toggle.
+3. **Modals, Dialogs & Docked Stats (`modalVirtualDisplay`):** `kModalTexWidth = 1024`, `kModalTexHeight = 768`, managed by `VRModalPresentation`. Floating quad for confirmation dialogs, resume prompts ("Retomar de XX:XX?"), and docked Stats for Nerds. In docked mode, the panel is positioned at radius 2.4m at an azimuth of ~38° to the right of the video screen, oriented with yaw facing $(0, y, 0)$ directly toward the viewer.
+4. **In-app Web Browser (browser `VirtualDisplay`):** `kBrowserTexWidth = 2560`, `kBrowserTexHeight = 1440`, managed by `VRWebBrowserPresentation` (Jetpack Compose + GeckoView, in `browser/`).
 
-A interação com a UI segue um pipeline de precisão geométrica em tempo real:
-1. O C++ obtém a pose 6DoF do controle Touch Plus direito/esquerdo via `xrLocateSpace`.
-2. Projeta um raio laser geométrico $\vec{R}(t) = \vec{O} + t \cdot \vec{D}$ no espaço 3D.
-3. Realiza o teste de interseção raio-plano contra o Quad flutuante da UI.
-4. Converte o ponto tridimensional do impacto em coordenadas UV normalizadas $x, y \in [0.0, 1.0]$.
-5. Se houver colisão e o usuário acionar o gatilho (Trigger), o C++ invoca via JNI:
+### 4.2 Interaction and Touch Synthesis (Controller Raycasting)
+
+Interaction with the UI follows a real-time geometric precision pipeline:
+
+1. C++ obtains the 6DoF pose of the right/left Touch Plus controller through `xrLocateSpace`.
+2. It projects a geometric laser ray $\vec{R}(t) = \vec{O} + t \cdot \vec{D}$ into 3D space.
+3. It performs geometric intersection testing:
+   - **Cylindrical Canvas:** Uses `rayHitsCylinder` (`native/include/cylinder_hit.h` and `vr_player_input_vulkan.h`), solving the ray-cylinder quadratic equation for radius $R$ and angular span $[-\theta/2, +\theta/2]$, mapping intersections to UV coordinates $u = 0.5 - \text{atan2}(x, -z)/\text{centralAngle}$ and $v = 0.5 - y / \text{height}$.
+   - **Planar Quads:** Uses `rayHitsQuad` for the floating playback controls, browser, and modal panels (including azimuth-rotated docked stats quad at $+38^\circ$).
+4. Converts the three-dimensional hit point into normalized UV coordinates $x, y \in [0.0, 1.0]$.
+5. **Haptic Feedback:** When a controller ray enters a clickable element or interactive surface, optional hover haptics (`HOVER_HAPTICS`) emit a subtle 15ms pulse (amplitude 0.15).
+6. **Physical Back Controls:** The secondary B/Y controller buttons synthesize Back events when enabled (`BY_BUTTON_AS_BACK`), routed to the active presentation or navigation stack.
+7. If there is a hit and the user pulls the trigger, C++ invokes through JNI:
+
    ```kotlin
-   VRActivity.dispatchVRTouch(activity, normX, normY, action)
+   VRActivity.dispatchVRTouch(activity, targetDisplay, normX, normY, action)
    ```
-6. O método Kotlin roda na UI Thread (`runOnUiThread`), escala as coordenadas para a resolução do display virtual (`normX * UI_WIDTH`, `normY * UI_HEIGHT`), instancia um `android.view.MotionEvent` legítimo (`ACTION_DOWN`, `ACTION_MOVE`, `ACTION_UP` ou `ACTION_HOVER_MOVE`) e o despacha diretamente para `presentation.dispatchTouchEvent(event)`.
+
+8. The Kotlin method runs on the UI thread (`runOnUiThread`), scales the coordinates to the virtual display resolution (`normX * UI_WIDTH`, `normY * UI_HEIGHT`), creates a genuine `android.view.MotionEvent` (`ACTION_DOWN`, `ACTION_MOVE`, `ACTION_UP` or `ACTION_HOVER_MOVE`) and dispatches it directly to `presentation.dispatchTouchEvent(event)`.
 
 ---
 
-## 5. Pipeline de Mídia e Sincronização A/V (Rust Engine)
+## 5. Media Pipeline and A/V Synchronization (Rust Engine)
 
-A camada Rust é dividida em crates modulares para permitir testes unitários no host (desenvolvimento em laptop/CI) sem dependências do NDK do Android.
+The Rust layer is split into modular crates so unit tests can run on the host (laptop/CI development) without Android NDK dependencies.
 
 ```mermaid
 graph TD
-    subgraph CRATES ["Particionamento de Crates (rust/Cargo.toml)"]
+    subgraph CRATES ["Crate Partitioning (rust/Cargo.toml)"]
         CORE["rust/core (NDK-only)\nDemuxer, MediaCodec, Controller"]
         AUDIO["rust/audio (NDK-only)\nOboe Native Stream"]
         LOGIC["rust/media-logic (Host-Testable)\nSyncManager, Resampling, Session, Clamps"]
-        PROTO["rust/protocols (Host-Testable)\nSMB 2/3, HTTP/S, FTP, SFTP"]
+        PROTO["rust/protocols (Host-Testable)\nSMB 2/3, NFS, FTP, SFTP, WebDAV, DLNA, HTTP(S), HLS, DASH"]
         BRIDGE["rust/bridge (NDK-only)\nC-ABI extern 'C'"]
     end
 
     BRIDGE --> CORE
+    BRIDGE --> LOGIC
+    BRIDGE --> PROTO
+    BRIDGE --> AUDIO
     CORE --> LOGIC
     CORE --> PROTO
     CORE --> AUDIO
 ```
 
-### 5.1 Pipeline de Vídeo Zero-Copy
+### 5.1 Zero-Copy Video Pipeline
 
-```
+```text
 ┌─────────────────┐     ┌─────────────────┐     ┌───────────────────┐     ┌──────────────────┐
-│  Fonte de Rede  │     │  Demuxer Rust   │     │ MediaCodec HW NDK │     │   ImageReader    │
-│  ou Local       │ ──> │ (ffmpeg-next)   │ ──> │ (H.264/HEVC/AV1)  │ ──> │  (Surface NDK)   │
+│ Network Source  │     │  Rust Demuxer   │     │ MediaCodec HW NDK │     │   ImageReader    │
+│ or Local        │ ──> │ (ffmpeg-next)   │ ──> │ (H.264/HEVC/AV1)  │ ──> │  (NDK Surface)   │
 └─────────────────┘     └─────────────────┘     └───────────────────┘     └─────────┬────────┘
                                                                                     │
                                       AHardwareBuffer* Pointer (Zero-Copy)          ▼
 ┌─────────────────┐     ┌─────────────────┐     ┌───────────────────┐     ┌──────────────────┐
-│  Olhos VR no    │ <── │ Fragment Shader │ <── │  VkSamplerYcbcr   │ <── │ VkImage Importada│
-│  Meta Quest 3   │     │ (RGB Amostrado) │     │    Conversion     │     │ (Vulkan Memory)  │
+│  VR Eyes on     │ <── │ Fragment Shader │ <── │  VkSamplerYcbcr   │ <── │ Imported VkImage │
+│  Meta Quest 3   │     │ (Sampled RGB)   │     │    Conversion     │     │ (Vulkan Memory)  │
 └─────────────────┘     └─────────────────┘     └───────────────────┘     └──────────────────┘
 ```
 
-1. O **Demuxer** (`demuxer.rs`) consome dados de arquivos locais ou canais customizados do Rust (`protocols`).
-2. Pacotes de vídeo comprimidos são etiquetados com a época da geração atual (`TaggedPacket { epoch, packet }`) e enviados à fila do decodificador.
-3. O decodificador **`ndk::MediaCodec`** decodifica os pacotes diretamente em uma superfície nativa do Android vinculada a um `AImageReader`.
-4. O `AImageReader` retém os buffers de saída como ponteiros opacos `AHardwareBuffer*`.
-5. O C++ obtém o ponteiro através de `get_current_video_frame()` e o mapeia diretamente na GPU Vulkan via `VkImportAndroidHardwareBufferInfoANDROID`, sem que nenhum byte de pixel trafegue pela CPU.
+1. The **Demuxer** (`demuxer.rs`) consumes data from local files or custom Rust I/O channels (`protocols`).
+2. Compressed video packets are tagged with the current generation epoch (`TaggedPacket { epoch, packet }`) and sent over bounded crossbeam channels (capacity 300) to the video thread, which owns the `HwDecoder`.
+3. The **`ndk::MediaCodec`** decoder decodes the packets directly into a native Android surface bound to an `AImageReader`.
+4. The `AImageReader` retains the output buffers as opaque `AHardwareBuffer*` pointers.
+5. C++ obtains the pointer through `get_current_video_frame()` and maps it directly into the Vulkan GPU via `VkImportAndroidHardwareBufferInfoANDROID`, without a single pixel byte passing through the CPU.
 
-### 5.2 Sincronização A/V e Clock Master (`SyncManager`)
+### 5.2 A/V Sync and Master Clock (`SyncManager`)
 
-A sincronização de áudio e vídeo é regida pela classe `SyncManager` (`rust/media-logic/src/sync.rs`):
+Audio and video synchronization is governed by the `SyncManager` class (`rust/media-logic/src/sync.rs`):
 
-- **Áudio como Master Clock:** O fluxo de saída de áudio de baixa latência (`Oboe`) reporta seu PTS (*Presentation Time Stamp*) atual após processar cada buffer PCM (`update_audio_pts(pts)`).
-- **Fallback para Relógio de Parede:** Se o vídeo não possui trilha sonora, ou durante o buffering inicial antes do primeiro pacote de áudio, o relógio mestre utiliza um relógio de sistema monotônico com compensação de escala de velocidade (`start_time.elapsed() * speed`).
-- **Políticas de Descarte e Aceleração (Drift Compensation):**
-  - **`LATE_FRAME_RENDER_SKIP_SEC` ($0.10\text{s} = 100\text{ms}$):** Se o frame decodificado chegar mais de 100ms atrasado em relação ao áudio, ele é descartado no momento da apresentação para não atrasar o render loop.
-  - **`CATCH_UP_SKIP_THRESHOLD_SEC` ($0.50\text{s} = 500\text{ms}$):** Se o atraso acumulado exceder meio segundo (ex.: pico de latência de rede ou gargalo no decoder a 2x), pacotes de vídeo não-chave (frames B/P) são sumariamente descartados **antes** da decodificação até a próxima keyframe (frame I).
+- **Audio as Master Clock:** the Rust audio decode thread reports the PTS (*Presentation Time Stamp*) of the audio actually being heard, computed by `acoustic_audio_pts(...)` (the PTS written to the Oboe queue minus the delay of the samples still queued), through `update_audio_pts(pts)`.
+- **Wall-Clock Fallback:** if the video has no audio track, or during initial buffering before the first audio packet, the master clock uses a monotonic system clock with speed-scale compensation (`start_time.elapsed() * speed`).
+- **Drop and Catch-Up Policies (Drift Compensation):**
+  - **`LATE_FRAME_RENDER_SKIP_SEC` ($0.10\text{s} = 100\text{ms}$):** if a decoded frame arrives more than 100 ms late relative to the audio, it is dropped at presentation time so it does not delay the render loop.
+  - **`CATCH_UP_SKIP_THRESHOLD_SEC` ($0.50\text{s} = 500\text{ms}$):** if the accumulated delay exceeds half a second (for example a network latency spike or a decoder bottleneck at 2x), non-key video packets (B/P frames) are summarily dropped **before** decoding until the next keyframe (I frame).
+- **Frame presentation decision:** the video thread calls `media_logic::frame_timing::decide_frame_action`, which returns `Land` (first frame after a seek, shown immediately), `WaitThenRender(duration)` (frame is early, wait up to 1 s in short slices), `RenderNow` (on time or late within the tolerance) or `Drop` (too late to be worth showing).
 
 ---
 
-## 6. Modelo de Threads, Concorrência e Não-Bloqueio
+## 6. Thread Model, Concurrency and Non-Blocking Behavior
 
-A estabilidade do framerate em Realidade Virtual é mandatória para prevenir enjoo por movimento (*motion sickness*). Por essa razão, a arquitetura impõe uma separação rigorosa de threads e uma política de sincronização não-bloqueante no loop gráfico.
+Framerate stability in Virtual Reality is mandatory to prevent motion sickness. For this reason the architecture enforces a strict thread separation and a non-blocking synchronization policy in the graphics loop.
 
 ```mermaid
 graph LR
-    subgraph ANDROID_VM ["Processo Android (JVM)"]
-        UI_THREAD["Thread Principal UI (Android)\n• VRPresentation View updates\n• Eventos de Toque\n• Room Database I/O"]
+    subgraph ANDROID_VM ["Android Process (JVM)"]
+        UI_THREAD["Main UI Thread (Android)\n• VRPresentation View updates\n• Touch events\n• Room Database I/O"]
     end
 
-    subgraph OPENXR_NATIVE ["Thread Gráfica Nativa (C++)"]
-        RENDER_THREAD["Thread do Render Loop OpenXR (~90Hz)\n• xrWaitFrame / xrBeginFrame / xrEndFrame\n• Raycast de Controles\n• Importação Vulkan AHardwareBuffer\n• Polling não-bloqueante (try_lock)"]
+    subgraph OPENXR_NATIVE ["Native Graphics Thread (C++)"]
+        RENDER_THREAD["OpenXR Render Loop Thread (~90Hz, also handles input)\n• xrWaitFrame / xrBeginFrame / xrEndFrame\n• Controller raycast\n• Vulkan AHardwareBuffer import\n• Non-blocking polling (try_lock)"]
     end
 
-    subgraph RUST_WORKERS ["Threads de Fundo (Rust)"]
-        DEMUX_T["Thread Demuxer\n(Leitura de pacotes / Rede)"]
-        DECODE_V_T["Thread Video Decoder\n(ndk::MediaCodec)"]
-        DECODE_A_T["Thread Audio Decoder\n(PCM Demux & Decode)"]
-        OBOE_T["Thread Oboe Audio Callback\n(Master Clock Provider)"]
-        NET_T["Worker Threads de Rede\n(Prefetch SMB/SFTP/HTTP)"]
+    subgraph RUST_WORKERS ["Background Threads (Rust)"]
+        DEMUX_T["Demuxer Thread\n(Packet reading / Network)"]
+        DECODE_V_T["Video Thread\n(owns ndk::MediaCodec HwDecoder)"]
+        DECODE_A_T["Audio Thread\n(Decode, resample, Oboe write, Master Clock Provider)"]
+        NET_T["Network Worker Threads\n(SMB/SFTP/HTTP prefetch)"]
     end
 
-    RENDER_THREAD -. "try_lock() (Jamais bloqueia)" .-> DECODE_V_T
-    UI_THREAD -. "runOnUiThread" .-> RENDER_THREAD
+    RENDER_THREAD -. "try_lock() (Never blocks)" .-> DECODE_V_T
+    RENDER_THREAD -. "runOnUiThread" .-> UI_THREAD
     DEMUX_T --> DECODE_V_T
     DEMUX_T --> DECODE_A_T
-    DECODE_A_T --> OBOE_T
-    OBOE_T -. "PTS Update" .-> DECODE_V_T
+    DECODE_A_T -. "PTS Update" .-> DECODE_V_T
 ```
 
-### 6.1 A Regra de Ouro do `try_lock()` no Render Loop
+Rust playback spawns exactly three threads: demux, video and audio. The `HwDecoder` is moved wholesale into the video thread (`rust/core/src/playback.rs`, `rust/core/src/decoder.rs`); there is no separate decoder or sync thread.
 
-No bridge C-ABI (`rust/bridge/src/lib.rs`):
+### 6.1 The Golden `try_lock()` Rule in the Render Loop
+
+In the C-ABI bridge (`rust/bridge/src/lib.rs`):
+
 ```rust
 #[no_mangle]
 pub extern "C" fn get_current_video_frame() -> *mut c_void {
@@ -319,54 +338,59 @@ pub extern "C" fn get_current_video_frame() -> *mut c_void {
     }
 }
 ```
+
 > [!CAUTION]
-> O Render Loop OpenXR em C++ **nunca deve sofrer bloqueio de mutex**.
-> Operações pesadas como abertura de arquivos remotos via SFTP/SMB ou busca de keyframes (`seek`) seguram o mutex do `PlaybackController` por centenas de milissegundos. Se `get_current_video_frame()` utilizasse um `lock()` bloqueante, o headset congelaria a renderização e o tracking de cabeça, gerando náusea instantânea no usuário. Utilizando `try_lock()`, se houver contenção temporária, a função retorna `null` e o C++ simplesmente repete o último frame ou renderiza a tela preta de espera, mantendo o headset a 90 FPS cravados.
+> The C++ OpenXR render loop **must never block on a mutex**.
+> Heavy operations such as opening remote files over SFTP/SMB or searching for keyframes (`seek`) hold the `PlaybackController` mutex for hundreds of milliseconds. If `get_current_video_frame()` used a blocking `lock()`, the headset would freeze rendering and head tracking, causing instant nausea for the user. With `try_lock()`, if there is temporary contention the function returns `null` and C++ simply repeats the last frame or renders the waiting black screen, keeping the headset at a rock-solid 90 FPS.
 
-### 6.2 Anel Circular de Erros (`ErrorRingBuffer`)
+### 6.2 Error Ring Buffer (`ErrorRingBuffer`)
 
-Falhas de I/O em threads secundárias do Rust não devem disparar exceções nem causar pânicos no processo. A crate `media-logic` implementa o `ErrorRingBuffer`, que armazena atomicamente os últimos erros ocorridos. A camada Kotlin consome periodicamente essa fila via polling leve JNI (`VRActivity.nativeTakeLastPlaybackError()`, respeitando o isolamento do ADR-002 onde Kotlin nunca acessa Rust diretamente) e exibe Toasts na interface sem qualquer sincronização bloqueante.
+I/O failures on secondary Rust threads must not raise exceptions or panic the process. The `media-logic` crate implements the `ErrorRingBuffer`, which atomically stores the most recent errors (16 entries). The Kotlin layer periodically drains this queue through lightweight JNI polling (`VRActivity.nativeTakeLastPlaybackError()`, respecting the ADR-002 isolation where Kotlin never touches Rust directly) and shows Toasts in the interface without any blocking synchronization.
 
 ---
 
-## 7. Ciclo de Vida e Gerenciamento de Foco (Horizon OS & ADR-006)
+## 7. Lifecycle and Focus Management (Horizon OS & ADR-006)
 
-O ciclo de vida de uma aplicação VR no Horizon OS difere criticamente do ciclo de uma Activity Android de telefone.
+The lifecycle of a VR application on Horizon OS differs critically from that of a phone's Android Activity.
 
-### 7.1 Auto-Pausa Orientada a Eventos OpenXR
+### 7.1 OpenXR Event-Driven Auto-Pause
 
-A aplicação é configurada no `AndroidManifest.xml` com:
+The application is configured in `AndroidManifest.xml` with:
+
 ```xml
 <meta-data android:name="com.oculus.vr.focusaware" android:value="true" />
 ```
 
-- **Por que `Activity.onPause()` não é confiável em VR:** Quando o usuário pressiona o botão Oculus/Horizon e abre o menu de sistema ou ativa o Passthrough, a aplicação continua visível no fundo. O Android **não** envia `onPause()` para uma Activity marcada como `focusaware`.
-- **Decisão Arquitetural (ADR-006):** O gerenciamento de pausa e retomada é ditado estritamente pela máquina de estados da sessão OpenXR processada no C++:
-  - `XR_SESSION_STATE_STOPPING` / `XR_SESSION_STATE_LOSS_PENDING`: Dispara auto-pausa nos decodificadores e no áudio.
-  - `XR_SESSION_STATE_FOCUSED`: Retoma a reprodução caso o usuário estivesse assistindo antes da interrupção.
-  - `Activity.onDestroy()`: É reservado unicamente para a destruição definitiva de superfícies, liberação de sockets e desmontagem do processo.
+- **Why `Activity.onPause()` is not reliable in VR:** when the user presses the Oculus/Horizon button and opens the system menu or enables Passthrough, the application stays visible in the background. Android does **not** send `onPause()` to an Activity marked `focusaware`.
+- **Architectural Decision (ADR-006):** pause and resume are dictated strictly by the OpenXR session state machine processed in C++ (`vr_player_app_vulkan.cpp`, session-state event handler):
+  - `XR_SESSION_STATE_STOPPING`: calls `on_app_focus_lost()` (pausing the decoders and audio) **before** `xrEndSession`.
+  - `XR_SESSION_STATE_LOSS_PENDING` / `XR_SESSION_STATE_EXITING`: request the app to exit (`requestExit`), with no pause.
+  - `XR_SESSION_STATE_FOCUSED`: calls `on_app_focus_gained()`, resuming playback if the user was watching before the interruption.
+  - `Activity.onDestroy()`: reserved solely for the definitive destruction of surfaces, release of sockets and process teardown. `VRActivity.onPause()` only flushes the playback-history progress.
 
 ---
 
-## 8. Segurança e Persistência de Dados
+## 8. Security and Data Persistence
 
-### 8.1 Armazenamento Criptografado de Credenciais de Rede
+### 8.1 Encrypted Storage of Network Credentials
 
-Servidores SMB, FTP e SFTP exigem armazenamento seguro de senhas e chaves privadas SSH.
-- O tucaVR utiliza a biblioteca `androidx.security:security-crypto` (`EncryptedSharedPreferences`) através das classes `SmbCredentialStore`, `FtpCredentialStore` e `SftpCredentialStore`.
-- As chaves de criptografia são gerenciadas diretamente pelo **Android Keystore hardware-backed** do processador Snapdragon XR2.
-- Nenhuma senha ou chave privada é gravada em arquivos de texto plano ou exposta nos logs do logcat.
+SMB, FTP and SFTP servers require secure storage of passwords and SSH private keys.
 
-### 8.2 Histórico e Favoritos (Room Database)
+- tucaVR uses the `androidx.security:security-crypto` library (`EncryptedSharedPreferences`) through the `SmbCredentialStore`, `FtpCredentialStore` and `SftpCredentialStore` classes.
+- The encryption keys are managed directly by the **hardware-backed Android Keystore** of the Snapdragon XR2 processor.
+- No password or private key is written to plain-text files or exposed in logcat logs.
 
-A persistência do progresso dos vídeos e da biblioteca é gerenciada pelo **Android Room DB** (`AppDatabase`, em `history/AppDatabase.kt:18`), utilizando KSP para geração de código.
-- As atualizações de progresso são throttled (estranguladas) para não gerar sobrecarga no disco de armazenamento flash do headset durante reproduções contínuas.
+### 8.2 History and Favorites (Room Database)
+
+Video progress and library persistence are handled by the **Android Room DB** (`AppDatabase`, `@Database` in `history/AppDatabase.kt:33`), using KSP for code generation.
+
+- Progress updates are throttled so they do not overload the headset's flash storage during continuous playback.
 
 ---
 
-## 9. Diagramas de Sequência Detalhados
+## 9. Detailed Sequence Diagrams
 
-### 9.1 Inicialização e Render Loop OpenXR Vulkan
+### 9.1 Initialization and the OpenXR Vulkan Render Loop
 
 ```mermaid
 sequenceDiagram
@@ -374,87 +398,86 @@ sequenceDiagram
     participant App as Android Shell (VRActivity)
     participant Ovr as OpenXR Runtime (Horizon OS)
     participant Vk as Vulkan Driver
-    participant Cpp as Engine C++ (vr_player_app_vulkan.cpp)
+    participant Cpp as C++ Engine (vr_player_app_vulkan.cpp)
     participant Rust as Rust Bridge (libbridge.so)
 
     App->>Cpp: android_main(struct android_app*)
     Cpp->>Ovr: xrInitializeLoaderKHR() / xrCreateInstance()
-    Cpp->>Ovr: xrGetVulkanGraphicsDevice2KHR()
+    Cpp->>Ovr: xrGetVulkanGraphicsRequirementsKHR() / xrGetVulkanGraphicsDeviceKHR()
     Cpp->>Vk: vkCreateInstance() / vkCreateDevice()
     Cpp->>Ovr: xrCreateSession(XrGraphicsBindingVulkanKHR)
     Cpp->>Ovr: xrCreateSwapchain(Left/Right Eye Textures)
-    Cpp->>Rust: CONTROLLER.initialize()
 
-    loop Loop Gráfico Sustentado (72 / 90 / 120 Hz)
+    loop Sustained Graphics Loop (72 / 90 / 120 Hz)
         Cpp->>Ovr: xrWaitFrame()
         Cpp->>Ovr: xrBeginFrame()
         Cpp->>Rust: get_current_video_frame() [try_lock]
-        alt Frame Novo Disponível
+        alt New Frame Available
             Rust-->>Cpp: AHardwareBuffer*
             Cpp->>Vk: GetOrImportVideoFrame() (VkImage + YCbCr Sampler)
-        else Lock Ocupado ou Sem Frame
+        else Lock Busy or No Frame
             Rust-->>Cpp: nullptr
-            Cpp->>Cpp: Mantém último frame / Tela de espera
+            Cpp->>Cpp: Keeps the last frame / waiting screen
         end
-        Cpp->>Vk: Renderiza Geometria (Quad 2D / Estéreo 3D / Esfera 360°)
-        Cpp->>Vk: Renderiza Painéis de UI (AImageReader AHardwareBuffer)
+        Cpp->>Vk: Renders geometry (2D quad / 3D stereo / 360° sphere)
+        Cpp->>Vk: Renders UI panels (AImageReader AHardwareBuffer)
         Cpp->>Ovr: xrEndFrame(XrCompositionLayerProjection)
     end
 ```
 
-### 9.2 Pipeline de Vídeo Zero-Copy (Demux $\rightarrow$ MediaCodec $\rightarrow$ Vulkan)
+### 9.2 Zero-Copy Video Pipeline (Demux $\rightarrow$ MediaCodec $\rightarrow$ Vulkan)
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Net as Fonte (Local / SMB / SFTP)
+    participant Net as Source (Local / SMB / SFTP)
     participant Dmx as Rust Demuxer (demuxer.rs)
-    participant Dec as NDK MediaCodec (decoder.rs)
+    participant Vid as Rust Video Thread (HwDecoder, decoder.rs)
     participant IR as AImageReader (TextureOutput)
-    participant Cpp as Engine C++ (Vulkan)
+    participant Cpp as C++ Engine (Vulkan)
     participant GPU as Qualcomm Adreno GPU
 
-    Net->>Dmx: Leitura de stream bruto de vídeo
-    Dmx->>Dmx: ffmpeg-next demuxa e gera AVPacket
-    Dmx->>Dec: AMediaCodec_queueInputBuffer()
-    Dec->>GPU: Decodificação em silício dedicado (Qualcomm VPU)
-    GPU-->>IR: Frame decodificado escrito na Surface interna
+    Net->>Dmx: Reads the raw video stream
+    Dmx->>Dmx: ffmpeg-next demuxes and produces an AVPacket
+    Dmx->>Vid: TaggedPacket over a crossbeam channel
+    Vid->>GPU: Decoding on dedicated silicon (Qualcomm VPU)
+    GPU-->>IR: Decoded frame written to the internal Surface
     IR->>IR: AImageReader_acquireLatestImage()
-    IR-->>Dec: AHardwareBuffer*
-    Cpp->>Dec: get_current_video_frame()
-    Dec-->>Cpp: AHardwareBuffer*
+    IR-->>Vid: AHardwareBuffer*
+    Cpp->>Vid: get_current_video_frame()
+    Vid-->>Cpp: AHardwareBuffer*
     Cpp->>GPU: vkCreateImage(VkExternalMemoryImageCreateInfo)
     Cpp->>GPU: vkAllocateMemory(VkImportAndroidHardwareBufferInfoANDROID)
-    Cpp->>GPU: Fragment Shader amostra textura via VkSamplerYcbcrConversion
+    Cpp->>GPU: Fragment shader samples the texture via VkSamplerYcbcrConversion
 ```
 
-### 9.3 Interação com a UI por Raycast e Disparo de Toque
+### 9.3 UI Interaction by Raycast and Touch Dispatch
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant Ctrl as Meta Quest Touch Plus Controller
-    participant Cpp as Engine C++ (vr_player_input_vulkan.h)
+    participant Cpp as C++ Engine (vr_player_input_vulkan.h)
     participant Jni as vr_player_jni_vulkan.cpp
     participant Act as VRActivity.kt (UI Thread)
     participant Pres as VRPresentation / Views
 
     Ctrl->>Cpp: xrLocateSpace(aimPose) & xrGetCurrentInteractionProfile()
-    Cpp->>Cpp: Calcula raio de mira 3D (Origem + Vetor Direção)
-    Cpp->>Cpp: Interseção Raio-Plano com Quad 3D da UI
-    alt Raio colidiu com o painel de UI
-        Cpp->>Cpp: Mapeia colisão 3D para UV normalizado (x, y em [0.0..1.0])
-        opt Gatilho Pressionado / Movimento
+    Cpp->>Cpp: Computes the 3D aim ray (Origin + Direction Vector)
+    Cpp->>Cpp: Ray-plane intersection with the 3D UI quad
+    alt Ray hit the UI panel
+        Cpp->>Cpp: Maps the 3D hit to normalized UV (x, y in [0.0..1.0])
+        opt Trigger Pressed / Movement
             Cpp->>Jni: dispatchVRTouch(normX, normY, action)
             Jni->>Act: VRActivity.dispatchVRTouch(activity, x, y, action)
-            Act->>Act: runOnUiThread: Converte para MotionEvent (x * width, y * height)
+            Act->>Act: runOnUiThread: converts to MotionEvent (x * width, y * height)
             Act->>Pres: presentation.dispatchTouchEvent(motionEvent)
-            Pres->>Pres: Dispara onClick / onScroll / onHover nos componentes de View
+            Pres->>Pres: Fires onClick / onScroll / onHover on the View components
         end
     end
 ```
 
-### 9.4 Sincronização A/V (Audio Clock Master vs Video Frame Presentation)
+### 9.4 A/V Sync (Audio Clock Master vs Video Frame Presentation)
 
 ```mermaid
 sequenceDiagram
@@ -465,32 +488,33 @@ sequenceDiagram
     participant Sync as SyncManager (media-logic)
     participant Vid as Rust Video Thread
 
-    Dmx->>Aud: Pacote de Áudio (AVPacket)
-    Aud->>Aud: Decodifica PCM & Resample
-    Aud->>Ob: Escreve buffer de áudio na fila Oboe
-    Ob->>Sync: update_audio_pts(pts_atual_tocado)
-    
-    Dmx->>Vid: Pacote de Vídeo (AVPacket com PTS_video)
+    Dmx->>Aud: Audio packet (AVPacket)
+    Aud->>Aud: Decodes PCM & resamples
+    Aud->>Ob: Writes the audio buffer to the Oboe queue
+    Aud->>Sync: update_audio_pts(acoustic_audio_pts(...))
+
+    Dmx->>Vid: Video packet (AVPacket with PTS_video)
     Vid->>Sync: get_master_clock()
-    Sync-->>Vid: pts_audio_mestre
-    
-    alt PTS_video <= pts_audio_mestre + TOLERANCIA
-        Vid->>Vid: Submete frame ao MediaCodec para apresentação
-    else PTS_video > pts_audio_mestre
-        Vid->>Vid: Aguarda diferença temporal (sleep regulado)
-    else PTS_video < pts_audio_mestre - 100ms (Atraso)
-        Vid->>Vid: Descarta frame (LATE_FRAME_RENDER_SKIP_SEC) para recuperar drift
+    Sync-->>Vid: master_audio_pts
+    Vid->>Vid: decide_frame_action(PTS_video, master_audio_pts)
+
+    alt WaitThenRender (PTS_video > master_audio_pts)
+        Vid->>Vid: Waits the time difference (regulated sleep, up to 1 s)
+    else RenderNow (PTS_video <= master_audio_pts, within 100 ms)
+        Vid->>Vid: Submits the frame to MediaCodec for presentation
+    else Drop (PTS_video < master_audio_pts - 100ms, late)
+        Vid->>Vid: Drops the frame (LATE_FRAME_RENDER_SKIP_SEC) to recover drift
     end
 ```
 
 ---
 
-## 10. Referências e Documentos Relacionados
+## 10. References and Related Documents
 
-Para detalhes complementares sobre subsistemas específicos do tucaVR:
+For complementary details on specific tucaVR subsystems:
 
-- **[docs/REQUIREMENTS.md](REQUIREMENTS.md):** Requisitos de negócio, priorização de fases e registro histórico de ADRs (ADR-001 a ADR-006).
-- **[docs/VULKAN-MIGRATION-PLAN.md](VULKAN-MIGRATION-PLAN.md):** Arquitetura detalhada da transição do pipeline gráfico GLES para Vulkan.
-- **[docs/TESTING-PLAN.md](TESTING-PLAN.md):** Estratégia de isolamento de testes unitários host, testes Docker de protocolos de rede e testes em hardware real.
-- **[docs/DEBUGGING.md](DEBUGGING.md):** Guia de depuração em dispositivo, comandos ADB, overlay de HUD em VR e inspeção de métricas de playback.
-- **[docs/NETWORK-IO-PERFORMANCE.md](NETWORK-IO-PERFORMANCE.md):** Análise de buffers de streaming e comportamento do prefetcher de rede.
+- **[docs/REQUIREMENTS.md](REQUIREMENTS.md):** business requirements, phase prioritization and the historical ADR log (ADR-001 to ADR-006).
+- **[docs/VULKAN-MIGRATION-PLAN.md](VULKAN-MIGRATION-PLAN.md):** detailed architecture of the graphics pipeline transition from GLES to Vulkan.
+- **[docs/TESTING-PLAN.md](TESTING-PLAN.md):** strategy for isolating host unit tests, Docker network-protocol tests and real-hardware tests.
+- **[docs/DEBUGGING.md](DEBUGGING.md):** on-device debugging guide, ADB commands, VR HUD overlay and playback metrics inspection.
+- **[docs/NETWORK-IO-PERFORMANCE.md](NETWORK-IO-PERFORMANCE.md):** analysis of streaming buffers and network prefetcher behavior.

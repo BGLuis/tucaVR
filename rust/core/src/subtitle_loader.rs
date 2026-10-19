@@ -10,6 +10,7 @@ use media_logic::subtitle::{
 };
 use media_logic::subtitle_ass::{ass_document_from_mkv_packets, parse_ass, MkvAssPacket};
 use media_logic::subtitle_pgs::{parse_pgs_packets, parse_pgs_sup, PgsPacket};
+use media_logic::track_info::parse_subtitle_file_suffix;
 use std::path::Path;
 
 #[derive(Debug, Clone)]
@@ -280,38 +281,64 @@ pub fn probe_sidecar_subtitles(video_path: &str) -> Vec<SubtitleTrackInfo> {
             "ssa",
             "sup",
             "pt-BR.srt",
-            "en.srt",
+            "pt-PT.srt",
             "pt.srt",
+            "en.srt",
+            "en-US.srt",
+            "en-GB.srt",
             "es.srt",
+            "es-MX.srt",
+            "es-ES.srt",
+            "fr.srt",
+            "de.srt",
+            "ja.srt",
             "pt-BR.ass",
+            "pt-PT.ass",
             "en.ass",
             "pt-BR.sup",
+            "pt-PT.sup",
             "en.sup",
         ];
 
-        for ext in candidate_extensions {
-            let candidate_name = format!("{stem_str}.{ext}");
-            let candidate_path = parent.join(&candidate_name);
-            if candidate_path.exists() && candidate_path.is_file() {
-                let candidate_str = candidate_path.to_string_lossy().to_string();
-                let lang = if ext.contains("pt-BR") || ext.contains("pt") {
-                    "pt-BR".to_string()
-                } else if ext.contains("en") {
-                    "en".to_string()
-                } else if ext.contains("es") {
-                    "es".to_string()
-                } else {
-                    String::new()
-                };
-
-                results.push(SubtitleTrackInfo {
-                    title: candidate_name,
-                    language: lang,
-                    is_external: true,
-                    source_path: Some(candidate_str),
-                    stream_index: None,
-                });
+        let mut discovered = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(parent) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with(&format!("{stem_str}.")) && entry.path().is_file() {
+                    if let Some(ext) = Path::new(&name).extension().and_then(|e| e.to_str()) {
+                        let lower = ext.to_ascii_lowercase();
+                        if matches!(lower.as_str(), "srt" | "vtt" | "ass" | "ssa" | "sup") {
+                            discovered.push((name, entry.path().to_string_lossy().to_string()));
+                        }
+                    }
+                }
             }
+        }
+
+        discovered.sort_by(|a, b| a.0.cmp(&b.0));
+
+        if discovered.is_empty() {
+            for ext in candidate_extensions {
+                let candidate_name = format!("{stem_str}.{ext}");
+                let candidate_path = parent.join(&candidate_name);
+                if candidate_path.exists() && candidate_path.is_file() {
+                    discovered.push((candidate_name, candidate_path.to_string_lossy().to_string()));
+                }
+            }
+        }
+
+        for (candidate_name, candidate_str) in discovered {
+            let lang = parse_subtitle_file_suffix(&candidate_name)
+                .map(|info| info.tag)
+                .unwrap_or_default();
+
+            results.push(SubtitleTrackInfo {
+                title: candidate_name,
+                language: lang,
+                is_external: true,
+                source_path: Some(candidate_str),
+                stream_index: None,
+            });
         }
     }
 

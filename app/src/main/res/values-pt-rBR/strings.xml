@@ -17,6 +17,7 @@
     <string name="common_warning_format">%1$s</string>
     <string name="common_row_dir_format">%1$s</string>
     <string name="common_row_video_format">%1$s</string>
+    <string name="common_close">Fechar</string>
 
     <!-- Acoes de texto / Menu de contexto / Validacao (VoidTextField, VoidContextMenu, VoidForm) -->
     <string name="text_action_copy">Copiar</string>
@@ -153,6 +154,14 @@
     <string name="env_passthrough_desc">Realidade Mista exibindo o ambiente real ao seu redor.</string>
     <string name="env_reset_anchor_button">Redefinir para Âncora do Ambiente</string>
 
+    <!-- Environment Validation (Phase 1.0 §1 T1.1 / Issue #62) -->
+    <string name="env_validate_ok">Ambiente válido</string>
+    <string name="env_error_corrupt_file">Arquivo de ambiente 3D inválido ou corrompido</string>
+    <string name="env_error_invalid_gltf">O modelo 3D não está em conformidade com a especificação glTF</string>
+    <string name="env_error_too_many_triangles">O modelo 3D excede o limite de 100.000 triângulos</string>
+    <string name="env_error_texture_too_large">As texturas do ambiente não podem exceder 4096×4096 pixels</string>
+    <string name="env_error_corrupt_texture">Textura corrompida no ambiente 3D</string>
+
     <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
     <string name="browser_title_local_files">Arquivos locais</string>
     <string name="browser_row_up">Subir um nivel</string>
@@ -180,54 +189,47 @@
     <string name="browser_filter_date_recent">24 horas</string>
     <string name="browser_filter_date_week">7 dias</string>
     <string name="browser_filter_date_month">30 dias</string>
-    <string name="browser_results_count_format">Exibindo %1$d de %2$d itens</string>
+    <plurals name="browser_results_count_format">
+        <item quantity="one">Exibindo %1$d de %2$d item</item>
+        <item quantity="other">Exibindo %1$d de %2$d itens</item>
+    </plurals>
     <string name="browser_empty_search">Nenhum arquivo corresponde aos criterios de busca</string>
     <string name="browser_btn_clear_filters">Limpar filtros</string>
-    <string name="browser_folder_summary_format">%1$s · %2$d itens</string>
+    <string name="browser_btn_refresh">Atualizar</string>
+    <plurals name="browser_folder_summary_format">
+        <item quantity="one">%1$s · %2$d item</item>
+        <item quantity="other">%1$s · %2$d itens</item>
+    </plurals>
+    <plurals name="browser_folder_summary_items_count">
+        <item quantity="one">%1$d item</item>
+        <item quantity="other">%1$d itens</item>
+    </plurals>
+    <plurals name="browser_folder_summary_videos_count">
+        <item quantity="one">%1$d vídeo</item>
+        <item quantity="other">%1$d vídeos</item>
+    </plurals>
+    <string name="browser_folder_summary_combined">%1$s · %2$s</string>
+    <string name="browser_badge_folder">📁 PASTA</string>
     <string name="history_filter_resumable">Nao finalizados</string>
     <string name="history_filter_all">Historico Completo</string>
     <string name="player_now_playing_title">Tocando Agora</string>
 
 
-    <!-- Detalhe de arquivo (FileDetailScreen) — local e rede -->
+    <!-- Linhas de detalhe de arquivo exibidas no ContextRailView -->
     <string name="file_detail_row_format">%1$s: %2$s</string>
     <string name="file_detail_label_size">Tamanho</string>
-    <string name="file_detail_label_modified">Modificado em</string>
     <string name="file_detail_label_duration">Duracao</string>
     <string name="file_detail_label_resolution">Resolucao</string>
-    <string name="file_detail_label_path">Caminho</string>
     <string name="file_detail_btn_play">Reproduzir</string>
-    <string name="file_detail_section_file">Arquivo</string>
-    <string name="file_detail_section_media">Midia</string>
-    <string name="file_detail_section_tags">Tags</string>
     <string name="file_detail_section_tracks">Trilhas</string>
     <string name="file_detail_label_container">Container</string>
     <string name="file_detail_label_bitrate">Bitrate</string>
     <string name="file_detail_label_video_codec">Codec de video</string>
-    <string name="file_detail_label_decoder">Decodificador</string>
-    <string name="file_detail_label_audio_codec">Codec de audio</string>
     <string name="file_detail_label_format3d">Formato 3D</string>
-    <string name="file_detail_format3d_low_confidence_suffix"> (estimado)</string>
     <string name="file_detail_value_bitrate_format">%1$.1f Mbps</string>
-    <string name="file_detail_track_video_format">%1$d. Video — %2$s</string>
     <string name="file_detail_track_audio_format">%1$d. Audio — %2$s</string>
     <string name="file_detail_track_subtitle_format">%1$d. Legenda — %2$s</string>
     <string name="file_detail_track_lang_unknown">Idioma desconhecido</string>
-    <string name="file_detail_tracks_empty">Nenhuma trilha encontrada</string>
-    <string name="file_detail_tracks_subtitle_note">Renderizacao de legenda ainda nao disponivel</string>
-    <string name="file_detail_metadata_loading">Carregando informacoes de midia…</string>
-    <string name="file_detail_metadata_error">Informacoes de midia indisponiveis</string>
-    <string name="file_detail_subtitle_local">Local</string>
-    <string name="file_detail_subtitle_http">HTTP</string>
-    <string name="file_detail_subtitle_smb_format">SMB · %1$s</string>
-    <string name="file_detail_subtitle_ftp_format">FTP · %1$s</string>
-    <string name="file_detail_subtitle_sftp_format">SFTP · %1$s</string>
-    <string name="file_detail_tag_title">Titulo</string>
-    <string name="file_detail_tag_artist">Artista</string>
-    <string name="file_detail_tag_album">Album</string>
-    <string name="file_detail_tag_date">Data</string>
-    <string name="file_detail_tag_genre">Genero</string>
-    <string name="file_detail_tag_comment">Comentario</string>
 
     <!-- Rede: landing com abas URL / SMB / NFS / FTP / SFTP / Descoberta (VRPresentation.renderNetworkHome) -->
     <string name="network_title">Rede</string>
@@ -251,6 +253,10 @@
     <string name="network_dlna_no_items">(nenhuma midia encontrada nesta pasta)</string>
     <string name="network_dlna_error_format">Falha ao navegar: %1$s</string>
     <string name="network_dlna_folder_tag">Pasta</string>
+    <string name="network_dlna_edit_title">Editar servidor DLNA</string>
+    <string name="network_dlna_form_name_label">Nome amigável</string>
+    <string name="network_dlna_form_name_hint">Servidor de Mídia da Sala</string>
+    <string name="network_dlna_edit_host_info">Endereço do servidor: %1$s</string>
 
     <!-- HLS Streaming -->
     <string name="player_hls_quality_auto">Auto (%1$s)</string>
@@ -280,6 +286,8 @@
     <string name="network_smb_form_port_label">Porta</string>
     <string name="network_smb_form_share_label">Share</string>
     <string name="network_smb_form_share_hint">Videos</string>
+    <string name="network_smb_form_name_label">Nome amigavel</string>
+    <string name="network_smb_form_name_hint">Meu PC / Compartilhamento</string>
     <string name="network_smb_form_guest_checkbox">Convidado / anonimo (sem usuario/senha)</string>
     <string name="network_smb_form_user_label">Usuario</string>
     <string name="network_smb_form_user_hint">usuario</string>
@@ -314,6 +322,8 @@
     <!-- Rede: aba FTP — formulario de adicionar servidor (VRPresentation.buildAddFtpServerForm) -->
     <string name="network_ftp_form_host_label">Host / IP</string>
     <string name="network_ftp_form_port_label">Porta</string>
+    <string name="network_ftp_form_name_label">Nome amigavel</string>
+    <string name="network_ftp_form_name_hint">Meu Servidor FTP</string>
     <string name="network_ftp_form_anonymous_checkbox">Anonimo (sem usuario/senha)</string>
     <string name="network_ftp_form_user_label">Usuario</string>
     <string name="network_ftp_form_user_hint">usuario</string>
@@ -333,6 +343,8 @@
     <string name="network_sftp_btn_add_server">+ Adicionar servidor</string>
     <string name="network_sftp_form_host_label">Host / IP</string>
     <string name="network_sftp_form_port_label">Porta</string>
+    <string name="network_sftp_form_name_label">Nome amigavel</string>
+    <string name="network_sftp_form_name_hint">Meu Servidor SSH / SFTP</string>
     <string name="network_sftp_form_use_key_checkbox">Usar chave privada em vez de senha</string>
     <string name="network_sftp_form_user_label">Usuario</string>
     <string name="network_sftp_form_user_hint">usuario</string>
@@ -413,6 +425,32 @@
     <string name="player_controls_time_format">%1$s / %2$s</string>
     <string name="player_controls_volume_format">%1$d%%</string>
     <string name="player_controls_speed_format">%1$.2fx</string>
+    <string name="player_btn_stop">Sair</string>
+    <string name="player_btn_format">Formato 3D</string>
+    <string name="player_btn_screen">Tela</string>
+    <string name="player_btn_environment">Ambiente</string>
+    <string name="player_btn_rewind">Voltar 10s</string>
+    <string name="player_btn_forward">Avançar 10s</string>
+    <string name="player_btn_previous">Anterior</string>
+    <string name="player_btn_next">Próximo</string>
+    <string name="player_btn_speed">Velocidade</string>
+    <string name="player_btn_volume">Volume</string>
+    <string name="player_menu_screen_title">Tela</string>
+    <string name="player_menu_screen_size">TAMANHO</string>
+    <string name="player_menu_screen_size_small">Pequena</string>
+    <string name="player_menu_screen_size_medium">Média</string>
+    <string name="player_menu_screen_size_large">Grande</string>
+    <string name="player_menu_screen_size_huge">Enorme</string>
+    <string name="player_menu_screen_distance">DISTÂNCIA</string>
+    <string name="player_menu_screen_distance_near">Perto</string>
+    <string name="player_menu_screen_distance_default">Padrão</string>
+    <string name="player_menu_screen_distance_far">Longe</string>
+    <string name="player_menu_screen_curve">CURVATURA</string>
+    <string name="player_menu_screen_curve_flat">Plana</string>
+    <string name="player_menu_screen_curve_curved">Curva</string>
+    <string name="player_menu_speed_title">Velocidade</string>
+    <string name="player_menu_volume_title">Volume</string>
+    <string name="player_menu_volume_hint">O stick esquerdo também muda o volume</string>
 
     <!-- T1.4/T2: modo de exibicao 3D (VRControlsPresentation/ScreenFormatCatalog) -->
     <string name="player_mode_2d">2D</string>
@@ -469,6 +507,7 @@
     <string name="quality_warning_gpu_overload">Reduzindo qualidade devido à alta carga de GPU</string>
     <string name="quality_warning_frame_pacing_lag">Reduzindo qualidade devido a instabilidade no ritmo de quadros</string>
     <string name="thermal_level_normal">Normal</string>
+    <string name="thermal_level_light">Leve</string>
     <string name="thermal_level_moderate">Moderado</string>
     <string name="thermal_level_severe">Severo</string>
     <string name="thermal_level_critical">Crítico</string>
@@ -478,11 +517,20 @@
     <string name="audio_tracks_modal_title">Trilhas de Áudio</string>
     <string name="audio_tracks_empty">Nenhuma trilha de áudio encontrada</string>
     <string name="audio_tracks_active_badge">Ativo</string>
+    <string name="audio_track_badge_surround_51">5.1 surround</string>
+    <string name="audio_track_badge_surround_71">7.1 surround</string>
+    <string name="audio_track_badge_surround">Surround</string>
+    <string name="audio_track_badge_stereo">Estéreo</string>
+    <string name="audio_track_badge_mono">Mono</string>
+    <string name="audio_track_badge_commentary">Comentário</string>
 
     <!-- Legendas (T9.1-T9.6) -->
     <string name="player_btn_subtitles">Legendas</string>
     <string name="subtitles_modal_title">Legendas</string>
     <string name="subtitles_option_off">Desativado</string>
+    <string name="subtitles_badge_embedded">Embutida</string>
+    <string name="subtitles_badge_external">Arquivo externo</string>
+    <string name="track_unknown_language_format">Idioma desconhecido · faixa %1$d</string>
     <string name="subtitles_track_format">Faixa %1$d: %2$s</string>
     <string name="subtitles_sync_label">Sincronização</string>
     <string name="subtitles_sync_value_format">%1$+.1f s</string>
@@ -498,6 +546,11 @@
     <string name="settings_section_subtitles">Legendas</string>
     <string name="settings_subtitles_auto_load_label">Carregar Legendas Automaticamente</string>
     <string name="settings_subtitles_auto_load_description">Detecta e carrega automaticamente arquivos de legenda (.srt, .vtt) ao lado do vídeo.</string>
+
+    <!-- Configurações: Controles -->
+    <string name="settings_section_controls">Controles</string>
+    <string name="settings_hand_tracking_label">Controle por gestos</string>
+    <string name="settings_hand_tracking_description">Permite usar as mãos e gestos de pinça para interagir com a reprodução e painéis de interface sem controles físicos.</string>
 
     <!-- Configurações: Avançado -->
     <string name="settings_section_advanced">Avançado</string>
@@ -542,6 +595,9 @@
     <string name="debug_stats_label_spatial_audio">Áudio Espacial</string>
     <string name="debug_stats_label_audio_track">Faixa de Áudio</string>
     <string name="debug_stats_label_subtitles">Legendas / Sincronia</string>
+    <string name="debug_stats_label_head_tracking">Rastreamento de Cabeça</string>
+    <string name="debug_stats_label_audio_underruns">Underruns de Áudio</string>
+    <string name="debug_stats_label_audio_queue">Fila de Buffer de Áudio</string>
 
     <string name="debug_stats_label_source">Origem / Protocolo</string>
     <string name="debug_stats_label_network_speed">Taxa de Rede</string>
@@ -550,10 +606,13 @@
     <string name="debug_stats_label_fetch_latency">Latência por Bloco</string>
     <string name="debug_stats_label_blocks">Blocos Buscados / Descartados</string>
     <string name="debug_stats_label_seek_latency">Latência do Último Seek</string>
+    <string name="debug_stats_label_net_failures">Falhas de Rede</string>
 
     <string name="debug_stats_label_thermal">Status Térmico</string>
     <string name="debug_stats_label_battery">Bateria</string>
     <string name="debug_stats_label_app_version">Versão do App</string>
+    <string name="debug_stats_label_cpu_util">Utilização de CPU</string>
+    <string name="debug_stats_label_gpu_util">Utilização de GPU</string>
 
     <!-- Capacidade de codec e aceleracao por hardware (T6.1, T6.5) -->
     <string name="codec_hw_unsupported_error">O dispositivo não possui suporte de hardware para este codec.</string>
@@ -574,8 +633,10 @@
     <string name="playlists_delete">Excluir Playlist</string>
     <string name="playlists_delete_confirm">Tem certeza de que deseja excluir esta playlist?</string>
     <string name="playlists_play_all">Reproduzir Tudo</string>
-    <string name="playlists_item_count_singular">%1$d vídeo</string>
-    <string name="playlists_item_count_plural">%1$d vídeos</string>
+    <plurals name="playlists_item_count">
+        <item quantity="one">%1$d vídeo</item>
+        <item quantity="other">%1$d vídeos</item>
+    </plurals>
     <string name="playlists_add_to_playlist">Adicionar à Playlist</string>
     <string name="playlists_added_success">Adicionado à playlist %1$s</string>
     <string name="playlists_select_playlist">Selecione uma Playlist</string>
@@ -611,7 +672,6 @@
 
     <!-- Downloads Offline (Fase 0.4 Seção 4) -->
     <string name="home_btn_downloads">Downloads</string>
-    <string name="file_detail_btn_download">Baixar</string>
     <string name="download_error_insufficient_space">Espaço de armazenamento insuficiente</string>
     <string name="download_started_toast">Baixando %1$s…</string>
     <string name="downloads_title">Downloads</string>
@@ -630,5 +690,134 @@
     <string name="downloads_btn_cancel">Cancelar</string>
     <string name="downloads_btn_retry">Tentar novamente</string>
     <string name="downloads_btn_play">Reproduzir</string>
+    <string name="home_btn_web_browser">Navegador Web VR</string>
+    <string name="webbrowser_btn_back">Voltar</string>
+    <string name="webbrowser_btn_forward">Avançar</string>
+    <string name="webbrowser_btn_reload">Recarregar</string>
+    <string name="webbrowser_btn_home">Início</string>
+    <string name="webbrowser_hint_url">Digite uma URL...</string>
+    <string name="webbrowser_btn_add_bookmark">Adicionar favorito</string>
+    <string name="webbrowser_btn_remove_bookmark">Remover favorito</string>
+    <string name="webbrowser_btn_toggle_curved">Alternar tela curva em VR</string>
+    <string name="webbrowser_btn_close">Fechar navegador</string>
+    <string name="webbrowser_title_shortcuts">Atalhos e favoritos</string>
+    <string name="webbrowser_btn_edit_bookmark">Editar favorito</string>
+    <string name="webbrowser_btn_delete_bookmark">Excluir favorito</string>
+    <string name="webbrowser_btn_add_shortcut">Adicionar atalho</string>
+    <string name="webbrowser_title_edit_bookmark">Editar favorito</string>
+    <string name="webbrowser_title_new_bookmark">Novo favorito</string>
+    <string name="webbrowser_label_title">Título</string>
+    <string name="webbrowser_label_url">URL</string>
+    <string name="webbrowser_btn_cancel">Cancelar</string>
+    <string name="webbrowser_btn_save">Salvar</string>
+    <string name="webbrowser_status_load_failed">Falha ao carregar a página</string>
+    <string name="webbrowser_status_error_format">Erro ao carregar a página: %1$s</string>
+    <string name="webbrowser_btn_dismiss_error">Dispensar erro</string>
+    <string name="webbrowser_btn_exit_fullscreen">✕ Sair da tela cheia</string>
+    <string name="webbrowser_btn_stop">Parar</string>
+    <string name="webbrowser_btn_retry">Tentar novamente</string>
+    <string name="webbrowser_error_title">Não foi possível carregar a página</string>
+    <string name="webbrowser_error_unknown_host">Não encontramos este site. Verifique se o endereço está escrito corretamente.</string>
+    <string name="webbrowser_error_connection_refused">O site recusou a conexão. Ele pode estar fora do ar ou bloqueando o acesso.</string>
+    <string name="webbrowser_error_timeout">O site demorou demais para responder. Tente novamente em instantes.</string>
+    <string name="webbrowser_error_offline">Você parece estar sem internet. Verifique sua conexão.</string>
+    <string name="webbrowser_error_certificate">A conexão não é segura, por isso a página foi bloqueada.</string>
+    <string name="webbrowser_error_malformed_url">Este endereço não é válido.</string>
+    <string name="webbrowser_error_generic">Algo deu errado ao carregar esta página.</string>
+    <string name="webbrowser_error_label_url">Endereço</string>
+
+    <!-- Sidebar navigation -->
+    <string name="sidebar_item_home">Início</string>
+    <string name="sidebar_item_files">Arquivos</string>
+    <string name="sidebar_item_network">Rede</string>
+    <string name="sidebar_item_playlists">Playlists</string>
+    <string name="sidebar_item_downloads">Downloads</string>
+    <string name="sidebar_item_settings">Configurações</string>
+
+    <!-- Context Rail -->
+    <string name="context_rail_now_playing">Tocando Agora</string>
+    <string name="context_rail_back_to_video">Voltar ao vídeo</string>
+    <string name="context_rail_no_video">Nenhum vídeo em reprodução</string>
+    <string name="context_rail_queue_title">A Seguir</string>
+    <string name="context_rail_empty_queue">Fila vazia</string>
+    <string name="context_rail_file_details">Detalhes do Arquivo</string>
+    <string name="context_rail_tab_details">Detalhes</string>
+    <string name="context_rail_btn_from_start">Do início</string>
+
+    <!-- Home Screen Sections -->
+    <string name="home_section_continue_watching">Continuar Assistindo</string>
+    <string name="home_section_recent_sources">Fontes Recentes</string>
+    <string name="home_section_recently_added">Adicionados Recentemente</string>
+    <string name="home_no_recent_videos">Nenhum vídeo recente</string>
+    <string name="home_no_recent_files">Nenhum arquivo recente</string>
+
+    <!-- Issue #94: Network unified sources, inline discovery and delete confirmation -->
+    <string name="network_delete_server_title">Excluir servidor</string>
+    <string name="network_delete_server_message">Tem certeza de que deseja excluir o servidor \"%1$s\"?</string>
+    <string name="network_delete_server_confirm">Excluir</string>
+    <string name="network_delete_server_cancel">Cancelar</string>
+    <string name="network_discovery_inline_header">Encontrados na rede</string>
+    <string name="network_server_saved_badge">Salvo</string>
+
+    <!-- Issue #95: Add network source wizard and editing saved servers -->
+    <string name="network_btn_add_source">Adicionar fonte</string>
+    <string name="network_btn_edit">Editar</string>
+    <string name="network_wizard_title">Adicionar Fonte de Rede</string>
+    <string name="network_wizard_subtitle">Selecione o protocolo de armazenamento de rede:</string>
+    <string name="network_protocol_desc_smb">Compartilhamento Windows / Samba (CIFS)</string>
+    <string name="network_protocol_desc_nfs">Sistema de Arquivos de Rede (Linux / Unix)</string>
+    <string name="network_protocol_desc_ftp">Protocolo Padrão de Transferência de Arquivos</string>
+    <string name="network_protocol_desc_sftp">Protocolo de Transferência via SSH</string>
+    <string name="network_protocol_desc_webdav">WebDAV via HTTP/HTTPS (Nextcloud, NAS)</string>
+    <string name="network_btn_test_connection">Testar conexão</string>
+    <string name="network_btn_save">Salvar</string>
+    <string name="network_edit_server_title">Editar Servidor</string>
+
+    <!-- Issue #99: Stats for nerds compact and full modes -->
+    <string name="stats_mode_closed">Fechado</string>
+    <string name="stats_mode_compact">Estatísticas Compactas</string>
+    <string name="stats_mode_full">Estatísticas Completas</string>
+    <string name="stats_compact_title">Estatísticas para Nerds</string>
+    <string name="stats_full_title">Estatísticas para Nerds · Telemetria Completa</string>
+    <string name="stats_metric_fps">FPS</string>
+    <string name="stats_metric_dropped">Quadros Perdidos</string>
+    <string name="stats_metric_gpu_time">Tempo de GPU</string>
+    <string name="stats_metric_cpu_time">Tempo de CPU</string>
+    <string name="stats_metric_resolution">Resolução</string>
+    <string name="stats_metric_decoder">Decodificador</string>
+    <string name="stats_metric_buffer">Buffer</string>
+    <string name="stats_chart_gpu_title">Tempo de GPU (ms)</string>
+    <string name="stats_chart_dropped_title">Quadros Perdidos</string>
+    <string name="stats_chart_bottleneck_title">Estágios de Gargalo</string>
+    <string name="stats_chart_buffer_title">Saúde do Buffer (s)</string>
+    <string name="stats_chart_network_title">Taxa de Rede (MB/s)</string>
+
+    <!-- Issue #100: Settings 3-column layout & dynamic cylinder options -->
+    <string name="settings_section_playback">Reprodução</string>
+    <string name="settings_resume_policy_label">Política de Retomada</string>
+    <string name="settings_resume_policy_desc">Ação executada ao abrir um vídeo iniciado anteriormente.</string>
+    <string name="settings_resume_ask">Perguntar</string>
+    <string name="settings_resume_always">Retomar</string>
+    <string name="settings_resume_never">Do início</string>
+    <string name="settings_panel_fov_label">Campo de Visão do Painel</string>
+    <string name="settings_panel_fov_desc">Largura angular horizontal da superfície cilíndrica da interface.</string>
+    <string name="settings_panel_fov_50">Compacto (50°)</string>
+    <string name="settings_panel_fov_80">Padrão (80°)</string>
+    <string name="settings_panel_fov_100">Amplo (100°)</string>
+    <string name="settings_panel_distance_label">Distância do Painel</string>
+    <string name="settings_panel_distance_desc">Distância radial do painel da interface em relação ao usuário.</string>
+    <string name="settings_panel_dist_13">Perto (1,3m)</string>
+    <string name="settings_panel_dist_16">Padrão (1,6m)</string>
+    <string name="settings_panel_dist_20">Longe (2,0m)</string>
+    <string name="settings_by_back_label">Botões B/Y como Voltar</string>
+    <string name="settings_by_back_desc">Pressionar B ou Y nos controles retrocede hierarquicamente na navegação.</string>
+    <string name="settings_hover_haptics_label">Vibração ao Apontar</string>
+    <string name="settings_hover_haptics_desc">Pulso háptico suave nos controles quando o raio interage com botões.</string>
+    <string name="settings_live_preview_title">Prévia ao Vivo</string>
+    <string name="settings_live_preview_empty">Aponte ou selecione uma opção para ver detalhes e comportamento ao vivo.</string>
+    <string name="settings_telemetry_title">Telemetria do Sistema</string>
+    <string name="settings_telemetry_gpu">Tempo de GPU: %1$s</string>
+    <string name="settings_telemetry_temp">Status Térmico: %1$s</string>
+    <string name="settings_telemetry_refresh">Taxa de Atualização: %1$s</string>
 
 </resources>

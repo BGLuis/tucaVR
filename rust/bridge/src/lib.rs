@@ -10,8 +10,8 @@
 use core::playback::PlaybackController;
 use once_cell::sync::Lazy;
 use std::os::raw::c_void;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 
 // Nenhum backend de `log` (facade usada por `protocols`, ex.
 // `log::warn!("SftpFileSource: reconectando...")`) era inicializado em
@@ -20,7 +20,7 @@ use std::sync::{Arc, Mutex};
 // silencioso, entao os logs de diagnostico de rede adicionados nas sessoes
 // anteriores nunca apareciam no logcat. Implementacao minima em vez de puxar
 // a crate `android_logger` (que nao estava em nenhuma arvore de dependencia
-// deste workspace ainda) — so redireciona pra `__android_log_print`, mesmo
+// deste workspace ainda) — so redireciona pra `__android_log_write`, mesmo
 // mecanismo que o resto do bridge ja usa.
 struct AndroidLogger;
 
@@ -812,14 +812,13 @@ pub extern "C" fn get_video_presentation_pending() -> u32 {
     }
 }
 
-/// T-HDR: 1 se o video atual foi detectado como HDR (PQ/HLG, ver
-/// media_logic::color), 0 caso contrario (inclui antes do primeiro load).
-/// O C++ consulta isto pra escolher o pipeline de cor Vulkan certo
-/// (BT.709/SDR vs. BT.2020 + tonemap).
+/// T-HDR: 0 = SDR (inclui antes do primeiro load), 1 = PQ, 2 = HLG (ver
+/// media_logic::color::TransferFunction::shader_code). Qualquer valor != 0 e
+/// HDR. O C++ repassa o codigo ao shader pra escolher o tonemap certo.
 #[no_mangle]
 pub extern "C" fn get_video_is_hdr() -> u32 {
     match CONTROLLER.try_lock() {
-        Ok(controller) => controller.is_hdr() as u32,
+        Ok(controller) => controller.hdr_transfer().shader_code(),
         Err(_) => 0,
     }
 }
@@ -993,12 +992,23 @@ pub extern "C" fn get_last_av_drift_ms() -> f32 {
 
 #[no_mangle]
 pub extern "C" fn toggle_play_pause() {
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.toggle_play_pause();
         emit_playback_feedback(if controller.is_playing() {
             FEEDBACK_PLAY
         } else {
             FEEDBACK_PAUSE
+        });
+    } else {
+        std::thread::spawn(|| {
+            if let Ok(mut controller) = CONTROLLER.lock() {
+                controller.toggle_play_pause();
+                emit_playback_feedback(if controller.is_playing() {
+                    FEEDBACK_PLAY
+                } else {
+                    FEEDBACK_PAUSE
+                });
+            }
         });
     }
 }
@@ -1008,15 +1018,27 @@ pub extern "C" fn on_app_focus_lost() {
     if !PAUSE_ON_EXIT.load(Ordering::Relaxed) {
         return;
     }
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.on_focus_lost();
+    } else {
+        std::thread::spawn(|| {
+            if let Ok(mut controller) = CONTROLLER.lock() {
+                controller.on_focus_lost();
+            }
+        });
     }
 }
 
 #[no_mangle]
 pub extern "C" fn on_app_focus_gained() {
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.on_focus_gained();
+    } else {
+        std::thread::spawn(|| {
+            if let Ok(mut controller) = CONTROLLER.lock() {
+                controller.on_focus_gained();
+            }
+        });
     }
 }
 
@@ -1106,6 +1128,32 @@ pub extern "C" fn get_all_playback_errors() -> *mut std::os::raw::c_char {
     string_to_c_char(ERROR_RING.all_as_tsv())
 }
 
+// ============================================================================
+// Lock-free Playback Preferences (T7.6, Audio, Subtitle, Speed)
+// Decoupled from CONTROLLER mutex to prevent UI/render thread ANR deadlocks.
+// ============================================================================
+
+static PREFERRED_SUBTITLE_LANGUAGE: Lazy<RwLock<Option<String>>> = Lazy::new(|| RwLock::new(None));
+static DESIRED_AUDIO_TRACK: AtomicU32 = AtomicU32::new(0);
+static PLAYBACK_SPEED_BITS: AtomicU32 = AtomicU32::new(0x3F800000); // 1.0f32
+static SUBTITLE_OFFSET_MS: AtomicI64 = AtomicI64::new(0);
+
+fn apply_playback_preferences_before_load(controller: &mut PlaybackController) {
+    if let Ok(pref) = PREFERRED_SUBTITLE_LANGUAGE.read() {
+        if let Some(ref l) = *pref {
+            controller.set_preferred_subtitle_language(l);
+        } else {
+            controller.set_preferred_subtitle_language("");
+        }
+    }
+    let desired_audio = DESIRED_AUDIO_TRACK.load(Ordering::Relaxed) as usize;
+    controller.select_audio_track(desired_audio);
+    let speed = f32::from_bits(PLAYBACK_SPEED_BITS.load(Ordering::Relaxed));
+    controller.set_speed(speed);
+    let offset_ms = SUBTITLE_OFFSET_MS.load(Ordering::Relaxed);
+    controller.set_subtitle_offset_ms(offset_ms);
+}
+
 /// T6.4: inicia playback de um arquivo via SMB. Recebe host/share/caminho/
 /// credenciais como parametros SEPARADOS (nunca uma URI unica com a senha
 /// embutida cruzando a fronteira JNI) — o Kotlin resolve as credenciais
@@ -1175,6 +1223,7 @@ pub extern "C" fn start_smb_playback(
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
+            apply_playback_preferences_before_load(&mut controller);
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
                 unsafe {
                     log(6, &format!("Error loading SMB video: {:?}", e));
@@ -1270,7 +1319,15 @@ pub extern "C" fn smb_list_directory(
         Ok(entries) => {
             let lines: Vec<String> = entries
                 .into_iter()
-                .map(|e| format!("{}\t{}\t{}", e.name, if e.is_dir { 1 } else { 0 }, e.size))
+                .map(|e| {
+                    format!(
+                        "{}\t{}\t{}\t{}",
+                        e.name,
+                        if e.is_dir { 1 } else { 0 },
+                        e.size,
+                        e.mtime
+                    )
+                })
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
@@ -1378,6 +1435,7 @@ pub extern "C" fn start_ftp_playback(
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
+            apply_playback_preferences_before_load(&mut controller);
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
                 unsafe {
                     log(6, &format!("Error loading FTP video: {:?}", e));
@@ -1426,7 +1484,15 @@ pub extern "C" fn ftp_list_directory(
         Ok(entries) => {
             let lines: Vec<String> = entries
                 .into_iter()
-                .map(|e| format!("{}\t{}\t{}", e.name, if e.is_dir { 1 } else { 0 }, e.size))
+                .map(|e| {
+                    format!(
+                        "{}\t{}\t{}\t{}",
+                        e.name,
+                        if e.is_dir { 1 } else { 0 },
+                        e.size,
+                        e.mtime
+                    )
+                })
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
@@ -1483,6 +1549,7 @@ pub extern "C" fn start_sftp_playback(
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     private_key: *const std::os::raw::c_char,
+    expected_fingerprint: *const std::os::raw::c_char,
     start_time_sec: f32,
 ) {
     // Ver comentario em start_smb_playback.
@@ -1499,6 +1566,7 @@ pub extern "C" fn start_sftp_playback(
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        let expected_fingerprint = cstr_to_string(expected_fingerprint).filter(|s| !s.is_empty());
         protocols::sftp::SftpTarget {
             host,
             port: port.clamp(1, u16::MAX as i32) as u16,
@@ -1506,6 +1574,7 @@ pub extern "C" fn start_sftp_playback(
             username,
             password,
             private_key,
+            expected_fingerprint,
         }
     };
     if let Err(e) = target.validate() {
@@ -1532,6 +1601,7 @@ pub extern "C" fn start_sftp_playback(
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
+            apply_playback_preferences_before_load(&mut controller);
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
                 unsafe {
                     log(6, &format!("Error loading SFTP video: {:?}", e));
@@ -1557,6 +1627,7 @@ pub extern "C" fn sftp_list_directory(
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     private_key: *const std::os::raw::c_char,
+    expected_fingerprint: *const std::os::raw::c_char,
     path: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
@@ -1567,6 +1638,7 @@ pub extern "C" fn sftp_list_directory(
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        let expected_fingerprint = cstr_to_string(expected_fingerprint).filter(|s| !s.is_empty());
         protocols::sftp::SftpTarget {
             host,
             port: port.clamp(1, u16::MAX as i32) as u16,
@@ -1574,6 +1646,7 @@ pub extern "C" fn sftp_list_directory(
             username,
             password,
             private_key,
+            expected_fingerprint,
         }
     };
     if let Err(e) = target.validate() {
@@ -1585,11 +1658,25 @@ pub extern "C" fn sftp_list_directory(
         Ok(entries) => {
             let lines: Vec<String> = entries
                 .into_iter()
-                .map(|e| format!("{}\t{}\t{}", e.name, if e.is_dir { 1 } else { 0 }, e.size))
+                .map(|e| {
+                    format!(
+                        "{}\t{}\t{}\t{}",
+                        e.name,
+                        if e.is_dir { 1 } else { 0 },
+                        e.size,
+                        e.mtime
+                    )
+                })
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => {
+            if e.starts_with("ERROR:") {
+                string_to_c_char(e.replace('\n', " "))
+            } else {
+                string_to_c_char(format!("ERROR:{}", e.replace('\n', " ")))
+            }
+        }
     }
 }
 
@@ -1602,6 +1689,7 @@ pub extern "C" fn sftp_scan_folder_has_media(
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     private_key: *const std::os::raw::c_char,
+    expected_fingerprint: *const std::os::raw::c_char,
     path: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
@@ -1612,6 +1700,7 @@ pub extern "C" fn sftp_scan_folder_has_media(
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        let expected_fingerprint = cstr_to_string(expected_fingerprint).filter(|s| !s.is_empty());
         protocols::sftp::SftpTarget {
             host,
             port: port.clamp(1, u16::MAX as i32) as u16,
@@ -1619,6 +1708,7 @@ pub extern "C" fn sftp_scan_folder_has_media(
             username,
             password,
             private_key,
+            expected_fingerprint,
         }
     };
     if let Err(e) = target.validate() {
@@ -1631,7 +1721,52 @@ pub extern "C" fn sftp_scan_folder_has_media(
             "{}\t{}",
             result.has_media as i32, result.completed_fully as i32
         )),
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => {
+            if e.starts_with("ERROR:") {
+                string_to_c_char(e.replace('\n', " "))
+            } else {
+                string_to_c_char(format!("ERROR:{}", e.replace('\n', " ")))
+            }
+        }
+    }
+}
+
+/// T6.2 / #57: Consulta o fingerprint SHA-256 da host key do servidor SFTP (TOFU) sem autenticar.
+#[no_mangle]
+pub extern "C" fn sftp_probe_host_key(
+    host: *const std::os::raw::c_char,
+    port: i32,
+) -> *mut std::os::raw::c_char {
+    let host = match unsafe { cstr_to_string(host) } {
+        Some(s) => s,
+        None => return string_to_c_char("ERROR:host invalido".into()),
+    };
+    let port = port.clamp(1, u16::MAX as i32) as u16;
+    match protocols::sftp::probe_host_key(&host, port) {
+        Ok(fp) => string_to_c_char(fp),
+        Err(e) => {
+            if e.starts_with("ERROR:") {
+                string_to_c_char(e.replace('\n', " "))
+            } else {
+                string_to_c_char(format!("ERROR:{}", e.replace('\n', " ")))
+            }
+        }
+    }
+}
+
+/// Drops the pooled SMB/SFTP sessions of a server (called when the user removes it).
+/// Does not block: the sessions are closed in the background.
+#[no_mangle]
+pub extern "C" fn smb_close_pooled_sessions(host: *const std::os::raw::c_char, port: i32) {
+    if let Some(host) = unsafe { cstr_to_string(host) } {
+        protocols::smb::close_pooled_sessions(&host, port.clamp(1, u16::MAX as i32) as u16);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn sftp_close_pooled_sessions(host: *const std::os::raw::c_char, port: i32) {
+    if let Some(host) = unsafe { cstr_to_string(host) } {
+        protocols::sftp::close_pooled_sessions(&host, port.clamp(1, u16::MAX as i32) as u16);
     }
 }
 
@@ -1685,6 +1820,7 @@ pub extern "C" fn start_nfs_playback(
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
+            apply_playback_preferences_before_load(&mut controller);
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
                 unsafe {
                     log(6, &format!("Error loading NFS video: {:?}", e));
@@ -1732,7 +1868,15 @@ pub extern "C" fn nfs_list_directory(
         Ok(entries) => {
             let lines: Vec<String> = entries
                 .into_iter()
-                .map(|e| format!("{}\t{}\t{}", e.name, if e.is_dir { 1 } else { 0 }, e.size))
+                .map(|e| {
+                    format!(
+                        "{}\t{}\t{}\t{}",
+                        e.name,
+                        if e.is_dir { 1 } else { 0 },
+                        e.size,
+                        e.mtime
+                    )
+                })
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
@@ -1854,6 +1998,7 @@ pub extern "C" fn start_webdav_playback(
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
+            apply_playback_preferences_before_load(&mut controller);
             if let Err(e) = controller.load_at(&internal_uri, f64::from(start_time_sec)) {
                 unsafe {
                     log(6, &format!("Error loading WebDAV video: {:?}", e));
@@ -1909,7 +2054,15 @@ pub extern "C" fn webdav_list_directory(
         Ok(entries) => {
             let lines: Vec<String> = entries
                 .into_iter()
-                .map(|e| format!("{}\t{}\t{}", e.name, if e.is_dir { 1 } else { 0 }, e.size))
+                .map(|e| {
+                    format!(
+                        "{}\t{}\t{}\t{}",
+                        e.name,
+                        if e.is_dir { 1 } else { 0 },
+                        e.size,
+                        e.mtime
+                    )
+                })
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
@@ -2179,6 +2332,7 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
         }
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
+            apply_playback_preferences_before_load(&mut controller);
             if let Err(e) = controller.load_at(&path_str, f64::from(start_time_sec)) {
                 unsafe {
                     log(6, &format!("Error loading video: {:?}", e));
@@ -2209,8 +2363,14 @@ pub extern "C" fn stop_video_playback() {
 #[no_mangle]
 pub extern "C" fn reset_process_state() {
     DOWNLOAD_MANAGER.set_playback_active(false);
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.stop();
+    } else {
+        std::thread::spawn(|| {
+            if let Ok(mut controller) = CONTROLLER.lock() {
+                controller.stop();
+            }
+        });
     }
     LOADING_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
     FEEDBACK_EVENT.store(0, std::sync::atomic::Ordering::SeqCst);
@@ -2222,6 +2382,9 @@ pub extern "C" fn reset_process_state() {
     LAST_FRAMES_OUTPUT.store(0, std::sync::atomic::Ordering::SeqCst);
     LAST_FRAMES_DROPPED.store(0, std::sync::atomic::Ordering::SeqCst);
     LAST_NETWORK_BYTES.store(0, std::sync::atomic::Ordering::SeqCst);
+    DESIRED_AUDIO_TRACK.store(0, std::sync::atomic::Ordering::Relaxed);
+    SUBTITLE_OFFSET_MS.store(0, std::sync::atomic::Ordering::Relaxed);
+    PLAYBACK_SPEED_BITS.store(0x3F800000, std::sync::atomic::Ordering::Relaxed);
     ERROR_RING.clear();
 }
 
@@ -2270,16 +2433,17 @@ pub extern "C" fn get_video_volume() -> f32 {
 
 #[no_mangle]
 pub extern "C" fn set_playback_speed(speed: f32) {
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    let speed = speed.clamp(0.25, 4.0);
+    PLAYBACK_SPEED_BITS.store(speed.to_bits(), Ordering::Relaxed);
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.set_speed(speed);
     }
 }
 
 #[no_mangle]
 pub extern "C" fn get_playback_speed() -> f32 {
-    // try_sample_or: chamada periodica do render loop (C++ HUD / telemetry a 90Hz).
-    // Se o lock estiver ocupado (load_at em background), devolve 1.0 sem bloquear a render thread.
-    media_logic::session::try_sample_or(&CONTROLLER, 1.0, |controller| controller.get_speed())
+    let fallback = f32::from_bits(PLAYBACK_SPEED_BITS.load(Ordering::Relaxed));
+    media_logic::session::try_sample_or(&CONTROLLER, fallback, |controller| controller.get_speed())
 }
 
 #[no_mangle]
@@ -2308,7 +2472,8 @@ pub extern "C" fn get_audio_track_count() -> u32 {
 /// escolha feita num arquivo vaza silenciosamente pro proximo.
 #[no_mangle]
 pub extern "C" fn set_desired_audio_track(ordinal: u32) {
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    DESIRED_AUDIO_TRACK.store(ordinal, Ordering::Relaxed);
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.select_audio_track(ordinal as usize);
     }
 }
@@ -2366,11 +2531,7 @@ pub extern "C" fn set_screen_orientation(x: f32, y: f32, z: f32, w: f32) {
     media_logic::spatial_audio::set_global_screen_orientation(x, y, z, w);
 }
 
-/// Libera o buffer retornado por `smb_generate_thumbnail`/
-/// `ftp_generate_thumbnail`/`sftp_generate_thumbnail`. `len` precisa ser
-/// exatamente o valor escrito em `out_len` por essas chamadas — o buffer foi
-/// alocado com essa capacidade exata (ver `write_thumbnail` abaixo), entao
-/// reconstruir o `Vec` com um `len` diferente e undefined behavior.
+/// Frees the buffer returned by `thumbnail_session_decode`. `len` must match `out_len`.
 #[no_mangle]
 pub extern "C" fn free_rust_thumbnail_buffer(ptr: *mut u8, len: usize) {
     if ptr.is_null() {
@@ -2381,11 +2542,7 @@ pub extern "C" fn free_rust_thumbnail_buffer(ptr: *mut u8, len: usize) {
     }
 }
 
-/// Converte o resultado de `core::thumbnail::generate` num ponteiro cru RGBA
-/// (ou nulo em qualquer falha) + as dimensoes/tamanho via out-params —
-/// mesmo padrao dos out-params de `get_video_progress` abaixo, escolhido em
-/// vez de um struct `#[repr(C)]` pra manter a fronteira C ABI so com tipos
-/// primitivos (mesma razao documentada em `toggle_swap_eyes` sobre `bool`).
+/// Converts `ThumbnailImage` into a raw RGBA pointer and out-params (null on failure).
 fn write_thumbnail(
     image: Option<core::thumbnail::ThumbnailImage>,
     out_width: *mut u32,
@@ -2417,18 +2574,12 @@ fn write_thumbnail(
     ptr
 }
 
-/// Gera um thumbnail (RGBA cru, `max_width * max_height * 4` bytes) de um
-/// video num share SMB, decodificando UM frame por software — ver
-/// `core::thumbnail::generate` para os detalhes (seek de 1s pra dentro,
-/// limite de pacotes, sem MediaCodec). Chamada BLOQUEANTE (rede + decode
-/// sincronos) — Kotlin SEMPRE de `Dispatchers.IO`, uma por item de video
-/// visivel na listagem (mesmo cuidado de "nunca gerar pra pasta inteira de
-/// uma vez" do `ThumbnailGenerator` local). Retorna nulo em qualquer falha
-/// (sem popup de erro — mesmo contrato de silencio do lado local); o
-/// ponteiro retornado (se nao nulo) DEVE ser liberado com
-/// `free_rust_thumbnail_buffer`.
+/// Opens a video on an SMB share once and returns a session handle (0 on failure). The same
+/// session yields the metadata (`thumbnail_session_metadata`) and the frame
+/// (`thumbnail_session_decode`); always release it with `thumbnail_session_close`. BLOCKING
+/// (network + container probe), so Kotlin must call it from `Dispatchers.IO`.
 #[no_mangle]
-pub extern "C" fn smb_generate_thumbnail(
+pub extern "C" fn smb_thumbnail_open(
     host: *const std::os::raw::c_char,
     port: i32,
     username: *const std::os::raw::c_char,
@@ -2436,25 +2587,20 @@ pub extern "C" fn smb_generate_thumbnail(
     domain: *const std::os::raw::c_char,
     share: *const std::os::raw::c_char,
     path: *const std::os::raw::c_char,
-    max_width: u32,
-    max_height: u32,
     cancel_token: u64,
-    out_width: *mut u32,
-    out_height: *mut u32,
-    out_len: *mut usize,
-) -> *mut u8 {
+) -> u64 {
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let share = match cstr_to_string(share) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let path = match cstr_to_string(path) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -2470,34 +2616,27 @@ pub extern "C" fn smb_generate_thumbnail(
         }
     };
     let internal_uri = target.to_internal();
-    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
-    write_thumbnail(image, out_width, out_height, out_len)
+    core::thumbnail::open_session(&internal_uri, cancel_token).unwrap_or(0)
 }
 
-/// Mesma logica de `smb_generate_thumbnail`, para um arquivo num servidor
-/// FTP. Ver esse comentario para a justificativa completa (identica aqui).
+/// Same as `smb_thumbnail_open`, for a file on an FTP server.
 #[no_mangle]
-pub extern "C" fn ftp_generate_thumbnail(
+pub extern "C" fn ftp_thumbnail_open(
     host: *const std::os::raw::c_char,
     port: i32,
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     path: *const std::os::raw::c_char,
-    max_width: u32,
-    max_height: u32,
     cancel_token: u64,
-    out_width: *mut u32,
-    out_height: *mut u32,
-    out_len: *mut usize,
-) -> *mut u8 {
+) -> u64 {
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let path = match cstr_to_string(path) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -2510,41 +2649,35 @@ pub extern "C" fn ftp_generate_thumbnail(
         }
     };
     let internal_uri = target.to_internal();
-    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
-    write_thumbnail(image, out_width, out_height, out_len)
+    core::thumbnail::open_session(&internal_uri, cancel_token).unwrap_or(0)
 }
 
-/// Mesma logica de `smb_generate_thumbnail`, para um arquivo num servidor
-/// SFTP. `private_key` e o CONTEUDO PEM (nao um caminho de arquivo — mesma
-/// convencao de `start_sftp_playback`), ponteiro nulo ou string vazia =
-/// autenticacao por senha em vez de chave.
+/// Same as `smb_thumbnail_open`, for an SFTP server. `private_key` is the PEM content (not a
+/// path, like `start_sftp_playback`); null or empty selects password authentication.
 #[no_mangle]
-pub extern "C" fn sftp_generate_thumbnail(
+pub extern "C" fn sftp_thumbnail_open(
     host: *const std::os::raw::c_char,
     port: i32,
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     private_key: *const std::os::raw::c_char,
+    expected_fingerprint: *const std::os::raw::c_char,
     path: *const std::os::raw::c_char,
-    max_width: u32,
-    max_height: u32,
     cancel_token: u64,
-    out_width: *mut u32,
-    out_height: *mut u32,
-    out_len: *mut usize,
-) -> *mut u8 {
+) -> u64 {
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let path = match cstr_to_string(path) {
             Some(s) => s,
-            None => return write_thumbnail(None, out_width, out_height, out_len),
+            None => return 0,
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        let expected_fingerprint = cstr_to_string(expected_fingerprint).filter(|s| !s.is_empty());
         protocols::sftp::SftpTarget {
             host,
             port: port.clamp(1, u16::MAX as i32) as u16,
@@ -2552,20 +2685,129 @@ pub extern "C" fn sftp_generate_thumbnail(
             username,
             password,
             private_key,
+            expected_fingerprint,
         }
     };
     if target.validate().is_err() {
-        return write_thumbnail(None, out_width, out_height, out_len);
+        return 0;
     }
     let internal_uri = target.to_internal();
-    let image = core::thumbnail::generate(&internal_uri, max_width, max_height, cancel_token);
-    write_thumbnail(image, out_width, out_height, out_len)
+    core::thumbnail::open_session(&internal_uri, cancel_token).unwrap_or(0)
+}
+
+/// Same as `smb_thumbnail_open`, for a file on an NFS server.
+#[no_mangle]
+pub extern "C" fn nfs_thumbnail_open(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    export_path: *const std::os::raw::c_char,
+    file_path: *const std::os::raw::c_char,
+    version: i32,
+    cancel_token: u64,
+) -> u64 {
+    let target = unsafe {
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let export_path = match cstr_to_string(export_path) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let file_path = match cstr_to_string(file_path) {
+            Some(s) => s,
+            None => return 0,
+        };
+        protocols::nfs::NfsTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            export_path,
+            file_path,
+            version: version.clamp(3, 4) as u8,
+        }
+    };
+    let internal_uri = target.to_internal();
+    core::thumbnail::open_session(&internal_uri, cancel_token).unwrap_or(0)
+}
+
+/// Same as `smb_thumbnail_open`, for a file on a WebDAV server.
+#[no_mangle]
+pub extern "C" fn webdav_thumbnail_open(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    base_path: *const std::os::raw::c_char,
+    file_path: *const std::os::raw::c_char,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    use_https: i32,
+    accept_invalid_certs: i32,
+    cancel_token: u64,
+) -> u64 {
+    let target = unsafe {
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let base_path = match cstr_to_string(base_path) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let file_path = match cstr_to_string(file_path) {
+            Some(s) => s,
+            None => return 0,
+        };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        protocols::webdav::WebdavTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            base_path,
+            file_path,
+            username,
+            password,
+            use_https: use_https != 0,
+            accept_invalid_certs: accept_invalid_certs != 0,
+        }
+    };
+    let internal_uri = target.to_internal();
+    core::thumbnail::open_session(&internal_uri, cancel_token).unwrap_or(0)
 }
 
 /// Cancela a geração de um thumbnail de listagem em andamento identificada por `cancel_token`.
 #[no_mangle]
 pub extern "C" fn cancel_thumbnail_generation(cancel_token: u64) {
     core::thumbnail::cancel_thumbnail_generation(cancel_token);
+}
+
+/// Metadata wire string (`media_logic::metadata_wire`) of an open thumbnail session, or null for an
+/// unknown handle. Free with `free_rust_string`.
+#[no_mangle]
+pub extern "C" fn thumbnail_session_metadata(handle: u64) -> *mut std::os::raw::c_char {
+    match core::thumbnail::session_metadata_wire(handle) {
+        Some(wire) => string_to_c_char(wire),
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// Decodes one RGBA frame (`max_width * max_height * 4` bytes) from an open session, consuming it.
+/// BLOCKING. Null on any failure; free the buffer with `free_rust_thumbnail_buffer`.
+#[no_mangle]
+pub extern "C" fn thumbnail_session_decode(
+    handle: u64,
+    max_width: u32,
+    max_height: u32,
+    out_width: *mut u32,
+    out_height: *mut u32,
+    out_len: *mut usize,
+) -> *mut u8 {
+    let image = core::thumbnail::decode_session(handle, max_width, max_height);
+    write_thumbnail(image, out_width, out_height, out_len)
+}
+
+/// Releases a thumbnail session; safe to call after `thumbnail_session_decode` or twice.
+#[no_mangle]
+pub extern "C" fn thumbnail_session_close(handle: u64) {
+    core::thumbnail::close_session(handle);
 }
 
 /// Libera o buffer retornado por `smb_generate_thumbnail_strip`/
@@ -2621,11 +2863,8 @@ fn write_thumbnail_strip(
     ptr
 }
 
-/// Gera uma trilha de thumbnails (preview de arrasto no seekbar, T-seek-ux)
-/// de um video num share SMB — ver `core::thumbnail::generate_strip`.
-/// Mesmas ressalvas de `smb_generate_thumbnail` (chamada BLOQUEANTE, so de
-/// `Dispatchers.IO`, retorna nulo em qualquer falha); o ponteiro retornado
-/// (se nao nulo) DEVE ser liberado com `free_rust_thumbnail_strip`.
+/// Generates a thumbnail strip for seekbar preview from an SMB share (see `core::thumbnail::generate_strip`).
+/// Same blocking constraints as `smb_thumbnail_open` (call from Dispatchers.IO); free with `free_rust_thumbnail_strip`.
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn smb_generate_thumbnail_strip(
@@ -2683,9 +2922,8 @@ pub extern "C" fn smb_generate_thumbnail_strip(
     write_thumbnail_strip(strip, out_width, out_height, out_count, out_len)
 }
 
-/// Mesma logica de `smb_generate_thumbnail_strip`, para um arquivo num
-/// servidor SFTP — `private_key` segue a mesma convencao de
-/// `sftp_generate_thumbnail` (conteudo PEM, nao caminho de arquivo).
+/// Generates a thumbnail strip for seekbar preview from an SFTP server.
+/// `private_key` is the PEM content (matching `sftp_thumbnail_open`).
 #[no_mangle]
 #[allow(clippy::too_many_arguments)]
 pub extern "C" fn sftp_generate_thumbnail_strip(
@@ -2694,6 +2932,7 @@ pub extern "C" fn sftp_generate_thumbnail_strip(
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     private_key: *const std::os::raw::c_char,
+    expected_fingerprint: *const std::os::raw::c_char,
     path: *const std::os::raw::c_char,
     interval_secs: f32,
     max_width: u32,
@@ -2715,6 +2954,7 @@ pub extern "C" fn sftp_generate_thumbnail_strip(
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        let expected_fingerprint = cstr_to_string(expected_fingerprint).filter(|s| !s.is_empty());
         protocols::sftp::SftpTarget {
             host,
             port: port.clamp(1, u16::MAX as i32) as u16,
@@ -2722,6 +2962,7 @@ pub extern "C" fn sftp_generate_thumbnail_strip(
             username,
             password,
             private_key,
+            expected_fingerprint,
         }
     };
     if target.validate().is_err() {
@@ -2746,12 +2987,9 @@ pub extern "C" fn cancel_thumbnail_strip_generation() {
     core::thumbnail::cancel_strip_generation();
 }
 
-/// Roda `core::metadata::extract` e serializa o resultado (ver
-/// `media_logic::metadata_wire`) numa string liberada com `free_rust_string`,
-/// ou `"ERROR:<msg>"` em qualquer falha — mesmo contrato de erro de
-/// `smb_list_directory`/`probe_http_url`. Reusado pelas 4 funcoes de
-/// metadados abaixo (local e as 3 de rede) — so o marshalling de credenciais
-/// difere entre elas, ver justificativa em `smb_generate_thumbnail`.
+/// Runs `core::metadata::extract` and serializes the result into a wire string
+/// (freed with `free_rust_string`), or `"ERROR:<msg>"` on failure. Reused across
+/// local and network metadata functions.
 fn metadata_to_c_char(internal_uri: &str) -> *mut std::os::raw::c_char {
     match core::metadata::extract(internal_uri) {
         Ok(meta) => string_to_c_char(media_logic::metadata_wire::encode(&meta)),
@@ -2776,9 +3014,7 @@ pub extern "C" fn read_media_metadata(
     metadata_to_c_char(&path)
 }
 
-/// Mesma logica de `read_media_metadata`, para um arquivo num share SMB —
-/// credenciais como parametros separados, mesma justificativa de
-/// `smb_generate_thumbnail`.
+/// Reads media metadata from an SMB share.
 #[no_mangle]
 pub extern "C" fn smb_read_metadata(
     host: *const std::os::raw::c_char,
@@ -2849,9 +3085,8 @@ pub extern "C" fn ftp_read_metadata(
     metadata_to_c_char(&target.to_internal())
 }
 
-/// Mesma logica de `read_media_metadata`, para um arquivo num servidor SFTP.
-/// `private_key` e o CONTEUDO PEM (nao um caminho), mesma convencao de
-/// `sftp_generate_thumbnail`.
+/// Reads media metadata from an SFTP server.
+/// `private_key` is the PEM content (matching `sftp_thumbnail_open`).
 #[no_mangle]
 pub extern "C" fn sftp_read_metadata(
     host: *const std::os::raw::c_char,
@@ -2859,6 +3094,7 @@ pub extern "C" fn sftp_read_metadata(
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     private_key: *const std::os::raw::c_char,
+    expected_fingerprint: *const std::os::raw::c_char,
     path: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
@@ -2873,6 +3109,7 @@ pub extern "C" fn sftp_read_metadata(
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        let expected_fingerprint = cstr_to_string(expected_fingerprint).filter(|s| !s.is_empty());
         protocols::sftp::SftpTarget {
             host,
             port: port.clamp(1, u16::MAX as i32) as u16,
@@ -2880,11 +3117,86 @@ pub extern "C" fn sftp_read_metadata(
             username,
             password,
             private_key,
+            expected_fingerprint,
         }
     };
     if target.validate().is_err() {
         return string_to_c_char("ERROR:credenciais SFTP invalidas".to_string());
     }
+    metadata_to_c_char(&target.to_internal())
+}
+
+/// Same as `read_media_metadata`, for a file on an NFS server.
+#[no_mangle]
+pub extern "C" fn nfs_read_metadata(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    export_path: *const std::os::raw::c_char,
+    file_path: *const std::os::raw::c_char,
+    version: i32,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".to_string()),
+        };
+        let export_path = match cstr_to_string(export_path) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:export invalido".to_string()),
+        };
+        let file_path = match cstr_to_string(file_path) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:caminho invalido".to_string()),
+        };
+        protocols::nfs::NfsTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            export_path,
+            file_path,
+            version: version.clamp(3, 4) as u8,
+        }
+    };
+    metadata_to_c_char(&target.to_internal())
+}
+
+/// Same as `read_media_metadata`, for a file on a WebDAV server.
+#[no_mangle]
+pub extern "C" fn webdav_read_metadata(
+    host: *const std::os::raw::c_char,
+    port: i32,
+    base_path: *const std::os::raw::c_char,
+    file_path: *const std::os::raw::c_char,
+    username: *const std::os::raw::c_char,
+    password: *const std::os::raw::c_char,
+    use_https: i32,
+    accept_invalid_certs: i32,
+) -> *mut std::os::raw::c_char {
+    let target = unsafe {
+        let host = match cstr_to_string(host) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:host invalido".to_string()),
+        };
+        let base_path = match cstr_to_string(base_path) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:base_path invalido".to_string()),
+        };
+        let file_path = match cstr_to_string(file_path) {
+            Some(s) => s,
+            None => return string_to_c_char("ERROR:caminho invalido".to_string()),
+        };
+        let username = cstr_to_string(username).unwrap_or_default();
+        let password = cstr_to_string(password).unwrap_or_default();
+        protocols::webdav::WebdavTarget {
+            host,
+            port: port.clamp(1, u16::MAX as i32) as u16,
+            base_path,
+            file_path,
+            username,
+            password,
+            use_https: use_https != 0,
+            accept_invalid_certs: accept_invalid_certs != 0,
+        }
+    };
     metadata_to_c_char(&target.to_internal())
 }
 
@@ -2914,8 +3226,14 @@ pub extern "C" fn get_video_progress(current: *mut f32, total: *mut f32) {
 
 #[no_mangle]
 pub extern "C" fn set_subtitle_track(track_index: i32) {
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.set_subtitle_track(track_index);
+    } else {
+        std::thread::spawn(move || {
+            if let Ok(mut controller) = CONTROLLER.lock() {
+                controller.set_subtitle_track(track_index);
+            }
+        });
     }
 }
 
@@ -2930,7 +3248,8 @@ pub extern "C" fn get_subtitle_track() -> i32 {
 
 #[no_mangle]
 pub extern "C" fn set_subtitle_offset_ms(offset_ms: i64) {
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    SUBTITLE_OFFSET_MS.store(offset_ms, Ordering::Relaxed);
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.set_subtitle_offset_ms(offset_ms);
     }
 }
@@ -2940,7 +3259,7 @@ pub extern "C" fn get_subtitle_offset_ms() -> i64 {
     if let Ok(controller) = CONTROLLER.try_lock() {
         controller.get_subtitle_offset_ms()
     } else {
-        0
+        SUBTITLE_OFFSET_MS.load(Ordering::Relaxed)
     }
 }
 
@@ -2950,7 +3269,7 @@ pub extern "C" fn load_external_subtitle(path: *const std::os::raw::c_char) -> u
         Some(s) => s,
         None => return 0,
     };
-    if let Ok(mut controller) = CONTROLLER.lock() {
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.load_external_subtitle(&path_str).unwrap_or(0)
     } else {
         0
@@ -2960,11 +3279,20 @@ pub extern "C" fn load_external_subtitle(path: *const std::os::raw::c_char) -> u
 /// Define o idioma do sistema (ex.: `"pt-BR"`) para a auto-seleção de faixa de
 /// legenda embutida — T7.6. Deve ser chamado antes de `load_video_playback`
 /// para ter efeito no arquivo carregado a seguir.
+/// Totalmente lock-free em relação ao CONTROLLER para nunca travar a thread de UI do Android.
 #[no_mangle]
 pub extern "C" fn set_preferred_subtitle_language(lang: *const std::os::raw::c_char) {
     let lang_str = unsafe { cstr_to_string(lang) }.unwrap_or_default();
-    if let Ok(mut controller) = CONTROLLER.lock() {
-        controller.set_preferred_subtitle_language(&lang_str);
+    let trimmed = lang_str.trim().to_string();
+    if let Ok(mut pref) = PREFERRED_SUBTITLE_LANGUAGE.write() {
+        *pref = if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.clone())
+        };
+    }
+    if let Ok(mut controller) = CONTROLLER.try_lock() {
+        controller.set_preferred_subtitle_language(&trimmed);
     }
 }
 
@@ -2974,6 +3302,27 @@ pub extern "C" fn get_subtitle_track_count() -> u32 {
         controller.get_subtitle_track_count() as u32
     } else {
         0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_subtitle_track_info_wire() -> *mut std::os::raw::c_char {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        let count = controller.get_subtitle_track_count();
+        let mut lines = Vec::with_capacity(count);
+        for i in 0..count {
+            if let Some(info) = controller.get_subtitle_track_info(i) {
+                lines.push(format!(
+                    "{}\t{}\t{}",
+                    info.language.replace(['\t', '\n'], " "),
+                    info.title.replace(['\t', '\n'], " "),
+                    if info.is_external { 1 } else { 0 }
+                ));
+            }
+        }
+        string_to_c_char(lines.join("\n"))
+    } else {
+        string_to_c_char(String::new())
     }
 }
 

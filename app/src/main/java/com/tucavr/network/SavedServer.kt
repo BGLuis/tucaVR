@@ -88,6 +88,7 @@ fun SftpServer.toSavedServer(): SavedServer =
 fun SavedServer.toSftpServer(
     password: String = "",
     privateKey: String? = null,
+    hostKeyFingerprint: String? = null,
 ): SftpServer =
     SftpServer(
         id = id,
@@ -97,4 +98,5 @@ fun SavedServer.toSftpServer(
         username = username,
         password = password,
         privateKey = privateKey,
+        hostKeyFingerprint = hostKeyFingerprint,
     )

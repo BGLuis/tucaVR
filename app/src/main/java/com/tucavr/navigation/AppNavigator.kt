@@ -28,8 +28,17 @@ class AppNavigator(private val home: Destination = Destination.Home) {
     val canGoBack: Boolean
         get() = backStack.isNotEmpty()
 
+    /** Profundidade da pilha de navegação (número de destinos anteriores). */
+    val stackDepth: Int
+        get() = backStack.size
+
     fun navigateTo(destination: Destination) {
         backStack.addLast(current)
+        current = destination
+    }
+
+    /** Substitui o destino atual sem empilhar o anterior. */
+    fun replaceTop(destination: Destination) {
         current = destination
     }
 
@@ -40,8 +49,40 @@ class AppNavigator(private val home: Destination = Destination.Home) {
         return true
     }
 
+    /**
+     * Desempilha até que [current] satisfaça [predicate].
+     * Se esvaziar a pilha sem encontrar correspondência, redefine para [home].
+     * Retorna `true` se a navegação mudou, `false` se [current] já satisfazia o predicado.
+     */
+    fun popTo(predicate: (Destination) -> Boolean): Boolean {
+        if (predicate(current)) return false
+        while (backStack.isNotEmpty() && !predicate(current)) {
+            current = backStack.removeLast()
+        }
+        if (!predicate(current)) {
+            current = home
+        }
+        return true
+    }
+
     fun backToHome() {
         backStack.clear()
         current = home
+    }
+
+    /** Representa a pilha completa em ordem cronológica: histórico do back-stack seguido de [current]. */
+    val stack: List<Destination>
+        get() = backStack.toList() + current
+
+    /**
+     * Troca de seção a partir da barra lateral (Sidebar).
+     * Retorna a pilha para a raiz ([home]) e, se o destino não for [home], navega para [destination].
+     * Garante que a pilha resultante contenha exatamente [home, destination] (ou apenas [home] se o destino for [home]).
+     */
+    fun selectSection(destination: Destination) {
+        backToHome()
+        if (destination != home) {
+            navigateTo(destination)
+        }
     }
 }

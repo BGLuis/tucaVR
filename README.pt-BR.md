@@ -22,6 +22,8 @@
 
   [English](README.md) · **Português (BR)**
 
+  > Esta é uma tradução do [README.md](README.md). A versão em inglês é a canônica; em caso de divergência, ela prevalece.
+
 </div>
 
 # 📖 Sobre
@@ -75,6 +77,8 @@ As leituras remotas passam por um leitor com prefetch e chunking, que dispara *r
 
 ### Qualidade de vida
 
+Navegador web embutido (GeckoView) em um painel próprio, visualização de fotos e fotos 360°/3D, hand tracking, passthrough, ambientes 3D selecionáveis, downloads e playlists.
+
 Histórico de reprodução com "continuar assistindo" e prompt de retomada, thumbnails geradas para arquivos locais e de rede, armazenamento criptografado de credenciais (`EncryptedSharedPreferences`), servidores salvos, ordenação e filtros no navegador de arquivos, monitoramento térmico e uma UI totalmente localizada (inglês, português-BR e espanhol; veja [`docs/i18n.md`](docs/i18n.md) para diretrizes de contribuição de tradução).
 
 # 📋 Motivo
@@ -105,9 +109,9 @@ O projeto foi criado com a ideia de poder acessar os meus próprios arquivos do 
 
 > **O Gradle não está nessa lista de propósito** — o repositório já traz o Gradle Wrapper (8.7), então o `./gradlew` cuida disso pra você.
 
-**Dependência manual**
+**Meta OpenXR SDK**
 
-O [Meta OpenXR Mobile SDK](https://developers.meta.com/horizon/downloads/package/oculus-openxr-mobile-sdk/) não pode ser baixado automaticamente — exige aceite de licença no portal da Meta. Extraia-o em `sdk/meta-openxr-sdk/` de forma que existam `sdk/meta-openxr-sdk/Samples/SampleXrFramework/` e `sdk/meta-openxr-sdk/OpenXR/`. Essa pasta é ignorada pelo git; cada máquina precisa da sua própria cópia.
+O `./scripts/setup-deps.sh` baixa o último [release público do Meta OpenXR SDK no GitHub](https://github.com/meta-quest/Meta-OpenXR-SDK/releases) para `sdk/meta-openxr-sdk/` se ele ainda não estiver presente. Essa pasta é ignorada pelo git; cada máquina precisa da sua própria cópia.
 
 ### Instalação
 
@@ -121,7 +125,7 @@ O [Meta OpenXR Mobile SDK](https://developers.meta.com/horizon/downloads/package
   cd tucaVR
   ```
 
-3. Prepare as dependências externas (clona o `ffmpeg-android-maker` e verifica o SDK da Meta):
+3. Prepare as dependências externas (clona o `ffmpeg-android-maker` e baixa o SDK da Meta se ele não estiver presente):
   ```sh
   ./scripts/setup-deps.sh
   ```
@@ -135,11 +139,11 @@ O [Meta OpenXR Mobile SDK](https://developers.meta.com/horizon/downloads/package
   cd ..
   ```
 
-A partir daqui, você pode compilar de duas formas.
+A partir daqui, você pode compilar de duas formas. O passo 4 só é necessário no modo host (veja o Método B); o modo Docker compila o FFmpeg dentro da própria imagem.
 
 #### Método A — build unificado (recomendado)
 
-O script unificado cross-compila o Rust, copia os `.so` resultantes para `jniLibs` e então roda o Gradle:
+O script unificado roda o Gradle, cuja task `buildRust` (`scripts/build-rust.sh`) cross-compila o Rust e copia os `.so` resultantes para `jniLibs` antes da compilação nativa e da montagem do APK:
 
 ```sh
 ./scripts/build.sh          # Rust + C++ + Gradle
@@ -152,26 +156,23 @@ O APK sai em `app/build/outputs/apk/debug/app-debug.apk`.
 
 #### Método B — passo a passo (manual)
 
-Útil quando você está iterando em uma única camada e não quer recompilar tudo.
+O Gradle executa a task `buildRust` (`scripts/build-rust.sh`) automaticamente ao compilar o app no Android Studio ou pelo terminal.
 
-1. Compile o workspace Rust (tem que ser `cargo ndk`, **não** `cargo build` puro — `core`, `audio` e `bridge` precisam da toolchain do NDK):
-  ```sh
-  cd rust
-  cargo ndk -t aarch64-linux-android -P 26 -o ../app/src/main/jniLibs build --release
-  cd ..
-  ```
+O sistema de build escolhe automaticamente entre **Docker** e **Host Machine**:
+- **Modo Docker (Padrão se a toolchain Rust não estiver no host):** Não exige instalação do Rust, `cargo-ndk` ou `ffmpeg-android-maker` no host—apenas o Docker (ou Podman) rodando.
+- **Modo Host Machine:** Para compilar nativamente na sua máquina host sem Docker, instale:
+  1. Rust com target `aarch64-linux-android` (`rustup target add aarch64-linux-android`).
+  2. `cargo-ndk` (`cargo install cargo-ndk`).
+  3. Android NDK 26.3 (`26.3.11579264`).
+  4. Bibliotecas do FFmpeg em `ffmpeg-android-maker` (`./scripts/setup-deps.sh` e depois `./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26`).
+- **Forçar Modo Específico:** Use `-PrustBuildMode=docker`, `-PrustBuildMode=host` ou `-PrustBuildMode=skip` na linha de comando ou em `gradle.properties`, ou exporte `RUST_BUILD_MODE`.
 
-2. Copie as bibliotecas compartilhadas do FFmpeg para o mesmo lugar:
-  ```sh
-  cp ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/*.so app/src/main/jniLibs/arm64-v8a/
-  ```
-
-3. Compile o app Android (isso também dispara o build CMake da camada nativa C++):
+1. Para compilar pelo terminal:
   ```sh
   ./gradlew assembleDebug
   ```
 
-4. Instale no headset:
+2. Instale no headset:
   ```sh
   adb install -r app/build/outputs/apk/debug/app-debug.apk
   ```
@@ -183,7 +184,7 @@ O APK sai em `app/build/outputs/apk/debug/app-debug.apk`.
 
 #### Variáveis de ambiente do build
 
-O `scripts/build.sh` já define todas elas; você só precisa configurá-las manualmente se for rodar o build do Rust na mão:
+O `scripts/build-rust.sh` já define todas elas; você só precisa configurá-las manualmente se for rodar o build do Rust na mão:
 
 | Variável | Para que serve | Padrão usado pelo script |
 |----------|----------------|--------------------------|
@@ -223,7 +224,7 @@ Tudo que depende de renderização OpenXR real, haptics dos controles ou decode 
 Contribuições são bem-vindas — comece pelo [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
  <a href="https://github.com/bgluis/tucaVR/graphs/contributors">
-   <img src="https://contrib.rocks/image?repo=bgluis/tucaVR"/>
+   <img alt="Contributors" src="https://contrib.rocks/image?repo=bgluis/tucaVR"/>
  </a>
 
 # 📄 Licença

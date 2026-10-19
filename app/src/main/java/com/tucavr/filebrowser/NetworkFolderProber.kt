@@ -35,7 +35,8 @@ import kotlinx.coroutines.withContext
  * [pruneEmptyFolders] filtra diretamente a lista de entradas antes dela chegar em
  * `MediaFilterEngine`, preservando o comportamento de filtro por tipo/3D já existente.
  */
-object NetworkFolderProber {
+object NetworkFolderProber : FolderCache {
+    private const val INVALIDATE_CHUNK_SIZE = 500
     private const val TTL_FRESH_MS = 24L * 60 * 60 * 1000 // resultado definitivo (scanCompletedFully)
     private const val TTL_TIMED_OUT_MS = 60L * 60 * 1000 // resultado por deadline: revalida bem mais cedo
 
@@ -89,6 +90,82 @@ object NetworkFolderProber {
 
             entries.filter { it.type != MediaType.DIRECTORY || hasMediaByPath[it.path] != false }
         }
+
+    /**
+     * Filtra rapidamente pastas já conhecidas no cache persistente (Room) como sem mídia.
+     * Pastas sem registro no cache são mantidas provisoriamente para evitar travar a listagem.
+     */
+    override suspend fun pruneCachedEmptyFolders(
+        context: Context,
+        entries: List<MediaEntry>,
+        folderKeyFor: (MediaEntry) -> String,
+    ): List<MediaEntry> =
+        withContext(Dispatchers.IO) {
+            val directories = entries.filter { it.type == MediaType.DIRECTORY }
+            if (directories.isEmpty()) return@withContext entries
+
+            val dao = AppDatabase.getInstance(context).folderMediaStatusDao()
+            val emptyFolderPaths =
+                directories
+                    .filter { entry ->
+                        val cached = dao.find(folderKeyFor(entry))
+                        cached != null && !cached.hasPlayableMedia
+                    }.map { it.path }
+                    .toSet()
+
+            if (emptyFolderPaths.isEmpty()) entries else entries.filterNot { it.path in emptyFolderPaths }
+        }
+
+    /**
+     * Sondagem assíncrona progressiva de pastas ainda não cacheadas.
+     * Executa em segundo plano com controle de concorrência ([activeFolderSemaphore]).
+     * Notifica via [onFolderEmpty] sempre que uma pasta for confirmada vazia, permitindo
+     * atualizar a UI de forma não-bloqueante.
+     */
+    override suspend fun probeUncachedFoldersProgressive(
+        context: Context,
+        sourceKind: String,
+        entries: List<MediaEntry>,
+        folderKeyFor: (MediaEntry) -> String,
+        scanFnFor: (MediaEntry) -> suspend () -> String,
+        onFolderEmpty: suspend (emptyPath: String) -> Unit,
+    ) = coroutineScope {
+        val directories = entries.filter { it.type == MediaType.DIRECTORY }
+        if (directories.isEmpty()) return@coroutineScope
+
+        val dao = AppDatabase.getInstance(context).folderMediaStatusDao()
+        for (entry in directories) {
+            val folderKey = folderKeyFor(entry)
+            val cached = withContext(Dispatchers.IO) { dao.find(folderKey) }
+            if (cached != null) {
+                val ttl = if (cached.scanCompletedFully) TTL_FRESH_MS else TTL_TIMED_OUT_MS
+                val isStale = System.currentTimeMillis() - cached.lastCheckedAt >= ttl
+                if (isStale) {
+                    revalidateInBackground(context, sourceKind, folderKey, scanFnFor(entry))
+                }
+            } else {
+                launch {
+                    val hasMedia =
+                        activeFolderSemaphore.withPermit {
+                            val freshCached = withContext(Dispatchers.IO) { dao.find(folderKey) }
+                            freshCached?.hasPlayableMedia ?: scanAndCache(context, sourceKind, folderKey, scanFnFor(entry))
+                        }
+                    if (!hasMedia) {
+                        onFolderEmpty(entry.path)
+                    }
+                }
+            }
+        }
+    }
+
+    // Chunked to stay under SQLite's bound-variable limit.
+    override suspend fun invalidateFolders(
+        context: Context,
+        folderKeys: List<String>,
+    ) = withContext(Dispatchers.IO) {
+        val dao = AppDatabase.getInstance(context).folderMediaStatusDao()
+        folderKeys.chunked(INVALIDATE_CHUNK_SIZE).forEach { dao.deleteByKeys(it) }
+    }
 
     /**
      * Resolve se a pasta identificada por `folderKey` tem mídia, priorizando o cache.

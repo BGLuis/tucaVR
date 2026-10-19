@@ -1,8 +1,8 @@
 #!/bin/bash
-# Baixa/prepara dependencias externas que NAO sao versionadas no repositorio
-# (veja .gitignore): ffmpeg-android-maker e o Meta OpenXR SDK.
+# Downloads/prepares the external dependencies that are NOT versioned in the
+# repository (see .gitignore): ffmpeg-android-maker and the Meta OpenXR SDK.
 #
-# Rode uma vez apos clonar o repo, antes de scripts/build.sh.
+# Run it once after cloning the repo, before scripts/build.sh.
 set -e
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -11,34 +11,51 @@ cd "$ROOT_DIR"
 FFMPEG_MAKER_REPO="https://github.com/Javernaut/ffmpeg-android-maker.git"
 FFMPEG_MAKER_COMMIT="dd72b161ae5c759fd25a5cab971a3ff710f0bdba"
 
-# 1. ffmpeg-android-maker (ferramenta de cross-compile do FFmpeg, publica no GitHub)
+# 1. ffmpeg-android-maker (the FFmpeg cross-compile tool, public on GitHub)
 if [ -d "ffmpeg-android-maker/.git" ]; then
-    echo "✅ ffmpeg-android-maker já presente em ./ffmpeg-android-maker"
+    echo "✅ ffmpeg-android-maker already present in ./ffmpeg-android-maker"
 else
-    echo "🎬 Clonando ffmpeg-android-maker..."
+    echo "🎬 Cloning ffmpeg-android-maker..."
     git clone "$FFMPEG_MAKER_REPO" ffmpeg-android-maker
     git -C ffmpeg-android-maker checkout "$FFMPEG_MAKER_COMMIT"
 fi
 
-# 2. Meta OpenXR SDK — requer download manual autenticado, nao ha URL direta.
-if [ -d "sdk/meta-openxr-sdk" ]; then
-    echo "✅ Meta OpenXR SDK já presente em ./sdk/meta-openxr-sdk"
+# 2. Meta OpenXR SDK (the latest public GitHub release).
+META_OPENXR_SDK_DIR="sdk/meta-openxr-sdk"
+META_OPENXR_SDK_URL="https://github.com/meta-quest/Meta-OpenXR-SDK/releases/latest/download/meta-openxr-sdk.zip"
+
+if [ -d "$META_OPENXR_SDK_DIR/Samples/SampleXrFramework" ] &&
+   [ -d "$META_OPENXR_SDK_DIR/OpenXR" ]; then
+    echo "✅ Meta OpenXR SDK already present in ./sdk/meta-openxr-sdk"
+elif [ -e "$META_OPENXR_SDK_DIR" ]; then
+    echo "❌ ./sdk/meta-openxr-sdk exists but does not contain the expected structure." >&2
+    echo "   Move or remove that folder and run ./scripts/setup-deps.sh again." >&2
+    exit 1
 else
-    cat <<'EOF'
+    command -v curl >/dev/null 2>&1 || {
+        echo "❌ curl not found; install curl to download the Meta OpenXR SDK." >&2
+        exit 1
+    }
+    command -v unzip >/dev/null 2>&1 || {
+        echo "❌ unzip not found; install unzip to extract the Meta OpenXR SDK." >&2
+        exit 1
+    }
 
-⚠️  Meta OpenXR SDK não encontrado em ./sdk/meta-openxr-sdk
+    SDK_TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/meta-openxr-sdk.XXXXXX")"
+    trap 'rm -rf "$SDK_TMP_DIR"' EXIT
+    echo "⬇️  Downloading the latest Meta OpenXR SDK from GitHub..."
+    curl -fL --retry 3 --retry-delay 2 "$META_OPENXR_SDK_URL" -o "$SDK_TMP_DIR/meta-openxr-sdk.zip"
+    unzip -q "$SDK_TMP_DIR/meta-openxr-sdk.zip" -d "$SDK_TMP_DIR/extracted"
 
-Esse SDK não pode ser baixado automaticamente (exige aceite de licença no
-portal da Meta). Para prepará-lo:
+    if [ ! -d "$SDK_TMP_DIR/extracted/Samples/SampleXrFramework" ] ||
+       [ ! -d "$SDK_TMP_DIR/extracted/OpenXR" ]; then
+        echo "❌ The downloaded archive does not contain the expected Meta OpenXR SDK structure." >&2
+        exit 1
+    fi
 
-  1. Baixe o "OpenXR Mobile SDK" em https://developer.oculus.com/downloads/
-  2. Extraia o conteúdo de forma que exista o caminho:
-       sdk/meta-openxr-sdk/Samples/SampleXrFramework/...
-       sdk/meta-openxr-sdk/OpenXR/...
-
-Essa pasta é ignorada pelo git (.gitignore) — cada dev/máquina de CI
-precisa colocá-la localmente.
-EOF
+    mkdir -p sdk
+    mv "$SDK_TMP_DIR/extracted" "$META_OPENXR_SDK_DIR"
+    echo "✅ Meta OpenXR SDK installed in ./$META_OPENXR_SDK_DIR"
 fi
 
-echo "Concluído."
+echo "Done."

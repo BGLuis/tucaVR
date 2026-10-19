@@ -16,6 +16,8 @@ import android.os.Environment
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
+import android.view.InputDevice
+import android.view.MotionEvent
 import android.view.Surface
 import android.view.ViewGroup
 import android.view.inputmethod.InputMethodManager
@@ -23,6 +25,8 @@ import android.widget.EditText
 import android.widget.Toast
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import com.tucavr.browser.engine.VRBrowserController
+import com.tucavr.browser.presentation.VRWebBrowserPresentation
 import com.tucavr.chroma.PackedAlphaDetector
 import com.tucavr.chroma.PassthroughMaskMode
 import com.tucavr.debug.DebugTelemetryExporter
@@ -51,12 +55,17 @@ import java.io.File
 class VRActivity : NativeActivity() {
     private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
     private var presentation: VRPresentation? = null
+    private var xrSessionFocused = false
 
     private var controlsVirtualDisplay: android.hardware.display.VirtualDisplay? = null
     private var controlsPresentation: VRControlsPresentation? = null
 
     private var modalVirtualDisplay: android.hardware.display.VirtualDisplay? = null
     var modalPresentation: VRModalPresentation? = null
+
+    private var browserVirtualDisplay: android.hardware.display.VirtualDisplay? = null
+    var browserPresentation: VRWebBrowserPresentation? = null
+    var browserController: VRBrowserController? = null
 
     // ==================== TECLADO NATIVO (ver VRPresentation.buildVoidEditText) ====================
     // `nativeKeyboardProxy` e um EditText REAL, anexado direto na janela
@@ -124,9 +133,11 @@ class VRActivity : NativeActivity() {
     val screenTransformStore: ScreenTransformStore by lazy { ScreenTransformStore(this) }
     val environmentStore: EnvironmentStore by lazy { EnvironmentStore(this) }
 
-    fun applySavedScreenTransform() {
-        val t = screenTransformStore.get()
-        nativeSetScreenTransform(t.posX, t.posY, t.posZ, t.scaleX, t.scaleY)
+    fun applySavedScreenTransform(environmentId: String = environmentStore.getActiveEnvironment()) {
+        val t = screenTransformStore.get(environmentId)
+        if (t.isCustomized) {
+            nativeSetScreenTransform(t.posX, t.posY, t.posZ, t.scaleX, t.scaleY)
+        }
     }
 
     // Último `quality_reason` visto em updateDebugHud (chamado ~10x/s pelo C++ via JNI) — usado
@@ -230,6 +241,9 @@ class VRActivity : NativeActivity() {
                 currentMediaMetadata = com.tucavr.filebrowser.MediaMetadataReader.read(this@VRActivity, source)
             }
         }
+        runOnUiThread {
+            presentation?.updateMediaState(false, source != null)
+        }
     }
 
     // Ferramenta de debug (ver docs/DEBUGGING.md): troca o ScreenMode de um
@@ -294,15 +308,20 @@ class VRActivity : NativeActivity() {
                             val host = intent.getStringExtra(EXTRA_SFTP_HOST)
                             val path = intent.getStringExtra(EXTRA_SFTP_PATH)
                             if (!host.isNullOrBlank() && !path.isNullOrBlank()) {
+                                val port = intent.getIntExtra(EXTRA_SFTP_PORT, 22)
+                                val fp =
+                                    intent.getStringExtra("extra_sftp_fingerprint")
+                                        ?: nativeSftpProbeHostKey(host, port).takeIf { !it.startsWith("ERROR:") }
                                 val server =
                                     com.tucavr.network.SftpServer(
                                         id = "debug-broadcast",
                                         name = "debug-broadcast",
                                         host = host,
-                                        port = intent.getIntExtra(EXTRA_SFTP_PORT, 22),
+                                        port = port,
                                         username = intent.getStringExtra(EXTRA_SFTP_USER) ?: "",
                                         password = intent.getStringExtra(EXTRA_SFTP_PASSWORD) ?: "",
                                         privateKey = null,
+                                        hostKeyFingerprint = fp,
                                     )
                                 playSftp(server, path)
                             }
@@ -429,6 +448,7 @@ class VRActivity : NativeActivity() {
         }
 
         registerDebugReceiverIfDebuggable()
+        EnvironmentRegistry.loadFromAssets(assets)
 
         // "Buffer estilo YouTube" (ver media_logic::buffer_gate no lado
         // Rust): reporta a RAM total do aparelho uma vez no startup, pra o
@@ -488,9 +508,19 @@ class VRActivity : NativeActivity() {
         // T4.4: inicializa o modo screen-locked a partir da preferência persistida
         nativeSetAudioScreenLocked(FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_SCREEN_LOCKED))
 
+        // Fase 0.3 Seção 5: empurra valor persistido de Hand Tracking / Gestos pro nativo
+        nativeSetHandTrackingEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.HAND_TRACKING))
+
         // Painel de Estatísticas Técnicas / Stats for Nerds (ver docs/DEBUGGING.md)
         isDebugStatsEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.DEBUG_STATS_PANEL)
         nativeSetDebugStatsEnabled(isDebugStatsEnabled)
+
+        // Issue #100: Geometria dinâmica da superfície cilíndrica da UI e preferências de controle
+        val fovDeg = FeatureFlags.getUiPanelFov(this)
+        val distanceM = FeatureFlags.getUiPanelDistance(this)
+        nativeSetUiPanelGeometry(distanceM, fovDeg)
+        nativeSetByButtonAsBack(FeatureFlags.isEnabled(this, FeatureFlags.Flag.BY_BUTTON_AS_BACK))
+        nativeSetHoverHapticsEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.HOVER_HAPTICS))
 
         // F8: ANR e crash nativo (inclusive o abort do ART no teardown Vulkan)
         // não deixam rastro no handler de exceções da JVM abaixo — ApplicationExitInfo
@@ -544,6 +574,16 @@ class VRActivity : NativeActivity() {
         debugReceiver = null
 
         // R-01: Desmontagem ordenada e completa das Presentations e VirtualDisplays
+        nativeSetBrowserActive(false)
+        try {
+            browserPresentation?.dismiss()
+        } catch (_: Exception) {
+        }
+        browserPresentation = null
+        browserVirtualDisplay?.release()
+        browserVirtualDisplay = null
+        browserController = null
+
         try {
             modalPresentation?.dismiss()
         } catch (_: Exception) {
@@ -696,11 +736,16 @@ class VRActivity : NativeActivity() {
 
     override fun onResume() {
         super.onResume()
-        applySavedScreenTransform()
         val activeEnv = environmentStore.getActiveEnvironment()
-        if (activeEnv != EnvironmentStore.ENV_PASSTHROUGH) {
-            nativeSetEnvironment(activeEnv)
-        }
+        val isPassthrough =
+            PassthroughSyncPolicy.isPassthroughActive(
+                activeEnvironmentId = activeEnv,
+                isFlagEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.PASSTHROUGH),
+            )
+        nativeSetEnvironment(PassthroughSyncPolicy.resolveEffectiveEnvironment(activeEnv))
+        nativeSetPassthroughEnabled(isPassthrough)
+        controlsPresentation?.updatePassthroughState(isPassthrough)
+        applySavedScreenTransform(activeEnv)
         presentation?.loadFiles()
         thermalMonitor.startMonitoring(callback = thermalCallback)
         pendingAutoPlayPath?.let { path ->
@@ -741,7 +786,8 @@ class VRActivity : NativeActivity() {
             scaleY: Float,
         ) {
             activity.runOnUiThread {
-                activity.screenTransformStore.save(posX, posY, posZ, scaleX, scaleY)
+                val currentEnv = activity.environmentStore.getActiveEnvironment()
+                activity.screenTransformStore.save(currentEnv, posX, posY, posZ, scaleX, scaleY)
             }
         }
 
@@ -775,12 +821,14 @@ class VRActivity : NativeActivity() {
         private const val PLAYBACK_ERROR_POLL_MS = 1000L
 
         // Dimensões nominais dos VirtualDisplays de UI e Controles (devem bater com o nativo C++).
-        const val UI_DISPLAY_WIDTH = 1024
-        const val UI_DISPLAY_HEIGHT = 768
+        const val UI_DISPLAY_WIDTH = 1920
+        const val UI_DISPLAY_HEIGHT = 960
         const val CONTROLS_DISPLAY_WIDTH = 1582
         const val CONTROLS_DISPLAY_HEIGHT = 800
         const val MODAL_DISPLAY_WIDTH = 1024
         const val MODAL_DISPLAY_HEIGHT = 768
+        const val BROWSER_DISPLAY_WIDTH = 2560
+        const val BROWSER_DISPLAY_HEIGHT = 1440
 
         @JvmStatic
         fun openFilePicker(activity: VRActivity) {
@@ -814,7 +862,16 @@ class VRActivity : NativeActivity() {
                 activity.virtualDisplay?.display?.let { display ->
                     activity.presentation = VRPresentation(activity, display, activity)
                     activity.presentation?.show()
+                    if (activity.xrSessionFocused) activity.presentation?.onXrSessionFocused()
                 }
+            }
+        }
+
+        @JvmStatic
+        fun onXrSessionFocused(activity: VRActivity) {
+            activity.runOnUiThread {
+                activity.xrSessionFocused = true
+                activity.presentation?.onXrSessionFocused()
             }
         }
 
@@ -834,19 +891,21 @@ class VRActivity : NativeActivity() {
                 }
 
                 val downTime = if (lastDownTime == 0L) now else lastDownTime
+                val scaledX = (x * UI_DISPLAY_WIDTH.toFloat()).coerceIn(0f, UI_DISPLAY_WIDTH.toFloat())
+                val scaledY = (y * UI_DISPLAY_HEIGHT.toFloat()).coerceIn(0f, UI_DISPLAY_HEIGHT.toFloat())
                 val event =
                     android.view.MotionEvent.obtain(
                         downTime,
                         now,
                         action,
-                        x * UI_DISPLAY_WIDTH.toFloat(),
-                        y * UI_DISPLAY_HEIGHT.toFloat(),
+                        scaledX,
+                        scaledY,
                         0,
                     )
 
                 event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
 
-                if (action == 7) { // ACTION_HOVER_MOVE
+                if (action == android.view.MotionEvent.ACTION_HOVER_MOVE) {
                     activity.presentation?.dispatchGenericMotionEvent(event)
                 } else {
                     activity.presentation?.dispatchTouchEvent(event)
@@ -927,7 +986,7 @@ class VRActivity : NativeActivity() {
 
                 event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
 
-                if (action == 7) {
+                if (action == android.view.MotionEvent.ACTION_HOVER_MOVE) {
                     activity.controlsPresentation?.dispatchGenericMotionEvent(event)
                 } else {
                     activity.controlsPresentation?.dispatchTouchEvent(event)
@@ -993,7 +1052,7 @@ class VRActivity : NativeActivity() {
 
                 event.source = android.view.InputDevice.SOURCE_TOUCHSCREEN
 
-                if (action == 7) {
+                if (action == android.view.MotionEvent.ACTION_HOVER_MOVE) {
                     activity.modalPresentation?.dispatchGenericMotionEvent(event)
                 } else {
                     activity.modalPresentation?.dispatchTouchEvent(event)
@@ -1020,10 +1079,125 @@ class VRActivity : NativeActivity() {
         }
 
         @JvmStatic
+        fun setupBrowserVirtualDisplay(
+            activity: VRActivity,
+            surface: Surface,
+            width: Int,
+            height: Int,
+        ) {
+            activity.runOnUiThread {
+                if (activity.isDestroyed || activity.isFinishing) return@runOnUiThread
+                val displayManager = activity.getSystemService(Context.DISPLAY_SERVICE) as DisplayManager
+                val dpi = VRBrowserController.DEFAULT_DPI
+                activity.browserVirtualDisplay =
+                    displayManager.createVirtualDisplay(
+                        "VR_Browser_Display",
+                        width, height, dpi,
+                        surface,
+                        DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION,
+                    )
+
+                activity.browserVirtualDisplay?.display?.let { display ->
+                    val controller = VRBrowserController(activity, width, height, dpi)
+                    activity.browserController = controller
+                    activity.browserPresentation =
+                        VRWebBrowserPresentation(
+                            context = activity,
+                            display = display,
+                            browserController = controller,
+                        )
+                    activity.browserPresentation?.show()
+                }
+            }
+        }
+
+        private var lastBrowserDownTime: Long = 0
+
+        @JvmStatic
+        fun dispatchBrowserTouch(
+            activity: VRActivity,
+            normX: Float,
+            normY: Float,
+            action: Int,
+        ) {
+            activity.runOnUiThread {
+                val now = android.os.SystemClock.uptimeMillis()
+                if (action == android.view.MotionEvent.ACTION_DOWN) {
+                    lastBrowserDownTime = now
+                }
+
+                val downTime = if (lastBrowserDownTime == 0L) now else lastBrowserDownTime
+                val event =
+                    MotionEvent.obtain(
+                        downTime,
+                        now,
+                        action,
+                        normX * BROWSER_DISPLAY_WIDTH.toFloat(),
+                        normY * BROWSER_DISPLAY_HEIGHT.toFloat(),
+                        0,
+                    )
+
+                event.source = InputDevice.SOURCE_TOUCHSCREEN
+
+                if (action == android.view.MotionEvent.ACTION_HOVER_MOVE) {
+                    activity.browserPresentation?.dispatchGenericMotionEvent(event)
+                } else {
+                    activity.browserPresentation?.dispatchTouchEvent(event)
+                }
+
+                event.recycle()
+
+                if (action == MotionEvent.ACTION_UP) {
+                    lastBrowserDownTime = 0L
+                }
+            }
+        }
+
+        @JvmStatic
+        fun dispatchBrowserScroll(
+            activity: VRActivity,
+            normX: Float,
+            normY: Float,
+            scrollDeltaY: Float,
+        ) {
+            activity.runOnUiThread {
+                activity.browserPresentation?.dispatchScroll(normX, normY, scrollDeltaY)
+            }
+        }
+
+        @JvmStatic
         fun dismissModalFromNative(activity: VRActivity) {
             activity.runOnUiThread {
+                activity.onModalDismissedFromNative()
                 activity.modalPresentation?.dismissModal()
             }
+        }
+
+        @JvmStatic
+        fun handleBackFromNative(activity: VRActivity): Boolean {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var handled = false
+            activity.runOnUiThread {
+                try {
+                    if (activity.controlsPresentation?.hasOpenPopup() == true) {
+                        handled = activity.controlsPresentation?.dismissOpenPopup() ?: false
+                    } else if (activity.modalPresentation?.isShowing == true) {
+                        activity.onModalDismissedFromNative()
+                        activity.modalPresentation?.dismissModal()
+                        handled = true
+                    } else {
+                        handled = activity.presentation?.handleBack() ?: false
+                    }
+                } finally {
+                    latch.countDown()
+                }
+            }
+            try {
+                latch.await(100, java.util.concurrent.TimeUnit.MILLISECONDS)
+            } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+            }
+            return handled
         }
 
         @JvmStatic
@@ -1036,6 +1210,7 @@ class VRActivity : NativeActivity() {
                 activity.lastMediaProgressCurrent = currentSec
                 activity.lastMediaProgressTotal = totalSec
                 activity.controlsPresentation?.updateProgress(currentSec, totalSec)
+                activity.presentation?.updatePlaybackProgress(currentSec, totalSec)
                 // T9.2: mesmo hook que ja existia para a UI de controles —
                 // chamado pelo C++ via JNI ~10x/segundo (ver
                 // native/src/vr_player_app.cpp, `frameCount % 6 == 0` a
@@ -1085,6 +1260,7 @@ class VRActivity : NativeActivity() {
         ) {
             activity.runOnUiThread {
                 activity.controlsPresentation?.updateMediaState(isLoading, isPlaying)
+                activity.presentation?.updateMediaState(isLoading, isPlaying)
             }
         }
 
@@ -1125,6 +1301,8 @@ class VRActivity : NativeActivity() {
             if (!activity.isDebugStatsEnabled) return
             activity.runOnUiThread {
                 activity.modalPresentation?.updateDebugStats(text)
+                activity.presentation?.updateFullDebugStats(text)
+                activity.statsTelemetryListeners.forEach { it(text) }
             }
         }
     }
@@ -1157,7 +1335,8 @@ class VRActivity : NativeActivity() {
         currentSessionId = sessionId
         sessionStartRealtimeMs = android.os.SystemClock.elapsedRealtime()
         VRLog.activeSessionId = sessionId
-        VRLog.i("Iniciando sessao de reproducao $sessionId para $source")
+        val (sourceType, sourceRedacted) = com.tucavr.debug.DebugTelemetryExporter.extractSourceInfo(source)
+        VRLog.i("Starting playback session $sessionId for $sourceType $sourceRedacted")
         nativeSetSessionId(sessionId)
         ambientAudioManager.setDucked(true)
         // T7.6: informa o idioma do sistema para a auto-selecao de faixa de
@@ -1243,6 +1422,7 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayVideo(filePath, (resumeAtMs ?: 0L) / 1000f)
+        requestUiPanelHidden()
     }
 
     // T7: URL HTTP(S) reusa o mesmo entry point que arquivo local — o
@@ -1258,6 +1438,7 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayVideo(url, (resumeAtMs ?: 0L) / 1000f)
+        requestUiPanelHidden()
     }
 
     // T6.4: playback SMB tem entry point JNI dedicado porque as credenciais
@@ -1285,6 +1466,7 @@ class VRActivity : NativeActivity() {
             server.domain,
             (resumeAtMs ?: 0L) / 1000f,
         )
+        requestUiPanelHidden()
     }
 
     // T6.4: mesma logica de playSmb acima, so que sem `share`/`domain` (FTP
@@ -1302,6 +1484,7 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayFtp(server.host, server.port, path, server.username, server.password, (resumeAtMs ?: 0L) / 1000f)
+        requestUiPanelHidden()
     }
 
     // T6.4: mesma logica acima, com `privateKey` (conteudo PEM, ver
@@ -1325,8 +1508,10 @@ class VRActivity : NativeActivity() {
             server.username,
             server.password,
             server.privateKey ?: "",
+            server.hostKeyFingerprint ?: "",
             (resumeAtMs ?: 0L) / 1000f,
         )
+        requestUiPanelHidden()
     }
 
     // T5.4: playback NFS
@@ -1343,6 +1528,7 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayNfs(server.host, server.port, server.path, path, 3, (resumeAtMs ?: 0L) / 1000f)
+        requestUiPanelHidden()
     }
 
     // T7.4: playback DLNA
@@ -1360,6 +1546,7 @@ class VRActivity : NativeActivity() {
         controlsPresentation?.updateTitle(currentPlaybackSource?.let { resolveSourceTitle(it) } ?: "Desconhecido")
         applyFormat3dOverride(source)
         nativePlayVideo(url, (resumeAtMs ?: 0L) / 1000f)
+        requestUiPanelHidden()
     }
 
     // T3.2/T3.4: playback WebDAV
@@ -1400,6 +1587,7 @@ class VRActivity : NativeActivity() {
             acceptInvalidCerts,
             (resumeAtMs ?: 0L) / 1000f,
         )
+        requestUiPanelHidden()
     }
 
     private fun processVideoUri(uri: Uri) {
@@ -1444,7 +1632,9 @@ class VRActivity : NativeActivity() {
             // Se a Activity estiver finalizando ou destruída, não tenta recarregar painéis
             if (!isFinishing && !isDestroyed) {
                 nativeRequestUiPanelVisible()
+                presentation?.popPlayer()
                 presentation?.loadFiles()
+                presentation?.onPlaybackStopped()
             }
         }
     }
@@ -1482,6 +1672,12 @@ class VRActivity : NativeActivity() {
 
     external fun nativeRequestUiPanelVisible()
 
+    external fun nativeRequestUiPanelHidden()
+
+    fun requestUiPanelHidden() {
+        nativeRequestUiPanelHidden()
+    }
+
     external fun nativeRequestControlsPanelVisible()
 
     external fun nativeShowModalPanel()
@@ -1489,6 +1685,22 @@ class VRActivity : NativeActivity() {
     external fun nativeHideModalPanel()
 
     external fun nativeIsModalActive(): Boolean
+
+    external fun nativeSetModalDocked(
+        docked: Boolean,
+        azimuthDeg: Float,
+    )
+
+    external fun nativeSetFullStatsActive(active: Boolean)
+
+    external fun nativeSetUiPanelGeometry(
+        radius: Float,
+        centralAngleDeg: Float,
+    )
+
+    external fun nativeSetByButtonAsBack(enabled: Boolean)
+
+    external fun nativeSetHoverHapticsEnabled(enabled: Boolean)
 
     external fun nativeRequestFrameCapture(path: String)
 
@@ -1624,44 +1836,46 @@ class VRActivity : NativeActivity() {
 
     val ambientAudioManager: AmbientAudioManager by lazy { AmbientAudioManager(this) }
 
+    fun setPassthroughEnabled(
+        enabled: Boolean,
+        updatePrefs: Boolean = true,
+    ) {
+        if (updatePrefs) {
+            FeatureFlags.setEnabled(this, FeatureFlags.Flag.PASSTHROUGH, enabled)
+        }
+        nativeSetPassthroughEnabled(enabled)
+        runOnUiThread {
+            controlsPresentation?.updatePassthroughState(enabled)
+        }
+    }
+
     fun setVirtualEnvironment(environmentId: String) {
         environmentStore.setActiveEnvironment(environmentId)
-        if (environmentId == EnvironmentStore.ENV_PASSTHROUGH) {
-            nativeSetPassthroughEnabled(true)
-            nativeSetEnvironment(EnvironmentStore.ENV_VOID)
+        val requiresPassthrough = PassthroughSyncPolicy.shouldEnablePassthroughForEnvironment(environmentId)
+        if (requiresPassthrough) {
+            setPassthroughEnabled(true)
+            nativeSetEnvironment(PassthroughSyncPolicy.resolveEffectiveEnvironment(environmentId))
             ambientAudioManager.stopAmbient()
         } else {
             if (nativeIsPassthroughSupported()) {
-                nativeSetPassthroughEnabled(false)
+                setPassthroughEnabled(false)
             }
             nativeSetEnvironment(environmentId)
 
-            // Reancoragem da tela virtual de acordo com o ambiente (T1.6)
-            when (environmentId) {
-                EnvironmentStore.ENV_CINEMA -> {
-                    screenTransformStore.save(0.0f, 2.5f, -7.5f, 6.0f, 3.375f)
-                    nativeSetScreenTransform(0.0f, 2.5f, -7.5f, 6.0f, 3.375f)
-                }
-                EnvironmentStore.ENV_LIVING_ROOM -> {
-                    screenTransformStore.save(0.0f, 1.85f, -2.8f, 2.4f, 1.35f)
-                    nativeSetScreenTransform(0.0f, 1.85f, -2.8f, 2.4f, 1.35f)
-                }
-                EnvironmentStore.ENV_SPACE -> {
-                    screenTransformStore.save(0.0f, 1.8f, -3.2f, 3.8f, 2.1375f)
-                    nativeSetScreenTransform(0.0f, 1.8f, -3.2f, 3.8f, 2.1375f)
-                }
-                EnvironmentStore.ENV_VOID -> {
-                    screenTransformStore.save(0.0f, 1.5f, -2.4f, 2.8f, 1.575f)
-                    nativeSetScreenTransform(0.0f, 1.5f, -2.4f, 2.8f, 1.575f)
-                }
+            // Aplica transform customizado se o usuário já tiver ajustado a tela para este ambiente.
+            // Se nunca customizou, o C++ já aplica o default de config.ini em LoadEnvironmentMesh.
+            val transform = screenTransformStore.get(environmentId)
+            if (transform.isCustomized) {
+                nativeSetScreenTransform(
+                    transform.posX,
+                    transform.posY,
+                    transform.posZ,
+                    transform.scaleX,
+                    transform.scaleY,
+                )
             }
 
-            val volume =
-                when (environmentId) {
-                    EnvironmentStore.ENV_SPACE -> 0.25f
-                    EnvironmentStore.ENV_CINEMA -> 0.15f
-                    else -> 0.0f
-                }
+            val volume = EnvironmentRegistry.get(environmentId)?.ambientVolume ?: 0.0f
             if (volume > 0.0f) {
                 ambientAudioManager.playAmbient(environmentId, volume)
             } else {
@@ -1671,7 +1885,8 @@ class VRActivity : NativeActivity() {
     }
 
     fun resetScreenPosition() {
-        screenTransformStore.reset()
+        val currentEnv = environmentStore.getActiveEnvironment()
+        screenTransformStore.reset(currentEnv)
         nativeResetScreenPosition()
     }
 
@@ -1685,14 +1900,94 @@ class VRActivity : NativeActivity() {
         }
     }
 
+    fun openBrowserSession() {
+        runOnUiThread {
+            browserPresentation?.navigateToHome()
+            nativeSetBrowserActive(true)
+        }
+    }
+
+    fun closeBrowserSession() {
+        runOnUiThread {
+            nativeSetBrowserActive(false)
+            browserPresentation?.navigateToHome()
+        }
+    }
+
+    fun setBrowserGeometryMode(isCurved: Boolean) {
+        nativeSetBrowserGeometryMode(isCurved)
+    }
+
+    enum class DebugStatsDisplayMode {
+        CLOSED,
+        COMPACT,
+        FULL,
+    }
+
+    var debugStatsMode: DebugStatsDisplayMode = DebugStatsDisplayMode.CLOSED
+        private set
+
+    val statsTelemetryListeners = mutableListOf<(String) -> Unit>()
+
     /**
-     * Exibe o modal de Estatísticas Técnicas no 3º Quad dedicado frontal (VRModalPresentation).
+     * Alterna o modo de exibição de estatísticas técnicas no ciclo de 3 estados (#99):
+     * CLOSED -> COMPACT -> FULL -> CLOSED.
+     */
+    fun cycleDebugStatsMode() {
+        runOnUiThread {
+            when (debugStatsMode) {
+                DebugStatsDisplayMode.CLOSED -> {
+                    debugStatsMode = DebugStatsDisplayMode.COMPACT
+                    nativeSetModalDocked(true, 38.0f)
+                    nativeSetFullStatsActive(false)
+                    nativeShowModalPanel()
+                    modalPresentation?.showCompactDebugStats()
+                    presentation?.hideFullDebugStats()
+                }
+                DebugStatsDisplayMode.COMPACT -> {
+                    debugStatsMode = DebugStatsDisplayMode.FULL
+                    modalPresentation?.dismissModal()
+                    nativeSetModalDocked(false, 0.0f)
+                    nativeSetFullStatsActive(true)
+                    nativeRequestUiPanelVisible()
+                    presentation?.showFullDebugStats()
+                }
+                DebugStatsDisplayMode.FULL -> {
+                    debugStatsMode = DebugStatsDisplayMode.CLOSED
+                    presentation?.hideFullDebugStats()
+                    nativeSetFullStatsActive(false)
+                    modalPresentation?.dismissModal()
+                }
+            }
+        }
+    }
+
+    fun onCompactStatsDismissed() {
+        if (debugStatsMode == DebugStatsDisplayMode.COMPACT) {
+            debugStatsMode = DebugStatsDisplayMode.CLOSED
+            nativeSetModalDocked(false, 0.0f)
+        }
+    }
+
+    fun onFullStatsDismissed() {
+        if (debugStatsMode == DebugStatsDisplayMode.FULL) {
+            debugStatsMode = DebugStatsDisplayMode.CLOSED
+            nativeSetFullStatsActive(false)
+        }
+    }
+
+    fun onModalDismissedFromNative() {
+        if (debugStatsMode == DebugStatsDisplayMode.COMPACT) {
+            debugStatsMode = DebugStatsDisplayMode.CLOSED
+            nativeSetModalDocked(false, 0.0f)
+        }
+    }
+
+    /**
+     * Exibe o modal de Estatísticas Técnicas no ciclo de 3 estados (ou modal frontal avulso).
      */
     fun openDebugStatsModal() {
-        runOnUiThread {
-            nativeShowModalPanel()
-            modalPresentation?.showDebugStatsModal()
-        }
+        cycleDebugStatsMode()
     }
 
     /**
@@ -1737,6 +2032,28 @@ class VRActivity : NativeActivity() {
         runOnUiThread {
             nativeShowModalPanel()
             modalPresentation?.showResumePromptModal(entry, onResume, onRestart)
+        }
+    }
+
+    /**
+     * Exibe o modal de confirmação de exclusão no 3º Quad frontal (VRModalPresentation).
+     */
+    fun openConfirmDeleteModal(
+        title: String,
+        message: String,
+        confirmText: String = getString(R.string.network_delete_server_confirm),
+        cancelText: String = getString(R.string.network_delete_server_cancel),
+        onConfirm: () -> Unit,
+    ) {
+        runOnUiThread {
+            nativeShowModalPanel()
+            modalPresentation?.showConfirmDeleteModal(
+                title = title,
+                message = message,
+                confirmText = confirmText,
+                cancelText = cancelText,
+                onConfirm = onConfirm,
+            )
         }
     }
 
@@ -1795,7 +2112,6 @@ class VRActivity : NativeActivity() {
                 is PlaybackSource.Sftp -> playSftp(source.server, source.path, source.sizeBytes)
                 is PlaybackSource.Webdav -> playWebdav(source.server, source.path, source.sizeBytes)
             }
-            presentation?.onNavigateToPlayer(source)
         }
     }
 
@@ -1903,6 +2219,7 @@ class VRActivity : NativeActivity() {
         username: String,
         password: String,
         privateKey: String,
+        expectedFingerprint: String,
         startTimeSec: Float,
     )
 
@@ -1913,6 +2230,7 @@ class VRActivity : NativeActivity() {
         username: String,
         password: String,
         privateKey: String,
+        expectedFingerprint: String,
         path: String,
     ): String
 
@@ -1923,8 +2241,26 @@ class VRActivity : NativeActivity() {
         username: String,
         password: String,
         privateKey: String,
+        expectedFingerprint: String,
         path: String,
     ): String
+
+    // T6.2 / #57: Consulta host key SFTP para confirmacao TOFU sem autenticar.
+    external fun nativeSftpProbeHostKey(
+        host: String,
+        port: Int,
+    ): String
+
+    // Drops the pooled SMB/SFTP sessions of a removed server (does not block).
+    external fun nativeSmbClosePooledSessions(
+        host: String,
+        port: Int,
+    )
+
+    external fun nativeSftpClosePooledSessions(
+        host: String,
+        port: Int,
+    )
 
     // T5.1/T5.4: playback NFS
     external fun nativePlayNfs(
@@ -2018,13 +2354,10 @@ class VRActivity : NativeActivity() {
     // T2.1/T2.6: Probe de representações DASH (bloqueante — SEMPRE de Dispatchers.IO).
     external fun nativeDashProbeRepresentations(url: String): String
 
-    // T9: thumbnail de arquivo de video num share/servidor de rede — decode
-    // de UM frame por software do lado Rust (core::thumbnail::generate, ver
-    // rust/bridge/src/lib.rs). Bloqueante (rede + decode sincronos) — SEMPRE
-    // de Dispatchers.IO, nunca da UI thread (ver NetworkThumbnailGenerator.kt).
-    // Retorno: RGBA cru (maxWidth*maxHeight*4 bytes, sem padding de linha) ou
-    // null em qualquer falha (sem faixa de video, arquivo inacessivel, etc.).
-    external fun nativeSmbGenerateThumbnail(
+    // Network thumbnails: open the remote file once (handle, 0 on failure), then read the metadata
+    // wire string and decode one RGBA frame from that same session. Blocking, Dispatchers.IO only.
+    // The handle must always be released with nativeThumbnailSessionClose (decode also consumes it).
+    external fun nativeSmbThumbnailOpen(
         host: String,
         port: Int,
         username: String,
@@ -2032,33 +2365,59 @@ class VRActivity : NativeActivity() {
         domain: String,
         share: String,
         path: String,
-        maxWidth: Int,
-        maxHeight: Int,
         cancelToken: Long,
-    ): ByteArray?
+    ): Long
 
-    external fun nativeFtpGenerateThumbnail(
+    external fun nativeFtpThumbnailOpen(
         host: String,
         port: Int,
         username: String,
         password: String,
         path: String,
-        maxWidth: Int,
-        maxHeight: Int,
         cancelToken: Long,
-    ): ByteArray?
+    ): Long
 
-    external fun nativeSftpGenerateThumbnail(
+    external fun nativeSftpThumbnailOpen(
         host: String,
         port: Int,
         username: String,
         password: String,
         privateKey: String,
+        expectedFingerprint: String,
         path: String,
+        cancelToken: Long,
+    ): Long
+
+    external fun nativeNfsThumbnailOpen(
+        host: String,
+        port: Int,
+        exportPath: String,
+        filePath: String,
+        version: Int,
+        cancelToken: Long,
+    ): Long
+
+    external fun nativeWebdavThumbnailOpen(
+        host: String,
+        port: Int,
+        basePath: String,
+        filePath: String,
+        username: String,
+        password: String,
+        useHttps: Boolean,
+        acceptInvalidCerts: Boolean,
+        cancelToken: Long,
+    ): Long
+
+    external fun nativeThumbnailSessionMetadata(handle: Long): String
+
+    external fun nativeThumbnailSessionDecode(
+        handle: Long,
         maxWidth: Int,
         maxHeight: Int,
-        cancelToken: Long,
     ): ByteArray?
+
+    external fun nativeThumbnailSessionClose(handle: Long)
 
     // Cancela a geração de um thumbnail em andamento associada ao cancelToken
     external fun nativeCancelThumbnailGeneration(cancelToken: Long)
@@ -2088,6 +2447,7 @@ class VRActivity : NativeActivity() {
         username: String,
         password: String,
         privateKey: String,
+        expectedFingerprint: String,
         path: String,
         intervalSeconds: Float,
         maxWidth: Int,
@@ -2142,6 +2502,11 @@ class VRActivity : NativeActivity() {
     external fun nativeSetColorTemperature(kelvin: Float)
 
     external fun nativeSetNightMode(enabled: Boolean)
+
+    // Fase 0.3 Seção 5: Hand Tracking / Gestos (XR_EXT_hand_tracking).
+    external fun nativeSetHandTrackingEnabled(enabled: Boolean)
+
+    external fun nativeGetHandTrackingEnabled(): Boolean
 
     // Fase 0.3 Seção 2: Passthrough / Mixed Reality (Vulkan-only, XR_FB_passthrough).
     external fun nativeSetPassthroughEnabled(enabled: Boolean)
@@ -2221,7 +2586,27 @@ class VRActivity : NativeActivity() {
         username: String,
         password: String,
         privateKey: String,
+        expectedFingerprint: String,
         path: String,
+    ): String
+
+    external fun nativeNfsReadMetadata(
+        host: String,
+        port: Int,
+        exportPath: String,
+        filePath: String,
+        version: Int,
+    ): String
+
+    external fun nativeWebdavReadMetadata(
+        host: String,
+        port: Int,
+        basePath: String,
+        filePath: String,
+        username: String,
+        password: String,
+        useHttps: Boolean,
+        acceptInvalidCerts: Boolean,
     ): String
 
     // T13.2: seleciona a trilha de audio pro PROXIMO load — so tem efeito
@@ -2250,6 +2635,8 @@ class VRActivity : NativeActivity() {
 
     external fun nativeGetSubtitleTrackCount(): Int
 
+    external fun nativeGetSubtitleTrackInfoWire(): String?
+
     // T7.6: idioma do sistema para auto-selecao de faixa embutida.
     external fun nativeSetPreferredSubtitleLanguage(lang: String)
 
@@ -2267,6 +2654,10 @@ class VRActivity : NativeActivity() {
 
     // N1: Propaga o identificador de sessão ativo para C++ e Rust
     external fun nativeSetSessionId(sessionId: String)
+
+    external fun nativeSetBrowserGeometryMode(isCurved: Boolean)
+
+    external fun nativeSetBrowserActive(active: Boolean)
 
     // Upscaling de vídeo (Vulkan MQSR / SGSR1): 0=OFF, 1=QUALITY, 2=PERFORMANCE, 3=AUTO
     external fun nativeSetUpscalingMode(mode: Int)

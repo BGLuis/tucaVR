@@ -5,7 +5,6 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.CheckBox
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -17,12 +16,8 @@ import com.tucavr.designsystem.VoidButton
 import com.tucavr.designsystem.VoidButtonStyle
 import com.tucavr.designsystem.VoidFieldAction
 import com.tucavr.designsystem.VoidFieldKind
-import com.tucavr.designsystem.VoidFilterChip
 import com.tucavr.designsystem.VoidForm
-import com.tucavr.designsystem.VoidIconButton
 import com.tucavr.designsystem.VoidPanelChrome
-import com.tucavr.designsystem.VoidSearchBar
-import com.tucavr.designsystem.VoidSortSelector
 import com.tucavr.designsystem.VoidText
 import com.tucavr.designsystem.VoidTextField
 import com.tucavr.designsystem.VoidTheme
@@ -31,14 +26,15 @@ import com.tucavr.filebrowser.DateFilter
 import com.tucavr.filebrowser.FolderConfig
 import com.tucavr.filebrowser.FolderConfigStore
 import com.tucavr.filebrowser.Format3DFilter
-import com.tucavr.filebrowser.Format3DType
 import com.tucavr.filebrowser.MediaEntry
 import com.tucavr.filebrowser.MediaFilterEngine
-import com.tucavr.filebrowser.MediaType
+import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.filebrowser.MediaTypeFilter
-import com.tucavr.filebrowser.NetworkFolderProber
+import com.tucavr.filebrowser.NetworkDirectoryLoader
+import com.tucavr.filebrowser.NetworkDirectoryState
+import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ViewMode
-import com.tucavr.filebrowser.mediaTypeForExtension
+import com.tucavr.filebrowser.canReuseBrowser
 import com.tucavr.filebrowser.sortMediaEntries
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
@@ -47,6 +43,7 @@ import com.tucavr.network.SavedServerDao
 import com.tucavr.network.ServerCredentialStore
 import com.tucavr.network.ServerProtocol
 import com.tucavr.screens.adapters.FileAdapter
+import com.tucavr.screens.components.MediaBrowserToolbar
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -67,16 +64,21 @@ class NetworkWebdavScreen(
     private val credentialStore: ServerCredentialStore,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
+    private val onPlay: (PlaybackSource) -> Unit = { source -> onNavigate(Destination.Player(source)) },
 ) {
     var browsingServer: SavedServer? = null
     var browsePath: String = ""
 
+    private val directoryLoader = NetworkDirectoryLoader(scope)
     private val folderConfigStore = FolderConfigStore(context)
     private var adapter: FileAdapter? = null
     private var recyclerView: RecyclerView? = null
+    private var rootLayout: LinearLayout? = null
     private var countLabel: android.widget.TextView? = null
+    private var emptyLabel: android.widget.TextView? = null
+    private var clearFiltersButton: VoidButton? = null
     private var emptyContainer: LinearLayout? = null
-    private var searchBar: VoidSearchBar? = null
+    private var mediaToolbar: MediaBrowserToolbar? = null
 
     // Campos do formulário para preenchimento via descoberta automática
     private var formHostField: VoidTextField? = null
@@ -94,7 +96,10 @@ class NetworkWebdavScreen(
 
     // ---- Formulario "Adicionar servidor" (usado pela lista unificada em NetworkHomeScreen) ----
 
-    fun buildAddServerForm(onSaved: () -> Unit): View {
+    fun buildAddServerForm(
+        onSaved: () -> Unit,
+        prefill: ServerPrefill? = null,
+    ): View {
         val form = VoidForm(context)
 
         val hostInput =
@@ -198,6 +203,30 @@ class NetworkWebdavScreen(
             }
         form.addView(selfSignedCheckbox)
 
+        if (prefill != null) {
+            if (prefill.host.isNotEmpty()) hostInput.setText(prefill.host)
+            if (prefill.port > 0) portInput.setText(prefill.port.toString())
+            if (prefill.name.isNotEmpty()) nameInput.setText(prefill.name)
+            if (prefill.path.isNotEmpty()) basePathInput.setText(prefill.path)
+            if (prefill.username.isNotEmpty()) userInput.setText(prefill.username)
+            if (prefill.password.isNotEmpty()) passInput.setText(prefill.password)
+            if (prefill.extraJson != null) {
+                try {
+                    val json = JSONObject(prefill.extraJson)
+                    if (json.optBoolean("useHttps", false)) {
+                        httpsCheckbox.isChecked = true
+                        useHttps = true
+                    }
+                    if (json.optBoolean("acceptInvalidCerts", false)) {
+                        selfSignedCheckbox.isChecked = true
+                        acceptInvalidCerts = true
+                    }
+                } catch (_: Exception) {
+                    // Ignore malformed extraJson
+                }
+            }
+        }
+
         val warningText =
             VoidText.body(
                 context,
@@ -215,10 +244,67 @@ class NetworkWebdavScreen(
             }
         form.addView(statusText)
 
+        val buttonsRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { topMargin = VoidTheme.dpToPx(context, 8f) }
+            }
+
+        val btnTest =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.network_btn_test_connection)
+                setIcon(R.drawable.ic_network)
+                textSize = 15f
+                minHeight = VoidTheme.dpToPx(context, 48f)
+                setOnClickListener {
+                    val hostText = hostInput.getText().trim()
+                    if (hostText.isEmpty()) {
+                        statusText.text = context.getString(R.string.network_webdav_form_status_host_required)
+                        return@setOnClickListener
+                    }
+
+                    val portVal = portInput.getText().toIntOrNull() ?: if (useHttps) 5006 else 5005
+                    val basePathVal = basePathInput.getText().trim().ifEmpty { "/" }
+                    val userVal = userInput.getText().trim()
+                    val passVal = passInput.getText()
+
+                    statusText.text = context.getString(R.string.network_webdav_form_status_connecting)
+                    scope.launch {
+                        val result =
+                            withContext(Dispatchers.IO) {
+                                activity.nativeWebdavListDirectory(
+                                    hostText,
+                                    portVal,
+                                    basePathVal,
+                                    "",
+                                    userVal,
+                                    passVal,
+                                    useHttps,
+                                    acceptInvalidCerts,
+                                )
+                            }
+                        if (result.startsWith("ERROR:")) {
+                            statusText.text =
+                                context.getString(
+                                    R.string.network_webdav_form_status_error_format,
+                                    result.removePrefix("ERROR:"),
+                                )
+                        } else {
+                            statusText.text = context.getString(R.string.network_webdav_form_status_connected)
+                        }
+                    }
+                }
+            }
+
         val btnSave =
             VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-                text = context.getString(R.string.network_webdav_btn_test_save)
-                textSize = 16f
+                text = context.getString(R.string.network_btn_save)
+                setIcon(R.drawable.ic_check)
+                textSize = 15f
                 minHeight = VoidTheme.dpToPx(context, 48f)
                 setOnClickListener {
                     if (!form.validate()) return@setOnClickListener
@@ -235,37 +321,55 @@ class NetworkWebdavScreen(
                     val passVal = passInput.getText()
                     val nameVal = nameInput.getText().trim()
 
-                    testAndSaveWebdavServer(
-                        h = hostText,
-                        p = portVal,
-                        basePath = basePathVal,
-                        user = userVal,
-                        pass = passVal,
-                        useHttps = useHttps,
-                        acceptInvalidCerts = acceptInvalidCerts,
-                        name = nameVal,
-                        statusView = statusText,
-                        onSaved = {
-                            form.clearAll()
-                            basePathInput.setText("/")
-                            portInput.setText(if (useHttps) "5006" else "5005")
-                            statusText.text = context.getString(R.string.network_webdav_form_status_connected)
-                            onSaved()
-                        },
-                    )
+                    val serverId = prefill?.existingServerId ?: java.util.UUID.randomUUID().toString()
+                    val n = nameVal.ifEmpty { hostText }
+                    val extraJson =
+                        JSONObject().apply {
+                            put("useHttps", useHttps)
+                            put("acceptInvalidCerts", acceptInvalidCerts)
+                        }.toString()
+
+                    val server =
+                        SavedServer(
+                            id = serverId,
+                            name = n,
+                            protocol = ServerProtocol.WEBDAV,
+                            host = hostText,
+                            port = portVal,
+                            path = basePathVal,
+                            username = userVal,
+                            isAutoDiscovered = false,
+                            lastConnectedAt = System.currentTimeMillis(),
+                            extraJson = extraJson,
+                        )
+
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            savedServerDao.insert(server)
+                            credentialStore.saveCredentials(server.id, passVal)
+                        }
+                        form.clearAll()
+                        basePathInput.setText("/")
+                        portInput.setText(if (useHttps) "5006" else "5005")
+                        onSaved()
+                    }
                 }
             }
 
         form.onFormSubmit = { btnSave.performClick() }
 
-        form.addView(
+        buttonsRow.addView(
+            btnTest,
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                marginEnd = VoidTheme.dpToPx(context, 8f)
+            },
+        )
+        buttonsRow.addView(
             btnSave,
-            LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-            ).apply { topMargin = VoidTheme.dpToPx(context, 8f) },
+            LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
 
+        form.addView(buttonsRow)
         return form
     }
 
@@ -344,160 +448,86 @@ class NetworkWebdavScreen(
         server: SavedServer,
         subPath: String = browsePath,
     ) {
+        val sameServer = browsingServer == server && recyclerView != null
+        val previousConfig = currentConfig
         browsingServer = server
         browsePath = subPath
         val folderKey = folderKey(server, subPath)
         currentConfig = folderConfigStore.getConfigFor(folderKey)
 
-        val root = VoidPanelChrome.newRoot(context)
-        val titleText =
-            if (subPath.isEmpty()) {
-                "${server.name} (${server.path})"
-            } else {
-                subPath.substringAfterLast('/')
-            }
+        val subtitleText = if (subPath.isEmpty()) "${server.host}:${server.port}${server.path}" else "${server.path}/$subPath"
 
-        val header = VoidPanelChrome.buildHeader(context, title = titleText, onBack = { if (!handleBack(server)) onBack() })
+        if (canReuseBrowser(sameServer, rootLayout?.parent != null, previousConfig, currentConfig)) {
+            val subtitleView = rootLayout?.findViewById<android.widget.TextView>(VoidPanelChrome.ID_SUBTITLE)
+            subtitleView?.text = subtitleText
+            mediaToolbar?.clearSearch()
+            searchQuery = ""
+            mediaToolbar?.setViewMode(currentConfig.viewMode)
+            updateLayoutManager()
+            loadDirectory(server)
+            return
+        }
+
+        val root = VoidPanelChrome.newRoot(context)
+        rootLayout = root
+        val header =
+            VoidPanelChrome.buildHeader(
+                context,
+                title = server.name,
+                subtitle = subtitleText,
+                onBack = {
+                    if (!handleBack(server)) {
+                        onBack()
+                    }
+                },
+            )
         root.addView(header)
 
-        // Toolbar de busca e ordenação
+        // Barra de Ferramentas Compartilhada (Busca + Ordenação + Visualização + Filtros)
         val toolbar =
-            LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                layoutParams =
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                        it.bottomMargin = VoidTheme.dpToPx(context, 10f)
-                    }
-            }
-
-        searchBar =
-            VoidSearchBar(
+            MediaBrowserToolbar(
                 context = context,
                 host = host,
-                scope = scope,
-                hintText = context.getString(R.string.browser_search_hint),
                 activity = activity,
+                scope = scope,
+                initialSortBy = currentConfig.sortBy,
+                initialAscending = currentConfig.ascending,
+                initialViewMode = currentConfig.viewMode,
+                initialTypeFilter = currentTypeFilter,
+                initialFormat3DFilter = currentFormat3DFilter,
+                initialDateFilter = currentDateFilter,
+                showDateFilter = true,
                 onQueryChanged = { query ->
                     searchQuery = query
                     applyFiltersAndSort()
                 },
-            ).apply {
-                layoutParams =
-                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).also {
-                        it.marginEnd = VoidTheme.dpToPx(context, 8f)
-                    }
-            }
-        toolbar.addView(searchBar)
-
-        val sortSelector =
-            VoidSortSelector(
-                context = context,
-                currentSortBy = currentConfig.sortBy,
-                currentAscending = currentConfig.ascending,
                 onSortChanged = { newSort, newAscending ->
                     currentConfig = currentConfig.copy(sortBy = newSort, ascending = newAscending)
                     folderConfigStore.saveConfigFor(folderKey, currentConfig)
                     applyFiltersAndSort()
                 },
-            ).apply {
-                layoutParams =
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                        it.marginEnd = VoidTheme.dpToPx(context, 8f)
-                    }
-            }
-        toolbar.addView(sortSelector)
-
-        val viewModeBtn =
-            VoidIconButton(
-                context,
-                if (currentConfig.viewMode == ViewMode.GRID) R.drawable.ic_view_list else R.drawable.ic_view_grid,
-                VoidButtonStyle.SECONDARY,
-                isCircular = false,
-            ).apply {
-                layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 48f), VoidTheme.dpToPx(context, 48f))
-                setOnClickListener {
-                    val nextMode = if (currentConfig.viewMode == ViewMode.GRID) ViewMode.LIST else ViewMode.GRID
+                onViewModeChanged = { nextMode ->
                     currentConfig = currentConfig.copy(viewMode = nextMode)
                     folderConfigStore.saveConfigFor(folderKey, currentConfig)
-                    setImageResource(if (nextMode == ViewMode.GRID) R.drawable.ic_view_list else R.drawable.ic_view_grid)
                     updateLayoutManager()
                     applyFiltersAndSort()
-                }
-            }
-        toolbar.addView(viewModeBtn)
+                },
+                onFilterChanged = { newType, newFormat3D, newDate ->
+                    currentTypeFilter = newType
+                    currentFormat3DFilter = newFormat3D
+                    currentDateFilter = newDate
+                    applyFiltersAndSort()
+                },
+                onRefresh = {
+                    loadDirectory(server, forceRefresh = true)
+                },
+            )
+        mediaToolbar = toolbar
         root.addView(toolbar)
-
-        // Chips de Filtro
-        val filterScrollView =
-            HorizontalScrollView(context).apply {
-                layoutParams =
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                        it.bottomMargin = VoidTheme.dpToPx(context, 8f)
-                    }
-                isHorizontalScrollBarEnabled = false
-            }
-        val filterChipRow =
-            LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-
-        // Chips de Tipo
-        val typeChips = mutableListOf<Pair<MediaTypeFilter, VoidFilterChip>>()
-        listOf(
-            MediaTypeFilter.ALL to R.string.browser_filter_all,
-            MediaTypeFilter.VIDEO to R.string.browser_filter_video,
-            MediaTypeFilter.AUDIO to R.string.browser_filter_audio,
-            MediaTypeFilter.IMAGE to R.string.browser_filter_image,
-        ).forEach { (type, res) ->
-            val chip =
-                VoidFilterChip(context, context.getString(res), isSelectedChip = currentTypeFilter == type).apply {
-                    layoutParams =
-                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                            it.marginEnd = VoidTheme.dpToPx(context, 8f)
-                        }
-                }
-            typeChips.add(type to chip)
-            chip.setOnClickListener {
-                currentTypeFilter = type
-                typeChips.forEach { (t, c) -> c.setSelectedState(t == currentTypeFilter) }
-                applyFiltersAndSort()
-            }
-            filterChipRow.addView(chip)
-        }
-
-        // Chips de Formato 3D
-        val format3DChips = mutableListOf<Pair<Format3DFilter, VoidFilterChip>>()
-        listOf(
-            Format3DFilter.ALL to R.string.browser_filter_3d_all,
-            Format3DFilter.SBS to R.string.browser_filter_3d_sbs,
-            Format3DFilter.OU to R.string.browser_filter_3d_ou,
-            Format3DFilter.VR_180 to R.string.browser_filter_3d_180,
-            Format3DFilter.VR_360 to R.string.browser_filter_3d_360,
-        ).forEach { (f3d, res) ->
-            val chip =
-                VoidFilterChip(context, context.getString(res), isSelectedChip = currentFormat3DFilter == f3d).apply {
-                    layoutParams =
-                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                            it.marginEnd = VoidTheme.dpToPx(context, 8f)
-                        }
-                }
-            format3DChips.add(f3d to chip)
-            chip.setOnClickListener {
-                currentFormat3DFilter = f3d
-                format3DChips.forEach { (f, c) -> c.setSelectedState(f == currentFormat3DFilter) }
-                applyFiltersAndSort()
-            }
-            filterChipRow.addView(chip)
-        }
-
-        filterScrollView.addView(filterChipRow)
-        root.addView(filterScrollView)
 
         // Contador de Itens
         val counterView =
-            VoidText.body(context, context.getString(R.string.network_files_loading), sizeSp = 13f, secondary = true).apply {
+            VoidText.mono(context, "", sizeSp = 13f, secondary = true).apply {
                 layoutParams =
                     LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
                         it.bottomMargin = VoidTheme.dpToPx(context, 6f)
@@ -512,23 +542,44 @@ class NetworkWebdavScreen(
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
             }
         recyclerView = recycler
+        directoryLoader.trackUserInteraction(recycler)
         updateLayoutManager()
 
         val fileAdapter =
             FileAdapter(
                 context = context,
                 scope = scope,
-                onUpClick = { if (!handleBack(server)) onBack() },
+                onUpClick = {
+                    if (!handleBack(server)) {
+                        onBack()
+                    }
+                },
                 onDirectoryClick = { entry ->
                     browsePath = entry.path
-                    searchBar?.clear()
+                    mediaToolbar?.clearSearch()
                     searchQuery = ""
                     renderFiles(server, browsePath)
                 },
                 onVideoClick = { entry ->
+                    onPlay(PlaybackSource.Webdav(server, entry.path, entry.sizeBytes))
+                },
+                onFileSelected = { entry ->
                     val source = PlaybackSource.Webdav(server, entry.path, entry.sizeBytes)
-                    activity.playWebdav(server, entry.path, sizeBytes = entry.sizeBytes, resumeAtMs = 0L)
-                    onNavigate(Destination.Player(source))
+                    host.showFileDetail(
+                        entry = entry,
+                        source = source,
+                        onPlay = { resumeAtMs ->
+                            activity.playWebdav(server, entry.path, sizeBytes = entry.sizeBytes, resumeAtMs = resumeAtMs)
+                            activity.requestUiPanelHidden()
+                        },
+                    )
+                },
+                contextRailHost = host,
+                thumbnailLoader = { entry ->
+                    NetworkThumbnailGenerator.getThumbnail(context, activity, PlaybackSource.Webdav(server, entry.path, entry.sizeBytes))
+                },
+                metadataBadgeLoader = { entry ->
+                    MediaMetadataReader.readCachedSummary(context, PlaybackSource.Webdav(server, entry.path, entry.sizeBytes))
                 },
             )
         adapter = fileAdapter
@@ -536,23 +587,49 @@ class NetworkWebdavScreen(
         root.addView(recycler)
 
         // Empty State View
+        val label =
+            VoidText.body(context, context.getString(R.string.network_files_empty), sizeSp = 16f, secondary = true).apply {
+                gravity = Gravity.CENTER
+            }
+        emptyLabel = label
+
+        val clearBtn =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.browser_btn_clear_filters)
+                textSize = 15f
+                minHeight = VoidTheme.dpToPx(context, 48f)
+                val padH = VoidTheme.dpToPx(context, 16f)
+                val padV = VoidTheme.dpToPx(context, 10f)
+                setPadding(padH, padV, padH, padV)
+                setOnClickListener {
+                    mediaToolbar?.resetFilters()
+                    searchQuery = ""
+                    currentTypeFilter = MediaTypeFilter.ALL
+                    currentFormat3DFilter = Format3DFilter.ALL
+                    currentDateFilter = DateFilter.ALL
+                    applyFiltersAndSort()
+                }
+            }
+        clearFiltersButton = clearBtn
+
         emptyContainer =
             LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
                 visibility = View.GONE
-
+                addView(label)
                 addView(
-                    VoidText.body(context, context.getString(R.string.network_files_empty), sizeSp = 16f, secondary = true).apply {
-                        gravity = Gravity.CENTER
+                    clearBtn,
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = VoidTheme.dpToPx(context, 12f)
                     },
                 )
             }
         root.addView(emptyContainer)
 
         host.showScreen(root)
-        loadDirectory(server, subPath)
+        loadDirectory(server)
     }
 
     private fun updateLayoutManager() {
@@ -575,76 +652,55 @@ class NetworkWebdavScreen(
 
     private fun loadDirectory(
         server: SavedServer,
-        subPath: String,
+        forceRefresh: Boolean = false,
     ) {
-        scope.launch {
-            val password =
-                withContext(Dispatchers.IO) {
-                    credentialStore.getPassword(server.id)
+        directoryLoader.loadDirectory(
+            forceRefresh = forceRefresh,
+            historyFor = { entry -> activity.historyTracker.findExisting(PlaybackSource.Webdav(server, entry.path, entry.sizeBytes)) },
+            path = browsePath,
+            fetchRaw = {
+                val password = credentialStore.getPassword(server.id)
+                var useHttps = false
+                var acceptInvalidCerts = false
+                if (!server.extraJson.isNullOrEmpty()) {
+                    try {
+                        val json = JSONObject(server.extraJson)
+                        useHttps = json.optBoolean("useHttps", false)
+                        acceptInvalidCerts = json.optBoolean("acceptInvalidCerts", false)
+                    } catch (e: Exception) {
+                        // ignore
+                    }
                 }
-
-            var useHttps = false
-            var acceptInvalidCerts = false
-            if (!server.extraJson.isNullOrEmpty()) {
-                try {
-                    val json = JSONObject(server.extraJson)
-                    useHttps = json.optBoolean("useHttps", false)
-                    acceptInvalidCerts = json.optBoolean("acceptInvalidCerts", false)
-                } catch (e: Exception) {
-                    // ignore
-                }
-            }
-
-            val raw =
-                withContext(Dispatchers.IO) {
-                    activity.nativeWebdavListDirectory(
-                        server.host,
-                        server.port,
-                        server.path,
-                        subPath,
-                        server.username,
-                        password,
-                        useHttps,
-                        acceptInvalidCerts,
-                    )
-                }
-
-            if (raw.startsWith("ERROR:")) {
-                countLabel?.text = context.getString(R.string.network_webdav_form_status_error_format, raw.removePrefix("ERROR:"))
-                cachedRawEntries = emptyList()
-                applyFiltersAndSort()
-                return@launch
-            }
-
-            val lines = raw.split("\n").filter { it.isNotBlank() }
-            val entries =
-                lines.mapNotNull { line ->
-                    val parts = line.split("\t")
-                    val name = parts.getOrNull(0) ?: return@mapNotNull null
-                    val isDir = parts.getOrNull(1) == "1"
-                    val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
-                    val type = if (isDir) MediaType.DIRECTORY else (mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO)
-                    val f3d = if (type == MediaType.VIDEO) MediaFilterEngine.detectFormat3DFromFilename(name) else Format3DType.FLAT_2D
-                    val childPath = if (subPath.isEmpty()) name else "$subPath/$name"
-
-                    MediaEntry(
-                        name = name,
-                        path = childPath,
-                        sizeBytes = sizeBytes,
-                        lastModified = 0L,
-                        type = type,
-                        format3DHint = f3d,
-                    )
-                }
-
-            val pruned =
-                NetworkFolderProber.pruneEmptyFolders(
+                activity.nativeWebdavListDirectory(
+                    server.host,
+                    server.port,
+                    server.path,
+                    browsePath,
+                    server.username,
+                    password,
+                    useHttps,
+                    acceptInvalidCerts,
+                )
+            },
+            proberConfig =
+                NetworkDirectoryLoader.FolderProberConfig(
                     context = context,
                     sourceKind = "webdav",
-                    entries = entries,
                     folderKeyFor = { entry -> CacheKeys.forFolder("webdav", server.host, server.port, server.path, entry.path) },
                     scanFnFor = { entry ->
                         {
+                            val password = credentialStore.getPassword(server.id)
+                            var useHttps = false
+                            var acceptInvalidCerts = false
+                            if (!server.extraJson.isNullOrEmpty()) {
+                                try {
+                                    val json = JSONObject(server.extraJson)
+                                    useHttps = json.optBoolean("useHttps", false)
+                                    acceptInvalidCerts = json.optBoolean("acceptInvalidCerts", false)
+                                } catch (e: Exception) {
+                                    // ignore
+                                }
+                            }
                             activity.nativeWebdavScanFolderHasMedia(
                                 server.host,
                                 server.port,
@@ -657,10 +713,35 @@ class NetworkWebdavScreen(
                             )
                         }
                     },
-                )
+                ),
+            onStateChange = { state ->
+                renderState(state)
+            },
+        )
+    }
 
-            cachedRawEntries = pruned
-            applyFiltersAndSort()
+    private fun renderState(state: NetworkDirectoryState) {
+        when (state) {
+            is NetworkDirectoryState.Loading -> {
+                // Mantém a visualização atual durante carregamento
+            }
+            is NetworkDirectoryState.Error -> {
+                cachedRawEntries = emptyList()
+                val msg = context.getString(R.string.network_webdav_form_status_error_format, state.message)
+                countLabel?.text = msg
+                emptyLabel?.text = msg
+                clearFiltersButton?.visibility = View.GONE
+                recyclerView?.visibility = View.GONE
+                emptyContainer?.visibility = View.VISIBLE
+            }
+            is NetworkDirectoryState.Empty -> {
+                cachedRawEntries = emptyList()
+                applyFiltersAndSort()
+            }
+            is NetworkDirectoryState.Success -> {
+                cachedRawEntries = state.entries
+                applyFiltersAndSort()
+            }
         }
     }
 
@@ -683,9 +764,24 @@ class NetworkWebdavScreen(
         currentAdapter.submit(sorted, showUp, currentConfig.viewMode, searchQuery)
 
         countLabel?.text =
-            context.getString(
-                R.string.browser_results_count_format, sorted.size, cachedRawEntries.size,
+            context.resources.getQuantityString(
+                R.plurals.browser_results_count_format,
+                cachedRawEntries.size,
+                sorted.size,
+                cachedRawEntries.size,
             )
+
+        val hasActiveFilters =
+            searchQuery.isNotEmpty() ||
+                currentTypeFilter != MediaTypeFilter.ALL ||
+                currentFormat3DFilter != Format3DFilter.ALL ||
+                currentDateFilter != DateFilter.ALL
+
+        emptyLabel?.text =
+            context.getString(
+                if (hasActiveFilters) R.string.browser_empty_search else R.string.network_files_empty,
+            )
+        clearFiltersButton?.visibility = if (hasActiveFilters) View.VISIBLE else View.GONE
 
         val isEmpty = sorted.isEmpty() && !showUp
         recyclerView?.visibility = if (isEmpty) View.GONE else View.VISIBLE
@@ -696,7 +792,7 @@ class NetworkWebdavScreen(
         if (browsePath.isNotEmpty()) {
             val parentPath = if (browsePath.contains('/')) browsePath.substringBeforeLast('/') else ""
             browsePath = parentPath
-            searchBar?.clear()
+            mediaToolbar?.clearSearch()
             searchQuery = ""
             renderFiles(server, parentPath)
             return true

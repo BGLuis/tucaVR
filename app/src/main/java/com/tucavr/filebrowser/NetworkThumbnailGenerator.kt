@@ -10,7 +10,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
@@ -19,23 +18,37 @@ import kotlin.coroutines.coroutineContext
 
 // Contraparte de rede do ThumbnailGenerator local (ver esse arquivo para o
 // raciocinio do cache em disco). A geracao em si e feita do lado Rust
-// (core::thumbnail::generate, chamada via nativeSmb/Ftp/SftpGenerateThumbnail
+// (core::thumbnail::open_session/decode_session, chamadas via native*ThumbnailOpen
 // -- ver vr_player_app.cpp) porque so o Rust tem acesso ao Demuxer
 // SMB/FTP/SFTP; este objeto so cuida de cache em disco + conversao RGBA -> Bitmap.
 object NetworkThumbnailGenerator {
     const val THUMB_WIDTH = 512
     const val THUMB_HEIGHT = 288
     private const val CACHE_DIR_NAME = "network_thumbnails_v2"
+    private const val UNKNOWN_DIMENSIONS_WIDTH = 7680
+    private const val UNKNOWN_DIMENSIONS_HEIGHT = 4320
 
     // Trabalho 1: Gate adaptativo de orçamento de memória para limitar a concorrência
     // e impedir OOM em pastas contendo múltiplos vídeos 8K.
     internal val budgetGate = MemoryBudgetGate()
 
-    // Gate leve para operações de probe de metadados antes da decodificação.
-    private val probeSemaphore = Semaphore(4)
+    // Limits concurrent remote open sessions waiting for memory budget.
+    private val openGate = Semaphore(4)
 
     // Gerador de tokens para cancelamento cooperativo instantâneo no Rust.
     private val nextCancelToken = AtomicLong(1L)
+
+    // Selects the budget cost from the probed dimensions; unknown dimensions are budgeted as 8K,
+    // never as the 1080p fallback of calculateCostBytes, because under-reserving is what caused the OOM.
+    internal fun costBytesForProbedDimensions(
+        width: Int,
+        height: Int,
+    ): Long =
+        if (width > 0 && height > 0) {
+            MemoryBudgetGate.calculateCostBytes(width, height)
+        } else {
+            MemoryBudgetGate.calculateCostBytes(UNKNOWN_DIMENSIONS_WIDTH, UNKNOWN_DIMENSIONS_HEIGHT)
+        }
 
     suspend fun getThumbnail(
         context: Context,
@@ -50,17 +63,6 @@ object NetworkThumbnailGenerator {
 
             if (!coroutineContext.isActive) return@withContext null
 
-            // 1. Fase de Probe com cache em disco do resultado (.meta)
-            val key = cacheKeyFor(source)
-            val metaCacheFile = File(context.cacheDir, "$CACHE_DIR_NAME/$key.meta")
-            val (width, height) = readCachedDimensions(metaCacheFile) ?: probeDimensions(activity, source, metaCacheFile)
-
-            if (!coroutineContext.isActive) return@withContext null
-
-            // 2. Estima o custo de memória nativa
-            val costBytes = MemoryBudgetGate.calculateCostBytes(width, height)
-
-            // 3. Registra cancelToken para cancelamento cooperativo no Rust via invokeOnCompletion
             val cancelToken = nextCancelToken.incrementAndGet()
             coroutineContext[Job]?.invokeOnCompletion { cause ->
                 if (cause != null) {
@@ -68,12 +70,7 @@ object NetworkThumbnailGenerator {
                 }
             }
 
-            // 4. Adquire orçamento no gate e decodifica
-            val rgba =
-                budgetGate.withBudget(costBytes) {
-                    if (!coroutineContext.isActive) return@withBudget null
-                    generateRgba(activity, source, cancelToken)
-                } ?: return@withContext null
+            val rgba = openProbeAndDecode(context, activity, source, cancelToken) ?: return@withContext null
 
             val bitmap =
                 Bitmap.createBitmap(THUMB_WIDTH, THUMB_HEIGHT, Bitmap.Config.ARGB_8888).apply {
@@ -84,75 +81,116 @@ object NetworkThumbnailGenerator {
         }
     }
 
-    private fun readCachedDimensions(metaFile: File): Pair<Int, Int>? {
-        return runCatching {
-            if (!metaFile.exists()) return null
-            val line = metaFile.readText().trim()
-            val parts = line.split("x")
-            if (parts.size == 2) {
-                val w = parts[0].toIntOrNull() ?: return null
-                val h = parts[1].toIntOrNull() ?: return null
-                Pair(w, h)
-            } else {
-                null
-            }
-        }.getOrNull()
-    }
-
-    private suspend fun probeDimensions(
-        activity: VRActivity,
-        source: PlaybackSource,
-        metaFile: File,
-    ): Pair<Int, Int> {
-        return probeSemaphore.withPermit {
-            readCachedDimensions(metaFile)?.let { return@withPermit it }
-
-            val meta = runCatching { MediaMetadataReader.read(activity, source) }.getOrNull()
-            val videoTrack = meta?.videoTracks?.firstOrNull()
-            val w = videoTrack?.width ?: 0
-            val h = videoTrack?.height ?: 0
-
-            if (w > 0 && h > 0) {
-                runCatching {
-                    metaFile.parentFile?.mkdirs()
-                    metaFile.writeText("${w}x$h")
-                }
-            }
-            Pair(w, h)
-        }
-    }
-
-    // Chamada BLOQUEANTE (rede + decode sincronos do lado Rust) -- so deve
-    // ser chamada de Dispatchers.IO, mesma ressalva documentada em
-    // rust/bridge/src/lib.rs junto de smb_generate_thumbnail.
-    private fun generateRgba(
+    // One remote open yields dimensions + metadata + frame; the budget is taken from the real
+    // dimensions before decoding. A failed probe returns null instead of decoding blind.
+    private suspend fun openProbeAndDecode(
+        context: Context,
         activity: VRActivity,
         source: PlaybackSource,
         cancelToken: Long,
     ): ByteArray? {
+        openGate.acquire()
+        var openPermitHeld = true
+        val releaseOpenPermit = {
+            if (openPermitHeld) {
+                openPermitHeld = false
+                openGate.release()
+            }
+        }
+        var handle = 0L
+        try {
+            handle = openSession(activity, source, cancelToken)
+            if (handle == 0L) return null
+
+            val metadata = MediaMetadataReader.parse(activity.nativeThumbnailSessionMetadata(handle)) ?: return null
+            MediaMetadataReader.cacheSummary(context, source, metadata)
+            val video = metadata.videoTracks.firstOrNull() ?: return null
+
+            if (!coroutineContext.isActive) return null
+
+            return budgetGate.withBudget(costBytesForProbedDimensions(video.width, video.height)) {
+                releaseOpenPermit()
+                if (!coroutineContext.isActive) return@withBudget null
+                activity.nativeThumbnailSessionDecode(handle, THUMB_WIDTH, THUMB_HEIGHT)
+            }
+        } finally {
+            releaseOpenPermit()
+            if (handle != 0L) activity.nativeThumbnailSessionClose(handle)
+        }
+    }
+
+    // Blocking call (network + container probe): only from Dispatchers.IO. Returns 0 on failure.
+    private fun openSession(
+        activity: VRActivity,
+        source: PlaybackSource,
+        cancelToken: Long,
+    ): Long {
         return when (source) {
             is PlaybackSource.Smb ->
-                activity.nativeSmbGenerateThumbnail(
-                    source.server.host, source.server.port, source.server.username, source.server.password,
-                    source.server.domain, source.server.share, source.path, THUMB_WIDTH, THUMB_HEIGHT, cancelToken,
+                activity.nativeSmbThumbnailOpen(
+                    source.server.host,
+                    source.server.port,
+                    source.server.username,
+                    source.server.password,
+                    source.server.domain,
+                    source.server.share,
+                    source.path,
+                    cancelToken,
                 )
             is PlaybackSource.Ftp ->
-                activity.nativeFtpGenerateThumbnail(
+                activity.nativeFtpThumbnailOpen(
                     source.server.host,
                     source.server.port,
                     source.server.username,
                     source.server.password,
                     source.path,
-                    THUMB_WIDTH,
-                    THUMB_HEIGHT,
                     cancelToken,
                 )
             is PlaybackSource.Sftp ->
-                activity.nativeSftpGenerateThumbnail(
-                    source.server.host, source.server.port, source.server.username, source.server.password,
-                    source.server.privateKey ?: "", source.path, THUMB_WIDTH, THUMB_HEIGHT, cancelToken,
+                activity.nativeSftpThumbnailOpen(
+                    source.server.host,
+                    source.server.port,
+                    source.server.username,
+                    source.server.password,
+                    source.server.privateKey ?: "",
+                    source.server.hostKeyFingerprint ?: "",
+                    source.path,
+                    cancelToken,
                 )
-            is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Dlna, is PlaybackSource.Webdav -> null
+            is PlaybackSource.Nfs ->
+                activity.nativeNfsThumbnailOpen(
+                    source.server.host,
+                    source.server.port,
+                    source.server.path,
+                    source.path,
+                    3,
+                    cancelToken,
+                )
+            is PlaybackSource.Webdav -> {
+                val password = com.tucavr.network.ServerCredentialStore(activity).getPassword(source.server.id)
+                var useHttps = false
+                var acceptInvalidCerts = false
+                if (!source.server.extraJson.isNullOrEmpty()) {
+                    try {
+                        val json = org.json.JSONObject(source.server.extraJson)
+                        useHttps = json.optBoolean("useHttps", false)
+                        acceptInvalidCerts = json.optBoolean("acceptInvalidCerts", false)
+                    } catch (_: Exception) {
+                    }
+                }
+                activity.nativeWebdavThumbnailOpen(
+                    source.server.host,
+                    source.server.port,
+                    source.server.path,
+                    source.path,
+                    source.server.username,
+                    password,
+                    useHttps,
+                    acceptInvalidCerts,
+                    cancelToken,
+                )
+            }
+            is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Dlna -> 0L
         }
     }
 
@@ -188,14 +226,16 @@ object NetworkThumbnailGenerator {
     // tamanho e a unica pista de "arquivo mudou" disponivel aqui.
     // Delega a formula pra CacheKeys.forSource (compartilhada com os caches Room, ver
     // CacheKeys.kt), mas continua so aceitando os tipos com geracao de thumbnail suportada
-    // (Smb/Ftp/Sftp/Dlna) -- callers (getScrubStrip) dependem desse throw pra tratar os
+    // (Smb/Ftp/Sftp/Dlna/Nfs/Webdav) -- callers (getScrubStrip) dependem desse throw pra tratar os
     // demais tipos como "sem thumbnail de rede" via runCatching { }.getOrNull().
     internal fun cacheKeyFor(source: PlaybackSource): String {
         return when (source) {
-            is PlaybackSource.Smb, is PlaybackSource.Ftp, is PlaybackSource.Sftp, is PlaybackSource.Dlna ->
+            is PlaybackSource.Smb, is PlaybackSource.Ftp, is PlaybackSource.Sftp,
+            is PlaybackSource.Dlna, is PlaybackSource.Nfs, is PlaybackSource.Webdav,
+            ->
                 CacheKeys.forSource(source)
-            is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Webdav ->
-                throw IllegalArgumentException("NetworkThumbnailGenerator nao suporta $source")
+            is PlaybackSource.LocalFile, is PlaybackSource.Http ->
+                throw IllegalArgumentException("NetworkThumbnailGenerator nao suporta ${source::class.simpleName}")
         }
     }
 
@@ -269,10 +309,16 @@ object NetworkThumbnailGenerator {
             is PlaybackSource.Sftp ->
                 activity.nativeSftpGenerateThumbnailStrip(
                     source.server.host, source.server.port, source.server.username, source.server.password,
-                    source.server.privateKey ?: "", source.path,
+                    source.server.privateKey ?: "", source.server.hostKeyFingerprint ?: "", source.path,
                     SCRUB_INTERVAL_SECONDS, SCRUB_WIDTH, SCRUB_HEIGHT,
                 )
-            is PlaybackSource.Ftp, is PlaybackSource.LocalFile, is PlaybackSource.Http, is PlaybackSource.Nfs, is PlaybackSource.Dlna, is PlaybackSource.Webdav -> null
+            is PlaybackSource.Ftp,
+            is PlaybackSource.LocalFile,
+            is PlaybackSource.Http,
+            is PlaybackSource.Nfs,
+            is PlaybackSource.Dlna,
+            is PlaybackSource.Webdav,
+            -> null
         }
     }
 

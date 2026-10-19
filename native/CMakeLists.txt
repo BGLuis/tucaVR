@@ -16,14 +16,14 @@ find_package(OpenXR REQUIRED CONFIG)
 include_directories(include)
 
 # -----------------------------------------------------------------------------
-# Graphics API selection (ver docs/VULKAN-MIGRATION-PLAN.md)
+# Graphics API selection (see docs/VULKAN-MIGRATION-PLAN.md)
 # -----------------------------------------------------------------------------
-# VULKAN = back-end padrao do app: app/build.gradle.kts sempre passa
-#   -DVRPLAYER_GRAPHICS_API=VULKAN, a menos que o build use
-#   -PvrplayerGraphicsApi=GLES. Independente do OVRFW (que e GLES-only por
-#   construcao, ver o plano).
-# GLES = fallback congelado, usa o SampleXrFramework/OVRFW da Meta. O default
-#   "GLES" abaixo so vale para quem invoca o CMake direto, sem o Gradle.
+# VULKAN = the app's default back-end: app/build.gradle.kts always passes
+#   -DVRPLAYER_GRAPHICS_API=VULKAN, unless the build uses
+#   -PvrplayerGraphicsApi=GLES. Independent of OVRFW (which is GLES-only by
+#   construction, see the plan).
+# GLES = the frozen fallback, uses Meta's SampleXrFramework/OVRFW. The "GLES"
+#   default below only applies to whoever invokes CMake directly, without Gradle.
 set(VRPLAYER_GRAPHICS_API "GLES" CACHE STRING "Graphics API for VR rendering: GLES or VULKAN")
 option(ENABLE_VK_VALIDATION_LAYERS "Enable Vulkan validation layers" OFF)
 if(ENABLE_VK_VALIDATION_LAYERS)
@@ -45,8 +45,8 @@ else()
 endif()
 
 # -----------------------------------------------------------------------------
-# Shaders Vulkan (Estagio 2+ do plano de migracao) — GLSL -> SPIR-V -> header
-# C++ embutido em build-time, so quando VRPLAYER_GRAPHICS_API=VULKAN.
+# Vulkan shaders (Stage 2+ of the migration plan) — GLSL -> SPIR-V -> a C++ header
+# embedded at build time, only when VRPLAYER_GRAPHICS_API=VULKAN.
 # -----------------------------------------------------------------------------
 if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
     find_program(GLSLC_EXECUTABLE glslc HINTS ${ANDROID_NDK}/shader-tools/linux-x86_64)
@@ -72,34 +72,36 @@ if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
             OUTPUT ${HDR}
             COMMAND ${CMAKE_COMMAND} -DSPV=${SPV} -DHEADER=${HDR} -DVARNAME=${VAR_NAME} -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedSpirv.cmake
             DEPENDS ${SPV} ${CMAKE_CURRENT_SOURCE_DIR}/cmake/EmbedSpirv.cmake
-            COMMENT "Embutindo ${SHADER_NAME}.spv em ${HDR}"
+            COMMENT "Embedding ${SHADER_NAME}.spv into ${HDR}"
         )
         set(GENERATED_SHADER_HEADERS ${GENERATED_SHADER_HEADERS} ${HDR} PARENT_SCOPE)
     endfunction()
 
     vrplayer_compile_shader(quad.vert kQuadVertSpirv)
     vrplayer_compile_shader(quad.frag kQuadFragSpirv)
-    # Estagio 3: shaders de video com textura YCbCr via AHardwareBuffer
+    # Stage 3: video shaders with a YCbCr texture through AHardwareBuffer
     vrplayer_compile_shader(video.vert kVideoVertSpirv)
     vrplayer_compile_shader(video.frag kVideoFragSpirv)
-    # Estagio 4: shaders dos paineis de UI/controles (RGBA8888 normal)
+    # Stage 4: UI/controls panel shaders (normal RGBA8888)
     vrplayer_compile_shader(ui.vert kUiVertSpirv)
     vrplayer_compile_shader(ui.frag kUiFragSpirv)
-    # Estagio 5: shaders estereo/esfera (SBS/OU/360/180) com CAS sharpening
+    # Stage 5: stereo/sphere shaders (SBS/OU/360/180) with CAS sharpening
     vrplayer_compile_shader(stereo.vert kStereoVertSpirv)
     vrplayer_compile_shader(stereo.frag kStereoFragSpirv)
-    # Estagio 6: shaders de legendas MSDF (T9.3)
+    # Stage 6: MSDF subtitle shaders (T9.3)
     vrplayer_compile_shader(subtitle.vert kSubtitleVertSpirv)
     vrplayer_compile_shader(subtitle.frag kSubtitleFragSpirv)
-    # Fase 0.4 Seção 6: shaders de projeções avançadas Cubemap e EAC
+    # Phase 0.4 Section 6: advanced Cubemap and EAC projection shaders
     vrplayer_compile_shader(stereo_cubemap.vert kStereoCubemapVertSpirv)
     vrplayer_compile_shader(stereo_cubemap.frag kStereoCubemapFragSpirv)
-    # Ambientes Virtuais 3D & Skybox Cósmico
+    # 3D Virtual Environments & Cosmic Skybox
     vrplayer_compile_shader(environment.vert kEnvironmentVertSpirv)
     vrplayer_compile_shader(environment.frag kEnvironmentFragSpirv)
+    vrplayer_compile_shader(particles.vert kParticlesVertSpirv)
+    vrplayer_compile_shader(particles.frag kParticlesFragSpirv)
     vrplayer_compile_shader(skybox.vert kSkyboxVertSpirv)
     vrplayer_compile_shader(skybox.frag kSkyboxFragSpirv)
-    # Modo Ambiente: halo de luz derivado do frame (Fase 0.3)
+    # Ambient Mode: a light halo derived from the frame (Phase 0.3)
     vrplayer_compile_shader(ambient_downsample.vert kAmbientDownsampleVertSpirv)
     vrplayer_compile_shader(ambient_downsample.frag kAmbientDownsampleFragSpirv)
     vrplayer_compile_shader(ambient.vert kAmbientVertSpirv)
@@ -137,16 +139,18 @@ find_library(mediandk-lib mediandk)
 find_library(nativewindow-lib nativewindow)
 
 set(OPENXR_SDK_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../sdk/meta-openxr-sdk)
-add_subdirectory(${OPENXR_SDK_DIR}/Samples/3rdParty ${CMAKE_CURRENT_BINARY_DIR}/3rdParty)
-add_subdirectory(${OPENXR_SDK_DIR}/Samples/SampleXrFramework ${CMAKE_CURRENT_BINARY_DIR}/SampleXrFramework)
+if(EXISTS ${OPENXR_SDK_DIR}/Samples/3rdParty AND EXISTS ${OPENXR_SDK_DIR}/Samples/SampleXrFramework)
+    add_subdirectory(${OPENXR_SDK_DIR}/Samples/3rdParty ${CMAKE_CURRENT_BINARY_DIR}/3rdParty)
+    add_subdirectory(${OPENXR_SDK_DIR}/Samples/SampleXrFramework ${CMAKE_CURRENT_BINARY_DIR}/SampleXrFramework)
+endif()
 
 # Link everything together
 if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
-    # Caminho isolado: NAO linka samplexrframework. Esse alvo propaga
-    # XR_USE_GRAPHICS_API_OPENGL_ES=1, XR_USE_PLATFORM_ANDROID=1 e -Werror
-    # como PUBLIC (ver SampleXrFramework/CMakeLists.txt), o que contaminaria
-    # a compilacao de vr_player_app_vulkan.cpp (que define
-    # XR_USE_GRAPHICS_API_VULKAN e nao deriva de OVRFW::XrApp).
+    # Isolated path: does NOT link samplexrframework. That target propagates
+    # XR_USE_GRAPHICS_API_OPENGL_ES=1, XR_USE_PLATFORM_ANDROID=1 and -Werror
+    # as PUBLIC (see SampleXrFramework/CMakeLists.txt), which would contaminate
+    # the compilation of vr_player_app_vulkan.cpp (which defines
+    # XR_USE_GRAPHICS_API_VULKAN and does not derive from OVRFW::XrApp).
     target_link_libraries(vrplayer_native
         ${log-lib}
         ${android-lib}
@@ -155,9 +159,9 @@ if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
         ${mediandk-lib}
         native_app_glue
         OpenXR::openxr_loader
-        # Bridge Rust: get_current_video_frame e outras funcoes de playback
-        # (Estagio 3 precisa de get_current_video_frame para textura de video)
-        ${CMAKE_CURRENT_SOURCE_DIR}/../rust/target/aarch64-linux-android/release/libbridge.so
+        # Rust bridge: get_current_video_frame and other playback functions
+        # (Stage 3 needs get_current_video_frame for the video texture)
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/src/main/jniLibs/arm64-v8a/libbridge.so
     )
 else()
     target_link_libraries(vrplayer_native
@@ -172,7 +176,7 @@ else()
         # OpenXR library from prefab
         OpenXR::openxr_loader
         # Rust bridge dynamic library
-        ${CMAKE_CURRENT_SOURCE_DIR}/../rust/target/aarch64-linux-android/release/libbridge.so
+        ${CMAKE_CURRENT_SOURCE_DIR}/../app/src/main/jniLibs/arm64-v8a/libbridge.so
         samplexrframework
     )
 endif()

@@ -20,6 +20,11 @@ data class FtpServer(
     val password: String,
 ) {
     val isAnonymous: Boolean get() = username.isEmpty()
+
+    override fun toString(): String {
+        val passRedacted = if (password.isEmpty()) "" else "[REDACTED]"
+        return "FtpServer(id=$id, name=$name, host=$host, port=$port, username=$username, password=$passRedacted)"
+    }
 }
 
 /**

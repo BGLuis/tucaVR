@@ -24,6 +24,18 @@ inline XrVector3f Vec3Scale(const XrVector3f &v, float s) {
     return {v.x * s, v.y * s, v.z * s};
 }
 
+inline float Vec3Dot(const XrVector3f &a, const XrVector3f &b) {
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+inline float Vec3LengthSq(const XrVector3f &v) {
+    return v.x * v.x + v.y * v.y + v.z * v.z;
+}
+
+inline float Vec3Length(const XrVector3f &v) {
+    return sqrtf(Vec3LengthSq(v));
+}
+
 // Rotaciona em torno do eixo Y — mesma convencao de sinal de Mat4RotationY
 // abaixo (consistencia interna e o que importa aqui: nao precisa bater bit a
 // bit com OVR::Matrix4f::RotationY do caminho GLES).

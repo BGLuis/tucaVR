@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-preview-environment.py — Visualizador 3D Desktop/Web dos Ambientes do tucaVR.
+preview-environment.py — Desktop/Web 3D viewer for tucaVR's environments.
 
-Permite inspecionar, navegar e testar os ambientes virtuais 3D (Cinema, Sala de Estar,
-Espaço Cósmico e Void), a tela virtual ancorada e o áudio ambiente diretamente no
-navegador do PC, sem necessidade de óculos VR nem do headset conectado.
+Lets you inspect, navigate and test the 3D virtual environments (Cinema, Living Room,
+Space and Void), the anchored virtual screen and the ambient audio directly in the
+PC browser, with no need for VR glasses or a connected headset.
 """
 
 import http.server
@@ -25,7 +25,7 @@ DEFAULT_PORT = 8080
 
 
 def parse_ini_file(filepath):
-    """Lê um arquivo config.ini de ambiente de forma simples e direta."""
+    """Reads an environment config.ini file in a simple, direct way."""
     config = {}
     if not os.path.exists(filepath):
         return config
@@ -41,7 +41,7 @@ def parse_ini_file(filepath):
 
 
 def get_all_environments():
-    """Descobre e retorna a lista de ambientes e suas configurações."""
+    """Discovers and returns the list of environments and their settings."""
     envs = []
     if not os.path.exists(ASSETS_DIR):
         return envs
@@ -54,7 +54,7 @@ def get_all_environments():
             env_id = cfg.get("id", entry)
             env_name = cfg.get("name", entry.capitalize())
 
-            # Posição e escala da tela
+            # Screen position and scale
             pos_str = cfg.get("screen_pos", "0.0,1.5,-2.4")
             scale_str = cfg.get("screen_scale", "2.8,1.575")
             try:
@@ -148,7 +148,7 @@ HTML_PAGE = """<!DOCTYPE html>
       border-color: var(--accent); box-shadow: 0 0 16px rgba(56, 189, 248, 0.4);
     }
 
-    /* Painel de Informações Lateral */
+    /* Side Information Panel */
     .info-panel {
       position: absolute; bottom: 20px; left: 20px;
       background: var(--panel-bg); backdrop-filter: blur(12px);
@@ -160,7 +160,7 @@ HTML_PAGE = """<!DOCTYPE html>
     .info-row { display: flex; justify-content: space-between; margin: 4px 0; color: var(--text-muted); }
     .info-value { color: #fff; font-family: monospace; }
 
-    /* Painel de Controles e Câmera */
+    /* Controls and Camera Panel */
     .controls-panel {
       position: absolute; bottom: 20px; right: 20px;
       background: var(--panel-bg); backdrop-filter: blur(12px);
@@ -178,14 +178,14 @@ HTML_PAGE = """<!DOCTYPE html>
     .btn-action:hover { background: rgba(56,189,248,0.25); border-color: var(--accent); }
     .btn-action.active { background: var(--accent); color: #000; font-weight: 600; }
 
-    /* Retículo / Crosshair para primeira pessoa */
+    /* Reticle / Crosshair for first person */
     #crosshair {
       position: absolute; top: 50%; left: 50%; width: 6px; height: 6px;
       background: rgba(56, 189, 248, 0.7); border-radius: 50%;
       transform: translate(-50%, -50%); pointer-events: none; display: none; z-index: 5;
     }
 
-    /* Instruções de FPS */
+    /* FPS instructions */
     #fps-prompt {
       position: absolute; top: 80px; left: 50%; transform: translateX(-50%);
       background: rgba(0,0,0,0.7); border: 1px solid rgba(255,255,255,0.2);
@@ -208,38 +208,38 @@ HTML_PAGE = """<!DOCTYPE html>
 <body>
   <div id="canvas-container"></div>
   <div id="crosshair"></div>
-  <div id="fps-prompt">Clique na tela para controlar a visão com o mouse. Pressione <b>ESC</b> para liberar. Use <b>W, A, S, D</b> para mover.</div>
-  <div id="loading-indicator">Carregando ambiente 3D...</div>
+  <div id="fps-prompt">Click the screen to control the view with the mouse. Press <b>ESC</b> to release. Use <b>W, A, S, D</b> to move.</div>
+  <div id="loading-indicator">Loading the 3D environment...</div>
 
-  <!-- Barra Superior de Seleção de Ambientes -->
+  <!-- Top Bar for Environment Selection -->
   <div class="top-bar">
     <div class="logo-badge">🥽 tucaVR</div>
     <div id="env-selector" style="display: flex; gap: 6px;"></div>
   </div>
 
-  <!-- Painel de Informações -->
+  <!-- Information Panel -->
   <div class="info-panel">
-    <h3 id="env-title">Ambiente: Cinema IMAX</h3>
-    <div class="info-row"><span>Tela Posição:</span> <span id="val-pos" class="info-value">0.0, 2.2, -7.5</span></div>
-    <div class="info-row"><span>Tela Escala:</span> <span id="val-scale" class="info-value">6.0 × 3.38m</span></div>
-    <div class="info-row"><span>Distância Óptica:</span> <span id="val-dist" class="info-value">7.5m</span></div>
-    <div class="info-row"><span>Polígonos da Cena:</span> <span id="val-poly" class="info-value">--</span></div>
-    <div class="info-row"><span>Áudio Ambiência:</span> <span id="val-audio" class="info-value">--</span></div>
+    <h3 id="env-title">Environment: IMAX Cinema</h3>
+    <div class="info-row"><span>Screen Position:</span> <span id="val-pos" class="info-value">0.0, 2.2, -7.5</span></div>
+    <div class="info-row"><span>Screen Scale:</span> <span id="val-scale" class="info-value">6.0 × 3.38m</span></div>
+    <div class="info-row"><span>Optical Distance:</span> <span id="val-dist" class="info-value">7.5m</span></div>
+    <div class="info-row"><span>Scene Polygons:</span> <span id="val-poly" class="info-value">--</span></div>
+    <div class="info-row"><span>Ambient Audio:</span> <span id="val-audio" class="info-value">--</span></div>
   </div>
 
-  <!-- Painel de Controles -->
+  <!-- Controls Panel -->
   <div class="controls-panel">
-    <h3>Câmera e Visualização</h3>
+    <h3>Camera and View</h3>
     <div class="btn-group">
-      <button id="btn-pov" class="btn-action active">👁️ Primeira Pessoa</button>
-      <button id="btn-orbit" class="btn-action">🌐 Órbita Livre</button>
+      <button id="btn-pov" class="btn-action active">👁️ First Person</button>
+      <button id="btn-orbit" class="btn-action">🌐 Free Orbit</button>
     </div>
     <div class="btn-group" style="margin-top: 8px;">
-      <button id="btn-recenter" class="btn-action">🎯 Recentralizar (R)</button>
-      <button id="btn-audio-toggle" class="btn-action">🔊 Ambiência</button>
+      <button id="btn-recenter" class="btn-action">🎯 Recenter (R)</button>
+      <button id="btn-audio-toggle" class="btn-action">🔊 Ambience</button>
     </div>
     <div style="margin-top: 10px; font-size: 11px; color: var(--text-muted); line-height: 1.4;">
-      <b>Atalhos:</b> WASD para andar, Espaço/Shift para subir/descer, R para recentralizar visão.
+      <b>Shortcuts:</b> WASD to walk, Space/Shift to go up/down, R to recenter the view.
     </div>
   </div>
 
@@ -258,7 +258,7 @@ HTML_PAGE = """<!DOCTYPE html>
     const velocity = new THREE.Vector3();
     const direction = new THREE.Vector3();
 
-    // Textura animada para a tela de cinema virtual
+    // Animated texture for the virtual cinema screen
     let testPatternCanvas, testPatternCtx, testPatternTexture;
 
     function createTestPatternTexture() {
@@ -276,7 +276,7 @@ HTML_PAGE = """<!DOCTYPE html>
       const w = testPatternCanvas.width;
       const h = testPatternCanvas.height;
 
-      // Fundo gradiente cinematográfico suave
+      // Soft cinematic gradient background
       const grad = testPatternCtx.createLinearGradient(0, 0, w, h);
       grad.addColorStop(0, '#0f172a');
       grad.addColorStop(0.5, '#1e1b4b');
@@ -284,7 +284,7 @@ HTML_PAGE = """<!DOCTYPE html>
       testPatternCtx.fillStyle = grad;
       testPatternCtx.fillRect(0, 0, w, h);
 
-      // Linhas de barras de cor SMPTE sutis
+      // Subtle SMPTE color bar lines
       const colors = ['#ffffff', '#facc15', '#38bdf8', '#4ade80', '#c084fc', '#f87171', '#3b82f6'];
       const barW = w / colors.length;
       for (let i = 0; i < colors.length; i++) {
@@ -292,7 +292,7 @@ HTML_PAGE = """<!DOCTYPE html>
         testPatternCtx.fillRect(i * barW, h - 80, barW, 80);
       }
 
-      // Moldura e informações centrais
+      // Frame and central information
       testPatternCtx.strokeStyle = 'rgba(56, 189, 248, 0.4)';
       testPatternCtx.lineWidth = 4;
       testPatternCtx.strokeRect(20, 20, w - 40, h - 40);
@@ -310,7 +310,7 @@ HTML_PAGE = """<!DOCTYPE html>
       if (testPatternTexture) testPatternTexture.needsUpdate = true;
     }
 
-    // Mesma altura de olho que o runtime usa ao recentralizar
+    // The same eye height the runtime uses when recentering
     // (vr_player_app_vulkan.cpp: sceneTranslationOffset.y = headCenter.y - 1.5f).
     const RUNTIME_EYE_Y = 1.5;
 
@@ -328,7 +328,7 @@ HTML_PAGE = """<!DOCTYPE html>
       renderer.outputEncoding = THREE.sRGBEncoding;
       container.appendChild(renderer.domElement);
 
-      // Iluminação geral suave
+      // Soft general lighting
       const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
       scene.add(ambientLight);
 
@@ -336,14 +336,14 @@ HTML_PAGE = """<!DOCTYPE html>
       dirLight.position.set(0, 5, 2);
       scene.add(dirLight);
 
-      // Controles de Órbita
+      // Orbit controls
       orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
       orbitControls.enableDamping = true;
       orbitControls.dampingFactor = 0.05;
       orbitControls.target.set(0, RUNTIME_EYE_Y, -3);
       orbitControls.enabled = false;
 
-      // Controles de Primeira Pessoa
+      // First-person controls
       fpControls = new THREE.PointerLockControls(camera, document.body);
 
       const fpsPrompt = document.getElementById('fps-prompt');
@@ -367,7 +367,7 @@ HTML_PAGE = """<!DOCTYPE html>
         }
       });
 
-      // Teclas de Movimentação
+      // Movement keys
       window.addEventListener('keydown', (e) => {
         switch (e.code) {
           case 'KeyW': case 'ArrowUp': moveForward = true; break;
@@ -393,10 +393,10 @@ HTML_PAGE = """<!DOCTYPE html>
 
       window.addEventListener('resize', onWindowResize);
 
-      // Cria a tela virtual com o padrão de teste
+      // Create the virtual screen with the test pattern
       createVirtualScreen();
 
-      // Configuração dos Botões da Interface
+      // Interface button setup
       document.getElementById('btn-pov').addEventListener('click', () => setCameraMode(true));
       document.getElementById('btn-orbit').addEventListener('click', () => setCameraMode(false));
       document.getElementById('btn-recenter').addEventListener('click', recenterCamera);
@@ -410,7 +410,7 @@ HTML_PAGE = """<!DOCTYPE html>
       screenMesh = new THREE.Mesh(geom, mat);
       scene.add(screenMesh);
 
-      // Moldura elegante ao redor da tela
+      // Elegant frame around the screen
       const edges = new THREE.EdgesGeometry(geom);
       screenFrame = new THREE.LineSegments(edges, new THREE.LineBasicMaterial({ color: 0x38bdf8, linewidth: 2 }));
       scene.add(screenFrame);
@@ -475,27 +475,27 @@ HTML_PAGE = """<!DOCTYPE html>
       currentEnv = env;
       document.getElementById('env-title').textContent = 'Ambiente: ' + env.name;
 
-      // Atualiza botões
+      // Update the buttons
       document.querySelectorAll('.env-button').forEach(btn => {
         btn.classList.toggle('active', btn.dataset.id === env.id);
       });
 
-      // Atualiza posição e escala da tela virtual
+      // Update the virtual screen's position and scale
       updateVirtualScreenTransform(env.screen_pos, env.screen_scale);
 
-      // Remove modelo anterior
+      // Remove the previous model
       if (currentModel) {
         scene.remove(currentModel);
         currentModel = null;
       }
 
-      // Remove skybox anterior
+      // Remove the previous skybox
       if (skyboxMesh) {
         scene.remove(skyboxMesh);
         skyboxMesh = null;
       }
 
-      // Áudio ambiente
+      // Ambient audio
       if (ambientAudio) {
         ambientAudio.pause();
         ambientAudio = null;
@@ -509,11 +509,11 @@ HTML_PAGE = """<!DOCTYPE html>
         document.getElementById('val-audio').textContent = `${(ambientAudio.volume * 100).toFixed(0)}% (Loop)`;
         document.getElementById('btn-audio-toggle').style.display = 'inline-block';
       } else {
-        document.getElementById('val-audio').textContent = 'Nenhum';
+        document.getElementById('val-audio').textContent = 'None';
         document.getElementById('btn-audio-toggle').style.display = 'none';
       }
 
-      // Carrega Skybox se houver
+      // Load the skybox if there is one
       if (env.has_skybox && env.skybox_url) {
         const texLoader = new THREE.TextureLoader();
         texLoader.load(env.skybox_url, (tex) => {
@@ -525,7 +525,7 @@ HTML_PAGE = """<!DOCTYPE html>
         });
       }
 
-      // Carrega Modelo 3D se houver
+      // Load the 3D model if there is one
       const loading = document.getElementById('loading-indicator');
       if (env.has_model && env.model_url) {
         loading.style.display = 'block';
@@ -537,7 +537,7 @@ HTML_PAGE = """<!DOCTYPE html>
           let polyCount = 0;
           currentModel.traverse((child) => {
             if (child.isMesh) {
-              // Garante que cores de vertice sejam respeitadas
+              // Make sure vertex colors are respected
               if (child.geometry && child.geometry.attributes.color) {
                 child.material.vertexColors = true;
               }
@@ -604,7 +604,7 @@ HTML_PAGE = """<!DOCTYPE html>
       renderer.render(scene, camera);
     }
 
-    // Carrega ambientes via API
+    // Load the environments through the API
     fetch('/api/environments')
       .then(res => res.json())
       .then(data => {
@@ -656,7 +656,7 @@ class EnvironmentPreviewHandler(http.server.SimpleHTTPRequestHandler):
 
         if path.startswith("/assets/"):
             rel_path = path[len("/assets/"):]
-            # Protege contra directory traversal
+            # Protect against directory traversal
             clean_rel = os.path.normpath(rel_path).lstrip("/\\")
             file_path = os.path.join(ASSETS_DIR, clean_rel)
 
@@ -687,13 +687,13 @@ class EnvironmentPreviewHandler(http.server.SimpleHTTPRequestHandler):
                         self.wfile.write(chunk)
                 return
             else:
-                self.send_error(404, f"Arquivo não encontrado: {rel_path}")
+                self.send_error(404, f"File not found: {rel_path}")
                 return
 
         super().do_GET()
 
     def log_message(self, format, *args):
-        # Silencia logs de requisições individuais para manter o terminal limpo
+        # Silence the logs of individual requests to keep the terminal clean
         pass
 
 
@@ -715,11 +715,11 @@ def main():
     with socketserver.TCPServer(server_address, EnvironmentPreviewHandler) as httpd:
         url = f"http://127.0.0.1:{port}"
         print("==================================================================")
-        print("🥽 tucaVR — Visualizador 3D de Ambientes no PC (Desktop Preview)")
+        print("🥽 tucaVR — 3D Environment Viewer on the PC (Desktop Preview)")
         print("==================================================================")
-        print(f"Servidor iniciado com sucesso!")
+        print("Server started successfully!")
         print(f"URL: {url}")
-        print("Pressione Ctrl+C para encerrar o servidor.")
+        print("Press Ctrl+C to stop the server.")
         print("==================================================================")
 
         try:
@@ -730,7 +730,7 @@ def main():
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
-            print("\nEncerrando servidor...")
+            print("\nStopping the server...")
 
 
 if __name__ == "__main__":

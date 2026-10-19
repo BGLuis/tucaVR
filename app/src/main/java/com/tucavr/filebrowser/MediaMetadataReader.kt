@@ -82,11 +82,42 @@ object MediaMetadataReader {
                             source.server.username,
                             source.server.password,
                             source.server.privateKey ?: "",
+                            source.server.hostKeyFingerprint ?: "",
                             source.path,
                         )
-                    is PlaybackSource.Nfs, is PlaybackSource.Webdav -> null
+                    is PlaybackSource.Nfs ->
+                        activity.nativeNfsReadMetadata(
+                            source.server.host,
+                            source.server.port,
+                            source.server.path,
+                            source.path,
+                            3,
+                        )
+                    is PlaybackSource.Webdav -> {
+                        val password = com.tucavr.network.ServerCredentialStore(activity).getPassword(source.server.id)
+                        var useHttps = false
+                        var acceptInvalidCerts = false
+                        if (!source.server.extraJson.isNullOrEmpty()) {
+                            try {
+                                val json = org.json.JSONObject(source.server.extraJson)
+                                useHttps = json.optBoolean("useHttps", false)
+                                acceptInvalidCerts = json.optBoolean("acceptInvalidCerts", false)
+                            } catch (_: Exception) {
+                            }
+                        }
+                        activity.nativeWebdavReadMetadata(
+                            source.server.host,
+                            source.server.port,
+                            source.server.path,
+                            source.path,
+                            source.server.username,
+                            password,
+                            useHttps,
+                            acceptInvalidCerts,
+                        )
+                    }
                 }
-            if (wire == null) return@withContext null
+            if (wire.isEmpty()) return@withContext null
             val metadata = parse(wire) ?: return@withContext null
             cacheSummary(activity, source, metadata)
             metadata
@@ -107,7 +138,7 @@ object MediaMetadataReader {
             AppDatabase.getInstance(context).mediaMetadataCacheDao().find(key)
         }
 
-    private suspend fun cacheSummary(
+    internal suspend fun cacheSummary(
         context: Context,
         source: PlaybackSource,
         metadata: MediaMetadata,

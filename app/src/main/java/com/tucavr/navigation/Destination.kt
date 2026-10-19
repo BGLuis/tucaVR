@@ -6,18 +6,17 @@ import com.tucavr.network.SftpServer
 import com.tucavr.network.SmbServer
 
 /**
- * Fase 1+2 do redesign "Void" (ver docs/phases): consolida o que originalmente
- * eram 3 paineis 3D desconectados (VRPresentation / NetworkPresentation /
- * VRControlsPresentation, cada um seu proprio quad OES em
- * `native/src/vr_player_app.cpp`) num unico fluxo de navegacao logico, todo
- * hospedado no mesmo quad (`VRPresentation`):
+ * Fase 1+2 do redesign "Void" (ver docs/phases): consolida o fluxo de navegacao
+ * num unico canvas cilindrico de 1920x960 (`VRPresentation`), organizado em 3 zonas
+ * simultaneas (Zona 1: Sidebar de navegacao [288px], Zona 2: Conteudo principal [1200px],
+ * Zona 3: Context Rail [432px]):
  *
- *   Home -> (LocalFiles | NetworkHome -> NetworkFiles | ContinueWatching) -> Player
+ *   Home -> (LocalFiles | NetworkHome -> NetworkFiles | ContinueWatching | Settings) -> Direct Playback
  *
  * O painel de Controles (`VRControlsPresentation`) continua sendo seu proprio
  * quad — ele e contextual (aparece ao apontar pra tela de video durante a
  * reproducao) e nao fazia parte da duplicacao Local/Rede que motivou esta
- * consolidacao.
+ * consolidacao. Modal e estatisticas compactas vivem no quad frontal flutuante (`VRModalPresentation`).
  *
  * Este arquivo e [AppNavigator] sao Kotlin puro (sem `Context`/`View`/nenhum
  * import `android.*`) de proposito: precisam ser exercitaveis com JUnit puro
@@ -45,25 +44,6 @@ sealed class Destination {
     data class LocalFiles(val path: String) : Destination()
 
     /**
-     * Detalhe de um video (local OU de rede): thumbnail + metadados
-     * (tamanho, data de modificacao se conhecida, duracao, container,
-     * bitrate, codecs, trilhas) + botao Reproduzir. Single-click num video
-     * na listagem local (`FileAdapter.onVideoClick`) ou nas listagens de
-     * rede (SMB/FTP/SFTP) chega aqui; double-click no local continua tocando
-     * direto (`onVideoDoubleClick`), sem empilhar esta tela — as listagens
-     * de rede nao tem double-click (ver `FileDetailScreen`).
-     *
-     * [lastModified] e `0L` (desconhecido) pra fontes de rede — SMB/FTP/SFTP
-     * so devolvem nome/tipo/tamanho na listagem, ver `NetworkThumbnailGenerator`.
-     */
-    data class FileDetail(
-        val source: PlaybackSource,
-        val displayName: String,
-        val sizeBytes: Long = 0L,
-        val lastModified: Long = 0L,
-    ) : Destination()
-
-    /**
      * Landing da secao "Rede" (abas URL / SMB), renderizada dentro do mesmo
      * quad do Home (ver `VRPresentation.renderNetworkHome()`). Reaproveita a
      * logica de estado que antes vivia em `NetworkPresentation` (removida):
@@ -89,7 +69,8 @@ sealed class Destination {
     /** T3.1/T3.4: listagem de um diretório num servidor WebDAV já conectado. */
     data class NetworkWebdavFiles(val server: SavedServer, val path: String) : Destination()
 
-    /** Reproduzindo [source]. */
+    /** @deprecated Now Playing screen foi removida (Epic #81 / Issue #93). Reprodução direta via callbacks. */
+    @Deprecated("Now Playing screen foi removida na Issue #93. Use reprodução direta via callbacks.")
     data class Player(val source: PlaybackSource) : Destination()
 
     /** T9.2: listagem de playlists criadas pelo usuário. */
@@ -113,7 +94,7 @@ sealed class Destination {
 }
 
 /**
- * De onde vem a midia que esta tocando — usado por [Destination.Player].
+ * De onde vem a midia que esta tocando.
  *
  * [LocalFile.sizeBytes]/[Smb.sizeBytes] (T9, ver `com.tucavr.history`):
  * tamanho do arquivo em bytes, `0L` quando desconhecido no ponto de

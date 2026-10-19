@@ -1,19 +1,19 @@
 #!/bin/bash
-# Soak test automatizado via adb — cobre 2 itens da Definition of Done da
-# Fase 0.1 (docs/phases/PHASE-0.1-MVP.md) que hoje só têm como ser validados
-# num Quest 3 físico conectado por USB:
-#   - "Nenhum crash em sessão de 30 minutos"
-#   - "Memória < 2.5GB durante reprodução de vídeo 4K"
+# Automated soak test over adb — covers 2 items of Phase 0.1's Definition of
+# Done (docs/phases/PHASE-0.1-MVP.md) that today can only be validated on a
+# physical Quest 3 connected over USB:
+#   - "No crash in a 30-minute session"
+#   - "Memory < 2.5GB during 4K video playback"
 #
-# Uso:
-#   ./scripts/soak-test.sh --video-path /sdcard/Movies/teste-4k.mp4
-#   ./scripts/soak-test.sh --duration-min 5 --interval-sec 5   # smoke test rápido
+# Usage:
+#   ./scripts/soak-test.sh --video-path /sdcard/Movies/test-4k.mp4
+#   ./scripts/soak-test.sh --duration-min 5 --interval-sec 5   # quick smoke test
 #
-# O headset precisa estar com Depuração USB autorizada e visível em
-# `adb devices`. Se --video-path for passado, o app recebe o extra
-# EXTRA_AUTO_PLAY_PATH (ver VRActivity.kt) e começa a tocar sozinho ~3s
-# depois de abrir — sem isso o teste só mede o app ocioso na tela void/home,
-# o que não corresponde ao cenário "reprodução de vídeo 4K" da DoD.
+# The headset needs USB debugging authorized and to be visible in
+# `adb devices`. If --video-path is passed, the app receives the extra
+# EXTRA_AUTO_PLAY_PATH (see VRActivity.kt) and starts playing on its own ~3s
+# after opening — without it the test only measures the idle app on the
+# void/home screen, which does not match the DoD's "4K video playback" scenario.
 set -euo pipefail
 
 PACKAGE="com.tucavr"
@@ -23,19 +23,19 @@ INTERVAL_SEC=15
 VIDEO_PATH=""
 APK=""
 SKIP_INSTALL=0
-MEMORY_LIMIT_KB=$((2621440)) # 2.5GB em KB, limite da DoD
+MEMORY_LIMIT_KB=$((2621440)) # 2.5GB in KB, the DoD limit
 SERIAL=""
 
 usage() {
     cat <<EOF
-Uso: $0 [opcoes]
-  --duration-min N     Duracao do teste em minutos (padrao: 30)
-  --interval-sec N     Intervalo entre amostras em segundos (padrao: 15)
-  --video-path PATH    Caminho do video no dispositivo para auto-play (ex: /sdcard/Movies/x.mp4)
-  --apk PATH           Instala este APK antes do teste (ex: app/build/outputs/apk/debug/app-debug.apk)
-  --serial SERIAL      Serial do dispositivo adb (equivalente a 'adb -s')
-  --package NAME       Application ID (padrao: com.tucavr)
-  -h, --help            Mostra esta ajuda
+Usage: $0 [options]
+  --duration-min N     Test duration in minutes (default: 30)
+  --interval-sec N     Interval between samples in seconds (default: 15)
+  --video-path PATH    Path of the video on the device for auto-play (e.g. /sdcard/Movies/x.mp4)
+  --apk PATH           Installs this APK before the test (e.g. app/build/outputs/apk/debug/app-debug.apk)
+  --serial SERIAL      adb device serial (equivalent to 'adb -s')
+  --package NAME       Application ID (default: com.tucavr)
+  -h, --help            Shows this help
 EOF
 }
 
@@ -48,7 +48,7 @@ while [[ $# -gt 0 ]]; do
         --serial) SERIAL="$2"; shift 2 ;;
         --package) PACKAGE="$2"; shift 2 ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "Opcao desconhecida: $1"; usage; exit 1 ;;
+        *) echo "Unknown option: $1"; usage; exit 1 ;;
     esac
 done
 
@@ -59,16 +59,16 @@ fi
 
 DEVICE_COUNT=$("${ADB[@]}" devices | grep -c -E "device$" || true)
 if [[ "$DEVICE_COUNT" -eq 0 ]]; then
-    echo "Nenhum dispositivo adb encontrado. Conecte o Quest 3 via USB, autorize a Depuracao USB no headset e tente de novo." >&2
+    echo "No adb device found. Connect the Quest 3 over USB, authorize USB debugging on the headset and try again." >&2
     exit 1
 fi
 if [[ "$DEVICE_COUNT" -gt 1 && -z "$SERIAL" ]]; then
-    echo "Mais de um dispositivo adb conectado — use --serial <serial> (veja 'adb devices')." >&2
+    echo "More than one adb device connected — use --serial <serial> (see 'adb devices')." >&2
     exit 1
 fi
 
 if [[ -n "$APK" ]]; then
-    echo "Instalando $APK..."
+    echo "Installing $APK..."
     "${ADB[@]}" install -r "$APK"
 fi
 
@@ -90,19 +90,19 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-echo "Limpando logcat e iniciando captura em background..."
+echo "Clearing logcat and starting the background capture..."
 "${ADB[@]}" logcat -c
 "${ADB[@]}" logcat -v time > "$LOGCAT_FILE" &
 LOGCAT_PID=$!
 
-echo "Forcando parada do app (estado limpo) e iniciando..."
+echo "Force-stopping the app (clean state) and starting it..."
 "${ADB[@]}" shell am force-stop "$PACKAGE" || true
 sleep 1
 
 START_ARGS=(shell am start -n "$PACKAGE/$ACTIVITY")
 if [[ -n "$VIDEO_PATH" ]]; then
     START_ARGS+=(-e video_path "$VIDEO_PATH")
-    echo "Auto-play habilitado: $VIDEO_PATH (comeca ~3s apos o app abrir)"
+    echo "Auto-play enabled: $VIDEO_PATH (starts ~3s after the app opens)"
 fi
 "${ADB[@]}" "${START_ARGS[@]}"
 
@@ -112,7 +112,7 @@ MAX_PSS_KB=0
 CRASH_DETECTED=0
 
 get_pss_kb() {
-    # "TOTAL PSS:" ou variantes de layout do dumpsys meminfo dependendo da versao do Android.
+    # "TOTAL PSS:" or layout variants of dumpsys meminfo depending on the Android version.
     "${ADB[@]}" shell dumpsys meminfo "$PACKAGE" 2>/dev/null \
         | grep -m1 -E "TOTAL( PSS)?:" \
         | grep -oE "[0-9]+" \
@@ -121,9 +121,9 @@ get_pss_kb() {
 
 get_thermal_status() {
     # "Thermal Status: N" (PowerManager.THERMAL_STATUS_*: 0=NONE 1=LIGHT
-    # 2=MODERATE 3=SEVERE 4=CRITICAL 5=EMERGENCY 6=SHUTDOWN). Formato
-    # numerico confirmado em dumpsys thermalservice real no Quest 3 (Android
-    # 14) — nao "mStatus=WORD" como versoes antigas do AOSP.
+    # 2=MODERATE 3=SEVERE 4=CRITICAL 5=EMERGENCY 6=SHUTDOWN). Numeric format
+    # confirmed in a real dumpsys thermalservice on the Quest 3 (Android
+    # 14) — not "mStatus=WORD" as in older AOSP versions.
     local code
     code=$("${ADB[@]}" shell dumpsys thermalservice 2>/dev/null | grep -m1 -oE "Thermal Status: [0-9]+" | grep -oE "[0-9]+")
     case "$code" in
@@ -138,8 +138,8 @@ get_thermal_status() {
     esac
 }
 
-echo "Monitorando por $DURATION_MIN min (amostra a cada ${INTERVAL_SEC}s). Ctrl-C interrompe com relatorio parcial."
-echo "Resultados em: $OUT_DIR"
+echo "Monitoring for $DURATION_MIN min (a sample every ${INTERVAL_SEC}s). Ctrl-C stops with a partial report."
+echo "Results in: $OUT_DIR"
 
 while [[ "$ELAPSED" -lt "$TOTAL_SEC" ]]; do
     sleep "$INTERVAL_SEC"
@@ -147,7 +147,7 @@ while [[ "$ELAPSED" -lt "$TOTAL_SEC" ]]; do
 
     PID=$("${ADB[@]}" shell pidof "$PACKAGE" 2>/dev/null | tr -d '\r' || true)
     if [[ -z "$PID" ]]; then
-        echo "[${ELAPSED}s] Processo $PACKAGE nao encontrado — possivel crash." >&2
+        echo "[${ELAPSED}s] Process $PACKAGE not found — possible crash." >&2
         echo "$(date -Iseconds),$ELAPSED,,dead," >> "$MEMORY_CSV"
         CRASH_DETECTED=1
         break
@@ -184,21 +184,21 @@ fi
 
 {
     echo "Soak test — $PACKAGE"
-    echo "Data: $(date -Iseconds)"
-    echo "Duracao solicitada: ${DURATION_MIN}min | Duracao real: $((ELAPSED / 60))min ${ELAPSED}s totais"
-    echo "Video auto-play: ${VIDEO_PATH:-"(nenhum — app ocioso)"}"
+    echo "Date: $(date -Iseconds)"
+    echo "Requested duration: ${DURATION_MIN}min | Actual duration: $((ELAPSED / 60))min ${ELAPSED}s total"
+    echo "Video auto-play: ${VIDEO_PATH:-"(none — idle app)"}"
     echo
-    echo "== Criterio: nenhum crash em sessao (DoD) =="
-    echo "  Processo caiu durante monitoramento: $([[ $CRASH_DETECTED -eq 1 ]] && echo sim || echo nao)"
-    echo "  FATAL EXCEPTION / ANR / 'has died' no logcat: $([[ $CRASH_IN_LOG -eq 1 ]] && echo sim || echo nao)"
-    echo "  Resultado: $CRASH_OK"
+    echo "== Criterion: no crash in session (DoD) =="
+    echo "  Process died during monitoring: $([[ $CRASH_DETECTED -eq 1 ]] && echo yes || echo no)"
+    echo "  FATAL EXCEPTION / ANR / 'has died' in logcat: $([[ $CRASH_IN_LOG -eq 1 ]] && echo yes || echo no)"
+    echo "  Result: $CRASH_OK"
     echo
-    echo "== Criterio: memoria < 2.5GB (DoD) =="
-    echo "  PSS maximo observado: $((MAX_PSS_KB / 1024))MB ($MAX_PSS_KB KB)"
-    echo "  Limite: $((MEMORY_LIMIT_KB / 1024))MB"
-    echo "  Resultado: $MEMORY_OK"
+    echo "== Criterion: memory < 2.5GB (DoD) =="
+    echo "  Maximum PSS observed: $((MAX_PSS_KB / 1024))MB ($MAX_PSS_KB KB)"
+    echo "  Limit: $((MEMORY_LIMIT_KB / 1024))MB"
+    echo "  Result: $MEMORY_OK"
     echo
-    echo "Arquivos: $MEMORY_CSV | $LOGCAT_FILE"
+    echo "Files: $MEMORY_CSV | $LOGCAT_FILE"
 } | tee "$SUMMARY_FILE"
 
 if [[ "$CRASH_OK" == "FAIL" || "$MEMORY_OK" == "FAIL" ]]; then

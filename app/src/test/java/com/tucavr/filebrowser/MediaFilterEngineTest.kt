@@ -90,4 +90,19 @@ class MediaFilterEngineTest {
         assertFalse(MediaFilterEngine.matchesFilter(oldEntry, "", dateFilter = DateFilter.LAST_30_DAYS, nowMs = now))
         assertTrue(MediaFilterEngine.matchesFilter(oldEntry, "", dateFilter = DateFilter.ALL, nowMs = now))
     }
+
+    @Test
+    fun dateFilterWindowsAreNestedAndUnknownMtimeIsExcluded() {
+        val now = 1_700_000_000_000L
+        val day = 24L * 3600 * 1000L
+        val threeDaysOld = MediaEntry("a.mp4", "/a", 1, lastModified = now - 3 * day, type = MediaType.VIDEO)
+        val twentyDaysOld = MediaEntry("b.mp4", "/b", 1, lastModified = now - 20 * day, type = MediaType.VIDEO)
+        val unknownMtime = MediaEntry("c.mp4", "/c", 1, lastModified = 0L, type = MediaType.VIDEO)
+
+        assertFalse(MediaFilterEngine.matchesFilter(threeDaysOld, "", dateFilter = DateFilter.RECENT_24H, nowMs = now))
+        assertTrue(MediaFilterEngine.matchesFilter(threeDaysOld, "", dateFilter = DateFilter.LAST_7_DAYS, nowMs = now))
+        assertFalse(MediaFilterEngine.matchesFilter(twentyDaysOld, "", dateFilter = DateFilter.LAST_7_DAYS, nowMs = now))
+        assertTrue(MediaFilterEngine.matchesFilter(twentyDaysOld, "", dateFilter = DateFilter.LAST_30_DAYS, nowMs = now))
+        assertFalse(MediaFilterEngine.matchesFilter(unknownMtime, "", dateFilter = DateFilter.LAST_30_DAYS, nowMs = now))
+    }
 }

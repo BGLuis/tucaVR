@@ -32,11 +32,10 @@ vec3 RgbToYcbcr(vec3 rgb) {
 // Pipeline: linearizar a EOTF PQ (ST 2084) -> nits absolutos -> normalizar
 // pelo branco de referencia SDR nominal (100 nits) -> Reinhard em luz
 // linear -> gamma de saida aproximado (mesmo espaco "pronto pra exibir" que
-// o passthrough SDR abaixo ja assume). Aproximacao deliberada pra uma
-// primeira versao: nao le metadado estatico HDR (MaxCLL/MaxFALL), e trata
-// HLG com a mesma curva de PQ apos a normalizacao (ambas convergem pra
-// resultado proximo no branco de referencia) — Hable/ACES e leitura de
-// metadado ficam pra uma iteracao futura (ver plano).
+// o passthrough SDR abaixo ja assume). HLG usa a propria OETF inversa + OOTF
+// e as primarias 2020 sao convertidas pra 709 antes do Reinhard. Aproximacao
+// deliberada: nao le metadado estatico HDR (MaxCLL/MaxFALL) — Hable/ACES e
+// leitura de metadado ficam pra uma iteracao futura (ver plano).
 vec3 PqEotf(vec3 pq) {
     const float m1 = 0.1593017578125;
     const float m2 = 78.84375;
@@ -49,9 +48,28 @@ vec3 PqEotf(vec3 pq) {
     return pow(num / den, vec3(1.0 / m1));
 }
 
-vec3 TonemapHdrToSdr(vec3 hdrColor) {
-    vec3 nits = PqEotf(hdrColor) * 10000.0;
-    vec3 scene = nits / 100.0;
+// BT.2100 HLG: inverso da OETF -> luz de cena -> OOTF do sistema (gamma 1.2,
+// pico nominal de 1000 nits) -> nits de display.
+vec3 HlgToDisplayNits(vec3 hlg) {
+    const float a = 0.17883277;
+    const float b = 0.28466892;
+    const float c = 0.55991073;
+    vec3 e = clamp(hlg, 0.0, 1.0);
+    vec3 sceneLight = mix((exp((e - c) / a) + b) / 12.0, e * e / 3.0, lessThanEqual(e, vec3(0.5)));
+    float ys = dot(sceneLight, vec3(0.2627, 0.6780, 0.0593));
+    return sceneLight * pow(max(ys, 1e-6), 0.2) * 1000.0;
+}
+
+// Primarias BT.2020 -> BT.709 (ITU-R BT.2087), em luz linear. Coluna a coluna (GLSL).
+const mat3 kBt2020ToBt709 = mat3(
+     1.6605, -0.1246, -0.0182,
+    -0.5876,  1.1329, -0.1006,
+    -0.0728, -0.0083,  1.1187);
+
+// `transfer`: 1 = PQ, 2 = HLG (mesmo codigo de get_video_is_hdr).
+vec3 TonemapHdrToSdr(vec3 hdrColor, int transfer) {
+    vec3 nits = (transfer == 2) ? HlgToDisplayNits(hdrColor) : PqEotf(hdrColor) * 10000.0;
+    vec3 scene = max(kBt2020ToBt709 * (nits / 100.0), vec3(0.0));
     vec3 tonemapped = scene / (1.0 + scene);
     return pow(clamp(tonemapped, 0.0, 1.0), vec3(1.0 / 2.2));
 }
@@ -150,7 +168,7 @@ void main() {
         ? texture(videoTexture, vTexCoord).rgb
         : ApplySGSR1(vTexCoord, vSharpness, vTexelSize);
     if (vIsHdr != 0) {
-        color = TonemapHdrToSdr(color);
+        color = TonemapHdrToSdr(color, vIsHdr);
     }
 
     if (vColorTemperature < 0.0) {

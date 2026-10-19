@@ -3,6 +3,8 @@
 #include <jni.h>
 #include <android_native_app_glue.h>
 #include "vk_math.h"
+#include "cylinder_hit.h"
+#include "controls_pose.h"
 #include "hand_tracking.h"
 #include "vr_player_feedback_overlay.h"
 #include "vr_player_ambient.h"
@@ -19,6 +21,7 @@ extern std::atomic<float> g_requestedScreenPosY;
 extern std::atomic<float> g_requestedScreenPosZ;
 extern std::atomic<float> g_requestedScreenScaleX;
 extern std::atomic<float> g_requestedScreenScaleY;
+extern "C" bool get_hand_tracking_enabled();
 
 inline void NotifyScreenTransformChanged(AppState& state, const XrVector3f& pos, float scaleX, float scaleY) {
     if (!state.app || !state.app->activity || !state.app->activity->vm) return;
@@ -67,20 +70,7 @@ inline void FireHaptic(AppState& state, XrPath hand, float amplitude, XrDuration
 // dois caminhos comparaveis visualmente. Transformadas por
 // sceneTranslationOffset/sceneYawOffset em ComputeSceneTransforms abaixo.
 //
-// Distancia/escala aumentadas na revisao pos-migracao — os valores
-// originais (-2.2,1.5,-1.5 / escala 0.8x0.6) colocavam o painel a ~2.66m
-// com so 0.8m de largura, angulo visual pequeno demais (~17 graus) pro
-// texto ficar legivel — bug reportado em teste real de hardware ("muito
-// longe, nao da pra ler o texto"). Agora ~1.64m de distancia, 50% maior,
-// mantendo a proporcao da textura (4:3 pro UI/kUiTexWidth/kUiTexHeight,
-// 1582:800 pros controles/kControlsTexWidth/kControlsTexHeight).
-constexpr XrVector3f kBaseUiPos = {-1.3f, 1.5f, -1.0f};
-constexpr float kUiPanelScaleX = 1.2f;
-constexpr float kUiPanelScaleY = 0.9f;
-constexpr XrVector3f kBaseControlsPos = {0.0f, 0.4f, -1.3f};
-constexpr float kControlsPanelScaleX = 1.2f;
-constexpr float kControlsPanelScaleY = 1.2f * (800.0f / 1582.0f); // ~0.607m (aspect ratio 1582:800)
-constexpr float kControlsPitch = -0.3f;
+// As posições base e parâmetros cilíndricos de UI e Controles são definidos em controls_pose.h.
 constexpr XrVector3f kBaseModalPos = {0.0f, 1.35f, -1.35f};
 constexpr float kModalPanelScaleX = 1.2f;
 constexpr float kModalPanelScaleY = 0.9f;
@@ -104,50 +94,89 @@ struct SceneTransforms {
     Mat4 modalModelNoScale;
     XrVector3f modalCenter;
     XrVector3f modalNormal;
+    float modalYaw;
 
     Mat4 screenModelNoScale;
     XrVector3f screenCenter;
     XrVector3f screenNormal;
+
+    Mat4 browserModelNoScale;
+    XrVector3f browserCenter;
+    XrVector3f browserNormal;
+    float browserYaw;
 };
+
+// Inicializa/reseta a pose do navegador. Deve rodar uma vez por frame antes de
+// ComputeSceneTransforms, que apenas le o estado.
+inline void UpdateBrowserPose(AppState& state) {
+    if (!state.browserActive) {
+        state.browserPoseInitialized = false;
+        state.isBrowserGrabbed = false;
+        return;
+    }
+    if (!state.browserPoseInitialized) {
+        state.browserPosition = vrplayer::kBrowserSpawnLocalPosition;
+        state.browserScaleX = kBrowserPanelScaleX;
+        state.browserScaleY = kBrowserPanelScaleY;
+        state.isBrowserGrabbed = false;
+        state.browserPoseInitialized = true;
+    }
+}
 
 inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVector3f& headCenter) {
     SceneTransforms t{};
 
     // UI: billboard - sempre virado pra cabeca (mesma logica do GLES:
     // vr_player_app.cpp, calculo de uiYaw a partir de toHead).
-    XrVector3f worldUiPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(kBaseUiPos, state.sceneYawOffset));
+    XrVector3f baseUiPos = {0.0f, 1.36f, -state.uiCylinderRadius};
+    XrVector3f worldUiPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(baseUiPos, state.sceneYawOffset));
     XrVector3f toHead = Vec3Sub(headCenter, worldUiPos);
     toHead.y = 0.0f;
     float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
-    float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : 0.7f;
+    float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : state.sceneYawOffset;
     t.uiModelNoScale = Mat4Multiply(Mat4Translation(worldUiPos.x, worldUiPos.y, worldUiPos.z), Mat4RotationY(uiYaw));
     t.uiCenter = worldUiPos;
     t.uiNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, uiYaw);
 
     // Controles: segue o yaw da cena (recenter) mais uma inclinacao fixa.
-    XrVector3f worldControlsPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(kBaseControlsPos, state.sceneYawOffset));
-    Mat4 controlsRot = Mat4Multiply(Mat4RotationY(state.sceneYawOffset), Mat4RotationX(kControlsPitch));
-    t.controlsModelNoScale = Mat4Multiply(Mat4Translation(worldControlsPos.x, worldControlsPos.y, worldControlsPos.z), controlsRot);
+    XrVector3f worldControlsPos = vrplayer::ComputeControlsCenter(state.sceneTranslationOffset, state.sceneYawOffset, kBaseControlsPos);
+    t.controlsModelNoScale = vrplayer::ComputeControlsModelNoScale(worldControlsPos, state.sceneYawOffset, kControlsPitch);
     t.controlsCenter = worldControlsPos;
     // RotationX(kControlsPitch).Transform(0,0,1) = (0, -sin(pitch), cos(pitch))
     // (ver convencao de Mat4RotationX em vk_math.h), depois rotacionado pelo yaw da cena.
     XrVector3f pitchedNormal = {0.0f, -sinf(kControlsPitch), cosf(kControlsPitch)};
     t.controlsNormal = Vec3RotateY(pitchedNormal, state.sceneYawOffset);
 
-    // Modal (3o Quad frontal): alinhado com a tela de video e controles no centro da cena
-    XrVector3f worldModalPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(kBaseModalPos, state.sceneYawOffset));
+    // Modal (3o Quad frontal): alinhado com a tela de video e controles no centro da cena,
+    // ou ancorado em azimute lateral (~38°) quando modalDocked estiver ativo (#99).
+    XrVector3f localModalPos = kBaseModalPos;
+    float modalYaw = state.sceneYawOffset;
+    if (state.modalDocked) {
+        float rad = state.modalDockedAzimuth * (3.14159265358979323846f / 180.0f);
+        localModalPos = { 2.4f * sinf(rad), 1.35f, -2.4f * cosf(rad) };
+        modalYaw = state.sceneYawOffset - rad;
+    }
+    XrVector3f worldModalPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(localModalPos, state.sceneYawOffset));
     t.modalModelNoScale = Mat4Multiply(
         Mat4Translation(worldModalPos.x, worldModalPos.y, worldModalPos.z),
-        Mat4RotationY(state.sceneYawOffset)
+        Mat4RotationY(modalYaw)
     );
     t.modalCenter = worldModalPos;
-    t.modalNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.sceneYawOffset);
+    t.modalNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, modalYaw);
+    t.modalYaw = modalYaw;
 
     // Tela virtual: posicao/escala ajustaveis via thumbstick (Estagio 6).
     XrVector3f worldScreenPos = Vec3Add(state.sceneTranslationOffset, Vec3RotateY(state.screenPosition, state.sceneYawOffset));
     t.screenModelNoScale = Mat4Multiply(Mat4Translation(worldScreenPos.x, worldScreenPos.y, worldScreenPos.z), Mat4RotationY(state.sceneYawOffset));
     t.screenCenter = worldScreenPos;
     t.screenNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, state.sceneYawOffset);
+
+    // Navegador: posicao em coordenadas da cena (acompanha o recenter) e billboard para a cabeca, como o Home.
+    const XrVector3f browserLocal = state.browserPoseInitialized ? state.browserPosition : vrplayer::kBrowserSpawnLocalPosition;
+    t.browserCenter = vrplayer::BrowserLocalToWorld(browserLocal, state.sceneTranslationOffset, state.sceneYawOffset);
+    t.browserYaw = vrplayer::BillboardYaw(t.browserCenter, headCenter, state.sceneYawOffset);
+    t.browserModelNoScale = Mat4Multiply(Mat4Translation(t.browserCenter.x, t.browserCenter.y, t.browserCenter.z), Mat4RotationY(t.browserYaw));
+    t.browserNormal = Vec3RotateY({0.0f, 0.0f, 1.0f}, t.browserYaw);
 
     return t;
 }
@@ -321,6 +350,7 @@ inline float rayHitsQuad(const Mat4& transformNoScale, const XrVector3f& normal,
     return t;
 }
 
+
 inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVector3f headCenter,
                                const XrQuaternionf& headOrientation) {
     XrActiveActionSet activeActionSet{};
@@ -359,6 +389,18 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     bool currTrigger = false;
     bool useLeft = false;
 
+    bool prevHandTrackingEnabled = state.handTrackingEnabled;
+    state.handTrackingEnabled = get_hand_tracking_enabled();
+    if (prevHandTrackingEnabled && !state.handTrackingEnabled) {
+        state.leftHandFilter.Reset();
+        state.rightHandFilter.Reset();
+        if (state.handTrackingActive && state.isScreenGrabbed) {
+            state.isScreenGrabbed = false;
+            NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
+        }
+        state.handTrackingActive = false;
+    }
+
     if (controllerActive) {
         state.handTrackingActive = false;
         // Mesma preferencia do caminho GLES (vr_player_app.cpp): usa a
@@ -375,7 +417,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             Mat4 rot = Mat4FromXrPose(spaceLocation.pose);
             state.lastRayDir = {-rot.m[8], -rot.m[9], -rot.m[10]}; // -Z axis
         }
-    } else if (state.supportsHandTracking && state.pfnLocateHandJointsEXT != nullptr) {
+    } else if (state.supportsHandTracking && state.handTrackingEnabled && state.pfnLocateHandJointsEXT != nullptr) {
         // T5.2: Leitura de juntas das mãos via XR_EXT_hand_tracking a cada frame
         XrHandJointLocationEXT jointLocationsL[XR_HAND_JOINT_COUNT_EXT];
         XrHandJointLocationsEXT locationsL{XR_TYPE_HAND_JOINT_LOCATIONS_EXT};
@@ -420,11 +462,17 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
             // T5.5: Mapeamento de gestos de palma (Palm Up = mostrar controles, Palm Down = ocultar)
             if (activeHandOut.isPalmUp) {
-                state.controlsIdleTime = 0.0f;
-                state.controlsAlpha = 1.0f;
+                if (state.hasActiveMedia) {
+                    state.controlsIdleTime = 0.0f;
+                    state.controlsAlpha = 1.0f;
+                    state.controlsExplicitlyDismissed = false;
+                }
             } else if (activeHandOut.isPalmDown) {
                 if (state.controlsAlpha > 0.5f) {
                     state.controlsIdleTime = kUiAutoHideSeconds;
+                    state.controlsAlpha = 0.0f;
+                    state.controlsExplicitlyDismissed = true;
+                    state.dismissRayDir = state.lastRayDir;
                 }
             }
         } else {
@@ -445,22 +493,35 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     // T5.6: Fallback graceful — se perdeu o raio enquanto segurava toque/pinch, soltar para evitar drag preso
     if (!state.hasRay && state.isTouchDown) {
         state.isTouchDown = false;
-        JNIEnv* env = nullptr;
-        state.app->activity->vm->AttachCurrentThread(&env, nullptr);
-        if (env) {
-            jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
-            const char* methodName = (state.activePanel == 3) ? "dispatchModalVRTouch"
-                                   : ((state.activePanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch");
-            jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
-            if (touchMethod) {
-                env->CallStaticVoidMethod(vrActivityClass, touchMethod, state.app->activity->clazz, state.lastUvX, state.lastUvY, 1 /* UP */);
+        int targetPanel = state.activePanel;
+        if (targetPanel != 0) {
+            JNIEnv* env = nullptr;
+            state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+            if (env) {
+                jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+                const char* methodName = (targetPanel == 4) ? "dispatchBrowserTouch"
+                                       : ((targetPanel == 3) ? "dispatchModalVRTouch"
+                                       : ((targetPanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch"));
+                jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
+                if (touchMethod) {
+                    env->CallStaticVoidMethod(vrActivityClass, touchMethod, state.app->activity->clazz, state.lastUvX, state.lastUvY, 1 /* UP */);
+                }
+                env->DeleteLocalRef(vrActivityClass);
             }
-            env->DeleteLocalRef(vrActivityClass);
         }
+        state.activePanel = 0;
     }
     if (!state.hasRay) {
         state.isScreenGrabbed = false;
     }
+
+    state.modalDocked = ::g_modalDocked.load();
+    state.modalDockedAzimuth = ::g_modalDockedAzimuth.load();
+    state.statsFullActive = ::g_statsFullActive.load();
+    state.uiCylinderRadius = ::g_uiCylinderRadius.load();
+    state.uiCylinderCentralAngle = ::g_uiCylinderCentralAngle.load();
+    state.byButtonAsBack = ::g_byButtonAsBack.load();
+    state.hoverHapticsEnabled = ::g_hoverHapticsEnabled.load();
 
     if (::g_modalPanelShowRequested.exchange(false)) {
         state.modalActive = true;
@@ -472,26 +533,41 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
     SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
 
-    float uu = 0, vu = 0, uc = 0, vc = 0, um = 0, vm = 0;
-    float tUi = state.hasRay
-        ? rayHitsQuad(scene.uiModelNoScale, scene.uiNormal, scene.uiCenter, kUiPanelScaleX, kUiPanelScaleY,
-                      uu, vu, state.lastRayOrigin, state.lastRayDir)
+    float uu = 0, vu = 0, uc = 0, vc = 0, um = 0, vm = 0, ub = 0, vb = 0;
+    float tUi = (state.hasRay && state.uiAlpha > 0.01f)
+        ? rayHitsCylinder(scene.uiModelNoScale, state.uiCylinderRadius, state.uiCylinderCentralAngle,
+                          (float)kUiTexWidth / (float)kUiTexHeight,
+                          uu, vu, state.lastRayOrigin, state.lastRayDir)
         : -1.0f;
-    float tControls = state.hasRay
-        ? rayHitsQuad(scene.controlsModelNoScale, scene.controlsNormal, scene.controlsCenter,
-                      kControlsPanelScaleX, kControlsPanelScaleY, uc, vc, state.lastRayOrigin, state.lastRayDir)
+    float tControls = (state.hasRay && state.controlsAlpha > 0.01f)
+        ? rayHitsCylinder(scene.controlsModelNoScale, kControlsCylinderRadius, kControlsCylinderCentralAngle,
+                          (float)kControlsTexWidth / (float)kControlsTexHeight,
+                          uc, vc, state.lastRayOrigin, state.lastRayDir)
         : -1.0f;
     float tModal = (state.hasRay && state.modalAlpha > 0.01f)
         ? rayHitsQuad(scene.modalModelNoScale, scene.modalNormal, scene.modalCenter,
                       kModalPanelScaleX, kModalPanelScaleY, um, vm, state.lastRayOrigin, state.lastRayDir)
         : -1.0f;
+    float tBrowser = -1.0f;
+    if (state.hasRay && state.browserHasFrame && state.browserActive) {
+        float browserScaleFactor = state.browserScaleX / kBrowserPanelScaleX;
+        if (g_browserCurvedGeometry.load()) {
+            tBrowser = rayHitsCylinder(scene.browserModelNoScale, kBrowserCylinderRadius * browserScaleFactor, kBrowserCylinderCentralAngle,
+                                      (float)kBrowserTexWidth / (float)kBrowserTexHeight,
+                                      ub, vb, state.lastRayOrigin, state.lastRayDir);
+        } else {
+            tBrowser = rayHitsQuad(scene.browserModelNoScale, scene.browserNormal, scene.browserCenter,
+                                   state.browserScaleX, state.browserScaleY,
+                                   ub, vb, state.lastRayOrigin, state.lastRayDir);
+        }
+    }
 
-    int currentHitPanel = 0; // 0=none, 1=ui, 2=controls, 3=modal
+    int currentHitPanel = 0; // 0=none, 1=ui, 2=controls, 3=modal, 4=browser
     float hitU = 0, hitV = 0;
     state.lastHitDist = -1.0f;
 
-    // Foco exclusivo no modal se estiver ativo e visível
-    if (state.modalActive && state.modalAlpha > 0.5f) {
+    // Foco exclusivo no modal se estiver ativo, visível e NÃO acoplado (modal centralizado de bloqueio)
+    if (state.modalActive && !state.modalDocked && state.modalAlpha > 0.5f) {
         if (tModal > 0.0f) {
             currentHitPanel = 3; hitU = um; hitV = vm;
             state.lastHitDist = tModal;
@@ -500,15 +576,29 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.lastHitDist = -1.0f;
         }
     } else {
-        if (tControls > 0.0f) {
-            currentHitPanel = 2; hitU = uc; hitV = vc;
-            state.lastHitDist = tControls;
-        } else if (tUi > 0.0f) {
-            currentHitPanel = 1; hitU = uu; hitV = vu;
-            state.lastHitDist = tUi;
+        float effectiveModalT = (state.modalActive && state.modalDocked && state.modalAlpha > 0.01f) ? tModal : -1.0f;
+        switch (vrplayer::PickNearestPanel(tUi, tControls, tBrowser, effectiveModalT)) {
+            case vrplayer::Panel::Browser:
+                currentHitPanel = 4; hitU = ub; hitV = vb;
+                state.lastHitDist = tBrowser;
+                break;
+            case vrplayer::Panel::Modal:
+                currentHitPanel = 3; hitU = um; hitV = vm;
+                state.lastHitDist = tModal;
+                break;
+            case vrplayer::Panel::Controls:
+                currentHitPanel = 2; hitU = uc; hitV = vc;
+                state.lastHitDist = tControls;
+                break;
+            case vrplayer::Panel::Ui:
+                currentHitPanel = 1; hitU = uu; hitV = vu;
+                state.lastHitDist = tUi;
+                break;
+            default:
+                break;
         }
     }
-    if (currentHitPanel != 0) {
+    if (currentHitPanel != 0 && (!state.isTouchDown || currentHitPanel == state.activePanel)) {
         state.lastUvX = hitU;
         state.lastUvY = hitV;
     }
@@ -522,6 +612,41 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         if (deltaNs > 0) dt = static_cast<float>(deltaNs) / 1e9f;
     }
     state.lastPredictedDisplayTime = predictedDisplayTime;
+
+    // Detecção de repouso: verifica se o controle está apoiado imóvel em uma superfície.
+    // O tremor fisiológico natural da mão humana viva gera jitter angular e espacial contínuo;
+    // um controle descansando numa mesa ou sofá apresenta apenas ruído infinitesimal de sensor
+    // (posDeltaSq < 2e-6 m² e dirDot > 0.9999f).
+    if (state.hasRay) {
+        float posDeltaSq = Vec3LengthSq(Vec3Sub(state.lastRayOrigin, state.prevRayOrigin));
+        float dirDot = Vec3Dot(state.lastRayDir, state.prevRayDir);
+        bool isStill = (posDeltaSq < 2e-6f) && (dirDot > 0.9999f);
+
+        if (isStill) {
+            state.controllerStationaryTime += dt;
+            if (state.controllerStationaryTime >= 1.0f) {
+                state.isControllerStationary = true;
+            }
+        } else {
+            state.controllerStationaryTime = 0.0f;
+            state.isControllerStationary = false;
+        }
+
+        // Se os controles foram explicitamente dispensados por botão (B/Y/Menu), movimento intencional
+        // da mão (> 10° de deflexão angular do raio) limpa o estado de dispensa para permitir reabertura.
+        if (state.controlsExplicitlyDismissed) {
+            float dismissDot = Vec3Dot(state.lastRayDir, state.dismissRayDir);
+            if (dismissDot < 0.985f) {
+                state.controlsExplicitlyDismissed = false;
+            }
+        }
+    } else {
+        state.controllerStationaryTime = 0.0f;
+        state.isControllerStationary = false;
+        state.controlsExplicitlyDismissed = false;
+    }
+    state.prevRayOrigin = state.lastRayOrigin;
+    state.prevRayDir = state.lastRayDir;
 
     // Auto-hide com fade (Estagio 6, paridade com GLES kUiAutoHideSeconds/
     // kUiFadeDuration): aponta pro Home -> mantem visivel; aponta pra tela
@@ -547,27 +672,76 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     bool keyboardActive = get_keyboard_active() != 0;
     if (::g_requestUiPanelVisible.exchange(false)) {
         state.uiIdleTime = 0.0f;
+        state.controlsExplicitlyDismissed = false;
+    }
+    if (::g_requestUiPanelHidden.exchange(false)) {
+        state.uiAlpha = 0.0f;
+        state.uiIdleTime = kUiAutoHideSeconds;
+        if (currentHitPanel == 1) {
+            currentHitPanel = 0;
+            state.lastHitDist = -1.0f;
+        }
     }
     if (::g_requestControlsPanelVisible.exchange(false)) {
-        state.controlsIdleTime = 0.0f;
-        state.controlsAlpha = 1.0f;
-    }
-
-    if (currentHitPanel == 1 || keyboardActive) {
-        state.uiIdleTime = 0.0f;
-    } else {
-        state.uiIdleTime += dt;
+        if (state.hasActiveMedia) {
+            state.controlsIdleTime = 0.0f;
+            state.controlsAlpha = 1.0f;
+            state.controlsExplicitlyDismissed = false;
+        }
     }
 
     bool isPlaying = get_playback_is_playing() != 0;
-    // Se o vídeo estiver pausado, o painel de controles e o botão de pause não devem sumir por auto-hide
-    if (currentHitPanel == 2 || hitScreen || !isPlaying) {
+    if (isPlaying && !state.prevIsPlaying) {
+        state.uiIdleTime = kUiAutoHideSeconds;
+        state.uiAlpha = 0.0f;
+    }
+    state.prevIsPlaying = isPlaying;
+
+    // Auto-hide da UI principal:
+    // Suprimido completamente quando não há vídeo tocando (ex: na Home, navegando arquivos,
+    // ou com o vídeo pausado). Só faz auto-hide por inatividade se o vídeo estiver
+    // ativamente reproduzindo em segundo plano (hasActiveMedia && isPlaying).
+    bool isVideoPlaying = state.hasActiveMedia && isPlaying;
+    if (!isVideoPlaying) {
+        if (state.uiAlpha > 0.01f) {
+            state.uiIdleTime = 0.0f;
+        }
+    } else {
+        if (state.uiAlpha > 0.01f && (currentHitPanel == 1 || keyboardActive)) {
+            state.uiIdleTime = 0.0f;
+        } else {
+            state.uiIdleTime += dt;
+        }
+    }
+
+    // Interação ativa com a tela ou painel de controles:
+    // - Se o controle estiver em repouso sobre uma mesa (isControllerStationary) ou se os controles
+    //   foram explicitamente dispensados (controlsExplicitlyDismissed), apontar para a tela (hitScreen)
+    //   NÃO reseta o idle time.
+    // - Se o vídeo estiver pausado, mantém visível a menos que o usuário tenha dispensado explicitamente.
+    bool activeScreenHover = hitScreen && !state.isControllerStationary && !state.controlsExplicitlyDismissed;
+    bool activePanelHover = (currentHitPanel == 2) && !state.controlsExplicitlyDismissed && (!state.isControllerStationary || !isPlaying);
+    bool keepPausedVisible = state.hasActiveMedia && !isPlaying && !state.controlsExplicitlyDismissed;
+
+    if (state.hasActiveMedia && (activePanelHover || activeScreenHover || keepPausedVisible)) {
         state.controlsIdleTime = 0.0f;
     } else {
         state.controlsIdleTime += dt;
     }
-    float uiTargetAlpha = (state.uiIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
-    float controlsTargetAlpha = (state.controlsIdleTime < kUiAutoHideSeconds) ? 1.0f : 0.0f;
+
+    // Quando o controle for solto em repouso sobre uma superfície durante a reprodução,
+    // o auto-hide dos controles e da UI acelera para 1.0s (somando ~1.35s total com o fade-out).
+    constexpr float kUiAutoHideStationarySeconds = 1.0f;
+    float effectiveControlsTimeout = (state.isControllerStationary && isPlaying) ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
+    float effectiveUiTimeout = (state.isControllerStationary && isVideoPlaying) ? kUiAutoHideStationarySeconds : kUiAutoHideSeconds;
+
+    float uiTargetAlpha = (state.uiIdleTime < effectiveUiTimeout || state.statsFullActive) ? 1.0f : 0.0f;
+    float controlsTargetAlpha = (state.hasActiveMedia && state.controlsIdleTime < effectiveControlsTimeout) ? 1.0f : 0.0f;
+    if (!state.hasActiveMedia) {
+        controlsTargetAlpha = 0.0f;
+        state.controlsIdleTime = kUiAutoHideSeconds;
+        state.controlsAlpha = 0.0f;
+    }
     float modalTargetAlpha = state.modalActive ? 1.0f : 0.0f;
     float fadeStep = (kUiFadeDuration > 0.0f) ? dt / kUiFadeDuration : 1.0f;
     state.uiAlpha = MoveTowards(state.uiAlpha, uiTargetAlpha, fadeStep);
@@ -630,9 +804,12 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     bool uiVisible = state.uiAlpha > 0.5f;
     bool controlsVisible = state.controlsAlpha > 0.5f;
     bool modalVisible = state.modalAlpha > 0.5f;
+    bool browserVisible = state.browserHasFrame && state.browserActive;
     int dispatchHitPanel = 0;
     if (currentHitPanel == 3 && modalVisible) {
         dispatchHitPanel = 3;
+    } else if (currentHitPanel == 4 && browserVisible) {
+        dispatchHitPanel = 4;
     } else if (currentHitPanel == 1 && uiVisible) {
         dispatchHitPanel = 1;
     } else if (currentHitPanel == 2 && controlsVisible) {
@@ -640,32 +817,41 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     }
 
     int action = -1;
-    if (currTrigger && !prevTrigger && dispatchHitPanel != 0) {
+    if (currTrigger && !prevTrigger && dispatchHitPanel != 0 && !state.isBrowserGrabbed) {
         action = 0; // DOWN
         state.isTouchDown = true;
         state.activePanel = dispatchHitPanel;
     } else if (!currTrigger && prevTrigger && state.isTouchDown) {
         action = 1; // UP
         state.isTouchDown = false;
-    } else if (currTrigger && state.isTouchDown) {
+    } else if (currTrigger && state.isTouchDown && !state.isBrowserGrabbed) {
         action = 2; // MOVE
-    } else if (dispatchHitPanel != 0 && !state.isTouchDown) {
+    } else if (dispatchHitPanel != 0 && !state.isTouchDown && !state.isBrowserGrabbed) {
         action = 7; // HOVER_MOVE
         state.activePanel = dispatchHitPanel;
     }
 
     if (action >= 0) {
-        JNIEnv* env = nullptr;
-        state.app->activity->vm->AttachCurrentThread(&env, nullptr);
-        if (env) {
-            jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
-            const char* methodName = (dispatchHitPanel == 3) ? "dispatchModalVRTouch"
-                                   : ((dispatchHitPanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch");
-            jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
-            if (touchMethod) {
-                env->CallStaticVoidMethod(vrActivityClass, touchMethod, state.app->activity->clazz, hitU, hitV, action);
+        int targetPanel = (action == 7) ? dispatchHitPanel : state.activePanel;
+        if (targetPanel != 0) {
+            float sendU = (currentHitPanel == targetPanel) ? hitU : state.lastUvX;
+            float sendV = (currentHitPanel == targetPanel) ? hitV : state.lastUvY;
+            JNIEnv* env = nullptr;
+            state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+            if (env) {
+                jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+                const char* methodName = (targetPanel == 4) ? "dispatchBrowserTouch"
+                                       : ((targetPanel == 3) ? "dispatchModalVRTouch"
+                                       : ((targetPanel == 2) ? "dispatchControlsVRTouch" : "dispatchVRTouch"));
+                jmethodID touchMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFI)V");
+                if (touchMethod) {
+                    env->CallStaticVoidMethod(vrActivityClass, touchMethod, state.app->activity->clazz, sendU, sendV, action);
+                }
+                env->DeleteLocalRef(vrActivityClass);
             }
-            env->DeleteLocalRef(vrActivityClass);
+        }
+        if (action == 1) {
+            state.activePanel = 0;
         }
     }
 
@@ -689,7 +875,9 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     // click) — sempre na mao direita, igual ao FireHaptic(RightHandPath,...)
     // do GLES (nao acompanha useLeft).
     if (dispatchHitPanel != 0 && dispatchHitPanel != state.lastHoverPanel) {
-        FireHaptic(state, rightPath, 0.25f, XR_MIN_HAPTIC_DURATION);
+        if (state.hoverHapticsEnabled) {
+            FireHaptic(state, rightPath, 0.25f, XR_MIN_HAPTIC_DURATION);
+        }
     }
     state.lastHoverPanel = dispatchHitPanel;
     if (action == 0) {
@@ -728,10 +916,10 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     bool currY = yState.currentState == XR_TRUE;
     bool currMenu = menuState.currentState == XR_TRUE;
 
-    // Se o modal estiver ativo, fechar modal ao clicar fora ou ao pressionar B/Y
-    if (state.modalActive) {
+    // Se o modal estiver ativo e NÃO acoplado, fechar modal ao clicar fora ou ao pressionar B/Y (se habilitado)
+    if (state.modalActive && !state.modalDocked) {
         if (((currTrigger && !prevTrigger && dispatchHitPanel == 0) ||
-             (currB && !state.prevB) || (currY && !state.prevY)) && !keyboardActive) {
+             (((currB && !state.prevB) || (currY && !state.prevY)) && state.byButtonAsBack)) && !keyboardActive) {
             state.modalActive = false;
             ::g_modalPanelActive.store(false);
             JNIEnv* env = nullptr;
@@ -755,18 +943,62 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         bool triggerPlayPause = triggerOutsideUi && !handTrackingGrabPinch;
         bool buttonPlayPause = (currA && !state.prevA) || (currX && !state.prevX);
 
-        if ((buttonPlayPause || triggerPlayPause) && !keyboardActive) {
-            toggle_play_pause();
-            state.controlsIdleTime = 0.0f;
-            state.controlsAlpha = 1.0f;
+        // Limpa a dispensa explícita quando uma ação intencional do usuário ocorrer
+        if ((currA && !state.prevA) || (currX && !state.prevX) || (currTrigger && !prevTrigger)) {
+            state.controlsExplicitlyDismissed = false;
         }
 
-        // B (direita) ou Y (esquerda) = alterna a visibilidade do painel Home
-        // instantaneamente (sem esperar o auto-hide).
-        if ((currB && !state.prevB) || (currY && !state.prevY)) {
-            bool isCurrentlyVisible = state.uiIdleTime < kUiAutoHideSeconds;
-            state.uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
-            state.controlsIdleTime = 0.0f;
+        if ((buttonPlayPause || triggerPlayPause) && !keyboardActive) {
+            toggle_play_pause();
+            if (state.hasActiveMedia) {
+                state.controlsIdleTime = 0.0f;
+                state.controlsAlpha = 1.0f;
+                state.controlsExplicitlyDismissed = false;
+            }
+        }
+
+        // B (direita) ou Y (esquerda) = navegação hierárquica para trás (Issue #87, controlada por byButtonAsBack).
+        // 1. Se o teclado virtual estiver ativo ou byButtonAsBack estiver desativado, B/Y não altera visibilidade.
+        // 2. Se a UI principal estiver visível, chama handleBackFromNative: se tratado, mantém a UI visível.
+        // 3. Se não foi tratado pela UI (ou já está na raiz), oculta os painéis (dispensa rápida).
+        // 4. Se os painéis estavam ocultos, reabre-os instantaneamente.
+        if (((currB && !state.prevB) || (currY && !state.prevY)) && !keyboardActive && state.byButtonAsBack) {
+            bool controlsVisible = (state.controlsAlpha > 0.05f) || (state.controlsIdleTime < kUiAutoHideSeconds);
+            bool uiVisible = (state.uiAlpha > 0.05f) || (state.uiIdleTime < kUiAutoHideSeconds);
+
+            bool backHandled = false;
+            if (uiVisible) {
+                JNIEnv* env = nullptr;
+                state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+                if (env) {
+                    jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+                    jmethodID backMethod = env->GetStaticMethodID(vrActivityClass, "handleBackFromNative", "(Lcom/tucavr/VRActivity;)Z");
+                    if (backMethod) {
+                        jboolean res = env->CallStaticBooleanMethod(vrActivityClass, backMethod, state.app->activity->clazz);
+                        backHandled = (res == JNI_TRUE);
+                    }
+                    env->DeleteLocalRef(vrActivityClass);
+                }
+            }
+
+            if (!backHandled) {
+                if (controlsVisible || uiVisible) {
+                    state.uiIdleTime = kUiAutoHideSeconds;
+                    state.controlsIdleTime = kUiAutoHideSeconds;
+                    state.controlsAlpha = 0.0f;
+                    state.uiAlpha = 0.0f;
+                    state.controlsExplicitlyDismissed = true;
+                    state.dismissRayDir = state.lastRayDir;
+                } else {
+                    state.uiIdleTime = 0.0f;
+                    state.uiAlpha = 1.0f;
+                    if (state.hasActiveMedia) {
+                        state.controlsIdleTime = 0.0f;
+                        state.controlsAlpha = 1.0f;
+                        state.controlsExplicitlyDismissed = false;
+                    }
+                }
+            }
         }
     }
     state.prevA = currA;
@@ -775,8 +1007,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     state.prevY = currY;
 
     // Menu: long-press = recenter da cena inteira; short-press (no RELEASE,
-    // e so se o long-press nao tiver disparado durante o hold) = mesmo
-    // toggle de B/Y — mesma logica do GLES.
+    // e so se o long-press nao tiver disparado durante o hold) = alterna
+    // controles e Home da mesma forma que B/Y.
     if (currMenu) {
         state.menuHoldTime += dt;
         if (!state.recenterFiredThisHold && state.menuHoldTime >= kRecenterHoldSeconds) {
@@ -787,15 +1019,36 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.sceneYawOffset = atan2f(-fwd.x, -fwd.z);
             state.sceneTranslationOffset = headCenter;
             state.sceneTranslationOffset.y = headCenter.y - 1.5f;
-            state.screenPosition = {0.0f, 1.5f, -2.0f};
+            state.screenPosition = state.defaultScreenPosition;
+            state.screenScaleX = state.defaultScreenScaleX;
+            state.screenScaleY = state.defaultScreenScaleY;
+            ::g_resetScreenPositionRequested.store(true);
             state.isScreenGrabbed = false;
+            state.browserPosition = vrplayer::kBrowserSpawnLocalPosition;
+            state.isBrowserGrabbed = false;
             state.recenterFiredThisHold = true;
             FireHaptic(state, rightPath, 0.5f, 30000000 /* 30ms */);
         }
     } else {
-        if (state.prevMenu && !state.recenterFiredThisHold) {
-            bool isCurrentlyVisible = state.uiIdleTime < kUiAutoHideSeconds;
-            state.uiIdleTime = isCurrentlyVisible ? kUiAutoHideSeconds : 0.0f;
+        if (state.prevMenu && !state.recenterFiredThisHold && !keyboardActive) {
+            bool controlsVisible = (state.controlsAlpha > 0.05f) || (state.controlsIdleTime < kUiAutoHideSeconds);
+            bool uiVisible = (state.uiAlpha > 0.05f) || (state.uiIdleTime < kUiAutoHideSeconds);
+            if (controlsVisible || uiVisible) {
+                state.uiIdleTime = kUiAutoHideSeconds;
+                state.controlsIdleTime = kUiAutoHideSeconds;
+                state.controlsAlpha = 0.0f;
+                state.uiAlpha = 0.0f;
+                state.controlsExplicitlyDismissed = true;
+                state.dismissRayDir = state.lastRayDir;
+            } else {
+                state.uiIdleTime = 0.0f;
+                state.uiAlpha = 1.0f;
+                if (state.hasActiveMedia) {
+                    state.controlsIdleTime = 0.0f;
+                    state.controlsAlpha = 1.0f;
+                    state.controlsExplicitlyDismissed = false;
+                }
+            }
         }
         state.menuHoldTime = 0.0f;
         state.recenterFiredThisHold = false;
@@ -1040,16 +1293,17 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
     // Redefinição de posição solicitada via JNI ou Reset
     if (::g_resetScreenPositionRequested.exchange(false)) {
-        state.screenPosition = {0.0f, 1.5f, -2.4f};
-        state.screenScaleX = 2.8f;
-        state.screenScaleY = 1.575f;
+        state.screenPosition = state.defaultScreenPosition;
+        state.screenScaleX = state.defaultScreenScaleX;
+        state.screenScaleY = state.defaultScreenScaleY;
         state.isScreenGrabbed = false;
-        LOGI("Screen: posição e escala redefinidas para o padrão cinematográfico {0, 1.5, -2.4}");
-        NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
+        LOGI("Screen: posição e escala redefinidas para o padrão do ambiente atual: pos={%.2f, %.2f, %.2f}, scale={%.2f, %.2f}",
+             state.screenPosition.x, state.screenPosition.y, state.screenPosition.z,
+             state.screenScaleX, state.screenScaleY);
     }
 
-    // Rolagem por thumbstick no painel UI (Home/Arquivos) ou Modal
-    if ((dispatchHitPanel == 1 || dispatchHitPanel == 3) && !state.isScreenGrabbed && !state.isTouchDown) {
+    // Thumbstick scrolling on the UI (Home/Files), modal, or browser panel
+    if ((dispatchHitPanel == 1 || dispatchHitPanel == 3 || dispatchHitPanel == 4) && !state.isScreenGrabbed && !state.isBrowserGrabbed && !state.isTouchDown) {
         float stickY = (fabsf(rightStick.currentState.y) > 0.15f)
             ? rightStick.currentState.y
             : ((useLeft && fabsf(leftStick.currentState.y) > 0.15f) ? leftStick.currentState.y : 0.0f);
@@ -1060,7 +1314,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.app->activity->vm->AttachCurrentThread(&env, nullptr);
             if (env) {
                 jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
-                const char* methodName = (dispatchHitPanel == 3) ? "dispatchModalVRScroll" : "dispatchVRScroll";
+                const char* methodName = (dispatchHitPanel == 4) ? "dispatchBrowserScroll"
+                                       : ((dispatchHitPanel == 3) ? "dispatchModalVRScroll" : "dispatchVRScroll");
                 jmethodID scrollMethod = env->GetStaticMethodID(vrActivityClass, methodName, "(Lcom/tucavr/VRActivity;FFF)V");
                 if (scrollMethod) {
                     env->CallStaticVoidMethod(vrActivityClass, scrollMethod, state.app->activity->clazz, state.lastUvX, state.lastUvY, scrollDeltaY);
@@ -1075,6 +1330,9 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         const float kDeadzone = 0.15f;
         float sx = (fabsf(rightStick.currentState.x) < kDeadzone) ? 0.0f : rightStick.currentState.x;
         float sy = (fabsf(rightStick.currentState.y) < kDeadzone) ? 0.0f : rightStick.currentState.y;
+        if (sx != 0.0f || sy != 0.0f) {
+            state.controlsExplicitlyDismissed = false;
+        }
         bool gripHeld = squeezeState.currentState > 0.5f;
         bool prevGrabbed = state.isScreenGrabbed;
         static bool s_prevDirectAdjustActive = false;
@@ -1102,18 +1360,11 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             }
         } else {
             // Controller Touch Plus (Opção B):
-            // O thumbstick NUNCA move a tela quando desacompanhado de intenção expressa (elimina 100% de toques acidentais).
-            // Dois modos intencionais suportados:
-            // 1) Laser Grab & Drag: apontar o laser para a tela e segurar Grip.
-            //    - Movimento da mão translada a tela no espaço.
-            //    - Stick vertical (sy) redimensiona a escala proporcionalmente.
-            //    - Stick horizontal (sx) ajusta a distância (push/pull).
-            // 2) Ajuste Direto: segurar Grip + Trigger simultaneamente no controle direito.
-            //    - Stick vertical (sy) ajusta profundidade Z.
-            //    - Stick horizontal (sx) ajusta altura Y.
-
             bool isAimingScreen = (currentHitPanel == 0 && tScreen > 0.0f && !state.modalActive && !IsSphereMode(state.screenMode));
             bool directAdjustCombo = gripHeld && currTrigger && (currentHitPanel == 0) && !state.modalActive;
+
+            bool isAimingBrowser = (currentHitPanel == 4 && tBrowser > 0.0f && !state.modalActive);
+            bool directBrowserCombo = gripHeld && currTrigger && (currentHitPanel == 4 || state.isBrowserGrabbed) && !state.modalActive;
 
             if (directAdjustCombo) {
                 state.isScreenGrabbed = false;
@@ -1136,7 +1387,6 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                 }
 
                 if (state.isScreenGrabbed) {
-                    // Redimensionamento pelo stick enquanto segura o Grip na tela
                     if (sy != 0.0f) {
                         const float kResizeSpeedMetersPerSec = 1.2f;
                         float newWidth = state.screenScaleX + sy * kResizeSpeedMetersPerSec * dt;
@@ -1145,7 +1395,6 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                         state.screenScaleY = newWidth * (9.0f / 16.0f);
                     }
 
-                    // Push / pull de distância pelo stick horizontal
                     if (sx != 0.0f) {
                         const float kPushPullSpeed = 1.5f;
                         state.grabDistance -= sx * kPushPullSpeed * dt;
@@ -1165,7 +1414,51 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                 state.isScreenGrabbed = false;
             }
 
-            // Notifica encerramento de interação para persistir em SharedPreferences
+            // Grab & Drag / direct adjustment of the web browser
+            if (directBrowserCombo) {
+                state.isBrowserGrabbed = false;
+                if (sy != 0.0f || sx != 0.0f) {
+                    const float kMoveSpeedMetersPerSec = 1.5f;
+                    state.browserPosition.z -= sy * kMoveSpeedMetersPerSec * dt;
+                    state.browserPosition.y += sx * kMoveSpeedMetersPerSec * dt;
+                    state.browserPosition.z = std::min(-0.8f, std::max(state.browserPosition.z, -10.0f));
+                    state.browserPosition.y = std::max(0.3f, std::min(state.browserPosition.y, 3.5f));
+                    state.browserPosition.x = std::max(-4.0f, std::min(state.browserPosition.x, 4.0f));
+                }
+            } else if (gripHeld && (state.isBrowserGrabbed || isAimingBrowser)) {
+                if (!state.isBrowserGrabbed && isAimingBrowser) {
+                    state.isBrowserGrabbed = true;
+                    state.browserGrabDistance = std::max(0.8f, std::min(tBrowser, 8.0f));
+                    FireHaptic(state, rightPath, 0.4f, 20000000 /* 20ms */);
+                }
+
+                if (state.isBrowserGrabbed) {
+                    if (sy != 0.0f) {
+                        const float kResizeSpeedMetersPerSec = 1.2f;
+                        float newWidth = state.browserScaleX + sy * kResizeSpeedMetersPerSec * dt;
+                        newWidth = std::max(0.8f, std::min(newWidth, 8.0f));
+                        state.browserScaleX = newWidth;
+                        state.browserScaleY = newWidth * kBrowserTexAspect;
+                    }
+
+                    if (sx != 0.0f) {
+                        const float kPushPullSpeed = 1.5f;
+                        state.browserGrabDistance -= sx * kPushPullSpeed * dt;
+                        state.browserGrabDistance = std::max(0.8f, std::min(state.browserGrabDistance, 8.0f));
+                    }
+
+                    if (state.hasRay) {
+                        XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.browserGrabDistance));
+                        state.browserPosition = vrplayer::BrowserWorldToLocal(targetWorld, state.sceneTranslationOffset, state.sceneYawOffset);
+                        state.browserPosition.z = std::min(-0.8f, std::max(state.browserPosition.z, -10.0f));
+                        state.browserPosition.y = std::max(0.3f, std::min(state.browserPosition.y, 3.5f));
+                        state.browserPosition.x = std::max(-4.0f, std::min(state.browserPosition.x, 4.0f));
+                    }
+                }
+            } else {
+                state.isBrowserGrabbed = false;
+            }
+
             if (prevGrabbed && !state.isScreenGrabbed) {
                 FireHaptic(state, rightPath, 0.2f, 15000000 /* 15ms */);
                 NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
@@ -1183,6 +1476,14 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         const float kDeadzone = 0.2f;
         float lx = (fabsf(leftStick.currentState.x) < kDeadzone) ? 0.0f : leftStick.currentState.x;
         float ly = (fabsf(leftStick.currentState.y) < kDeadzone) ? 0.0f : leftStick.currentState.y;
+
+        if (lx != 0.0f || ly != 0.0f) {
+            if (state.hasActiveMedia) {
+                state.controlsIdleTime = 0.0f;
+                state.controlsAlpha = 1.0f;
+                state.controlsExplicitlyDismissed = false;
+            }
+        }
 
         bool leftAimingUi = useLeft && (dispatchHitPanel == 1 || dispatchHitPanel == 3);
         if (ly != 0.0f && !leftAimingUi) {

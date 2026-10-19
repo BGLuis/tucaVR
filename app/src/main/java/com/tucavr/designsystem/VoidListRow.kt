@@ -20,6 +20,7 @@ class VoidListRow(context: Context) : LinearLayout(context) {
     private val textColumn: LinearLayout
     val titleView: android.widget.TextView
     val metaView: android.widget.TextView
+    val playButton: VoidButton
 
     init {
         orientation = HORIZONTAL
@@ -69,6 +70,54 @@ class VoidListRow(context: Context) : LinearLayout(context) {
         textColumn.addView(titleView)
         textColumn.addView(metaView)
         addView(textColumn)
+
+        playButton =
+            VoidButton(context, VoidButtonStyle.PRIMARY, isCompact = true).apply {
+                setIcon(com.tucavr.R.drawable.ic_play_arrow)
+                contentDescription = context.getString(com.tucavr.R.string.file_detail_btn_play)
+                layoutParams =
+                    LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        marginStart = VoidTheme.dpToPx(context, 12f)
+                    }
+                visibility = View.GONE
+            }
+        addView(playButton)
+    }
+
+    /**
+     * Define o estado de seleção da linha. Quando selecionada, exibe uma borda de destaque
+     * e o botão Play (▶) caso [onPlayClick] seja fornecido.
+     */
+    fun setSelectedRow(
+        selected: Boolean,
+        onPlayClick: (() -> Unit)? = null,
+    ) {
+        if (selected) {
+            background =
+                GradientDrawable().apply {
+                    setColor(VoidTheme.colorSurfaceAlt)
+                    cornerRadius = VoidTheme.dp(context, 10f)
+                    setStroke(VoidTheme.dpToPx(context, VoidTheme.borderWidthDp), VoidTheme.colorAccent)
+                }
+            if (onPlayClick != null) {
+                playButton.visibility = View.VISIBLE
+                playButton.setOnClickListener { onPlayClick() }
+            } else {
+                playButton.visibility = View.GONE
+                playButton.setOnClickListener(null)
+            }
+        } else {
+            background =
+                GradientDrawable().apply {
+                    setColor(VoidTheme.colorSurface)
+                    cornerRadius = VoidTheme.dp(context, 10f)
+                }
+            playButton.visibility = View.GONE
+            playButton.setOnClickListener(null)
+        }
     }
 
     /**
@@ -81,10 +130,13 @@ class VoidListRow(context: Context) : LinearLayout(context) {
         meta: String? = null,
         showThumbnailSlot: Boolean = true,
         iconResId: Int = 0,
+        isSelected: Boolean = false,
+        onPlayClick: (() -> Unit)? = null,
+        isFolder: Boolean = false,
     ) {
         titleView.text = title
 
-        if (iconResId != 0) {
+        if (iconResId != 0 && !isFolder) {
             val icon = context.getDrawable(iconResId)?.mutate()
             icon?.colorFilter = android.graphics.PorterDuffColorFilter(VoidTheme.colorText, android.graphics.PorterDuff.Mode.SRC_IN)
             if (icon != null) {
@@ -103,7 +155,22 @@ class VoidListRow(context: Context) : LinearLayout(context) {
         } else {
             metaView.visibility = View.GONE
         }
-        thumbnail.setImageDrawable(null)
-        thumbnail.visibility = if (showThumbnailSlot) View.INVISIBLE else View.GONE
+
+        if (isFolder) {
+            thumbnail.scaleType = ImageView.ScaleType.CENTER_INSIDE
+            val pad = VoidTheme.dpToPx(context, 8f)
+            thumbnail.setPadding(pad, pad, pad, pad)
+            thumbnail.setImageResource(com.tucavr.R.drawable.ic_folder)
+            thumbnail.setColorFilter(VoidTheme.colorFolder, android.graphics.PorterDuff.Mode.SRC_IN)
+            thumbnail.visibility = View.VISIBLE
+        } else {
+            thumbnail.scaleType = ImageView.ScaleType.CENTER_CROP
+            thumbnail.setPadding(0, 0, 0, 0)
+            thumbnail.colorFilter = null
+            thumbnail.setImageDrawable(null)
+            thumbnail.visibility = if (showThumbnailSlot) View.INVISIBLE else View.GONE
+        }
+
+        setSelectedRow(isSelected, onPlayClick)
     }
 }

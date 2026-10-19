@@ -1,8 +1,8 @@
 #!/bin/bash
-# Gera clipes sinteticos H.264 pra testar visualmente cada ScreenMode (ver enum em
-# native/src/vr_player_app.cpp / rust/bridge/src/lib.rs). Cada clipe rotula os dois
-# olhos (SBS/OU) ou marca 0/25/50/75/100% da largura (mono), pra ficar obvio num
-# screenshot se o crop/split esta certo ou se a imagem esta duplicada/cortada.
+# Generates synthetic H.264 clips to visually test each ScreenMode (see the enum in
+# native/include/screen_mode.h / rust/bridge/src/lib.rs). Each clip labels the two
+# eyes (SBS/OU) or marks 0/25/50/75/100% of the width (mono), so it is obvious in a
+# screenshot whether the crop/split is right or the image is duplicated/cut.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -14,11 +14,11 @@ FONT="/usr/share/fonts/liberation/LiberationSans-Bold.ttf"
 
 usage() {
     cat <<EOF
-Uso: $0 [opcoes]
-  --resolution 4k|5.7k|8k   Largura combinada do frame (padrao: 4k = 3840px)
-  --duration-sec N          Duracao de cada clipe (padrao: 15)
-  --out-dir PATH             Diretorio de saida (padrao: testdata/3d-test-clips)
-  --force                     Regera mesmo se os arquivos ja existirem
+Usage: $0 [options]
+  --resolution 4k|5.7k|8k   Combined frame width (default: 4k = 3840px)
+  --duration-sec N          Duration of each clip (default: 15)
+  --out-dir PATH             Output directory (default: testdata/3d-test-clips)
+  --force                     Regenerates even if the files already exist
 EOF
 }
 
@@ -29,7 +29,7 @@ while [[ $# -gt 0 ]]; do
         --out-dir) OUT_DIR="$2"; shift 2 ;;
         --force) FORCE=1; shift ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "Opcao desconhecida: $1"; usage; exit 1 ;;
+        *) echo "Unknown option: $1"; usage; exit 1 ;;
     esac
 done
 
@@ -37,11 +37,11 @@ case "$RESOLUTION" in
     4k) W=3840; H=2160 ;;
     5.7k) W=5760; H=2880 ;;
     8k) W=7680; H=4320 ;;
-    *) echo "Resolucao desconhecida: $RESOLUTION (use 4k, 5.7k ou 8k)" >&2; exit 1 ;;
+    *) echo "Unknown resolution: $RESOLUTION (use 4k, 5.7k or 8k)" >&2; exit 1 ;;
 esac
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
-    echo "ffmpeg nao encontrado no PATH." >&2
+    echo "ffmpeg not found in PATH." >&2
     exit 1
 fi
 
@@ -50,7 +50,7 @@ mkdir -p "$OUT_DIR"
 encode() {
     local out="$1" filter_complex="$2"
     if [[ -f "$out" && "$FORCE" -eq 0 ]]; then
-        echo "Ja existe: $out (use --force pra regerar)."
+        echo "Already exists: $out (use --force to regenerate)."
         return
     fi
     ffmpeg -y -hide_banner -loglevel warning \
@@ -60,10 +60,10 @@ encode() {
         -c:v libx264 -preset veryfast -profile:v high -level 5.2 -pix_fmt yuv420p -b:v 30M -maxrate 30M -bufsize 60M \
         -c:a aac -b:a 128k -movflags +faststart \
         "$out"
-    echo "Gerado: $out ($(du -h "$out" | cut -f1))"
+    echo "Generated: $out ($(du -h "$out" | cut -f1))"
 }
 
-# Marcadores 0/25/50/75/100% da largura — verifica crop/duplicacao no modo mono.
+# Markers at 0/25/50/75/100% of the width — checks crop/duplication in mono mode.
 mono_markers() {
     local w="$1" fs=$(( $1 / 40 ))
     echo "drawtext=fontfile=$FONT:text='0pct':x=10:y=10:fontsize=$fs:fontcolor=white,"\
@@ -73,23 +73,23 @@ mono_markers() {
 "drawtext=fontfile=$FONT:text='100pct':x=w-160:y=10:fontsize=$fs:fontcolor=white"
 }
 
-echo "== mono (180/360 mono — a diferenca e so o modo escolhido no player) =="
+echo "== mono (180/360 mono — the only difference is the mode chosen in the player) =="
 encode "$OUT_DIR/mono.mp4" \
     "testsrc2=size=${W}x${H}:rate=30,$(mono_markers "$W")[out]"
 
-echo "== sbs (flat/360/180 SBS — a diferenca e so o modo escolhido no player) =="
+echo "== sbs (flat/360/180 SBS — the only difference is the mode chosen in the player) =="
 EW=$((W/2))
 encode "$OUT_DIR/sbs.mp4" \
-    "color=c=green:size=${EW}x${H}:rate=30,drawtext=fontfile=$FONT:text='ESQUERDA':x=(w-tw)/2:y=(h-th)/2:fontsize=$((EW/8)):fontcolor=white,$(mono_markers "$EW")[left];\
-color=c=maroon:size=${EW}x${H}:rate=30,drawtext=fontfile=$FONT:text='DIREITA':x=(w-tw)/2:y=(h-th)/2:fontsize=$((EW/8)):fontcolor=white,$(mono_markers "$EW")[right];\
+    "color=c=green:size=${EW}x${H}:rate=30,drawtext=fontfile=$FONT:text='LEFT':x=(w-tw)/2:y=(h-th)/2:fontsize=$((EW/8)):fontcolor=white,$(mono_markers "$EW")[left];\
+color=c=maroon:size=${EW}x${H}:rate=30,drawtext=fontfile=$FONT:text='RIGHT':x=(w-tw)/2:y=(h-th)/2:fontsize=$((EW/8)):fontcolor=white,$(mono_markers "$EW")[right];\
 [left][right]hstack=inputs=2[out]"
 
-echo "== ou (flat/360 OU — a diferenca e so o modo escolhido no player) =="
+echo "== ou (flat/360 OU — the only difference is the mode chosen in the player) =="
 EH=$((H/2))
 encode "$OUT_DIR/ou.mp4" \
-    "color=c=green:size=${W}x${EH}:rate=30,drawtext=fontfile=$FONT:text='CIMA':x=(w-tw)/2:y=(h-th)/2:fontsize=$((W/20)):fontcolor=white[top];\
-color=c=maroon:size=${W}x${EH}:rate=30,drawtext=fontfile=$FONT:text='BAIXO':x=(w-tw)/2:y=(h-th)/2:fontsize=$((W/20)):fontcolor=white[bottom];\
+    "color=c=green:size=${W}x${EH}:rate=30,drawtext=fontfile=$FONT:text='TOP':x=(w-tw)/2:y=(h-th)/2:fontsize=$((W/20)):fontcolor=white[top];\
+color=c=maroon:size=${W}x${EH}:rate=30,drawtext=fontfile=$FONT:text='BOTTOM':x=(w-tw)/2:y=(h-th)/2:fontsize=$((W/20)):fontcolor=white[bottom];\
 [top][bottom]vstack=inputs=2[out]"
 
 echo ""
-echo "Clipes em $OUT_DIR — use com scripts/test-3d-playback.sh <arquivo> <screen_mode>"
+echo "Clips in $OUT_DIR — use them with scripts/test-3d-playback.sh <file> <screen_mode>"

@@ -2,7 +2,7 @@
 
 Thanks for taking the time to contribute! tucaVR is a three-language project (Kotlin + C++ + Rust) targeting a physical VR headset, which makes it a little unusual to work on. This guide covers what you need to know before opening your first pull request.
 
-By participating, you agree to keep the discussion respectful and constructive.
+By participating, you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ---
 
@@ -27,7 +27,7 @@ You do **not** need a Meta Quest 3 to contribute. Plenty of the project is testa
 
 | No headset required | Headset required |
 |---------------------|------------------|
-| `rust/protocols` — SMB, NFS, FTP, SFTP, DLNA, HTTP(S), HLS clients | OpenXR rendering and the Vulkan/GLES render loop |
+| `rust/protocols` — SMB, NFS, FTP, SFTP, WebDAV, DLNA, HTTP(S), HLS, DASH clients | OpenXR rendering and the Vulkan/GLES render loop |
 | `rust/media-logic` — A/V sync, resample math, playback clamps | Controller input and haptics |
 | Kotlin pure logic (`app/src/test`) — sorting, navigation, formatting | Hardware `MediaCodec` decode |
 | Docs, i18n strings, CI workflows | Anything about comfort, framerate or visual quality |
@@ -41,23 +41,23 @@ Follow the [Requirements and Installation sections of the README](README.md#-get
 ```sh
 git clone https://github.com/bgluis/tucaVR.git
 cd tucaVR
-./scripts/setup-deps.sh     # clones ffmpeg-android-maker, checks the Meta SDK
+./scripts/setup-deps.sh     # clones ffmpeg-android-maker and downloads the Meta SDK
 ```
 
 Two things commonly trip people up on the first build:
 
-1. **The Meta OpenXR Mobile SDK is not in the repository.** It requires accepting a license on Meta's portal, so you have to download and extract it into `sdk/meta-openxr-sdk/` yourself. Without it, the native C++ layer will not compile.
+1. **The Meta OpenXR SDK is not in the repository.** `./scripts/setup-deps.sh` downloads the latest public GitHub release into `sdk/meta-openxr-sdk/`. Without it, the native C++ layer will not compile.
 2. **FFmpeg has to be cross-compiled once** before the Rust build can link against it (see step 4 in the README). It takes several minutes but only needs to happen once.
 
 If you only intend to touch `protocols` or `media-logic`, you can skip both: those crates build and test with plain `cargo test` on any host.
 
 ## Knowing which layer you are in
 
-```
+```text
 Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocols/audio/media-logic)
 ```
 
-- **Kotlin** (`app/src/main/java/com/tucavr/`) — the Android shell and the UI. The UI is drawn as plain Android `View`s inside an `android.app.Presentation` on a `VirtualDisplay`, and the native layer projects it onto 3D quads. It is **not** XML layouts as a screen hierarchy and **not** Jetpack Compose. Also owns credential storage, Room-backed history and i18n.
+- **Kotlin** (`app/src/main/java/com/tucavr/`) — the Android shell and the UI. The UI is drawn inside `android.app.Presentation`s on `VirtualDisplay`s, and the native layer projects it onto 3D quads: plain Android `View`s for the main panels, and Jetpack Compose + GeckoView for the in-app web browser panel. It is **not** XML layouts as a screen hierarchy. Also owns credential storage, Room-backed history and i18n.
 - **C++** (`native/src/`) — OpenXR session, swapchains and the render loop. Vulkan is the default backend (independent of OVRFW); the frozen OpenGL ES fallback path built on Meta's `SampleXrFramework` (OVRFW) is kept available (`-PvrplayerGraphicsApi=GLES`).
 - **Rust** (`rust/`) — demuxing (`ffmpeg-next`), hardware decode (`ndk::MediaCodec`), audio (Oboe) and every network protocol client.
 
@@ -70,7 +70,7 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 | `core` | Demuxer, MediaCodec decoder, playback/sync state | ❌ needs the NDK toolchain |
 | `audio` | Oboe audio output | ❌ needs the NDK toolchain |
 | `bridge` | The `cdylib`/`staticlib` that C++ links against | ❌ needs the NDK toolchain |
-| `protocols` | SMB2/3, NFS, FTP, SFTP, DLNA, HTTP(S), HLS — all pure Rust | ✅ |
+| `protocols` | SMB2/3, NFS, FTP, SFTP, WebDAV, DLNA/UPnP, HTTP(S), HLS, DASH, discovery, download, chunking, prefetch — all pure Rust | ✅ |
 | `media-logic` | Pure logic, zero Android dependencies, by design | ✅ |
 
 `media-logic` exists specifically so that sync, resample and playback-parameter logic can run under plain `cargo test`. **Before adding logic of that kind to `core`, check whether it belongs in `media-logic` instead** — `core` usually delegates rather than reimplementing. See `docs/TESTING-PLAN.md` section 2.
@@ -80,7 +80,7 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 - **Rust** — `cargo fmt`, and `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings` must pass. CI enforces the clippy gate.
 - **Kotlin** — `./gradlew ktlintCheck` must pass; CI blocks on it. Pre-existing violations are frozen in `app/config/ktlint/baseline.xml`.
 - **C++** — C++20, matching the surrounding file. In the frozen GLES fallback, respect the OVRFW shader conventions (the framework injects `FragmentHeader`/`VertexHeader`); in the default Vulkan backend, shaders are written in standard GLSL and compiled to SPIR-V via `glslc`.
-- **Comments and docs are written in Portuguese (BR).** That is the existing convention across the codebase — match it when adding comments to existing files. Issues, PRs and this guide are in English.
+- **Language is English.** Documentation (`docs/`), issues, PRs, commit messages and scripts are written in English, and so are new and edited source code comments (older Kotlin/C++/Rust files still contain Portuguese comments and log strings while the migration to English continues). The only exceptions are `README.pt-BR.md` (a translation of `README.md`, which is canonical) and the user-facing strings externalized in `app/src/main/res/values-*/` for the multilingual UI.
 - Prefer explaining *why* in a comment over restating *what* the code does. The existing comments tend to record the reasoning behind a version pin or a workaround; that style has been genuinely useful here.
 
 ## Cross-cutting rules that are easy to get wrong
@@ -94,7 +94,7 @@ Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocol
 
 Changing one without the others produces a silently wrong projection, not a compile error.
 
-**i18n.** UI strings live in `app/src/main/res/values/strings.xml` (English, default), `app/src/main/res/values-pt-rBR/strings.xml` (Portuguese), and `app/src/main/res/values-es/strings.xml` (Spanish), mirroring the key order exactly so they diff side by side. Key and placeholder parity across all three locales is enforced by `app/src/test/java/com/tucavr/I18nParityTest.kt` (`./gradlew testDebugUnitTest`). Interpolated strings use positional placeholders (`%1$s`, `%1$d`) through `getString(R.string.xxx, arg1, …)` — **never** Kotlin string concatenation, so that argument order can change per locale. See `docs/i18n.md`, including the section on adding a new locale.
+**i18n.** UI strings live in `app/src/main/res/values/strings.xml` (English, default), `app/src/main/res/values-pt-rBR/strings.xml` (Portuguese), and `app/src/main/res/values-es/strings.xml` (Spanish), mirroring the key order exactly so they diff side by side. Key and placeholder parity across all supported locales is enforced by `app/src/test/java/com/tucavr/I18nParityTest.kt` (`./gradlew testDebugUnitTest`). Interpolated strings use positional placeholders (`%1$s`, `%1$d`) through `getString(R.string.xxx, arg1, …)` — **never** Kotlin string concatenation, so that argument order can change per locale. See the translator guide in [docs/CONTRIBUTING_I18N.md](docs/CONTRIBUTING_I18N.md) and the architectural document [docs/i18n.md](docs/i18n.md) for details.
 
 **Credentials.** Server passwords go through `EncryptedSharedPreferences` (see `app/src/main/java/com/tucavr/network/`). Never store or log a credential in plain text, and make sure URIs are redacted before they reach a log line.
 
@@ -116,8 +116,8 @@ cd rust && cargo test -p media-logic sync::tests::some_test_name
 ./gradlew ktlintCheck
 ./gradlew :app:lintDebug
 
-# C++ host unit tests (native math, screen mode, subtitle layout, hand tracking, environment config)
-# Requires cmake and libopenxr-dev (installed via apt-get install libopenxr-dev)
+# C++ host unit tests (native math, input FSM, screen mode, subtitle layout, hand tracking, environment config, browser pose, panel pick)
+# Requires g++ and libopenxr-dev (installed via apt-get install libopenxr-dev)
 ./scripts/test-native-host.sh
 
 # Run all host test suites at once (Rust + C++ host + Kotlin JVM; no lint)
@@ -150,7 +150,7 @@ There are also longer-running scripts for stability and memory work: `scripts/so
 2. Target `develop` unless you are fixing something that must go straight to a release.
 3. Fill in the [pull request template](.github/PULL_REQUEST_TEMPLATE.md) — in particular the "How has this been tested?" section, including whether you tested on a real headset.
 4. For anything visual, attach a screenshot or a short clip captured from the Quest. Describing a rendering change in prose rarely survives review.
-5. CI (`.github/workflows/main.yml`) runs decoupled parallel jobs: `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings`, `cargo test -p protocols -p media-logic`, `ktlintCheck`, Android Lint and `./gradlew testDebugUnitTest`, plus C++ host tests and shader validation. The full native build (`build-apk`) runs in a separate gated job that builds the Quest 3 APK.
+5. CI (`.github/workflows/main.yml`) runs parallel jobs, and on pull requests a path filter (`changes`) skips the ones your diff cannot affect: `security-and-workflows` (actionlint, cargo-deny licenses/bans/sources, gitleaks), `rust-checks` (`cargo fmt --check`, clippy with `-D warnings`, `cargo test`), `cpp-checks` (clang-format, shader validation, ASan host tests), `android-checks` (`ktlintCheck`, Android Lint, `testDebugUnitTest`) and `markdown-checks` (markdownlint). `ci-gate` is the single required check. The full native build (`build-apk`) runs in a separate gated job that builds the Quest 3 APK.
 
 Small, focused pull requests get reviewed much faster than large ones. If you are planning something substantial — a new protocol, a rendering change, a new phase task — open an issue first so the approach can be discussed before you invest the time.
 
@@ -161,13 +161,13 @@ Use the issue templates:
 - [🐛 Bug report](.github/ISSUE_TEMPLATE/bug_report.yml) — include the commit or version, the headset model, the graphics API in use, reproduction steps and `adb logcat` output.
 - [✨ Feature request](.github/ISSUE_TEMPLATE/feature_request.yml) — describe the problem first, then the proposed solution, keeping VR interaction in mind (controllers, immersion, 3D panels).
 
-For questions and setup help, please use [Discussions](https://github.com/BGLuis/tucaVR/discussions) rather than opening an issue.
+For questions and setup help, open an issue with the `question` label.
 
 Before filing, it is worth checking `docs/REQUIREMENTS.md` and `docs/phases/` — many features are already specified with a task ID and a target phase, so your request may be a matter of prioritization rather than a new idea.
 
 ## Security issues
 
-Please do **not** open a public issue for a security vulnerability — especially anything touching credential storage or the network protocol clients. Report it privately to the maintainer instead, and allow reasonable time for a fix before disclosing.
+Please do **not** open a public issue for a security vulnerability — especially anything touching credential storage or the network protocol clients. Follow [`SECURITY.md`](SECURITY.md) to report it privately, and allow reasonable time for a fix before disclosing.
 
 ---
 

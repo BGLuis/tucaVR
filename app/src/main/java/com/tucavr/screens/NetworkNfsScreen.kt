@@ -4,7 +4,6 @@ import android.content.Context
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
@@ -15,12 +14,8 @@ import com.tucavr.designsystem.FieldValidators
 import com.tucavr.designsystem.VoidButton
 import com.tucavr.designsystem.VoidButtonStyle
 import com.tucavr.designsystem.VoidFieldKind
-import com.tucavr.designsystem.VoidFilterChip
 import com.tucavr.designsystem.VoidForm
-import com.tucavr.designsystem.VoidIconButton
 import com.tucavr.designsystem.VoidPanelChrome
-import com.tucavr.designsystem.VoidSearchBar
-import com.tucavr.designsystem.VoidSortSelector
 import com.tucavr.designsystem.VoidText
 import com.tucavr.designsystem.VoidTheme
 import com.tucavr.filebrowser.CacheKeys
@@ -28,14 +23,15 @@ import com.tucavr.filebrowser.DateFilter
 import com.tucavr.filebrowser.FolderConfig
 import com.tucavr.filebrowser.FolderConfigStore
 import com.tucavr.filebrowser.Format3DFilter
-import com.tucavr.filebrowser.Format3DType
 import com.tucavr.filebrowser.MediaEntry
 import com.tucavr.filebrowser.MediaFilterEngine
-import com.tucavr.filebrowser.MediaType
+import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.filebrowser.MediaTypeFilter
-import com.tucavr.filebrowser.NetworkFolderProber
+import com.tucavr.filebrowser.NetworkDirectoryLoader
+import com.tucavr.filebrowser.NetworkDirectoryState
+import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ViewMode
-import com.tucavr.filebrowser.mediaTypeForExtension
+import com.tucavr.filebrowser.canReuseBrowser
 import com.tucavr.filebrowser.sortMediaEntries
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
@@ -43,6 +39,7 @@ import com.tucavr.network.SavedServer
 import com.tucavr.network.SavedServerDao
 import com.tucavr.network.ServerProtocol
 import com.tucavr.screens.adapters.FileAdapter
+import com.tucavr.screens.components.MediaBrowserToolbar
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -60,16 +57,21 @@ class NetworkNfsScreen(
     private val savedServerDao: SavedServerDao,
     private val onNavigate: (Destination) -> Unit,
     private val onBack: () -> Unit,
+    private val onPlay: (PlaybackSource) -> Unit = { source -> onNavigate(Destination.Player(source)) },
 ) {
     var browsingServer: SavedServer? = null
     var browsePath: String = ""
 
+    private val directoryLoader = NetworkDirectoryLoader(scope)
     private val folderConfigStore = FolderConfigStore(context)
     private var adapter: FileAdapter? = null
     private var recyclerView: RecyclerView? = null
+    private var rootLayout: LinearLayout? = null
     private var countLabel: android.widget.TextView? = null
+    private var emptyLabel: android.widget.TextView? = null
+    private var clearFiltersButton: VoidButton? = null
     private var emptyContainer: LinearLayout? = null
-    private var searchBar: VoidSearchBar? = null
+    private var mediaToolbar: MediaBrowserToolbar? = null
 
     // Estados de busca e filtros de rede
     private var searchQuery = ""
@@ -81,7 +83,10 @@ class NetworkNfsScreen(
 
     // ---- Formulario "Adicionar servidor" (usado pela lista unificada em NetworkHomeScreen) ----
 
-    fun buildAddServerForm(onSaved: () -> Unit): View {
+    fun buildAddServerForm(
+        onSaved: () -> Unit,
+        prefill: ServerPrefill? = null,
+    ): View {
         val form = VoidForm(context)
 
         val hostInput =
@@ -121,6 +126,13 @@ class NetworkNfsScreen(
                 kind = VoidFieldKind.TEXT,
             )
 
+        if (prefill != null) {
+            if (prefill.host.isNotEmpty()) hostInput.setText(prefill.host)
+            if (prefill.port > 0) portInput.setText(prefill.port.toString())
+            if (prefill.path.isNotEmpty()) exportInput.setText(prefill.path)
+            if (prefill.name.isNotEmpty()) nameInput.setText(prefill.name)
+        }
+
         val statusText =
             VoidText.body(context, "", sizeSp = 14f, secondary = true).apply {
                 setPadding(0, VoidTheme.dpToPx(context, 8f), 0, VoidTheme.dpToPx(context, 8f))
@@ -136,7 +148,7 @@ class NetworkNfsScreen(
             VoidButton(context, VoidButtonStyle.SECONDARY).apply {
                 text = context.getString(R.string.network_nfs_form_btn_find_exports)
                 setIcon(R.drawable.ic_search)
-                textSize = 16f
+                textSize = 15f
                 setOnClickListener {
                     val h = hostInput.getText().trim()
                     val p = portInput.getText().toIntOrNull() ?: 2049
@@ -152,7 +164,11 @@ class NetworkNfsScreen(
                                 activity.nativeNfsListExports(h, p)
                             }
                         if (result.startsWith("ERROR:")) {
-                            statusText.text = context.getString(R.string.network_nfs_form_status_error_format, result.removePrefix("ERROR:"))
+                            statusText.text =
+                                context.getString(
+                                    R.string.network_nfs_form_status_error_format,
+                                    result.removePrefix("ERROR:"),
+                                )
                         } else {
                             val firstExport = result.lines().firstOrNull { it.isNotBlank() }
                             if (firstExport != null) {
@@ -166,11 +182,48 @@ class NetworkNfsScreen(
                 }
             }
 
+        val btnTest =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.network_btn_test_connection)
+                setIcon(R.drawable.ic_network)
+                textSize = 15f
+                setOnClickListener {
+                    val h = hostInput.getText().trim()
+                    val p = portInput.getText().toIntOrNull() ?: 2049
+                    val exp = exportInput.getText().trim()
+                    if (h.isEmpty()) {
+                        hostInput.setError(context.getString(R.string.network_nfs_form_status_host_required))
+                        statusText.text = context.getString(R.string.network_nfs_form_status_host_required)
+                        return@setOnClickListener
+                    }
+                    statusText.text = context.getString(R.string.network_nfs_form_status_connecting)
+                    scope.launch {
+                        val result =
+                            withContext(Dispatchers.IO) {
+                                if (exp.isNotEmpty()) {
+                                    activity.nativeNfsListDirectory(h, p, exp, "", 3)
+                                } else {
+                                    activity.nativeNfsListExports(h, p)
+                                }
+                            }
+                        if (result.startsWith("ERROR:")) {
+                            statusText.text =
+                                context.getString(
+                                    R.string.network_nfs_form_status_error_format,
+                                    result.removePrefix("ERROR:"),
+                                )
+                        } else {
+                            statusText.text = context.getString(R.string.network_nfs_form_status_connected)
+                        }
+                    }
+                }
+            }
+
         val btnSave =
             VoidButton(context, VoidButtonStyle.PRIMARY).apply {
-                text = context.getString(R.string.network_nfs_btn_test_save)
+                text = context.getString(R.string.network_btn_save)
                 setIcon(R.drawable.ic_check)
-                textSize = 16f
+                textSize = 15f
                 setOnClickListener {
                     if (!form.validate()) return@setOnClickListener
 
@@ -178,10 +231,25 @@ class NetworkNfsScreen(
                     val p = portInput.getText().toIntOrNull() ?: 2049
                     val exp = exportInput.getText().trim()
                     val name = nameInput.getText().trim()
-                    testAndSave(h, p, exp, name, statusText) {
+                    val n = name.ifEmpty { h }
+
+                    val serverId = prefill?.existingServerId ?: java.util.UUID.randomUUID().toString()
+                    val server =
+                        SavedServer(
+                            id = serverId,
+                            name = n,
+                            protocol = ServerProtocol.NFS,
+                            host = h,
+                            port = p,
+                            path = exp,
+                            lastConnectedAt = System.currentTimeMillis(),
+                        )
+                    scope.launch {
+                        withContext(Dispatchers.IO) {
+                            savedServerDao.insert(server)
+                        }
                         form.clearAll()
                         portInput.setText("2049")
-                        statusText.text = context.getString(R.string.network_nfs_form_status_connected)
                         onSaved()
                     }
                 }
@@ -194,53 +262,12 @@ class NetworkNfsScreen(
                 it.marginEnd = VoidTheme.dpToPx(context, 8f)
             }
         btnRow.addView(btnBrowseExports, margin)
+        btnRow.addView(btnTest, margin)
         btnRow.addView(btnSave, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
 
         form.addView(statusText)
         form.addView(btnRow)
         return form
-    }
-
-    private fun testAndSave(
-        h: String,
-        p: Int,
-        exp: String,
-        name: String,
-        statusView: android.widget.TextView,
-        onSaved: () -> Unit,
-    ) {
-        val n = name.ifEmpty { h }
-
-        statusView.text = context.getString(R.string.network_nfs_form_status_connecting)
-
-        scope.launch {
-            val result =
-                withContext(Dispatchers.IO) {
-                    activity.nativeNfsListDirectory(h, p, exp, "", 3)
-                }
-            if (result.startsWith("ERROR:")) {
-                statusView.text = context.getString(R.string.network_nfs_form_status_error_format, result.removePrefix("ERROR:"))
-                return@launch
-            }
-
-            val server =
-                SavedServer(
-                    name = n,
-                    protocol = ServerProtocol.NFS,
-                    host = h,
-                    port = p,
-                    path = exp,
-                    isAutoDiscovered = false,
-                    lastConnectedAt = System.currentTimeMillis(),
-                )
-
-            withContext(Dispatchers.IO) {
-                savedServerDao.insert(server)
-            }
-
-            statusView.text = context.getString(R.string.network_nfs_form_status_connected)
-            onSaved()
-        }
     }
 
     // ---- Navegacao de arquivos NFS ----
@@ -249,156 +276,82 @@ class NetworkNfsScreen(
         server: SavedServer,
         subPath: String = browsePath,
     ) {
+        val sameServer = browsingServer == server && recyclerView != null
+        val previousConfig = currentConfig
         browsingServer = server
         browsePath = subPath
         val folderKey = folderKey(server, subPath)
         currentConfig = folderConfigStore.getConfigFor(folderKey)
 
-        val root = VoidPanelChrome.newRoot(context)
-        val titleText =
-            if (subPath.isEmpty()) {
-                "${server.name} (${server.path})"
-            } else {
-                subPath.substringAfterLast('/')
-            }
+        val subtitleText = if (subPath.isEmpty()) "${server.host}:${server.port}${server.path}" else "${server.path}/$subPath"
 
-        val header = VoidPanelChrome.buildHeader(context, title = titleText, onBack = { handleBack(server) })
+        if (canReuseBrowser(sameServer, rootLayout?.parent != null, previousConfig, currentConfig)) {
+            val subtitleView = rootLayout?.findViewById<android.widget.TextView>(VoidPanelChrome.ID_SUBTITLE)
+            subtitleView?.text = subtitleText
+            mediaToolbar?.clearSearch()
+            searchQuery = ""
+            mediaToolbar?.setViewMode(currentConfig.viewMode)
+            updateLayoutManager()
+            loadDirectory(server)
+            return
+        }
+
+        val root = VoidPanelChrome.newRoot(context)
+        rootLayout = root
+        val header =
+            VoidPanelChrome.buildHeader(
+                context,
+                title = server.name,
+                subtitle = subtitleText,
+                onBack = {
+                    if (!handleBack(server)) {
+                        onBack()
+                    }
+                },
+            )
         root.addView(header)
 
-        // Toolbar de busca e ordenacao
+        // Barra de Ferramentas Compartilhada (Busca + Ordenação + Visualização + Filtros)
         val toolbar =
-            LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-                layoutParams =
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                        it.bottomMargin = VoidTheme.dpToPx(context, 10f)
-                    }
-            }
-
-        searchBar =
-            VoidSearchBar(
+            MediaBrowserToolbar(
                 context = context,
                 host = host,
-                scope = scope,
-                hintText = context.getString(R.string.browser_search_hint),
                 activity = activity,
+                scope = scope,
+                initialSortBy = currentConfig.sortBy,
+                initialAscending = currentConfig.ascending,
+                initialViewMode = currentConfig.viewMode,
+                initialTypeFilter = currentTypeFilter,
+                initialFormat3DFilter = currentFormat3DFilter,
+                initialDateFilter = currentDateFilter,
+                showDateFilter = true,
                 onQueryChanged = { query ->
                     searchQuery = query
                     applyFiltersAndSort()
                 },
-            ).apply {
-                layoutParams =
-                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).also {
-                        it.marginEnd = VoidTheme.dpToPx(context, 8f)
-                    }
-            }
-        toolbar.addView(searchBar)
-
-        val sortSelector =
-            VoidSortSelector(
-                context = context,
-                currentSortBy = currentConfig.sortBy,
-                currentAscending = currentConfig.ascending,
                 onSortChanged = { newSort, newAscending ->
                     currentConfig = currentConfig.copy(sortBy = newSort, ascending = newAscending)
                     folderConfigStore.saveConfigFor(folderKey, currentConfig)
                     applyFiltersAndSort()
                 },
-            ).apply {
-                layoutParams =
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                        it.marginEnd = VoidTheme.dpToPx(context, 8f)
-                    }
-            }
-        toolbar.addView(sortSelector)
-
-        val viewModeBtn =
-            VoidIconButton(
-                context,
-                if (currentConfig.viewMode == ViewMode.GRID) R.drawable.ic_view_list else R.drawable.ic_view_grid,
-                VoidButtonStyle.SECONDARY,
-                isCircular = false,
-            ).apply {
-                layoutParams = LinearLayout.LayoutParams(VoidTheme.dpToPx(context, 48f), VoidTheme.dpToPx(context, 48f))
-                setOnClickListener {
-                    val nextMode = if (currentConfig.viewMode == ViewMode.GRID) ViewMode.LIST else ViewMode.GRID
+                onViewModeChanged = { nextMode ->
                     currentConfig = currentConfig.copy(viewMode = nextMode)
                     folderConfigStore.saveConfigFor(folderKey, currentConfig)
-                    setImageResource(if (nextMode == ViewMode.GRID) R.drawable.ic_view_list else R.drawable.ic_view_grid)
                     updateLayoutManager()
                     applyFiltersAndSort()
-                }
-            }
-        toolbar.addView(viewModeBtn)
+                },
+                onFilterChanged = { newType, newFormat3D, newDate ->
+                    currentTypeFilter = newType
+                    currentFormat3DFilter = newFormat3D
+                    currentDateFilter = newDate
+                    applyFiltersAndSort()
+                },
+                onRefresh = {
+                    loadDirectory(server, forceRefresh = true)
+                },
+            )
+        mediaToolbar = toolbar
         root.addView(toolbar)
-
-        // Chips de Filtro
-        val filterScrollView =
-            HorizontalScrollView(context).apply {
-                layoutParams =
-                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                        it.bottomMargin = VoidTheme.dpToPx(context, 8f)
-                    }
-                isHorizontalScrollBarEnabled = false
-            }
-        val filterChipRow =
-            LinearLayout(context).apply {
-                orientation = LinearLayout.HORIZONTAL
-                gravity = Gravity.CENTER_VERTICAL
-            }
-
-        // Chips de Tipo
-        val typeChips = mutableListOf<Pair<MediaTypeFilter, VoidFilterChip>>()
-        listOf(
-            MediaTypeFilter.ALL to R.string.browser_filter_all,
-            MediaTypeFilter.VIDEO to R.string.browser_filter_video,
-            MediaTypeFilter.AUDIO to R.string.browser_filter_audio,
-            MediaTypeFilter.IMAGE to R.string.browser_filter_image,
-        ).forEach { (type, res) ->
-            val chip =
-                VoidFilterChip(context, context.getString(res), isSelectedChip = currentTypeFilter == type).apply {
-                    layoutParams =
-                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                            it.marginEnd = VoidTheme.dpToPx(context, 8f)
-                        }
-                }
-            typeChips.add(type to chip)
-            chip.setOnClickListener {
-                currentTypeFilter = type
-                typeChips.forEach { (t, c) -> c.setSelectedState(t == currentTypeFilter) }
-                applyFiltersAndSort()
-            }
-            filterChipRow.addView(chip)
-        }
-
-        // Chips de Formato 3D
-        val format3DChips = mutableListOf<Pair<Format3DFilter, VoidFilterChip>>()
-        listOf(
-            Format3DFilter.ALL to R.string.browser_filter_3d_all,
-            Format3DFilter.SBS to R.string.browser_filter_3d_sbs,
-            Format3DFilter.OU to R.string.browser_filter_3d_ou,
-            Format3DFilter.VR_180 to R.string.browser_filter_3d_180,
-            Format3DFilter.VR_360 to R.string.browser_filter_3d_360,
-        ).forEach { (f3d, res) ->
-            val chip =
-                VoidFilterChip(context, context.getString(res), isSelectedChip = currentFormat3DFilter == f3d).apply {
-                    layoutParams =
-                        LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).also {
-                            it.marginEnd = VoidTheme.dpToPx(context, 8f)
-                        }
-                }
-            format3DChips.add(f3d to chip)
-            chip.setOnClickListener {
-                currentFormat3DFilter = f3d
-                format3DChips.forEach { (f, c) -> c.setSelectedState(f == currentFormat3DFilter) }
-                applyFiltersAndSort()
-            }
-            filterChipRow.addView(chip)
-        }
-
-        filterScrollView.addView(filterChipRow)
-        root.addView(filterScrollView)
 
         // Contador de Resultados
         val counterView =
@@ -417,23 +370,44 @@ class NetworkNfsScreen(
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
             }
         recyclerView = recycler
+        directoryLoader.trackUserInteraction(recycler)
         updateLayoutManager()
 
         val fileAdapter =
             FileAdapter(
                 context = context,
                 scope = scope,
-                onUpClick = { onBack() },
+                onUpClick = {
+                    if (!handleBack(server)) {
+                        onBack()
+                    }
+                },
                 onDirectoryClick = { entry ->
                     browsePath = entry.path
-                    searchBar?.clear()
+                    mediaToolbar?.clearSearch()
                     searchQuery = ""
                     renderFiles(server, browsePath)
                 },
                 onVideoClick = { entry ->
+                    onPlay(PlaybackSource.Nfs(server, entry.path, entry.sizeBytes))
+                },
+                onFileSelected = { entry ->
                     val source = PlaybackSource.Nfs(server, entry.path, entry.sizeBytes)
-                    activity.playNfs(server, entry.path, resumeAtMs = 0L)
-                    onNavigate(Destination.Player(source))
+                    host.showFileDetail(
+                        entry = entry,
+                        source = source,
+                        onPlay = { resumeAtMs ->
+                            activity.playNfs(server, entry.path, entry.sizeBytes, resumeAtMs)
+                            activity.requestUiPanelHidden()
+                        },
+                    )
+                },
+                contextRailHost = host,
+                thumbnailLoader = { entry ->
+                    NetworkThumbnailGenerator.getThumbnail(context, activity, PlaybackSource.Nfs(server, entry.path, entry.sizeBytes))
+                },
+                metadataBadgeLoader = { entry ->
+                    MediaMetadataReader.readCachedSummary(context, PlaybackSource.Nfs(server, entry.path, entry.sizeBytes))
                 },
             )
         adapter = fileAdapter
@@ -441,23 +415,49 @@ class NetworkNfsScreen(
         root.addView(recycler)
 
         // Empty State View
+        val label =
+            VoidText.body(context, context.getString(R.string.network_files_empty), sizeSp = 16f, secondary = true).apply {
+                gravity = Gravity.CENTER
+            }
+        emptyLabel = label
+
+        val clearBtn =
+            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                text = context.getString(R.string.browser_btn_clear_filters)
+                textSize = 15f
+                minHeight = VoidTheme.dpToPx(context, 48f)
+                val padH = VoidTheme.dpToPx(context, 16f)
+                val padV = VoidTheme.dpToPx(context, 10f)
+                setPadding(padH, padV, padH, padV)
+                setOnClickListener {
+                    mediaToolbar?.resetFilters()
+                    searchQuery = ""
+                    currentTypeFilter = MediaTypeFilter.ALL
+                    currentFormat3DFilter = Format3DFilter.ALL
+                    currentDateFilter = DateFilter.ALL
+                    applyFiltersAndSort()
+                }
+            }
+        clearFiltersButton = clearBtn
+
         emptyContainer =
             LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 gravity = Gravity.CENTER
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
                 visibility = View.GONE
-
+                addView(label)
                 addView(
-                    VoidText.body(context, context.getString(R.string.network_files_empty), sizeSp = 16f, secondary = true).apply {
-                        gravity = Gravity.CENTER
+                    clearBtn,
+                    LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                        topMargin = VoidTheme.dpToPx(context, 12f)
                     },
                 )
             }
         root.addView(emptyContainer)
 
         host.showScreen(root)
-        loadDirectory(server, subPath)
+        loadDirectory(server)
     }
 
     private fun updateLayoutManager() {
@@ -480,55 +480,52 @@ class NetworkNfsScreen(
 
     private fun loadDirectory(
         server: SavedServer,
-        subPath: String,
+        forceRefresh: Boolean = false,
     ) {
-        scope.launch {
-            val raw =
-                withContext(Dispatchers.IO) {
-                    activity.nativeNfsListDirectory(server.host, server.port, server.path, subPath, 3)
-                }
-
-            if (raw.startsWith("ERROR:")) {
-                countLabel?.text = context.getString(R.string.network_nfs_form_status_error_format, raw.removePrefix("ERROR:"))
-                cachedRawEntries = emptyList()
-                applyFiltersAndSort()
-                return@launch
-            }
-
-            val lines = raw.split("\n").filter { it.isNotBlank() }
-            val entries =
-                lines.mapNotNull { line ->
-                    val parts = line.split("\t")
-                    val name = parts.getOrNull(0) ?: return@mapNotNull null
-                    val isDir = parts.getOrNull(1) == "1"
-                    val sizeBytes = parts.getOrNull(2)?.toLongOrNull() ?: 0L
-                    val type = if (isDir) MediaType.DIRECTORY else (mediaTypeForExtension(name.substringAfterLast('.', "")) ?: MediaType.VIDEO)
-                    val f3d = if (type == MediaType.VIDEO) MediaFilterEngine.detectFormat3DFromFilename(name) else Format3DType.FLAT_2D
-                    val childPath = if (subPath.isEmpty()) name else "$subPath/$name"
-
-                    MediaEntry(
-                        name = name,
-                        path = childPath,
-                        sizeBytes = sizeBytes,
-                        lastModified = 0L,
-                        type = type,
-                        format3DHint = f3d,
-                    )
-                }
-
-            val pruned =
-                NetworkFolderProber.pruneEmptyFolders(
+        directoryLoader.loadDirectory(
+            forceRefresh = forceRefresh,
+            historyFor = { entry -> activity.historyTracker.findExisting(PlaybackSource.Nfs(server, entry.path, entry.sizeBytes)) },
+            path = browsePath,
+            fetchRaw = {
+                activity.nativeNfsListDirectory(server.host, server.port, server.path, browsePath, 3)
+            },
+            proberConfig =
+                NetworkDirectoryLoader.FolderProberConfig(
                     context = context,
                     sourceKind = "nfs",
-                    entries = entries,
                     folderKeyFor = { entry -> CacheKeys.forFolder("nfs", server.host, server.port, server.path, entry.path) },
                     scanFnFor = { entry ->
                         { activity.nativeNfsScanFolderHasMedia(server.host, server.port, server.path, entry.path, 3) }
                     },
-                )
+                ),
+            onStateChange = { state ->
+                renderState(state)
+            },
+        )
+    }
 
-            cachedRawEntries = pruned
-            applyFiltersAndSort()
+    private fun renderState(state: NetworkDirectoryState) {
+        when (state) {
+            is NetworkDirectoryState.Loading -> {
+                // Mantém a visualização atual durante carregamento
+            }
+            is NetworkDirectoryState.Error -> {
+                cachedRawEntries = emptyList()
+                val msg = context.getString(R.string.network_nfs_form_status_error_format, state.message)
+                countLabel?.text = msg
+                emptyLabel?.text = msg
+                clearFiltersButton?.visibility = View.GONE
+                recyclerView?.visibility = View.GONE
+                emptyContainer?.visibility = View.VISIBLE
+            }
+            is NetworkDirectoryState.Empty -> {
+                cachedRawEntries = emptyList()
+                applyFiltersAndSort()
+            }
+            is NetworkDirectoryState.Success -> {
+                cachedRawEntries = state.entries
+                applyFiltersAndSort()
+            }
         }
     }
 
@@ -551,19 +548,34 @@ class NetworkNfsScreen(
         currentAdapter.submit(sorted, showUp, currentConfig.viewMode, searchQuery)
 
         countLabel?.text =
-            context.getString(
-                R.string.browser_results_count_format, sorted.size, cachedRawEntries.size,
+            context.resources.getQuantityString(
+                R.plurals.browser_results_count_format,
+                cachedRawEntries.size,
+                sorted.size,
+                cachedRawEntries.size,
             )
+
+        val hasActiveFilters =
+            searchQuery.isNotEmpty() ||
+                currentTypeFilter != MediaTypeFilter.ALL ||
+                currentFormat3DFilter != Format3DFilter.ALL ||
+                currentDateFilter != DateFilter.ALL
+
+        emptyLabel?.text =
+            context.getString(
+                if (hasActiveFilters) R.string.browser_empty_search else R.string.network_files_empty,
+            )
+        clearFiltersButton?.visibility = if (hasActiveFilters) View.VISIBLE else View.GONE
 
         val isEmpty = sorted.isEmpty() && !showUp
         recyclerView?.visibility = if (isEmpty) View.GONE else View.VISIBLE
-        emptyContainer?.visibility = if (isEmpty) View.GONE else View.GONE
+        emptyContainer?.visibility = if (isEmpty) View.VISIBLE else View.GONE
     }
 
     fun handleBack(server: SavedServer? = browsingServer): Boolean {
         if (browsePath.isNotEmpty() && server != null) {
             browsePath = browsePath.substringBeforeLast('/', missingDelimiterValue = "")
-            searchBar?.clear()
+            mediaToolbar?.clearSearch()
             searchQuery = ""
             renderFiles(server, browsePath)
             return true

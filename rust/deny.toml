@@ -1,4 +1,4 @@
-# Configuração do cargo-deny para validação de supply chain no tucaVR
+# cargo-deny configuration for supply-chain validation in tucaVR
 # https://embarkstudios.github.io/cargo-deny/
 
 [licenses]

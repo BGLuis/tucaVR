@@ -44,10 +44,15 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 #include "vk_math.h"
+#include "cylinder_hit.h"
+#include "controls_pose.h"
+#include "browser_pose.h"
+#include "panel_pick.h"
 #include "hand_tracking.h"
 #include "screen_mode.h"
 #include "vr_player_feedback_overlay.h"
@@ -68,6 +73,8 @@
 #include "subtitle_layout.h"
 #include "environment.vert.h"
 #include "environment.frag.h"
+#include "particles.vert.h"
+#include "particles.frag.h"
 #include "environment_config.h"
 #include "skybox.vert.h"
 #include "skybox.frag.h"
@@ -77,11 +84,12 @@
 #include "ambient.vert.h"
 #include "ambient.frag.h"
 #define STB_IMAGE_IMPLEMENTATION
-#define STBI_ONLY_PNG
 #define STBI_NO_STDIO
 #include "stb_image.h"
 #define CGLTF_IMPLEMENTATION
 #include "cgltf.h"
+#undef CGLTF_IMPLEMENTATION
+#include "environment_validator.h"
 #include <android/asset_manager.h>
 
 #ifndef XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME
@@ -300,12 +308,26 @@ uint32_t g_scrubOverlayWidth = 0;
 uint32_t g_scrubOverlayHeight = 0;
 std::mutex g_scrubOverlayMutex;
 std::atomic<bool> g_requestUiPanelVisible{false};
+std::atomic<bool> g_requestUiPanelHidden{false};
 std::atomic<bool> g_requestControlsPanelVisible{false};
 std::atomic<bool> g_stopVideoRequested{false};
 std::atomic<bool> g_newVideoSessionRequested{false};
 std::atomic<bool> g_modalPanelActive{false};
 std::atomic<bool> g_modalPanelShowRequested{false};
 std::atomic<bool> g_modalPanelHideRequested{false};
+std::atomic<bool> g_browserCurvedGeometry{false};
+std::atomic<bool> g_browserActive{false};
+
+// Stats for Nerds docking & full stats (#99)
+std::atomic<bool> g_modalDocked{false};
+std::atomic<float> g_modalDockedAzimuth{38.0f};
+std::atomic<bool> g_statsFullActive{false};
+
+// Dynamic cylindrical UI geometry & input options (#100)
+std::atomic<float> g_uiCylinderRadius{vrplayer::kUiCylinderRadius};
+std::atomic<float> g_uiCylinderCentralAngle{vrplayer::kUiCylinderCentralAngle};
+std::atomic<bool> g_byButtonAsBack{true};
+std::atomic<bool> g_hoverHapticsEnabled{true};
 
 // Fase 0.3 Seção 8: Fotos 360° e 3D estéreo (T8.3, T8.4)
 std::atomic<bool> g_photoDirty{false};
@@ -329,12 +351,16 @@ void ResetGlobalState() {
         g_scrubOverlayHeight = 0;
     }
     g_requestUiPanelVisible.store(false);
+    g_requestUiPanelHidden.store(false);
     g_requestControlsPanelVisible.store(false);
     g_stopVideoRequested.store(false);
     g_newVideoSessionRequested.store(false);
     g_modalPanelActive.store(false);
     g_modalPanelShowRequested.store(false);
     g_modalPanelHideRequested.store(false);
+    g_modalDocked.store(false);
+    g_modalDockedAzimuth.store(38.0f);
+    g_statsFullActive.store(false);
 
     g_photoDirty.store(false);
     g_photoActive.store(false);
@@ -365,12 +391,28 @@ constexpr float kSphereRadius = 20.0f;
 // bater exatamente com as constantes em
 // VRActivity.dispatchVRTouch/dispatchControlsVRTouch (1024x768 e 1582x800)
 // para que as coordenadas normalizadas do raycast casem com a janela Android.
-constexpr uint32_t kUiTexWidth = 1024;
-constexpr uint32_t kUiTexHeight = 768;
+constexpr uint32_t kUiTexWidth = 1920;
+constexpr uint32_t kUiTexHeight = 960;
 constexpr uint32_t kControlsTexWidth = 1582;
 constexpr uint32_t kControlsTexHeight = 800;
 constexpr uint32_t kModalTexWidth = 1024;
 constexpr uint32_t kModalTexHeight = 768;
+constexpr uint32_t kBrowserTexWidth = 2560;
+constexpr uint32_t kBrowserTexHeight = 1440;
+constexpr float kBrowserPanelScaleX = 2.4f;
+constexpr float kBrowserPanelScaleY = 1.35f;
+constexpr float kBrowserCylinderRadius = 2.3f;
+constexpr float kBrowserCylinderCentralAngle = 1.0435f;
+constexpr float kBrowserTexAspect = static_cast<float>(kBrowserTexHeight) / static_cast<float>(kBrowserTexWidth);
+
+// Constantes cilíndricas de UI (1.6m, 80°) e Controles (1.3m, 48°)
+using vrplayer::kBaseControlsPos;
+using vrplayer::kBaseUiPos;
+using vrplayer::kControlsCylinderCentralAngle;
+using vrplayer::kControlsCylinderRadius;
+using vrplayer::kControlsPitch;
+using vrplayer::kUiCylinderCentralAngle;
+using vrplayer::kUiCylinderRadius;
 
 // Metricas de performance (debug, ver docs/DEBUGGING.md).
 constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz
@@ -499,6 +541,34 @@ PFN LoadXrFunction(XrInstance instance, const char* name) {
 // Forward declaration — struct AppState so e definida mais abaixo neste arquivo.
 struct AppState;
 
+// Geometria e estados de Ambientes Virtuais 3D (Fase 0.3 §1 / Fase 0.5 §3)
+struct EnvironmentVertex {
+    float pos[3];
+    float normal[3];
+    float color[4];
+};
+
+enum class EnvironmentTransitionPhase {
+    IDLE,
+    FADING_OUT,
+    LOADING_WORKER,
+    GPU_SWAP,
+    FADING_IN
+};
+
+struct CpuEnvironmentData {
+    std::string envId;
+    EnvironmentConfig config;
+    bool hasConfig = false;
+    bool hasSkybox = false;
+    int skyboxWidth = 0;
+    int skyboxHeight = 0;
+    std::vector<uint8_t> skyboxPixels;
+    bool hasMesh = false;
+    std::vector<EnvironmentVertex> vertices;
+    std::vector<uint32_t> indices;
+};
+
 // Auditoria pos-reinicio (P-01/P-04/P-06):
 // unico ponto que deve escrever em state.displayRefreshRate depois da sessao criada. Pede a
 // taxa e SO atualiza o campo a partir de uma leitura confirmada via xrGetDisplayRefreshRateFB —
@@ -616,6 +686,7 @@ struct AppState {
 
     // Fase 0.3 Seção 5: Hand Tracking (XR_EXT_hand_tracking) — ver SetupHandTracking / DestroyHandTracking
     bool supportsHandTracking = false;
+    bool handTrackingEnabled = true;
     PFN_xrCreateHandTrackerEXT pfnCreateHandTrackerEXT = nullptr;
     PFN_xrDestroyHandTrackerEXT pfnDestroyHandTrackerEXT = nullptr;
     PFN_xrLocateHandJointsEXT pfnLocateHandJointsEXT = nullptr;
@@ -685,6 +756,7 @@ struct AppState {
     float upscalingSharpness = 0.0f;
     bool upscalingEnabled = false;
     bool supportsMqsr = false;
+    bool supportsCylinder = false;
     bool supportsPerfMetrics = false;
     // F3: XR_META_performance_metrics.
     // `supportsPerfMetrics` acima so significa que a EXTENSAO foi habilitada — o SISTEMA de
@@ -788,6 +860,7 @@ struct AppState {
     VkDescriptorSet uiDescriptorSet = VK_NULL_HANDLE;
     float uiAlpha = 1.0f;
     bool uiHasFrame = false;
+    bool prevIsPlaying = false;
 
     // Painel de controles (kControlsTexWidth x kControlsTexHeight)
     AImageReader* controlsImageReader = nullptr;
@@ -807,6 +880,32 @@ struct AppState {
     float modalAlpha = 0.0f;
     bool modalHasFrame = false;
     bool modalActive = false;
+    bool modalDocked = false;
+    float modalDockedAzimuth = 38.0f;
+    bool statsFullActive = false;
+    float uiCylinderRadius = vrplayer::kUiCylinderRadius;
+    float uiCylinderCentralAngle = vrplayer::kUiCylinderCentralAngle;
+    bool byButtonAsBack = true;
+    bool hoverHapticsEnabled = true;
+
+    // VR browser panel (kBrowserTexWidth x kBrowserTexHeight)
+    AImageReader* browserImageReader = nullptr;
+    VkImage browserImage = VK_NULL_HANDLE;
+    VkDeviceMemory browserImageMemory = VK_NULL_HANDLE;
+    VkImageView browserImageView = VK_NULL_HANDLE;
+    VkDescriptorSet browserDescriptorSet = VK_NULL_HANDLE;
+    float browserAlpha = 1.0f;
+    bool browserHasFrame = false;
+    bool browserActive = false;
+    // Reader e swapchain do navegador so sao criados na primeira abertura (CreateBrowserPipeline).
+    bool browserPipelineCreated = false;
+    // Coordenadas da cena (como screenPosition), nao do mundo.
+    XrVector3f browserPosition = vrplayer::kBrowserSpawnLocalPosition;
+    bool browserPoseInitialized = false;
+    float browserScaleX = kBrowserPanelScaleX;
+    float browserScaleY = kBrowserPanelScaleY;
+    bool isBrowserGrabbed = false;
+    float browserGrabDistance = 2.4f;
 
     // R-01 & R-06: Swapchains OpenXR dedicados para composição de painéis 2D como XrCompositionLayerQuad
     struct ImportedUiHwb {
@@ -817,6 +916,7 @@ struct AppState {
     EyeSwapchain uiPanelSwapchain;
     EyeSwapchain controlsPanelSwapchain;
     EyeSwapchain modalPanelSwapchain;
+    EyeSwapchain browserPanelSwapchain;
     EyeSwapchain cursorSwapchain;
     EyeSwapchain beamSwapchain;
     VkCommandBuffer uiCopyCmd = VK_NULL_HANDLE;
@@ -846,6 +946,31 @@ struct AppState {
     uint32_t envIndexCount = 0;
     bool envMeshLoaded = false;
     std::string currentEnvironmentId = "void";
+    XrVector3f envSpawnOffset = {0.0f, 0.0f, 0.0f};
+
+    // Transição suave de ambiente virtual (Fase 0.5 §3 T3.5 / #53)
+    EnvironmentTransitionPhase envTransitionPhase = EnvironmentTransitionPhase::IDLE;
+    float envTransitionAlpha = 0.0f;
+    std::chrono::steady_clock::time_point envTransitionStartTime{};
+    std::string envTransitionTargetId = "";
+    VkPipeline envFadePipeline = VK_NULL_HANDLE;
+    std::thread envWorkerThread;
+    std::atomic<bool> envWorkerFinished{false};
+    CpuEnvironmentData envLoadedData;
+
+    // Partículas cósmicas (Fase 0.5 §3 T3.3 / #54)
+    bool envParticlesEnabled = false;
+    bool particlesLoaded = false;
+    VkPipeline particlesPipeline = VK_NULL_HANDLE;
+    VkPipelineLayout particlesPipelineLayout = VK_NULL_HANDLE;
+    VkBuffer particlesVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory particlesVertexMemory = VK_NULL_HANDLE;
+    VkBuffer particlesIndexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory particlesIndexMemory = VK_NULL_HANDLE;
+    uint32_t particlesIndexCount = 0;
+
+    // Tempo de display previsto para efeitos shader animados
+    double predictedDisplayTimeSeconds = 0.0;
 
     // Skybox Cósmico 360 (Fase 0.5 §3)
     VkPipeline skyboxPipeline = VK_NULL_HANDLE;
@@ -930,12 +1055,19 @@ struct AppState {
     int activePanel = 0; // 0=none, 1=UI, 2=controls
     XrVector3f lastRayOrigin = {0,0,0};
     XrVector3f lastRayDir = {0,0,-1};
+    XrVector3f prevRayOrigin = {0,0,0};
+    XrVector3f prevRayDir = {0,0,-1};
+    float controllerStationaryTime = 0.0f;
+    bool isControllerStationary = false;
+    bool controlsExplicitlyDismissed = false;
+    XrVector3f dismissRayDir = {0,0,-1};
     bool isTriggerPressed = false;
     float uiIdleTime = 0.0f;
     float controlsIdleTime = 0.0f;
     float lastUvX = 0.0f;
     float lastUvY = 0.0f;
     float lastHitDist = -1.0f;
+    bool hasActiveMedia = false;
 
     // Estagio 5 — pipeline estereo/esfera (SBS/OU/360/180 com CAS sharpening).
     // Reusa o videoDescriptorSetLayout (mesmo sampler YCbCr) mas pipeline separado.
@@ -1049,6 +1181,9 @@ struct AppState {
     XrVector3f screenPosition = {0.0f, 1.5f, -2.4f};
     float screenScaleX = 2.8f;
     float screenScaleY = 1.575f;
+    XrVector3f defaultScreenPosition = {0.0f, 1.5f, -2.4f};
+    float defaultScreenScaleX = 2.8f;
+    float defaultScreenScaleY = 1.575f;
 
     // Fase 0.3 Seção 2: Grab & Drag da tela virtual (T2.5)
     bool isScreenGrabbed = false;
@@ -1307,6 +1442,15 @@ void CreateXrInstance(AppState& state) {
         extensions.push_back(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME);
     if (isExtensionSupported(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME))
         extensions.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+
+    // Cylinder composition layer (XR_KHR_composition_layer_cylinder)
+    state.supportsCylinder = isExtensionSupported(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+    if (state.supportsCylinder) {
+        extensions.push_back(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
+        LOGI("OpenXR: Extensão XR_KHR_composition_layer_cylinder detectada e habilitada");
+    } else {
+        LOGI("OpenXR: Extensão XR_KHR_composition_layer_cylinder nao encontrada neste runtime");
+    }
 
     // F2: Meta Quest Super Resolution (XR_FB_composition_layer_settings)
     state.supportsMqsr = isExtensionSupported(XR_FB_COMPOSITION_LAYER_SETTINGS_EXTENSION_NAME);
@@ -1639,6 +1783,31 @@ void CreateReferenceSpace(AppState& state) {
 // Um swapchain Vulkan por olho (faceCount=1, arraySize=1), espelhando a
 // mesma topologia que Framebuffer.cpp usa no caminho GLES — nao um unico
 // swapchain com array de 2 camadas.
+// R-01: Swapchain OpenXR dedicado para composição de painéis 2D como XrCompositionLayerQuad
+void CreatePanelSwapchain(AppState& state, EyeSwapchain& chain, uint32_t width, uint32_t height) {
+    chain.width = static_cast<int32_t>(width);
+    chain.height = static_cast<int32_t>(height);
+    XrSwapchainCreateInfo pInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    pInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT |
+                       XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
+                       0x00000010; // XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT
+    pInfo.format = static_cast<int64_t>(state.swapchainFormat);
+    pInfo.sampleCount = 1;
+    pInfo.width = width;
+    pInfo.height = height;
+    pInfo.faceCount = 1;
+    pInfo.arraySize = 1;
+    pInfo.mipCount = 1;
+    OXR(xrCreateSwapchain(state.session, &pInfo, &chain.handle));
+
+    uint32_t imgCount = 0;
+    OXR(xrEnumerateSwapchainImages(chain.handle, 0, &imgCount, nullptr));
+    chain.images.assign(imgCount, XrSwapchainImageVulkanKHR{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
+    OXR(xrEnumerateSwapchainImages(
+        chain.handle, imgCount, &imgCount,
+        reinterpret_cast<XrSwapchainImageBaseHeader*>(chain.images.data())));
+}
+
 void CreateSwapchains(AppState& state) {
     uint32_t viewCount = 0;
     OXR(xrEnumerateViewConfigurationViews(
@@ -1704,29 +1873,8 @@ void CreateSwapchains(AppState& state) {
             reinterpret_cast<XrSwapchainImageBaseHeader*>(eyeChain.images.data())));
     }
 
-    // R-01: Swapchains OpenXR dedicados para composição de painéis 2D como XrCompositionLayerQuad
     auto createPanelChain = [&](EyeSwapchain& chain, uint32_t width, uint32_t height) {
-        chain.width = static_cast<int32_t>(width);
-        chain.height = static_cast<int32_t>(height);
-        XrSwapchainCreateInfo pInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO};
-        pInfo.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT |
-                           XR_SWAPCHAIN_USAGE_SAMPLED_BIT |
-                           0x00000010; // XR_SWAPCHAIN_USAGE_TRANSFER_DST_BIT
-        pInfo.format = chosenFormat;
-        pInfo.sampleCount = 1;
-        pInfo.width = width;
-        pInfo.height = height;
-        pInfo.faceCount = 1;
-        pInfo.arraySize = 1;
-        pInfo.mipCount = 1;
-        OXR(xrCreateSwapchain(state.session, &pInfo, &chain.handle));
-
-        uint32_t imgCount = 0;
-        OXR(xrEnumerateSwapchainImages(chain.handle, 0, &imgCount, nullptr));
-        chain.images.assign(imgCount, XrSwapchainImageVulkanKHR{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
-        OXR(xrEnumerateSwapchainImages(
-            chain.handle, imgCount, &imgCount,
-            reinterpret_cast<XrSwapchainImageBaseHeader*>(chain.images.data())));
+        CreatePanelSwapchain(state, chain, width, height);
     };
 
     createPanelChain(state.uiPanelSwapchain, kUiTexWidth, kUiTexHeight);
@@ -3634,6 +3782,71 @@ void CreateUiPipeline(AppState& state, android_app* app) {
         kUiTexWidth, kUiTexHeight, kControlsTexWidth, kControlsTexHeight, kModalTexWidth, kModalTexHeight);
 }
 
+// Cria sob demanda (1a abertura do navegador) o AImageReader e a swapchain do painel
+// e entrega a Surface ao Kotlin, que so entao cria VirtualDisplay, Gecko e Presentation.
+// Roda na thread de render, entre frames, como as demais criacoes de swapchain.
+// Em falha o painel e desativado e nao ha nova tentativa (browserPipelineCreated ja esta true).
+void CreateBrowserPipeline(AppState& state, android_app* app) {
+    auto fail = [&](const char* reason) {
+        LOGE("Stage 4: browser pipeline failed: %s", reason);
+        ::g_browserActive.store(false);
+    };
+
+    media_status_t browserStatus = AImageReader_newWithUsage(
+        kBrowserTexWidth, kBrowserTexHeight, AIMAGE_FORMAT_RGBA_8888,
+        AHARDWAREBUFFER_USAGE_GPU_SAMPLED_IMAGE |
+        AHARDWAREBUFFER_USAGE_GPU_COLOR_OUTPUT, 2,
+        &state.browserImageReader);
+    if (browserStatus != AMEDIA_OK || !state.browserImageReader) {
+        state.browserImageReader = nullptr;
+        fail("AImageReader_newWithUsage");
+        return;
+    }
+
+    ANativeWindow* browserWindow = nullptr;
+    AImageReader_getWindow(state.browserImageReader, &browserWindow);
+    if (!browserWindow) {
+        fail("AImageReader_getWindow returned null");
+        return;
+    }
+
+    if (!app || !app->activity || !app->activity->vm) {
+        fail("android_app is null");
+        return;
+    }
+
+    CreatePanelSwapchain(state, state.browserPanelSwapchain, kBrowserTexWidth, kBrowserTexHeight);
+
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (app->activity->vm->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+        app->activity->vm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    }
+    if (env) {
+        jobject activityObj = app->activity->clazz;
+        jclass vrActivityClass = env->GetObjectClass(activityObj);
+        jobject browserSurface = ANativeWindow_toSurface(env, browserWindow);
+        jmethodID setupBrowser = env->GetStaticMethodID(
+            vrActivityClass, "setupBrowserVirtualDisplay",
+            "(Lcom/tucavr/VRActivity;Landroid/view/Surface;II)V");
+        if (setupBrowser) {
+            env->CallStaticVoidMethod(vrActivityClass, setupBrowser,
+                activityObj, browserSurface, (jint)kBrowserTexWidth, (jint)kBrowserTexHeight);
+            LOGI("Stage 4: setupBrowserVirtualDisplay (%ux%u) called successfully", kBrowserTexWidth, kBrowserTexHeight);
+        } else {
+            fail("setupBrowserVirtualDisplay NOT FOUND");
+        }
+        env->DeleteLocalRef(browserSurface);
+        env->DeleteLocalRef(vrActivityClass);
+    } else {
+        fail("JNIEnv unavailable");
+    }
+    if (attached) {
+        app->activity->vm->DetachCurrentThread();
+    }
+}
+
 // Atualiza swapchains de UI/controles/modal a partir dos AImageReaders.
 // Chamado a cada frame antes de RenderFrame.
 void UpdateUiFrames(AppState& state) {
@@ -3654,6 +3867,18 @@ void UpdateUiFrames(AppState& state) {
     acquireAndUpdate(state.uiImageReader, state.uiPanelSwapchain, state.uiHasFrame, kUiTexWidth, kUiTexHeight);
     acquireAndUpdate(state.controlsImageReader, state.controlsPanelSwapchain, state.controlsHasFrame, kControlsTexWidth, kControlsTexHeight);
     acquireAndUpdate(state.modalImageReader, state.modalPanelSwapchain, state.modalHasFrame, kModalTexWidth, kModalTexHeight);
+    if (g_browserActive.load() && !state.browserPipelineCreated) {
+        state.browserPipelineCreated = true;
+        CreateBrowserPipeline(state, state.app);
+    }
+    if (g_browserActive.load()) {
+        acquireAndUpdate(state.browserImageReader, state.browserPanelSwapchain, state.browserHasFrame, kBrowserTexWidth, kBrowserTexHeight);
+        state.browserActive = state.browserHasFrame;
+    } else {
+        state.browserHasFrame = false;
+        state.browserActive = false;
+        state.browserPoseInitialized = false;
+    }
 }
 
 // ===========================================================================
@@ -4888,12 +5113,6 @@ static inline float PassthroughEnvAlpha(const AppState& state) {
 }
 
 // Ambientes Virtuais 3D (Fase 0.3 §1 / Fase 0.5 §3)
-struct EnvironmentVertex {
-    float pos[3];
-    float normal[3];
-    float color[4];
-};
-
 struct EnvironmentPushConstants {
     Mat4 mvp;
     XrVector4f tintColor;
@@ -5276,7 +5495,587 @@ static void DrawSkyboxIfLoaded(
     CountDrawCall(state.sphereIndexCount);
 }
 
-static bool LoadEnvironmentMesh(AppState& state, const std::string& envId) {
+// Partículas Cósmicas (Fase 0.5 §3 T3.3 / #54)
+static void CreateParticlesPipeline(AppState& state) {
+    VkShaderModule vertModule = CreateShaderModule(state, kParticlesVertSpirv, kParticlesVertSpirv_size);
+    VkShaderModule fragModule = CreateShaderModule(state, kParticlesFragSpirv, kParticlesFragSpirv_size);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName = "main";
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName = "main";
+
+    VkVertexInputBindingDescription bindingDesc{};
+    bindingDesc.binding = 0;
+    bindingDesc.stride = sizeof(EnvironmentVertex);
+    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attrDesc[3]{};
+    attrDesc[0].location = 0;
+    attrDesc[0].binding = 0;
+    attrDesc[0].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attrDesc[0].offset = offsetof(EnvironmentVertex, pos);
+
+    attrDesc[1].location = 1;
+    attrDesc[1].binding = 0;
+    attrDesc[1].format = VK_FORMAT_R32G32B32_SFLOAT;
+    attrDesc[1].offset = offsetof(EnvironmentVertex, normal);
+
+    attrDesc[2].location = 2;
+    attrDesc[2].binding = 0;
+    attrDesc[2].format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attrDesc[2].offset = offsetof(EnvironmentVertex, color);
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &bindingDesc;
+    vertexInput.vertexAttributeDescriptionCount = 3;
+    vertexInput.pVertexAttributeDescriptions = attrDesc;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.blendEnable = VK_TRUE;
+    colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    colorBlendAttachment.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dynamicState.dynamicStateCount = 2;
+    dynamicState.pDynamicStates = dynamicStates;
+
+    VkPushConstantRange pushConstantRange{};
+    pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushConstantRange.offset = 0;
+    pushConstantRange.size = sizeof(EnvironmentPushConstants);
+
+    VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.setLayoutCount = 0;
+    layoutInfo.pSetLayouts = nullptr;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushConstantRange;
+
+    VKR(vkCreatePipelineLayout(state.vkDevice, &layoutInfo, nullptr, &state.particlesPipelineLayout));
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = state.particlesPipelineLayout;
+    pipelineInfo.renderPass = state.renderPass;
+    pipelineInfo.subpass = 0;
+
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &state.particlesPipeline));
+
+    vkDestroyShaderModule(state.vkDevice, fragModule, nullptr);
+    vkDestroyShaderModule(state.vkDevice, vertModule, nullptr);
+
+    LOGI("Particles: pipeline Vulkan de starfield criado com sucesso");
+}
+
+static void DestroyParticlesResources(AppState& state) {
+    if (state.particlesPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.particlesPipeline, nullptr);
+        state.particlesPipeline = VK_NULL_HANDLE;
+    }
+    if (state.particlesPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.particlesPipelineLayout, nullptr);
+        state.particlesPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.particlesVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.particlesVertexBuffer, nullptr);
+        state.particlesVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.particlesVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.particlesVertexMemory, nullptr);
+        state.particlesVertexMemory = VK_NULL_HANDLE;
+    }
+    if (state.particlesIndexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.particlesIndexBuffer, nullptr);
+        state.particlesIndexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.particlesIndexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.particlesIndexMemory, nullptr);
+        state.particlesIndexMemory = VK_NULL_HANDLE;
+    }
+    state.particlesIndexCount = 0;
+    state.particlesLoaded = false;
+}
+
+static void GenerateParticlesMesh(AppState& state) {
+    if (state.particlesLoaded) return;
+
+    // ~200 deterministic billboard quads em raio 3.5m - 12.0m
+    const uint32_t kParticleCount = 200;
+    std::vector<EnvironmentVertex> vertices;
+    std::vector<uint32_t> indices;
+    vertices.reserve(kParticleCount * 4);
+    indices.reserve(kParticleCount * 6);
+
+    uint32_t seed = 0x12345678;
+    auto lcgRand = [&seed]() -> float {
+        seed = seed * 1664525u + 1013904223u;
+        return static_cast<float>(seed & 0x00FFFFFF) / static_cast<float>(0x01000000);
+    };
+
+    for (uint32_t i = 0; i < kParticleCount; ++i) {
+        float u = lcgRand() * 2.0f - 1.0f;
+        float phi = lcgRand() * 6.2831853f;
+        float sinTheta = sqrtf(std::max(0.0f, 1.0f - u * u));
+        float radius = 3.5f + lcgRand() * 8.5f;
+
+        XrVector3f center = {
+            radius * sinTheta * cosf(phi),
+            radius * u + 1.0f,
+            radius * sinTheta * sinf(phi)
+        };
+
+        float len = Vec3Length(center);
+        if (len < 0.001f) continue;
+        XrVector3f fwd = {-center.x / len, -center.y / len, -center.z / len};
+
+        XrVector3f worldUp = {0.0f, 1.0f, 0.0f};
+        if (fabsf(fwd.y) > 0.9f) {
+            worldUp = {1.0f, 0.0f, 0.0f};
+        }
+        XrVector3f right = {
+            worldUp.y * fwd.z - worldUp.z * fwd.y,
+            worldUp.z * fwd.x - worldUp.x * fwd.z,
+            worldUp.x * fwd.y - worldUp.y * fwd.x
+        };
+        float rLen = Vec3Length(right);
+        if (rLen < 0.001f) continue;
+        right = Vec3Scale(right, 1.0f / rLen);
+
+        XrVector3f up = {
+            fwd.y * right.z - fwd.z * right.y,
+            fwd.z * right.x - fwd.x * right.z,
+            fwd.x * right.y - fwd.y * right.x
+        };
+
+        float pSize = 0.035f + lcgRand() * 0.045f;
+        float rX = right.x * pSize, rY = right.y * pSize, rZ = right.z * pSize;
+        float uX = up.x * pSize, uY = up.y * pSize, uZ = up.z * pSize;
+
+        float colorTint = lcgRand();
+        XrVector4f pColor = {1.0f, 1.0f, 1.0f, 0.85f};
+        if (colorTint < 0.35f) {
+            pColor = {0.8f, 0.92f, 1.0f, 0.9f};
+        } else if (colorTint < 0.6f) {
+            pColor = {1.0f, 0.95f, 0.82f, 0.85f};
+        }
+
+        uint32_t baseIdx = static_cast<uint32_t>(vertices.size());
+
+        EnvironmentVertex v0{};
+        v0.pos[0] = center.x - rX - uX;
+        v0.pos[1] = center.y - rY - uY;
+        v0.pos[2] = center.z - rZ - uZ;
+        v0.normal[0] = -1.0f; v0.normal[1] = -1.0f; v0.normal[2] = 0.0f;
+        v0.color[0] = pColor.x; v0.color[1] = pColor.y; v0.color[2] = pColor.z; v0.color[3] = pColor.w;
+        vertices.push_back(v0);
+
+        EnvironmentVertex v1{};
+        v1.pos[0] = center.x + rX - uX;
+        v1.pos[1] = center.y - rY - uY;
+        v1.pos[2] = center.z + rZ - uZ;
+        v1.normal[0] = 1.0f; v1.normal[1] = -1.0f; v1.normal[2] = 0.0f;
+        v1.color[0] = pColor.x; v1.color[1] = pColor.y; v1.color[2] = pColor.z; v1.color[3] = pColor.w;
+        vertices.push_back(v1);
+
+        EnvironmentVertex v2{};
+        v2.pos[0] = center.x + rX + uX;
+        v2.pos[1] = center.y + rY + uY;
+        v2.pos[2] = center.z + rZ + uZ;
+        v2.normal[0] = 1.0f; v2.normal[1] = 1.0f; v2.normal[2] = 0.0f;
+        v2.color[0] = pColor.x; v2.color[1] = pColor.y; v2.color[2] = pColor.z; v2.color[3] = pColor.w;
+        vertices.push_back(v2);
+
+        EnvironmentVertex v3{};
+        v3.pos[0] = center.x - rX + uX;
+        v3.pos[1] = center.y + rY + uY;
+        v3.pos[2] = center.z + rZ + uZ;
+        v3.normal[0] = -1.0f; v3.normal[1] = 1.0f; v3.normal[2] = 0.0f;
+        v3.color[0] = pColor.x; v3.color[1] = pColor.y; v3.color[2] = pColor.z; v3.color[3] = pColor.w;
+        vertices.push_back(v3);
+
+        indices.push_back(baseIdx + 0);
+        indices.push_back(baseIdx + 1);
+        indices.push_back(baseIdx + 2);
+        indices.push_back(baseIdx + 0);
+        indices.push_back(baseIdx + 2);
+        indices.push_back(baseIdx + 3);
+    }
+
+    VkBufferCreateInfo vbInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    vbInfo.size = vertices.size() * sizeof(EnvironmentVertex);
+    vbInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    vbInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VKR(vkCreateBuffer(state.vkDevice, &vbInfo, nullptr, &state.particlesVertexBuffer));
+
+    VkMemoryRequirements vmr{};
+    vkGetBufferMemoryRequirements(state.vkDevice, state.particlesVertexBuffer, &vmr);
+    VkMemoryAllocateInfo vai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    vai.allocationSize = vmr.size;
+    vai.memoryTypeIndex = FindMemoryType(
+        state, vmr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VKR(vkAllocateMemory(state.vkDevice, &vai, nullptr, &state.particlesVertexMemory));
+    VKR(vkBindBufferMemory(state.vkDevice, state.particlesVertexBuffer, state.particlesVertexMemory, 0));
+
+    void* mappedVerts = nullptr;
+    VKR(vkMapMemory(state.vkDevice, state.particlesVertexMemory, 0, vbInfo.size, 0, &mappedVerts));
+    std::memcpy(mappedVerts, vertices.data(), vbInfo.size);
+    vkUnmapMemory(state.vkDevice, state.particlesVertexMemory);
+
+    VkBufferCreateInfo ibInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    ibInfo.size = indices.size() * sizeof(uint32_t);
+    ibInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+    ibInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VKR(vkCreateBuffer(state.vkDevice, &ibInfo, nullptr, &state.particlesIndexBuffer));
+
+    VkMemoryRequirements imr{};
+    vkGetBufferMemoryRequirements(state.vkDevice, state.particlesIndexBuffer, &imr);
+    VkMemoryAllocateInfo iai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    iai.allocationSize = imr.size;
+    iai.memoryTypeIndex = FindMemoryType(
+        state, imr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VKR(vkAllocateMemory(state.vkDevice, &iai, nullptr, &state.particlesIndexMemory));
+    VKR(vkBindBufferMemory(state.vkDevice, state.particlesIndexBuffer, state.particlesIndexMemory, 0));
+
+    void* mappedIndices = nullptr;
+    VKR(vkMapMemory(state.vkDevice, state.particlesIndexMemory, 0, ibInfo.size, 0, &mappedIndices));
+    std::memcpy(mappedIndices, indices.data(), ibInfo.size);
+    vkUnmapMemory(state.vkDevice, state.particlesIndexMemory);
+
+    state.particlesIndexCount = static_cast<uint32_t>(indices.size());
+    state.particlesLoaded = true;
+    LOGI("Particles: Malha de starfield gerada (%zu vertices, %u indices)", vertices.size(), state.particlesIndexCount);
+}
+
+// Transição Suave de Ambientes Virtuais (Fase 0.5 §3 T3.5 / #53)
+static void CreateEnvironmentFadePipeline(AppState& state) {
+    VkShaderModule vertModule = CreateShaderModule(state, kQuadVertSpirv, kQuadVertSpirv_size);
+    VkShaderModule fragModule = CreateShaderModule(state, kQuadFragSpirv, kQuadFragSpirv_size);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName = "main";
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName = "main";
+
+    VkVertexInputBindingDescription bindingDesc{};
+    bindingDesc.binding = 0;
+    bindingDesc.stride = 3 * sizeof(float);
+    bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attrDesc{};
+    attrDesc.location = 0;
+    attrDesc.binding = 0;
+    attrDesc.format = VK_FORMAT_R32G32B32_SFLOAT;
+    attrDesc.offset = 0;
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &bindingDesc;
+    vertexInput.vertexAttributeDescriptionCount = 1;
+    vertexInput.pVertexAttributeDescriptions = &attrDesc;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+
+    VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.blendEnable = VK_TRUE;
+    colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
+    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
+    colorBlendAttachment.colorWriteMask =
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+        VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dynamicState.dynamicStateCount = 2;
+    dynamicState.pDynamicStates = dynamicStates;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthWriteEnable = VK_FALSE;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = state.pipelineLayout;
+    pipelineInfo.renderPass = state.renderPass;
+    pipelineInfo.subpass = 0;
+
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &state.envFadePipeline));
+
+    vkDestroyShaderModule(state.vkDevice, fragModule, nullptr);
+    vkDestroyShaderModule(state.vkDevice, vertModule, nullptr);
+
+    LOGI("Ambiente: pipeline Vulkan de transicao fade criado com sucesso");
+}
+
+static void DrawEnvironmentFade(AppState& state, VkCommandBuffer cmd) {
+    if (state.envTransitionAlpha <= 0.001f || state.envFadePipeline == VK_NULL_HANDLE ||
+        state.quadVertexBuffer == VK_NULL_HANDLE) {
+        return;
+    }
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.envFadePipeline);
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &state.quadVertexBuffer, &offset);
+
+    QuadPushConstants pc{};
+    pc.mvp = Mat4Scale(2.0f, 2.0f, 1.0f);
+    pc.color[0] = 0.0f;
+    pc.color[1] = 0.0f;
+    pc.color[2] = 0.0f;
+    pc.color[3] = state.envTransitionAlpha;
+
+    vkCmdPushConstants(cmd, state.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(pc), &pc);
+    vkCmdDraw(cmd, 4, 1, 0, 0);
+    CountDrawCall(4);
+}
+
+// Carregamento de dados de CPU assíncrono (Fase 0.5 §3 T3.5 / #53)
+static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, const std::string& envId) {
+    CpuEnvironmentData data;
+    data.envId = envId;
+
+    if (envId == "void" || envId.empty() || !assetManager) {
+        return data;
+    }
+
+    std::string configPath = "environments/" + envId + "/config.ini";
+    AAsset* cfgAsset = AAssetManager_open(assetManager, configPath.c_str(), AASSET_MODE_BUFFER);
+    if (cfgAsset) {
+        size_t cfgSize = static_cast<size_t>(AAsset_getLength(cfgAsset));
+        const char* cfgBuffer = static_cast<const char*>(AAsset_getBuffer(cfgAsset));
+        if (cfgBuffer && cfgSize > 0) {
+            std::string iniContent(cfgBuffer, cfgSize);
+            data.config = EnvironmentConfig::Parse(iniContent);
+            data.hasConfig = true;
+        }
+        AAsset_close(cfgAsset);
+    }
+
+    // Skybox
+    if (!data.config.skyboxFile.empty()) {
+        std::string skyboxPath = data.config.skyboxFile;
+        if (skyboxPath.rfind("environments/", 0) != 0) {
+            skyboxPath = "environments/" + skyboxPath;
+        }
+        AAsset* asset = AAssetManager_open(assetManager, skyboxPath.c_str(), AASSET_MODE_BUFFER);
+        if (asset) {
+            size_t assetSize = static_cast<size_t>(AAsset_getLength(asset));
+            const void* assetBuffer = AAsset_getBuffer(asset);
+            if (assetBuffer && assetSize > 0) {
+                int width = 0, height = 0, channels = 0;
+                stbi_uc* pixels = stbi_load_from_memory(
+                    reinterpret_cast<const stbi_uc*>(assetBuffer),
+                    static_cast<int>(assetSize),
+                    &width, &height, &channels, 4);
+                if (pixels && width > 0 && height > 0) {
+                    size_t sz = static_cast<size_t>(width) * static_cast<size_t>(height) * 4;
+                    data.skyboxPixels.assign(pixels, pixels + sz);
+                    data.skyboxWidth = width;
+                    data.skyboxHeight = height;
+                    data.hasSkybox = true;
+                    stbi_image_free(pixels);
+                }
+            }
+            AAsset_close(asset);
+        }
+    }
+
+    // 3D Model GLB
+    std::string modelTarget = data.config.modelFile.empty() ? ("environments/" + envId + "/model.glb") : data.config.modelFile;
+    cgltf_options options{};
+    cgltf_data* gltfData = nullptr;
+    bool isFilePath = (!modelTarget.empty() && modelTarget[0] == '/');
+
+    if (isFilePath) {
+        cgltf_result res = cgltf_parse_file(&options, modelTarget.c_str(), &gltfData);
+        if (res == cgltf_result_success && gltfData) {
+            res = cgltf_load_buffers(&options, gltfData, modelTarget.c_str());
+            if (res != cgltf_result_success) {
+                cgltf_free(gltfData);
+                gltfData = nullptr;
+            }
+        } else {
+            LOGE("Ambiente: Falha ao carregar modelo GLB do arquivo '%s'", modelTarget.c_str());
+            gltfData = nullptr;
+        }
+    } else {
+        std::string assetPath = modelTarget;
+        if (assetPath.rfind("environments/", 0) != 0) {
+            assetPath = "environments/" + assetPath;
+        }
+        AAsset* asset = AAssetManager_open(assetManager, assetPath.c_str(), AASSET_MODE_BUFFER);
+        if (asset) {
+            size_t assetSize = static_cast<size_t>(AAsset_getLength(asset));
+            const void* assetBuffer = AAsset_getBuffer(asset);
+            if (assetBuffer && assetSize > 0) {
+                cgltf_result res = cgltf_parse(&options, assetBuffer, assetSize, &gltfData);
+                if (res == cgltf_result_success && gltfData) {
+                    res = cgltf_load_buffers(&options, gltfData, nullptr);
+                    if (res != cgltf_result_success) {
+                        cgltf_free(gltfData);
+                        gltfData = nullptr;
+                    }
+                }
+            }
+            AAsset_close(asset);
+        }
+    }
+
+    if (gltfData) {
+        EnvironmentValidationReport valReport;
+        EnvironmentValidationResult valRes = ValidateEnvironment(gltfData, &valReport);
+        if (valRes != EnvironmentValidationResult::Ok) {
+            LOGE("Ambiente: Validacao do modelo '%s' falhou: %s (triangles=%zu, maxTex=%dx%d)",
+                 modelTarget.c_str(), valReport.messageKey, valReport.totalTriangles,
+                 valReport.maxTextureWidth, valReport.maxTextureHeight);
+            cgltf_free(gltfData);
+            gltfData = nullptr;
+        }
+    }
+
+    if (gltfData) {
+        for (size_t m = 0; m < gltfData->meshes_count; ++m) {
+            const auto& mesh = gltfData->meshes[m];
+            for (size_t p = 0; p < mesh.primitives_count; ++p) {
+                const auto& prim = mesh.primitives[p];
+                if (prim.type != cgltf_primitive_type_triangles) continue;
+
+                uint32_t vertexBase = static_cast<uint32_t>(data.vertices.size());
+                cgltf_accessor* posAcc = nullptr;
+                cgltf_accessor* normAcc = nullptr;
+                cgltf_accessor* colorAcc = nullptr;
+
+                for (size_t a = 0; a < prim.attributes_count; ++a) {
+                    if (prim.attributes[a].type == cgltf_attribute_type_position) posAcc = prim.attributes[a].data;
+                    else if (prim.attributes[a].type == cgltf_attribute_type_normal) normAcc = prim.attributes[a].data;
+                    else if (prim.attributes[a].type == cgltf_attribute_type_color) colorAcc = prim.attributes[a].data;
+                }
+
+                if (!posAcc) continue;
+
+                size_t count = posAcc->count;
+                for (size_t i = 0; i < count; ++i) {
+                    EnvironmentVertex v{};
+                    v.pos[0] = v.pos[1] = v.pos[2] = 0.0f;
+                    v.normal[0] = 0.0f; v.normal[1] = 1.0f; v.normal[2] = 0.0f;
+                    v.color[0] = v.color[1] = v.color[2] = v.color[3] = 1.0f;
+
+                    cgltf_accessor_read_float(posAcc, i, v.pos, 3);
+                    if (normAcc) cgltf_accessor_read_float(normAcc, i, v.normal, 3);
+                    if (colorAcc) {
+                        float c[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+                        cgltf_accessor_read_float(colorAcc, i, c, colorAcc->type == cgltf_type_vec4 ? 4 : 3);
+                        v.color[0] = c[0]; v.color[1] = c[1]; v.color[2] = c[2]; v.color[3] = c[3];
+                    }
+                    data.vertices.push_back(v);
+                }
+
+                if (prim.indices) {
+                    size_t icount = prim.indices->count;
+                    for (size_t i = 0; i < icount; ++i) {
+                        data.indices.push_back(vertexBase + static_cast<uint32_t>(cgltf_accessor_read_index(prim.indices, i)));
+                    }
+                } else {
+                    for (size_t i = 0; i < count; ++i) {
+                        data.indices.push_back(vertexBase + static_cast<uint32_t>(i));
+                    }
+                }
+            }
+        }
+        if (!data.vertices.empty() && !data.indices.empty()) {
+            data.hasMesh = true;
+        }
+        cgltf_free(gltfData);
+    }
+
+    return data;
+}
+
+static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& data) {
     if (state.envVertexBuffer != VK_NULL_HANDLE) {
         vkDestroyBuffer(state.vkDevice, state.envVertexBuffer, nullptr);
         state.envVertexBuffer = VK_NULL_HANDLE;
@@ -5296,231 +6095,137 @@ static bool LoadEnvironmentMesh(AppState& state, const std::string& envId) {
     state.envIndexCount = 0;
     state.envMeshLoaded = false;
     DestroyEnvironmentSkybox(state);
-    state.currentEnvironmentId = envId;
+    state.currentEnvironmentId = data.envId;
 
-    if (envId == "void" || envId.empty()) {
-        LOGI("Ambiente: Modo Void selecionado (sem geometria 3D nem skybox)");
+    if (data.envId == "void" || data.envId.empty()) {
         state.screenPosition = {0.0f, 1.5f, -2.4f};
         state.screenScaleX = 2.8f;
         state.screenScaleY = 1.575f;
-        return true;
+        state.defaultScreenPosition = state.screenPosition;
+        state.defaultScreenScaleX = state.screenScaleX;
+        state.defaultScreenScaleY = state.screenScaleY;
+        state.envSpawnOffset = {0.0f, 0.0f, 0.0f};
+        state.envParticlesEnabled = false;
+        LOGI("Ambiente: Modo Void aplicado com sucesso");
+        return;
     }
 
-    if (!state.app || !state.app->activity || !state.app->activity->assetManager) {
-        LOGE("Ambiente: AAssetManager nao disponivel");
-        return false;
-    }
-
-    // Carregar e parsear config.ini do ambiente
-    std::string configPath = "environments/" + envId + "/config.ini";
-    AAsset* cfgAsset = AAssetManager_open(state.app->activity->assetManager, configPath.c_str(), AASSET_MODE_BUFFER);
-    EnvironmentConfig envConfig;
-    if (cfgAsset) {
-        size_t cfgSize = static_cast<size_t>(AAsset_getLength(cfgAsset));
-        const char* cfgBuffer = static_cast<const char*>(AAsset_getBuffer(cfgAsset));
-        if (cfgBuffer && cfgSize > 0) {
-            std::string iniContent(cfgBuffer, cfgSize);
-            envConfig = EnvironmentConfig::Parse(iniContent);
-            LOGI("Ambiente: config.ini parseado para '%s' (pos=%.2f,%.2f,%.2f, scale=%.2f,%.2f, skybox='%s')",
-                 envId.c_str(), envConfig.screenPosX, envConfig.screenPosY, envConfig.screenPosZ,
-                 envConfig.screenScaleX, envConfig.screenScaleY, envConfig.skyboxFile.c_str());
-
-            // Ancorar a tela na posição especificada no ambiente
-            state.screenPosition.x = envConfig.screenPosX;
-            state.screenPosition.y = envConfig.screenPosY;
-            state.screenPosition.z = envConfig.screenPosZ;
-            state.screenScaleX = envConfig.screenScaleX;
-            state.screenScaleY = envConfig.screenScaleY;
+    if (data.hasConfig) {
+        state.screenPosition.x = data.config.screenPosX;
+        state.screenPosition.y = data.config.screenPosY;
+        state.screenPosition.z = data.config.screenPosZ;
+        state.screenScaleX = data.config.screenScaleX;
+        state.screenScaleY = data.config.screenScaleY;
+        state.defaultScreenPosition = state.screenPosition;
+        state.defaultScreenScaleX = state.screenScaleX;
+        state.defaultScreenScaleY = state.screenScaleY;
+        state.envSpawnOffset = {data.config.spawnPosX, data.config.spawnPosY, data.config.spawnPosZ};
+        state.envParticlesEnabled = data.config.particlesEnabled;
+        if (state.envParticlesEnabled && !state.particlesLoaded) {
+            GenerateParticlesMesh(state);
         }
-        AAsset_close(cfgAsset);
+        LOGI("Ambiente: '%s' config aplicado (pos=%.2f,%.2f,%.2f, scale=%.2f,%.2f, spawn=%.2f,%.2f,%.2f, particles=%d)",
+             data.envId.c_str(), state.screenPosition.x, state.screenPosition.y, state.screenPosition.z,
+             state.screenScaleX, state.screenScaleY, state.envSpawnOffset.x, state.envSpawnOffset.y, state.envSpawnOffset.z,
+             state.envParticlesEnabled ? 1 : 0);
     }
 
-    // Carregar Skybox se configurado
-    if (!envConfig.skyboxFile.empty()) {
-        std::string skyboxPath = envConfig.skyboxFile;
-        if (skyboxPath.rfind("environments/", 0) != 0) {
-            skyboxPath = "environments/" + skyboxPath;
-        }
-        LoadEnvironmentSkybox(state, skyboxPath);
+    if (data.hasSkybox && !data.skyboxPixels.empty() && data.skyboxWidth > 0 && data.skyboxHeight > 0) {
+        CreateUiImage(state, static_cast<uint32_t>(data.skyboxWidth), static_cast<uint32_t>(data.skyboxHeight),
+                      state.skyboxImage, state.skyboxImageMemory, state.skyboxImageView);
+
+        UpdateUiImageFromBytes(state, data.skyboxPixels.data(),
+                               static_cast<uint32_t>(data.skyboxWidth), static_cast<uint32_t>(data.skyboxHeight),
+                               state.skyboxImage);
+
+        VkDescriptorImageInfo imgInfo{};
+        imgInfo.sampler     = state.uiSampler;
+        imgInfo.imageView   = state.skyboxImageView;
+        imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet          = state.skyboxDescriptorSet;
+        write.dstBinding      = 0;
+        write.descriptorCount = 1;
+        write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo      = &imgInfo;
+        vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+
+        state.skyboxLoaded = true;
+        LOGI("Skybox: '%s' carregado e vinculado com sucesso (%dx%d)", data.envId.c_str(), data.skyboxWidth, data.skyboxHeight);
     }
 
-    std::string assetPath = envConfig.modelFile.empty() ? ("environments/" + envId + "/model.glb") : envConfig.modelFile;
-    if (assetPath.rfind("environments/", 0) != 0) {
-        assetPath = "environments/" + assetPath;
+    if (data.hasMesh && !data.vertices.empty() && !data.indices.empty()) {
+        VkBufferCreateInfo vbInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        vbInfo.size = data.vertices.size() * sizeof(EnvironmentVertex);
+        vbInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+        vbInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VKR(vkCreateBuffer(state.vkDevice, &vbInfo, nullptr, &state.envVertexBuffer));
+
+        VkMemoryRequirements vmr{};
+        vkGetBufferMemoryRequirements(state.vkDevice, state.envVertexBuffer, &vmr);
+        VkMemoryAllocateInfo vai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        vai.allocationSize = vmr.size;
+        vai.memoryTypeIndex = FindMemoryType(
+            state, vmr.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        VKR(vkAllocateMemory(state.vkDevice, &vai, nullptr, &state.envVertexMemory));
+        VKR(vkBindBufferMemory(state.vkDevice, state.envVertexBuffer, state.envVertexMemory, 0));
+
+        void* mappedVerts = nullptr;
+        VKR(vkMapMemory(state.vkDevice, state.envVertexMemory, 0, vbInfo.size, 0, &mappedVerts));
+        std::memcpy(mappedVerts, data.vertices.data(), vbInfo.size);
+        vkUnmapMemory(state.vkDevice, state.envVertexMemory);
+
+        VkBufferCreateInfo ibInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        ibInfo.size = data.indices.size() * sizeof(uint32_t);
+        ibInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
+        ibInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        VKR(vkCreateBuffer(state.vkDevice, &ibInfo, nullptr, &state.envIndexBuffer));
+
+        VkMemoryRequirements imr{};
+        vkGetBufferMemoryRequirements(state.vkDevice, state.envIndexBuffer, &imr);
+        VkMemoryAllocateInfo iai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        iai.allocationSize = imr.size;
+        iai.memoryTypeIndex = FindMemoryType(
+            state, imr.memoryTypeBits,
+            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        VKR(vkAllocateMemory(state.vkDevice, &iai, nullptr, &state.envIndexMemory));
+        VKR(vkBindBufferMemory(state.vkDevice, state.envIndexBuffer, state.envIndexMemory, 0));
+
+        void* mappedIndices = nullptr;
+        VKR(vkMapMemory(state.vkDevice, state.envIndexMemory, 0, ibInfo.size, 0, &mappedIndices));
+        std::memcpy(mappedIndices, data.indices.data(), ibInfo.size);
+        vkUnmapMemory(state.vkDevice, state.envIndexMemory);
+
+        state.envIndexCount = static_cast<uint32_t>(data.indices.size());
+        state.envMeshLoaded = true;
+        LOGI("Ambiente: '%s' malha carregada com sucesso (%zu vertices, %u indices, %zu bytes)",
+             data.envId.c_str(), data.vertices.size(), state.envIndexCount, vbInfo.size + ibInfo.size);
     }
+}
 
-    AAsset* asset = AAssetManager_open(state.app->activity->assetManager, assetPath.c_str(), AASSET_MODE_BUFFER);
-    if (!asset) {
-        if (state.skyboxLoaded) {
-            LOGI("Ambiente: '%s' possui apenas skybox (sem malha model.glb)", envId.c_str());
-            return true;
-        }
-        LOGE("Ambiente: Falha ao abrir asset '%s'", assetPath.c_str());
-        return false;
-    }
-
-    size_t assetSize = static_cast<size_t>(AAsset_getLength(asset));
-    const void* assetBuffer = AAsset_getBuffer(asset);
-    if (!assetBuffer || assetSize == 0) {
-        AAsset_close(asset);
-        LOGE("Ambiente: Buffer de asset invalido para '%s'", assetPath.c_str());
-        return false;
-    }
-
-    cgltf_options options{};
-    cgltf_data* data = nullptr;
-    cgltf_result res = cgltf_parse(&options, assetBuffer, assetSize, &data);
-    if (res != cgltf_result_success || !data) {
-        AAsset_close(asset);
-        LOGE("Ambiente: Falha ao parsear GLB '%s' (erro %d)", assetPath.c_str(), static_cast<int>(res));
-        return false;
-    }
-
-    res = cgltf_load_buffers(&options, data, nullptr);
-    if (res != cgltf_result_success) {
-        cgltf_free(data);
-        AAsset_close(asset);
-        LOGE("Ambiente: Falha ao carregar buffers de '%s'", assetPath.c_str());
-        return false;
-    }
-
-    std::vector<EnvironmentVertex> vertices;
-    std::vector<uint32_t> indices;
-
-    for (size_t m = 0; m < data->meshes_count; ++m) {
-        const auto& mesh = data->meshes[m];
-        for (size_t p = 0; p < mesh.primitives_count; ++p) {
-            const auto& prim = mesh.primitives[p];
-            if (prim.type != cgltf_primitive_type_triangles) continue;
-
-            uint32_t vertexBase = static_cast<uint32_t>(vertices.size());
-            cgltf_accessor* posAcc = nullptr;
-            cgltf_accessor* normAcc = nullptr;
-            cgltf_accessor* colorAcc = nullptr;
-
-            for (size_t a = 0; a < prim.attributes_count; ++a) {
-                if (prim.attributes[a].type == cgltf_attribute_type_position) posAcc = prim.attributes[a].data;
-                else if (prim.attributes[a].type == cgltf_attribute_type_normal) normAcc = prim.attributes[a].data;
-                else if (prim.attributes[a].type == cgltf_attribute_type_color) colorAcc = prim.attributes[a].data;
-            }
-
-            if (!posAcc) continue;
-
-            size_t count = posAcc->count;
-            for (size_t i = 0; i < count; ++i) {
-                EnvironmentVertex v{};
-                v.pos[0] = v.pos[1] = v.pos[2] = 0.0f;
-                v.normal[0] = 0.0f; v.normal[1] = 1.0f; v.normal[2] = 0.0f;
-                v.color[0] = v.color[1] = v.color[2] = v.color[3] = 1.0f;
-
-                cgltf_accessor_read_float(posAcc, i, v.pos, 3);
-                if (normAcc) cgltf_accessor_read_float(normAcc, i, v.normal, 3);
-                if (colorAcc) {
-                    float c[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-                    cgltf_accessor_read_float(colorAcc, i, c, colorAcc->type == cgltf_type_vec4 ? 4 : 3);
-                    v.color[0] = c[0]; v.color[1] = c[1]; v.color[2] = c[2]; v.color[3] = c[3];
-                }
-                vertices.push_back(v);
-            }
-
-            if (prim.indices) {
-                size_t icount = prim.indices->count;
-                for (size_t i = 0; i < icount; ++i) {
-                    indices.push_back(vertexBase + static_cast<uint32_t>(cgltf_accessor_read_index(prim.indices, i)));
-                }
-            } else {
-                for (size_t i = 0; i < count; ++i) {
-                    indices.push_back(vertexBase + static_cast<uint32_t>(i));
-                }
-            }
-        }
-    }
-
-    cgltf_free(data);
-    AAsset_close(asset);
-
-    if (vertices.empty() || indices.empty()) {
-        LOGE("Ambiente: Nenhuma geometria util encontrada em '%s'", assetPath.c_str());
-        return false;
-    }
-
-    // Criar Vertex Buffer
-    VkBufferCreateInfo vbInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    vbInfo.size = vertices.size() * sizeof(EnvironmentVertex);
-    vbInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    vbInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    VKR(vkCreateBuffer(state.vkDevice, &vbInfo, nullptr, &state.envVertexBuffer));
-
-    VkMemoryRequirements vmr{};
-    vkGetBufferMemoryRequirements(state.vkDevice, state.envVertexBuffer, &vmr);
-    VkMemoryAllocateInfo vai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    vai.allocationSize = vmr.size;
-    vai.memoryTypeIndex = FindMemoryType(
-        state, vmr.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    VKR(vkAllocateMemory(state.vkDevice, &vai, nullptr, &state.envVertexMemory));
-    VKR(vkBindBufferMemory(state.vkDevice, state.envVertexBuffer, state.envVertexMemory, 0));
-
-    void* mappedVerts = nullptr;
-    VKR(vkMapMemory(state.vkDevice, state.envVertexMemory, 0, vbInfo.size, 0, &mappedVerts));
-    std::memcpy(mappedVerts, vertices.data(), vbInfo.size);
-    vkUnmapMemory(state.vkDevice, state.envVertexMemory);
-
-    // Criar Index Buffer
-    VkBufferCreateInfo ibInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    ibInfo.size = indices.size() * sizeof(uint32_t);
-    ibInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-    ibInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    VKR(vkCreateBuffer(state.vkDevice, &ibInfo, nullptr, &state.envIndexBuffer));
-
-    VkMemoryRequirements imr{};
-    vkGetBufferMemoryRequirements(state.vkDevice, state.envIndexBuffer, &imr);
-    VkMemoryAllocateInfo iai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    iai.allocationSize = imr.size;
-    iai.memoryTypeIndex = FindMemoryType(
-        state, imr.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    VKR(vkAllocateMemory(state.vkDevice, &iai, nullptr, &state.envIndexMemory));
-    VKR(vkBindBufferMemory(state.vkDevice, state.envIndexBuffer, state.envIndexMemory, 0));
-
-    void* mappedIndices = nullptr;
-    VKR(vkMapMemory(state.vkDevice, state.envIndexMemory, 0, ibInfo.size, 0, &mappedIndices));
-    std::memcpy(mappedIndices, indices.data(), ibInfo.size);
-    vkUnmapMemory(state.vkDevice, state.envIndexMemory);
-
-    state.envIndexCount = static_cast<uint32_t>(indices.size());
-    state.envMeshLoaded = true;
-    LOGI("Ambiente: '%s' carregado com sucesso (%zu vertices, %u indices, %zu bytes)",
-         envId.c_str(), vertices.size(), state.envIndexCount, vbInfo.size + ibInfo.size);
+static bool LoadEnvironmentMesh(AppState& state, const std::string& envId) {
+    AAssetManager* assetMgr = (state.app && state.app->activity) ? state.app->activity->assetManager : nullptr;
+    CpuEnvironmentData data = LoadEnvironmentCpuData(assetMgr, envId);
+    ApplyLoadedEnvironment(state, data);
     return true;
 }
 
 static void DrawEnvironmentIfLoaded(
     AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
-    if (!state.envMeshLoaded || state.envPipeline == VK_NULL_HANDLE ||
-        state.envVertexBuffer == VK_NULL_HANDLE || state.passthroughActive) {
+    if (state.passthroughActive) {
         return;
-    }
-
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.envPipeline);
-    VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &state.envVertexBuffer, &offset);
-    vkCmdBindIndexBuffer(cmd, state.envIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-
-    VkDescriptorSet envAmbientDs = (state.ambientDescriptorSet[state.ambientDisplayIndex] != VK_NULL_HANDLE)
-        ? state.ambientDescriptorSet[state.ambientDisplayIndex]
-        : state.uiDescriptorSet;
-    if (envAmbientDs != VK_NULL_HANDLE) {
-        vkCmdBindDescriptorSets(
-            cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.envPipelineLayout,
-            0, 1, &envAmbientDs, 0, nullptr);
     }
 
     const float envBrightness = get_environment_brightness();
     EnvironmentPushConstants envPc{};
     Mat4 envModel = Mat4Multiply(
         Mat4Translation(state.sceneTranslationOffset.x, state.sceneTranslationOffset.y, state.sceneTranslationOffset.z),
-        Mat4RotationY(state.sceneYawOffset)
+        Mat4Multiply(
+            Mat4RotationY(state.sceneYawOffset),
+            Mat4Translation(-state.envSpawnOffset.x, -state.envSpawnOffset.y, -state.envSpawnOffset.z)
+        )
     );
     envPc.mvp = Mat4Multiply(Mat4Multiply(proj, view), envModel);
     envPc.tintColor = {envBrightness, envBrightness, envBrightness, 1.0f};
@@ -5529,16 +6234,50 @@ static void DrawEnvironmentIfLoaded(
     SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
     const bool is3dRoom = (state.currentEnvironmentId == "cinema" || state.currentEnvironmentId == "living_room");
     const float glowIntensity = (is3dRoom && state.thermalLevel < 2) ? state.ambientIntensity : 0.0f;
-    envPc.glowParams = {glowIntensity, envBrightness, 0.0f, 0.0f};
+    envPc.glowParams = {glowIntensity, envBrightness, static_cast<float>(state.predictedDisplayTimeSeconds), 0.0f};
     envPc.screenPos = {scene.screenCenter.x, scene.screenCenter.y, scene.screenCenter.z, 1.0f};
 
-    vkCmdPushConstants(
-        cmd, state.envPipelineLayout,
-        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-        0, sizeof(envPc), &envPc);
+    if (state.envMeshLoaded && state.envPipeline != VK_NULL_HANDLE &&
+        state.envVertexBuffer != VK_NULL_HANDLE && state.envIndexBuffer != VK_NULL_HANDLE) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.envPipeline);
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &state.envVertexBuffer, &offset);
+        vkCmdBindIndexBuffer(cmd, state.envIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-    vkCmdDrawIndexed(cmd, state.envIndexCount, 1, 0, 0, 0);
-    CountDrawCall(state.envIndexCount);
+        VkDescriptorSet envAmbientDs = (state.ambientDescriptorSet[state.ambientDisplayIndex] != VK_NULL_HANDLE)
+            ? state.ambientDescriptorSet[state.ambientDisplayIndex]
+            : state.uiDescriptorSet;
+        if (envAmbientDs != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.envPipelineLayout,
+                0, 1, &envAmbientDs, 0, nullptr);
+        }
+
+        vkCmdPushConstants(
+            cmd, state.envPipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(envPc), &envPc);
+
+        vkCmdDrawIndexed(cmd, state.envIndexCount, 1, 0, 0, 0);
+        CountDrawCallIndexed(state.envIndexCount);
+    }
+
+    // Partículas cósmicas (~200 billboards com twinkle sinusoidal) (Fase 0.5 §3 T3.3 / #54)
+    if (state.envParticlesEnabled && state.particlesLoaded && state.particlesPipeline != VK_NULL_HANDLE &&
+        state.particlesVertexBuffer != VK_NULL_HANDLE && state.particlesIndexBuffer != VK_NULL_HANDLE) {
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.particlesPipeline);
+        VkDeviceSize pOffset = 0;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &state.particlesVertexBuffer, &pOffset);
+        vkCmdBindIndexBuffer(cmd, state.particlesIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+        vkCmdPushConstants(
+            cmd, state.particlesPipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+            0, sizeof(envPc), &envPc);
+
+        vkCmdDrawIndexed(cmd, state.particlesIndexCount, 1, 0, 0, 0);
+        CountDrawCallIndexed(state.particlesIndexCount);
+    }
 }
 
 // ============================================================================
@@ -6127,6 +6866,7 @@ void RecordFallbackQuad(
     CountDrawCall(4);
 
     DrawUiQuads(state, cmd, proj, view, headCenter);
+    DrawEnvironmentFade(state, cmd);
 
     vkCmdEndRenderPass(cmd);
 }
@@ -6440,6 +7180,7 @@ void RecordVideoFlat(
     float vw = (state.videoWidth > 0) ? static_cast<float>(state.videoWidth) : 1920.0f;
     float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1080.0f;
     pc.texelWidth = 1.0f / vw;
+    pc.texelHeight = 1.0f / vh;
     const int rawChromaMode = static_cast<int>(get_chroma_key_enabled());
     // Chroma Key e Packed Alpha SÓ devem ser executados se o Passthrough estiver realmente ATIVO.
     // Sem passthrough (ambientes Cinema, Espaço, Skybox, Void), o fundo deve permanecer 100% opaco.
@@ -6475,6 +7216,7 @@ void RecordVideoFlat(
     }
 
     DrawUiQuads(state, cmd, proj, view, headCenter);
+    DrawEnvironmentFade(state, cmd);
 
     vkCmdEndRenderPass(cmd);
 }
@@ -6540,6 +7282,7 @@ void RecordStereoFrame(
     float vw = (state.videoWidth > 0) ? static_cast<float>(state.videoWidth) : 3840.0f;
     float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1920.0f;
     spc.texelWidth     = 1.0f / vw;
+    spc.texelHeight    = 1.0f / vh;
     const int rawChromaMode = static_cast<int>(get_chroma_key_enabled());
     // Modos estéreo compatíveis com DeoVR Packed Alpha (SBS em 180, Fisheye 190 ou Flat SBS).
     const bool allowPackedAlpha = (state.screenMode == ScreenMode::Vr180SBS ||
@@ -6597,6 +7340,7 @@ void RecordStereoFrame(
     }
 
     DrawUiQuads(state, cmd, proj, view, headCenter);
+    DrawEnvironmentFade(state, cmd);
 
     vkCmdEndRenderPass(cmd);
 }
@@ -6683,6 +7427,7 @@ void RecordPhotoFrame(
     }
 
     DrawUiQuads(state, cmd, proj, view, headCenter);
+    DrawEnvironmentFade(state, cmd);
 
     vkCmdEndRenderPass(cmd);
 }
@@ -6739,12 +7484,19 @@ void UpdateVideoFrame(AppState& state) {
         state.controlsIdleTime = kUiAutoHideSeconds;
         ClearVideoImageCache(state);
         if (stopRequested) {
+            state.hasActiveMedia = false;
             g_requestUiPanelVisible.store(true);
             return;
+        }
+        if (newSessionRequested) {
+            state.hasActiveMedia = true;
         }
     }
 
     AHardwareBuffer* buffer = get_current_video_frame();
+    if (buffer != nullptr && !state.hasActiveMedia) {
+        state.hasActiveMedia = true;
+    }
 
     if (buffer == nullptr) {
         // Sem frame: NAO limpa state.activeVideoFrame — mantem o ultimo
@@ -6986,6 +7738,7 @@ void RenderFrame(AppState& state) {
     XrFrameWaitInfo waitFrameInfo{XR_TYPE_FRAME_WAIT_INFO};
     XrFrameState frameState{XR_TYPE_FRAME_STATE};
     OXR(xrWaitFrame(state.session, &waitFrameInfo, &frameState));
+    state.predictedDisplayTimeSeconds = static_cast<double>(frameState.predictedDisplayTime) * 1e-9;
 
     // Metricas de performance baseadas no pacing real do compositor OpenXR
     if (state.lastPredictedDisplayTime > 0) {
@@ -7208,20 +7961,120 @@ void RenderFrame(AppState& state) {
             state.sceneCalibrated = true;
         }
 
-        // Processa troca pendente de ambiente virtual 3D
+        // Processa troca pendente de ambiente virtual 3D com transição suave (Fase 0.5 §3 T3.5 / #53)
+        const float kFadeDurationSec = 0.300f; // ~300 ms fade
+        auto nowSteady = std::chrono::steady_clock::now();
+
         if (g_environmentChangeRequested.exchange(false)) {
             std::string targetEnv;
             {
                 std::lock_guard<std::mutex> lock(g_environmentMutex);
                 targetEnv = g_requestedEnvironmentId;
             }
-            if (targetEnv != state.currentEnvironmentId) {
-                vkDeviceWaitIdle(state.vkDevice);
-                LoadEnvironmentMesh(state, targetEnv);
+
+            if (state.envTransitionPhase == EnvironmentTransitionPhase::IDLE) {
+                if (targetEnv != state.currentEnvironmentId) {
+                    state.envTransitionTargetId = targetEnv;
+                    state.envTransitionPhase = EnvironmentTransitionPhase::FADING_OUT;
+                    state.envTransitionStartTime = nowSteady;
+                    LOGI("Ambiente: Iniciando transicao fade out para '%s'", targetEnv.c_str());
+                }
+            } else if (state.envTransitionPhase == EnvironmentTransitionPhase::FADING_OUT) {
+                if (targetEnv == state.currentEnvironmentId) {
+                    // Reversao imediata do fade-out: ambiente atual ainda esta na GPU
+                    state.envTransitionTargetId = targetEnv;
+                    state.envTransitionPhase = EnvironmentTransitionPhase::FADING_IN;
+                    float elapsedEquivalent = (1.0f - state.envTransitionAlpha) * kFadeDurationSec;
+                    state.envTransitionStartTime = nowSteady - std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                        std::chrono::duration<float>(elapsedEquivalent));
+                    LOGI("Ambiente: Revertendo fade-out para '%s' (alpha=%.2f)", targetEnv.c_str(), state.envTransitionAlpha);
+                } else {
+                    state.envTransitionTargetId = targetEnv;
+                    LOGI("Ambiente: Alvo de transicao em fade-out atualizado para '%s'", targetEnv.c_str());
+                }
+            } else if (state.envTransitionPhase == EnvironmentTransitionPhase::FADING_IN) {
+                if (targetEnv != state.currentEnvironmentId) {
+                    // Reverte o fade-in suavemente de volta para fade-out para o novo alvo
+                    state.envTransitionTargetId = targetEnv;
+                    state.envTransitionPhase = EnvironmentTransitionPhase::FADING_OUT;
+                    float elapsedEquivalent = state.envTransitionAlpha * kFadeDurationSec;
+                    state.envTransitionStartTime = nowSteady - std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                        std::chrono::duration<float>(elapsedEquivalent));
+                    LOGI("Ambiente: Interrompendo fade-in para novo alvo '%s' (alpha=%.2f)", targetEnv.c_str(), state.envTransitionAlpha);
+                }
+            } else {
+                // LOADING_WORKER ou GPU_SWAP: registra novo alvo
+                state.envTransitionTargetId = targetEnv;
+                LOGI("Ambiente: Transicao em andamento, proximo alvo pendente '%s'", targetEnv.c_str());
+            }
+        }
+
+        // Atualização da máquina de estados de transição de ambiente
+        if (state.envTransitionPhase == EnvironmentTransitionPhase::FADING_OUT) {
+            float elapsed = std::chrono::duration<float>(nowSteady - state.envTransitionStartTime).count();
+            state.envTransitionAlpha = std::min(1.0f, elapsed / kFadeDurationSec);
+            if (state.envTransitionAlpha >= 1.0f) {
+                state.envTransitionAlpha = 1.0f;
+
+                if (state.envTransitionTargetId == state.currentEnvironmentId) {
+                    state.envTransitionPhase = EnvironmentTransitionPhase::FADING_IN;
+                    state.envTransitionStartTime = nowSteady;
+                    LOGI("Ambiente: Alvo coincide com ambiente atual, iniciando fade in direto");
+                } else {
+                    state.envTransitionPhase = EnvironmentTransitionPhase::LOADING_WORKER;
+                    state.envWorkerFinished = false;
+
+                    if (state.envWorkerThread.joinable()) {
+                        state.envWorkerThread.join();
+                    }
+
+                    std::string targetEnv = state.envTransitionTargetId;
+                    AAssetManager* assetMgr = (state.app && state.app->activity) ? state.app->activity->assetManager : nullptr;
+
+                    state.envWorkerThread = std::thread([&state, assetMgr, targetEnv]() {
+                        state.envLoadedData = LoadEnvironmentCpuData(assetMgr, targetEnv);
+                        state.envWorkerFinished = true;
+                    });
+                }
+            }
+        } else if (state.envTransitionPhase == EnvironmentTransitionPhase::LOADING_WORKER) {
+            state.envTransitionAlpha = 1.0f;
+            if (state.envWorkerFinished.load()) {
+                if (state.envWorkerThread.joinable()) {
+                    state.envWorkerThread.join();
+                }
+                state.envTransitionPhase = EnvironmentTransitionPhase::GPU_SWAP;
+            }
+        }
+
+        if (state.envTransitionPhase == EnvironmentTransitionPhase::GPU_SWAP) {
+            state.envTransitionAlpha = 1.0f;
+            // Sincroniza apenas com as fences dos quadros em voo (< 1ms), sem vkDeviceWaitIdle
+            vkWaitForFences(state.vkDevice, AppState::kMaxFramesInFlight, state.inFlightFences, VK_TRUE, 1000000000ULL);
+
+            ApplyLoadedEnvironment(state, state.envLoadedData);
+            state.envLoadedData = CpuEnvironmentData{};
+
+            state.envTransitionPhase = EnvironmentTransitionPhase::FADING_IN;
+            state.envTransitionStartTime = std::chrono::steady_clock::now();
+            LOGI("Ambiente: GPU swap concluido para '%s', iniciando fade in", state.currentEnvironmentId.c_str());
+        } else if (state.envTransitionPhase == EnvironmentTransitionPhase::FADING_IN) {
+            float elapsed = std::chrono::duration<float>(nowSteady - state.envTransitionStartTime).count();
+            state.envTransitionAlpha = std::max(0.0f, 1.0f - (elapsed / kFadeDurationSec));
+            if (state.envTransitionAlpha <= 0.0f) {
+                state.envTransitionAlpha = 0.0f;
+                state.envTransitionPhase = EnvironmentTransitionPhase::IDLE;
+                LOGI("Ambiente: Transicao para '%s' concluida com sucesso", state.currentEnvironmentId.c_str());
+                if (!state.envTransitionTargetId.empty() && state.envTransitionTargetId != state.currentEnvironmentId) {
+                    state.envTransitionPhase = EnvironmentTransitionPhase::FADING_OUT;
+                    state.envTransitionStartTime = std::chrono::steady_clock::now();
+                    LOGI("Ambiente: Iniciando transicao pendente fade out para '%s'", state.envTransitionTargetId.c_str());
+                }
             }
         }
 
         // Estagio 4/5: Processar interacoes apos obtermos a posicao da cabeca
+        UpdateBrowserPose(state);
         UpdateInteraction(state, frameState.predictedDisplayTime, headCenter, views[0].pose.orientation);
 
         // Atualiza a orientação da cabeça para o pipeline de áudio espacial (Rust)
@@ -7554,33 +8407,37 @@ void RenderFrame(AppState& state) {
         SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
 
         // Painel 1: Home (UI / File Browser)
-        XrCompositionLayerQuad uiQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
-        uiQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-        uiQuad.space = state.localSpace;
-        uiQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-        uiQuad.subImage.swapchain = state.uiPanelSwapchain.handle;
-        uiQuad.subImage.imageRect.offset = {0, 0};
-        uiQuad.subImage.imageRect.extent = {static_cast<int32_t>(kUiTexWidth), static_cast<int32_t>(kUiTexHeight)};
-        uiQuad.pose.position = scene.uiCenter;
+        XrCompositionLayerCylinderKHR uiCylinder{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+        uiCylinder.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        uiCylinder.space = state.localSpace;
+        uiCylinder.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        uiCylinder.subImage.swapchain = state.uiPanelSwapchain.handle;
+        uiCylinder.subImage.imageRect.offset = {0, 0};
+        uiCylinder.subImage.imageRect.extent = {static_cast<int32_t>(kUiTexWidth), static_cast<int32_t>(kUiTexHeight)};
         XrVector3f toHead = Vec3Sub(headCenter, scene.uiCenter);
         toHead.y = 0.0f;
         float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
-        float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : 0.7f;
-        uiQuad.pose.orientation = QuatFromYaw(uiYaw);
-        uiQuad.size = {kUiPanelScaleX, kUiPanelScaleY};
+        float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : state.sceneYawOffset;
+        uiCylinder.pose.position = Vec3Add(scene.uiCenter, Vec3RotateY({0.0f, 0.0f, state.uiCylinderRadius}, uiYaw));
+        uiCylinder.pose.orientation = QuatFromYaw(uiYaw);
+        uiCylinder.radius = state.uiCylinderRadius;
+        uiCylinder.centralAngle = state.uiCylinderCentralAngle;
+        uiCylinder.aspectRatio = static_cast<float>(kUiTexWidth) / static_cast<float>(kUiTexHeight);
 
         // Painel 2: Controls
-        XrCompositionLayerQuad controlsQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
-        controlsQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
-        controlsQuad.space = state.localSpace;
-        controlsQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
-        controlsQuad.subImage.swapchain = state.controlsPanelSwapchain.handle;
-        controlsQuad.subImage.imageRect.offset = {0, 0};
-        controlsQuad.subImage.imageRect.extent = {static_cast<int32_t>(kControlsTexWidth), static_cast<int32_t>(kControlsTexHeight)};
-        controlsQuad.pose.position = scene.controlsCenter;
+        XrCompositionLayerCylinderKHR controlsCylinder{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+        controlsCylinder.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        controlsCylinder.space = state.localSpace;
+        controlsCylinder.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        controlsCylinder.subImage.swapchain = state.controlsPanelSwapchain.handle;
+        controlsCylinder.subImage.imageRect.offset = {0, 0};
+        controlsCylinder.subImage.imageRect.extent = {static_cast<int32_t>(kControlsTexWidth), static_cast<int32_t>(kControlsTexHeight)};
         Mat4 controlsRot = Mat4Multiply(Mat4RotationY(state.sceneYawOffset), Mat4RotationX(kControlsPitch));
-        controlsQuad.pose.orientation = QuatFromMat4(controlsRot);
-        controlsQuad.size = {kControlsPanelScaleX, kControlsPanelScaleY};
+        controlsCylinder.pose.position = vrplayer::ComputeControlsCylinderCenter(scene.controlsCenter, state.sceneYawOffset, kControlsCylinderRadius, kControlsPitch);
+        controlsCylinder.pose.orientation = QuatFromMat4(controlsRot);
+        controlsCylinder.radius = kControlsCylinderRadius;
+        controlsCylinder.centralAngle = kControlsCylinderCentralAngle;
+        controlsCylinder.aspectRatio = static_cast<float>(kControlsTexWidth) / static_cast<float>(kControlsTexHeight);
 
         // Painel 3: Modal frontal (3o Quad flutuante)
         XrCompositionLayerQuad modalQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
@@ -7591,8 +8448,35 @@ void RenderFrame(AppState& state) {
         modalQuad.subImage.imageRect.offset = {0, 0};
         modalQuad.subImage.imageRect.extent = {static_cast<int32_t>(kModalTexWidth), static_cast<int32_t>(kModalTexHeight)};
         modalQuad.pose.position = scene.modalCenter;
-        modalQuad.pose.orientation = QuatFromYaw(state.sceneYawOffset);
+        modalQuad.pose.orientation = QuatFromYaw(scene.modalYaw);
         modalQuad.size = {kModalPanelScaleX, kModalPanelScaleY};
+
+        // Browser panel: quad and cylinder
+        XrCompositionLayerQuad browserQuad{XR_TYPE_COMPOSITION_LAYER_QUAD};
+        browserQuad.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        browserQuad.space = state.localSpace;
+        browserQuad.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        browserQuad.subImage.swapchain = state.browserPanelSwapchain.handle;
+        browserQuad.subImage.imageRect.offset = {0, 0};
+        browserQuad.subImage.imageRect.extent = {static_cast<int32_t>(kBrowserTexWidth), static_cast<int32_t>(kBrowserTexHeight)};
+        browserQuad.pose.position = scene.browserCenter;
+        browserQuad.pose.orientation = QuatFromYaw(scene.browserYaw);
+        browserQuad.size = {state.browserScaleX, state.browserScaleY};
+
+        float browserScaleFactor = state.browserScaleX / kBrowserPanelScaleX;
+        float cylinderRadius = kBrowserCylinderRadius * browserScaleFactor;
+        XrCompositionLayerCylinderKHR browserCylinder{XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+        browserCylinder.layerFlags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
+        browserCylinder.space = state.localSpace;
+        browserCylinder.eyeVisibility = XR_EYE_VISIBILITY_BOTH;
+        browserCylinder.subImage.swapchain = state.browserPanelSwapchain.handle;
+        browserCylinder.subImage.imageRect.offset = {0, 0};
+        browserCylinder.subImage.imageRect.extent = {static_cast<int32_t>(kBrowserTexWidth), static_cast<int32_t>(kBrowserTexHeight)};
+        browserCylinder.pose.position = Vec3Add(scene.browserCenter, Vec3RotateY({0.0f, 0.0f, cylinderRadius}, scene.browserYaw));
+        browserCylinder.pose.orientation = QuatFromYaw(scene.browserYaw);
+        browserCylinder.radius = cylinderRadius;
+        browserCylinder.centralAngle = kBrowserCylinderCentralAngle;
+        browserCylinder.aspectRatio = (float)kBrowserTexWidth / (float)kBrowserTexHeight;
 
         // Retículo do Laser no topo de todos os painéis
         // Raio Laser (Beam) como XrCompositionLayerQuad submetido após os painéis e antes do retículo do cursor (R-01)
@@ -7684,23 +8568,23 @@ void RenderFrame(AppState& state) {
         // billboard dinâmico (uiYaw) do painel Home, causando deformação
         // perspectiva que estica o retículo verticalmente.
         if (state.lastHoverPanel == 1) {
-            cursorQuad.pose.orientation = uiQuad.pose.orientation;
+            cursorQuad.pose.orientation = uiCylinder.pose.orientation;
         } else if (state.lastHoverPanel == 2) {
-            cursorQuad.pose.orientation = controlsQuad.pose.orientation;
+            cursorQuad.pose.orientation = controlsCylinder.pose.orientation;
         } else {
             cursorQuad.pose.orientation = QuatFromYaw(state.sceneYawOffset);
         }
         cursorQuad.size = {0.025f, 0.025f}; // 2.5 cm diâmetro
 
-        // MQSR Sharpening nos quads de UI para dobrar o ganho de nitidez nas fontes
+        // MQSR Sharpening nos quads e cilindros de UI para dobrar o ganho de nitidez nas fontes
         XrCompositionLayerSettingsFB uiMqsr{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
         XrCompositionLayerSettingsFB ctrlMqsr{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
         XrCompositionLayerSettingsFB modalMqsr{XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
         if (state.supportsMqsr) {
             uiMqsr.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
-            uiQuad.next = &uiMqsr;
+            uiCylinder.next = &uiMqsr;
             ctrlMqsr.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
-            controlsQuad.next = &ctrlMqsr;
+            controlsCylinder.next = &ctrlMqsr;
             modalMqsr.layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
             modalQuad.next = &modalMqsr;
         }
@@ -7717,10 +8601,17 @@ void RenderFrame(AppState& state) {
         layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projectionLayer);
 
         if (state.uiHasFrame && state.uiAlpha > 0.05f) {
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&uiQuad);
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&uiCylinder);
+        }
+        if (state.browserHasFrame && state.browserActive) {
+            if (g_browserCurvedGeometry.load()) {
+                layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&browserCylinder);
+            } else {
+                layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&browserQuad);
+            }
         }
         if (state.controlsHasFrame && state.controlsAlpha > 0.05f) {
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&controlsQuad);
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&controlsCylinder);
         }
         if (state.modalHasFrame && state.modalAlpha > 0.05f) {
             layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&modalQuad);
@@ -7780,6 +8671,36 @@ void PollAndroidEvents(AppState& state) {
     }
 }
 
+// The UI Presentation exists long before the headset shows any frame (system splash,
+// headset asleep after `make deploy`), so the intro waits for this signal to start.
+static void NotifyKotlinSessionFocused(AppState& state) {
+    android_app* app = state.app;
+    if (!app || !app->activity || !app->activity->vm) return;
+
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (app->activity->vm->GetEnv((void**)&env, JNI_VERSION_1_6) == JNI_EDETACHED) {
+        app->activity->vm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    }
+    if (env) {
+        jobject activityObj = app->activity->clazz;
+        jclass vrActivityClass = env->GetObjectClass(activityObj);
+        jmethodID onFocused = env->GetStaticMethodID(
+            vrActivityClass, "onXrSessionFocused", "(Lcom/tucavr/VRActivity;)V");
+        if (onFocused) {
+            env->CallStaticVoidMethod(vrActivityClass, onFocused, activityObj);
+        } else {
+            env->ExceptionClear();
+            LOGE("onXrSessionFocused NOT FOUND");
+        }
+        env->DeleteLocalRef(vrActivityClass);
+    }
+    if (attached) {
+        app->activity->vm->DetachCurrentThread();
+    }
+}
+
 void PollXrEvents(AppState& state) {
     for (;;) {
         XrEventDataBuffer eventBuffer{XR_TYPE_EVENT_DATA_BUFFER};
@@ -7800,6 +8721,7 @@ void PollXrEvents(AppState& state) {
             switch (event->state) {
                 case XR_SESSION_STATE_FOCUSED:
                     on_app_focus_gained();
+                    NotifyKotlinSessionFocused(state);
                     break;
                 case XR_SESSION_STATE_READY: {
                     XrSessionBeginInfo beginInfo{XR_TYPE_SESSION_BEGIN_INFO};
@@ -8203,7 +9125,15 @@ void DestroyAppResources(AppState& state) {
     state.envIndexCount = 0;
     state.envMeshLoaded = false;
 
-    // 11. Recursos de Skybox Cósmico 360
+    // 11. Recursos de Skybox Cósmico 360, Partículas e Transição (Fase 0.5 §3)
+    if (state.envWorkerThread.joinable()) {
+        state.envWorkerThread.join();
+    }
+    if (state.envFadePipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.envFadePipeline, nullptr);
+        state.envFadePipeline = VK_NULL_HANDLE;
+    }
+    DestroyParticlesResources(state);
     DestroyEnvironmentSkybox(state);
     if (state.skyboxPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(state.vkDevice, state.skyboxPipeline, nullptr);
@@ -8257,6 +9187,10 @@ void DestroyAppResources(AppState& state) {
     if (state.modalImageReader != nullptr) {
         AImageReader_delete(state.modalImageReader);
         state.modalImageReader = nullptr;
+    }
+    if (state.browserImageReader != nullptr) {
+        AImageReader_delete(state.browserImageReader);
+        state.browserImageReader = nullptr;
     }
 }
 
@@ -8393,6 +9327,9 @@ void android_main(android_app* app) {
     // Ambientes Virtuais 3D (Fase 0.3 §1 / Fase 0.5 §3)
     CreateEnvironmentPipeline(state);
     CreateSkyboxPipeline(state);
+    CreateParticlesPipeline(state);
+    GenerateParticlesMesh(state);
+    CreateEnvironmentFadePipeline(state);
     // Modo Ambiente (halo de luz). Depois de
     // CreateUiPipeline de proposito — reusa uiSampler/uiDescriptorSetLayout.
     CreateAmbientTarget(state);
@@ -8440,6 +9377,7 @@ void android_main(android_app* app) {
     if (state.uiPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.uiPanelSwapchain.handle);
     if (state.controlsPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.controlsPanelSwapchain.handle);
     if (state.modalPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.modalPanelSwapchain.handle);
+    if (state.browserPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.browserPanelSwapchain.handle);
     if (state.cursorSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.cursorSwapchain.handle);
     if (state.beamSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.beamSwapchain.handle);
     if (state.localSpace != XR_NULL_HANDLE) xrDestroySpace(state.localSpace);

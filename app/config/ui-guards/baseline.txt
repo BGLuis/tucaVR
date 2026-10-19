@@ -1,0 +1,23 @@
+# Debt that predates the UI guards (UiSourceGuardsTest). Format: rule|file|snippet.
+# Do not add new entries: use a string resource / theme token. Delete the line when fixing it.
+hardcoded-text|com/tucavr/browser/ui/WebBrowserScreen.kt|GeckoView Engine (Widevine DRM Enabled)
+hardcoded-text|com/tucavr/browser/ui/WebBrowserScreen.kt|URL: ${state.url}
+hardcoded-text|com/tucavr/designsystem/DebugStatsModal.kt|${BuildConfig.VERSION_NAME} (${if (isDebuggable) 
+hardcoded-text|com/tucavr/designsystem/DebugStatsModal.kt|${stats.seekLatencyMs} ms
+hardcoded-text|com/tucavr/designsystem/DebugStatsModal.kt|$text (${ageMs}ms atrás)
+hardcoded-text|com/tucavr/screens/NetworkFtpScreen.kt|anonymous
+hardcoded-text|com/tucavr/screens/NetworkFtpScreen.kt|ftp.example.com
+hardcoded-text|com/tucavr/screens/NetworkSftpScreen.kt|sftp.example.com
+hardcoded-text|com/tucavr/screens/NetworkSftpScreen.kt|user
+hardcoded-text|com/tucavr/screens/NetworkSmbScreen.kt|user
+hardcoded-text|com/tucavr/screens/NetworkSmbScreen.kt|Videos
+hardcoded-text|com/tucavr/screens/NetworkSmbScreen.kt|WORKGROUP
+hardcoded-text|com/tucavr/screens/PhotoViewerScreen.kt|1.00x
+hardcoded-text|com/tucavr/VRControlsPresentation.kt|AQ: MED
+literal-color|com/tucavr/browser/ui/EditBookmarkModal.kt|Color.Black
+literal-color|com/tucavr/browser/ui/ShortcutsPanel.kt|Color(0xFF24292E)
+literal-color|com/tucavr/browser/ui/ShortcutsPanel.kt|Color(0xFF4285F4)
+literal-color|com/tucavr/browser/ui/ShortcutsPanel.kt|Color(0xFF9146FF)
+literal-color|com/tucavr/browser/ui/ShortcutsPanel.kt|Color(0xFFE50914)
+literal-color|com/tucavr/browser/ui/ShortcutsPanel.kt|Color(0xFFFF0000)
+literal-color|com/tucavr/browser/ui/ShortcutsPanel.kt|Color(0xFFFF4500)

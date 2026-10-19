@@ -4,15 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project overview
 
-tucaVR for Meta Quest 3 (Qualcomm XR2 Gen 2): a 2D/3D video player built as a fully immersive OpenXR app (`com.oculus.vr.mode = vr_only`, `NativeActivity`, no classic 2D Android UI). Architecture documentation lives in `docs/ARCHITECTURE.md`; requirements/spec lives in `docs/REQUIREMENTS.md` (Portuguese); phase breakdown with task IDs (`T1.1`, `T6.3`, etc.) is in `docs/phases/PHASE-0.*.md`. Code comments and docs are written in Portuguese (BR) — match that when adding comments to existing files.
+tucaVR for Meta Quest 3 (Qualcomm XR2 Gen 2): a 2D/3D video player built as a fully immersive OpenXR app (`com.oculus.vr.mode = vr_only`, `NativeActivity`, no classic 2D Android UI). Architecture documentation lives in `docs/ARCHITECTURE.md`; requirements/spec lives in `docs/REQUIREMENTS.md`; phase breakdown with task IDs (`T1.1`, `T6.3`, etc.) is in `docs/phases/PHASE-0.*.md`. Documentation (`docs/`, READMEs), scripts, PRs, and commit messages are written in English; the codebase is migrating its source comments to English too, so write new and edited comments in English even though older Kotlin/C++/Rust files still contain Portuguese comments and log strings. The exceptions are `README.pt-BR.md` (a translation of `README.md`) and the localized UI strings in `app/src/main/res/values-*/`.
 
 ## Three-language architecture — know which layer you're in
 
-```
+```text
 Kotlin (app/) <-JNI-> C++ (native/) <-C ABI-> Rust (rust/bridge -> core/protocols/audio/media-logic)
 ```
 
-- **Kotlin** (`app/src/main/java/com/tucavr/`): Android app shell, UI (drawn as plain Android `View`s inside `android.app.Presentation` on a `VirtualDisplay`, projected as textures onto 3D quads by C++ — **not** XML layouts, **not** Compose), network credential storage, Room-based playback history, i18n resources.
+- **Kotlin** (`app/src/main/java/com/tucavr/`): Android app shell, UI (drawn inside `android.app.Presentation`s on `VirtualDisplay`s, projected as textures onto 3D quads by C++: plain Android `View`s for the main panels, Jetpack Compose + GeckoView for the in-app web browser panel — **not** XML layouts), network credential storage, Room-based playback history, i18n resources.
 - **C++** (`native/src/`, built via CMake, `native/CMakeLists.txt`): OpenXR session/swapchain/render loop, controller input, zero-copy import of decoded `AHardwareBuffer` frames. Two graphics back-ends, chosen at build time:
   - **Vulkan** (`vr_player_app_vulkan.cpp` + `vr_player_jni_vulkan.cpp`) is what every default build compiles: `app/build.gradle.kts` passes `-DVRPLAYER_GRAPHICS_API=VULKAN` unless `-PvrplayerGraphicsApi=GLES` is given, overriding the `GLES` default in `native/CMakeLists.txt`. Frames are imported via `VkSamplerYcbcrConversion`; this path does not link OVRFW.
   - **GLES** (`vr_player_app.cpp`, Meta's `SampleXrFramework`/OVRFW from `sdk/meta-openxr-sdk/`, frames via `eglCreateImageKHR` -> `GL_TEXTURE_EXTERNAL_OES`) stays compilable as a fallback until headset validation of the Vulkan cut (`docs/VULKAN-MIGRATION-PLAN.md`, Stage 6), but is frozen: rendering work goes into the Vulkan path only, with no mirroring into GLES.
@@ -32,12 +32,12 @@ Screen/stereo mode encoding (2D/SBS/OU/360/180/Cubemap/EAC/Fisheye variants) is 
 
 ## Build commands
 
-One-time setup after cloning (downloads `ffmpeg-android-maker` and prompts for the manually-licensed Meta OpenXR SDK):
+One-time setup after cloning (downloads `ffmpeg-android-maker` and the latest public Meta OpenXR SDK release):
 ```bash
 ./scripts/setup-deps.sh
 ```
 
-Full unified build (Rust cross-compile -> copy `.so`s into `jniLibs` -> Gradle):
+Full unified build (`scripts/build.sh` runs Gradle, whose `buildRust` task calls `scripts/build-rust.sh` to cross-compile Rust and copy the `.so`s into `jniLibs`):
 ```bash
 ./scripts/build.sh
 # or
@@ -45,12 +45,13 @@ make build      # same thing
 make deploy      # build + adb install
 ```
 
-Containerized build (no SDK/NDK/Rust/FFmpeg on the host; runs `scripts/build.sh` inside `docker/build/`, still needs the Meta SDK under `sdk/`; does not work from a `git worktree`):
-```bash
-./scripts/docker-build.sh   # or: make docker-build
-```
+Rust Cross-Compilation Modes (Gradle / Android Studio):
+- **Auto Mode (default):** Automatically uses Docker if host Rust/cargo toolchain is missing, or host directly if installed.
+- **Docker Only (no host Rust/NDK setup needed):** `./gradlew assembleDebug -PrustBuildMode=docker` or `./scripts/docker-build.sh`
+- **Host Machine Only (requires Rust, target `aarch64-linux-android`, `cargo-ndk`, NDK 26.3, and FFmpeg):** `./gradlew assembleDebug -PrustBuildMode=host`
+- **Skip Rust:** `./gradlew assembleDebug -PrustBuildMode=skip`
 
-Rust alone (must use `cargo ndk`, not plain `cargo build`, for anything touching `core`/`audio`/`bridge`):
+Rust alone on host:
 ```bash
 cd rust && cargo ndk -t aarch64-linux-android -P 26 -o ../app/src/main/jniLibs build --release
 ```
@@ -108,16 +109,20 @@ There's also `scripts/soak-test.sh` (long-run stability, results land in `soak-t
 
 ## i18n
 
-UI strings live in `app/src/main/res/values/strings.xml` (English, default), `values-pt-rBR/strings.xml` (Portuguese), and `values-es/strings.xml` (Spanish), which mirror key order exactly for side-by-side diffing. Parity across locales is enforced by `I18nParityTest` in `testDebugUnitTest`. Interpolated strings use positional placeholders (`%1$s`, `%1$d`) via `getString(R.string.xxx, arg1, ...)`, never Kotlin string concatenation, so argument order can change per-locale. See `docs/i18n.md` for which files were deliberately left un-externalized (pure-logic files with no user-facing text) and the one real `<plurals>` case (SMB share count). Adding a new locale: see `docs/i18n.md` section covering T8.5.
+UI strings live in `app/src/main/res/values/strings.xml` (English, default), `values-pt-rBR/strings.xml` (Portuguese), and `values-es/strings.xml` (Spanish), which mirror key order exactly for side-by-side diffing. Parity across locales is enforced by `I18nParityTest` in `testDebugUnitTest`. Interpolated strings use positional placeholders (`%1$s`, `%1$d`) via `getString(R.string.xxx, arg1, ...)`, never Kotlin string concatenation, so argument order can change per-locale. See `docs/i18n.md` for which files were deliberately left un-externalized (pure-logic files with no user-facing text) and `<plurals>` cases for count-dependent strings (`browser_results_count_format`, `browser_folder_summary_format`, `playlists_item_count`). Adding a new locale: see `docs/CONTRIBUTING_I18N.md` and `docs/i18n.md` §5.
+
+Android Lint's `HardcodedText` only checks XML, so `UiSourceGuardsTest` (in `testDebugUnitTest`) fails on new literal user-facing text (`Text("...")`, `view.text = "..."`) and on literal `Color(0x...)`/`Color.White` in Compose files — use string resources and `BrowserColors`/`VoidTheme` tokens. Pre-existing debt is listed in `app/config/ui-guards/baseline.txt`; the test also fails on baseline lines that no longer match, so delete them when fixing. `ThemeContrastTest` enforces WCAG contrast (4.5:1 text, 3:1 icons) for the theme color pairs it lists; add a pair there when a screen combines colors in a new way (text on `accent` uses `background`, as `VoidButton` ACTIVE does).
 
 ## CI (`.github/workflows/main.yml`)
 
-The CI workflow runs 4 parallel check jobs:
-1. `security-and-workflows`: `actionlint` (workflow lint), `cargo-deny` (Rust licenses and advisories), `gitleaks` (secret scan).
+The CI workflow (`tucaVR CI`) runs these parallel jobs. On pull requests a `changes` job path-filters them (Rust, C++, Android, APK, docs); pushes and manual runs run everything:
+1. `security-and-workflows`: `actionlint` (workflow lint), `cargo-deny` (`check licenses bans sources`), `gitleaks` (secret scan, non-blocking: `continue-on-error`).
 2. `rust-checks`: `cargo fmt --check`, `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings`, `cargo test -p protocols -p media-logic`.
 3. `cpp-checks`: `clang-format --dry-run -Werror`, `./scripts/check-shaders.sh`, `ENABLE_ASAN=1 ./scripts/test-native-host.sh`.
 4. `android-checks`: `./gradlew ktlintCheck`, `./gradlew :app:lintDebug`, `./gradlew testDebugUnitTest`.
+5. `markdown-checks`: `markdownlint-cli2` (config in `.markdownlint-cli2.jsonc`).
+6. `ci-gate`: the single check branch protection needs; it fails if any job failed and treats path-filter skips as success.
 
-`build-apk` (runs on `BGLuis/vr-multmidia` or `BGLuis/tucaVR` when SDK PAT is present) depends on all 4 check jobs passing, executes the real native/C++ + Rust + Gradle build, and uploads `VR-Player-APK-<ref>` as an artifact. Both native (CMake/NDK) and Rust (`cargo ndk`) compiles are wrapped with `hendrikmuhs/ccache-action` and `mozilla-actions/sccache-action` respectively to avoid full rebuilds from scratch on every run — see the `ccachePath` detection in `app/build.gradle.kts` (only activates when `ccache` is on `PATH`, so local dev builds are unaffected).
+`build-apk` (runs only on `BGLuis/vr-multmidia` or `BGLuis/tucaVR`, when the APK path filter matches) depends on `changes` and the four check jobs above not failing, executes the real native/C++ + Rust + Gradle build, and uploads `VR-Player-APK-<ref>-<run_id>` as an artifact. Both native (CMake/NDK) and Rust (`cargo ndk`) compiles are wrapped with `hendrikmuhs/ccache-action` and `mozilla-actions/sccache-action` respectively to avoid full rebuilds from scratch on every run — see the `ccachePath` detection in `app/build.gradle.kts` (only activates when `ccache` is on `PATH`, so local dev builds are unaffected).
 
-`.github/workflows/release.yml` reuses the CI build instead of compiling the APK itself: it triggers via `workflow_run` after `tucaVR CI` succeeds, looks up that CI run's `VR-Player-APK-main` artifact for the exact commit (`locate-artifact` job, via `gh api .../actions/runs?head_sha=...`) and publishes that. If no matching CI run is found (e.g. releasing an old tag whose artifact expired), it transparently falls back to the full build steps — same job, steps gated by `steps.reuse.outcome != 'success'`.
+`.github/workflows/release.yml` reuses the CI build instead of compiling the APK itself: it triggers via `workflow_run` after `tucaVR CI` succeeds, looks up that CI run's `VR-Player-APK-*` artifact for the exact commit (`locate-artifact` job, via `gh api .../actions/runs?head_sha=...`) and publishes that. If no matching CI run is found (e.g. releasing an old tag whose artifact expired), it transparently falls back to the full build steps — same job, steps gated by `steps.reuse.outcome != 'success'`.

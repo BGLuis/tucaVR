@@ -28,19 +28,24 @@ pub struct SftpTarget {
     /// Conteudo PEM da chave privada (nao um caminho de arquivo). `None`
     /// quando a autenticacao usada e por senha.
     pub private_key: Option<String>,
+    /// Fingerprint SHA-256 da host key esperada (T6.2 / #57 - TOFU). `None`
+    /// na primeira conexao (dispara confirmacao).
+    pub expected_fingerprint: Option<String>,
 }
 
 impl SftpTarget {
     pub fn to_internal(&self) -> String {
         let key_field = self.private_key.as_deref().unwrap_or("");
+        let fp_field = self.expected_fingerprint.as_deref().unwrap_or("");
         format!(
-            "sftp://{}:{}{sep}{}{sep}{}{sep}{}{sep}{}",
+            "sftp://{}:{}{sep}{}{sep}{}{sep}{}{sep}{}{sep}{}",
             self.host,
             self.port,
             self.path,
             self.username,
             self.password,
             key_field,
+            fp_field,
             sep = SEP
         )
     }
@@ -58,6 +63,7 @@ impl SftpTarget {
         // verdade"). `unwrap_or("")` cobre strings antigas/roundtrips sem
         // esse campo.
         let private_key = parts.next().unwrap_or("");
+        let expected_fingerprint = parts.next().unwrap_or("");
         Some(Self {
             host: host.to_string(),
             port: port_str.parse().ok()?,
@@ -68,6 +74,11 @@ impl SftpTarget {
                 None
             } else {
                 Some(private_key.to_string())
+            },
+            expected_fingerprint: if expected_fingerprint.is_empty() {
+                None
+            } else {
+                Some(expected_fingerprint.to_string())
             },
         })
     }
@@ -117,6 +128,7 @@ mod tests {
             username: "user".into(),
             password: "p@ss:word".into(),
             private_key: None,
+            expected_fingerprint: None,
         };
         let s = t.to_internal();
         assert!(is_sftp_uri(&s));
@@ -134,12 +146,49 @@ mod tests {
             username: "vruser".into(),
             password: String::new(),
             private_key: Some(pem.to_string()),
+            expected_fingerprint: None,
         };
         let s = t.to_internal();
         assert!(is_sftp_uri(&s));
         let back = SftpTarget::from_internal(&s).unwrap();
         assert_eq!(t, back);
         assert_eq!(back.private_key.as_deref(), Some(pem));
+    }
+
+    #[test]
+    fn roundtrip_with_expected_fingerprint() {
+        let t = SftpTarget {
+            host: "nas.local".into(),
+            port: 22,
+            path: "videos/test.mp4".into(),
+            username: "user".into(),
+            password: "pass".into(),
+            private_key: None,
+            expected_fingerprint: Some("SHA256:abc123xyz".to_string()),
+        };
+        let s = t.to_internal();
+        assert!(is_sftp_uri(&s));
+        let back = SftpTarget::from_internal(&s).unwrap();
+        assert_eq!(t, back);
+        assert_eq!(
+            back.expected_fingerprint.as_deref(),
+            Some("SHA256:abc123xyz")
+        );
+    }
+
+    #[test]
+    fn backwards_compatibility_without_fingerprint_field() {
+        // String format before T6.2 / #57 had only 5 fields
+        let legacy_str = "sftp://nas.local:22\u{0}videos/test.mp4\u{0}user\u{0}pass\u{0}";
+        let target =
+            SftpTarget::from_internal(legacy_str).expect("should parse legacy 5-field uri");
+        assert_eq!(target.host, "nas.local");
+        assert_eq!(target.port, 22);
+        assert_eq!(target.path, "videos/test.mp4");
+        assert_eq!(target.username, "user");
+        assert_eq!(target.password, "pass");
+        assert_eq!(target.private_key, None);
+        assert_eq!(target.expected_fingerprint, None);
     }
 
     #[test]
@@ -151,6 +200,7 @@ mod tests {
             username: "secretuser".into(),
             password: "secretpass".into(),
             private_key: None,
+            expected_fingerprint: None,
         };
         let redacted = redact(&t.to_internal());
         assert!(!redacted.contains("secretuser"));
@@ -167,6 +217,7 @@ mod tests {
             username: "secretuser".into(),
             password: String::new(),
             private_key: Some("-----BEGIN OPENSSH PRIVATE KEY-----\nsupersecretmaterial\n-----END OPENSSH PRIVATE KEY-----\n".into()),
+            expected_fingerprint: None,
         };
         let redacted = redact(&t.to_internal());
         assert!(!redacted.contains("supersecretmaterial"));
@@ -182,6 +233,7 @@ mod tests {
             username: "user".into(),
             password: String::new(),
             private_key: None,
+            expected_fingerprint: None,
         };
         assert!(t.validate().is_err());
     }
@@ -195,6 +247,7 @@ mod tests {
             username: "user".into(),
             password: "pw".into(),
             private_key: None,
+            expected_fingerprint: None,
         };
         assert!(t.validate().is_ok());
         t.password = String::new();

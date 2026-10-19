@@ -1,0 +1,21 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+  <group>
+    <clip-path android:pathData="M12,2A10,10 0 1,0 22,12A10,10 0 0,0 12,2Z"/>
+    <!-- White background -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M0,0h24v24H0z"/>
+    <!-- Red circle (Hinomaru) -->
+    <path
+        android:fillColor="#BC002D"
+        android:pathData="M12,7.5A4.5,4.5 0 1,0 16.5,12A4.5,4.5 0 0,0 12,7.5Z"/>
+  </group>
+  <path
+      android:strokeColor="#33FFFFFF"
+      android:strokeWidth="1"
+      android:pathData="M12,2A10,10 0 1,0 22,12A10,10 0 0,0 12,2Z"/>
+</vector>

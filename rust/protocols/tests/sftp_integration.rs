@@ -10,13 +10,31 @@
 //! `./scripts/test-network-protocols.sh` na raiz do repo, que sobe os containers,
 //! exporta as env vars abaixo com os valores corretos e roda
 //! `cargo test -p protocols -- --ignored`.
+mod common;
+
+use common::TcpProxy;
 use protocols::prefetch::PrefetchReader;
-use protocols::sftp::{SftpFileSource, SftpTarget, list_directory, scan_has_media};
+use protocols::sftp::{
+    SftpFileSource, SftpTarget, close_pooled_sessions, list_directory, scan_has_media,
+};
 use sha2::{Digest, Sha256};
 use std::io::Read;
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
+}
+
+/// Obtém e fixa (TOFU) o fingerprint do container SFTP de teste.
+fn server_fingerprint() -> String {
+    static FP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let host = env_or("VRPLAYER_TEST_SFTP_HOST", "127.0.0.1");
+        let port: u16 = env_or("VRPLAYER_TEST_SFTP_PORT", "12222")
+            .parse()
+            .expect("VRPLAYER_TEST_SFTP_PORT invalido");
+        protocols::sftp::probe_host_key(&host, port)
+            .expect("probe_host_key falhou contra container sftp-test")
+    });
+    FP.clone()
 }
 
 /// Alvo com autenticacao por senha (T6.2 "password").
@@ -30,6 +48,7 @@ fn password_target() -> SftpTarget {
         username: env_or("VRPLAYER_TEST_SFTP_USER", "vruser"),
         password: env_or("VRPLAYER_TEST_SFTP_PASS", "vrpass123"),
         private_key: None,
+        expected_fingerprint: Some(server_fingerprint()),
     }
 }
 
@@ -96,19 +115,143 @@ fn list_directory_finds_test_file() {
     });
     assert!(!entry.is_dir);
     assert!(entry.size > 0);
+    assert!(entry.mtime > 0, "mtime ausente em {}", entry.name);
 }
 
 /// Varredura recursiva de poda de pastas (T-folder-pruning) contra o servidor real —
-/// `FIXTURES_DIR` so tem o arquivo de teste (nao-midia), entao o resultado esperado
-/// e "nenhuma midia encontrada, varredura concluida por completo" — cobre o caminho
-/// de conexao+listagem real (mesma sessao SFTP reusada, sem reconectar por nivel).
+/// `scan/empty-a` only holds `.txt` files (one in a subfolder), so the expected result is
+/// "no media, scan fully completed" — exercises real connect + listing on one reused session.
 #[test]
 #[ignore]
 fn scan_has_media_reports_no_media_for_fixture_with_only_a_non_media_file() {
-    let result = scan_has_media(&password_target(), FIXTURES_DIR)
+    let result = scan_has_media(&password_target(), &scan_dir("empty-a"))
         .expect("scan_has_media falhou contra o servidor real");
     assert!(!result.has_media);
     assert!(result.completed_fully);
+}
+
+fn scan_dir(name: &str) -> String {
+    format!("{FIXTURES_DIR}/scan/{name}")
+}
+
+/// Target going through a local TCP proxy, to count SSH authentications (one TCP
+/// connection = one handshake + auth) and cut the connection mid-test.
+fn proxied_target(proxy: &TcpProxy) -> SftpTarget {
+    SftpTarget {
+        host: "127.0.0.1".to_string(),
+        port: proxy.port(),
+        ..password_target()
+    }
+}
+
+fn proxy_to_server() -> TcpProxy {
+    let direct = password_target();
+    TcpProxy::start(&direct.host, direct.port)
+}
+
+/// #146 acceptance: listing the root and scanning three subfolders reuses ONE
+/// authenticated session. Each TCP connection the proxy accepts is one SSH authentication.
+#[test]
+#[ignore]
+fn listing_root_and_scanning_three_folders_authenticates_once() {
+    let proxy = proxy_to_server();
+    let target = proxied_target(&proxy);
+
+    let root = list_directory(&target, "").expect("list_directory da raiz falhou");
+    assert!(root.iter().any(|e| e.name == FIXTURES_DIR));
+    for folder in ["empty-a", "empty-b", "empty-c"] {
+        let result = scan_has_media(&target, &scan_dir(folder)).expect("scan falhou");
+        assert!(!result.has_media && result.completed_fully, "{folder}");
+    }
+
+    assert_eq!(
+        proxy.connections(),
+        1,
+        "as 4 chamadas deveriam reusar a sessao"
+    );
+    close_pooled_sessions(&target.host, target.port);
+}
+
+/// `close_pooled_sessions` (server deleted by the user) drops the session: the next
+/// call has to authenticate again.
+#[test]
+#[ignore]
+fn close_pooled_sessions_forces_a_new_authentication() {
+    let proxy = proxy_to_server();
+    let target = proxied_target(&proxy);
+
+    list_directory(&target, FIXTURES_DIR).expect("primeira listagem falhou");
+    close_pooled_sessions(&target.host, target.port);
+    list_directory(&target, FIXTURES_DIR).expect("listagem apos fechar falhou");
+
+    assert_eq!(proxy.connections(), 2);
+    close_pooled_sessions(&target.host, target.port);
+}
+
+/// Dead pooled session (Wi-Fi dropped inside the TTL): the listing reconnects by itself.
+#[test]
+#[ignore]
+fn list_directory_recovers_after_the_pooled_connection_is_dropped() {
+    let proxy = proxy_to_server();
+    let target = proxied_target(&proxy);
+
+    list_directory(&target, FIXTURES_DIR).expect("primeira listagem falhou");
+    proxy.drop_connections();
+    let entries =
+        list_directory(&target, FIXTURES_DIR).expect("listagem apos queda deveria reconectar");
+
+    assert!(entries.iter().any(|e| e.name == test_file_name()));
+    assert_eq!(proxy.connections(), 2, "uma reconexao, nao mais");
+    close_pooled_sessions(&target.host, target.port);
+}
+
+/// Regression: with a dead pooled session the scan must NOT conclude "empty folder"
+/// (Kotlin would hide the folder for 24 h). It has to reconnect and find the media.
+#[test]
+#[ignore]
+fn scan_has_media_does_not_report_empty_when_the_pooled_connection_is_dropped() {
+    let proxy = proxy_to_server();
+    let target = proxied_target(&proxy);
+
+    list_directory(&target, FIXTURES_DIR).expect("primeira listagem falhou");
+    proxy.drop_connections();
+    let result = scan_has_media(&target, &scan_dir("with-media"))
+        .expect("scan apos queda deveria reconectar");
+
+    assert!(result.has_media, "a pasta tem clip.mp4");
+    assert!(result.completed_fully);
+    assert_eq!(proxy.connections(), 2);
+    close_pooled_sessions(&target.host, target.port);
+}
+
+/// If the server is gone the error propagates (Kotlin treats it as "assume media",
+/// short TTL) instead of becoming `exhausted_empty`.
+#[test]
+#[ignore]
+fn scan_has_media_returns_err_when_the_server_is_unreachable() {
+    let target = SftpTarget {
+        host: "127.0.0.1".to_string(),
+        port: 1,
+        ..password_target()
+    };
+    assert!(scan_has_media(&target, FIXTURES_DIR).is_err());
+}
+
+/// The pool key includes the credential: once a session authenticated with the right
+/// password sits in the pool, a wrong password must fail instead of reusing it.
+#[test]
+#[ignore]
+fn wrong_password_does_not_reuse_a_pooled_session() {
+    let proxy = proxy_to_server();
+    let good = proxied_target(&proxy);
+    let bad = SftpTarget {
+        password: "wrong-password".to_string(),
+        ..good.clone()
+    };
+
+    list_directory(&good, FIXTURES_DIR).expect("listagem com a senha certa falhou");
+    assert!(list_directory(&bad, FIXTURES_DIR).is_err());
+    close_pooled_sessions(&good.host, good.port);
 }
 
 /// Leitura de arquivo via `SftpFileSource` + `PrefetchReader` (T6.3) com
@@ -228,4 +371,36 @@ fn sftp_file_source_backward_seek_after_forward_read() {
         .expect("leitura completa apos salto pra tras falhou");
 
     assert_eq!(sha256_hex(&buf), expected_sha256());
+}
+
+/// T6.2 / #57: Primeira conexão sem fingerprint armazenado retorna erro solicitando
+/// confirmação do usuário com o fingerprint apresentado pelo servidor.
+#[test]
+#[ignore]
+fn tofu_first_connection_without_fingerprint_returns_needs_confirmation() {
+    let mut target = password_target();
+    target.expected_fingerprint = None;
+
+    let err = list_directory(&target, "")
+        .expect_err("primeira conexao sem fingerprint deve exigir confirmacao");
+    assert!(
+        err.contains("needs confirmation") || err.contains("HOST_KEY_CONFIRM:"),
+        "erro esperado de confirmacao de chave, obteve: {err}"
+    );
+}
+
+/// T6.2 / #57: Conexão com fingerprint diferente do esperado (ou container recriado com nova chave)
+/// falha com erro de identidade alterada (proteção contra MITM).
+#[test]
+#[ignore]
+fn different_fingerprint_fails_with_identity_changed() {
+    let mut target = password_target();
+    target.expected_fingerprint =
+        Some("SHA256:0000000000000000000000000000000000000000000".to_string());
+
+    let err = list_directory(&target, "").expect_err("conexao com host key divergente deve falhar");
+    assert!(
+        err.contains("server identity changed") || err.contains("HOST_KEY_CHANGED:"),
+        "erro esperado de identidade alterada, obteve: {err}"
+    );
 }

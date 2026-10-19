@@ -1,445 +1,459 @@
-# Performance de I/O de rede para playback remoto
+# Network I/O Performance for Remote Playback
 
-> Registro do trabalho de uma sessão: investigação de degradação de playback
-> 8K60 via SFTP, redesenho do buffer de prefetch e paralelização de leitura
-> para os 4 protocolos (SMB, SFTP, HTTP/S, FTP), a regressão encontrada em
-> hardware real e a correção aplicada. Como o resto do repo, este documento
-> registra o que foi **validado** (testes automatizados + Docker) vs. o que
-> ainda depende do **Quest 3 físico** — ver `docs/TESTING-PLAN.md`.
+> A record of the work of one session: the investigation of degraded 8K60
+> playback over SFTP, the redesign of the prefetch buffer and the
+> parallelization of reads for the 4 protocols (SMB, SFTP, HTTP/S, FTP), the
+> regression found on real hardware and the fix applied. Like the rest of the
+> repo, this document records what was **validated** (automated tests + Docker)
+> vs. what still depends on the **physical Quest 3** — see
+> `docs/TESTING-PLAN.md`.
+>
+> This is a session record, so the numbers and file lists describe the code as it
+> was then. Where the code has since moved on, the text carries a **"Current:"**
+> note (test counts, the Vulkan image cache limit, per-chunk retry coverage).
 
-## 1. Motivação
+## 1. Motivation
 
-Um vídeo 8K60 HEVC transmitido via SFTP degradava progressivamente durante a
-reprodução no Quest 3. Evidência que descartou a hipótese inicial ("teto
-térmico/decode de hardware"):
+An 8K60 HEVC video streamed over SFTP degraded progressively during playback on
+the Quest 3. Evidence that ruled out the initial hypothesis ("thermal
+ceiling/hardware decode"):
 
-- O mesmo arquivo, em **outro player**, toca sem problema via SFTP no mesmo
-  servidor — descarta problema de servidor.
-- Um vídeo 4K60 **local** (sem rede) toca normalmente no nosso player —
-  descarta problema geral de decode/render.
-- MKV ainda não é suportado pela aplicação, então o teste comparativo ficou
-  restrito a HEVC puro.
+- The same file, in **another player**, plays fine over SFTP on the same server
+  — rules out a server problem.
+- A **local** 4K60 video (no network) plays normally in our player — rules out a
+  general decode/render problem.
+- MKV is not yet supported by the application, so the comparative test was
+  restricted to raw HEVC.
 
-Conclusão: o gargalo era a **implementação do cliente SFTP deste projeto**,
-não o hardware, o decode nem o servidor.
+Conclusion: the bottleneck was **this project's SFTP client implementation**,
+not the hardware, the decode or the server.
 
-## 2. Diagnóstico
+## 2. Diagnosis
 
-Causa raiz em `rust/protocols/src/sftp/mod.rs` (`SftpFileSource::try_read_range`,
-antes desta sessão): o laço de `SSH_FXP_READ` era **inteiramente sequencial**
-— cada leitura de até `SFTP_MAX_READ_CHUNK` (~252KB) esperava a resposta
-antes de disparar a próxima, apesar de `RawSftpSession::read` tomar `&self`
-(não `&mut self`) *exatamente* para permitir chamadas posicionais concorrentes
-multiplexadas por request-id sobre a mesma sessão SSH — confirmado lendo o
-código-fonte da crate `russh-sftp` (`~/.cargo/registry/.../russh-sftp-2.4.0/src/client/rawsession.rs`),
-não só a doc. `smb2::client::stream::FileReader::read_at` tem a mesma
-propriedade (multiplexado por `MessageId`), documentada explicitamente no
-doc-comment da própria crate.
+Root cause in `rust/protocols/src/sftp/mod.rs`
+(`SftpFileSource::try_read_range`, before this session): the `SSH_FXP_READ` loop
+was **entirely sequential** — each read of up to `SFTP_MAX_READ_CHUNK` (~252KB)
+waited for the response before firing the next, even though
+`RawSftpSession::read` takes `&self` (not `&mut self`) *precisely* to allow
+concurrent positional calls multiplexed by request-id over the same SSH session
+— confirmed by reading the `russh-sftp` crate's source
+(`~/.cargo/registry/.../russh-sftp-2.4.0/src/client/rawsession.rs`), not just the
+docs. `smb2::client::stream::FileReader::read_at` has the same property
+(multiplexed by `MessageId`), explicitly documented in the crate's own
+doc-comment.
 
-Segundo achado, ortogonal: `PrefetchReader` (`rust/protocols/src/prefetch.rs`)
-era um cache **pull** puro — só buscava o próximo bloco de 4-12MB quando o
-atual acabava, sem nenhum read-ahead em background. Isso afeta os 4
-protocolos igualmente, não só SFTP.
+A second, orthogonal finding: `PrefetchReader`
+(`rust/protocols/src/prefetch.rs`) was a purely **pull** cache — it only fetched
+the next 4-12MB block when the current one ended, with no background read-ahead
+at all. This affects all 4 protocols equally, not just SFTP.
 
-Terceiro achado, também ortogonal (encontrado ao revisar os 4 protocolos
-juntos, não relacionado ao caso SFTP original): `FtpFileSource::read_range`
-(`rust/protocols/src/ftp/mod.rs`) fazia uma única chamada `Read::read()` sem
-laço — um socket TCP pode "short-read" (devolver menos do que foi pedido sem
-que seja EOF), o que minava silenciosamente o tamanho de bloco assumido pelo
-`PrefetchReader`.
+A third, also orthogonal finding (found while reviewing the 4 protocols
+together, unrelated to the original SFTP case): `FtpFileSource::read_range`
+(`rust/protocols/src/ftp/mod.rs`) made a single `Read::read()` call with no loop
+— a TCP socket can "short-read" (return less than requested without it being
+EOF), which silently undermined the block size `PrefetchReader` assumed.
 
-## 3. Decisão de escopo
+## 3. Scope Decision
 
-Instrução explícita: não fazer só a correção mínima do SFTP — usar a
-oportunidade para levar **todos** os protocolos de rede ao mesmo padrão de
-performance (pelo menos no cenário same-LAN, servidor e Quest na mesma rede),
-com testes host-testáveis escritos **antes** da implementação. Sem perseguir
-metas hipotéticas de throughput sem relação com o problema real (ex.:
-"16K@100fps" foi citado só como teto ilustrativo, nunca implementado como
-meta de teste).
+Explicit instruction: do not do just the minimal SFTP fix — use the opportunity
+to bring **all** network protocols up to the same performance standard (at least
+in the same-LAN scenario, server and Quest on the same network), with
+host-testable tests written **before** the implementation. Without chasing
+hypothetical throughput goals unrelated to the real problem (e.g. "16K@100fps"
+was mentioned only as an illustrative ceiling, never implemented as a test
+goal).
 
-## 4. O que foi implementado
+## 4. What Was Implemented
 
-### 4.1 `PrefetchReader` — read-ahead real em background (`prefetch.rs`)
+### 4.1 `PrefetchReader` — real background read-ahead (`prefetch.rs`)
 
-Redesenhado para possuir uma **thread de background dedicada** que:
+Redesigned to own a **dedicated background thread** that:
 
-1. É disparada na construção (`kick_prefetch(0)`), buscando o bloco 0 antes
-   do primeiro `read()`.
-2. A cada bloco consumido pela thread principal, dispara em background a
-   busca do **próximo** bloco sequencial (`ensure_cache` → `kick_prefetch`),
-   sobrepondo o RTT de rede do próximo bloco ao tempo de consumo/decode do
-   bloco atual — em vez de somá-los, como no design "pull" anterior.
-3. Um seek para fora do bloco atual **e** do bloco em pré-busca invalida o
-   prefetch em voo (resultado obsoleto é descartado quando chega — não há
-   cancelamento cooperativo real de uma leitura de rede já em andamento).
-4. `Drop` manda `Shutdown` para a thread e dá `join()` de forma síncrona,
-   fechando a conexão de rede (dentro do worker) de forma determinística.
+1. Is kicked off at construction (`kick_prefetch(0)`), fetching block 0 before
+   the first `read()`.
+2. For each block consumed by the main thread, fires in the background the fetch
+   of the **next** sequential block (`ensure_cache` → `kick_prefetch`), overlapping
+   the network RTT of the next block with the consumption/decode time of the
+   current block — instead of adding them, as in the previous "pull" design.
+3. A seek outside both the current block **and** the block being prefetched
+   invalidates the in-flight prefetch (the stale result is discarded when it
+   arrives — there is no real cooperative cancellation of a network read already
+   in progress).
+4. `Drop` sends `Shutdown` to the thread and does a synchronous `join()`,
+   deterministically closing the network connection (inside the worker).
 
-Comunicação com o worker via `std::sync::mpsc` (`Command::Fetch`/`Shutdown` →
-`io::Result<Block>`), no máximo 1 pedido em voo por vez (double-buffering
-simples: bloco atual + bloco seguinte).
+Communication with the worker is through `std::sync::mpsc`
+(`Command::Fetch`/`Shutdown` → `io::Result<Block>`), at most 1 request in flight
+at a time (simple double-buffering: current block + next block).
 
-Isto beneficia **todos** os protocolos igualmente (é puramente do lado do
-cliente, agnóstico de SMB/SFTP/HTTP/FTP) — é a melhoria "de buffer" que
-ajuda o player em geral, além da paralelização específica de cada protocolo.
+This benefits **all** protocols equally (it is purely client-side, agnostic of
+SMB/SFTP/HTTP/FTP) — it is the "buffer" improvement that helps the player in
+general, in addition to each protocol's specific parallelization.
 
-### 4.2 `chunking::split_range` — divisão pura de range em sub-chunks (novo, `chunking.rs`)
+### 4.2 `chunking::split_range` — pure range splitting into sub-chunks (new, `chunking.rs`)
 
-Função determinística, sem I/O, usada pelos 3 protocolos abaixo para decidir
-em quantos pedaços (e de que tamanho) dividir um `read_range` antes de
-disparar as leituras de verdade:
+A deterministic function, with no I/O, used by the 3 protocols below to decide
+into how many pieces (and of what size) to split a `read_range` before firing
+the real reads:
 
 ```rust
 pub fn split_range(offset: u64, total_len: u32, chunk_size: u32) -> Vec<(u64, u32)>
 ```
 
-### 4.3 Leitura concorrente por protocolo
+### 4.3 Concurrent Reads per Protocol
 
-| Protocolo | Mecanismo | Tamanho de chunk | Concorrência |
+| Protocol | Mechanism | Chunk size | Concurrency |
 |---|---|---|---|
-| SMB (`smb/mod.rs`) | `FileReader::read_at(&self, ...)` via `futures_util::future::join_all` dentro do `block_on` existente | 1MB (`SMB_CONCURRENT_CHUNK_SIZE`) | até 4 em voo (`SMB_MAX_CONCURRENT_CHUNKS`) |
-| SFTP (`sftp/mod.rs`) | `RawSftpSession::read(&self, ...)` via `join_all` | ~252KB (`SFTP_MAX_READ_CHUNK`, já existia) | até 4 em voo (`SFTP_MAX_CONCURRENT_CHUNKS`) |
-| HTTP/S (`http.rs`) | `std::thread::scope` + `reqwest::blocking::Client` clonado (pool de conexões compartilhado) | 2MB (`HTTP_CONCURRENT_CHUNK_SIZE`) | até 4 threads em voo (`HTTP_MAX_CONCURRENT_CHUNKS`) |
-| FTP (`ftp/mod.rs`) | **sem paralelismo** — decisão deliberada (ver 4.4) | — | — |
+| SMB (`smb/mod.rs`) | `FileReader::read_at(&self, ...)` through `futures_util::future::join_all` inside the existing `block_on` | 1MB (`SMB_CONCURRENT_CHUNK_SIZE`) | up to 4 in flight (`SMB_MAX_CONCURRENT_CHUNKS`) |
+| SFTP (`sftp/mod.rs`) | `RawSftpSession::read(&self, ...)` through `join_all` | ~252KB (`SFTP_MAX_READ_CHUNK`, already existed) | up to 4 in flight (`SFTP_MAX_CONCURRENT_CHUNKS`) |
+| HTTP/S (`http.rs`) | `std::thread::scope` + a cloned `reqwest::blocking::Client` (shared connection pool) | 2MB (`HTTP_CONCURRENT_CHUNK_SIZE`) | up to 4 threads in flight (`HTTP_MAX_CONCURRENT_CHUNKS`) |
+| FTP (`ftp/mod.rs`) | **no parallelism** — a deliberate decision (see 4.4) | — | — |
 
-Em todos os três, os chunks de um `read_range` são processados em **lotes**
-de até N (hoje N=4 nos três — ver seção 6, essa é a correção pós-regressão),
-com `join_all`/`thread::scope` concorrente **dentro** de cada lote e os lotes
-em si sequenciais. Um chunk curto/EOF no meio de um lote interrompe a
-remontagem ali (os chunks já buscados depois dele são descartados) — mesma
-semântica de short-read que o `PrefetchReader` já esperava.
+In all three, the chunks of a `read_range` are processed in **batches** of up
+to N (today N=4 in all three — see section 6, that is the post-regression
+fix), with concurrent `join_all`/`thread::scope` **inside** each batch and the
+batches themselves sequential. A short chunk/EOF in the middle of a batch stops
+the reassembly there (the chunks already fetched after it are discarded) — the
+same short-read semantics that `PrefetchReader` already expected.
 
-### 4.4 FTP — correção de short-read, sem paralelismo (`ftp/mod.rs`)
+### 4.4 FTP — Short-Read Fix, No Parallelism (`ftp/mod.rs`)
 
-`FtpFileSource::read_range` agora faz um laço em `Read::read()` até encher o
-buffer pedido ou bater EOF, em vez de uma única chamada (que podia devolver
-bem menos que o bloco de 4-12MB pedido, sem sinalizar erro).
+`FtpFileSource::read_range` now loops over `Read::read()` until it fills the
+requested buffer or hits EOF, instead of a single call (which could return much
+less than the requested 4-12MB block, without signaling an error).
 
-Decisão deliberada de **não** paralelizar FTP: o protocolo não multiplexa
-requests numa única conexão de controle como SMB2/SFTP — paralelismo real
-exigiria múltiplas conexões de dados simultâneas (bem mais invasivo), para um
-protocolo que já é o secundário/legado do projeto (sem TLS, sem
-auto-reconexão — ver `docs/phases/PHASE-0.1-MVP.md` seção 6). Leitura
-sequencial contígua já é quase ótima para FTP (stream contínuo, sem overhead
-de request por chunk uma vez que o `RETR` está aberto).
+A deliberate decision **not** to parallelize FTP: the protocol does not
+multiplex requests over a single control connection like SMB2/SFTP — real
+parallelism would require multiple simultaneous data connections (far more
+invasive), for a protocol that is already the project's secondary/legacy one (no
+TLS at the time; see `docs/phases/PHASE-0.2-3D-NETWORK.md` section 6 for the FTP
+scope). Contiguous sequential reading is already nearly optimal for FTP (a
+continuous stream, with no per-chunk request overhead once the `RETR` is open).
+**Current:** FTP now also reconnects and retries a failed chunk
+(`FTP_CHUNK_RETRY_ATTEMPTS = 2`, `ftp/mod.rs`).
 
-### 4.5 Nova dependência
+### 4.5 New Dependency
 
 `futures-util = { version = "0.3", default-features = false, features = ["alloc"] }`
-em `rust/protocols/Cargo.toml` — só para `future::join_all` (não precisa de
-executor/runtime próprio: roda dentro do `block_on` que SMB/SFTP já usavam).
-Já estava no `Cargo.lock` transitivamente (via `russh`/`reqwest`), então não
-adiciona uma árvore de dependências nova.
+in `rust/protocols/Cargo.toml` — only for `future::join_all` (it needs no
+executor/runtime of its own: it runs inside the `block_on` that SMB/SFTP already
+used). It was already in `Cargo.lock` transitively (through `russh`/`reqwest`),
+so it does not add a new dependency tree.
 
-## 5. Testes escritos (antes da implementação, como pedido)
+## 5. Tests Written (before the implementation, as requested)
 
-### 5.1 Host-testável, sem rede/Docker (`cargo test -p protocols`)
+### 5.1 Host-Testable, No Network/Docker (`cargo test -p protocols`)
 
-`prefetch.rs` (7 testes novos/adaptados):
-- `background_prefetch_overlaps_network_delay_with_consumption` — **prova
-  por medição** (com atraso artificial + `Instant`) que o tempo total para
-  ler N blocos com um consumidor lento fica bem abaixo de
-  `N * (delay_rede + tempo_consumo)`, comparando com uma baseline "sem
-  overlap" calculada no próprio teste.
-- `seek_during_pending_prefetch_returns_correct_data` — seek longe enquanto
-  um prefetch sequencial está em voo não corrompe a leitura seguinte.
-- `mixed_sequential_and_random_access_matches_reference` — padrão misto de
-  seeks comparado byte a byte contra um buffer de referência.
-- `drop_joins_background_thread_without_hanging` — `Drop` encerra a thread
-  de forma síncrona, com timeout no próprio teste para não travar a suíte se
-  houver regressão de deadlock.
-- `source_error_propagates_to_read_caller` — erro da fonte não é engolido.
-- `sequential_reads_hit_one_block_per_prefetch` / `seek_and_read` — versões
-  adaptadas dos testes originais do cache "pull".
+`prefetch.rs` (7 new/adapted tests at the time):
 
-`chunking.rs` (6 testes): casos de borda de `split_range` (vazio, menor que
-um chunk, múltiplo exato, resto, range de 1 byte, cobertura contígua exata
-de um range grande e "feio" — offset/tamanho não múltiplos do chunk).
+- `background_prefetch_overlaps_network_delay_with_consumption` — **proves by
+  measurement** (with an artificial delay + `Instant`) that the total time to
+  read N blocks with a slow consumer stays well below
+  `N * (network_delay + consumption_time)`, comparing against a "no overlap"
+  baseline computed in the test itself.
+- `seek_during_pending_prefetch_returns_correct_data` — seeking far away while a
+  sequential prefetch is in flight does not corrupt the following read.
+- `mixed_sequential_and_random_access_matches_reference` — a mixed seek pattern
+  compared byte by byte against a reference buffer.
+- `drop_joins_background_thread_without_hanging` — `Drop` ends the thread
+  synchronously, with a timeout in the test itself so as not to hang the suite if
+  there is a deadlock regression.
+- `source_error_propagates_to_read_caller` — a source error is not swallowed.
+- `sequential_reads_hit_one_block_per_prefetch` / `seek_and_read` — adapted
+  versions of the original "pull" cache tests.
 
-Total: **33 testes** em `cargo test -p protocols` (mais os já existentes de
-URI/redação por protocolo), **0 falhas**, roda em <1s.
+`chunking.rs` (6 tests at the time): edge cases of `split_range` (empty, smaller
+than a chunk, an exact multiple, a remainder, a 1-byte range, exact contiguous
+coverage of a large, "ugly" range — an offset/size that are not multiples of the
+chunk).
 
-### 5.2 Integração contra servidores reais via Docker (`./scripts/test-network-protocols.sh`)
+Total at the time: **33 tests** in `cargo test -p protocols` (besides the
+already-existing per-protocol URI/redaction ones), **0 failures**, running in
+<1s. **Current:** `prefetch.rs` has 14 tests, `chunking.rs` 7, and
+`rust/protocols/src` as a whole about 83; `rust/media-logic` about 224.
+(Counted by grepping `#[test]`, not by running them for this document.)
 
-Os testes `#[ignore]` existentes em `rust/protocols/tests/*_integration.rs`
-(comparação de sha256 do arquivo inteiro reconstruído via
-`PrefetchReader` + cada `*FileSource`) já servem como regressão de
-correção para as novas implementações concorrentes — não precisaram ser
-reescritos, só continuar passando com o código novo por baixo. **18/18
-passaram** contra SMB (Samba real), SFTP (OpenSSH real, senha e chave),
-HTTP e HTTPS (nginx real) e FTP (vsftpd real) — confirma que a
-paralelização e o fix de short-read não corromperam nada.
+### 5.2 Integration Against Real Servers via Docker (`./scripts/test-network-protocols.sh`)
 
-Achado colateral (infra, não relacionado à lógica de protocolo): o container
-`ftp-test` não subia — `docker-compose.yml` montava `./fixtures` como
-`:ro` diretamente sobre o home dir que o entrypoint da imagem
-(`delfer/alpine-ftp-server`) precisa escrever (`adduser`/`chown`) no boot.
-Corrigido removendo o `:ro` (container efêmero de teste, sem risco real).
+The existing `#[ignore]` tests in `rust/protocols/tests/*_integration.rs` (a
+sha256 comparison of the whole file reassembled through `PrefetchReader` + each
+`*FileSource`) already serve as a correctness regression for the new concurrent
+implementations — they did not need to be rewritten, only to keep passing with
+the new code underneath. **18/18 passed** at the time against SMB (real Samba),
+SFTP (real OpenSSH, password and key), HTTP and HTTPS (real nginx) and FTP (real
+vsftpd) — confirming that the parallelization and the short-read fix corrupted
+nothing. **Current:** the suite has grown to 33 `#[ignore]`d integration tests
+across `smb`, `sftp`, `http`, `https`, `ftp`, `webdav` and `dash`.
 
-## 6. Regressão encontrada em hardware real + correção
+A collateral finding (infrastructure, unrelated to the protocol logic): the
+`ftp-test` container would not start — `docker-compose.yml` mounted `./fixtures`
+as `:ro` directly over the home directory that the image's entrypoint
+(`delfer/alpine-ftp-server`) needs to write to (`adduser`/`chown`) at boot. Fixed
+by removing the `:ro` (an ephemeral test container, with no real risk).
 
-A primeira versão desta otimização (chunks de um `read_range` disparados
-**todos de uma vez**, sem limite) foi só validada via Docker/localhost antes
-do deploy. No Quest 3 físico, testando o mesmo vídeo 8K60 via SFTP, os
-números **pioraram** em relação à baseline anterior a esta sessão:
+## 6. Regression Found on Real Hardware + Fix
 
-| Métrica | Antes desta sessão | Após 1ª versão (sem limite) |
+The first version of this optimization (the chunks of a `read_range` fired **all
+at once**, with no limit) was only validated through Docker/localhost before
+deploying. On the physical Quest 3, testing the same 8K60 video over SFTP, the
+numbers got **worse** than the baseline before this session:
+
+| Metric | Before this session | After the 1st version (no limit) |
 |---|---|---|
-| `vidFps` | ~30 (20 em modo 180°) | fixo em 10 |
-| `decFps` | — | média 10 (variando 7–14) |
+| `vidFps` | ~30 (20 in 180° mode) | fixed at 10 |
+| `decFps` | — | average 10 (varying 7–14) |
 | `jitter` | ~200ms | ~300ms |
 
-Um bloco de 12MB (`REMOTE_PREFETCH_BLOCK_SIZE` em `core/src/demuxer.rs`)
-dividido em chunks de ~252KB para SFTP dá **~48 chunks** — a primeira versão
-disparava os 48 concorrentemente via `join_all`. Duas causas plausíveis
-(não confirmadas por log — sem acesso a `adb logcat` neste momento):
+A 12MB block (`REMOTE_PREFETCH_BLOCK_SIZE` in `core/src/demuxer.rs`) divided
+into ~252KB chunks for SFTP yields **~48 chunks** — the first version fired all
+48 concurrently through `join_all`. Two plausible causes (not confirmed by logs —
+no access to `adb logcat` at that moment):
 
-1. **Contenção de CPU com a thread de decode**: cada `SSH_FXP_READ` custa
-   criptografia SSH de verdade (CPU, ao contrário do decode de vídeo, que
-   roda em hardware dedicado). Antes, esse custo de CPU acontecia
-   serializado com o decode (thread de decode dormia enquanto a leitura de
-   rede rodava). Com o read-ahead em background, esse trabalho de CPU passou
-   a rodar **concorrentemente** com o decode ativo — um burst de 48
-   requisições de uma vez pode ter competido por CPU com a thread de decode
-   muito mais do que o design pretendia.
-2. **Estouro de limite do lado do servidor/canal SSH**: um burst desse
-   tamanho pode estourar a janela de fluxo do canal SSH ou algum limite do
-   servidor. Como `SftpFileSource::read_range` reconecta do zero (handshake
-   SSH completo + auth + reabrir arquivo) e tenta de novo a leitura inteira
-   assim que **qualquer** chunk falha, uma única falha nesse cenário vira um
-   evento bem mais caro que o RTT que a concorrência deveria estar
-   economizando — indistinguível, do ponto de vista do HUD, de um stall
-   grande.
+1. **CPU contention with the decode thread**: every `SSH_FXP_READ` costs real SSH
+   encryption (CPU, unlike video decode, which runs on dedicated hardware).
+   Before, that CPU cost happened serialized with the decode (the decode thread
+   slept while the network read ran). With the background read-ahead, that work
+   started running **concurrently** with the active decode — a burst of 48
+   requests at once may have competed for CPU with the decode thread far more
+   than the design intended.
+2. **Exceeding a server-side/SSH-channel limit**: a burst of that size can
+   overflow the SSH channel's flow window or some server limit. Since
+   `SftpFileSource::read_range` reconnects from scratch (a full SSH handshake +
+   auth + reopening the file) and retries the entire read as soon as **any**
+   chunk fails, a single failure in that scenario becomes a much more expensive
+   event than the RTT the concurrency was supposed to save — indistinguishable,
+   from the HUD's point of view, from a large stall.
 
-### Correção aplicada
+### Fix Applied
 
-Mesma ideia nos três protocolos que paralelizam (SMB, SFTP, HTTP/S): os
-chunks de um `read_range` passaram a ser processados em **lotes de até 4**
+The same idea in the three protocols that parallelize (SMB, SFTP, HTTP/S): the
+chunks of a `read_range` came to be processed in **batches of up to 4**
 (`SFTP_MAX_CONCURRENT_CHUNKS` / `SMB_MAX_CONCURRENT_CHUNKS` /
-`HTTP_MAX_CONCURRENT_CHUNKS`, todas = 4 hoje), concorrentes dentro do lote,
-lotes em si sequenciais — ainda pipeline (4x melhor que sequencial puro),
-sem o burst de dezenas de requisições simultâneas.
+`HTTP_MAX_CONCURRENT_CHUNKS`, all = 4 today), concurrent within the batch, the
+batches themselves sequential — still a pipeline (4x better than pure
+sequential), without the burst of dozens of simultaneous requests.
 
-Também adicionado `log::warn!("SftpFileSource: reconectando apos falha de
-leitura")` em `SftpFileSource::reconnect` — se a causa (2) acima for a real,
-isso vai aparecer repetidamente no log durante um stall.
+Also added `log::warn!("SftpFileSource: reconectando apos falha de leitura")`
+("reconnecting after a read failure") in `SftpFileSource::reconnect` — if cause
+(2) above is the real one, it will show up repeatedly in the log during a stall.
 
-**Estado**: correção reaplicada e reverificada via `cargo test -p protocols`
-(33 testes) e `./scripts/test-network-protocols.sh` (18 testes, servidores
-reais) — ambos voltaram a passar 100%. **Ainda não testada no Quest 3
-físico** — é o próximo passo antes de considerar este trabalho concluído.
-Se o problema persistir, o log de reconexão acima ajuda a decidir entre
-baixar ainda mais o limite de concorrência (causa 1) ou revisar o
-tratamento de erro/reconexão do SFTP (causa 2).
+**State**: the fix was reapplied and re-verified through `cargo test -p
+protocols` (33 tests) and `./scripts/test-network-protocols.sh` (18 tests, real
+servers) — both went back to passing 100%. **Not yet tested on the physical Quest
+3** — it was the next step before considering this work done. If the problem
+persisted, the reconnect log above would help decide between lowering the
+concurrency limit even further (cause 1) or revising SFTP's error/reconnect
+handling (cause 2).
 
-## 7. Sessão seguinte: causa raiz confirmada em hardware + correções
+## 7. Following Session: Root Cause Confirmed on Hardware + Fixes
 
-Nova sessão, com Quest 3 físico conectado (`adb devices`) e acesso a
-`adb logcat` — o que faltava na sessão anterior para confirmar ou refutar as
-hipóteses (1)/(2) da §6.
+A new session, with a physical Quest 3 connected (`adb devices`) and access to
+`adb logcat` — what was missing in the previous session to confirm or refute
+hypotheses (1)/(2) of §6.
 
-### 7.1 O A/B que faltava
+### 7.1 The Missing A/B
 
-Mesmo arquivo 8192×4320, mesmo build Vulkan, dois cenários:
+The same 8192×4320 file, the same Vulkan build, two scenarios:
 
-| Cenário | `decFps` | `vidFps` |
+| Scenario | `decFps` | `vidFps` |
 |---|---|---|
-| Local (armazenamento do Quest, sem rede) | 60 | 50–55 |
+| Local (Quest storage, no network) | 60 | 50–55 |
 | SFTP | 17 | 10 |
 
-Isto refuta a hipótese "burst de 48 requisições" da §6 como causa principal:
-o APK que produziu os números de 10fps (`app-debug.apk`, build de 22:55) já
-continha a correção de lote-de-4 (`SFTP_MAX_CONCURRENT_CHUNKS`, arquivos-fonte
-editados às 22:52–22:53) — a mitigação já estava ativa e a regressão persistiu.
-O logcat da sessão de 23:11 também mostra **0 eventos de `stutter` (>20ms) e 0
-`FREEZE` (>250ms)** no loop de render, contra 26 de `judder` (frame de vídeo
-parado na tela) — o caminho Vulkan/render está exonerado como gargalo
-principal; o problema é throughput sustentado do cliente de rede
-(~2.2 MB/s efetivos contra os ~7.85MB/s que o stream 8K60 exige).
+This refutes the "burst of 48 requests" hypothesis of §6 as the main cause: the
+APK that produced the 10fps numbers (`app-debug.apk`, the 22:55 build) already
+contained the batch-of-4 fix (`SFTP_MAX_CONCURRENT_CHUNKS`, source files edited
+at 22:52–22:53) — the mitigation was already active and the regression
+persisted. The logcat of the 23:11 session also shows **0 `stutter` events
+(>20ms) and 0 `FREEZE` (>250ms)** in the render loop, against 26 `judder` (a
+video frame stuck on screen) — the Vulkan/render path is cleared as the main
+bottleneck; the problem is the network client's sustained throughput (~2.2 MB/s
+effective against the ~7.85MB/s that the 8K60 stream requires).
 
-### 7.2 Dois problemas de instrumentação encontrados
+### 7.2 Two Instrumentation Problems Found
 
-1. **`decFps` não media o decoder.** `HwDecoder::release_output_frames_with_sync`
-   (`decoder.rs`) só contava um frame como "decodificado"
-   (`TextureOutput::frames_decoded`) quando o callback de sync decidia
-   RENDERIZAR — frames que o MediaCodec produziu mas foram descartados por
-   atraso não entravam na conta. `decFps ≈ vidFps` era portanto um artefato da
-   métrica, não prova de que o decode estava saudável.
-2. **O `log::warn!` de reconexão SFTP (§6) nunca chegava no logcat** — nenhum
-   backend de `log` (`android_logger` ou similar) era inicializado em lugar
-   nenhum do workspace; todo log que de fato aparecia ia por
-   `__android_log_print` cru.
+1. **`decFps` did not measure the decoder.**
+   `HwDecoder::release_output_frames_with_sync` (`decoder.rs`) only counted a
+   frame as "decoded" (`TextureOutput::frames_decoded`) when the sync callback
+   decided to RENDER — frames that MediaCodec produced but that were dropped for
+   lateness did not enter the count. `decFps ≈ vidFps` was therefore an artifact
+   of the metric, not proof that the decode was healthy.
+2. **The SFTP reconnect `log::warn!` (§6) never reached logcat** — no `log`
+   backend (`android_logger` or similar) was initialized anywhere in the
+   workspace; every log that did show up went through raw `__android_log_print`.
 
-### 7.3 Correções aplicadas
+### 7.3 Fixes Applied
 
-**Instrumentação nova** (`decoder.rs`, `texture.rs`, `playback.rs`,
-`prefetch.rs`, `demuxer.rs`, `bridge/lib.rs`, HUD em
+**New instrumentation** (`decoder.rs`, `texture.rs`, `playback.rs`,
+`prefetch.rs`, `demuxer.rs`, `bridge/lib.rs`, the HUD in
 `vr_player_input_vulkan.h`/`vr_player_app.cpp`):
-- `HwDecoder::metrics()` — contadores REAIS de saída do MediaCodec
-  (`frames_output`) e de descarte por atraso (`frames_dropped`), incrementados
-  ANTES do callback de sync, independente do resultado.
-- `PrefetchStats` (`prefetch.rs`) — bytes lidos, duração do último fetch de
-  bloco, blocos buscados/descartados, exposto via `PrefetchReader::stats()`.
-- Profundidade da fila demux→decode exposta via clone do `Sender` (`.len()`).
-- HUD ganhou `outFps`, `drop`, `net=X MB/s`, `q=N` ao lado de `decFps`/`vidFps`
-  existentes, nos dois caminhos (Vulkan e GLES).
-- Corrigido um bug real de contagem: `get_video_frames_decoded_count()` (e as
-  novas funções análogas) devolviam `0` quando `CONTROLLER.try_lock()` falhava
-  por contenção — o C++ calcula um delta em `uint64_t` contra a última
-  amostra, e `0` produzia um wraparound e um pico de `decFps` espúrio na
-  amostra seguinte. Agora devolvem o último valor conhecido (delta = 0).
-- `Demuxer::read_packet` agora distingue EOF de erro de I/O real (antes os
-  dois casos eram indistinguíveis — `Input::packets()` devolve `None` para
-  ambos — e uma falha de rede virava um restart silencioso pro início do
-  arquivo). O erro agora é logado; a recuperação (seek pro início) continua a
-  mesma por ora.
 
-**Prioridade da thread de I/O** (`prefetch.rs`, `raise_io_thread_priority`) —
-suspeita inicial para os ~2.2MB/s: nenhuma thread do workspace definia
-prioridade/afinidade explícita. Best-effort via
-`libc::setpriority(PRIO_PROCESS, 0, -10)`, logado (`nice antes -> depois`).
-**Refutada em hardware (§7.4 abaixo)**: mantida no código como best-effort
-de baixo risco (não é a causa, mas tampouco atrapalha), porém a doc não
-deve mais ser lida como "isto resolveu o throughput" — não resolveu.
+- `HwDecoder::metrics()` — REAL counters of MediaCodec output
+  (`frames_output`) and of drops for lateness (`frames_dropped`), incremented
+  BEFORE the sync callback, regardless of the result.
+- `PrefetchStats` (`prefetch.rs`) — bytes read, the duration of the last block
+  fetch, blocks fetched/discarded, exposed through `PrefetchReader::stats()`.
+- The demux→decode queue depth exposed through a clone of the `Sender`
+  (`.len()`).
+- The HUD gained `outFps`, `drop`, `net=X MB/s`, `q=N` next to the existing
+  `decFps`/`vidFps`, in both paths (Vulkan and GLES).
+- Fixed a real counting bug: `get_video_frames_decoded_count()` (and the new
+  analogous functions) returned `0` when `CONTROLLER.try_lock()` failed from
+  contention — C++ computes a `uint64_t` delta against the last sample, and `0`
+  produced a wraparound and a spurious `decFps` spike in the next sample. They
+  now return the last known value (delta = 0).
+- `Demuxer::read_packet` now distinguishes EOF from a real I/O error (before the
+  two cases were indistinguishable — `Input::packets()` returns `None` for both
+  — and a network failure became a silent restart to the beginning of the
+  file). The error is now logged; the recovery (a seek to the beginning) stays
+  the same for now.
 
-**Seek não dispara mais prefetch especulativo em cadeia**
-(`PrefetchReader::ensure_cache`) — um miss não-sequencial (seek de verdade)
-já não dispara mais a busca do próximo bloco imediatamente; só dispara no
-primeiro acesso seguinte que confirma que a leitura continua dentro do bloco
-que o seek acabou de instalar. Evita que uma sequência de seeks encadeados
-(probe do container, cues no fim do arquivo) pague por prefetches que o
-próximo seek só ia descartar — sem verdadeiro cancelamento de I/O em voo
-(que exigiria uma segunda conexão), esse continua sendo o limite de
-`ensure_cache`, documentado no header do módulo.
+**I/O thread priority** (`prefetch.rs`, `raise_io_thread_priority`) — the
+initial suspect for the ~2.2MB/s: no thread in the workspace set an explicit
+priority/affinity. Best-effort through `libc::setpriority(PRIO_PROCESS, 0, -10)`,
+logged (`nice before -> after`). **Refuted on hardware (§7.4 below)**: kept in
+the code as a low-risk best-effort (it is not the cause, but neither does it
+hurt), yet the doc should no longer be read as "this fixed the throughput" — it
+did not.
 
-**SFTP: erro de um chunk não derruba mais o lote inteiro**
-(`SftpFileSource::try_read_range`) — antes, qualquer chunk que falhasse
-dentro de um lote de 4 concorrentes propagava o erro pra `read_range`, que
-reconectava do zero (handshake SSH completo) e refazia os 12MB inteiros,
-descartando os outros chunks bem-sucedidos. Agora repete só o(s) chunk(s)
-que falharam (até `SFTP_CHUNK_RETRY_ATTEMPTS = 2` vezes) antes de escalar
-para reconexão completa.
+**A seek no longer triggers chained speculative prefetch**
+(`PrefetchReader::ensure_cache`) — a non-sequential miss (a real seek) no longer
+fires the fetch of the next block immediately; it only fires on the first
+following access that confirms the read continues inside the block the seek just
+installed. This prevents a sequence of chained seeks (the container probe, cues
+at the end of the file) from paying for prefetches that the next seek was only
+going to discard — without true cancellation of in-flight I/O (which would
+require a second connection), this remains the limit of `ensure_cache`,
+documented in the module header.
 
-**Cache de imagem Vulkan corrigido** (`vr_player_app_vulkan.cpp`) —
-confirmado no logcat: `evicao de entrada antiga` + `importado AHardwareBuffer`
-em TODO frame, ~10 ponteiros distintos circulando contra
-`kVideoImageCacheLimit = 6`, e a evicção usava `unordered_map::begin()`
-(bucket arbitrário do hash, não o mais antigo de verdade, apesar do
-comentário dizer "LRU"). Limite subido pra 16 e LRU real implementado via
-carimbo de uso (`VideoFrame::lastUsedFrame`).
+**SFTP: an error in one chunk no longer takes down the whole batch**
+(`SftpFileSource::try_read_range`) — before, any chunk that failed inside a
+batch of 4 concurrent ones propagated the error to `read_range`, which
+reconnected from scratch (a full SSH handshake) and redid the entire 12MB,
+discarding the other successful chunks. It now repeats only the chunk(s) that
+failed (up to `SFTP_CHUNK_RETRY_ATTEMPTS = 2` times) before escalating to a full
+reconnect.
 
-**Estado**: `cargo test -p protocols -p media-logic` (69+33 testes),
-`cargo clippy -p protocols -p media-logic -- -D warnings` e
-`./scripts/test-network-protocols.sh` (18 testes, servidores reais) — todos
-passando. Cross-compile completo verificado via `cargo ndk ... build
---release` (workspace inteiro) e via `./gradlew assembleDebug` nas duas
-variantes gráficas (`-PvrplayerGraphicsApi=VULKAN` e `=GLES`).
+**Vulkan image cache fixed** (`vr_player_app_vulkan.cpp`) — confirmed in logcat:
+`evicao de entrada antiga` ("evicting an old entry") + `importado
+AHardwareBuffer` ("imported AHardwareBuffer") on EVERY frame, ~10 distinct
+pointers circulating against `kVideoImageCacheLimit = 6`, and the eviction used
+`unordered_map::begin()` (an arbitrary hash bucket, not the truly oldest, even
+though the comment said "LRU"). The limit was raised to 16 and a real LRU
+implemented through a usage stamp (`VideoFrame::lastUsedFrame`). **Current:**
+`kVideoImageCacheLimit = 32`.
 
-### 7.4 Teste em hardware: prioridade de thread refutada, causa raiz real encontrada
+**State**: `cargo test -p protocols -p media-logic` (69+33 tests), `cargo clippy
+-p protocols -p media-logic -- -D warnings` and
+`./scripts/test-network-protocols.sh` (18 tests, real servers) — all passing.
+Full cross-compile verified through `cargo ndk ... build --release` (the whole
+workspace) and through `./gradlew assembleDebug` in both graphics variants
+(`-PvrplayerGraphicsApi=VULKAN` and `=GLES`).
 
-Com o HUD novo instalado no Quest 3, o teste decisivo que faltava (§1) foi
-finalmente possível: o MESMO arquivo, via SMB, tocou liso (`net=11.2` a
-`12MB/s`, igual ao local) — **sem nenhuma mudança de prioridade de thread
-envolvida nesse caminho**, já que SMB usa exatamente a mesma infraestrutura
-de `PrefetchReader`. Isso refuta a hipótese de escalonamento de núcleo do
-XR2 Gen 2 como causa do throughput baixo: se fosse isso, SMB teria o mesmo
-problema.
+### 7.4 Hardware Test: Thread Priority Refuted, Real Root Cause Found
 
-O log com `blockFetchMs`/`blocksFetched` novos (§7.3) apontou a causa real
-na hora: durante SFTP, `blockFetchMs` ficava em 5-10ms (deveria ser ~500ms
-pra um bloco de 12MB, o que SMB de fato mostrava) e `blocksFetched` subia
-~80/s — aritmética simples (`netMBs / blocksFetched`) dava **~30KB por
-"bloco"**, não os 12MB pretendidos nem os ~252KB de
-`SFTP_MAX_READ_CHUNK`.
+With the new HUD installed on the Quest 3, the decisive test that was missing
+(§1) was finally possible: the SAME file, over SMB, played smoothly (`net=11.2`
+to `12MB/s`, the same as local) — **with no thread-priority change involved in
+that path**, since SMB uses exactly the same `PrefetchReader` infrastructure.
+That refutes the XR2 Gen 2 core-scheduling hypothesis as the cause of the low
+throughput: if it were that, SMB would have the same problem.
 
-Causa raiz: `SftpFileSource::try_read_range` (`sftp/mod.rs`) pedia cada
-chunk em ate 252KB, mas quando o servidor devolvia MENOS do que pedido —
-permitido pelo protocolo SFTP sem sinalizar EOF explícito, o próprio
-comentário do código já citava essa possibilidade — o código tratava isso
-como fim de dados e parava de remontar o bloco ali (`break 'batches`). O
-servidor SFTP do NAS usado no teste aparentemente limita cada resposta de
-`SSH_FXP_READ` a algo em torno de 30KB, bem abaixo do que o cliente pedia.
-Toda troca de "bloco" pagava overhead completo de round-trip SSH/canal
-mpsc/wake de thread por uma fração minúscula dos dados — isso, não CPU ou
-prioridade, era o gargalo real desde antes desta sessão (herdado de antes
-de `3d682c0`, só nunca medido com granularidade suficiente pra aparecer).
+The log with the new `blockFetchMs`/`blocksFetched` (§7.3) pointed to the real
+cause immediately: during SFTP, `blockFetchMs` stayed at 5-10ms (it should be
+~500ms for a 12MB block, which SMB indeed showed) and `blocksFetched` climbed
+~80/s — simple arithmetic (`netMBs / blocksFetched`) gave **~30KB per "block"**,
+neither the intended 12MB nor the ~252KB of `SFTP_MAX_READ_CHUNK`.
 
-**Correção**: nova função `SftpFileSource::read_chunk_filling` — em vez de
-uma única chamada `raw.read(handle, chunk_offset, chunk_len)`, faz um laço
-que continua chamando `raw.read()` pro RESTANTE do chunk atual até
-preenchê-lo por completo, e só para de verdade em EOF explícito
-(`StatusCode::Eof`) ou erro real. Aplicada nas duas chamadas de
-`raw.read()` dentro de `try_read_range` (lote inicial e retry de chunk).
+Root cause: `SftpFileSource::try_read_range` (`sftp/mod.rs`) requested each chunk
+at up to 252KB, but when the server returned LESS than requested — allowed by the
+SFTP protocol without signaling an explicit EOF, the code's own comment already
+cited that possibility — the code treated that as the end of data and stopped
+reassembling the block there (`break 'batches`). The NAS's SFTP server used in
+the test apparently limits each `SSH_FXP_READ` response to around 30KB, well
+below what the client requested. Every "block" exchange paid the full overhead of
+an SSH round trip/mpsc channel/thread wake-up for a tiny fraction of the data —
+that, not CPU or priority, was the real bottleneck since before this session
+(inherited from before `3d682c0`, only never measured with enough granularity to
+show up).
 
-**Validado em hardware real**: com o fix, `net=12MB/s` via SFTP — igual ao
-SMB e ao local — e a taxa de frames do vídeo emparelhou com a reprodução
-local. **A regressão 30fps→10fps está resolvida.**
+**Fix**: a new function `SftpFileSource::read_chunk_filling` — instead of a
+single `raw.read(handle, chunk_offset, chunk_len)` call, it loops, continuing to
+call `raw.read()` for the REMAINDER of the current chunk until it fills it
+completely, and only really stops on an explicit EOF (`StatusCode::Eof`) or a
+real error. Applied to both `raw.read()` calls inside `try_read_range` (the
+initial batch and the chunk retry).
 
-Testes: `cargo test -p protocols -p media-logic` (69+33) e
-`./scripts/test-network-protocols.sh` (18 testes, servidores reais,
-incluindo verificação de sha256 do arquivo inteiro via SFTP — sem
-corrupção introduzida pelo laço novo) — todos passando.
+**Validated on real hardware**: with the fix, `net=12MB/s` over SFTP — the same
+as SMB and local — and the video's frame rate matched local playback. **The
+30fps→10fps regression is resolved.**
 
-## 8. Arquivos tocados
+Tests: `cargo test -p protocols -p media-logic` (69+33) and
+`./scripts/test-network-protocols.sh` (18 tests, real servers, including a
+sha256 check of the whole file over SFTP — no corruption introduced by the new
+loop) — all passing.
 
-```
+## 8. Files Touched
+
+```text
 rust/protocols/Cargo.toml                  (+ futures-util, + libc)
 rust/protocols/src/lib.rs                  (+ pub mod chunking)
-rust/protocols/src/chunking.rs             (novo — split_range + testes)
-rust/protocols/src/prefetch.rs             (redesenho: thread de background + testes;
-                                             sessao seguinte: PrefetchStats, prioridade de
-                                             thread, sem prefetch especulativo pos-seek)
-rust/protocols/src/smb/mod.rs              (read_range concorrente em lotes)
-rust/protocols/src/sftp/mod.rs             (read_range concorrente em lotes + log de reconexao;
-                                             sessao seguinte: retry por chunk antes de reconectar;
-                                             sessao seguinte, causa raiz real: read_chunk_filling
-                                             — nao trata mais leitura curta como EOF)
-rust/protocols/src/http.rs                 (read_range concorrente em lotes; sessao
-                                             seguinte: fix de lint collapsible_if pre-existente)
-rust/protocols/src/ftp/mod.rs              (fix de short-read, sem paralelismo)
-docker/network-tests/docker-compose.yml    (fix do mount :ro do ftp-test)
-rust/core/src/decoder.rs                   (sessao seguinte: HwDecoder::metrics())
-rust/core/src/texture.rs                   (sessao seguinte: remove log por frame)
-rust/core/src/demuxer.rs                   (sessao seguinte: ReadPacketOutcome,
-                                             network_stats, fix de caller em thumbnail.rs)
-rust/core/src/thumbnail.rs                 (sessao seguinte: adapta ao novo read_packet)
-rust/core/src/playback.rs                  (sessao seguinte: getters de instrumentacao)
-rust/bridge/src/lib.rs                     (sessao seguinte: novos getters + fix do
-                                             bug de wraparound em contencao de lock)
-native/src/vr_player_app_vulkan.cpp        (sessao seguinte: HUD novo, LRU real do
-                                             cache de imagem, limite subido pra 16)
-native/src/vr_player_input_vulkan.h        (sessao seguinte: HUD novo)
-native/src/vr_player_app.cpp               (sessao seguinte: HUD novo, paridade GLES)
-rust/bridge/Cargo.toml                     (sessao seguinte: + log, pra AndroidLogger)
+rust/protocols/src/chunking.rs             (new — split_range + tests)
+rust/protocols/src/prefetch.rs             (redesign: background thread + tests;
+                                             following session: PrefetchStats, thread
+                                             priority, no speculative prefetch after a seek)
+rust/protocols/src/smb/mod.rs              (concurrent read_range in batches)
+rust/protocols/src/sftp/mod.rs             (concurrent read_range in batches + reconnect log;
+                                             following session: per-chunk retry before
+                                             reconnecting; following session, real root
+                                             cause: read_chunk_filling — no longer treats
+                                             a short read as EOF)
+rust/protocols/src/http.rs                 (concurrent read_range in batches; following
+                                             session: fix for a pre-existing collapsible_if lint)
+rust/protocols/src/ftp/mod.rs              (short-read fix, no parallelism)
+docker/network-tests/docker-compose.yml    (fix for the ftp-test :ro mount)
+rust/core/src/decoder.rs                   (following session: HwDecoder::metrics())
+rust/core/src/texture.rs                   (following session: removes a per-frame log)
+rust/core/src/demuxer.rs                   (following session: ReadPacketOutcome,
+                                             network_stats, caller fix in thumbnail.rs)
+rust/core/src/thumbnail.rs                 (following session: adapts to the new read_packet)
+rust/core/src/playback.rs                  (following session: instrumentation getters)
+rust/bridge/src/lib.rs                     (following session: new getters + fix for the
+                                             wraparound bug on lock contention)
+native/src/vr_player_app_vulkan.cpp        (following session: new HUD, real LRU for the
+                                             image cache, limit raised to 16)
+native/src/vr_player_input_vulkan.h        (following session: new HUD)
+native/src/vr_player_app.cpp               (following session: new HUD, GLES parity)
+rust/bridge/Cargo.toml                     (following session: + log, for AndroidLogger)
 app/src/main/java/com/tucavr/VRPresentation.kt
-                                            (sessao seguinte, achado durante o teste: as
-                                             abas URL/SMB/FTP/SFTP de "Rede" nao tinham
-                                             ScrollView — formulario de cadastro de servidor
-                                             ficava com o botao de salvar fora da area
-                                             visivel/tocavel de 1024x768; corrigido com o
-                                             mesmo padrao de ScrollView ja usado nas
-                                             listagens de diretorio)
+                                            (following session, found during the test: the
+                                             URL/SMB/FTP/SFTP "Network" tabs had no
+                                             ScrollView — the server registration form left
+                                             the save button outside the visible/touchable
+                                             1024x768 area; fixed with the same ScrollView
+                                             pattern already used in the directory listings)
 ```
 
-## 9. O que NÃO foi feito (fora do escopo desta sessão)
+## 9. What Was NOT Done (outside the scope of that session)
 
-- Nenhuma meta de throughput hipotética (ex. "16K@100fps") virou teste real
-  — descartada por instrução explícita por ser irrelevante ao problema.
-- Paralelismo multi-conexão para FTP (ver 4.4 — decisão deliberada).
-- Ajuste de `pool_max_idle_per_host`/tuning fino do `reqwest::blocking::Client`
-  além do default (não se mostrou necessário para os testes feitos).
-- Tornar o tamanho de bloco do `PrefetchReader`/`REMOTE_PREFETCH_BLOCK_SIZE`
-  adaptativo — hoje continua fixo em 12MB para remoto (`core/src/demuxer.rs`).
-  Pode virar um próximo passo se a validação em hardware mostrar que ainda
-  não é suficiente.
-- Cancelamento cooperativo real de uma leitura de rede já em voo (ver 7.3,
-  fix do seek) — precisaria de uma segunda conexão ou de infraestrutura de
-  cancelamento no nível do protocolo; não implementado.
-- Retry por chunk (7.3) aplicado só a SFTP — SMB e HTTP não têm o mesmo
-  padrão de "erro de um chunk derruba o lote inteiro" hoje, mas também não
-  foram auditados a fundo para essa classe de problema nesta sessão.
-- Ajuste fino de qual valor de `nice` é ideal para `vrplayer-prefetch-io`
-  (`-10` é um chute inicial) ou pinning de afinidade de núcleo — decisão
-  deliberada de manter simples e deixar a validação em hardware guiar o
-  próximo passo, ver 7.3.
+- No hypothetical throughput goal (e.g. "16K@100fps") became a real test —
+  discarded by explicit instruction as irrelevant to the problem.
+- Multi-connection parallelism for FTP (see 4.4 — a deliberate decision).
+- Tuning of `pool_max_idle_per_host`/fine-tuning of the `reqwest::blocking::Client`
+  beyond the default (it did not prove necessary for the tests done).
+- Making the `PrefetchReader`/`REMOTE_PREFETCH_BLOCK_SIZE` block size adaptive —
+  today it stays fixed at 12MB for remote (`core/src/demuxer.rs`). It may become a
+  next step if hardware validation shows it is still not enough.
+- Real cooperative cancellation of a network read already in flight (see 7.3, the
+  seek fix) — it would need a second connection or cancellation infrastructure at
+  the protocol level; not implemented.
+- Per-chunk retry (7.3) applied only to SFTP at the time — SMB and HTTP did not
+  have the same "an error in one chunk takes down the whole batch" pattern, but
+  were also not audited in depth for that class of problem in that session.
+  **Current:** per-chunk retry now also exists for SMB
+  (`SMB_CHUNK_RETRY_ATTEMPTS = 2`, `smb/mod.rs`), HTTP
+  (`HTTP_CHUNK_RETRY_ATTEMPTS = 2`, `http.rs`) and FTP
+  (`FTP_CHUNK_RETRY_ATTEMPTS = 2`, `ftp/mod.rs`).
+- Fine-tuning which `nice` value is ideal for `vrplayer-prefetch-io` (`-10` is an
+  initial guess) or core-affinity pinning — a deliberate decision to keep things
+  simple and let hardware validation guide the next step, see 7.3.

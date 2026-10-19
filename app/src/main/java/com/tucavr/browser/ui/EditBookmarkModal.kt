@@ -1,0 +1,227 @@
+package com.tucavr.browser.ui
+
+import android.text.InputType
+import android.view.inputmethod.EditorInfo
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Text
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.dp
+import com.tucavr.R
+import com.tucavr.browser.data.BrowserBookmark
+import com.tucavr.designsystem.KeyboardBinding
+
+@Composable
+fun EditBookmarkModal(
+    bookmark: BrowserBookmark?,
+    onDismiss: () -> Unit,
+    onSave: (title: String, url: String) -> Unit,
+    onShowNativeKeyboard: ((KeyboardBinding) -> Unit)? = null,
+    onHideNativeKeyboard: (() -> Unit)? = null,
+) {
+    var titleText by remember(bookmark) { mutableStateOf(bookmark?.title ?: "") }
+    var urlText by remember(bookmark) { mutableStateOf(bookmark?.url ?: "") }
+    val focusManager = LocalFocusManager.current
+    val urlFocusRequester = remember { FocusRequester() }
+    val titleInteractionSource = remember { MutableInteractionSource() }
+    val urlInteractionSource = remember { MutableInteractionSource() }
+
+    NativeKeyboardEffect(
+        interactionSource = titleInteractionSource,
+        text = titleText,
+        onTextChange = { titleText = it },
+        keyboardInputType = InputType.TYPE_CLASS_TEXT,
+        keyboardImeOptions = EditorInfo.IME_ACTION_NEXT,
+        onImeAction = { actionId -> if (actionId == EditorInfo.IME_ACTION_NEXT) urlFocusRequester.requestFocus() },
+        onShowNativeKeyboard = onShowNativeKeyboard,
+        onHideNativeKeyboard = onHideNativeKeyboard,
+    )
+    NativeKeyboardEffect(
+        interactionSource = urlInteractionSource,
+        text = urlText,
+        onTextChange = { urlText = it },
+        keyboardInputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_URI,
+        keyboardImeOptions = EditorInfo.IME_ACTION_DONE,
+        onImeAction = { actionId ->
+            if (actionId == EditorInfo.IME_ACTION_DONE) {
+                focusManager.clearFocus()
+                onHideNativeKeyboard?.invoke()
+            }
+        },
+        onShowNativeKeyboard = onShowNativeKeyboard,
+        onHideNativeKeyboard = onHideNativeKeyboard,
+    )
+
+    Box(
+        modifier =
+            Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.75f))
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                ) { onDismiss() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Card(
+            colors =
+                CardDefaults.cardColors(
+                    containerColor = BrowserColors.surface,
+                ),
+            shape = RoundedCornerShape(16.dp),
+            modifier =
+                Modifier
+                    .fillMaxWidth(0.85f)
+                    .padding(16.dp)
+                    .clickable(
+                        interactionSource = remember { MutableInteractionSource() },
+                        indication = null,
+                    ) { /* Prevent closing when clicking the card */ },
+        ) {
+            Column(
+                modifier =
+                    Modifier
+                        .padding(24.dp)
+                        .fillMaxWidth(),
+            ) {
+                Text(
+                    text =
+                        stringResource(
+                            if (bookmark != null) R.string.webbrowser_title_edit_bookmark else R.string.webbrowser_title_new_bookmark,
+                        ),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = BrowserColors.text,
+                    fontWeight = FontWeight.Bold,
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = titleText,
+                    onValueChange = { titleText = it },
+                    interactionSource = titleInteractionSource,
+                    label = { Text(stringResource(R.string.webbrowser_label_title), color = BrowserColors.textSecondary) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors =
+                        OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = BrowserColors.text,
+                            unfocusedTextColor = BrowserColors.text,
+                            focusedBorderColor = BrowserColors.accent,
+                            unfocusedBorderColor = BrowserColors.border,
+                            focusedContainerColor = BrowserColors.surfaceAlt,
+                            unfocusedContainerColor = BrowserColors.surfaceAlt,
+                        ),
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                OutlinedTextField(
+                    value = urlText,
+                    onValueChange = { urlText = it },
+                    interactionSource = urlInteractionSource,
+                    label = { Text(stringResource(R.string.webbrowser_label_url), color = BrowserColors.textSecondary) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth().focusRequester(urlFocusRequester),
+                    colors =
+                        OutlinedTextFieldDefaults.colors(
+                            focusedTextColor = BrowserColors.text,
+                            unfocusedTextColor = BrowserColors.text,
+                            focusedBorderColor = BrowserColors.accent,
+                            unfocusedBorderColor = BrowserColors.border,
+                            focusedContainerColor = BrowserColors.surfaceAlt,
+                            unfocusedContainerColor = BrowserColors.surfaceAlt,
+                        ),
+                )
+
+                Spacer(modifier = Modifier.height(24.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    OutlinedButton(
+                        onClick = onDismiss,
+                        colors =
+                            ButtonDefaults.outlinedButtonColors(
+                                contentColor = BrowserColors.text,
+                            ),
+                    ) {
+                        Text(stringResource(R.string.webbrowser_btn_cancel))
+                    }
+
+                    Spacer(modifier = Modifier.width(12.dp))
+
+                    Button(
+                        onClick = {
+                            if (urlText.isNotBlank()) {
+                                onSave(titleText, urlText)
+                            }
+                        },
+                        colors =
+                            ButtonDefaults.buttonColors(
+                                containerColor = BrowserColors.accent,
+                                contentColor = BrowserColors.background,
+                            ),
+                    ) {
+                        Text(stringResource(R.string.webbrowser_btn_save))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Preview(widthDp = 1280, heightDp = 720)
+@Composable
+fun EditBookmarkModalPreview() {
+    MaterialTheme(colorScheme = darkColorScheme()) {
+        Box(
+            modifier =
+                Modifier
+                    .fillMaxSize()
+                    .background(BrowserColors.background),
+        ) {
+            EditBookmarkModal(
+                bookmark = BrowserBookmark(id = 1, title = "YouTube VR", url = "https://www.youtube.com"),
+                onDismiss = {},
+                onSave = { _, _ -> },
+            )
+        }
+    }
+}

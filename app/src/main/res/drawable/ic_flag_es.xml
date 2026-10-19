@@ -1,0 +1,32 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+  <group>
+    <clip-path android:pathData="M12,2A10,10 0 1,0 22,12A10,10 0 0,0 12,2Z"/>
+    <!-- Red top stripe -->
+    <path
+        android:fillColor="#AA151B"
+        android:pathData="M0,0h24v6H0z"/>
+    <!-- Yellow middle stripe -->
+    <path
+        android:fillColor="#F1BF00"
+        android:pathData="M0,6h24v12H0z"/>
+    <!-- Red bottom stripe -->
+    <path
+        android:fillColor="#AA151B"
+        android:pathData="M0,18h24v6H0z"/>
+    <!-- Simplified Spanish coat of arms in yellow stripe -->
+    <path
+        android:fillColor="#AA151B"
+        android:pathData="M7,10h3v3.5c0,0.8 -1.5,1.5 -1.5,1.5s-1.5,-0.7 -1.5,-1.5z"/>
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M7.8,11h1.4v2H7.8z"/>
+  </group>
+  <path
+      android:strokeColor="#33FFFFFF"
+      android:strokeWidth="1"
+      android:pathData="M12,2A10,10 0 1,0 22,12A10,10 0 0,0 12,2Z"/>
+</vector>

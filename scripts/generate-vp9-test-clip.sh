@@ -1,14 +1,14 @@
 #!/bin/bash
-# Gera clipes sintéticos de teste para validação de decodificação por hardware (T6.1-T6.3)
-# dos codecs VP9 Profile 0 (8-bit), VP9 Profile 2 (10-bit) e AV1 no Meta Quest 3.
+# Generates synthetic test clips to validate hardware decoding (T6.1-T6.3) of the
+# VP9 Profile 0 (8-bit), VP9 Profile 2 (10-bit) and AV1 codecs on the Meta Quest 3.
 #
-# Utiliza geradores de sinal do FFmpeg (testsrc2 e sine) para garantir testes
-# determinísticos e reprodutíveis, sem necessidade de mídia externa ou download.
+# It uses FFmpeg's signal generators (testsrc2 and sine) to guarantee deterministic,
+# reproducible tests, with no need for external media or downloads.
 #
-# Formatos gerados:
-# 1. VP9 Profile 0: YUV 4:2:0 8-bit SDR em container WebM
-# 2. VP9 Profile 2: YUV 4:2:0 10-bit (yuv420p10le) em container WebM
-# 3. AV1: YUV 4:2:0 8-bit em container MP4 (ou WebM se encoder preferir)
+# Generated formats:
+# 1. VP9 Profile 0: YUV 4:2:0 8-bit SDR in a WebM container
+# 2. VP9 Profile 2: YUV 4:2:0 10-bit (yuv420p10le) in a WebM container
+# 3. AV1: YUV 4:2:0 8-bit in an MP4 container (or WebM if the encoder prefers)
 set -euo pipefail
 
 DURATION_SEC=10
@@ -22,19 +22,19 @@ GEN_AV1=1
 
 usage() {
     cat <<EOF
-Uso: $0 [opcoes]
-  --duration-sec N   Duração de cada clipe em segundos (padrão: 10)
-  --res RES          Resolução: '1080p' (1920x1080) ou '4k' (3840x2160) (padrão: 1080p)
-  --out-dir PATH     Diretório de saída (padrão: testdata/codecs)
-  --force            Regera mesmo se os arquivos já existirem
-  --vp9-prof0        Gera apenas VP9 Profile 0 (8-bit)
-  --vp9-prof2        Gera apenas VP9 Profile 2 (10-bit)
-  --av1              Gera apenas AV1
-  -h, --help         Exibe esta ajuda
+Usage: $0 [options]
+  --duration-sec N   Duration of each clip in seconds (default: 10)
+  --res RES          Resolution: '1080p' (1920x1080) or '4k' (3840x2160) (default: 1080p)
+  --out-dir PATH     Output directory (default: testdata/codecs)
+  --force            Regenerates even if the files already exist
+  --vp9-prof0        Generates only VP9 Profile 0 (8-bit)
+  --vp9-prof2        Generates only VP9 Profile 2 (10-bit)
+  --av1              Generates only AV1
+  -h, --help         Shows this help
 EOF
 }
 
-# Se alguma flag específica de codec for passada, desativa a geração de todos por padrão
+# If any codec-specific flag is passed, disable generating all of them by default
 SPECIFIED_CODEC=0
 
 while [[ $# -gt 0 ]]; do
@@ -59,12 +59,12 @@ while [[ $# -gt 0 ]]; do
             fi
             GEN_AV1=1; shift ;;
         -h|--help) usage; exit 0 ;;
-        *) echo "Opção desconhecida: $1"; usage; exit 1 ;;
+        *) echo "Unknown option: $1"; usage; exit 1 ;;
     esac
 done
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
-    echo "Erro: ffmpeg não encontrado no PATH — obrigatório para gerar clipes sintéticos." >&2
+    echo "Error: ffmpeg not found in PATH — required to generate synthetic clips." >&2
     exit 1
 fi
 
@@ -80,7 +80,7 @@ case "$RESOLUTION" in
         BITRATE_AV1="16M"
         ;;
     *)
-        echo "Resolução inválida: $RESOLUTION. Escolha '1080p' ou '4k'." >&2
+        echo "Invalid resolution: $RESOLUTION. Choose '1080p' or '4k'." >&2
         exit 1
         ;;
 esac
@@ -91,9 +91,9 @@ mkdir -p "$OUT_DIR"
 if [[ $GEN_VP9_P0 -eq 1 ]]; then
     OUT_FILE="$OUT_DIR/vp9-profile0-clip.webm"
     if [[ -f "$OUT_FILE" && "$FORCE" -eq 0 ]]; then
-        echo "Já existe: $OUT_FILE ($(du -h "$OUT_FILE" | cut -f1)). Use --force para regerar."
+        echo "Already exists: $OUT_FILE ($(du -h "$OUT_FILE" | cut -f1)). Use --force to regenerate."
     else
-        echo "Gerando clipe VP9 Profile 0 8-bit (${DIMENSIONS}, ${DURATION_SEC}s)..."
+        echo "Generating the VP9 Profile 0 8-bit clip (${DIMENSIONS}, ${DURATION_SEC}s)..."
         ffmpeg -y -hide_banner -loglevel warning \
             -f lavfi -i "testsrc2=size=${DIMENSIONS}:rate=30" \
             -f lavfi -i "sine=frequency=440:sample_rate=48000" \
@@ -102,7 +102,7 @@ if [[ $GEN_VP9_P0 -eq 1 ]]; then
             -b:v "$BITRATE_VP9" -deadline realtime -cpu-used 4 \
             -c:a libopus -b:a 128k \
             "$OUT_FILE"
-        echo "Gerado com sucesso: $OUT_FILE ($(du -h "$OUT_FILE" | cut -f1))"
+        echo "Generated successfully: $OUT_FILE ($(du -h "$OUT_FILE" | cut -f1))"
     fi
 fi
 
@@ -110,9 +110,9 @@ fi
 if [[ $GEN_VP9_P2 -eq 1 ]]; then
     OUT_FILE="$OUT_DIR/vp9-profile2-10bit-clip.webm"
     if [[ -f "$OUT_FILE" && "$FORCE" -eq 0 ]]; then
-        echo "Já existe: $OUT_FILE ($(du -h "$OUT_FILE" | cut -f1)). Use --force para regerar."
+        echo "Already exists: $OUT_FILE ($(du -h "$OUT_FILE" | cut -f1)). Use --force to regenerate."
     else
-        echo "Gerando clipe VP9 Profile 2 10-bit (${DIMENSIONS}, ${DURATION_SEC}s)..."
+        echo "Generating the VP9 Profile 2 10-bit clip (${DIMENSIONS}, ${DURATION_SEC}s)..."
         ffmpeg -y -hide_banner -loglevel warning \
             -f lavfi -i "testsrc2=size=${DIMENSIONS}:rate=30" \
             -f lavfi -i "sine=frequency=440:sample_rate=48000" \
@@ -121,7 +121,7 @@ if [[ $GEN_VP9_P2 -eq 1 ]]; then
             -b:v "$BITRATE_VP9" -deadline realtime -cpu-used 4 \
             -c:a libopus -b:a 128k \
             "$OUT_FILE"
-        echo "Gerado com sucesso: $OUT_FILE ($(du -h "$OUT_FILE" | cut -f1))"
+        echo "Generated successfully: $OUT_FILE ($(du -h "$OUT_FILE" | cut -f1))"
     fi
 fi
 
@@ -129,9 +129,9 @@ fi
 if [[ $GEN_AV1 -eq 1 ]]; then
     OUT_FILE="$OUT_DIR/av1-test-clip.mp4"
     if [[ -f "$OUT_FILE" && "$FORCE" -eq 0 ]]; then
-        echo "Já existe: $OUT_FILE ($(du -h "$OUT_FILE" | cut -f1)). Use --force para regerar."
+        echo "Already exists: $OUT_FILE ($(du -h "$OUT_FILE" | cut -f1)). Use --force to regenerate."
     else
-        echo "Detectando encoder AV1 no FFmpeg..."
+        echo "Detecting the AV1 encoder in FFmpeg..."
         AV1_ENCODER=""
         AV1_ARGS=()
         ENCODERS=$(ffmpeg -encoders 2>&1 || true)
@@ -145,11 +145,11 @@ if [[ $GEN_AV1 -eq 1 ]]; then
             AV1_ENCODER="librav1e"
             AV1_ARGS=(-speed 10)
         else
-            echo "Aviso: Nenhum encoder AV1 suportado encontrado no ffmpeg (libsvtav1, libaom-av1 ou librav1e). Pulando AV1." >&2
+            echo "Warning: No supported AV1 encoder found in ffmpeg (libsvtav1, libaom-av1 or librav1e). Skipping AV1." >&2
         fi
 
         if [[ -n "$AV1_ENCODER" ]]; then
-            echo "Gerando clipe AV1 (${AV1_ENCODER}, ${DIMENSIONS}, ${DURATION_SEC}s)..."
+            echo "Generating the AV1 clip (${AV1_ENCODER}, ${DIMENSIONS}, ${DURATION_SEC}s)..."
             ffmpeg -y -hide_banner -loglevel warning \
                 -f lavfi -i "testsrc2=size=${DIMENSIONS}:rate=30" \
                 -f lavfi -i "sine=frequency=440:sample_rate=48000" \
@@ -158,9 +158,9 @@ if [[ $GEN_AV1 -eq 1 ]]; then
                 -b:v "$BITRATE_AV1" \
                 -c:a libopus -b:a 128k \
                 "$OUT_FILE"
-            echo "Gerado com sucesso: $OUT_FILE ($(du -h "$OUT_FILE" | cut -f1))"
+            echo "Generated successfully: $OUT_FILE ($(du -h "$OUT_FILE" | cut -f1))"
         fi
     fi
 fi
 
-echo "Concluído! Clipes de teste prontos em: $OUT_DIR"
+echo "Done! Test clips ready in: $OUT_DIR"

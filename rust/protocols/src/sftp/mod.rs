@@ -37,19 +37,18 @@
 //! remontados na ordem original; um `StatusCode::Eof`/short-read no meio do
 //! range para a remontagem ali (o resto, se buscado, e descartado).
 //!
-//! ## Verificacao de host key: aceita qualquer uma, DE PROPOSITO
+//! ## Verificação e fixação de host key (TOFU - Trust On First Use, T6.2 / #57)
 //!
-//! `SftpHandler::check_server_key` sempre retorna `Ok(true)` — ou seja, NAO
-//! ha verificacao de host key (equivalente a
-//! `ssh -o StrictHostKeyChecking=no`, vulneravel a
-//! man-in-the-middle-na-rede-local). Decisao deliberada e documentada, nao
-//! um descuido: nao existe infraestrutura de `known_hosts`/TOFU nesta app
-//! (nem para SMB nem para NFS — mesmo padrao ja aceito no doc para "sem
-//! infra de auth real para NAS domestico"), e o caso de uso e uma rede
-//! Wi-Fi domestica onde o Quest 3 fala com um NAS/servidor SFTP na mesma
-//! LAN. Se isto algum dia mudar (uso fora de uma LAN confiavel), a
-//! mitigacao correta e fixacao de chave (guardar o fingerprint na primeira
-//! conexao e comparar nas seguintes), nao "confiar em tudo" como agora.
+//! Conexões SFTP realizam verificação estrita de identidade do servidor:
+//! 1. Na primeira conexão sem fingerprint armazenado (`expected_fingerprint: None`),
+//!    a negociação KEX captura a chave pública do servidor e aborta com
+//!    `ERROR:HOST_KEY_CONFIRM:<fingerprint>` (ou erro `needs confirmation: <fingerprint>`),
+//!    retornando o fingerprint SHA-256 apresentado pelo servidor para confirmação do usuário.
+//! 2. Uma vez confirmado e fixado (`expected_fingerprint: Some(fp)`), as conexões
+//!    seguintes comparam o fingerprint da chave do servidor contra o valor fixado.
+//!    Se a chave divergir, a conexão é abortada com
+//!    `ERROR:HOST_KEY_CHANGED:expected ..., server presented ...` (proteção contra
+//!    ataques man-in-the-middle / MITM).
 //!
 //! ## Keepalive e reconexao (T6.4, doc secao 6 `[!NOTE]` "Timeout agressivo")
 //!
@@ -65,17 +64,23 @@
 //! erro sobe para o chamador (`Demuxer`).
 //!
 //! **O que NAO esta implementado** (fora do escopo desta sessao, documentado
-//! honestamente em vez de fingido): escrita de arquivos, `known_hosts`,
+//! honestamente em vez de fingido): escrita de arquivos, `known_hosts` em arquivo plano,
 //! agentes SSH (`ssh-agent`), certificados OpenSSH. Autenticacao por chave
 //! privada (T6.2 "avancado") esta implementada (`SftpTarget::private_key`,
 //! PEM em memoria — ver `uri.rs`), password auth e o caminho principal.
 
+pub mod host_key;
 pub mod uri;
 
+pub use host_key::{
+    HostKeyError, compute_fingerprint, normalize_fingerprint, verify_host_key_fingerprint,
+    verify_server_public_key,
+};
 pub use uri::{SftpTarget, is_sftp_uri, redact};
 
 use crate::chunking::split_range;
 use crate::prefetch::RangeSource;
+use crate::session_pool::{MAX_IDLE_PER_KEY, PoolKey, SESSION_TTL, SessionPool};
 use futures_util::future::join_all;
 use russh::Disconnect;
 use russh::client::{self, Handler};
@@ -84,7 +89,7 @@ use russh_sftp::client::error::Error as SftpError;
 use russh_sftp::client::{RawSftpSession, SftpSession};
 use russh_sftp::protocol::{Data, FileAttributes, OpenFlags, StatusCode};
 use std::io;
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock};
 use std::time::Duration;
 use tokio::runtime::Runtime;
 
@@ -105,36 +110,26 @@ const SFTP_MAX_READ_CHUNK: u32 = 256 * 1024 - 4096;
 const SFTP_SUB_READ_SIZE: u32 = 64 * 1024;
 const SFTP_SUB_READ_ROUNDS: usize = 4;
 
-/// Quantos `SSH_FXP_READ` concorrentes no maximo por vez. Um bloco de 12MB
-/// (ver `REMOTE_PREFETCH_BLOCK_SIZE` em `core/src/demuxer.rs`) dividido em
-/// chunks de ~252KB da ~48 chunks — disparar os 48 de uma vez (primeira
-/// versao desta otimizacao, so testada via Docker/localhost) coincidiu com
-/// uma REGRESSAO reportada no Quest 3 real (decFps ~30 -> media 10, jitter
-/// ~200ms -> ~300ms) assim que a otimizacao foi ao ar.
+/// Quantos chunks de ~252KB ficam em voo ao mesmo tempo, numa janela
+/// deslizante: cada chunk que termina libera o proximo, sem esperar os
+/// demais. Antes eram lotes de 4 com barreira (o lote seguinte so saia quando
+/// o mais lento do anterior voltava); medido no Quest 3, a janela de 16 subiu
+/// a vazao de ~49 para ~70 MB/s.
 ///
-/// **Atualizacao (sessao seguinte, com acesso a logcat de verdade):** este
-/// limite de 4 ja estava rodando no APK que reproduziu vidFps~10/decFps~17
-/// contra SFTP (mesmo timestamp de build), e o mesmo arquivo local (sem
-/// rede) fez decFps~60/vidFps~50-55 no mesmo dispositivo — ou seja, a
-/// hipotese "burst de 48 requisicoes" abaixo esta REFUTADA como causa
-/// principal da regressao; o gargalo e throughput sustentado da leitura de
-/// rede, nao contencao de burst. As duas causas originais ficam registradas
-/// porque o limite continua uma protecao razoavel contra bursts (nao ha
-/// motivo pra tira-lo), so nao explicam mais os ~10fps observados:
-/// (1) cada `SSH_FXP_READ` custa criptografia SSH de verdade (CPU, ao
-/// contrario do decode de video que roda em hardware) — um burst de 48
-/// concorrentes compete por CPU com a thread de decode muito mais do que um
-/// numero pequeno em voo por vez; (2) um burst desse tamanho pode estourar a
-/// janela de fluxo do canal SSH ou algum limite do servidor, fazendo uma
-/// unica falha disparar reconexao completa (handshake SSH + auth + reabrir o
-/// arquivo, ver `SftpFileSource::reconnect`) — bem mais caro que o RTT que a
-/// concorrencia deveria estar economizando. Ver docs/NETWORK-IO-PERFORMANCE.md.
-const SFTP_MAX_CONCURRENT_CHUNKS: usize = 4;
+/// Historico do limite antigo: disparar os 48 chunks de um bloco de 12MB de
+/// uma vez coincidiu com uma regressao no Quest 3 (decFps ~30 -> 10). A causa
+/// foi refutada depois (o gargalo era vazao sustentada), mas os dois riscos
+/// de um burst grande continuam: cada `SSH_FXP_READ` custa CPU de cifra que
+/// disputa nucleo com o decode, e um burst que estoura a janela do canal SSH
+/// ou um limite do servidor faz uma falha disparar reconexao completa. Por
+/// isso a janela tem teto e cada chunk tem retry proprio (ver
+/// `read_chunks_windowed`).
+const SFTP_WINDOW_CHUNKS: usize = 16;
 
-/// Quantas vezes tentar de novo SO o(s) chunk(s) que falharam dentro de um
-/// lote, antes de desistir e deixar o erro propagar para `read_range`
+/// Quantas vezes tentar de novo SO o(s) chunk(s) que falharam dentro da
+/// janela, antes de desistir e deixar o erro propagar para `read_range`
 /// (que ai sim reconecta a sessao inteira). Sem isto, uma unica falha
-/// transiente de UM chunk entre 4 concorrentes descartava os outros 3 que
+/// transiente de UM chunk entre os concorrentes descartava os que
 /// tinham vindo certos e forcava reconexao completa (handshake SSH + auth +
 /// reabrir arquivo) so pra refazer os mesmos ~12MB do zero.
 const SFTP_CHUNK_RETRY_ATTEMPTS: usize = 2;
@@ -142,29 +137,38 @@ const SFTP_CHUNK_RETRY_ATTEMPTS: usize = 2;
 /// Timeout maximo para handshake TCP e negociacao/autenticacao SSH.
 const SFTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
 
-/// Teto de tempo pra UM lote de leitura concorrente (~1MB).
-/// Em regime normal no Quest 3, 1MB leva ~60-100ms (p95 de 12MB = 1.2s).
-/// 3.5 segundos e ~35x a mediana, suficiente para absorver jitter transiente de Wi-Fi,
-/// mas detectando e recuperando stalls pontuais antes que o buffer do demuxer esvazie (q=0).
-const SFTP_READ_TIMEOUT: Duration = Duration::from_millis(3500);
+/// Tempo maximo sem NENHUM chunk da janela concluir antes de tratar como stall
+/// de rede (o chamador reconecta). Mede progresso, nao a duracao de cada
+/// chunk: assim a vazao minima tolerada nao depende do tamanho da janela, e
+/// uma conexao morta e detectada em 3,5s, como quando o teto era do lote de
+/// ~1MB. Em regime normal no Quest 3, 1MB leva ~60-100ms (p95 de 12MB =
+/// 1,2s); 3,5s e ~35x a mediana, o bastante para absorver jitter de Wi-Fi e
+/// ainda recuperar stalls pontuais antes que o buffer do demuxer esvazie.
+const SFTP_STALL_TIMEOUT: Duration = Duration::from_millis(3500);
 
-/// Teto de tempo para retentativa de chunks individuais falhos dentro de um lote.
+/// Teto de tempo para retentativa de chunks individuais falhos dentro da janela.
 const SFTP_CHUNK_RETRY_TIMEOUT: Duration = Duration::from_millis(2000);
 
-/// Handler minimo exigido pelo `russh::client` para receber eventos da
-/// sessao SSH (banner, checagem de host key, etc). `check_server_key`
-/// aceita QUALQUER chave — ver `[!WARNING]` no doc do modulo. Todos os
-/// outros callbacks usam a implementacao default do trait.
-struct SftpHandler;
+/// Handler do `russh::client` para eventos de sessao SSH.
+/// Realiza a verificacao da host key do servidor (T6.2 / #57 TOFU).
+struct SftpHandler {
+    expected_fingerprint: Option<String>,
+    check_result: Arc<std::sync::Mutex<Option<Result<String, HostKeyError>>>>,
+}
 
 impl Handler for SftpHandler {
     type Error = russh::Error;
 
     async fn check_server_key(
         &mut self,
-        _server_public_key: &PublicKeyOrCertificate,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        Ok(true)
+        let res = verify_server_public_key(self.expected_fingerprint.as_deref(), server_public_key);
+        let ok = res.is_ok();
+        if let Ok(mut lock) = self.check_result.lock() {
+            *lock = Some(res);
+        }
+        Ok(ok)
     }
 }
 
@@ -181,6 +185,45 @@ fn client_config(keepalive: bool) -> client::Config {
     cfg
 }
 
+/// `client::connect` da russh cria o socket sem desligar o Nagle; com
+/// requisicoes SFTP pequenas isso custa ~44 ms por chamada (delayed ACK do
+/// servidor), entao o socket e criado aqui com `TCP_NODELAY`.
+async fn connect_nodelay(
+    t: &SftpTarget,
+    keepalive: bool,
+) -> Result<client::Handle<SftpHandler>, String> {
+    let socket = tokio::net::TcpStream::connect((t.host.as_str(), t.port))
+        .await
+        .map_err(|e| e.to_string())?;
+    socket.set_nodelay(true).map_err(|e| e.to_string())?;
+    let check_result = Arc::new(std::sync::Mutex::new(None));
+    let handler = SftpHandler {
+        expected_fingerprint: t.expected_fingerprint.clone(),
+        check_result: check_result.clone(),
+    };
+    match client::connect_stream(Arc::new(client_config(keepalive)), socket, handler).await {
+        Ok(handle) => Ok(handle),
+        Err(e) => {
+            if let Ok(guard) = check_result.lock() {
+                match &*guard {
+                    Some(Err(HostKeyError::NeedsConfirmation { fingerprint })) => {
+                        return Err(format!(
+                            "HOST_KEY_CONFIRM:{fingerprint} needs confirmation: {fingerprint}"
+                        ));
+                    }
+                    Some(Err(HostKeyError::IdentityChanged { expected, actual })) => {
+                        return Err(format!(
+                            "HOST_KEY_CHANGED:expected {expected}, server presented {actual} server identity changed: expected fingerprint {expected}, server presented {actual}"
+                        ));
+                    }
+                    _ => {}
+                }
+            }
+            Err(e.to_string())
+        }
+    }
+}
+
 /// Conecta e autentica — senha OU chave privada (T6.2 "avancado"), conforme
 /// `SftpTarget::private_key` esta preenchido ou nao (ver `uri.rs`).
 async fn connect_and_auth(
@@ -189,13 +232,7 @@ async fn connect_and_auth(
 ) -> Result<client::Handle<SftpHandler>, String> {
     t.validate()?;
     tokio::time::timeout(SFTP_CONNECT_TIMEOUT, async {
-        let mut session = match client::connect(
-            Arc::new(client_config(keepalive)),
-            (t.host.as_str(), t.port),
-            SftpHandler,
-        )
-        .await
-        {
+        let mut session = match connect_nodelay(t, keepalive).await {
             Ok(session) => {
                 log::info!(
                     "SFTP: conexao TCP/SSH estabelecida com {}:{}",
@@ -206,7 +243,7 @@ async fn connect_and_auth(
             }
             Err(e) => {
                 log::warn!("SFTP: falha ao conectar em {}:{}: {e}", t.host, t.port);
-                return Err(e.to_string());
+                return Err(e);
             }
         };
 
@@ -291,32 +328,145 @@ async fn disconnect_best_effort(session: &client::Handle<SftpHandler>) {
         .await;
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SftpDirEntry {
     pub name: String,
     pub is_dir: bool,
     pub size: u64,
+    pub mtime: i64,
 }
 
-/// Lista um diretorio remoto (T6.2 "opendir, readdir, stat") — tambem serve
-/// como "testar conexao"/"status de conexao" para a UI (T6.4), igual ao
-/// `smb::list_shares`/`smb::list_directory`: se autenticar e listar
-/// funcionam, a conexao esta OK. Conexao curta, sem keepalive (nao vale a
-/// pena para uma chamada de UI de poucos segundos). `path` vazio = diretorio
-/// home do usuario SSH (`.`).
-///
-/// Usa `SftpSession::read_dir` de alto nivel: ja faz `OPENDIR`+`READDIR` em
-/// laco e devolve os atributos (tamanho, tipo) que ja vem embutidos em cada
-/// entrada da resposta `SSH_FXP_NAME` — ao contrario do SMB
-/// (`smb::list_directory`), SFTP nao exige um `STAT`/`FSTAT` extra por
-/// arquivo so pra descobrir tamanho/tipo.
-pub fn list_directory(t: &SftpTarget, path: &str) -> Result<Vec<SftpDirEntry>, String> {
-    let rt = new_runtime().map_err(|e| e.to_string())?;
-    rt.block_on(async {
-        let session = connect_and_auth(t, false).await?;
-        let sftp = open_sftp_session(&session).await?;
+struct SftpPooledSession {
+    session: client::Handle<SftpHandler>,
+    sftp: SftpSession,
+    epoch: u64,
+}
 
+impl SftpPooledSession {
+    async fn connect(t: &SftpTarget) -> Result<Self, String> {
+        let epoch = SFTP_POOL.epoch(&t.host, t.port);
+        let session = connect_and_auth(t, false).await?;
+        let sftp = match open_sftp_session(&session).await {
+            Ok(sftp) => sftp,
+            Err(e) => {
+                disconnect_best_effort(&session).await;
+                return Err(e);
+            }
+        };
+        Ok(Self {
+            session,
+            sftp,
+            epoch,
+        })
+    }
+
+    async fn close(self) {
+        let _ = self.sftp.close().await;
+        disconnect_best_effort(&self.session).await;
+    }
+}
+
+static SFTP_POOL: LazyLock<SessionPool<SftpPooledSession>> =
+    LazyLock::new(|| SessionPool::new(SESSION_TTL, MAX_IDLE_PER_KEY));
+
+fn pool_key(t: &SftpTarget) -> PoolKey {
+    PoolKey::new(
+        &t.host,
+        t.port,
+        &[
+            &t.username,
+            &t.password,
+            t.private_key.as_deref().unwrap_or(""),
+            t.expected_fingerprint.as_deref().unwrap_or(""),
+        ],
+    )
+}
+
+/// Closes sessions in the background so a dead server never stalls the caller.
+fn dispose(sessions: Vec<SftpPooledSession>) {
+    for session in sessions {
+        crate::POOL_RUNTIME.spawn(session.close());
+    }
+}
+
+fn checkout(t: &SftpTarget) -> Option<SftpPooledSession> {
+    let (session, expired) = SFTP_POOL.checkout(&pool_key(t));
+    dispose(expired);
+    session
+}
+
+fn checkin(t: &SftpTarget, session: SftpPooledSession) {
+    let epoch = session.epoch;
+    dispose(SFTP_POOL.checkin(pool_key(t), session, epoch));
+}
+
+/// Drops every pooled session of a server (called when the user deletes it).
+pub fn close_pooled_sessions(host: &str, port: u16) {
+    dispose(SFTP_POOL.drain_server(host, port));
+}
+
+/// Obtém o fingerprint SHA-256 da host key do servidor SFTP sem autenticar.
+/// Conecta via TCP, aguarda a troca de chaves SSH (KEX) e extrai o fingerprint retornado.
+pub async fn probe_server_fingerprint(host: &str, port: u16) -> Result<String, String> {
+    let target = SftpTarget {
+        host: host.to_string(),
+        port,
+        ..Default::default()
+    };
+    match connect_nodelay(&target, false).await {
+        Ok(session) => {
+            let _ = session.disconnect(Disconnect::ByApplication, "", "").await;
+            Err("SFTP: probe obteve conexao inesperada sem confirmacao de chave".to_string())
+        }
+        Err(e) => {
+            if let Some(idx) = e.find("HOST_KEY_CONFIRM:") {
+                let rest = &e[idx + "HOST_KEY_CONFIRM:".len()..];
+                let fp = rest.split_whitespace().next().unwrap_or("").trim();
+                Ok(fp.to_string())
+            } else {
+                Err(e)
+            }
+        }
+    }
+}
+
+/// Versão bloqueante de [`probe_server_fingerprint`].
+pub fn probe_host_key(host: &str, port: u16) -> Result<String, String> {
+    crate::POOL_RUNTIME.block_on(probe_server_fingerprint(host, port))
+}
+
+/// Lists `dir_path` on a pooled session; a pooled session may be dead (server
+/// restart, Wi-Fi blip), so a failure on it is retried once on a fresh one.
+/// On success the session is returned still checked out.
+async fn read_dir_on_session(
+    t: &SftpTarget,
+    dir_path: &str,
+) -> Result<(SftpPooledSession, russh_sftp::client::fs::ReadDir), String> {
+    if let Some(session) = checkout(t) {
+        match session.sftp.read_dir(dir_path).await {
+            Ok(entries) => return Ok((session, entries)),
+            Err(e) => {
+                log::warn!("SFTP: read_dir failed on a pooled session ({e}), reconnecting...");
+                dispose(vec![session]);
+            }
+        }
+    }
+    let session = SftpPooledSession::connect(t).await?;
+    match session.sftp.read_dir(dir_path).await {
+        Ok(entries) => Ok((session, entries)),
+        Err(e) => {
+            dispose(vec![session]);
+            Err(e.to_string())
+        }
+    }
+}
+
+/// Lists a remote directory, reusing an idle pooled SFTP session to avoid new handshakes.
+pub fn list_directory(t: &SftpTarget, path: &str) -> Result<Vec<SftpDirEntry>, String> {
+    crate::POOL_RUNTIME.block_on(async {
         let dir_path = if path.is_empty() { "." } else { path };
-        let entries = sftp.read_dir(dir_path).await.map_err(|e| e.to_string())?;
+        let (session, entries) = read_dir_on_session(t, dir_path).await?;
+        checkin(t, session);
 
         let result = entries
             .map(|entry| {
@@ -325,29 +475,21 @@ pub fn list_directory(t: &SftpTarget, path: &str) -> Result<Vec<SftpDirEntry>, S
                     name: entry.file_name(),
                     is_dir: metadata.file_type().is_dir(),
                     size: metadata.len(),
+                    mtime: metadata.mtime.map(|m| m as i64).unwrap_or(0),
                 }
             })
             .collect();
 
-        let _ = sftp.close().await;
-        disconnect_best_effort(&session).await;
         Ok(result)
     })
 }
 
-/// Varredura recursiva "esta pasta tem alguma midia reproduzivel?" -- ver
-/// `crate::folder_scan`. Reusa a MESMA sessao SFTP pra todas as subpastas
-/// visitadas (nao reconecta por nivel), pilha explicita, sem limite de
-/// profundidade fixo, para no primeiro arquivo de midia ou no deadline de
-/// seguranca.
+/// Recursive folder walk checking for media files, using a dedicated session from the pool.
 pub fn scan_has_media(
     t: &SftpTarget,
     path: &str,
 ) -> Result<crate::folder_scan::ScanResult, String> {
-    let rt = new_runtime().map_err(|e| e.to_string())?;
-    rt.block_on(async {
-        let session = connect_and_auth(t, false).await?;
-        let sftp = open_sftp_session(&session).await?;
+    crate::POOL_RUNTIME.block_on(async {
         let deadline = crate::folder_scan::deadline_from_now();
 
         let start = if path.is_empty() {
@@ -355,19 +497,27 @@ pub fn scan_has_media(
         } else {
             path.to_string()
         };
+        let (session, first_entries) = read_dir_on_session(t, &start).await?;
+
+        let mut pending_entries = Some(first_entries);
         let mut stack = vec![start];
-        let mut result = crate::folder_scan::ScanResult::exhausted_empty();
+        let (mut found, mut timed_out, mut skipped_unreadable) = (false, false, false);
 
         while let Some(current) = stack.pop() {
             if std::time::Instant::now() > deadline {
-                result = crate::folder_scan::ScanResult::timed_out_assume_has_media();
+                timed_out = true;
                 break;
             }
-            let entries = match sftp.read_dir(&current).await {
-                Ok(e) => e,
-                Err(_) => continue,
+            let entries = match pending_entries.take() {
+                Some(entries) => entries,
+                None => match session.sftp.read_dir(&current).await {
+                    Ok(e) => e,
+                    Err(_) => {
+                        skipped_unreadable = true;
+                        continue;
+                    }
+                },
             };
-            let mut found = false;
             for entry in entries {
                 let metadata = entry.metadata();
                 let name = entry.file_name();
@@ -384,14 +534,21 @@ pub fn scan_has_media(
                 }
             }
             if found {
-                result = crate::folder_scan::ScanResult::found();
                 break;
             }
         }
 
-        let _ = sftp.close().await;
-        disconnect_best_effort(&session).await;
-        Ok(result)
+        // A failed listing may mean the session died: do not give it back to the pool.
+        if skipped_unreadable {
+            dispose(vec![session]);
+        } else {
+            checkin(t, session);
+        }
+        Ok(crate::folder_scan::ScanResult::from_walk(
+            found,
+            timed_out,
+            skipped_unreadable,
+        ))
     })
 }
 
@@ -488,7 +645,7 @@ impl SftpFileSource {
         // Reconexao completa (handshake SSH + auth + reabrir arquivo) e
         // MUITO mais cara que uma leitura normal — se isto aparecer com
         // frequencia no log durante playback, e sinal de que algo esta
-        // derrubando a conexao com regularidade (ver SFTP_MAX_CONCURRENT_CHUNKS).
+        // derrubando a conexao com regularidade (ver SFTP_WINDOW_CHUNKS).
         log::warn!("SftpFileSource: reconectando apos falha de leitura");
         // Solta o que sobrou da conexao anterior antes de abrir outra —
         // best-effort, o socket provavelmente ja caiu de qualquer forma.
@@ -516,7 +673,7 @@ impl SftpFileSource {
     /// Refinamento desta sessao: preencher um chunk de ~252KB a ~30KB por
     /// vez SEQUENCIALMENTE (uma leitura por vez, esperando cada resposta)
     /// significa ~8 idas-e-voltas em serie por chunk — a concorrencia de
-    /// `SFTP_MAX_CONCURRENT_CHUNKS` so se aplica ENTRE chunks, nao dentro de
+    /// `SFTP_WINDOW_CHUNKS` so se aplica ENTRE chunks, nao dentro de
     /// um. Aqui o chunk e sub-dividido em pedacos de `SFTP_SUB_READ_SIZE` e
     /// todos pedidos em paralelo por rodada (`join_all`) — cada rodada
     /// preenche o que ainda falta; o que sobrar apos `SFTP_SUB_READ_ROUNDS`
@@ -624,105 +781,53 @@ impl SftpFileSource {
         }
 
         let chunks = split_range(offset, want, SFTP_MAX_READ_CHUNK);
-        'batches: for batch in chunks.chunks(SFTP_MAX_CONCURRENT_CHUNKS) {
-            // tokio::time::timeout registra o timer na construcao, entao precisa rodar dentro do block_on.
-            let mut results = match self.runtime.block_on(async {
-                tokio::time::timeout(
-                    SFTP_READ_TIMEOUT,
-                    join_all(batch.iter().map(|&(chunk_offset, chunk_len)| {
-                        Self::read_chunk_filling(raw, handle, chunk_offset, chunk_len)
-                    })),
-                )
-                .await
-            }) {
-                Ok(results) => results,
-                Err(_elapsed) => {
+        let results = self.runtime.block_on(read_chunks_windowed(
+            &chunks,
+            SFTP_WINDOW_CHUNKS,
+            SFTP_STALL_TIMEOUT,
+            SFTP_CHUNK_RETRY_TIMEOUT,
+            SFTP_CHUNK_RETRY_ATTEMPTS,
+            |chunk_offset, chunk_len| {
+                Self::read_chunk_filling(raw, handle, chunk_offset, chunk_len)
+            },
+        ));
+
+        for (idx, result) in results.into_iter().enumerate() {
+            let (chunk_offset, chunk_len) = chunks[idx];
+            match result {
+                Ok(data) => {
+                    let n = data.data.len();
+                    let start_in_buf = (chunk_offset - offset) as usize;
+                    buf[start_in_buf..start_in_buf + n].copy_from_slice(&data.data[..n]);
+                    *total += n;
+                    if n < chunk_len as usize {
+                        // Servidor devolveu menos do que pedido sem sinalizar
+                        // EOF explicito (permitido pelo protocolo), ou este
+                        // era o chunk final legitimo — os chunks seguintes
+                        // (se buscados) nao formam um prefixo contiguo
+                        // confiavel, entao para a remontagem aqui.
+                        break;
+                    }
+                }
+                Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => break,
+                Err(SftpError::Timeout) => {
                     log::warn!(
-                        "SFTP: sem resposta do servidor por {:?} no offset {offset} (stall de rede detectado)",
-                        SFTP_READ_TIMEOUT
+                        "SFTP: sem resposta do servidor no offset {chunk_offset} por {:?} (stall de rede detectado)",
+                        SFTP_STALL_TIMEOUT
                     );
                     return Err(io::Error::new(
                         io::ErrorKind::TimedOut,
                         format!(
                             "SFTP: sem resposta do servidor por {:?} (stall de rede)",
-                            SFTP_READ_TIMEOUT
+                            SFTP_STALL_TIMEOUT
                         ),
                     ));
                 }
-            };
-
-            // Repete SO os chunks que falharam com um erro de verdade (nao
-            // Eof — isso e um resultado legitimo, nao uma falha) antes de
-            // desistir do lote inteiro. Ver doc de SFTP_CHUNK_RETRY_ATTEMPTS.
-            for _ in 0..SFTP_CHUNK_RETRY_ATTEMPTS {
-                let retry_slots: Vec<usize> = results
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, r)| match r {
-                        // Eof e um resultado legitimo (fim do arquivo), nao
-                        // uma falha — nao ha nada pra reler.
-                        Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => {
-                            None
-                        }
-                        Err(_) => Some(i),
-                        Ok(_) => None,
-                    })
-                    .collect();
-                if retry_slots.is_empty() {
-                    break;
-                }
-                let retried_res = self.runtime.block_on(async {
-                    tokio::time::timeout(
-                        SFTP_CHUNK_RETRY_TIMEOUT,
-                        join_all(retry_slots.iter().map(|&i| {
-                            let (chunk_offset, chunk_len) = batch[i];
-                            Self::read_chunk_filling(raw, handle, chunk_offset, chunk_len)
-                        })),
-                    )
-                    .await
-                });
-                match retried_res {
-                    Ok(retried) => {
-                        for (slot, result) in retry_slots.into_iter().zip(retried) {
-                            results[slot] = result;
-                        }
-                    }
-                    Err(_timeout) => {
-                        log::warn!(
-                            "SFTP: timeout ao retentar chunks falhos ({:?})",
-                            SFTP_CHUNK_RETRY_TIMEOUT
-                        );
-                        break;
-                    }
-                }
-            }
-
-            for (idx, result) in results.into_iter().enumerate() {
-                let (chunk_offset, chunk_len) = batch[idx];
-                match result {
-                    Ok(data) => {
-                        let n = data.data.len();
-                        let start_in_buf = (chunk_offset - offset) as usize;
-                        buf[start_in_buf..start_in_buf + n].copy_from_slice(&data.data[..n]);
-                        *total += n;
-                        if n < chunk_len as usize {
-                            // Servidor devolveu menos do que pedido sem sinalizar
-                            // EOF explicito (permitido pelo protocolo), ou este
-                            // era o chunk final legitimo — os chunks seguintes
-                            // (se buscados) nao formam um prefixo contiguo
-                            // confiavel, entao para a remontagem aqui.
-                            break 'batches;
-                        }
-                    }
-                    Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => {
-                        break 'batches;
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "SFTP: leitura em offset {chunk_offset} (tam {chunk_len}) falhou: {e}"
-                        );
-                        return Err(io::Error::other(e.to_string()));
-                    }
+                Err(e) => {
+                    log::warn!(
+                        "SFTP: leitura em offset {chunk_offset} (tam {chunk_len}) falhou: {e}"
+                    );
+                    return Err(io::Error::other(e.to_string()));
                 }
             }
         }
@@ -735,6 +840,70 @@ impl SftpFileSource {
         self.try_read_range_into(offset, buf, &mut total)?;
         Ok(total)
     }
+}
+
+/// Le `chunks` com no maximo `window` em voo, numa janela deslizante (cada
+/// chunk que termina libera o proximo, sem barreira por lote), e devolve os
+/// resultados NA ORDEM de `chunks` — quem monta o buffer depende disso para
+/// parar no primeiro chunk curto ou EOF.
+///
+/// - Um chunk que falha com erro de verdade e relido ate `retry_attempts`
+///   vezes (cada uma com `retry_timeout`) sem descartar os que vieram certos
+///   nem forcar reconexao. `Eof` e um resultado legitimo e nunca e repetido.
+/// - Se nenhum chunk concluir em `stall_timeout`, a leitura para com
+///   `Err(Timeout)` na posicao do chunk que estava sendo esperado: a conexao
+///   provavelmente caiu e repetir na mesma so gastaria mais tempo.
+/// - No primeiro `Err` (incluindo `Eof`) a janela e abandonada e os chunks
+///   em voo sao cancelados: os seguintes nao seriam usados. O vetor devolvido
+///   termina nesse `Err`.
+async fn read_chunks_windowed<F, Fut>(
+    chunks: &[(u64, u32)],
+    window: usize,
+    stall_timeout: Duration,
+    retry_timeout: Duration,
+    retry_attempts: usize,
+    fetch: F,
+) -> Vec<Result<Data, SftpError>>
+where
+    F: Fn(u64, u32) -> Fut,
+    Fut: std::future::Future<Output = Result<Data, SftpError>>,
+{
+    use futures_util::stream::{self, StreamExt};
+
+    let fetch = &fetch;
+    let mut in_order = stream::iter(chunks.iter().copied())
+        .map(|(offset, len)| async move {
+            let mut result = fetch(offset, len).await;
+            for _ in 0..retry_attempts {
+                match &result {
+                    Ok(_) => break,
+                    Err(SftpError::Status(status)) if status.status_code == StatusCode::Eof => {
+                        break;
+                    }
+                    Err(_) => {}
+                }
+                result = tokio::time::timeout(retry_timeout, fetch(offset, len))
+                    .await
+                    .unwrap_or(Err(SftpError::Timeout));
+            }
+            result
+        })
+        .buffered(window);
+
+    let mut results = Vec::with_capacity(chunks.len());
+    while results.len() < chunks.len() {
+        let next = match tokio::time::timeout(stall_timeout, in_order.next()).await {
+            Ok(Some(result)) => result,
+            Ok(None) => break,
+            Err(_stalled) => Err(SftpError::Timeout),
+        };
+        let failed = next.is_err();
+        results.push(next);
+        if failed {
+            break;
+        }
+    }
+    results
 }
 
 impl RangeSource for SftpFileSource {
@@ -791,5 +960,300 @@ impl Drop for SftpFileSource {
                 disconnect_best_effort(&session).await;
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const T: Duration = Duration::from_millis(200);
+
+    fn chunk_list(n: u64) -> Vec<(u64, u32)> {
+        (0..n).map(|i| (i * 100, 100)).collect()
+    }
+
+    fn data_for(offset: u64) -> Data {
+        Data {
+            id: 0,
+            data: offset.to_be_bytes().to_vec(),
+        }
+    }
+
+    fn eof() -> SftpError {
+        SftpError::Status(russh_sftp::protocol::Status {
+            id: 0,
+            status_code: StatusCode::Eof,
+            error_message: String::new(),
+            language_tag: String::new(),
+        })
+    }
+
+    fn payload(result: &Result<Data, SftpError>) -> u64 {
+        u64::from_be_bytes(
+            result.as_ref().expect("chunk deveria ter lido").data[..8]
+                .try_into()
+                .unwrap(),
+        )
+    }
+
+    #[tokio::test]
+    async fn results_keep_chunk_order_even_when_later_chunks_finish_first() {
+        let chunks = chunk_list(8);
+        // Quanto maior o offset, mais rapido responde: a ordem de chegada e a inversa da de pedido.
+        let results = read_chunks_windowed(&chunks, 8, T, T, 0, |offset, _| async move {
+            tokio::time::sleep(Duration::from_millis(80 - offset / 10)).await;
+            Ok(data_for(offset))
+        })
+        .await;
+
+        let got: Vec<u64> = results.iter().map(payload).collect();
+        let want: Vec<u64> = chunks.iter().map(|&(o, _)| o).collect();
+        assert_eq!(
+            got, want,
+            "quem monta o buffer para no primeiro chunk curto: a ordem tem que ser a do pedido"
+        );
+    }
+
+    #[tokio::test]
+    async fn never_exceeds_window_and_keeps_it_full() {
+        let in_flight = AtomicUsize::new(0);
+        let peak = AtomicUsize::new(0);
+        let chunks = chunk_list(40);
+
+        let results = read_chunks_windowed(&chunks, 5, T, T, 0, |offset, _| {
+            let (in_flight, peak) = (&in_flight, &peak);
+            async move {
+                let now = in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+                peak.fetch_max(now, Ordering::SeqCst);
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                in_flight.fetch_sub(1, Ordering::SeqCst);
+                Ok(data_for(offset))
+            }
+        })
+        .await;
+
+        assert_eq!(results.len(), 40);
+        assert_eq!(
+            peak.load(Ordering::SeqCst),
+            5,
+            "a janela deve encher (senao nao ha ganho) e nunca passar do teto"
+        );
+    }
+
+    #[tokio::test]
+    async fn transient_failure_retries_only_the_failed_chunk() {
+        let calls: Mutex<HashMap<u64, usize>> = Mutex::new(HashMap::new());
+        let chunks = chunk_list(6);
+
+        let results = read_chunks_windowed(&chunks, 6, T, T, 2, |offset, _| {
+            let attempt = {
+                let mut calls = calls.lock().unwrap();
+                let n = calls.entry(offset).or_insert(0);
+                *n += 1;
+                *n
+            };
+            async move {
+                if offset == 300 && attempt == 1 {
+                    Err(SftpError::IO("conexao resetada".into()))
+                } else {
+                    Ok(data_for(offset))
+                }
+            }
+        })
+        .await;
+
+        assert!(results.iter().all(|r| r.is_ok()));
+        let calls = calls.lock().unwrap();
+        assert_eq!(calls[&300], 2, "o chunk que falhou e lido de novo");
+        assert!(
+            calls
+                .iter()
+                .filter(|&(&o, _)| o != 300)
+                .all(|(_, &n)| n == 1),
+            "os que vieram certos nao sao relidos"
+        );
+    }
+
+    #[tokio::test]
+    async fn exhausted_retries_leave_the_error_in_the_failed_chunks_slot() {
+        let calls = AtomicUsize::new(0);
+        let chunks = chunk_list(4);
+
+        let results = read_chunks_windowed(&chunks, 4, T, T, 2, |offset, _| {
+            let calls = &calls;
+            async move {
+                if offset == 200 {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Err(SftpError::IO("conexao resetada".into()))
+                } else {
+                    Ok(data_for(offset))
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 3, "1 tentativa + 2 retries");
+        assert_eq!(
+            results.len(),
+            3,
+            "o vetor termina no chunk que esgotou as tentativas"
+        );
+        assert!(matches!(results[2], Err(SftpError::IO(_))));
+        assert!(
+            results[0].is_ok() && results[1].is_ok(),
+            "o progresso antes da falha e preservado"
+        );
+    }
+
+    #[tokio::test]
+    async fn eof_is_a_result_not_a_failure_and_is_not_retried() {
+        let calls = AtomicUsize::new(0);
+        let chunks = chunk_list(3);
+
+        let results = read_chunks_windowed(&chunks, 3, T, T, 2, |offset, _| {
+            let calls = &calls;
+            async move {
+                if offset == 200 {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Err(eof())
+                } else {
+                    Ok(data_for(offset))
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert!(
+            matches!(&results[2], Err(SftpError::Status(s)) if s.status_code == StatusCode::Eof)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_silent_chunk_stalls_the_window_and_stops_at_its_slot() {
+        let started = AtomicUsize::new(0);
+        let chunks = chunk_list(12);
+
+        let t0 = std::time::Instant::now();
+        let results =
+            read_chunks_windowed(&chunks, 4, Duration::from_millis(60), T, 2, |offset, _| {
+                started.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if offset == 300 {
+                        std::future::pending::<()>().await;
+                    }
+                    Ok(data_for(offset))
+                }
+            })
+            .await;
+
+        assert_eq!(
+            results.len(),
+            4,
+            "o vetor termina no chunk que travou: 3 lidos + o Timeout"
+        );
+        assert!(
+            results[..3].iter().all(|r| r.is_ok()),
+            "o progresso antes do stall e preservado"
+        );
+        assert!(matches!(results[3], Err(SftpError::Timeout)));
+        assert!(
+            t0.elapsed() < Duration::from_millis(400),
+            "stall detectado pelo vigia, sem esperar retries"
+        );
+        assert!(
+            started.load(Ordering::SeqCst) < 12,
+            "chunks alem do stall nao sao disparados"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_slow_but_progressing_link_is_not_a_stall() {
+        let chunks = chunk_list(24);
+
+        // 24 chunks x 15 ms em janela de 2 leva bem mais que o vigia de 50 ms no total,
+        // mas cada chunk conclui bem antes: vazao baixa nao pode virar timeout.
+        let results = read_chunks_windowed(
+            &chunks,
+            2,
+            Duration::from_millis(50),
+            T,
+            0,
+            |offset, _| async move {
+                tokio::time::sleep(Duration::from_millis(15)).await;
+                Ok(data_for(offset))
+            },
+        )
+        .await;
+
+        assert_eq!(results.len(), 24);
+        assert!(results.iter().all(|r| r.is_ok()));
+    }
+
+    #[tokio::test]
+    async fn first_error_abandons_the_window() {
+        let started = AtomicUsize::new(0);
+        let chunks = chunk_list(30);
+
+        let results = read_chunks_windowed(&chunks, 3, T, T, 0, |offset, _| {
+            started.fetch_add(1, Ordering::SeqCst);
+            async move {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+                if offset == 200 {
+                    Err(SftpError::IO("conexao resetada".into()))
+                } else {
+                    Ok(data_for(offset))
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(results.len(), 3);
+        assert!(matches!(results[2], Err(SftpError::IO(_))));
+        assert!(
+            started.load(Ordering::SeqCst) <= 6,
+            "depois do erro nao ha mais leituras novas"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_retry_that_hangs_reports_timeout() {
+        let calls = AtomicUsize::new(0);
+        let chunks = chunk_list(2);
+
+        let results = read_chunks_windowed(
+            &chunks,
+            2,
+            Duration::from_millis(500),
+            Duration::from_millis(20),
+            2,
+            |offset, _| {
+                let attempt = if offset == 100 {
+                    calls.fetch_add(1, Ordering::SeqCst) + 1
+                } else {
+                    0
+                };
+                async move {
+                    match (offset, attempt) {
+                        (100, 1) => Err(SftpError::IO("resetada".into())),
+                        (100, _) => std::future::pending().await,
+                        _ => Ok(data_for(offset)),
+                    }
+                }
+            },
+        )
+        .await;
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            3,
+            "1 tentativa + 2 retries, cada retry com o seu timeout"
+        );
+        assert!(results[0].is_ok());
+        assert!(matches!(results[1], Err(SftpError::Timeout)));
     }
 }

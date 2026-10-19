@@ -7,25 +7,24 @@ on:
       - '**/*.md'
       - '.github/ISSUE_TEMPLATE/**'
       - '.github/PULL_REQUEST_TEMPLATE.md'
+  # No paths-ignore here: a workflow that never starts leaves its required checks
+  # "Pending" forever, so docs-only PRs could only merge with an admin bypass.
+  # The `changes` job below skips the heavy jobs instead.
   pull_request:
     branches: [ master, main, develop ]
-    paths-ignore:
-      - '**/*.md'
-      - '.github/ISSUE_TEMPLATE/**'
-      - '.github/PULL_REQUEST_TEMPLATE.md'
   workflow_dispatch:
     inputs:
       build_apk:
-        description: 'Compilar APK completo (requer segredo do SDK)'
+        description: 'Compilar APK completo'
         type: boolean
         default: true
 
-# Cancela runs anteriores em branches de PR para economizar recursos dos runners
+# Cancels earlier runs on PR branches to save runner resources
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# Privilégio mínimo no escopo global (segurança de supply-chain e OIDC)
+# Least privilege at the global scope (supply-chain security and OIDC)
 permissions: {}
 
 env:
@@ -34,53 +33,112 @@ env:
   NDK_VERSION: '26.3.11579264'
 
 jobs:
+  # Only pull requests are filtered. Pushes and manual runs keep running everything, because
+  # release.yml reuses the APK built by the CI run of the pushed commit.
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read # paths-filter needs the repository metadata
+      pull-requests: read # paths-filter lists the PR files through the API
+    outputs:
+      rust: ${{ github.event_name != 'pull_request' || steps.filter.outputs.rust == 'true' }}
+      cpp: ${{ github.event_name != 'pull_request' || steps.filter.outputs.cpp == 'true' }}
+      android: ${{ github.event_name != 'pull_request' || steps.filter.outputs.android == 'true' }}
+      apk: ${{ github.event_name != 'pull_request' || steps.filter.outputs.apk == 'true' }}
+      docs: ${{ github.event_name != 'pull_request' || steps.filter.outputs.docs == 'true' }}
+    steps:
+      - name: Filter changed paths
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            rust:
+              - '.github/workflows/main.yml'
+              - 'rust/**'
+            cpp:
+              - '.github/workflows/main.yml'
+              - 'native/**'
+              - 'scripts/check-shaders.sh'
+              - 'scripts/test-native-host.sh'
+              - '.clang-format'
+            android:
+              - '.github/workflows/main.yml'
+              - 'app/**'
+              - 'gradle/**'
+              - '*.gradle.kts'
+              - 'gradle.properties'
+              - 'version.properties'
+            apk:
+              - '.github/workflows/main.yml'
+              - 'rust/**'
+              - 'native/**'
+              - 'app/**'
+              - 'gradle/**'
+              - 'scripts/**'
+              - 'docker/build/**'
+              - '*.gradle.kts'
+              - 'gradle.properties'
+              - 'version.properties'
+            docs:
+              - '.github/workflows/main.yml'
+              - '**/*.md'
+              - '.markdownlint-cli2.jsonc'
+
   security-and-workflows:
     name: Security & Workflows
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
-      contents: read # Necessário para checar fontes, workflows e licenças
+      contents: read # Needed to check sources, workflows and licenses
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Lint GitHub Actions workflows (actionlint)
         run: |
-          bash <(curl -s https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
           ./actionlint -color
 
       - name: Check Rust dependencies & licenses (cargo-deny)
         run: |
-          curl -sL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.18.2/cargo-deny-0.18.2-x86_64-unknown-linux-musl.tar.gz | tar -xz
-          ./cargo-deny-0.18.2-x86_64-unknown-linux-musl/cargo-deny --manifest-path rust/Cargo.toml check --config deny.toml licenses bans sources
-          rm -rf cargo-deny-0.18.2-x86_64-unknown-linux-musl
+          curl -sSfL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz -o cargo-deny.tar.gz
+          echo "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f  cargo-deny.tar.gz" | sha256sum -c -
+          tar -xzf cargo-deny.tar.gz
+          ./cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny --manifest-path rust/Cargo.toml --config rust/deny.toml check licenses bans sources
+          rm -rf cargo-deny-0.20.2-x86_64-unknown-linux-musl cargo-deny.tar.gz
 
       - name: Scan repository for secrets (gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_SUMMARY: true
-        continue-on-error: true # Notifica no step summary sem abortar caso haja falso positivo em testes
+        continue-on-error: true # Reports in the step summary without aborting in case of a false positive in tests
 
   rust-checks:
     name: Rust Quality & Tests
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: read # Necessário para compilação e testes no host
+      contents: read # Needed for building and testing on the host
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Setup Rust (Host)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
+          toolchain: stable
           components: clippy, rustfmt
 
       - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: "rust -> rust/target"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -96,17 +154,19 @@ jobs:
 
   cpp-checks:
     name: C++ Native & Shaders
+    needs: changes
+    if: needs.changes.outputs.cpp == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
-      contents: read # Necessário para checagens de formatação e shaders
+      contents: read # Needed for formatting and shader checks
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Install C++ Host Dependencies
-        uses: awalsh128/cache-apt-pkgs-action@v1
+        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
         with:
           packages: libopenxr-dev glslc
           version: 1.2
@@ -119,13 +179,16 @@ jobs:
             native/include/screen_mode.h \
             native/include/subtitle_layout.h \
             native/include/hand_tracking.h \
-            native/include/environment_config.h
+            native/include/environment_config.h \
+            native/include/environment_validator.h \
+            native/include/browser_pose.h \
+            native/include/panel_pick.h
 
       - name: Validate Vulkan Shaders (glslc)
         run: ./scripts/check-shaders.sh
 
       - name: Cache ccache (host C++ tests)
-        uses: hendrikmuhs/ccache-action@v1
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
         with:
           key: host-tests-${{ runner.os }}
           max-size: 200M
@@ -135,23 +198,29 @@ jobs:
 
   android-checks:
     name: Android Lint & JVM Tests
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
-      contents: read # Necessário para análise estática e execução dos testes JVM
+      contents: read # Needed for static analysis and running the JVM tests
+    env:
+      # Lint and JVM tests load no native library; without this, preBuild runs buildRust,
+      # which builds a Docker image and cross-compiles Rust and FFmpeg (~8 min).
+      RUST_BUILD_MODE: skip
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Set up JDK ${{ env.JAVA_VERSION }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: ${{ env.JAVA_DISTRO }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
         with:
           cache-read-only: ${{ github.event_name == 'pull_request' }}
 
@@ -166,7 +235,7 @@ jobs:
 
       - name: Upload Test & Lint Reports
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: android-verification-reports
           path: |
@@ -175,57 +244,94 @@ jobs:
             app/build/reports/ktlint/
           retention-days: 7
 
-  build-apk:
-    name: Build Quest 3 APK
-    needs: [security-and-workflows, rust-checks, cpp-checks, android-checks]
-    if: (github.repository == 'BGLuis/vr-multmidia' || github.repository == 'BGLuis/tucaVR') && (inputs.build_apk == true || inputs.build_apk == null)
+  markdown-checks:
+    name: Markdown Lint
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 35
+    timeout-minutes: 5
     permissions:
-      contents: read # Necessário para compilar o APK
+      contents: read # Needed to read the Markdown files
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Checkout Meta OpenXR SDK (Private Repo)
-        uses: actions/checkout@v4
+      - name: Lint Markdown (markdownlint-cli2)
+        run: npx --yes markdownlint-cli2@0.18.1
+
+  # The only check branch protection needs. A skipped job reports success, so without this a
+  # failed `changes` job would skip every dependent job and let the PR merge unchecked.
+  ci-gate:
+    name: CI Gate
+    if: always()
+    needs: [changes, security-and-workflows, rust-checks, cpp-checks, android-checks, markdown-checks]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require every job to have passed or been skipped
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in success|skipped) ;; *) exit 1 ;; esac
+          done
+
+  build-apk:
+    name: Build Quest 3 APK
+    needs: [changes, security-and-workflows, rust-checks, cpp-checks, android-checks]
+    # A needed job skipped by the path filter must not skip the APK build.
+    if: >-
+      ${{ !cancelled() && !contains(needs.*.result, 'failure')
+      && needs.changes.outputs.apk == 'true'
+      && (github.repository == 'BGLuis/vr-multmidia' || github.repository == 'BGLuis/tucaVR')
+      && (inputs.build_apk == true || inputs.build_apk == null) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    permissions:
+      contents: read # Needed to build the APK
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          repository: BGLuis/meta-openxr-sdk-private
-          token: ${{ secrets.SDK_REPO_PAT }}
-          path: sdk/meta-openxr-sdk
+          persist-credentials: false
+
+      - name: Setup External Dependencies (Meta OpenXR SDK)
+        run: ./scripts/setup-deps.sh
 
       - name: Set up JDK ${{ env.JAVA_VERSION }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: ${{ env.JAVA_DISTRO }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
 
       - name: Setup Rust (Android)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
         with:
+          toolchain: stable
           targets: aarch64-linux-android
 
       - name: Rust Cache
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: "rust -> rust/target"
 
       - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.9
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
       - name: Cache ccache (native C++ build)
-        uses: hendrikmuhs/ccache-action@v1
+        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
         with:
           key: native-build-${{ runner.os }}
           max-size: 500M
 
       - name: Cache cargo-ndk
         id: cache-cargo-ndk
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cargo/bin/cargo-ndk
           key: ${{ runner.os }}-cargo-ndk-bin-v1
@@ -236,7 +342,7 @@ jobs:
 
       - name: Cache Android NDK
         id: cache-ndk
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: /usr/local/lib/android/sdk/ndk/26.3.11579264
           key: ${{ runner.os }}-ndk-${{ env.NDK_VERSION }}
@@ -253,7 +359,7 @@ jobs:
 
       - name: Cache FFmpeg Build
         id: cache-ffmpeg
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ffmpeg-android-maker
           key: ${{ runner.os }}-ffmpeg-${{ hashFiles('scripts/setup-deps.sh') }}-v2
@@ -284,7 +390,7 @@ jobs:
           echo "name=VR-Player-APK-${SAFE_REF}-${GITHUB_RUN_ID}" >> "$GITHUB_OUTPUT"
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.artifact-meta.outputs.name }}
           path: app/build/outputs/apk/debug/app-debug.apk

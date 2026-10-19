@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Diretório raiz do repositório
+# Repository root directory
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 BUILD_DIR="/tmp/tucavr_native_tests_build"
 mkdir -p "$BUILD_DIR"
 
-echo "=== Compilando e Executando Testes Unitários Nativos C++ (Host) ==="
+echo "=== Building and Running the Native C++ Unit Tests (Host) ==="
 
 CXX="${CXX:-g++}"
-# ccache acelera recompilações quando disponível no PATH (ex.: CI com ccache-action).
+# ccache speeds up rebuilds when available on PATH (e.g. CI with ccache-action).
 if command -v ccache >/dev/null 2>&1 && [ "$CXX" = "g++" ]; then
     CXX="ccache g++"
 fi
@@ -23,12 +23,25 @@ TESTS=(
     "test_subtitle_layout"
     "test_hand_tracking"
     "test_environment_config"
+    "test_environment_validator"
+    "test_browser_pose"
+    "test_panel_pick"
+    "test_cylinder_hit"
+    "test_controls_pose"
 )
 
 EXTRA_FLAGS=()
 if [ "${ENABLE_ASAN:-0}" = "1" ]; then
-    echo "-> Habilitando AddressSanitizer e UndefinedBehaviorSanitizer (-fsanitize=address,undefined)..."
+    echo "-> Enabling AddressSanitizer and UndefinedBehaviorSanitizer (-fsanitize=address,undefined)..."
     EXTRA_FLAGS+=("-fsanitize=address,undefined" "-fno-omit-frame-pointer")
+fi
+
+OPENXR_INCLUDE_FLAGS=()
+if ! echo '#include <openxr/openxr.h>' | $CXX -E - >/dev/null 2>&1; then
+    OPENXR_HEADER=$(find "$HOME/.gradle/caches" -path "*/openxr/openxr.h" -print -quit 2>/dev/null || true)
+    if [ -n "$OPENXR_HEADER" ]; then
+        OPENXR_INCLUDE_FLAGS+=("-I" "$(dirname "$(dirname "$OPENXR_HEADER")")")
+    fi
 fi
 
 compile_test() {
@@ -36,11 +49,12 @@ compile_test() {
     $CXX -std=c++20 -O2 -Wall -Wextra -Werror \
         "${EXTRA_FLAGS[@]}" \
         -I native/include \
+        "${OPENXR_INCLUDE_FLAGS[@]}" \
         "native/tests/${name}.cpp" \
         -o "$BUILD_DIR/${name}"
 }
 
-echo "-> Compilando os ${#TESTS[@]} binários de teste em paralelo..."
+echo "-> Building the ${#TESTS[@]} test binaries in parallel..."
 PIDS=()
 for name in "${TESTS[@]}"; do
     compile_test "$name" &
@@ -55,14 +69,14 @@ for pid in "${PIDS[@]}"; do
 done
 
 if [ "$FAILED" -ne 0 ]; then
-    echo "❌ Falha ao compilar um ou mais binários de teste." >&2
+    echo "❌ Failed to build one or more test binaries." >&2
     exit 1
 fi
 
 for name in "${TESTS[@]}"; do
-    echo "-> Executando ${name}..."
+    echo "-> Running ${name}..."
     "$BUILD_DIR/${name}"
 done
 
-echo "=== Todos os ${#TESTS[@]} binários de teste C++ passaram com sucesso! ==="
+echo "=== All ${#TESTS[@]} C++ test binaries passed! ==="
 rm -rf "$BUILD_DIR"

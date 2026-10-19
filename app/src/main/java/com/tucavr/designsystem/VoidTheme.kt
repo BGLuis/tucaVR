@@ -17,6 +17,7 @@ object VoidTheme {
     val colorTextSecondary = Color.parseColor("#B3B3B3")
     val colorAccent = Color.parseColor("#FF6B00")
     val colorBorder = Color.parseColor("#3A2F1E")
+    val colorFolder = Color.parseColor("#E5A93C")
 
     fun accentWithAlpha(alpha: Int): Int = Color.argb(alpha, Color.red(colorAccent), Color.green(colorAccent), Color.blue(colorAccent))
 

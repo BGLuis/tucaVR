@@ -13,10 +13,14 @@ import com.tucavr.designsystem.VoidListRow
 import com.tucavr.designsystem.VoidPanelChrome
 import com.tucavr.designsystem.VoidText
 import com.tucavr.designsystem.VoidTheme
+import com.tucavr.filebrowser.DlnaThumbnailFetcher
+import com.tucavr.filebrowser.DlnaThumbnailPolicy
 import com.tucavr.network.SavedServer
 import com.tucavr.network.SavedServerDao
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.ArrayDeque
@@ -48,6 +52,8 @@ class NetworkDlnaScreen(
     private var currentServer: SavedServer? = null
     private var currentItems: List<DlnaItem> = emptyList()
 
+    private val thumbnailJobs = mutableListOf<Job>()
+
     private var fileListContainer: LinearLayout? = null
     private var fileProgressBar: ProgressBar? = null
     private var fileStatusLabel: android.widget.TextView? = null
@@ -58,6 +64,7 @@ class NetworkDlnaScreen(
         server: SavedServer,
         objectId: String = "0",
     ) {
+        cancelThumbnailJobs()
         currentServer = server
         if (folderStack.isEmpty()) {
             folderStack.push(Pair("0", server.name))
@@ -150,6 +157,7 @@ class NetworkDlnaScreen(
 
     private fun renderItemsList() {
         val container = fileListContainer ?: return
+        cancelThumbnailJobs()
         container.removeAllViews()
 
         if (currentItems.isEmpty()) {
@@ -178,7 +186,9 @@ class NetworkDlnaScreen(
 
                     val icon = if (item.isContainer) R.drawable.ic_folder else R.drawable.ic_movie
                     val meta = buildItemMeta(item)
-                    bind(item.title, meta = meta, showThumbnailSlot = false, iconResId = icon)
+                    val artUrl = item.thumbnailUrl.takeIf { !item.isContainer && DlnaThumbnailPolicy.isFetchableUrl(it) }
+                    bind(item.title, meta = meta, showThumbnailSlot = artUrl != null, iconResId = icon)
+                    if (artUrl != null) loadThumbnail(this, artUrl)
 
                     setOnClickListener {
                         if (item.isContainer) {
@@ -191,6 +201,34 @@ class NetworkDlnaScreen(
                 }
             container.addView(row)
         }
+    }
+
+    private fun loadThumbnail(
+        row: VoidListRow,
+        url: String,
+    ) {
+        thumbnailJobs +=
+            scope.launch {
+                val bitmap =
+                    try {
+                        DlnaThumbnailFetcher.getThumbnail(context, url)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        null
+                    }
+                if (bitmap != null) {
+                    row.thumbnail.setImageBitmap(bitmap)
+                    row.thumbnail.visibility = View.VISIBLE
+                } else {
+                    row.thumbnail.visibility = View.GONE
+                }
+            }
+    }
+
+    private fun cancelThumbnailJobs() {
+        thumbnailJobs.forEach { it.cancel() }
+        thumbnailJobs.clear()
     }
 
     private fun buildItemMeta(item: DlnaItem): String {
@@ -239,6 +277,7 @@ class NetworkDlnaScreen(
             renderFiles(currentServer ?: return, parent.first)
         } else {
             folderStack.clear()
+            cancelThumbnailJobs()
             onBack()
         }
     }

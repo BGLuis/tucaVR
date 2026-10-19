@@ -14,7 +14,12 @@ const TAG_WHITELIST: &[&str] = &["title", "artist", "album", "date", "genre", "c
 /// header/index, nenhum frame; mesma ressalva de `thumbnail::generate`
 /// sobre rodar sempre numa thread de fundo do lado chamador.
 pub fn extract(path: &str) -> Result<MediaMetadata, String> {
-    let demuxer = Demuxer::new(path)?;
+    let demuxer = Demuxer::open_probe(path)?;
+    Ok(extract_from(&demuxer, path))
+}
+
+/// Like `extract`, reusing an already open `Demuxer` (avoids reopening the remote source).
+pub fn extract_from(demuxer: &Demuxer, path: &str) -> MediaMetadata {
     let ictx = &demuxer.input_context;
 
     let format = ictx.format();
@@ -32,13 +37,13 @@ pub fn extract(path: &str) -> Result<MediaMetadata, String> {
 
     let mut tracks = Vec::new();
     for (ordinal, &idx) in demuxer.video_streams.iter().enumerate() {
-        tracks.push(track_info(&demuxer, TrackKind::Video, ordinal, idx));
+        tracks.push(track_info(demuxer, TrackKind::Video, ordinal, idx));
     }
     for (ordinal, &idx) in demuxer.audio_streams.iter().enumerate() {
-        tracks.push(track_info(&demuxer, TrackKind::Audio, ordinal, idx));
+        tracks.push(track_info(demuxer, TrackKind::Audio, ordinal, idx));
     }
     for (ordinal, &idx) in demuxer.subtitle_streams.iter().enumerate() {
-        tracks.push(track_info(&demuxer, TrackKind::Subtitle, ordinal, idx));
+        tracks.push(track_info(demuxer, TrackKind::Subtitle, ordinal, idx));
     }
     let (video_w, video_h) = tracks
         .iter()
@@ -46,11 +51,11 @@ pub fn extract(path: &str) -> Result<MediaMetadata, String> {
         .map(|t| (t.width, t.height))
         .unwrap_or((0, 0));
 
-    let (fmt, confidence) = crate::format3d_detect::detect(&demuxer, path, video_w, video_h);
+    let (fmt, confidence) = crate::format3d_detect::detect(demuxer, path, video_w, video_h);
     let format3d_index = fmt.to_screen_mode_index();
     let detection_confidence = confidence as u8;
 
-    Ok(MediaMetadata {
+    MediaMetadata {
         container,
         container_long,
         duration_us,
@@ -59,7 +64,7 @@ pub fn extract(path: &str) -> Result<MediaMetadata, String> {
         detection_confidence,
         tags,
         tracks,
-    })
+    }
 }
 
 // Le width/height/sample_rate/canais direto do AVCodecParameters cru em vez

@@ -5,6 +5,7 @@ pub mod rpc;
 pub mod source;
 pub mod uri;
 
+use client::list_exports as list_exports_on_server;
 pub use client::{NfsClient, NfsDirEntry};
 pub use source::NfsFileSource;
 pub use uri::{NfsTarget, is_nfs_uri, redact};
@@ -15,8 +16,12 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 
 /// Lista os arquivos e pastas dentro de um diretorio NFS
 pub fn list_directory(target: &NfsTarget, dir_path: &str) -> Result<Vec<NfsDirEntry>, String> {
-    let mut client = NfsClient::connect(&target.host, target.port, CONNECT_TIMEOUT)?;
-    let root_handle = client.mount(&target.export_path)?;
+    let (mut client, root_handle) = NfsClient::open_export(
+        &target.host,
+        target.port,
+        &target.export_path,
+        CONNECT_TIMEOUT,
+    )?;
     let (target_handle, _, is_dir) = client.resolve_path(&root_handle, dir_path)?;
 
     if !is_dir {
@@ -28,8 +33,7 @@ pub fn list_directory(target: &NfsTarget, dir_path: &str) -> Result<Vec<NfsDirEn
 
 /// Lista os exports disponiveis no servidor NFS
 pub fn list_exports(host: &str, port: u16) -> Result<Vec<String>, String> {
-    let mut client = NfsClient::connect(host, port, CONNECT_TIMEOUT)?;
-    client.list_exports()
+    list_exports_on_server(host, port, CONNECT_TIMEOUT)
 }
 
 /// Varredura recursiva "esta pasta tem alguma midia reproduzivel?" -- ver
@@ -41,8 +45,12 @@ pub fn scan_has_media(
     target: &NfsTarget,
     dir_path: &str,
 ) -> Result<crate::folder_scan::ScanResult, String> {
-    let mut client = NfsClient::connect(&target.host, target.port, CONNECT_TIMEOUT)?;
-    let root_handle = client.mount(&target.export_path)?;
+    let (mut client, root_handle) = NfsClient::open_export(
+        &target.host,
+        target.port,
+        &target.export_path,
+        CONNECT_TIMEOUT,
+    )?;
     let deadline = crate::folder_scan::deadline_from_now();
 
     let mut stack = vec![dir_path.to_string()];

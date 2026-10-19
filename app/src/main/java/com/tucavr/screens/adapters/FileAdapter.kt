@@ -6,10 +6,9 @@ import android.graphics.Typeface
 import android.text.SpannableString
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
-import android.view.GestureDetector
-import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ImageView
 import android.widget.LinearLayout
 import androidx.recyclerview.widget.RecyclerView
 import com.tucavr.R
@@ -24,6 +23,8 @@ import com.tucavr.filebrowser.MediaType
 import com.tucavr.filebrowser.ThumbnailGenerator
 import com.tucavr.filebrowser.ViewMode
 import com.tucavr.history.formatDurationMs
+import com.tucavr.navigation.PlaybackSource
+import com.tucavr.screens.ContextRailHost
 import com.tucavr.screens.formatFileSize
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -39,7 +40,7 @@ class FileAdapter(
     private val scope: CoroutineScope,
     private val onUpClick: () -> Unit,
     private val onDirectoryClick: (MediaEntry) -> Unit,
-    /** Single-click em vídeo → inicia reprodução direta / retoma. */
+    /** Tocar no botão ▶ ou double-click em vídeo/arquivo → reprodução imediata. */
     private val onVideoClick: (MediaEntry) -> Unit,
     /** Double-click em vídeo → toca direto. */
     private val onVideoDoubleClick: (MediaEntry) -> Unit = onVideoClick,
@@ -52,6 +53,8 @@ class FileAdapter(
      * erro, mesmo contrato de silêncio de [thumbnailLoader].
      */
     private val metadataBadgeLoader: (suspend (MediaEntry) -> MediaMetadataCacheEntry?)? = null,
+    private val onFileSelected: ((MediaEntry) -> Unit)? = null,
+    private val contextRailHost: ContextRailHost? = null,
 ) : RecyclerView.Adapter<FileAdapter.ViewHolder>() {
     private sealed class Row {
         object Up : Row()
@@ -63,10 +66,56 @@ class FileAdapter(
     private var currentViewMode: ViewMode = ViewMode.GRID
     private var currentSearchQuery: String = ""
 
+    var selectedEntryPath: String? = null
+        private set
+
     companion object {
         private const val VIEW_TYPE_UP = 0
         private const val VIEW_TYPE_LIST_ITEM = 1
         private const val VIEW_TYPE_GRID_ITEM = 2
+        private const val PAYLOAD_SELECTION_CHANGED = "PAYLOAD_SELECTION_CHANGED"
+    }
+
+    override fun onAttachedToRecyclerView(recyclerView: RecyclerView) {
+        super.onAttachedToRecyclerView(recyclerView)
+        recyclerView.itemAnimator = null
+    }
+
+    fun selectEntry(entry: MediaEntry) {
+        val previousSelectedPath = selectedEntryPath
+        if (previousSelectedPath == entry.path) {
+            onVideoClick(entry)
+            return
+        }
+
+        selectedEntryPath = entry.path
+
+        if (previousSelectedPath != null) {
+            val oldIndex = rows.indexOfFirst { it is Row.Item && it.entry.path == previousSelectedPath }
+            if (oldIndex >= 0) notifyItemChanged(oldIndex, PAYLOAD_SELECTION_CHANGED)
+        }
+        val newIndex = rows.indexOfFirst { it is Row.Item && it.entry.path == entry.path }
+        if (newIndex >= 0) notifyItemChanged(newIndex, PAYLOAD_SELECTION_CHANGED)
+
+        onFileSelected?.invoke(entry)
+        if (onFileSelected == null && contextRailHost != null) {
+            contextRailHost.showFileDetail(
+                entry = entry,
+                source = PlaybackSource.LocalFile(entry.path, entry.sizeBytes),
+                onPlay = { _ ->
+                    onVideoClick(entry)
+                },
+            )
+        }
+    }
+
+    fun clearSelection() {
+        val previousSelectedPath = selectedEntryPath
+        selectedEntryPath = null
+        if (previousSelectedPath != null) {
+            val oldIndex = rows.indexOfFirst { it is Row.Item && it.entry.path == previousSelectedPath }
+            if (oldIndex >= 0) notifyItemChanged(oldIndex, PAYLOAD_SELECTION_CHANGED)
+        }
     }
 
     fun submit(
@@ -77,6 +126,10 @@ class FileAdapter(
     ) {
         currentViewMode = viewMode
         currentSearchQuery = searchQuery
+
+        if (selectedEntryPath != null && entries.none { it.path == selectedEntryPath }) {
+            selectedEntryPath = null
+        }
 
         rows =
             buildList {
@@ -89,21 +142,6 @@ class FileAdapter(
     inner class ViewHolder(val view: View) : RecyclerView.ViewHolder(view) {
         var thumbnailJob: Job? = null
         var boundEntry: MediaEntry? = null
-        val gestureDetector =
-            GestureDetector(
-                view.context,
-                object : GestureDetector.SimpleOnGestureListener() {
-                    override fun onSingleTapConfirmed(e: MotionEvent): Boolean {
-                        boundEntry?.let(onVideoClick)
-                        return true
-                    }
-
-                    override fun onDoubleTap(e: MotionEvent): Boolean {
-                        boundEntry?.let(onVideoDoubleClick)
-                        return true
-                    }
-                },
-            )
     }
 
     override fun getItemViewType(position: Int): Int {
@@ -146,6 +184,33 @@ class FileAdapter(
     override fun onBindViewHolder(
         holder: ViewHolder,
         position: Int,
+        payloads: MutableList<Any>,
+    ) {
+        if (payloads.isNotEmpty() && payloads.contains(PAYLOAD_SELECTION_CHANGED)) {
+            val row = rows.getOrNull(position)
+            if (row is Row.Item) {
+                val isSelected = row.entry.path == selectedEntryPath
+                val isDir = row.entry.type == MediaType.DIRECTORY
+                if (holder.view is VoidListRow) {
+                    val onPlayRowAction: (() -> Unit)? =
+                        if (!isDir) {
+                            { onVideoClick(row.entry) }
+                        } else {
+                            null
+                        }
+                    holder.view.setSelectedRow(isSelected, onPlayRowAction)
+                } else if (holder.view is VoidGridCard) {
+                    holder.view.setSelectedCard(isSelected, isFolder = isDir)
+                }
+                return
+            }
+        }
+        super.onBindViewHolder(holder, position, payloads)
+    }
+
+    override fun onBindViewHolder(
+        holder: ViewHolder,
+        position: Int,
     ) {
         holder.thumbnailJob?.cancel()
         holder.boundEntry = null
@@ -158,6 +223,13 @@ class FileAdapter(
         }
     }
 
+    override fun onViewRecycled(holder: ViewHolder) {
+        super.onViewRecycled(holder)
+        holder.thumbnailJob?.cancel()
+        holder.thumbnailJob = null
+        holder.boundEntry = null
+    }
+
     private fun bindUpRow(holder: ViewHolder) {
         if (holder.view is VoidListRow) {
             holder.view.thumbnail.setImageBitmap(null)
@@ -167,7 +239,10 @@ class FileAdapter(
                 iconResId = R.drawable.ic_arrow_up,
             )
         }
-        holder.itemView.setOnClickListener { onUpClick() }
+        holder.itemView.setOnClickListener {
+            clearSelection()
+            onUpClick()
+        }
     }
 
     private fun bindItemRow(
@@ -192,23 +267,40 @@ class FileAdapter(
 
         val meta =
             when {
-                isDir -> entry.itemCount?.let { context.getString(R.string.browser_folder_summary_format, "", it).removePrefix(" · ") }
+                isDir ->
+                    entry.itemCount?.let { count ->
+                        context.resources.getQuantityString(
+                            R.plurals.browser_folder_summary_format,
+                            count,
+                            "",
+                            count,
+                        ).removePrefix(" · ")
+                    }
                 isVideo -> formatFileSize(context, entry.sizeBytes)
                 entry.sizeBytes > 0 -> formatFileSize(context, entry.sizeBytes)
                 else -> null
             }
 
+        val isSelected = entry.path == selectedEntryPath
+        val onPlayRowAction: (() -> Unit)? =
+            if (!isDir) {
+                { onVideoClick(entry) }
+            } else {
+                null
+            }
+
         if (holder.view is VoidListRow) {
-            holder.view.thumbnail.setImageBitmap(null)
             holder.view.bind(
                 title = displayName.toString(),
                 meta = meta,
                 showThumbnailSlot = isVideo || isDir || isImage,
                 iconResId = iconRes,
+                isSelected = isSelected,
+                onPlayClick = onPlayRowAction,
+                isFolder = isDir,
             )
             holder.view.titleView.text = displayName
         } else if (holder.view is VoidGridCard) {
-            holder.view.thumbnail.setImageBitmap(null)
             holder.view.bind(
                 title = displayName,
                 meta = meta,
@@ -216,12 +308,16 @@ class FileAdapter(
                 iconResId = iconRes,
                 isFolder = isDir,
                 progressFraction = entry.progressFraction,
+                isSelected = isSelected,
             )
         }
 
         // Configuração de cliques e carregamento assíncrono de miniaturas
         if (isDir) {
-            holder.itemView.setOnClickListener { onDirectoryClick(entry) }
+            holder.itemView.setOnClickListener {
+                clearSelection()
+                onDirectoryClick(entry)
+            }
 
             // Carregamento de mosaico e estatísticas da pasta em segundo plano
             holder.thumbnailJob =
@@ -230,9 +326,25 @@ class FileAdapter(
                     if (summary != null && holder.adapterPosition == position) {
                         val summaryMeta =
                             if (summary.videoCount > 0) {
-                                "${summary.totalItems} itens · ${summary.videoCount} vídeos"
+                                val items =
+                                    context.resources.getQuantityString(
+                                        R.plurals.browser_folder_summary_items_count,
+                                        summary.totalItems,
+                                        summary.totalItems,
+                                    )
+                                val videos =
+                                    context.resources.getQuantityString(
+                                        R.plurals.browser_folder_summary_videos_count,
+                                        summary.videoCount,
+                                        summary.videoCount,
+                                    )
+                                context.getString(R.string.browser_folder_summary_combined, items, videos)
                             } else {
-                                "${summary.totalItems} itens"
+                                context.resources.getQuantityString(
+                                    R.plurals.browser_folder_summary_items_count,
+                                    summary.totalItems,
+                                    summary.totalItems,
+                                )
                             }
 
                         if (holder.view is VoidListRow) {
@@ -252,24 +364,20 @@ class FileAdapter(
                         }
 
                     if (folderMosaic != null && holder.adapterPosition == position) {
-                        if (holder.view is VoidListRow) {
-                            holder.view.thumbnail.setImageBitmap(folderMosaic)
-                            holder.view.thumbnail.visibility = View.VISIBLE
-                        } else if (holder.view is VoidGridCard) {
-                            holder.view.thumbnail.setImageBitmap(folderMosaic)
+                        val thumbView = (holder.view as? VoidListRow)?.thumbnail ?: (holder.view as? VoidGridCard)?.thumbnail
+                        thumbView?.apply {
+                            scaleType = ImageView.ScaleType.CENTER_CROP
+                            setPadding(0, 0, 0, 0)
+                            colorFilter = null
+                            setImageBitmap(folderMosaic)
                         }
+                        if (holder.view is VoidListRow) holder.view.thumbnail.visibility = View.VISIBLE
                     }
                 }
-        } else if (isVideo || isImage) {
+        } else {
+            // Arquivo de mídia (vídeo, imagem ou áudio)
             holder.boundEntry = entry
-            if (isVideo) {
-                holder.itemView.setOnTouchListener { _, event ->
-                    holder.gestureDetector.onTouchEvent(event)
-                    true
-                }
-            } else {
-                holder.itemView.setOnClickListener { onVideoClick(entry) }
-            }
+            holder.itemView.setOnClickListener { selectEntry(entry) }
 
             // Carregamento de miniatura da mídia (vídeo ou imagem)
             holder.thumbnailJob =
@@ -305,9 +413,6 @@ class FileAdapter(
                         }
                     }
                 }
-        } else {
-            // Áudio
-            holder.itemView.setOnClickListener { onVideoClick(entry) }
         }
     }
 

@@ -1,9 +1,9 @@
 #!/bin/bash
 # ==============================================================================
-# capture-screen.sh — Captura instantânea do framebuffer Vulkan do tucaVR
+# capture-screen.sh — Instant capture of tucaVR's Vulkan framebuffer
 #
-# Envia sinal via ADB para o aplicativo, faz o dump direto do swapchain OpenXR
-# (olho esquerdo e direito), transfere para o PC em formato PNG e abre na tela.
+# Sends a signal over ADB to the app, dumps the OpenXR swapchain directly
+# (left and right eye), transfers it to the PC as PNG and opens it on screen.
 # ==============================================================================
 
 set -e
@@ -19,38 +19,38 @@ OUT_DIR="$ROOT_DIR/captures"
 mkdir -p "$OUT_DIR"
 
 echo -e "${CYAN}==================================================================${NC}"
-echo -e "${CYAN}📸 tucaVR — Captura Instantânea de Frame (Vulkan/GLES)${NC}"
+echo -e "${CYAN}📸 tucaVR — Instant Frame Capture (Vulkan/GLES)${NC}"
 echo -e "${CYAN}==================================================================${NC}"
 
-# 1. Verificar adb
+# 1. Check adb
 if ! command -v adb >/dev/null 2>&1; then
-    echo -e "${RED}❌ ERRO: 'adb' não encontrado no PATH.${NC}"
+    echo -e "${RED}❌ ERROR: 'adb' not found in PATH.${NC}"
     exit 1
 fi
 
 DEVICE_STATUS=$(adb get-state 2>/dev/null || echo "offline")
 if [ "$DEVICE_STATUS" != "device" ]; then
-    echo -e "${RED}❌ ERRO: Dispositivo não detectado. Conecte o Quest 3 via USB com depuração ativada.${NC}"
+    echo -e "${RED}❌ ERROR: Device not detected. Connect the Quest 3 over USB with debugging enabled.${NC}"
     exit 1
 fi
 
-# 2. Acordar o dispositivo se estiver suspenso
+# 2. Wake the device if it is asleep
 WAKEFULNESS=$(adb shell dumpsys power 2>/dev/null | grep -i "mWakefulness=" | head -n1 || true)
 if [[ "$WAKEFULNESS" =~ "Asleep" ]]; then
-    echo -e "${YELLOW}⚡ Acordando o headset suspenso...${NC}"
+    echo -e "${YELLOW}⚡ Waking the sleeping headset...${NC}"
     adb shell input keyevent 26 >/dev/null 2>&1 || true
     sleep 1
 fi
 
-# 3. Limpar arquivos antigos no dispositivo
+# 3. Clean old files on the device
 DEVICE_PPM="/sdcard/vr-frame-capture.ppm"
 adb shell rm -f "$DEVICE_PPM" "${DEVICE_PPM}.left.ppm" "${DEVICE_PPM}.right.ppm" 2>/dev/null || true
 
-# 4. Enviar broadcast para disparar a captura nativa
-echo -e "Enviando comando de captura para o tucaVR..."
+# 4. Send the broadcast that triggers the native capture
+echo -e "Sending the capture command to tucaVR..."
 adb shell am broadcast -a com.tucavr.debug.CAPTURE_FRAME --es capture_path "$DEVICE_PPM" >/dev/null 2>&1 || true
 
-# 5. Aguardar até 3 segundos pelo arquivo gerado
+# 5. Wait up to 3 seconds for the generated file
 FOUND=0
 for i in {1..15}; do
     if adb shell test -f "${DEVICE_PPM}.left.ppm" 2>/dev/null; then
@@ -61,8 +61,8 @@ for i in {1..15}; do
 done
 
 if [ "$FOUND" -eq 0 ]; then
-    echo -e "${YELLOW}⚠️ O arquivo '${DEVICE_PPM}.left.ppm' não foi gerado imediatamente via broadcast.${NC}"
-    echo -e "Tentando via intent direto..."
+    echo -e "${YELLOW}⚠️ The file '${DEVICE_PPM}.left.ppm' was not generated right away through the broadcast.${NC}"
+    echo -e "Trying through a direct intent..."
     adb shell am start -n com.tucavr/.VRActivity -e capture_path "$DEVICE_PPM" >/dev/null 2>&1 || true
     for i in {1..15}; do
         if adb shell test -f "${DEVICE_PPM}.left.ppm" 2>/dev/null; then
@@ -74,12 +74,12 @@ if [ "$FOUND" -eq 0 ]; then
 fi
 
 if [ "$FOUND" -eq 0 ]; then
-    echo -e "${RED}❌ ERRO: Não foi possível capturar o frame.${NC}"
-    echo -e "Certifique-se de que o app tucaVR está em execução ativa no Meta Quest."
+    echo -e "${RED}❌ ERROR: Could not capture the frame.${NC}"
+    echo -e "Make sure the tucaVR app is actively running on the Meta Quest."
     exit 1
 fi
 
-# 6. Baixar arquivos PPM e converter para PNG
+# 6. Download the PPM files and convert them to PNG
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
 LOCAL_LEFT_PPM="$OUT_DIR/${TIMESTAMP}_left.ppm"
 LOCAL_RIGHT_PPM="$OUT_DIR/${TIMESTAMP}_right.ppm"
@@ -94,7 +94,7 @@ if adb shell test -f "${DEVICE_PPM}.right.ppm" 2>/dev/null; then
     adb shell rm -f "${DEVICE_PPM}.right.ppm" 2>/dev/null || true
 fi
 
-# Conversão PPM -> PNG
+# PPM -> PNG conversion
 if command -v ffmpeg >/dev/null 2>&1; then
     ffmpeg -y -hide_banner -loglevel error -i "$LOCAL_LEFT_PPM" "$LOCAL_LEFT_PNG"
     rm -f "$LOCAL_LEFT_PPM"
@@ -103,7 +103,7 @@ if command -v ffmpeg >/dev/null 2>&1; then
         rm -f "$LOCAL_RIGHT_PPM"
     fi
 else
-    # Fallback para Python com Pillow caso ffmpeg não esteja instalado
+    # Fall back to Python with Pillow if ffmpeg is not installed
     python3 -c "
 from PIL import Image
 Image.open('$LOCAL_LEFT_PPM').save('$LOCAL_LEFT_PNG')
@@ -112,20 +112,20 @@ Image.open('$LOCAL_LEFT_PPM').save('$LOCAL_LEFT_PNG')
 fi
 
 if [ -f "$LOCAL_LEFT_PNG" ]; then
-    echo -e "${GREEN}✅ Captura realizada com sucesso!${NC}"
-    echo -e "Imagem salva em: ${CYAN}$LOCAL_LEFT_PNG${NC}"
+    echo -e "${GREEN}✅ Capture completed successfully!${NC}"
+    echo -e "Image saved at: ${CYAN}$LOCAL_LEFT_PNG${NC}"
     if [ -f "$LOCAL_RIGHT_PNG" ]; then
-        echo -e "Olho direito em:  ${CYAN}$LOCAL_RIGHT_PNG${NC}"
+        echo -e "Right eye at:     ${CYAN}$LOCAL_RIGHT_PNG${NC}"
     fi
 
-    # 7. Abrir a imagem automaticamente no visualizador do sistema (se houver interface gráfica)
+    # 7. Open the image automatically in the system viewer (if there is a graphical interface)
     if [ -n "$DISPLAY" ] || [ -n "$WAYLAND_DISPLAY" ]; then
         if command -v xdg-open >/dev/null 2>&1; then
             xdg-open "$LOCAL_LEFT_PNG" >/dev/null 2>&1 &
         fi
     fi
 else
-    echo -e "${RED}❌ Falha ao converter imagem capturada para PNG.${NC}"
+    echo -e "${RED}❌ Failed to convert the captured image to PNG.${NC}"
     exit 1
 fi
 echo -e "=================================================================="

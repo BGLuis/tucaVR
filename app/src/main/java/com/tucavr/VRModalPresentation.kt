@@ -10,11 +10,14 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import com.tucavr.designsystem.AudioTrackModal
+import com.tucavr.designsystem.CompactDebugStatsView
+import com.tucavr.designsystem.ConfirmDeleteModal
 import com.tucavr.designsystem.DebugStatsModal
 import com.tucavr.designsystem.PassthroughSettingsModal
 import com.tucavr.designsystem.ResumePromptModal
 import com.tucavr.designsystem.ScreenFormatModal
 import com.tucavr.designsystem.SubtitleSelectionModal
+import com.tucavr.designsystem.SubtitleTrackItem
 import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.history.PlaybackHistory
 import com.tucavr.history.historyKey
@@ -41,6 +44,7 @@ class VRModalPresentation(
     private lateinit var rootContainer: FrameLayout
     private var currentModalView: View? = null
     private var currentDebugStatsModal: DebugStatsModal? = null
+    private var currentCompactStatsView: CompactDebugStatsView? = null
     private var lastStatsWire: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -90,8 +94,36 @@ class VRModalPresentation(
         rootContainer.removeAllViews()
         currentModalView = null
         currentDebugStatsModal = null
+        currentCompactStatsView = null
         rootContainer.setBackgroundColor(Color.TRANSPARENT)
         activity.nativeHideModalPanel()
+    }
+
+    /**
+     * Prepara e exibe o card de estatísticas técnicas compacto acoplado ([CompactDebugStatsView]).
+     */
+    fun showCompactDebugStats() {
+        val view =
+            CompactDebugStatsView(
+                context = context,
+                onDismiss = {
+                    dismissModal()
+                    activity.onCompactStatsDismissed()
+                },
+            )
+        currentCompactStatsView = view
+        showModal(view)
+
+        lastStatsWire?.let { wire ->
+            view.updateStats(
+                text = wire,
+                meta = activity.currentMediaMetadata,
+                source = activity.currentPlaybackSource,
+                isCharging = activity.isBatteryCharging(),
+                batteryPercent = activity.getBatteryPercent(),
+                isDebuggable = activity.isDebuggable,
+            )
+        }
     }
 
     /**
@@ -123,10 +155,19 @@ class VRModalPresentation(
      */
     fun updateDebugStats(text: String) {
         lastStatsWire = text
-        val modal = currentDebugStatsModal ?: return
         val batteryPct = activity.getBatteryPercent()
         val isCharging = activity.isBatteryCharging()
-        modal.updateStats(
+
+        currentDebugStatsModal?.updateStats(
+            text = text,
+            meta = activity.currentMediaMetadata,
+            source = activity.currentPlaybackSource,
+            isCharging = isCharging,
+            batteryPercent = batteryPct,
+            isDebuggable = activity.isDebuggable,
+        )
+
+        currentCompactStatsView?.updateStats(
             text = text,
             meta = activity.currentMediaMetadata,
             source = activity.currentPlaybackSource,
@@ -188,6 +229,37 @@ class VRModalPresentation(
         val currentTrack = activity.nativeGetSubtitleTrack()
         val currentOffsetMs = activity.nativeGetSubtitleOffsetMs()
 
+        val items = mutableListOf<SubtitleTrackItem>()
+        val wire = activity.nativeGetSubtitleTrackInfoWire()
+        if (!wire.isNullOrBlank()) {
+            wire.lines().forEachIndexed { index, line ->
+                val parts = line.split('\t')
+                if (parts.size >= 3) {
+                    val lang = parts[0]
+                    val title = parts[1]
+                    val isExternal = parts[2] == "1"
+                    items.add(SubtitleTrackItem(index, lang, title, isExternal))
+                }
+            }
+        }
+
+        if (items.isEmpty() && trackCount > 0) {
+            val meta = activity.currentMediaMetadata
+            val subTracks = meta?.subtitleTracks ?: emptyList()
+            for (i in 0 until trackCount) {
+                val track = subTracks.getOrNull(i)
+                items.add(
+                    SubtitleTrackItem(
+                        index = i,
+                        language = track?.language ?: "",
+                        title = track?.title ?: "",
+                        isExternal = false,
+                        codec = track?.codec ?: "",
+                    ),
+                )
+            }
+        }
+
         val modal =
             SubtitleSelectionModal(
                 context = context,
@@ -201,6 +273,7 @@ class VRModalPresentation(
                     activity.nativeSetSubtitleOffsetMs(offsetMs)
                 },
                 onDismiss = { dismissModal() },
+                trackItems = items,
             )
         showModal(modal)
     }
@@ -256,6 +329,32 @@ class VRModalPresentation(
     }
 
     /**
+     * Prepara e exibe o modal de confirmação de exclusão ([ConfirmDeleteModal]).
+     */
+    fun showConfirmDeleteModal(
+        title: String,
+        message: String,
+        confirmText: String = context.getString(R.string.network_delete_server_confirm),
+        cancelText: String = context.getString(R.string.network_delete_server_cancel),
+        onConfirm: () -> Unit,
+    ) {
+        val modal =
+            ConfirmDeleteModal(
+                context = context,
+                title = title,
+                message = message,
+                confirmText = confirmText,
+                cancelText = cancelText,
+                onConfirm = {
+                    dismissModal()
+                    onConfirm()
+                },
+                onDismiss = { dismissModal() },
+            )
+        showModal(modal)
+    }
+
+    /**
      * Prepara e exibe o modal de configurações e estilo do Passthrough ([PassthroughSettingsModal]).
      */
     fun showPassthroughSettingsModal() {
@@ -289,8 +388,7 @@ class VRModalPresentation(
                 currentPackedAlphaCutoff = packedAlphaCutoff,
                 currentPackedAlphaChoke = packedAlphaChoke,
                 onTogglePassthrough = { enabled ->
-                    FeatureFlags.setEnabled(context, FeatureFlags.Flag.PASSTHROUGH, enabled)
-                    activity.nativeSetPassthroughEnabled(enabled)
+                    activity.setPassthroughEnabled(enabled)
                 },
                 onOpacityChanged = { newOpacity ->
                     FeatureFlags.setPassthroughOpacity(context, newOpacity)
@@ -363,7 +461,7 @@ class VRModalPresentation(
                     activity.detectCurrentVideoChromaKey(callback)
                 },
                 onResetScreenPosition = {
-                    activity.nativeResetScreenPosition()
+                    activity.resetScreenPosition()
                 },
                 onDismiss = { dismissModal() },
             )
@@ -452,7 +550,10 @@ class VRModalPresentation(
             }
         }
 
-        if (parent is android.widget.ScrollView || parent is androidx.recyclerview.widget.RecyclerView || parent.canScrollVertically(1) || parent.canScrollVertically(-1)) {
+        val isScrollableType =
+            parent is android.widget.ScrollView ||
+                parent is androidx.recyclerview.widget.RecyclerView
+        if (isScrollableType || parent.canScrollVertically(1) || parent.canScrollVertically(-1)) {
             return parent
         }
         return null
