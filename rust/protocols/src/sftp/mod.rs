@@ -208,12 +208,12 @@ async fn connect_nodelay(
                 match &*guard {
                     Some(Err(HostKeyError::NeedsConfirmation { fingerprint })) => {
                         return Err(format!(
-                            "ERROR:HOST_KEY_CONFIRM:{fingerprint}\nneeds confirmation: {fingerprint}"
+                            "HOST_KEY_CONFIRM:{fingerprint} needs confirmation: {fingerprint}"
                         ));
                     }
                     Some(Err(HostKeyError::IdentityChanged { expected, actual })) => {
                         return Err(format!(
-                            "ERROR:HOST_KEY_CHANGED:expected {expected}, server presented {actual}\nserver identity changed: expected fingerprint {expected}, server presented {actual}"
+                            "HOST_KEY_CHANGED:expected {expected}, server presented {actual} server identity changed: expected fingerprint {expected}, server presented {actual}"
                         ));
                     }
                     _ => {}
@@ -419,9 +419,9 @@ pub async fn probe_server_fingerprint(host: &str, port: u16) -> Result<String, S
             Err("SFTP: probe obteve conexao inesperada sem confirmacao de chave".to_string())
         }
         Err(e) => {
-            if let Some(idx) = e.find("ERROR:HOST_KEY_CONFIRM:") {
-                let rest = &e[idx + "ERROR:HOST_KEY_CONFIRM:".len()..];
-                let fp = rest.lines().next().unwrap_or(rest).trim();
+            if let Some(idx) = e.find("HOST_KEY_CONFIRM:") {
+                let rest = &e[idx + "HOST_KEY_CONFIRM:".len()..];
+                let fp = rest.split_whitespace().next().unwrap_or("").trim();
                 Ok(fp.to_string())
             } else {
                 Err(e)

@@ -82,6 +82,7 @@ object MediaMetadataReader {
                             source.server.username,
                             source.server.password,
                             source.server.privateKey ?: "",
+                            source.server.hostKeyFingerprint ?: "",
                             source.path,
                         )
                     is PlaybackSource.Nfs ->

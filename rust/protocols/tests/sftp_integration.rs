@@ -384,7 +384,7 @@ fn tofu_first_connection_without_fingerprint_returns_needs_confirmation() {
     let err = list_directory(&target, "")
         .expect_err("primeira conexao sem fingerprint deve exigir confirmacao");
     assert!(
-        err.contains("needs confirmation") || err.contains("ERROR:HOST_KEY_CONFIRM:"),
+        err.contains("needs confirmation") || err.contains("HOST_KEY_CONFIRM:"),
         "erro esperado de confirmacao de chave, obteve: {err}"
     );
 }
@@ -400,7 +400,7 @@ fn different_fingerprint_fails_with_identity_changed() {
 
     let err = list_directory(&target, "").expect_err("conexao com host key divergente deve falhar");
     assert!(
-        err.contains("server identity changed") || err.contains("ERROR:HOST_KEY_CHANGED:"),
+        err.contains("server identity changed") || err.contains("HOST_KEY_CHANGED:"),
         "erro esperado de identidade alterada, obteve: {err}"
     );
 }

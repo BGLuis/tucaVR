@@ -164,14 +164,20 @@ impl Args {
 fn build_internal_uri(protocol: &str, args: &Args) -> String {
     match protocol {
         "sftp" => {
+            let host = args.require("host");
+            let port = args.get_u16("port", 22);
+            let expected_fingerprint = args
+                .get("fingerprint")
+                .map(|s| s.to_string())
+                .or_else(|| protocols::sftp::probe_host_key(&host, port).ok());
             let target = SftpTarget {
-                host: args.require("host"),
-                port: args.get_u16("port", 22),
+                host,
+                port,
                 path: args.require("path"),
                 username: args.get_or("user", ""),
                 password: args.get_or("password", ""),
                 private_key: None,
-                expected_fingerprint: None,
+                expected_fingerprint,
             };
             target.to_internal()
         }
