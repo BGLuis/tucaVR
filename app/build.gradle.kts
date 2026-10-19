@@ -148,7 +148,7 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("com.google.android.material:material:1.12.0")
     implementation("org.khronos.openxr:openxr_loader_for_android:1.0.34")
-    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     // T6.4: EncryptedSharedPreferences for SMB server credentials —
     // NEVER store a password in plain text (doc, section 6, "Credentials" warning).
     implementation("androidx.security:security-crypto:1.1.0")
@@ -187,7 +187,7 @@ dependencies {
     // because none of those classes touches real Android APIs in the
     // tested paths. See docs/TESTING-PLAN.md.
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     // Android's org.json is a stub on the JVM unit-test classpath.
     testImplementation("org.json:json:20250517")
 
