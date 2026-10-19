@@ -1549,6 +1549,7 @@ pub extern "C" fn start_sftp_playback(
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     private_key: *const std::os::raw::c_char,
+    expected_fingerprint: *const std::os::raw::c_char,
     start_time_sec: f32,
 ) {
     // Ver comentario em start_smb_playback.
@@ -1565,6 +1566,7 @@ pub extern "C" fn start_sftp_playback(
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        let expected_fingerprint = cstr_to_string(expected_fingerprint).filter(|s| !s.is_empty());
         protocols::sftp::SftpTarget {
             host,
             port: port.clamp(1, u16::MAX as i32) as u16,
@@ -1572,6 +1574,7 @@ pub extern "C" fn start_sftp_playback(
             username,
             password,
             private_key,
+            expected_fingerprint,
         }
     };
     if let Err(e) = target.validate() {
@@ -1624,6 +1627,7 @@ pub extern "C" fn sftp_list_directory(
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     private_key: *const std::os::raw::c_char,
+    expected_fingerprint: *const std::os::raw::c_char,
     path: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
@@ -1634,6 +1638,7 @@ pub extern "C" fn sftp_list_directory(
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        let expected_fingerprint = cstr_to_string(expected_fingerprint).filter(|s| !s.is_empty());
         protocols::sftp::SftpTarget {
             host,
             port: port.clamp(1, u16::MAX as i32) as u16,
@@ -1641,6 +1646,7 @@ pub extern "C" fn sftp_list_directory(
             username,
             password,
             private_key,
+            expected_fingerprint,
         }
     };
     if let Err(e) = target.validate() {
@@ -1664,7 +1670,13 @@ pub extern "C" fn sftp_list_directory(
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => {
+            if e.starts_with("ERROR:") {
+                string_to_c_char(e.replace('\n', " "))
+            } else {
+                string_to_c_char(format!("ERROR:{}", e.replace('\n', " ")))
+            }
+        }
     }
 }
 
@@ -1677,6 +1689,7 @@ pub extern "C" fn sftp_scan_folder_has_media(
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     private_key: *const std::os::raw::c_char,
+    expected_fingerprint: *const std::os::raw::c_char,
     path: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
@@ -1687,6 +1700,7 @@ pub extern "C" fn sftp_scan_folder_has_media(
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        let expected_fingerprint = cstr_to_string(expected_fingerprint).filter(|s| !s.is_empty());
         protocols::sftp::SftpTarget {
             host,
             port: port.clamp(1, u16::MAX as i32) as u16,
@@ -1694,6 +1708,7 @@ pub extern "C" fn sftp_scan_folder_has_media(
             username,
             password,
             private_key,
+            expected_fingerprint,
         }
     };
     if let Err(e) = target.validate() {
@@ -1706,7 +1721,36 @@ pub extern "C" fn sftp_scan_folder_has_media(
             "{}\t{}",
             result.has_media as i32, result.completed_fully as i32
         )),
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => {
+            if e.starts_with("ERROR:") {
+                string_to_c_char(e.replace('\n', " "))
+            } else {
+                string_to_c_char(format!("ERROR:{}", e.replace('\n', " ")))
+            }
+        }
+    }
+}
+
+/// T6.2 / #57: Consulta o fingerprint SHA-256 da host key do servidor SFTP (TOFU) sem autenticar.
+#[no_mangle]
+pub extern "C" fn sftp_probe_host_key(
+    host: *const std::os::raw::c_char,
+    port: i32,
+) -> *mut std::os::raw::c_char {
+    let host = match unsafe { cstr_to_string(host) } {
+        Some(s) => s,
+        None => return string_to_c_char("ERROR:host invalido".into()),
+    };
+    let port = port.clamp(1, u16::MAX as i32) as u16;
+    match protocols::sftp::probe_host_key(&host, port) {
+        Ok(fp) => string_to_c_char(fp),
+        Err(e) => {
+            if e.starts_with("ERROR:") {
+                string_to_c_char(e.replace('\n', " "))
+            } else {
+                string_to_c_char(format!("ERROR:{}", e.replace('\n', " ")))
+            }
+        }
     }
 }
 
@@ -2617,6 +2661,7 @@ pub extern "C" fn sftp_thumbnail_open(
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     private_key: *const std::os::raw::c_char,
+    expected_fingerprint: *const std::os::raw::c_char,
     path: *const std::os::raw::c_char,
     cancel_token: u64,
 ) -> u64 {
@@ -2632,6 +2677,7 @@ pub extern "C" fn sftp_thumbnail_open(
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        let expected_fingerprint = cstr_to_string(expected_fingerprint).filter(|s| !s.is_empty());
         protocols::sftp::SftpTarget {
             host,
             port: port.clamp(1, u16::MAX as i32) as u16,
@@ -2639,6 +2685,7 @@ pub extern "C" fn sftp_thumbnail_open(
             username,
             password,
             private_key,
+            expected_fingerprint,
         }
     };
     if target.validate().is_err() {
@@ -2885,6 +2932,7 @@ pub extern "C" fn sftp_generate_thumbnail_strip(
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     private_key: *const std::os::raw::c_char,
+    expected_fingerprint: *const std::os::raw::c_char,
     path: *const std::os::raw::c_char,
     interval_secs: f32,
     max_width: u32,
@@ -2906,6 +2954,7 @@ pub extern "C" fn sftp_generate_thumbnail_strip(
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        let expected_fingerprint = cstr_to_string(expected_fingerprint).filter(|s| !s.is_empty());
         protocols::sftp::SftpTarget {
             host,
             port: port.clamp(1, u16::MAX as i32) as u16,
@@ -2913,6 +2962,7 @@ pub extern "C" fn sftp_generate_thumbnail_strip(
             username,
             password,
             private_key,
+            expected_fingerprint,
         }
     };
     if target.validate().is_err() {
@@ -3044,6 +3094,7 @@ pub extern "C" fn sftp_read_metadata(
     username: *const std::os::raw::c_char,
     password: *const std::os::raw::c_char,
     private_key: *const std::os::raw::c_char,
+    expected_fingerprint: *const std::os::raw::c_char,
     path: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let target = unsafe {
@@ -3058,6 +3109,7 @@ pub extern "C" fn sftp_read_metadata(
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
         let private_key = cstr_to_string(private_key).filter(|s| !s.is_empty());
+        let expected_fingerprint = cstr_to_string(expected_fingerprint).filter(|s| !s.is_empty());
         protocols::sftp::SftpTarget {
             host,
             port: port.clamp(1, u16::MAX as i32) as u16,
@@ -3065,6 +3117,7 @@ pub extern "C" fn sftp_read_metadata(
             username,
             password,
             private_key,
+            expected_fingerprint,
         }
     };
     if target.validate().is_err() {

@@ -55,6 +55,7 @@ data class ServerPrefill(
     val isAnonymousOrGuest: Boolean = false,
     val existingServerId: String? = null,
     val extraJson: String? = null,
+    val hostKeyFingerprint: String? = null,
 )
 
 /**
@@ -513,6 +514,7 @@ class NetworkHomeScreen(
                         scope.launch {
                             val password = withContext(Dispatchers.IO) { credentialStore.getPassword(server.id) }
                             val privateKey = withContext(Dispatchers.IO) { credentialStore.getPrivateKey(server.id) }
+                            val hostKeyFingerprint = withContext(Dispatchers.IO) { credentialStore.getHostKeyFingerprint(server.id) }
                             val prefill =
                                 ServerPrefill(
                                     host = server.host,
@@ -526,6 +528,7 @@ class NetworkHomeScreen(
                                     isAnonymousOrGuest = server.isGuest,
                                     existingServerId = server.id,
                                     extraJson = server.extraJson,
+                                    hostKeyFingerprint = hostKeyFingerprint,
                                 )
                             withContext(Dispatchers.Main) {
                                 pendingPrefill = prefill
@@ -719,7 +722,11 @@ class NetworkHomeScreen(
                             )
                         ServerProtocol.SFTP ->
                             Destination.NetworkSftpFiles(
-                                server.toSftpServer(credentialStore.getPassword(server.id), credentialStore.getPrivateKey(server.id)),
+                                server.toSftpServer(
+                                    password = credentialStore.getPassword(server.id),
+                                    privateKey = credentialStore.getPrivateKey(server.id),
+                                    hostKeyFingerprint = credentialStore.getHostKeyFingerprint(server.id),
+                                ),
                                 "",
                             )
                         ServerProtocol.NFS -> Destination.NetworkNfsFiles(server, "")

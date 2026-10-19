@@ -142,13 +142,15 @@ extern "C" {
     // SFTP
     extern void start_sftp_playback(const char* host, int32_t port, const char* path,
                                      const char* username, const char* password,
-                                     const char* private_key, float startTimeSec);
+                                     const char* private_key, const char* expected_fingerprint,
+                                     float startTimeSec);
     extern char* sftp_list_directory(const char* host, int32_t port, const char* username,
                                       const char* password, const char* private_key,
-                                      const char* path);
+                                      const char* expected_fingerprint, const char* path);
     extern char* sftp_scan_folder_has_media(const char* host, int32_t port, const char* username,
                                              const char* password, const char* private_key,
-                                             const char* path);
+                                             const char* expected_fingerprint, const char* path);
+    extern char* sftp_probe_host_key(const char* host, int32_t port);
     extern void smb_close_pooled_sessions(const char* host, int32_t port);
     extern void sftp_close_pooled_sessions(const char* host, int32_t port);
     // NFS
@@ -189,7 +191,8 @@ extern "C" {
     extern uint64_t ftp_thumbnail_open(const char* host, int32_t port, const char* username,
                                        const char* password, const char* path, uint64_t cancel_token);
     extern uint64_t sftp_thumbnail_open(const char* host, int32_t port, const char* username,
-                                        const char* password, const char* private_key, const char* path,
+                                        const char* password, const char* private_key,
+                                        const char* expected_fingerprint, const char* path,
                                         uint64_t cancel_token);
     extern uint64_t nfs_thumbnail_open(const char* host, int32_t port, const char* export_path,
                                        const char* file_path, int32_t version, uint64_t cancel_token);
@@ -213,7 +216,8 @@ extern "C" {
                                                   uint32_t* out_width, uint32_t* out_height,
                                                   size_t* out_count, size_t* out_len);
     extern uint8_t* sftp_generate_thumbnail_strip(const char* host, int32_t port, const char* username,
-                                                   const char* password, const char* private_key, const char* path,
+                                                   const char* password, const char* private_key,
+                                                   const char* expected_fingerprint, const char* path,
                                                    float interval_secs, uint32_t max_width, uint32_t max_height,
                                                    uint32_t* out_width, uint32_t* out_height,
                                                    size_t* out_count, size_t* out_len);
@@ -230,7 +234,8 @@ extern "C" {
     extern char* ftp_read_metadata(const char* host, int32_t port, const char* username,
                                     const char* password, const char* path);
     extern char* sftp_read_metadata(const char* host, int32_t port, const char* username,
-                                     const char* password, const char* private_key, const char* path);
+                                     const char* password, const char* private_key,
+                                     const char* expected_fingerprint, const char* path);
     extern char* nfs_read_metadata(const char* host, int32_t port, const char* export_path,
                                     const char* file_path, int32_t version);
     extern char* webdav_read_metadata(const char* host, int32_t port, const char* base_path,
@@ -966,35 +971,41 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativePlaySftp(JNIEnv* env, jobject,
                                              jstring host, jint port, jstring path,
                                              jstring username, jstring password,
-                                             jstring privateKey, jfloat startTimeSec) {
+                                             jstring privateKey, jstring expectedFingerprint,
+                                             jfloat startTimeSec) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* p = env->GetStringUTFChars(path, nullptr);
     const char* u = env->GetStringUTFChars(username, nullptr);
     const char* pw = env->GetStringUTFChars(password, nullptr);
     const char* k = env->GetStringUTFChars(privateKey, nullptr);
-    start_sftp_playback(h, (int32_t)port, p, u, pw, k, startTimeSec);
+    const char* fp = env->GetStringUTFChars(expectedFingerprint, nullptr);
+    start_sftp_playback(h, (int32_t)port, p, u, pw, k, fp, startTimeSec);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(path, p);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
     env->ReleaseStringUTFChars(privateKey, k);
+    env->ReleaseStringUTFChars(expectedFingerprint, fp);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_tucavr_VRActivity_nativeSftpListDirectory(JNIEnv* env, jobject,
                                                        jstring host, jint port,
                                                        jstring username, jstring password,
-                                                       jstring privateKey, jstring path) {
+                                                       jstring privateKey, jstring expectedFingerprint,
+                                                       jstring path) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* u = env->GetStringUTFChars(username, nullptr);
     const char* pw = env->GetStringUTFChars(password, nullptr);
     const char* k = env->GetStringUTFChars(privateKey, nullptr);
+    const char* fp = env->GetStringUTFChars(expectedFingerprint, nullptr);
     const char* p = env->GetStringUTFChars(path, nullptr);
-    char* result = sftp_list_directory(h, (int32_t)port, u, pw, k, p);
+    char* result = sftp_list_directory(h, (int32_t)port, u, pw, k, fp, p);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
     env->ReleaseStringUTFChars(privateKey, k);
+    env->ReleaseStringUTFChars(expectedFingerprint, fp);
     env->ReleaseStringUTFChars(path, p);
     return RustStringToJStringAndFree(env, result);
 }
@@ -1005,18 +1016,31 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_tucavr_VRActivity_nativeSftpScanFolderHasMedia(JNIEnv* env, jobject,
                                                           jstring host, jint port,
                                                           jstring username, jstring password,
-                                                          jstring privateKey, jstring path) {
+                                                          jstring privateKey, jstring expectedFingerprint,
+                                                          jstring path) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* u = env->GetStringUTFChars(username, nullptr);
     const char* pw = env->GetStringUTFChars(password, nullptr);
     const char* k = env->GetStringUTFChars(privateKey, nullptr);
+    const char* fp = env->GetStringUTFChars(expectedFingerprint, nullptr);
     const char* p = env->GetStringUTFChars(path, nullptr);
-    char* result = sftp_scan_folder_has_media(h, (int32_t)port, u, pw, k, p);
+    char* result = sftp_scan_folder_has_media(h, (int32_t)port, u, pw, k, fp, p);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
     env->ReleaseStringUTFChars(privateKey, k);
+    env->ReleaseStringUTFChars(expectedFingerprint, fp);
     env->ReleaseStringUTFChars(path, p);
+    return RustStringToJStringAndFree(env, result);
+}
+
+// T6.2 / #57: Consulta host key SFTP para confirmacao TOFU sem autenticar.
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeSftpProbeHostKey(JNIEnv* env, jobject,
+                                                     jstring host, jint port) {
+    const char* h = env->GetStringUTFChars(host, nullptr);
+    char* result = sftp_probe_host_key(h, (int32_t)port);
+    env->ReleaseStringUTFChars(host, h);
     return RustStringToJStringAndFree(env, result);
 }
 
@@ -1202,17 +1226,19 @@ Java_com_tucavr_VRActivity_nativeFtpThumbnailOpen(JNIEnv* env, jobject,
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_tucavr_VRActivity_nativeSftpThumbnailOpen(JNIEnv* env, jobject,
         jstring host, jint port, jstring username, jstring password, jstring privateKey,
-        jstring path, jlong cancelToken) {
+        jstring expectedFingerprint, jstring path, jlong cancelToken) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* u = env->GetStringUTFChars(username, nullptr);
     const char* pw = env->GetStringUTFChars(password, nullptr);
     const char* k = env->GetStringUTFChars(privateKey, nullptr);
+    const char* fp = env->GetStringUTFChars(expectedFingerprint, nullptr);
     const char* p = env->GetStringUTFChars(path, nullptr);
-    uint64_t handle = sftp_thumbnail_open(h, (int32_t)port, u, pw, k, p, (uint64_t)cancelToken);
+    uint64_t handle = sftp_thumbnail_open(h, (int32_t)port, u, pw, k, fp, p, (uint64_t)cancelToken);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
     env->ReleaseStringUTFChars(privateKey, k);
+    env->ReleaseStringUTFChars(expectedFingerprint, fp);
     env->ReleaseStringUTFChars(path, p);
     return (jlong)handle;
 }
@@ -1313,23 +1339,26 @@ extern "C" JNIEXPORT jbyteArray JNICALL
 Java_com_tucavr_VRActivity_nativeSftpGenerateThumbnailStrip(JNIEnv* env, jobject,
                                                                jstring host, jint port,
                                                                jstring username, jstring password,
-                                                               jstring privateKey, jstring path,
+                                                               jstring privateKey, jstring expectedFingerprint,
+                                                               jstring path,
                                                                jfloat intervalSeconds,
                                                                jint maxWidth, jint maxHeight) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* u = env->GetStringUTFChars(username, nullptr);
     const char* pw = env->GetStringUTFChars(password, nullptr);
     const char* k = env->GetStringUTFChars(privateKey, nullptr);
+    const char* fp = env->GetStringUTFChars(expectedFingerprint, nullptr);
     const char* p = env->GetStringUTFChars(path, nullptr);
     uint32_t outWidth = 0, outHeight = 0;
     size_t outCount = 0, outLen = 0;
-    uint8_t* data = sftp_generate_thumbnail_strip(h, (int32_t)port, u, pw, k, p, (float)intervalSeconds,
+    uint8_t* data = sftp_generate_thumbnail_strip(h, (int32_t)port, u, pw, k, fp, p, (float)intervalSeconds,
                                                    (uint32_t)maxWidth, (uint32_t)maxHeight,
                                                    &outWidth, &outHeight, &outCount, &outLen);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
     env->ReleaseStringUTFChars(privateKey, k);
+    env->ReleaseStringUTFChars(expectedFingerprint, fp);
     env->ReleaseStringUTFChars(path, p);
     return RustThumbnailStripToJByteArrayAndFree(env, data, outLen);
 }
@@ -1437,17 +1466,20 @@ extern "C" JNIEXPORT jstring JNICALL
 Java_com_tucavr_VRActivity_nativeSftpReadMetadata(JNIEnv* env, jobject,
                                                      jstring host, jint port,
                                                      jstring username, jstring password,
-                                                     jstring privateKey, jstring path) {
+                                                     jstring privateKey, jstring expectedFingerprint,
+                                                     jstring path) {
     const char* h = env->GetStringUTFChars(host, nullptr);
     const char* u = env->GetStringUTFChars(username, nullptr);
     const char* pw = env->GetStringUTFChars(password, nullptr);
     const char* k = env->GetStringUTFChars(privateKey, nullptr);
+    const char* fp = env->GetStringUTFChars(expectedFingerprint, nullptr);
     const char* p = env->GetStringUTFChars(path, nullptr);
-    char* result = sftp_read_metadata(h, (int32_t)port, u, pw, k, p);
+    char* result = sftp_read_metadata(h, (int32_t)port, u, pw, k, fp, p);
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
     env->ReleaseStringUTFChars(privateKey, k);
+    env->ReleaseStringUTFChars(expectedFingerprint, fp);
     env->ReleaseStringUTFChars(path, p);
     return RustStringToJStringAndFree(env, result);
 }

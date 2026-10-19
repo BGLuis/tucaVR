@@ -24,6 +24,19 @@ fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
+/// Obtém e fixa (TOFU) o fingerprint do container SFTP de teste.
+fn server_fingerprint() -> String {
+    static FP: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let host = env_or("VRPLAYER_TEST_SFTP_HOST", "127.0.0.1");
+        let port: u16 = env_or("VRPLAYER_TEST_SFTP_PORT", "12222")
+            .parse()
+            .expect("VRPLAYER_TEST_SFTP_PORT invalido");
+        protocols::sftp::probe_host_key(&host, port)
+            .expect("probe_host_key falhou contra container sftp-test")
+    });
+    FP.clone()
+}
+
 /// Alvo com autenticacao por senha (T6.2 "password").
 fn password_target() -> SftpTarget {
     SftpTarget {
@@ -35,6 +48,7 @@ fn password_target() -> SftpTarget {
         username: env_or("VRPLAYER_TEST_SFTP_USER", "vruser"),
         password: env_or("VRPLAYER_TEST_SFTP_PASS", "vrpass123"),
         private_key: None,
+        expected_fingerprint: Some(server_fingerprint()),
     }
 }
 
@@ -357,4 +371,36 @@ fn sftp_file_source_backward_seek_after_forward_read() {
         .expect("leitura completa apos salto pra tras falhou");
 
     assert_eq!(sha256_hex(&buf), expected_sha256());
+}
+
+/// T6.2 / #57: Primeira conexão sem fingerprint armazenado retorna erro solicitando
+/// confirmação do usuário com o fingerprint apresentado pelo servidor.
+#[test]
+#[ignore]
+fn tofu_first_connection_without_fingerprint_returns_needs_confirmation() {
+    let mut target = password_target();
+    target.expected_fingerprint = None;
+
+    let err = list_directory(&target, "")
+        .expect_err("primeira conexao sem fingerprint deve exigir confirmacao");
+    assert!(
+        err.contains("needs confirmation") || err.contains("HOST_KEY_CONFIRM:"),
+        "erro esperado de confirmacao de chave, obteve: {err}"
+    );
+}
+
+/// T6.2 / #57: Conexão com fingerprint diferente do esperado (ou container recriado com nova chave)
+/// falha com erro de identidade alterada (proteção contra MITM).
+#[test]
+#[ignore]
+fn different_fingerprint_fails_with_identity_changed() {
+    let mut target = password_target();
+    target.expected_fingerprint =
+        Some("SHA256:0000000000000000000000000000000000000000000".to_string());
+
+    let err = list_directory(&target, "").expect_err("conexao com host key divergente deve falhar");
+    assert!(
+        err.contains("server identity changed") || err.contains("HOST_KEY_CHANGED:"),
+        "erro esperado de identidade alterada, obteve: {err}"
+    );
 }

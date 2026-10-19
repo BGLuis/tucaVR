@@ -20,6 +20,7 @@ data class SftpServer(
     val username: String,
     val password: String,
     val privateKey: String?,
+    val hostKeyFingerprint: String? = null,
 ) {
     val usesKeyAuth: Boolean get() = !privateKey.isNullOrEmpty()
 
@@ -55,7 +56,12 @@ class SftpCredentialStore(
                 dao.getByProtocol(ServerProtocol.SFTP).map { saved ->
                     val password = credentials.getPassword(saved.id)
                     val privateKey = credentials.getPrivateKey(saved.id)
-                    saved.toSftpServer(password = password, privateKey = privateKey)
+                    val hostKeyFingerprint = credentials.getHostKeyFingerprint(saved.id)
+                    saved.toSftpServer(
+                        password = password,
+                        privateKey = privateKey,
+                        hostKeyFingerprint = hostKeyFingerprint,
+                    )
                 }
             } catch (e: Exception) {
                 emptyList()
@@ -72,6 +78,7 @@ class SftpCredentialStore(
                     server.id,
                     password = server.password,
                     privateKey = server.privateKey,
+                    hostKeyFingerprint = server.hostKeyFingerprint,
                 )
             } catch (e: Exception) {
                 // Log / ignore
