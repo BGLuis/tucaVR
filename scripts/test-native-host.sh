@@ -23,6 +23,7 @@ TESTS=(
     "test_subtitle_layout"
     "test_hand_tracking"
     "test_environment_config"
+    "test_environment_validator"
     "test_browser_pose"
     "test_panel_pick"
     "test_cylinder_hit"
@@ -35,11 +36,20 @@ if [ "${ENABLE_ASAN:-0}" = "1" ]; then
     EXTRA_FLAGS+=("-fsanitize=address,undefined" "-fno-omit-frame-pointer")
 fi
 
+OPENXR_INCLUDE_FLAGS=()
+if ! echo '#include <openxr/openxr.h>' | $CXX -E - >/dev/null 2>&1; then
+    OPENXR_HEADER=$(find "$HOME/.gradle/caches" -path "*/openxr/openxr.h" -print -quit 2>/dev/null || true)
+    if [ -n "$OPENXR_HEADER" ]; then
+        OPENXR_INCLUDE_FLAGS+=("-I" "$(dirname "$(dirname "$OPENXR_HEADER")")")
+    fi
+fi
+
 compile_test() {
     local name="$1"
     $CXX -std=c++20 -O2 -Wall -Wextra -Werror \
         "${EXTRA_FLAGS[@]}" \
         -I native/include \
+        "${OPENXR_INCLUDE_FLAGS[@]}" \
         "native/tests/${name}.cpp" \
         -o "$BUILD_DIR/${name}"
 }

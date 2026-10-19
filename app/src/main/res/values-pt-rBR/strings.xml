@@ -154,6 +154,14 @@
     <string name="env_passthrough_desc">Realidade Mista exibindo o ambiente real ao seu redor.</string>
     <string name="env_reset_anchor_button">Redefinir para Âncora do Ambiente</string>
 
+    <!-- Environment Validation (Phase 1.0 §1 T1.1 / Issue #62) -->
+    <string name="env_validate_ok">Ambiente válido</string>
+    <string name="env_error_corrupt_file">Arquivo de ambiente 3D inválido ou corrompido</string>
+    <string name="env_error_invalid_gltf">O modelo 3D não está em conformidade com a especificação glTF</string>
+    <string name="env_error_too_many_triangles">O modelo 3D excede o limite de 100.000 triângulos</string>
+    <string name="env_error_texture_too_large">As texturas do ambiente não podem exceder 4096×4096 pixels</string>
+    <string name="env_error_corrupt_texture">Textura corrompida no ambiente 3D</string>
+
     <!-- File Browser local (VRPresentation.renderLocalFiles / FileAdapter) -->
     <string name="browser_title_local_files">Arquivos locais</string>
     <string name="browser_row_up">Subir um nivel</string>

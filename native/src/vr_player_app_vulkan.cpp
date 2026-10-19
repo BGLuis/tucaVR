@@ -89,6 +89,7 @@
 #include "stb_image.h"
 #define CGLTF_IMPLEMENTATION
 #include "cgltf.h"
+#include "environment_validator.h"
 #include <android/asset_manager.h>
 
 #ifndef XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME
@@ -5964,77 +5965,111 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
     }
 
     // 3D Model GLB
-    std::string assetPath = data.config.modelFile.empty() ? ("environments/" + envId + "/model.glb") : data.config.modelFile;
-    if (assetPath.rfind("environments/", 0) != 0) {
-        assetPath = "environments/" + assetPath;
-    }
-    AAsset* asset = AAssetManager_open(assetManager, assetPath.c_str(), AASSET_MODE_BUFFER);
-    if (asset) {
-        size_t assetSize = static_cast<size_t>(AAsset_getLength(asset));
-        const void* assetBuffer = AAsset_getBuffer(asset);
-        if (assetBuffer && assetSize > 0) {
-            cgltf_options options{};
-            cgltf_data* gltfData = nullptr;
-            cgltf_result res = cgltf_parse(&options, assetBuffer, assetSize, &gltfData);
-            if (res == cgltf_result_success && gltfData) {
-                res = cgltf_load_buffers(&options, gltfData, nullptr);
-                if (res == cgltf_result_success) {
-                    for (size_t m = 0; m < gltfData->meshes_count; ++m) {
-                        const auto& mesh = gltfData->meshes[m];
-                        for (size_t p = 0; p < mesh.primitives_count; ++p) {
-                            const auto& prim = mesh.primitives[p];
-                            if (prim.type != cgltf_primitive_type_triangles) continue;
+    std::string modelTarget = data.config.modelFile.empty() ? ("environments/" + envId + "/model.glb") : data.config.modelFile;
+    cgltf_options options{};
+    cgltf_data* gltfData = nullptr;
+    bool isFilePath = (!modelTarget.empty() && modelTarget[0] == '/');
 
-                            uint32_t vertexBase = static_cast<uint32_t>(data.vertices.size());
-                            cgltf_accessor* posAcc = nullptr;
-                            cgltf_accessor* normAcc = nullptr;
-                            cgltf_accessor* colorAcc = nullptr;
-
-                            for (size_t a = 0; a < prim.attributes_count; ++a) {
-                                if (prim.attributes[a].type == cgltf_attribute_type_position) posAcc = prim.attributes[a].data;
-                                else if (prim.attributes[a].type == cgltf_attribute_type_normal) normAcc = prim.attributes[a].data;
-                                else if (prim.attributes[a].type == cgltf_attribute_type_color) colorAcc = prim.attributes[a].data;
-                            }
-
-                            if (!posAcc) continue;
-
-                            size_t count = posAcc->count;
-                            for (size_t i = 0; i < count; ++i) {
-                                EnvironmentVertex v{};
-                                v.pos[0] = v.pos[1] = v.pos[2] = 0.0f;
-                                v.normal[0] = 0.0f; v.normal[1] = 1.0f; v.normal[2] = 0.0f;
-                                v.color[0] = v.color[1] = v.color[2] = v.color[3] = 1.0f;
-
-                                cgltf_accessor_read_float(posAcc, i, v.pos, 3);
-                                if (normAcc) cgltf_accessor_read_float(normAcc, i, v.normal, 3);
-                                if (colorAcc) {
-                                    float c[4] = {1.0f, 1.0f, 1.0f, 1.0f};
-                                    cgltf_accessor_read_float(colorAcc, i, c, colorAcc->type == cgltf_type_vec4 ? 4 : 3);
-                                    v.color[0] = c[0]; v.color[1] = c[1]; v.color[2] = c[2]; v.color[3] = c[3];
-                                }
-                                data.vertices.push_back(v);
-                            }
-
-                            if (prim.indices) {
-                                size_t icount = prim.indices->count;
-                                for (size_t i = 0; i < icount; ++i) {
-                                    data.indices.push_back(vertexBase + static_cast<uint32_t>(cgltf_accessor_read_index(prim.indices, i)));
-                                }
-                            } else {
-                                for (size_t i = 0; i < count; ++i) {
-                                    data.indices.push_back(vertexBase + static_cast<uint32_t>(i));
-                                }
-                            }
-                        }
-                    }
-                    if (!data.vertices.empty() && !data.indices.empty()) {
-                        data.hasMesh = true;
+    if (isFilePath) {
+        cgltf_result res = cgltf_parse_file(&options, modelTarget.c_str(), &gltfData);
+        if (res == cgltf_result_success && gltfData) {
+            res = cgltf_load_buffers(&options, gltfData, modelTarget.c_str());
+            if (res != cgltf_result_success) {
+                cgltf_free(gltfData);
+                gltfData = nullptr;
+            }
+        } else {
+            LOGE("Ambiente: Falha ao carregar modelo GLB do arquivo '%s'", modelTarget.c_str());
+            gltfData = nullptr;
+        }
+    } else {
+        std::string assetPath = modelTarget;
+        if (assetPath.rfind("environments/", 0) != 0) {
+            assetPath = "environments/" + assetPath;
+        }
+        AAsset* asset = AAssetManager_open(assetManager, assetPath.c_str(), AASSET_MODE_BUFFER);
+        if (asset) {
+            size_t assetSize = static_cast<size_t>(AAsset_getLength(asset));
+            const void* assetBuffer = AAsset_getBuffer(asset);
+            if (assetBuffer && assetSize > 0) {
+                cgltf_result res = cgltf_parse(&options, assetBuffer, assetSize, &gltfData);
+                if (res == cgltf_result_success && gltfData) {
+                    res = cgltf_load_buffers(&options, gltfData, nullptr);
+                    if (res != cgltf_result_success) {
+                        cgltf_free(gltfData);
+                        gltfData = nullptr;
                     }
                 }
-                cgltf_free(gltfData);
+            }
+            AAsset_close(asset);
+        }
+    }
+
+    if (gltfData) {
+        EnvironmentValidationReport valReport;
+        EnvironmentValidationResult valRes = ValidateEnvironment(gltfData, &valReport);
+        if (valRes != EnvironmentValidationResult::Ok) {
+            LOGE("Ambiente: Validacao do modelo '%s' falhou: %s (triangles=%zu, maxTex=%dx%d)",
+                 modelTarget.c_str(), valReport.messageKey, valReport.totalTriangles,
+                 valReport.maxTextureWidth, valReport.maxTextureHeight);
+            cgltf_free(gltfData);
+            gltfData = nullptr;
+        }
+    }
+
+    if (gltfData) {
+        for (size_t m = 0; m < gltfData->meshes_count; ++m) {
+            const auto& mesh = gltfData->meshes[m];
+            for (size_t p = 0; p < mesh.primitives_count; ++p) {
+                const auto& prim = mesh.primitives[p];
+                if (prim.type != cgltf_primitive_type_triangles) continue;
+
+                uint32_t vertexBase = static_cast<uint32_t>(data.vertices.size());
+                cgltf_accessor* posAcc = nullptr;
+                cgltf_accessor* normAcc = nullptr;
+                cgltf_accessor* colorAcc = nullptr;
+
+                for (size_t a = 0; a < prim.attributes_count; ++a) {
+                    if (prim.attributes[a].type == cgltf_attribute_type_position) posAcc = prim.attributes[a].data;
+                    else if (prim.attributes[a].type == cgltf_attribute_type_normal) normAcc = prim.attributes[a].data;
+                    else if (prim.attributes[a].type == cgltf_attribute_type_color) colorAcc = prim.attributes[a].data;
+                }
+
+                if (!posAcc) continue;
+
+                size_t count = posAcc->count;
+                for (size_t i = 0; i < count; ++i) {
+                    EnvironmentVertex v{};
+                    v.pos[0] = v.pos[1] = v.pos[2] = 0.0f;
+                    v.normal[0] = 0.0f; v.normal[1] = 1.0f; v.normal[2] = 0.0f;
+                    v.color[0] = v.color[1] = v.color[2] = v.color[3] = 1.0f;
+
+                    cgltf_accessor_read_float(posAcc, i, v.pos, 3);
+                    if (normAcc) cgltf_accessor_read_float(normAcc, i, v.normal, 3);
+                    if (colorAcc) {
+                        float c[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+                        cgltf_accessor_read_float(colorAcc, i, c, colorAcc->type == cgltf_type_vec4 ? 4 : 3);
+                        v.color[0] = c[0]; v.color[1] = c[1]; v.color[2] = c[2]; v.color[3] = c[3];
+                    }
+                    data.vertices.push_back(v);
+                }
+
+                if (prim.indices) {
+                    size_t icount = prim.indices->count;
+                    for (size_t i = 0; i < icount; ++i) {
+                        data.indices.push_back(vertexBase + static_cast<uint32_t>(cgltf_accessor_read_index(prim.indices, i)));
+                    }
+                } else {
+                    for (size_t i = 0; i < count; ++i) {
+                        data.indices.push_back(vertexBase + static_cast<uint32_t>(i));
+                    }
+                }
             }
         }
-        AAsset_close(asset);
+        if (!data.vertices.empty() && !data.indices.empty()) {
+            data.hasMesh = true;
+        }
+        cgltf_free(gltfData);
     }
 
     return data;
