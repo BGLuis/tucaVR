@@ -308,15 +308,20 @@ class VRActivity : NativeActivity() {
                             val host = intent.getStringExtra(EXTRA_SFTP_HOST)
                             val path = intent.getStringExtra(EXTRA_SFTP_PATH)
                             if (!host.isNullOrBlank() && !path.isNullOrBlank()) {
+                                val port = intent.getIntExtra(EXTRA_SFTP_PORT, 22)
+                                val fp =
+                                    intent.getStringExtra("extra_sftp_fingerprint")
+                                        ?: nativeSftpProbeHostKey(host, port).takeIf { !it.startsWith("ERROR:") }
                                 val server =
                                     com.tucavr.network.SftpServer(
                                         id = "debug-broadcast",
                                         name = "debug-broadcast",
                                         host = host,
-                                        port = intent.getIntExtra(EXTRA_SFTP_PORT, 22),
+                                        port = port,
                                         username = intent.getStringExtra(EXTRA_SFTP_USER) ?: "",
                                         password = intent.getStringExtra(EXTRA_SFTP_PASSWORD) ?: "",
                                         privateKey = null,
+                                        hostKeyFingerprint = fp,
                                     )
                                 playSftp(server, path)
                             }
@@ -1503,6 +1508,7 @@ class VRActivity : NativeActivity() {
             server.username,
             server.password,
             server.privateKey ?: "",
+            server.hostKeyFingerprint ?: "",
             (resumeAtMs ?: 0L) / 1000f,
         )
         requestUiPanelHidden()
@@ -2213,6 +2219,7 @@ class VRActivity : NativeActivity() {
         username: String,
         password: String,
         privateKey: String,
+        expectedFingerprint: String,
         startTimeSec: Float,
     )
 
@@ -2223,6 +2230,7 @@ class VRActivity : NativeActivity() {
         username: String,
         password: String,
         privateKey: String,
+        expectedFingerprint: String,
         path: String,
     ): String
 
@@ -2233,7 +2241,14 @@ class VRActivity : NativeActivity() {
         username: String,
         password: String,
         privateKey: String,
+        expectedFingerprint: String,
         path: String,
+    ): String
+
+    // T6.2 / #57: Consulta host key SFTP para confirmacao TOFU sem autenticar.
+    external fun nativeSftpProbeHostKey(
+        host: String,
+        port: Int,
     ): String
 
     // Drops the pooled SMB/SFTP sessions of a removed server (does not block).
@@ -2368,6 +2383,7 @@ class VRActivity : NativeActivity() {
         username: String,
         password: String,
         privateKey: String,
+        expectedFingerprint: String,
         path: String,
         cancelToken: Long,
     ): Long
@@ -2431,6 +2447,7 @@ class VRActivity : NativeActivity() {
         username: String,
         password: String,
         privateKey: String,
+        expectedFingerprint: String,
         path: String,
         intervalSeconds: Float,
         maxWidth: Int,
@@ -2569,6 +2586,7 @@ class VRActivity : NativeActivity() {
         username: String,
         password: String,
         privateKey: String,
+        expectedFingerprint: String,
         path: String,
     ): String
 

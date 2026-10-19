@@ -153,6 +153,7 @@ object NetworkThumbnailGenerator {
                     source.server.username,
                     source.server.password,
                     source.server.privateKey ?: "",
+                    source.server.hostKeyFingerprint ?: "",
                     source.path,
                     cancelToken,
                 )
@@ -308,7 +309,7 @@ object NetworkThumbnailGenerator {
             is PlaybackSource.Sftp ->
                 activity.nativeSftpGenerateThumbnailStrip(
                     source.server.host, source.server.port, source.server.username, source.server.password,
-                    source.server.privateKey ?: "", source.path,
+                    source.server.privateKey ?: "", source.server.hostKeyFingerprint ?: "", source.path,
                     SCRUB_INTERVAL_SECONDS, SCRUB_WIDTH, SCRUB_HEIGHT,
                 )
             is PlaybackSource.Ftp,

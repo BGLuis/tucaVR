@@ -195,6 +195,8 @@ class NetworkSftpScreen(
                     ).apply { topMargin = VoidTheme.dpToPx(context, 8f) }
             }
 
+        var currentFingerprint: String? = prefill?.hostKeyFingerprint
+
         val btnTest =
             VoidButton(context, VoidButtonStyle.SECONDARY).apply {
                 text = context.getString(R.string.network_btn_test_connection)
@@ -222,7 +224,23 @@ class NetworkSftpScreen(
                     scope.launch {
                         val result =
                             withContext(Dispatchers.IO) {
-                                activity.nativeSftpListDirectory(hostStr, port, user, pass, key, "")
+                                val fp = currentFingerprint ?: ""
+                                val firstTry = activity.nativeSftpListDirectory(hostStr, port, user, pass, key, fp, "")
+                                if (firstTry.startsWith("ERROR:HOST_KEY_CONFIRM:")) {
+                                    val discovered =
+                                        firstTry.removePrefix("ERROR:HOST_KEY_CONFIRM:")
+                                            .trim()
+                                            .substringBefore(" ")
+                                            .trim()
+                                    if (discovered.isNotEmpty()) {
+                                        currentFingerprint = discovered
+                                        activity.nativeSftpListDirectory(hostStr, port, user, pass, key, discovered, "")
+                                    } else {
+                                        firstTry
+                                    }
+                                } else {
+                                    firstTry
+                                }
                             }
                         if (result.startsWith("ERROR:")) {
                             statusText.text =
@@ -262,17 +280,22 @@ class NetworkSftpScreen(
                     }
 
                     val serverId = prefill?.existingServerId ?: credentialStore.newId()
-                    val server =
-                        SftpServer(
-                            id = serverId,
-                            name = finalName,
-                            host = hostStr,
-                            port = port,
-                            username = user,
-                            password = pass,
-                            privateKey = if (useKey) key else null,
-                        )
                     scope.launch {
+                        val fpToSave =
+                            currentFingerprint ?: withContext(Dispatchers.IO) {
+                                activity.nativeSftpProbeHostKey(hostStr, port).takeIf { !it.startsWith("ERROR:") }
+                            }
+                        val server =
+                            SftpServer(
+                                id = serverId,
+                                name = finalName,
+                                host = hostStr,
+                                port = port,
+                                username = user,
+                                password = pass,
+                                privateKey = if (useKey) key else null,
+                                hostKeyFingerprint = fpToSave,
+                            )
                         withContext(Dispatchers.IO) {
                             credentialStore.save(server)
                         }
@@ -526,6 +549,7 @@ class NetworkSftpScreen(
                     server.username,
                     server.password,
                     server.privateKey ?: "",
+                    server.hostKeyFingerprint ?: "",
                     browsePath,
                 )
             },
@@ -542,6 +566,7 @@ class NetworkSftpScreen(
                                 server.username,
                                 server.password,
                                 server.privateKey ?: "",
+                                server.hostKeyFingerprint ?: "",
                                 entry.path,
                             )
                         }
