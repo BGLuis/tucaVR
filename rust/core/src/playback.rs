@@ -1417,6 +1417,15 @@ impl PlaybackController {
         self.audio_track_count
     }
 
+    /// Indice da trilha de audio atualmente selecionada (0 se nada foi carregado,
+    /// delimitado entre 0 e audio_track_count - 1).
+    pub fn audio_track_index(&self) -> usize {
+        media_logic::playback_params::clamp_audio_track_index(
+            self.desired_audio_track,
+            self.audio_track_count,
+        )
+    }
+
     /// Seleciona a trilha de audio pela posicao ordinal (0 = primeira).
     /// So tem efeito no PROXIMO load_at() — nao troca a trilha "ao vivo"
     /// no meio da reproducao (isso exigiria recriar o AudioDecoder e o

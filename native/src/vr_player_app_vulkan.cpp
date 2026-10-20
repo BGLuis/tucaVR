@@ -318,6 +318,7 @@ extern "C" {
     extern uint32_t get_spatial_audio_head_tracking();
     extern float get_playback_speed();
     extern uint32_t get_audio_track_count();
+    extern uint32_t get_audio_track_index();
     // T-HDR: 1 se o video atual foi detectado como HDR (PQ/HLG, ver
     // media_logic::color) — usado pra escolher o pipeline de cor do shader
     // de video (tonemap HDR->SDR) e o modelo YCbCr certo.

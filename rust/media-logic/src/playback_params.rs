@@ -17,6 +17,17 @@ pub fn clamp_volume(volume: f32) -> f32 {
     volume.clamp(0.0, 1.0)
 }
 
+/// Clamps the desired audio track index to the available track count.
+/// Returns 0 when no tracks are present or when desired is 0.
+/// Otherwise clamps to `count - 1`.
+pub fn clamp_audio_track_index(desired: usize, count: usize) -> usize {
+    if count == 0 {
+        0
+    } else {
+        desired.min(count - 1)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -55,5 +66,25 @@ mod tests {
     #[test]
     fn volume_above_one_is_clamped_to_one() {
         assert_eq!(clamp_volume(3.0), 1.0);
+    }
+
+    #[test]
+    fn audio_track_index_zero_count_returns_zero() {
+        assert_eq!(clamp_audio_track_index(0, 0), 0);
+        assert_eq!(clamp_audio_track_index(3, 0), 0);
+    }
+
+    #[test]
+    fn audio_track_index_within_range_is_unchanged() {
+        assert_eq!(clamp_audio_track_index(0, 3), 0);
+        assert_eq!(clamp_audio_track_index(1, 3), 1);
+        assert_eq!(clamp_audio_track_index(2, 3), 2);
+    }
+
+    #[test]
+    fn audio_track_index_at_or_above_count_clamps_to_last_track() {
+        assert_eq!(clamp_audio_track_index(3, 3), 2);
+        assert_eq!(clamp_audio_track_index(10, 3), 2);
+        assert_eq!(clamp_audio_track_index(1, 1), 0);
     }
 }
