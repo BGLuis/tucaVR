@@ -92,6 +92,7 @@
 #include "cgltf.h"
 #undef CGLTF_IMPLEMENTATION
 #include "environment_validator.h"
+#include "astc_transcode.h"
 #include <android/asset_manager.h>
 
 #ifndef XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME
@@ -117,6 +118,48 @@ std::string ValidateEnvironmentFileMessageKey(const char* path) {
     EnvironmentValidationReport report;
     ValidateEnvironmentFile(path, &report);
     return report.messageKey;
+}
+
+static bool IsEnvironmentImageSrgb(const cgltf_data* data, const cgltf_image* image) {
+    for (size_t m = 0; m < data->materials_count; ++m) {
+        const cgltf_material& mat = data->materials[m];
+        const cgltf_texture* base = mat.pbr_metallic_roughness.base_color_texture.texture;
+        const cgltf_texture* emissive = mat.emissive_texture.texture;
+        if ((base && base->image == image) || (emissive && emissive->image == image)) return true;
+    }
+    return false;
+}
+
+// Writes <model>.<imageIndex>.astc next to the model for every embedded image. Returns the number written.
+int TranscodeEnvironmentTexturesToAstc(const char* modelPath) {
+    cgltf_options options{};
+    cgltf_data* data = nullptr;
+    if (cgltf_parse_file(&options, modelPath, &data) != cgltf_result_success || !data) return 0;
+    int written = 0;
+    if (cgltf_load_buffers(&options, data, modelPath) == cgltf_result_success) {
+        for (size_t i = 0; i < data->images_count; ++i) {
+            const cgltf_image& img = data->images[i];
+            if (!img.buffer_view) continue;
+
+            const bool srgb = IsEnvironmentImageSrgb(data, &img);
+
+            int w = 0, h = 0, channels = 0;
+            stbi_uc* pixels = stbi_load_from_memory(
+                reinterpret_cast<const stbi_uc*>(cgltf_buffer_view_data(img.buffer_view)),
+                static_cast<int>(img.buffer_view->size), &w, &h, &channels, 4);
+            if (!pixels) continue;
+            AstcImage astc;
+            const bool ok = TranscodeRgbaToAstc6x6(pixels, static_cast<uint32_t>(w), static_cast<uint32_t>(h), srgb, &astc);
+            stbi_image_free(pixels);
+            if (!ok) continue;
+
+            const std::vector<uint8_t> bytes = SerializeAstcCache(astc);
+            std::ofstream out(std::string(modelPath) + "." + std::to_string(i) + ".astc", std::ios::binary);
+            if (out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) ++written;
+        }
+    }
+    cgltf_free(data);
+    return written;
 }
 
 static std::string CustomEnvironmentConfigPath(const std::string& envId) {
@@ -562,6 +605,21 @@ struct EnvironmentVertex {
     float pos[3];
     float normal[3];
     float color[4];
+    float uv[2];
+};
+
+// texture indexes the environment texture list; -1 draws with the white fallback.
+struct EnvironmentDrawRange {
+    uint32_t firstIndex = 0;
+    uint32_t indexCount = 0;
+    int32_t texture = -1;
+};
+
+struct EnvironmentTexture {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkDescriptorSet set = VK_NULL_HANDLE;
 };
 
 enum class EnvironmentTransitionPhase {
@@ -570,6 +628,14 @@ enum class EnvironmentTransitionPhase {
     LOADING_WORKER,
     GPU_SWAP,
     FADING_IN
+};
+
+struct CpuEnvironmentTexture {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    bool srgb = false;
+    bool astc = false;
+    std::vector<uint8_t> bytes;
 };
 
 struct CpuEnvironmentData {
@@ -583,6 +649,8 @@ struct CpuEnvironmentData {
     bool hasMesh = false;
     std::vector<EnvironmentVertex> vertices;
     std::vector<uint32_t> indices;
+    std::vector<EnvironmentDrawRange> drawRanges;
+    std::vector<CpuEnvironmentTexture> textures;
 };
 
 // Auditoria pos-reinicio (P-01/P-04/P-06):
@@ -753,6 +821,7 @@ struct AppState {
     uint32_t vkQueueFamilyIndex = UINT32_MAX;
     VkQueue vkQueue = VK_NULL_HANDLE;
     bool supportsAnisotropy = false; // ver CreateVulkanInstanceAndDevice
+    bool supportsAstc = false;       // ASTC 6x6 sampled images, see CreateVulkanInstanceAndDevice
     static constexpr uint32_t kMaxFramesInFlight = 2;
     uint32_t currentFrameIndex = 0;
     VkCommandPool vkCommandPool = VK_NULL_HANDLE;
@@ -961,6 +1030,11 @@ struct AppState {
     VkDeviceMemory envIndexMemory = VK_NULL_HANDLE;
     uint32_t envIndexCount = 0;
     bool envMeshLoaded = false;
+    VkSampler envTextureSampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout envTextureSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool envTexturePool = VK_NULL_HANDLE;
+    std::vector<EnvironmentTexture> envTextures; // [0] is the 1x1 white fallback
+    std::vector<EnvironmentDrawRange> envDrawRanges;
     std::string currentEnvironmentId = "void";
     XrVector3f envSpawnOffset = {0.0f, 0.0f, 0.0f};
 
@@ -1760,6 +1834,14 @@ void CreateVulkanInstanceAndDevice(AppState& state) {
 
     VkPhysicalDeviceFeatures enabledFeatures{};
     enabledFeatures.samplerAnisotropy = state.supportsAnisotropy ? VK_TRUE : VK_FALSE;
+
+    state.supportsAstc = supportedFeatures.textureCompressionASTC_LDR == VK_TRUE;
+    for (VkFormat astcFormat : {VK_FORMAT_ASTC_6x6_SRGB_BLOCK, VK_FORMAT_ASTC_6x6_UNORM_BLOCK}) {
+        VkFormatProperties props{};
+        vkGetPhysicalDeviceFormatProperties(state.vkPhysicalDevice, astcFormat, &props);
+        if (!(props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) state.supportsAstc = false;
+    }
+    enabledFeatures.textureCompressionASTC_LDR = state.supportsAstc ? VK_TRUE : VK_FALSE;
 
     VkDeviceCreateInfo deviceCreateInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     deviceCreateInfo.pNext = &ycbcrFeatures;
@@ -2945,10 +3027,11 @@ void CreateYcbcrAndVideoPipeline(AppState& state) {
 // Cria um VkImage RGBA8888 vazio de dadas dimensoes, com layout UNDEFINED.
 // Usado para alocar as texturas de UI/controles antes do primeiro frame.
 static void CreateUiImage(AppState& state, uint32_t width, uint32_t height,
-                          VkImage& outImage, VkDeviceMemory& outMemory, VkImageView& outView) {
+                          VkImage& outImage, VkDeviceMemory& outMemory, VkImageView& outView,
+                          VkFormat format = VK_FORMAT_R8G8B8A8_UNORM) {
     VkImageCreateInfo imgInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     imgInfo.imageType   = VK_IMAGE_TYPE_2D;
-    imgInfo.format      = VK_FORMAT_R8G8B8A8_UNORM;
+    imgInfo.format      = format;
     imgInfo.extent      = {width, height, 1};
     imgInfo.mipLevels   = 1;
     imgInfo.arrayLayers = 1;
@@ -2979,7 +3062,7 @@ static void CreateUiImage(AppState& state, uint32_t width, uint32_t height,
     VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     viewInfo.image    = outImage;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format   = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.format   = format;
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
@@ -3375,8 +3458,9 @@ static void InitBeamSwapchain(AppState& state) {
 // crus em memoria (nao um AHardwareBuffer) — usado pelo preview de arrasto
 // (ver g_scrubOverlay* acima). Sem stride/lock: o buffer chega do Kotlin via
 // JNI ja compacto (largura*4 bytes por linha).
-static void UpdateUiImageFromBytes(AppState& state, const uint8_t* data, uint32_t width, uint32_t height, VkImage dstImage) {
-    const VkDeviceSize bufSize = (VkDeviceSize)width * height * 4;
+static void UpdateUiImageFromBytes(AppState& state, const uint8_t* data, uint32_t width, uint32_t height, VkImage dstImage,
+                                   VkDeviceSize sizeBytes = 0) {
+    const VkDeviceSize bufSize = sizeBytes ? sizeBytes : (VkDeviceSize)width * height * 4;
     VkBuffer stagingBuf;
     VkDeviceMemory stagingMem;
 
@@ -5136,6 +5220,34 @@ struct EnvironmentPushConstants {
     XrVector4f screenPos;  // xyz: screenWorldPosition
 };
 
+// glTF textures default to REPEAT wrapping, unlike the clamped UI sampler.
+static void CreateEnvironmentTextureLayout(AppState& state) {
+    if (state.envTextureSetLayout != VK_NULL_HANDLE) return;
+
+    VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.anisotropyEnable = state.supportsAnisotropy ? VK_TRUE : VK_FALSE;
+    samplerInfo.maxAnisotropy = state.supportsAnisotropy ? 4.0f : 1.0f;
+    VKR(vkCreateSampler(state.vkDevice, &samplerInfo, nullptr, &state.envTextureSampler));
+
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    binding.pImmutableSamplers = &state.envTextureSampler;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &binding;
+    VKR(vkCreateDescriptorSetLayout(state.vkDevice, &layoutInfo, nullptr, &state.envTextureSetLayout));
+}
+
 static void CreateEnvironmentPipeline(AppState& state) {
     VkShaderModule vertModule = CreateShaderModule(state, kEnvironmentVertSpirv, kEnvironmentVertSpirv_size);
     VkShaderModule fragModule = CreateShaderModule(state, kEnvironmentFragSpirv, kEnvironmentFragSpirv_size);
@@ -5155,7 +5267,7 @@ static void CreateEnvironmentPipeline(AppState& state) {
     bindingDesc.stride = sizeof(EnvironmentVertex);
     bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    VkVertexInputAttributeDescription attrDesc[3]{};
+    VkVertexInputAttributeDescription attrDesc[4]{};
     attrDesc[0].location = 0;
     attrDesc[0].binding = 0;
     attrDesc[0].format = VK_FORMAT_R32G32B32_SFLOAT;
@@ -5171,10 +5283,15 @@ static void CreateEnvironmentPipeline(AppState& state) {
     attrDesc[2].format = VK_FORMAT_R32G32B32A32_SFLOAT;
     attrDesc[2].offset = offsetof(EnvironmentVertex, color);
 
+    attrDesc[3].location = 3;
+    attrDesc[3].binding = 0;
+    attrDesc[3].format = VK_FORMAT_R32G32_SFLOAT;
+    attrDesc[3].offset = offsetof(EnvironmentVertex, uv);
+
     VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     vertexInput.vertexBindingDescriptionCount = 1;
     vertexInput.pVertexBindingDescriptions = &bindingDesc;
-    vertexInput.vertexAttributeDescriptionCount = 3;
+    vertexInput.vertexAttributeDescriptionCount = 4;
     vertexInput.pVertexAttributeDescriptions = attrDesc;
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
@@ -5213,9 +5330,12 @@ static void CreateEnvironmentPipeline(AppState& state) {
     pushConstantRange.offset = 0;
     pushConstantRange.size = sizeof(EnvironmentPushConstants);
 
+    // Set 0 = screen ambient texture, set 1 = the draw range's base color texture.
+    CreateEnvironmentTextureLayout(state);
+    const VkDescriptorSetLayout setLayouts[2] = {state.uiDescriptorSetLayout, state.envTextureSetLayout};
     VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &state.uiDescriptorSetLayout;
+    layoutInfo.setLayoutCount = 2;
+    layoutInfo.pSetLayouts = setLayouts;
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushConstantRange;
 
@@ -5930,7 +6050,9 @@ static void DrawEnvironmentFade(AppState& state, VkCommandBuffer cmd) {
 }
 
 // Carregamento de dados de CPU assíncrono (Fase 0.5 §3 T3.5 / #53)
-static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, const std::string& envId) {
+constexpr size_t kMaxEnvironmentTextures = 8;
+
+static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, const std::string& envId, bool astcSupported) {
     CpuEnvironmentData data;
     data.envId = envId;
 
@@ -6044,6 +6166,38 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
     }
 
     if (gltfData) {
+        const size_t textureCount = std::min(gltfData->images_count, kMaxEnvironmentTextures);
+        data.textures.resize(textureCount);
+        for (size_t i = 0; i < textureCount; ++i) {
+            const cgltf_image& img = gltfData->images[i];
+            CpuEnvironmentTexture& tex = data.textures[i];
+            tex.srgb = IsEnvironmentImageSrgb(gltfData, &img);
+
+            if (isFilePath && astcSupported) {
+                std::ifstream cacheFile(modelTarget + "." + std::to_string(i) + ".astc", std::ios::binary);
+                const std::vector<uint8_t> cacheBytes((std::istreambuf_iterator<char>(cacheFile)), std::istreambuf_iterator<char>());
+                AstcImage cached;
+                if (ParseAstcCache(cacheBytes.data(), cacheBytes.size(), &cached) && cached.srgb == tex.srgb) {
+                    tex.width = cached.width;
+                    tex.height = cached.height;
+                    tex.astc = true;
+                    tex.bytes = std::move(cached.blocks);
+                    continue;
+                }
+            }
+
+            if (!img.buffer_view) continue;
+            int w = 0, h = 0, channels = 0;
+            stbi_uc* pixels = stbi_load_from_memory(
+                reinterpret_cast<const stbi_uc*>(cgltf_buffer_view_data(img.buffer_view)),
+                static_cast<int>(img.buffer_view->size), &w, &h, &channels, 4);
+            if (!pixels) continue;
+            tex.width = static_cast<uint32_t>(w);
+            tex.height = static_cast<uint32_t>(h);
+            tex.bytes.assign(pixels, pixels + static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
+            stbi_image_free(pixels);
+        }
+
         for (size_t m = 0; m < gltfData->meshes_count; ++m) {
             const auto& mesh = gltfData->meshes[m];
             for (size_t p = 0; p < mesh.primitives_count; ++p) {
@@ -6054,11 +6208,13 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
                 cgltf_accessor* posAcc = nullptr;
                 cgltf_accessor* normAcc = nullptr;
                 cgltf_accessor* colorAcc = nullptr;
+                cgltf_accessor* uvAcc = nullptr;
 
                 for (size_t a = 0; a < prim.attributes_count; ++a) {
                     if (prim.attributes[a].type == cgltf_attribute_type_position) posAcc = prim.attributes[a].data;
                     else if (prim.attributes[a].type == cgltf_attribute_type_normal) normAcc = prim.attributes[a].data;
                     else if (prim.attributes[a].type == cgltf_attribute_type_color) colorAcc = prim.attributes[a].data;
+                    else if (prim.attributes[a].type == cgltf_attribute_type_texcoord && prim.attributes[a].index == 0) uvAcc = prim.attributes[a].data;
                 }
 
                 if (!posAcc) continue;
@@ -6071,6 +6227,7 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
                     v.color[0] = v.color[1] = v.color[2] = v.color[3] = 1.0f;
 
                     cgltf_accessor_read_float(posAcc, i, v.pos, 3);
+                    if (uvAcc) cgltf_accessor_read_float(uvAcc, i, v.uv, 2);
                     if (normAcc) cgltf_accessor_read_float(normAcc, i, v.normal, 3);
                     if (colorAcc) {
                         float c[4] = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -6079,6 +6236,18 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
                     }
                     data.vertices.push_back(v);
                 }
+
+                int32_t textureIndex = -1;
+                if (prim.material && uvAcc) {
+                    const cgltf_texture* base = prim.material->pbr_metallic_roughness.base_color_texture.texture;
+                    if (base && base->image) {
+                        const size_t imageIndex = static_cast<size_t>(base->image - gltfData->images);
+                        if (imageIndex < data.textures.size() && !data.textures[imageIndex].bytes.empty()) {
+                            textureIndex = static_cast<int32_t>(imageIndex);
+                        }
+                    }
+                }
+                const uint32_t firstIndex = static_cast<uint32_t>(data.indices.size());
 
                 if (prim.indices) {
                     size_t icount = prim.indices->count;
@@ -6089,6 +6258,13 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
                     for (size_t i = 0; i < count; ++i) {
                         data.indices.push_back(vertexBase + static_cast<uint32_t>(i));
                     }
+                }
+
+                const uint32_t indexCount = static_cast<uint32_t>(data.indices.size()) - firstIndex;
+                if (!data.drawRanges.empty() && data.drawRanges.back().texture == textureIndex) {
+                    data.drawRanges.back().indexCount += indexCount;
+                } else {
+                    data.drawRanges.push_back({firstIndex, indexCount, textureIndex});
                 }
             }
         }
@@ -6101,7 +6277,76 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
     return data;
 }
 
+static void DestroyEnvironmentTextures(AppState& state) {
+    for (EnvironmentTexture& tex : state.envTextures) {
+        if (tex.view != VK_NULL_HANDLE) vkDestroyImageView(state.vkDevice, tex.view, nullptr);
+        if (tex.image != VK_NULL_HANDLE) vkDestroyImage(state.vkDevice, tex.image, nullptr);
+        if (tex.memory != VK_NULL_HANDLE) vkFreeMemory(state.vkDevice, tex.memory, nullptr);
+    }
+    state.envTextures.clear();
+    state.envDrawRanges.clear();
+    if (state.envTexturePool != VK_NULL_HANDLE) {
+        vkResetDescriptorPool(state.vkDevice, state.envTexturePool, 0);
+    }
+}
+
+static void AddEnvironmentTexture(AppState& state, uint32_t width, uint32_t height, VkFormat format,
+                                  const uint8_t* bytes, VkDeviceSize sizeBytes) {
+    EnvironmentTexture tex;
+    CreateUiImage(state, width, height, tex.image, tex.memory, tex.view, format);
+    UpdateUiImageFromBytes(state, bytes, width, height, tex.image, sizeBytes);
+
+    VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    alloc.descriptorPool = state.envTexturePool;
+    alloc.descriptorSetCount = 1;
+    alloc.pSetLayouts = &state.envTextureSetLayout;
+    VKR(vkAllocateDescriptorSets(state.vkDevice, &alloc, &tex.set));
+
+    VkDescriptorImageInfo imgInfo{};
+    imgInfo.imageView = tex.view;
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = tex.set;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imgInfo;
+    vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+
+    state.envTextures.push_back(tex);
+}
+
+// envTextures[0] is the white fallback, so draw range texture N lives at envTextures[N + 1].
+static void UploadEnvironmentTextures(AppState& state, const CpuEnvironmentData& data) {
+    CreateEnvironmentTextureLayout(state);
+    if (state.envTexturePool == VK_NULL_HANDLE) {
+        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                      static_cast<uint32_t>(kMaxEnvironmentTextures + 1)};
+        VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        poolInfo.maxSets = static_cast<uint32_t>(kMaxEnvironmentTextures + 1);
+        poolInfo.poolSizeCount = 1;
+        poolInfo.pPoolSizes = &poolSize;
+        VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.envTexturePool));
+    }
+
+    const uint8_t white[4] = {255, 255, 255, 255};
+    AddEnvironmentTexture(state, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, white, sizeof(white));
+    for (const CpuEnvironmentTexture& tex : data.textures) {
+        if (tex.bytes.empty()) {
+            state.envTextures.push_back({});
+            continue;
+        }
+        VkFormat format = tex.srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+        if (tex.astc) format = tex.srgb ? VK_FORMAT_ASTC_6x6_SRGB_BLOCK : VK_FORMAT_ASTC_6x6_UNORM_BLOCK;
+        AddEnvironmentTexture(state, tex.width, tex.height, format, tex.bytes.data(), tex.bytes.size());
+        LOGI("Ambiente: textura %zu carregada (%ux%u, %s)", state.envTextures.size() - 2, tex.width, tex.height,
+             tex.astc ? "ASTC 6x6" : "RGBA8");
+    }
+    state.envDrawRanges = data.drawRanges;
+}
+
 static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& data) {
+    DestroyEnvironmentTextures(state);
     if (state.envVertexBuffer != VK_NULL_HANDLE) {
         vkDestroyBuffer(state.vkDevice, state.envVertexBuffer, nullptr);
         state.envVertexBuffer = VK_NULL_HANDLE;
@@ -6225,6 +6470,7 @@ static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& da
         vkUnmapMemory(state.vkDevice, state.envIndexMemory);
 
         state.envIndexCount = static_cast<uint32_t>(data.indices.size());
+        UploadEnvironmentTextures(state, data);
         state.envMeshLoaded = true;
         LOGI("Ambiente: '%s' malha carregada com sucesso (%zu vertices, %u indices, %zu bytes)",
              data.envId.c_str(), data.vertices.size(), state.envIndexCount, vbInfo.size + ibInfo.size);
@@ -6233,7 +6479,7 @@ static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& da
 
 static bool LoadEnvironmentMesh(AppState& state, const std::string& envId) {
     AAssetManager* assetMgr = (state.app && state.app->activity) ? state.app->activity->assetManager : nullptr;
-    CpuEnvironmentData data = LoadEnvironmentCpuData(assetMgr, envId);
+    CpuEnvironmentData data = LoadEnvironmentCpuData(assetMgr, envId, state.supportsAstc);
     ApplyLoadedEnvironment(state, data);
     return true;
 }
@@ -6284,8 +6530,16 @@ static void DrawEnvironmentIfLoaded(
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(envPc), &envPc);
 
-        vkCmdDrawIndexed(cmd, state.envIndexCount, 1, 0, 0, 0);
-        CountDrawCallIndexed(state.envIndexCount);
+        for (const EnvironmentDrawRange& range : state.envDrawRanges) {
+            const size_t slot = static_cast<size_t>(range.texture + 1);
+            const bool hasTexture = slot < state.envTextures.size() && state.envTextures[slot].set != VK_NULL_HANDLE;
+            const VkDescriptorSet textureSet = state.envTextures[hasTexture ? slot : 0].set;
+            vkCmdBindDescriptorSets(
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.envPipelineLayout,
+                1, 1, &textureSet, 0, nullptr);
+            vkCmdDrawIndexed(cmd, range.indexCount, 1, range.firstIndex, 0, 0);
+            CountDrawCallIndexed(range.indexCount);
+        }
     }
 
     // Partículas cósmicas (~200 billboards com twinkle sinusoidal) (Fase 0.5 §3 T3.3 / #54)
@@ -8058,7 +8312,7 @@ void RenderFrame(AppState& state) {
                     AAssetManager* assetMgr = (state.app && state.app->activity) ? state.app->activity->assetManager : nullptr;
 
                     state.envWorkerThread = std::thread([&state, assetMgr, targetEnv]() {
-                        state.envLoadedData = LoadEnvironmentCpuData(assetMgr, targetEnv);
+                        state.envLoadedData = LoadEnvironmentCpuData(assetMgr, targetEnv, state.supportsAstc);
                         state.envWorkerFinished = true;
                     });
                 }
@@ -9124,6 +9378,19 @@ void DestroyAppResources(AppState& state) {
     }
 
     // 10. Recursos de Ambiente Virtual 3D
+    DestroyEnvironmentTextures(state);
+    if (state.envTexturePool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.envTexturePool, nullptr);
+        state.envTexturePool = VK_NULL_HANDLE;
+    }
+    if (state.envTextureSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(state.vkDevice, state.envTextureSetLayout, nullptr);
+        state.envTextureSetLayout = VK_NULL_HANDLE;
+    }
+    if (state.envTextureSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(state.vkDevice, state.envTextureSampler, nullptr);
+        state.envTextureSampler = VK_NULL_HANDLE;
+    }
     if (state.envPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(state.vkDevice, state.envPipeline, nullptr);
         state.envPipeline = VK_NULL_HANDLE;

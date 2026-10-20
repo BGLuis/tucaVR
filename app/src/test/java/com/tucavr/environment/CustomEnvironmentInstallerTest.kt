@@ -32,8 +32,9 @@ class CustomEnvironmentInstallerTest {
     private fun installer(
         root: File,
         maxModelBytes: Long = CustomEnvironmentInstaller.MAX_MODEL_BYTES,
+        transcodeTextures: (String) -> Int = { 0 },
         validate: (String) -> String,
-    ) = CustomEnvironmentInstaller(root, dao, validate, maxModelBytes) { registered.add(it) }
+    ) = CustomEnvironmentInstaller(root, dao, validate, maxModelBytes, transcodeTextures) { registered.add(it) }
 
     private fun glb() = ByteArrayInputStream(byteArrayOf(1, 2, 3))
 
@@ -130,5 +131,35 @@ class CustomEnvironmentInstallerTest {
             inst.registerInstalled()
 
             assertEquals(listOf(kept), registered)
+        }
+
+    @Test
+    fun `textures are transcoded from the validated model only`() =
+        runTest {
+            val root = tmp.newFolder("environments")
+            val transcoded = mutableListOf<String>()
+
+            installer(root, transcodeTextures = { transcoded.add(it).let { 1 } }) { "env_error_texture_too_large" }.install("Big", glb())
+            assertTrue(transcoded.isEmpty())
+
+            val result =
+                installer(root, transcodeTextures = { transcoded.add(it).let { 1 } }) { CustomEnvironmentInstaller.VALID_MESSAGE_KEY }
+                    .install("Room", glb())
+
+            assertTrue(result is InstallResult.Installed)
+            assertEquals(1, transcoded.size)
+            assertTrue(transcoded.single().endsWith("model.glb"))
+        }
+
+    @Test
+    fun `texture transcoding failure does not fail the install`() =
+        runTest {
+            val root = tmp.newFolder("environments")
+
+            val result =
+                installer(root, transcodeTextures = { error("encoder crashed") }) { CustomEnvironmentInstaller.VALID_MESSAGE_KEY }
+                    .install("Room", glb())
+
+            assertTrue(result is InstallResult.Installed)
         }
 }

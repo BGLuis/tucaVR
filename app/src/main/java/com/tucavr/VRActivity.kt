@@ -1351,6 +1351,7 @@ class VRActivity : NativeActivity() {
             environmentsRoot = File(filesDir, "environments"),
             dao = AppDatabase.getInstance(this).customEnvironmentDao(),
             validate = ::nativeValidateEnvironmentFile,
+            transcodeTextures = ::nativeTranscodeEnvironmentTextures,
         )
     }
 
@@ -1713,6 +1714,8 @@ class VRActivity : NativeActivity() {
     external fun nativeSetCustomEnvironmentsDir(dir: String)
 
     external fun nativeValidateEnvironmentFile(path: String): String
+
+    external fun nativeTranscodeEnvironmentTextures(modelPath: String): Int
 
     external fun nativeTogglePlayPause()
 

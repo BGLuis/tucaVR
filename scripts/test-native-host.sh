@@ -28,6 +28,7 @@ TESTS=(
     "test_panel_pick"
     "test_cylinder_hit"
     "test_controls_pose"
+    "test_astc_transcode"
 )
 
 EXTRA_FLAGS=()
@@ -44,14 +45,22 @@ if ! echo '#include <openxr/openxr.h>' | $CXX -E - >/dev/null 2>&1; then
     fi
 fi
 
+# Extra sources a test links against (the vendored encoder is third-party code).
+ASTC_SOURCES=(native/src/astc_transcode.cpp native/third_party/astcenc/astcenc_*.cpp)
+
 compile_test() {
     local name="$1"
+    local extra_sources=()
+    if [ "$name" = "test_astc_transcode" ]; then
+        extra_sources=("${ASTC_SOURCES[@]}")
+    fi
     $CXX -std=c++20 -O2 -Wall -Wextra -Werror \
         "${EXTRA_FLAGS[@]}" \
         -I native/include \
         "${OPENXR_INCLUDE_FLAGS[@]}" \
         "native/tests/${name}.cpp" \
-        -o "$BUILD_DIR/${name}"
+        "${extra_sources[@]}" \
+        -pthread -o "$BUILD_DIR/${name}"
 }
 
 echo "-> Building the ${#TESTS[@]} test binaries in parallel..."
