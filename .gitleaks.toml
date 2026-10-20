@@ -1,0 +1,14 @@
+title = "tucaVR gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Test fixtures with intentionally fake credentials"
+paths = [
+    '''app/src/test/java/com/tucavr/network/ServerCredentialRedactionTest\.kt''',
+    '''app/src/test/java/com/tucavr/download/DownloadMappingTest\.kt''',
+    '''scripts/test-network-protocols\.sh''',
+    '''docker/network-tests/ssh-keys/''',
+    '''rust/protocols/src/sftp/uri\.rs''',
+]

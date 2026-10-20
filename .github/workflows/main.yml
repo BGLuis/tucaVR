@@ -108,7 +108,7 @@ jobs:
           curl -sSfL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz -o cargo-deny.tar.gz
           echo "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f  cargo-deny.tar.gz" | sha256sum -c -
           tar -xzf cargo-deny.tar.gz
-          ./cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny --manifest-path rust/Cargo.toml --config rust/deny.toml check licenses bans sources
+          ./cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny --manifest-path rust/Cargo.toml --config rust/deny.toml check advisories licenses bans sources
           rm -rf cargo-deny-0.20.2-x86_64-unknown-linux-musl cargo-deny.tar.gz
 
       - name: Scan repository for secrets (gitleaks)
@@ -116,7 +116,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_SUMMARY: true
-        continue-on-error: true # Reports in the step summary without aborting in case of a false positive in tests
 
   rust-checks:
     name: Rust Quality & Tests
