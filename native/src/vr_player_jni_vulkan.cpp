@@ -733,6 +733,32 @@ Java_com_tucavr_VRActivity_nativeSetEnvironment(JNIEnv* env, jobject, jstring en
     }
 }
 
+extern std::string g_customEnvironmentsDir;
+extern std::mutex g_customEnvironmentsDirMutex;
+std::string ValidateEnvironmentFileMessageKey(const char* path);
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetCustomEnvironmentsDir(JNIEnv* env, jobject, jstring dir) {
+    if (!dir) return;
+    const char* dirStr = env->GetStringUTFChars(dir, nullptr);
+    if (!dirStr) return;
+    {
+        std::lock_guard<std::mutex> lock(g_customEnvironmentsDirMutex);
+        g_customEnvironmentsDir = dirStr;
+    }
+    env->ReleaseStringUTFChars(dir, dirStr);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeValidateEnvironmentFile(JNIEnv* env, jobject, jstring path) {
+    if (!path) return env->NewStringUTF("env_error_corrupt_file");
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+    if (!pathStr) return env->NewStringUTF("env_error_corrupt_file");
+    const std::string key = ValidateEnvironmentFileMessageKey(pathStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+    return env->NewStringUTF(key.c_str());
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetPauseOnExit(JNIEnv*, jobject, jboolean enabled) {
     set_pause_on_exit(enabled ? 1 : 0);

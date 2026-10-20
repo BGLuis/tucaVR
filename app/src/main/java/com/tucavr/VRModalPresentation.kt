@@ -500,6 +500,9 @@ class VRModalPresentation(
                 onResetAnchor = {
                     activity.resetScreenPosition()
                 },
+                onImportEnvironment = {
+                    VRActivity.openEnvironmentFilePicker(activity)
+                },
                 onDismiss = { dismissModal() },
             )
         showModal(modal)

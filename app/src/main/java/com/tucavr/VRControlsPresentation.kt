@@ -305,6 +305,9 @@ class VRControlsPresentation(
             onResetAnchor = {
                 activity.nativeResetScreenPosition()
             },
+            onImportEnvironment = {
+                VRActivity.openEnvironmentFilePicker(activity)
+            },
             onDismiss = { dismissOpenPopup() },
         )
     }

@@ -42,7 +42,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -108,6 +110,20 @@ std::atomic<float> g_debugCameraPitch{0.0f};
 std::atomic<float> g_debugCameraX{0.0f};
 std::atomic<float> g_debugCameraY{0.0f};
 std::atomic<float> g_debugCameraZ{0.0f};
+std::string g_customEnvironmentsDir;
+std::mutex g_customEnvironmentsDirMutex;
+
+std::string ValidateEnvironmentFileMessageKey(const char* path) {
+    EnvironmentValidationReport report;
+    ValidateEnvironmentFile(path, &report);
+    return report.messageKey;
+}
+
+static std::string CustomEnvironmentConfigPath(const std::string& envId) {
+    std::lock_guard<std::mutex> lock(g_customEnvironmentsDirMutex);
+    if (g_customEnvironmentsDir.empty()) return {};
+    return g_customEnvironmentsDir + "/" + envId + "/config.ini";
+}
 
 static inline std::string get_current_session_id_vk_app() {
     std::lock_guard<std::mutex> lock(g_sessionIdMutex);
@@ -5933,6 +5949,16 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
             data.hasConfig = true;
         }
         AAsset_close(cfgAsset);
+    } else {
+        const std::string customConfigPath = CustomEnvironmentConfigPath(envId);
+        std::ifstream customConfig;
+        if (!customConfigPath.empty()) customConfig.open(customConfigPath);
+        if (customConfig) {
+            std::stringstream buffer;
+            buffer << customConfig.rdbuf();
+            data.config = EnvironmentConfig::Parse(buffer.str());
+            data.hasConfig = true;
+        }
     }
 
     // Skybox

@@ -153,6 +153,9 @@
     <string name="env_passthrough_title">Passthrough (MR)</string>
     <string name="env_passthrough_desc">Realidade Mista exibindo o ambiente real ao seu redor.</string>
     <string name="env_reset_anchor_button">Redefinir para Âncora do Ambiente</string>
+    <string name="env_import_button">Importar ambiente</string>
+    <string name="env_import_success">Ambiente importado</string>
+    <string name="env_import_failed">Não foi possível importar o ambiente</string>
 
     <!-- Environment Validation (Phase 1.0 §1 T1.1 / Issue #62) -->
     <string name="env_validate_ok">Ambiente válido</string>
