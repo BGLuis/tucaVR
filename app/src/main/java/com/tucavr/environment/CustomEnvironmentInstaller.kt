@@ -22,6 +22,7 @@ class CustomEnvironmentInstaller(
     private val dao: CustomEnvironmentDao,
     private val validate: (modelPath: String) -> String,
     private val maxModelBytes: Long = MAX_MODEL_BYTES,
+    private val transcodeTextures: (modelPath: String) -> Int = { 0 },
     private val register: (EnvironmentDefinition) -> Unit = EnvironmentRegistry::register,
 ) {
     suspend fun install(
@@ -38,6 +39,8 @@ class CustomEnvironmentInstaller(
 
             val messageKey = validate(model.absolutePath)
             if (messageKey != VALID_MESSAGE_KEY) return InstallResult.Rejected(messageKey)
+
+            runCatching { transcodeTextures(model.absolutePath) }
 
             val displayName = name.replace(LINE_BREAKS, " ").trim().ifEmpty { id }
             File(dir, CONFIG_FILE_NAME).writeText("id=$id\nname=$displayName\nmodel_file=${model.absolutePath}\n")

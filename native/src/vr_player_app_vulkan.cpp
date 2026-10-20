@@ -92,6 +92,7 @@
 #include "cgltf.h"
 #undef CGLTF_IMPLEMENTATION
 #include "environment_validator.h"
+#include "astc_transcode.h"
 #include <android/asset_manager.h>
 
 #ifndef XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME
@@ -117,6 +118,43 @@ std::string ValidateEnvironmentFileMessageKey(const char* path) {
     EnvironmentValidationReport report;
     ValidateEnvironmentFile(path, &report);
     return report.messageKey;
+}
+
+// Writes <model>.<imageIndex>.astc next to the model for every embedded image. Returns the number written.
+int TranscodeEnvironmentTexturesToAstc(const char* modelPath) {
+    cgltf_options options{};
+    cgltf_data* data = nullptr;
+    if (cgltf_parse_file(&options, modelPath, &data) != cgltf_result_success || !data) return 0;
+    int written = 0;
+    if (cgltf_load_buffers(&options, data, modelPath) == cgltf_result_success) {
+        for (size_t i = 0; i < data->images_count; ++i) {
+            const cgltf_image& img = data->images[i];
+            if (!img.buffer_view) continue;
+
+            bool srgb = false;
+            for (size_t m = 0; m < data->materials_count && !srgb; ++m) {
+                const cgltf_material& mat = data->materials[m];
+                const cgltf_texture* base = mat.pbr_metallic_roughness.base_color_texture.texture;
+                srgb = (base && base->image == &img) || (mat.emissive_texture.texture && mat.emissive_texture.texture->image == &img);
+            }
+
+            int w = 0, h = 0, channels = 0;
+            stbi_uc* pixels = stbi_load_from_memory(
+                reinterpret_cast<const stbi_uc*>(cgltf_buffer_view_data(img.buffer_view)),
+                static_cast<int>(img.buffer_view->size), &w, &h, &channels, 4);
+            if (!pixels) continue;
+            AstcImage astc;
+            const bool ok = TranscodeRgbaToAstc6x6(pixels, static_cast<uint32_t>(w), static_cast<uint32_t>(h), srgb, &astc);
+            stbi_image_free(pixels);
+            if (!ok) continue;
+
+            const std::vector<uint8_t> bytes = SerializeAstcCache(astc);
+            std::ofstream out(std::string(modelPath) + "." + std::to_string(i) + ".astc", std::ios::binary);
+            if (out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) ++written;
+        }
+    }
+    cgltf_free(data);
+    return written;
 }
 
 static std::string CustomEnvironmentConfigPath(const std::string& envId) {

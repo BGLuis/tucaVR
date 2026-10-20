@@ -736,6 +736,7 @@ Java_com_tucavr_VRActivity_nativeSetEnvironment(JNIEnv* env, jobject, jstring en
 extern std::string g_customEnvironmentsDir;
 extern std::mutex g_customEnvironmentsDirMutex;
 std::string ValidateEnvironmentFileMessageKey(const char* path);
+int TranscodeEnvironmentTexturesToAstc(const char* modelPath);
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetCustomEnvironmentsDir(JNIEnv* env, jobject, jstring dir) {
@@ -757,6 +758,16 @@ Java_com_tucavr_VRActivity_nativeValidateEnvironmentFile(JNIEnv* env, jobject, j
     const std::string key = ValidateEnvironmentFileMessageKey(pathStr);
     env->ReleaseStringUTFChars(path, pathStr);
     return env->NewStringUTF(key.c_str());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_VRActivity_nativeTranscodeEnvironmentTextures(JNIEnv* env, jobject, jstring path) {
+    if (!path) return 0;
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+    if (!pathStr) return 0;
+    const int written = TranscodeEnvironmentTexturesToAstc(pathStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+    return written;
 }
 
 extern "C" JNIEXPORT void JNICALL
