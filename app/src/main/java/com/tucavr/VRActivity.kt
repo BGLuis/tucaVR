@@ -13,6 +13,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
@@ -32,6 +33,8 @@ import com.tucavr.chroma.PassthroughMaskMode
 import com.tucavr.debug.DebugTelemetryExporter
 import com.tucavr.debug.VRLog
 import com.tucavr.designsystem.KeyboardBinding
+import com.tucavr.environment.CustomEnvironmentInstaller
+import com.tucavr.environment.InstallResult
 import com.tucavr.history.AppDatabase
 import com.tucavr.history.PlaybackHistoryTracker
 import com.tucavr.history.historyKey
@@ -449,6 +452,8 @@ class VRActivity : NativeActivity() {
 
         registerDebugReceiverIfDebuggable()
         EnvironmentRegistry.loadFromAssets(assets)
+        nativeSetCustomEnvironmentsDir(customEnvironmentInstaller.environmentsRoot.absolutePath)
+        CoroutineScope(Dispatchers.IO).launch { customEnvironmentInstaller.registerInstalled() }
 
         // "Buffer estilo YouTube" (ver media_logic::buffer_gate no lado
         // Rust): reporta a RAM total do aparelho uma vez no startup, pra o
@@ -792,6 +797,7 @@ class VRActivity : NativeActivity() {
         }
 
         private const val PICK_VIDEO_REQUEST_CODE = 1001
+        private const val PICK_ENVIRONMENT_REQUEST_CODE = 1002
 
         // Ver hook de auto-play em onCreate/onNewIntent/onResume.
         const val EXTRA_AUTO_PLAY_PATH = "video_path"
@@ -839,6 +845,19 @@ class VRActivity : NativeActivity() {
                         type = "video/*"
                     }
                 activity.startActivityForResult(intent, PICK_VIDEO_REQUEST_CODE)
+            }
+        }
+
+        @JvmStatic
+        fun openEnvironmentFilePicker(activity: VRActivity) {
+            activity.runOnUiThread {
+                val intent =
+                    Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                        putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("model/gltf-binary", "application/octet-stream"))
+                    }
+                activity.startActivityForResult(intent, PICK_ENVIRONMENT_REQUEST_CODE)
             }
         }
 
@@ -1317,8 +1336,42 @@ class VRActivity : NativeActivity() {
             data?.data?.let { uri ->
                 processVideoUri(uri)
             }
+        } else if (requestCode == PICK_ENVIRONMENT_REQUEST_CODE && resultCode == RESULT_OK) {
+            data?.data?.let { uri -> importEnvironment(uri) }
         }
     }
+
+    val customEnvironmentInstaller: CustomEnvironmentInstaller by lazy {
+        CustomEnvironmentInstaller(
+            environmentsRoot = File(filesDir, "environments"),
+            dao = AppDatabase.getInstance(this).customEnvironmentDao(),
+            validate = ::nativeValidateEnvironmentFile,
+        )
+    }
+
+    private fun importEnvironment(uri: Uri) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val name = displayNameOf(uri)?.substringBeforeLast('.') ?: ""
+            val result =
+                contentResolver.openInputStream(uri)?.let { customEnvironmentInstaller.install(name, it) }
+                    ?: InstallResult.Failed
+            val messageRes =
+                when (result) {
+                    is InstallResult.Installed -> R.string.env_import_success
+                    is InstallResult.Rejected -> resources.getIdentifier(result.messageKey, "string", packageName)
+                    InstallResult.Failed -> R.string.env_import_failed
+                }
+            withContext(Dispatchers.Main) {
+                val text = getString(messageRes.takeIf { it != 0 } ?: R.string.env_import_failed)
+                Toast.makeText(this@VRActivity, text, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun displayNameOf(uri: Uri): String? =
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
 
     @Volatile
     var currentSessionId: String? = null
@@ -1645,6 +1698,10 @@ class VRActivity : NativeActivity() {
     )
 
     external fun nativeStopVideo()
+
+    external fun nativeSetCustomEnvironmentsDir(dir: String)
+
+    external fun nativeValidateEnvironmentFile(path: String): String
 
     external fun nativeTogglePlayPause()
 

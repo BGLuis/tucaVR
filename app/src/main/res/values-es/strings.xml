@@ -153,6 +153,9 @@
     <string name="env_passthrough_title">Passthrough (RM)</string>
     <string name="env_passthrough_desc">Realidad Mixta mostrando su habitación física como fondo.</string>
     <string name="env_reset_anchor_button">Restablecer a anclaje de entorno</string>
+    <string name="env_import_button">Importar entorno</string>
+    <string name="env_import_success">Entorno importado</string>
+    <string name="env_import_failed">No se pudo importar el entorno</string>
 
     <!-- Environment Validation (Phase 1.0 §1 T1.1 / Issue #62) -->
     <string name="env_validate_ok">El entorno es válido</string>

@@ -10,6 +10,8 @@ import com.tucavr.browser.data.BrowserBookmark
 import com.tucavr.browser.data.BrowserBookmarkDao
 import com.tucavr.download.Download
 import com.tucavr.download.DownloadDao
+import com.tucavr.environment.CustomEnvironment
+import com.tucavr.environment.CustomEnvironmentDao
 import com.tucavr.filebrowser.FolderMediaStatus
 import com.tucavr.filebrowser.FolderMediaStatusDao
 import com.tucavr.filebrowser.MediaMetadataCacheDao
@@ -29,13 +31,15 @@ import com.tucavr.playlist.PlaylistItem
  * - Tabelas `folder_media_status` e `media_metadata_cache`: poda de pastas vazias e cache de
  *   metadados de mídia pra exibição rápida (schema v5).
  * - `browser_bookmarks` table: VR browser bookmarks/shortcuts (schema v6).
+ * - `custom_environment` table: user-imported 3D environments (schema v7).
  */
 @Database(
     entities = [
         PlaybackHistory::class, SavedServer::class, Playlist::class, PlaylistItem::class, Download::class,
         FolderMediaStatus::class, MediaMetadataCacheEntry::class, BrowserBookmark::class,
+        CustomEnvironment::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -52,6 +56,8 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun mediaMetadataCacheDao(): MediaMetadataCacheDao
 
     abstract fun browserBookmarkDao(): BrowserBookmarkDao
+
+    abstract fun customEnvironmentDao(): CustomEnvironmentDao
 
     companion object {
         @Volatile
@@ -172,6 +178,17 @@ abstract class AppDatabase : RoomDatabase() {
                 """.trimIndent(),
             )
 
+        internal val MIGRATION_6_7_SQL =
+            listOf(
+                """
+                CREATE TABLE IF NOT EXISTS `custom_environment` (
+                    `id` TEXT NOT NULL PRIMARY KEY,
+                    `name` TEXT NOT NULL,
+                    `created_at_ms` INTEGER NOT NULL
+                )
+                """.trimIndent(),
+            )
+
         val MIGRATION_1_2 =
             object : Migration(1, 2) {
                 override fun migrate(db: SupportSQLiteDatabase) {
@@ -205,6 +222,13 @@ abstract class AppDatabase : RoomDatabase() {
                 override fun migrate(db: SupportSQLiteDatabase) {
                     MIGRATION_5_6_SQL.forEach { db.execSQL(it) }
                     seedDefaultPresets(db)
+                }
+            }
+
+        val MIGRATION_6_7 =
+            object : Migration(6, 7) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    MIGRATION_6_7_SQL.forEach { db.execSQL(it) }
                 }
             }
 
@@ -276,7 +300,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "vrplayer_history.db",
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
                     .addCallback(
                         object : Callback() {
                             override fun onCreate(db: SupportSQLiteDatabase) {
