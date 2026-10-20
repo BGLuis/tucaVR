@@ -54,6 +54,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 
 class VRActivity : NativeActivity() {
     private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
@@ -452,7 +453,11 @@ class VRActivity : NativeActivity() {
 
         registerDebugReceiverIfDebuggable()
         EnvironmentRegistry.loadFromAssets(assets)
-        nativeSetCustomEnvironmentsDir(customEnvironmentInstaller.environmentsRoot.absolutePath)
+        try {
+            nativeSetCustomEnvironmentsDir(customEnvironmentInstaller.environmentsRoot.absolutePath)
+        } catch (_: UnsatisfiedLinkError) {
+            // The frozen GLES back-end does not implement custom environments.
+        }
         CoroutineScope(Dispatchers.IO).launch { customEnvironmentInstaller.registerInstalled() }
 
         // "Buffer estilo YouTube" (ver media_logic::buffer_gate no lado
@@ -1351,10 +1356,16 @@ class VRActivity : NativeActivity() {
 
     private fun importEnvironment(uri: Uri) {
         CoroutineScope(Dispatchers.IO).launch {
-            val name = displayNameOf(uri)?.substringBeforeLast('.') ?: ""
             val result =
-                contentResolver.openInputStream(uri)?.let { customEnvironmentInstaller.install(name, it) }
-                    ?: InstallResult.Failed
+                try {
+                    val name = displayNameOf(uri)?.substringBeforeLast('.') ?: ""
+                    contentResolver.openInputStream(uri)?.let { customEnvironmentInstaller.install(name, it) }
+                        ?: InstallResult.Failed
+                } catch (e: IOException) {
+                    InstallResult.Failed
+                } catch (e: SecurityException) {
+                    InstallResult.Failed
+                }
             val messageRes =
                 when (result) {
                     is InstallResult.Installed -> R.string.env_import_success

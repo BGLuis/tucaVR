@@ -31,8 +31,9 @@ class CustomEnvironmentInstallerTest {
 
     private fun installer(
         root: File,
+        maxModelBytes: Long = CustomEnvironmentInstaller.MAX_MODEL_BYTES,
         validate: (String) -> String,
-    ) = CustomEnvironmentInstaller(root, dao, validate) { registered.add(it) }
+    ) = CustomEnvironmentInstaller(root, dao, validate, maxModelBytes) { registered.add(it) }
 
     private fun glb() = ByteArrayInputStream(byteArrayOf(1, 2, 3))
 
@@ -62,6 +63,43 @@ class CustomEnvironmentInstallerTest {
 
             assertEquals(InstallResult.Failed, result)
             assertEquals(emptyList<String>(), root.list()!!.toList())
+        }
+
+    @Test
+    fun `oversized file is refused before validation and leaves nothing behind`() =
+        runTest {
+            val root = tmp.newFolder("environments")
+            var validated = false
+
+            val result =
+                installer(root, maxModelBytes = 2) {
+                    validated = true
+                    CustomEnvironmentInstaller.VALID_MESSAGE_KEY
+                }.install("Huge", glb())
+
+            assertEquals(InstallResult.Failed, result)
+            assertTrue(!validated)
+            assertEquals(emptyList<String>(), root.list()!!.toList())
+        }
+
+    @Test
+    fun `database failure leaves no directory, no row and no registration`() =
+        runTest {
+            val root = tmp.newFolder("environments")
+            val failingDao =
+                object : CustomEnvironmentDao {
+                    override suspend fun getAll(): List<CustomEnvironment> = emptyList()
+
+                    override suspend fun insert(environment: CustomEnvironment) = throw IllegalStateException("db closed")
+                }
+            val inst =
+                CustomEnvironmentInstaller(root, failingDao, { CustomEnvironmentInstaller.VALID_MESSAGE_KEY }) { registered.add(it) }
+
+            val result = inst.install("Db", glb())
+
+            assertEquals(InstallResult.Failed, result)
+            assertEquals(emptyList<String>(), root.list()!!.toList())
+            assertTrue(registered.isEmpty())
         }
 
     @Test

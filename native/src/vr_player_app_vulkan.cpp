@@ -5951,8 +5951,9 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
         AAsset_close(cfgAsset);
     } else {
         const std::string customConfigPath = CustomEnvironmentConfigPath(envId);
-        std::ifstream customConfig(customConfigPath);
-        if (!customConfigPath.empty() && customConfig) {
+        std::ifstream customConfig;
+        if (!customConfigPath.empty()) customConfig.open(customConfigPath);
+        if (customConfig) {
             std::stringstream buffer;
             buffer << customConfig.rdbuf();
             data.config = EnvironmentConfig::Parse(buffer.str());
