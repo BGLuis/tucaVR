@@ -424,8 +424,9 @@ impl PlaybackController {
         );
         self.network_stats = demuxer.network_stats.clone();
         self.demux_corrupt_packets = Some(demuxer.corrupt_packets.clone());
-        demuxer.select_audio_track(self.desired_audio_track);
         self.audio_track_count = demuxer.audio_streams.len();
+        self.desired_audio_track = self.audio_track_index();
+        demuxer.select_audio_track(self.desired_audio_track);
         self.duration = demuxer.input_context.duration() as f64 / 1_000_000.0;
 
         let video_idx = demuxer.video_stream_index.ok_or("No video stream")?;
