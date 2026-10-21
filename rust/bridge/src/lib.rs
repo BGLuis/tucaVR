@@ -2470,6 +2470,15 @@ pub extern "C" fn get_audio_track_count() -> u32 {
     })
 }
 
+#[no_mangle]
+pub extern "C" fn get_audio_track_index() -> u32 {
+    // try_sample_or: chamada periodica do render loop (C++ HUD / telemetry a 90Hz).
+    // Se o lock estiver ocupado (load_at em background), devolve 0 sem bloquear a render thread.
+    media_logic::session::try_sample_or(&CONTROLLER, 0, |controller| {
+        controller.audio_track_index() as u32
+    })
+}
+
 /// Seleciona a trilha de audio desejada pro PROXIMO `load_at()` — nao troca
 /// a trilha ao vivo (ver `PlaybackController::select_audio_track`). Uso
 /// pretendido: a tela de detalhe do arquivo chama isto antes de tocar.

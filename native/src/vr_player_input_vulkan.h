@@ -1189,7 +1189,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             stats.spatialHeadTracking = (int)get_spatial_audio_head_tracking();
             stats.playbackSpeed = get_playback_speed();
             stats.audioVolume = get_video_volume();
-            stats.audioTrackIndex = 0;
+            stats.audioTrackIndex = (int)get_audio_track_index();
             stats.audioTrackCount = (int)get_audio_track_count();
             stats.subtitleTrackIndex = get_subtitle_track();
             stats.subtitleOffsetMs = (int32_t)get_subtitle_offset_ms();

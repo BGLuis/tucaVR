@@ -424,8 +424,9 @@ impl PlaybackController {
         );
         self.network_stats = demuxer.network_stats.clone();
         self.demux_corrupt_packets = Some(demuxer.corrupt_packets.clone());
-        demuxer.select_audio_track(self.desired_audio_track);
         self.audio_track_count = demuxer.audio_streams.len();
+        self.desired_audio_track = self.audio_track_index();
+        demuxer.select_audio_track(self.desired_audio_track);
         self.duration = demuxer.input_context.duration() as f64 / 1_000_000.0;
 
         let video_idx = demuxer.video_stream_index.ok_or("No video stream")?;
@@ -1415,6 +1416,15 @@ impl PlaybackController {
     /// nada foi carregado ainda ou o arquivo nao tem audio).
     pub fn audio_track_count(&self) -> usize {
         self.audio_track_count
+    }
+
+    /// Indice da trilha de audio atualmente selecionada (0 se nada foi carregado,
+    /// delimitado entre 0 e audio_track_count - 1).
+    pub fn audio_track_index(&self) -> usize {
+        media_logic::playback_params::clamp_audio_track_index(
+            self.desired_audio_track,
+            self.audio_track_count,
+        )
     }
 
     /// Seleciona a trilha de audio pela posicao ordinal (0 = primeira).
