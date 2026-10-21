@@ -536,7 +536,7 @@ class DebugStatsModal(
      * F5: acumula a amostra corrente nos históricos rolantes e redesenha os 5 gráficos.
      */
     private fun updateCharts(stats: NativeDebugStats) {
-        val bufferHealthSeconds = if (stats.videoFps > 0f) stats.queueDepth / stats.videoFps else 0f
+        val bufferHealthSeconds = stats.bufferedAheadSec
 
         bottleneckHistory.pushCapped(BottleneckStageAnalyzer.analyze(stats))
         bufferHealthHistory.pushCapped(bufferHealthSeconds)

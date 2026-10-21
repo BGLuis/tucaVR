@@ -26,6 +26,8 @@ class DebugStatsParserTest {
                 "jitter_ms\t1.2\n" +
                 "net_mbs\t12.50\n" +
                 "queue_depth\t32\n" +
+                "presentation_pending\t5\n" +
+                "buffered_ahead_sec\t2.50\n" +
                 "seek_latency_ms\t45\n" +
                 "smoothed_fps\t90.0\n" +
                 "frame_time_ms\t11.1\n" +
@@ -109,6 +111,8 @@ class DebugStatsParserTest {
         assertEquals(1.2f, stats.jitterMs, 0.01f)
         assertEquals(12.50f, stats.netMBs, 0.01f)
         assertEquals(32, stats.queueDepth)
+        assertEquals(5, stats.presentationPending)
+        assertEquals(2.50f, stats.bufferedAheadSec, 0.01f)
         assertEquals(45, stats.seekLatencyMs)
         assertEquals(90.0f, stats.smoothedFps, 0.01f)
         assertEquals(11.1f, stats.frameTimeMs, 0.01f)
@@ -177,6 +181,8 @@ class DebugStatsParserTest {
         assertNotNull(stats)
         stats!!
         assertEquals(0, stats.videoStallCount)
+        assertEquals(0, stats.presentationPending)
+        assertEquals(0.0f, stats.bufferedAheadSec, 0.01f)
         assertEquals(0, stats.videoStatsAgeMs)
         assertEquals(0, stats.networkStatsAgeMs)
         assertEquals(0, stats.audioStatsAgeMs)

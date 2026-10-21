@@ -33,6 +33,9 @@ struct DebugStats {
     // So populado no backend Vulkan; fica 0 no GLES (congelado, sem essa
     // reestruturacao de decode/apresentacao).
     uint32_t videoPresentationPending = 0;
+    // #204: segundos de video bufferizados a frente do relogio mestre no demux/playback controller
+    // (get_buffered_ahead_sec).
+    float bufferedAheadSec = 0.0f;
     uint32_t seekLatencyMs = 0;
     float smoothedFps = 0.0f;
     float lastFrameMs = 0.0f;
@@ -147,6 +150,7 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         "net_mbs\t%.2f\n"
         "queue_depth\t%u\n"
         "presentation_pending\t%u\n"
+        "buffered_ahead_sec\t%.2f\n"
         "seek_latency_ms\t%u\n"
         "smoothed_fps\t%.1f\n"
         "frame_time_ms\t%.1f\n"
@@ -226,6 +230,7 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         s.netMBs,
         s.videoQueueDepth,
         s.videoPresentationPending,
+        s.bufferedAheadSec,
         s.seekLatencyMs,
         s.smoothedFps,
         s.lastFrameMs,
