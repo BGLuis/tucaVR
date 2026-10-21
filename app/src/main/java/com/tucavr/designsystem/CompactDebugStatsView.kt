@@ -239,7 +239,7 @@ class CompactDebugStatsView(
         statValueViews["decoder"]?.text = decoderText
 
         // 7. Buffer
-        val bufferSec = if (stats.videoFps > 0f) stats.queueDepth / stats.videoFps else 0f
+        val bufferSec = stats.bufferedAheadSec
         statValueViews["buffer"]?.text =
             String.format(Locale.US, "%d pkts (%.1fs)", stats.queueDepth, bufferSec)
 
