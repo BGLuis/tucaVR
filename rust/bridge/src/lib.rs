@@ -733,6 +733,20 @@ static LAST_FRAMES_DECODED: AtomicU64 = AtomicU64::new(0);
 static LAST_FRAMES_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static LAST_FRAMES_DROPPED: AtomicU64 = AtomicU64::new(0);
 static LAST_NETWORK_BYTES: AtomicU64 = AtomicU64::new(0);
+static LAST_VIDEO_QUEUE_DEPTH: AtomicU32 = AtomicU32::new(0);
+static LAST_VIDEO_PRESENTATION_PENDING: AtomicU32 = AtomicU32::new(0);
+static LAST_NETWORK_LAST_BLOCK_FETCH_MS: media_logic::session::AtomicF32 =
+    media_logic::session::AtomicF32::new(0.0);
+static LAST_NETWORK_BLOCKS_FETCHED: AtomicU64 = AtomicU64::new(0);
+static LAST_NETWORK_BLOCKS_DISCARDED: AtomicU64 = AtomicU64::new(0);
+static LAST_NETWORK_FETCH_FAILURES: AtomicU64 = AtomicU64::new(0);
+static LAST_AUDIO_QUEUE_DEPTH: AtomicU32 = AtomicU32::new(0);
+static LAST_DECODE_ERROR_COUNT: AtomicU64 = AtomicU64::new(0);
+static LAST_DEMUX_CORRUPT_PACKET_COUNT: AtomicU64 = AtomicU64::new(0);
+static LAST_AUDIO_UNDERRUN_COUNT: AtomicU64 = AtomicU64::new(0);
+static LAST_SEEK_LATENCY_MS: AtomicU32 = AtomicU32::new(0);
+static LAST_AV_DRIFT_MS: media_logic::session::AtomicF32 =
+    media_logic::session::AtomicF32::new(0.0);
 
 /// Debug (docs/DEBUGGING.md): total de frames REALMENTE decodificados pela
 /// thread de decode, independente de quantas vezes o C++ chama
@@ -746,14 +760,9 @@ static LAST_NETWORK_BYTES: AtomicU64 = AtomicU64::new(0);
 /// ultimo valor conhecido (ver LAST_FRAMES_DECODED acima), nao 0.
 #[no_mangle]
 pub extern "C" fn get_video_frames_decoded_count() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => {
-            let v = controller.get_frames_decoded_count();
-            LAST_FRAMES_DECODED.store(v, Ordering::Relaxed);
-            v
-        }
-        Err(_) => LAST_FRAMES_DECODED.load(Ordering::Relaxed),
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_FRAMES_DECODED, |controller| {
+        controller.get_frames_decoded_count()
+    })
 }
 
 /// Debug (docs/DEBUGGING.md): total de buffers de saida que o MediaCodec
@@ -765,51 +774,40 @@ pub extern "C" fn get_video_frames_decoded_count() -> u64 {
 /// filtrado pelo mesmo descarte por atraso — este contador nao e.
 #[no_mangle]
 pub extern "C" fn get_video_frames_output_count() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => {
-            let v = controller.get_frames_output_count();
-            LAST_FRAMES_OUTPUT.store(v, Ordering::Relaxed);
-            v
-        }
-        Err(_) => LAST_FRAMES_OUTPUT.load(Ordering::Relaxed),
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_FRAMES_OUTPUT, |controller| {
+        controller.get_frames_output_count()
+    })
 }
 
 /// Debug (docs/DEBUGGING.md): frames que o MediaCodec produziu mas foram
 /// descartados por chegarem atrasados (LATE_FRAME_RENDER_SKIP_SEC).
 #[no_mangle]
 pub extern "C" fn get_video_frames_dropped_count() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => {
-            let v = controller.get_frames_dropped_count();
-            LAST_FRAMES_DROPPED.store(v, Ordering::Relaxed);
-            v
-        }
-        Err(_) => LAST_FRAMES_DROPPED.load(Ordering::Relaxed),
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_FRAMES_DROPPED, |controller| {
+        controller.get_frames_dropped_count()
+    })
 }
 
 /// Debug (docs/DEBUGGING.md): quantos pacotes de video estao bufferizados
-/// entre a thread de demux e a de decode agora — sem cache-on-contencao
-/// porque um valor "errado por um frame" aqui nao produz nenhum artefato
-/// tipo wraparound (nao e usado pra calcular delta), so um numero levemente
-/// atrasado.
+/// entre a thread de demux e a de decode agora. Usa try_sample_cached para
+/// reter o ultimo valor durante contencao (ex.: load/seek).
 #[no_mangle]
 pub extern "C" fn get_video_queue_depth() -> u32 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_video_queue_depth(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_VIDEO_QUEUE_DEPTH, |controller| {
+        controller.get_video_queue_depth()
+    })
 }
 
 /// Debug (docs/DEBUGGING.md): frames que o MediaCodec ja decodificou mas a
 /// video_thread ainda nao liberou/mostrou — ver PlaybackController::get_video_presentation_pending.
+/// Usa try_sample_cached para reter o ultimo valor durante contencao.
 #[no_mangle]
 pub extern "C" fn get_video_presentation_pending() -> u32 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_video_presentation_pending(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(
+        &CONTROLLER,
+        &LAST_VIDEO_PRESENTATION_PENDING,
+        |controller| controller.get_video_presentation_pending(),
+    )
 }
 
 /// T-HDR: 0 = SDR (inclui antes do primeiro load), 1 = PQ, 2 = HLG (ver
@@ -828,54 +826,54 @@ pub extern "C" fn get_video_is_hdr() -> u32 {
 /// amostra isto ao longo do tempo e calcula MB/s, mesmo padrao de decFps.
 #[no_mangle]
 pub extern "C" fn get_network_bytes_read() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => {
-            let v = controller.get_network_bytes_read();
-            LAST_NETWORK_BYTES.store(v, Ordering::Relaxed);
-            v
-        }
-        Err(_) => LAST_NETWORK_BYTES.load(Ordering::Relaxed),
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_NETWORK_BYTES, |controller| {
+        controller.get_network_bytes_read()
+    })
 }
 
 /// Debug (docs/DEBUGGING.md): duracao do ULTIMO fetch de bloco completo do
 /// PrefetchReader, em ms — diferencia throughput estavel de media baixa por
-/// stalls pontuais. Sem cache-on-contencao: um valor levemente atrasado nao
-/// produz artefato (nao e usado em calculo de delta).
+/// stalls pontuais. Usa try_sample_cached para reter o ultimo valor sob contencao.
 #[no_mangle]
 pub extern "C" fn get_network_last_block_fetch_ms() -> f32 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_network_last_block_fetch_ms(),
-        Err(_) => 0.0,
-    }
+    media_logic::session::try_sample_cached(
+        &CONTROLLER,
+        &LAST_NETWORK_LAST_BLOCK_FETCH_MS,
+        |controller| controller.get_network_last_block_fetch_ms(),
+    )
+}
+
+/// Debug (docs/DEBUGGING.md): blocos buscados pelo PrefetchReader.
+/// Usa try_sample_cached para reter o valor cumulativo sob contencao,
+/// evitando queda para 0 e falsos resets no sinal de frescor (FreshnessTracker).
+#[no_mangle]
+pub extern "C" fn get_network_blocks_fetched() -> u64 {
+    media_logic::session::try_sample_cached(
+        &CONTROLLER,
+        &LAST_NETWORK_BLOCKS_FETCHED,
+        |controller| controller.get_network_blocks_fetched(),
+    )
 }
 
 /// Debug (docs/DEBUGGING.md): blocos buscados e descartados por seek do
 /// PrefetchReader — ver PlaybackController::get_network_blocks_discarded.
 #[no_mangle]
-pub extern "C" fn get_network_blocks_fetched() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_network_blocks_fetched(),
-        Err(_) => 0,
-    }
-}
-
-#[no_mangle]
 pub extern "C" fn get_network_blocks_discarded() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_network_blocks_discarded(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(
+        &CONTROLLER,
+        &LAST_NETWORK_BLOCKS_DISCARDED,
+        |controller| controller.get_network_blocks_discarded(),
+    )
 }
 
-/// F4: falhas de fetch de rede — antes so
-/// visiveis no logcat.
+/// F4: falhas de fetch de rede — mantem valor sob contencao.
 #[no_mangle]
 pub extern "C" fn get_network_fetch_failures() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_network_fetch_failures(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(
+        &CONTROLLER,
+        &LAST_NETWORK_FETCH_FAILURES,
+        |controller| controller.get_network_fetch_failures(),
+    )
 }
 
 /// F4: blocos especulativos consecutivos desde o ultimo seek nao-sequencial.
@@ -897,13 +895,12 @@ pub extern "C" fn get_network_throttled() -> u32 {
 }
 
 /// F4: profundidade da fila de audio entre demux e decode — espelho de
-/// get_video_queue_depth() acima, antes invisivel de fora.
+/// get_video_queue_depth() acima.
 #[no_mangle]
 pub extern "C" fn get_audio_queue_depth() -> u32 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_audio_queue_depth(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_AUDIO_QUEUE_DEPTH, |controller| {
+        controller.get_audio_queue_depth()
+    })
 }
 
 /// "Buffer estilo YouTube": segundos de video ja bufferizados a frente do
@@ -923,28 +920,27 @@ pub extern "C" fn get_buffered_ahead_sec() -> f32 {
 /// F4: contador de erros de decode de video (ver HwDecoder::decode_packet), por sessao.
 #[no_mangle]
 pub extern "C" fn get_decode_error_count() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_decode_error_count(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_DECODE_ERROR_COUNT, |controller| {
+        controller.get_decode_error_count()
+    })
 }
 
 /// F4: contador de pacotes corrompidos descartados pelo demuxer, por sessao.
 #[no_mangle]
 pub extern "C" fn get_demux_corrupt_packet_count() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_demux_corrupt_packet_count(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(
+        &CONTROLLER,
+        &LAST_DEMUX_CORRUPT_PACKET_COUNT,
+        |controller| controller.get_demux_corrupt_packet_count(),
+    )
 }
 
 /// F4: contador cumulativo de underruns de audio (canal vazio quando o Oboe pediu amostras).
 #[no_mangle]
 pub extern "C" fn get_audio_underrun_count() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_audio_underrun_count(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_AUDIO_UNDERRUN_COUNT, |controller| {
+        controller.get_audio_underrun_count()
+    })
 }
 
 /// F4: fases do load_at() — antes so no logcat, agora consultaveis. 0 antes do primeiro load.
@@ -975,19 +971,17 @@ pub extern "C" fn get_load_phase_audio_ready_ms() -> u32 {
 // Debug (docs/DEBUGGING.md): duracao do ultimo seek concluido, em ms.
 #[no_mangle]
 pub extern "C" fn get_last_seek_latency_ms() -> u32 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_last_seek_latency_ms(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_SEEK_LATENCY_MS, |controller| {
+        controller.get_last_seek_latency_ms()
+    })
 }
 
 /// Debug (docs/DEBUGGING.md): desvio A/V instantaneo (master_clock - video_pts), em ms.
 #[no_mangle]
 pub extern "C" fn get_last_av_drift_ms() -> f32 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_last_av_drift_ms(),
-        Err(_) => 0.0,
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_AV_DRIFT_MS, |controller| {
+        controller.get_last_av_drift_ms()
+    })
 }
 
 #[no_mangle]
@@ -2382,6 +2376,18 @@ pub extern "C" fn reset_process_state() {
     LAST_FRAMES_OUTPUT.store(0, std::sync::atomic::Ordering::SeqCst);
     LAST_FRAMES_DROPPED.store(0, std::sync::atomic::Ordering::SeqCst);
     LAST_NETWORK_BYTES.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_VIDEO_QUEUE_DEPTH.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_VIDEO_PRESENTATION_PENDING.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_NETWORK_LAST_BLOCK_FETCH_MS.store(0.0, std::sync::atomic::Ordering::SeqCst);
+    LAST_NETWORK_BLOCKS_FETCHED.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_NETWORK_BLOCKS_DISCARDED.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_NETWORK_FETCH_FAILURES.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_AUDIO_QUEUE_DEPTH.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_DECODE_ERROR_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_DEMUX_CORRUPT_PACKET_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_AUDIO_UNDERRUN_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_SEEK_LATENCY_MS.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_AV_DRIFT_MS.store(0.0, std::sync::atomic::Ordering::SeqCst);
     DESIRED_AUDIO_TRACK.store(0, std::sync::atomic::Ordering::Relaxed);
     SUBTITLE_OFFSET_MS.store(0, std::sync::atomic::Ordering::Relaxed);
     PLAYBACK_SPEED_BITS.store(0x3F800000, std::sync::atomic::Ordering::Relaxed);

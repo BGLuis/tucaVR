@@ -36,6 +36,9 @@
 //! recommended, low-risk follow-up on a machine that can actually build
 //! `core` (`cargo ndk ... build -p core`).
 
+use std::sync::atomic::{
+    AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicU64, AtomicUsize, Ordering,
+};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -100,9 +103,9 @@ impl Default for Generation {
     }
 }
 
-/// Helper para amostragem periódica não-bloqueante no render loop (90Hz OpenXR).
-/// Se o recurso protegido estiver sob contenção (ex.: carregamento/conexão em background),
-/// devolve `fallback` imediatamente sem bloquear a thread que o invoca.
+/// Helper for non-blocking periodic sampling in the render loop (90Hz OpenXR).
+/// If the protected resource is under contention (e.g. background load/seek),
+/// returns `fallback` immediately without blocking the invoking thread.
 pub fn try_sample_or<T, R, F>(lock: &Mutex<T>, fallback: R, f: F) -> R
 where
     F: FnOnce(&T) -> R,
@@ -112,6 +115,154 @@ where
         Err(_) => fallback,
     }
 }
+
+/// Atomic storage for `f32` based on binary representation via `AtomicU32`.
+#[derive(Debug, Default)]
+pub struct AtomicF32(AtomicU32);
+
+impl AtomicF32 {
+    pub const fn new(val: f32) -> Self {
+        Self(AtomicU32::new(val.to_bits()))
+    }
+
+    pub fn load(&self, ordering: Ordering) -> f32 {
+        f32::from_bits(self.0.load(ordering))
+    }
+
+    pub fn store(&self, val: f32, ordering: Ordering) {
+        self.0.store(val.to_bits(), ordering);
+    }
+}
+
+/// Trait for atomic types storing the last successful value for non-blocking
+/// periodic sampling in the render loop.
+pub trait AtomicSampleStorage: Send + Sync {
+    type Value: Copy;
+    fn load_sample(&self) -> Self::Value;
+    fn store_sample(&self, val: Self::Value);
+}
+
+impl AtomicSampleStorage for AtomicU64 {
+    type Value = u64;
+    fn load_sample(&self) -> Self::Value {
+        self.load(Ordering::Relaxed)
+    }
+    fn store_sample(&self, val: Self::Value) {
+        self.store(val, Ordering::Relaxed);
+    }
+}
+
+impl AtomicSampleStorage for AtomicU32 {
+    type Value = u32;
+    fn load_sample(&self) -> Self::Value {
+        self.load(Ordering::Relaxed)
+    }
+    fn store_sample(&self, val: Self::Value) {
+        self.store(val, Ordering::Relaxed);
+    }
+}
+
+impl AtomicSampleStorage for AtomicUsize {
+    type Value = usize;
+    fn load_sample(&self) -> Self::Value {
+        self.load(Ordering::Relaxed)
+    }
+    fn store_sample(&self, val: Self::Value) {
+        self.store(val, Ordering::Relaxed);
+    }
+}
+
+impl AtomicSampleStorage for AtomicBool {
+    type Value = bool;
+    fn load_sample(&self) -> Self::Value {
+        self.load(Ordering::Relaxed)
+    }
+    fn store_sample(&self, val: Self::Value) {
+        self.store(val, Ordering::Relaxed);
+    }
+}
+
+impl AtomicSampleStorage for AtomicI32 {
+    type Value = i32;
+    fn load_sample(&self) -> Self::Value {
+        self.load(Ordering::Relaxed)
+    }
+    fn store_sample(&self, val: Self::Value) {
+        self.store(val, Ordering::Relaxed);
+    }
+}
+
+impl AtomicSampleStorage for AtomicI64 {
+    type Value = i64;
+    fn load_sample(&self) -> Self::Value {
+        self.load(Ordering::Relaxed)
+    }
+    fn store_sample(&self, val: Self::Value) {
+        self.store(val, Ordering::Relaxed);
+    }
+}
+
+impl AtomicSampleStorage for AtomicF32 {
+    type Value = f32;
+    fn load_sample(&self) -> Self::Value {
+        self.load(Ordering::Relaxed)
+    }
+    fn store_sample(&self, val: Self::Value) {
+        self.store(val, Ordering::Relaxed);
+    }
+}
+
+/// Helper for non-blocking periodic sampling in the render loop (90Hz OpenXR)
+/// with fallback to the last successfully sampled value under lock contention.
+///
+/// When the lock is free, evaluates `f(&*guard)`, stores the result in atomic
+/// storage, and returns it. Under contention, immediately returns the last
+/// cached value without blocking the render loop.
+pub fn try_sample_cached<T, S, F>(lock: &Mutex<T>, cache: &S, f: F) -> S::Value
+where
+    S: AtomicSampleStorage,
+    F: FnOnce(&T) -> S::Value,
+{
+    match lock.try_lock() {
+        Ok(guard) => {
+            let val = f(&*guard);
+            cache.store_sample(val);
+            val
+        }
+        Err(_) => cache.load_sample(),
+    }
+}
+
+/// Non-blocking cached sampler retaining the last successful sample.
+#[derive(Debug, Default)]
+pub struct CachedSampler<S> {
+    cache: S,
+}
+
+impl<S: AtomicSampleStorage> CachedSampler<S> {
+    pub const fn new(cache: S) -> Self {
+        Self { cache }
+    }
+
+    pub fn sample<T, F>(&self, lock: &Mutex<T>, f: F) -> S::Value
+    where
+        F: FnOnce(&T) -> S::Value,
+    {
+        try_sample_cached(lock, &self.cache, f)
+    }
+
+    pub fn load(&self) -> S::Value {
+        self.cache.load_sample()
+    }
+
+    pub fn store(&self, val: S::Value) {
+        self.cache.store_sample(val);
+    }
+}
+
+pub type CachedU64 = CachedSampler<AtomicU64>;
+pub type CachedU32 = CachedSampler<AtomicU32>;
+pub type CachedF32 = CachedSampler<AtomicF32>;
 
 #[cfg(test)]
 mod tests {
@@ -246,5 +397,106 @@ mod tests {
             elapsed < Duration::from_millis(10),
             "try_sample_or demorou demais ({elapsed:?}), bloqueou a thread!"
         );
+    }
+
+    #[test]
+    fn try_sample_cached_returns_last_successful_value_during_contention_and_new_value_when_free() {
+        let lock = Arc::new(Mutex::new(10u64));
+        let cache = AtomicU64::new(0);
+
+        // Initial sample when uncontended: reads current value 10 and stores it in cache
+        let val1 = try_sample_cached(&lock, &cache, |v| *v);
+        assert_eq!(val1, 10);
+        assert_eq!(cache.load(Ordering::Relaxed), 10);
+
+        // Spawn background thread to simulate load/seek holding lock
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+        let lock_clone = lock.clone();
+        let background_thread = thread::spawn(move || {
+            let mut guard = lock_clone.lock().unwrap();
+            *guard = 42; // value updated while lock is held
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+
+        started_rx.recv().unwrap();
+
+        // While contended, try_sample_cached MUST return the last known value (10), NOT 0
+        let contended_val = try_sample_cached(&lock, &cache, |v| *v);
+        assert_eq!(
+            contended_val, 10,
+            "must return last successful value during lock contention"
+        );
+
+        // Release lock
+        release_tx.send(()).unwrap();
+        background_thread.join().unwrap();
+
+        // Once free, try_sample_cached returns the new value (42) and updates the cache
+        let new_val = try_sample_cached(&lock, &cache, |v| *v);
+        assert_eq!(new_val, 42);
+        assert_eq!(cache.load(Ordering::Relaxed), 42);
+    }
+
+    #[test]
+    fn try_sample_cached_f32_works_with_atomic_f32() {
+        let lock = Arc::new(Mutex::new(12.5f32));
+        let cache = AtomicF32::new(0.0);
+
+        let val1 = try_sample_cached(&lock, &cache, |v| *v);
+        assert_eq!(val1, 12.5);
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+        let lock_clone = lock.clone();
+        let background_thread = thread::spawn(move || {
+            let mut guard = lock_clone.lock().unwrap();
+            *guard = 99.5;
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+
+        started_rx.recv().unwrap();
+
+        // While contended, returns 12.5 instead of 0.0
+        let contended_val = try_sample_cached(&lock, &cache, |v| *v);
+        assert_eq!(contended_val, 12.5);
+
+        release_tx.send(()).unwrap();
+        background_thread.join().unwrap();
+
+        let new_val = try_sample_cached(&lock, &cache, |v| *v);
+        assert_eq!(new_val, 99.5);
+    }
+
+    #[test]
+    fn cached_sampler_struct_helper() {
+        let lock = Arc::new(Mutex::new(5u32));
+        let sampler = CachedU32::new(AtomicU32::new(0));
+
+        assert_eq!(sampler.sample(&lock, |v| *v), 5);
+
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+        let lock_clone = lock.clone();
+        let background_thread = thread::spawn(move || {
+            let mut guard = lock_clone.lock().unwrap();
+            *guard = 15;
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+
+        started_rx.recv().unwrap();
+
+        assert_eq!(sampler.sample(&lock, |v| *v), 5);
+
+        release_tx.send(()).unwrap();
+        background_thread.join().unwrap();
+
+        assert_eq!(sampler.sample(&lock, |v| *v), 15);
     }
 }
