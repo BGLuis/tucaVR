@@ -104,16 +104,21 @@ def plot_g2_histogram(ax, rows):
 
 
 def plot_g3_buffer_and_network(ax, rows):
-    if not has_columns(rows, "video_q_depth", "video_fps", "net_mbs"):
+    has_buffered = has_columns(rows, "buffered_ahead_sec", "net_mbs")
+    has_legacy = has_columns(rows, "video_q_depth", "video_fps", "net_mbs")
+    if not (has_buffered or has_legacy):
         ax.set_visible(False)
-        print("G3 skipped: video_q_depth/video_fps/net_mbs are absent in this schema.")
+        print("G3 skipped: buffered_ahead_sec (or video_q_depth/video_fps) and net_mbs are absent in this schema.")
         return
     buffer_health = []
     net_mbs = []
     for r in rows:
-        fps = col_float(r, "video_fps")
-        q = col_int(r, "video_q_depth")
-        buffer_health.append(q / fps if fps > 0 else 0.0)
+        if has_buffered:
+            buffer_health.append(col_float(r, "buffered_ahead_sec"))
+        else:
+            fps = col_float(r, "video_fps")
+            q = col_int(r, "video_q_depth")
+            buffer_health.append(q / fps if fps > 0 else 0.0)
         net_mbs.append(col_float(r, "net_mbs"))
     x = range(len(rows))
     ax.fill_between(x, buffer_health, color="#4CAF50", alpha=0.4, label="Buffer health (s)")

@@ -1140,6 +1140,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             stats.netMBs = state.netMBs;
             stats.videoQueueDepth = state.videoQueueDepth;
             stats.videoPresentationPending = state.videoPresentationPending;
+            stats.bufferedAheadSec = get_buffered_ahead_sec();
             stats.seekLatencyMs = get_last_seek_latency_ms();
             stats.smoothedFps = state.smoothedFps;
             stats.lastFrameMs = state.lastFrameMs;

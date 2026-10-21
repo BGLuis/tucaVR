@@ -498,7 +498,7 @@ class FullDebugStatsView(
     }
 
     private fun updateCharts(stats: NativeDebugStats) {
-        val bufferHealthSeconds = if (stats.videoFps > 0f) stats.queueDepth / stats.videoFps else 0f
+        val bufferHealthSeconds = stats.bufferedAheadSec
 
         bottleneckHistory.addLast(BottleneckStageAnalyzer.analyze(stats))
         while (bottleneckHistory.size > HISTORY_MAX_SAMPLES) bottleneckHistory.removeFirst()

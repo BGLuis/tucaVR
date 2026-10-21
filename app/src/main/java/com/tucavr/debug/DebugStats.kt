@@ -20,6 +20,7 @@ data class NativeDebugStats(
     val netMBs: Float = 0.0f,
     val queueDepth: Int = 0,
     val presentationPending: Int = 0,
+    val bufferedAheadSec: Float = 0.0f,
     val seekLatencyMs: Int = 0,
     val smoothedFps: Float = 0.0f,
     val frameTimeMs: Float = 0.0f,
@@ -102,6 +103,7 @@ object DebugStatsParser {
         var netMBs = 0.0f
         var queueDepth = 0
         var presentationPending = 0
+        var bufferedAheadSec = 0.0f
         var seekLatencyMs = 0
         var smoothedFps = 0.0f
         var frameTimeMs = 0.0f
@@ -230,6 +232,10 @@ object DebugStatsParser {
                 }
                 "presentation_pending" -> {
                     presentationPending = value.toIntOrNull() ?: 0
+                    recognizedKeys++
+                }
+                "buffered_ahead_sec" -> {
+                    bufferedAheadSec = value.toFloatOrNull() ?: 0f
                     recognizedKeys++
                 }
                 "seek_latency_ms" -> {
@@ -509,6 +515,7 @@ object DebugStatsParser {
             netMBs = netMBs,
             queueDepth = queueDepth,
             presentationPending = presentationPending,
+            bufferedAheadSec = bufferedAheadSec,
             seekLatencyMs = seekLatencyMs,
             smoothedFps = smoothedFps,
             frameTimeMs = frameTimeMs,
