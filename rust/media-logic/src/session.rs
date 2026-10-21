@@ -103,9 +103,9 @@ impl Default for Generation {
     }
 }
 
-/// Helper para amostragem periódica não-bloqueante no render loop (90Hz OpenXR).
-/// Se o recurso protegido estiver sob contenção (ex.: carregamento/conexão em background),
-/// devolve `fallback` imediatamente sem bloquear a thread que o invoca.
+/// Helper for non-blocking periodic sampling in the render loop (90Hz OpenXR).
+/// If the protected resource is under contention (e.g. background load/seek),
+/// returns `fallback` immediately without blocking the invoking thread.
 pub fn try_sample_or<T, R, F>(lock: &Mutex<T>, fallback: R, f: F) -> R
 where
     F: FnOnce(&T) -> R,
@@ -116,7 +116,7 @@ where
     }
 }
 
-/// Armazenamento atômico para `f32` baseado em representação binária via `AtomicU32`.
+/// Atomic storage for `f32` based on binary representation via `AtomicU32`.
 #[derive(Debug, Default)]
 pub struct AtomicF32(AtomicU32);
 
@@ -134,8 +134,8 @@ impl AtomicF32 {
     }
 }
 
-/// Trait para tipos atômicos que armazenam o último valor bem-sucedido para amostragem
-/// periódica não-bloqueante no render loop.
+/// Trait for atomic types storing the last successful value for non-blocking
+/// periodic sampling in the render loop.
 pub trait AtomicSampleStorage: Send + Sync {
     type Value: Copy;
     fn load_sample(&self) -> Self::Value;
@@ -212,12 +212,12 @@ impl AtomicSampleStorage for AtomicF32 {
     }
 }
 
-/// Helper para amostragem periódica não-bloqueante no render loop (90Hz OpenXR)
-/// com fallback para o último valor amostrado com sucesso em caso de contenção.
+/// Helper for non-blocking periodic sampling in the render loop (90Hz OpenXR)
+/// with fallback to the last successfully sampled value under lock contention.
 ///
-/// Se o lock estiver desocupado, executa `f(&*guard)`, salva o resultado no armazenamento
-/// atômico e o retorna. Sob contenção, devolve imediatamente o último valor armazenado no
-/// `cache` sem bloquear o render loop.
+/// When the lock is free, evaluates `f(&*guard)`, stores the result in atomic
+/// storage, and returns it. Under contention, immediately returns the last
+/// cached value without blocking the render loop.
 pub fn try_sample_cached<T, S, F>(lock: &Mutex<T>, cache: &S, f: F) -> S::Value
 where
     S: AtomicSampleStorage,
@@ -233,7 +233,7 @@ where
     }
 }
 
-/// Amostrador cacheado não-bloqueante que retém o último valor bem-sucedido.
+/// Non-blocking cached sampler retaining the last successful sample.
 #[derive(Debug, Default)]
 pub struct CachedSampler<S> {
     cache: S,
