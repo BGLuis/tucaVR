@@ -493,7 +493,7 @@ class SettingsScreen(
                         labelRes = R.string.settings_telemetry_export_label,
                         descriptionRes = R.string.settings_telemetry_export_description,
                         flag = FeatureFlags.Flag.DEBUG_STATS_EXPORT,
-                        onChanged = { /* flag persisted automatically */ },
+                        onChanged = { activity.refreshNativeDebugStatsStream() },
                     ),
                 )
             }

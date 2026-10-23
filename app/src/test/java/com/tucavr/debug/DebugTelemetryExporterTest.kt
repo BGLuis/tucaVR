@@ -492,4 +492,13 @@ class DebugTelemetryExporterTest {
         assertTrue(row.contains("\"sess,1\""))
         assertTrue(row.contains("\"/sdcard/Movies/Title, with \"\"quotes\"\" and commas.mp4\""))
     }
+
+    // #198: the CSV rows are built from the native wire, so the export alone must keep it streaming.
+    @Test
+    fun testNativeStatsStreamRunsWhenPanelOrExportIsOn() {
+        assertTrue(DebugTelemetryExporter.shouldStreamNativeStats(panelEnabled = false, exportEnabled = true))
+        assertTrue(DebugTelemetryExporter.shouldStreamNativeStats(panelEnabled = true, exportEnabled = false))
+        assertTrue(DebugTelemetryExporter.shouldStreamNativeStats(panelEnabled = true, exportEnabled = true))
+        assertFalse(DebugTelemetryExporter.shouldStreamNativeStats(panelEnabled = false, exportEnabled = false))
+    }
 }

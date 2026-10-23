@@ -244,6 +244,12 @@ object DebugTelemetryExporter {
         ).joinToString(",")
     }
 
+    // The CSV rows are parsed from the native HUD wire, which native only sends while its flag is on.
+    fun shouldStreamNativeStats(
+        panelEnabled: Boolean,
+        exportEnabled: Boolean,
+    ): Boolean = panelEnabled || exportEnabled
+
     /**
      * Ponto de entrada chamado a partir de `VRActivity.updateDebugHud`.
      * Ignora chamadas se sessionId for nulo, vazio ou sentinela ("--------").
