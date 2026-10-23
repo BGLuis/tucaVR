@@ -211,9 +211,30 @@ pub fn acoustic_audio_pts(
     (packet_pts_sec - queue_delay_sec).max(0.0)
 }
 
+/// One step of the smoothed A/V drift (EMA, α = 0.1) reported as `av_drift_ms`.
+/// Kept in floating point: rounding the state each step stalls it up to 9 ms short of a steady drift.
+pub fn av_drift_ema_ms(prev_ms: f32, inst_ms: f64) -> f32 {
+    (prev_ms as f64 * 0.9 + inst_ms * 0.1) as f32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn settle_av_drift(steady_ms: f64, updates: usize) -> f32 {
+        (0..updates).fold(0.0, |prev, _| av_drift_ema_ms(prev, steady_ms))
+    }
+
+    #[test]
+    fn av_drift_ema_converges_to_a_steady_drift_of_either_sign() {
+        assert!(settle_av_drift(40.0, 200) >= 39.5);
+        assert!(settle_av_drift(-40.0, 200) <= -39.5);
+    }
+
+    #[test]
+    fn av_drift_ema_does_not_hide_small_steady_drift() {
+        assert!(settle_av_drift(5.0, 200) >= 4.5);
+    }
 
     fn speed_bits(speed: f32) -> Arc<AtomicU32> {
         Arc::new(AtomicU32::new(speed.to_bits()))

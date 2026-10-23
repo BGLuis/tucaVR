@@ -989,7 +989,8 @@ pub extern "C" fn get_last_seek_latency_ms() -> u32 {
     })
 }
 
-/// Debug (docs/DEBUGGING.md): desvio A/V instantaneo (master_clock - video_pts), em ms.
+/// Debug (docs/DEBUGGING.md): smoothed A/V drift (master_clock - video_pts), an EMA with
+/// α = 0.1 over released video frames, in ms.
 #[no_mangle]
 pub extern "C" fn get_last_av_drift_ms() -> f32 {
     media_logic::session::try_sample_cached(&CONTROLLER, &LAST_AV_DRIFT_MS, |controller| {
