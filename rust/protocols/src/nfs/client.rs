@@ -68,6 +68,7 @@ fn read_post_op_attr(reader: &mut XdrReader) -> io::Result<Option<Fattr3>> {
 
 /// Entrada de uma pagina de `READDIRPLUS` (`entryplus3`) ou `READDIR` (`entry3`); esta
 /// ultima nao carrega atributos.
+#[doc(hidden)]
 #[derive(Debug, PartialEq, Eq)]
 pub struct RawEntry {
     pub name: String,
@@ -75,6 +76,7 @@ pub struct RawEntry {
     attrs: Option<Fattr3>,
 }
 
+#[doc(hidden)]
 #[derive(Debug, PartialEq, Eq)]
 pub struct DirPage {
     pub cookieverf: [u8; 8],
@@ -85,6 +87,7 @@ pub struct DirPage {
 /// Decodifica o corpo de uma resposta `READDIRPLUS3res` (`plus`) ou `READDIR3res`. O layout
 /// das duas so difere dentro da entrada: `entryplus3` acrescenta `name_attributes` e
 /// `name_handle` (RFC 1813 §3.3.16-3.3.17).
+#[doc(hidden)]
 pub fn parse_dir_page(resp: &[u8], plus: bool) -> Result<DirPage, String> {
     let mut reader = XdrReader::new(resp);
     let io_err = |e: io::Error| e.to_string();
