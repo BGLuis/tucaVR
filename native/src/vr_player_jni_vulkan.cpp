@@ -886,6 +886,8 @@ Java_com_tucavr_VRActivity_nativePlaySmb(JNIEnv* env, jobject,
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
     env->ReleaseStringUTFChars(domain, d);
+    g_requestControlsPanelVisible.store(true);
+    g_newVideoSessionRequested.store(true);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -966,6 +968,8 @@ Java_com_tucavr_VRActivity_nativePlayFtp(JNIEnv* env, jobject,
     env->ReleaseStringUTFChars(path, p);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
+    g_requestControlsPanelVisible.store(true);
+    g_newVideoSessionRequested.store(true);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -1023,6 +1027,8 @@ Java_com_tucavr_VRActivity_nativePlaySftp(JNIEnv* env, jobject,
     env->ReleaseStringUTFChars(password, pw);
     env->ReleaseStringUTFChars(privateKey, k);
     env->ReleaseStringUTFChars(expectedFingerprint, fp);
+    g_requestControlsPanelVisible.store(true);
+    g_newVideoSessionRequested.store(true);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -1109,6 +1115,8 @@ Java_com_tucavr_VRActivity_nativePlayNfs(JNIEnv* env, jobject,
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(exportPath, ep);
     env->ReleaseStringUTFChars(filePath, fp);
+    g_requestControlsPanelVisible.store(true);
+    g_newVideoSessionRequested.store(true);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -1169,6 +1177,8 @@ Java_com_tucavr_VRActivity_nativePlayWebdav(JNIEnv* env, jobject,
     env->ReleaseStringUTFChars(filePath, fp);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
+    g_requestControlsPanelVisible.store(true);
+    g_newVideoSessionRequested.store(true);
 }
 
 extern "C" JNIEXPORT jstring JNICALL

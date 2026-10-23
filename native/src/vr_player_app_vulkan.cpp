@@ -7760,17 +7760,16 @@ void UpdateVideoFrame(AppState& state) {
         state.controlsAlpha = 0.0f;
         state.controlsIdleTime = kUiAutoHideSeconds;
         ClearVideoImageCache(state);
-        if (stopRequested) {
-            state.hasActiveMedia = false;
-            g_requestUiPanelVisible.store(true);
-            return;
-        }
         if (newSessionRequested) {
             state.hasActiveMedia = true;
             state.stutterCount = 0;
             state.freezeCount = 0;
             state.videoStallCount = 0;
             std::fill(std::begin(state.frameTimeHistogram), std::end(state.frameTimeHistogram), 0u);
+        } else if (stopRequested) {
+            state.hasActiveMedia = false;
+            g_requestUiPanelVisible.store(true);
+            return;
         }
     }
 

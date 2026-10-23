@@ -154,8 +154,8 @@ The app has a complete real-time diagnostics modal ("Stats for Nerds"), reachabl
 
 ### Activation and Zero Overhead
 
-- **Settings**: the `DEBUG_STATS_PANEL` toggle persists the user's preference and instantly notifies the native engine through JNI (`nativeSetDebugStatsEnabled`). It is a Settings toggle (a `FeatureFlags.Flag`), not an adb broadcast, and it is available in release builds too.
-- **Zero Overhead**: when disabled, the native engine (C++/Rust) early-exits on an atomic flag (`g_debugStatsEnabled`), eliminating periodic JNI calls, string allocations and metric collection in the render loop.
+- **Settings**: the `DEBUG_STATS_PANEL` and `DEBUG_STATS_EXPORT` toggles persist the user's preferences and immediately notify the native engine through JNI (`nativeSetDebugStatsEnabled`, driven by `DebugTelemetryExporter.shouldStreamNativeStats`). Both are Settings toggles (`FeatureFlags.Flag`), not adb broadcasts, and are available in release builds too.
+- **Zero Overhead**: when both toggles are disabled, the native engine (C++/Rust) early-exits on an atomic flag (`g_debugStatsEnabled`), eliminating periodic JNI calls, string allocations and metric collection in the render loop.
 
 ### Single Field Contract (F0)
 
@@ -182,7 +182,7 @@ Four fields (`video_stats_age_ms`, `network_stats_age_ms`, `audio_stats_age_ms`,
 
 2. **Audio & Sync**: codec/channels, **A/V Drift** (`av_drift_ms`, now an EMA — see F4 below), spatial audio, track and subtitles.
 
-3. **Network & Buffer**: source/protocol, network rate, buffer queue, per-block latency, blocks fetched/discarded, last seek latency.
+3. **Network & Buffer**: source/protocol, delivered network rate (`net_mbs`, MiB/s), last-block link throughput (`net_block_mbs`, MiB/s), buffer queue, frames pending display, per-block latency, blocks fetched/discarded, last seek latency.
 
 4. **System & Hardware**: thermal status, battery, app version.
 
@@ -191,8 +191,8 @@ Four fields (`video_stats_age_ms`, `network_stats_age_ms`, `audio_stats_age_ms`,
    | # | Chart | Answers | Source |
    |---|---|---|---|
    | G1 | Pipeline stage (60s) | Colored bands per `bottleneck_stage`, a rolling history accumulated in `DebugStatsModal` from the ~10Hz samples — no new wire field. | Green=healthy, blue=`NETWORK`, red=`PRESENTATION`. |
-   | G2 | Frame time histogram | 8 cumulative buckets (`hist_bucket_0..7`, edges at 11.1/16.7/20/33.3/50/100/250ms) accumulated every frame in the render loop — captures the distribution at 90Hz without transporting 90 samples/s. | `native/src/vr_player_app_vulkan.cpp` (`kFrameTimeHistogramEdgesMs`). |
-   | G3 | Buffer health (s) / Network (MB/s) | `buffered_ahead_sec` reported by the playback controller overlaid on `net_mbs` — shows seconds of video buffered ahead of the master clock even during stalls; `video_q_depth / video_fps` kept as offline CSV fallback. | Wire (`buffered_ahead_sec` from `rust/bridge`). |
+   | G2 | Frame time histogram | 8 cumulative buckets (`hist_bucket_0..7`: on time, +1 vsync, +2 vsyncs at the display refresh rate, then `<50`, `<100`, `<150`, `<250`, `>=250` ms) accumulated every frame in the render loop and reset per video — captures the distribution without transporting 90 samples/s. | `native/include/frame_time_histogram.h` (`FrameTimeHistogramBucket`). |
+   | G3 | Buffer health (s) / Network (MiB/s) | `buffered_ahead_sec` reported by the playback controller overlaid on `net_mbs` (plus `net_block_mbs` in `scripts/plot-session.py`) — shows seconds of video buffered ahead of the master clock even during stalls; `video_q_depth / video_fps` kept as offline CSV fallback. | Wire (`buffered_ahead_sec`, `net_mbs`, `net_block_mbs` from `rust/bridge`). |
    | G4 | A/V Drift (ms) | `av_drift_ms` with a ±40ms reference band. | Wire (EMA, see F4). |
    | G5 | GPU time vs. budget (ms) | `smoothed_gpu_time_ms` against the same budget formula as the `QualityController` (`frame_interval_ms × 0.85`, `rust/media-logic/src/quality.rs`). | Wire + formula mirrored on the client. |
 
@@ -278,7 +278,7 @@ The app supports periodically recording performance metrics to CSV files for in-
 The 1st column is always `schema_version` (D-05) — incremented whenever the format changes incompatibly; see `DebugTelemetryExporter.SCHEMA_VERSION` for the version history and what each one added. Full header (current version):
 
 ```csv
-schema_version,timestamp_ms,session_id,elapsed_s,backend,screen_mode,stereo_layout,polar_180,swap_eyes,video_status,frame_gap_ms,video_fps,decoded_fps,output_fps,dropped_fps,jitter_ms,net_mbs,video_q_depth,video_presentation_pending,buffered_ahead_sec,seek_ms,smoothed_fps,frame_ms,gpu_time_ms,smoothed_gpu_time_ms,upscaling_mode,upscaling_sharpness,mqsr_enabled,stutter_count,freeze_count,thermal_level,scale,refresh_rate,av_drift_ms,net_last_fetch_ms,net_blocks_fetched,net_blocks_discarded,foveation,spatial_audio,head_tracking,speed,volume,audio_track,audio_track_count,sub_track,sub_offset_ms,quality_level,quality_reason,draw_call_count,triangle_count,video_stall_count,video_stats_age_ms,network_stats_age_ms,audio_stats_age_ms,render_stats_age_ms,network_fetch_failures,network_sequential_streak,network_throttled,audio_queue_depth,decode_error_count,demux_corrupt_packet_count,audio_underrun_count,load_phase_demux_open_ms,load_phase_decoder_ready_ms,load_phase_audio_ready_ms,perf_metrics_valid_mask,perf_app_cpu_frametime_ms,perf_app_gpu_frametime_ms,perf_motion_to_photon_latency_ms,perf_compositor_cpu_frametime_ms,perf_compositor_gpu_frametime_ms,perf_compositor_dropped_frame_count,perf_compositor_spacewarp_mode,perf_device_cpu_util_average,perf_device_cpu_util_worst,perf_device_gpu_util,hist_bucket_0,hist_bucket_1,hist_bucket_2,hist_bucket_3,hist_bucket_4,hist_bucket_5,hist_bucket_6,hist_bucket_7,source_type,source_redacted
+schema_version,timestamp_ms,session_id,elapsed_s,backend,screen_mode,stereo_layout,polar_180,swap_eyes,video_status,frame_gap_ms,video_fps,decoded_fps,output_fps,dropped_fps,jitter_ms,net_mbs,video_q_depth,video_presentation_pending,buffered_ahead_sec,seek_ms,smoothed_fps,frame_ms,gpu_time_ms,smoothed_gpu_time_ms,upscaling_mode,upscaling_sharpness,mqsr_enabled,stutter_count,freeze_count,thermal_level,scale,refresh_rate,av_drift_ms,net_last_fetch_ms,net_block_mbs,net_blocks_fetched,net_blocks_discarded,foveation,spatial_audio,head_tracking,speed,volume,audio_track,audio_track_count,sub_track,sub_offset_ms,quality_level,quality_reason,draw_call_count,triangle_count,video_stall_count,video_stats_age_ms,network_stats_age_ms,audio_stats_age_ms,render_stats_age_ms,network_fetch_failures,network_sequential_streak,network_throttled,audio_queue_depth,decode_error_count,demux_corrupt_packet_count,audio_underrun_count,load_phase_demux_open_ms,load_phase_decoder_ready_ms,load_phase_audio_ready_ms,perf_metrics_valid_mask,perf_app_cpu_frametime_ms,perf_app_gpu_frametime_ms,perf_motion_to_photon_latency_ms,perf_compositor_cpu_frametime_ms,perf_compositor_gpu_frametime_ms,perf_compositor_dropped_frame_count,perf_compositor_spacewarp_mode,perf_device_cpu_util_average,perf_device_cpu_util_worst,perf_device_gpu_util,hist_bucket_0,hist_bucket_1,hist_bucket_2,hist_bucket_3,hist_bucket_4,hist_bucket_5,hist_bucket_6,hist_bucket_7,source_type,source_redacted
 ```
 
 Next to each CSV, the same session writes `session-<id>-events.log` (section 3, Event Log) — see `scripts/plot-session.py` to regenerate the modal's 5 charts from the CSV, on the PC, without a headset.
