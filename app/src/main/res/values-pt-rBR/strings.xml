@@ -588,7 +588,7 @@
 
     <string name="debug_stats_section_charts">Gráficos</string>
     <string name="debug_stats_chart_g1_title">Estágio do pipeline (60s)</string>
-    <string name="debug_stats_chart_g2_title">Histograma de frame time (buckets: &lt;11,1/16,7/20/33,3/50/100/250/≥250ms)</string>
+    <string name="debug_stats_chart_g2_title">Histograma de frame time (buckets: no tempo/+1/+2 vsyncs, &lt;50/100/150/250/≥250ms)</string>
     <string name="debug_stats_chart_g3_title">Saúde do buffer (s) / Rede (MiB/s)</string>
     <string name="debug_stats_chart_g4_title">Drift A/V (ms)</string>
     <string name="debug_stats_chart_g5_title">Tempo de GPU vs. orçamento (ms)</string>

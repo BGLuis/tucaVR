@@ -55,6 +55,7 @@
 #include "controls_pose.h"
 #include "browser_pose.h"
 #include "panel_pick.h"
+#include "frame_time_histogram.h"
 #include "hand_tracking.h"
 #include "screen_mode.h"
 #include "vr_player_feedback_overlay.h"
@@ -479,14 +480,10 @@ using vrplayer::kUiCylinderRadius;
 constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz
 constexpr float kFreezeThresholdMs = 250.0f; // stall claro, nao so reprojection
 
-// F5, G2: bordas do histograma de frame
-// time. 11.1 = cadencia alvo a 90Hz, 20 = kStutterThresholdMs, 250 = kFreezeThresholdMs —
-// os tres marcos que o relatorio pede desenhados no grafico; os demais so dao granularidade
-// na faixa intermediaria. 7 bordas -> 8 buckets (o ultimo pega tudo acima de 250ms).
-constexpr int kFrameTimeHistogramBucketCount = 8;
-constexpr float kFrameTimeHistogramEdgesMs[kFrameTimeHistogramBucketCount - 1] = {
-    11.1f, 16.7f, 20.0f, 33.3f, 50.0f, 100.0f, 250.0f
-};
+// F5, G2: the frame time histogram buckets follow the display refresh rate, see
+// frame_time_histogram.h.
+using vrplayer::FrameTimeHistogramBucket;
+using vrplayer::kFrameTimeHistogramBucketCount;
 constexpr float kVideoStallThresholdMs = 500.0f; // decode/rede travado (ver AppState.msSinceLastVideoFrame)
 
 // ScreenMode e helpers estao centralizados em screen_mode.h
@@ -1323,7 +1320,7 @@ struct AppState {
     float lastFrameMs = 0.0f;
     int stutterCount = 0;
     int freezeCount = 0;
-    // F5 G2: contagens cumulativas por bucket (ver kFrameTimeHistogramEdgesMs) — acumulado a
+    // F5 G2: contagens cumulativas por bucket (ver frame_time_histogram.h) — acumulado a
     // cada frame no proprio loop de render, exportado no wire so a 10Hz do HUD.
     uint32_t frameTimeHistogram[kFrameTimeHistogramBucketCount] = {};
     std::chrono::steady_clock::time_point lastFrameTimestamp{};
@@ -8026,13 +8023,7 @@ void RenderFrame(AppState& state) {
     if (state.lastPredictedDisplayTime > 0) {
         float frameMs = static_cast<float>(frameState.predictedDisplayTime - state.lastPredictedDisplayTime) * 1e-6f;
         state.lastFrameMs = frameMs;
-        {
-            int bucket = kFrameTimeHistogramBucketCount - 1;
-            for (int i = 0; i < kFrameTimeHistogramBucketCount - 1; ++i) {
-                if (frameMs < kFrameTimeHistogramEdgesMs[i]) { bucket = i; break; }
-            }
-            state.frameTimeHistogram[bucket]++;
-        }
+        state.frameTimeHistogram[FrameTimeHistogramBucket(frameMs, state.displayRefreshRate)]++;
         ReportAdpfWorkDuration(state, frameMs); // F8: declara ao SO a duracao real deste frame
         if (frameMs > 0.0f) {
             float instFps = 1000.0f / frameMs;

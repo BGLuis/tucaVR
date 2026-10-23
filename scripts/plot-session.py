@@ -26,11 +26,14 @@ except ImportError:
     sys.exit(1)
 
 # The same thresholds/edges used natively — see BottleneckStageAnalyzer.kt and
-# vr_player_app_vulkan.cpp (kFrameTimeHistogramEdgesMs).
+# native/include/frame_time_histogram.h.
 STALL_THRESHOLD_MS = 500.0
 QUEUE_EMPTY_THRESHOLD = 5
 QUEUE_FULL_THRESHOLD = 80
-HIST_BUCKET_LABELS = ["<11.1", "<16.7", "<20", "<33.3", "<50", "<100", "<250", ">=250"]
+# Since schema v8 the first three edges follow the display refresh rate (halfway between periods).
+HIST_BUCKET_LABELS = ["on time", "+1 vsync", "+2 vsyncs", "<50", "<100", "<150", "<250", ">=250"]
+HIST_BUCKET_LABELS_BEFORE_V8 = ["<11.1", "<16.7", "<20", "<33.3", "<50", "<100", "<250", ">=250"]
+REFRESH_RELATIVE_HIST_SCHEMA = 8
 
 STAGE_NONE, STAGE_NETWORK, STAGE_PRESENTATION = "NONE", "NETWORK", "PRESENTATION"
 STAGE_COLORS = {STAGE_NONE: "#4CAF50", STAGE_NETWORK: "#4A90D9", STAGE_PRESENTATION: "#F44336"}
@@ -98,8 +101,12 @@ def plot_g2_histogram(ax, rows):
         return
     last = rows[-1]  # cumulative counters — the last sample already holds the session total.
     counts = [col_int(last, k) for k in bucket_keys]
-    ax.bar(HIST_BUCKET_LABELS, counts, color="#4A90D9")
-    ax.set_title("G2 — Frame time histogram (ms, cumulative over the session)")
+    if col_int(last, "schema_version") >= REFRESH_RELATIVE_HIST_SCHEMA:
+        labels = HIST_BUCKET_LABELS
+    else:
+        labels = HIST_BUCKET_LABELS_BEFORE_V8
+    ax.bar(labels, counts, color="#4A90D9")
+    ax.set_title("G2 — Frame time histogram (cumulative over the session)")
     ax.tick_params(axis="x", rotation=45)
 
 

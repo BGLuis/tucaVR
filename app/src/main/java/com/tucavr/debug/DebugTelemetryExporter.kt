@@ -42,6 +42,8 @@ object DebugTelemetryExporter {
     // mestre no demux/playback controller; alimenta o grafico G3 mesmo durante video stall).
     // v8 (#199): + net_block_mbs (link throughput of the last prefetch block, MiB/s); net_mbs
     // stays the delivered average, also in MiB/s.
+    // Also v8 (#201): hist_bucket_0..2 now mean on time / +1 / +2 vsyncs at the display refresh
+    // rate and the remaining edges are <50/<100/<150/<250/>=250 ms (native/include/frame_time_histogram.h).
     const val SCHEMA_VERSION = 8
 
     const val CSV_HEADER =

@@ -120,8 +120,8 @@ struct DebugStats {
     float perfDeviceGpuUtil = 0.0f;          // bit 9
 
     // F5 G2 — histograma de frame time, 8 buckets cumulativos (ver
-    // kFrameTimeHistogramEdgesMs em vr_player_app_vulkan.cpp: <11.1, <16.7, <20, <33.3, <50,
-    // <100, <250, >=250 ms). Acumulado a cada frame no loop de render, nao a cada amostra do
+    // native/include/frame_time_histogram.h: on time, +1 vsync, +2 vsyncs at the current refresh
+    // rate, then <50, <100, <150, <250, >=250 ms). Acumulado a cada frame no loop de render, nao a cada amostra do
     // HUD — e assim que captura a distribuicao real a 90Hz sem transportar 90 amostras/s.
     uint32_t histBucket0 = 0;
     uint32_t histBucket1 = 0;
