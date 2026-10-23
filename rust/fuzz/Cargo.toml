@@ -1,0 +1,58 @@
+[package]
+name = "tucavr-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+media-logic = { path = "../media-logic" }
+protocols = { path = "../protocols" }
+
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "pgs"
+path = "fuzz_targets/pgs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ass"
+path = "fuzz_targets/ass.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hls"
+path = "fuzz_targets/hls.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dash"
+path = "fuzz_targets/dash.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "didl"
+path = "fuzz_targets/didl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "nfs_rpc"
+path = "fuzz_targets/nfs_rpc.rs"
+test = false
+doc = false
+bench = false
