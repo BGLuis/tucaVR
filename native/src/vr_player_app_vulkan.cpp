@@ -36,6 +36,7 @@
 #include <android/api-level.h>
 #include <android/performance_hint.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -43,6 +44,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -1309,13 +1311,11 @@ struct AppState {
     bool cursorDotVisible = false;
     XrVector3f cursorDotPos = {0.0f, 0.0f, 0.0f};
 
-    // Metricas de performance (debug, ver docs/DEBUGGING.md) — medido em
-    // wall-clock (std::chrono) entre chamadas consecutivas de RenderFrame,
-    // nao a partir de predictedDisplayTime: xrWaitFrame devolve o horario
-    // que o COMPOSITOR pretende mostrar o proximo frame, nao quanto tempo
-    // o app de fato levou — um stall real (decode bloqueando,
-    // vkQueueWaitIdle demorado) atrasa a PROXIMA chamada de RenderFrame,
-    // que e exatamente o que o wall-clock aqui capta.
+    // Performance metrics (debug, see docs/DEBUGGING.md), measured as the delta between
+    // consecutive predictedDisplayTime values from xrWaitFrame: a frame the app delivers late
+    // pushes the next predicted display time out by whole display periods. Reset per video
+    // in UpdateVideoFrame; the READY handler clears lastPredictedDisplayTime so a session
+    // pause is not counted as one long frame.
     float smoothedFps = 0.0f;
     float lastFrameMs = 0.0f;
     int stutterCount = 0;
@@ -1323,8 +1323,6 @@ struct AppState {
     // F5 G2: contagens cumulativas por bucket (ver frame_time_histogram.h) — acumulado a
     // cada frame no proprio loop de render, exportado no wire so a 10Hz do HUD.
     uint32_t frameTimeHistogram[kFrameTimeHistogramBucketCount] = {};
-    std::chrono::steady_clock::time_point lastFrameTimestamp{};
-    bool hasLastFrameTimestamp = false;
 
     // Metrica SEPARADA das acima: fps/stutter/freeze medem o LOOP DE
     // RENDER, nao o video em si — o loop pode rodar liso redesenhando o
@@ -7769,6 +7767,10 @@ void UpdateVideoFrame(AppState& state) {
         }
         if (newSessionRequested) {
             state.hasActiveMedia = true;
+            state.stutterCount = 0;
+            state.freezeCount = 0;
+            state.videoStallCount = 0;
+            std::fill(std::begin(state.frameTimeHistogram), std::end(state.frameTimeHistogram), 0u);
         }
     }
 
@@ -9002,6 +9004,9 @@ void PollXrEvents(AppState& state) {
                     OXR(xrBeginSession(state.session, &beginInfo));
                     AttachInputsToSession(state);
                     state.sessionRunning = true;
+                    // No frames ran while the session was stopped: without this, the first frame
+                    // after resuming would measure the whole pause as one frame (freeze, bucket 7).
+                    state.lastPredictedDisplayTime = 0;
                     break;
                 }
                 case XR_SESSION_STATE_STOPPING:

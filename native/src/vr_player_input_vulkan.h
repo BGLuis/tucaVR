@@ -1227,7 +1227,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             stats.perfDeviceCpuUtilWorst = state.perfDeviceCpuUtilWorst;
             stats.perfDeviceGpuUtil = state.perfDeviceGpuUtil;
 
-            // F5 G2: histograma de frame time (contadores cumulativos desde o inicio da sessao).
+            // F5 G2: histograma de frame time (contadores cumulativos desde o inicio do video atual).
             stats.histBucket0 = state.frameTimeHistogram[0];
             stats.histBucket1 = state.frameTimeHistogram[1];
             stats.histBucket2 = state.frameTimeHistogram[2];
