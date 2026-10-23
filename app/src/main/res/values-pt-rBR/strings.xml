@@ -589,7 +589,7 @@
     <string name="debug_stats_section_charts">Gráficos</string>
     <string name="debug_stats_chart_g1_title">Estágio do pipeline (60s)</string>
     <string name="debug_stats_chart_g2_title">Histograma de frame time (buckets: &lt;11,1/16,7/20/33,3/50/100/250/≥250ms)</string>
-    <string name="debug_stats_chart_g3_title">Saúde do buffer (s) / Rede (MB/s)</string>
+    <string name="debug_stats_chart_g3_title">Saúde do buffer (s) / Rede (MiB/s)</string>
     <string name="debug_stats_chart_g4_title">Drift A/V (ms)</string>
     <string name="debug_stats_chart_g5_title">Tempo de GPU vs. orçamento (ms)</string>
 
@@ -604,6 +604,7 @@
 
     <string name="debug_stats_label_source">Origem / Protocolo</string>
     <string name="debug_stats_label_network_speed">Taxa de Rede</string>
+    <string name="debug_stats_label_network_link_speed">Taxa do Link (último bloco)</string>
     <string name="debug_stats_label_buffer_queue">Fila de Buffer</string>
     <string name="debug_stats_label_presentation_pending">Frames Aguardando Exibição</string>
     <string name="debug_stats_label_fetch_latency">Latência por Bloco</string>

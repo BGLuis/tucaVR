@@ -110,8 +110,10 @@ def plot_g3_buffer_and_network(ax, rows):
         ax.set_visible(False)
         print("G3 skipped: buffered_ahead_sec (or video_q_depth/video_fps) and net_mbs are absent in this schema.")
         return
+    has_block_rate = has_columns(rows, "net_block_mbs")
     buffer_health = []
     net_mbs = []
+    net_block_mbs = []
     for r in rows:
         if has_buffered:
             buffer_health.append(col_float(r, "buffered_ahead_sec"))
@@ -120,11 +122,15 @@ def plot_g3_buffer_and_network(ax, rows):
             q = col_int(r, "video_q_depth")
             buffer_health.append(q / fps if fps > 0 else 0.0)
         net_mbs.append(col_float(r, "net_mbs"))
+        if has_block_rate:
+            net_block_mbs.append(col_float(r, "net_block_mbs"))
     x = range(len(rows))
     ax.fill_between(x, buffer_health, color="#4CAF50", alpha=0.4, label="Buffer health (s)")
     ax2 = ax.twinx()
-    ax2.plot(x, net_mbs, color="#B388FF", label="Network (MB/s)")
-    ax.set_title("G3 — Buffer health (s) / Network (MB/s)")
+    ax2.plot(x, net_mbs, color="#B388FF", label="Network avg (MiB/s)")
+    if has_block_rate:
+        ax2.plot(x, net_block_mbs, color="#FFB74D", label="Link, last block (MiB/s)")
+    ax.set_title("G3 — Buffer health (s) / Network (MiB/s)")
     ax.legend(loc="upper left")
     ax2.legend(loc="upper right")
 

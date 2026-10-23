@@ -1591,7 +1591,7 @@ impl PlaybackController {
     /// Debug (docs/DEBUGGING.md) — bytes recebidos da rede pelo
     /// PrefetchReader da fonte atual, soma cumulativa. 0 para arquivo local
     /// ou `http://` puro (sem PrefetchReader envolvido). O C++ amostra isto
-    /// ao longo do tempo e calcula MB/s, mesmo padrao de decFps.
+    /// ao longo do tempo e calcula MiB/s, mesmo padrao de decFps.
     pub fn get_network_bytes_read(&self) -> u64 {
         self.network_stats
             .as_ref()
@@ -1611,8 +1611,17 @@ impl PlaybackController {
             .unwrap_or(0.0)
     }
 
-    /// Debug (docs/DEBUGGING.md) — quantos blocos foram buscados no total
-    /// (sucesso ou erro) e quantos desses foram descartados por um seek real
+    /// Debug (docs/DEBUGGING.md) — link throughput of the last fetched block in MiB/s
+    /// (see PrefetchStats::last_block_mibs); 0 without a PrefetchReader.
+    pub fn get_network_last_block_mibs(&self) -> f32 {
+        self.network_stats
+            .as_ref()
+            .map(|s| s.last_block_mibs())
+            .unwrap_or(0.0)
+    }
+
+    /// Debug (docs/DEBUGGING.md) — quantos blocos foram buscados com sucesso
+    /// (falhas ficam em fetch_failures) e quantos desses foram descartados por um seek real
     /// antes de serem consumidos. Alto `discarded` relativo a `fetched`
     /// durante playback estavel (nao logo apos abrir o arquivo) indica
     /// acesso menos sequencial do que o esperado.

@@ -46,6 +46,9 @@ struct DebugStats {
     float displayRefreshRate = 0.0f;
     float avDriftMs = 0.0f;
     float netLastFetchMs = 0.0f;
+    // #199: link throughput of the last prefetch block (MiB/s); netMBs above is the delivered
+    // average, which moves in whole-block steps.
+    float netBlockMBs = 0.0f;
     uint64_t netBlocksFetched = 0;
     uint64_t netBlocksDiscarded = 0;
     int foveationEnabled = 0;
@@ -170,6 +173,7 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         "refresh_rate\t%.1f\n"
         "av_drift_ms\t%.1f\n"
         "net_last_fetch_ms\t%.1f\n"
+        "net_block_mbs\t%.2f\n"
         "net_blocks_fetched\t%llu\n"
         "net_blocks_discarded\t%llu\n"
         "foveation\t%d\n"
@@ -250,6 +254,7 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         s.displayRefreshRate,
         s.avDriftMs,
         s.netLastFetchMs,
+        s.netBlockMBs,
         (unsigned long long)s.netBlocksFetched,
         (unsigned long long)s.netBlocksDiscarded,
         s.foveationEnabled,

@@ -1183,6 +1183,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             stats.displayRefreshRate = state.displayRefreshRate;
             stats.avDriftMs = get_last_av_drift_ms();
             stats.netLastFetchMs = get_network_last_block_fetch_ms();
+            stats.netBlockMBs = get_network_last_block_mibs();
             stats.netBlocksFetched = get_network_blocks_fetched();
             stats.netBlocksDiscarded = get_network_blocks_discarded();
             stats.foveationEnabled = (int)get_foveation_enabled();

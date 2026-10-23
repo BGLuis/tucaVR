@@ -287,6 +287,7 @@ extern "C" {
     // e contagem de blocos buscados/descartados — logado a 1Hz junto com
     // decFps/netMBs, ver bloco de amostragem em RenderFrame.
     extern float get_network_last_block_fetch_ms();
+    extern float get_network_last_block_mibs();
     extern uint64_t get_network_blocks_fetched();
     extern uint64_t get_network_blocks_discarded();
     extern uint32_t get_last_seek_latency_ms(); // debug, ver docs/DEBUGGING.md
@@ -8102,8 +8103,8 @@ void RenderFrame(AppState& state) {
             state.videoPresentationPending = get_video_presentation_pending();
 
             if (state.lastNetworkBytes > 0 || get_network_blocks_fetched() > 0) {
-                LOGI("net: %.2fMB/s blockFetchMs=%.0f blocksFetched=%llu blocksDiscarded=%llu q=%u",
-                    state.netMBs, get_network_last_block_fetch_ms(),
+                LOGI("net: %.2fMiB/s link=%.2fMiB/s blockFetchMs=%.0f blocksFetched=%llu blocksDiscarded=%llu q=%u",
+                    state.netMBs, get_network_last_block_mibs(), get_network_last_block_fetch_ms(),
                     (unsigned long long)get_network_blocks_fetched(),
                     (unsigned long long)get_network_blocks_discarded(),
                     state.videoQueueDepth);

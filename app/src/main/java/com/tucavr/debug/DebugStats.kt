@@ -31,6 +31,7 @@ data class NativeDebugStats(
     val refreshRate: Float = 90.0f,
     val avDriftMs: Float = 0.0f,
     val netLastFetchMs: Float = 0.0f,
+    val netBlockMBs: Float = 0.0f,
     val netBlocksFetched: Long = 0L,
     val netBlocksDiscarded: Long = 0L,
     val foveationEnabled: Boolean = false,
@@ -150,6 +151,7 @@ object DebugStatsParser {
         var refreshRate = 90.0f
         var avDriftMs = 0.0f
         var netLastFetchMs = 0.0f
+        var netBlockMBs = 0.0f
         var netBlocksFetched = 0L
         var netBlocksDiscarded = 0L
         var foveationEnabled = false
@@ -312,6 +314,10 @@ object DebugStatsParser {
                 }
                 "net_last_fetch_ms" -> {
                     netLastFetchMs = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "net_block_mbs" -> {
+                    netBlockMBs = value.toFloatOrNull() ?: 0f
                     recognizedKeys++
                 }
                 "net_blocks_fetched" -> {
@@ -526,6 +532,7 @@ object DebugStatsParser {
             refreshRate = refreshRate,
             avDriftMs = avDriftMs,
             netLastFetchMs = netLastFetchMs,
+            netBlockMBs = netBlockMBs,
             netBlocksFetched = netBlocksFetched,
             netBlocksDiscarded = netBlocksDiscarded,
             foveationEnabled = foveationEnabled,
