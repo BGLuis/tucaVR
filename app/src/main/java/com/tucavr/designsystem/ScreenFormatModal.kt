@@ -157,7 +157,7 @@ class ScreenFormatModal(
         panel.addView(tabRow)
         panel.addView(contentHost)
 
-        // Seção de Controles 3D (Swap Eyes e Visão 2D)
+        // 3D controls section (Swap Eyes and 2D view)
         val stereoControls =
             LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
@@ -248,7 +248,7 @@ class ScreenFormatModal(
         panel.addView(stereoSection)
         stereoSection.visibility = if (ScreenFormatCatalog.isStereo(currentMode)) View.VISIBLE else View.GONE
 
-        // Seção de Ângulo Fisheye (180°, 190°, 200°, 220°)
+        // Fisheye field of view section (180°, 190°, 200°, 220°)
         val fisheyeControls =
             LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
