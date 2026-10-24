@@ -437,70 +437,105 @@ enum FilenameProjection {
 /// checking the specific patterns first keeps that an explicit choice
 /// rather than a coincidence.
 pub fn detect_from_filename(name: &str) -> Option<Format3D> {
-    let lower = name.to_lowercase();
+    let stem = match name.rsplit_once('.') {
+        Some((base, _ext)) if !base.is_empty() => base,
+        _ => name,
+    };
+    let lower = stem.to_lowercase();
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .collect();
 
-    let stereo_layout = if lower.contains("_hsbs") || lower.contains("_half_sbs") {
+    let has_token = |t: &str| tokens.contains(&t);
+    let has_pair = |t1: &str, t2: &str| tokens.windows(2).any(|w| w[0] == t1 && w[1] == t2);
+
+    let is_sbs_half = has_token("hsbs") || has_pair("half", "sbs");
+    let is_ou_half = has_token("hou") || has_pair("half", "ou") || has_pair("half", "tab");
+
+    let is_sbs_full = has_token("sbs")
+        || has_token("fsbs")
+        || has_token("lr")
+        || has_pair("3d", "sbs")
+        || has_pair("side", "by")
+        || has_pair("left", "right");
+
+    let is_ou_full = has_token("ou")
+        || has_token("fou")
+        || has_token("tb")
+        || has_token("tab")
+        || has_pair("over", "under")
+        || has_pair("top", "bottom");
+
+    let stereo_layout = if is_sbs_half {
         Some(FilenameStereoLayout::SbsHalf)
-    } else if lower.contains("_hou") {
+    } else if is_ou_half {
         Some(FilenameStereoLayout::OuHalf)
-    } else if lower.contains("_sbs")
-        || lower.contains("-sbs")
-        || lower.contains("_3d_sbs")
-        || lower.contains("_lr")
-    {
+    } else if is_sbs_full {
         Some(FilenameStereoLayout::SbsFull)
-    } else if lower.contains("_ou") || lower.contains("_tab") {
+    } else if is_ou_full {
         Some(FilenameStereoLayout::OuFull)
     } else {
         None
     };
 
-    let is_explicit_mono = lower.contains("_mono")
-        || lower.contains("-mono")
-        || lower.contains(".mono")
-        || lower.contains("2d_")
-        || lower.contains("_2d");
+    let is_explicit_mono = has_token("mono") || has_token("2d");
 
-    let projection = if lower.contains("_vr190")
-        || lower.contains("-vr190")
-        || lower.contains(".vr190")
-        || lower.contains("_rf52")
-        || lower.contains("-rf52")
-        || lower.contains(".rf52")
-    {
+    let is_fisheye_specific = has_token("vr190") || has_token("rf52") || has_token("mkx200");
+    let is_fisheye_generic = has_token("fisheye190")
+        || has_token("190fisheye")
+        || has_token("eyefish190")
+        || has_token("fisheye200")
+        || has_token("fisheye220")
+        || has_token("fisheye180")
+        || has_token("fisheye")
+        || has_token("eyefish")
+        || has_pair("fisheye", "190")
+        || has_pair("190", "fisheye")
+        || has_pair("eyefish", "190")
+        || has_pair("fisheye", "200")
+        || has_pair("200", "fisheye")
+        || has_pair("fisheye", "220")
+        || has_pair("220", "fisheye")
+        || has_pair("fisheye", "180")
+        || has_pair("180", "fisheye");
+
+    let is_spherical_360 = has_token("360x180")
+        || has_token("360")
+        || has_token("360vr")
+        || has_token("vr360")
+        || has_pair("360", "vr")
+        || has_pair("vr", "360");
+
+    let is_vr180_specific = has_token("vr180")
+        || has_token("180vr")
+        || has_token("180x180")
+        || has_pair("180", "sbs")
+        || has_pair("180", "vr")
+        || has_pair("vr", "180")
+        || (has_token("vr") && !is_spherical_360);
+
+    let is_vr180_generic = has_token("180");
+    let is_eac = has_token("eac");
+    let is_cubemap_6x1 =
+        has_token("6x1") && (has_token("cube") || has_token("cubemap") || has_token("360"));
+    let is_cubemap = has_token("cubemap") || has_token("cube");
+
+    let projection = if is_fisheye_specific {
         Some(FilenameProjection::Fisheye190Specific)
-    } else if lower.contains("fisheye190")
-        || lower.contains("fisheye_190")
-        || lower.contains("fisheye-190")
-        || lower.contains("190_fisheye")
-        || lower.contains("190-fisheye")
-        || lower.contains("190fisheye")
-        || lower.contains("eyefish190")
-        || lower.contains("eyefish_190")
-    {
+    } else if is_fisheye_generic {
         Some(FilenameProjection::Fisheye190Generic)
-    } else if lower.contains("_vr180")
-        || lower.contains("-vr180")
-        || lower.contains(".vr180")
-        || lower.contains("vr180")
-        || lower.contains("_180x180")
-        || lower.contains("-180x180")
-        || lower.contains("_vr_")
-        || lower.contains("180_sbs")
-        || lower.contains("180-sbs")
-        || lower.contains("180_vr")
-        || lower.contains("180vr")
-    {
-        Some(FilenameProjection::Vr180Specific)
-    } else if lower.contains("_360x180") || lower.contains("_360") {
+    } else if is_spherical_360 {
         Some(FilenameProjection::Spherical360)
-    } else if lower.contains("_180") {
+    } else if is_vr180_specific {
+        Some(FilenameProjection::Vr180Specific)
+    } else if is_vr180_generic {
         Some(FilenameProjection::Vr180Generic)
-    } else if lower.contains("_eac") || lower.contains("-eac") {
+    } else if is_eac {
         Some(FilenameProjection::Eac)
-    } else if lower.contains("6x1") && (lower.contains("cube") || lower.contains("360")) {
+    } else if is_cubemap_6x1 {
         Some(FilenameProjection::Cubemap6x1)
-    } else if lower.contains("_cubemap") || lower.contains("-cubemap") || lower.contains("_cube") {
+    } else if is_cubemap {
         Some(FilenameProjection::Cubemap)
     } else {
         None
@@ -976,6 +1011,69 @@ mod tests {
         assert_eq!(
             detect_from_filename("Space_360_SBS.mp4"),
             Some(Format3D::Spherical360SbsFull)
+        );
+    }
+
+    #[test]
+    fn filename_whole_token_matching_acceptance_criteria() {
+        // Positive cases from acceptance criteria
+        assert_eq!(
+            detect_from_filename("Film.SBS.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("Film.fsbs.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("Film.hsbs.mkv"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("Film.fou.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("Film.TB.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("Film.360.sbs.mkv"),
+            Some(Format3D::Spherical360SbsFull)
+        );
+
+        // Negative cases from acceptance criteria
+        assert_eq!(detect_from_filename("Film_360p.mp4"), None);
+        assert_eq!(detect_from_filename("Film_180p.mp4"), None);
+        assert_eq!(detect_from_filename("Film_out.mkv"), None);
+        assert_eq!(detect_from_filename("Film_ou2.mkv"), None);
+        assert_eq!(detect_from_filename("Film_lrx.mkv"), None);
+        assert_eq!(detect_from_filename("Film_table.mkv"), None);
+
+        // Edge cases: 360 combined with vr, vr360, 360vr, and fisheye variations
+        assert_eq!(
+            detect_from_filename("Film_360_vr.mp4"),
+            Some(Format3D::Spherical360Mono)
+        );
+        assert_eq!(
+            detect_from_filename("Film.360.vr.sbs.mkv"),
+            Some(Format3D::Spherical360SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("space_vr360.mp4"),
+            Some(Format3D::Spherical360Mono)
+        );
+        assert_eq!(
+            detect_from_filename("rollercoaster_360vr.mp4"),
+            Some(Format3D::Spherical360Mono)
+        );
+        assert_eq!(
+            detect_from_filename("film_mkx200.mp4"),
+            Some(Format3D::Fisheye190Sbs)
+        );
+        assert_eq!(
+            detect_from_filename("clip_fisheye_200.mp4"),
+            Some(Format3D::Fisheye190Sbs)
         );
     }
 
