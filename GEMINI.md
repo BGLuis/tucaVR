@@ -181,7 +181,7 @@ cd rust && cargo test -p media-logic sync::tests::test_name
 ./gradlew :app:lintDebug
 
 # C++ code formatting and shader validation
-clang-format --dry-run -Werror native/tests/*.cpp native/include/vk_math.h native/include/screen_mode.h native/include/subtitle_layout.h native/include/hand_tracking.h native/include/environment_config.h native/include/environment_validator.h native/include/browser_pose.h native/include/panel_pick.h native/include/cylinder_hit.h native/include/controls_pose.h
+clang-format --dry-run -Werror native/tests/*.cpp native/include/vk_math.h native/include/screen_mode.h native/include/polar_mode.h native/include/subtitle_layout.h native/include/hand_tracking.h native/include/environment_config.h native/include/environment_validator.h native/include/browser_pose.h native/include/panel_pick.h native/include/cylinder_hit.h native/include/controls_pose.h
 ./scripts/check-shaders.sh
 
 # C++ host unit tests (native math, input FSM, screen mode, subtitle layout, hand tracking, environment config, browser pose, panel pick)

@@ -1,3 +1,4 @@
+#include "polar_mode.h"
 #include "screen_mode.h"
 
 #include <cassert>
@@ -76,11 +77,38 @@ static void TestScreenModePredicates() {
     std::cout << "[PASS] TestScreenModePredicates\n";
 }
 
+static void TestPolarModeEncodeDecode() {
+    const int angles[] = {180, 190, 200, 220};
+    const int polarModes[] = {0, 1, 2};
+
+    for (int angle : angles) {
+        for (int mode : polarModes) {
+            int packed = EncodePolar180(mode, angle);
+            assert(DecodePolarMode(packed) == mode);
+            assert(DecodeFisheyeFov(packed) == angle);
+        }
+    }
+
+    // Default/fallback: angle omitted or upper bits 0
+    for (int mode : polarModes) {
+        int packedDefault = EncodePolar180(mode);
+        assert(DecodePolarMode(packedDefault) == mode);
+        assert(DecodeFisheyeFov(packedDefault) == 190);
+
+        // Raw mode integer with 0 in upper bits
+        assert(DecodePolarMode(mode) == mode);
+        assert(DecodeFisheyeFov(mode) == 190);
+    }
+
+    std::cout << "[PASS] TestPolarModeEncodeDecode\n";
+}
+
 int main() {
     std::cout << "--- Executando testes unitarios de screen_mode.h ---\n";
     TestScreenModeIndices();
     TestScreenModeNames();
     TestScreenModePredicates();
+    TestPolarModeEncodeDecode();
     std::cout << "--- Todos os testes de screen_mode.h passaram com sucesso! ---\n";
     return 0;
 }

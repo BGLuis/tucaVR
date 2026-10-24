@@ -32,6 +32,7 @@ import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ScrubStrip
 import com.tucavr.history.historyKey
 import com.tucavr.navigation.PlaybackSource
+import com.tucavr.network.FisheyeFovPreferenceStore
 import com.tucavr.playlist.PlaybackMode
 import com.tucavr.playlist.PlaylistItem
 import com.tucavr.playlist.PlaylistQueueManager
@@ -231,11 +232,25 @@ class VRControlsPresentation(
         val meta = activity.currentMediaMetadata
         val detectedMode = meta?.format3dIndex
         val confidence = meta?.detectionConfidence ?: 3
+        val currentFov =
+            currentSource?.let { src -> activity.fisheyeFovStore.get(src.historyKey()) }
+                ?: FisheyeFovPreferenceStore.DEFAULT_FOV
         return ScreenFormatModal(
             context = context,
             currentMode = currentMode,
             detectedMode = detectedMode,
             detectionConfidence = confidence,
+            isSwapEyes = { activity.nativeGetSwapEyes() },
+            onToggleSwapEyes = { activity.nativeToggleSwapEyes() != 0 },
+            isMonoView = { activity.nativeGetMonoView() },
+            onToggleMonoView = { activity.nativeToggleMonoView() },
+            currentFisheyeFov = currentFov,
+            onFisheyeFovSelected = { fov ->
+                activity.nativeSetFisheyeFov(fov)
+                currentSource?.let { src ->
+                    activity.fisheyeFovStore.set(src.historyKey(), fov)
+                }
+            },
             onModeSelected = { mode ->
                 activity.nativeSetScreenMode(mode)
                 currentSource?.let { src ->
