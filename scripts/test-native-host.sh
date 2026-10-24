@@ -29,6 +29,7 @@ TESTS=(
     "test_cylinder_hit"
     "test_controls_pose"
     "test_astc_transcode"
+    "test_frame_time_histogram"
 )
 
 EXTRA_FLAGS=()

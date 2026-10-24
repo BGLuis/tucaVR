@@ -78,7 +78,9 @@ pub struct PrefetchStats {
     pub bytes_fetched: AtomicU64,
     /// Duracao do ULTIMO fetch de bloco completo, em microssegundos.
     pub last_fetch_us: AtomicU64,
-    /// Quantos blocos foram buscados no total (sucesso ou erro).
+    /// Bytes delivered by the LAST successful block fetch (pairs with `last_fetch_us`).
+    pub last_fetch_bytes: AtomicU64,
+    /// Blocks fetched successfully; failures are counted in `fetch_failures`.
     pub blocks_fetched: AtomicU64,
     /// Quantos prefetches em voo foram descartados por um seek real (ver
     /// ensure_cache) — alto = padrao de acesso pouco sequencial.
@@ -96,6 +98,18 @@ pub struct PrefetchStats {
     /// Tamanho de bloco alvo dinamico configuravel (ex.: 4MB para 1080p, 12MB para 4K/8K).
     /// Se 0 ou menor que 64KB, o prefetch reader mantem o `block_size` padrao.
     pub target_block_size: AtomicU64,
+}
+
+impl PrefetchStats {
+    /// Link throughput of the last fetched block in MiB/s, or 0 before the first block.
+    pub fn last_block_mibs(&self) -> f32 {
+        let us = self.last_fetch_us.load(Ordering::Relaxed);
+        if us == 0 {
+            return 0.0;
+        }
+        let bytes = self.last_fetch_bytes.load(Ordering::Relaxed);
+        (bytes as f64 / (1024.0 * 1024.0) / (us as f64 / 1_000_000.0)) as f32
+    }
 }
 
 /// Melhor esforco pra elevar a prioridade da thread de I/O de rede acima do
@@ -270,6 +284,7 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
                             if let Ok(ref block) = result {
                                 worker_stats.bytes_fetched.fetch_add(block.len as u64, Ordering::Relaxed);
                                 worker_stats.blocks_fetched.fetch_add(1, Ordering::Relaxed);
+                                worker_stats.last_fetch_bytes.store(block.len as u64, Ordering::Relaxed);
                                 worker_stats.last_fetch_us.store(fetch_start.elapsed().as_micros() as u64, Ordering::Relaxed);
                             } else if let Err(ref e) = result {
                                 worker_stats.fetch_failures.fetch_add(1, Ordering::Relaxed);
@@ -566,6 +581,34 @@ mod tests {
             },
             reads,
         )
+    }
+
+    // #199: the panel needs the link throughput of a block, not bytes counted only when a block completes.
+    #[test]
+    fn stats_report_the_size_and_throughput_of_the_last_fetched_block() {
+        let block = 1024 * 1024;
+        let source = DelayedMemSource {
+            data: vec![7u8; block],
+            delay: Duration::from_millis(20),
+            reads: Arc::new(AtomicUsize::new(0)),
+            fail_at: None,
+        };
+        let mut reader = PrefetchReader::without_read_ahead(source, block);
+        reader.read_exact(&mut [0u8; 1024]).unwrap();
+
+        let stats = reader.stats();
+        assert_eq!(stats.last_fetch_bytes.load(Ordering::Relaxed), block as u64);
+        assert!(stats.last_fetch_us.load(Ordering::Relaxed) >= 20_000);
+        let mibs = stats.last_block_mibs();
+        assert!(
+            mibs > 0.0 && mibs <= 50.0,
+            "1 MiB in >= 20 ms is at most 50 MiB/s, got {mibs}"
+        );
+    }
+
+    #[test]
+    fn last_block_mibs_is_zero_before_any_block_arrives() {
+        assert_eq!(PrefetchStats::default().last_block_mibs(), 0.0);
     }
 
     #[test]

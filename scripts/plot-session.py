@@ -26,11 +26,14 @@ except ImportError:
     sys.exit(1)
 
 # The same thresholds/edges used natively — see BottleneckStageAnalyzer.kt and
-# vr_player_app_vulkan.cpp (kFrameTimeHistogramEdgesMs).
+# native/include/frame_time_histogram.h.
 STALL_THRESHOLD_MS = 500.0
 QUEUE_EMPTY_THRESHOLD = 5
 QUEUE_FULL_THRESHOLD = 80
-HIST_BUCKET_LABELS = ["<11.1", "<16.7", "<20", "<33.3", "<50", "<100", "<250", ">=250"]
+# Since schema v8 the first three edges follow the display refresh rate (halfway between periods).
+HIST_BUCKET_LABELS = ["on time", "+1 vsync", "+2 vsyncs", "<50", "<100", "<150", "<250", ">=250"]
+HIST_BUCKET_LABELS_BEFORE_V8 = ["<11.1", "<16.7", "<20", "<33.3", "<50", "<100", "<250", ">=250"]
+REFRESH_RELATIVE_HIST_SCHEMA = 8
 
 STAGE_NONE, STAGE_NETWORK, STAGE_PRESENTATION = "NONE", "NETWORK", "PRESENTATION"
 STAGE_COLORS = {STAGE_NONE: "#4CAF50", STAGE_NETWORK: "#4A90D9", STAGE_PRESENTATION: "#F44336"}
@@ -98,8 +101,12 @@ def plot_g2_histogram(ax, rows):
         return
     last = rows[-1]  # cumulative counters — the last sample already holds the session total.
     counts = [col_int(last, k) for k in bucket_keys]
-    ax.bar(HIST_BUCKET_LABELS, counts, color="#4A90D9")
-    ax.set_title("G2 — Frame time histogram (ms, cumulative over the session)")
+    if col_int(last, "schema_version") >= REFRESH_RELATIVE_HIST_SCHEMA:
+        labels = HIST_BUCKET_LABELS
+    else:
+        labels = HIST_BUCKET_LABELS_BEFORE_V8
+    ax.bar(labels, counts, color="#4A90D9")
+    ax.set_title("G2 — Frame time histogram (cumulative over the session)")
     ax.tick_params(axis="x", rotation=45)
 
 
@@ -110,8 +117,10 @@ def plot_g3_buffer_and_network(ax, rows):
         ax.set_visible(False)
         print("G3 skipped: buffered_ahead_sec (or video_q_depth/video_fps) and net_mbs are absent in this schema.")
         return
+    has_block_rate = has_columns(rows, "net_block_mbs")
     buffer_health = []
     net_mbs = []
+    net_block_mbs = []
     for r in rows:
         if has_buffered:
             buffer_health.append(col_float(r, "buffered_ahead_sec"))
@@ -120,11 +129,15 @@ def plot_g3_buffer_and_network(ax, rows):
             q = col_int(r, "video_q_depth")
             buffer_health.append(q / fps if fps > 0 else 0.0)
         net_mbs.append(col_float(r, "net_mbs"))
+        if has_block_rate:
+            net_block_mbs.append(col_float(r, "net_block_mbs"))
     x = range(len(rows))
     ax.fill_between(x, buffer_health, color="#4CAF50", alpha=0.4, label="Buffer health (s)")
     ax2 = ax.twinx()
-    ax2.plot(x, net_mbs, color="#B388FF", label="Network (MB/s)")
-    ax.set_title("G3 — Buffer health (s) / Network (MB/s)")
+    ax2.plot(x, net_mbs, color="#B388FF", label="Network avg (MiB/s)")
+    if has_block_rate:
+        ax2.plot(x, net_block_mbs, color="#FFB74D", label="Link, last block (MiB/s)")
+    ax.set_title("G3 — Buffer health (s) / Network (MiB/s)")
     ax.legend(loc="upper left")
     ax2.legend(loc="upper right")
 

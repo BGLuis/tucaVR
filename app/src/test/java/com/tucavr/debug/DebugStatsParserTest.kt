@@ -47,6 +47,7 @@ class DebugStatsParserTest {
                 "refresh_rate\t90.0\n" +
                 "av_drift_ms\t-3.5\n" +
                 "net_last_fetch_ms\t15.2\n" +
+                "net_block_mbs\t6.40\n" +
                 "net_blocks_fetched\t1024\n" +
                 "net_blocks_discarded\t4\n" +
                 "foveation\t1\n" +
@@ -132,6 +133,7 @@ class DebugStatsParserTest {
         assertEquals(90.0f, stats.refreshRate, 0.01f)
         assertEquals(-3.5f, stats.avDriftMs, 0.01f)
         assertEquals(15.2f, stats.netLastFetchMs, 0.01f)
+        assertEquals(6.40f, stats.netBlockMBs, 0.01f)
         assertEquals(1024L, stats.netBlocksFetched)
         assertEquals(4L, stats.netBlocksDiscarded)
         assertTrue(stats.foveationEnabled)

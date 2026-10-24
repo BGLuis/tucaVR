@@ -268,7 +268,8 @@ pub struct PlaybackController {
     load_phase_demux_open_ms: Arc<AtomicU32>,
     load_phase_decoder_ready_ms: Arc<AtomicU32>,
     load_phase_audio_ready_ms: Arc<AtomicU32>,
-    av_drift_ms: Arc<AtomicI32>,
+    // f32 bits of the smoothed A/V drift (ms), see media_logic::sync::av_drift_ema_ms.
+    av_drift_ms: Arc<AtomicU32>,
     // "Buffer estilo YouTube" (ver rust/media-logic/src/buffer_gate.rs): DTS
     // (bits de f64, convertido em segundos) do ultimo pacote de video que a
     // thread de demux enfileirou com sucesso, publicado a cada pacote — DTS
@@ -337,7 +338,7 @@ impl PlaybackController {
             load_phase_demux_open_ms: Arc::new(AtomicU32::new(0)),
             load_phase_decoder_ready_ms: Arc::new(AtomicU32::new(0)),
             load_phase_audio_ready_ms: Arc::new(AtomicU32::new(0)),
-            av_drift_ms: Arc::new(AtomicI32::new(0)),
+            av_drift_ms: Arc::new(AtomicU32::new(0.0f32.to_bits())),
             last_enqueued_video_dts_bits: Arc::new(AtomicU64::new(0.0f64.to_bits())),
             video_bytes_queued: Arc::new(AtomicU64::new(0)),
             audio_bytes_queued: Arc::new(AtomicU64::new(0)),
@@ -971,12 +972,10 @@ impl PlaybackController {
                         let master_clock = sync_v.get_master_clock();
                         let inst_drift_ms = ((master_clock - pts_sec) * 1000.0)
                             .clamp(i32::MIN as f64, i32::MAX as f64);
-                        let prev_drift_ms = av_drift_v.load(Ordering::Relaxed) as f64;
-                        let smoothed_drift_ms = prev_drift_ms * 0.9 + inst_drift_ms * 0.1;
-                        av_drift_v.store(
-                            smoothed_drift_ms.clamp(i32::MIN as f64, i32::MAX as f64) as i32,
-                            Ordering::Relaxed,
-                        );
+                        let prev_drift_ms = f32::from_bits(av_drift_v.load(Ordering::Relaxed));
+                        let smoothed_drift_ms =
+                            media_logic::sync::av_drift_ema_ms(prev_drift_ms, inst_drift_ms);
+                        av_drift_v.store(smoothed_drift_ms.to_bits(), Ordering::Relaxed);
                     }
                 };
             }
@@ -1591,7 +1590,7 @@ impl PlaybackController {
     /// Debug (docs/DEBUGGING.md) — bytes recebidos da rede pelo
     /// PrefetchReader da fonte atual, soma cumulativa. 0 para arquivo local
     /// ou `http://` puro (sem PrefetchReader envolvido). O C++ amostra isto
-    /// ao longo do tempo e calcula MB/s, mesmo padrao de decFps.
+    /// ao longo do tempo e calcula MiB/s, mesmo padrao de decFps.
     pub fn get_network_bytes_read(&self) -> u64 {
         self.network_stats
             .as_ref()
@@ -1611,8 +1610,17 @@ impl PlaybackController {
             .unwrap_or(0.0)
     }
 
-    /// Debug (docs/DEBUGGING.md) — quantos blocos foram buscados no total
-    /// (sucesso ou erro) e quantos desses foram descartados por um seek real
+    /// Debug (docs/DEBUGGING.md) — link throughput of the last fetched block in MiB/s
+    /// (see PrefetchStats::last_block_mibs); 0 without a PrefetchReader.
+    pub fn get_network_last_block_mibs(&self) -> f32 {
+        self.network_stats
+            .as_ref()
+            .map(|s| s.last_block_mibs())
+            .unwrap_or(0.0)
+    }
+
+    /// Debug (docs/DEBUGGING.md) — quantos blocos foram buscados com sucesso
+    /// (falhas ficam em fetch_failures) e quantos desses foram descartados por um seek real
     /// antes de serem consumidos. Alto `discarded` relativo a `fetched`
     /// durante playback estavel (nao logo apos abrir o arquivo) indica
     /// acesso menos sequencial do que o esperado.
@@ -1674,9 +1682,9 @@ impl PlaybackController {
         self.load_phase_audio_ready_ms.load(Ordering::Relaxed)
     }
 
-    // Drift A/V (master_clock - video_pts) do ultimo frame decodificado, em ms.
+    // Smoothed A/V drift (master_clock - video_pts, EMA with α = 0.1) of released frames, in ms.
     pub fn get_last_av_drift_ms(&self) -> f32 {
-        self.av_drift_ms.load(Ordering::Relaxed) as f32
+        f32::from_bits(self.av_drift_ms.load(Ordering::Relaxed))
     }
 
     pub fn toggle_play_pause(&mut self) {

@@ -43,6 +43,7 @@ class DebugTelemetryExporterTest {
         refresh_rate	90.0
         av_drift_ms	12.5
         net_last_fetch_ms	8.0
+        net_block_mbs	9.75
         net_blocks_fetched	1240
         net_blocks_discarded	5
         foveation	1
@@ -155,55 +156,56 @@ class DebugTelemetryExporterTest {
         assertEquals("90.0", cols[32]) // refresh_rate
         assertEquals("12.5", cols[33]) // av_drift_ms
         assertEquals("8.0", cols[34]) // net_last_fetch_ms
-        assertEquals("1240", cols[35])
-        assertEquals("5", cols[36])
-        assertEquals("1", cols[37]) // foveation
-        assertEquals("2", cols[38]) // spatial_audio
-        assertEquals("1", cols[39]) // head_tracking
-        assertEquals("1.00", cols[40]) // speed
-        assertEquals("0.80", cols[41]) // volume
-        assertEquals("1", cols[42]) // audio_track
-        assertEquals("2", cols[43]) // audio_track_count
-        assertEquals("0", cols[44]) // sub_track
-        assertEquals("-100", cols[45]) // sub_offset_ms
-        assertEquals("MEDIUM", cols[46]) // quality_level
-        assertEquals("GpuOverload", cols[47]) // quality_reason
-        assertEquals("9", cols[48]) // draw_call_count
-        assertEquals("12000", cols[49]) // triangle_count
+        assertEquals("9.75", cols[35]) // net_block_mbs
+        assertEquals("1240", cols[36])
+        assertEquals("5", cols[37])
+        assertEquals("1", cols[38]) // foveation
+        assertEquals("2", cols[39]) // spatial_audio
+        assertEquals("1", cols[40]) // head_tracking
+        assertEquals("1.00", cols[41]) // speed
+        assertEquals("0.80", cols[42]) // volume
+        assertEquals("1", cols[43]) // audio_track
+        assertEquals("2", cols[44]) // audio_track_count
+        assertEquals("0", cols[45]) // sub_track
+        assertEquals("-100", cols[46]) // sub_offset_ms
+        assertEquals("MEDIUM", cols[47]) // quality_level
+        assertEquals("GpuOverload", cols[48]) // quality_reason
+        assertEquals("9", cols[49]) // draw_call_count
+        assertEquals("12000", cols[50]) // triangle_count
         // F1: tsvHud não emite video_stall_count/*_stats_age_ms — devem cair nos defaults.
-        assertEquals("0", cols[50]) // video_stall_count
-        assertEquals("0", cols[51]) // video_stats_age_ms
-        assertEquals("0", cols[52]) // network_stats_age_ms
-        assertEquals("0", cols[53]) // audio_stats_age_ms
-        assertEquals("0", cols[54]) // render_stats_age_ms
+        assertEquals("0", cols[51]) // video_stall_count
+        assertEquals("0", cols[52]) // video_stats_age_ms
+        assertEquals("0", cols[53]) // network_stats_age_ms
+        assertEquals("0", cols[54]) // audio_stats_age_ms
+        assertEquals("0", cols[55]) // render_stats_age_ms
         // F4: tsvHud não emite os 7 campos novos de coleta na origem — defaults.
-        assertEquals("0", cols[55]) // network_fetch_failures
-        assertEquals("0", cols[56]) // network_sequential_streak
-        assertEquals("0", cols[57]) // network_throttled
-        assertEquals("0", cols[58]) // audio_queue_depth
-        assertEquals("0", cols[59]) // decode_error_count
-        assertEquals("0", cols[60]) // demux_corrupt_packet_count
-        assertEquals("0", cols[61]) // audio_underrun_count
-        assertEquals("0", cols[62]) // load_phase_demux_open_ms
-        assertEquals("0", cols[63]) // load_phase_decoder_ready_ms
-        assertEquals("0", cols[64]) // load_phase_audio_ready_ms
+        assertEquals("0", cols[56]) // network_fetch_failures
+        assertEquals("0", cols[57]) // network_sequential_streak
+        assertEquals("0", cols[58]) // network_throttled
+        assertEquals("0", cols[59]) // audio_queue_depth
+        assertEquals("0", cols[60]) // decode_error_count
+        assertEquals("0", cols[61]) // demux_corrupt_packet_count
+        assertEquals("0", cols[62]) // audio_underrun_count
+        assertEquals("0", cols[63]) // load_phase_demux_open_ms
+        assertEquals("0", cols[64]) // load_phase_decoder_ready_ms
+        assertEquals("0", cols[65]) // load_phase_audio_ready_ms
         // F3: tsvHud não emite os campos de XR_META_performance_metrics — defaults.
-        assertEquals("0", cols[65]) // perf_metrics_valid_mask
-        assertEquals("0.00", cols[66]) // perf_app_cpu_frametime_ms
-        assertEquals("0.00", cols[67]) // perf_app_gpu_frametime_ms
-        assertEquals("0.00", cols[68]) // perf_motion_to_photon_latency_ms
-        assertEquals("0.00", cols[69]) // perf_compositor_cpu_frametime_ms
-        assertEquals("0.00", cols[70]) // perf_compositor_gpu_frametime_ms
-        assertEquals("0", cols[71]) // perf_compositor_dropped_frame_count
-        assertEquals("0", cols[72]) // perf_compositor_spacewarp_mode
-        assertEquals("0.00", cols[73]) // perf_device_cpu_util_average
-        assertEquals("0.00", cols[74]) // perf_device_cpu_util_worst
-        assertEquals("0.00", cols[75]) // perf_device_gpu_util
+        assertEquals("0", cols[66]) // perf_metrics_valid_mask
+        assertEquals("0.00", cols[67]) // perf_app_cpu_frametime_ms
+        assertEquals("0.00", cols[68]) // perf_app_gpu_frametime_ms
+        assertEquals("0.00", cols[69]) // perf_motion_to_photon_latency_ms
+        assertEquals("0.00", cols[70]) // perf_compositor_cpu_frametime_ms
+        assertEquals("0.00", cols[71]) // perf_compositor_gpu_frametime_ms
+        assertEquals("0", cols[72]) // perf_compositor_dropped_frame_count
+        assertEquals("0", cols[73]) // perf_compositor_spacewarp_mode
+        assertEquals("0.00", cols[74]) // perf_device_cpu_util_average
+        assertEquals("0.00", cols[75]) // perf_device_cpu_util_worst
+        assertEquals("0.00", cols[76]) // perf_device_gpu_util
         // F5 G2: tsvHud não emite os buckets de histograma — defaults.
-        for (i in 76..83) {
-            assertEquals("0", cols[i]) // hist_bucket_${i - 76}
+        for (i in 77..84) {
+            assertEquals("0", cols[i]) // hist_bucket_${i - 77}
         }
-        assertEquals("Sftp", cols[84])
+        assertEquals("Sftp", cols[85])
     }
 
     @Test
@@ -224,11 +226,11 @@ class DebugTelemetryExporterTest {
                 source = null,
             )
         val cols = row.split(',')
-        assertEquals("3", cols[50]) // video_stall_count
-        assertEquals("1200", cols[51]) // video_stats_age_ms
-        assertEquals("340", cols[52]) // network_stats_age_ms
-        assertEquals("0", cols[53]) // audio_stats_age_ms
-        assertEquals("0", cols[54]) // render_stats_age_ms
+        assertEquals("3", cols[51]) // video_stall_count
+        assertEquals("1200", cols[52]) // video_stats_age_ms
+        assertEquals("340", cols[53]) // network_stats_age_ms
+        assertEquals("0", cols[54]) // audio_stats_age_ms
+        assertEquals("0", cols[55]) // render_stats_age_ms
     }
 
     @Test
@@ -251,13 +253,13 @@ class DebugTelemetryExporterTest {
                 source = null,
             )
         val cols = row.split(',')
-        assertEquals("2", cols[55]) // network_fetch_failures
-        assertEquals("5", cols[56]) // network_sequential_streak
-        assertEquals("1", cols[57]) // network_throttled
-        assertEquals("40", cols[58]) // audio_queue_depth
-        assertEquals("1", cols[59]) // decode_error_count
-        assertEquals("7", cols[60]) // demux_corrupt_packet_count
-        assertEquals("9", cols[61]) // audio_underrun_count
+        assertEquals("2", cols[56]) // network_fetch_failures
+        assertEquals("5", cols[57]) // network_sequential_streak
+        assertEquals("1", cols[58]) // network_throttled
+        assertEquals("40", cols[59]) // audio_queue_depth
+        assertEquals("1", cols[60]) // decode_error_count
+        assertEquals("7", cols[61]) // demux_corrupt_packet_count
+        assertEquals("9", cols[62]) // audio_underrun_count
     }
 
     @Test
@@ -276,9 +278,9 @@ class DebugTelemetryExporterTest {
                 source = null,
             )
         val cols = row.split(',')
-        assertEquals("12", cols[62]) // load_phase_demux_open_ms
-        assertEquals("45", cols[63]) // load_phase_decoder_ready_ms
-        assertEquals("60", cols[64]) // load_phase_audio_ready_ms
+        assertEquals("12", cols[63]) // load_phase_demux_open_ms
+        assertEquals("45", cols[64]) // load_phase_decoder_ready_ms
+        assertEquals("60", cols[65]) // load_phase_audio_ready_ms
     }
 
     @Test
@@ -305,17 +307,17 @@ class DebugTelemetryExporterTest {
                 source = null,
             )
         val cols = row.split(',')
-        assertEquals("1023", cols[65]) // perf_metrics_valid_mask
-        assertEquals("3.10", cols[66]) // perf_app_cpu_frametime_ms
-        assertEquals("4.20", cols[67]) // perf_app_gpu_frametime_ms
-        assertEquals("18.50", cols[68]) // perf_motion_to_photon_latency_ms
-        assertEquals("2.00", cols[69]) // perf_compositor_cpu_frametime_ms
-        assertEquals("2.50", cols[70]) // perf_compositor_gpu_frametime_ms
-        assertEquals("3", cols[71]) // perf_compositor_dropped_frame_count
-        assertEquals("1", cols[72]) // perf_compositor_spacewarp_mode
-        assertEquals("45.00", cols[73]) // perf_device_cpu_util_average
-        assertEquals("80.00", cols[74]) // perf_device_cpu_util_worst
-        assertEquals("60.00", cols[75]) // perf_device_gpu_util
+        assertEquals("1023", cols[66]) // perf_metrics_valid_mask
+        assertEquals("3.10", cols[67]) // perf_app_cpu_frametime_ms
+        assertEquals("4.20", cols[68]) // perf_app_gpu_frametime_ms
+        assertEquals("18.50", cols[69]) // perf_motion_to_photon_latency_ms
+        assertEquals("2.00", cols[70]) // perf_compositor_cpu_frametime_ms
+        assertEquals("2.50", cols[71]) // perf_compositor_gpu_frametime_ms
+        assertEquals("3", cols[72]) // perf_compositor_dropped_frame_count
+        assertEquals("1", cols[73]) // perf_compositor_spacewarp_mode
+        assertEquals("45.00", cols[74]) // perf_device_cpu_util_average
+        assertEquals("80.00", cols[75]) // perf_device_cpu_util_worst
+        assertEquals("60.00", cols[76]) // perf_device_gpu_util
     }
 
     @Test
@@ -341,7 +343,7 @@ class DebugTelemetryExporterTest {
         val cols = row.split(',')
         val expected = listOf("100", "50", "20", "10", "5", "3", "2", "1")
         for (i in expected.indices) {
-            assertEquals(expected[i], cols[76 + i]) // hist_bucket_$i
+            assertEquals(expected[i], cols[77 + i]) // hist_bucket_$i
         }
     }
 
@@ -491,5 +493,14 @@ class DebugTelemetryExporterTest {
 
         assertTrue(row.contains("\"sess,1\""))
         assertTrue(row.contains("\"/sdcard/Movies/Title, with \"\"quotes\"\" and commas.mp4\""))
+    }
+
+    // #198: the CSV rows are built from the native wire, so the export alone must keep it streaming.
+    @Test
+    fun testNativeStatsStreamRunsWhenPanelOrExportIsOn() {
+        assertTrue(DebugTelemetryExporter.shouldStreamNativeStats(panelEnabled = false, exportEnabled = true))
+        assertTrue(DebugTelemetryExporter.shouldStreamNativeStats(panelEnabled = true, exportEnabled = false))
+        assertTrue(DebugTelemetryExporter.shouldStreamNativeStats(panelEnabled = true, exportEnabled = true))
+        assertFalse(DebugTelemetryExporter.shouldStreamNativeStats(panelEnabled = false, exportEnabled = false))
     }
 }

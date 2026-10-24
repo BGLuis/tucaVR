@@ -1183,6 +1183,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             stats.displayRefreshRate = state.displayRefreshRate;
             stats.avDriftMs = get_last_av_drift_ms();
             stats.netLastFetchMs = get_network_last_block_fetch_ms();
+            stats.netBlockMBs = get_network_last_block_mibs();
             stats.netBlocksFetched = get_network_blocks_fetched();
             stats.netBlocksDiscarded = get_network_blocks_discarded();
             stats.foveationEnabled = (int)get_foveation_enabled();
@@ -1226,7 +1227,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             stats.perfDeviceCpuUtilWorst = state.perfDeviceCpuUtilWorst;
             stats.perfDeviceGpuUtil = state.perfDeviceGpuUtil;
 
-            // F5 G2: histograma de frame time (contadores cumulativos desde o inicio da sessao).
+            // F5 G2: histograma de frame time (contadores cumulativos desde o inicio do video atual).
             stats.histBucket0 = state.frameTimeHistogram[0];
             stats.histBucket1 = state.frameTimeHistogram[1];
             stats.histBucket2 = state.frameTimeHistogram[2];

@@ -135,6 +135,7 @@ class FullDebugStatsView(
                 listOf(
                     "source" to R.string.debug_stats_label_source,
                     "net_speed" to R.string.debug_stats_label_network_speed,
+                    "net_link_speed" to R.string.debug_stats_label_network_link_speed,
                     "buffer_queue" to R.string.debug_stats_label_buffer_queue,
                     "presentation_pending" to R.string.debug_stats_label_presentation_pending,
                     "fetch_latency" to R.string.debug_stats_label_fetch_latency,
@@ -434,7 +435,8 @@ class FullDebugStatsView(
             }
         statViews["source"]?.text = srcText
 
-        setValue("net_speed", String.format(Locale.US, "%.2f MB/s", stats.netMBs), stats.networkStatsAgeMs)
+        setValue("net_speed", String.format(Locale.US, "%.2f MiB/s", stats.netMBs), stats.networkStatsAgeMs)
+        setValue("net_link_speed", String.format(Locale.US, "%.2f MiB/s", stats.netBlockMBs), stats.networkStatsAgeMs)
         setValue("buffer_queue", "${stats.queueDepth} pkts", stats.networkStatsAgeMs)
         setValue("presentation_pending", "${stats.presentationPending} frames", stats.networkStatsAgeMs)
         setValue("fetch_latency", String.format(Locale.US, "%.1f ms", stats.netLastFetchMs), stats.networkStatsAgeMs)

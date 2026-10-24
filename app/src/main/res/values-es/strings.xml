@@ -591,8 +591,8 @@
 
     <string name="debug_stats_section_charts">Gráficos</string>
     <string name="debug_stats_chart_g1_title">Etapa del pipeline (60s)</string>
-    <string name="debug_stats_chart_g2_title">Histograma de frame time (buckets: &lt;11,1/16,7/20/33,3/50/100/250/≥250ms)</string>
-    <string name="debug_stats_chart_g3_title">Salud del búfer (s) / Red (MB/s)</string>
+    <string name="debug_stats_chart_g2_title">Histograma de frame time (buckets: a tiempo/+1/+2 vsyncs, &lt;50/100/150/250/≥250ms)</string>
+    <string name="debug_stats_chart_g3_title">Salud del búfer (s) / Red (MiB/s)</string>
     <string name="debug_stats_chart_g4_title">Drift A/V (ms)</string>
     <string name="debug_stats_chart_g5_title">Tiempo de GPU vs. presupuesto (ms)</string>
 
@@ -607,6 +607,7 @@
 
     <string name="debug_stats_label_source">Origen / Protocolo</string>
     <string name="debug_stats_label_network_speed">Rendimiento de red</string>
+    <string name="debug_stats_label_network_link_speed">Rendimiento del enlace (último bloque)</string>
     <string name="debug_stats_label_buffer_queue">Cola de búfer</string>
     <string name="debug_stats_label_presentation_pending">Fotogramas pendientes de mostrar</string>
     <string name="debug_stats_label_fetch_latency">Latencia de bloque</string>

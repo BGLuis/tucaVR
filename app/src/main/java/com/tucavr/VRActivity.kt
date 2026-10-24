@@ -230,8 +230,17 @@ class VRActivity : NativeActivity() {
 
     fun setDebugStatsEnabled(enabled: Boolean) {
         isDebugStatsEnabled = enabled
-        nativeSetDebugStatsEnabled(enabled)
+        refreshNativeDebugStatsStream()
         controlsPresentation?.onDebugStatsFlagChanged(enabled)
+    }
+
+    fun refreshNativeDebugStatsStream() {
+        nativeSetDebugStatsEnabled(
+            DebugTelemetryExporter.shouldStreamNativeStats(
+                panelEnabled = isDebugStatsEnabled,
+                exportEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.DEBUG_STATS_EXPORT),
+            ),
+        )
     }
 
     var currentAudioTrackOrdinal: Int = 0
@@ -523,7 +532,7 @@ class VRActivity : NativeActivity() {
 
         // Painel de Estatísticas Técnicas / Stats for Nerds (ver docs/DEBUGGING.md)
         isDebugStatsEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.DEBUG_STATS_PANEL)
-        nativeSetDebugStatsEnabled(isDebugStatsEnabled)
+        refreshNativeDebugStatsStream()
 
         // Issue #100: Geometria dinâmica da superfície cilíndrica da UI e preferências de controle
         val fovDeg = FeatureFlags.getUiPanelFov(this)

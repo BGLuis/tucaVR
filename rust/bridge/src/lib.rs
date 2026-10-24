@@ -737,6 +737,8 @@ static LAST_VIDEO_QUEUE_DEPTH: AtomicU32 = AtomicU32::new(0);
 static LAST_VIDEO_PRESENTATION_PENDING: AtomicU32 = AtomicU32::new(0);
 static LAST_NETWORK_LAST_BLOCK_FETCH_MS: media_logic::session::AtomicF32 =
     media_logic::session::AtomicF32::new(0.0);
+static LAST_NETWORK_LAST_BLOCK_MIBS: media_logic::session::AtomicF32 =
+    media_logic::session::AtomicF32::new(0.0);
 static LAST_NETWORK_BLOCKS_FETCHED: AtomicU64 = AtomicU64::new(0);
 static LAST_NETWORK_BLOCKS_DISCARDED: AtomicU64 = AtomicU64::new(0);
 static LAST_NETWORK_FETCH_FAILURES: AtomicU64 = AtomicU64::new(0);
@@ -823,7 +825,7 @@ pub extern "C" fn get_video_is_hdr() -> u32 {
 
 /// Debug (docs/DEBUGGING.md): bytes recebidos da rede pelo PrefetchReader da
 /// fonte atual, soma cumulativa (0 para arquivo local/`http://` puro). O C++
-/// amostra isto ao longo do tempo e calcula MB/s, mesmo padrao de decFps.
+/// amostra isto ao longo do tempo e calcula MiB/s, mesmo padrao de decFps.
 #[no_mangle]
 pub extern "C" fn get_network_bytes_read() -> u64 {
     media_logic::session::try_sample_cached(&CONTROLLER, &LAST_NETWORK_BYTES, |controller| {
@@ -840,6 +842,17 @@ pub extern "C" fn get_network_last_block_fetch_ms() -> f32 {
         &CONTROLLER,
         &LAST_NETWORK_LAST_BLOCK_FETCH_MS,
         |controller| controller.get_network_last_block_fetch_ms(),
+    )
+}
+
+/// Debug (docs/DEBUGGING.md): link throughput of the last block fetched by the
+/// PrefetchReader, in MiB/s. Usa try_sample_cached para reter o ultimo valor sob contencao.
+#[no_mangle]
+pub extern "C" fn get_network_last_block_mibs() -> f32 {
+    media_logic::session::try_sample_cached(
+        &CONTROLLER,
+        &LAST_NETWORK_LAST_BLOCK_MIBS,
+        |controller| controller.get_network_last_block_mibs(),
     )
 }
 
@@ -976,7 +989,8 @@ pub extern "C" fn get_last_seek_latency_ms() -> u32 {
     })
 }
 
-/// Debug (docs/DEBUGGING.md): desvio A/V instantaneo (master_clock - video_pts), em ms.
+/// Debug (docs/DEBUGGING.md): smoothed A/V drift (master_clock - video_pts), an EMA with
+/// α = 0.1 over released video frames, in ms.
 #[no_mangle]
 pub extern "C" fn get_last_av_drift_ms() -> f32 {
     media_logic::session::try_sample_cached(&CONTROLLER, &LAST_AV_DRIFT_MS, |controller| {
@@ -2379,6 +2393,7 @@ pub extern "C" fn reset_process_state() {
     LAST_VIDEO_QUEUE_DEPTH.store(0, std::sync::atomic::Ordering::SeqCst);
     LAST_VIDEO_PRESENTATION_PENDING.store(0, std::sync::atomic::Ordering::SeqCst);
     LAST_NETWORK_LAST_BLOCK_FETCH_MS.store(0.0, std::sync::atomic::Ordering::SeqCst);
+    LAST_NETWORK_LAST_BLOCK_MIBS.store(0.0, std::sync::atomic::Ordering::SeqCst);
     LAST_NETWORK_BLOCKS_FETCHED.store(0, std::sync::atomic::Ordering::SeqCst);
     LAST_NETWORK_BLOCKS_DISCARDED.store(0, std::sync::atomic::Ordering::SeqCst);
     LAST_NETWORK_FETCH_FAILURES.store(0, std::sync::atomic::Ordering::SeqCst);
