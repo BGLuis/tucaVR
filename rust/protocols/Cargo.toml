@@ -15,7 +15,10 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time", "ma
 # libavformat bundled neste projeto nao tem suporte nativo a TLS (ver nota em
 # demuxer.rs). rustls em vez de openssl/native-tls: evita depender de uma lib
 # TLS nativa cross-compilada para Android.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+# Mozilla roots handed to reqwest (see `http::client_builder`), the same set
+# webpki-roots gave reqwest 0.12 through `rustls-tls`.
+webpki-root-certs = "1"
 log = "0.4"
 # Cliente FTP (T6.1) — puro Rust, API bloqueante nativa (nao precisa de
 # tokio::block_on como SMB/SFTP). Sem feature de TLS: FTP em si e sempre

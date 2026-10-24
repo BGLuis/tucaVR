@@ -12,7 +12,9 @@ mod common;
 
 use common::sha256_hex;
 use protocols::prefetch::RangeSource;
-use protocols::webdav::{WebdavFileSource, WebdavTarget, list_directory, scan_has_media};
+use protocols::webdav::{
+    WebdavFileSource, WebdavTarget, create_client, list_directory, scan_has_media,
+};
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
@@ -128,4 +130,31 @@ fn webdav_file_source_reads_full_file_with_small_blocks() {
 
     assert_eq!(collected.len(), total);
     assert_eq!(sha256_hex(&collected), expected_sha256());
+}
+
+// The WebDAV container has no TLS, so the self-signed https-test nginx stands in:
+// the check is the TLS handshake of `create_client`, not WebDAV itself.
+#[test]
+#[ignore]
+fn self_signed_certificate_is_refused_unless_accept_invalid_certs() {
+    let url = env_or(
+        "VRPLAYER_TEST_HTTPS_URL",
+        "https://127.0.0.1:18443/testfile.bin",
+    );
+    let mut tls_target = target("");
+    tls_target.use_https = true;
+
+    let strict = create_client(&tls_target).expect("strict client");
+    assert!(
+        strict.head(&url).send().is_err(),
+        "self-signed certificate should be refused by default"
+    );
+
+    tls_target.accept_invalid_certs = true;
+    let lenient = create_client(&tls_target).expect("lenient client");
+    let resp = lenient
+        .head(&url)
+        .send()
+        .expect("accept_invalid_certs should accept the self-signed certificate");
+    assert!(resp.status().is_success(), "status {}", resp.status());
 }

@@ -126,7 +126,7 @@ pub fn parse_device_description(xml: &str, location: &str) -> Result<DlnaDevice,
 
 /// Baixa e faz parse do Device Description XML a partir da URL LOCATION.
 pub fn fetch_device_description(location_url: &str) -> Result<DlnaDevice, String> {
-    let client = reqwest::blocking::Client::builder()
+    let client = crate::http::client_builder()
         .timeout(Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
