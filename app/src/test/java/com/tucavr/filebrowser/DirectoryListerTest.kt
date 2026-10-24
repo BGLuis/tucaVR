@@ -138,4 +138,14 @@ class DirectoryListerTest {
         assertEquals(MediaType.VIDEO, mediaTypeForExtension("MP4"))
         assertEquals(MediaType.AUDIO, mediaTypeForExtension("Mp3"))
     }
+
+    @Test
+    fun mediaTypeForExtensionRecognizesNewVideoContainersAndRejectsUnsupported() {
+        for (ext in listOf("m4v", "m2ts", "mts", "mk3d")) {
+            assertEquals(MediaType.VIDEO, mediaTypeForExtension(ext))
+        }
+        for (ext in listOf("vob", "asf")) {
+            assertNull(mediaTypeForExtension(ext))
+        }
+    }
 }
