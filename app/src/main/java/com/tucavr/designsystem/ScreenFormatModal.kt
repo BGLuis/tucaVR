@@ -31,6 +31,8 @@ class ScreenFormatModal(
     private val onToggleSwapEyes: () -> Boolean = { false },
     private val isMonoView: () -> Boolean = { false },
     private val onToggleMonoView: () -> Boolean = { false },
+    private var currentFisheyeFov: Int = 190,
+    private val onFisheyeFovSelected: (fov: Int) -> Unit = {},
     private val onModeSelected: (modeIndex: Int) -> Unit,
     private val onUseAutoDetection: () -> Unit,
     private val onDismiss: () -> Unit,
@@ -45,6 +47,7 @@ class ScreenFormatModal(
     private val tabPages = mutableListOf<View>()
     private val tabRow: VoidTabRow
     private val stereoSection: View
+    private val fisheyeSection: View
 
     init {
         layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
@@ -244,6 +247,86 @@ class ScreenFormatModal(
         panel.addView(stereoSection)
         stereoSection.visibility = if (ScreenFormatCatalog.isStereo(currentMode)) View.VISIBLE else View.GONE
 
+        // Seção de Ângulo Fisheye (180°, 190°, 200°, 220°)
+        val fisheyeControls =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        topMargin = VoidTheme.dpToPx(context, 12f)
+                    }
+                background =
+                    GradientDrawable().apply {
+                        setColor(VoidTheme.colorSurfaceAlt)
+                        cornerRadius = VoidTheme.dp(context, 12f)
+                        setStroke(VoidTheme.dpToPx(context, 1f), VoidTheme.colorBorder)
+                    }
+                val pad = VoidTheme.dpToPx(context, 12f)
+                setPadding(pad, pad, pad, pad)
+            }
+
+        val fisheyeTitle =
+            TextView(context).apply {
+                text = context.getString(R.string.format_fisheye_fov_label)
+                typeface = VoidTheme.typefaceTitle
+                textSize = 15f
+                setTextColor(VoidTheme.colorTextSecondary)
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 8f)
+                    }
+            }
+        fisheyeControls.addView(fisheyeTitle)
+
+        val fisheyeRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    )
+            }
+
+        val fovAngles = listOf(180, 190, 200, 220)
+        val fovButtons = mutableMapOf<Int, VoidButton>()
+
+        fovAngles.forEachIndexed { index, angle ->
+            val btn =
+                VoidButton(
+                    context,
+                    if (angle == currentFisheyeFov) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY,
+                ).apply {
+                    text = context.getString(R.string.format_fisheye_fov_value, angle)
+                    layoutParams =
+                        LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                            if (index > 0) leftMargin = VoidTheme.dpToPx(context, 4f)
+                            if (index < fovAngles.size - 1) rightMargin = VoidTheme.dpToPx(context, 4f)
+                        }
+                    setOnClickListener {
+                        currentFisheyeFov = angle
+                        fovButtons.forEach { (fov, b) ->
+                            b.style = if (fov == angle) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
+                        }
+                        onFisheyeFovSelected(angle)
+                    }
+                }
+            fovButtons[angle] = btn
+            fisheyeRow.addView(btn)
+        }
+        fisheyeControls.addView(fisheyeRow)
+
+        fisheyeSection = fisheyeControls
+        panel.addView(fisheyeSection)
+        fisheyeSection.visibility = if (currentMode == 15 || currentMode == 16) View.VISIBLE else View.GONE
+
         addView(panel)
 
         // Define aba inicial com base no modo ativo
@@ -407,6 +490,7 @@ class ScreenFormatModal(
             currentMode = entry.index
             updateCardsHighlight()
             stereoSection.visibility = if (ScreenFormatCatalog.isStereo(currentMode)) View.VISIBLE else View.GONE
+            fisheyeSection.visibility = if (currentMode == 15 || currentMode == 16) View.VISIBLE else View.GONE
             onModeSelected(entry.index)
         }
 

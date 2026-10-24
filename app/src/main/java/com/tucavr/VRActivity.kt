@@ -39,6 +39,7 @@ import com.tucavr.history.AppDatabase
 import com.tucavr.history.PlaybackHistoryTracker
 import com.tucavr.history.historyKey
 import com.tucavr.navigation.PlaybackSource
+import com.tucavr.network.FisheyeFovPreferenceStore
 import com.tucavr.network.Format3DPreferenceStore
 import com.tucavr.network.FtpCredentialStore
 import com.tucavr.network.LegacyCredentialMigrator
@@ -132,6 +133,7 @@ class VRActivity : NativeActivity() {
     val historyTracker: PlaybackHistoryTracker by lazy { PlaybackHistoryTracker(this) }
     val playlistQueueManager: PlaylistQueueManager by lazy { PlaylistQueueManager() }
     val format3dStore: Format3DPreferenceStore by lazy { Format3DPreferenceStore(this) }
+    val fisheyeFovStore: FisheyeFovPreferenceStore by lazy { FisheyeFovPreferenceStore(this) }
     val upscalingStore: UpscalingModeStore by lazy { UpscalingModeStore(this) }
     val thermalMonitor: ThermalMonitor by lazy { ThermalMonitor(this) }
     val screenTransformStore: ScreenTransformStore by lazy { ScreenTransformStore(this) }
@@ -1434,6 +1436,8 @@ class VRActivity : NativeActivity() {
     private fun applyFormat3dOverride(source: PlaybackSource) {
         val cached = format3dStore.get(source.historyKey())
         nativeSetScreenModeOverride(cached ?: -1)
+        val fov = fisheyeFovStore.get(source.historyKey())
+        nativeSetFisheyeFov(fov)
         applyPassthroughMaskForSource(source)
     }
 
@@ -1755,6 +1759,8 @@ class VRActivity : NativeActivity() {
     external fun nativeToggleMonoView(): Boolean
 
     external fun nativeGetMonoView(): Boolean
+
+    external fun nativeSetFisheyeFov(fov: Int)
 
     external fun nativeRequestUiPanelVisible()
 

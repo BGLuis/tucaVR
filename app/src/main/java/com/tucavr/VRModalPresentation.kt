@@ -192,6 +192,8 @@ class VRModalPresentation(
             val detectedMode = meta?.format3dIndex
             val confidence = meta?.detectionConfidence ?: 3
 
+            val currentFov = currentSource?.let { src -> activity.fisheyeFovStore.get(src.historyKey()) } ?: 190
+
             val modal =
                 ScreenFormatModal(
                     context = context,
@@ -202,6 +204,13 @@ class VRModalPresentation(
                     onToggleSwapEyes = { activity.nativeToggleSwapEyes() != 0 },
                     isMonoView = { activity.nativeGetMonoView() },
                     onToggleMonoView = { activity.nativeToggleMonoView() },
+                    currentFisheyeFov = currentFov,
+                    onFisheyeFovSelected = { fov ->
+                        activity.nativeSetFisheyeFov(fov)
+                        currentSource?.let { src ->
+                            activity.fisheyeFovStore.set(src.historyKey(), fov)
+                        }
+                    },
                     onModeSelected = { mode ->
                         activity.nativeSetScreenMode(mode)
                         currentSource?.let { src ->

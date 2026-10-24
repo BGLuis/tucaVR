@@ -590,6 +590,11 @@ Java_com_tucavr_VRActivity_nativeGetMonoView(JNIEnv* env, jobject thiz) {
     return (jboolean)(get_mono_view() != 0);
 }
 
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetFisheyeFov(JNIEnv* env, jobject thiz, jint fov) {
+    // No-op in frozen GLES fallback backend
+}
+
 // Bug de auto-hide durante digitacao — ver KEYBOARD_ACTIVE em
 // rust/bridge/src/lib.rs. Chamado por VRActivity.showNativeKeyboardFor/
 // hideNativeKeyboard exatamente quando o teclado nativo abre/fecha.

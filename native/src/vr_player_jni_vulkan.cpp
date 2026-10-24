@@ -55,6 +55,7 @@ extern "C" {
     extern uint32_t get_swap_eyes();
     extern uint32_t toggle_mono_view();
     extern uint32_t get_mono_view();
+    extern void set_fisheye_fov(int fov);
     extern void set_keyboard_active(int active);
     // Fase 0.4 T5: Foveated Rendering (implementacao real em
     // vr_player_app_vulkan.cpp, ver ApplyFoveation).
@@ -602,6 +603,11 @@ Java_com_tucavr_VRActivity_nativeToggleMonoView(JNIEnv*, jobject) {
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_tucavr_VRActivity_nativeGetMonoView(JNIEnv*, jobject) {
     return (jboolean)(get_mono_view() != 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetFisheyeFov(JNIEnv*, jobject, jint fov) {
+    set_fisheye_fov(static_cast<int>(fov));
 }
 
 extern "C" JNIEXPORT void JNICALL

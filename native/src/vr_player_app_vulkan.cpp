@@ -59,6 +59,7 @@
 #include "panel_pick.h"
 #include "frame_time_histogram.h"
 #include "hand_tracking.h"
+#include "polar_mode.h"
 #include "screen_mode.h"
 #include "vr_player_feedback_overlay.h"
 #include "debug_stats.h"
@@ -394,6 +395,15 @@ std::atomic<float> g_uiCylinderCentralAngle{vrplayer::kUiCylinderCentralAngle};
 std::atomic<bool> g_byButtonAsBack{true};
 std::atomic<bool> g_hoverHapticsEnabled{true};
 
+// Fisheye lens field of view setting (#214)
+std::atomic<int> g_fisheyeFovDegrees{DEFAULT_FISHEYE_FOV_DEGREES};
+
+extern "C" void set_fisheye_fov(int fov) {
+    if (fov == 180 || fov == 190 || fov == 200 || fov == 220) {
+        g_fisheyeFovDegrees.store(fov, std::memory_order_relaxed);
+    }
+}
+
 // Fase 0.3 Seção 8: Fotos 360° e 3D estéreo (T8.3, T8.4)
 std::atomic<bool> g_photoDirty{false};
 std::atomic<bool> g_photoActive{false};
@@ -439,6 +449,7 @@ void ResetGlobalState() {
     g_photoZoom.store(1.0f);
     g_photoPanX.store(0.0f);
     g_photoPanY.store(0.0f);
+    g_fisheyeFovDegrees.store(DEFAULT_FISHEYE_FOV_DEGREES);
 }
 
 namespace {
@@ -501,12 +512,17 @@ struct StereoParams {
     int projectionType = 0; // 0=Standard Cubemap, 1=EAC
 };
 
+int get_fisheye_fov() {
+    return g_fisheyeFovDegrees.load(std::memory_order_relaxed);
+}
+
 StereoParams GetStereoParams(ScreenMode mode, int eye) {
     StereoParams p;
     p.eyeIndex   = eye;
     p.swapEyes   = (int)(get_swap_eyes() != 0);
-    p.polar180   = (mode == ScreenMode::Sphere180 || mode == ScreenMode::Vr180SBS) ? 1 :
-                   (mode == ScreenMode::Fisheye190 || mode == ScreenMode::Fisheye190SBS) ? 2 : 0;
+    int rawPolarMode = (mode == ScreenMode::Sphere180 || mode == ScreenMode::Vr180SBS) ? 1 :
+                       (mode == ScreenMode::Fisheye190 || mode == ScreenMode::Fisheye190SBS) ? 2 : 0;
+    p.polar180   = (rawPolarMode == 2) ? EncodePolar180(2, get_fisheye_fov()) : EncodePolar180(rawPolarMode);
     switch (mode) {
         case ScreenMode::SBS:
         case ScreenMode::SBSHalf:
@@ -1486,6 +1502,7 @@ struct StereoPushConstants {
     float chromaSmoothness;
     float colorTemperature;
 };
+static_assert(sizeof(StereoPushConstants) == 128, "StereoPushConstants must be 128 bytes");
 
 struct BeamPushConstants {
     Mat4  mvp;
@@ -8380,7 +8397,7 @@ void RenderFrame(AppState& state) {
             if (newMode != state.screenMode) {
                 StereoParams spLog = GetStereoParams(newMode, 0);
                 LOGI("Video: ScreenMode -> %s (stereoLayout=%d, polar180=%d, swapEyes=%d, cubemapLayout=%d, projectionType=%d)",
-                    ScreenModeName(newMode), spLog.stereoLayout, spLog.polar180, spLog.swapEyes, spLog.cubemapLayout, spLog.projectionType);
+                    ScreenModeName(newMode), spLog.stereoLayout, spLog.polar180 & 0xFF, spLog.swapEyes, spLog.cubemapLayout, spLog.projectionType);
             }
             state.screenMode = newMode;
         }
