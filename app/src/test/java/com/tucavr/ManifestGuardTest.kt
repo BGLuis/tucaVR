@@ -6,6 +6,11 @@ import java.io.File
 
 /**
  * Sub-issue #215: Guard against unintended Android permissions and proprietary analytics dependencies.
+ *
+ * Scope note: This guard parses the source `src/main/AndroidManifest.xml` only. Permissions merged in
+ * from library AARs (e.g. GeckoView) during manifest merging are outside this test's scope and would
+ * need to be verified against `processDebugMainManifest` outputs if audited later.
+ *
  * Fails if:
  * 1. An AndroidManifest.xml permission or feature is added without being recorded in permissions.txt.
  * 2. An entry in permissions.txt is stale (no longer present in AndroidManifest.xml).
