@@ -93,4 +93,28 @@ class ScreenFormatCatalogTest {
             assertEquals("O índice do modo $modeKey deve ser exatamente $expectedIndex", expectedIndex, entry.index)
         }
     }
+
+    @Test
+    fun testIsStereo() {
+        val stereoModes = setOf(1, 2, 3, 4, 7, 8, 9, 13, 14, 16)
+        (0..16).forEach { mode ->
+            assertEquals(
+                "Mode $mode stereo expectation mismatch",
+                stereoModes.contains(mode),
+                ScreenFormatCatalog.isStereo(mode),
+            )
+        }
+    }
+
+    @Test
+    fun testIsFisheye() {
+        val fisheyeModes = setOf(15, 16)
+        (0..16).forEach { mode ->
+            assertEquals(
+                "Mode $mode fisheye expectation mismatch",
+                fisheyeModes.contains(mode),
+                ScreenFormatCatalog.isFisheye(mode),
+            )
+        }
+    }
 }

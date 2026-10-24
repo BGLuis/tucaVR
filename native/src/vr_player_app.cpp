@@ -225,6 +225,8 @@ extern "C" {
     extern void set_screen_mode_override(int32_t mode);
     extern uint32_t toggle_swap_eyes();
     extern uint32_t get_swap_eyes();
+    extern uint32_t toggle_mono_view();
+    extern uint32_t get_mono_view();
 
     // Bug de auto-hide durante digitacao no teclado nativo — ver comentario
     // completo em rust/bridge/src/lib.rs junto de KEYBOARD_ACTIVE.
@@ -571,6 +573,26 @@ Java_com_tucavr_VRActivity_nativeSetScreenModeOverride(JNIEnv* env, jobject thiz
 extern "C" JNIEXPORT jint JNICALL
 Java_com_tucavr_VRActivity_nativeToggleSwapEyes(JNIEnv* env, jobject thiz) {
     return (jint)toggle_swap_eyes();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetSwapEyes(JNIEnv* env, jobject thiz) {
+    return (jboolean)(get_swap_eyes() != 0);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeToggleMonoView(JNIEnv* env, jobject thiz) {
+    return (jboolean)(toggle_mono_view() != 0);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetMonoView(JNIEnv* env, jobject thiz) {
+    return (jboolean)(get_mono_view() != 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetFisheyeFov(JNIEnv* env, jobject thiz, jint fov) {
+    // No-op in frozen GLES fallback backend
 }
 
 // Bug de auto-hide durante digitacao — ver KEYBOARD_ACTIVE em

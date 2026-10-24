@@ -155,74 +155,77 @@ vec3 ApplySGSR1(vec2 uv, float sharpness, vec2 texelSize) {
 void main() {
     vec2 uv = vTexCoord;
 
-    // Inversao de olho se requisitada (swapEyes)
+    // Eye swap if requested (swapEyes)
     int eye = (vSwapEyes != 0) ? (1 - vEye) : vEye;
 
-    // Mapeamento hemisferio frontal 180 graus (T6.4) ou Fisheye 190 graus:
-    // A malha da esfera mapeia U de 0 a 1 em torno de 360 graus.
-    // Para video 180 (polar180 == 1), o conteudo util esta no
-    // hemisferio frontal [-90, +90], que corresponde a U em [0.25, 0.75].
-    // Reescalamos U para que [0.25, 0.75] cubra toda a faixa [0, 1] do frame.
-    // Pixels fora do hemisferio frontal ficam 100% transparentes (alpha 0)
-    // para revelar o Passthrough (mundo real) atras do usuario.
+    // Front hemisphere 180° mapping (T6.4) or Fisheye (180°, 190°, 200°, 220°):
+    // The sphere mesh maps U from 0 to 1 around 360 degrees.
+    // For 180 video (polarMode == 1), useful content is in the
+    // front hemisphere [-90, +90], corresponding to U in [0.25, 0.75].
+    // Rescale U so [0.25, 0.75] covers the full [0, 1] range of the frame.
+    // Pixels outside the front hemisphere are 100% transparent (alpha 0)
+    // to reveal Passthrough (real world) behind the user.
+    int polarMode = vPolar180 & 0xFF;
+    int rawFov = (vPolar180 >> 8) & 0xFFFF;
     float hemisphereAlpha = 1.0;
-    if (vPolar180 == 1) {
+    if (polarMode == 1) {
         if (uv.x < 0.25 || uv.x > 0.75) {
             outColor = vec4(0.0, 0.0, 0.0, 0.0);
             return;
         }
-        // Suavizacao (feathering) de ~5 graus na borda de 180 graus
+        // Feathering (~5 degrees) on 180-degree edge
         const float feather = 0.02;
         float edgeL = smoothstep(0.25, 0.25 + feather, uv.x);
         float edgeR = smoothstep(0.75, 0.75 - feather, uv.x);
         hemisphereAlpha = min(edgeL, edgeR);
 
         uv.x = (uv.x - 0.25) * 2.0;
-    } else if (vPolar180 == 2) {
-        // Projeção Fisheye 190° (equidistante f-theta com FOV total de 190° / semi-FOV 95°)
+    } else if (polarMode == 2) {
+        // Fisheye projection (equidistant f-theta with configurable FOV: 180°, 190°, 200°, 220°)
         const float PI = 3.141592653589793;
         float theta = 2.0 * PI * (vTexCoord.x - 0.5);
         float phi   = PI * vTexCoord.y;
         float sinPhi = sin(phi);
         vec3 dir = vec3(sinPhi * sin(theta), cos(phi), -sinPhi * cos(theta));
 
-        // Ângulo óptico a partir do eixo frontal (-Z)
+        // Optical angle from the forward axis (-Z)
         float cosPsi = clamp(-dir.z, -1.0, 1.0);
         float psi = acos(cosPsi);
-        const float kMaxHalfFov = 190.0 * PI / 360.0; // 95 graus em radianos (~1.65806 rad)
+        float fisheyeFov = (rawFov == 0) ? 190.0 : float(rawFov);
+        float kMaxHalfFov = fisheyeFov * PI / 360.0;
 
         if (psi > kMaxHalfFov) {
             outColor = vec4(0.0, 0.0, 0.0, 0.0);
             return;
         }
 
-        // Suavizacao de borda na margem externa de 190° (feathering de ~3 graus)
+        // Edge feathering on the outer margin (~3 degrees feather)
         const float kFeatherAngle = 3.0 * PI / 180.0;
         hemisphereAlpha = smoothstep(kMaxHalfFov, kMaxHalfFov - kFeatherAngle, psi);
 
-        // Projeção azimutal equidistante: r = psi / kMaxHalfFov
+        // Equidistant azimuthal projection: r = psi / kMaxHalfFov
         float rho = length(dir.xy);
         vec2 planeDir = (rho > 1e-6) ? (dir.xy / rho) : vec2(0.0, 0.0);
-        float rNorm = psi / kMaxHalfFov; // 0.0 no centro óptico até 1.0 na borda do círculo de 190°
+        float rNorm = psi / kMaxHalfFov; // 0.0 at optical center up to 1.0 at circle edge
 
-        // Coordenadas UV locais no círculo fisheye do olho [0, 1] x [0, 1]
+        // Local UV coordinates in eye fisheye circle [0, 1] x [0, 1]
         uv = vec2(0.5 + 0.5 * rNorm * planeDir.x, 0.5 - 0.5 * rNorm * planeDir.y);
     }
 
-    // Coordenadas UV locais do olho antes do recorte estéreo para desempacotamento de máscara
+    // Local eye UV coordinates before stereo crop for mask unpacking
     vec2 eyeLocalUv = clamp(uv, 0.0, 1.0);
 
-    // Recorte estereo por olho
+    // Per-eye stereo crop
     if (vStereoLayout == 2) {
-        // OU: recorta em Y — olho esquerdo = metade superior
+        // OU: crop in Y — left eye = top half
         uv.y = uv.y * 0.5 + float(eye) * 0.5;
     } else if (vStereoLayout == 1) {
-        // SBS: recorta em X — olho esquerdo = metade esquerda
+        // SBS: crop in X — left eye = left half
         uv.x = uv.x * 0.5 + float(eye) * 0.5;
     }
 
-    // vPolar180 != 0: pula SGSR1 perto do `return` de recorte acima (derivada de LOD diverge, tela preta no Adreno).
-    vec3 color = (vSharpness <= 0.01 || vTexelSize.x <= 0.0 || vTexelSize.y <= 0.0 || vPolar180 != 0)
+    // polarMode != 0: skip SGSR1 near crop return above (LOD derivative diverges, black screen on Adreno).
+    vec3 color = (vSharpness <= 0.01 || vTexelSize.x <= 0.0 || vTexelSize.y <= 0.0 || polarMode != 0)
         ? texture(videoTexture, uv).rgb
         : ApplySGSR1(uv, vSharpness, vTexelSize);
     if (vIsHdr != 0) {
@@ -230,7 +233,7 @@ void main() {
     }
 
     if (vColorTemperature < 0.0) {
-        // Night Mode: reduz luz azul (~3000K)
+        // Night Mode: reduce blue light (~3000K)
         color = ApplyColorTemperature(color, 3000.0);
     } else if (abs(vColorTemperature - 6500.0) > 1.0 && vColorTemperature > 1000.0) {
         color = ApplyColorTemperature(color, vColorTemperature);

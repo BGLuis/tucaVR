@@ -12,10 +12,13 @@ class MediaFilterEngineTest {
         assertEquals(Format3DType.SBS, MediaFilterEngine.detectFormat3DFromFilename("movie.half-sbs.mp4"))
         assertEquals(Format3DType.SBS, MediaFilterEngine.detectFormat3DFromFilename("clip.hsbs.mp4"))
         assertEquals(Format3DType.SBS, MediaFilterEngine.detectFormat3DFromFilename("travel_side-by-side.mp4"))
+        assertEquals(Format3DType.SBS, MediaFilterEngine.detectFormat3DFromFilename("Film.fsbs.mkv"))
 
         assertEquals(Format3DType.OU, MediaFilterEngine.detectFormat3DFromFilename("Dune.3D-OU.mkv"))
         assertEquals(Format3DType.OU, MediaFilterEngine.detectFormat3DFromFilename("concert.top-bottom.mp4"))
         assertEquals(Format3DType.OU, MediaFilterEngine.detectFormat3DFromFilename("video.half-ou.mp4"))
+        assertEquals(Format3DType.OU, MediaFilterEngine.detectFormat3DFromFilename("Film.fou.mkv"))
+        assertEquals(Format3DType.OU, MediaFilterEngine.detectFormat3DFromFilename("Film.TB.mkv"))
 
         assertEquals(Format3DType.VR_180, MediaFilterEngine.detectFormat3DFromFilename("rollercoaster_180_sbs.mp4"))
         assertEquals(Format3DType.VR_180, MediaFilterEngine.detectFormat3DFromFilename("space_vr180.mp4"))

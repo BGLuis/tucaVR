@@ -177,6 +177,7 @@ jobs:
             native/tests/*.cpp \
             native/include/vk_math.h \
             native/include/screen_mode.h \
+            native/include/polar_mode.h \
             native/include/subtitle_layout.h \
             native/include/hand_tracking.h \
             native/include/environment_config.h \

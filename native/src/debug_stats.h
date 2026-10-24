@@ -222,7 +222,7 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         s.backend ? s.backend : "UNKNOWN",
         s.screenMode ? s.screenMode : "Flat2D",
         s.stereoLayout,
-        s.polar180,
+        s.polar180 & 0xFF,
         s.swapEyes,
         s.hasActiveFrame,
         s.msSinceLastVideoFrame,

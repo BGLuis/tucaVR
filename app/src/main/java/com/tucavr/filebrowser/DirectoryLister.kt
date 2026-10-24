@@ -7,6 +7,7 @@ import java.io.File
 val VIDEO_EXTENSIONS =
     setOf(
         "mp4", "mkv", "avi", "mov", "webm", "flv", "ts", "m3u8", "mpd", "3gp", "wmv", "mpg", "mpeg",
+        "m4v", "m2ts", "mts", "mk3d",
     )
 
 val AUDIO_EXTENSIONS =

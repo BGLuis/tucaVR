@@ -21,6 +21,7 @@ import com.tucavr.designsystem.SubtitleTrackItem
 import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.history.PlaybackHistory
 import com.tucavr.history.historyKey
+import com.tucavr.network.FisheyeFovPreferenceStore
 import com.tucavr.screens.ScreenFormatCatalog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -191,6 +192,9 @@ class VRModalPresentation(
                 }
             val detectedMode = meta?.format3dIndex
             val confidence = meta?.detectionConfidence ?: 3
+            val currentFov =
+                currentSource?.let { src -> activity.fisheyeFovStore.get(src.historyKey()) }
+                    ?: FisheyeFovPreferenceStore.DEFAULT_FOV
 
             val modal =
                 ScreenFormatModal(
@@ -198,6 +202,17 @@ class VRModalPresentation(
                     currentMode = currentMode,
                     detectedMode = detectedMode,
                     detectionConfidence = confidence,
+                    isSwapEyes = { activity.nativeGetSwapEyes() },
+                    onToggleSwapEyes = { activity.nativeToggleSwapEyes() != 0 },
+                    isMonoView = { activity.nativeGetMonoView() },
+                    onToggleMonoView = { activity.nativeToggleMonoView() },
+                    currentFisheyeFov = currentFov,
+                    onFisheyeFovSelected = { fov ->
+                        activity.nativeSetFisheyeFov(fov)
+                        currentSource?.let { src ->
+                            activity.fisheyeFovStore.set(src.historyKey(), fov)
+                        }
+                    },
                     onModeSelected = { mode ->
                         activity.nativeSetScreenMode(mode)
                         currentSource?.let { src ->
