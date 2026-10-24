@@ -204,7 +204,7 @@ checksum = "144e573728da132683b9488acd528274c790e07fc06ff81ee29f9d8f8b1041e0"
 dependencies = [
  "blowfish",
  "pbkdf2",
- "sha2 0.11.1",
+ "sha2",
 ]
 
 [[package]]
@@ -790,7 +790,7 @@ dependencies = [
  "ed25519",
  "rand_core",
  "serde",
- "sha2 0.11.1",
+ "sha2",
  "signature",
  "subtle",
  "zeroize",
@@ -2047,7 +2047,7 @@ dependencies = [
  "elliptic-curve",
  "primefield",
  "primeorder",
- "sha2 0.11.1",
+ "sha2",
 ]
 
 [[package]]
@@ -2061,7 +2061,7 @@ dependencies = [
  "fiat-crypto",
  "primefield",
  "primeorder",
- "sha2 0.11.1",
+ "sha2",
 ]
 
 [[package]]
@@ -2075,7 +2075,7 @@ dependencies = [
  "elliptic-curve",
  "primefield",
  "primeorder",
- "sha2 0.11.1",
+ "sha2",
 ]
 
 [[package]]
@@ -2091,7 +2091,7 @@ dependencies = [
  "futures",
  "log",
  "rand",
- "sha2 0.11.1",
+ "sha2",
  "thiserror 2.0.21",
  "tokio",
  "windows",
@@ -2209,7 +2209,7 @@ dependencies = [
  "pbkdf2",
  "rand_core",
  "scrypt",
- "sha2 0.11.1",
+ "sha2",
  "spki",
 ]
 
@@ -2325,7 +2325,7 @@ dependencies = [
  "reqwest",
  "russh",
  "russh-sftp",
- "sha2 0.10.9",
+ "sha2",
  "smb2",
  "suppaftp",
  "tokio",
@@ -2558,7 +2558,7 @@ dependencies = [
  "pkcs1",
  "pkcs8",
  "rand_core",
- "sha2 0.11.1",
+ "sha2",
  "signature",
  "spki",
  "zeroize",
@@ -2621,7 +2621,7 @@ dependencies = [
  "scrypt",
  "sec1",
  "sha1 0.11.0",
- "sha2 0.11.1",
+ "sha2",
  "sha3",
  "signature",
  "spki",
@@ -2775,7 +2775,7 @@ dependencies = [
  "cfg-if",
  "pbkdf2",
  "salsa20",
- "sha2 0.11.1",
+ "sha2",
 ]
 
 [[package]]
@@ -2907,17 +2907,6 @@ dependencies = [
 
 [[package]]
 name = "sha2"
-version = "0.10.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
-dependencies = [
- "cfg-if",
- "cpufeatures 0.2.17",
- "digest 0.10.7",
-]
-
-[[package]]
-name = "sha2"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "47d7069beb7d6ac7b9acd1039986e73443f24234f41074da099d6f994ac9ad19"
@@ -3028,7 +3017,7 @@ dependencies = [
  "num_enum",
  "pbkdf2",
  "sha1 0.11.0",
- "sha2 0.11.1",
+ "sha2",
  "thiserror 2.0.21",
  "tokio",
 ]
@@ -3131,7 +3120,7 @@ dependencies = [
  "rsa",
  "sec1",
  "sha1 0.11.0",
- "sha2 0.11.1",
+ "sha2",
  "signature",
  "ssh-cipher",
  "ssh-encoding",

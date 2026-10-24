@@ -9,9 +9,11 @@
 //! `./scripts/test-network-protocols.sh` na raiz do repo, que sobe os containers,
 //! exporta as env vars abaixo com os valores corretos e roda
 //! `cargo test -p protocols -- --ignored`.
+mod common;
+
+use common::sha256_hex;
 use protocols::ftp::{FtpFileSource, FtpTarget, list_directory, scan_has_media};
 use protocols::prefetch::PrefetchReader;
-use sha2::{Digest, Sha256};
 use std::io::Read;
 
 fn env_or(key: &str, default: &str) -> String {
@@ -38,12 +40,6 @@ fn expected_sha256() -> String {
     std::env::var("VRPLAYER_TEST_FILE_SHA256").expect(
         "VRPLAYER_TEST_FILE_SHA256 nao definido — rode via scripts/test-network-protocols.sh",
     )
-}
-
-fn sha256_hex(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    format!("{:x}", hasher.finalize())
 }
 
 /// Autenticacao + listagem via modo passivo (T6.1/T6.4) — tambem cobre o

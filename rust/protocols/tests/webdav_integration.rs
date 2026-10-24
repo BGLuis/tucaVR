@@ -8,9 +8,11 @@
 //! `#[ignore]` — depende do ambiente Docker. Use `./scripts/test-network-protocols.sh`
 //! na raiz do repo, que sobe os containers, exporta as env vars abaixo e roda
 //! `cargo test -p protocols -- --ignored`.
+mod common;
+
+use common::sha256_hex;
 use protocols::prefetch::RangeSource;
 use protocols::webdav::{WebdavFileSource, WebdavTarget, list_directory, scan_has_media};
-use sha2::{Digest, Sha256};
 
 fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
@@ -38,12 +40,6 @@ fn test_file_name() -> String {
 fn expected_sha256() -> String {
     std::env::var("VRPLAYER_TEST_WEBDAV_FILE_SHA256")
         .expect("VRPLAYER_TEST_WEBDAV_FILE_SHA256 nao definido — rode via scripts/test-network-protocols.sh")
-}
-
-fn sha256_hex(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    format!("{:x}", hasher.finalize())
 }
 
 /// PROPFIND (Depth: 1) contra o Apache/mod_dav real — cobre o parser de multistatus XML
