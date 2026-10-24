@@ -486,6 +486,8 @@
     <string name="player_mode_fisheye_190_mono">Fisheye 190°</string>
     <string name="player_mode_fisheye_190_sbs">Fisheye 190° 3D (SBS)</string>
     <string name="player_btn_swap_eyes">Swap eyes</string>
+    <string name="player_btn_2d_view">2D view</string>
+    <string name="format_section_3d">3D View</string>
     <string name="player_btn_recenter">Recenter</string>
 
     <!-- Screen Format Selector (ScreenFormatModal - T3.4) -->

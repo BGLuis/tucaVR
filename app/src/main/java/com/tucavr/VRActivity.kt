@@ -1750,6 +1750,12 @@ class VRActivity : NativeActivity() {
 
     external fun nativeToggleSwapEyes(): Int
 
+    external fun nativeGetSwapEyes(): Boolean
+
+    external fun nativeToggleMonoView(): Boolean
+
+    external fun nativeGetMonoView(): Boolean
+
     external fun nativeRequestUiPanelVisible()
 
     external fun nativeRequestUiPanelHidden()

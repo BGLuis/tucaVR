@@ -206,6 +206,7 @@ pub extern "C" fn get_audio_thread_tid() -> i32 {
 static SCREEN_MODE: AtomicU32 = AtomicU32::new(0);
 const SCREEN_MODE_COUNT: u32 = 17;
 static SWAP_EYES: AtomicBool = AtomicBool::new(false);
+static MONO_VIEW: AtomicBool = AtomicBool::new(false);
 
 // Bug reportado em validacao real de headset: o painel "Adicionar servidor"
 // (e qualquer outro com EditText) ficava transparente durante a digitacao,
@@ -698,6 +699,18 @@ pub extern "C" fn toggle_swap_eyes() -> u32 {
 #[no_mangle]
 pub extern "C" fn get_swap_eyes() -> u32 {
     SWAP_EYES.load(Ordering::Relaxed) as u32
+}
+
+#[no_mangle]
+pub extern "C" fn toggle_mono_view() -> u32 {
+    let next = !MONO_VIEW.load(Ordering::Relaxed);
+    MONO_VIEW.store(next, Ordering::Relaxed);
+    next as u32
+}
+
+#[no_mangle]
+pub extern "C" fn get_mono_view() -> u32 {
+    MONO_VIEW.load(Ordering::Relaxed) as u32
 }
 
 #[no_mangle]
@@ -2384,6 +2397,7 @@ pub extern "C" fn reset_process_state() {
     FEEDBACK_EVENT.store(0, std::sync::atomic::Ordering::SeqCst);
     SCREEN_MODE.store(0, std::sync::atomic::Ordering::SeqCst);
     SWAP_EYES.store(false, std::sync::atomic::Ordering::SeqCst);
+    MONO_VIEW.store(false, std::sync::atomic::Ordering::SeqCst);
     KEYBOARD_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
     SCREEN_MODE_OVERRIDE.store(u32::MAX, std::sync::atomic::Ordering::SeqCst);
     LAST_FRAMES_DECODED.store(0, std::sync::atomic::Ordering::SeqCst);

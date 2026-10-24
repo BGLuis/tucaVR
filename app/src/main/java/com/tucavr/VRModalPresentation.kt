@@ -198,6 +198,10 @@ class VRModalPresentation(
                     currentMode = currentMode,
                     detectedMode = detectedMode,
                     detectionConfidence = confidence,
+                    isSwapEyes = { activity.nativeGetSwapEyes() },
+                    onToggleSwapEyes = { activity.nativeToggleSwapEyes() != 0 },
+                    isMonoView = { activity.nativeGetMonoView() },
+                    onToggleMonoView = { activity.nativeToggleMonoView() },
                     onModeSelected = { mode ->
                         activity.nativeSetScreenMode(mode)
                         currentSource?.let { src ->

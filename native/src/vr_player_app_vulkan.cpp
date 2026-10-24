@@ -197,6 +197,7 @@ extern "C" {
     extern void get_video_progress(float* current, float* total);
     extern uint32_t get_3d_mode();
     extern uint32_t get_swap_eyes();
+    extern uint32_t get_mono_view();
     // Fase 0.4 T5: Foveated Rendering — ver ApplyFoveation abaixo.
     extern uint32_t get_foveation_enabled();
     extern uint32_t get_foveation_mode();
@@ -547,6 +548,10 @@ StereoParams GetStereoParams(ScreenMode mode, int eye) {
         default:
             p.stereoLayout = 0;
             break;
+    }
+    if (get_mono_view() != 0 && p.stereoLayout != 0) {
+        p.eyeIndex = 0;
+        p.swapEyes = 0;
     }
     return p;
 }
