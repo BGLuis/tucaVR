@@ -89,4 +89,10 @@ object ScreenFormatCatalog {
      * Sphere360OU (8), Vr180SBS (9), Cubemap3x2SBS (13), EAC3x2SBS (14), Fisheye190SBS (16).
      */
     fun isStereo(index: Int): Boolean = index in setOf(1, 2, 3, 4, 7, 8, 9, 13, 14, 16)
+
+    /**
+     * Indica se o modo possui projeção fisheye (Fisheye190 mono ou Fisheye190 SBS).
+     * Modos: Fisheye190 (15), Fisheye190SBS (16).
+     */
+    fun isFisheye(index: Int): Boolean = index == 15 || index == 16
 }

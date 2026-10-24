@@ -12,6 +12,7 @@ import android.widget.ImageView
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.tucavr.R
+import com.tucavr.network.FisheyeFovPreferenceStore
 import com.tucavr.screens.ScreenFormatCatalog
 import com.tucavr.screens.ScreenFormatEntry
 import com.tucavr.screens.ScreenFormatGroup
@@ -31,7 +32,7 @@ class ScreenFormatModal(
     private val onToggleSwapEyes: () -> Boolean = { false },
     private val isMonoView: () -> Boolean = { false },
     private val onToggleMonoView: () -> Boolean = { false },
-    private var currentFisheyeFov: Int = 190,
+    private var currentFisheyeFov: Int = FisheyeFovPreferenceStore.DEFAULT_FOV,
     private val onFisheyeFovSelected: (fov: Int) -> Unit = {},
     private val onModeSelected: (modeIndex: Int) -> Unit,
     private val onUseAutoDetection: () -> Unit,
@@ -325,7 +326,7 @@ class ScreenFormatModal(
 
         fisheyeSection = fisheyeControls
         panel.addView(fisheyeSection)
-        fisheyeSection.visibility = if (currentMode == 15 || currentMode == 16) View.VISIBLE else View.GONE
+        fisheyeSection.visibility = if (ScreenFormatCatalog.isFisheye(currentMode)) View.VISIBLE else View.GONE
 
         addView(panel)
 
@@ -490,7 +491,7 @@ class ScreenFormatModal(
             currentMode = entry.index
             updateCardsHighlight()
             stereoSection.visibility = if (ScreenFormatCatalog.isStereo(currentMode)) View.VISIBLE else View.GONE
-            fisheyeSection.visibility = if (currentMode == 15 || currentMode == 16) View.VISIBLE else View.GONE
+            fisheyeSection.visibility = if (ScreenFormatCatalog.isFisheye(currentMode)) View.VISIBLE else View.GONE
             onModeSelected(entry.index)
         }
 

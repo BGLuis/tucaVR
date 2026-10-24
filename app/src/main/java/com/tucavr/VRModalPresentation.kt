@@ -21,6 +21,7 @@ import com.tucavr.designsystem.SubtitleTrackItem
 import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.history.PlaybackHistory
 import com.tucavr.history.historyKey
+import com.tucavr.network.FisheyeFovPreferenceStore
 import com.tucavr.screens.ScreenFormatCatalog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -191,8 +192,9 @@ class VRModalPresentation(
                 }
             val detectedMode = meta?.format3dIndex
             val confidence = meta?.detectionConfidence ?: 3
-
-            val currentFov = currentSource?.let { src -> activity.fisheyeFovStore.get(src.historyKey()) } ?: 190
+            val currentFov =
+                currentSource?.let { src -> activity.fisheyeFovStore.get(src.historyKey()) }
+                    ?: FisheyeFovPreferenceStore.DEFAULT_FOV
 
             val modal =
                 ScreenFormatModal(

@@ -105,4 +105,16 @@ class ScreenFormatCatalogTest {
             )
         }
     }
+
+    @Test
+    fun testIsFisheye() {
+        val fisheyeModes = setOf(15, 16)
+        (0..16).forEach { mode ->
+            assertEquals(
+                "Mode $mode fisheye expectation mismatch",
+                fisheyeModes.contains(mode),
+                ScreenFormatCatalog.isFisheye(mode),
+            )
+        }
+    }
 }
