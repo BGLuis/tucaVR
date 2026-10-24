@@ -407,35 +407,32 @@ enum FilenameStereoLayout {
 /// Internal: projection/extent extracted from a filename.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FilenameProjection {
-    /// Fisheye 190° com identificador específico para SBS (ex: `_rf52`, `_vr190`).
+    /// Fisheye 190° specific SBS identifiers (e.g., `rf52`, `vr190`).
     Fisheye190Specific,
-    /// Fisheye 190° genérico (ex: `_fisheye190`, `190_fisheye`, `eyefish190`).
+    /// Fisheye 190° generic markers (e.g., `fisheye190`, `190fisheye`, `eyefish190`).
     Fisheye190Generic,
-    /// `_vr180`, `_180x180`, `_vr_` — explicitly VR180-branded markers.
+    /// `vr180`, `180vr`, `180x180`, `180`+`sbs`, `180`+`vr`, `vr`+`180` — explicitly VR180-branded markers.
     Vr180Specific,
-    /// Bare `_180` with no VR180-specific marker alongside it.
+    /// Bare `180` token with no VR180-specific marker alongside it.
     Vr180Generic,
-    /// `_360` or `_360x180`.
+    /// `360` or `360x180`.
     Spherical360,
-    /// Cubemap 3x2 / generic cubemap marker (`_cubemap`, `-cubemap`, `_cube`).
+    /// Cubemap 3x2 / generic cubemap marker (`cubemap`, `cube`).
     Cubemap,
-    /// Cubemap 6x1 (`_6x1`, `cubemap_6x1`).
+    /// Cubemap 6x1 (`6x1` combined with `cube`, `cubemap`, or `360`).
     Cubemap6x1,
-    /// EAC / Equi-Angular Cubemap marker (`_eac`, `-eac`).
+    /// EAC / Equi-Angular Cubemap marker (`eac`).
     Eac,
 }
 
-/// Detect [`Format3D`] from a filename, per T3.2's pattern table
-/// (case-insensitive `contains` matching). Returns `None` when nothing in
-/// the name matches any known convention, so callers can fall through to
+/// Detect [`Format3D`] from a filename using whole-token matching on non-alphanumeric separators.
+/// Returns `None` when nothing in the name matches any known convention, so callers can fall through to
 /// [`detect_from_resolution`].
 ///
-/// Projection extraction order (VR180-specific before generic `_180`):
-/// `_vr180` and `_180x180` both contain `_180` as a substring, so the
-/// specific markers are checked first — both this function's current
-/// mapping and a plain substring-first check happen to agree here, but
-/// checking the specific patterns first keeps that an explicit choice
-/// rather than a coincidence.
+/// Projection extraction order:
+/// Specific projections (Fisheye, EAC, Cubemap, VR180-specific) are checked before generic ones
+/// (`360`, `180`) so that specific layout markers (e.g. `6x1` cubemap or `vr180`) take precedence
+/// over bare projection numbers (`360`, `180`).
 pub fn detect_from_filename(name: &str) -> Option<Format3D> {
     let stem = match name.rsplit_once('.') {
         Some((base, _ext)) if !base.is_empty() => base,
@@ -481,24 +478,18 @@ pub fn detect_from_filename(name: &str) -> Option<Format3D> {
 
     let is_explicit_mono = has_token("mono") || has_token("2d");
 
-    let is_fisheye_specific = has_token("vr190") || has_token("rf52") || has_token("mkx200");
+    let is_fisheye_specific = has_token("vr190") || has_token("rf52");
     let is_fisheye_generic = has_token("fisheye190")
         || has_token("190fisheye")
         || has_token("eyefish190")
-        || has_token("fisheye200")
-        || has_token("fisheye220")
-        || has_token("fisheye180")
-        || has_token("fisheye")
-        || has_token("eyefish")
         || has_pair("fisheye", "190")
         || has_pair("190", "fisheye")
-        || has_pair("eyefish", "190")
-        || has_pair("fisheye", "200")
-        || has_pair("200", "fisheye")
-        || has_pair("fisheye", "220")
-        || has_pair("220", "fisheye")
-        || has_pair("fisheye", "180")
-        || has_pair("180", "fisheye");
+        || has_pair("eyefish", "190");
+
+    let is_eac = has_token("eac");
+    let is_cubemap_6x1 =
+        has_token("6x1") && (has_token("cube") || has_token("cubemap") || has_token("360"));
+    let is_cubemap = has_token("cubemap") || has_token("cube");
 
     let is_spherical_360 = has_token("360x180")
         || has_token("360")
@@ -507,36 +498,37 @@ pub fn detect_from_filename(name: &str) -> Option<Format3D> {
         || has_pair("360", "vr")
         || has_pair("vr", "360");
 
+    // The old rule was `_vr_` (flanked by separators on both sides, e.g. `trip_vr_footage.mp4`).
+    // Replicate this by requiring `vr` to be an interior token so that boundary words like
+    // `family_vr.mp4` or `Movie.VR.mkv` do not trigger false positives.
+    let is_interior_vr = tokens.len() >= 3 && tokens[1..tokens.len() - 1].contains(&"vr");
+
     let is_vr180_specific = has_token("vr180")
         || has_token("180vr")
         || has_token("180x180")
         || has_pair("180", "sbs")
         || has_pair("180", "vr")
         || has_pair("vr", "180")
-        || (has_token("vr") && !is_spherical_360);
+        || is_interior_vr;
 
     let is_vr180_generic = has_token("180");
-    let is_eac = has_token("eac");
-    let is_cubemap_6x1 =
-        has_token("6x1") && (has_token("cube") || has_token("cubemap") || has_token("360"));
-    let is_cubemap = has_token("cubemap") || has_token("cube");
 
     let projection = if is_fisheye_specific {
         Some(FilenameProjection::Fisheye190Specific)
     } else if is_fisheye_generic {
         Some(FilenameProjection::Fisheye190Generic)
-    } else if is_spherical_360 {
-        Some(FilenameProjection::Spherical360)
-    } else if is_vr180_specific {
-        Some(FilenameProjection::Vr180Specific)
-    } else if is_vr180_generic {
-        Some(FilenameProjection::Vr180Generic)
     } else if is_eac {
         Some(FilenameProjection::Eac)
     } else if is_cubemap_6x1 {
         Some(FilenameProjection::Cubemap6x1)
     } else if is_cubemap {
         Some(FilenameProjection::Cubemap)
+    } else if is_spherical_360 {
+        Some(FilenameProjection::Spherical360)
+    } else if is_vr180_specific {
+        Some(FilenameProjection::Vr180Specific)
+    } else if is_vr180_generic {
+        Some(FilenameProjection::Vr180Generic)
     } else {
         None
     };
@@ -1067,13 +1059,27 @@ mod tests {
             detect_from_filename("rollercoaster_360vr.mp4"),
             Some(Format3D::Spherical360Mono)
         );
+        // Bare 'vr' without 180 or 360 does not match VR180 SBS
+        assert_eq!(detect_from_filename("family_vr.mp4"), None);
+        assert_eq!(detect_from_filename("Movie.VR.mkv"), None);
+
+        // Unrequested fisheye variants are not matched without explicit 190 indicator
+        assert_eq!(detect_from_filename("clip_fisheye_220.mp4"), None);
+        assert_eq!(detect_from_filename("clip_fisheye_200.mp4"), None);
+        assert_eq!(detect_from_filename("film_mkx200.mp4"), None);
+
+        // Cubemap 6x1 with '360' token takes precedence over spherical 360
         assert_eq!(
-            detect_from_filename("film_mkx200.mp4"),
-            Some(Format3D::Fisheye190Sbs)
+            detect_from_filename("tour.360.6x1.mp4"),
+            Some(Format3D::Cubemap6x1Mono)
         );
         assert_eq!(
-            detect_from_filename("clip_fisheye_200.mp4"),
-            Some(Format3D::Fisheye190Sbs)
+            detect_from_filename("tour-6x1-360.mp4"),
+            Some(Format3D::Cubemap6x1Mono)
+        );
+        assert_eq!(
+            detect_from_filename("Tour.360.Cube.6x1.mp4"),
+            Some(Format3D::Cubemap6x1Mono)
         );
     }
 
