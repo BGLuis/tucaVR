@@ -147,10 +147,10 @@ jobs:
         run: cd rust && cargo fmt --check
 
       - name: Lint Rust (clippy --all-targets --all-features)
-        run: cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings
+        run: cd rust && cargo clippy --locked -p protocols -p media-logic --all-targets --all-features -- -D warnings
 
       - name: Run Rust unit tests (host-testable crates)
-        run: cd rust && cargo test -p protocols -p media-logic
+        run: cd rust && cargo test --locked -p protocols -p media-logic
 
   cpp-checks:
     name: C++ Native & Shaders

@@ -175,7 +175,7 @@ export PKG_CONFIG_PATH="$FFMPEG_MAKER_DIR/build/ffmpeg/arm64-v8a/lib/pkgconfig"
 export BINDGEN_EXTRA_CLANG_ARGS="-I$FFMPEG_MAKER_DIR/output/include/arm64-v8a -I$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 
 cd rust
-cargo ndk -t aarch64-linux-android -P 26 -o ../app/src/main/jniLibs build --release
+cargo ndk -t aarch64-linux-android -P 26 -o ../app/src/main/jniLibs build --release --locked
 
 copy_all_if_changed "$FFMPEG_MAKER_DIR/build/ffmpeg/arm64-v8a/lib" "../app/src/main/jniLibs/arm64-v8a" "*.so"
 
