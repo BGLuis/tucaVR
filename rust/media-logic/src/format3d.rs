@@ -430,9 +430,8 @@ enum FilenameProjection {
 /// [`detect_from_resolution`].
 ///
 /// Projection extraction order:
-/// Specific projections (Fisheye, EAC, Cubemap, VR180-specific) are checked before generic ones
-/// (`360`, `180`) so that specific layout markers (e.g. `6x1` cubemap or `vr180`) take precedence
-/// over bare projection numbers (`360`, `180`).
+/// Specific projections (Fisheye, EAC, Cubemap) are checked before `360`, which is checked
+/// before VR180-specific markers (`vr180`, `180vr`, `180x180`), which are checked before bare `180`.
 pub fn detect_from_filename(name: &str) -> Option<Format3D> {
     let stem = match name.rsplit_once('.') {
         Some((base, _ext)) if !base.is_empty() => base,
@@ -1080,6 +1079,16 @@ mod tests {
         assert_eq!(
             detect_from_filename("Tour.360.Cube.6x1.mp4"),
             Some(Format3D::Cubemap6x1Mono)
+        );
+
+        // EAC and Cubemap with '360' token take precedence over spherical 360
+        assert_eq!(
+            detect_from_filename("flight.360.eac.mp4"),
+            Some(Format3D::Eac3x2Mono)
+        );
+        assert_eq!(
+            detect_from_filename("space.360.cubemap.mp4"),
+            Some(Format3D::Cubemap3x2Mono)
         );
     }
 

@@ -91,8 +91,8 @@ object ScreenFormatCatalog {
     fun isStereo(index: Int): Boolean = index in setOf(1, 2, 3, 4, 7, 8, 9, 13, 14, 16)
 
     /**
-     * Indica se o modo possui projeção fisheye (Fisheye190 mono ou Fisheye190 SBS).
-     * Modos: Fisheye190 (15), Fisheye190SBS (16).
+     * Indicates whether the mode has fisheye projection (Fisheye190 mono or Fisheye190 SBS).
+     * Modes: Fisheye190 (15), Fisheye190SBS (16).
      */
     fun isFisheye(index: Int): Boolean = index == 15 || index == 16
 }
