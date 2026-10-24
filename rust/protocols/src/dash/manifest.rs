@@ -5,6 +5,7 @@
 
 use crate::dlna::resolve_url;
 use crate::hls::abr::BitrateVariant;
+use crate::xml_text;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
@@ -287,7 +288,6 @@ impl DashManifest {
 /// Faz o parse do manifesto MPD XML.
 pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
 
     let mut duration_sec = None;
     let mut min_buffer_time_sec = None;
@@ -299,26 +299,28 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
     let mut current_adapt: Option<DashAdaptationSet> = None;
     let mut current_rep: Option<DashRepresentation> = None;
     let mut current_tag = String::new();
+    let mut text = String::new();
 
     let mut buf = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                let tag_raw = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let tag_raw = e.name().as_ref().to_string();
                 let local_tag = tag_raw
                     .split(':')
                     .next_back()
                     .unwrap_or(&tag_raw)
                     .to_string();
                 current_tag = local_tag.clone();
+                text.clear();
 
                 match local_tag.as_str() {
                     "MPD" => {
                         for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                            let key = attr.key.as_ref().to_string();
                             let key_local = key.split(':').next_back().unwrap_or(&key).to_string();
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            let val = attr.value.to_string();
 
                             match key_local.as_str() {
                                 "mediaPresentationDuration" => {
@@ -340,9 +342,9 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
                         let mut p_duration = None;
 
                         for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                            let key = attr.key.as_ref().to_string();
                             let key_local = key.split(':').next_back().unwrap_or(&key).to_string();
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            let val = attr.value.to_string();
 
                             match key_local.as_str() {
                                 "id" => p_id = Some(val),
@@ -365,9 +367,9 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
                         let mut a_mime_type = None;
 
                         for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                            let key = attr.key.as_ref().to_string();
                             let key_local = key.split(':').next_back().unwrap_or(&key).to_string();
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            let val = attr.value.to_string();
 
                             match key_local.as_str() {
                                 "id" => a_id = Some(val),
@@ -394,9 +396,9 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
                         let mut st_start_num = 1;
 
                         for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                            let key = attr.key.as_ref().to_string();
                             let key_local = key.split(':').next_back().unwrap_or(&key).to_string();
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            let val = attr.value.to_string();
 
                             match key_local.as_str() {
                                 "initialization" => st_init = Some(val),
@@ -428,9 +430,9 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
                         let mut sb_pto = 0;
 
                         for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                            let key = attr.key.as_ref().to_string();
                             let key_local = key.split(':').next_back().unwrap_or(&key).to_string();
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            let val = attr.value.to_string();
 
                             match key_local.as_str() {
                                 "indexRange" => sb_index_range = parse_byte_range(&val),
@@ -462,9 +464,9 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
                         let mut r_fps = None;
 
                         for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                            let key = attr.key.as_ref().to_string();
                             let key_local = key.split(':').next_back().unwrap_or(&key).to_string();
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            let val = attr.value.to_string();
 
                             match key_local.as_str() {
                                 "id" => r_id = val,
@@ -493,7 +495,7 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
                 }
             }
             Ok(Event::Empty(ref e)) => {
-                let tag_raw = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let tag_raw = e.name().as_ref().to_string();
                 let local_tag = tag_raw
                     .split(':')
                     .next_back()
@@ -509,9 +511,9 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
                         let mut st_start_num = 1;
 
                         for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                            let key = attr.key.as_ref().to_string();
                             let key_local = key.split(':').next_back().unwrap_or(&key).to_string();
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            let val = attr.value.to_string();
 
                             match key_local.as_str() {
                                 "initialization" => st_init = Some(val),
@@ -543,9 +545,9 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
                         let mut sb_pto = 0;
 
                         for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                            let key = attr.key.as_ref().to_string();
                             let key_local = key.split(':').next_back().unwrap_or(&key).to_string();
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            let val = attr.value.to_string();
 
                             match key_local.as_str() {
                                 "indexRange" => sb_index_range = parse_byte_range(&val),
@@ -570,9 +572,9 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
                     }
                     "Initialization" => {
                         for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                            let key = attr.key.as_ref().to_string();
                             let key_local = key.split(':').next_back().unwrap_or(&key).to_string();
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            let val = attr.value.to_string();
 
                             if key_local == "range" {
                                 let init_range = parse_byte_range(&val);
@@ -597,9 +599,9 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
                         let mut r_fps = None;
 
                         for attr in e.attributes().flatten() {
-                            let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
+                            let key = attr.key.as_ref().to_string();
                             let key_local = key.split(':').next_back().unwrap_or(&key).to_string();
-                            let val = String::from_utf8_lossy(&attr.value).to_string();
+                            let val = attr.value.to_string();
 
                             match key_local.as_str() {
                                 "id" => r_id = val,
@@ -631,24 +633,26 @@ pub fn parse_mpd(xml: &str, mpd_url: &str) -> Result<DashManifest, String> {
                     _ => {}
                 }
             }
-            Ok(Event::Text(ref e)) => {
-                let text = e.unescape().unwrap_or_default().to_string();
+            Ok(Event::Text(ref e)) => xml_text::push_text(&mut text, e),
+            Ok(Event::GeneralRef(ref e)) => xml_text::push_ref(&mut text, e)?,
+            Ok(Event::End(ref e)) => {
+                let tag_raw = e.name().as_ref().to_string();
+                let local_tag = tag_raw
+                    .split(':')
+                    .next_back()
+                    .unwrap_or(&tag_raw)
+                    .to_string();
+
+                let text = std::mem::take(&mut text);
+                let text = text.trim();
                 if current_tag == "BaseURL" && !text.is_empty() {
-                    let resolved = resolve_dash_url(mpd_url, mpd_url, &text)?;
+                    let resolved = resolve_dash_url(mpd_url, mpd_url, text)?;
                     if let Some(ref mut rep) = current_rep {
                         rep.base_url = Some(resolved);
                     } else {
                         mpd_base_url = Some(resolved);
                     }
                 }
-            }
-            Ok(Event::End(ref e)) => {
-                let tag_raw = String::from_utf8_lossy(e.name().as_ref()).to_string();
-                let local_tag = tag_raw
-                    .split(':')
-                    .next_back()
-                    .unwrap_or(&tag_raw)
-                    .to_string();
 
                 match local_tag.as_str() {
                     "Representation" => {
@@ -948,5 +952,25 @@ mod tests {
         assert!(abr.record_segment_download(1_000_000, Duration::from_secs(9), 10.0));
         assert_eq!(abr.current_variant_index(), 0);
         assert_eq!(abr.current_variant().unwrap().id, "360p");
+    }
+
+    #[test]
+    fn entity_references_in_base_url_query_are_resolved_whole() {
+        let xml = r#"<?xml version="1.0"?>
+<MPD xmlns="urn:mpeg:dash:schema:mpd:2011" mediaPresentationDuration="PT30S" type="static">
+  <Period id="0">
+    <AdaptationSet mimeType="video/mp4" contentType="video">
+      <Representation id="r" bandwidth="2500000" width="1920" height="1080">
+        <BaseURL>video.mp4?token=a&amp;sig=b&#38;exp=1</BaseURL>
+      </Representation>
+    </AdaptationSet>
+  </Period>
+</MPD>"#;
+
+        let manifest = parse_mpd(xml, "https://cdn.example.com/dash/manifest.mpd").unwrap();
+        assert_eq!(
+            manifest.video_representations()[0].base_url.as_deref(),
+            Some("https://cdn.example.com/dash/video.mp4?token=a&sig=b&exp=1")
+        );
     }
 }
