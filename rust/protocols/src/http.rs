@@ -20,6 +20,7 @@
 use crate::chunking::split_range;
 use crate::prefetch::RangeSource;
 use std::io;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// Tamanho de cada sub-GET concorrente dentro de um `read_range` (T7.2,
@@ -61,9 +62,25 @@ pub struct HttpCapabilities {
     pub error: Option<String>,
 }
 
+fn bundled_roots() -> &'static [reqwest::Certificate] {
+    static ROOTS: OnceLock<Vec<reqwest::Certificate>> = OnceLock::new();
+    ROOTS.get_or_init(|| {
+        webpki_root_certs::TLS_SERVER_ROOT_CERTS
+            .iter()
+            .filter_map(|der| reqwest::Certificate::from_der(der).ok())
+            .collect()
+    })
+}
+
+/// `tls_certs_only` keeps reqwest 0.13 off `rustls-platform-verifier`, which on
+/// Android needs a JNI init with the app context that this app never does.
+pub(crate) fn client_builder() -> reqwest::blocking::ClientBuilder {
+    reqwest::blocking::Client::builder().tls_certs_only(bundled_roots().iter().cloned())
+}
+
 fn base_client() -> Result<reqwest::blocking::Client, String> {
     #[allow(unused_mut)] // "mut" so e usado com a feature "integration-tests" habilitada
-    let mut builder = reqwest::blocking::Client::builder()
+    let mut builder = client_builder()
         // T7.1 "custom headers": User-Agent fixo por enquanto — a API aqui
         // aceita headers arbitrarios (ver `HttpsRangeSource::new`), mas nao
         // ha UI para o usuario customizar User-Agent/Referer nesta sessao.
@@ -83,7 +100,7 @@ fn base_client() -> Result<reqwest::blocking::Client, String> {
             let pem = std::fs::read(&ca_path)
                 .map_err(|e| format!("falha ao ler VRPLAYER_TEST_CA_CERT ({ca_path}): {e}"))?;
             let cert = reqwest::Certificate::from_pem(&pem).map_err(|e| e.to_string())?;
-            builder = builder.add_root_certificate(cert);
+            builder = builder.tls_certs_merge([cert]);
         }
     }
 
@@ -349,6 +366,15 @@ impl RangeSource for HttpsRangeSource {
 mod tests {
     use super::*;
     use httpmock::prelude::*;
+
+    #[test]
+    fn client_builder_uses_every_bundled_mozilla_root() {
+        assert_eq!(
+            bundled_roots().len(),
+            webpki_root_certs::TLS_SERVER_ROOT_CERTS.len()
+        );
+        assert!(client_builder().build().is_ok());
+    }
 
     /// Servidor que responde HEAD normalmente e anuncia suporte a range
     /// requests via `Accept-Ranges: bytes` — o caminho feliz mais comum

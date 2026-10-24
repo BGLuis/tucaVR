@@ -25,7 +25,7 @@ pub struct HlsStreamSource {
 
 impl HlsStreamSource {
     pub fn open(url: &str) -> Result<Self, String> {
-        let client = reqwest::blocking::Client::builder()
+        let client = crate::http::client_builder()
             .timeout(Duration::from_secs(10))
             .build()
             .map_err(|e| e.to_string())?;

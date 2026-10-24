@@ -10,9 +10,11 @@
 //! `./scripts/test-network-protocols.sh`, nunca em `cargo test` normal.
 #![cfg(feature = "integration-tests")]
 
+mod common;
+
+use common::sha256_hex;
 use protocols::http::{HttpsRangeSource, probe};
 use protocols::prefetch::{PrefetchReader, RangeSource};
-use sha2::{Digest, Sha256};
 use std::io::Read;
 
 fn env_or(key: &str, default: &str) -> String {
@@ -30,12 +32,6 @@ fn expected_sha256() -> String {
     std::env::var("VRPLAYER_TEST_FILE_SHA256").expect(
         "VRPLAYER_TEST_FILE_SHA256 nao definido — rode via scripts/test-network-protocols.sh",
     )
-}
-
-fn sha256_hex(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    format!("{:x}", hasher.finalize())
 }
 
 #[test]

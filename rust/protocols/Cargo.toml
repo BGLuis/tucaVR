@@ -15,7 +15,10 @@ tokio = { version = "1", features = ["rt", "rt-multi-thread", "net", "time", "ma
 # libavformat bundled neste projeto nao tem suporte nativo a TLS (ver nota em
 # demuxer.rs). rustls em vez de openssl/native-tls: evita depender de uma lib
 # TLS nativa cross-compilada para Android.
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls"] }
+# Mozilla roots handed to reqwest (see `http::client_builder`), the same set
+# webpki-roots gave reqwest 0.12 through `rustls-tls`.
+webpki-root-certs = "1"
 log = "0.4"
 # Cliente FTP (T6.1) — puro Rust, API bloqueante nativa (nao precisa de
 # tokio::block_on como SMB/SFTP). Sem feature de TLS: FTP em si e sempre
@@ -41,9 +44,9 @@ libc = "0.2"
 # Descoberta mDNS/DNS-SD (T10.2) — biblioteca de descoberta pura-Rust sem dependencia async
 mdns-sd = "0.21"
 # Parser XML leve para Device Description UPnP e DIDL-Lite (T7.2, T7.3)
-quick-xml = "0.37"
+quick-xml = "0.42"
 # Descriptografia HLS AES-128 (T8.1)
-aes = "0.8"
+aes = "0.9"
 # Codificação de paths para WebDAV (T3.1)
 percent-encoding = "2.3"
 # Parsing de RFC 2822 / getlastmodified para WebDAV (T3.1 / #142)
@@ -55,7 +58,7 @@ media-logic = { path = "../media-logic" }
 
 [dev-dependencies]
 httpmock = "0.8.3"
-sha2 = "0.10"
+sha2 = "0.11"
 
 [features]
 # Habilitada apenas por scripts/test-network-protocols.sh, nunca no build Android
