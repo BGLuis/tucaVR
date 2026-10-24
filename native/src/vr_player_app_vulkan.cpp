@@ -1596,7 +1596,7 @@ void CreateXrInstance(AppState& state) {
     appInfo.applicationVersion = 1;
     std::strncpy(appInfo.engineName, "tucaVR", XR_MAX_ENGINE_NAME_SIZE - 1);
     appInfo.engineVersion = 1;
-    appInfo.apiVersion = XR_CURRENT_API_VERSION;
+    appInfo.apiVersion = XR_API_VERSION_1_0;
 
     XrInstanceCreateInfo createInfo{XR_TYPE_INSTANCE_CREATE_INFO};
     createInfo.applicationInfo = appInfo;

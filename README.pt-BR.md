@@ -14,7 +14,7 @@
 ![Rust](https://www.shieldcn.dev/badge/Rust-stable-000000.svg?logo=rust&variant=branded&size=sm)
 ![C++](https://www.shieldcn.dev/badge/C%2B%2B-20-00599C.svg?logo=cplusplus&variant=branded&size=sm)
 ![Vulkan](https://www.shieldcn.dev/badge/Vulkan-padr%C3%A3o-AC162C.svg?logo=vulkan&variant=branded&size=sm)
-![OpenXR](https://www.shieldcn.dev/badge/OpenXR-1.0.34-000000.svg?logo=khronosgroup&variant=branded&size=sm)
+![OpenXR](https://www.shieldcn.dev/badge/OpenXR-1.1.63-000000.svg?logo=khronosgroup&variant=branded&size=sm)
 ![Android](https://www.shieldcn.dev/badge/Android-SDK%2034-3DDC84.svg?logo=android&variant=branded&size=sm)
 
   <h3>tucaVR</h3>
