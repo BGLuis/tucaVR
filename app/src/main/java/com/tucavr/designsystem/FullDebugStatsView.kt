@@ -193,11 +193,11 @@ class FullDebugStatsView(
                     )
             }
 
-        lowerCharts.addView(buildChartColumn("g1", R.string.stats_chart_bottleneck_title))
-        lowerCharts.addView(buildChartColumn("g2", R.string.stats_chart_network_title))
-        lowerCharts.addView(buildChartColumn("g3", R.string.stats_chart_buffer_title))
+        lowerCharts.addView(buildChartColumn("g1", R.string.debug_stats_chart_g1_title))
+        lowerCharts.addView(buildChartColumn("g2", R.string.debug_stats_chart_g2_title))
+        lowerCharts.addView(buildChartColumn("g3", R.string.debug_stats_chart_g3_title))
         lowerCharts.addView(buildChartColumn("g4", R.string.debug_stats_chart_g4_title))
-        lowerCharts.addView(buildChartColumn("g5", R.string.stats_chart_gpu_title))
+        lowerCharts.addView(buildChartColumn("g5", R.string.debug_stats_chart_g5_title))
         root.addView(lowerCharts)
 
         addView(root)
