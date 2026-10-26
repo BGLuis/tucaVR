@@ -290,7 +290,9 @@ fn decode_and_scale(
         }
         let (stream_index, packet) = match demuxer.read_packet() {
             ReadPacketOutcome::Packet(idx, packet) => (idx, packet),
-            ReadPacketOutcome::Eof | ReadPacketOutcome::Error(_) => break,
+            ReadPacketOutcome::Eof | ReadPacketOutcome::Error(_) | ReadPacketOutcome::Cancelled => {
+                break
+            }
         };
         if stream_index != video_stream_index {
             continue;
@@ -621,7 +623,9 @@ fn decode_and_scale_hw(
     while tried < MAX_PACKETS_TRIED {
         let (stream_index, packet) = match demuxer.read_packet() {
             ReadPacketOutcome::Packet(idx, packet) => (idx, packet),
-            ReadPacketOutcome::Eof | ReadPacketOutcome::Error(_) => break,
+            ReadPacketOutcome::Eof | ReadPacketOutcome::Error(_) | ReadPacketOutcome::Cancelled => {
+                break
+            }
         };
         if stream_index != video_stream_index {
             continue;

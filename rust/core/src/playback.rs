@@ -369,6 +369,9 @@ impl PlaybackController {
         *self.seek_started_at.lock().unwrap() = Some(Instant::now());
 
         if let Some(session) = &self.session {
+            // Signal seek interruption to unblock any waiting read_packet() call
+            // and let the top of the demux loop handle the SeekTo command (#173).
+            session.generation.trigger_seek();
             if session
                 .command_tx
                 .send(DemuxCommand::SeekTo(position_sec))
@@ -412,8 +415,10 @@ impl PlaybackController {
         }
 
         self.current_path = Some(path.to_string());
-        let mut demuxer =
-            Demuxer::open(path, Some(&mut self.connection_cache)).map_err(|e| e.to_string())?;
+        let generation = media_logic::session::Generation::new();
+        let interrupt = generation.interrupt_handle();
+        let mut demuxer = Demuxer::open(path, Some(&mut self.connection_cache), Some(interrupt))
+            .map_err(|e| e.to_string())?;
         crate::log_info!(
             "load_at: demux_open={}ms",
             load_started_at.elapsed().as_millis()
@@ -714,10 +719,9 @@ impl PlaybackController {
         let audio_bytes_queued_d = self.audio_bytes_queued.clone();
         let audio_bytes_queued_a = self.audio_bytes_queued.clone();
 
-        // Flags desta geracao: nao sao compartilhadas com nenhuma
-        // sessao anterior ou futura (ver media_logic::session::Generation e
-        // seus testes em rust/media-logic/src/session.rs).
-        let generation = media_logic::session::Generation::new();
+        // Flags desta geracao: compartilhadas com Demuxer::open acima (interrupt_handle)
+        // e com as threads abaixo (ver media_logic::session::Generation).
+        let generation_d = generation.clone();
         let is_playing = generation.is_playing_handle();
         let is_running = generation.is_running_handle();
 
@@ -750,6 +754,7 @@ impl PlaybackController {
                 }
 
                 if let Ok(DemuxCommand::SeekTo(target_sec)) = command_rx.try_recv() {
+                    generation_d.clear_seek();
                     let target_ts = (target_sec * 1_000_000.0) as i64;
                     // Limite superior explícito (..target_ts) força o FFmpeg a encontrar
                     // uma keyframe <= target_ts (AVSEEK_FLAG_BACKWARD), evitando que seeks
@@ -866,6 +871,23 @@ impl PlaybackController {
                                 &is_running_d,
                             ) {
                                 break;
+                            }
+                        }
+                    }
+                    crate::demuxer::ReadPacketOutcome::Cancelled => {
+                        let is_running = *is_running_d.lock().unwrap();
+                        match media_logic::session::resolve_cancel_action(
+                            generation_d.is_stopped(),
+                            is_running,
+                        ) {
+                            media_logic::session::CancelAction::ExitThread => {
+                                crate::log_info!("Demuxer: session stopped, exiting demux thread");
+                                break;
+                            }
+                            media_logic::session::CancelAction::Continue => {
+                                generation_d.clear_seek();
+                                demuxer.input_context.clear_interrupt();
+                                continue;
                             }
                         }
                     }

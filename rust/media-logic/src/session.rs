@@ -42,6 +42,77 @@ use std::sync::atomic::{
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
+/// Atomic cancellation handle distinguishing session stops from seek interruptions.
+///
+/// A stop signal is latching and permanent: once `trigger_stop()` is called,
+/// `is_stopped()` and `is_interrupted()` will return `true` for the remainder
+/// of the session, and no seek-clearing operation can erase it (#173).
+#[derive(Clone, Debug, Default)]
+pub struct InterruptHandle {
+    stop: Arc<AtomicBool>,
+    seek: Arc<AtomicBool>,
+}
+
+impl InterruptHandle {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns `true` if either a stop or a seek interrupt is active.
+    #[inline]
+    pub fn is_interrupted(&self) -> bool {
+        self.stop.load(Ordering::Relaxed) || self.seek.load(Ordering::Relaxed)
+    }
+
+    /// Returns `true` if the session has been permanently stopped.
+    #[inline]
+    pub fn is_stopped(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+
+    /// Returns `true` if a seek interrupt is active.
+    #[inline]
+    pub fn is_seek_interrupted(&self) -> bool {
+        self.seek.load(Ordering::Relaxed)
+    }
+
+    /// Latching stop trigger: once set, cannot be unset.
+    pub fn trigger_stop(&self) {
+        self.stop.store(true, Ordering::Relaxed);
+    }
+
+    /// Transient seek trigger: cancels blocking I/O to handle a user seek.
+    pub fn trigger_seek(&self) {
+        self.seek.store(true, Ordering::Relaxed);
+    }
+
+    /// Clears only the transient seek interrupt; never clears a stop signal.
+    pub fn clear_seek(&self) {
+        self.seek.store(false, Ordering::Relaxed);
+    }
+}
+
+/// Decision outcome for the demux loop when a read packet returns `Cancelled`.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum CancelAction {
+    /// The session is stopping; exit the demux thread.
+    ExitThread,
+    /// The cancellation was due to seek or transient interruption; clear seek and continue loop.
+    Continue,
+}
+
+/// Resolves whether a cancelled read should exit the demux thread or continue.
+///
+/// If `is_stopped` or `!is_running`, the thread exits. Otherwise, the seek interrupt
+/// is cleared and the loop continues to process pending commands.
+pub fn resolve_cancel_action(is_stopped: bool, is_running: bool) -> CancelAction {
+    if is_stopped || !is_running {
+        CancelAction::ExitThread
+    } else {
+        CancelAction::Continue
+    }
+}
+
 /// Independent play/run flags for a single "generation" of playback
 /// threads. Two `Generation`s never share the underlying `Arc<Mutex<bool>>`
 /// -- that's precisely the invariant the T2.6 bug violated.
@@ -49,6 +120,7 @@ use std::thread::JoinHandle;
 pub struct Generation {
     is_playing: Arc<Mutex<bool>>,
     is_running: Arc<Mutex<bool>>,
+    interrupt: InterruptHandle,
 }
 
 impl Generation {
@@ -56,6 +128,7 @@ impl Generation {
         Self {
             is_playing: Arc::new(Mutex::new(true)),
             is_running: Arc::new(Mutex::new(true)),
+            interrupt: InterruptHandle::new(),
         }
     }
 
@@ -70,6 +143,10 @@ impl Generation {
         self.is_playing.clone()
     }
 
+    pub fn interrupt_handle(&self) -> InterruptHandle {
+        self.interrupt.clone()
+    }
+
     pub fn is_running(&self) -> bool {
         *self.is_running.lock().unwrap()
     }
@@ -78,8 +155,24 @@ impl Generation {
         *self.is_playing.lock().unwrap()
     }
 
+    pub fn is_interrupted(&self) -> bool {
+        self.interrupt.is_interrupted()
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.interrupt.is_stopped()
+    }
+
     pub fn set_playing(&self, playing: bool) {
         *self.is_playing.lock().unwrap() = playing;
+    }
+
+    pub fn trigger_seek(&self) {
+        self.interrupt.trigger_seek();
+    }
+
+    pub fn clear_seek(&self) {
+        self.interrupt.clear_seek();
     }
 
     /// Signals every worker sharing this generation's flags to stop (and
@@ -88,6 +181,7 @@ impl Generation {
     /// `sleep(150ms)`-and-hope shutdown: callers only get control back once
     /// every worker thread has actually exited.
     pub fn stop_and_join<T>(self, handles: Vec<JoinHandle<T>>) {
+        self.interrupt.trigger_stop();
         *self.is_running.lock().unwrap() = false;
         *self.is_playing.lock().unwrap() = true;
 
@@ -355,6 +449,63 @@ mod tests {
         let handle = thread::spawn(|| {});
         gen.clone().stop_and_join(vec![handle]);
         assert!(!gen.is_running());
+    }
+
+    #[test]
+    fn stop_and_join_triggers_latching_stop_interrupt() {
+        let gen = Generation::new();
+        let interrupt = gen.interrupt_handle();
+        assert!(!gen.is_interrupted());
+        assert!(!interrupt.is_interrupted());
+        assert!(!interrupt.is_stopped());
+
+        let handle = thread::spawn(|| {});
+        gen.clone().stop_and_join(vec![handle]);
+
+        assert!(gen.is_interrupted());
+        assert!(interrupt.is_interrupted());
+        assert!(interrupt.is_stopped());
+    }
+
+    #[test]
+    fn interrupt_handle_stop_is_latching_and_not_cleared_by_seek() {
+        let handle = InterruptHandle::new();
+        assert!(!handle.is_interrupted());
+        assert!(!handle.is_stopped());
+        assert!(!handle.is_seek_interrupted());
+
+        handle.trigger_seek();
+        assert!(handle.is_interrupted());
+        assert!(handle.is_seek_interrupted());
+        assert!(!handle.is_stopped());
+
+        handle.trigger_stop();
+        assert!(handle.is_interrupted());
+        assert!(handle.is_stopped());
+
+        handle.clear_seek();
+        // Crucial invariant: clearing seek must NOT erase a concurrent stop signal (#173).
+        assert!(handle.is_interrupted());
+        assert!(handle.is_stopped());
+        assert!(!handle.is_seek_interrupted());
+    }
+
+    #[test]
+    fn cancel_action_decision_matrix() {
+        // Normal playback running without stop: continue loop to process seek/commands
+        assert_eq!(resolve_cancel_action(false, true), CancelAction::Continue);
+
+        // Session was stopped while running flag is still true (e.g. stop_and_join triggered)
+        assert_eq!(resolve_cancel_action(true, true), CancelAction::ExitThread);
+
+        // Session was marked not running
+        assert_eq!(
+            resolve_cancel_action(false, false),
+            CancelAction::ExitThread
+        );
+
+        // Both stopped and not running
+        assert_eq!(resolve_cancel_action(true, false), CancelAction::ExitThread);
     }
 
     #[test]

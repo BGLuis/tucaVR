@@ -1,5 +1,6 @@
 use ffmpeg::format::context::{Input, StreamIo};
 use ffmpeg_next as ffmpeg;
+use media_logic::session::InterruptHandle;
 use protocols::prefetch::{PrefetchReader, PrefetchStats, RangeSource, SharedRangeSource};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -56,6 +57,7 @@ fn fast_probe_options() -> ffmpeg::Dictionary<'static> {
 pub enum ReadPacketOutcome {
     Packet(usize, ffmpeg::Packet),
     Eof,
+    Cancelled,
     Error(String),
 }
 
@@ -102,6 +104,8 @@ pub struct Demuxer {
     // F4: pacotes corrompidos/invalidos
     // descartados silenciosamente por read_packet() abaixo — antes disto, invisivel.
     pub corrupt_packets: Arc<AtomicU64>,
+    /// Atomic interrupt handle to cancel blocking libavformat I/O reads on stop or seek (#173).
+    interrupt: InterruptHandle,
 }
 
 impl Demuxer {
@@ -128,31 +132,35 @@ impl Demuxer {
     ///   internamente, entao nao ha necessidade de reinventar isso para
     ///   HTTP sem TLS.
     pub fn new(path: &str) -> Result<Self, String> {
-        Self::open(path, None)
+        Self::open(path, None, None)
     }
 
-    /// Como `new()`, mas aceita um `ConnectionCache` opcional (ver o tipo
-    /// acima) pra reaproveitar a conexao SFTP de uma sessao anterior no
-    /// MESMO path em vez de reabrir do zero — usado por
-    /// `PlaybackController::load_at` (seek), nao por chamadores avulsos
-    /// como `thumbnail::generate`.
-    pub fn open(path: &str, cache: Option<&mut ConnectionCache>) -> Result<Self, String> {
-        Self::open_with(path, cache, FetchProfile::Playback)
+    /// Like `new()`, but optionally accepts a `ConnectionCache` to reuse
+    /// connections from a prior session on the same path, and an optional
+    /// `InterruptHandle` to abort blocking reads on stop/seek (#173).
+    pub fn open(
+        path: &str,
+        cache: Option<&mut ConnectionCache>,
+        interrupt: Option<InterruptHandle>,
+    ) -> Result<Self, String> {
+        Self::open_with(path, cache, FetchProfile::Playback, interrupt)
     }
 
     /// Como `new()`, para quem le so o cabecalho e um ou poucos quadros (miniatura, metadados): as
     /// fontes remotas usam blocos pequenos e nao buscam nada que nao seja lido.
     pub fn open_probe(path: &str) -> Result<Self, String> {
-        Self::open_with(path, None, FetchProfile::Probe)
+        Self::open_with(path, None, FetchProfile::Probe, None)
     }
 
     fn open_with(
         path: &str,
         cache: Option<&mut ConnectionCache>,
         profile: FetchProfile,
+        interrupt: Option<InterruptHandle>,
     ) -> Result<Self, String> {
         ffmpeg::init().map_err(|e| e.to_string())?;
 
+        let interrupt = interrupt.unwrap_or_default();
         let mut network_stats = None;
 
         let ictx = if let Some(target) = protocols::smb::SmbTarget::from_internal(path) {
@@ -160,10 +168,12 @@ impl Demuxer {
             let reader = profile.reader(shared);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(
+            let i = interrupt.clone();
+            ffmpeg::format::input_from_stream_with_interrupt(
                 stream_io,
                 Some(&target.path),
                 Some(fast_probe_options()),
+                move || i.is_interrupted(),
             )
             .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::ftp::FtpTarget::from_internal(path) {
@@ -171,10 +181,12 @@ impl Demuxer {
             let reader = profile.reader(source);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(
+            let i = interrupt.clone();
+            ffmpeg::format::input_from_stream_with_interrupt(
                 stream_io,
                 Some(&target.path),
                 Some(fast_probe_options()),
+                move || i.is_interrupted(),
             )
             .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::sftp::SftpTarget::from_internal(path) {
@@ -182,10 +194,12 @@ impl Demuxer {
             let reader = profile.reader(shared);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(
+            let i = interrupt.clone();
+            ffmpeg::format::input_from_stream_with_interrupt(
                 stream_io,
                 Some(&target.path),
                 Some(fast_probe_options()),
+                move || i.is_interrupted(),
             )
             .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::nfs::NfsTarget::from_internal(path) {
@@ -193,10 +207,12 @@ impl Demuxer {
             let reader = profile.reader(source);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(
+            let i = interrupt.clone();
+            ffmpeg::format::input_from_stream_with_interrupt(
                 stream_io,
                 Some(&target.file_path),
                 Some(fast_probe_options()),
+                move || i.is_interrupted(),
             )
             .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::webdav::WebdavTarget::from_internal(path) {
@@ -204,32 +220,57 @@ impl Demuxer {
             let reader = profile.reader(shared);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(
+            let i = interrupt.clone();
+            ffmpeg::format::input_from_stream_with_interrupt(
                 stream_io,
                 Some(&target.file_path),
                 Some(fast_probe_options()),
+                move || i.is_interrupted(),
             )
             .map_err(|e| e.to_string())?
         } else if path.contains(".m3u8") || path.starts_with("hls://") {
             let source = protocols::hls::HlsStreamSource::open(path)?;
             let stream_io = StreamIo::from_read_seek(source).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(stream_io, Some(path), Some(fast_probe_options()))
-                .map_err(|e| e.to_string())?
+            let i = interrupt.clone();
+            ffmpeg::format::input_from_stream_with_interrupt(
+                stream_io,
+                Some(path),
+                Some(fast_probe_options()),
+                move || i.is_interrupted(),
+            )
+            .map_err(|e| e.to_string())?
         } else if path.contains(".mpd") || path.starts_with("dash://") {
             let source = protocols::dash::DashStreamSource::open(path)?;
             let stream_io = StreamIo::from_read_seek(source).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(stream_io, Some(path), Some(fast_probe_options()))
-                .map_err(|e| e.to_string())?
+            let i = interrupt.clone();
+            ffmpeg::format::input_from_stream_with_interrupt(
+                stream_io,
+                Some(path),
+                Some(fast_probe_options()),
+                move || i.is_interrupted(),
+            )
+            .map_err(|e| e.to_string())?
         } else if path.starts_with("https://") {
             let shared = Self::https_source(path, cache)?;
             let reader = profile.reader(shared);
             network_stats = Some(reader.stats());
             let stream_io = StreamIo::from_read_seek(reader).map_err(|e| e.to_string())?;
-            ffmpeg::format::input_from_stream(stream_io, Some(path), Some(fast_probe_options()))
-                .map_err(|e| e.to_string())?
+            let i = interrupt.clone();
+            ffmpeg::format::input_from_stream_with_interrupt(
+                stream_io,
+                Some(path),
+                Some(fast_probe_options()),
+                move || i.is_interrupted(),
+            )
+            .map_err(|e| e.to_string())?
         } else {
-            ffmpeg::format::input_with_dictionary(&path, fast_probe_options())
-                .map_err(|e| e.to_string())?
+            let i = interrupt.clone();
+            ffmpeg::format::input_with_interrupt_and_dictionary(
+                &path,
+                move || i.is_interrupted(),
+                fast_probe_options(),
+            )
+            .map_err(|e| e.to_string())?
         };
 
         let mut video_streams = Vec::new();
@@ -279,6 +320,7 @@ impl Demuxer {
             subtitle_streams,
             network_stats,
             corrupt_packets: Arc::new(AtomicU64::new(0)),
+            interrupt,
         })
     }
 
@@ -399,20 +441,29 @@ impl Demuxer {
     pub fn read_packet(&mut self) -> ReadPacketOutcome {
         let mut packet = ffmpeg::Packet::empty();
         loop {
+            if self.interrupt.is_interrupted() {
+                return ReadPacketOutcome::Cancelled;
+            }
             match packet.read(&mut self.input_context) {
                 Ok(()) => {
                     let idx = packet.stream();
                     return ReadPacketOutcome::Packet(idx, packet);
                 }
                 Err(ffmpeg::Error::Eof) => return ReadPacketOutcome::Eof,
-                // Pacote corrompido isolado — o demuxer consegue
-                // resincronizar (mesmo comportamento do PacketIter interno).
+                Err(ffmpeg::Error::Exit) => return ReadPacketOutcome::Cancelled,
+                // Isolated corrupt packet - the demuxer can resynchronize
+                // (same behavior as the internal PacketIter).
                 Err(ffmpeg::Error::InvalidData) => {
                     self.corrupt_packets
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     continue;
                 }
-                Err(e) => return ReadPacketOutcome::Error(e.to_string()),
+                Err(e) => {
+                    if self.interrupt.is_interrupted() {
+                        return ReadPacketOutcome::Cancelled;
+                    }
+                    return ReadPacketOutcome::Error(e.to_string());
+                }
             }
         }
     }
