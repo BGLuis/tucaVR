@@ -54,7 +54,11 @@ pub fn detect(
                         if data.len() >= std::mem::size_of::<ffmpeg::ffi::AVStereo3D>()
                             && stereo.is_none()
                         {
-                            let s = unsafe { &*(data.as_ptr() as *const ffmpeg::ffi::AVStereo3D) };
+                            let s: ffmpeg::ffi::AVStereo3D = unsafe {
+                                std::ptr::read_unaligned(
+                                    data.as_ptr() as *const ffmpeg::ffi::AVStereo3D
+                                )
+                            };
                             stereo = map_av_stereo3d(s.type_ as i32, s.flags);
                         } else if data.len() >= 8 && stereo.is_none() {
                             let val = i32::from_ne_bytes(data[0..4].try_into().unwrap_or_default());
@@ -68,8 +72,10 @@ pub fn detect(
                         if data.len() >= std::mem::size_of::<ffmpeg::ffi::AVSphericalMapping>()
                             && projection.is_none()
                         {
-                            let m = unsafe {
-                                &*(data.as_ptr() as *const ffmpeg::ffi::AVSphericalMapping)
+                            let m: ffmpeg::ffi::AVSphericalMapping = unsafe {
+                                std::ptr::read_unaligned(
+                                    data.as_ptr() as *const ffmpeg::ffi::AVSphericalMapping
+                                )
                             };
                             projection = map_av_spherical_projection(
                                 m.projection as i32,

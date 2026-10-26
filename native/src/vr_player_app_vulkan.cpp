@@ -1283,6 +1283,10 @@ struct AppState {
     // posicionados em coordenadas "base" e transformados por este offset no
     // momento do desenho e do hit-test (ver ComputeSceneTransforms).
     float sceneYawOffset = 0.0f;
+    // Rotação inicial da esfera esférica extraída de metadados do container (MP4 prhd /
+    // AVSphericalMapping). Mantida separada de sceneYawOffset para preservar a orientação
+    // calibrada de cabeça do usuário no espaço Stage do OpenXR.
+    float videoSphereYawOffset = 0.0f;
     XrVector3f sceneTranslationOffset = {0.0f, 0.0f, 0.0f};
     bool needsOsRecenter = false;
     // Dispara uma calibracao inicial no 1o frame com pose valida, pra cena
@@ -8411,8 +8415,11 @@ void RenderFrame(AppState& state) {
             float initPitch = 0.0f;
             float initRoll = 0.0f;
             if (consume_initial_orientation(&initYaw, &initPitch, &initRoll) != 0) {
-                state.sceneYawOffset = initYaw;
-                LOGI("Video: Applied initial orientation from metadata (yaw=%.2f rad / %.1f deg)",
+                // Aplica rotação de yaw apenas à esfera de vídeo, preservando a calibração de cabeça
+                // do usuário em sceneYawOffset. Pitch e roll são deliberadamente ignorados para manter
+                // o horizonte nivelado e prevenir enjoo de movimento (simulator sickness) em VR.
+                state.videoSphereYawOffset = -initYaw;
+                LOGI("Video: Applied initial sphere orientation from metadata (yaw=%.2f rad / %.1f deg)",
                      initYaw, initYaw * 180.0f / 3.14159265f);
             }
         }
@@ -8635,9 +8642,10 @@ void RenderFrame(AppState& state) {
                 RecordPhotoFrame(state, cmd, fb, extent, photoMvp, proj, view, headCenter, pSphere, eye, sp);
             } else if (state.activeVideoFrame != nullptr) {
                 if (sphereMode || stereoFlat) {
+                    const float sphereYaw = state.sceneYawOffset + (sphereMode ? state.videoSphereYawOffset : 0.0f);
                     const Mat4 sphereModel = Mat4Multiply(
                         Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
-                        Mat4RotationY(state.sceneYawOffset));
+                        Mat4RotationY(sphereYaw));
                     const Mat4 sphereMvp = Mat4Multiply(Mat4Multiply(proj, view), sphereModel);
                     StereoParams sp = GetStereoParams(state.screenMode, eye);
                     RecordStereoFrame(state, cmd, fb, extent, mvp, proj, view, headCenter, sphereMode, sphereMvp, eye, sp);

@@ -2423,8 +2423,10 @@ public:
             float initPitch = 0.0f;
             float initRoll = 0.0f;
             if (consume_initial_orientation(&initYaw, &initPitch, &initRoll) != 0) {
-                m_sceneYawOffset = initYaw;
-                LOGI("VRPlayerApp: Applied initial orientation from metadata (yaw=%.2f rad)", initYaw);
+                // Aplica rotacao de yaw apenas a esfera de video. Pitch e roll sao ignorados
+                // para manter o horizonte nivelado e prevenir enjoo em VR.
+                m_videoSphereYawOffset = -initYaw;
+                LOGI("VRPlayerApp: Applied initial sphere orientation from metadata (yaw=%.2f rad)", initYaw);
             }
         }
 
@@ -2439,7 +2441,8 @@ public:
         // "dentro" da esfera mesmo andando fisicamente no espaco do
         // Guardian) importa. `m_sceneYawOffset` e o unico ajuste manual de
         // rotacao, aplicado so pelo recenter (T4.3, abaixo).
-        m_sphereTransform = OVR::Matrix4f::Translation(in.HeadPose.Translation) * OVR::Matrix4f::RotationY(m_sceneYawOffset);
+        const float sphereYaw = m_sceneYawOffset + (IsSphereMode(m_screenMode) ? m_videoSphereYawOffset : 0.0f);
+        m_sphereTransform = OVR::Matrix4f::Translation(in.HeadPose.Translation) * OVR::Matrix4f::RotationY(sphereYaw);
 
         // Tela de video (usada apenas para detectar "apontando para a tela" -> mostra controles)
         OVR::Vector3f worldScreenPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(m_screenPosition);
@@ -3435,6 +3438,7 @@ private:
     float m_swapEyesF = 0.0f; // T1.5: espelha get_swap_eyes(), compartilhado pelos 2 programas estereo
     float m_sharpness = 0.5f; // uniform CAS: 0=mais leve (peak -8), 1=mais forte (peak -5). So usado se kSharpenEnabled.
     float m_sceneYawOffset = 0.0f; // T4.3: recenter — offset de yaw aplicado a cena
+    float m_videoSphereYawOffset = 0.0f; // Rotacao inicial da esfera extraida de metadados do container
     PFN_xrRequestDisplayRefreshRateFB m_pfnRequestDisplayRefreshRateFB = nullptr;
     uint32_t m_thermalLevel = 0;
     OVR::Vector3f m_sceneTranslationOffset = OVR::Vector3f(0.0f, 0.0f, 0.0f);

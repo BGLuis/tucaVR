@@ -1448,6 +1448,44 @@ mod tests {
     }
 
     #[test]
+    fn resolve_container_hint_fisheye190() {
+        // Fisheye 190 mono
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::Mono),
+                Some(VideoProjection::Fisheye190),
+                1920,
+                1920
+            ),
+            Some(Format3D::Fisheye190Mono)
+        );
+        assert_eq!(
+            resolve_container_hint(None, Some(VideoProjection::Fisheye190), 1920, 1920),
+            Some(Format3D::Fisheye190Mono)
+        );
+
+        // Fisheye 190 stereo SBS (left-first e right-first)
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(VideoProjection::Fisheye190),
+                3840,
+                1920
+            ),
+            Some(Format3D::Fisheye190Sbs)
+        );
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideRight),
+                Some(VideoProjection::Fisheye190),
+                3840,
+                1920
+            ),
+            Some(Format3D::Fisheye190Sbs)
+        );
+    }
+
+    #[test]
     fn test_map_av_spherical_projection_and_stereo3d() {
         // AV_SPHERICAL_FISHEYE (5) -> Fisheye190
         assert_eq!(

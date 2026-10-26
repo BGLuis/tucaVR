@@ -673,7 +673,10 @@ fn apply_screen_mode_after_load(controller: &core::playback::PlaybackController)
         INITIAL_ORIENTATION_ROLL.store(pose.roll.to_bits(), Ordering::Relaxed);
         INITIAL_ORIENTATION_PENDING.store(true, Ordering::Release);
     } else {
-        INITIAL_ORIENTATION_PENDING.store(false, Ordering::Release);
+        INITIAL_ORIENTATION_YAW.store(0, Ordering::Relaxed);
+        INITIAL_ORIENTATION_PITCH.store(0, Ordering::Relaxed);
+        INITIAL_ORIENTATION_ROLL.store(0, Ordering::Relaxed);
+        INITIAL_ORIENTATION_PENDING.store(true, Ordering::Release);
     }
 }
 
@@ -691,10 +694,10 @@ fn apply_screen_mode_after_load(controller: &core::playback::PlaybackController)
 #[no_mangle]
 pub extern "C" fn reset_3d_mode() {
     SCREEN_MODE.store(0, Ordering::Relaxed);
-    INITIAL_ORIENTATION_PENDING.store(false, Ordering::Release);
     INITIAL_ORIENTATION_YAW.store(0, Ordering::Relaxed);
     INITIAL_ORIENTATION_PITCH.store(0, Ordering::Relaxed);
     INITIAL_ORIENTATION_ROLL.store(0, Ordering::Relaxed);
+    INITIAL_ORIENTATION_PENDING.store(true, Ordering::Release);
 }
 
 /// Consome a orientação inicial da câmera/cena (yaw, pitch, roll em radianos)
