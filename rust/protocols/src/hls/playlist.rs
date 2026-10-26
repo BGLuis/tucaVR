@@ -23,6 +23,12 @@ pub struct HlsKey {
     pub iv: Option<[u8; 16]>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HlsMap {
+    pub uri: String,
+    pub byte_range: Option<(u64, u64)>, // (offset, length)
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct HlsSegment {
     pub index: usize,
@@ -31,6 +37,8 @@ pub struct HlsSegment {
     pub url: String,
     pub byte_range: Option<(u64, u64)>, // (offset, length)
     pub key: Option<HlsKey>,
+    pub map: Option<HlsMap>,
+    pub discontinuity: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -164,6 +172,8 @@ fn parse_media_playlist(lines: &[&str], base_url: &str) -> Result<HlsMediaPlayli
     let mut segments = Vec::new();
 
     let mut current_key: Option<HlsKey> = None;
+    let mut current_map: Option<HlsMap> = None;
+    let mut pending_discontinuity = false;
     let mut next_duration: Option<f64> = None;
     let mut next_byte_range: Option<(u64, u64)> = None;
     let mut last_byte_range_end = 0u64;
@@ -173,6 +183,41 @@ fn parse_media_playlist(lines: &[&str], base_url: &str) -> Result<HlsMediaPlayli
             target_duration = dur_str.trim().parse().unwrap_or(0.0);
         } else if line.starts_with("#EXT-X-ENDLIST") {
             is_vod = true;
+        } else if line.starts_with("#EXT-X-DISCONTINUITY") {
+            pending_discontinuity = true;
+        } else if let Some(attr_str) = line.strip_prefix("#EXT-X-MAP:") {
+            let mut uri = None;
+            let mut map_byte_range = None;
+
+            for attr in split_hls_attributes(attr_str) {
+                if let Some((k, v)) = attr.split_once('=') {
+                    let k = k.trim().to_ascii_uppercase();
+                    let v = v.trim().trim_matches('"');
+                    if k == "URI" {
+                        uri = Some(resolve_url(base_url, v));
+                    } else if k == "BYTERANGE" {
+                        if let Some((len_str, off_str)) = v.split_once('@') {
+                            if let (Ok(len), Ok(off)) =
+                                (len_str.trim().parse::<u64>(), off_str.trim().parse::<u64>())
+                                && len > 0
+                            {
+                                map_byte_range = Some((off, len));
+                            }
+                        } else if let Ok(len) = v.trim().parse::<u64>()
+                            && len > 0
+                        {
+                            map_byte_range = Some((0, len));
+                        }
+                    }
+                }
+            }
+
+            if let Some(u) = uri {
+                current_map = Some(HlsMap {
+                    uri: u,
+                    byte_range: map_byte_range,
+                });
+            }
         } else if let Some(attr_str) = line.strip_prefix("#EXT-X-KEY:") {
             let mut method = "NONE".to_string();
             let mut uri = None;
@@ -204,11 +249,14 @@ fn parse_media_playlist(lines: &[&str], base_url: &str) -> Result<HlsMediaPlayli
             if let Some((len_str, off_str)) = range_str.split_once('@') {
                 if let (Ok(len), Ok(off)) =
                     (len_str.trim().parse::<u64>(), off_str.trim().parse::<u64>())
+                    && len > 0
                 {
                     next_byte_range = Some((off, len));
                     last_byte_range_end = off + len;
                 }
-            } else if let Ok(len) = range_str.trim().parse::<u64>() {
+            } else if let Ok(len) = range_str.trim().parse::<u64>()
+                && len > 0
+            {
                 let off = last_byte_range_end;
                 next_byte_range = Some((off, len));
                 last_byte_range_end = off + len;
@@ -224,6 +272,8 @@ fn parse_media_playlist(lines: &[&str], base_url: &str) -> Result<HlsMediaPlayli
                     url: segment_url,
                     byte_range: next_byte_range.take(),
                     key: current_key.clone(),
+                    map: current_map.clone(),
+                    discontinuity: std::mem::take(&mut pending_discontinuity),
                 };
                 total_duration += dur;
                 segments.push(segment);
@@ -347,9 +397,103 @@ segment2.ts
                 );
                 assert_eq!(media.segments[0].duration, 9.009);
                 assert_eq!(media.segments[0].start_time, 0.0);
+                assert_eq!(media.segments[0].map, None);
+                assert!(!media.segments[0].discontinuity);
 
                 assert_eq!(media.segments[1].start_time, 9.009);
                 assert_eq!(media.total_duration, 9.009 + 9.009 + 8.500);
+            }
+            _ => panic!("Expected media playlist"),
+        }
+    }
+
+    #[test]
+    fn parse_fmp4_playlist_with_ext_x_map_and_discontinuity() {
+        let fmp4_m3u8 = r#"#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:6
+#EXT-X-MAP:URI="init.mp4",BYTERANGE="720@0"
+#EXTINF:2.0,
+segment0.m4s
+#EXTINF:2.0,
+segment1.m4s
+#EXT-X-DISCONTINUITY
+#EXT-X-MAP:URI="init2.mp4"
+#EXTINF:2.0,
+segment2.m4s
+#EXT-X-ENDLIST
+"#;
+        let parsed = parse_playlist(fmp4_m3u8, "https://example.com/hls/stream.m3u8").unwrap();
+        match parsed {
+            HlsPlaylist::Media(media) => {
+                assert_eq!(media.segments.len(), 3);
+
+                // Segment 0: has first init map, no discontinuity
+                assert_eq!(
+                    media.segments[0].map,
+                    Some(HlsMap {
+                        uri: "https://example.com/hls/init.mp4".to_string(),
+                        byte_range: Some((0, 720)),
+                    })
+                );
+                assert!(!media.segments[0].discontinuity);
+                assert_eq!(
+                    media.segments[0].url,
+                    "https://example.com/hls/segment0.m4s"
+                );
+
+                // Segment 1: inherits map from previous tag, no discontinuity
+                assert_eq!(
+                    media.segments[1].map,
+                    Some(HlsMap {
+                        uri: "https://example.com/hls/init.mp4".to_string(),
+                        byte_range: Some((0, 720)),
+                    })
+                );
+                assert!(!media.segments[1].discontinuity);
+
+                // Segment 2: has discontinuity and new map without byte range
+                assert_eq!(
+                    media.segments[2].map,
+                    Some(HlsMap {
+                        uri: "https://example.com/hls/init2.mp4".to_string(),
+                        byte_range: None,
+                    })
+                );
+                assert!(media.segments[2].discontinuity);
+                assert_eq!(
+                    media.segments[2].url,
+                    "https://example.com/hls/segment2.m4s"
+                );
+            }
+            _ => panic!("Expected media playlist"),
+        }
+    }
+
+    #[test]
+    fn parse_fmp4_playlist_rejects_zero_length_byterange() {
+        let fmp4_m3u8 = r#"#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:6
+#EXT-X-MAP:URI="init.mp4",BYTERANGE="0@0"
+#EXTINF:2.0,
+#EXT-X-BYTERANGE:0@0
+segment0.m4s
+#EXT-X-ENDLIST
+"#;
+        let parsed = parse_playlist(fmp4_m3u8, "https://example.com/hls/stream.m3u8").unwrap();
+        match parsed {
+            HlsPlaylist::Media(media) => {
+                assert_eq!(media.segments.len(), 1);
+                // Zero length byte range should be discarded safely rather than causing underflow
+                assert_eq!(
+                    media.segments[0].map,
+                    Some(HlsMap {
+                        uri: "https://example.com/hls/init.mp4".to_string(),
+                        byte_range: None,
+                    })
+                );
+                assert_eq!(media.segments[0].byte_range, None);
             }
             _ => panic!("Expected media playlist"),
         }

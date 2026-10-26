@@ -124,6 +124,26 @@ EOF
 rm -f "$TINY_MP4"
 echo "dash/template and dash/singlefile generated ($(du -sh "$DASH_DIR" | cut -f1))"
 
+echo "== Generating the HLS fMP4 fixture =="
+HLS_DIR="$COMPOSE_DIR/fixtures/hls_fmp4"
+rm -rf "$HLS_DIR"
+mkdir -p "$HLS_DIR"
+
+TINY_HLS_MP4=$(mktemp --suffix=.mp4)
+ffmpeg -y -hide_banner -loglevel error \
+    -f lavfi -i "testsrc=duration=6:size=320x240:rate=25" \
+    -f lavfi -i "sine=duration=6:frequency=440" \
+    -c:v libx264 -profile:v baseline -pix_fmt yuv420p -g 50 -keyint_min 50 -sc_threshold 0 \
+    -c:a aac -shortest "$TINY_HLS_MP4"
+
+ffmpeg -y -hide_banner -loglevel error -i "$TINY_HLS_MP4" -map 0:v -map 0:a -c copy \
+    -f hls -hls_time 2 -hls_segment_type fmp4 -hls_fmp4_init_filename "init.mp4" \
+    "$HLS_DIR/playlist.m3u8"
+rm -f "$TINY_HLS_MP4"
+HLS_FMP4_TOTAL_SIZE=$(cat "$HLS_DIR/init.mp4" "$HLS_DIR"/*.m4s | wc -c)
+export VRPLAYER_TEST_HLS_FMP4_SIZE="$HLS_FMP4_TOTAL_SIZE"
+echo "hls_fmp4 generated ($(du -sh "$HLS_DIR" | cut -f1), total payload: $HLS_FMP4_TOTAL_SIZE bytes)"
+
 echo "== Starting containers (smb-test, http-test, https-test, ftp-test, sftp-test, webdav-test, nfs-test) =="
 "${DC[@]}" up -d --build
 
