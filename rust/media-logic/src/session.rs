@@ -49,6 +49,7 @@ use std::thread::JoinHandle;
 pub struct Generation {
     is_playing: Arc<Mutex<bool>>,
     is_running: Arc<Mutex<bool>>,
+    interrupt: Arc<AtomicBool>,
 }
 
 impl Generation {
@@ -56,6 +57,7 @@ impl Generation {
         Self {
             is_playing: Arc::new(Mutex::new(true)),
             is_running: Arc::new(Mutex::new(true)),
+            interrupt: Arc::new(AtomicBool::new(false)),
         }
     }
 
@@ -70,6 +72,10 @@ impl Generation {
         self.is_playing.clone()
     }
 
+    pub fn interrupt_handle(&self) -> Arc<AtomicBool> {
+        self.interrupt.clone()
+    }
+
     pub fn is_running(&self) -> bool {
         *self.is_running.lock().unwrap()
     }
@@ -78,8 +84,20 @@ impl Generation {
         *self.is_playing.lock().unwrap()
     }
 
+    pub fn is_interrupted(&self) -> bool {
+        self.interrupt.load(Ordering::Relaxed)
+    }
+
     pub fn set_playing(&self, playing: bool) {
         *self.is_playing.lock().unwrap() = playing;
+    }
+
+    pub fn interrupt(&self) {
+        self.interrupt.store(true, Ordering::Relaxed);
+    }
+
+    pub fn clear_interrupt(&self) {
+        self.interrupt.store(false, Ordering::Relaxed);
     }
 
     /// Signals every worker sharing this generation's flags to stop (and
@@ -88,6 +106,7 @@ impl Generation {
     /// `sleep(150ms)`-and-hope shutdown: callers only get control back once
     /// every worker thread has actually exited.
     pub fn stop_and_join<T>(self, handles: Vec<JoinHandle<T>>) {
+        self.interrupt.store(true, Ordering::Relaxed);
         *self.is_running.lock().unwrap() = false;
         *self.is_playing.lock().unwrap() = true;
 
@@ -355,6 +374,35 @@ mod tests {
         let handle = thread::spawn(|| {});
         gen.clone().stop_and_join(vec![handle]);
         assert!(!gen.is_running());
+    }
+
+    #[test]
+    fn stop_and_join_triggers_atomic_interrupt_flag() {
+        let gen = Generation::new();
+        let interrupt = gen.interrupt_handle();
+        assert!(!gen.is_interrupted());
+        assert!(!interrupt.load(Ordering::Relaxed));
+
+        let handle = thread::spawn(|| {});
+        gen.clone().stop_and_join(vec![handle]);
+
+        assert!(gen.is_interrupted());
+        assert!(interrupt.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn manual_interrupt_and_clear_work_with_atomic_handle() {
+        let gen = Generation::new();
+        let handle = gen.interrupt_handle();
+        assert!(!handle.load(Ordering::Relaxed));
+
+        gen.interrupt();
+        assert!(gen.is_interrupted());
+        assert!(handle.load(Ordering::Relaxed));
+
+        gen.clear_interrupt();
+        assert!(!gen.is_interrupted());
+        assert!(!handle.load(Ordering::Relaxed));
     }
 
     #[test]

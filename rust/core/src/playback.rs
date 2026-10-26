@@ -369,6 +369,9 @@ impl PlaybackController {
         *self.seek_started_at.lock().unwrap() = Some(Instant::now());
 
         if let Some(session) = &self.session {
+            // Sinaliza a interrupção atômica para destravar qualquer read_packet() bloqueado
+            // e permitir que o comando SeekTo seja consumido imediatamente (#173).
+            session.generation.interrupt();
             if session
                 .command_tx
                 .send(DemuxCommand::SeekTo(position_sec))
@@ -412,8 +415,10 @@ impl PlaybackController {
         }
 
         self.current_path = Some(path.to_string());
-        let mut demuxer =
-            Demuxer::open(path, Some(&mut self.connection_cache)).map_err(|e| e.to_string())?;
+        let generation = media_logic::session::Generation::new();
+        let interrupt = generation.interrupt_handle();
+        let mut demuxer = Demuxer::open(path, Some(&mut self.connection_cache), Some(interrupt))
+            .map_err(|e| e.to_string())?;
         crate::log_info!(
             "load_at: demux_open={}ms",
             load_started_at.elapsed().as_millis()
@@ -714,10 +719,9 @@ impl PlaybackController {
         let audio_bytes_queued_d = self.audio_bytes_queued.clone();
         let audio_bytes_queued_a = self.audio_bytes_queued.clone();
 
-        // Flags desta geracao: nao sao compartilhadas com nenhuma
-        // sessao anterior ou futura (ver media_logic::session::Generation e
-        // seus testes em rust/media-logic/src/session.rs).
-        let generation = media_logic::session::Generation::new();
+        // Flags desta geracao: compartilhadas com Demuxer::open acima (interrupt_handle)
+        // e com as threads abaixo (ver media_logic::session::Generation).
+        let generation_d = generation.clone();
         let is_playing = generation.is_playing_handle();
         let is_running = generation.is_running_handle();
 
@@ -750,6 +754,7 @@ impl PlaybackController {
                 }
 
                 if let Ok(DemuxCommand::SeekTo(target_sec)) = command_rx.try_recv() {
+                    generation_d.clear_interrupt();
                     let target_ts = (target_sec * 1_000_000.0) as i64;
                     // Limite superior explícito (..target_ts) força o FFmpeg a encontrar
                     // uma keyframe <= target_ts (AVSEEK_FLAG_BACKWARD), evitando que seeks
@@ -868,6 +873,30 @@ impl PlaybackController {
                                 break;
                             }
                         }
+                    }
+                    crate::demuxer::ReadPacketOutcome::Cancelled => {
+                        // Se um seek foi enfileirado para interromper a leitura atual, processa-o imediatamente
+                        if let Ok(DemuxCommand::SeekTo(target_sec)) = command_rx.try_recv() {
+                            generation_d.clear_interrupt();
+                            let target_ts = (target_sec * 1_000_000.0) as i64;
+                            if let Err(e) = demuxer.input_context.seek(target_ts, ..target_ts) {
+                                crate::log_warn!(
+                                    "Demuxer: seek delimitado para {:.2}s falhou ({e}), tentando range aberto",
+                                    target_sec
+                                );
+                                let _ = demuxer.input_context.seek(target_ts, ..);
+                            }
+                            epoch_d.fetch_add(1, Ordering::SeqCst);
+                            sync_d.update_master_clock(target_sec);
+                            last_good_pos_sec = target_sec.max(0.0);
+                            consecutive_read_errors = 0;
+                            last_enqueued_video_dts_bits_d
+                                .store(target_sec.to_bits(), Ordering::Relaxed);
+                            buffer_gate_state = media_logic::buffer_gate::GateState::Read;
+                            continue;
+                        }
+                        crate::log_info!("Demuxer: leitura cancelada, encerrando thread de demux");
+                        break;
                     }
                     crate::demuxer::ReadPacketOutcome::Eof => {
                         let _ = demuxer.input_context.seek(0, 0..1);
