@@ -1,7 +1,8 @@
 use ffmpeg::format::context::{Input, StreamIo};
 use ffmpeg_next as ffmpeg;
+use media_logic::session::InterruptHandle;
 use protocols::prefetch::{PrefetchReader, PrefetchStats, RangeSource, SharedRangeSource};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 // 12MB em vez do default 4MB: a 8K/60fps HEVC (~63Mbps / 7.85MB/s), 4MB cobre só ~0.5s por bloco.
@@ -103,9 +104,8 @@ pub struct Demuxer {
     // F4: pacotes corrompidos/invalidos
     // descartados silenciosamente por read_packet() abaixo — antes disto, invisivel.
     pub corrupt_packets: Arc<AtomicU64>,
-    /// Flag atômica de cancelamento da geração atual para interromper leituras
-    /// bloqueantes no libavformat (#173).
-    pub interrupt: Arc<AtomicBool>,
+    /// Atomic interrupt handle to cancel blocking libavformat I/O reads on stop or seek (#173).
+    interrupt: InterruptHandle,
 }
 
 impl Demuxer {
@@ -135,15 +135,13 @@ impl Demuxer {
         Self::open(path, None, None)
     }
 
-    /// Como `new()`, mas aceita um `ConnectionCache` opcional (ver o tipo
-    /// acima) pra reaproveitar a conexao SFTP de uma sessao anterior no
-    /// MESMO path em vez de reabrir do zero e uma flag atômica de cancelamento
-    /// opcional (#173) — usado por `PlaybackController::load_at` (seek),
-    /// nao por chamadores avulsos como `thumbnail::generate`.
+    /// Like `new()`, but optionally accepts a `ConnectionCache` to reuse
+    /// connections from a prior session on the same path, and an optional
+    /// `InterruptHandle` to abort blocking reads on stop/seek (#173).
     pub fn open(
         path: &str,
         cache: Option<&mut ConnectionCache>,
-        interrupt: Option<Arc<AtomicBool>>,
+        interrupt: Option<InterruptHandle>,
     ) -> Result<Self, String> {
         Self::open_with(path, cache, FetchProfile::Playback, interrupt)
     }
@@ -158,11 +156,11 @@ impl Demuxer {
         path: &str,
         cache: Option<&mut ConnectionCache>,
         profile: FetchProfile,
-        interrupt: Option<Arc<AtomicBool>>,
+        interrupt: Option<InterruptHandle>,
     ) -> Result<Self, String> {
         ffmpeg::init().map_err(|e| e.to_string())?;
 
-        let interrupt = interrupt.unwrap_or_else(|| Arc::new(AtomicBool::new(false)));
+        let interrupt = interrupt.unwrap_or_default();
         let mut network_stats = None;
 
         let ictx = if let Some(target) = protocols::smb::SmbTarget::from_internal(path) {
@@ -175,7 +173,7 @@ impl Demuxer {
                 stream_io,
                 Some(&target.path),
                 Some(fast_probe_options()),
-                move || i.load(Ordering::Relaxed),
+                move || i.is_interrupted(),
             )
             .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::ftp::FtpTarget::from_internal(path) {
@@ -188,7 +186,7 @@ impl Demuxer {
                 stream_io,
                 Some(&target.path),
                 Some(fast_probe_options()),
-                move || i.load(Ordering::Relaxed),
+                move || i.is_interrupted(),
             )
             .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::sftp::SftpTarget::from_internal(path) {
@@ -201,7 +199,7 @@ impl Demuxer {
                 stream_io,
                 Some(&target.path),
                 Some(fast_probe_options()),
-                move || i.load(Ordering::Relaxed),
+                move || i.is_interrupted(),
             )
             .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::nfs::NfsTarget::from_internal(path) {
@@ -214,7 +212,7 @@ impl Demuxer {
                 stream_io,
                 Some(&target.file_path),
                 Some(fast_probe_options()),
-                move || i.load(Ordering::Relaxed),
+                move || i.is_interrupted(),
             )
             .map_err(|e| e.to_string())?
         } else if let Some(target) = protocols::webdav::WebdavTarget::from_internal(path) {
@@ -227,7 +225,7 @@ impl Demuxer {
                 stream_io,
                 Some(&target.file_path),
                 Some(fast_probe_options()),
-                move || i.load(Ordering::Relaxed),
+                move || i.is_interrupted(),
             )
             .map_err(|e| e.to_string())?
         } else if path.contains(".m3u8") || path.starts_with("hls://") {
@@ -238,7 +236,7 @@ impl Demuxer {
                 stream_io,
                 Some(path),
                 Some(fast_probe_options()),
-                move || i.load(Ordering::Relaxed),
+                move || i.is_interrupted(),
             )
             .map_err(|e| e.to_string())?
         } else if path.contains(".mpd") || path.starts_with("dash://") {
@@ -249,7 +247,7 @@ impl Demuxer {
                 stream_io,
                 Some(path),
                 Some(fast_probe_options()),
-                move || i.load(Ordering::Relaxed),
+                move || i.is_interrupted(),
             )
             .map_err(|e| e.to_string())?
         } else if path.starts_with("https://") {
@@ -262,14 +260,14 @@ impl Demuxer {
                 stream_io,
                 Some(path),
                 Some(fast_probe_options()),
-                move || i.load(Ordering::Relaxed),
+                move || i.is_interrupted(),
             )
             .map_err(|e| e.to_string())?
         } else {
             let i = interrupt.clone();
             ffmpeg::format::input_with_interrupt_and_dictionary(
                 &path,
-                move || i.load(Ordering::Relaxed),
+                move || i.is_interrupted(),
                 fast_probe_options(),
             )
             .map_err(|e| e.to_string())?
@@ -443,7 +441,7 @@ impl Demuxer {
     pub fn read_packet(&mut self) -> ReadPacketOutcome {
         let mut packet = ffmpeg::Packet::empty();
         loop {
-            if self.interrupt.load(Ordering::Relaxed) {
+            if self.interrupt.is_interrupted() {
                 return ReadPacketOutcome::Cancelled;
             }
             match packet.read(&mut self.input_context) {
@@ -453,15 +451,15 @@ impl Demuxer {
                 }
                 Err(ffmpeg::Error::Eof) => return ReadPacketOutcome::Eof,
                 Err(ffmpeg::Error::Exit) => return ReadPacketOutcome::Cancelled,
-                // Pacote corrompido isolado — o demuxer consegue
-                // resincronizar (mesmo comportamento do PacketIter interno).
+                // Isolated corrupt packet - the demuxer can resynchronize
+                // (same behavior as the internal PacketIter).
                 Err(ffmpeg::Error::InvalidData) => {
                     self.corrupt_packets
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     continue;
                 }
                 Err(e) => {
-                    if self.interrupt.load(Ordering::Relaxed) {
+                    if self.interrupt.is_interrupted() {
                         return ReadPacketOutcome::Cancelled;
                     }
                     return ReadPacketOutcome::Error(e.to_string());
