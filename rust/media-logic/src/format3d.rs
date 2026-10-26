@@ -68,6 +68,92 @@ pub enum VideoProjection {
     HalfEquirectangular,
     /// Fisheye 190° — lentes circulares olho de peixe com FOV de 190°.
     Fisheye190,
+    /// Tiled equirectangular com coordenadas de delimitação em ponto fixo 0.32
+    /// (FFmpeg `AV_SPHERICAL_EQUIRECTANGULAR_TILE`, comum em arquivos Google VR180 e Matroska).
+    EquirectangularTile {
+        bound_left: u32,
+        bound_top: u32,
+        bound_right: u32,
+        bound_bottom: u32,
+    },
+}
+
+/// Pose inicial da câmera/projeção esférica (yaw, pitch, roll em radianos).
+///
+/// Extraída de metadados de container (`AVSphericalMapping` / MP4 `prhd`).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ProjectionPose {
+    /// Rotação em torno do eixo Y (up) em radianos.
+    pub yaw: f32,
+    /// Rotação em torno do eixo X (right) em radianos.
+    pub pitch: f32,
+    /// Rotação em torno do eixo Z (forward) em radianos.
+    pub roll: f32,
+}
+
+impl ProjectionPose {
+    /// Converte valores de graus em ponto fixo 16.16 (padrão exportado pelo FFmpeg) para radianos.
+    pub fn from_ffmpeg_fixed(yaw_fixed: i32, pitch_fixed: i32, roll_fixed: i32) -> Self {
+        const SCALE: f32 = 65536.0;
+        let yaw_deg = yaw_fixed as f32 / SCALE;
+        let pitch_deg = pitch_fixed as f32 / SCALE;
+        let roll_deg = roll_fixed as f32 / SCALE;
+        Self {
+            yaw: yaw_deg.to_radians(),
+            pitch: pitch_deg.to_radians(),
+            roll: roll_deg.to_radians(),
+        }
+    }
+
+    /// Retorna `true` se ao menos um dos ângulos for significativamente diferente de zero.
+    pub fn is_nonzero(&self) -> bool {
+        self.yaw.abs() > 1e-5 || self.pitch.abs() > 1e-5 || self.roll.abs() > 1e-5
+    }
+}
+
+/// Mapeia o valor de enum `AVStereo3DType` e flags (`AV_STEREO3D_FLAG_INVERT = 1`) do FFmpeg
+/// para [`VideoStereoMode`].
+pub fn map_av_stereo3d(type_val: i32, flags: i32) -> Option<VideoStereoMode> {
+    const AV_STEREO3D_FLAG_INVERT: i32 = 1 << 0;
+    let invert = (flags & AV_STEREO3D_FLAG_INVERT) != 0;
+    match type_val {
+        0 => Some(VideoStereoMode::Mono),
+        1 => Some(if invert {
+            VideoStereoMode::SideBySideRight
+        } else {
+            VideoStereoMode::SideBySideLeft
+        }),
+        2 => Some(if invert {
+            VideoStereoMode::TopBottomRight
+        } else {
+            VideoStereoMode::TopBottomLeft
+        }),
+        _ => None,
+    }
+}
+
+/// Mapeia o valor de enum `AVSphericalProjection` e bounds do FFmpeg para [`VideoProjection`].
+pub fn map_av_spherical_projection(
+    projection_val: i32,
+    bound_left: u32,
+    bound_top: u32,
+    bound_right: u32,
+    bound_bottom: u32,
+) -> Option<VideoProjection> {
+    match projection_val {
+        0 => Some(VideoProjection::Equirectangular),
+        1 => Some(VideoProjection::Cubemap),
+        2 => Some(VideoProjection::EquirectangularTile {
+            bound_left,
+            bound_top,
+            bound_right,
+            bound_bottom,
+        }),
+        3 => Some(VideoProjection::HalfEquirectangular),
+        4 => Some(VideoProjection::Rectangular),
+        5 => Some(VideoProjection::Fisheye190),
+        _ => None,
+    }
 }
 
 /// The format this crate/app actually drives UI and rendering off of. This
@@ -327,6 +413,41 @@ pub fn resolve_container_hint(
         } else {
             Format3D::Vr180Mono
         }),
+        Some(VideoProjection::EquirectangularTile {
+            bound_left,
+            bound_right,
+            ..
+        }) => {
+            let total = bound_left as u64 + bound_right as u64;
+            if total > u32::MAX as u64 {
+                None
+            } else {
+                let remaining = (u32::MAX as u64 - total) as f64 / u32::MAX as f64;
+                if (0.40..=0.60).contains(&remaining) {
+                    Some(if is_stereo {
+                        Format3D::Vr180Sbs
+                    } else {
+                        Format3D::Vr180Mono
+                    })
+                } else if remaining >= 0.90 {
+                    Some(if !is_stereo {
+                        Format3D::Spherical360Mono
+                    } else if is_sbs {
+                        if is_full_packing(true, aspect) {
+                            Format3D::Spherical360SbsFull
+                        } else {
+                            Format3D::Spherical360SbsHalf
+                        }
+                    } else if is_full_packing(false, aspect) {
+                        Format3D::Spherical360OverUnderFull
+                    } else {
+                        Format3D::Spherical360OverUnderHalf
+                    })
+                } else {
+                    None
+                }
+            }
+        }
         Some(VideoProjection::Equirectangular) => Some(if !is_stereo {
             Format3D::Spherical360Mono
         } else if is_sbs {
@@ -1257,6 +1378,158 @@ mod tests {
             ),
             Some(Format3D::Vr180Sbs)
         );
+    }
+
+    #[test]
+    fn resolve_container_hint_tile_vr180() {
+        // Tile com bound_left e bound_right de 90° cada (2^30), deixando 180° frontais (~0.5 da esfera)
+        // Arquivos Google VR180 reais usam bound_left = 1073741824, bound_right = 1073741824
+        let vr180_tile = VideoProjection::EquirectangularTile {
+            bound_left: 1073741824,
+            bound_top: 0,
+            bound_right: 1073741824,
+            bound_bottom: 0,
+        };
+
+        // VR180 tile mono
+        assert_eq!(
+            resolve_container_hint(Some(VideoStereoMode::Mono), Some(vr180_tile), 1920, 1920),
+            Some(Format3D::Vr180Mono)
+        );
+        assert_eq!(
+            resolve_container_hint(None, Some(vr180_tile), 1920, 1920),
+            Some(Format3D::Vr180Mono)
+        );
+
+        // VR180 tile stereo SBS
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(vr180_tile),
+                3840,
+                1920
+            ),
+            Some(Format3D::Vr180Sbs)
+        );
+        // VR180 tile stereo SBS right-first
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideRight),
+                Some(vr180_tile),
+                3840,
+                1920
+            ),
+            Some(Format3D::Vr180Sbs)
+        );
+
+        // Tile de largura total (bounds = 0) vira 360° mono
+        let full_tile = VideoProjection::EquirectangularTile {
+            bound_left: 0,
+            bound_top: 0,
+            bound_right: 0,
+            bound_bottom: 0,
+        };
+        assert_eq!(
+            resolve_container_hint(None, Some(full_tile), 3840, 1920),
+            Some(Format3D::Spherical360Mono)
+        );
+
+        // Tile recortado fora dos padrões conhecidos (ex: 25% da esfera) retorna None (fallback seguro)
+        let narrow_tile = VideoProjection::EquirectangularTile {
+            bound_left: 3221225472, // 75% da esfera à esquerda
+            bound_top: 0,
+            bound_right: 0,
+            bound_bottom: 0,
+        };
+        assert_eq!(
+            resolve_container_hint(None, Some(narrow_tile), 1920, 1080),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_container_hint_fisheye190() {
+        // Fisheye 190 mono
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::Mono),
+                Some(VideoProjection::Fisheye190),
+                1920,
+                1920
+            ),
+            Some(Format3D::Fisheye190Mono)
+        );
+        assert_eq!(
+            resolve_container_hint(None, Some(VideoProjection::Fisheye190), 1920, 1920),
+            Some(Format3D::Fisheye190Mono)
+        );
+
+        // Fisheye 190 stereo SBS (left-first e right-first)
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(VideoProjection::Fisheye190),
+                3840,
+                1920
+            ),
+            Some(Format3D::Fisheye190Sbs)
+        );
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideRight),
+                Some(VideoProjection::Fisheye190),
+                3840,
+                1920
+            ),
+            Some(Format3D::Fisheye190Sbs)
+        );
+    }
+
+    #[test]
+    fn test_map_av_spherical_projection_and_stereo3d() {
+        // AV_SPHERICAL_FISHEYE (5) -> Fisheye190
+        assert_eq!(
+            map_av_spherical_projection(5, 0, 0, 0, 0),
+            Some(VideoProjection::Fisheye190)
+        );
+
+        // AV_STEREO3D_FLAG_INVERT (1) com SBS (1) -> SideBySideRight
+        assert_eq!(
+            map_av_stereo3d(1, 1),
+            Some(VideoStereoMode::SideBySideRight)
+        );
+
+        // SBS normal sem flag invert -> SideBySideLeft
+        assert_eq!(map_av_stereo3d(1, 0), Some(VideoStereoMode::SideBySideLeft));
+
+        // Top-bottom com flag invert -> TopBottomRight
+        assert_eq!(map_av_stereo3d(2, 1), Some(VideoStereoMode::TopBottomRight));
+
+        // AV_SPHERICAL_EQUIRECTANGULAR_TILE (2) -> EquirectangularTile preservando bounds
+        assert_eq!(
+            map_av_spherical_projection(2, 1073741824, 0, 1073741824, 0),
+            Some(VideoProjection::EquirectangularTile {
+                bound_left: 1073741824,
+                bound_top: 0,
+                bound_right: 1073741824,
+                bound_bottom: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn test_projection_pose_from_ffmpeg_fixed() {
+        // 90 graus em 16.16 fixed point: 90 * 65536 = 5898240
+        let pose = ProjectionPose::from_ffmpeg_fixed(5898240, 0, 0);
+        assert!(pose.is_nonzero());
+        let expected_yaw = 90.0f32.to_radians();
+        assert!((pose.yaw - expected_yaw).abs() < 1e-4);
+        assert_eq!(pose.pitch, 0.0);
+        assert_eq!(pose.roll, 0.0);
+
+        // Pose zerada
+        let zero_pose = ProjectionPose::from_ffmpeg_fixed(0, 0, 0);
+        assert!(!zero_pose.is_nonzero());
     }
 
     #[test]
