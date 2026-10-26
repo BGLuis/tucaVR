@@ -215,7 +215,7 @@ fn generate_from_session(
     }
 
     // Trabalho 4: detecção 3D gratuita antes de borrows mutáveis do demuxer
-    let (format_3d, _) =
+    let (format_3d, _, _) =
         crate::format3d_detect::detect(demuxer, path, decoder.width(), decoder.height());
 
     let primary_target_us = primary_seek_target_us(demuxer.input_context.duration());
@@ -417,7 +417,7 @@ pub fn generate_strip(
         return generate_strip_hw(path, interval_secs, max_width, max_height);
     }
 
-    let (format_3d, _) =
+    let (format_3d, _, _) =
         crate::format3d_detect::detect(&demuxer, path, decoder.width(), decoder.height());
 
     let duration_secs = demuxer.input_context.duration() as f64 / 1_000_000.0;

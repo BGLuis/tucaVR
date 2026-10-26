@@ -199,6 +199,7 @@ extern "C" {
     extern uint32_t get_3d_mode();
     extern uint32_t get_swap_eyes();
     extern uint32_t get_mono_view();
+    extern uint32_t consume_initial_orientation(float* yaw, float* pitch, float* roll);
     // Fase 0.4 T5: Foveated Rendering — ver ApplyFoveation abaixo.
     extern uint32_t get_foveation_enabled();
     extern uint32_t get_foveation_mode();
@@ -8403,6 +8404,18 @@ void RenderFrame(AppState& state) {
         }
         // T-HDR: mesma cadencia de leitura por frame que screenMode acima.
         state.isHdr = get_video_is_hdr() != 0;
+
+        // Orientação inicial vinda dos metadados do container (MP4 prhd / AVSphericalMapping)
+        {
+            float initYaw = 0.0f;
+            float initPitch = 0.0f;
+            float initRoll = 0.0f;
+            if (consume_initial_orientation(&initYaw, &initPitch, &initRoll) != 0) {
+                state.sceneYawOffset = initYaw;
+                LOGI("Video: Applied initial orientation from metadata (yaw=%.2f rad / %.1f deg)",
+                     initYaw, initYaw * 180.0f / 3.14159265f);
+            }
+        }
         const bool sphereMode = IsSphereMode(state.screenMode);
         const bool stereoFlat = IsFlatStereoMode(state.screenMode);
 

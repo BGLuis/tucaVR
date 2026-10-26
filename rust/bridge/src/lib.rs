@@ -207,6 +207,10 @@ static SCREEN_MODE: AtomicU32 = AtomicU32::new(0);
 const SCREEN_MODE_COUNT: u32 = 17;
 static SWAP_EYES: AtomicBool = AtomicBool::new(false);
 static MONO_VIEW: AtomicBool = AtomicBool::new(false);
+static INITIAL_ORIENTATION_PENDING: AtomicBool = AtomicBool::new(false);
+static INITIAL_ORIENTATION_YAW: AtomicU32 = AtomicU32::new(0);
+static INITIAL_ORIENTATION_PITCH: AtomicU32 = AtomicU32::new(0);
+static INITIAL_ORIENTATION_ROLL: AtomicU32 = AtomicU32::new(0);
 
 // Bug reportado em validacao real de headset: o painel "Adicionar servidor"
 // (e qualquer outro com EditText) ficava transparente durante a digitacao,
@@ -662,6 +666,15 @@ fn apply_screen_mode_after_load(controller: &core::playback::PlaybackController)
         controller.detected_screen_mode()
     };
     set_3d_mode(final_mode);
+
+    if let Some(pose) = controller.initial_pose() {
+        INITIAL_ORIENTATION_YAW.store(pose.yaw.to_bits(), Ordering::Relaxed);
+        INITIAL_ORIENTATION_PITCH.store(pose.pitch.to_bits(), Ordering::Relaxed);
+        INITIAL_ORIENTATION_ROLL.store(pose.roll.to_bits(), Ordering::Relaxed);
+        INITIAL_ORIENTATION_PENDING.store(true, Ordering::Release);
+    } else {
+        INITIAL_ORIENTATION_PENDING.store(false, Ordering::Release);
+    }
 }
 
 /// T9 (historico): ao carregar um arquivo novo, o modo 3D da reproducao
@@ -678,6 +691,40 @@ fn apply_screen_mode_after_load(controller: &core::playback::PlaybackController)
 #[no_mangle]
 pub extern "C" fn reset_3d_mode() {
     SCREEN_MODE.store(0, Ordering::Relaxed);
+    INITIAL_ORIENTATION_PENDING.store(false, Ordering::Release);
+    INITIAL_ORIENTATION_YAW.store(0, Ordering::Relaxed);
+    INITIAL_ORIENTATION_PITCH.store(0, Ordering::Relaxed);
+    INITIAL_ORIENTATION_ROLL.store(0, Ordering::Relaxed);
+}
+
+/// Consome a orientação inicial da câmera/cena (yaw, pitch, roll em radianos)
+/// especificada nos metadados do container de vídeo (ex: MP4 prhd / AVSphericalMapping).
+///
+/// Retorna 1 se uma nova orientação estiver disponível e preenche os ponteiros não-nulos;
+/// retorna 0 se nenhuma orientação inicial pendente existir.
+#[no_mangle]
+pub extern "C" fn consume_initial_orientation(
+    yaw: *mut f32,
+    pitch: *mut f32,
+    roll: *mut f32,
+) -> u32 {
+    if INITIAL_ORIENTATION_PENDING.swap(false, Ordering::AcqRel) {
+        if !yaw.is_null() {
+            let bits = INITIAL_ORIENTATION_YAW.load(Ordering::Relaxed);
+            unsafe { *yaw = f32::from_bits(bits) };
+        }
+        if !pitch.is_null() {
+            let bits = INITIAL_ORIENTATION_PITCH.load(Ordering::Relaxed);
+            unsafe { *pitch = f32::from_bits(bits) };
+        }
+        if !roll.is_null() {
+            let bits = INITIAL_ORIENTATION_ROLL.load(Ordering::Relaxed);
+            unsafe { *roll = f32::from_bits(bits) };
+        }
+        1
+    } else {
+        0
+    }
 }
 
 /// T1.5: "swap eyes" — inverte qual metade do frame SBS/OU vai pro olho
@@ -2396,6 +2443,10 @@ pub extern "C" fn reset_process_state() {
     LOADING_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
     FEEDBACK_EVENT.store(0, std::sync::atomic::Ordering::SeqCst);
     SCREEN_MODE.store(0, std::sync::atomic::Ordering::SeqCst);
+    INITIAL_ORIENTATION_PENDING.store(false, std::sync::atomic::Ordering::SeqCst);
+    INITIAL_ORIENTATION_YAW.store(0, std::sync::atomic::Ordering::SeqCst);
+    INITIAL_ORIENTATION_PITCH.store(0, std::sync::atomic::Ordering::SeqCst);
+    INITIAL_ORIENTATION_ROLL.store(0, std::sync::atomic::Ordering::SeqCst);
     SWAP_EYES.store(false, std::sync::atomic::Ordering::SeqCst);
     MONO_VIEW.store(false, std::sync::atomic::Ordering::SeqCst);
     KEYBOARD_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);

@@ -227,6 +227,7 @@ extern "C" {
     extern uint32_t get_swap_eyes();
     extern uint32_t toggle_mono_view();
     extern uint32_t get_mono_view();
+    extern uint32_t consume_initial_orientation(float* yaw, float* pitch, float* roll);
 
     // Bug de auto-hide durante digitacao no teclado nativo — ver comentario
     // completo em rust/bridge/src/lib.rs junto de KEYBOARD_ACTIVE.
@@ -2415,6 +2416,16 @@ public:
             LOGI("VRPlayerApp: ScreenMode -> %s (stereoLayout flat=%.0f esfera=%.0f, polar180=%.0f, swapEyes=%.0f)",
                 ScreenModeName(m_screenMode), m_flatStereoLayout, m_sphereStereoLayout,
                 m_uPolar180, m_swapEyesF);
+        }
+
+        {
+            float initYaw = 0.0f;
+            float initPitch = 0.0f;
+            float initRoll = 0.0f;
+            if (consume_initial_orientation(&initYaw, &initPitch, &initRoll) != 0) {
+                m_sceneYawOffset = initYaw;
+                LOGI("VRPlayerApp: Applied initial orientation from metadata (yaw=%.2f rad)", initYaw);
+            }
         }
 
         // T2.6: a esfera acompanha a TRANSLACAO da cabeca (o usuario sempre

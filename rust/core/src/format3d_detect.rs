@@ -10,22 +10,24 @@
 
 use ffmpeg_next as ffmpeg;
 use media_logic::format3d::{
-    detect as detect_logic, resolve_container_hint, DetectionConfidence, Format3D, VideoProjection,
-    VideoStereoMode,
+    detect as detect_logic, map_av_spherical_projection, map_av_stereo3d, resolve_container_hint,
+    DetectionConfidence, Format3D, ProjectionPose, VideoProjection, VideoStereoMode,
 };
 
 use crate::demuxer::Demuxer;
 
 /// Analisa os metadados de stream e container do demuxer, filename derivado de `path`
-/// e as dimensões `width` e `height`, retornando o `Format3D` e a respectiva `DetectionConfidence`.
+/// e as dimensões `width` e `height`, retornando o `Format3D`, a respectiva `DetectionConfidence`
+/// e opcionalmente a `ProjectionPose` inicial de visualização (yaw/pitch/roll).
 pub fn detect(
     demuxer: &Demuxer,
     path: &str,
     width: u32,
     height: u32,
-) -> (Format3D, DetectionConfidence) {
+) -> (Format3D, DetectionConfidence, Option<ProjectionPose>) {
     let mut stereo: Option<VideoStereoMode> = None;
     let mut projection: Option<VideoProjection> = None;
+    let mut initial_pose: Option<ProjectionPose> = None;
 
     if let Some(video_idx) = demuxer.video_stream_index {
         if let Some(stream) = demuxer.input_context.stream(video_idx) {
@@ -49,29 +51,43 @@ pub fn detect(
                 match sd.kind() {
                     ffmpeg::codec::packet::side_data::Type::Stereo3d => {
                         let data = sd.data();
-                        if data.len() >= 4 && stereo.is_none() {
+                        if data.len() >= std::mem::size_of::<ffmpeg::ffi::AVStereo3D>()
+                            && stereo.is_none()
+                        {
+                            let s = unsafe { &*(data.as_ptr() as *const ffmpeg::ffi::AVStereo3D) };
+                            stereo = map_av_stereo3d(s.type_ as i32, s.flags);
+                        } else if data.len() >= 8 && stereo.is_none() {
                             let val = i32::from_ne_bytes(data[0..4].try_into().unwrap_or_default());
-                            // AVStereo3DType enum: 0=2D, 1=SBS, 2=TB
-                            stereo = match val {
-                                0 => Some(VideoStereoMode::Mono),
-                                1 => Some(VideoStereoMode::SideBySideLeft),
-                                2 => Some(VideoStereoMode::TopBottomLeft),
-                                _ => None,
-                            };
+                            let flags =
+                                i32::from_ne_bytes(data[4..8].try_into().unwrap_or_default());
+                            stereo = map_av_stereo3d(val, flags);
                         }
                     }
                     ffmpeg::codec::packet::side_data::Type::DataSpherical => {
                         let data = sd.data();
-                        if data.len() >= 4 && projection.is_none() {
-                            let val = i32::from_ne_bytes(data[0..4].try_into().unwrap_or_default());
-                            // AVSphericalProjection enum: 0=Equirect, 1=Cube, 3=HalfEquirect, 4=Rectilinear
-                            projection = match val {
-                                0 => Some(VideoProjection::Equirectangular),
-                                1 => Some(VideoProjection::Cubemap),
-                                3 => Some(VideoProjection::HalfEquirectangular),
-                                4 => Some(VideoProjection::Rectangular),
-                                _ => None,
+                        if data.len() >= std::mem::size_of::<ffmpeg::ffi::AVSphericalMapping>()
+                            && projection.is_none()
+                        {
+                            let m = unsafe {
+                                &*(data.as_ptr() as *const ffmpeg::ffi::AVSphericalMapping)
                             };
+                            projection = map_av_spherical_projection(
+                                m.projection as i32,
+                                m.bound_left,
+                                m.bound_top,
+                                m.bound_right,
+                                m.bound_bottom,
+                            );
+                            if initial_pose.is_none() {
+                                let pose =
+                                    ProjectionPose::from_ffmpeg_fixed(m.yaw, m.pitch, m.roll);
+                                if pose.is_nonzero() {
+                                    initial_pose = Some(pose);
+                                }
+                            }
+                        } else if data.len() >= 4 && projection.is_none() {
+                            let val = i32::from_ne_bytes(data[0..4].try_into().unwrap_or_default());
+                            projection = map_av_spherical_projection(val, 0, 0, 0, 0);
                         }
                     }
                     _ => {}
@@ -105,5 +121,6 @@ pub fn detect(
 
     let container_hint = resolve_container_hint(stereo, projection, width, height);
     let filename = path.rsplit(&['/', '\\'][..]).next().unwrap_or(path);
-    detect_logic(filename, width, height, container_hint)
+    let (fmt, confidence) = detect_logic(filename, width, height, container_hint);
+    (fmt, confidence, initial_pose)
 }

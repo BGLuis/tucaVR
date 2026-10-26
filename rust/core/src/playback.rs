@@ -230,6 +230,7 @@ pub struct PlaybackController {
     desired_audio_track: usize,
     audio_track_count: usize,
     detected_screen_mode: u32,
+    initial_pose: Option<media_logic::format3d::ProjectionPose>,
     // T-HDR: transfer characteristic (EOTF) do stream de video atual,
     // detectada uma vez em load_at() a partir do que o FFmpeg reporta (ver
     // media_logic::color) — exposta pro C++ (bridge) escolher o pipeline
@@ -323,6 +324,7 @@ impl PlaybackController {
             desired_audio_track: 0,
             audio_track_count: 0,
             detected_screen_mode: 0,
+            initial_pose: None,
             hdr_transfer: media_logic::color::TransferFunction::Sdr,
             auto_paused: false,
             network_stats: None,
@@ -468,8 +470,9 @@ impl PlaybackController {
         }
         self.hdr_transfer = transfer_function;
 
-        let (fmt3d, _) = crate::format3d_detect::detect(&demuxer, path, width, height);
+        let (fmt3d, _, pose) = crate::format3d_detect::detect(&demuxer, path, width, height);
         self.detected_screen_mode = fmt3d.to_screen_mode_index();
+        self.initial_pose = pose;
 
         // Descoberta de legendas sidecar (.srt/.vtt) e trilhas embutidas (T9.1, T9.6)
         self.available_subtitle_tracks = crate::subtitle_loader::probe_sidecar_subtitles(path);
@@ -1735,6 +1738,10 @@ impl PlaybackController {
 
     pub fn detected_screen_mode(&self) -> u32 {
         self.detected_screen_mode
+    }
+
+    pub fn initial_pose(&self) -> Option<media_logic::format3d::ProjectionPose> {
+        self.initial_pose
     }
 
     /// T-HDR: transfer characteristic do video atual (PQ/HLG/SDR, ver
