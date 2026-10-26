@@ -199,10 +199,13 @@ fn parse_media_playlist(lines: &[&str], base_url: &str) -> Result<HlsMediaPlayli
                         if let Some((len_str, off_str)) = v.split_once('@') {
                             if let (Ok(len), Ok(off)) =
                                 (len_str.trim().parse::<u64>(), off_str.trim().parse::<u64>())
+                                && len > 0
                             {
                                 map_byte_range = Some((off, len));
                             }
-                        } else if let Ok(len) = v.trim().parse::<u64>() {
+                        } else if let Ok(len) = v.trim().parse::<u64>()
+                            && len > 0
+                        {
                             map_byte_range = Some((0, len));
                         }
                     }
@@ -246,11 +249,14 @@ fn parse_media_playlist(lines: &[&str], base_url: &str) -> Result<HlsMediaPlayli
             if let Some((len_str, off_str)) = range_str.split_once('@') {
                 if let (Ok(len), Ok(off)) =
                     (len_str.trim().parse::<u64>(), off_str.trim().parse::<u64>())
+                    && len > 0
                 {
                     next_byte_range = Some((off, len));
                     last_byte_range_end = off + len;
                 }
-            } else if let Ok(len) = range_str.trim().parse::<u64>() {
+            } else if let Ok(len) = range_str.trim().parse::<u64>()
+                && len > 0
+            {
                 let off = last_byte_range_end;
                 next_byte_range = Some((off, len));
                 last_byte_range_end = off + len;
@@ -459,6 +465,35 @@ segment2.m4s
                     media.segments[2].url,
                     "https://example.com/hls/segment2.m4s"
                 );
+            }
+            _ => panic!("Expected media playlist"),
+        }
+    }
+
+    #[test]
+    fn parse_fmp4_playlist_rejects_zero_length_byterange() {
+        let fmp4_m3u8 = r#"#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:6
+#EXT-X-MAP:URI="init.mp4",BYTERANGE="0@0"
+#EXTINF:2.0,
+#EXT-X-BYTERANGE:0@0
+segment0.m4s
+#EXT-X-ENDLIST
+"#;
+        let parsed = parse_playlist(fmp4_m3u8, "https://example.com/hls/stream.m3u8").unwrap();
+        match parsed {
+            HlsPlaylist::Media(media) => {
+                assert_eq!(media.segments.len(), 1);
+                // Zero length byte range should be discarded safely rather than causing underflow
+                assert_eq!(
+                    media.segments[0].map,
+                    Some(HlsMap {
+                        uri: "https://example.com/hls/init.mp4".to_string(),
+                        byte_range: None,
+                    })
+                );
+                assert_eq!(media.segments[0].byte_range, None);
             }
             _ => panic!("Expected media playlist"),
         }

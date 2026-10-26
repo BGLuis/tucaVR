@@ -18,6 +18,7 @@ pub struct HlsStreamSource {
     key_cache: HashMap<String, Vec<u8>>,
     init_cache: HashMap<String, Vec<u8>>,
     last_emitted_map_uri: Option<String>,
+    init_emitted_for_segment: Option<usize>,
     current_segment_idx: usize,
     buffer: Vec<u8>,
     buffer_offset_in_segment: usize,
@@ -100,6 +101,7 @@ impl HlsStreamSource {
             key_cache: HashMap::new(),
             init_cache: HashMap::new(),
             last_emitted_map_uri: None,
+            init_emitted_for_segment: None,
             current_segment_idx: 0,
             buffer: Vec::new(),
             buffer_offset_in_segment: 0,
@@ -122,6 +124,8 @@ impl HlsStreamSource {
 
     pub fn set_variant(&mut self, index: Option<usize>) -> Result<(), String> {
         self.abr.set_manual_override(index);
+        self.init_emitted_for_segment = None;
+        self.last_emitted_map_uri = None;
         self.reload_media_playlist()
     }
 
@@ -175,8 +179,9 @@ impl HlsStreamSource {
         self.buffer.clear();
         self.buffer_offset_in_segment = 0;
         self.last_emitted_map_uri = None;
+        self.init_emitted_for_segment = None;
         log::info!(
-            "HLS Seek: Saltando para segmento {} (timestamp {:.2}s / total {:.2}s)",
+            "HLS Seek: jumping to segment {} (timestamp {:.2}s / total {:.2}s)",
             target_idx,
             target,
             self.media_playlist.total_duration
@@ -185,7 +190,7 @@ impl HlsStreamSource {
         Ok(())
     }
 
-    /// Preenche o buffer interno baixando o próximo segmento se o atual esgotou.
+    /// Fills internal buffer by downloading the next segment when the current one is depleted.
     fn ensure_buffer(&mut self) -> io::Result<bool> {
         if self.buffer_offset_in_segment < self.buffer.len() {
             return Ok(true);
@@ -197,36 +202,45 @@ impl HlsStreamSource {
 
         let segment = self.media_playlist.segments[self.current_segment_idx].clone();
 
-        // Se o segmento possui EXT-X-MAP (fMP4/CMAF) e o init segment ainda não foi emitido
-        // para esta URI ou ocorreu descontinuidade, emite o init segment antes da mídia (#177).
+        // If the segment specifies an EXT-X-MAP (fMP4/CMAF) and the init section
+        // has not yet been emitted for this segment, emit it before media chunks (#177).
         if let Some(ref map) = segment.map {
-            let needs_init =
-                self.last_emitted_map_uri.as_deref() != Some(&map.uri) || segment.discontinuity;
-            if needs_init {
-                let init_bytes = if let Some(cached) = self.init_cache.get(&map.uri) {
-                    cached.clone()
-                } else {
-                    let fetched =
-                        fetch_init_segment(&self.client, map).map_err(io::Error::other)?;
-                    self.init_cache.insert(map.uri.clone(), fetched.clone());
-                    fetched
-                };
+            let already_emitted_for_this_seg =
+                self.init_emitted_for_segment == Some(self.current_segment_idx);
+            if !already_emitted_for_this_seg {
+                let needs_init =
+                    self.last_emitted_map_uri.as_deref() != Some(&map.uri) || segment.discontinuity;
+                if needs_init {
+                    let init_bytes = if let Some(cached) = self.init_cache.get(&map.uri) {
+                        cached.clone()
+                    } else {
+                        let fetched =
+                            fetch_init_segment(&self.client, map).map_err(io::Error::other)?;
+                        self.init_cache.insert(map.uri.clone(), fetched.clone());
+                        fetched
+                    };
 
-                self.buffer = init_bytes;
-                self.buffer_offset_in_segment = 0;
-                self.last_emitted_map_uri = Some(map.uri.clone());
-                return Ok(true);
+                    self.buffer = init_bytes;
+                    self.buffer_offset_in_segment = 0;
+                    self.init_emitted_for_segment = Some(self.current_segment_idx);
+                    self.last_emitted_map_uri = Some(map.uri.clone());
+                    return Ok(true);
+                }
             }
         }
 
         let (data, dur) =
             fetch_segment(&self.client, &segment, &mut self.key_cache).map_err(io::Error::other)?;
 
-        // Informa o ABR sobre a velocidade de download do segmento
+        // Inform ABR about segment download performance.
         let quality_changed = self
             .abr
             .record_segment_download(data.len(), dur, segment.duration);
-        if quality_changed {
+        // Note: FFmpeg's mov demuxer ignores duplicated moov atoms mid-stream.
+        // Mid-stream ABR switching for fMP4 requires demuxer restart across C ABI (matching DASH).
+        // For fMP4, maintain the active variant across the stream (Refs #177).
+        let is_fmp4 = segment.map.is_some();
+        if quality_changed && !is_fmp4 {
             let _ = self.reload_media_playlist();
         }
 
@@ -439,29 +453,89 @@ seg2_1.m4s
         });
 
         let url = server.url("/master.m3u8");
-        let mut source = HlsStreamSource::open(&url).expect("open deve ter sucesso");
+        let mut source = HlsStreamSource::open(&url).expect("open should succeed");
 
-        // 1. Primeira leitura: deve conter o init segment da variante inicial (índice 1 no ABR inicial)
+        // 1. Initial read: contains the init segment of the active variant (variant 1 from initial ABR)
         let mut init2_buf = vec![0u8; 21];
         source
             .read_exact(&mut init2_buf)
-            .expect("leitura do init 2 deve ter sucesso");
+            .expect("read of initial init segment should succeed");
         assert_eq!(&init2_buf, b"INIT_VARIANT_2_HEADER");
         init2_mock.assert_calls(1);
 
-        // 2. Troca de variante (ABR switch manual para a variante 0)
+        // 2. Manual variant switch to variant 0
         source
             .set_variant(Some(0))
-            .expect("troca de variante deve ter sucesso");
+            .expect("variant switch should succeed");
 
-        // 3. Próxima leitura no limite do segmento: primeiros bytes entregues DEVEM ser o init segment da nova variante (0)
+        // 3. Next read at boundary: delivered bytes must be the init segment of the new variant
         let mut init1_buf = vec![0u8; 21];
         source
             .read_exact(&mut init1_buf)
-            .expect("leitura do init 1 após switch deve ter sucesso");
+            .expect("read of new variant init segment should succeed");
         assert_eq!(&init1_buf, b"INIT_VARIANT_1_HEADER");
         init1_mock.assert_calls(1);
 
         master_mock.assert();
+    }
+
+    #[test]
+    fn test_hls_stream_source_discontinuity_emits_init_once_and_reads_all_media_segments() {
+        let server = MockServer::start();
+
+        let playlist = r#"#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:2
+#EXT-X-MAP:URI="init.mp4"
+#EXTINF:2.0,
+s0.m4s
+#EXT-X-DISCONTINUITY
+#EXTINF:2.0,
+s1.m4s
+#EXT-X-ENDLIST
+"#;
+
+        let playlist_mock = server.mock(|when, then| {
+            when.method(GET).path("/playlist.m3u8");
+            then.status(200).body(playlist);
+        });
+
+        let init_mock = server.mock(|when, then| {
+            when.method(GET).path("/init.mp4");
+            then.status(200).body(b"INIT_HEADER_123");
+        });
+
+        let s0_mock = server.mock(|when, then| {
+            when.method(GET).path("/s0.m4s");
+            then.status(200).body(b"SEGMENT_0");
+        });
+
+        let s1_mock = server.mock(|when, then| {
+            when.method(GET).path("/s1.m4s");
+            then.status(200).body(b"SEGMENT_1");
+        });
+
+        let url = server.url("/playlist.m3u8");
+        let mut source = HlsStreamSource::open(&url).expect("open should succeed");
+
+        let mut all_bytes = Vec::new();
+        source
+            .read_to_end(&mut all_bytes)
+            .expect("read_to_end should terminate and succeed");
+
+        playlist_mock.assert();
+        // Crucial assertions: init must be emitted twice (before s0 and after discontinuity before s1),
+        // and both segments must be fetched without getting stuck in an infinite loop.
+        init_mock.assert_calls(1); // Cached from first fetch, re-emitted from cache
+        s0_mock.assert_calls(1);
+        s1_mock.assert_calls(1);
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(b"INIT_HEADER_123");
+        expected.extend_from_slice(b"SEGMENT_0");
+        expected.extend_from_slice(b"INIT_HEADER_123");
+        expected.extend_from_slice(b"SEGMENT_1");
+
+        assert_eq!(all_bytes, expected);
     }
 }

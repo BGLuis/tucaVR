@@ -1,11 +1,23 @@
-//! Download e descriptografia de segmentos HLS (T8.2 / RFC 8216).
+//! Download and decryption of HLS segments (T8.2 / RFC 8216).
 
 use super::playlist::{HlsKey, HlsMap, HlsSegment};
 use aes::cipher::{BlockCipherDecrypt, KeyInit};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-/// Baixa os bytes brutos do segmento de inicialização HLS (EXT-X-MAP) aplicando Range se presente.
+/// Formats an HTTP Range header value safely, checking for zero length and overflow.
+pub(crate) fn format_byte_range_header(offset: u64, length: u64) -> Result<String, String> {
+    if length == 0 {
+        return Err("Invalid byte range: length must be greater than zero".to_string());
+    }
+    let end = offset
+        .checked_add(length)
+        .and_then(|sum| sum.checked_sub(1))
+        .ok_or_else(|| "Byte range arithmetic overflow".to_string())?;
+    Ok(format!("bytes={offset}-{end}"))
+}
+
+/// Fetches raw bytes of an HLS initialization segment (EXT-X-MAP) applying byte range if present.
 pub fn fetch_init_segment(
     client: &reqwest::blocking::Client,
     map: &HlsMap,
@@ -13,30 +25,30 @@ pub fn fetch_init_segment(
     let mut req = client.get(&map.uri);
 
     if let Some((offset, length)) = map.byte_range {
-        let end = offset + length - 1;
-        req = req.header("Range", format!("bytes={offset}-{end}"));
+        let range_hdr = format_byte_range_header(offset, length)?;
+        req = req.header("Range", range_hdr);
     }
 
     let resp = req
         .send()
-        .map_err(|e| format!("Falha ao baixar init segment HLS ({}): {e}", map.uri))?;
+        .map_err(|e| format!("Failed to fetch HLS init segment ({}): {e}", map.uri))?;
 
     if !resp.status().is_success() && resp.status().as_u16() != 206 {
         return Err(format!(
-            "Erro HTTP {} ao baixar init segment HLS",
+            "HTTP error {} while fetching HLS init segment",
             resp.status()
         ));
     }
 
     let raw_bytes = resp
         .bytes()
-        .map_err(|e| format!("Falha ao ler corpo do init segment HLS: {e}"))?
+        .map_err(|e| format!("Failed to read HLS init segment body: {e}"))?
         .to_vec();
 
     Ok(raw_bytes)
 }
 
-/// Baixa os bytes brutos de um segmento HLS via HTTP/HTTPS, aplicando range headers e descriptografia AES-128 se necessário.
+/// Fetches raw bytes of an HLS segment via HTTP/HTTPS, applying range headers and AES-128 decryption if needed.
 pub fn fetch_segment(
     client: &reqwest::blocking::Client,
     segment: &HlsSegment,
@@ -46,8 +58,8 @@ pub fn fetch_segment(
     let mut req = client.get(&segment.url);
 
     if let Some((offset, length)) = segment.byte_range {
-        let end = offset + length - 1;
-        req = req.header("Range", format!("bytes={offset}-{end}"));
+        let range_hdr = format_byte_range_header(offset, length)?;
+        req = req.header("Range", range_hdr);
     }
 
     let resp = req
@@ -265,5 +277,21 @@ mod tests {
         // Decripta
         let decrypted = decrypt_aes128_cbc(&key, &iv, &ciphertext).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_format_byte_range_header_valid_and_edge_cases() {
+        assert_eq!(format_byte_range_header(0, 500).unwrap(), "bytes=0-499");
+        assert_eq!(
+            format_byte_range_header(1000, 200).unwrap(),
+            "bytes=1000-1199"
+        );
+
+        // Zero length must return error rather than underflowing
+        assert!(format_byte_range_header(0, 0).is_err());
+        assert!(format_byte_range_header(500, 0).is_err());
+
+        // Overflow check
+        assert!(format_byte_range_header(u64::MAX - 10, 20).is_err());
     }
 }
