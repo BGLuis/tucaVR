@@ -2,7 +2,7 @@
 
 use super::abr::AdaptiveBitrateManager;
 use super::playlist::{HlsMediaPlaylist, HlsPlaylist, HlsVariant, parse_playlist};
-use super::segment::fetch_segment;
+use super::segment::{fetch_init_segment, fetch_segment};
 use crate::prefetch::RangeSource;
 use std::collections::HashMap;
 use std::io;
@@ -16,6 +16,8 @@ pub struct HlsStreamSource {
     media_playlist: HlsMediaPlaylist,
     abr: AdaptiveBitrateManager,
     key_cache: HashMap<String, Vec<u8>>,
+    init_cache: HashMap<String, Vec<u8>>,
+    last_emitted_map_uri: Option<String>,
     current_segment_idx: usize,
     buffer: Vec<u8>,
     buffer_offset_in_segment: usize,
@@ -96,6 +98,8 @@ impl HlsStreamSource {
             media_playlist,
             abr,
             key_cache: HashMap::new(),
+            init_cache: HashMap::new(),
+            last_emitted_map_uri: None,
             current_segment_idx: 0,
             buffer: Vec::new(),
             buffer_offset_in_segment: 0,
@@ -141,6 +145,8 @@ impl HlsStreamSource {
         let body = resp.text().map_err(|e| e.to_string())?;
         if let HlsPlaylist::Media(m) = parse_playlist(&body, &active_variant.url)? {
             self.media_playlist = m;
+            // Força reemissão do init segment para a nova variante ativa (#177)
+            self.last_emitted_map_uri = None;
         }
 
         Ok(())
@@ -168,6 +174,7 @@ impl HlsStreamSource {
         self.current_segment_idx = target_idx;
         self.buffer.clear();
         self.buffer_offset_in_segment = 0;
+        self.last_emitted_map_uri = None;
         log::info!(
             "HLS Seek: Saltando para segmento {} (timestamp {:.2}s / total {:.2}s)",
             target_idx,
@@ -189,6 +196,29 @@ impl HlsStreamSource {
         }
 
         let segment = self.media_playlist.segments[self.current_segment_idx].clone();
+
+        // Se o segmento possui EXT-X-MAP (fMP4/CMAF) e o init segment ainda não foi emitido
+        // para esta URI ou ocorreu descontinuidade, emite o init segment antes da mídia (#177).
+        if let Some(ref map) = segment.map {
+            let needs_init =
+                self.last_emitted_map_uri.as_deref() != Some(&map.uri) || segment.discontinuity;
+            if needs_init {
+                let init_bytes = if let Some(cached) = self.init_cache.get(&map.uri) {
+                    cached.clone()
+                } else {
+                    let fetched =
+                        fetch_init_segment(&self.client, map).map_err(io::Error::other)?;
+                    self.init_cache.insert(map.uri.clone(), fetched.clone());
+                    fetched
+                };
+
+                self.buffer = init_bytes;
+                self.buffer_offset_in_segment = 0;
+                self.last_emitted_map_uri = Some(map.uri.clone());
+                return Ok(true);
+            }
+        }
+
         let (data, dur) =
             fetch_segment(&self.client, &segment, &mut self.key_cache).map_err(io::Error::other)?;
 
@@ -273,3 +303,165 @@ impl RangeSource for HlsStreamSource {
 
 /// Wrapper `Arc<Mutex<HlsStreamSource>>` seguro para compartilhamento
 pub type SharedHlsStreamSource = Arc<Mutex<HlsStreamSource>>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use httpmock::Method::GET;
+    use httpmock::MockServer;
+    use std::io::Read;
+
+    #[test]
+    fn test_hls_stream_source_fmp4_init_segment_delivered_first() {
+        let server = MockServer::start();
+
+        let playlist = r#"#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:2
+#EXT-X-MAP:URI="init.mp4"
+#EXTINF:2.0,
+segment0.m4s
+#EXTINF:2.0,
+segment1.m4s
+#EXT-X-ENDLIST
+"#;
+
+        let playlist_mock = server.mock(|when, then| {
+            when.method(GET).path("/stream.m3u8");
+            then.status(200)
+                .header("Content-Type", "application/vnd.apple.mpegurl")
+                .body(playlist);
+        });
+
+        let init_mock = server.mock(|when, then| {
+            when.method(GET).path("/init.mp4");
+            then.status(200).body(b"INIT_MOOV_BYTES_123");
+        });
+
+        let seg0_mock = server.mock(|when, then| {
+            when.method(GET).path("/segment0.m4s");
+            then.status(200).body(b"SEGMENT_0_PAYLOAD");
+        });
+
+        let seg1_mock = server.mock(|when, then| {
+            when.method(GET).path("/segment1.m4s");
+            then.status(200).body(b"SEGMENT_1_PAYLOAD");
+        });
+
+        let url = server.url("/stream.m3u8");
+        let mut source = HlsStreamSource::open(&url).expect("open deve ter sucesso");
+
+        let mut all_bytes = Vec::new();
+        source
+            .read_to_end(&mut all_bytes)
+            .expect("read deve ter sucesso");
+
+        playlist_mock.assert();
+        init_mock.assert_calls(1);
+        seg0_mock.assert_calls(1);
+        seg1_mock.assert_calls(1);
+
+        let mut expected = Vec::new();
+        expected.extend_from_slice(b"INIT_MOOV_BYTES_123");
+        expected.extend_from_slice(b"SEGMENT_0_PAYLOAD");
+        expected.extend_from_slice(b"SEGMENT_1_PAYLOAD");
+
+        assert_eq!(all_bytes, expected);
+    }
+
+    #[test]
+    fn test_hls_stream_source_abr_switch_delivers_new_variant_init_section() {
+        let server = MockServer::start();
+
+        let master = r#"#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=640x360
+var1.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1500000,RESOLUTION=1280x720
+var2.m3u8
+"#;
+
+        let var1_playlist = r#"#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:2
+#EXT-X-MAP:URI="init1.mp4"
+#EXTINF:2.0,
+seg1_0.m4s
+#EXTINF:2.0,
+seg1_1.m4s
+#EXT-X-ENDLIST
+"#;
+
+        let var2_playlist = r#"#EXTM3U
+#EXT-X-VERSION:7
+#EXT-X-TARGETDURATION:2
+#EXT-X-MAP:URI="init2.mp4"
+#EXTINF:2.0,
+seg2_0.m4s
+#EXTINF:2.0,
+seg2_1.m4s
+#EXT-X-ENDLIST
+"#;
+
+        let master_mock = server.mock(|when, then| {
+            when.method(GET).path("/master.m3u8");
+            then.status(200).body(master);
+        });
+
+        let _var1_mock = server.mock(|when, then| {
+            when.method(GET).path("/var1.m3u8");
+            then.status(200).body(var1_playlist);
+        });
+
+        let _var2_mock = server.mock(|when, then| {
+            when.method(GET).path("/var2.m3u8");
+            then.status(200).body(var2_playlist);
+        });
+
+        let init1_mock = server.mock(|when, then| {
+            when.method(GET).path("/init1.mp4");
+            then.status(200).body(b"INIT_VARIANT_1_HEADER");
+        });
+
+        let init2_mock = server.mock(|when, then| {
+            when.method(GET).path("/init2.mp4");
+            then.status(200).body(b"INIT_VARIANT_2_HEADER");
+        });
+
+        let _seg1_mock = server.mock(|when, then| {
+            when.method(GET).path("/seg1_0.m4s");
+            then.status(200).body(b"MEDIA_V1_CHUNK");
+        });
+
+        let _seg2_mock = server.mock(|when, then| {
+            when.method(GET).path("/seg2_0.m4s");
+            then.status(200).body(b"MEDIA_V2_CHUNK");
+        });
+
+        let url = server.url("/master.m3u8");
+        let mut source = HlsStreamSource::open(&url).expect("open deve ter sucesso");
+
+        // 1. Primeira leitura: deve conter o init segment da variante inicial (índice 1 no ABR inicial)
+        let mut init2_buf = vec![0u8; 21];
+        source
+            .read_exact(&mut init2_buf)
+            .expect("leitura do init 2 deve ter sucesso");
+        assert_eq!(&init2_buf, b"INIT_VARIANT_2_HEADER");
+        init2_mock.assert_calls(1);
+
+        // 2. Troca de variante (ABR switch manual para a variante 0)
+        source
+            .set_variant(Some(0))
+            .expect("troca de variante deve ter sucesso");
+
+        // 3. Próxima leitura no limite do segmento: primeiros bytes entregues DEVEM ser o init segment da nova variante (0)
+        let mut init1_buf = vec![0u8; 21];
+        source
+            .read_exact(&mut init1_buf)
+            .expect("leitura do init 1 após switch deve ter sucesso");
+        assert_eq!(&init1_buf, b"INIT_VARIANT_1_HEADER");
+        init1_mock.assert_calls(1);
+
+        master_mock.assert();
+    }
+}

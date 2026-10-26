@@ -1,9 +1,40 @@
 //! Download e descriptografia de segmentos HLS (T8.2 / RFC 8216).
 
-use super::playlist::{HlsKey, HlsSegment};
+use super::playlist::{HlsKey, HlsMap, HlsSegment};
 use aes::cipher::{BlockCipherDecrypt, KeyInit};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
+
+/// Baixa os bytes brutos do segmento de inicialização HLS (EXT-X-MAP) aplicando Range se presente.
+pub fn fetch_init_segment(
+    client: &reqwest::blocking::Client,
+    map: &HlsMap,
+) -> Result<Vec<u8>, String> {
+    let mut req = client.get(&map.uri);
+
+    if let Some((offset, length)) = map.byte_range {
+        let end = offset + length - 1;
+        req = req.header("Range", format!("bytes={offset}-{end}"));
+    }
+
+    let resp = req
+        .send()
+        .map_err(|e| format!("Falha ao baixar init segment HLS ({}): {e}", map.uri))?;
+
+    if !resp.status().is_success() && resp.status().as_u16() != 206 {
+        return Err(format!(
+            "Erro HTTP {} ao baixar init segment HLS",
+            resp.status()
+        ));
+    }
+
+    let raw_bytes = resp
+        .bytes()
+        .map_err(|e| format!("Falha ao ler corpo do init segment HLS: {e}"))?
+        .to_vec();
+
+    Ok(raw_bytes)
+}
 
 /// Baixa os bytes brutos de um segmento HLS via HTTP/HTTPS, aplicando range headers e descriptografia AES-128 se necessário.
 pub fn fetch_segment(
