@@ -263,7 +263,7 @@ class VRActivity : NativeActivity() {
 
     // Ferramenta de debug (ver docs/DEBUGGING.md): troca o ScreenMode de um
     // video JA tocando sem precisar reiniciar o app/relançar o intent, ex.
-    // `adb shell am broadcast -a com.tucavr.debug.SET_SCREEN_MODE --ei mode 6`
+    // `adb shell am broadcast -a com.tucavr.debug.SET_SCREEN_MODE --ei screen_mode 6`
     // (6 = Sphere180, ver a ordem do enum ScreenMode em vr_player_app.cpp/
     // vr_player_app_vulkan.cpp). So registrado se o app estiver debuggable
     // (`FLAG_DEBUGGABLE` — verdadeiro pro build `debug` do Gradle por
