@@ -486,7 +486,6 @@ class VRActivity : NativeActivity() {
         // Fase 0.4 T5: empurra o modo persistido de Foveated Rendering pro Rust/C++
         val fovMode = FeatureFlags.getFoveatedRenderingMode(this)
         nativeSetFoveationMode(fovMode)
-        nativeSetFoveationEnabled(fovMode != 0)
 
         // Pausar ao sair: empurra preferência inicial de auto-pause para a camada nativa
         nativeSetPauseOnExit(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PAUSE_ON_EXIT))
