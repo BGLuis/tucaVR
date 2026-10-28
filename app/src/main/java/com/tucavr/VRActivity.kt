@@ -2572,6 +2572,10 @@ class VRActivity : NativeActivity() {
     // (padrao de build); GLES aceita a chamada mas nao aplica — ver
     // comentario em native/src/vr_player_app.cpp. Chamada barata (so um
     // atomic no lado Rust), segura direto da UI thread.
+    @Deprecated(
+        "Overrides granular foveation mode to Auto (4). Use nativeSetFoveationMode instead.",
+        replaceWith = ReplaceWith("nativeSetFoveationMode(if (enabled) 4 else 0)"),
+    )
     external fun nativeSetFoveationEnabled(enabled: Boolean)
 
     external fun nativeSetFoveationMode(mode: Int)
