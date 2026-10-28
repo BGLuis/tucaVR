@@ -228,7 +228,7 @@ Validates stereoscopic spherical projections, HDR tonemapping, Meta Quest Super 
 - **Projection ADB Overrides (`docs/DEBUGGING.md` §2):**
   ```bash
   # Sphere180 (mode 6), Vr180SBS (9), Cubemap/EAC (10-14), Fisheye190 (15-16)
-  adb shell am broadcast -a com.tucavr.debug.SET_SCREEN_MODE --ei mode 6
+  adb shell am broadcast -a com.tucavr.debug.SET_SCREEN_MODE --ei screen_mode 6
   adb shell am broadcast -a com.tucavr.debug.SET_ENVIRONMENT --es environment_id space
   ```
 - **Test Assets:**

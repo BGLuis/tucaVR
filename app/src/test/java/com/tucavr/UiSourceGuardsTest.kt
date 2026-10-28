@@ -132,6 +132,20 @@ class UiSourceGuardsTest {
     }
 
     @Test
+    fun `foveated rendering does not call nativeSetFoveationEnabled to prevent mode override`() {
+        listOf("VRActivity.kt", "screens/SettingsScreen.kt").forEach { fileName ->
+            val target = File(TestPaths.mainSources, "com/tucavr/$fileName")
+            assertTrue("File must exist: ${target.path}", target.exists())
+            val content = target.readText()
+            val calls = Regex("""(?<!external fun\s)\bnativeSetFoveationEnabled\s*\(""").findAll(content).toList()
+            assertTrue(
+                "$fileName must not call nativeSetFoveationEnabled because it overrides granular modes to Auto (Issue #41)",
+                calls.isEmpty(),
+            )
+        }
+    }
+
+    @Test
     fun `user-facing text comes from string resources`() = assertMatchesBaseline(RULE_TEXT)
 
     @Test

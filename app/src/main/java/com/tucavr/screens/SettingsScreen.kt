@@ -810,7 +810,6 @@ class SettingsScreen(
                     onOptionSelected = { mode ->
                         FeatureFlags.setFoveatedRenderingMode(context, mode)
                         activity.nativeSetFoveationMode(mode)
-                        activity.nativeSetFoveationEnabled(mode != 0)
                     },
                 )
             addView(selector)

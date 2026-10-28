@@ -263,7 +263,7 @@ class VRActivity : NativeActivity() {
 
     // Ferramenta de debug (ver docs/DEBUGGING.md): troca o ScreenMode de um
     // video JA tocando sem precisar reiniciar o app/relançar o intent, ex.
-    // `adb shell am broadcast -a com.tucavr.debug.SET_SCREEN_MODE --ei mode 6`
+    // `adb shell am broadcast -a com.tucavr.debug.SET_SCREEN_MODE --ei screen_mode 6`
     // (6 = Sphere180, ver a ordem do enum ScreenMode em vr_player_app.cpp/
     // vr_player_app_vulkan.cpp). So registrado se o app estiver debuggable
     // (`FLAG_DEBUGGABLE` — verdadeiro pro build `debug` do Gradle por
@@ -486,7 +486,6 @@ class VRActivity : NativeActivity() {
         // Fase 0.4 T5: empurra o modo persistido de Foveated Rendering pro Rust/C++
         val fovMode = FeatureFlags.getFoveatedRenderingMode(this)
         nativeSetFoveationMode(fovMode)
-        nativeSetFoveationEnabled(fovMode != 0)
 
         // Pausar ao sair: empurra preferência inicial de auto-pause para a camada nativa
         nativeSetPauseOnExit(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PAUSE_ON_EXIT))
@@ -2573,6 +2572,10 @@ class VRActivity : NativeActivity() {
     // (padrao de build); GLES aceita a chamada mas nao aplica — ver
     // comentario em native/src/vr_player_app.cpp. Chamada barata (so um
     // atomic no lado Rust), segura direto da UI thread.
+    @Deprecated(
+        "Overrides granular foveation mode to Auto (4). Use nativeSetFoveationMode instead.",
+        replaceWith = ReplaceWith("nativeSetFoveationMode(if (enabled) 4 else 0)"),
+    )
     external fun nativeSetFoveationEnabled(enabled: Boolean)
 
     external fun nativeSetFoveationMode(mode: Int)
