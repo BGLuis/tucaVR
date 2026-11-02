@@ -289,7 +289,7 @@ Audio and video synchronization is governed by the `SyncManager` class (`rust/me
 - **Audio as Master Clock:** the Rust audio decode thread reports the PTS (*Presentation Time Stamp*) of the audio actually being heard, computed by `acoustic_audio_pts(...)` (the PTS written to the Oboe queue minus the delay of the samples still queued), through `update_audio_pts(pts)`.
 - **Wall-Clock Fallback:** if the video has no audio track, or during initial buffering before the first audio packet, the master clock uses a monotonic system clock with speed-scale compensation (`start_time.elapsed() * speed`).
 - **Drop and Catch-Up Policies (Drift Compensation):**
-  - **`LATE_FRAME_RENDER_SKIP_SEC` ($0.10\text{s} = 100\text{ms}$):** if a decoded frame arrives more than 100 ms late relative to the audio, it is dropped at presentation time so it does not delay the render loop.
+  - **Late frame drop threshold (`late_skip_sec` = 1 frame period / 20 ms fallback):** if a decoded frame arrives more than one frame period late relative to the master clock (`1.0 / fps`, falling back to 20 ms when frame rate is unknown or non-positive), it is dropped at presentation time so playback catches up without showing stale frames.
   - **`CATCH_UP_SKIP_THRESHOLD_SEC` ($0.50\text{s} = 500\text{ms}$):** if the accumulated delay exceeds half a second (for example a network latency spike or a decoder bottleneck at 2x), non-key video packets (B/P frames) are summarily dropped **before** decoding until the next keyframe (I frame).
 - **Frame presentation decision:** the video thread calls `media_logic::frame_timing::decide_frame_action`, which returns `Land` (first frame after a seek, shown immediately), `WaitThenRender(duration)` (frame is early, wait up to 1 s in short slices), `RenderNow` (on time or late within the tolerance) or `Drop` (too late to be worth showing).
 
@@ -500,10 +500,10 @@ sequenceDiagram
 
     alt WaitThenRender (PTS_video > master_audio_pts)
         Vid->>Vid: Waits the time difference (regulated sleep, up to 1 s)
-    else RenderNow (PTS_video <= master_audio_pts, within 100 ms)
+    else RenderNow (PTS_video <= master_audio_pts, within late_skip_sec)
         Vid->>Vid: Submits the frame to MediaCodec for presentation
-    else Drop (PTS_video < master_audio_pts - 100ms, late)
-        Vid->>Vid: Drops the frame (LATE_FRAME_RENDER_SKIP_SEC) to recover drift
+    else Drop (PTS_video < master_audio_pts - late_skip_sec, late)
+        Vid->>Vid: Drops the frame (late_skip_sec) to recover drift
     end
 ```
 

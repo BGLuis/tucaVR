@@ -25,11 +25,25 @@ pub enum FrameAction {
     Drop,
 }
 
-/// `pts_sec`/`master_clock` em segundos; `late_skip_sec` e a tolerancia
-/// (`LATE_FRAME_RENDER_SKIP_SEC` em playback.rs) abaixo da qual um frame
-/// `pts_sec`/`master_clock` em segundos; `late_skip_sec` e a tolerancia
-/// (`LATE_FRAME_RENDER_SKIP_SEC` em playback.rs) abaixo da qual um frame
-/// atrasado ainda e mostrado em vez de descartado.
+/// Default fallback late tolerance (20 ms) when stream frame rate is unknown or non-positive.
+/// Matches VLC video output behavior (Source F1).
+pub const DEFAULT_LATE_SKIP_SEC: f64 = 0.020;
+
+/// Calculates the late frame drop threshold in seconds from stream fps.
+///
+/// Follows VLC late threshold logic: drops late frames once they are more than one frame period late
+/// (`1.0 / fps`), falling back to 20 ms (`DEFAULT_LATE_SKIP_SEC`) when the frame rate is unknown,
+/// non-positive, or not finite.
+pub fn late_skip_sec_from_fps(fps: f32) -> f64 {
+    if fps > 0.0 && fps.is_finite() {
+        1.0 / (fps as f64)
+    } else {
+        DEFAULT_LATE_SKIP_SEC
+    }
+}
+
+/// `pts_sec`/`master_clock` in seconds; `late_skip_sec` is the late tolerance
+/// threshold below which a late frame is still rendered instead of dropped.
 pub fn decide_frame_action(
     pts_sec: f64,
     master_clock: f64,
@@ -116,6 +130,45 @@ mod tests {
         assert_eq!(
             action,
             FrameAction::WaitThenRender(Duration::from_secs_f64(1.0))
+        );
+    }
+
+    #[test]
+    fn frame_twenty_ms_late_at_60fps_is_dropped() {
+        let late_skip = late_skip_sec_from_fps(60.0);
+        // At 60 fps (~16.67 ms duration), a frame 20 ms late exceeds 1 frame period and must be dropped.
+        assert_eq!(
+            decide_frame_action(1.0 - 0.020, 1.0, false, late_skip),
+            FrameAction::Drop
+        );
+    }
+
+    #[test]
+    fn frame_twenty_ms_late_at_24fps_is_rendered() {
+        let late_skip = late_skip_sec_from_fps(24.0);
+        // At 24 fps (~41.67 ms duration), a frame 20 ms late is within 1 frame period and rendered.
+        assert_eq!(
+            decide_frame_action(1.0 - 0.020, 1.0, false, late_skip),
+            FrameAction::RenderNow
+        );
+    }
+
+    #[test]
+    fn unknown_frame_rate_uses_twenty_ms_threshold() {
+        assert_eq!(late_skip_sec_from_fps(0.0), 0.020);
+        assert_eq!(late_skip_sec_from_fps(-5.0), 0.020);
+        assert_eq!(late_skip_sec_from_fps(f32::NAN), 0.020);
+
+        let late_skip = late_skip_sec_from_fps(0.0);
+        // 19 ms late is within the 20 ms threshold -> RenderNow
+        assert_eq!(
+            decide_frame_action(1.0 - 0.019, 1.0, false, late_skip),
+            FrameAction::RenderNow
+        );
+        // 21 ms late exceeds the 20 ms threshold -> Drop
+        assert_eq!(
+            decide_frame_action(1.0 - 0.021, 1.0, false, late_skip),
+            FrameAction::Drop
         );
     }
 }
