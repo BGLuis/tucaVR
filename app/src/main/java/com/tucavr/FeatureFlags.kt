@@ -72,6 +72,9 @@ object FeatureFlags {
 
         // Vibração háptica no hover ao apontar controles (Issue #100)
         HOVER_HAPTICS("hover_haptics", defaultEnabled = true),
+
+        // Sincronizar taxa de atualização do display com o fps do vídeo (Issue #174)
+        MATCH_CONTENT_FRAME_RATE("match_content_frame_rate", defaultEnabled = true),
     }
 
     /** Chave usada para persistir o brilho do ambiente 3D/Skybox (0.0f a 1.0f). Padrão: 1.0f (100%). */
@@ -145,6 +148,15 @@ object FeatureFlags {
     ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(flag.key, enabled).apply()
+    }
+
+    fun isMatchContentFrameRateEnabled(context: Context): Boolean = isEnabled(context, Flag.MATCH_CONTENT_FRAME_RATE)
+
+    fun setMatchContentFrameRateEnabled(
+        context: Context,
+        enabled: Boolean,
+    ) {
+        setEnabled(context, Flag.MATCH_CONTENT_FRAME_RATE, enabled)
     }
 
     /**

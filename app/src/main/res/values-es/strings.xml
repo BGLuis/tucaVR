@@ -72,6 +72,8 @@
     <string name="settings_night_mode_description">Reduce la emisión de luz azul (~3000K) para comodidad visual en entornos oscuros.</string>
     <string name="quality_warning_thermal">Límite térmico alcanzado: reduciendo calidad de renderizado para enfriar el dispositivo.</string>
     <string name="quality_warning_8k60">El video 8K con alta tasa de cuadros puede experimentar caídas de cuadros en hardware móvil.</string>
+    <string name="settings_match_content_frame_rate_label">Sincronizar tasa de cuadros</string>
+    <string name="settings_match_content_frame_rate_description">Sincroniza la tasa de actualización con los fps del video (ej: 72 o 120 Hz para 24 fps) para eliminar vibración.</string>
     <string name="settings_pause_on_exit_label">Pausar al salir</string>
     <string name="settings_pause_on_exit_description">Pausa automáticamente la reproducción al volver al menú del sistema o passthrough.</string>
     <string name="settings_section_audio">Audio</string>

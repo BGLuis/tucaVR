@@ -81,6 +81,8 @@
     <string name="settings_night_mode_description">Reduces blue light emission (~3000K) for comfortable viewing in dark environments.</string>
     <string name="quality_warning_thermal">Thermal limit reached: reducing rendering quality to cool down device.</string>
     <string name="quality_warning_8k60">High framerate 8K video may experience frame drops on mobile hardware.</string>
+    <string name="settings_match_content_frame_rate_label">Match content frame rate</string>
+    <string name="settings_match_content_frame_rate_description">Sync display refresh rate to video fps (e.g. 72 or 120 Hz for 24 fps) to eliminate judder.</string>
     <string name="settings_pause_on_exit_label">Pause on exit</string>
     <string name="settings_pause_on_exit_description">Automatically pause playback when returning to the system menu or passthrough.</string>
     <string name="settings_section_audio">Audio</string>

@@ -547,6 +547,42 @@ pub extern "C" fn quality_controller_get_reason() -> u32 {
 }
 
 #[no_mangle]
+pub extern "C" fn set_supported_refresh_rates(rates: *const f32, count: u32) {
+    if rates.is_null() || count == 0 {
+        return;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(rates, count as usize) };
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        qc.set_supported_refresh_rates(slice.to_vec());
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn set_match_content_frame_rate(enabled: u32) {
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        qc.set_match_content_frame_rate(enabled != 0);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_match_content_frame_rate() -> u32 {
+    if let Ok(qc) = QUALITY_CONTROLLER.lock() {
+        qc.match_content_frame_rate() as u32
+    } else {
+        1
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_video_fps() -> f32 {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        controller.video_fps()
+    } else {
+        0.0
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn quality_controller_evaluate_and_resolve(
     thermal_level: u32,
     smoothed_gpu_time_ms: f32,
@@ -2411,6 +2447,9 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
                 set_last_playback_error(format!("{:?}", e));
             } else {
                 apply_screen_mode_after_load(&controller);
+                if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+                    qc.set_content_fps(controller.video_fps());
+                }
                 unsafe {
                     log(4, "Video loaded successfully!");
                 }
@@ -2498,6 +2537,8 @@ pub extern "C" fn seek_video_playback(position: f32) {
                     log(6, &format!("Error seeking video: {e}"));
                 }
                 set_last_playback_error(e);
+            } else if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+                qc.set_content_fps(controller.video_fps());
             }
         }
     });
