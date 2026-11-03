@@ -25,6 +25,14 @@ pub enum FrameAction {
     Drop,
 }
 
+/// Minimum late frame drop threshold (5 ms). Prevents overly aggressive frame drops
+/// on streams with corrupted or absurdly high reported frame rates (e.g. 1000+ fps).
+pub const MIN_LATE_SKIP_SEC: f64 = 0.005;
+
+/// Maximum late frame drop threshold (100 ms). Caps the drop threshold so streams with
+/// near-zero or extremely low reported frame rates do not effectively disable late frame dropping.
+pub const MAX_LATE_SKIP_SEC: f64 = 0.100;
+
 /// Default fallback late tolerance (20 ms) when stream frame rate is unknown or non-positive.
 /// Matches VLC video output behavior (Source F1).
 pub const DEFAULT_LATE_SKIP_SEC: f64 = 0.020;
@@ -32,11 +40,12 @@ pub const DEFAULT_LATE_SKIP_SEC: f64 = 0.020;
 /// Calculates the late frame drop threshold in seconds from stream fps.
 ///
 /// Follows VLC late threshold logic: drops late frames once they are more than one frame period late
-/// (`1.0 / fps`), falling back to 20 ms (`DEFAULT_LATE_SKIP_SEC`) when the frame rate is unknown,
-/// non-positive, or not finite.
+/// (`1.0 / fps`), clamped to `[MIN_LATE_SKIP_SEC, MAX_LATE_SKIP_SEC]` (5 ms to 100 ms) to guard
+/// against degenerate values from corrupted stream metadata, falling back to 20 ms
+/// (`DEFAULT_LATE_SKIP_SEC`) when the frame rate is unknown, non-positive, or not finite.
 pub fn late_skip_sec_from_fps(fps: f32) -> f64 {
     if fps > 0.0 && fps.is_finite() {
-        1.0 / (fps as f64)
+        (1.0 / (fps as f64)).clamp(MIN_LATE_SKIP_SEC, MAX_LATE_SKIP_SEC)
     } else {
         DEFAULT_LATE_SKIP_SEC
     }
@@ -168,6 +177,42 @@ mod tests {
         // 21 ms late exceeds the 20 ms threshold -> Drop
         assert_eq!(
             decide_frame_action(1.0 - 0.021, 1.0, false, late_skip),
+            FrameAction::Drop
+        );
+    }
+
+    #[test]
+    fn excessively_high_fps_is_clamped_to_min_threshold() {
+        assert_eq!(late_skip_sec_from_fps(1000.0), MIN_LATE_SKIP_SEC);
+        assert_eq!(late_skip_sec_from_fps(90000.0), MIN_LATE_SKIP_SEC);
+
+        let late_skip = late_skip_sec_from_fps(1000.0);
+        // 4 ms late is within the 5 ms threshold -> RenderNow
+        assert_eq!(
+            decide_frame_action(1.0 - 0.004, 1.0, false, late_skip),
+            FrameAction::RenderNow
+        );
+        // 6 ms late exceeds the 5 ms threshold -> Drop
+        assert_eq!(
+            decide_frame_action(1.0 - 0.006, 1.0, false, late_skip),
+            FrameAction::Drop
+        );
+    }
+
+    #[test]
+    fn near_zero_fps_is_clamped_to_max_threshold() {
+        assert_eq!(late_skip_sec_from_fps(0.001), MAX_LATE_SKIP_SEC);
+        assert_eq!(late_skip_sec_from_fps(f32::MIN_POSITIVE), MAX_LATE_SKIP_SEC);
+
+        let late_skip = late_skip_sec_from_fps(0.001);
+        // 99 ms late is within the 100 ms threshold -> RenderNow
+        assert_eq!(
+            decide_frame_action(1.0 - 0.099, 1.0, false, late_skip),
+            FrameAction::RenderNow
+        );
+        // 101 ms late exceeds the 100 ms threshold -> Drop
+        assert_eq!(
+            decide_frame_action(1.0 - 0.101, 1.0, false, late_skip),
             FrameAction::Drop
         );
     }
