@@ -4,6 +4,9 @@
 //! eliminate 3:2 pull-down judder without depending on Android or OpenXR.
 //! Enables 100% host testing via `cargo test -p media-logic refresh`.
 
+/// Relative tolerance for cadence matching and NTSC fractional rates (~0.1% for 24000/1001 ≈ 0.0999%).
+pub const CADENCE_TOLERANCE: f32 = 0.0011;
+
 /// Normalizes standard video frame rates (e.g. NTSC 23.976, 29.97, 59.94)
 /// to their nominal integer cadences if within 0.1% tolerance.
 pub fn normalize_fps(fps: f32) -> f32 {
@@ -11,13 +14,21 @@ pub fn normalize_fps(fps: f32) -> f32 {
         return 0.0;
     }
     // 24000 / 1001 ≈ 23.976024
-    if (fps - 24.0 / 1.001).abs() / 24.0 <= 0.002 || (fps - 24.0).abs() / 24.0 <= 0.002 {
+    if (fps - 24.0 / 1.001).abs() / 24.0 <= CADENCE_TOLERANCE
+        || (fps - 24.0).abs() / 24.0 <= CADENCE_TOLERANCE
+    {
         24.0
-    } else if (fps - 30.0 / 1.001).abs() / 30.0 <= 0.002 || (fps - 30.0).abs() / 30.0 <= 0.002 {
+    } else if (fps - 30.0 / 1.001).abs() / 30.0 <= CADENCE_TOLERANCE
+        || (fps - 30.0).abs() / 30.0 <= CADENCE_TOLERANCE
+    {
         30.0
-    } else if (fps - 48.0 / 1.001).abs() / 48.0 <= 0.002 || (fps - 48.0).abs() / 48.0 <= 0.002 {
+    } else if (fps - 48.0 / 1.001).abs() / 48.0 <= CADENCE_TOLERANCE
+        || (fps - 48.0).abs() / 48.0 <= CADENCE_TOLERANCE
+    {
         48.0
-    } else if (fps - 60.0 / 1.001).abs() / 60.0 <= 0.002 || (fps - 60.0).abs() / 60.0 <= 0.002 {
+    } else if (fps - 60.0 / 1.001).abs() / 60.0 <= CADENCE_TOLERANCE
+        || (fps - 60.0).abs() / 60.0 <= CADENCE_TOLERANCE
+    {
         60.0
     } else {
         fps
@@ -37,7 +48,7 @@ pub fn is_cadence_multiple(rate: f32, fps: f32) -> bool {
         return false;
     }
     let diff = (ratio - round_ratio).abs();
-    diff / round_ratio <= 0.002
+    diff / round_ratio <= CADENCE_TOLERANCE
 }
 
 /// Returns all rates from `supported_rates` that are whole multiples of `fps`,
@@ -132,6 +143,10 @@ mod tests {
             choose_refresh_rate(59.94, &quest3_rates, 120.0, 90.0),
             120.0
         );
+
+        // 24.05 fps exceeds 0.1% tolerance and is not normalized to 24
+        assert_eq!(normalize_fps(24.05), 24.05);
+        assert_eq!(choose_refresh_rate(24.05, &quest3_rates, 120.0, 90.0), 90.0);
     }
 
     #[test]
