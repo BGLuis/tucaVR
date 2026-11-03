@@ -24,6 +24,7 @@ import com.tucavr.filebrowser.MediaEntry
 import com.tucavr.filebrowser.MediaType
 import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ThumbnailGenerator
+import com.tucavr.history.HistoryAvailability
 import com.tucavr.history.HistorySourceResolver
 import com.tucavr.history.HistorySourceType
 import com.tucavr.history.PlaybackHistory
@@ -145,8 +146,9 @@ class HomeScreen(
                 withContext(Dispatchers.IO) {
                     activity.historyTracker.listRecent()
                 }
-            val resumable = allRecent.filter { it.isResumable() }.take(10)
-            val items = if (resumable.isNotEmpty()) resumable else allRecent.take(10)
+            val available = HistoryAvailability.filterAvailable(activity, allRecent)
+            val resumable = available.filter { it.isResumable() }.take(10)
+            val items = if (resumable.isNotEmpty()) resumable else available.take(10)
 
             if (items.isEmpty()) {
                 emptyText.visibility = View.VISIBLE

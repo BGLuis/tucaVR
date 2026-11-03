@@ -13,6 +13,7 @@ import com.tucavr.designsystem.VoidFilterChip
 import com.tucavr.designsystem.VoidPanelChrome
 import com.tucavr.designsystem.VoidText
 import com.tucavr.designsystem.VoidTheme
+import com.tucavr.history.HistoryAvailability
 import com.tucavr.history.HistorySourceType
 import com.tucavr.history.PlaybackHistory
 import com.tucavr.history.isResumable
@@ -82,19 +83,20 @@ class ContinueWatchingScreen(
 
         lateinit var adapter: HistoryAdapter
 
+        // Loaded once per render: switching chips must not list the remote servers again.
+        var available: List<PlaybackHistory>? = null
+
         fun refresh() {
-            scope.launch {
-                val allItems = activity.historyTracker.listRecent()
-                val items =
-                    if (filterOnlyResumable) {
-                        allItems.filter { it.isResumable() }
-                    } else {
-                        allItems
-                    }
-                adapter.submit(items)
-                recycler.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
-                emptyText.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
-            }
+            val loaded = available ?: return
+            val items =
+                if (filterOnlyResumable) {
+                    loaded.filter { it.isResumable() }
+                } else {
+                    loaded
+                }
+            adapter.submit(items)
+            recycler.visibility = if (items.isEmpty()) View.GONE else View.VISIBLE
+            emptyText.visibility = if (items.isEmpty()) View.VISIBLE else View.GONE
         }
 
         chipResumable =
@@ -134,6 +136,7 @@ class ContinueWatchingScreen(
                 onRemoveClick = { entry ->
                     scope.launch {
                         activity.historyTracker.delete(entry.historyKey)
+                        available = available?.filterNot { it.historyKey == entry.historyKey }
                         refresh()
                     }
                 },
@@ -143,7 +146,10 @@ class ContinueWatchingScreen(
         root.addView(recycler)
         root.addView(emptyText)
         host.showScreen(root)
-        refresh()
+        scope.launch {
+            available = HistoryAvailability.filterAvailable(activity, activity.historyTracker.listRecent())
+            refresh()
+        }
     }
 
     /**
