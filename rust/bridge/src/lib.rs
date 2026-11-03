@@ -565,24 +565,6 @@ pub extern "C" fn set_match_content_frame_rate(enabled: u32) {
 }
 
 #[no_mangle]
-pub extern "C" fn get_match_content_frame_rate() -> u32 {
-    if let Ok(qc) = QUALITY_CONTROLLER.lock() {
-        qc.match_content_frame_rate() as u32
-    } else {
-        1
-    }
-}
-
-#[no_mangle]
-pub extern "C" fn get_video_fps() -> f32 {
-    if let Ok(controller) = CONTROLLER.try_lock() {
-        controller.video_fps()
-    } else {
-        0.0
-    }
-}
-
-#[no_mangle]
 pub extern "C" fn quality_controller_evaluate_and_resolve(
     thermal_level: u32,
     smoothed_gpu_time_ms: f32,

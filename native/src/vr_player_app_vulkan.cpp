@@ -243,8 +243,6 @@ extern "C" {
     extern uint32_t quality_controller_get_reason();
     extern void set_supported_refresh_rates(const float* rates, uint32_t count);
     extern void set_match_content_frame_rate(uint32_t enabled);
-    extern uint32_t get_match_content_frame_rate();
-    extern float get_video_fps();
     // P-05: tid das 3 threads do pipeline Rust, pra registro via xrSetAndroidApplicationThreadKHR.
     // Retornam 0 enquanto a thread correspondente ainda nao subiu.
     extern int32_t get_demux_thread_tid();

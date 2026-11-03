@@ -88,7 +88,6 @@ extern "C" {
     extern void set_upscaling_mode(uint32_t mode);
     extern uint32_t get_upscaling_mode();
     extern void set_match_content_frame_rate(uint32_t enabled);
-    extern uint32_t get_match_content_frame_rate();
     // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
     extern void set_thermal_level(uint32_t level);
     extern uint32_t get_thermal_level();

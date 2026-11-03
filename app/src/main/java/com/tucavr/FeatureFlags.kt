@@ -73,7 +73,7 @@ object FeatureFlags {
         // Vibração háptica no hover ao apontar controles (Issue #100)
         HOVER_HAPTICS("hover_haptics", defaultEnabled = true),
 
-        // Sincronizar taxa de atualização do display com o fps do vídeo (Issue #174)
+        // Match display refresh rate to content frame rate (Issue #174)
         MATCH_CONTENT_FRAME_RATE("match_content_frame_rate", defaultEnabled = true),
     }
 
@@ -148,15 +148,6 @@ object FeatureFlags {
     ) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putBoolean(flag.key, enabled).apply()
-    }
-
-    fun isMatchContentFrameRateEnabled(context: Context): Boolean = isEnabled(context, Flag.MATCH_CONTENT_FRAME_RATE)
-
-    fun setMatchContentFrameRateEnabled(
-        context: Context,
-        enabled: Boolean,
-    ) {
-        setEnabled(context, Flag.MATCH_CONTENT_FRAME_RATE, enabled)
     }
 
     /**
