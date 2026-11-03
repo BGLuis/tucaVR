@@ -31,15 +31,12 @@ pub static AUDIO_THREAD_TID: AtomicI32 = AtomicI32::new(0);
 /// fixo pre-existente.
 pub static DEVICE_TOTAL_MEMORY_BYTES: AtomicU64 = AtomicU64::new(0);
 
-const LATE_FRAME_RENDER_SKIP_SEC: f64 = 0.1;
-
-/// Quando o proximo pacote de video ja nasce mais atrasado que isto em
-/// relacao ao master_clock, pacotes nao-chave sao descartados sem decodificar
-/// ate a proxima keyframe (ver video_thread). Sem isso, um atraso persistente
-/// (decode mais lento que o exigido pela velocidade pedida, ex: 2x em 8K60,
-/// onde o hardware ja decodifica perto do limite em 1x) nunca se recupera —
-/// LATE_FRAME_RENDER_SKIP_SEC so descarta no render, sem reduzir o backlog,
-/// entao o atraso so cresce e trava no ultimo frame renderizado pra sempre.
+/// When the next video packet arrives with more delay than this threshold relative
+/// to the master clock, non-key packets are dropped without decoding until the next
+/// keyframe (see video_thread). Without this, persistent delay (e.g. decoding slower
+/// than required playback speed, such as 2x at 8K60) never recovers — dropping late frames
+/// at render time (via late_skip_sec) alone only discards frames at presentation without
+/// reducing the queue backlog, causing delay to grow indefinitely.
 const CATCH_UP_SKIP_THRESHOLD_SEC: f64 = 0.5;
 
 /// Quantas vezes seguidas a thread de demux tenta retomar perto da ultima
@@ -953,6 +950,7 @@ impl PlaybackController {
         // Thread 2: Video Decoder
         let sync_v = sync_manager.clone();
         let video_present_pending_v = self.video_present_pending.clone();
+        let late_skip_sec = media_logic::frame_timing::late_skip_sec_from_fps(video_fps);
         let video_thread = thread::spawn(move || {
             VIDEO_THREAD_TID.store(unsafe { libc::gettid() }, Ordering::Relaxed);
             if let Some(sps) = sps_pps {
@@ -1052,7 +1050,7 @@ impl PlaybackController {
                         pts_sec,
                         master_clock,
                         is_landing,
-                        LATE_FRAME_RENDER_SKIP_SEC,
+                        late_skip_sec,
                     ) {
                         media_logic::frame_timing::FrameAction::WaitThenRender(d) => {
                             if d <= std::time::Duration::from_millis(15) {
@@ -1542,8 +1540,8 @@ impl PlaybackController {
             .unwrap_or(0)
     }
 
-    /// Debug (docs/DEBUGGING.md) — frames que o MediaCodec produziu mas o
-    /// callback de sync descartou por atraso (LATE_FRAME_RENDER_SKIP_SEC).
+    /// Debug (docs/DEBUGGING.md) — frames that MediaCodec produced but were
+    /// dropped at render time due to late arrival (late_skip_sec threshold).
     pub fn get_frames_dropped_count(&self) -> u64 {
         self.frames_dropped
             .as_ref()

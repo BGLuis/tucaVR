@@ -844,8 +844,8 @@ pub extern "C" fn get_video_frames_output_count() -> u64 {
     })
 }
 
-/// Debug (docs/DEBUGGING.md): frames que o MediaCodec produziu mas foram
-/// descartados por chegarem atrasados (LATE_FRAME_RENDER_SKIP_SEC).
+/// Debug (docs/DEBUGGING.md): frames produced by MediaCodec that were
+/// dropped at presentation time due to arriving late (late_skip_sec threshold).
 #[no_mangle]
 pub extern "C" fn get_video_frames_dropped_count() -> u64 {
     media_logic::session::try_sample_cached(&CONTROLLER, &LAST_FRAMES_DROPPED, |controller| {
