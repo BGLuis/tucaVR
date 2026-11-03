@@ -582,6 +582,7 @@ class VRActivity : NativeActivity() {
 
         // Upscaling de vídeo (Vulkan MQSR / SGSR1): empurra modo persistido pro nativo
         nativeSetUpscalingMode(upscalingStore.get().id)
+        nativeSetMatchContentFrameRate(FeatureFlags.isEnabled(this, FeatureFlags.Flag.MATCH_CONTENT_FRAME_RATE))
     }
 
     override fun onDestroy() {
@@ -2756,4 +2757,6 @@ class VRActivity : NativeActivity() {
 
     // Upscaling de vídeo (Vulkan MQSR / SGSR1): 0=OFF, 1=QUALITY, 2=PERFORMANCE, 3=AUTO
     external fun nativeSetUpscalingMode(mode: Int)
+
+    external fun nativeSetMatchContentFrameRate(enabled: Boolean)
 }

@@ -241,6 +241,8 @@ extern "C" {
     );
     extern uint32_t quality_controller_get_level();
     extern uint32_t quality_controller_get_reason();
+    extern void set_supported_refresh_rates(const float* rates, uint32_t count);
+    extern void set_match_content_frame_rate(uint32_t enabled);
     // P-05: tid das 3 threads do pipeline Rust, pra registro via xrSetAndroidApplicationThreadKHR.
     // Retornam 0 enquanto a thread correspondente ainda nao subiu.
     extern int32_t get_demux_thread_tid();
@@ -9604,6 +9606,7 @@ void android_main(android_app* app) {
                 XrResult enumResult = state.pfnEnumerateDisplayRefreshRatesFB(
                     state.session, rateCount, &rateCount, rates.data());
                 if (!XR_FAILED(enumResult) && !rates.empty()) {
+                    set_supported_refresh_rates(rates.data(), static_cast<uint32_t>(rates.size()));
                     float bestAtOrBelow = -1.0f;
                     float lowestAbove = -1.0f;
                     for (float hz : rates) {

@@ -441,6 +441,14 @@ class SettingsScreen(
             Category.PLAYBACK -> {
                 content.addView(
                     buildFlagRow(
+                        labelRes = R.string.settings_match_content_frame_rate_label,
+                        descriptionRes = R.string.settings_match_content_frame_rate_description,
+                        flag = FeatureFlags.Flag.MATCH_CONTENT_FRAME_RATE,
+                        onChanged = { enabled -> activity.nativeSetMatchContentFrameRate(enabled) },
+                    ),
+                )
+                content.addView(
+                    buildFlagRow(
                         labelRes = R.string.settings_pause_on_exit_label,
                         descriptionRes = R.string.settings_pause_on_exit_description,
                         flag = FeatureFlags.Flag.PAUSE_ON_EXIT,

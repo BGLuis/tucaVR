@@ -81,6 +81,15 @@ impl QualityLevel {
         }
     }
 
+    /// Maximum refresh rate ceiling allowed for this quality level (in Hz).
+    pub fn max_refresh_rate(&self) -> f32 {
+        match self {
+            QualityLevel::Ultra => 120.0f32,
+            QualityLevel::High | QualityLevel::Medium => 90.0f32,
+            QualityLevel::Low | QualityLevel::Emergency => 72.0f32,
+        }
+    }
+
     /// Degrada 1 nível em direção ao Emergency.
     pub fn step_down(&self) -> Self {
         match self {
@@ -184,6 +193,12 @@ pub struct QualityController {
     stable_healthy_samples: u32,
     /// Se o modo adaptativo automático está ativo (true por padrão).
     enabled: bool,
+    /// Se a sincronização da taxa de atualização com o fps do vídeo está ativa.
+    match_content_frame_rate: bool,
+    /// Taxa de quadros do vídeo atual (0.0 se desconhecido).
+    content_fps: f32,
+    /// Taxas de atualização suportadas pelo headset/runtime (ex: [72, 90, 120]).
+    supported_refresh_rates: Vec<f32>,
 }
 
 impl Default for QualityController {
@@ -214,7 +229,40 @@ impl QualityController {
             pacing_stress_count: 0,
             stable_healthy_samples: 0,
             enabled: true,
+            match_content_frame_rate: true,
+            content_fps: 0.0f32,
+            supported_refresh_rates: Vec::new(),
         }
+    }
+
+    pub fn set_match_content_frame_rate(&mut self, enabled: bool) {
+        self.match_content_frame_rate = enabled;
+    }
+
+    pub fn set_content_fps(&mut self, fps: f32) {
+        self.content_fps = fps;
+    }
+
+    pub fn set_supported_refresh_rates(&mut self, rates: Vec<f32>) {
+        self.supported_refresh_rates = rates;
+    }
+
+    /// Calculates target refresh rate for the given quality level, matching
+    /// content frame rate cadence when enabled and respecting thermal ceilings.
+    pub fn target_refresh_rate(&self, level: QualityLevel) -> f32 {
+        if !self.match_content_frame_rate
+            || self.content_fps <= 0.0
+            || self.supported_refresh_rates.is_empty()
+        {
+            return level.target_fps();
+        }
+
+        crate::refresh::find_cadence_refresh_rate(
+            self.content_fps,
+            &self.supported_refresh_rates,
+            level.max_refresh_rate(),
+        )
+        .unwrap_or_else(|| level.target_fps())
     }
 
     pub fn current_level(&self) -> QualityLevel {
@@ -437,7 +485,7 @@ impl QualityController {
             render_scale: effective_render_scale,
             foveation_level: self.current_level.foveation_level(),
             foveation_vertical_offset: self.current_level.foveation_vertical_offset(),
-            target_fps: self.current_level.target_fps(),
+            target_fps: self.target_refresh_rate(self.current_level),
             sharpness,
             enable_mqsr,
             enable_shader_sgsr,
@@ -801,5 +849,77 @@ mod tests {
             assert_eq!(action, QualityAction::Maintain);
         }
         assert_eq!(controller.current_level(), QualityLevel::Medium);
+    }
+
+    #[test]
+    fn test_thermal_step_down_chooses_rate_from_allowed_cadence_set() {
+        let mut qc = QualityController::new();
+        qc.set_match_content_frame_rate(true);
+        qc.set_content_fps(24.0);
+        qc.set_supported_refresh_rates(vec![72.0, 90.0, 120.0]);
+
+        // At Ultra, target_refresh_rate is 120 Hz (allowed set: {72, 120})
+        qc.set_manual_level(QualityLevel::Ultra);
+        let normal_params = qc.resolve_params(0, UpscalingMode::Off, 0, 1920, 1080);
+        assert_eq!(normal_params.target_fps, 120.0);
+
+        // Thermal stress level 3 (Severe) forces degradation to Low
+        let sample = QualitySample {
+            thermal_level: 3,
+            smoothed_gpu_time_ms: 5.0,
+            frame_time_ms: 8.33,
+            dropped_fps: 0.0,
+            target_fps: 120.0,
+        };
+        let action = qc.evaluate(&sample);
+        assert_eq!(
+            action,
+            QualityAction::Degrade(QualityLevel::Low, QualityTransitionReason::ThermalPressure)
+        );
+        assert_eq!(qc.current_level(), QualityLevel::Low);
+
+        // The resolved target_fps must pick 72 Hz from the allowed set {72, 120},
+        // never an arbitrary rate or unaligned rate like 90 Hz
+        let degraded_params = qc.resolve_params(3, UpscalingMode::Off, 0, 1920, 1080);
+        assert_eq!(degraded_params.target_fps, 72.0);
+
+        // Test with 30 fps content where allowed set is {90, 120}.
+        // At Low quality level, ceiling is 72 Hz; neither 90 nor 120 fits under the ceiling,
+        // so it falls back to QualityLevel::target_fps() (72 Hz) to preserve thermal degradation.
+        qc.set_content_fps(30.0);
+        let degraded_30fps = qc.resolve_params(3, UpscalingMode::Off, 0, 1920, 1080);
+        assert_eq!(degraded_30fps.target_fps, 72.0);
+    }
+
+    #[test]
+    fn test_cleared_content_fps_returns_target_fps() {
+        let mut qc = QualityController::new();
+        qc.set_match_content_frame_rate(true);
+        qc.set_supported_refresh_rates(vec![72.0, 90.0, 120.0]);
+        qc.set_content_fps(24.0);
+        assert_eq!(qc.target_refresh_rate(QualityLevel::Ultra), 120.0);
+
+        // Clearing content_fps (e.g. on stop, reset or failed load)
+        qc.set_content_fps(0.0);
+        assert_eq!(qc.target_refresh_rate(QualityLevel::Ultra), 90.0);
+        assert_eq!(qc.target_refresh_rate(QualityLevel::Low), 72.0);
+    }
+
+    #[test]
+    fn test_cadence_ceiling_fallback_does_not_exceed_quality_level_ceiling() {
+        let mut qc = QualityController::new();
+        qc.set_match_content_frame_rate(true);
+        qc.set_supported_refresh_rates(vec![72.0, 90.0, 120.0]);
+
+        // 60 fps content: allowed cadence set is {120.0}
+        qc.set_content_fps(60.0);
+        // Ultra ceiling is 120 -> 120 qualifies
+        assert_eq!(qc.target_refresh_rate(QualityLevel::Ultra), 120.0);
+        // High/Medium ceiling is 90 -> 120 exceeds ceiling, falls back to target_fps (90)
+        assert_eq!(qc.target_refresh_rate(QualityLevel::High), 90.0);
+        assert_eq!(qc.target_refresh_rate(QualityLevel::Medium), 90.0);
+        // Low/Emergency ceiling is 72 -> 120 exceeds ceiling, falls back to target_fps (72)
+        assert_eq!(qc.target_refresh_rate(QualityLevel::Low), 72.0);
+        assert_eq!(qc.target_refresh_rate(QualityLevel::Emergency), 72.0);
     }
 }

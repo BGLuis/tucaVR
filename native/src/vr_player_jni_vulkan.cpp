@@ -87,6 +87,7 @@ extern "C" {
     // Upscaling de vídeo (Vulkan-only, MQSR & SGSR1)
     extern void set_upscaling_mode(uint32_t mode);
     extern uint32_t get_upscaling_mode();
+    extern void set_match_content_frame_rate(uint32_t enabled);
     // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
     extern void set_thermal_level(uint32_t level);
     extern uint32_t get_thermal_level();
@@ -875,6 +876,11 @@ Java_com_tucavr_VRActivity_nativeGetHandTrackingEnabled(JNIEnv*, jobject) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetUpscalingMode(JNIEnv*, jobject, jint mode) {
     set_upscaling_mode(static_cast<uint32_t>(mode < 0 ? 0 : mode));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetMatchContentFrameRate(JNIEnv*, jobject, jboolean enabled) {
+    set_match_content_frame_rate(enabled ? 1 : 0);
 }
 
 extern "C" JNIEXPORT void JNICALL

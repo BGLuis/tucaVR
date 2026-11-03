@@ -235,6 +235,7 @@ pub struct PlaybackController {
     // default seguro antes do primeiro load_at() ou se o container nao
     // informa nada (mesma suposicao implicita que o pipeline sempre teve).
     hdr_transfer: media_logic::color::TransferFunction,
+    video_fps: f32,
     auto_paused: bool,
     // Instrumentacao (docs/DEBUGGING.md), capturada em load_at() antes de
     // mover o Demuxer/HwDecoder pra dentro das threads de sessao — ver
@@ -323,6 +324,7 @@ impl PlaybackController {
             detected_screen_mode: 0,
             initial_pose: None,
             hdr_transfer: media_logic::color::TransferFunction::Sdr,
+            video_fps: 0.0,
             auto_paused: false,
             network_stats: None,
             video_queue: None,
@@ -471,6 +473,7 @@ impl PlaybackController {
             }
         }
         self.hdr_transfer = transfer_function;
+        self.video_fps = video_fps;
 
         let (fmt3d, _, pose) = crate::format3d_detect::detect(&demuxer, path, width, height);
         self.detected_screen_mode = fmt3d.to_screen_mode_index();
@@ -1769,6 +1772,11 @@ impl PlaybackController {
     /// tonemap Vulkan certo. SDR antes do primeiro load_at().
     pub fn hdr_transfer(&self) -> media_logic::color::TransferFunction {
         self.hdr_transfer
+    }
+
+    /// Taxa de quadros (fps) média do stream de vídeo, lida em load_at() do container.
+    pub fn video_fps(&self) -> f32 {
+        self.video_fps
     }
 
     pub fn set_subtitle_track(&mut self, track: i32) {

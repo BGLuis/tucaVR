@@ -72,6 +72,9 @@ object FeatureFlags {
 
         // Vibração háptica no hover ao apontar controles (Issue #100)
         HOVER_HAPTICS("hover_haptics", defaultEnabled = true),
+
+        // Match display refresh rate to content frame rate (Issue #174)
+        MATCH_CONTENT_FRAME_RATE("match_content_frame_rate", defaultEnabled = true),
     }
 
     /** Chave usada para persistir o brilho do ambiente 3D/Skybox (0.0f a 1.0f). Padrão: 1.0f (100%). */
