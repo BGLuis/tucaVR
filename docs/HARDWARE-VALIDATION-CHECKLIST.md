@@ -35,15 +35,26 @@ Before and during any validation session on physical hardware, use the following
 
 ---
 
+## Headless session notes (2026-11-01)
+
+Results below marked *headless* come from adb automation with the headset on a table: `debug.oculus.guardian_pause=1`, `vrpowermanager.prox_close`, preferences written with `run-as`, captures through `CAPTURE_FRAME`. They cover what telemetry and swapchain captures can prove. They do not replace a wearer: head motion, comfort, perceived quality and the composited passthrough are out of reach.
+
+- A/B numbers use the Void environment with `debug.oculus.gpuLevel=4` and `cpuLevel=4`. With free clocks or a 3D environment, the same configuration ranged from 1.5 to 10 ms between launches, because of clock changes, `QualityController` scale and refresh changes, and the table pose.
+- `output_fps` is the video cadence (30 fps on these clips), so the FPS criteria below were checked against `smoothed_fps` and the compositor's `VrApi FPS=` line.
+- The Quest sleeps after about 10 minutes without a wearer, even with `prox_close` sent every 45 s, which caps headless sessions.
+- Vulkan validation layers were not enabled in this session.
+
+---
+
 ## Block 1: Foveated Rendering (`XR_FB_foveation`) — Sub-issue #41
 
 Validates fixed foveated rendering via the Vulkan pipeline (`vr_player_app_vulkan.cpp::ApplyFoveation`) to decide whether `FeatureFlags.Flag.FOVEATED_RENDERING` should default to `true`.
 
 ### Session Metadata
-- **Date:** 
-- **Build Commit:** 
-- **Quest Firmware:** 
-- **Tester / Device Serial:** 
+- **Date:** 2026-11-01 (headless, nobody wearing the headset)
+- **Build Commit:** `af128b6` (debug APK)
+- **Quest Firmware:** `52641960031600520` (Horizon OS API 160 build)
+- **Tester / Device Serial:** Claude Code over adb / `2G97C5ZH9201LH`
 
 ### Debug Switch & Setup
 - **Feature Flag:** Set `FOVEATED_RENDERING` in Settings or `FeatureFlags.kt`.
@@ -64,13 +75,17 @@ Validates fixed foveated rendering via the Vulkan pipeline (`vr_player_app_vulka
    - `smoothed_gpu_time_ms` at `High` foveation is strictly less than or equal to `smoothed_gpu_time_ms` with foveation `Off`.
 
 ### Results & Metrics
-- `Off`  GPU Time: _____ ms | FPS: _____
-- `Low`  GPU Time: _____ ms | FPS: _____
-- `Med`  GPU Time: _____ ms | FPS: _____
-- `High` GPU Time: _____ ms | FPS: _____
-- `Auto` GPU Time: _____ ms | FPS: _____
-- **Status:** [ ] PASSED | [ ] FAILED (Issue: #_____)
-- **Decided Flag Default (`FOVEATED_RENDERING`):** [ ] `true` | [ ] `false`
+*Headless, Void, Sphere360 with the 4K clip, pinned clocks, n = 3 launches per level:*
+
+- `Off`  GPU Time: 1.24 ms | FPS: 90
+- `Low`  GPU Time: 1.24 ms | FPS: 90
+- `Med`  GPU Time: 1.24 ms | FPS: 90
+- `High` GPU Time: 1.24 ms | FPS: 90
+- `Auto` GPU Time: 1.24 ms | FPS: 90 (the runtime reports level 1)
+- **Finding:** the runtime reports each level (`VrApi Fov=`), but nothing changes: compositor `App` stays at 1.56–1.62 ms and `GPU%` at 0.23–0.24 on every level, and a High capture matches an Off capture (SSIM 0.9997). `CreateEyeSwapchains` chains no `XrSwapchainCreateInfoFoveationFB`, and there is no fragment density map in the render pass, so foveation has no effect on the Vulkan path.
+- **Not run:** changing the level during playback (prefs are read at launch), Vulkan validation, foveal quality by eye.
+- **Status:** [ ] PASSED | [x] FAILED (Issue: #232)
+- **Decided Flag Default (`FOVEATED_RENDERING`):** [ ] `true` | [x] `false` until that is fixed
 
 ---
 
@@ -79,10 +94,10 @@ Validates fixed foveated rendering via the Vulkan pipeline (`vr_player_app_vulka
 Validates `XR_FB_passthrough`, background keying, and packed transparency to decide defaults for `FeatureFlags.Flag.PASSTHROUGH` and `FeatureFlags.Flag.CHROMA_KEY`.
 
 ### Session Metadata
-- **Date:** 
-- **Build Commit:** 
-- **Quest Firmware:** 
-- **Tester / Device Serial:** 
+- **Date:** 2026-11-01 (headless, nobody wearing the headset)
+- **Build Commit:** `af128b6` (debug APK)
+- **Quest Firmware:** `52641960031600520` (Horizon OS API 160 build)
+- **Tester / Device Serial:** Claude Code over adb / `2G97C5ZH9201LH`
 
 ### Debug Switch & Setup
 - **Passthrough Toggle:** Settings UI or ADB environment switch:
@@ -103,9 +118,10 @@ Validates `XR_FB_passthrough`, background keying, and packed transparency to dec
    - Packed alpha clip separates transparency cleanly; transparent pixels blend into real-world passthrough feed without rendering black or white borders.
 
 ### Results & Metrics
-- **Anchoring Drift after 5 min:** _____ cm / _____ deg
-- **Chroma Key Artifacts:** [ ] None detected | [ ] Fringing observed
-- **Packed Alpha Cutout:** [ ] Clean transparency | [ ] Blend defect
+- **Anchoring Drift after 5 min:** not run (needs a wearer) cm / deg
+- **Chroma Key Artifacts:** [x] None detected | [ ] Fringing observed. *Headless, synthetic green and blue clips, one capture each: 0 key-tinted pixels among about 42,000 lit pixels. The composite over the real passthrough feed was not seen.*
+- **Packed Alpha Cutout:** [ ] Clean transparency | [ ] Blend defect. *Not validated: no real DeoVR/HereSphere clip is available. A synthetic clip only shows the mode runs without a crash.*
+- **Passthrough:** *headless, session starts and holds 90 FPS (`smoothed_fps` minimum 89.7), no crash.*
 - **Status:** [ ] PASSED | [ ] FAILED (Issue: #_____)
 - **Decided Flag Defaults:**
   - `PASSTHROUGH`: [ ] `true` | [ ] `false`
@@ -118,10 +134,10 @@ Validates `XR_FB_passthrough`, background keying, and packed transparency to dec
 Validates spatial soundfield stability and binaural rendering over extended sessions, closing Task **T2.4** and the comfort requirement from `PHASE-0.3-POLISH-AUDIO.md`.
 
 ### Session Metadata
-- **Date:** 
-- **Build Commit:** 
-- **Quest Firmware:** 
-- **Tester / Device Serial:** 
+- **Date:** 2026-11-01 (headless, nobody wearing the headset)
+- **Build Commit:** `af128b6` (debug APK)
+- **Quest Firmware:** `52641960031600520` (Horizon OS API 160 build)
+- **Tester / Device Serial:** Claude Code over adb / `2G97C5ZH9201LH`
 
 ### Debug Switch & Setup
 - **Audio Mode:** `SPATIAL_AUDIO` and `SPATIAL_HEAD_TRACKING` enabled (`defaultEnabled = true`).
@@ -137,9 +153,9 @@ Validates spatial soundfield stability and binaural rendering over extended sess
    - After $\ge 30\text{ minutes}$ of continuous playback, sound sources maintain angular alignment within $\pm 5^\circ$ of their initial orientation.
 
 ### Results & Metrics
-- **Session Duration:** _____ minutes (must be $\ge 30$)
-- **Rapid Turn Audio Artifacts:** [ ] 0 detected | [ ] Audible clicks/zippers
-- **Drift after 30 min:** _____ degrees
+- **Session Duration:** not met. *Headless, synthetic FOA MKV, n = 2 runs: telemetry covers 595 s each, then the headset sleeps. 0 underruns after startup, 0 freezes, A/V drift at most 1.3 ms, 90 FPS. The stream's detection as Ambisonics was not confirmed by any log or telemetry field.*
+- **Rapid Turn Audio Artifacts:** [ ] 0 detected | [ ] Audible clicks/zippers (needs a wearer)
+- **Drift after 30 min:** not run (needs a wearer)
 - **Status:** [ ] PASSED | [ ] FAILED (Issue: #_____)
 
 ---
@@ -149,10 +165,10 @@ Validates spatial soundfield stability and binaural rendering over extended sess
 Validates the bias lighting halo in the Void environment (the halo gating in `vr_player_input_vulkan.h`, which draws it only when `get_ambient_mode_enabled()` is set) to evaluate GPU overhead and determine the default for `FeatureFlags.Flag.AMBIENT_MODE`.
 
 ### Session Metadata
-- **Date:** 
-- **Build Commit:** 
-- **Quest Firmware:** 
-- **Tester / Device Serial:** 
+- **Date:** 2026-11-01 (headless, nobody wearing the headset)
+- **Build Commit:** `af128b6` (debug APK)
+- **Quest Firmware:** `52641960031600520` (Horizon OS API 160 build)
+- **Tester / Device Serial:** Claude Code over adb / `2G97C5ZH9201LH`
 
 ### Debug Switch & Setup
 - **Environment:** Void:
@@ -172,12 +188,16 @@ Validates the bias lighting halo in the Void environment (the halo gating in `vr
    - Framerate remains $\ge 72\text{ FPS}$ with zero introduced frame freezes.
 
 ### Results & Metrics
-- **Halo OFF:** `smoothed_gpu_time_ms`: _____ ms | `draw_call_count`: _____ | FPS: _____
-- **Halo ON:**  `smoothed_gpu_time_ms`: _____ ms | `draw_call_count`: _____ | FPS: _____
-- **Delta:** GPU: +_____ ms | Draw calls: +_____
-- **Status:** [ ] PASSED | [ ] FAILED (Issue: #_____)
-- **Decided Flag Default (`AMBIENT_MODE`):** [ ] `true` | [ ] `false`
-- **Fallback Glow Mode (`getScreenGlowIntensityMode`):** [ ] Strong (2) | [ ] Off (0)
+*Headless, Void, `ambient_steps.mp4` (1080p red/blue/white, 2 s each), pinned clocks, n = 3 per state:*
+
+- **Halo OFF:** `smoothed_gpu_time_ms`: 0.11 ms | `draw_call_count`: 2 | FPS: 90
+- **Halo ON:**  `smoothed_gpu_time_ms`: 0.40 ms (0.40, 0.40, 0.24) | `draw_call_count`: 4 | FPS: 90
+- **Delta:** GPU: +0.29 ms | Draw calls: +2 in total, +1 per eye
+- **Color tracking:** 12 captures show the halo following each scene color. The capture interval (about 1.75 s) is too coarse to measure the 0.6 s convergence. Flicker needs a wearer.
+- **Scope note:** the code also draws the halo in `cinema` and `living_room` (`vr_player_input_vulkan.h:785-790`), not only Void. Those were not measured.
+- **Status:** cost criteria PASSED. Colour latency and flicker were not verified (Issue: #233).
+- **Decided Flag Default (`AMBIENT_MODE`):** [ ] `true` | [x] `false` until #233 has a result
+- **Fallback Glow Mode (`getScreenGlowIntensityMode`):** [ ] Strong (2) | [x] Off (0), unchanged while the flag is off
 
 ---
 
@@ -186,10 +206,10 @@ Validates the bias lighting halo in the Void environment (the halo gating in `vr
 Validates optical hand tracking, pinch gestures, and controller-hand transitions across UI panels without input deadlocks.
 
 ### Session Metadata
-- **Date:** 
-- **Build Commit:** 
-- **Quest Firmware:** 
-- **Tester / Device Serial:** 
+- **Date:** 2026-11-01 (headless, nobody wearing the headset)
+- **Build Commit:** `af128b6` (debug APK)
+- **Quest Firmware:** `52641960031600520` (Horizon OS API 160 build)
+- **Tester / Device Serial:** Claude Code over adb / `2G97C5ZH9201LH`
 
 ### Debug Switch & Setup
 - **Input Mode:** Natural hands active (place Touch Plus controllers on flat surface).
@@ -206,6 +226,8 @@ Validates optical hand tracking, pinch gestures, and controller-hand transitions
    - No tracking dropouts or gesture hysteresis locking during a $\ge 10\text{ minute}$ session. Record ergonomic notes.
 
 ### Results & Metrics
+*Not validated: every item needs real hands. Headless evidence only: `XR_EXT_hand_tracking` is detected and both hand trackers are created, with no crash when `HAND_TRACKING` is on.*
+
 - **Pinch Select Accuracy:** _____ / _____ buttons triggered correctly
 - **Controller $\leftrightarrow$ Hands Transitions (3 cycles):** [ ] Clean | [ ] Cursor duplicated/frozen
 - **Session Duration:** _____ minutes (must be $\ge 10$)
@@ -219,10 +241,10 @@ Validates optical hand tracking, pinch gestures, and controller-hand transitions
 Validates stereoscopic spherical projections, HDR tonemapping, Meta Quest Super Resolution (MQSR), and the 3D Space environment.
 
 ### Session Metadata
-- **Date:** 
-- **Build Commit:** 
-- **Quest Firmware:** 
-- **Tester / Device Serial:** 
+- **Date:** 2026-11-01 (headless, nobody wearing the headset)
+- **Build Commit:** `af128b6` (debug APK)
+- **Quest Firmware:** `52641960031600520` (Horizon OS API 160 build)
+- **Tester / Device Serial:** Claude Code over adb / `2G97C5ZH9201LH`
 
 ### Debug Switch & Setup
 - **Projection ADB Overrides (`docs/DEBUGGING.md` §2):**
@@ -247,12 +269,16 @@ Validates stereoscopic spherical projections, HDR tonemapping, Meta Quest Super 
    - `space/model.glb` + skybox maintains $\ge 72\text{ FPS}$ sustained over $n \ge 3$ runs both idle and during 4K video playback ($\texttt{smoothed\_gpu\_time\_ms} \le 11.8\text{ ms}$ at 72 Hz).
 
 ### Results & Metrics
-- **HDR10 Render Status:** [ ] Clean color grading | [ ] Washed out / crashed
-- **Projection Seams / Geometry:** [ ] Verified clean | [ ] Distortion detected
-- **Space Environment (Idle):**
-  - Run 1: _____ FPS (_____ ms) | Run 2: _____ FPS (_____ ms) | Run 3: _____ FPS (_____ ms)
-- **Space Environment (4K Playback):**
-  - Run 1: _____ FPS (_____ ms) | Run 2: _____ FPS (_____ ms) | Run 3: _____ FPS (_____ ms)
+*Headless. Clips and captures are synthetic, generated with ffmpeg; forced modes use `SET_SCREEN_MODE`:*
+
+- **HDR10 Render Status:** [ ] Clean color grading | [x] Washed out / crashed. *No crash, and the tonemap path runs. A PQ step ramp (10-bit codes 189–939) captures as 93, 149, 199, 233, 248, 253, 254, so the top steps are nearly merged. See the gamma finding below.*
+- **SDR gamma finding:** a BT.709 gray ramp captures at the sRGB encoding of its video values (Y 47 captures as 101, Y 233 as 253). The video shaders write gamma-coded values to an `R8G8B8A8_SRGB` swapchain with no linearization, so midtones are lifted. This needs an eye check against another player.
+- **Projection Seams / Geometry:** [ ] Verified clean | [x] Distortion detected. *Against an equirect reference, Cubemap3x2 (10), Cubemap6x1 (11) and EAC3x2 (12) match on the side faces but show the up and down faces rotated 180°, with a visible seam (SSIM 0.84–0.90 there, 0.94–0.97 on the sides). Sphere180 (6) and Fisheye190 (15) match in front (SSIM 0.995). In the SBS modes 7, 9, 13, 14 and 16 each eye samples its own half. Clips came from ffmpeg `v360`; confirm with a real YouTube EAC file.*
+- **MQSR:** *modes 0–3 hold 90 FPS. Telemetry reports the mode (`QUAL`, `PERF`, `AUTO`, `mqsr_enabled=1`), and `PERF` renders at scale 0.8. No edge gain was shown: MQSR runs in the compositor, outside the capture, and SGSR1 did not change the Sobel measure on this content (0.957 vs 0.954). Needs an eye check on real footage.*
+- **Space Environment (Idle):** *no session means no CSV, so ms is the compositor `App` value.*
+  - Run 1: 90 FPS (0.81 ms) | Run 2: 90 FPS (0.80 ms) | Run 3: 90 FPS (0.81 ms). *Lowest 1 s sample: 80, 90, 89.*
+- **Space Environment (4K Playback):** *free clocks, table pose, about 45 s each.*
+  - Run 1: 90 FPS (0.94 ms) | Run 2: 90 FPS (0.94 ms) | Run 3: 90 FPS (1.20 ms). *Lowest 1 s sample: 80, 90, 90.*
 - **Status:** [ ] PASSED | [ ] FAILED (Issue: #_____)
 
 ---

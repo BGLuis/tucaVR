@@ -84,7 +84,7 @@ Enable community localization contributions with CI verification and translator 
 
 ### Tasks
 
-- [ ] **T5.1** — Run Meta VRC Validator Tool locally and resolve warnings
+- [ ] **T5.1** — Check the release build against the current [`VRC.Quest.*` requirements](https://developers.meta.com/horizon/resources/publish-quest-req) and record the results in `docs/HARDWARE-VALIDATION-CHECKLIST.md`
 - [ ] **T5.2** — Configure release `AndroidManifest.xml` (VR-only flags, permission cleanup)
 - [ ] **T5.3** — APK size and binary optimization (strip symbols, enable ProGuard/R8)
 - [ ] **T5.4** — Store visual assets (app icon, banner, panoramic screenshots)
