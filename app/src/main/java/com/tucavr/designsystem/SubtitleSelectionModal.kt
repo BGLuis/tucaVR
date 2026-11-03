@@ -217,7 +217,7 @@ class SubtitleSelectionModal(
             deltaMs: Long,
         ) {
             val btn =
-                VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                VoidButton(context, VoidButtonStyle.SECONDARY, isCompact = true).apply {
                     text = label
                     textSize = 14f
                     layoutParams =

@@ -669,7 +669,7 @@ class SettingsScreen(
 
             if (actionButtonTextRes != null && onActionClicked != null) {
                 actionBtn =
-                    VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                    VoidButton(context, VoidButtonStyle.SECONDARY, isCompact = true).apply {
                         text = context.getString(actionButtonTextRes)
                         textSize = 13f
                         layoutParams =

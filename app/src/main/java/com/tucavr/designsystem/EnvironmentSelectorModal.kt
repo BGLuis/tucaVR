@@ -171,6 +171,7 @@ class EnvironmentSelectorModal(
             VoidButton(
                 context,
                 VoidButtonStyle.SECONDARY,
+                isCompact = true,
             ).apply {
                 text = context.getString(R.string.env_reset_anchor_button)
                 setOnClickListener {
@@ -181,6 +182,7 @@ class EnvironmentSelectorModal(
             VoidButton(
                 context,
                 VoidButtonStyle.SECONDARY,
+                isCompact = true,
             ).apply {
                 text = context.getString(R.string.env_import_button)
                 setOnClickListener { onImportEnvironment() }
