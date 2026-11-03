@@ -6142,6 +6142,8 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
     std::string modelTarget = data.config.modelFile.empty() ? ("environments/" + envId + "/model.glb") : data.config.modelFile;
     cgltf_options options{};
     cgltf_data* gltfData = nullptr;
+    // cgltf keeps pointers into the GLB's binary chunk, so the asset must outlive every accessor read.
+    AAsset* modelAsset = nullptr;
     bool isFilePath = (!modelTarget.empty() && modelTarget[0] == '/');
 
     if (isFilePath) {
@@ -6161,10 +6163,10 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
         if (assetPath.rfind("environments/", 0) != 0) {
             assetPath = "environments/" + assetPath;
         }
-        AAsset* asset = AAssetManager_open(assetManager, assetPath.c_str(), AASSET_MODE_BUFFER);
-        if (asset) {
-            size_t assetSize = static_cast<size_t>(AAsset_getLength(asset));
-            const void* assetBuffer = AAsset_getBuffer(asset);
+        modelAsset = AAssetManager_open(assetManager, assetPath.c_str(), AASSET_MODE_BUFFER);
+        if (modelAsset) {
+            size_t assetSize = static_cast<size_t>(AAsset_getLength(modelAsset));
+            const void* assetBuffer = AAsset_getBuffer(modelAsset);
             if (assetBuffer && assetSize > 0) {
                 cgltf_result res = cgltf_parse(&options, assetBuffer, assetSize, &gltfData);
                 if (res == cgltf_result_success && gltfData) {
@@ -6175,7 +6177,6 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
                     }
                 }
             }
-            AAsset_close(asset);
         }
     }
 
@@ -6299,6 +6300,7 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
         }
         cgltf_free(gltfData);
     }
+    if (modelAsset) AAsset_close(modelAsset);
 
     return data;
 }
