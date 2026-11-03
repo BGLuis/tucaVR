@@ -2445,6 +2445,9 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
                     log(6, &format!("Error loading video: {:?}", e));
                 }
                 set_last_playback_error(format!("{:?}", e));
+                if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+                    qc.set_content_fps(0.0);
+                }
             } else {
                 apply_screen_mode_after_load(&controller);
                 if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
@@ -2461,6 +2464,9 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
 #[no_mangle]
 pub extern "C" fn stop_video_playback() {
     DOWNLOAD_MANAGER.set_playback_active(false);
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        qc.set_content_fps(0.0);
+    }
     std::thread::spawn(|| {
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
@@ -2473,6 +2479,9 @@ pub extern "C" fn stop_video_playback() {
 #[no_mangle]
 pub extern "C" fn reset_process_state() {
     DOWNLOAD_MANAGER.set_playback_active(false);
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        qc.set_content_fps(0.0);
+    }
     if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.stop();
     } else {
@@ -2537,8 +2546,6 @@ pub extern "C" fn seek_video_playback(position: f32) {
                     log(6, &format!("Error seeking video: {e}"));
                 }
                 set_last_playback_error(e);
-            } else if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
-                qc.set_content_fps(controller.video_fps());
             }
         }
     });
