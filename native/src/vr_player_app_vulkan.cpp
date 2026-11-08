@@ -33,6 +33,7 @@
 #include <math.h>
 #include <unistd.h>
 #include <dlfcn.h>
+#include <sys/system_properties.h>
 #include <android/api-level.h>
 #include <android/performance_hint.h>
 
@@ -63,6 +64,11 @@
 #include "screen_mode.h"
 #include "vr_player_feedback_overlay.h"
 #include "debug_stats.h"
+#include "vulkan_msaa.h"
+
+static_assert(VK_SAMPLE_COUNT_1_BIT == vrplayer::kMsaaSampleCount1 &&
+                  VK_SAMPLE_COUNT_4_BIT == vrplayer::kMsaaSampleCount4,
+              "VkSampleCountFlagBits must match vulkan_msaa constants");
 #include "quad.vert.h"
 #include "quad.frag.h"
 #include "video.vert.h"
@@ -707,6 +713,9 @@ struct EyeSwapchain {
     std::vector<XrSwapchainImageVulkanKHR> images;
     std::vector<VkImageView> imageViews;
     std::vector<VkFramebuffer> framebuffers;
+    std::vector<VkImage> msaaColorImages;
+    std::vector<VkDeviceMemory> msaaColorMemories;
+    std::vector<VkImageView> msaaColorImageViews;
     std::vector<VkImage> depthImages;
     std::vector<VkDeviceMemory> depthMemories;
     std::vector<VkImageView> depthImageViews;
@@ -929,6 +938,7 @@ struct AppState {
     uint32_t videoHeight = 0;
     VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+    VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 
     // Estagio 2 — pipeline do quad estatico (fallback sem frame de video).
     VkRenderPass renderPass = VK_NULL_HANDLE;
@@ -2501,29 +2511,47 @@ static uint32_t FindMemoryTypeWithFallback(AppState& state, uint32_t typeBits,
     std::abort();
 }
 
-// RenderPass com Color Attachment + Depth Attachment.
-// Depth buffer usa loadOp=CLEAR e storeOp=DONT_CARE com transient allocation,
-// operando 100% na GMEM on-chip da GPU Adreno 740 sem gastar largura de banda de DRAM.
+// RenderPass with 4x MSAA transient color + depth attachments resolved on-chip
+// into the 1x OpenXR swapchain image via pResolveAttachments (falls back to 1x
+// if the device does not advertise 4x color+depth or debug.tucavr.msaa=1).
+// Transient MSAA color and depth use loadOp=CLEAR and storeOp=DONT_CARE with
+// lazy allocation so they stay in Adreno 740 on-chip GMEM without DRAM writeback.
 void CreateRenderPass(AppState& state) {
     state.depthFormat = FindSupportedDepthFormat(state);
 
+    VkPhysicalDeviceProperties devProps{};
+    vkGetPhysicalDeviceProperties(state.vkPhysicalDevice, &devProps);
+
+    char msaaProp[PROP_VALUE_MAX] = {};
+    __system_property_get("debug.tucavr.msaa", msaaProp);
+    const uint32_t requestedSamples = vrplayer::ParseMsaaOverrideProperty(msaaProp);
+    const uint32_t selectedSamples = vrplayer::SelectEyeMsaaSampleCount(
+        devProps.limits.framebufferColorSampleCounts,
+        devProps.limits.framebufferDepthSampleCounts,
+        requestedSamples);
+    state.msaaSamples = static_cast<VkSampleCountFlagBits>(selectedSamples);
+    const vrplayer::EyeRenderPassMsaaConfig msaaCfg =
+        vrplayer::BuildEyeRenderPassMsaaConfig(selectedSamples);
+
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = state.swapchainFormat;
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.samples = state.msaaSamples;
     colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.storeOp = msaaCfg.hasResolveAttachment
+                                  ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                                  : VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     VkAttachmentReference colorRef{};
-    colorRef.attachment = 0;
+    colorRef.attachment = msaaCfg.colorAttachmentIndex;
     colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     VkAttachmentDescription depthAttachment{};
     depthAttachment.format = state.depthFormat;
-    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.samples = state.msaaSamples;
     depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -2532,13 +2560,28 @@ void CreateRenderPass(AppState& state) {
     depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     VkAttachmentReference depthRef{};
-    depthRef.attachment = 1;
+    depthRef.attachment = msaaCfg.depthAttachmentIndex;
     depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentDescription resolveAttachment{};
+    resolveAttachment.format = state.swapchainFormat;
+    resolveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    resolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    resolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    resolveAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    resolveAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    resolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    resolveAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference resolveRef{};
+    resolveRef.attachment = msaaCfg.resolveAttachmentIndex;
+    resolveRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorRef;
+    subpass.pResolveAttachments = msaaCfg.hasResolveAttachment ? &resolveRef : nullptr;
     subpass.pDepthStencilAttachment = &depthRef;
 
     VkSubpassDependency dependency{};
@@ -2552,25 +2595,35 @@ void CreateRenderPass(AppState& state) {
     dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-    std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
+    std::array<VkAttachmentDescription, 3> attachments = {
+        colorAttachment, depthAttachment, resolveAttachment};
 
     VkRenderPassCreateInfo renderPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    renderPassInfo.attachmentCount = msaaCfg.attachmentCount;
     renderPassInfo.pAttachments = attachments.data();
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
     renderPassInfo.dependencyCount = 1;
     renderPassInfo.pDependencies = &dependency;
     VKR(vkCreateRenderPass(state.vkDevice, &renderPassInfo, nullptr, &state.renderPass));
-    LOGI("CreateRenderPass: renderPass criado com color (%d) e depth (%d)",
-         state.swapchainFormat, state.depthFormat);
+    LOGI("CreateRenderPass: renderPass created with color (%d), depth (%d), msaa=%ux (prop='%s')",
+         state.swapchainFormat, state.depthFormat, selectedSamples, msaaProp);
 }
 
-// Uma VkImageView (Color) + VkImageView (Depth) + VkFramebuffer por imagem de cada swapchain de olho.
+// Per swapchain image: 1x resolve VkImageView + optional transient 4x MSAA color
+// VkImage/VkImageView + transient depth VkImage/VkImageView + VkFramebuffer.
 void CreateFramebuffers(AppState& state) {
+    const vrplayer::EyeRenderPassMsaaConfig msaaCfg =
+        vrplayer::BuildEyeRenderPassMsaaConfig(static_cast<uint32_t>(state.msaaSamples));
+
     for (auto& eyeChain : state.eyes) {
         eyeChain.imageViews.resize(eyeChain.images.size());
         eyeChain.framebuffers.resize(eyeChain.images.size());
+        if (msaaCfg.hasResolveAttachment) {
+            eyeChain.msaaColorImages.resize(eyeChain.images.size(), VK_NULL_HANDLE);
+            eyeChain.msaaColorMemories.resize(eyeChain.images.size(), VK_NULL_HANDLE);
+            eyeChain.msaaColorImageViews.resize(eyeChain.images.size(), VK_NULL_HANDLE);
+        }
         eyeChain.depthImages.resize(eyeChain.images.size());
         eyeChain.depthMemories.resize(eyeChain.images.size());
         eyeChain.depthImageViews.resize(eyeChain.images.size());
@@ -2585,7 +2638,61 @@ void CreateFramebuffers(AppState& state) {
             viewInfo.subresourceRange.layerCount = 1;
             VKR(vkCreateImageView(state.vkDevice, &viewInfo, nullptr, &eyeChain.imageViews[i]));
 
-            // Criar Depth Image para este framebuffer
+            if (msaaCfg.hasResolveAttachment) {
+                VkImageCreateInfo msaaImageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+                msaaImageInfo.imageType = VK_IMAGE_TYPE_2D;
+                msaaImageInfo.extent.width = static_cast<uint32_t>(eyeChain.width);
+                msaaImageInfo.extent.height = static_cast<uint32_t>(eyeChain.height);
+                msaaImageInfo.extent.depth = 1;
+                msaaImageInfo.mipLevels = 1;
+                msaaImageInfo.arrayLayers = 1;
+                msaaImageInfo.format = state.swapchainFormat;
+                msaaImageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+                msaaImageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                msaaImageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                                      VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+                msaaImageInfo.samples = state.msaaSamples;
+                msaaImageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+                VkResult msaaRes = vkCreateImage(
+                    state.vkDevice, &msaaImageInfo, nullptr, &eyeChain.msaaColorImages[i]);
+                const bool msaaIsTransient = (msaaRes == VK_SUCCESS);
+                if (!msaaIsTransient) {
+                    msaaImageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+                    VKR(vkCreateImage(
+                        state.vkDevice, &msaaImageInfo, nullptr, &eyeChain.msaaColorImages[i]));
+                }
+
+                VkMemoryRequirements msaaMemReq{};
+                vkGetImageMemoryRequirements(
+                    state.vkDevice, eyeChain.msaaColorImages[i], &msaaMemReq);
+
+                VkMemoryAllocateInfo msaaAllocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+                msaaAllocInfo.allocationSize = msaaMemReq.size;
+                msaaAllocInfo.memoryTypeIndex = FindMemoryTypeWithFallback(
+                    state, msaaMemReq.memoryTypeBits,
+                    msaaIsTransient ? VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT
+                                    : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                VKR(vkAllocateMemory(
+                    state.vkDevice, &msaaAllocInfo, nullptr, &eyeChain.msaaColorMemories[i]));
+                VKR(vkBindImageMemory(
+                    state.vkDevice, eyeChain.msaaColorImages[i], eyeChain.msaaColorMemories[i], 0));
+
+                VkImageViewCreateInfo msaaViewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+                msaaViewInfo.image = eyeChain.msaaColorImages[i];
+                msaaViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                msaaViewInfo.format = state.swapchainFormat;
+                msaaViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                msaaViewInfo.subresourceRange.baseMipLevel = 0;
+                msaaViewInfo.subresourceRange.levelCount = 1;
+                msaaViewInfo.subresourceRange.baseArrayLayer = 0;
+                msaaViewInfo.subresourceRange.layerCount = 1;
+                VKR(vkCreateImageView(
+                    state.vkDevice, &msaaViewInfo, nullptr, &eyeChain.msaaColorImageViews[i]));
+            }
+
+            // Create Depth Image for this framebuffer
             VkImageCreateInfo depthImageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
             depthImageInfo.imageType = VK_IMAGE_TYPE_2D;
             depthImageInfo.extent.width = static_cast<uint32_t>(eyeChain.width);
@@ -2598,12 +2705,13 @@ void CreateFramebuffers(AppState& state) {
             depthImageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             depthImageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                                    VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
-            depthImageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            depthImageInfo.samples = state.msaaSamples;
             depthImageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-            // Fallback sem TRANSIENT_ATTACHMENT_BIT se o driver rejeitar
+            // Fallback without TRANSIENT_ATTACHMENT_BIT if rejected by the driver
             VkResult imgRes = vkCreateImage(state.vkDevice, &depthImageInfo, nullptr, &eyeChain.depthImages[i]);
-            if (imgRes != VK_SUCCESS) {
+            const bool depthIsTransient = (imgRes == VK_SUCCESS);
+            if (!depthIsTransient) {
                 depthImageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
                 VKR(vkCreateImage(state.vkDevice, &depthImageInfo, nullptr, &eyeChain.depthImages[i]));
             }
@@ -2615,7 +2723,8 @@ void CreateFramebuffers(AppState& state) {
             allocInfo.allocationSize = memReq.size;
             allocInfo.memoryTypeIndex = FindMemoryTypeWithFallback(
                 state, memReq.memoryTypeBits,
-                VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT,
+                depthIsTransient ? VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT
+                                 : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
             VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &eyeChain.depthMemories[i]));
             VKR(vkBindImageMemory(state.vkDevice, eyeChain.depthImages[i], eyeChain.depthMemories[i], 0));
@@ -2634,11 +2743,19 @@ void CreateFramebuffers(AppState& state) {
             depthViewInfo.subresourceRange.layerCount = 1;
             VKR(vkCreateImageView(state.vkDevice, &depthViewInfo, nullptr, &eyeChain.depthImageViews[i]));
 
-            std::array<VkImageView, 2> attachments = {eyeChain.imageViews[i], eyeChain.depthImageViews[i]};
+            std::array<VkImageView, 3> attachments{};
+            if (msaaCfg.hasResolveAttachment) {
+                attachments[0] = eyeChain.msaaColorImageViews[i];
+                attachments[1] = eyeChain.depthImageViews[i];
+                attachments[2] = eyeChain.imageViews[i];
+            } else {
+                attachments[0] = eyeChain.imageViews[i];
+                attachments[1] = eyeChain.depthImageViews[i];
+            }
 
             VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             fbInfo.renderPass = state.renderPass;
-            fbInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+            fbInfo.attachmentCount = msaaCfg.attachmentCount;
             fbInfo.pAttachments = attachments.data();
             fbInfo.width = static_cast<uint32_t>(eyeChain.width);
             fbInfo.height = static_cast<uint32_t>(eyeChain.height);
@@ -2781,7 +2898,7 @@ void CreateGraphicsPipeline(AppState& state) {
 
     VkPipelineMultisampleStateCreateInfo multisample{
         VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisample.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState blendAttachment{};
     blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -2997,7 +3114,7 @@ void CreateYcbcrAndVideoPipeline(AppState& state) {
 
     VkPipelineMultisampleStateCreateInfo multisample{
         VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisample.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState blendAttachment{};
     blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -3711,7 +3828,7 @@ void CreateUiPipeline(AppState& state, android_app* app) {
     rast.lineWidth   = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = state.msaaSamples;
 
     // Alpha blending (SRC_ALPHA / ONE_MINUS_SRC_ALPHA) — mesmo do GLES (vr_player_app.cpp:863-868)
     VkPipelineColorBlendAttachmentState blendAtt{};
@@ -4160,7 +4277,7 @@ void CreateStereoPipeline(AppState& state) {
     rast.lineWidth   = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState blendAtt{};
     blendAtt.colorWriteMask = 0xF;
@@ -4354,7 +4471,7 @@ static void CreatePhotoPipeline(AppState& state) {
     rast.lineWidth   = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState attState{};
     attState.blendEnable         = VK_FALSE;
@@ -4484,7 +4601,7 @@ void CreateBeamResources(AppState& state) {
     rast.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rast.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState blendAtt{};
     blendAtt.colorWriteMask = 0xF;
@@ -4576,7 +4693,7 @@ void CreateFeedbackResources(AppState& state) {
     rast.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rast.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState blendAtt{};
     blendAtt.blendEnable = VK_TRUE;
@@ -4712,7 +4829,7 @@ void CreateSubtitlePipeline(AppState& state) {
     rast.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rast.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState blendAtt{};
     blendAtt.blendEnable = VK_TRUE;
@@ -5334,7 +5451,7 @@ static void CreateEnvironmentPipeline(AppState& state) {
     rasterizer.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisampling.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.blendEnable = VK_FALSE;
@@ -5495,7 +5612,7 @@ static void CreateSkyboxPipeline(AppState& state) {
     rasterizer.lineWidth   = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisampling.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.blendEnable    = VK_FALSE;
@@ -5713,7 +5830,7 @@ static void CreateParticlesPipeline(AppState& state) {
     rasterizer.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisampling.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.blendEnable = VK_TRUE;
@@ -6004,7 +6121,7 @@ static void CreateEnvironmentFadePipeline(AppState& state) {
     rasterizer.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisampling.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.blendEnable = VK_TRUE;
@@ -6928,7 +7045,7 @@ static void CreateAmbientHaloPipeline(AppState& state) {
     rasterizer.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisampling.rasterizationSamples = state.msaaSamples;
 
     // Alpha blending (SRC_ALPHA / ONE_MINUS_SRC_ALPHA) — copia literal do
     // bloco de CreateUiPipeline.
@@ -9387,7 +9504,7 @@ void DestroyAppResources(AppState& state) {
         state.pipelineLayout = VK_NULL_HANDLE;
     }
 
-    // 9. Framebuffers e ImageViews dos olhos (e Depth buffers)
+    // 9. Framebuffers e ImageViews dos olhos (e Depth / MSAA buffers)
     for (auto& eyeChain : state.eyes) {
         for (auto framebuffer : eyeChain.framebuffers) {
             if (framebuffer != VK_NULL_HANDLE) {
@@ -9395,6 +9512,24 @@ void DestroyAppResources(AppState& state) {
             }
         }
         eyeChain.framebuffers.clear();
+        for (auto msaaImageView : eyeChain.msaaColorImageViews) {
+            if (msaaImageView != VK_NULL_HANDLE) {
+                vkDestroyImageView(state.vkDevice, msaaImageView, nullptr);
+            }
+        }
+        eyeChain.msaaColorImageViews.clear();
+        for (auto msaaImage : eyeChain.msaaColorImages) {
+            if (msaaImage != VK_NULL_HANDLE) {
+                vkDestroyImage(state.vkDevice, msaaImage, nullptr);
+            }
+        }
+        eyeChain.msaaColorImages.clear();
+        for (auto msaaMemory : eyeChain.msaaColorMemories) {
+            if (msaaMemory != VK_NULL_HANDLE) {
+                vkFreeMemory(state.vkDevice, msaaMemory, nullptr);
+            }
+        }
+        eyeChain.msaaColorMemories.clear();
         for (auto depthImageView : eyeChain.depthImageViews) {
             if (depthImageView != VK_NULL_HANDLE) {
                 vkDestroyImageView(state.vkDevice, depthImageView, nullptr);

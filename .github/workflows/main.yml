@@ -185,7 +185,8 @@ jobs:
             native/include/browser_pose.h \
             native/include/panel_pick.h \
             native/include/astc_transcode.h \
-            native/include/frame_time_histogram.h
+            native/include/frame_time_histogram.h \
+            native/include/vulkan_msaa.h
 
       - name: Validate Vulkan Shaders (glslc)
         run: ./scripts/check-shaders.sh
