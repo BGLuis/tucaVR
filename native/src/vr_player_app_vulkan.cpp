@@ -3799,7 +3799,10 @@ static void EnsureScrubOverlayTexture(AppState& state, uint32_t width, uint32_t 
             vkFreeMemory(state.vkDevice, state.scrubOverlayImageMemory, nullptr);
             state.scrubOverlayImageMemory = VK_NULL_HANDLE;
         }
-        CreateUiImage(state, width, height, state.scrubOverlayImage, state.scrubOverlayImageMemory, state.scrubOverlayImageView);
+        // Gamma-coded video thumbnails drawn with the raw ui.frag: an sRGB view decodes on sampling so the
+        // eye swapchain's sRGB encode round-trips, matching the linearized video underneath.
+        CreateUiImage(state, width, height, state.scrubOverlayImage, state.scrubOverlayImageMemory, state.scrubOverlayImageView,
+                      VK_FORMAT_R8G8B8A8_SRGB);
         state.scrubOverlayTexWidth = width;
         state.scrubOverlayTexHeight = height;
         state.scrubOverlayReady = true;
