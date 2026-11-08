@@ -34,6 +34,7 @@ TESTS=(
     "test_screen_layout"
     "test_bed_mode"
     "test_color_grading"
+    "test_video_layer"
 )
 
 EXTRA_FLAGS=()
