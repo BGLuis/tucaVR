@@ -1303,8 +1303,11 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     XrActionStateFloat squeezeState{XR_TYPE_ACTION_STATE_FLOAT};
     xrGetActionStateFloat(state.session, &squeezeInfo, &squeezeState);
 
-    // Transformation loading requested via JNI (persistence)
-    if (::g_setScreenTransformRequested.exchange(false)) {
+    // Transformation loading requested via JNI (persistence). Kotlin sends it right after requesting the
+    // environment, so it waits for the swap: ApplyLoadedEnvironment would overwrite it with the defaults.
+    const bool environmentSettled = !::g_environmentChangeRequested.load() &&
+                                    state.envTransitionPhase == EnvironmentTransitionPhase::IDLE;
+    if (environmentSettled && ::g_setScreenTransformRequested.exchange(false)) {
         state.screenPosition.x = ::g_requestedScreenPosX.load();
         state.screenPosition.y = ::g_requestedScreenPosY.load();
         state.screenPosition.z = ::g_requestedScreenPosZ.load();
