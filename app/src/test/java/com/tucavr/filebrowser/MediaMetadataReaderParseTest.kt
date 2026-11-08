@@ -67,7 +67,7 @@ class MediaMetadataReaderParseTest {
         assertEquals("mp4", meta.container)
         assertEquals(0L, meta.durationMs)
         assertEquals(0, meta.format3dIndex)
-        assertEquals(3, meta.detectionConfidence)
+        assertEquals(4, meta.detectionConfidence)
         assertTrue(meta.tags.isEmpty())
         assertTrue(meta.tracks.isEmpty())
     }

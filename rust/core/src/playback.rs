@@ -475,7 +475,15 @@ impl PlaybackController {
         self.hdr_transfer = transfer_function;
         self.video_fps = video_fps;
 
-        let (fmt3d, _, pose) = crate::format3d_detect::detect(&demuxer, path, width, height);
+        let (mut fmt3d, confidence, pose) =
+            crate::format3d_detect::detect(&demuxer, path, width, height);
+        if fmt3d == media_logic::format3d::Format3D::Flat2D
+            && confidence == media_logic::format3d::DetectionConfidence::Default
+        {
+            if let Some(promoted) = crate::format3d_detect::detect_visual_sample(&mut demuxer) {
+                fmt3d = promoted;
+            }
+        }
         self.detected_screen_mode = fmt3d.to_screen_mode_index();
         self.initial_pose = pose;
 

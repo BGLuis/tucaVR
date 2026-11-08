@@ -371,7 +371,7 @@ fn is_full_packing(is_sbs: bool, aspect: f64) -> bool {
     if is_sbs {
         aspect >= 2.4
     } else {
-        aspect <= 1.2
+        aspect > 0.0 && aspect <= 1.2
     }
 }
 
@@ -468,11 +468,31 @@ pub fn resolve_container_hint(
         } else {
             Format3D::Cubemap3x2Mono
         }),
-        Some(VideoProjection::EquiangularCubemap) => Some(if is_stereo {
-            Format3D::Eac3x2Sbs
-        } else {
-            Format3D::Eac3x2Mono
-        }),
+        Some(VideoProjection::EquiangularCubemap) => {
+            if width > 0 && width < 3840 {
+                // Sub-4K YouTube EAC sanity check: sub-4K streams are often flat or
+                // non-cubemap re-encodes. Revert safely to flat (or flat SBS/OU if stereo).
+                Some(if !is_stereo {
+                    Format3D::Flat2D
+                } else if is_sbs {
+                    if is_full_packing(true, aspect) {
+                        Format3D::SbsFull
+                    } else {
+                        Format3D::SbsHalf
+                    }
+                } else if is_full_packing(false, aspect) {
+                    Format3D::OverUnderFull
+                } else {
+                    Format3D::OverUnderHalf
+                })
+            } else {
+                Some(if is_stereo {
+                    Format3D::Eac3x2Sbs
+                } else {
+                    Format3D::Eac3x2Mono
+                })
+            }
+        }
         Some(VideoProjection::Fisheye190) => Some(if is_stereo {
             Format3D::Fisheye190Sbs
         } else {
@@ -497,21 +517,24 @@ pub fn resolve_container_hint(
 /// decide whether to show a "we're not fully sure" affordance next to the
 /// detected format. Ordered roughly by trustworthiness, most to least.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum DetectionConfidence {
     /// Read straight out of container metadata (`st3d`/`sv3d`/`StereoMode`/
     /// `Projection`). The content itself declares its format — as
     /// trustworthy as detection gets.
-    FromMetadata,
+    FromMetadata = 0,
     /// Matched a known filename convention (e.g. `_sbs`, `_360`). Common
     /// and usually reliable, but filenames are free text — a false
     /// positive/negative is always possible.
-    FromFilename,
+    FromFilename = 1,
     /// No metadata, no filename pattern — inferred purely from aspect
     /// ratio + resolution. The T3.3 "último recurso" tier; easy to fool
     /// (e.g. an unusually-cropped flat 21:9 video near 32:9).
-    FromHeuristic,
+    FromHeuristic = 2,
+    /// Inferred from visual pixel inspection of decoded video frames.
+    FromVisualInspection = 3,
     /// No signal whatsoever — defaulted to flat 2D.
-    Default,
+    Default = 4,
 }
 
 /// Internal: stereo packing extracted from a filename, independent of
@@ -554,10 +577,14 @@ enum FilenameProjection {
 /// Specific projections (Fisheye, EAC, Cubemap) are checked before `360`, which is checked
 /// before VR180-specific markers (`vr180`, `180vr`, `180x180`), which are checked before bare `180`.
 pub fn detect_from_filename(name: &str) -> Option<Format3D> {
-    let stem = match name.rsplit_once('.') {
-        Some((base, _ext)) if !base.is_empty() => base,
-        _ => name,
+    let basename = name.rsplit(&['/', '\\'][..]).next().unwrap_or(name);
+    let clean_basename = basename.split(&['?', '#'][..]).next().unwrap_or(basename);
+    let (stem, ext) = match clean_basename.rsplit_once('.') {
+        Some((base, ext)) if !base.is_empty() => (base, ext),
+        _ => (clean_basename, ""),
     };
+    let is_mk3d = ext.eq_ignore_ascii_case("mk3d");
+
     let lower = stem.to_lowercase();
     let tokens: Vec<&str> = lower
         .split(|c: char| !c.is_alphanumeric())
@@ -567,22 +594,69 @@ pub fn detect_from_filename(name: &str) -> Option<Format3D> {
     let has_token = |t: &str| tokens.contains(&t);
     let has_pair = |t1: &str, t2: &str| tokens.windows(2).any(|w| w[0] == t1 && w[1] == t2);
 
-    let is_sbs_half = has_token("hsbs") || has_pair("half", "sbs");
-    let is_ou_half = has_token("hou") || has_pair("half", "ou") || has_pair("half", "tab");
+    let is_explicit_sbs_half = has_token("hsbs")
+        || has_token("halfsbs")
+        || has_pair("half", "sbs")
+        || has_pair("h", "sbs")
+        || has_pair("3d", "hsbs");
 
-    let is_sbs_full = has_token("sbs")
-        || has_token("fsbs")
+    let is_explicit_sbs_full = has_token("fsbs")
+        || has_token("fullsbs")
+        || has_pair("full", "sbs")
+        || has_pair("f", "sbs")
+        || has_pair("3d", "fsbs");
+
+    let is_sbs_half =
+        is_explicit_sbs_half || (!is_explicit_sbs_full && has_token("half") && has_token("sbs"));
+
+    let is_explicit_ou_half = has_token("hou")
+        || has_token("halfou")
+        || has_token("htab")
+        || has_token("halftab")
+        || has_pair("half", "ou")
+        || has_pair("half", "tab")
+        || has_pair("half", "tb")
+        || has_pair("h", "ou")
+        || has_pair("h", "tab")
+        || has_pair("h", "tb")
+        || has_pair("3d", "hou")
+        || has_pair("3d", "htab");
+
+    let is_explicit_ou_full = has_token("fou")
+        || has_token("fullou")
+        || has_token("ftab")
+        || has_token("fulltab")
+        || has_pair("full", "ou")
+        || has_pair("full", "tab")
+        || has_pair("full", "tb")
+        || has_pair("f", "ou")
+        || has_pair("f", "tab")
+        || has_pair("f", "tb")
+        || has_pair("3d", "fou");
+
+    let has_any_ou_indicator = has_token("ou")
+        || has_token("tab")
+        || has_token("tb")
+        || has_token("overunder")
+        || has_token("topbottom")
+        || has_pair("over", "under")
+        || has_pair("top", "bottom")
+        || has_pair("3d", "ou")
+        || has_pair("3d", "tab")
+        || has_pair("3d", "tb");
+
+    let is_ou_half =
+        is_explicit_ou_half || (!is_explicit_ou_full && has_token("half") && has_any_ou_indicator);
+
+    let is_sbs_full = is_explicit_sbs_full
+        || has_token("sbs")
         || has_token("lr")
+        || has_token("sidebyside")
         || has_pair("3d", "sbs")
         || has_pair("side", "by")
         || has_pair("left", "right");
 
-    let is_ou_full = has_token("ou")
-        || has_token("fou")
-        || has_token("tb")
-        || has_token("tab")
-        || has_pair("over", "under")
-        || has_pair("top", "bottom");
+    let is_ou_full = is_explicit_ou_full || has_any_ou_indicator;
 
     let stereo_layout = if is_sbs_half {
         Some(FilenameStereoLayout::SbsHalf)
@@ -592,6 +666,19 @@ pub fn detect_from_filename(name: &str) -> Option<Format3D> {
         Some(FilenameStereoLayout::SbsFull)
     } else if is_ou_full {
         Some(FilenameStereoLayout::OuFull)
+    } else if is_mk3d {
+        // .mk3d files are always 3D: default to SbsHalf unless full or ou is specified.
+        if has_any_ou_indicator {
+            if has_token("full") {
+                Some(FilenameStereoLayout::OuFull)
+            } else {
+                Some(FilenameStereoLayout::OuHalf)
+            }
+        } else if has_token("full") {
+            Some(FilenameStereoLayout::SbsFull)
+        } else {
+            Some(FilenameStereoLayout::SbsHalf)
+        }
     } else {
         None
     };
@@ -740,6 +827,25 @@ pub fn detect_from_resolution(width: u32, height: u32) -> Option<Format3D> {
         return Some(Format3D::SbsFull);
     }
 
+    // ~6:1 at >= 3K -> faixa horizontal de 6 faces cubemap mono (6x1)
+    if close_to(aspect, 6.0) && max_dim >= 3000 {
+        return Some(Format3D::Cubemap6x1Mono);
+    }
+
+    // ~3:1 at >= 3840 -> cubemap stereo SBS (duas metades 3x2 lado a lado)
+    if close_to(aspect, 3.0) && max_dim >= 3840 {
+        return Some(Format3D::Cubemap3x2Sbs);
+    }
+
+    // 5.7K+ Super-Wide resolution heuristic:
+    // Videos with width >= 5760 (or max_dim >= 5760) and aspect ratio >= 1.75
+    // that don't match 32:9/4:1/6:1/3:1 should be detected as VR 180° SBS (Format3D::Vr180Sbs).
+    if (width >= 5760 || max_dim >= 5760)
+        && (aspect >= 1.75 || 4 * (width as u64) >= 7 * (height as u64))
+    {
+        return Some(Format3D::Vr180Sbs);
+    }
+
     // ~2:1 at >= 4K -> classic 360° equirectangular mono (a stereo 360°
     // SBS/OU frame at this resolution would need to be *twice* as large in
     // one axis to give each eye a full 2:1 sphere).
@@ -753,52 +859,77 @@ pub fn detect_from_resolution(width: u32, height: u32) -> Option<Format3D> {
         return Some(Format3D::Spherical360OverUnderFull);
     }
 
-    // ~6:1 at >= 3K -> faixa horizontal de 6 faces cubemap mono (6x1)
-    if close_to(aspect, 6.0) && max_dim >= 3000 {
-        return Some(Format3D::Cubemap6x1Mono);
-    }
-
-    // ~3:1 at >= 3840 -> cubemap stereo SBS (duas metades 3x2 lado a lado)
-    if close_to(aspect, 3.0) && max_dim >= 3840 {
-        return Some(Format3D::Cubemap3x2Sbs);
-    }
-
     None
 }
 
 /// Compose all three detection sources in priority order — container
-/// metadata > filename > resolution heuristic > conservative default — and
+/// metadata > filename > resolution heuristic > visual inspection > conservative default — and
 /// report how confident the result is (T3.4 UI affordance).
-///
-/// `container_hint` is `Option<Format3D>` rather than
-/// `Option<(VideoStereoMode, VideoProjection)>` deliberately: turning raw
-/// box/element values into a `Format3D` needs the actual frame dimensions
-/// too (container metadata alone doesn't distinguish half- from
-/// full-resolution SBS/OU packing), and doing that combination correctly
-/// requires FFmpeg's parsed stream info, which only exists inside `core`.
-/// So `core` is expected to do that final `Format3D` resolution itself and
-/// hand the answer in here — this function only orchestrates priority.
-pub fn detect(
+pub fn detect_with_visual(
     filename: &str,
     width: u32,
     height: u32,
     container_hint: Option<Format3D>,
+    visual_hint: Option<Format3D>,
 ) -> (Format3D, DetectionConfidence) {
+    let sanitize_sub_4k_eac = |format: Format3D| -> Format3D {
+        if width > 0 && width < 3840 {
+            let aspect = if height > 0 {
+                width as f64 / height as f64
+            } else {
+                0.0
+            };
+            match format {
+                Format3D::Eac3x2Mono => Format3D::Flat2D,
+                Format3D::Eac3x2Sbs => {
+                    if is_full_packing(true, aspect) {
+                        Format3D::SbsFull
+                    } else {
+                        Format3D::SbsHalf
+                    }
+                }
+                other => other,
+            }
+        } else {
+            format
+        }
+    };
+
     if let Some(format) = container_hint {
-        return (format, DetectionConfidence::FromMetadata);
+        return (
+            sanitize_sub_4k_eac(format),
+            DetectionConfidence::FromMetadata,
+        );
     }
 
     if let Some(format) = detect_from_filename(filename) {
-        return (format, DetectionConfidence::FromFilename);
+        return (
+            sanitize_sub_4k_eac(format),
+            DetectionConfidence::FromFilename,
+        );
     }
 
     if let Some(format) = detect_from_resolution(width, height) {
         return (format, DetectionConfidence::FromHeuristic);
     }
 
+    if let Some(format) = visual_hint {
+        return (format, DetectionConfidence::FromVisualInspection);
+    }
+
     // No signal whatsoever: per the module-level CAUTION, never guess a
     // stereo/spherical mode with nothing backing it up.
     (Format3D::Flat2D, DetectionConfidence::Default)
+}
+
+/// Compose detection sources without visual pixel hint (defaults `visual_hint` to None).
+pub fn detect(
+    filename: &str,
+    width: u32,
+    height: u32,
+    container_hint: Option<Format3D>,
+) -> (Format3D, DetectionConfidence) {
+    detect_with_visual(filename, width, height, container_hint, None)
 }
 
 #[cfg(test)]
@@ -1229,13 +1360,19 @@ mod tests {
 
     #[test]
     fn resolution_2_to_1_at_4k_is_spherical_360_mono() {
-        assert_eq!(
-            detect_from_resolution(7680, 3840),
-            Some(Format3D::Spherical360Mono)
-        );
-        // Also the canonical 4K equirect: 3840x1920.
+        // Canonical 4K equirect: 3840x1920.
         assert_eq!(
             detect_from_resolution(3840, 1920),
+            Some(Format3D::Spherical360Mono)
+        );
+        // 4K DCI equirect: 4096x2048.
+        assert_eq!(
+            detect_from_resolution(4096, 2048),
+            Some(Format3D::Spherical360Mono)
+        );
+        // Sub-5.7K 2:1 equirect: 5000x2500.
+        assert_eq!(
+            detect_from_resolution(5000, 2500),
             Some(Format3D::Spherical360Mono)
         );
     }
@@ -1314,6 +1451,49 @@ mod tests {
         let (format, confidence) = detect("family_video.mp4", 1920, 1080, None);
         assert_eq!(format, Format3D::Flat2D);
         assert_eq!(confidence, DetectionConfidence::Default);
+    }
+
+    #[test]
+    fn detect_uses_visual_inspection_when_metadata_filename_and_resolution_are_absent() {
+        let (format, confidence) = detect_with_visual(
+            "family_video.mp4",
+            1920,
+            1080,
+            None,
+            Some(Format3D::SbsHalf),
+        );
+        assert_eq!(format, Format3D::SbsHalf);
+        assert_eq!(confidence, DetectionConfidence::FromVisualInspection);
+
+        let (format_ou, confidence_ou) =
+            detect_with_visual("clip.mp4", 1920, 1080, None, Some(Format3D::OverUnderHalf));
+        assert_eq!(format_ou, Format3D::OverUnderHalf);
+        assert_eq!(confidence_ou, DetectionConfidence::FromVisualInspection);
+    }
+
+    #[test]
+    fn detect_prefers_metadata_and_filename_over_visual_inspection() {
+        // Metadata outranks visual hint
+        let (format, confidence) = detect_with_visual(
+            "clip.mp4",
+            1920,
+            1080,
+            Some(Format3D::Flat2D),
+            Some(Format3D::SbsHalf),
+        );
+        assert_eq!(format, Format3D::Flat2D);
+        assert_eq!(confidence, DetectionConfidence::FromMetadata);
+
+        // Filename outranks visual hint
+        let (format2, confidence2) = detect_with_visual(
+            "clip_sbs.mp4",
+            1920,
+            1080,
+            None,
+            Some(Format3D::OverUnderHalf),
+        );
+        assert_eq!(format2, Format3D::SbsFull);
+        assert_eq!(confidence2, DetectionConfidence::FromFilename);
     }
 
     // ---- to_screen_mode_index: mapeamento exaustivo pros 10 indices nativos ----
@@ -1643,10 +1823,15 @@ mod tests {
             ),
             Some(Format3D::Cubemap3x2Sbs)
         );
-        // EAC mono
+        // EAC mono at >= 4K
+        assert_eq!(
+            resolve_container_hint(None, Some(VideoProjection::EquiangularCubemap), 3840, 2160),
+            Some(Format3D::Eac3x2Mono)
+        );
+        // EAC mono at sub-4K downgrades to Flat2D
         assert_eq!(
             resolve_container_hint(None, Some(VideoProjection::EquiangularCubemap), 1920, 1080),
-            Some(Format3D::Eac3x2Mono)
+            Some(Format3D::Flat2D)
         );
         // EAC stereo SBS
         assert_eq!(
@@ -1931,6 +2116,366 @@ mod tests {
         assert_eq!(
             produced, expected,
             "Format3D deve cobrir exatamente os modos do C++"
+        );
+    }
+
+    // ---- 5.7K+ VR180 SBS resolution heuristic tests ----
+
+    #[test]
+    fn resolution_5_7k_plus_vr180_sbs_heuristic() {
+        // Canon R5 / standard 5.7K VR180 SBS (5760x2880, aspect 2:1)
+        assert_eq!(detect_from_resolution(5760, 2880), Some(Format3D::Vr180Sbs));
+        // 6.4K VR180 SBS (6400x3200, aspect 2:1)
+        assert_eq!(detect_from_resolution(6400, 3200), Some(Format3D::Vr180Sbs));
+        // 8K VR180 SBS (7680x3840, aspect 2:1)
+        assert_eq!(detect_from_resolution(7680, 3840), Some(Format3D::Vr180Sbs));
+        // 8K DCI VR180 SBS (8192x4096, aspect 2:1)
+        assert_eq!(detect_from_resolution(8192, 4096), Some(Format3D::Vr180Sbs));
+        // 5.7K 16:9 super-wide (5760x3240, aspect ~1.7778 >= 1.75)
+        assert_eq!(detect_from_resolution(5760, 3240), Some(Format3D::Vr180Sbs));
+
+        // Boundary and aspect ratio cases:
+        // Sub-5.7K 2:1 (5759x2880) does not trigger 5.7K+ heuristic; falls back to 4K 360 mono
+        assert_eq!(
+            detect_from_resolution(5759, 2880),
+            Some(Format3D::Spherical360Mono)
+        );
+        // 5.7K square/1:1 (5760x5760, aspect 1.0 < 1.75) is 360 OU, not VR180 SBS
+        assert_eq!(
+            detect_from_resolution(5760, 5760),
+            Some(Format3D::Spherical360OverUnderFull)
+        );
+        // Aspect ratio strictly below 1.75 (5760x3292 -> aspect ~1.7496) does not match
+        assert_eq!(detect_from_resolution(5760, 3292), None);
+
+        // Aspect ratios with specific geometry overrides take precedence:
+        // 4:1 full SBS (7680x1920)
+        assert_eq!(detect_from_resolution(7680, 1920), Some(Format3D::SbsFull));
+        // 32:9 full SBS (7680x2160)
+        assert_eq!(detect_from_resolution(7680, 2160), Some(Format3D::SbsFull));
+        // 6:1 cubemap mono (6000x1000)
+        assert_eq!(
+            detect_from_resolution(6000, 1000),
+            Some(Format3D::Cubemap6x1Mono)
+        );
+        // 3:1 cubemap stereo SBS (6000x2000)
+        assert_eq!(
+            detect_from_resolution(6000, 2000),
+            Some(Format3D::Cubemap3x2Sbs)
+        );
+        // Portrait orientation (2880x5760, aspect 0.5 < 1.75) does not match
+        assert_eq!(detect_from_resolution(2880, 5760), None);
+    }
+
+    // ---- Sub-4K YouTube EAC downgrade sanity check ----
+
+    #[test]
+    fn sub_4k_eac_downgrade_sanity_check() {
+        // resolve_container_hint: mono sub-4K EAC downgrades to Flat2D
+        assert_eq!(
+            resolve_container_hint(None, Some(VideoProjection::EquiangularCubemap), 1920, 1080),
+            Some(Format3D::Flat2D)
+        );
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::Mono),
+                Some(VideoProjection::EquiangularCubemap),
+                1280,
+                720
+            ),
+            Some(Format3D::Flat2D)
+        );
+        // resolve_container_hint: stereo sub-4K EAC downgrades to flat SBS (Half vs Full)
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(VideoProjection::EquiangularCubemap),
+                1920,
+                1080
+            ),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(VideoProjection::EquiangularCubemap),
+                2560,
+                720 // aspect ~3.55 >= 2.4 -> Full
+            ),
+            Some(Format3D::SbsFull)
+        );
+        // resolve_container_hint: >= 4K EAC remains EAC
+        assert_eq!(
+            resolve_container_hint(None, Some(VideoProjection::EquiangularCubemap), 3840, 2160),
+            Some(Format3D::Eac3x2Mono)
+        );
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(VideoProjection::EquiangularCubemap),
+                3840,
+                1280
+            ),
+            Some(Format3D::Eac3x2Sbs)
+        );
+        // resolve_container_hint: unknown dimensions (0x0) preserve EAC
+        assert_eq!(
+            resolve_container_hint(None, Some(VideoProjection::EquiangularCubemap), 0, 0),
+            Some(Format3D::Eac3x2Mono)
+        );
+
+        // detect: sub-4K EAC via filename or metadata downgrades safely
+        assert_eq!(
+            detect("flight.eac.mp4", 1920, 1080, None),
+            (Format3D::Flat2D, DetectionConfidence::FromFilename)
+        );
+        assert_eq!(
+            detect("flight.eac.mp4", 3840, 2160, None),
+            (Format3D::Eac3x2Mono, DetectionConfidence::FromFilename)
+        );
+        assert_eq!(
+            detect("sample.mp4", 1920, 1080, Some(Format3D::Eac3x2Mono)),
+            (Format3D::Flat2D, DetectionConfidence::FromMetadata)
+        );
+        assert_eq!(
+            detect("sample.mp4", 1920, 1080, Some(Format3D::Eac3x2Sbs)),
+            (Format3D::SbsHalf, DetectionConfidence::FromMetadata)
+        );
+        assert_eq!(
+            detect("sample.mp4", 2560, 720, Some(Format3D::Eac3x2Sbs)),
+            (Format3D::SbsFull, DetectionConfidence::FromMetadata)
+        );
+        assert_eq!(
+            detect("sample.mp4", 3840, 2160, Some(Format3D::Eac3x2Mono)),
+            (Format3D::Eac3x2Mono, DetectionConfidence::FromMetadata)
+        );
+    }
+
+    // ---- .mk3d file extension detection ----
+
+    #[test]
+    fn filename_mk3d_detection() {
+        // Bare .mk3d defaults to SbsHalf
+        assert_eq!(
+            detect_from_filename("feature.mk3d"),
+            Some(Format3D::SbsHalf)
+        );
+        // Case-insensitivity
+        assert_eq!(
+            detect_from_filename("Feature.MK3D"),
+            Some(Format3D::SbsHalf)
+        );
+        // Explicit full specified
+        assert_eq!(
+            detect_from_filename("movie.full.mk3d"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("movie.full.sbs.mk3d"),
+            Some(Format3D::SbsFull)
+        );
+        // Explicit OU specified
+        assert_eq!(
+            detect_from_filename("movie.ou.mk3d"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("movie.half.ou.mk3d"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("movie.full.ou.mk3d"),
+            Some(Format3D::OverUnderFull)
+        );
+        // Explicit hsbs specified
+        assert_eq!(
+            detect_from_filename("movie.hsbs.mk3d"),
+            Some(Format3D::SbsHalf)
+        );
+        // Full path with .mk3d
+        assert_eq!(
+            detect_from_filename("/storage/emulated/0/Movies/sample.mk3d"),
+            Some(Format3D::SbsHalf)
+        );
+        // URL with query parameters and fragment
+        assert_eq!(
+            detect_from_filename("https://example.com/stream/sample.mk3d?token=xyz#frag"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("https://example.com/stream/sample.full.mk3d?token=xyz"),
+            Some(Format3D::SbsFull)
+        );
+    }
+
+    // ---- New filename tokens & Title safety ----
+
+    #[test]
+    fn filename_additional_tokens_and_title_safety() {
+        // half.sbs, full.sbs, half.ou, full.ou with various delimiters
+        assert_eq!(
+            detect_from_filename("clip.half.sbs.mp4"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip-half-sbs.mp4"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip_half_sbs.mp4"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip.full.sbs.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("clip-full-sbs.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("clip_full_sbs.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("clip.half.ou.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip-half-ou.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip_half_ou.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip.full.ou.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("clip-full-ou.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("clip_full_ou.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("clip.half.tab.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip.full.tab.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("clip.halfsbs.mp4"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip.fullsbs.mp4"),
+            Some(Format3D::SbsFull)
+        );
+
+        // Delimiters with single letter indicators (h-sbs, h-ou, f-sbs, f-ou)
+        assert_eq!(
+            detect_from_filename("movie.h.sbs.mkv"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("movie-h-sbs.mp4"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("movie.h.ou.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("movie-h-tab.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("movie.f.sbs.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("movie.f.ou.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+
+        // Separated / non-adjacent tokens (e.g. resolution or tags between half/full and sbs/ou)
+        assert_eq!(
+            detect_from_filename("Avatar.Half.1080p.SBS.mkv"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("Avatar.Half.3D.SBS.mkv"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.Half.1080p.OU.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.Half.1080p.TAB.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.Full.1080p.SBS.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.Full.1080p.OU.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+
+        // Compound single-word markers
+        assert_eq!(
+            detect_from_filename("movie.sidebyside.mp4"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("movie.overunder.mp4"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("movie.topbottom.mp4"),
+            Some(Format3D::OverUnderFull)
+        );
+
+        // H.264 / H.265 safety: H.264 token must not falsely trigger half SBS
+        assert_eq!(
+            detect_from_filename("Series.S01E02.720p.H.264.SBS.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.2024.1080p.H.265.OU.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+
+        // Title safety: generic "3d" without stereo indicators must NOT match
+        assert_eq!(detect_from_filename("Step.Up.3D.1080p.mkv"), None);
+        assert_eq!(detect_from_filename("Avatar.3D.mkv"), None);
+        assert_eq!(detect_from_filename("Piranha.3D.mp4"), None);
+        assert_eq!(detect_from_filename("Jackass_3D.mp4"), None);
+
+        // Generic "3d" accompanied by stereo indicators matches appropriately
+        assert_eq!(
+            detect_from_filename("Movie.3D.SBS.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.3D.Half-SBS.mkv"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.3D.OU.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.3D.Half-OU.mkv"),
+            Some(Format3D::OverUnderHalf)
         );
     }
 }
