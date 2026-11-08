@@ -253,7 +253,7 @@ class VRActivity : NativeActivity() {
         currentAudioTrackOrdinal = 0
         if (source != null) {
             CoroutineScope(Dispatchers.IO).launch {
-                currentMediaMetadata = com.tucavr.filebrowser.MediaMetadataReader.read(this@VRActivity, source)
+                currentMediaMetadata = com.tucavr.filebrowser.MediaMetadataReader.readCached(this@VRActivity, source)
             }
         }
         runOnUiThread {
@@ -1848,16 +1848,6 @@ class VRActivity : NativeActivity() {
     }
 
     /**
-     * Exibe o modal de formato de tela no 3º Quad dedicado frontal (VRModalPresentation).
-     */
-    fun openScreenFormatModal() {
-        runOnUiThread {
-            nativeShowModalPanel()
-            modalPresentation?.showScreenFormatModal()
-        }
-    }
-
-    /**
      * Exibe o modal de configurações e estilo do Passthrough no 3º Quad dedicado frontal (VRModalPresentation).
      */
     fun openPassthroughSettingsModal() {
@@ -2090,26 +2080,6 @@ class VRActivity : NativeActivity() {
         nativeSetAudioTrack(ordinal)
         if (currentPlaybackSource != null && lastMediaProgressCurrent > 0f) {
             nativeSeekVideo(lastMediaProgressCurrent)
-        }
-    }
-
-    /**
-     * Exibe o modal de Legendas no 3º Quad dedicado frontal (VRModalPresentation).
-     */
-    fun openSubtitlesModal() {
-        runOnUiThread {
-            nativeShowModalPanel()
-            modalPresentation?.showSubtitlesModal()
-        }
-    }
-
-    /**
-     * Exibe o modal de Trilhas de Áudio no 3º Quad dedicado frontal (VRModalPresentation).
-     */
-    fun openAudioTracksModal() {
-        runOnUiThread {
-            nativeShowModalPanel()
-            modalPresentation?.showAudioTracksModal()
         }
     }
 
@@ -2732,6 +2702,8 @@ class VRActivity : NativeActivity() {
     external fun nativeGetSubtitleTrackCount(): Int
 
     external fun nativeGetSubtitleTrackInfoWire(): String?
+
+    external fun nativeGetAudioTrackInfoWire(): String?
 
     // T7.6: idioma do sistema para auto-selecao de faixa embutida.
     external fun nativeSetPreferredSubtitleLanguage(lang: String)

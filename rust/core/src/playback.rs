@@ -226,6 +226,7 @@ pub struct PlaybackController {
     // seek() ja faz.
     desired_audio_track: usize,
     audio_track_count: usize,
+    available_audio_tracks: Vec<media_logic::track_info::AudioTrackInfo>,
     detected_screen_mode: u32,
     initial_pose: Option<media_logic::format3d::ProjectionPose>,
     // T-HDR: transfer characteristic (EOTF) do stream de video atual,
@@ -321,6 +322,7 @@ impl PlaybackController {
             speed_bits,
             desired_audio_track: 0,
             audio_track_count: 0,
+            available_audio_tracks: Vec::new(),
             detected_screen_mode: 0,
             initial_pose: None,
             hdr_transfer: media_logic::color::TransferFunction::Sdr,
@@ -434,6 +436,33 @@ impl PlaybackController {
         self.audio_track_count = demuxer.audio_streams.len();
         self.desired_audio_track = self.audio_track_index();
         demuxer.select_audio_track(self.desired_audio_track);
+        self.available_audio_tracks.clear();
+        for (i, &stream_idx) in demuxer.audio_streams.iter().enumerate() {
+            if let Some(stream) = demuxer.input_context.stream(stream_idx) {
+                let meta = stream.metadata();
+                let lang = meta.get("language").unwrap_or_default().to_string();
+                let title = meta.get("title").unwrap_or_default().to_string();
+                let params = stream.parameters();
+                let codec = params.id().name().to_string();
+                let (channels, sample_rate) = unsafe {
+                    let p = params.as_ptr();
+                    ((*p).ch_layout.nb_channels as u32, (*p).sample_rate as u32)
+                };
+                self.available_audio_tracks
+                    .push(media_logic::track_info::AudioTrackInfo {
+                        index: i,
+                        codec,
+                        language: lang,
+                        title: if title.is_empty() {
+                            format!("Track {}", i + 1)
+                        } else {
+                            title
+                        },
+                        channels,
+                        sample_rate,
+                    });
+            }
+        }
         self.duration = demuxer.input_context.duration() as f64 / 1_000_000.0;
 
         let video_idx = demuxer.video_stream_index.ok_or("No video stream")?;
@@ -1449,6 +1478,17 @@ impl PlaybackController {
     /// nada foi carregado ainda ou o arquivo nao tem audio).
     pub fn audio_track_count(&self) -> usize {
         self.audio_track_count
+    }
+
+    pub fn get_available_audio_tracks(&self) -> &[media_logic::track_info::AudioTrackInfo] {
+        &self.available_audio_tracks
+    }
+
+    pub fn get_audio_track_info(
+        &self,
+        index: usize,
+    ) -> Option<&media_logic::track_info::AudioTrackInfo> {
+        self.available_audio_tracks.get(index)
     }
 
     /// Indice da trilha de audio atualmente selecionada (0 se nada foi carregado,

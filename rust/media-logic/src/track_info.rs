@@ -23,6 +23,34 @@ pub struct TrackLanguageInfo {
     pub display_name: String,
 }
 
+/// Descriptor for an audio track exported via wire / JNI.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AudioTrackInfo {
+    pub index: usize,
+    pub codec: String,
+    pub language: String,
+    pub title: String,
+    pub channels: u32,
+    pub sample_rate: u32,
+}
+
+/// Formats a list of audio tracks into wire lines (index, codec, language, title, channels, sample_rate).
+pub fn format_audio_track_info_wire(tracks: &[AudioTrackInfo]) -> String {
+    let mut lines = Vec::with_capacity(tracks.len());
+    for info in tracks {
+        lines.push(format!(
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            info.index,
+            info.codec.replace(['\t', '\n'], " "),
+            info.language.replace(['\t', '\n'], " "),
+            info.title.replace(['\t', '\n'], " "),
+            info.channels,
+            info.sample_rate
+        ));
+    }
+    lines.join("\n")
+}
+
 /// Maps an ISO 639-1 (2-letter) or ISO 639-2 (3-letter) code to its English language name.
 pub fn iso_to_language_name(code: &str) -> Option<&'static str> {
     let cleaned = code.trim().to_ascii_lowercase();
@@ -467,5 +495,32 @@ mod tests {
         let jp = resolve_track_language("jpn", "", 0);
         assert_eq!(jp.language_name, "Japanese");
         assert_eq!(jp.region_code.as_deref(), Some("JP"));
+    }
+
+    #[test]
+    fn test_format_audio_track_info_wire() {
+        let tracks = vec![
+            AudioTrackInfo {
+                index: 0,
+                codec: "aac".into(),
+                language: "por".into(),
+                title: "Portuguese\tStereo\n5.1".into(),
+                channels: 6,
+                sample_rate: 48000,
+            },
+            AudioTrackInfo {
+                index: 1,
+                codec: "ac3".into(),
+                language: "eng".into(),
+                title: "English Commentary".into(),
+                channels: 2,
+                sample_rate: 44100,
+            },
+        ];
+        let wire = format_audio_track_info_wire(&tracks);
+        assert_eq!(
+            wire,
+            "0\taac\tpor\tPortuguese Stereo 5.1\t6\t48000\n1\tac3\teng\tEnglish Commentary\t2\t44100"
+        );
     }
 }
