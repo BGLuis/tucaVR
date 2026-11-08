@@ -217,6 +217,23 @@ static void TestColorGradingConstantsParity() {
     printf("[PASS] TestColorGradingConstantsParity\n");
 }
 
+static void TestSrgbEotfRoundTripsEightBitCodes() {
+    // Every 8-bit code, including the linear toe (codes 0..10), must survive EOTF -> hardware OETF.
+    for (int code = 0; code <= 255; ++code) {
+        float v = static_cast<float>(code) / 255.0f;
+        float encoded = SrgbOetf(SrgbEotf(v));
+        assert(std::abs(encoded - v) < 1e-5f);
+        assert(static_cast<int>(std::lround(encoded * 255.0f)) == code);
+    }
+    // Segment boundary and anchors.
+    assert(SrgbEotf(0.0f) == 0.0f);
+    assert(std::abs(SrgbEotf(1.0f) - 1.0f) < 1e-6f);
+    assert(std::abs(SrgbEotf(0.04045f) - 0.04045f / 12.92f) < 1e-6f);
+    // A known midtone: sRGB 0.5 is 21.4% linear. Plain pow 2.2 would give 0.2176.
+    assert(std::abs(SrgbEotf(0.5f) - 0.21404f) < 1e-4f);
+    printf("[PASS] TestSrgbEotfRoundTripsEightBitCodes\n");
+}
+
 int main() {
     printf("--- Executing unit tests for color_grading.h ---\n");
     TestHableFilmicCurveMonotonicity();
@@ -228,6 +245,7 @@ int main() {
     TestColorTemperature();
     TestRgbToYcbcr();
     TestColorGradingConstantsParity();
+    TestSrgbEotfRoundTripsEightBitCodes();
     printf("--- All color_grading.h unit tests passed successfully! ---\n");
     return 0;
 }

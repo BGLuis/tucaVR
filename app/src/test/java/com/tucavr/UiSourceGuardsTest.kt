@@ -251,6 +251,15 @@ class UiSourceGuardsTest {
             assertTrue("$name must define kW = 40.0", code.contains("const float kW = 40.0;"))
             assertTrue("$name must define kExposure = 2.0", code.contains("const float kExposure = 2.0;"))
             assertTrue("$name must apply Cubic S-Curve at 0.18 for HDR", code.contains("ApplyCubicSCurve(gammaColor, 0.18);"))
+
+            // 5. The eye swapchain is *_SRGB: output must be linearized or the hardware encodes video twice.
+            assertTrue("$name must define SrgbEotf", code.contains("vec3 SrgbEotf(vec3 c)"))
+            assertTrue("$name SrgbEotf must use the exact piecewise curve", code.contains("c / 12.92") && code.contains("vec3(2.4)"))
+            val finalOutput = code.lines().last { it.trim().startsWith("outColor = vec4(") }
+            assertTrue(
+                "$name must linearize with SrgbEotf in its final outColor write",
+                finalOutput.contains("SrgbEotf(color)"),
+            )
         }
     }
 

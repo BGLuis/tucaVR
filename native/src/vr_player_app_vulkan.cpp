@@ -2000,6 +2000,8 @@ void CreateSwapchains(AppState& state) {
         }
     }
     if (chosenFormat == 0) {
+        // The video fragment shaders linearize for an sRGB attachment, so video renders too dark here.
+        LOGW("No sRGB swapchain format offered by the runtime; falling back to UNORM (video will look darker)");
         for (int64_t format : formats) {
             if (format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_B8G8R8A8_UNORM) {
                 chosenFormat = format;
