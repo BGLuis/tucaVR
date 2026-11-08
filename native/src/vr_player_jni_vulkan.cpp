@@ -111,6 +111,7 @@ extern "C" {
     extern uint32_t load_external_subtitle(const char* path);
     extern uint32_t get_subtitle_track_count();
     extern char* get_subtitle_track_info_wire();
+    extern char* get_audio_track_info_wire();
     extern uint32_t get_active_subtitle_text(char* out_buf, size_t max_len);
     extern void set_preferred_subtitle_language(const char* lang); // T7.6
     extern char* take_last_playback_error();
@@ -1658,6 +1659,12 @@ Java_com_tucavr_VRActivity_nativeGetSubtitleTrackCount(JNIEnv* env, jobject) {
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_tucavr_VRActivity_nativeGetSubtitleTrackInfoWire(JNIEnv* env, jobject) {
     char* result = get_subtitle_track_info_wire();
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeGetAudioTrackInfoWire(JNIEnv* env, jobject) {
+    char* result = get_audio_track_info_wire();
     return RustStringToJStringAndFree(env, result);
 }
 

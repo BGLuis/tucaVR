@@ -28,6 +28,8 @@ import com.tucavr.designsystem.VoidButtonStyle
 import com.tucavr.designsystem.VoidIconButton
 import com.tucavr.designsystem.VoidTheme
 import com.tucavr.designsystem.VolumeMenuModal
+import com.tucavr.designsystem.parseAudioWire
+import com.tucavr.designsystem.parseSubtitleWire
 import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ScrubStrip
 import com.tucavr.history.historyKey
@@ -331,6 +333,13 @@ class VRControlsPresentation(
         val trackCount = activity.nativeGetSubtitleTrackCount()
         val currentTrack = activity.nativeGetSubtitleTrack()
         val currentOffsetMs = activity.nativeGetSubtitleOffsetMs()
+        val wire = activity.nativeGetSubtitleTrackInfoWire()
+        val trackItems =
+            parseSubtitleWire(
+                wire = wire,
+                trackCount = trackCount,
+                fallbackTracks = activity.currentMediaMetadata?.subtitleTracks ?: emptyList(),
+            )
         return SubtitleSelectionModal(
             context = context,
             trackCount = trackCount,
@@ -343,11 +352,18 @@ class VRControlsPresentation(
                 activity.nativeSetSubtitleOffsetMs(offsetMs)
             },
             onDismiss = { dismissOpenPopup() },
+            trackItems = trackItems,
         )
     }
 
     private fun createAudioModal(): View {
-        val tracks = activity.currentMediaMetadata?.tracks ?: emptyList()
+        var tracks = activity.currentMediaMetadata?.audioTracks ?: emptyList()
+        if (tracks.isEmpty()) {
+            val wire = activity.nativeGetAudioTrackInfoWire()
+            if (!wire.isNullOrBlank()) {
+                tracks = parseAudioWire(wire)
+            }
+        }
         return AudioTrackModal(
             context = context,
             tracks = tracks,

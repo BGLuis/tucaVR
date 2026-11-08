@@ -3455,6 +3455,18 @@ pub extern "C" fn get_subtitle_track_info_wire() -> *mut std::os::raw::c_char {
 }
 
 #[no_mangle]
+pub extern "C" fn get_audio_track_info_wire() -> *mut std::os::raw::c_char {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        let wire = media_logic::track_info::format_audio_track_info_wire(
+            controller.get_available_audio_tracks(),
+        );
+        string_to_c_char(wire)
+    } else {
+        string_to_c_char(String::new())
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn get_active_subtitle_text(
     out_buf: *mut std::os::raw::c_char,
     max_len: usize,
