@@ -8048,15 +8048,9 @@ void ApplyDynamicAspectRatio(AppState& state) {
     state.defaultScreenScaleX = fit.x;
     state.defaultScreenScaleY = fit.y;
 
-    if (!state.userCustomScreenScale) {
-        state.screenScaleX = fit.x;
-        state.screenScaleY = fit.y;
-    } else {
-        // User had manually resized the screen width; adjust height to match new aspect ratio
-        if (aspect > 0.001f) {
-            state.screenScaleY = state.screenScaleX / aspect;
-        }
-    }
+    const vrplayer::ScreenScale shown = ComputeScreenFit(state, aspect);
+    state.screenScaleX = shown.x;
+    state.screenScaleY = shown.y;
 
     LOGI("Dynamic Aspect Ratio: video %ux%u mode %s -> aspect %.3f (scale=%.3fx%.3f, default=%.3fx%.3f)",
          state.videoWidth, state.videoHeight, ScreenModeName(currentMode), aspect,

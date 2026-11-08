@@ -1456,19 +1456,15 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                 if (state.isScreenGrabbed) {
                     if (sy != 0.0f) {
                         const float kResizeSpeedMetersPerSec = 1.2f;
-                        float newWidth = state.screenScaleX + sy * kResizeSpeedMetersPerSec * dt;
+                        const float currentBound =
+                            state.userCustomScreenScale ? state.userScreenBoundWidth : state.baseScaleX;
+                        float newWidth = currentBound + sy * kResizeSpeedMetersPerSec * dt;
                         newWidth = std::max(0.8f, std::min(newWidth, 8.0f));
-                        float currentAspect = 16.0f / 9.0f;
-                        if (state.videoWidth > 0 && state.videoHeight > 0) {
-                            currentAspect = vrplayer::CalculateContentAspectRatio(
-                                state.videoWidth, state.videoHeight, state.screenMode);
-                        } else if (state.screenScaleY > 0.001f) {
-                            currentAspect = state.screenScaleX / state.screenScaleY;
-                        }
-                        state.screenScaleX = newWidth;
-                        state.screenScaleY = newWidth / currentAspect;
-                        state.userCustomScreenScale = true;
                         state.userScreenBoundWidth = newWidth;
+                        state.userCustomScreenScale = true;
+                        const auto fit = ComputeScreenFit(state, CurrentScreenContentAspect(state));
+                        state.screenScaleX = fit.x;
+                        state.screenScaleY = fit.y;
                     }
 
                     if (sx != 0.0f) {
