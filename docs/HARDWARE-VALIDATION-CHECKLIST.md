@@ -299,6 +299,16 @@ Executes the measurement protocol for 4× MSAA on geometry pipelines (`vr_player
   ./gradlew assembleDebug -PenableVulkanValidation=true
   adb logcat -s VkValidation:* VRPlayerAppVK:*
   ```
+- **Runtime MSAA A/B Property (`debug.tucavr.msaa`):**
+  ```bash
+  # Force 1x baseline on the same APK
+  adb shell setprop debug.tucavr.msaa 1
+  adb shell am force-stop com.tucavr
+
+  # Force 4x MSAA (or leave unset; 4x is the default when supported)
+  adb shell setprop debug.tucavr.msaa 4
+  adb shell am force-stop com.tucavr
+  ```
 - **Scenes:** Cinema Environment and Space Environment.
 
 ### Objective Pass Criteria & Measurement Protocol

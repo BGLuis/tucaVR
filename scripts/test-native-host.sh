@@ -30,6 +30,7 @@ TESTS=(
     "test_controls_pose"
     "test_astc_transcode"
     "test_frame_time_histogram"
+    "test_vulkan_msaa"
 )
 
 EXTRA_FLAGS=()
