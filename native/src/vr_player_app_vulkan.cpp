@@ -963,7 +963,7 @@ struct AppState {
     VkBuffer videoVertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory videoVertexMemory = VK_NULL_HANDLE;
 
-    // Tela curva cilíndrica (Curved Cinema Screen)
+    // Cylindrical curved screen (Curved Cinema Screen)
     float screenCurvature = 0.0f;
     float lastGeneratedCurvature = -1.0f;
     float lastGeneratedScaleX = -1.0f;
@@ -1322,7 +1322,7 @@ struct AppState {
     // nascer na altura dos olhos sem exigir long-press manual.
     bool sceneCalibrated = false;
 
-    // Bed Mode (Modo Cama / Reclined 3DoF playback)
+    // Bed Mode (Reclined 3DoF playback)
     bool bedModeEnabled = false;
     XrQuaternionf sceneOrientation = {0.0f, 0.0f, 0.0f, 1.0f};
     Mat4 sceneOrientationMatrix = Mat4Identity();
@@ -5337,7 +5337,7 @@ static void DrawSubtitles(AppState& state, VkCommandBuffer cmd, const Mat4& proj
             Mat4Multiply(state.sceneOrientationMatrix, Mat4Translation(subXOffset, subYOffset, -2.2f)));
         subModel = Mat4Multiply(subTrans, Mat4Scale(state.subtitleScale, state.subtitleScale, 1.0f));
     } else {
-        // Modo plano (2D, SBS, OU): posicionado relativo à tela virtual (com projeção cilíndrica se curvada)
+        // Planar mode (2D, SBS, OU): positioned relative to virtual screen (with cylindrical projection if curved)
         SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
         const auto curParams = vrplayer::ComputeCurvedScreenParams(
             state.screenCurvature, state.screenScaleX, state.screenScaleY);
@@ -5864,7 +5864,7 @@ static void DrawSkyboxIfLoaded(
     vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
     vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-    // Skybox rotaciona com a orientação da cena (yaw-only ou 3DoF em Bed Mode), sem translação
+    // Skybox rotates with scene orientation (yaw-only or 3DoF in Bed Mode), without translation
     Mat4 skyboxModel = state.sceneOrientationMatrix;
     Mat4 viewNoTrans = view;
     viewNoTrans.m[12] = 0.0f;
@@ -8070,8 +8070,8 @@ void UpdateVideoFrame(AppState& state) {
     bool stopRequested = g_stopVideoRequested.exchange(false);
     bool newSessionRequested = g_newVideoSessionRequested.exchange(false);
     if (stopRequested || newSessionRequested) {
-        LOGI("Video: %s — limpando frame ativo e cache Vulkan",
-             stopRequested ? "parada solicitada" : "nova sessao de video iniciada");
+        LOGI("Video: %s — clearing active frame and Vulkan cache",
+             stopRequested ? "stop requested" : "new video session started");
         state.activeVideoFrame = nullptr;
         state.lastVideoBuffer = nullptr;
         state.msSinceLastVideoFrame = 0.0f;
@@ -8725,17 +8725,17 @@ void RenderFrame(AppState& state) {
         // T-HDR: mesma cadencia de leitura por frame que screenMode acima.
         state.isHdr = static_cast<int>(get_video_is_hdr());
 
-        // Sincronização da curvatura da tela solicitada via JNI
+        // Screen curvature synchronization requested via JNI
         if (::g_screenCurvatureDirty.exchange(false)) {
             state.screenCurvature = ::g_screenCurvature.load();
             LOGI("Screen: Curvature updated via JNI -> %.2f", state.screenCurvature);
         }
         UpdateCurvedScreenVertexBuffer(state);
 
-        // Posicao/escala da tela virtual — mesma base do caminho GLES
+        // Virtual screen position/scale — same baseline as GLES path
         // (vr_player_app.cpp: m_screenPosition = {0, 1.5, -2},
-        //  m_screenScale = {1.6, 0.9}), ajustavel via thumbstick (Estagio 6)
-        // e deslocada pelo offset de cena/recenter acima.
+        //  m_screenScale = {1.6, 0.9}), adjustable via thumbstick (Stage 6)
+        // and offset by scene/recenter above.
         SceneTransforms sceneForScreen = ComputeSceneTransforms(state, headCenter);
         const Mat4 screenModel = Mat4Multiply(
             sceneForScreen.screenModelNoScale,
@@ -8797,7 +8797,7 @@ void RenderFrame(AppState& state) {
                     state.screenScaleY = fit.y;
                     state.defaultScreenScaleX = fit.x;
                     state.defaultScreenScaleY = fit.y;
-                    LOGI("Foto: textura carregada %ux%u no modo %s (scale=%.2fx%.2f)",
+                    LOGI("Photo: texture loaded %ux%u in mode %s (scale=%.2fx%.2f)",
                          w, h, ScreenModeName(state.photoScreenMode), fit.x, fit.y);
                 }
             } else {
