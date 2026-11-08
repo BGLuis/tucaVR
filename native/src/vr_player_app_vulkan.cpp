@@ -410,6 +410,7 @@ std::atomic<float> g_uiCylinderRadius{vrplayer::kUiCylinderRadius};
 std::atomic<float> g_uiCylinderCentralAngle{vrplayer::kUiCylinderCentralAngle};
 std::atomic<bool> g_byButtonAsBack{true};
 std::atomic<bool> g_hoverHapticsEnabled{true};
+std::atomic<bool> g_directVideoLayerEnabled{true};
 
 // Fisheye lens field of view setting (#214)
 std::atomic<int> g_fisheyeFovDegrees{DEFAULT_FISHEYE_FOV_DEGREES};

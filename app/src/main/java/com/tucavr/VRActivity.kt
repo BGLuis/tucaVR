@@ -543,6 +543,7 @@ class VRActivity : NativeActivity() {
         nativeSetUiPanelGeometry(distanceM, fovDeg)
         nativeSetByButtonAsBack(FeatureFlags.isEnabled(this, FeatureFlags.Flag.BY_BUTTON_AS_BACK))
         nativeSetHoverHapticsEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.HOVER_HAPTICS))
+        nativeSetDirectVideoLayerEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.DIRECT_VIDEO_LAYER))
 
         // F8: ANR e crash nativo (inclusive o abort do ART no teardown Vulkan)
         // não deixam rastro no handler de exceções da JVM abaixo — ApplicationExitInfo
@@ -1795,6 +1796,8 @@ class VRActivity : NativeActivity() {
     external fun nativeSetByButtonAsBack(enabled: Boolean)
 
     external fun nativeSetHoverHapticsEnabled(enabled: Boolean)
+
+    external fun nativeSetDirectVideoLayerEnabled(enabled: Boolean)
 
     external fun nativeRequestFrameCapture(path: String)
 

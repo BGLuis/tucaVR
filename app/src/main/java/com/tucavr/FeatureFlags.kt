@@ -72,6 +72,10 @@ object FeatureFlags {
 
         // Match display refresh rate to content frame rate (Issue #174)
         MATCH_CONTENT_FRAME_RATE("match_content_frame_rate", defaultEnabled = true),
+
+        // Flat 2D/SBS/OU video as its own compositor layer instead of the eye buffer (Vulkan only).
+        // On: unvalidated on a headset, so the setting stays available for A/B comparison.
+        DIRECT_VIDEO_LAYER("direct_video_layer", defaultEnabled = true),
     }
 
     /** Chave usada para persistir o brilho do ambiente 3D/Skybox (0.0f a 1.0f). Padrão: 1.0f (100%). */

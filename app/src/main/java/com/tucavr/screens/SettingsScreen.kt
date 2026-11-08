@@ -377,6 +377,14 @@ class SettingsScreen(
             Category.VIDEO -> {
                 content.addView(buildUpscalingRow())
                 content.addView(buildFoveationRow())
+                content.addView(
+                    buildFlagRow(
+                        labelRes = R.string.settings_direct_video_layer_label,
+                        descriptionRes = R.string.settings_direct_video_layer_description,
+                        flag = FeatureFlags.Flag.DIRECT_VIDEO_LAYER,
+                        onChanged = { enabled -> activity.nativeSetDirectVideoLayerEnabled(enabled) },
+                    ),
+                )
             }
             Category.LIGHTING -> {
                 content.addView(buildEnvironmentBrightnessRow())

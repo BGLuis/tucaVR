@@ -65,5 +65,7 @@ class FeatureFlagsTest {
 
         // Hand tracking habilitado por padrão
         assertTrue("HAND_TRACKING deve vir habilitado por padrão", FeatureFlags.Flag.HAND_TRACKING.defaultEnabled)
+
+        assertTrue("DIRECT_VIDEO_LAYER must be on by default", FeatureFlags.Flag.DIRECT_VIDEO_LAYER.defaultEnabled)
     }
 }
