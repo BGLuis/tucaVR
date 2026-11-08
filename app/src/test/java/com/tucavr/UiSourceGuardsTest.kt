@@ -254,6 +254,22 @@ class UiSourceGuardsTest {
         }
     }
 
+    @Test
+    fun `player controls guards view writes to prevent redundant invalidations`() {
+        val file = File("src/main/java/com/tucavr/VRControlsPresentation.kt")
+        val target = if (file.exists()) file else File("app/src/main/java/com/tucavr/VRControlsPresentation.kt")
+        assertTrue(target.exists())
+        val content = target.readText()
+        assertTrue(
+            "VRControlsPresentation must guard view updates using viewCache (Issue #152)",
+            content.contains("viewCache.shouldWriteProgress") &&
+                content.contains("viewCache.shouldWriteTime") &&
+                content.contains("viewCache.shouldWriteTotalTime") &&
+                content.contains("viewCache.shouldWritePlaying") &&
+                content.contains("viewCache.reset()"),
+        )
+    }
+
     private fun assertMatchesBaseline(rule: String) {
         val current = scanMainSources().filter { it.rule == rule }.map { it.key }
         val baseline = readBaseline().filter { it.startsWith("$rule|") }

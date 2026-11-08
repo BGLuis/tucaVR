@@ -57,6 +57,7 @@ class VRControlsPresentation(
     private val onPlayPause: () -> Unit,
 ) : Presentation(outerContext, display, android.R.style.Theme_NoTitleBar_Fullscreen) {
     internal val popupCoordinator = ControlsPopupCoordinator()
+    internal val viewCache = ControlsViewCache()
     private var currentPopupView: View? = null
     private var currentSpeed: Float = 1.0f
     private var currentVolume: Float = 1.0f
@@ -430,15 +431,23 @@ class VRControlsPresentation(
         }
     }
 
+    private fun TextView.setTextIfChanged(newText: CharSequence): Boolean {
+        if (text?.toString() != newText.toString()) {
+            text = newText
+            return true
+        }
+        return false
+    }
+
     private fun updateSpeedButtonLabel(speed: Float) {
         if (::btnSpeed.isInitialized) {
-            btnSpeed.text = formatSpeedText(speed)
+            btnSpeed.setTextIfChanged(formatSpeedText(speed))
         }
     }
 
     fun updateTitle(title: String) {
         if (::titleLabel.isInitialized) {
-            titleLabel.text = title
+            titleLabel.setTextIfChanged(title)
         }
     }
 
@@ -463,6 +472,7 @@ class VRControlsPresentation(
         if (::loadingSpinner.isInitialized) {
             loadingSpinner.visibility = View.GONE
         }
+        viewCache.reset()
     }
 
     fun updateProgress(
@@ -472,11 +482,20 @@ class VRControlsPresentation(
         totalDuration = totalSec
         lastKnownCurrentSec = currentSec
         if (!isDragging && totalSec > 0 && (System.currentTimeMillis() - lastSeekTime > 800)) {
-            seekBar.progress = ((currentSec / totalSec) * SEEK_BAR_MAX).toInt()
-            timeLabel.text = formatTime(currentSec)
+            val progress = ((currentSec / totalSec) * SEEK_BAR_MAX).toInt()
+            if (::seekBar.isInitialized && viewCache.shouldWriteProgress(progress)) {
+                seekBar.progress = progress
+            }
+            val timeText = formatTime(currentSec)
+            if (::timeLabel.isInitialized && viewCache.shouldWriteTime(timeText)) {
+                timeLabel.text = timeText
+            }
         }
         if (::totalTimeLabel.isInitialized) {
-            totalTimeLabel.text = formatTime(totalSec)
+            val totalTimeText = formatTime(totalSec)
+            if (viewCache.shouldWriteTotalTime(totalTimeText)) {
+                totalTimeLabel.text = totalTimeText
+            }
         }
         lastKnownMode = activity.nativeGet3DMode()
     }
@@ -565,8 +584,11 @@ class VRControlsPresentation(
         isLoading: Boolean,
         isPlaying: Boolean,
     ) {
-        loadingSpinner.visibility = if (isLoading) View.VISIBLE else View.GONE
-        if (::btnPlayPause.isInitialized) {
+        val targetLoadingVisibility = if (isLoading) View.VISIBLE else View.GONE
+        if (::loadingSpinner.isInitialized && loadingSpinner.visibility != targetLoadingVisibility) {
+            loadingSpinner.visibility = targetLoadingVisibility
+        }
+        if (viewCache.shouldWritePlaying(isPlaying) && ::btnPlayPause.isInitialized) {
             btnPlayPause.setImageResource(if (isPlaying) R.drawable.icon_pause else R.drawable.icon_play)
         }
     }
@@ -1039,7 +1061,10 @@ class VRControlsPresentation(
                         ) {
                             if (fromUser && totalDuration > 0) {
                                 val target = (progress.toFloat() / SEEK_BAR_MAX) * totalDuration
-                                timeLabel.text = formatTime(target)
+                                val timeText = formatTime(target)
+                                if (viewCache.shouldWriteTime(timeText)) {
+                                    timeLabel.text = timeText
+                                }
                                 updateTooltipPosition(progress)
                                 updateScrubPreview(target)
                             }
@@ -1059,7 +1084,10 @@ class VRControlsPresentation(
                             lastSeekTime = System.currentTimeMillis()
                             if (totalDuration > 0) {
                                 val target = (progress.toFloat() / SEEK_BAR_MAX) * totalDuration
-                                timeLabel.text = formatTime(target)
+                                val timeText = formatTime(target)
+                                if (viewCache.shouldWriteTime(timeText)) {
+                                    timeLabel.text = timeText
+                                }
                                 activity.nativeSeekVideo(target)
                             }
                         }
