@@ -30,7 +30,7 @@ data class MediaMetadata(
     val durationMs: Long,
     val bitRate: Long,
     val format3dIndex: Int = 0,
-    val detectionConfidence: Int = 3,
+    val detectionConfidence: Int = 4,
     val tags: List<Pair<String, String>>,
     val tracks: List<TrackInfo>,
 ) {
@@ -173,7 +173,7 @@ object MediaMetadataReader {
         var durationMs = 0L
         var bitRate = 0L
         var format3dIndex = 0
-        var detectionConfidence = 3
+        var detectionConfidence = 4
         val tags = mutableListOf<Pair<String, String>>()
         val tracks = mutableListOf<TrackInfo>()
 
@@ -186,7 +186,7 @@ object MediaMetadataReader {
                     durationMs = ((parts.getOrNull(3)?.toLongOrNull() ?: 0L) / 1000L)
                     bitRate = parts.getOrNull(4)?.toLongOrNull() ?: 0L
                     format3dIndex = parts.getOrNull(5)?.toIntOrNull() ?: 0
-                    detectionConfidence = parts.getOrNull(6)?.toIntOrNull() ?: 3
+                    detectionConfidence = parts.getOrNull(6)?.toIntOrNull() ?: 4
                 }
                 "M" -> {
                     val key = parts.getOrNull(1) ?: return@forEach

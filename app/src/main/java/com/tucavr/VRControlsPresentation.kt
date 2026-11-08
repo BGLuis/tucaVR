@@ -231,7 +231,7 @@ class VRControlsPresentation(
         val currentMode = activity.nativeGet3DMode()
         val meta = activity.currentMediaMetadata
         val detectedMode = meta?.format3dIndex
-        val confidence = meta?.detectionConfidence ?: 3
+        val confidence = meta?.detectionConfidence ?: 4
         val currentFov =
             currentSource?.let { src -> activity.fisheyeFovStore.get(src.historyKey()) }
                 ?: FisheyeFovPreferenceStore.DEFAULT_FOV

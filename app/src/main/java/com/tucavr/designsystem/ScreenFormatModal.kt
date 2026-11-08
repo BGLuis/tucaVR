@@ -27,7 +27,7 @@ class ScreenFormatModal(
     context: Context,
     private var currentMode: Int,
     private val detectedMode: Int? = null,
-    private val detectionConfidence: Int = 3,
+    private val detectionConfidence: Int = 4,
     private val isSwapEyes: () -> Boolean = { false },
     private val onToggleSwapEyes: () -> Boolean = { false },
     private val isMonoView: () -> Boolean = { false },
@@ -367,12 +367,7 @@ class ScreenFormatModal(
         val detectedModeName =
             if (detectedMode != null && ScreenFormatCatalog.isValid(detectedMode)) {
                 val name = context.getString(ScreenFormatCatalog.getLabelResId(detectedMode))
-                val confidenceSuffix =
-                    when {
-                        detectionConfidence >= 3 -> " (${context.getString(R.string.format_confidence_high)})"
-                        detectionConfidence == 2 -> " (${context.getString(R.string.format_confidence_medium)})"
-                        else -> " (${context.getString(R.string.format_confidence_low)})"
-                    }
+                val confidenceSuffix = formatConfidenceSuffix(context, detectionConfidence)
                 name + confidenceSuffix
             } else {
                 context.getString(R.string.format_auto_no_media)
@@ -525,6 +520,24 @@ class ScreenFormatModal(
                 views.iconView.setColorFilter(VoidTheme.colorText)
                 views.labelView.setTextColor(VoidTheme.colorText)
             }
+        }
+    }
+
+    companion object {
+        fun getConfidenceLabelResId(detectionConfidence: Int): Int? =
+            when (detectionConfidence) {
+                0, 1 -> R.string.format_confidence_high
+                3 -> R.string.format_confidence_medium
+                2 -> R.string.format_confidence_low
+                else -> null
+            }
+
+        fun formatConfidenceSuffix(
+            context: Context,
+            detectionConfidence: Int,
+        ): String {
+            val resId = getConfidenceLabelResId(detectionConfidence) ?: return ""
+            return " (${context.getString(resId)})"
         }
     }
 }

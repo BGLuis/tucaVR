@@ -191,7 +191,7 @@ class VRModalPresentation(
                     MediaMetadataReader.read(activity, src)
                 }
             val detectedMode = meta?.format3dIndex
-            val confidence = meta?.detectionConfidence ?: 3
+            val confidence = meta?.detectionConfidence ?: 4
             val currentFov =
                 currentSource?.let { src -> activity.fisheyeFovStore.get(src.historyKey()) }
                     ?: FisheyeFovPreferenceStore.DEFAULT_FOV
