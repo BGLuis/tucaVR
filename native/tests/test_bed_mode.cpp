@@ -396,6 +396,37 @@ static void TestApplyRecenterHelper() {
     std::cout << "[PASS] TestApplyRecenterHelper\n";
 }
 
+static XrVector3f Mat4TransformPoint(const Mat4 &m, const XrVector3f &p) {
+    return {m.m[0] * p.x + m.m[4] * p.y + m.m[8] * p.z + m.m[12], m.m[1] * p.x + m.m[5] * p.y + m.m[9] * p.z + m.m[13],
+            m.m[2] * p.x + m.m[6] * p.y + m.m[10] * p.z + m.m[14]};
+}
+
+static void TestEnvironmentModelKeepsViewpointAtSpawnEyeInBedMode() {
+    const XrVector3f spawn = {1.2f, 0.3f, -2.0f};
+    const XrVector3f head = {0.4f, 1.1f, 0.7f};
+    const XrVector3f sceneOffset = {0.1f, 0.0f, 0.2f};
+    const float reclineDegrees[] = {30.0f, 60.0f, 90.0f};
+    for (float deg : reclineDegrees) {
+        const Mat4 rot = Mat4RotationX(deg * 3.14159265f / 180.0f);
+        const Mat4 model = ComputeEnvironmentModel(true, head, sceneOffset, rot, spawn);
+        // The mesh point the head should occupy is the spawn point raised to eye height.
+        const XrVector3f eyeInEnv = {spawn.x, spawn.y + 1.5f, spawn.z};
+        assert(Vec3Near(Mat4TransformPoint(model, eyeInEnv), head));
+    }
+    std::cout << "[PASS] TestEnvironmentModelKeepsViewpointAtSpawnEyeInBedMode\n";
+}
+
+static void TestEnvironmentModelYawOnlyMatchesLegacyFormula() {
+    const XrVector3f spawn = {1.2f, 0.3f, -2.0f};
+    const XrVector3f sceneOffset = {0.5f, 0.2f, -0.4f};
+    const XrVector3f head = {3.0f, 1.0f, 3.0f};
+    const Mat4 rot = Mat4RotationY(0.8f);
+    const Mat4 legacy = Mat4Multiply(Mat4Translation(sceneOffset.x, sceneOffset.y, sceneOffset.z),
+                                     Mat4Multiply(rot, Mat4Translation(-spawn.x, -spawn.y, -spawn.z)));
+    assert(Mat4Near(ComputeEnvironmentModel(false, head, sceneOffset, rot, spawn), legacy));
+    std::cout << "[PASS] TestEnvironmentModelYawOnlyMatchesLegacyFormula\n";
+}
+
 int main() {
     std::cout << "--- Executing unit tests for bed_mode.h ---\n";
     TestRecenterYawOnlyInvariants();
@@ -407,6 +438,8 @@ int main() {
     TestRaycastControlsCylinderInBedMode();
     TestOrientationQuaternionMatchesMatrix();
     TestApplyRecenterHelper();
+    TestEnvironmentModelKeepsViewpointAtSpawnEyeInBedMode();
+    TestEnvironmentModelYawOnlyMatchesLegacyFormula();
     std::cout << "--- All bed_mode.h unit tests passed successfully! ---\n";
     return 0;
 }

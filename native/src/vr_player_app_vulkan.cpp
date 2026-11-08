@@ -6764,13 +6764,9 @@ static void DrawEnvironmentIfLoaded(
 
     const float envBrightness = get_environment_brightness();
     EnvironmentPushConstants envPc{};
-    Mat4 envModel = Mat4Multiply(
-        Mat4Translation(state.sceneTranslationOffset.x, state.sceneTranslationOffset.y, state.sceneTranslationOffset.z),
-        Mat4Multiply(
-            state.sceneOrientationMatrix,
-            Mat4Translation(-state.envSpawnOffset.x, -state.envSpawnOffset.y, -state.envSpawnOffset.z)
-        )
-    );
+    const Mat4 envModel = vrplayer::ComputeEnvironmentModel(
+        state.bedModeEnabled, headCenter, state.sceneTranslationOffset, state.sceneOrientationMatrix,
+        state.envSpawnOffset);
     envPc.mvp = Mat4Multiply(Mat4Multiply(proj, view), envModel);
     envPc.tintColor = {envBrightness, envBrightness, envBrightness, 1.0f};
 
