@@ -462,9 +462,23 @@ class DebugStatsModal(
         debugStatValueViews["drawcalls"]?.text = "${stats.drawCallCount} / ${stats.triangleCount}"
 
         // 2. Áudio & Sincronização
+        val resolvedAudio =
+            audioTrack ?: (context as? com.tucavr.VRActivity)?.nativeGetAudioTrackInfoWire()?.let { wire ->
+                parseAudioWire(wire).getOrNull(stats.audioTrackIndex) ?: parseAudioWire(wire).firstOrNull()
+            }
         val audioCodecStr =
-            if (audioTrack != null && audioTrack.codec.isNotEmpty()) {
-                "${audioTrack.codec.uppercase()} (${audioTrack.channels}ch, ${audioTrack.sampleRate / 1000}kHz)"
+            if (resolvedAudio != null && resolvedAudio.codec.isNotEmpty()) {
+                val sampleRateStr = if (resolvedAudio.sampleRate > 0) "${resolvedAudio.sampleRate / 1000}kHz" else ""
+                val details =
+                    listOfNotNull(
+                        if (resolvedAudio.channels > 0) "${resolvedAudio.channels}ch" else null,
+                        sampleRateStr.ifEmpty { null },
+                    ).joinToString(", ")
+                if (details.isNotEmpty()) {
+                    "${resolvedAudio.codec.uppercase()} ($details)"
+                } else {
+                    resolvedAudio.codec.uppercase()
+                }
             } else {
                 "—"
             }

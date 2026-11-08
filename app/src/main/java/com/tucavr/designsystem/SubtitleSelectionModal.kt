@@ -43,19 +43,35 @@ fun parseSubtitleWire(
                 val lang = parts[0]
                 val title = parts[1]
                 val isExternal = parts[2] == "1"
+                val fallbackCodec = fallbackTracks.getOrNull(index)?.codec ?: ""
                 items.add(
                     SubtitleTrackItem(
                         index = index,
                         language = lang,
                         title = title,
                         isExternal = isExternal,
+                        codec = fallbackCodec,
                     ),
                 )
             }
         }
     }
-    if (items.isEmpty() && trackCount > 0) {
-        for (i in 0 until trackCount) {
+    if (items.isEmpty()) {
+        val count = if (trackCount > 0) trackCount else fallbackTracks.size
+        for (i in 0 until count) {
+            val track = fallbackTracks.getOrNull(i)
+            items.add(
+                SubtitleTrackItem(
+                    index = i,
+                    language = track?.language ?: "",
+                    title = track?.title ?: "",
+                    isExternal = false,
+                    codec = track?.codec ?: "",
+                ),
+            )
+        }
+    } else if (items.size < trackCount) {
+        for (i in items.size until trackCount) {
             val track = fallbackTracks.getOrNull(i)
             items.add(
                 SubtitleTrackItem(

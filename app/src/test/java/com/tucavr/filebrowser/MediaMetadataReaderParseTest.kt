@@ -225,4 +225,67 @@ class MediaMetadataReaderParseTest {
         assertEquals(2, audioTracks[1].channels)
         assertEquals(44100, audioTracks[1].sampleRate)
     }
+
+    @Test
+    fun handlesCorruptJsonInDeserialize() {
+        assertEquals(emptyList<TrackInfo>(), deserializeTracks("not valid json"))
+        assertEquals(emptyList<TrackInfo>(), deserializeTracks("{ \"not\": \"an array\" }"))
+        assertEquals(emptyList<Pair<String, String>>(), deserializeTags("invalid json"))
+    }
+
+    @Test
+    fun parsesAudioWireWithFewerFieldsGracefully() {
+        val audioWire = "0\topus\tjpn\tJapanese"
+        val audioTracks = com.tucavr.designsystem.parseAudioWire(audioWire)
+        assertEquals(1, audioTracks.size)
+        assertEquals(0, audioTracks[0].ordinal)
+        assertEquals("opus", audioTracks[0].codec)
+        assertEquals("jpn", audioTracks[0].language)
+        assertEquals("Japanese", audioTracks[0].title)
+        assertEquals(2, audioTracks[0].channels)
+        assertEquals(48000, audioTracks[0].sampleRate)
+    }
+
+    @Test
+    fun parsesSubtitleWirePreservingFallbackCodecAndPaddingMissing() {
+        val fallback =
+            listOf(
+                TrackInfo(
+                    kind = TrackKind.SUBTITLE,
+                    ordinal = 0,
+                    codec = "subrip",
+                    language = "por",
+                    title = "Legenda PT",
+                    width = 0,
+                    height = 0,
+                    fpsMilli = 0,
+                    channels = 0,
+                    sampleRate = 0,
+                    bitRate = 0L,
+                    isDefault = false,
+                ),
+                TrackInfo(
+                    kind = TrackKind.SUBTITLE,
+                    ordinal = 1,
+                    codec = "ass",
+                    language = "eng",
+                    title = "English Sub",
+                    width = 0,
+                    height = 0,
+                    fpsMilli = 0,
+                    channels = 0,
+                    sampleRate = 0,
+                    bitRate = 0L,
+                    isDefault = false,
+                ),
+            )
+        val wire = "por\tLegenda PT\t0"
+        val items = com.tucavr.designsystem.parseSubtitleWire(wire, trackCount = 2, fallbackTracks = fallback)
+        assertEquals(2, items.size)
+        assertEquals("subrip", items[0].codec)
+        assertEquals("por", items[0].language)
+        assertEquals(1, items[1].index)
+        assertEquals("ass", items[1].codec)
+        assertEquals("eng", items[1].language)
+    }
 }

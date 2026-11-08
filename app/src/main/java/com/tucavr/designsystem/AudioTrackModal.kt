@@ -24,13 +24,13 @@ fun parseAudioWire(wire: String?): List<TrackInfo> {
     wire.lines().forEach { line ->
         if (line.isBlank()) return@forEach
         val parts = line.split('\t')
-        if (parts.size >= 6) {
+        if (parts.size >= 4) {
             val index = parts[0].toIntOrNull() ?: list.size
             val codec = parts[1]
             val language = parts[2]
             val title = parts[3]
-            val channels = parts[4].toIntOrNull() ?: 2
-            val sampleRate = parts[5].toIntOrNull() ?: 48000
+            val channels = parts.getOrNull(4)?.toIntOrNull() ?: 2
+            val sampleRate = parts.getOrNull(5)?.toIntOrNull() ?: 48000
             list.add(
                 TrackInfo(
                     kind = TrackKind.AUDIO,

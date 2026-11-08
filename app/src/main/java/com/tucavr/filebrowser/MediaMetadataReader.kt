@@ -166,7 +166,8 @@ object MediaMetadataReader {
 
     /**
      * Leitura SOMENTE do cache Room de [MediaMetadata] completo (nunca chama o Rust).
-     * Devolve nulo se não houver entrada no cache ou se as faixas não estiverem gravadas.
+     * Devolve nulo se não houver entrada no cache, se as faixas não estiverem gravadas
+     * ou se o tamanho do arquivo não bater com o tamanho esperado.
      */
     suspend fun readCached(
         context: Context,
@@ -175,7 +176,9 @@ object MediaMetadataReader {
         withContext(Dispatchers.IO) {
             val key = runCatching { CacheKeys.forSource(source) }.getOrNull() ?: return@withContext null
             val entry = AppDatabase.getInstance(context).mediaMetadataCacheDao().find(key) ?: return@withContext null
-            if (entry.tracksJson.isNotEmpty()) {
+            val sourceSize = source.fileSizeBytes()
+            val sizeMatches = sourceSize == 0L || entry.fileSizeBytes == 0L || entry.fileSizeBytes == sourceSize
+            if (entry.tracksJson.isNotEmpty() && sizeMatches) {
                 entry.toMediaMetadata()
             } else {
                 null

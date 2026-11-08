@@ -446,9 +446,13 @@ class FullDebugStatsView(
 
         // 3. Áudio
         setValue("av_drift", String.format(Locale.US, "%+.1f ms", stats.avDriftMs), stats.audioStatsAgeMs)
+        val resolvedAudio =
+            audioTrack ?: (context as? com.tucavr.VRActivity)?.nativeGetAudioTrackInfoWire()?.let { wire ->
+                parseAudioWire(wire).getOrNull(stats.audioTrackIndex) ?: parseAudioWire(wire).firstOrNull()
+            }
         val audioFmt =
-            if (audioTrack != null) {
-                "${audioTrack.codec.uppercase()} (${audioTrack.channels}ch)"
+            if (resolvedAudio != null) {
+                "${resolvedAudio.codec.uppercase()} (${resolvedAudio.channels}ch)"
             } else {
                 "${stats.audioTrackIndex + 1}/${stats.audioTrackCount}"
             }

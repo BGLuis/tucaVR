@@ -218,6 +218,7 @@ class VRActivity : NativeActivity() {
     var currentPlaybackSource: PlaybackSource? = null
         private set
 
+    @Volatile
     var currentMediaMetadata: com.tucavr.filebrowser.MediaMetadata? = null
         private set
 
@@ -245,6 +246,7 @@ class VRActivity : NativeActivity() {
         )
     }
 
+    @Volatile
     var currentAudioTrackOrdinal: Int = 0
 
     private fun updateCurrentPlaybackSource(source: PlaybackSource?) {

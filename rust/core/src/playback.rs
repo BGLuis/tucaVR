@@ -446,7 +446,16 @@ impl PlaybackController {
                 let codec = params.id().name().to_string();
                 let (channels, sample_rate) = unsafe {
                     let p = params.as_ptr();
-                    ((*p).ch_layout.nb_channels as u32, (*p).sample_rate as u32)
+                    if p.is_null() {
+                        (2, 48000)
+                    } else {
+                        let ch = (*p).ch_layout.nb_channels;
+                        let sr = (*p).sample_rate;
+                        (
+                            if ch > 0 { ch as u32 } else { 2 },
+                            if sr > 0 { sr as u32 } else { 48000 },
+                        )
+                    }
                 };
                 self.available_audio_tracks
                     .push(media_logic::track_info::AudioTrackInfo {
@@ -1801,6 +1810,13 @@ impl PlaybackController {
         self.duration = 0.0;
         self.current_path = None;
         self.auto_paused = false;
+        self.available_audio_tracks.clear();
+        self.audio_track_count = 0;
+        self.available_subtitle_tracks.clear();
+        self.selected_subtitle_track = -1;
+        self.subtitle_entries = None;
+        self.ass_subtitle = None;
+        self.pgs_subtitles = None;
     }
 
     pub fn get_progress(&self) -> (f64, f64) {

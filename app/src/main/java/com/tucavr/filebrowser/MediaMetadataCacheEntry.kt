@@ -68,35 +68,39 @@ fun serializeTracks(tracks: List<TrackInfo>): String {
 
 fun deserializeTracks(jsonStr: String): List<TrackInfo> {
     if (jsonStr.isBlank()) return emptyList()
-    val list = mutableListOf<TrackInfo>()
-    val arr = JSONArray(jsonStr)
-    for (i in 0 until arr.length()) {
-        val obj = arr.getJSONObject(i)
-        val kindStr = obj.optString("kind", "VIDEO")
-        val kind =
-            try {
-                TrackKind.valueOf(kindStr)
-            } catch (_: Exception) {
-                TrackKind.VIDEO
-            }
-        list.add(
-            TrackInfo(
-                kind = kind,
-                ordinal = obj.optInt("ordinal", 0),
-                codec = obj.optString("codec", ""),
-                language = obj.optString("language", ""),
-                title = obj.optString("title", ""),
-                width = obj.optInt("width", 0),
-                height = obj.optInt("height", 0),
-                fpsMilli = obj.optInt("fpsMilli", 0),
-                channels = obj.optInt("channels", 0),
-                sampleRate = obj.optInt("sampleRate", 0),
-                bitRate = obj.optLong("bitRate", 0L),
-                isDefault = obj.optBoolean("isDefault", false),
-            ),
-        )
+    return try {
+        val list = mutableListOf<TrackInfo>()
+        val arr = JSONArray(jsonStr)
+        for (i in 0 until arr.length()) {
+            val obj = arr.getJSONObject(i)
+            val kindStr = obj.optString("kind", "VIDEO")
+            val kind =
+                try {
+                    TrackKind.valueOf(kindStr)
+                } catch (_: Exception) {
+                    TrackKind.VIDEO
+                }
+            list.add(
+                TrackInfo(
+                    kind = kind,
+                    ordinal = obj.optInt("ordinal", 0),
+                    codec = obj.optString("codec", ""),
+                    language = obj.optString("language", ""),
+                    title = obj.optString("title", ""),
+                    width = obj.optInt("width", 0),
+                    height = obj.optInt("height", 0),
+                    fpsMilli = obj.optInt("fpsMilli", 0),
+                    channels = obj.optInt("channels", 0),
+                    sampleRate = obj.optInt("sampleRate", 0),
+                    bitRate = obj.optLong("bitRate", 0L),
+                    isDefault = obj.optBoolean("isDefault", false),
+                ),
+            )
+        }
+        list
+    } catch (_: Exception) {
+        emptyList()
     }
-    return list
 }
 
 fun serializeTags(tags: List<Pair<String, String>>): String {
@@ -112,17 +116,21 @@ fun serializeTags(tags: List<Pair<String, String>>): String {
 
 fun deserializeTags(jsonStr: String): List<Pair<String, String>> {
     if (jsonStr.isBlank()) return emptyList()
-    val list = mutableListOf<Pair<String, String>>()
-    val arr = JSONArray(jsonStr)
-    for (i in 0 until arr.length()) {
-        val obj = arr.getJSONObject(i)
-        val k = obj.optString("k", "")
-        val v = obj.optString("v", "")
-        if (k.isNotEmpty()) {
-            list.add(k to v)
+    return try {
+        val list = mutableListOf<Pair<String, String>>()
+        val arr = JSONArray(jsonStr)
+        for (i in 0 until arr.length()) {
+            val obj = arr.getJSONObject(i)
+            val k = obj.optString("k", "")
+            val v = obj.optString("v", "")
+            if (k.isNotEmpty()) {
+                list.add(k to v)
+            }
         }
+        list
+    } catch (_: Exception) {
+        emptyList()
     }
-    return list
 }
 
 @Dao
