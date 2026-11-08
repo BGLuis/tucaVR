@@ -32,6 +32,7 @@ import com.tucavr.playlist.PlaylistItem
  *   metadados de mídia pra exibição rápida (schema v5).
  * - `browser_bookmarks` table: VR browser bookmarks/shortcuts (schema v6).
  * - `custom_environment` table: user-imported 3D environments (schema v7).
+ * - Tabela `media_metadata_cache` com `tracksJson`, `tagsJson` e `fileSizeBytes` (schema v8).
  */
 @Database(
     entities = [
@@ -39,7 +40,7 @@ import com.tucavr.playlist.PlaylistItem
         FolderMediaStatus::class, MediaMetadataCacheEntry::class, BrowserBookmark::class,
         CustomEnvironment::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -189,6 +190,13 @@ abstract class AppDatabase : RoomDatabase() {
                 """.trimIndent(),
             )
 
+        internal val MIGRATION_7_8_SQL =
+            listOf(
+                "ALTER TABLE `media_metadata_cache` ADD COLUMN `tracksJson` TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE `media_metadata_cache` ADD COLUMN `tagsJson` TEXT NOT NULL DEFAULT ''",
+                "ALTER TABLE `media_metadata_cache` ADD COLUMN `fileSizeBytes` INTEGER NOT NULL DEFAULT 0",
+            )
+
         val MIGRATION_1_2 =
             object : Migration(1, 2) {
                 override fun migrate(db: SupportSQLiteDatabase) {
@@ -229,6 +237,13 @@ abstract class AppDatabase : RoomDatabase() {
             object : Migration(6, 7) {
                 override fun migrate(db: SupportSQLiteDatabase) {
                     MIGRATION_6_7_SQL.forEach { db.execSQL(it) }
+                }
+            }
+
+        val MIGRATION_7_8 =
+            object : Migration(7, 8) {
+                override fun migrate(db: SupportSQLiteDatabase) {
+                    MIGRATION_7_8_SQL.forEach { db.execSQL(it) }
                 }
             }
 
@@ -300,7 +315,15 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "vrplayer_history.db",
                 )
-                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6, MIGRATION_6_7)
+                    .addMigrations(
+                        MIGRATION_1_2,
+                        MIGRATION_2_3,
+                        MIGRATION_3_4,
+                        MIGRATION_4_5,
+                        MIGRATION_5_6,
+                        MIGRATION_6_7,
+                        MIGRATION_7_8,
+                    )
                     .addCallback(
                         object : Callback() {
                             override fun onCreate(db: SupportSQLiteDatabase) {

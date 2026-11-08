@@ -199,7 +199,7 @@ class AppDatabaseMigrationTest {
     }
 
     @Test
-    fun `full migration chain 1 to 7 preserves playback_history data untouched`() {
+    fun `full migration chain 1 to 8 preserves playback_history data untouched`() {
         insertSampleHistoryRow()
 
         applyMigration(AppDatabase.MIGRATION_1_2_SQL)
@@ -208,6 +208,7 @@ class AppDatabaseMigrationTest {
         applyMigration(AppDatabase.MIGRATION_4_5_SQL)
         applyMigration(AppDatabase.MIGRATION_5_6_SQL)
         applyMigration(AppDatabase.MIGRATION_6_7_SQL)
+        applyMigration(AppDatabase.MIGRATION_7_8_SQL)
 
         connection.createStatement().use { stmt ->
             stmt.executeQuery("SELECT title, mediaPath, positionMs, durationMs, sourceType FROM playback_history").use { rs ->
@@ -231,6 +232,60 @@ class AppDatabaseMigrationTest {
         assertTrue(connection.tableExists("media_metadata_cache"))
         assertTrue(connection.tableExists("browser_bookmarks"))
         assertTrue(connection.tableExists("custom_environment"))
+
+        val cols = connection.columnNames("media_metadata_cache")
+        assertTrue(cols.contains("tracksJson"))
+        assertTrue(cols.contains("tagsJson"))
+        assertTrue(cols.contains("fileSizeBytes"))
+    }
+
+    @Test
+    fun `migration 7 to 8 adds tracksJson tagsJson fileSizeBytes to media_metadata_cache`() {
+        applyMigration(AppDatabase.MIGRATION_1_2_SQL)
+        applyMigration(AppDatabase.MIGRATION_2_3_SQL)
+        applyMigration(AppDatabase.MIGRATION_3_4_SQL)
+        applyMigration(AppDatabase.MIGRATION_4_5_SQL)
+        applyMigration(AppDatabase.MIGRATION_5_6_SQL)
+        applyMigration(AppDatabase.MIGRATION_6_7_SQL)
+
+        connection.prepareStatement(
+            "INSERT INTO `media_metadata_cache` " +
+                "(mediaKey, container, containerLong, durationMs, bitRate, " +
+                "format3dIndex, detectionConfidence, videoWidth, videoHeight, videoCodec, fetchedAt) " +
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ).use { stmt ->
+            stmt.setString(1, "test_key")
+            stmt.setString(2, "mp4")
+            stmt.setString(3, "QuickTime / MOV")
+            stmt.setLong(4, 120_000L)
+            stmt.setLong(5, 5_000_000L)
+            stmt.setInt(6, 0)
+            stmt.setInt(7, 4)
+            stmt.setInt(8, 1920)
+            stmt.setInt(9, 1080)
+            stmt.setString(10, "h264")
+            stmt.setLong(11, 1_700_000_000_000L)
+            stmt.executeUpdate()
+        }
+
+        applyMigration(AppDatabase.MIGRATION_7_8_SQL)
+
+        val cols = connection.columnNames("media_metadata_cache")
+        assertTrue(cols.contains("tracksJson"))
+        assertTrue(cols.contains("tagsJson"))
+        assertTrue(cols.contains("fileSizeBytes"))
+
+        connection.createStatement().use { stmt ->
+            stmt.executeQuery(
+                "SELECT tracksJson, tagsJson, fileSizeBytes " +
+                    "FROM media_metadata_cache WHERE mediaKey = 'test_key'",
+            ).use { rs ->
+                assertTrue(rs.next())
+                assertEquals("", rs.getString("tracksJson"))
+                assertEquals("", rs.getString("tagsJson"))
+                assertEquals(0L, rs.getLong("fileSizeBytes"))
+            }
+        }
     }
 
     @Test
