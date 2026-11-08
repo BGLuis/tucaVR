@@ -33,6 +33,7 @@ pub mod quality;
 pub mod refresh;
 pub mod retire_ring;
 pub mod retry_backoff;
+pub mod sar;
 pub mod session;
 pub mod spatial_audio;
 pub mod subtitle;

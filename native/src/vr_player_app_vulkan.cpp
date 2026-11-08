@@ -340,6 +340,7 @@ extern "C" {
     // media_logic::color) — usado pra escolher o pipeline de cor do shader
     // de video (tonemap HDR->SDR) e o modelo YCbCr certo.
     extern uint32_t get_video_is_hdr();
+    extern uint64_t get_video_sample_aspect_ratio();
     extern void reset_process_state();
     extern void on_app_focus_lost();
     extern void on_app_focus_gained();
@@ -1340,6 +1341,8 @@ struct AppState {
     uint32_t lastAspectVideoWidth = 0;
     uint32_t lastAspectVideoHeight = 0;
     ScreenMode lastAspectScreenMode = ScreenMode::Flat2D;
+    uint64_t lastAspectSarPacked = 0;
+    vrplayer::SampleAspectRatio videoSar;
     bool userCustomScreenScale = false;
     // Width of the user-chosen 16:9 bounding box; screenScaleX/Y are the content fitted inside it.
     float userScreenBoundWidth = 2.8f;
@@ -6636,8 +6639,7 @@ static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& da
         state.userCustomScreenScale = false;
         state.lastAspectVideoWidth = 0;
         state.lastAspectVideoHeight = 0;
-        const auto fit = vrplayer::CalculateVideoFitBounds(
-            state.videoWidth, state.videoHeight, state.screenMode, state.baseScaleX, state.baseScaleY);
+        const auto fit = vrplayer::ComputeFitBounds(VideoContentAspect(state), state.baseScaleX, state.baseScaleY);
         state.screenScaleX = fit.x;
         state.screenScaleY = fit.y;
         state.defaultScreenScaleX = fit.x;
@@ -6658,8 +6660,7 @@ static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& da
         state.userCustomScreenScale = false;
         state.lastAspectVideoWidth = 0;
         state.lastAspectVideoHeight = 0;
-        const auto fit = vrplayer::CalculateVideoFitBounds(
-            state.videoWidth, state.videoHeight, state.screenMode, state.baseScaleX, state.baseScaleY);
+        const auto fit = vrplayer::ComputeFitBounds(VideoContentAspect(state), state.baseScaleX, state.baseScaleY);
         state.screenScaleX = fit.x;
         state.screenScaleY = fit.y;
         state.defaultScreenScaleX = fit.x;
@@ -8030,18 +8031,21 @@ void ApplyDynamicAspectRatio(AppState& state) {
         return;
     }
     ScreenMode currentMode = state.screenMode;
+    const uint64_t sarPacked = get_video_sample_aspect_ratio();
     if (state.videoWidth == state.lastAspectVideoWidth &&
         state.videoHeight == state.lastAspectVideoHeight &&
-        currentMode == state.lastAspectScreenMode) {
+        currentMode == state.lastAspectScreenMode &&
+        sarPacked == state.lastAspectSarPacked) {
         return;
     }
 
     state.lastAspectVideoWidth = state.videoWidth;
     state.lastAspectVideoHeight = state.videoHeight;
     state.lastAspectScreenMode = currentMode;
+    state.lastAspectSarPacked = sarPacked;
+    state.videoSar = vrplayer::UnpackSampleAspectRatio(sarPacked);
 
-    const float aspect = vrplayer::CalculateContentAspectRatio(
-        state.videoWidth, state.videoHeight, currentMode);
+    const float aspect = VideoContentAspect(state);
     const vrplayer::ScreenScale fit = vrplayer::ComputeFitBounds(
         aspect, state.baseScaleX, state.baseScaleY);
 
@@ -8170,10 +8174,8 @@ void UpdateVideoFrame(AppState& state) {
     if (state.activeVideoFrame == nullptr) {
         LOGE("Video: GetOrImportVideoFrame falhou para o buffer %p — frame sera ignorado (fallback quad solido)", (void*)buffer);
     } else {
-        // Content aspect ratio is derived directly from AHardwareBuffer dimensions.
-        // Streams with Sample Aspect Ratio (SAR) != 1:1 or non-zero container crop rectangles
-        // are currently displayed at raw buffer aspect ratio without SAR stretching.
-        // Tracking full SAR / crop rectangle metadata propagation from demuxer: Issue #176.
+        // Content aspect ratio comes from the AHardwareBuffer dimensions plus the stream's sample
+        // aspect ratio. Container crop rectangles are not applied yet: Issue #176.
         state.videoWidth = state.activeVideoFrame->width;
         state.videoHeight = state.activeVideoFrame->height;
         ApplyDynamicAspectRatio(state);

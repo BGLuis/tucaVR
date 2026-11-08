@@ -44,14 +44,35 @@ struct ScreenScale {
     float y = kDefaultBaseScreenHeight;
 };
 
+struct SampleAspectRatio {
+    uint32_t num = 1;
+    uint32_t den = 1;
+};
+
+// Unpacks the bridge's `numerator << 32 | denominator` word. A zero component (unknown) means 1:1.
+inline SampleAspectRatio UnpackSampleAspectRatio(uint64_t packed) {
+    const uint32_t num = static_cast<uint32_t>(packed >> 32);
+    const uint32_t den = static_cast<uint32_t>(packed & 0xFFFFFFFFu);
+    if (num == 0 || den == 0) {
+        return {};
+    }
+    return {num, den};
+}
+
 // Calculates the effective content display aspect ratio (W / H) for a video frame,
-// accounting for anamorphic stereoscopic packing modes.
-inline float CalculateContentAspectRatio(uint32_t videoWidth, uint32_t videoHeight, ScreenMode mode) {
+// accounting for the sample aspect ratio (anamorphic pixels, e.g. 720x576 flagged 16:9)
+// and anamorphic stereoscopic packing modes. Crop rectangles are not applied (issue #176).
+inline float CalculateContentAspectRatio(uint32_t videoWidth, uint32_t videoHeight, ScreenMode mode,
+                                         SampleAspectRatio sar = {}) {
     if (videoWidth == 0 || videoHeight == 0) {
         return kDefaultAspectRatio;
     }
+    if (sar.num == 0 || sar.den == 0) {
+        sar = {};
+    }
 
-    const float rawAspect = static_cast<float>(videoWidth) / static_cast<float>(videoHeight);
+    const float rawAspect = (static_cast<float>(videoWidth) / static_cast<float>(videoHeight)) *
+                            (static_cast<float>(sar.num) / static_cast<float>(sar.den));
     if (!std::isfinite(rawAspect) || rawAspect <= 0.001f) {
         return kDefaultAspectRatio;
     }

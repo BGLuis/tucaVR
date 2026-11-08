@@ -29,13 +29,18 @@ extern std::atomic<float> g_requestedScreenScaleX;
 extern std::atomic<float> g_requestedScreenScaleY;
 extern "C" bool get_hand_tracking_enabled();
 
+// Display aspect of the current video: buffer size, sample aspect ratio and stereo packing.
+inline float VideoContentAspect(const AppState& state) {
+    return vrplayer::CalculateContentAspectRatio(state.videoWidth, state.videoHeight, state.screenMode, state.videoSar);
+}
+
 // Aspect of the content currently on the virtual screen (photo, else video, else 16:9).
 inline float CurrentScreenContentAspect(const AppState& state) {
     if (state.photoActive && state.photoWidth > 0 && state.photoHeight > 0) {
         return vrplayer::CalculateContentAspectRatio(state.photoWidth, state.photoHeight, state.photoScreenMode);
     }
     if (state.videoWidth > 0 && state.videoHeight > 0) {
-        return vrplayer::CalculateContentAspectRatio(state.videoWidth, state.videoHeight, state.screenMode);
+        return VideoContentAspect(state);
     }
     return vrplayer::kDefaultAspectRatio;
 }

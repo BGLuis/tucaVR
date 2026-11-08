@@ -522,9 +522,38 @@ static void TestUserBoundFitKeepsStable16x9Box() {
     std::cout << "[PASS] TestUserBoundFitKeepsStable16x9Box\n";
 }
 
+static void TestSampleAspectRatioCompensation() {
+    using vrplayer::CalculateContentAspectRatio;
+    using vrplayer::SampleAspectRatio;
+    using vrplayer::UnpackSampleAspectRatio;
+
+    // 720x576 anamorphic PAL: the raw buffer is 1.25:1.
+    assert(Near(CalculateContentAspectRatio(720, 576, ScreenMode::Flat2D), 1.25f));
+    assert(Near(CalculateContentAspectRatio(720, 576, ScreenMode::Flat2D, SampleAspectRatio{16, 15}), 4.0f / 3.0f));
+    assert(Near(CalculateContentAspectRatio(720, 576, ScreenMode::Flat2D, SampleAspectRatio{64, 45}), 16.0f / 9.0f));
+
+    // Unknown SAR (0/0, as ffmpeg reports it) is square pixels.
+    assert(Near(CalculateContentAspectRatio(720, 576, ScreenMode::Flat2D, SampleAspectRatio{0, 0}), 1.25f));
+    assert(Near(CalculateContentAspectRatio(1920, 1080, ScreenMode::Flat2D, SampleAspectRatio{1, 1}), 16.0f / 9.0f));
+
+    // Stereo packing compensation still applies on top of the SAR.
+    assert(Near(CalculateContentAspectRatio(2880, 1080, ScreenMode::SBS, SampleAspectRatio{4, 3}), 16.0f / 9.0f));
+    assert(Near(CalculateContentAspectRatio(1920, 540, ScreenMode::OU, SampleAspectRatio{1, 1}), 7.1111f));
+
+    // Bridge packing: numerator in the high word, denominator in the low word.
+    const auto pal = UnpackSampleAspectRatio((uint64_t{64} << 32) | 45u);
+    assert(pal.num == 64 && pal.den == 45);
+    const auto unknown = UnpackSampleAspectRatio(0);
+    assert(unknown.num == 1 && unknown.den == 1);
+    const auto zeroDen = UnpackSampleAspectRatio(uint64_t{16} << 32);
+    assert(zeroDen.num == 1 && zeroDen.den == 1);
+    std::cout << "[PASS] TestSampleAspectRatioCompensation\n";
+}
+
 int main() {
     std::cout << "--- Executing unit tests for screen_layout.h ---\n";
     TestCalculateContentAspectRatio();
+    TestSampleAspectRatioCompensation();
     TestComputeFitBounds();
     TestCalculateVideoFitBounds();
     TestAspectRatioPreservationDuringResizing();
