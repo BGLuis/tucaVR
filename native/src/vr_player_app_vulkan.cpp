@@ -3938,7 +3938,9 @@ void CreateUiPipeline(AppState& state, android_app* app) {
     blendAtt.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
     blendAtt.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.colorBlendOp        = VK_BLEND_OP_ADD;
-    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    // ONE rather than SRC_ALPHA for the alpha channel: SRC_ALPHA squares the source alpha, so over the transparent
+    // hole of the direct video layer an overlay would end up fainter than it is.
+    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     blendAtt.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.alphaBlendOp        = VK_BLEND_OP_ADD;
     blendAtt.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -4806,7 +4808,7 @@ void CreateFeedbackResources(AppState& state) {
     blendAtt.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
     blendAtt.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.colorBlendOp = VK_BLEND_OP_ADD;
-    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     blendAtt.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.alphaBlendOp = VK_BLEND_OP_ADD;
     blendAtt.colorWriteMask = 0xF;
@@ -4942,7 +4944,7 @@ void CreateSubtitlePipeline(AppState& state) {
     blendAtt.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
     blendAtt.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.colorBlendOp = VK_BLEND_OP_ADD;
-    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     blendAtt.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.alphaBlendOp = VK_BLEND_OP_ADD;
     blendAtt.colorWriteMask = 0xF;
@@ -7184,7 +7186,7 @@ static void CreateAmbientHaloPipeline(AppState& state) {
     blendAtt.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
     blendAtt.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.colorBlendOp = VK_BLEND_OP_ADD;
-    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     blendAtt.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.alphaBlendOp = VK_BLEND_OP_ADD;
     blendAtt.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
