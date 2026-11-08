@@ -189,6 +189,71 @@ class UiSourceGuardsTest {
         )
     }
 
+    @Test
+    fun `color grading constants maintain strict parity between header and shaders`() {
+        val candidates =
+            listOf(
+                TestPaths.moduleDir.parentFile,
+                TestPaths.moduleDir,
+                File(System.getProperty("user.dir") ?: "."),
+            )
+        val rootDir =
+            candidates.firstOrNull { File(it, "native/include/color_grading.h").isFile }
+                ?: error("Repository root with native/include/color_grading.h not found")
+
+        val headerText = File(rootDir, "native/include/color_grading.h").readText()
+        val videoFrag = File(rootDir, "native/shaders/vulkan/video.frag").readText()
+        val stereoFrag = File(rootDir, "native/shaders/vulkan/stereo.frag").readText()
+        val cubemapFrag = File(rootDir, "native/shaders/vulkan/stereo_cubemap.frag").readText()
+
+        val shaders =
+            listOf(
+                "video.frag" to videoFrag,
+                "stereo.frag" to stereoFrag,
+                "stereo_cubemap.frag" to cubemapFrag,
+            )
+
+        // 1. Verify Hable Filmic constants in header
+        assertTrue("color_grading.h must define kHableA = 0.15f", headerText.contains("kHableA = 0.15f"))
+        assertTrue("color_grading.h must define kHableB = 0.50f", headerText.contains("kHableB = 0.50f"))
+        assertTrue("color_grading.h must define kHableC = 0.10f", headerText.contains("kHableC = 0.10f"))
+        assertTrue("color_grading.h must define kHableD = 0.20f", headerText.contains("kHableD = 0.20f"))
+        assertTrue("color_grading.h must define kHableE = 0.02f", headerText.contains("kHableE = 0.02f"))
+        assertTrue("color_grading.h must define kHableF = 0.30f", headerText.contains("kHableF = 0.30f"))
+
+        // 2. Verify PQ EOTF constants in header
+        assertTrue("color_grading.h must define kPqM1", headerText.contains("kPqM1 = 0.1593017578125f"))
+        assertTrue("color_grading.h must define kPqM2", headerText.contains("kPqM2 = 78.84375f"))
+        assertTrue("color_grading.h must define kPqC1", headerText.contains("kPqC1 = 0.8359375f"))
+        assertTrue("color_grading.h must define kPqC2", headerText.contains("kPqC2 = 18.8515625f"))
+        assertTrue("color_grading.h must define kPqC3", headerText.contains("kPqC3 = 18.6875f"))
+
+        // 3. Verify tonemapping parameters in header
+        assertTrue("color_grading.h must define kW = 40.0f", headerText.contains("kW = 40.0f"))
+        assertTrue("color_grading.h must define kExposure = 2.0f", headerText.contains("kExposure = 2.0f"))
+        assertTrue("color_grading.h must define kSCurveStrength = 0.18f", headerText.contains("kSCurveStrength = 0.18f"))
+
+        // 4. Verify parity across all three fragment shaders
+        for ((name, code) in shaders) {
+            assertTrue("$name must define Hable constant A = 0.15", code.contains("const float A = 0.15;"))
+            assertTrue("$name must define Hable constant B = 0.50", code.contains("const float B = 0.50;"))
+            assertTrue("$name must define Hable constant C = 0.10", code.contains("const float C = 0.10;"))
+            assertTrue("$name must define Hable constant D = 0.20", code.contains("const float D = 0.20;"))
+            assertTrue("$name must define Hable constant E = 0.02", code.contains("const float E = 0.02;"))
+            assertTrue("$name must define Hable constant F = 0.30", code.contains("const float F = 0.30;"))
+
+            assertTrue("$name must define PQ m1 = 0.1593017578125", code.contains("const float m1 = 0.1593017578125;"))
+            assertTrue("$name must define PQ m2 = 78.84375", code.contains("const float m2 = 78.84375;"))
+            assertTrue("$name must define PQ c1 = 0.8359375", code.contains("const float c1 = 0.8359375;"))
+            assertTrue("$name must define PQ c2 = 18.8515625", code.contains("const float c2 = 18.8515625;"))
+            assertTrue("$name must define PQ c3 = 18.6875", code.contains("const float c3 = 18.6875;"))
+
+            assertTrue("$name must define kW = 40.0", code.contains("const float kW = 40.0;"))
+            assertTrue("$name must define kExposure = 2.0", code.contains("const float kExposure = 2.0;"))
+            assertTrue("$name must apply Cubic S-Curve at 0.18 for HDR", code.contains("ApplyCubicSCurve(gammaColor, 0.18);"))
+        }
+    }
+
     private fun assertMatchesBaseline(rule: String) {
         val current = scanMainSources().filter { it.rule == rule }.map { it.key }
         val baseline = readBaseline().filter { it.startsWith("$rule|") }

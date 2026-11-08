@@ -19,7 +19,7 @@ layout(location = 9) flat in float vColorTemperature;
 
 layout(location = 0) out vec4 outColor;
 
-// Conversao RGB para YCbCr para medicao de distancia cromatica invariante a iluminacao
+// RGB to YCbCr conversion for illumination-invariant color distance measurement
 vec3 RgbToYcbcr(vec3 rgb) {
     float y  =  0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
     float cb = -0.168736 * rgb.r - 0.331264 * rgb.g + 0.5 * rgb.b;
@@ -27,15 +27,8 @@ vec3 RgbToYcbcr(vec3 rgb) {
     return vec3(y, cb, cr);
 }
 
-// T-HDR (Fase 2, primeira versao — ver docs/phases/PHASE-0.3-POLISH-AUDIO.md
-// T6.2): tonemap HDR->SDR pra exibir PQ/HLG no display SDR do Quest 3.
-// Pipeline: linearizar a EOTF PQ (ST 2084) -> nits absolutos -> normalizar
-// pelo branco de referencia SDR nominal (100 nits) -> Reinhard em luz
-// linear -> gamma de saida aproximado (mesmo espaco "pronto pra exibir" que
-// o passthrough SDR abaixo ja assume). HLG usa a propria OETF inversa + OOTF
-// e as primarias 2020 sao convertidas pra 709 antes do Reinhard. Aproximacao
-// deliberada: nao le metadado estatico HDR (MaxCLL/MaxFALL) — Hable/ACES e
-// leitura de metadado ficam pra uma iteracao futura (ver plano).
+// ST 2084 (PQ EOTF): converts PQ signal [0.0, 1.0] to relative linear luminance [0.0, 1.0],
+// where 1.0 corresponds to the theoretical peak of 10,000 nits.
 vec3 PqEotf(vec3 pq) {
     const float m1 = 0.1593017578125;
     const float m2 = 78.84375;
@@ -48,8 +41,8 @@ vec3 PqEotf(vec3 pq) {
     return pow(num / den, vec3(1.0 / m1));
 }
 
-// BT.2100 HLG: inverso da OETF -> luz de cena -> OOTF do sistema (gamma 1.2,
-// pico nominal de 1000 nits) -> nits de display.
+// BT.2100 HLG: inverse OETF -> scene light -> system OOTF (gamma 1.2,
+// 1000 nits nominal peak) -> display nits.
 vec3 HlgToDisplayNits(vec3 hlg) {
     const float a = 0.17883277;
     const float b = 0.28466892;
@@ -60,18 +53,98 @@ vec3 HlgToDisplayNits(vec3 hlg) {
     return sceneLight * pow(max(ys, 1e-6), 0.2) * 1000.0;
 }
 
-// Primarias BT.2020 -> BT.709 (ITU-R BT.2087), em luz linear. Coluna a coluna (GLSL).
+// BT.2020 -> BT.709 primaries (ITU-R BT.2087) in linear light. Column by column (GLSL).
 const mat3 kBt2020ToBt709 = mat3(
      1.6605, -0.1246, -0.0182,
     -0.5876,  1.1329, -0.1006,
     -0.0728, -0.0083,  1.1187);
 
-// `transfer`: 1 = PQ, 2 = HLG (mesmo codigo de get_video_is_hdr).
+// Hable Filmic tone mapping curve (Uncharted 2 / John Hable)
+// Constants:
+//   A = 0.15 (Shoulder Strength)
+//   B = 0.50 (Linear Strength)
+//   C = 0.10 (Linear Angle)
+//   D = 0.20 (Toe Strength)
+//   E = 0.02 (Toe Numerator)
+//   F = 0.30 (Toe Denominator)
+vec3 HableFilmicCurve(vec3 x) {
+    const float A = 0.15;
+    const float B = 0.50;
+    const float C = 0.10;
+    const float D = 0.20;
+    const float E = 0.02;
+    const float F = 0.30;
+    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - (E / F);
+}
+
+float HableFilmicCurve(float x) {
+    const float A = 0.15;
+    const float B = 0.50;
+    const float C = 0.10;
+    const float D = 0.20;
+    const float E = 0.02;
+    const float F = 0.30;
+    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - (E / F);
+}
+
+// Converts linear RGB or sRGB to saturation [0.0, 1.0] (HSV saturation)
+float rgb2sat(vec3 rgb) {
+    float maxVal = max(max(rgb.r, rgb.g), rgb.b);
+    float minVal = min(min(rgb.r, rgb.g), rgb.b);
+    return (maxVal <= 1e-5) ? 0.0 : (maxVal - minVal) / maxVal;
+}
+
+// Adaptive Polynomial Cubic S-Curve
+// f(x) = x * x * (3.0 - 2.0 * x)
+// Fixed anchors at black (0.0), mid-tone (0.5), and white (1.0).
+// Eliminates mid-tone gamma drift and enriches micro-contrast without banding.
+vec3 ApplyCubicSCurve(vec3 color, float strength) {
+    if (strength <= 0.0) {
+        return color;
+    }
+    vec3 c = clamp(color, 0.0, 1.0);
+    vec3 s = c * c * (3.0 - 2.0 * c);
+    return mix(c, s, strength);
+}
+
+// Filmic HDR -> SDR Tonemapping (PQ / HLG for Quest 3 display)
+// `transfer`: 1 = PQ (ST 2084), 2 = HLG (BT.2100).
 vec3 TonemapHdrToSdr(vec3 hdrColor, int transfer) {
     vec3 nits = (transfer == 2) ? HlgToDisplayNits(hdrColor) : PqEotf(hdrColor) * 10000.0;
+    // Linear BT.709 scene normalization (100 nits = 1.0 linear)
     vec3 scene = max(kBt2020ToBt709 * (nits / 100.0), vec3(0.0));
-    vec3 tonemapped = scene / (1.0 + scene);
-    return pow(clamp(tonemapped, 0.0, 1.0), vec3(1.0 / 2.2));
+
+    // Linear white point W calibrated for cinema mastering peak (4,000 nits)
+    const float kW = 40.0;
+    const float kExposure = 2.0;
+    float whiteScale = 1.0 / max(HableFilmicCurve(kW * kExposure), 1e-4);
+
+    // 1. Per-channel Hable Filmic mapping (filmic curve with smooth shoulder and toe)
+    vec3 filmColor = max(HableFilmicCurve(scene * kExposure) * whiteScale, vec3(0.0));
+
+    // 2. Highlight Saturation Recovery (rgb2sat):
+    // Preserves chromaticity of bright light sources, fire, neon, and explosions.
+    const vec3 kBt709Luma = vec3(0.2126, 0.7152, 0.0722);
+    float sceneLuma = dot(scene, kBt709Luma);
+    float mappedLuma = max(HableFilmicCurve(sceneLuma * kExposure) * whiteScale, 0.0);
+    vec3 lumaMappedColor = scene * (mappedLuma / max(sceneLuma, 1e-5));
+
+    float origSat = rgb2sat(scene);
+    float highlightWeight = clamp(sceneLuma * 0.1, 0.0, 1.0);
+    vec3 tonemapped = mix(filmColor, lumaMappedColor, origSat * highlightWeight * 0.6);
+
+    // Gamut blowout protection preserving original hue
+    float peak = max(max(tonemapped.r, tonemapped.g), tonemapped.b);
+    if (peak > 1.0) {
+        tonemapped /= peak;
+    }
+    tonemapped = clamp(tonemapped, 0.0, 1.0);
+
+    // 3. Conversion to SDR display gamma (Rec.709 / sRGB 2.2)
+    vec3 gammaColor = pow(tonemapped, vec3(1.0 / 2.2));
+
+    // 4. Adaptive Polynomial Cubic S-Curve for cinematic contrast
+    return ApplyCubicSCurve(gammaColor, 0.18);
 }
 
 // Planckian locus approximation (Kelvin 2700K a 6500K / Night Mode ~3000K)
@@ -172,7 +245,7 @@ void main() {
     }
 
     if (vColorTemperature < 0.0) {
-        // Night Mode: reduz luz azul (~3000K)
+        // Night Mode: reduce blue light (~3000K)
         color = ApplyColorTemperature(color, 3000.0);
     } else if (abs(vColorTemperature - 6500.0) > 1.0 && vColorTemperature > 1000.0) {
         color = ApplyColorTemperature(color, vColorTemperature);

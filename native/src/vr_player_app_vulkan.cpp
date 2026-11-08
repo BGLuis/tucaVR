@@ -65,6 +65,8 @@
 #include "vr_player_feedback_overlay.h"
 #include "debug_stats.h"
 #include "vulkan_msaa.h"
+#include "screen_layout.h"
+#include "bed_mode.h"
 
 static_assert(VK_SAMPLE_COUNT_1_BIT == vrplayer::kMsaaSampleCount1 &&
                   VK_SAMPLE_COUNT_4_BIT == vrplayer::kMsaaSampleCount4,
@@ -359,6 +361,10 @@ extern "C" {
 }
 
 std::atomic<bool> g_resetScreenPositionRequested{false};
+std::atomic<bool> g_bedModeEnabled{false};
+std::atomic<bool> g_recenterRequested{false};
+std::atomic<float> g_screenCurvature{0.0f};
+std::atomic<bool> g_screenCurvatureDirty{false};
 std::atomic<bool> g_setScreenTransformRequested{false};
 std::atomic<float> g_requestedScreenPosX{0.0f};
 std::atomic<float> g_requestedScreenPosY{1.5f};
@@ -957,6 +963,15 @@ struct AppState {
     VkBuffer videoVertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory videoVertexMemory = VK_NULL_HANDLE;
 
+    // Cylindrical curved screen (Curved Cinema Screen)
+    float screenCurvature = 0.0f;
+    float lastGeneratedCurvature = -1.0f;
+    float lastGeneratedScaleX = -1.0f;
+    float lastGeneratedScaleY = -1.0f;
+    VkBuffer curvedVideoVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory curvedVideoVertexMemory = VK_NULL_HANDLE;
+    uint32_t curvedVideoVertexCount = 0;
+
     std::unordered_map<AHardwareBuffer*, VideoFrame> videoImageCache;
     // Relogio logico pra LRU de videoImageCache — incrementado a cada
     // acesso (hit ou insercao nova), carimbado em VideoFrame::lastUsedFrame.
@@ -1221,6 +1236,8 @@ struct AppState {
     bool photoActive = false;
     uint32_t photoTexWidth = 0;
     uint32_t photoTexHeight = 0;
+    uint32_t photoWidth = 0;
+    uint32_t photoHeight = 0;
     ScreenMode photoScreenMode = ScreenMode::Flat2D;
 
     // Estagio 5 — BeamRenderer: linha simples de laser do controller.
@@ -1287,8 +1304,8 @@ struct AppState {
     ScreenMode screenMode = ScreenMode::Flat2D;
     // T-HDR: detectado uma vez por load (ver get_video_is_hdr), lido a
     // cada frame junto com screenMode — usado pelo shader de video pra
-    // decidir se aplica o tonemap HDR->SDR.
-    bool isHdr = false;
+    // decidir se aplica o tonemap HDR->SDR (0 = SDR, 1 = PQ, 2 = HLG).
+    int isHdr = 0;
 
     // Estado de cena / recenter — espelha m_sceneYawOffset/m_sceneTranslationOffset
     // do caminho GLES (vr_player_app.cpp). Toda a UI/controles/tela/esfera sao
@@ -1305,6 +1322,11 @@ struct AppState {
     // nascer na altura dos olhos sem exigir long-press manual.
     bool sceneCalibrated = false;
 
+    // Bed Mode (Reclined 3DoF playback)
+    bool bedModeEnabled = false;
+    XrQuaternionf sceneOrientation = {0.0f, 0.0f, 0.0f, 1.0f};
+    Mat4 sceneOrientationMatrix = Mat4Identity();
+
     // Tela virtual ajustavel via thumbstick (Etapa 6) — posicao/escala em
     // espaco "base" (antes do offset de cena acima).
     XrVector3f screenPosition = {0.0f, 1.5f, -2.4f};
@@ -1313,6 +1335,12 @@ struct AppState {
     XrVector3f defaultScreenPosition = {0.0f, 1.5f, -2.4f};
     float defaultScreenScaleX = 2.8f;
     float defaultScreenScaleY = 1.575f;
+    float baseScaleX = 2.8f;
+    float baseScaleY = 1.575f;
+    uint32_t lastAspectVideoWidth = 0;
+    uint32_t lastAspectVideoHeight = 0;
+    ScreenMode lastAspectScreenMode = ScreenMode::Flat2D;
+    bool userCustomScreenScale = false;
 
     // Fase 0.3 Seção 2: Grab & Drag da tela virtual (T2.5)
     bool isScreenGrabbed = false;
@@ -2833,6 +2861,69 @@ void CreateVideoVertexBuffer(AppState& state) {
     VKR(vkMapMemory(state.vkDevice, state.videoVertexMemory, 0, sizeof(vertices), 0, &mapped));
     std::memcpy(mapped, vertices, sizeof(vertices));
     vkUnmapMemory(state.vkDevice, state.videoVertexMemory);
+}
+
+void CreateCurvedVideoVertexBuffer(AppState& state) {
+    const uint32_t maxVertices = (vrplayer::kCurvedScreenSlices + 1) * 2;
+    const VkDeviceSize bufferSize = maxVertices * sizeof(vrplayer::ScreenVertex);
+
+    VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bufferInfo.size = bufferSize;
+    bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VKR(vkCreateBuffer(state.vkDevice, &bufferInfo, nullptr, &state.curvedVideoVertexBuffer));
+
+    VkMemoryRequirements memReq{};
+    vkGetBufferMemoryRequirements(state.vkDevice, state.curvedVideoVertexBuffer, &memReq);
+
+    VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocInfo.allocationSize = memReq.size;
+    allocInfo.memoryTypeIndex = FindMemoryType(
+        state, memReq.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &state.curvedVideoVertexMemory));
+    VKR(vkBindBufferMemory(state.vkDevice, state.curvedVideoVertexBuffer, state.curvedVideoVertexMemory, 0));
+
+    state.lastGeneratedCurvature = -1.0f;
+    state.lastGeneratedScaleX = -1.0f;
+    state.lastGeneratedScaleY = -1.0f;
+    state.curvedVideoVertexCount = 0;
+}
+
+void WaitForAllFences(AppState& state) {
+    if (state.vkDevice != VK_NULL_HANDLE && state.inFlightFences[0] != VK_NULL_HANDLE) {
+        vkWaitForFences(state.vkDevice, AppState::kMaxFramesInFlight, state.inFlightFences, VK_TRUE, 1000000000ULL);
+    }
+}
+
+void UpdateCurvedScreenVertexBuffer(AppState& state) {
+    if (state.curvedVideoVertexBuffer == VK_NULL_HANDLE || state.curvedVideoVertexMemory == VK_NULL_HANDLE) {
+        return;
+    }
+
+    if (std::fabs(state.screenCurvature - state.lastGeneratedCurvature) < 1e-4f &&
+        std::fabs(state.screenScaleX - state.lastGeneratedScaleX) < 1e-4f &&
+        std::fabs(state.screenScaleY - state.lastGeneratedScaleY) < 1e-4f) {
+        return;
+    }
+
+    const auto params = vrplayer::ComputeCurvedScreenParams(
+        state.screenCurvature, state.screenScaleX, state.screenScaleY);
+    std::vector<vrplayer::ScreenVertex> vertices;
+    vrplayer::GenerateCurvedScreenVertices(params, vertices, vrplayer::kCurvedScreenSlices);
+
+    WaitForAllFences(state);
+
+    void* mapped = nullptr;
+    const VkDeviceSize copySize = vertices.size() * sizeof(vrplayer::ScreenVertex);
+    VKR(vkMapMemory(state.vkDevice, state.curvedVideoVertexMemory, 0, copySize, 0, &mapped));
+    std::memcpy(mapped, vertices.data(), copySize);
+    vkUnmapMemory(state.vkDevice, state.curvedVideoVertexMemory);
+
+    state.lastGeneratedCurvature = state.screenCurvature;
+    state.lastGeneratedScaleX = state.screenScaleX;
+    state.lastGeneratedScaleY = state.screenScaleY;
+    state.curvedVideoVertexCount = static_cast<uint32_t>(vertices.size());
 }
 
 VkShaderModule CreateShaderModule(AppState& state, const unsigned char* spirv, size_t size) {
@@ -4368,6 +4459,8 @@ static void DestroyPhotoTexture(AppState& state) {
     }
     state.photoTexWidth = 0;
     state.photoTexHeight = 0;
+    state.photoWidth = 0;
+    state.photoHeight = 0;
     state.photoTextureReady = false;
 }
 
@@ -4377,6 +4470,8 @@ static void EnsurePhotoTexture(AppState& state, uint32_t width, uint32_t height)
         CreateUiImage(state, width, height, state.photoImage, state.photoImageMemory, state.photoImageView);
         state.photoTexWidth = width;
         state.photoTexHeight = height;
+        state.photoWidth = width;
+        state.photoHeight = height;
         state.photoTextureReady = true;
 
         VkDescriptorImageInfo imgInfo{};
@@ -5009,11 +5104,19 @@ static bool DrawPgsSubtitle(AppState& state, VkCommandBuffer cmd, const Mat4& pr
 
     Mat4 pgsModel;
     if (sphereMode) {
-        Mat4 pgsTrans = Mat4Translation(headCenter.x + quadPosX, headCenter.y + quadPosY, headCenter.z - 2.2f);
+        Mat4 pgsTrans = Mat4Multiply(
+            Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
+            Mat4Multiply(state.sceneOrientationMatrix, Mat4Translation(quadPosX, quadPosY, -2.2f)));
         pgsModel = Mat4Multiply(pgsTrans, Mat4Scale(quadScaleX * state.subtitleScale, quadScaleY * state.subtitleScale, 1.0f));
     } else {
         SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
-        Mat4 pgsTrans = Mat4Multiply(scene.screenModelNoScale, Mat4Translation(quadPosX, quadPosY, 0.04f));
+        const auto curParams = vrplayer::ComputeCurvedScreenParams(
+            state.screenCurvature, state.screenScaleX, state.screenScaleY);
+        const auto curvedPos = vrplayer::ProjectToCurvedScreen(curParams, quadPosX, 0.04f);
+        Mat4 pgsRot = (curvedPos.yaw != 0.0f) ? Mat4RotationY(curvedPos.yaw) : Mat4Identity();
+        Mat4 pgsTrans = Mat4Multiply(
+            scene.screenModelNoScale,
+            Mat4Multiply(Mat4Translation(curvedPos.x, quadPosY, curvedPos.z), pgsRot));
         pgsModel = Mat4Multiply(pgsTrans, Mat4Scale(quadScaleX * state.subtitleScale, quadScaleY * state.subtitleScale, 1.0f));
     }
 
@@ -5229,12 +5332,20 @@ static void DrawSubtitles(AppState& state, VkCommandBuffer cmd, const Mat4& proj
     Mat4 subModel;
     if (sphereMode) {
         // Modo esférico (360°/180°): Lazy Follow suave (~0.5s)
-        Mat4 subTrans = Mat4Translation(headCenter.x + subXOffset, headCenter.y + subYOffset, headCenter.z - 2.2f);
+        Mat4 subTrans = Mat4Multiply(
+            Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
+            Mat4Multiply(state.sceneOrientationMatrix, Mat4Translation(subXOffset, subYOffset, -2.2f)));
         subModel = Mat4Multiply(subTrans, Mat4Scale(state.subtitleScale, state.subtitleScale, 1.0f));
     } else {
-        // Modo plano (2D, SBS, OU): posicionado relativo à tela virtual
+        // Planar mode (2D, SBS, OU): positioned relative to virtual screen (with cylindrical projection if curved)
         SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
-        Mat4 subTrans = Mat4Multiply(scene.screenModelNoScale, Mat4Translation(subXOffset, subYOffset, 0.04f));
+        const auto curParams = vrplayer::ComputeCurvedScreenParams(
+            state.screenCurvature, state.screenScaleX, state.screenScaleY);
+        const auto curvedPos = vrplayer::ProjectToCurvedScreen(curParams, subXOffset, 0.04f);
+        Mat4 subRot = (curvedPos.yaw != 0.0f) ? Mat4RotationY(curvedPos.yaw) : Mat4Identity();
+        Mat4 subTrans = Mat4Multiply(
+            scene.screenModelNoScale,
+            Mat4Multiply(Mat4Translation(curvedPos.x, subYOffset, curvedPos.z), subRot));
         subModel = Mat4Multiply(subTrans, Mat4Scale(state.subtitleScale, state.subtitleScale, 1.0f));
     }
 
@@ -5753,8 +5864,8 @@ static void DrawSkyboxIfLoaded(
     vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
     vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-    // Skybox rotaciona com a orientação da cabeça e com o yaw da cena, mas sem translação
-    Mat4 skyboxModel = Mat4RotationY(state.sceneYawOffset);
+    // Skybox rotates with scene orientation (yaw-only or 3DoF in Bed Mode), without translation
+    Mat4 skyboxModel = state.sceneOrientationMatrix;
     Mat4 viewNoTrans = view;
     viewNoTrans.m[12] = 0.0f;
     viewNoTrans.m[13] = 0.0f;
@@ -6515,14 +6626,21 @@ static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& da
 
     if (data.envId == "void" || data.envId.empty()) {
         state.screenPosition = {0.0f, 1.5f, -2.4f};
-        state.screenScaleX = 2.8f;
-        state.screenScaleY = 1.575f;
+        state.baseScaleX = 2.8f;
+        state.baseScaleY = 1.575f;
         state.defaultScreenPosition = state.screenPosition;
-        state.defaultScreenScaleX = state.screenScaleX;
-        state.defaultScreenScaleY = state.screenScaleY;
+        state.userCustomScreenScale = false;
+        state.lastAspectVideoWidth = 0;
+        state.lastAspectVideoHeight = 0;
+        const auto fit = vrplayer::CalculateVideoFitBounds(
+            state.videoWidth, state.videoHeight, state.screenMode, state.baseScaleX, state.baseScaleY);
+        state.screenScaleX = fit.x;
+        state.screenScaleY = fit.y;
+        state.defaultScreenScaleX = fit.x;
+        state.defaultScreenScaleY = fit.y;
         state.envSpawnOffset = {0.0f, 0.0f, 0.0f};
         state.envParticlesEnabled = false;
-        LOGI("Ambiente: Modo Void aplicado com sucesso");
+        LOGI("Ambiente: Modo Void aplicado com sucesso (scale=%.2f,%.2f)", state.screenScaleX, state.screenScaleY);
         return;
     }
 
@@ -6530,11 +6648,18 @@ static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& da
         state.screenPosition.x = data.config.screenPosX;
         state.screenPosition.y = data.config.screenPosY;
         state.screenPosition.z = data.config.screenPosZ;
-        state.screenScaleX = data.config.screenScaleX;
-        state.screenScaleY = data.config.screenScaleY;
+        state.baseScaleX = data.config.screenScaleX;
+        state.baseScaleY = data.config.screenScaleY;
         state.defaultScreenPosition = state.screenPosition;
-        state.defaultScreenScaleX = state.screenScaleX;
-        state.defaultScreenScaleY = state.screenScaleY;
+        state.userCustomScreenScale = false;
+        state.lastAspectVideoWidth = 0;
+        state.lastAspectVideoHeight = 0;
+        const auto fit = vrplayer::CalculateVideoFitBounds(
+            state.videoWidth, state.videoHeight, state.screenMode, state.baseScaleX, state.baseScaleY);
+        state.screenScaleX = fit.x;
+        state.screenScaleY = fit.y;
+        state.defaultScreenScaleX = fit.x;
+        state.defaultScreenScaleY = fit.y;
         state.envSpawnOffset = {data.config.spawnPosX, data.config.spawnPosY, data.config.spawnPosZ};
         state.envParticlesEnabled = data.config.particlesEnabled;
         if (state.envParticlesEnabled && !state.particlesLoaded) {
@@ -6640,7 +6765,7 @@ static void DrawEnvironmentIfLoaded(
     Mat4 envModel = Mat4Multiply(
         Mat4Translation(state.sceneTranslationOffset.x, state.sceneTranslationOffset.y, state.sceneTranslationOffset.z),
         Mat4Multiply(
-            Mat4RotationY(state.sceneYawOffset),
+            state.sceneOrientationMatrix,
             Mat4Translation(-state.envSpawnOffset.x, -state.envSpawnOffset.y, -state.envSpawnOffset.z)
         )
     );
@@ -7590,8 +7715,12 @@ void RecordVideoFlat(
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.videoPipeline);
 
+    const bool isCurved = (state.screenCurvature > 1e-4f);
+    VkBuffer targetVb = isCurved ? state.curvedVideoVertexBuffer : state.videoVertexBuffer;
+    uint32_t vertexCount = isCurved ? state.curvedVideoVertexCount : 4;
+
     VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
+    vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &offset);
 
     vkCmdBindDescriptorSets(
         cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -7601,7 +7730,7 @@ void RecordVideoFlat(
     pc.mvp = mvp;
     pc.sharpness = state.upscalingSharpness;
     pc.upscalingMode = static_cast<int>(state.upscalingMode);
-    pc.isHdr = state.isHdr ? 1 : 0;
+    pc.isHdr = state.isHdr;
     float vw = (state.videoWidth > 0) ? static_cast<float>(state.videoWidth) : 1920.0f;
     float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1080.0f;
     pc.texelWidth = 1.0f / vw;
@@ -7620,15 +7749,15 @@ void RecordVideoFlat(
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(pc), &pc);
 
-    vkCmdDraw(cmd, 4, 1, 0, 0);
-    CountDrawCall(4);
+    vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+    CountDrawCall(vertexCount);
 
     // Preview de arrasto (T-seek-ux): mesmo transform do quad de video
     // (Flat2D), reaproveitando o pipeline de UI (RGBA8 simples, sem YCbCr).
     if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
         VkDeviceSize ovOffset = 0;
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
-        vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &ovOffset);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &ovOffset);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             state.uiPipelineLayout, 0, 1, &state.scrubOverlayDescriptorSet, 0, nullptr);
         UiPushConstants ovpc{};
@@ -7636,8 +7765,8 @@ void RecordVideoFlat(
         ovpc.alpha = 1.0f;
         vkCmdPushConstants(cmd, state.uiPipelineLayout,
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
-        vkCmdDraw(cmd, 4, 1, 0, 0);
-        CountDrawCall(4);
+        vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+        CountDrawCall(vertexCount);
     }
 
     DrawUiQuads(state, cmd, proj, view, headCenter);
@@ -7703,7 +7832,7 @@ void RecordStereoFrame(
     spc.upscalingMode  = static_cast<int>(state.upscalingMode);
     spc.cubemapLayout  = sp.cubemapLayout;
     spc.projectionType = sp.projectionType;
-    spc.isHdr          = state.isHdr ? 1 : 0;
+    spc.isHdr          = state.isHdr;
     float vw = (state.videoWidth > 0) ? static_cast<float>(state.videoWidth) : 3840.0f;
     float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1920.0f;
     spc.texelWidth     = 1.0f / vw;
@@ -7743,15 +7872,19 @@ void RecordStereoFrame(
         vkCmdDrawIndexed(cmd, state.sphereIndexCount, 1, 0, 0, 0);
         CountDrawCallIndexed(state.sphereIndexCount);
     } else {
+        const bool isCurved = (state.screenCurvature > 1e-4f);
+        VkBuffer targetVb = isCurved ? state.curvedVideoVertexBuffer : state.videoVertexBuffer;
+        uint32_t vertexCount = isCurved ? state.curvedVideoVertexCount : 4;
+
         VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
-        vkCmdDraw(cmd, 4, 1, 0, 0);
-        CountDrawCall(4);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &offset);
+        vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+        CountDrawCall(vertexCount);
 
         if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
             VkDeviceSize ovOffset = 0;
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
-            vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &ovOffset);
+            vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &ovOffset);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                 state.uiPipelineLayout, 0, 1, &state.scrubOverlayDescriptorSet, 0, nullptr);
             UiPushConstants ovpc{};
@@ -7759,8 +7892,8 @@ void RecordStereoFrame(
             ovpc.alpha = 1.0f;
             vkCmdPushConstants(cmd, state.uiPipelineLayout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
-            vkCmdDraw(cmd, 4, 1, 0, 0);
-            CountDrawCall(4);
+            vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+            CountDrawCall(vertexCount);
         }
     }
 
@@ -7889,6 +8022,47 @@ void PushVideoGapSample(AppState& state, float gapMs) {
     state.videoJitterMs = maxV - minV;
 }
 
+// Updates virtual screen dimensions dynamically according to the decoded video frame's
+// native aspect ratio and anamorphic stereoscopic format, fitting proportionally within
+// the environment's base bounds (fit bounds).
+void ApplyDynamicAspectRatio(AppState& state) {
+    if (state.videoWidth == 0 || state.videoHeight == 0) {
+        return;
+    }
+    ScreenMode currentMode = state.screenMode;
+    if (state.videoWidth == state.lastAspectVideoWidth &&
+        state.videoHeight == state.lastAspectVideoHeight &&
+        currentMode == state.lastAspectScreenMode) {
+        return;
+    }
+
+    state.lastAspectVideoWidth = state.videoWidth;
+    state.lastAspectVideoHeight = state.videoHeight;
+    state.lastAspectScreenMode = currentMode;
+
+    const float aspect = vrplayer::CalculateContentAspectRatio(
+        state.videoWidth, state.videoHeight, currentMode);
+    const vrplayer::ScreenScale fit = vrplayer::ComputeFitBounds(
+        aspect, state.baseScaleX, state.baseScaleY);
+
+    state.defaultScreenScaleX = fit.x;
+    state.defaultScreenScaleY = fit.y;
+
+    if (!state.userCustomScreenScale) {
+        state.screenScaleX = fit.x;
+        state.screenScaleY = fit.y;
+    } else {
+        // User had manually resized the screen width; adjust height to match new aspect ratio
+        if (aspect > 0.001f) {
+            state.screenScaleY = state.screenScaleX / aspect;
+        }
+    }
+
+    LOGI("Dynamic Aspect Ratio: video %ux%u mode %s -> aspect %.3f (scale=%.3fx%.3f, default=%.3fx%.3f)",
+         state.videoWidth, state.videoHeight, ScreenModeName(currentMode), aspect,
+         state.screenScaleX, state.screenScaleY, state.defaultScreenScaleX, state.defaultScreenScaleY);
+}
+
 // Estagio 3: atualiza o frame de video ativo a partir do bridge Rust.
 // Chamado uma vez por loop de frame, antes de RenderFrame.
 // Equivale ao bloco vr_player_app.cpp:1354-1400 (m_eglImageCache).
@@ -7896,8 +8070,8 @@ void UpdateVideoFrame(AppState& state) {
     bool stopRequested = g_stopVideoRequested.exchange(false);
     bool newSessionRequested = g_newVideoSessionRequested.exchange(false);
     if (stopRequested || newSessionRequested) {
-        LOGI("Video: %s — limpando frame ativo e cache Vulkan",
-             stopRequested ? "parada solicitada" : "nova sessao de video iniciada");
+        LOGI("Video: %s — clearing active frame and Vulkan cache",
+             stopRequested ? "stop requested" : "new video session started");
         state.activeVideoFrame = nullptr;
         state.lastVideoBuffer = nullptr;
         state.msSinceLastVideoFrame = 0.0f;
@@ -7908,6 +8082,8 @@ void UpdateVideoFrame(AppState& state) {
         state.controlsAlpha = 0.0f;
         state.controlsIdleTime = kUiAutoHideSeconds;
         ClearVideoImageCache(state);
+        state.lastAspectVideoWidth = 0;
+        state.lastAspectVideoHeight = 0;
         if (newSessionRequested) {
             state.hasActiveMedia = true;
             state.stutterCount = 0;
@@ -7915,10 +8091,28 @@ void UpdateVideoFrame(AppState& state) {
             state.videoStallCount = 0;
             std::fill(std::begin(state.frameTimeHistogram), std::end(state.frameTimeHistogram), 0u);
         } else if (stopRequested) {
+            state.userCustomScreenScale = false;
             state.hasActiveMedia = false;
+            state.videoWidth = 0;
+            state.videoHeight = 0;
+            const auto fit = vrplayer::ComputeFitBounds(
+                vrplayer::kDefaultAspectRatio, state.baseScaleX, state.baseScaleY);
+            state.screenScaleX = fit.x;
+            state.screenScaleY = fit.y;
+            state.defaultScreenScaleX = fit.x;
+            state.defaultScreenScaleY = fit.y;
             g_requestUiPanelVisible.store(true);
             return;
         }
+    }
+
+    ScreenMode currentMode = static_cast<ScreenMode>(get_3d_mode());
+    if (currentMode != state.screenMode) {
+        StereoParams spLog = GetStereoParams(currentMode, 0);
+        LOGI("Video: ScreenMode -> %s (stereoLayout=%d, polar180=%d, swapEyes=%d, cubemapLayout=%d, projectionType=%d)",
+             ScreenModeName(currentMode), spLog.stereoLayout, spLog.polar180 & 0xFF, spLog.swapEyes, spLog.cubemapLayout, spLog.projectionType);
+        state.screenMode = currentMode;
+        ApplyDynamicAspectRatio(state);
     }
 
     AHardwareBuffer* buffer = get_current_video_frame();
@@ -7981,6 +8175,14 @@ void UpdateVideoFrame(AppState& state) {
     state.activeVideoFrame = GetOrImportVideoFrame(state, buffer);
     if (state.activeVideoFrame == nullptr) {
         LOGE("Video: GetOrImportVideoFrame falhou para o buffer %p — frame sera ignorado (fallback quad solido)", (void*)buffer);
+    } else {
+        // Content aspect ratio is derived directly from AHardwareBuffer dimensions.
+        // Streams with Sample Aspect Ratio (SAR) != 1:1 or non-zero container crop rectangles
+        // are currently displayed at raw buffer aspect ratio without SAR stretching.
+        // Tracking full SAR / crop rectangle metadata propagation from demuxer: Issue #176.
+        state.videoWidth = state.activeVideoFrame->width;
+        state.videoHeight = state.activeVideoFrame->height;
+        ApplyDynamicAspectRatio(state);
     }
 }
 
@@ -8374,13 +8576,14 @@ void RenderFrame(AppState& state) {
             XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT;
         bool poseValidForCalibration = (viewState.viewStateFlags & kPoseValidFlags) == kPoseValidFlags;
         if (poseValidForCalibration && (state.needsOsRecenter || !state.sceneCalibrated)) {
-            Mat4 rot0 = Mat4FromXrPose(views[0].pose);
-            XrVector3f fwd = {-rot0.m[8], -rot0.m[9], -rot0.m[10]};
-            state.sceneYawOffset = atan2f(-fwd.x, -fwd.z);
-            state.sceneTranslationOffset = headCenter;
-            state.sceneTranslationOffset.y = headCenter.y - 1.5f;
+            const auto res = vrplayer::ComputeRecenter(
+                state.bedModeEnabled, views[0].pose.orientation, headCenter, 1.5f);
+            vrplayer::ApplyRecenter(state, res);
             state.needsOsRecenter = false;
             state.sceneCalibrated = true;
+            LOGI("Recenter (OS/calib): bedMode=%d, yaw=%.2f deg, pitch=%.2f deg",
+                 (int)state.bedModeEnabled, res.yawOffset * (180.0f / 3.14159265f),
+                 res.pitchOffset * (180.0f / 3.14159265f));
         }
 
         // Processa troca pendente de ambiente virtual 3D com transição suave (Fase 0.5 §3 T3.5 / #53)
@@ -8471,8 +8674,8 @@ void RenderFrame(AppState& state) {
 
         if (state.envTransitionPhase == EnvironmentTransitionPhase::GPU_SWAP) {
             state.envTransitionAlpha = 1.0f;
-            // Sincroniza apenas com as fences dos quadros em voo (< 1ms), sem vkDeviceWaitIdle
-            vkWaitForFences(state.vkDevice, AppState::kMaxFramesInFlight, state.inFlightFences, VK_TRUE, 1000000000ULL);
+            // Synchronize with in-flight frame fences (< 1ms) without calling vkDeviceWaitIdle
+            WaitForAllFences(state);
 
             ApplyLoadedEnvironment(state, state.envLoadedData);
             state.envLoadedData = CpuEnvironmentData{};
@@ -8507,16 +8710,7 @@ void RenderFrame(AppState& state) {
             views[0].pose.orientation.w
         );
 
-        // Posicao/escala da tela virtual — mesma base do caminho GLES
-        // (vr_player_app.cpp: m_screenPosition = {0, 1.5, -2},
-        //  m_screenScale = {1.6, 0.9}), ajustavel via thumbstick (Estagio 6)
-        // e deslocada pelo offset de cena/recenter acima.
-        SceneTransforms sceneForScreen = ComputeSceneTransforms(state, headCenter);
-        const Mat4 screenModel = Mat4Multiply(
-            sceneForScreen.screenModelNoScale,
-            Mat4Scale(state.screenScaleX, state.screenScaleY, 1.0f));
-
-        // Estagio 5: lerencia do ScreenMode a cada frame (mesmo que o GLES:
+        // Estagio 5: leitura do ScreenMode a cada frame (mesmo que o GLES:
         // vr_player_app.cpp:993 "m_screenMode = static_cast<ScreenMode>(get_3d_mode())")
         {
             ScreenMode newMode = static_cast<ScreenMode>(get_3d_mode());
@@ -8524,11 +8718,30 @@ void RenderFrame(AppState& state) {
                 StereoParams spLog = GetStereoParams(newMode, 0);
                 LOGI("Video: ScreenMode -> %s (stereoLayout=%d, polar180=%d, swapEyes=%d, cubemapLayout=%d, projectionType=%d)",
                     ScreenModeName(newMode), spLog.stereoLayout, spLog.polar180 & 0xFF, spLog.swapEyes, spLog.cubemapLayout, spLog.projectionType);
+                state.screenMode = newMode;
+                ApplyDynamicAspectRatio(state);
             }
-            state.screenMode = newMode;
         }
         // T-HDR: mesma cadencia de leitura por frame que screenMode acima.
-        state.isHdr = get_video_is_hdr() != 0;
+        state.isHdr = static_cast<int>(get_video_is_hdr());
+
+        // Screen curvature synchronization requested via JNI
+        if (::g_screenCurvatureDirty.exchange(false)) {
+            state.screenCurvature = ::g_screenCurvature.load();
+            LOGI("Screen: Curvature updated via JNI -> %.2f", state.screenCurvature);
+        }
+        UpdateCurvedScreenVertexBuffer(state);
+
+        // Virtual screen position/scale — same baseline as GLES path
+        // (vr_player_app.cpp: m_screenPosition = {0, 1.5, -2},
+        //  m_screenScale = {1.6, 0.9}), adjustable via thumbstick (Stage 6)
+        // and offset by scene/recenter above.
+        SceneTransforms sceneForScreen = ComputeSceneTransforms(state, headCenter);
+        const Mat4 screenModel = Mat4Multiply(
+            sceneForScreen.screenModelNoScale,
+            Mat4Scale(state.screenScaleX, state.screenScaleY, 1.0f));
+        const bool isCurved = (state.screenCurvature > 1e-4f);
+        const Mat4 effectiveVideoModel = isCurved ? sceneForScreen.screenModelNoScale : screenModel;
 
         // Orientação inicial vinda dos metadados do container (MP4 prhd / AVSphericalMapping)
         {
@@ -8556,7 +8769,7 @@ void RenderFrame(AppState& state) {
             }
         }
 
-        // Processa upload ou limpeza de foto estática (Fase 0.3 Seção 8)
+        // Process static photo upload or cleanup (Phase 0.3 Section 8)
         if (g_photoDirty.exchange(false)) {
             bool active = g_photoActive.load();
             if (active) {
@@ -8574,12 +8787,38 @@ void RenderFrame(AppState& state) {
                     UpdateUiImageFromBytes(state, rgba.data(), w, h, state.photoImage);
                     state.photoActive = true;
                     state.photoScreenMode = static_cast<ScreenMode>(sm);
-                    LOGI("Foto: textura carregada %ux%u no modo %s", w, h, ScreenModeName(state.photoScreenMode));
+                    state.photoWidth = w;
+                    state.photoHeight = h;
+                    state.lastAspectVideoWidth = 0;
+                    state.lastAspectVideoHeight = 0;
+                    const auto fit = vrplayer::CalculateVideoFitBounds(
+                        w, h, state.photoScreenMode, state.baseScaleX, state.baseScaleY);
+                    state.screenScaleX = fit.x;
+                    state.screenScaleY = fit.y;
+                    state.defaultScreenScaleX = fit.x;
+                    state.defaultScreenScaleY = fit.y;
+                    LOGI("Photo: texture loaded %ux%u in mode %s (scale=%.2fx%.2f)",
+                         w, h, ScreenModeName(state.photoScreenMode), fit.x, fit.y);
                 }
             } else {
                 state.photoActive = false;
+                state.photoWidth = 0;
+                state.photoHeight = 0;
                 DestroyPhotoTexture(state);
-                LOGI("Foto: textura descarregada");
+                state.lastAspectVideoWidth = 0;
+                state.lastAspectVideoHeight = 0;
+                if (state.videoWidth > 0 && state.videoHeight > 0) {
+                    ApplyDynamicAspectRatio(state);
+                } else {
+                    const auto fit = vrplayer::ComputeFitBounds(
+                        vrplayer::kDefaultAspectRatio, state.baseScaleX, state.baseScaleY);
+                    state.screenScaleX = fit.x;
+                    state.screenScaleY = fit.y;
+                    state.defaultScreenScaleX = fit.x;
+                    state.defaultScreenScaleY = fit.y;
+                }
+                LOGI("Foto: textura descarregada (scale restaurada=%.2fx%.2f)",
+                     state.screenScaleX, state.screenScaleY);
             }
         }
 
@@ -8708,7 +8947,8 @@ void RenderFrame(AppState& state) {
                 view = Mat4Multiply(Mat4Multiply(rot, trans), viewBase);
             }
             const Mat4 proj = Mat4ProjectionFromFov(views[eye].fov, 0.05f, 100.0f);
-            const Mat4 mvp  = Mat4Multiply(Mat4Multiply(proj, view), screenModel);
+            const Mat4 mvp  = Mat4Multiply(Mat4Multiply(proj, view), effectiveVideoModel);
+            const Mat4 fallbackMvp = Mat4Multiply(Mat4Multiply(proj, view), screenModel);
 
             const int32_t renderW = static_cast<int32_t>(eyeChain.width * state.renderResolutionScale);
             const int32_t renderH = static_cast<int32_t>(eyeChain.height * state.renderResolutionScale);
@@ -8745,7 +8985,7 @@ void RenderFrame(AppState& state) {
                 if (pSphere) {
                     pScreenModel = Mat4Multiply(
                         Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
-                        Mat4RotationY(state.sceneYawOffset));
+                        state.sceneOrientationMatrix);
                 } else {
                     float z = g_photoZoom.load();
                     if (z < 0.1f) z = 1.0f;
@@ -8763,10 +9003,12 @@ void RenderFrame(AppState& state) {
                 RecordPhotoFrame(state, cmd, fb, extent, photoMvp, proj, view, headCenter, pSphere, eye, sp);
             } else if (state.activeVideoFrame != nullptr) {
                 if (sphereMode || stereoFlat) {
-                    const float sphereYaw = state.sceneYawOffset + (sphereMode ? state.videoSphereYawOffset : 0.0f);
+                    const Mat4 sphereRot = state.bedModeEnabled ?
+                        Mat4Multiply(state.sceneOrientationMatrix, Mat4RotationY(sphereMode ? state.videoSphereYawOffset : 0.0f)) :
+                        Mat4RotationY(state.sceneYawOffset + (sphereMode ? state.videoSphereYawOffset : 0.0f));
                     const Mat4 sphereModel = Mat4Multiply(
                         Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
-                        Mat4RotationY(sphereYaw));
+                        sphereRot);
                     const Mat4 sphereMvp = Mat4Multiply(Mat4Multiply(proj, view), sphereModel);
                     StereoParams sp = GetStereoParams(state.screenMode, eye);
                     RecordStereoFrame(state, cmd, fb, extent, mvp, proj, view, headCenter, sphereMode, sphereMvp, eye, sp);
@@ -8774,7 +9016,7 @@ void RenderFrame(AppState& state) {
                     RecordVideoFlat(state, cmd, fb, extent, mvp, proj, view, headCenter, state.activeVideoFrame);
                 }
             } else {
-                RecordFallbackQuad(state, cmd, fb, extent, mvp, proj, view, headCenter);
+                RecordFallbackQuad(state, cmd, fb, extent, fallbackMvp, proj, view, headCenter);
             }
 
             if (state.queryPool != VK_NULL_HANDLE) {
@@ -8852,12 +9094,17 @@ void RenderFrame(AppState& state) {
         uiCylinder.subImage.swapchain = state.uiPanelSwapchain.handle;
         uiCylinder.subImage.imageRect.offset = {0, 0};
         uiCylinder.subImage.imageRect.extent = {static_cast<int32_t>(kUiTexWidth), static_cast<int32_t>(kUiTexHeight)};
-        XrVector3f toHead = Vec3Sub(headCenter, scene.uiCenter);
-        toHead.y = 0.0f;
-        float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
-        float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : state.sceneYawOffset;
-        uiCylinder.pose.position = Vec3Add(scene.uiCenter, Vec3RotateY({0.0f, 0.0f, state.uiCylinderRadius}, uiYaw));
-        uiCylinder.pose.orientation = QuatFromYaw(uiYaw);
+        if (state.bedModeEnabled) {
+            uiCylinder.pose.position = Vec3Add(scene.uiCenter, vrplayer::Mat4TransformVector(scene.uiModelNoScale, {0.0f, 0.0f, state.uiCylinderRadius}));
+            uiCylinder.pose.orientation = scene.uiOrientation;
+        } else {
+            XrVector3f toHead = Vec3Sub(headCenter, scene.uiCenter);
+            toHead.y = 0.0f;
+            float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
+            float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : state.sceneYawOffset;
+            uiCylinder.pose.position = Vec3Add(scene.uiCenter, Vec3RotateY({0.0f, 0.0f, state.uiCylinderRadius}, uiYaw));
+            uiCylinder.pose.orientation = QuatFromYaw(uiYaw);
+        }
         uiCylinder.radius = state.uiCylinderRadius;
         uiCylinder.centralAngle = state.uiCylinderCentralAngle;
         uiCylinder.aspectRatio = static_cast<float>(kUiTexWidth) / static_cast<float>(kUiTexHeight);
@@ -8870,9 +9117,8 @@ void RenderFrame(AppState& state) {
         controlsCylinder.subImage.swapchain = state.controlsPanelSwapchain.handle;
         controlsCylinder.subImage.imageRect.offset = {0, 0};
         controlsCylinder.subImage.imageRect.extent = {static_cast<int32_t>(kControlsTexWidth), static_cast<int32_t>(kControlsTexHeight)};
-        Mat4 controlsRot = Mat4Multiply(Mat4RotationY(state.sceneYawOffset), Mat4RotationX(kControlsPitch));
-        controlsCylinder.pose.position = vrplayer::ComputeControlsCylinderCenter(scene.controlsCenter, state.sceneYawOffset, kControlsCylinderRadius, kControlsPitch);
-        controlsCylinder.pose.orientation = QuatFromMat4(controlsRot);
+        controlsCylinder.pose.position = vrplayer::ComputeControlsCylinderCenter3DoF(scene.controlsCenter, scene.controlsModelNoScale, kControlsCylinderRadius);
+        controlsCylinder.pose.orientation = scene.controlsOrientation;
         controlsCylinder.radius = kControlsCylinderRadius;
         controlsCylinder.centralAngle = kControlsCylinderCentralAngle;
         controlsCylinder.aspectRatio = static_cast<float>(kControlsTexWidth) / static_cast<float>(kControlsTexHeight);
@@ -8886,7 +9132,7 @@ void RenderFrame(AppState& state) {
         modalQuad.subImage.imageRect.offset = {0, 0};
         modalQuad.subImage.imageRect.extent = {static_cast<int32_t>(kModalTexWidth), static_cast<int32_t>(kModalTexHeight)};
         modalQuad.pose.position = scene.modalCenter;
-        modalQuad.pose.orientation = QuatFromYaw(scene.modalYaw);
+        modalQuad.pose.orientation = scene.modalOrientation;
         modalQuad.size = {kModalPanelScaleX, kModalPanelScaleY};
 
         // Browser panel: quad and cylinder
@@ -8898,7 +9144,7 @@ void RenderFrame(AppState& state) {
         browserQuad.subImage.imageRect.offset = {0, 0};
         browserQuad.subImage.imageRect.extent = {static_cast<int32_t>(kBrowserTexWidth), static_cast<int32_t>(kBrowserTexHeight)};
         browserQuad.pose.position = scene.browserCenter;
-        browserQuad.pose.orientation = QuatFromYaw(scene.browserYaw);
+        browserQuad.pose.orientation = scene.browserOrientation;
         browserQuad.size = {state.browserScaleX, state.browserScaleY};
 
         float browserScaleFactor = state.browserScaleX / kBrowserPanelScaleX;
@@ -8910,8 +9156,13 @@ void RenderFrame(AppState& state) {
         browserCylinder.subImage.swapchain = state.browserPanelSwapchain.handle;
         browserCylinder.subImage.imageRect.offset = {0, 0};
         browserCylinder.subImage.imageRect.extent = {static_cast<int32_t>(kBrowserTexWidth), static_cast<int32_t>(kBrowserTexHeight)};
-        browserCylinder.pose.position = Vec3Add(scene.browserCenter, Vec3RotateY({0.0f, 0.0f, cylinderRadius}, scene.browserYaw));
-        browserCylinder.pose.orientation = QuatFromYaw(scene.browserYaw);
+        if (state.bedModeEnabled) {
+            browserCylinder.pose.position = Vec3Add(scene.browserCenter, vrplayer::Mat4TransformVector(scene.browserModelNoScale, {0.0f, 0.0f, cylinderRadius}));
+            browserCylinder.pose.orientation = scene.browserOrientation;
+        } else {
+            browserCylinder.pose.position = Vec3Add(scene.browserCenter, Vec3RotateY({0.0f, 0.0f, cylinderRadius}, scene.browserYaw));
+            browserCylinder.pose.orientation = QuatFromYaw(scene.browserYaw);
+        }
         browserCylinder.radius = cylinderRadius;
         browserCylinder.centralAngle = kBrowserCylinderCentralAngle;
         browserCylinder.aspectRatio = (float)kBrowserTexWidth / (float)kBrowserTexHeight;
@@ -9009,8 +9260,12 @@ void RenderFrame(AppState& state) {
             cursorQuad.pose.orientation = uiCylinder.pose.orientation;
         } else if (state.lastHoverPanel == 2) {
             cursorQuad.pose.orientation = controlsCylinder.pose.orientation;
+        } else if (state.lastHoverPanel == 3) {
+            cursorQuad.pose.orientation = modalQuad.pose.orientation;
+        } else if (state.lastHoverPanel == 4) {
+            cursorQuad.pose.orientation = g_browserCurvedGeometry.load() ? browserCylinder.pose.orientation : browserQuad.pose.orientation;
         } else {
-            cursorQuad.pose.orientation = QuatFromYaw(state.sceneYawOffset);
+            cursorQuad.pose.orientation = state.sceneOrientation;
         }
         cursorQuad.size = {0.025f, 0.025f}; // 2.5 cm diâmetro
 
@@ -9242,6 +9497,14 @@ void DestroyAppResources(AppState& state) {
     if (state.videoVertexMemory != VK_NULL_HANDLE) {
         vkFreeMemory(state.vkDevice, state.videoVertexMemory, nullptr);
         state.videoVertexMemory = VK_NULL_HANDLE;
+    }
+    if (state.curvedVideoVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.curvedVideoVertexBuffer, nullptr);
+        state.curvedVideoVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.curvedVideoVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.curvedVideoVertexMemory, nullptr);
+        state.curvedVideoVertexMemory = VK_NULL_HANDLE;
     }
 
     // 2. Recursos do Beam
@@ -9784,6 +10047,7 @@ void android_main(android_app* app) {
     // Estagio 3: YCbCr + pipeline de video + vertex buffer de video
     CreateYcbcrAndVideoPipeline(state);
     CreateVideoVertexBuffer(state);
+    CreateCurvedVideoVertexBuffer(state);
     // Estagio 4: pipeline de UI/controles (RGBA8888 + AImageReader)
     CreateUiPipeline(state, app);
     InitCursorSwapchain(state);

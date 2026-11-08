@@ -633,6 +633,10 @@ Java_com_tucavr_VRActivity_nativeGetFoveationMode(JNIEnv*, jobject) {
 }
 
 extern std::atomic<bool> g_resetScreenPositionRequested;
+extern std::atomic<bool> g_bedModeEnabled;
+extern std::atomic<bool> g_recenterRequested;
+extern std::atomic<float> g_screenCurvature;
+extern std::atomic<bool> g_screenCurvatureDirty;
 extern std::atomic<bool> g_setScreenTransformRequested;
 extern std::atomic<float> g_requestedScreenPosX;
 extern std::atomic<float> g_requestedScreenPosY;
@@ -734,6 +738,21 @@ Java_com_tucavr_VRActivity_nativeResetScreenPosition(JNIEnv*, jobject) {
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetBedMode(JNIEnv*, jobject, jboolean enabled) {
+    g_bedModeEnabled.store(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetBedMode(JNIEnv*, jobject) {
+    return g_bedModeEnabled.load() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRecenter(JNIEnv*, jobject) {
+    g_recenterRequested.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetScreenTransform(
     JNIEnv*, jobject, jfloat posX, jfloat posY, jfloat posZ, jfloat scaleX, jfloat scaleY) {
     g_requestedScreenPosX.store(static_cast<float>(posX));
@@ -742,6 +761,17 @@ Java_com_tucavr_VRActivity_nativeSetScreenTransform(
     g_requestedScreenScaleX.store(static_cast<float>(scaleX));
     g_requestedScreenScaleY.store(static_cast<float>(scaleY));
     g_setScreenTransformRequested.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetScreenCurvature(JNIEnv*, jobject, jfloat curvature) {
+    g_screenCurvature.store(std::clamp(static_cast<float>(curvature), 0.0f, 1.0f));
+    g_screenCurvatureDirty.store(true);
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_tucavr_VRActivity_nativeGetScreenCurvature(JNIEnv*, jobject) {
+    return g_screenCurvature.load();
 }
 
 extern "C" JNIEXPORT void JNICALL

@@ -279,11 +279,13 @@ class VRControlsPresentation(
     private fun createScreenModal(): View {
         val currentEnv = activity.environmentStore.getActiveEnvironment()
         val currentT = activity.screenTransformStore.get(currentEnv)
+        isScreenCurved = activity.nativeGetScreenCurvature() > 0.05f
         return ScreenSettingsModal(
             context = context,
             currentScaleX = currentT.scaleX,
             currentDistanceZ = currentT.posZ,
             isCurved = isScreenCurved,
+            isBedMode = activity.nativeGetBedMode(),
             onScaleSelected = { scaleX ->
                 val t = activity.screenTransformStore.get(currentEnv)
                 val scaleY = scaleX * (9.0f / 16.0f)
@@ -297,13 +299,18 @@ class VRControlsPresentation(
             },
             onCurvedToggled = { curved ->
                 isScreenCurved = curved
+                activity.nativeSetScreenCurvature(if (curved) 0.5f else 0.0f)
                 activity.setBrowserGeometryMode(curved)
+            },
+            onBedModeToggled = { bedMode ->
+                activity.nativeSetBedMode(bedMode)
             },
             onRecenter = {
                 activity.screenTransformStore.reset(currentEnv)
                 val defaultT = ScreenTransformStore.getDefaultTransform(currentEnv)
                 activity.nativeSetScreenTransform(defaultT.posX, defaultT.posY, defaultT.posZ, defaultT.scaleX, defaultT.scaleY)
                 activity.nativeResetScreenPosition()
+                activity.nativeRecenter()
                 dismissOpenPopup()
             },
             onDismiss = { dismissOpenPopup() },
@@ -321,6 +328,7 @@ class VRControlsPresentation(
             },
             onResetAnchor = {
                 activity.nativeResetScreenPosition()
+                activity.nativeRecenter()
             },
             onImportEnvironment = {
                 VRActivity.openEnvironmentFilePicker(activity)

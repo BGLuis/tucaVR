@@ -1,5 +1,6 @@
 #pragma once
 
+#include "screen_layout.h"
 #include "vk_math.h"
 
 #include <algorithm>
@@ -81,6 +82,57 @@ inline float rayHitsCylinder(const Mat4 &transformNoScale, float radius, float c
     return -1.0f;
 }
 
+// Raycast hit-testing against a flat quad panel.
+// transformNoScale: rigid transformation matrix for the quad center.
+// normal: plane normal vector in world coordinates (points towards front).
+// center: quad center in world coordinates.
+// scaleX, scaleY: width and height in meters.
+// outU, outV: normalized UV texture coordinates [0, 1] at intersection.
+inline float rayHitsQuad(const Mat4 &transformNoScale, const XrVector3f &normal, const XrVector3f &center, float scaleX,
+                         float scaleY, float &outU, float &outV, const XrVector3f &rayOrigin,
+                         const XrVector3f &rayDir) {
+    float dotDir = normal.x * rayDir.x + normal.y * rayDir.y + normal.z * rayDir.z;
+    if (std::fabs(dotDir) <= 0.001f) {
+        return -1.0f;
+    }
+    XrVector3f toCenter = {center.x - rayOrigin.x, center.y - rayOrigin.y, center.z - rayOrigin.z};
+    float dotDist = toCenter.x * normal.x + toCenter.y * normal.y + toCenter.z * normal.z;
+    float t = dotDist / dotDir;
+    if (t <= 0.0f) {
+        return -1.0f;
+    }
+    XrVector3f hitWorld = {rayOrigin.x + rayDir.x * t, rayOrigin.y + rayDir.y * t, rayOrigin.z + rayDir.z * t};
+    Mat4 inv = Mat4RigidInverse(transformNoScale);
+    XrVector3f hitLoc = {
+        inv.m[0] * hitWorld.x + inv.m[4] * hitWorld.y + inv.m[8] * hitWorld.z + inv.m[12],
+        inv.m[1] * hitWorld.x + inv.m[5] * hitWorld.y + inv.m[9] * hitWorld.z + inv.m[13],
+        inv.m[2] * hitWorld.x + inv.m[6] * hitWorld.y + inv.m[10] * hitWorld.z + inv.m[14],
+    };
+    float halfX = scaleX * 0.5f;
+    float halfY = scaleY * 0.5f;
+    if (std::fabs(hitLoc.x) > halfX || std::fabs(hitLoc.y) > halfY) {
+        return -1.0f;
+    }
+    outU = (hitLoc.x / scaleX) + 0.5f;
+    outV = 0.5f - (hitLoc.y / scaleY);
+    return t;
+}
+
+// Unified raycast hit-testing for virtual screen supporting both flat quad and cylindrical curvature.
+inline float rayHitsScreen(const Mat4 &transformNoScale, const XrVector3f &normal, const XrVector3f &center,
+                           float scaleX, float scaleY, float curvature, float &outU, float &outV,
+                           const XrVector3f &rayOrigin, const XrVector3f &rayDir) {
+    if (curvature > 1e-4f) {
+        const auto params = ComputeCurvedScreenParams(curvature, scaleX, scaleY);
+        const float aspect = (scaleY > 1e-4f) ? (scaleX / scaleY) : (16.0f / 9.0f);
+        return rayHitsCylinder(transformNoScale, params.radius, params.centralAngle, aspect, outU, outV, rayOrigin,
+                               rayDir);
+    }
+    return rayHitsQuad(transformNoScale, normal, center, scaleX, scaleY, outU, outV, rayOrigin, rayDir);
+}
+
 } // namespace vrplayer
 
 using vrplayer::rayHitsCylinder;
+using vrplayer::rayHitsQuad;
+using vrplayer::rayHitsScreen;

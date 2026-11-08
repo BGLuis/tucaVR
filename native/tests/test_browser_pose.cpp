@@ -74,11 +74,32 @@ static void TestBillboardKeepsFallbackWhenHeadIsAbovePanel() {
     std::cout << "[PASS] TestBillboardKeepsFallbackWhenHeadIsAbovePanel\n";
 }
 
+static void TestBrowser3DoFRoundTrip() {
+    const XrVector3f headCenter = {0.5f, 0.8f, -1.0f};
+    const Mat4 rot = Mat4Multiply(Mat4RotationY(0.7f), Mat4RotationX(1.1f));
+    const XrVector3f local = {-0.5f, 1.3f, -2.5f};
+
+    const XrVector3f world = BrowserLocalToWorld3DoF(local, headCenter, rot);
+    const XrVector3f back = BrowserWorldToLocal3DoF(world, headCenter, rot);
+
+    assert(Near(back.x, local.x) && Near(back.y, local.y) && Near(back.z, local.z));
+
+    // When looking straight up at ceiling (+90 deg pitch)
+    const Mat4 ceilingRot = Mat4RotationX(kPi * 0.5f);
+    const XrVector3f headBed = {0.0f, 0.5f, 0.0f};
+    const XrVector3f spawnWorld = BrowserLocalToWorld3DoF(kBrowserSpawnLocalPosition, headBed, ceilingRot);
+    // Spawn local is {0, 1.5, -2.2}. When pitched up 90 deg, it must be above head at {0, 0.5 + 2.2, 0} = {0, 2.7, 0}
+    assert(Near(spawnWorld.x, 0.0f) && Near(spawnWorld.y, 2.7f) && Near(spawnWorld.z, 0.0f));
+
+    std::cout << "[PASS] TestBrowser3DoFRoundTrip\n";
+}
+
 int main() {
     TestLocalToWorldRoundTrip();
     TestSpawnIsInFrontOfTheHeadAfterRecenter();
     TestSamePanelMovesWithTheSceneWhenYawChanges();
     TestBillboardFacesTheHead();
     TestBillboardKeepsFallbackWhenHeadIsAbovePanel();
+    TestBrowser3DoFRoundTrip();
     return 0;
 }

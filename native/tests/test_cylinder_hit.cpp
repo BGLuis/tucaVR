@@ -13,6 +13,12 @@ static bool Near(float a, float b, float eps = 0.005f) {
     return std::fabs(a - b) <= eps;
 }
 
+static XrVector3f Normalize(const XrVector3f &v) {
+    float len = Vec3Length(v);
+    assert(len > 1e-6f);
+    return Vec3Scale(v, 1.0f / len);
+}
+
 static void TestUiCylinderAnglesAndUv() {
     const float radius = kUiCylinderRadius;             // 1.6m
     const float centralAngle = kUiCylinderCentralAngle; // 80 deg in radians
@@ -221,6 +227,147 @@ static void TestControlsCylinderWithPitchAndYaw() {
     std::cout << "[PASS] TestControlsCylinderWithPitchAndYaw\n";
 }
 
+static void TestRayHitsQuadAndScreenFlatEquivalence() {
+    const XrVector3f screenPos = {0.0f, 1.5f, -2.4f};
+    const Mat4 transform = Mat4Translation(screenPos.x, screenPos.y, screenPos.z);
+    const XrVector3f normal = {0.0f, 0.0f, 1.0f};
+    const float scaleX = 2.8f;
+    const float scaleY = 1.575f;
+
+    const XrVector3f rayOrigin = {0.0f, 1.5f, 0.0f};
+
+    // Center hit
+    {
+        XrVector3f rayDir = {0.0f, 0.0f, -1.0f};
+        float uQuad = 0.0f, vQuad = 0.0f;
+        float tQuad = rayHitsQuad(transform, normal, screenPos, scaleX, scaleY, uQuad, vQuad, rayOrigin, rayDir);
+
+        float uScreen = 0.0f, vScreen = 0.0f;
+        float tScreen =
+            rayHitsScreen(transform, normal, screenPos, scaleX, scaleY, 0.0f, uScreen, vScreen, rayOrigin, rayDir);
+
+        assert(tQuad > 0.0f);
+        assert(Near(tQuad, 2.4f));
+        assert(Near(uQuad, 0.5f));
+        assert(Near(vQuad, 0.5f));
+
+        assert(Near(tScreen, tQuad));
+        assert(Near(uScreen, uQuad));
+        assert(Near(vScreen, vQuad));
+    }
+
+    // Offset hits within bounds (angles ~15 deg left/right, ~10 deg up/down)
+    const float offsetsX[] = {-0.8f, 0.8f, -1.2f, 1.2f};
+    const float offsetsY[] = {-0.5f, 0.5f, -0.7f, 0.7f};
+    for (float ox : offsetsX) {
+        for (float oy : offsetsY) {
+            XrVector3f target = {ox, 1.5f + oy, -2.4f};
+            XrVector3f dir = Normalize(Vec3Sub(target, rayOrigin));
+
+            float uQuad = 0.0f, vQuad = 0.0f;
+            float tQuad = rayHitsQuad(transform, normal, screenPos, scaleX, scaleY, uQuad, vQuad, rayOrigin, dir);
+
+            float uScreen = 0.0f, vScreen = 0.0f;
+            float tScreen =
+                rayHitsScreen(transform, normal, screenPos, scaleX, scaleY, 0.0f, uScreen, vScreen, rayOrigin, dir);
+
+            assert(tQuad > 0.0f);
+            assert(Near(tScreen, tQuad, 0.005f));
+            assert(Near(uScreen, uQuad, 0.005f));
+            assert(Near(vScreen, vQuad, 0.005f));
+        }
+    }
+
+    // Out-of-bounds misses (ray pointing outside the quad)
+    {
+        XrVector3f targetMissX = {2.5f, 1.5f, -2.4f}; // past half-width 1.4m
+        XrVector3f dirMissX = Normalize(Vec3Sub(targetMissX, rayOrigin));
+        float u1 = 0, v1 = 0, u2 = 0, v2 = 0;
+        assert(rayHitsQuad(transform, normal, screenPos, scaleX, scaleY, u1, v1, rayOrigin, dirMissX) < 0.0f);
+        assert(rayHitsScreen(transform, normal, screenPos, scaleX, scaleY, 0.0f, u2, v2, rayOrigin, dirMissX) < 0.0f);
+
+        XrVector3f targetMissY = {0.0f, 1.5f + 1.2f, -2.4f}; // past half-height 0.7875m
+        XrVector3f dirMissY = Normalize(Vec3Sub(targetMissY, rayOrigin));
+        assert(rayHitsQuad(transform, normal, screenPos, scaleX, scaleY, u1, v1, rayOrigin, dirMissY) < 0.0f);
+        assert(rayHitsScreen(transform, normal, screenPos, scaleX, scaleY, 0.0f, u2, v2, rayOrigin, dirMissY) < 0.0f);
+    }
+
+    std::cout << "[PASS] TestRayHitsQuadAndScreenFlatEquivalence\n";
+}
+
+static void TestRayHitsCurvedScreenApexPreservation() {
+    const XrVector3f screenPos = {0.0f, 1.5f, -2.4f};
+    const Mat4 transform = Mat4Translation(screenPos.x, screenPos.y, screenPos.z);
+    const XrVector3f normal = {0.0f, 0.0f, 1.0f};
+    const float scaleX = 2.8f;
+    const float scaleY = 1.575f;
+
+    const XrVector3f rayOrigin = {0.0f, 1.5f, 0.0f};
+    const XrVector3f rayDir = {0.0f, 0.0f, -1.0f};
+
+    const float curvatures[] = {0.0f, 0.1f, 0.25f, 0.50f, 0.75f, 1.0f};
+    for (float c : curvatures) {
+        float outU = -1.0f;
+        float outV = -1.0f;
+        float t = rayHitsScreen(transform, normal, screenPos, scaleX, scaleY, c, outU, outV, rayOrigin, rayDir);
+
+        // Focal distance at the apex must remain strictly 2.4m for all curvatures
+        assert(t > 0.0f);
+        assert(Near(t, 2.4f, 0.005f));
+        assert(Near(outU, 0.5f, 0.005f));
+        assert(Near(outV, 0.5f, 0.005f));
+    }
+
+    std::cout << "[PASS] TestRayHitsCurvedScreenApexPreservation\n";
+}
+
+static void TestRayHitsCurvedScreenAnglesAndUv() {
+    const XrVector3f screenPos = {0.0f, 1.5f, -2.4f};
+    const Mat4 transform = Mat4Translation(screenPos.x, screenPos.y, screenPos.z);
+    const XrVector3f normal = {0.0f, 0.0f, 1.0f};
+    const float scaleX = 2.8f;
+    const float scaleY = 1.575f;
+    const float curvature = 0.50f; // 60 deg central span (+-30 deg)
+
+    const auto params = vrplayer::ComputeCurvedScreenParams(curvature, scaleX, scaleY);
+    assert(params.isCurved);
+
+    // Center of curvature in world coordinates is at (0, 1.5, -2.4 + R)
+    const XrVector3f centerOfCurvature = {0.0f, 1.5f, -2.4f + params.radius};
+
+    // Radians test angles within +-30 deg: 0 deg, +-10 deg, +-20 deg, +-28 deg
+    const float testAnglesDeg[] = {0.0f, 10.0f, -10.0f, 20.0f, -20.0f, 28.0f, -28.0f};
+    for (float deg : testAnglesDeg) {
+        float rad = deg * (kPi / 180.0f);
+        XrVector3f rayDir = {std::sin(rad), 0.0f, -std::cos(rad)};
+
+        float outU = -1.0f, outV = -1.0f;
+        float t = rayHitsScreen(transform, normal, screenPos, scaleX, scaleY, curvature, outU, outV, centerOfCurvature,
+                                rayDir);
+
+        assert(t > 0.0f);
+        assert(Near(t, params.radius, 0.01f));
+
+        float expectedU = 0.5f + (rad / params.centralAngle);
+        assert(Near(outU, expectedU, 0.005f));
+        assert(Near(outV, 0.5f, 0.005f));
+    }
+
+    // Miss outside the 60 deg span (+-32 deg, +-40 deg, +-60 deg)
+    const float missAnglesDeg[] = {31.0f, -31.0f, 35.0f, -35.0f, 50.0f, -50.0f};
+    for (float deg : missAnglesDeg) {
+        float rad = deg * (kPi / 180.0f);
+        XrVector3f rayDir = {std::sin(rad), 0.0f, -std::cos(rad)};
+
+        float outU = -1.0f, outV = -1.0f;
+        float t = rayHitsScreen(transform, normal, screenPos, scaleX, scaleY, curvature, outU, outV, centerOfCurvature,
+                                rayDir);
+        assert(t < 0.0f);
+    }
+
+    std::cout << "[PASS] TestRayHitsCurvedScreenAnglesAndUv\n";
+}
+
 int main() {
     std::cout << "--- Executando testes unitarios de cylinder_hit.h ---\n";
     TestUiCylinderAnglesAndUv();
@@ -231,6 +378,9 @@ int main() {
     TestDegenerateParameters();
     TestObserverOutsideCylinderDiameter();
     TestControlsCylinderWithPitchAndYaw();
+    TestRayHitsQuadAndScreenFlatEquivalence();
+    TestRayHitsCurvedScreenApexPreservation();
+    TestRayHitsCurvedScreenAnglesAndUv();
     std::cout << "--- Todos os testes de cylinder_hit.h passaram com sucesso! ---\n";
     return 0;
 }
