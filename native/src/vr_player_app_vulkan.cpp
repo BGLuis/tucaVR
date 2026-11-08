@@ -8368,6 +8368,74 @@ void RecordVideoFlat(
     vkCmdEndRenderPass(cmd);
 }
 
+// Direct video layer path: the screen is drawn as a transparent hole and the picture comes from the layers submitted
+// behind the projection layer. Environment, overlays and fade are drawn as in RecordVideoFlat. It serves Flat2D and
+// flat SBS/OU alike, since the hole does not depend on the stereo layout.
+void RecordVideoHole(
+    AppState& state, VkCommandBuffer cmd, VkFramebuffer framebuffer, VkExtent2D extent,
+    const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
+    clearValues[1].depthStencil = {1.0f, 0};
+
+    VkRenderPassBeginInfo renderPassBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    renderPassBegin.renderPass = state.renderPass;
+    renderPassBegin.framebuffer = framebuffer;
+    renderPassBegin.renderArea.offset = {0, 0};
+    renderPassBegin.renderArea.extent = extent;
+    renderPassBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    renderPassBegin.pClearValues = clearValues.data();
+    vkCmdBeginRenderPass(cmd, &renderPassBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport viewport{};
+    viewport.width = static_cast<float>(extent.width);
+    viewport.height = static_cast<float>(extent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{{0, 0}, extent};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    DrawSkyboxIfLoaded(state, cmd, proj, view);
+    DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
+    DrawAmbientHalo(state, cmd, proj, view, headCenter);
+
+    const bool isCurved = (state.screenCurvature > 1e-4f);
+    VkBuffer targetVb = isCurved ? state.curvedVideoVertexBuffer : state.videoVertexBuffer;
+    const uint32_t vertexCount = isCurved ? state.curvedVideoVertexCount : 4;
+
+    VkDeviceSize offset = 0;
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.videoLayer.holePipeline);
+    vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &offset);
+    QuadPushConstants holePush{};
+    holePush.mvp = mvp;
+    vkCmdPushConstants(cmd, state.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(holePush), &holePush);
+    vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+    CountDrawCall(vertexCount);
+
+    // Scrub preview over the hole, same transform as the screen.
+    if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
+        VkDeviceSize ovOffset = 0;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &ovOffset);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+            state.uiPipelineLayout, 0, 1, &state.scrubOverlayDescriptorSet, 0, nullptr);
+        UiPushConstants ovpc{};
+        ovpc.mvp = mvp;
+        ovpc.alpha = 1.0f;
+        vkCmdPushConstants(cmd, state.uiPipelineLayout,
+            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
+        vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+        CountDrawCall(vertexCount);
+    }
+
+    DrawUiQuads(state, cmd, proj, view, headCenter);
+    DrawEnvironmentFade(state, cmd);
+
+    vkCmdEndRenderPass(cmd);
+}
+
 // Estagio 5: grava o frame de video Estereo (SBS/OU) ou Esfera (360/180)
 void RecordStereoFrame(
     AppState& state, VkCommandBuffer cmd, VkFramebuffer fb, VkExtent2D extent,
@@ -8664,6 +8732,7 @@ void UpdateVideoFrame(AppState& state) {
              stopRequested ? "stop requested" : "new video session started");
         state.activeVideoFrame = nullptr;
         state.lastVideoBuffer = nullptr;
+        InvalidateVideoLayerImages(state);
         state.msSinceLastVideoFrame = 0.0f;
         state.videoStallLogged = false;
         state.videoGapHistoryCount = 0;
@@ -8732,7 +8801,6 @@ void UpdateVideoFrame(AppState& state) {
             state.videoFps = 0.0f;
             state.videoJitterMs = 0.0f;
             LOGI("Video: sem frame disponivel, mantendo ultimo frame na tela ate a proxima sessao produzir um novo");
-        InvalidateVideoLayerImages(state);
         }
         return;
     }
@@ -8761,6 +8829,7 @@ void UpdateVideoFrame(AppState& state) {
     }
 
     state.lastVideoBuffer = buffer;
+    state.videoFrameSerial++;
     state.msSinceLastVideoFrame = 0.0f;
     state.videoStallLogged = false;
     state.activeVideoFrame = GetOrImportVideoFrame(state, buffer);
@@ -8829,7 +8898,6 @@ static void CaptureFramePpm(AppState& state, VkImage srcImage, uint32_t width, u
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
     VKR(vkBeginCommandBuffer(cmd, &beginInfo));
 
-    state.videoFrameSerial++;
     VkImageMemoryBarrier barrierToSrc{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     barrierToSrc.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
     barrierToSrc.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
@@ -9136,11 +9204,17 @@ void RenderFrame(AppState& state) {
 
     std::array<XrCompositionLayerProjectionView, kEyeCount> projectionViews{};
     const bool shouldSubmitLayer = frameState.shouldRender;
-    // [0]=passthrough (Fase 0.3 Seção 2, quando ativo) + projection + ui +
-    // controls + modal + beam + cursor = 7 (alocado 8 por margem). Passthrough SEMPRE vai no indice 0
-    // (fundo) e o projection layer passa a compor com o alpha do swapchain.
-    const XrCompositionLayerBaseHeader* layers[8]{};
+    // Underlay order: passthrough (Fase 0.3 Seção 2, quando ativo), direct video layers, projection, then the UI
+    // panels, beam and cursor. vrplayer::kFrameLayerCapacity is the worst case of all of them together.
+    const XrCompositionLayerBaseHeader* layers[vrplayer::kFrameLayerCapacity]{};
     uint32_t layerCount = 0;
+    auto submitLayer = [&](const void* layer) {
+        if (layerCount < vrplayer::kFrameLayerCapacity) {
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(layer);
+        } else {
+            LOGE("xrEndFrame: dropping a composition layer, the frame already holds %u", layerCount);
+        }
+    };
     // Declarada aqui (mesmo escopo de `layers` e `endFrameInfo`) porque
     // xrEndFrame roda FORA do `if (shouldSubmitLayer)` abaixo e le os
     // ponteiros de `layers`.
@@ -9510,6 +9584,32 @@ void RenderFrame(AppState& state) {
             }
         }
 
+        // Direct video layer: flat video is converted into its own swapchains and shown as quad/cylinder layers; the
+        // eye buffer then only carries a hole where the screen is. Anything the predicate rejects keeps the eye buffer.
+        DestroyExpiredVideoLayerChains(state);
+        const vrplayer::VideoLayerLayout videoLayerLayout = vrplayer::VideoLayerLayoutForMode(state.screenMode);
+        const bool photoShown = state.photoActive && state.photoTextureReady;
+        vrplayer::DirectVideoLayerInputs directInputs;
+        directInputs.featureEnabled = g_directVideoLayerEnabled.load() && !g_captureRequested.load();
+        directInputs.screenMode = state.screenMode;
+        directInputs.hasVideoFrame = state.activeVideoFrame != nullptr;
+        directInputs.photoActive = photoShown;
+        // Chroma key and packed alpha only take effect while passthrough is active (see RecordVideoFlat/RecordStereoFrame).
+        const uint32_t effectiveChromaMode = state.passthroughActive ? get_chroma_key_enabled() : 0;
+        directInputs.chromaKeyActive = effectiveChromaMode == 1;
+        directInputs.packedAlphaActive = effectiveChromaMode >= 2;
+        directInputs.curvedScreen = isCurved;
+        directInputs.cylinderSupported = state.supportsCylinder;
+        directInputs.swapchainsReady =
+            directInputs.featureEnabled && directInputs.hasVideoFrame && !photoShown &&
+            vrplayer::IsDirectVideoLayerMode(state.screenMode) &&
+            PrepareVideoLayerChains(state, *state.activeVideoFrame, videoLayerLayout,
+                                    vrplayer::UsesPerEyeVideoLayers(videoLayerLayout, get_mono_view() != 0));
+        bool useDirectVideo = vrplayer::ShouldUseDirectVideoLayer(directInputs);
+        if (useDirectVideo) {
+            useDirectVideo = UpdateVideoLayerImages(state, *state.activeVideoFrame, videoLayerLayout);
+        }
+
         // R-07: reseta os contadores de draw call/triangulo uma vez por frame (nao por olho) —
         // agregados em AppState.lastFrameDrawCallCount/lastFrameTriangleCount ao final do loop.
         g_frameDrawCallCount = 0;
@@ -9594,7 +9694,9 @@ void RenderFrame(AppState& state) {
                 const Mat4 photoMvp = Mat4Multiply(Mat4Multiply(proj, view), pScreenModel);
                 RecordPhotoFrame(state, cmd, fb, extent, photoMvp, proj, view, headCenter, pSphere, eye, sp);
             } else if (state.activeVideoFrame != nullptr) {
-                if (sphereMode || stereoFlat) {
+                if (useDirectVideo) {
+                    RecordVideoHole(state, cmd, fb, extent, mvp, proj, view, headCenter);
+                } else if (sphereMode || stereoFlat) {
                     const Mat4 sphereRot = state.bedModeEnabled ?
                         Mat4Multiply(state.sceneOrientationMatrix, Mat4RotationY(sphereMode ? state.videoSphereYawOffset : 0.0f)) :
                         Mat4RotationY(state.sceneYawOffset + (sphereMode ? state.videoSphereYawOffset : 0.0f));
@@ -9670,7 +9772,10 @@ void RenderFrame(AppState& state) {
         // O clear dos Record* passa a usar alpha 0 (ver PassthroughEnvAlpha),
         // entao tudo que nao for desenhado (fundo ao redor do video 2D) revela
         // o mundo real; o quad/esfera de video seguem opacos (alpha 1).
-        if (state.passthroughActive) {
+        // The direct video layers need the same blend: the screen hole is alpha 0 and the video layer behind it shows
+        // through. Outside the hole the clear alpha stays 1 without passthrough (PassthroughEnvAlpha), so the
+        // surroundings remain opaque.
+        if (state.passthroughActive || useDirectVideo) {
             projectionLayer.layerFlags |= XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
         }
 
@@ -9874,38 +9979,100 @@ void RenderFrame(AppState& state) {
             modalQuad.next = &modalMqsr;
         }
 
+        // Direct video layers: one for mono content, one per eye for stereo content. The pose comes from the scene
+        // transforms (bed mode, recenter, resize and grab), the same ones the eye buffer hole is drawn with.
+        std::array<XrCompositionLayerQuad, kEyeCount> videoQuads{};
+        std::array<XrCompositionLayerCylinderKHR, kEyeCount> videoCylinders{};
+        std::array<XrCompositionLayerSettingsFB, kEyeCount> videoSettings{};
+        if (useDirectVideo) {
+            const VideoLayerState& videoLayer = state.videoLayer;
+            const vrplayer::CurvedScreenParams curvedScreen =
+                vrplayer::ComputeCurvedScreenParams(state.screenCurvature, state.screenScaleX, state.screenScaleY);
+            for (uint32_t i = 0; i < videoLayer.chainCount; i++) {
+                const EyeSwapchain& chain = videoLayer.chains[i];
+                const XrEyeVisibility visibility = videoLayer.chainCount == 1 ? XR_EYE_VISIBILITY_BOTH
+                                                   : (i == 0 ? XR_EYE_VISIBILITY_LEFT : XR_EYE_VISIBILITY_RIGHT);
+                const XrSwapchainSubImage subImage{chain.handle, {{0, 0}, {chain.width, chain.height}}, 0};
+
+                if (state.supportsMqsr) {
+                    videoSettings[i] = {XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
+                    videoSettings[i].layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SUPER_SAMPLING_BIT_FB |
+                                                  XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
+                }
+                const void* settingsChain = state.supportsMqsr ? &videoSettings[i] : nullptr;
+
+                if (isCurved) {
+                    // The cylinder is centered on its axis, one radius behind the screen apex along the screen normal
+                    // (the mesh curves towards +Z from the apex at the origin).
+                    XrCompositionLayerCylinderKHR& cylinder = videoCylinders[i];
+                    cylinder = {XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+                    cylinder.next = settingsChain;
+                    cylinder.space = state.localSpace;
+                    cylinder.eyeVisibility = visibility;
+                    cylinder.subImage = subImage;
+                    cylinder.pose.position = Vec3Add(
+                        scene.screenCenter,
+                        vrplayer::Mat4TransformVector(scene.screenModelNoScale, {0.0f, 0.0f, curvedScreen.radius}));
+                    cylinder.pose.orientation = scene.screenOrientation;
+                    cylinder.radius = curvedScreen.radius;
+                    cylinder.centralAngle = curvedScreen.centralAngle;
+                    cylinder.aspectRatio = curvedScreen.arcLength / curvedScreen.height;
+                } else {
+                    XrCompositionLayerQuad& quad = videoQuads[i];
+                    quad = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+                    quad.next = settingsChain;
+                    quad.space = state.localSpace;
+                    quad.eyeVisibility = visibility;
+                    quad.subImage = subImage;
+                    quad.pose.position = scene.screenCenter;
+                    quad.pose.orientation = scene.screenOrientation;
+                    quad.size = {state.screenScaleX, state.screenScaleY};
+                }
+            }
+        }
+
         // Fase 0.3 Seção 2: passthrough é o PRIMEIRO layer (fundo), antes do
         // projection. Só entra quando a layer está efetivamente resumed.
         if (state.passthroughActive && state.passthroughLayer != XR_NULL_HANDLE) {
             passthroughLayerComp.flags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
             passthroughLayerComp.space = XR_NULL_HANDLE; // não usado p/ RECONSTRUCTION
             passthroughLayerComp.layerHandle = state.passthroughLayer;
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&passthroughLayerComp);
+            submitLayer(&passthroughLayerComp);
         }
 
-        layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projectionLayer);
+        if (useDirectVideo) {
+            for (uint32_t i = 0; i < state.videoLayer.chainCount; i++) {
+                if (isCurved) {
+                    submitLayer(&videoCylinders[i]);
+                } else {
+                    submitLayer(&videoQuads[i]);
+                }
+            }
+        }
+
+        submitLayer(&projectionLayer);
 
         if (state.uiHasFrame && state.uiAlpha > 0.05f) {
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&uiCylinder);
+            submitLayer(&uiCylinder);
         }
         if (state.browserHasFrame && state.browserActive) {
             if (g_browserCurvedGeometry.load()) {
-                layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&browserCylinder);
+                submitLayer(&browserCylinder);
             } else {
-                layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&browserQuad);
+                submitLayer(&browserQuad);
             }
         }
         if (state.controlsHasFrame && state.controlsAlpha > 0.05f) {
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&controlsCylinder);
+            submitLayer(&controlsCylinder);
         }
         if (state.modalHasFrame && state.modalAlpha > 0.05f) {
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&modalQuad);
+            submitLayer(&modalQuad);
         }
         if (beamActive) {
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&beamQuad);
+            submitLayer(&beamQuad);
         }
         if (state.cursorDotVisible && state.hasRay) {
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cursorQuad);
+            submitLayer(&cursorQuad);
         }
     }
 
@@ -10024,6 +10191,7 @@ void PollXrEvents(AppState& state) {
                     on_app_focus_lost();
                     OXR(xrEndSession(state.session));
                     state.sessionRunning = false;
+                    InvalidateVideoLayerImages(state);
                     break;
                 case XR_SESSION_STATE_EXITING:
                 case XR_SESSION_STATE_LOSS_PENDING:
@@ -10191,7 +10359,6 @@ void DestroyAppResources(AppState& state) {
     if (state.subtitleVertexBuffer != VK_NULL_HANDLE) {
         vkDestroyBuffer(state.vkDevice, state.subtitleVertexBuffer, nullptr);
         state.subtitleVertexBuffer = VK_NULL_HANDLE;
-                    InvalidateVideoLayerImages(state);
     }
     if (state.subtitleVertexMemory != VK_NULL_HANDLE) {
         vkFreeMemory(state.vkDevice, state.subtitleVertexMemory, nullptr);
@@ -10360,6 +10527,9 @@ void DestroyAppResources(AppState& state) {
         state.pipelineLayout = VK_NULL_HANDLE;
     }
 
+    // Direct video layer: swapchains, conversion pass and hole pipeline
+    DestroyVideoLayerResources(state);
+
     // 9. Framebuffers e ImageViews dos olhos (e Depth / MSAA buffers)
     for (auto& eyeChain : state.eyes) {
         for (auto framebuffer : eyeChain.framebuffers) {
@@ -10527,9 +10697,6 @@ void DestroyAppResources(AppState& state) {
 void android_main(android_app* app) {
     // C-04: Reset defensivo de estado global na inicialização (cold start ou reabertura de processo em cache)
     reset_process_state();
-    // Direct video layer: swapchains, conversion pass and hole pipeline
-    DestroyVideoLayerResources(state);
-
     ResetGlobalState();
 
     AppState state;
@@ -10644,6 +10811,7 @@ void android_main(android_app* app) {
     CreateYcbcrAndVideoPipeline(state);
     CreateVideoVertexBuffer(state);
     CreateCurvedVideoVertexBuffer(state);
+    CreateVideoLayerResources(state);
     // Estagio 4: pipeline de UI/controles (RGBA8888 + AImageReader)
     CreateUiPipeline(state, app);
     InitCursorSwapchain(state);
@@ -10731,4 +10899,3 @@ void android_main(android_app* app) {
         }
     }
 }
-    CreateVideoLayerResources(state);
