@@ -29,7 +29,7 @@ suppaftp = { version = "12", default-features = false }
 # armadilha no doc (secao 6, aviso "libssh2 cross-compile"). Async/tokio por
 # baixo, igual ao cliente SMB (ver smb/mod.rs) — ponte pro FFmpeg custom I/O
 # sincrono via block_on por chamada, mesmo padrao.
-russh = "0.64"
+russh = "0.65"
 russh-sftp = "3.0.1"
 # `join_all` para disparar sub-leituras de um mesmo read_range CONCORRENTEMENTE
 # sobre a mesma sessao SMB/SFTP (ambas as crates multiplexam por MessageId/
