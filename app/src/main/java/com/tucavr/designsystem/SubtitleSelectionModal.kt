@@ -11,6 +11,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.tucavr.R
+import com.tucavr.filebrowser.TrackInfo
 import com.tucavr.filebrowser.TrackKind
 
 /**
@@ -23,6 +24,52 @@ data class SubtitleTrackItem(
     val isExternal: Boolean = false,
     val codec: String = "",
 )
+
+/**
+ * Parses wire format lines from Rust bridge into a list of [SubtitleTrackItem].
+ * If wire is empty/null, falls back to [fallbackTracks] or trackCount.
+ */
+fun parseSubtitleWire(
+    wire: String?,
+    trackCount: Int = 0,
+    fallbackTracks: List<TrackInfo> = emptyList(),
+): List<SubtitleTrackItem> {
+    val items = mutableListOf<SubtitleTrackItem>()
+    if (!wire.isNullOrBlank()) {
+        wire.lines().forEachIndexed { index, line ->
+            if (line.isBlank()) return@forEachIndexed
+            val parts = line.split('\t')
+            if (parts.size >= 3) {
+                val lang = parts[0]
+                val title = parts[1]
+                val isExternal = parts[2] == "1"
+                items.add(
+                    SubtitleTrackItem(
+                        index = index,
+                        language = lang,
+                        title = title,
+                        isExternal = isExternal,
+                    ),
+                )
+            }
+        }
+    }
+    if (items.isEmpty() && trackCount > 0) {
+        for (i in 0 until trackCount) {
+            val track = fallbackTracks.getOrNull(i)
+            items.add(
+                SubtitleTrackItem(
+                    index = i,
+                    language = track?.language ?: "",
+                    title = track?.title ?: "",
+                    isExternal = false,
+                    codec = track?.codec ?: "",
+                ),
+            )
+        }
+    }
+    return items
+}
 
 /**
  * Floating modal for selecting subtitle tracks and fine-tuning synchronization offset.

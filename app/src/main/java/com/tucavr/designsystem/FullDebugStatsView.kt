@@ -358,7 +358,7 @@ class FullDebugStatsView(
     ) {
         val stats = DebugStatsParser.parse(text) ?: return
         val videoTrack = meta?.videoTracks?.firstOrNull()
-        val audioTrack = meta?.audioTracks?.firstOrNull()
+        val audioTrack = meta?.audioTracks?.getOrNull(stats.audioTrackIndex) ?: meta?.audioTracks?.firstOrNull()
 
         // 1. Vídeo
         val bottleneckText =
