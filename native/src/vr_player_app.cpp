@@ -107,6 +107,7 @@ extern "C" {
     extern char* probe_http_url(const char* url);
     extern void free_rust_string(char* ptr);
     extern char* take_last_playback_error();
+    extern void request_audio_reopen();
 
     // T6.4: FTP — mesmo padrao de start_smb_playback/smb_list_directory
     // (credenciais como parametros separados, nunca uma URI unica cruzando
@@ -522,6 +523,11 @@ Java_com_tucavr_VRActivity_nativeTakeLastPlaybackError(JNIEnv* env, jobject thiz
     jstring result = env->NewStringUTF(rustStr);
     free_rust_string(rustStr);
     return result;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRequestAudioReopen(JNIEnv* env, jobject thiz) {
+    request_audio_reopen();
 }
 
 extern "C" JNIEXPORT void JNICALL

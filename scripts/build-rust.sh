@@ -174,7 +174,7 @@ fi
 
 # Ensure pkg-config files reflect the current path (handles moved or renamed repos)
 for pc in "$FFMPEG_MAKER_DIR"/build/ffmpeg/arm64-v8a/lib/pkgconfig/*.pc; do
-    [[ -f "$pc" ]] || continue
+    [[ -f "$pc" && -w "$pc" ]] || continue
     sed -i \
         -e "s|^prefix=.*|prefix=$FFMPEG_MAKER_DIR/build/ffmpeg/arm64-v8a|" \
         -e 's|^libdir=.*|libdir=${prefix}/lib|' \

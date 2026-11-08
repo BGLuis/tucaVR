@@ -57,6 +57,7 @@ static CONTROLLER: Lazy<Arc<Mutex<PlaybackController>>> = Lazy::new(|| {
     log::set_max_level(log::LevelFilter::Info);
     // Sem isto, panic em thread de fundo morre silencioso: stderr nao vai pro logcat neste app.
     std::panic::set_hook(Box::new(|info| log::error!("PANIC: {info}")));
+    core::log::set_error_callback(set_last_playback_error);
     Arc::new(Mutex::new(PlaybackController::new()))
 });
 
@@ -2585,6 +2586,13 @@ pub extern "C" fn cycle_audio_track() {
             controller.cycle_audio_track();
         }
     });
+}
+
+#[no_mangle]
+pub extern "C" fn request_audio_reopen() {
+    if let Ok(controller) = CONTROLLER.lock() {
+        controller.request_audio_reopen();
+    }
 }
 
 #[no_mangle]

@@ -8,6 +8,21 @@ use std::sync::RwLock;
 
 static TAG: &CStr = c"VRPlayer_Rust";
 static SESSION_ID: RwLock<Option<String>> = RwLock::new(None);
+static ERROR_CALLBACK: RwLock<Option<Box<dyn Fn(String) + Send + Sync>>> = RwLock::new(None);
+
+pub fn set_error_callback<F: Fn(String) + Send + Sync + 'static>(cb: F) {
+    if let Ok(mut lock) = ERROR_CALLBACK.write() {
+        *lock = Some(Box::new(cb));
+    }
+}
+
+pub fn report_playback_error(msg: String) {
+    if let Ok(lock) = ERROR_CALLBACK.read() {
+        if let Some(cb) = lock.as_ref() {
+            cb(msg);
+        }
+    }
+}
 
 /// Define o identificador de sessão ativo para correlacionar logs.
 pub fn set_session_id(id: Option<String>) {

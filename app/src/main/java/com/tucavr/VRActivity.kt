@@ -9,6 +9,9 @@ import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -263,6 +266,26 @@ class VRActivity : NativeActivity() {
         }
     }
 
+    // #171: Notifica o motor nativo quando novos dispositivos de saída de áudio
+    // (fones Bluetooth, etc.) são conectados no meio da reprodução.
+    // Debounce de 500ms para evitar disparos repetidos quando o Android reporta
+    // múltiplos perfis (ex.: A2DP e LE Audio) do mesmo dispositivo.
+    private var lastAudioReopenRequestTimeMs = 0L
+
+    private val audioDeviceCallback =
+        object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+                super.onAudioDevicesAdded(addedDevices)
+                if (addedDevices?.any { it.isSink } == true) {
+                    val now = android.os.SystemClock.uptimeMillis()
+                    if (now - lastAudioReopenRequestTimeMs >= 500L) {
+                        lastAudioReopenRequestTimeMs = now
+                        nativeRequestAudioReopen()
+                    }
+                }
+            }
+        }
+
     // Ferramenta de debug (ver docs/DEBUGGING.md): troca o ScreenMode de um
     // video JA tocando sem precisar reiniciar o app/relançar o intent, ex.
     // `adb shell am broadcast -a com.tucavr.debug.SET_SCREEN_MODE --ei screen_mode 6`
@@ -409,6 +432,9 @@ class VRActivity : NativeActivity() {
         com.tucavr.designsystem.VoidTheme.init(this)
 
         applyTaskDescription()
+
+        (getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
+            ?.registerAudioDeviceCallback(audioDeviceCallback, null)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (!Environment.isExternalStorageManager()) {
@@ -588,6 +614,9 @@ class VRActivity : NativeActivity() {
     }
 
     override fun onDestroy() {
+        (getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
+            ?.unregisterAudioDeviceCallback(audioDeviceCallback)
+
         // R-02: Para o vídeo e decodificadores/áudio nativos antes do teardown nativo
         stopPlayback()
 
@@ -1741,6 +1770,8 @@ class VRActivity : NativeActivity() {
     external fun nativeSetSpeed(speed: Float)
 
     external fun nativeCycleAudioTrack()
+
+    external fun nativeRequestAudioReopen()
 
     // T1.4/T1.5: modo de exibicao 3D (ver ScreenMode em
     // native/src/vr_player_app.cpp e a codificacao em rust/bridge/src/lib.rs)

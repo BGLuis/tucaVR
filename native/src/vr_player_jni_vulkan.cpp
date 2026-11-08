@@ -115,6 +115,7 @@ extern "C" {
     extern uint32_t get_active_subtitle_text(char* out_buf, size_t max_len);
     extern void set_preferred_subtitle_language(const char* lang); // T7.6
     extern char* take_last_playback_error();
+    extern void request_audio_reopen();
     extern void free_rust_string(char* s);
     extern char* probe_http_url(const char* url);
     // Download Offline (Fase 0.4 Seção 4)
@@ -544,6 +545,11 @@ Java_com_tucavr_VRActivity_nativeTakeLastPlaybackError(JNIEnv* env, jobject) {
     jstring result = env->NewStringUTF(rustStr);
     free_rust_string(rustStr);
     return result;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRequestAudioReopen(JNIEnv*, jobject) {
+    request_audio_reopen();
 }
 
 extern "C" JNIEXPORT void JNICALL
