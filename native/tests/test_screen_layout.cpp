@@ -258,17 +258,14 @@ static void TestCurvedScreenParamsCalculation() {
     using vrplayer::kCurvatureGentle;
     using vrplayer::kCurvatureModerate;
     using vrplayer::kMaxScreenCurvatureAngle;
-    using vrplayer::ScreenCurvaturePreset;
-    using vrplayer::ScreenCurvaturePresetValue;
 
     const float w = 2.8f;
     const float h = 1.575f;
 
-    // Presets mapping
-    assert(Near(ScreenCurvaturePresetValue(ScreenCurvaturePreset::Flat), 0.0f));
-    assert(Near(ScreenCurvaturePresetValue(ScreenCurvaturePreset::Gentle), kCurvatureGentle));
-    assert(Near(ScreenCurvaturePresetValue(ScreenCurvaturePreset::Moderate), kCurvatureModerate));
-    assert(Near(ScreenCurvaturePresetValue(ScreenCurvaturePreset::Deep), kCurvatureDeep));
+    // Curvature constants verification
+    assert(Near(kCurvatureGentle, 0.25f));
+    assert(Near(kCurvatureModerate, 0.50f));
+    assert(Near(kCurvatureDeep, 0.85f));
 
     // Curvature = 0 (Flat)
     {

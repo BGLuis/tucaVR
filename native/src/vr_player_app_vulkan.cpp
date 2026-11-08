@@ -1236,6 +1236,8 @@ struct AppState {
     bool photoActive = false;
     uint32_t photoTexWidth = 0;
     uint32_t photoTexHeight = 0;
+    uint32_t photoWidth = 0;
+    uint32_t photoHeight = 0;
     ScreenMode photoScreenMode = ScreenMode::Flat2D;
 
     // Estagio 5 — BeamRenderer: linha simples de laser do controller.
@@ -2888,6 +2890,12 @@ void CreateCurvedVideoVertexBuffer(AppState& state) {
     state.curvedVideoVertexCount = 0;
 }
 
+void WaitForAllFences(AppState& state) {
+    if (state.vkDevice != VK_NULL_HANDLE && state.inFlightFences[0] != VK_NULL_HANDLE) {
+        vkWaitForFences(state.vkDevice, AppState::kMaxFramesInFlight, state.inFlightFences, VK_TRUE, 1000000000ULL);
+    }
+}
+
 void UpdateCurvedScreenVertexBuffer(AppState& state) {
     if (state.curvedVideoVertexBuffer == VK_NULL_HANDLE || state.curvedVideoVertexMemory == VK_NULL_HANDLE) {
         return;
@@ -2903,6 +2911,8 @@ void UpdateCurvedScreenVertexBuffer(AppState& state) {
         state.screenCurvature, state.screenScaleX, state.screenScaleY);
     std::vector<vrplayer::ScreenVertex> vertices;
     vrplayer::GenerateCurvedScreenVertices(params, vertices, vrplayer::kCurvedScreenSlices);
+
+    WaitForAllFences(state);
 
     void* mapped = nullptr;
     const VkDeviceSize copySize = vertices.size() * sizeof(vrplayer::ScreenVertex);
@@ -4449,6 +4459,8 @@ static void DestroyPhotoTexture(AppState& state) {
     }
     state.photoTexWidth = 0;
     state.photoTexHeight = 0;
+    state.photoWidth = 0;
+    state.photoHeight = 0;
     state.photoTextureReady = false;
 }
 
@@ -4458,6 +4470,8 @@ static void EnsurePhotoTexture(AppState& state, uint32_t width, uint32_t height)
         CreateUiImage(state, width, height, state.photoImage, state.photoImageMemory, state.photoImageView);
         state.photoTexWidth = width;
         state.photoTexHeight = height;
+        state.photoWidth = width;
+        state.photoHeight = height;
         state.photoTextureReady = true;
 
         VkDescriptorImageInfo imgInfo{};
@@ -8068,7 +8082,6 @@ void UpdateVideoFrame(AppState& state) {
         state.controlsAlpha = 0.0f;
         state.controlsIdleTime = kUiAutoHideSeconds;
         ClearVideoImageCache(state);
-        state.userCustomScreenScale = false;
         state.lastAspectVideoWidth = 0;
         state.lastAspectVideoHeight = 0;
         if (newSessionRequested) {
@@ -8078,6 +8091,7 @@ void UpdateVideoFrame(AppState& state) {
             state.videoStallCount = 0;
             std::fill(std::begin(state.frameTimeHistogram), std::end(state.frameTimeHistogram), 0u);
         } else if (stopRequested) {
+            state.userCustomScreenScale = false;
             state.hasActiveMedia = false;
             state.videoWidth = 0;
             state.videoHeight = 0;
@@ -8162,6 +8176,10 @@ void UpdateVideoFrame(AppState& state) {
     if (state.activeVideoFrame == nullptr) {
         LOGE("Video: GetOrImportVideoFrame falhou para o buffer %p — frame sera ignorado (fallback quad solido)", (void*)buffer);
     } else {
+        // Content aspect ratio is derived directly from AHardwareBuffer dimensions.
+        // Streams with Sample Aspect Ratio (SAR) != 1:1 or non-zero container crop rectangles
+        // are currently displayed at raw buffer aspect ratio without SAR stretching.
+        // Tracking full SAR / crop rectangle metadata propagation from demuxer: Issue #176.
         state.videoWidth = state.activeVideoFrame->width;
         state.videoHeight = state.activeVideoFrame->height;
         ApplyDynamicAspectRatio(state);
@@ -8560,10 +8578,7 @@ void RenderFrame(AppState& state) {
         if (poseValidForCalibration && (state.needsOsRecenter || !state.sceneCalibrated)) {
             const auto res = vrplayer::ComputeRecenter(
                 state.bedModeEnabled, views[0].pose.orientation, headCenter, 1.5f);
-            state.sceneYawOffset = res.yawOffset;
-            state.sceneOrientation = res.orientation;
-            state.sceneOrientationMatrix = res.orientationMatrix;
-            state.sceneTranslationOffset = res.translationOffset;
+            vrplayer::ApplyRecenter(state, res);
             state.needsOsRecenter = false;
             state.sceneCalibrated = true;
             LOGI("Recenter (OS/calib): bedMode=%d, yaw=%.2f deg, pitch=%.2f deg",
@@ -8659,8 +8674,8 @@ void RenderFrame(AppState& state) {
 
         if (state.envTransitionPhase == EnvironmentTransitionPhase::GPU_SWAP) {
             state.envTransitionAlpha = 1.0f;
-            // Sincroniza apenas com as fences dos quadros em voo (< 1ms), sem vkDeviceWaitIdle
-            vkWaitForFences(state.vkDevice, AppState::kMaxFramesInFlight, state.inFlightFences, VK_TRUE, 1000000000ULL);
+            // Synchronize with in-flight frame fences (< 1ms) without calling vkDeviceWaitIdle
+            WaitForAllFences(state);
 
             ApplyLoadedEnvironment(state, state.envLoadedData);
             state.envLoadedData = CpuEnvironmentData{};
@@ -8754,7 +8769,7 @@ void RenderFrame(AppState& state) {
             }
         }
 
-        // Processa upload ou limpeza de foto estática (Fase 0.3 Seção 8)
+        // Process static photo upload or cleanup (Phase 0.3 Section 8)
         if (g_photoDirty.exchange(false)) {
             bool active = g_photoActive.load();
             if (active) {
@@ -8772,6 +8787,8 @@ void RenderFrame(AppState& state) {
                     UpdateUiImageFromBytes(state, rgba.data(), w, h, state.photoImage);
                     state.photoActive = true;
                     state.photoScreenMode = static_cast<ScreenMode>(sm);
+                    state.photoWidth = w;
+                    state.photoHeight = h;
                     state.lastAspectVideoWidth = 0;
                     state.lastAspectVideoHeight = 0;
                     const auto fit = vrplayer::CalculateVideoFitBounds(
@@ -8785,6 +8802,8 @@ void RenderFrame(AppState& state) {
                 }
             } else {
                 state.photoActive = false;
+                state.photoWidth = 0;
+                state.photoHeight = 0;
                 DestroyPhotoTexture(state);
                 state.lastAspectVideoWidth = 0;
                 state.lastAspectVideoHeight = 0;

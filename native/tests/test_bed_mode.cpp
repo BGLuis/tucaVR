@@ -28,6 +28,19 @@ static bool Mat4Near(const Mat4 &a, const Mat4 &b, float eps = kEpsilon) {
     return true;
 }
 
+static bool QuatMatchesMatrix(const XrQuaternionf &q, const Mat4 &m, float eps = 1e-3f) {
+    Mat4 qMat = Mat4FromXrPose(XrPosef{q, {0.0f, 0.0f, 0.0f}});
+    for (int col = 0; col < 3; ++col) {
+        for (int row = 0; row < 3; ++row) {
+            int idx = col * 4 + row;
+            if (!FloatNear(qMat.m[idx], m.m[idx], eps)) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 static bool IsMatrixOrthonormal(const Mat4 &m, float eps = kEpsilon) {
     // Check that columns are unit length and orthogonal
     for (int col1 = 0; col1 < 3; ++col1) {
@@ -65,6 +78,7 @@ static void TestRecenterYawOnlyInvariants() {
     assert(FloatNear(res.yawOffset, yaw));
     assert(FloatNear(res.pitchOffset, pitch));
     assert(Mat4Near(res.orientationMatrix, Mat4RotationY(yaw)));
+    assert(QuatMatchesMatrix(res.orientation, res.orientationMatrix));
     assert(FloatNear(res.translationOffset.x, 1.0f));
     assert(FloatNear(res.translationOffset.y, 0.3f)); // 1.8 - 1.5
     assert(FloatNear(res.translationOffset.z, -0.5f));
@@ -94,6 +108,7 @@ static void TestRecenter3DoFBedModeLookingStraightUpAtCeiling() {
 
     assert(FloatNear(res.pitchOffset, kHalfPi));
     assert(IsMatrixOrthonormal(res.orientationMatrix));
+    assert(QuatMatchesMatrix(res.orientation, res.orientationMatrix));
 
     // Forward direction must point straight up toward the ceiling (0, 1, 0)
     XrVector3f fwd = ExtractForwardVector(res.orientationMatrix);
@@ -151,6 +166,7 @@ static void TestRecenter3DoFArbitraryRecline() {
     RecenterResult res = ComputeRecenter(true, headOrientation, headPos, 1.5f);
 
     assert(IsMatrixOrthonormal(res.orientationMatrix));
+    assert(QuatMatchesMatrix(res.orientation, res.orientationMatrix));
 
     XrVector3f baseScreenPos = {0.0f, 1.5f, -2.4f};
     XrVector3f worldScreenPos = BasePointToWorld(baseScreenPos, headPos, res.orientationMatrix);
@@ -321,6 +337,65 @@ static void TestRaycastControlsCylinderInBedMode() {
     std::cout << "[PASS] TestRaycastControlsCylinderInBedMode\n";
 }
 
+static void TestOrientationQuaternionMatchesMatrix() {
+    // 1. Identity orientation
+    {
+        RecenterResult res = ComputeRecenter(true, {0.0f, 0.0f, 0.0f, 1.0f}, {0.0f, 1.5f, 0.0f}, 1.5f);
+        assert(QuatMatchesMatrix(res.orientation, res.orientationMatrix));
+    }
+    // 2. Ceiling gaze (+90 deg pitch)
+    {
+        XrQuaternionf qCeil = QuatFromMat4(Mat4RotationX(1.5707963f));
+        RecenterResult res = ComputeRecenter(true, qCeil, {0.0f, 0.5f, 0.0f}, 1.5f);
+        assert(QuatMatchesMatrix(res.orientation, res.orientationMatrix));
+    }
+    // 3. Floor gaze (-90 deg pitch)
+    {
+        XrQuaternionf qFloor = QuatFromMat4(Mat4RotationX(-1.5707963f));
+        RecenterResult res = ComputeRecenter(true, qFloor, {0.0f, 1.5f, 0.0f}, 1.5f);
+        assert(QuatMatchesMatrix(res.orientation, res.orientationMatrix));
+    }
+    // 4. Multiple pitch/yaw sweep
+    for (float yaw = -3.0f; yaw <= 3.0f; yaw += 1.0f) {
+        for (float pitch = -1.4f; pitch <= 1.4f; pitch += 0.7f) {
+            Mat4 rot = Mat4Multiply(Mat4RotationY(yaw), Mat4RotationX(pitch));
+            XrQuaternionf q = QuatFromMat4(rot);
+            RecenterResult resBed = ComputeRecenter(true, q, {1.0f, 2.0f, 3.0f}, 1.5f);
+            assert(QuatMatchesMatrix(resBed.orientation, resBed.orientationMatrix));
+            RecenterResult resCinema = ComputeRecenter(false, q, {1.0f, 2.0f, 3.0f}, 1.5f);
+            assert(QuatMatchesMatrix(resCinema.orientation, resCinema.orientationMatrix));
+        }
+    }
+    std::cout << "[PASS] TestOrientationQuaternionMatchesMatrix\n";
+}
+
+static void TestApplyRecenterHelper() {
+    struct DummyAppState {
+        float sceneYawOffset = 0.0f;
+        XrQuaternionf sceneOrientation{};
+        Mat4 sceneOrientationMatrix{};
+        XrVector3f sceneTranslationOffset{};
+    } state;
+
+    RecenterResult res{};
+    res.yawOffset = 1.234f;
+    res.orientation = {0.1f, 0.2f, 0.3f, 0.9f};
+    res.orientationMatrix = Mat4RotationY(1.234f);
+    res.translationOffset = {1.0f, 2.0f, 3.0f};
+
+    ApplyRecenter(state, res);
+
+    assert(FloatNear(state.sceneYawOffset, res.yawOffset));
+    assert(FloatNear(state.sceneOrientation.x, res.orientation.x));
+    assert(FloatNear(state.sceneOrientation.y, res.orientation.y));
+    assert(FloatNear(state.sceneOrientation.z, res.orientation.z));
+    assert(FloatNear(state.sceneOrientation.w, res.orientation.w));
+    assert(Mat4Near(state.sceneOrientationMatrix, res.orientationMatrix));
+    assert(Vec3Near(state.sceneTranslationOffset, res.translationOffset));
+
+    std::cout << "[PASS] TestApplyRecenterHelper\n";
+}
+
 int main() {
     std::cout << "--- Executing unit tests for bed_mode.h ---\n";
     TestRecenterYawOnlyInvariants();
@@ -330,6 +405,8 @@ int main() {
     TestSingularitiesAndGimbalLockResistance();
     TestControlsPoseBedMode();
     TestRaycastControlsCylinderInBedMode();
+    TestOrientationQuaternionMatchesMatrix();
+    TestApplyRecenterHelper();
     std::cout << "--- All bed_mode.h unit tests passed successfully! ---\n";
     return 0;
 }

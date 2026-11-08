@@ -137,9 +137,16 @@ inline void UpdateBrowserPose(AppState& state) {
 inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVector3f& headCenter) {
     SceneTransforms t{};
 
-    // UI: billboard - sempre virado pra cabeca
+    // Anchor position: in Bed Mode (3DoF reclined), anchor is dynamically tracked to user's head position.
+    // In standard cinema mode (bedModeEnabled == false), anchor is rigidly fixed at the recentered world position,
+    // preserving natural 6DoF head parallax relative to the virtual theater room.
+    const XrVector3f sceneAnchor = state.bedModeEnabled
+        ? headCenter
+        : Vec3Add(state.sceneTranslationOffset, {0.0f, 1.5f, 0.0f});
+
+    // UI: billboard - always facing the head
     XrVector3f baseUiPos = {0.0f, 1.36f, -state.uiCylinderRadius};
-    XrVector3f worldUiPos = vrplayer::BasePointToWorld(baseUiPos, headCenter, state.sceneOrientationMatrix);
+    XrVector3f worldUiPos = vrplayer::BasePointToWorld(baseUiPos, sceneAnchor, state.sceneOrientationMatrix);
     XrVector3f toHead = Vec3Sub(headCenter, worldUiPos);
     toHead.y = 0.0f;
     float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
@@ -150,8 +157,8 @@ inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVec
     t.uiNormal = vrplayer::Mat4TransformVector(uiRot, {0.0f, 0.0f, 1.0f});
     t.uiOrientation = QuatFromMat4(uiRot);
 
-    // Controles: segue a orientacao da cena (recenter) mais uma inclinacao fixa.
-    XrVector3f worldControlsPos = vrplayer::ComputeControlsCenter3DoF(headCenter, state.sceneOrientationMatrix, kBaseControlsPos);
+    // Controls: follows scene orientation (recenter) plus fixed pitch
+    XrVector3f worldControlsPos = vrplayer::ComputeControlsCenter3DoF(sceneAnchor, state.sceneOrientationMatrix, kBaseControlsPos);
     Mat4 controlsRot = vrplayer::ComputeControlsRotation3DoF(state.sceneOrientationMatrix, kControlsPitch);
     t.controlsModelNoScale = Mat4Multiply(Mat4Translation(worldControlsPos.x, worldControlsPos.y, worldControlsPos.z), controlsRot);
     t.controlsCenter = worldControlsPos;
@@ -159,8 +166,8 @@ inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVec
     t.controlsNormal = vrplayer::Mat4TransformVector(state.sceneOrientationMatrix, pitchedNormal);
     t.controlsOrientation = QuatFromMat4(controlsRot);
 
-    // Modal (3o Quad frontal): alinhado com a tela de video e controles no centro da cena,
-    // ou ancorado em azimute lateral (~38°) quando modalDocked estiver ativo (#99).
+    // Modal (3rd front quad): aligned with video screen and controls at scene center,
+    // or docked at lateral azimuth (~38 deg) when modalDocked is active (#99).
     XrVector3f localModalPos = kBaseModalPos;
     float modalYaw = state.sceneYawOffset;
     Mat4 modalRot = state.sceneOrientationMatrix;
@@ -170,7 +177,7 @@ inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVec
         modalYaw = state.sceneYawOffset - rad;
         modalRot = Mat4Multiply(state.sceneOrientationMatrix, Mat4RotationY(-rad));
     }
-    XrVector3f worldModalPos = vrplayer::BasePointToWorld(localModalPos, headCenter, state.sceneOrientationMatrix);
+    XrVector3f worldModalPos = vrplayer::BasePointToWorld(localModalPos, sceneAnchor, state.sceneOrientationMatrix);
     t.modalModelNoScale = Mat4Multiply(
         Mat4Translation(worldModalPos.x, worldModalPos.y, worldModalPos.z),
         modalRot
@@ -180,16 +187,16 @@ inline SceneTransforms ComputeSceneTransforms(const AppState& state, const XrVec
     t.modalYaw = modalYaw;
     t.modalOrientation = QuatFromMat4(modalRot);
 
-    // Tela virtual: posicao/escala ajustaveis via thumbstick (Estagio 6).
-    XrVector3f worldScreenPos = vrplayer::BasePointToWorld(state.screenPosition, headCenter, state.sceneOrientationMatrix);
+    // Virtual screen: position and scale adjustable via thumbstick (Stage 6)
+    XrVector3f worldScreenPos = vrplayer::BasePointToWorld(state.screenPosition, sceneAnchor, state.sceneOrientationMatrix);
     t.screenModelNoScale = Mat4Multiply(Mat4Translation(worldScreenPos.x, worldScreenPos.y, worldScreenPos.z), state.sceneOrientationMatrix);
     t.screenCenter = worldScreenPos;
     t.screenNormal = vrplayer::Mat4TransformVector(state.sceneOrientationMatrix, {0.0f, 0.0f, 1.0f});
     t.screenOrientation = state.sceneOrientation;
 
-    // Navegador: posicao em coordenadas da cena (acompanha o recenter)
+    // Browser: position in scene coordinates (follows recenter)
     const XrVector3f browserLocal = state.browserPoseInitialized ? state.browserPosition : vrplayer::kBrowserSpawnLocalPosition;
-    t.browserCenter = vrplayer::BrowserLocalToWorld3DoF(browserLocal, headCenter, state.sceneOrientationMatrix);
+    t.browserCenter = vrplayer::BrowserLocalToWorld3DoF(browserLocal, sceneAnchor, state.sceneOrientationMatrix);
     t.browserYaw = vrplayer::BillboardYaw(t.browserCenter, headCenter, state.sceneYawOffset);
     Mat4 browserRot = state.bedModeEnabled ? state.sceneOrientationMatrix : Mat4RotationY(t.browserYaw);
     t.browserModelNoScale = Mat4Multiply(Mat4Translation(t.browserCenter.x, t.browserCenter.y, t.browserCenter.z), browserRot);
@@ -644,7 +651,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     float tScreen = -1.0f;
     bool hitScreen = false;
     if (IsSphereMode(state.screenMode)) {
-        // No modo esférico (180° SBS / 360°), qualquer raio do controle apontado para frente mantém os controles visíveis
+        // In spherical mode (180 deg SBS / 360 deg), any forward-pointing controller ray keeps controls visible
         const Mat4 sphereRot = state.bedModeEnabled ?
             Mat4Multiply(state.sceneOrientationMatrix, Mat4RotationY(state.videoSphereYawOffset)) :
             Mat4RotationY(state.sceneYawOffset + state.videoSphereYawOffset);
@@ -652,8 +659,9 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         hitScreen = state.hasRay && (Vec3Dot(state.lastRayDir, sphereFwd) > 0.1f);
     } else {
         if (state.hasRay) {
+            const float effectiveCurvature = state.photoActive ? 0.0f : state.screenCurvature;
             tScreen = rayHitsScreen(scene.screenModelNoScale, scene.screenNormal, scene.screenCenter,
-                                  state.screenScaleX, state.screenScaleY, state.screenCurvature, su, sv,
+                                  state.screenScaleX, state.screenScaleY, effectiveCurvature, su, sv,
                                   state.lastRayOrigin, state.lastRayDir);
             hitScreen = (tScreen > 0.0f);
         }
@@ -1004,10 +1012,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         if (!state.recenterFiredThisHold && state.menuHoldTime >= kRecenterHoldSeconds) {
             const auto res = vrplayer::ComputeRecenter(
                 state.bedModeEnabled, headOrientation, headCenter, 1.5f);
-            state.sceneYawOffset = res.yawOffset;
-            state.sceneOrientation = res.orientation;
-            state.sceneOrientationMatrix = res.orientationMatrix;
-            state.sceneTranslationOffset = res.translationOffset;
+            vrplayer::ApplyRecenter(state, res);
             state.screenPosition = state.defaultScreenPosition;
             state.screenScaleX = state.defaultScreenScaleX;
             state.screenScaleY = state.defaultScreenScaleY;
@@ -1270,7 +1275,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     XrActionStateFloat squeezeState{XR_TYPE_ACTION_STATE_FLOAT};
     xrGetActionStateFloat(state.session, &squeezeInfo, &squeezeState);
 
-    // Carregamento de transformação solicitado via JNI (persistência)
+    // Transformation loading requested via JNI (persistence)
     if (::g_setScreenTransformRequested.exchange(false)) {
         state.screenPosition.x = ::g_requestedScreenPosX.load();
         state.screenPosition.y = ::g_requestedScreenPosY.load();
@@ -1278,45 +1283,53 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         float reqScaleX = ::g_requestedScreenScaleX.load();
         float reqScaleY = ::g_requestedScreenScaleY.load();
         state.userCustomScreenScale = true;
-        if (state.videoWidth > 0 && state.videoHeight > 0) {
-            float aspect = vrplayer::CalculateContentAspectRatio(
+
+        float aspect = 0.0f;
+        if (state.photoActive && state.photoWidth > 0 && state.photoHeight > 0) {
+            aspect = vrplayer::CalculateContentAspectRatio(
+                state.photoWidth, state.photoHeight, state.photoScreenMode);
+        } else if (state.videoWidth > 0 && state.videoHeight > 0) {
+            aspect = vrplayer::CalculateContentAspectRatio(
                 state.videoWidth, state.videoHeight, state.screenMode);
-            if (aspect > 0.001f) {
-                reqScaleY = reqScaleX / aspect;
-            }
         }
+
+        if (aspect > 0.001f) {
+            const float boundHeight = reqScaleX * (9.0f / 16.0f);
+            const auto fit = vrplayer::ComputeFitBounds(aspect, reqScaleX, boundHeight);
+            reqScaleX = fit.x;
+            reqScaleY = fit.y;
+        } else if (reqScaleY <= 0.001f) {
+            reqScaleY = reqScaleX * (9.0f / 16.0f);
+        }
+
         state.screenScaleX = reqScaleX;
         state.screenScaleY = reqScaleY;
         state.isScreenGrabbed = false;
-        LOGI("Screen: posição e escala carregadas via JNI: pos={%.2f, %.2f, %.2f}, scale={%.2f, %.2f}",
+        LOGI("Screen: position and scale loaded via JNI: pos={%.2f, %.2f, %.2f}, scale={%.2f, %.2f}",
              state.screenPosition.x, state.screenPosition.y, state.screenPosition.z,
              state.screenScaleX, state.screenScaleY);
     }
 
-    // Redefinição de posição solicitada via JNI ou Reset
+    // Screen position reset requested via JNI or Reset
     if (::g_resetScreenPositionRequested.exchange(false)) {
         state.screenPosition = state.defaultScreenPosition;
         state.screenScaleX = state.defaultScreenScaleX;
         state.screenScaleY = state.defaultScreenScaleY;
         state.userCustomScreenScale = false;
         state.isScreenGrabbed = false;
-        NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
-        LOGI("Screen: posição e escala redefinidas para o padrão do ambiente atual: pos={%.2f, %.2f, %.2f}, scale={%.2f, %.2f}",
+        LOGI("Screen: position and scale reset to current environment defaults: pos={%.2f, %.2f, %.2f}, scale={%.2f, %.2f}",
              state.screenPosition.x, state.screenPosition.y, state.screenPosition.z,
              state.screenScaleX, state.screenScaleY);
     }
 
-    // Sincronização do Bed Mode solicitado via JNI
+    // Bed Mode synchronization requested via JNI
     bool reqBedMode = ::g_bedModeEnabled.load();
     if (reqBedMode != state.bedModeEnabled) {
         state.bedModeEnabled = reqBedMode;
         if (state.bedModeEnabled) {
             const auto res = vrplayer::ComputeRecenter(
                 true, headOrientation, headCenter, 1.5f);
-            state.sceneYawOffset = res.yawOffset;
-            state.sceneOrientation = res.orientation;
-            state.sceneOrientationMatrix = res.orientationMatrix;
-            state.sceneTranslationOffset = res.translationOffset;
+            vrplayer::ApplyRecenter(state, res);
         } else {
             state.sceneOrientation = QuatFromYaw(state.sceneYawOffset);
             state.sceneOrientationMatrix = Mat4RotationY(state.sceneYawOffset);
@@ -1324,20 +1337,17 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         LOGI("Bed Mode: %s", state.bedModeEnabled ? "ENABLED (3DoF reclined)" : "DISABLED (Yaw-only)");
     }
 
-    // Sincronização da curvatura da tela solicitada via JNI
+    // Screen curvature synchronization requested via JNI
     if (::g_screenCurvatureDirty.exchange(false)) {
         state.screenCurvature = ::g_screenCurvature.load();
         LOGI("Screen: Curvature updated via JNI -> %.2f", state.screenCurvature);
     }
 
-    // Recenter solicitado explicitamente via JNI / UI
+    // Recenter requested explicitly via JNI / UI
     if (::g_recenterRequested.exchange(false)) {
         const auto res = vrplayer::ComputeRecenter(
             state.bedModeEnabled, headOrientation, headCenter, 1.5f);
-        state.sceneYawOffset = res.yawOffset;
-        state.sceneOrientation = res.orientation;
-        state.sceneOrientationMatrix = res.orientationMatrix;
-        state.sceneTranslationOffset = res.translationOffset;
+        vrplayer::ApplyRecenter(state, res);
         state.screenPosition = state.defaultScreenPosition;
         state.screenScaleX = state.defaultScreenScaleX;
         state.screenScaleY = state.defaultScreenScaleY;
@@ -1345,8 +1355,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         state.isScreenGrabbed = false;
         state.browserPosition = vrplayer::kBrowserSpawnLocalPosition;
         state.isBrowserGrabbed = false;
-        NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
-        LOGI("Recenter executado via JNI: bedMode=%d, yaw=%.2f deg, pitch=%.2f deg",
+        LOGI("Recenter executed via JNI: bedMode=%d, yaw=%.2f deg, pitch=%.2f deg",
              (int)state.bedModeEnabled, res.yawOffset * (180.0f / 3.14159265f),
              res.pitchOffset * (180.0f / 3.14159265f));
     }
@@ -1386,8 +1395,12 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         bool prevGrabbed = state.isScreenGrabbed;
         static bool s_prevDirectAdjustActive = false;
 
+        const XrVector3f sceneAnchor = state.bedModeEnabled
+            ? headCenter
+            : Vec3Add(state.sceneTranslationOffset, {0.0f, 1.5f, 0.0f});
+
         if (state.handTrackingActive) {
-            // T5.5: Com Hand Tracking, pinch segurado apontando para a tela virtual (fora dos painéis de UI) faz Grab & Drag
+            // Hand Tracking: pinching and holding aiming at the virtual screen (outside UI panels) triggers Grab & Drag
             bool pinchGrab = currTrigger && (currentHitPanel == 0) && !state.modalActive && !IsSphereMode(state.screenMode);
             if (!state.isScreenGrabbed && pinchGrab && (tScreen > 0.0f)) {
                 state.isScreenGrabbed = true;
@@ -1395,7 +1408,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             } else if (state.isScreenGrabbed) {
                 if (currTrigger && state.hasRay) {
                     XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.grabDistance));
-                    state.screenPosition = vrplayer::WorldPointToBase(targetWorld, headCenter, state.sceneOrientationMatrix);
+                    state.screenPosition = vrplayer::WorldPointToBase(targetWorld, sceneAnchor, state.sceneOrientationMatrix);
                     state.screenPosition.z = std::min(-0.8f, std::max(state.screenPosition.z, -10.0f));
                     state.screenPosition.y = std::max(0.3f, std::min(state.screenPosition.y, 3.5f));
                     state.screenPosition.x = std::max(-4.0f, std::min(state.screenPosition.x, 4.0f));
@@ -1407,7 +1420,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                 NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
             }
         } else {
-            // Controller Touch Plus (Opção B):
+            // Controller Touch Plus (Option B):
             bool isAimingScreen = (currentHitPanel == 0 && tScreen > 0.0f && !state.modalActive && !IsSphereMode(state.screenMode));
             bool directAdjustCombo = gripHeld && currTrigger && (currentHitPanel == 0) && !state.modalActive;
 
@@ -1459,7 +1472,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
                     if (state.hasRay) {
                         XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.grabDistance));
-                        state.screenPosition = vrplayer::WorldPointToBase(targetWorld, headCenter, state.sceneOrientationMatrix);
+                        state.screenPosition = vrplayer::WorldPointToBase(targetWorld, sceneAnchor, state.sceneOrientationMatrix);
                         state.screenPosition.z = std::min(-0.8f, std::max(state.screenPosition.z, -10.0f));
                         state.screenPosition.y = std::max(0.3f, std::min(state.screenPosition.y, 3.5f));
                         state.screenPosition.x = std::max(-4.0f, std::min(state.screenPosition.x, 4.0f));
@@ -1504,7 +1517,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
                     if (state.hasRay) {
                         XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.browserGrabDistance));
-                        state.browserPosition = vrplayer::BrowserWorldToLocal3DoF(targetWorld, headCenter, state.sceneOrientationMatrix);
+                        state.browserPosition = vrplayer::BrowserWorldToLocal3DoF(targetWorld, sceneAnchor, state.sceneOrientationMatrix);
                         state.browserPosition.z = std::min(-0.8f, std::max(state.browserPosition.z, -10.0f));
                         state.browserPosition.y = std::max(0.3f, std::min(state.browserPosition.y, 3.5f));
                         state.browserPosition.x = std::max(-4.0f, std::min(state.browserPosition.x, 4.0f));

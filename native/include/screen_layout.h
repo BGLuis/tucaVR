@@ -21,28 +21,6 @@ constexpr float kCurvatureModerate = 0.50f;  // 60 deg span (~natural viewer foc
 constexpr float kCurvatureDeep = 0.85f;      // ~102 deg span
 constexpr uint32_t kCurvedScreenSlices = 64; // 64 vertical slices = 65 columns, 130 vertices
 
-enum class ScreenCurvaturePreset : int {
-    Flat = 0,
-    Gentle = 1,
-    Moderate = 2,
-    Deep = 3,
-};
-
-inline float ScreenCurvaturePresetValue(ScreenCurvaturePreset preset) {
-    switch (preset) {
-    case ScreenCurvaturePreset::Flat:
-        return 0.0f;
-    case ScreenCurvaturePreset::Gentle:
-        return kCurvatureGentle;
-    case ScreenCurvaturePreset::Moderate:
-        return kCurvatureModerate;
-    case ScreenCurvaturePreset::Deep:
-        return kCurvatureDeep;
-    default:
-        return 0.0f;
-    }
-}
-
 struct ScreenVertex {
     float x = 0.0f;
     float y = 0.0f;

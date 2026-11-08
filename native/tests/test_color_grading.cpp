@@ -195,6 +195,28 @@ static void TestRgbToYcbcr() {
     printf("[PASS] TestRgbToYcbcr\n");
 }
 
+static void TestColorGradingConstantsParity() {
+    using namespace color_grading;
+    assert(kHableA == 0.15f);
+    assert(kHableB == 0.50f);
+    assert(kHableC == 0.10f);
+    assert(kHableD == 0.20f);
+    assert(kHableE == 0.02f);
+    assert(kHableF == 0.30f);
+
+    assert(kPqM1 == 0.1593017578125f);
+    assert(kPqM2 == 78.84375f);
+    assert(kPqC1 == 0.8359375f);
+    assert(kPqC2 == 18.8515625f);
+    assert(kPqC3 == 18.6875f);
+
+    assert(kW == 40.0f);
+    assert(kExposure == 2.0f);
+    assert(kSCurveStrength == 0.18f);
+
+    printf("[PASS] TestColorGradingConstantsParity\n");
+}
+
 int main() {
     printf("--- Executing unit tests for color_grading.h ---\n");
     TestHableFilmicCurveMonotonicity();
@@ -205,6 +227,7 @@ int main() {
     TestTonemapHdrToSdrPqAndHlg();
     TestColorTemperature();
     TestRgbToYcbcr();
+    TestColorGradingConstantsParity();
     printf("--- All color_grading.h unit tests passed successfully! ---\n");
     return 0;
 }

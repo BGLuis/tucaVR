@@ -75,9 +75,9 @@ inline RecenterResult ComputeRecenter(bool bedModeEnabled, const XrQuaternionf &
     if (hLenSq >= 1e-4f) {
         res.yawOffset = atan2f(-fwd.x, -fwd.z);
     } else {
-        // Singularidade de zenith (+90 deg) ou nadir (-90 deg): a projecao horizontal do olhar eh nula.
-        // Usamos o vetor 'up' (coluna Y da matriz) projetado no plano XZ para preservar a orientacao
-        // corporal horizontal do usuario sem resetar espuriamente para yaw = 0.
+        // Zenith (+90 deg) or nadir (-90 deg) singularity: horizontal gaze projection is zero.
+        // Use the 'up' vector (matrix column Y) projected onto the XZ plane to preserve the user's
+        // horizontal body orientation without spuriously resetting yaw to 0.
         const XrVector3f up = {headRot.m[4], headRot.m[5], headRot.m[6]};
         if (fwd.y > 0.0f) {
             res.yawOffset = atan2f(up.x, up.z);
@@ -97,6 +97,15 @@ inline RecenterResult ComputeRecenter(bool bedModeEnabled, const XrQuaternionf &
     }
 
     return res;
+}
+
+// Applies recenter transformation parameters to an application state structure.
+template <typename StateType>
+inline void ApplyRecenter(StateType &state, const RecenterResult &res) {
+    state.sceneYawOffset = res.yawOffset;
+    state.sceneOrientation = res.orientation;
+    state.sceneOrientationMatrix = res.orientationMatrix;
+    state.sceneTranslationOffset = res.translationOffset;
 }
 
 // Transforms a base point (defined relative to nominal eye height = 1.5m) to world coordinates.

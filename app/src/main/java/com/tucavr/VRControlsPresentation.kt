@@ -277,6 +277,7 @@ class VRControlsPresentation(
     private fun createScreenModal(): View {
         val currentEnv = activity.environmentStore.getActiveEnvironment()
         val currentT = activity.screenTransformStore.get(currentEnv)
+        isScreenCurved = activity.nativeGetScreenCurvature() > 0.05f
         return ScreenSettingsModal(
             context = context,
             currentScaleX = currentT.scaleX,

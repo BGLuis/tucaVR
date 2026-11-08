@@ -3,9 +3,31 @@
 #include <algorithm>
 #include <cmath>
 
-// Tratamento de Cor & Tone Mapping Cinematografico (Hable Filmic + rgb2sat + Curva S de Contraste).
-// Fornece a referencia C++ exata das funcoes executadas nos shaders Vulkan (video.frag, stereo.frag,
-// stereo_cubemap.frag) para testes de host com AddressSanitizer/UBSan e processamento nativo.
+// Cinematic Color Grading & Tone Mapping (Hable Filmic + rgb2sat + Cubic Contrast S-Curve).
+// Provides the exact C++ reference for functions executed in Vulkan shaders (video.frag, stereo.frag,
+// stereo_cubemap.frag) for host unit testing under ASan/UBSan and native processing.
+
+namespace color_grading {
+// Hable Filmic constants
+constexpr float kHableA = 0.15f;
+constexpr float kHableB = 0.50f;
+constexpr float kHableC = 0.10f;
+constexpr float kHableD = 0.20f;
+constexpr float kHableE = 0.02f;
+constexpr float kHableF = 0.30f;
+
+// ST 2084 (PQ) EOTF constants
+constexpr float kPqM1 = 0.1593017578125f;
+constexpr float kPqM2 = 78.84375f;
+constexpr float kPqC1 = 0.8359375f;
+constexpr float kPqC2 = 18.8515625f;
+constexpr float kPqC3 = 18.6875f;
+
+// Cinematic HDR tonemapping constants
+constexpr float kW = 40.0f;
+constexpr float kExposure = 2.0f;
+constexpr float kSCurveStrength = 0.18f;
+} // namespace color_grading
 
 struct ColorRgb {
     float r = 0.0f;
@@ -15,7 +37,7 @@ struct ColorRgb {
     bool operator==(const ColorRgb &o) const { return r == o.r && g == o.g && b == o.b; }
 };
 
-// Conversao RGB para YCbCr (ITU-R BT.601) para medicao de distancia cromatica e chroma key
+// RGB to YCbCr conversion (ITU-R BT.601) for color distance and chroma key measurement
 inline ColorRgb RgbToYcbcr(ColorRgb rgb) {
     float y = 0.299f * rgb.r + 0.587f * rgb.g + 0.114f * rgb.b;
     float cb = -0.168736f * rgb.r - 0.331264f * rgb.g + 0.5f * rgb.b;
@@ -23,8 +45,8 @@ inline ColorRgb RgbToYcbcr(ColorRgb rgb) {
     return {y, cb, cr};
 }
 
-// Curva cinematografica Hable Filmic (Uncharted 2 / John Hable)
-// Constantes:
+// Hable Filmic curve (Uncharted 2 / John Hable)
+// Constants:
 //   A = 0.15 (Shoulder Strength)
 //   B = 0.50 (Linear Strength)
 //   C = 0.10 (Linear Angle)
@@ -32,25 +54,20 @@ inline ColorRgb RgbToYcbcr(ColorRgb rgb) {
 //   E = 0.02 (Toe Numerator)
 //   F = 0.30 (Toe Denominator)
 inline float HableFilmicCurve(float x) {
-    constexpr float A = 0.15f;
-    constexpr float B = 0.50f;
-    constexpr float C = 0.10f;
-    constexpr float D = 0.20f;
-    constexpr float E = 0.02f;
-    constexpr float F = 0.30f;
-    float num = x * (A * x + C * B) + D * E;
-    float den = x * (A * x + B) + D * F;
+    using namespace color_grading;
+    float num = x * (kHableA * x + kHableC * kHableB) + kHableD * kHableE;
+    float den = x * (kHableA * x + kHableB) + kHableD * kHableF;
     if (std::abs(den) < 1e-6f) {
         return 0.0f;
     }
-    return (num / den) - (E / F);
+    return (num / den) - (kHableE / kHableF);
 }
 
 inline ColorRgb HableFilmicCurve(ColorRgb x) {
     return {HableFilmicCurve(x.r), HableFilmicCurve(x.g), HableFilmicCurve(x.b)};
 }
 
-// Converte RGB linear ou sRGB para saturacao [0.0, 1.0] (HSV saturation)
+// Converts linear RGB or sRGB to saturation [0.0, 1.0] (HSV saturation)
 inline float RgbToSat(ColorRgb rgb) {
     float maxVal = std::max({rgb.r, rgb.g, rgb.b});
     float minVal = std::min({rgb.r, rgb.g, rgb.b});
@@ -60,10 +77,10 @@ inline float RgbToSat(ColorRgb rgb) {
     return (maxVal - minVal) / maxVal;
 }
 
-// Curva de Contraste Polinomial Cubica (S-Curve) adaptativa
+// Adaptive Polynomial Cubic S-Curve for contrast
 // f(x) = x * x * (3.0 - 2.0 * x)
-// Ancoras fixas em preto (0.0), meio-tom (0.5) e branco (1.0).
-// Elimina o desvio de gamma medio mantendo suavidade nos extremos (toe e shoulder).
+// Fixed anchors at black (0.0), mid-tone (0.5), and white (1.0).
+// Eliminates mid-tone gamma drift while preserving smooth toe and shoulder rolloff.
 inline float ApplyCubicSCurve(float x, float strength) {
     if (strength <= 0.0f) {
         return x;
@@ -77,27 +94,23 @@ inline ColorRgb ApplyCubicSCurve(ColorRgb c, float strength) {
     return {ApplyCubicSCurve(c.r, strength), ApplyCubicSCurve(c.g, strength), ApplyCubicSCurve(c.b, strength)};
 }
 
-// ST 2084 (PQ EOTF): converte sinal PQ [0.0, 1.0] para luminancia relativa [0.0, 1.0],
-// onde 1.0 corresponde ao pico teorico de 10.000 nits.
+// ST 2084 (PQ EOTF): converts PQ signal [0.0, 1.0] to relative linear luminance [0.0, 1.0],
+// where 1.0 corresponds to the theoretical peak of 10,000 nits.
 inline ColorRgb PqEotf(ColorRgb pq) {
-    constexpr float m1 = 0.1593017578125f;
-    constexpr float m2 = 78.84375f;
-    constexpr float c1 = 0.8359375f;
-    constexpr float c2 = 18.8515625f;
-    constexpr float c3 = 18.6875f;
+    using namespace color_grading;
 
     auto evalChannel = [&](float v) -> float {
-        float p = std::pow(std::clamp(v, 0.0f, 1.0f), 1.0f / m2);
-        float num = std::max(p - c1, 0.0f);
-        float den = std::max(c2 - c3 * p, 1e-6f);
-        return std::pow(num / den, 1.0f / m1);
+        float p = std::pow(std::clamp(v, 0.0f, 1.0f), 1.0f / kPqM2);
+        float num = std::max(p - kPqC1, 0.0f);
+        float den = std::max(kPqC2 - kPqC3 * p, 1e-6f);
+        return std::pow(num / den, 1.0f / kPqM1);
     };
 
     return {evalChannel(pq.r), evalChannel(pq.g), evalChannel(pq.b)};
 }
 
-// BT.2100 HLG: inverso da OETF -> luz de cena -> OOTF do sistema (gamma 1.2,
-// pico nominal de 1000 nits) -> nits de display.
+// BT.2100 HLG: inverse OETF -> scene light -> system OOTF (gamma 1.2,
+// 1000 nits nominal peak) -> display nits.
 inline ColorRgb HlgToDisplayNits(ColorRgb hlg) {
     constexpr float a = 0.17883277f;
     constexpr float b = 0.28466892f;
@@ -119,16 +132,17 @@ inline ColorRgb HlgToDisplayNits(ColorRgb hlg) {
     return {sceneLight.r * scale, sceneLight.g * scale, sceneLight.b * scale};
 }
 
-// Primarias BT.2020 -> BT.709 (ITU-R BT.2087), em luz linear.
+// BT.2020 -> BT.709 primaries (ITU-R BT.2087) in linear light.
 inline ColorRgb Bt2020ToBt709(ColorRgb bt2020) {
     return {1.6605f * bt2020.r - 0.5876f * bt2020.g - 0.0728f * bt2020.b,
             -0.1246f * bt2020.r + 1.1329f * bt2020.g - 0.0083f * bt2020.b,
             -0.0182f * bt2020.r - 0.1006f * bt2020.g + 1.1187f * bt2020.b};
 }
 
-// Tonemap cinematografico HDR -> SDR (PQ / HLG para display SDR do Quest 3)
+// Cinematic HDR -> SDR Tonemapping (PQ / HLG for Quest 3 SDR display)
 // `transfer`: 1 = PQ (ST 2084), 2 = HLG (BT.2100).
 inline ColorRgb TonemapHdrToSdr(ColorRgb hdrColor, int transfer) {
+    using namespace color_grading;
     ColorRgb nits = (transfer == 2) ? HlgToDisplayNits(hdrColor)
                                     : ColorRgb{PqEotf(hdrColor).r * 10000.0f, PqEotf(hdrColor).g * 10000.0f,
                                                PqEotf(hdrColor).b * 10000.0f};
@@ -137,9 +151,7 @@ inline ColorRgb TonemapHdrToSdr(ColorRgb hdrColor, int transfer) {
     ColorRgb scene709 = Bt2020ToBt709(nitsDiv100);
     ColorRgb scene = {std::max(scene709.r, 0.0f), std::max(scene709.g, 0.0f), std::max(scene709.b, 0.0f)};
 
-    // Ponto branco linear W calibrado para o pico de mastering cinematografico (4.000 nits)
-    constexpr float kW = 40.0f;
-    constexpr float kExposure = 2.0f;
+    // Linear white point W calibrated for cinema mastering peak (4,000 nits)
     float whiteVal = HableFilmicCurve(kW * kExposure);
     float whiteScale = 1.0f / std::max(whiteVal, 1e-4f);
 
@@ -147,7 +159,7 @@ inline ColorRgb TonemapHdrToSdr(ColorRgb hdrColor, int transfer) {
                           std::max(HableFilmicCurve(scene.g * kExposure) * whiteScale, 0.0f),
                           std::max(HableFilmicCurve(scene.b * kExposure) * whiteScale, 0.0f)};
 
-    // Recuperacao de Saturacao de Realces (RgbToSat)
+    // Highlight Saturation Recovery (RgbToSat)
     constexpr float kBt709LumaR = 0.2126f;
     constexpr float kBt709LumaG = 0.7152f;
     constexpr float kBt709LumaB = 0.0722f;
@@ -178,10 +190,10 @@ inline ColorRgb TonemapHdrToSdr(ColorRgb hdrColor, int transfer) {
     ColorRgb gammaColor = {std::pow(tonemapped.r, 1.0f / 2.2f), std::pow(tonemapped.g, 1.0f / 2.2f),
                            std::pow(tonemapped.b, 1.0f / 2.2f)};
 
-    return ApplyCubicSCurve(gammaColor, 0.18f);
+    return ApplyCubicSCurve(gammaColor, kSCurveStrength);
 }
 
-// Planckian locus approximation (Kelvin 2700K a 6500K / Night Mode ~3000K)
+// Planckian locus approximation (Kelvin 2700K to 6500K / Night Mode ~3000K)
 inline ColorRgb ApplyColorTemperature(ColorRgb color, float tempK) {
     float t = tempK / 100.0f;
     ColorRgb tempColor;

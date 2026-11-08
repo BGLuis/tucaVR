@@ -23,7 +23,7 @@ layout(location = 13) flat in float vColorTemperature;
 
 layout(location = 0) out vec4 outColor;
 
-// Conversao RGB para YCbCr para medicao de distancia cromatica invariante a iluminacao
+// RGB to YCbCr conversion for illumination-invariant color distance measurement
 vec3 RgbToYcbcr(vec3 rgb) {
     float y  =  0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
     float cb = -0.168736 * rgb.r - 0.331264 * rgb.g + 0.5 * rgb.b;
@@ -31,8 +31,8 @@ vec3 RgbToYcbcr(vec3 rgb) {
     return vec3(y, cb, cr);
 }
 
-// ST 2084 (PQ EOTF): converte sinal PQ [0.0, 1.0] para luminancia relativa [0.0, 1.0],
-// onde 1.0 corresponde ao pico teorico de 10.000 nits.
+// ST 2084 (PQ EOTF): converts PQ signal [0.0, 1.0] to relative linear luminance [0.0, 1.0],
+// where 1.0 corresponds to the theoretical peak of 10,000 nits.
 vec3 PqEotf(vec3 pq) {
     const float m1 = 0.1593017578125;
     const float m2 = 78.84375;
@@ -45,8 +45,8 @@ vec3 PqEotf(vec3 pq) {
     return pow(num / den, vec3(1.0 / m1));
 }
 
-// BT.2100 HLG: inverso da OETF -> luz de cena -> OOTF do sistema (gamma 1.2,
-// pico nominal de 1000 nits) -> nits de display.
+// BT.2100 HLG: inverse OETF -> scene light -> system OOTF (gamma 1.2,
+// 1000 nits nominal peak) -> display nits.
 vec3 HlgToDisplayNits(vec3 hlg) {
     const float a = 0.17883277;
     const float b = 0.28466892;
@@ -57,14 +57,14 @@ vec3 HlgToDisplayNits(vec3 hlg) {
     return sceneLight * pow(max(ys, 1e-6), 0.2) * 1000.0;
 }
 
-// Primarias BT.2020 -> BT.709 (ITU-R BT.2087), em luz linear. Coluna a coluna (GLSL).
+// BT.2020 -> BT.709 primaries (ITU-R BT.2087) in linear light. Column by column (GLSL).
 const mat3 kBt2020ToBt709 = mat3(
      1.6605, -0.1246, -0.0182,
     -0.5876,  1.1329, -0.1006,
     -0.0728, -0.0083,  1.1187);
 
-// Curva cinematografica Hable Filmic (Uncharted 2 / John Hable)
-// Constantes:
+// Hable Filmic tone mapping curve (Uncharted 2 / John Hable)
+// Constants:
 //   A = 0.15 (Shoulder Strength)
 //   B = 0.50 (Linear Strength)
 //   C = 0.10 (Linear Angle)
@@ -91,17 +91,17 @@ float HableFilmicCurve(float x) {
     return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - (E / F);
 }
 
-// Converte RGB linear ou sRGB para saturacao [0.0, 1.0] (HSV saturation)
+// Converts linear RGB or sRGB to saturation [0.0, 1.0] (HSV saturation)
 float rgb2sat(vec3 rgb) {
     float maxVal = max(max(rgb.r, rgb.g), rgb.b);
     float minVal = min(min(rgb.r, rgb.g), rgb.b);
     return (maxVal <= 1e-5) ? 0.0 : (maxVal - minVal) / maxVal;
 }
 
-// Curva de Contraste Polinomial Cubica (S-Curve) adaptativa
+// Adaptive Polynomial Cubic S-Curve
 // f(x) = x * x * (3.0 - 2.0 * x)
-// Ancoras fixas em preto (0.0), meio-tom (0.5) e branco (1.0).
-// Elimina desvio de gamma na faixa media e enriquece micro-contraste sem banding.
+// Fixed anchors at black (0.0), mid-tone (0.5), and white (1.0).
+// Eliminates mid-tone gamma drift and enriches micro-contrast without banding.
 vec3 ApplyCubicSCurve(vec3 color, float strength) {
     if (strength <= 0.0) {
         return color;
@@ -111,23 +111,23 @@ vec3 ApplyCubicSCurve(vec3 color, float strength) {
     return mix(c, s, strength);
 }
 
-// Tonemap cinematografico HDR -> SDR (PQ / HLG para display Quest 3)
+// Filmic HDR -> SDR Tonemapping (PQ / HLG for Quest 3 display)
 // `transfer`: 1 = PQ (ST 2084), 2 = HLG (BT.2100).
 vec3 TonemapHdrToSdr(vec3 hdrColor, int transfer) {
     vec3 nits = (transfer == 2) ? HlgToDisplayNits(hdrColor) : PqEotf(hdrColor) * 10000.0;
-    // Normalizacao de cena BT.709 linear (100 nits = 1.0 linear)
+    // Linear BT.709 scene normalization (100 nits = 1.0 linear)
     vec3 scene = max(kBt2020ToBt709 * (nits / 100.0), vec3(0.0));
 
-    // Ponto branco linear W calibrado para o pico de mastering cinematografico (4.000 nits)
+    // Linear white point W calibrated for cinema mastering peak (4,000 nits)
     const float kW = 40.0;
     const float kExposure = 2.0;
     float whiteScale = 1.0 / max(HableFilmicCurve(kW * kExposure), 1e-4);
 
-    // 1. Mapeamento Hable Filmic por canal (curva cinematografica com shoulder e toe suaves)
+    // 1. Per-channel Hable Filmic mapping (filmic curve with smooth shoulder and toe)
     vec3 filmColor = max(HableFilmicCurve(scene * kExposure) * whiteScale, vec3(0.0));
 
-    // 2. Recuperacao de Saturacao de Realces (rgb2sat):
-    // Preserva cromaticidade de fontes de luz, fogo, neon e explosoes, impedindo estouro para branco.
+    // 2. Highlight Saturation Recovery (rgb2sat):
+    // Preserves chromaticity of bright light sources, fire, neon, and explosions.
     const vec3 kBt709Luma = vec3(0.2126, 0.7152, 0.0722);
     float sceneLuma = dot(scene, kBt709Luma);
     float mappedLuma = max(HableFilmicCurve(sceneLuma * kExposure) * whiteScale, 0.0);
@@ -137,17 +137,17 @@ vec3 TonemapHdrToSdr(vec3 hdrColor, int transfer) {
     float highlightWeight = clamp(sceneLuma * 0.1, 0.0, 1.0);
     vec3 tonemapped = mix(filmColor, lumaMappedColor, origSat * highlightWeight * 0.6);
 
-    // Protecao contra estouro de gamut mantendo matiz original
+    // Gamut blowout protection preserving original hue
     float peak = max(max(tonemapped.r, tonemapped.g), tonemapped.b);
     if (peak > 1.0) {
         tonemapped /= peak;
     }
     tonemapped = clamp(tonemapped, 0.0, 1.0);
 
-    // 3. Conversao para gamma do display SDR (Rec.709 / sRGB 2.2)
+    // 3. Conversion to SDR display gamma (Rec.709 / sRGB 2.2)
     vec3 gammaColor = pow(tonemapped, vec3(1.0 / 2.2));
 
-    // 4. Curva S de Contraste Polinomial Cubica adaptativa
+    // 4. Adaptive Polynomial Cubic S-Curve for cinematic contrast
     return ApplyCubicSCurve(gammaColor, 0.18);
 }
 
@@ -311,14 +311,6 @@ void main() {
         : ApplySGSR1(uv, vSharpness, vTexelSize);
     if (vIsHdr != 0) {
         color = TonemapHdrToSdr(color, vIsHdr);
-    } else {
-        // Pipeline SDR: mantem o sinal limpo e fiel ao original por padrao (sem desvio de gamma).
-        // Quando upscaling/sharpness esta ativo, uma curva S sutil adaptativa
-        // enriquece o contraste estetico sem alterar a luminancia media.
-        if (vSharpness > 0.05) {
-            float sdrContrast = clamp((vSharpness - 0.05) * 0.10, 0.0, 0.08);
-            color = ApplyCubicSCurve(color, sdrContrast);
-        }
     }
 
     if (vColorTemperature < 0.0) {
