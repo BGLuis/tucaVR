@@ -171,6 +171,17 @@ if ! ls "$FFMPEG_MAKER_DIR"/build/ffmpeg/arm64-v8a/lib/*.so > /dev/null 2>&1; th
     echo "   Run ./scripts/setup-deps.sh and compile FFmpeg (see the README)." >&2
     exit 1
 fi
+
+# Ensure pkg-config files reflect the current path (handles moved or renamed repos)
+for pc in "$FFMPEG_MAKER_DIR"/build/ffmpeg/arm64-v8a/lib/pkgconfig/*.pc; do
+    [[ -f "$pc" ]] || continue
+    sed -i \
+        -e "s|^prefix=.*|prefix=$FFMPEG_MAKER_DIR/build/ffmpeg/arm64-v8a|" \
+        -e 's|^libdir=.*|libdir=${prefix}/lib|' \
+        -e 's|^includedir=.*|includedir=${prefix}/include|' \
+        "$pc"
+done
+
 export PKG_CONFIG_PATH="$FFMPEG_MAKER_DIR/build/ffmpeg/arm64-v8a/lib/pkgconfig"
 export BINDGEN_EXTRA_CLANG_ARGS="-I$FFMPEG_MAKER_DIR/output/include/arm64-v8a -I$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
 

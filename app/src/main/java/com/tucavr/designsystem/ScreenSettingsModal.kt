@@ -21,9 +21,11 @@ class ScreenSettingsModal(
     private var currentScaleX: Float,
     private var currentDistanceZ: Float,
     private var isCurved: Boolean,
+    private var isBedMode: Boolean = false,
     private val onScaleSelected: (scaleX: Float) -> Unit,
     private val onDistanceSelected: (posZ: Float) -> Unit,
     private val onCurvedToggled: (curved: Boolean) -> Unit,
+    private val onBedModeToggled: ((bedMode: Boolean) -> Unit)? = null,
     private val onRecenter: () -> Unit,
     private val onDismiss: () -> Unit,
 ) : FrameLayout(context) {
@@ -32,6 +34,8 @@ class ScreenSettingsModal(
     private data class DistanceOption(val posZ: Float, val labelResId: Int)
 
     private data class CurveOption(val isCurved: Boolean, val labelResId: Int)
+
+    private data class BedModeOption(val isBedMode: Boolean, val labelResId: Int)
 
     private val scaleOptions =
         listOf(
@@ -54,9 +58,16 @@ class ScreenSettingsModal(
             CurveOption(true, R.string.player_menu_screen_curve_curved),
         )
 
+    private val bedModeOptions =
+        listOf(
+            BedModeOption(false, R.string.player_menu_screen_bed_mode_off),
+            BedModeOption(true, R.string.player_menu_screen_bed_mode_on),
+        )
+
     private val scaleButtons = mutableListOf<Pair<Float, VoidButton>>()
     private val distanceButtons = mutableListOf<Pair<Float, VoidButton>>()
     private val curveButtons = mutableListOf<Pair<Boolean, VoidButton>>()
+    private val bedModeButtons = mutableListOf<Pair<Boolean, VoidButton>>()
 
     init {
         layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.MATCH_PARENT)
@@ -246,6 +257,43 @@ class ScreenSettingsModal(
         }
         panel.addView(curveRow)
 
+        // Bed Mode (3DoF reclined playback)
+        panel.addView(createSectionHeader(context.getString(R.string.player_menu_screen_bed_mode)))
+        val bedModeRow =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.MATCH_PARENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                    ).apply {
+                        bottomMargin = VoidTheme.dpToPx(context, 16f)
+                    }
+            }
+        bedModeOptions.forEachIndexed { idx, opt ->
+            val isSelected = isBedMode == opt.isBedMode
+            val btn =
+                VoidButton(
+                    context,
+                    if (isSelected) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY,
+                    isCompact = true,
+                ).apply {
+                    text = context.getString(opt.labelResId)
+                    layoutParams =
+                        LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f).apply {
+                            if (idx > 0) leftMargin = VoidTheme.dpToPx(context, 8f)
+                        }
+                    setOnClickListener {
+                        isBedMode = opt.isBedMode
+                        onBedModeToggled?.invoke(opt.isBedMode)
+                        updateBedModeButtonStyles()
+                    }
+                }
+            bedModeButtons.add(opt.isBedMode to btn)
+            bedModeRow.addView(btn)
+        }
+        panel.addView(bedModeRow)
+
         // Recenter Button
         val btnRecenter =
             VoidButton(context, VoidButtonStyle.SECONDARY).apply {
@@ -297,6 +345,13 @@ class ScreenSettingsModal(
     private fun updateCurveButtonStyles() {
         for ((curved, btn) in curveButtons) {
             val isSelected = isCurved == curved
+            btn.style = if (isSelected) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
+        }
+    }
+
+    private fun updateBedModeButtonStyles() {
+        for ((bedMode, btn) in bedModeButtons) {
+            val isSelected = isBedMode == bedMode
             btn.style = if (isSelected) VoidButtonStyle.ACTIVE else VoidButtonStyle.SECONDARY
         }
     }

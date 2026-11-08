@@ -463,6 +463,9 @@
     <string name="player_menu_screen_curve">CURVATURE</string>
     <string name="player_menu_screen_curve_flat">Flat</string>
     <string name="player_menu_screen_curve_curved">Curved</string>
+    <string name="player_menu_screen_bed_mode">BED MODE</string>
+    <string name="player_menu_screen_bed_mode_off">Normal</string>
+    <string name="player_menu_screen_bed_mode_on">Bed (3DoF)</string>
     <string name="player_menu_speed_title">Playback Speed</string>
     <string name="player_menu_volume_title">Volume</string>
     <string name="player_menu_volume_hint">Left stick also controls volume</string>

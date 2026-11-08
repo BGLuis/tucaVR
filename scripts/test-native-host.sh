@@ -31,6 +31,9 @@ TESTS=(
     "test_astc_transcode"
     "test_frame_time_histogram"
     "test_vulkan_msaa"
+    "test_screen_layout"
+    "test_bed_mode"
+    "test_color_grading"
 )
 
 EXTRA_FLAGS=()

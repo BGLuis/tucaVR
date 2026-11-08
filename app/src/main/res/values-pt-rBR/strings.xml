@@ -453,6 +453,9 @@
     <string name="player_menu_screen_curve">CURVATURA</string>
     <string name="player_menu_screen_curve_flat">Plana</string>
     <string name="player_menu_screen_curve_curved">Curva</string>
+    <string name="player_menu_screen_bed_mode">MODO CAMA</string>
+    <string name="player_menu_screen_bed_mode_off">Normal</string>
+    <string name="player_menu_screen_bed_mode_on">Cama (3DoF)</string>
     <string name="player_menu_speed_title">Velocidade</string>
     <string name="player_menu_volume_title">Volume</string>
     <string name="player_menu_volume_hint">O stick esquerdo também muda o volume</string>

@@ -2641,6 +2641,12 @@ class VRActivity : NativeActivity() {
 
     external fun nativeResetScreenPosition()
 
+    external fun nativeSetBedMode(enabled: Boolean)
+
+    external fun nativeGetBedMode(): Boolean
+
+    external fun nativeRecenter()
+
     external fun nativeSetScreenTransform(
         posX: Float,
         posY: Float,
@@ -2648,6 +2654,10 @@ class VRActivity : NativeActivity() {
         scaleX: Float,
         scaleY: Float,
     )
+
+    external fun nativeSetScreenCurvature(curvature: Float)
+
+    external fun nativeGetScreenCurvature(): Float
 
     external fun nativeSetEnvironment(environmentId: String)
 

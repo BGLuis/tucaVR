@@ -51,6 +51,30 @@ inline XrVector3f ComputeControlsCylinderCenter(const XrVector3f &controlsCenter
     return Vec3Add(controlsCenter, disp);
 }
 
+// Pure function calculating world position of controls center with full 3DoF scene rotation
+inline XrVector3f ComputeControlsCenter3DoF(const XrVector3f &headCenter, const Mat4 &sceneRot,
+                                            const XrVector3f &basePos = kBaseControlsPos) {
+    const XrVector3f rel = {basePos.x, basePos.y - 1.5f, basePos.z};
+    const XrVector3f rotRel = {
+        sceneRot.m[0] * rel.x + sceneRot.m[4] * rel.y + sceneRot.m[8] * rel.z,
+        sceneRot.m[1] * rel.x + sceneRot.m[5] * rel.y + sceneRot.m[9] * rel.z,
+        sceneRot.m[2] * rel.x + sceneRot.m[6] * rel.y + sceneRot.m[10] * rel.z,
+    };
+    return Vec3Add(headCenter, rotRel);
+}
+
+// Pure function calculating the rotation matrix for controls panel with full 3DoF scene rotation
+inline Mat4 ComputeControlsRotation3DoF(const Mat4 &sceneRot, float pitch = kControlsPitch) {
+    return Mat4Multiply(sceneRot, Mat4RotationX(pitch));
+}
+
+// Pure function calculating center of curvature for XrCompositionLayerCylinderKHR with full 3DoF controls rotation
+inline XrVector3f ComputeControlsCylinderCenter3DoF(const XrVector3f &controlsCenter, const Mat4 &controlsRot,
+                                                    float radius = kControlsCylinderRadius) {
+    const XrVector3f disp = {controlsRot.m[8] * radius, controlsRot.m[9] * radius, controlsRot.m[10] * radius};
+    return Vec3Add(controlsCenter, disp);
+}
+
 // Pure function calculating the downward elevation angle (in degrees) below eye level.
 // Positive return value indicates the controls center is below the eyes.
 inline float ComputeControlsElevationAngleDeg(const XrVector3f &controlsCenter, const XrVector3f &eyePos) {
@@ -79,13 +103,16 @@ inline float ComputeControlsDistance(const XrVector3f &controlsCenter, const XrV
 } // namespace vrplayer
 
 using vrplayer::ComputeControlsCenter;
+using vrplayer::ComputeControlsCenter3DoF;
 using vrplayer::ComputeControlsCylinderCenter;
+using vrplayer::ComputeControlsCylinderCenter3DoF;
 using vrplayer::ComputeControlsDistance;
 using vrplayer::ComputeControlsElevationAngleDeg;
 using vrplayer::ComputeControlsHorizontalDistance;
 using vrplayer::ComputeControlsModelNoScale;
 using vrplayer::ComputeControlsOrientation;
 using vrplayer::ComputeControlsRotation;
+using vrplayer::ComputeControlsRotation3DoF;
 using vrplayer::kBaseControlsPos;
 using vrplayer::kBaseUiPos;
 using vrplayer::kControlsCylinderCentralAngle;

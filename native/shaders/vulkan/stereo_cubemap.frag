@@ -24,7 +24,8 @@ layout(location = 0) out vec4 outColor;
 
 const float PI = 3.14159265358979323846;
 
-// T-HDR (Fase 2, primeira versao) — ver o comentario completo em video.frag.
+// ST 2084 (PQ EOTF): converte sinal PQ [0.0, 1.0] para luminancia relativa [0.0, 1.0],
+// onde 1.0 corresponde ao pico teorico de 10.000 nits.
 vec3 PqEotf(vec3 pq) {
     const float m1 = 0.1593017578125;
     const float m2 = 78.84375;
@@ -55,12 +56,92 @@ const mat3 kBt2020ToBt709 = mat3(
     -0.5876,  1.1329, -0.1006,
     -0.0728, -0.0083,  1.1187);
 
-// `transfer`: 1 = PQ, 2 = HLG (mesmo codigo de get_video_is_hdr).
+// Curva cinematografica Hable Filmic (Uncharted 2 / John Hable)
+// Constantes:
+//   A = 0.15 (Shoulder Strength)
+//   B = 0.50 (Linear Strength)
+//   C = 0.10 (Linear Angle)
+//   D = 0.20 (Toe Strength)
+//   E = 0.02 (Toe Numerator)
+//   F = 0.30 (Toe Denominator)
+vec3 HableFilmicCurve(vec3 x) {
+    const float A = 0.15;
+    const float B = 0.50;
+    const float C = 0.10;
+    const float D = 0.20;
+    const float E = 0.02;
+    const float F = 0.30;
+    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - (E / F);
+}
+
+float HableFilmicCurve(float x) {
+    const float A = 0.15;
+    const float B = 0.50;
+    const float C = 0.10;
+    const float D = 0.20;
+    const float E = 0.02;
+    const float F = 0.30;
+    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - (E / F);
+}
+
+// Converte RGB linear ou sRGB para saturacao [0.0, 1.0] (HSV saturation)
+float rgb2sat(vec3 rgb) {
+    float maxVal = max(max(rgb.r, rgb.g), rgb.b);
+    float minVal = min(min(rgb.r, rgb.g), rgb.b);
+    return (maxVal <= 1e-5) ? 0.0 : (maxVal - minVal) / maxVal;
+}
+
+// Curva de Contraste Polinomial Cubica (S-Curve) adaptativa
+// f(x) = x * x * (3.0 - 2.0 * x)
+// Ancoras fixas em preto (0.0), meio-tom (0.5) e branco (1.0).
+// Elimina desvio de gamma na faixa media e enriquece micro-contraste sem banding.
+vec3 ApplyCubicSCurve(vec3 color, float strength) {
+    if (strength <= 0.0) {
+        return color;
+    }
+    vec3 c = clamp(color, 0.0, 1.0);
+    vec3 s = c * c * (3.0 - 2.0 * c);
+    return mix(c, s, strength);
+}
+
+// Tonemap cinematografico HDR -> SDR (PQ / HLG para display Quest 3)
+// `transfer`: 1 = PQ (ST 2084), 2 = HLG (BT.2100).
 vec3 TonemapHdrToSdr(vec3 hdrColor, int transfer) {
     vec3 nits = (transfer == 2) ? HlgToDisplayNits(hdrColor) : PqEotf(hdrColor) * 10000.0;
+    // Normalizacao de cena BT.709 linear (100 nits = 1.0 linear)
     vec3 scene = max(kBt2020ToBt709 * (nits / 100.0), vec3(0.0));
-    vec3 tonemapped = scene / (1.0 + scene);
-    return pow(clamp(tonemapped, 0.0, 1.0), vec3(1.0 / 2.2));
+
+    // Ponto branco linear W calibrado para o pico de mastering cinematografico (4.000 nits)
+    const float kW = 40.0;
+    const float kExposure = 2.0;
+    float whiteScale = 1.0 / max(HableFilmicCurve(kW * kExposure), 1e-4);
+
+    // 1. Mapeamento Hable Filmic por canal (curva cinematografica com shoulder e toe suaves)
+    vec3 filmColor = max(HableFilmicCurve(scene * kExposure) * whiteScale, vec3(0.0));
+
+    // 2. Recuperacao de Saturacao de Realces (rgb2sat):
+    // Preserva cromaticidade de fontes de luz, fogo, neon e explosoes, impedindo estouro para branco.
+    const vec3 kBt709Luma = vec3(0.2126, 0.7152, 0.0722);
+    float sceneLuma = dot(scene, kBt709Luma);
+    float mappedLuma = max(HableFilmicCurve(sceneLuma * kExposure) * whiteScale, 0.0);
+    vec3 lumaMappedColor = scene * (mappedLuma / max(sceneLuma, 1e-5));
+
+    float origSat = rgb2sat(scene);
+    float highlightWeight = clamp(sceneLuma * 0.1, 0.0, 1.0);
+    vec3 tonemapped = mix(filmColor, lumaMappedColor, origSat * highlightWeight * 0.6);
+
+    // Protecao contra estouro de gamut mantendo matiz original
+    float peak = max(max(tonemapped.r, tonemapped.g), tonemapped.b);
+    if (peak > 1.0) {
+        tonemapped /= peak;
+    }
+    tonemapped = clamp(tonemapped, 0.0, 1.0);
+
+    // 3. Conversao para gamma do display SDR (Rec.709 / sRGB 2.2)
+    vec3 gammaColor = pow(tonemapped, vec3(1.0 / 2.2));
+
+    // 4. Curva S de Contraste Polinomial Cubica adaptativa
+    return ApplyCubicSCurve(gammaColor, 0.18);
 }
 
 // Planckian locus approximation (Kelvin 2700K a 6500K / Night Mode ~3000K)
@@ -301,6 +382,14 @@ void main() {
         : ApplySGSR1(texUV, vSharpness, vTexelSize);
     if (vIsHdr != 0) {
         color = TonemapHdrToSdr(color, vIsHdr);
+    } else {
+        // Pipeline SDR: mantem o sinal limpo e fiel ao original por padrao (sem desvio de gamma).
+        // Quando upscaling/sharpness esta ativo, uma curva S sutil adaptativa
+        // enriquece o contraste estetico sem alterar a luminancia media.
+        if (vSharpness > 0.05) {
+            float sdrContrast = clamp((vSharpness - 0.05) * 0.10, 0.0, 0.08);
+            color = ApplyCubicSCurve(color, sdrContrast);
+        }
     }
     if (vColorTemperature < 0.0) {
         // Night Mode: reduz luz azul (~3000K)

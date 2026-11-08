@@ -719,9 +719,34 @@ Java_com_tucavr_VRActivity_nativeResetScreenPosition(JNIEnv* env, jobject thiz) 
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetBedMode(JNIEnv* env, jobject thiz, jboolean enabled) {
+    // No-op em GLES
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetBedMode(JNIEnv* env, jobject thiz) {
+    return JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRecenter(JNIEnv* env, jobject thiz) {
+    // No-op em GLES
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetScreenTransform(
     JNIEnv* env, jobject thiz, jfloat posX, jfloat posY, jfloat posZ, jfloat scaleX, jfloat scaleY) {
     // No-op em GLES
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetScreenCurvature(JNIEnv* env, jobject thiz, jfloat curvature) {
+    // No-op em GLES
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_tucavr_VRActivity_nativeGetScreenCurvature(JNIEnv* env, jobject thiz) {
+    return 0.0f;
 }
 
 extern "C" JNIEXPORT void JNICALL
