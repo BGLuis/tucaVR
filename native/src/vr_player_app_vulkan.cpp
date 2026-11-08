@@ -1341,6 +1341,8 @@ struct AppState {
     uint32_t lastAspectVideoHeight = 0;
     ScreenMode lastAspectScreenMode = ScreenMode::Flat2D;
     bool userCustomScreenScale = false;
+    // Width of the user-chosen 16:9 bounding box; screenScaleX/Y are the content fitted inside it.
+    float userScreenBoundWidth = 2.8f;
 
     // Fase 0.3 Seção 2: Grab & Drag da tela virtual (T2.5)
     bool isScreenGrabbed = false;
@@ -8089,14 +8091,14 @@ void UpdateVideoFrame(AppState& state) {
             state.videoStallCount = 0;
             std::fill(std::begin(state.frameTimeHistogram), std::end(state.frameTimeHistogram), 0u);
         } else if (stopRequested) {
-            state.userCustomScreenScale = false;
             state.hasActiveMedia = false;
             state.videoWidth = 0;
             state.videoHeight = 0;
             const auto fit = vrplayer::ComputeFitBounds(
                 vrplayer::kDefaultAspectRatio, state.baseScaleX, state.baseScaleY);
-            state.screenScaleX = fit.x;
-            state.screenScaleY = fit.y;
+            const auto shown = ComputeScreenFit(state, vrplayer::kDefaultAspectRatio);
+            state.screenScaleX = shown.x;
+            state.screenScaleY = shown.y;
             state.defaultScreenScaleX = fit.x;
             state.defaultScreenScaleY = fit.y;
             g_requestUiPanelVisible.store(true);
@@ -8789,14 +8791,15 @@ void RenderFrame(AppState& state) {
                     state.photoHeight = h;
                     state.lastAspectVideoWidth = 0;
                     state.lastAspectVideoHeight = 0;
-                    const auto fit = vrplayer::CalculateVideoFitBounds(
-                        w, h, state.photoScreenMode, state.baseScaleX, state.baseScaleY);
-                    state.screenScaleX = fit.x;
-                    state.screenScaleY = fit.y;
+                    const float photoAspect = vrplayer::CalculateContentAspectRatio(w, h, state.photoScreenMode);
+                    const auto fit = vrplayer::ComputeFitBounds(photoAspect, state.baseScaleX, state.baseScaleY);
+                    const auto shown = ComputeScreenFit(state, photoAspect);
+                    state.screenScaleX = shown.x;
+                    state.screenScaleY = shown.y;
                     state.defaultScreenScaleX = fit.x;
                     state.defaultScreenScaleY = fit.y;
                     LOGI("Photo: texture loaded %ux%u in mode %s (scale=%.2fx%.2f)",
-                         w, h, ScreenModeName(state.photoScreenMode), fit.x, fit.y);
+                         w, h, ScreenModeName(state.photoScreenMode), shown.x, shown.y);
                 }
             } else {
                 state.photoActive = false;
@@ -8810,8 +8813,9 @@ void RenderFrame(AppState& state) {
                 } else {
                     const auto fit = vrplayer::ComputeFitBounds(
                         vrplayer::kDefaultAspectRatio, state.baseScaleX, state.baseScaleY);
-                    state.screenScaleX = fit.x;
-                    state.screenScaleY = fit.y;
+                    const auto shown = ComputeScreenFit(state, vrplayer::kDefaultAspectRatio);
+                    state.screenScaleX = shown.x;
+                    state.screenScaleY = shown.y;
                     state.defaultScreenScaleX = fit.x;
                     state.defaultScreenScaleY = fit.y;
                 }

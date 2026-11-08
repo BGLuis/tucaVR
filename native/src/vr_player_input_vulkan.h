@@ -29,7 +29,30 @@ extern std::atomic<float> g_requestedScreenScaleX;
 extern std::atomic<float> g_requestedScreenScaleY;
 extern "C" bool get_hand_tracking_enabled();
 
-inline void NotifyScreenTransformChanged(AppState& state, const XrVector3f& pos, float scaleX, float scaleY) {
+// Aspect of the content currently on the virtual screen (photo, else video, else 16:9).
+inline float CurrentScreenContentAspect(const AppState& state) {
+    if (state.photoActive && state.photoWidth > 0 && state.photoHeight > 0) {
+        return vrplayer::CalculateContentAspectRatio(state.photoWidth, state.photoHeight, state.photoScreenMode);
+    }
+    if (state.videoWidth > 0 && state.videoHeight > 0) {
+        return vrplayer::CalculateContentAspectRatio(state.videoWidth, state.videoHeight, state.screenMode);
+    }
+    return vrplayer::kDefaultAspectRatio;
+}
+
+// Visible screen scale for the given content aspect: fitted inside the user's 16:9 bounding box when the
+// user chose a size, otherwise inside the environment's default bounds.
+inline vrplayer::ScreenScale ComputeScreenFit(const AppState& state, float aspect) {
+    return state.userCustomScreenScale
+        ? vrplayer::ComputeUserBoundFit(aspect, state.userScreenBoundWidth)
+        : vrplayer::ComputeFitBounds(aspect, state.baseScaleX, state.baseScaleY);
+}
+
+// Persists the screen pose together with the bounding box width (never the aspect-fitted scale), so a
+// vertical video does not overwrite the saved size with a shrunken fit.
+inline void NotifyScreenTransformChanged(AppState& state, const XrVector3f& pos) {
+    const float scaleX = state.userCustomScreenScale ? state.userScreenBoundWidth : state.baseScaleX;
+    const float scaleY = scaleX * (9.0f / 16.0f);
     if (!state.app || !state.app->activity || !state.app->activity->vm) return;
     JNIEnv* env = nullptr;
     state.app->activity->vm->AttachCurrentThread(&env, nullptr);
@@ -389,7 +412,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         state.rightHandFilter.Reset();
         if (state.handTrackingActive && state.isScreenGrabbed) {
             state.isScreenGrabbed = false;
-            NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
+            NotifyScreenTransformChanged(state, state.screenPosition);
         }
         state.handTrackingActive = false;
     }
@@ -1280,30 +1303,13 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         state.screenPosition.x = ::g_requestedScreenPosX.load();
         state.screenPosition.y = ::g_requestedScreenPosY.load();
         state.screenPosition.z = ::g_requestedScreenPosZ.load();
-        float reqScaleX = ::g_requestedScreenScaleX.load();
-        float reqScaleY = ::g_requestedScreenScaleY.load();
+        const float reqScaleX = ::g_requestedScreenScaleX.load();
         state.userCustomScreenScale = true;
+        state.userScreenBoundWidth = reqScaleX > 0.001f ? reqScaleX : vrplayer::kDefaultBaseScreenWidth;
 
-        float aspect = 0.0f;
-        if (state.photoActive && state.photoWidth > 0 && state.photoHeight > 0) {
-            aspect = vrplayer::CalculateContentAspectRatio(
-                state.photoWidth, state.photoHeight, state.photoScreenMode);
-        } else if (state.videoWidth > 0 && state.videoHeight > 0) {
-            aspect = vrplayer::CalculateContentAspectRatio(
-                state.videoWidth, state.videoHeight, state.screenMode);
-        }
-
-        if (aspect > 0.001f) {
-            const float boundHeight = reqScaleX * (9.0f / 16.0f);
-            const auto fit = vrplayer::ComputeFitBounds(aspect, reqScaleX, boundHeight);
-            reqScaleX = fit.x;
-            reqScaleY = fit.y;
-        } else if (reqScaleY <= 0.001f) {
-            reqScaleY = reqScaleX * (9.0f / 16.0f);
-        }
-
-        state.screenScaleX = reqScaleX;
-        state.screenScaleY = reqScaleY;
+        const auto fit = ComputeScreenFit(state, CurrentScreenContentAspect(state));
+        state.screenScaleX = fit.x;
+        state.screenScaleY = fit.y;
         state.isScreenGrabbed = false;
         LOGI("Screen: position and scale loaded via JNI: pos={%.2f, %.2f, %.2f}, scale={%.2f, %.2f}",
              state.screenPosition.x, state.screenPosition.y, state.screenPosition.z,
@@ -1417,7 +1423,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                 }
             }
             if (prevGrabbed && !state.isScreenGrabbed) {
-                NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
+                NotifyScreenTransformChanged(state, state.screenPosition);
             }
         } else {
             // Controller Touch Plus (Option B):
@@ -1462,6 +1468,7 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                         state.screenScaleX = newWidth;
                         state.screenScaleY = newWidth / currentAspect;
                         state.userCustomScreenScale = true;
+                        state.userScreenBoundWidth = newWidth;
                     }
 
                     if (sx != 0.0f) {
@@ -1529,11 +1536,11 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
             if (prevGrabbed && !state.isScreenGrabbed) {
                 FireHaptic(state, rightPath, 0.2f, 15000000 /* 15ms */);
-                NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
+                NotifyScreenTransformChanged(state, state.screenPosition);
             }
             if (s_prevDirectAdjustActive && !directAdjustCombo) {
                 FireHaptic(state, rightPath, 0.2f, 15000000 /* 15ms */);
-                NotifyScreenTransformChanged(state, state.screenPosition, state.screenScaleX, state.screenScaleY);
+                NotifyScreenTransformChanged(state, state.screenPosition);
             }
             s_prevDirectAdjustActive = directAdjustCombo;
         }

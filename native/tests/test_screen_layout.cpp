@@ -494,12 +494,41 @@ static void TestProjectToCurvedScreen() {
     std::cout << "[PASS] TestProjectToCurvedScreen\n";
 }
 
+static void TestUserBoundFitKeepsStable16x9Box() {
+    using vrplayer::ComputeUserBoundFit;
+    const float portrait = 9.0f / 16.0f;
+    const float landscape = 16.0f / 9.0f;
+    const float widths[] = {0.8f, 2.8f, 4.0f, 8.0f};
+
+    // "Large" (4.0) with a vertical video is limited by the box height, not by the width.
+    auto fit = ComputeUserBoundFit(portrait, 4.0f);
+    assert(Near(fit.x, 1.266f, 0.002f));
+    assert(Near(fit.y, 2.25f));
+
+    // The next 16:9 video goes back to the full chosen width: the vertical fit must not stick.
+    fit = ComputeUserBoundFit(landscape, 4.0f);
+    assert(Near(fit.x, 4.0f));
+    assert(Near(fit.y, 2.25f));
+
+    const float aspects[] = {0.05f, 0.5f, portrait, 1.0f, 4.0f / 3.0f, landscape, 2.39f, 20.0f};
+    for (float width : widths) {
+        for (float aspect : aspects) {
+            const auto f = ComputeUserBoundFit(aspect, width);
+            assert(f.y <= width * 9.0f / 16.0f + 1e-4f);
+            assert(f.x <= width + 1e-4f);
+            assert(Near(f.x / f.y, aspect, aspect * 1e-3f));
+        }
+    }
+    std::cout << "[PASS] TestUserBoundFitKeepsStable16x9Box\n";
+}
+
 int main() {
     std::cout << "--- Executing unit tests for screen_layout.h ---\n";
     TestCalculateContentAspectRatio();
     TestComputeFitBounds();
     TestCalculateVideoFitBounds();
     TestAspectRatioPreservationDuringResizing();
+    TestUserBoundFitKeepsStable16x9Box();
     TestCurvedScreenParamsCalculation();
     TestGenerateCurvedScreenVertices();
     TestProjectToCurvedScreen();

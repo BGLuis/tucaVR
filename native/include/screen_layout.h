@@ -114,6 +114,12 @@ inline ScreenScale ComputeFitBounds(float contentAspect, float maxBoundWidth = k
     return scale;
 }
 
+// Fits content inside the user-chosen screen size. The user's size is a stable 16:9 bounding box of the
+// given width, so the visible height never exceeds boundWidth * 9/16 whatever the content aspect.
+inline ScreenScale ComputeUserBoundFit(float contentAspect, float boundWidth) {
+    return ComputeFitBounds(contentAspect, boundWidth, boundWidth * (9.0f / 16.0f));
+}
+
 // Convenience helper: directly calculates fit bounds given video dimensions, screen mode, and bounds
 inline ScreenScale CalculateVideoFitBounds(uint32_t videoWidth, uint32_t videoHeight, ScreenMode mode,
                                            float maxBoundWidth = kDefaultBaseScreenWidth,
