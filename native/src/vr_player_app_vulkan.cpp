@@ -340,6 +340,7 @@ extern "C" {
     // media_logic::color) — usado pra escolher o pipeline de cor do shader
     // de video (tonemap HDR->SDR) e o modelo YCbCr certo.
     extern uint32_t get_video_is_hdr();
+    extern uint64_t get_video_sample_aspect_ratio();
     extern void reset_process_state();
     extern void on_app_focus_lost();
     extern void on_app_focus_gained();
@@ -1340,7 +1341,11 @@ struct AppState {
     uint32_t lastAspectVideoWidth = 0;
     uint32_t lastAspectVideoHeight = 0;
     ScreenMode lastAspectScreenMode = ScreenMode::Flat2D;
+    uint64_t lastAspectSarPacked = 0;
+    vrplayer::SampleAspectRatio videoSar;
     bool userCustomScreenScale = false;
+    // Width of the user-chosen 16:9 bounding box; screenScaleX/Y are the content fitted inside it.
+    float userScreenBoundWidth = 2.8f;
 
     // Fase 0.3 Seção 2: Grab & Drag da tela virtual (T2.5)
     bool isScreenGrabbed = false;
@@ -2000,6 +2005,8 @@ void CreateSwapchains(AppState& state) {
         }
     }
     if (chosenFormat == 0) {
+        // The video fragment shaders linearize for an sRGB attachment, so video renders too dark here.
+        LOGW("No sRGB swapchain format offered by the runtime; falling back to UNORM (video will look darker)");
         for (int64_t format : formats) {
             if (format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_B8G8R8A8_UNORM) {
                 chosenFormat = format;
@@ -3792,7 +3799,10 @@ static void EnsureScrubOverlayTexture(AppState& state, uint32_t width, uint32_t 
             vkFreeMemory(state.vkDevice, state.scrubOverlayImageMemory, nullptr);
             state.scrubOverlayImageMemory = VK_NULL_HANDLE;
         }
-        CreateUiImage(state, width, height, state.scrubOverlayImage, state.scrubOverlayImageMemory, state.scrubOverlayImageView);
+        // Gamma-coded video thumbnails drawn with the raw ui.frag: an sRGB view decodes on sampling so the
+        // eye swapchain's sRGB encode round-trips, matching the linearized video underneath.
+        CreateUiImage(state, width, height, state.scrubOverlayImage, state.scrubOverlayImageMemory, state.scrubOverlayImageView,
+                      VK_FORMAT_R8G8B8A8_SRGB);
         state.scrubOverlayTexWidth = width;
         state.scrubOverlayTexHeight = height;
         state.scrubOverlayReady = true;
@@ -6632,8 +6642,7 @@ static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& da
         state.userCustomScreenScale = false;
         state.lastAspectVideoWidth = 0;
         state.lastAspectVideoHeight = 0;
-        const auto fit = vrplayer::CalculateVideoFitBounds(
-            state.videoWidth, state.videoHeight, state.screenMode, state.baseScaleX, state.baseScaleY);
+        const auto fit = vrplayer::ComputeFitBounds(VideoContentAspect(state), state.baseScaleX, state.baseScaleY);
         state.screenScaleX = fit.x;
         state.screenScaleY = fit.y;
         state.defaultScreenScaleX = fit.x;
@@ -6654,8 +6663,7 @@ static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& da
         state.userCustomScreenScale = false;
         state.lastAspectVideoWidth = 0;
         state.lastAspectVideoHeight = 0;
-        const auto fit = vrplayer::CalculateVideoFitBounds(
-            state.videoWidth, state.videoHeight, state.screenMode, state.baseScaleX, state.baseScaleY);
+        const auto fit = vrplayer::ComputeFitBounds(VideoContentAspect(state), state.baseScaleX, state.baseScaleY);
         state.screenScaleX = fit.x;
         state.screenScaleY = fit.y;
         state.defaultScreenScaleX = fit.x;
@@ -6762,13 +6770,9 @@ static void DrawEnvironmentIfLoaded(
 
     const float envBrightness = get_environment_brightness();
     EnvironmentPushConstants envPc{};
-    Mat4 envModel = Mat4Multiply(
-        Mat4Translation(state.sceneTranslationOffset.x, state.sceneTranslationOffset.y, state.sceneTranslationOffset.z),
-        Mat4Multiply(
-            state.sceneOrientationMatrix,
-            Mat4Translation(-state.envSpawnOffset.x, -state.envSpawnOffset.y, -state.envSpawnOffset.z)
-        )
-    );
+    const Mat4 envModel = vrplayer::ComputeEnvironmentModel(
+        state.bedModeEnabled, headCenter, state.sceneTranslationOffset, state.sceneOrientationMatrix,
+        state.envSpawnOffset);
     envPc.mvp = Mat4Multiply(Mat4Multiply(proj, view), envModel);
     envPc.tintColor = {envBrightness, envBrightness, envBrightness, 1.0f};
 
@@ -8030,33 +8034,30 @@ void ApplyDynamicAspectRatio(AppState& state) {
         return;
     }
     ScreenMode currentMode = state.screenMode;
+    const uint64_t sarPacked = get_video_sample_aspect_ratio();
     if (state.videoWidth == state.lastAspectVideoWidth &&
         state.videoHeight == state.lastAspectVideoHeight &&
-        currentMode == state.lastAspectScreenMode) {
+        currentMode == state.lastAspectScreenMode &&
+        sarPacked == state.lastAspectSarPacked) {
         return;
     }
 
     state.lastAspectVideoWidth = state.videoWidth;
     state.lastAspectVideoHeight = state.videoHeight;
     state.lastAspectScreenMode = currentMode;
+    state.lastAspectSarPacked = sarPacked;
+    state.videoSar = vrplayer::UnpackSampleAspectRatio(sarPacked);
 
-    const float aspect = vrplayer::CalculateContentAspectRatio(
-        state.videoWidth, state.videoHeight, currentMode);
+    const float aspect = VideoContentAspect(state);
     const vrplayer::ScreenScale fit = vrplayer::ComputeFitBounds(
         aspect, state.baseScaleX, state.baseScaleY);
 
     state.defaultScreenScaleX = fit.x;
     state.defaultScreenScaleY = fit.y;
 
-    if (!state.userCustomScreenScale) {
-        state.screenScaleX = fit.x;
-        state.screenScaleY = fit.y;
-    } else {
-        // User had manually resized the screen width; adjust height to match new aspect ratio
-        if (aspect > 0.001f) {
-            state.screenScaleY = state.screenScaleX / aspect;
-        }
-    }
+    const vrplayer::ScreenScale shown = ComputeScreenFit(state, aspect);
+    state.screenScaleX = shown.x;
+    state.screenScaleY = shown.y;
 
     LOGI("Dynamic Aspect Ratio: video %ux%u mode %s -> aspect %.3f (scale=%.3fx%.3f, default=%.3fx%.3f)",
          state.videoWidth, state.videoHeight, ScreenModeName(currentMode), aspect,
@@ -8091,14 +8092,14 @@ void UpdateVideoFrame(AppState& state) {
             state.videoStallCount = 0;
             std::fill(std::begin(state.frameTimeHistogram), std::end(state.frameTimeHistogram), 0u);
         } else if (stopRequested) {
-            state.userCustomScreenScale = false;
             state.hasActiveMedia = false;
             state.videoWidth = 0;
             state.videoHeight = 0;
             const auto fit = vrplayer::ComputeFitBounds(
                 vrplayer::kDefaultAspectRatio, state.baseScaleX, state.baseScaleY);
-            state.screenScaleX = fit.x;
-            state.screenScaleY = fit.y;
+            const auto shown = ComputeScreenFit(state, vrplayer::kDefaultAspectRatio);
+            state.screenScaleX = shown.x;
+            state.screenScaleY = shown.y;
             state.defaultScreenScaleX = fit.x;
             state.defaultScreenScaleY = fit.y;
             g_requestUiPanelVisible.store(true);
@@ -8176,10 +8177,8 @@ void UpdateVideoFrame(AppState& state) {
     if (state.activeVideoFrame == nullptr) {
         LOGE("Video: GetOrImportVideoFrame falhou para o buffer %p — frame sera ignorado (fallback quad solido)", (void*)buffer);
     } else {
-        // Content aspect ratio is derived directly from AHardwareBuffer dimensions.
-        // Streams with Sample Aspect Ratio (SAR) != 1:1 or non-zero container crop rectangles
-        // are currently displayed at raw buffer aspect ratio without SAR stretching.
-        // Tracking full SAR / crop rectangle metadata propagation from demuxer: Issue #176.
+        // Content aspect ratio comes from the AHardwareBuffer dimensions plus the stream's sample
+        // aspect ratio. Container crop rectangles are not applied yet: Issue #176.
         state.videoWidth = state.activeVideoFrame->width;
         state.videoHeight = state.activeVideoFrame->height;
         ApplyDynamicAspectRatio(state);
@@ -8791,14 +8790,15 @@ void RenderFrame(AppState& state) {
                     state.photoHeight = h;
                     state.lastAspectVideoWidth = 0;
                     state.lastAspectVideoHeight = 0;
-                    const auto fit = vrplayer::CalculateVideoFitBounds(
-                        w, h, state.photoScreenMode, state.baseScaleX, state.baseScaleY);
-                    state.screenScaleX = fit.x;
-                    state.screenScaleY = fit.y;
+                    const float photoAspect = vrplayer::CalculateContentAspectRatio(w, h, state.photoScreenMode);
+                    const auto fit = vrplayer::ComputeFitBounds(photoAspect, state.baseScaleX, state.baseScaleY);
+                    const auto shown = ComputeScreenFit(state, photoAspect);
+                    state.screenScaleX = shown.x;
+                    state.screenScaleY = shown.y;
                     state.defaultScreenScaleX = fit.x;
                     state.defaultScreenScaleY = fit.y;
                     LOGI("Photo: texture loaded %ux%u in mode %s (scale=%.2fx%.2f)",
-                         w, h, ScreenModeName(state.photoScreenMode), fit.x, fit.y);
+                         w, h, ScreenModeName(state.photoScreenMode), shown.x, shown.y);
                 }
             } else {
                 state.photoActive = false;
@@ -8812,8 +8812,9 @@ void RenderFrame(AppState& state) {
                 } else {
                     const auto fit = vrplayer::ComputeFitBounds(
                         vrplayer::kDefaultAspectRatio, state.baseScaleX, state.baseScaleY);
-                    state.screenScaleX = fit.x;
-                    state.screenScaleY = fit.y;
+                    const auto shown = ComputeScreenFit(state, vrplayer::kDefaultAspectRatio);
+                    state.screenScaleX = shown.x;
+                    state.screenScaleY = shown.y;
                     state.defaultScreenScaleX = fit.x;
                     state.defaultScreenScaleY = fit.y;
                 }

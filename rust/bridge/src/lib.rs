@@ -815,6 +815,8 @@ static LAST_FRAMES_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static LAST_FRAMES_DROPPED: AtomicU64 = AtomicU64::new(0);
 static LAST_NETWORK_BYTES: AtomicU64 = AtomicU64::new(0);
 static LAST_VIDEO_QUEUE_DEPTH: AtomicU32 = AtomicU32::new(0);
+// (1 << 32) | 1: square pixels until a video reports its SAR.
+static LAST_VIDEO_SAR: AtomicU64 = AtomicU64::new((1 << 32) | 1);
 static LAST_VIDEO_PRESENTATION_PENDING: AtomicU32 = AtomicU32::new(0);
 static LAST_NETWORK_LAST_BLOCK_FETCH_MS: media_logic::session::AtomicF32 =
     media_logic::session::AtomicF32::new(0.0);
@@ -891,6 +893,17 @@ pub extern "C" fn get_video_presentation_pending() -> u32 {
         &LAST_VIDEO_PRESENTATION_PENDING,
         |controller| controller.get_video_presentation_pending(),
     )
+}
+
+/// Sample aspect ratio of the current video packed as `numerator << 32 | denominator`
+/// (see media_logic::sar::pack_sar). Square pixels (1:1) when unknown. Retains the last
+/// value under lock contention (try_sample_cached) so the render loop never sees a bogus SAR.
+#[no_mangle]
+pub extern "C" fn get_video_sample_aspect_ratio() -> u64 {
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_VIDEO_SAR, |controller| {
+        let (num, den) = controller.video_sar();
+        media_logic::sar::pack_sar(num, den)
+    })
 }
 
 /// T-HDR: 0 = SDR (inclui antes do primeiro load), 1 = PQ, 2 = HLG (ver

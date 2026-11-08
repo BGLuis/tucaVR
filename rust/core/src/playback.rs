@@ -237,6 +237,7 @@ pub struct PlaybackController {
     // informa nada (mesma suposicao implicita que o pipeline sempre teve).
     hdr_transfer: media_logic::color::TransferFunction,
     video_fps: f32,
+    video_sar: (u32, u32),
     auto_paused: bool,
     // Instrumentacao (docs/DEBUGGING.md), capturada em load_at() antes de
     // mover o Demuxer/HwDecoder pra dentro das threads de sessao — ver
@@ -327,6 +328,7 @@ impl PlaybackController {
             initial_pose: None,
             hdr_transfer: media_logic::color::TransferFunction::Sdr,
             video_fps: 0.0,
+            video_sar: (1, 1),
             auto_paused: false,
             network_stats: None,
             video_queue: None,
@@ -482,6 +484,7 @@ impl PlaybackController {
         let mut transfer_function = media_logic::color::TransferFunction::Sdr;
         let mut avcol_spc = 2; // AVCOL_SPC_UNSPECIFIED
         let mut avcol_range = 0; // AVCOL_RANGE_UNSPECIFIED
+        let mut video_sar = (1, 1);
         if let Some(stream) = demuxer.input_context.stream(video_idx) {
             codec_id = stream.parameters().id();
             let avg_fps = stream.avg_frame_rate();
@@ -507,11 +510,18 @@ impl PlaybackController {
                     let range: ffmpeg_next::ffi::AVColorRange =
                         video_decoder_ctx.color_range().into();
                     avcol_range = range as i32;
+                    let codec_sar = video_decoder_ctx.aspect_ratio();
+                    let stream_sar = unsafe { (*stream.as_ptr()).sample_aspect_ratio };
+                    video_sar = media_logic::sar::preferred_sar(
+                        (stream_sar.num, stream_sar.den),
+                        (codec_sar.numerator(), codec_sar.denominator()),
+                    );
                 }
             }
         }
         self.hdr_transfer = transfer_function;
         self.video_fps = video_fps;
+        self.video_sar = video_sar;
 
         let (mut fmt3d, confidence, pose) =
             crate::format3d_detect::detect(&demuxer, path, width, height);
@@ -1829,6 +1839,12 @@ impl PlaybackController {
 
     pub fn initial_pose(&self) -> Option<media_logic::format3d::ProjectionPose> {
         self.initial_pose
+    }
+
+    /// Sample aspect ratio (numerator, denominator) of the current video; (1, 1) when unknown
+    /// or before the first load_at().
+    pub fn video_sar(&self) -> (u32, u32) {
+        self.video_sar
     }
 
     /// T-HDR: transfer characteristic do video atual (PQ/HLG/SDR, ver

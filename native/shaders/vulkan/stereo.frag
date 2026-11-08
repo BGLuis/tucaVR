@@ -233,6 +233,14 @@ vec3 ApplySGSR1(vec2 uv, float sharpness, vec2 texelSize) {
     return mix(c, finalColor, clamp(sharpness * 1.5, 0.0, 1.0));
 }
 
+// Exact piecewise sRGB EOTF. The eye swapchain is an *_SRGB format, so the hardware applies the
+// sRGB OETF on write; linearizing the video's gamma-coded value here makes that encode round-trip to the
+// original code value instead of encoding twice.
+vec3 SrgbEotf(vec3 c) {
+    c = clamp(c, 0.0, 1.0);
+    return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), greaterThan(c, vec3(0.04045)));
+}
+
 void main() {
     vec2 uv = vTexCoord;
 
@@ -427,5 +435,5 @@ void main() {
     }
 
     // Pre-multiplied alpha para o compositor OpenXR (XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT)
-    outColor = vec4(color * finalAlpha, finalAlpha);
+    outColor = vec4(SrgbEotf(color) * finalAlpha, finalAlpha);
 }

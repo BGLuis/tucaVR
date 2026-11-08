@@ -123,4 +123,18 @@ inline XrVector3f WorldPointToBase(const XrVector3f &worldPos, const XrVector3f 
     return {rel.x, rel.y + 1.5f, rel.z};
 }
 
+// Model matrix of the 3D environment mesh. The scene rotation pivots around the eye anchor (the same
+// anchor as ComputeSceneTransforms), not the floor point below it, so a reclined 3DoF rotation keeps the
+// viewpoint at envSpawnOffset + (0, 1.5, 0). In yaw-only mode this equals
+// T(sceneTranslationOffset) * R * T(-envSpawnOffset).
+inline Mat4 ComputeEnvironmentModel(bool bedModeEnabled, const XrVector3f &headCenter,
+                                    const XrVector3f &sceneTranslationOffset, const Mat4 &sceneRotation,
+                                    const XrVector3f &envSpawnOffset) {
+    const XrVector3f anchor = bedModeEnabled ? headCenter : Vec3Add(sceneTranslationOffset, {0.0f, 1.5f, 0.0f});
+    return Mat4Multiply(Mat4Translation(anchor.x, anchor.y, anchor.z),
+                        Mat4Multiply(sceneRotation, Mat4Multiply(Mat4Translation(0.0f, -1.5f, 0.0f),
+                                                                 Mat4Translation(-envSpawnOffset.x, -envSpawnOffset.y,
+                                                                                 -envSpawnOffset.z))));
+}
+
 } // namespace vrplayer

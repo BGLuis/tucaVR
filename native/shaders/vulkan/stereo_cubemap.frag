@@ -338,6 +338,14 @@ vec4 GetFaceRectAndRotation(int face, int cbLayout, out int rotation) {
     return vec4(cw, 2.0 * ch, 2.0 * cw, 1.0);                 // Bottom
 }
 
+// Exact piecewise sRGB EOTF. The eye swapchain is an *_SRGB format, so the hardware applies the
+// sRGB OETF on write; linearizing the video's gamma-coded value here makes that encode round-trip to the
+// original code value instead of encoding twice.
+vec3 SrgbEotf(vec3 c) {
+    c = clamp(c, 0.0, 1.0);
+    return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), greaterThan(c, vec3(0.04045)));
+}
+
 void main() {
     int eye = vEye;
     if (vSwapEyes != 0) {
@@ -389,5 +397,5 @@ void main() {
     } else if (abs(vColorTemperature - 6500.0) > 1.0 && vColorTemperature > 1000.0) {
         color = ApplyColorTemperature(color, vColorTemperature);
     }
-    outColor = vec4(color, 1.0);
+    outColor = vec4(SrgbEotf(color), 1.0);
 }

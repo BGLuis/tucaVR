@@ -77,6 +77,24 @@ inline float RgbToSat(ColorRgb rgb) {
     return (maxVal - minVal) / maxVal;
 }
 
+// Exact piecewise sRGB EOTF (IEC 61966-2-1), mirroring SrgbEotf() in video.frag, stereo.frag and
+// stereo_cubemap.frag. The eye swapchain is *_SRGB, so shaders linearize the gamma-coded video value
+// and the hardware sRGB OETF restores it on write.
+inline float SrgbEotf(float c) {
+    c = std::clamp(c, 0.0f, 1.0f);
+    return (c <= 0.04045f) ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f);
+}
+
+inline ColorRgb SrgbEotf(ColorRgb c) {
+    return {SrgbEotf(c.r), SrgbEotf(c.g), SrgbEotf(c.b)};
+}
+
+// Exact piecewise sRGB OETF: what the GPU applies when writing to an *_SRGB attachment.
+inline float SrgbOetf(float l) {
+    l = std::clamp(l, 0.0f, 1.0f);
+    return (l <= 0.0031308f) ? l * 12.92f : 1.055f * std::pow(l, 1.0f / 2.4f) - 0.055f;
+}
+
 // Adaptive Polynomial Cubic S-Curve for contrast
 // f(x) = x * x * (3.0 - 2.0 * x)
 // Fixed anchors at black (0.0), mid-tone (0.5), and white (1.0).
