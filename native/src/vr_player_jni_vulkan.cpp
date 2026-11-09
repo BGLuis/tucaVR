@@ -349,6 +349,7 @@ extern std::atomic<float> g_uiCylinderRadius;
 extern std::atomic<float> g_uiCylinderCentralAngle;
 extern std::atomic<bool> g_byButtonAsBack;
 extern std::atomic<bool> g_hoverHapticsEnabled;
+extern std::atomic<bool> g_directVideoLayerEnabled;
 
 // Fase 0.3 Seção 8: Fotos 360° e 3D estéreo (T8.3, T8.4)
 extern std::atomic<bool> g_photoDirty;
@@ -466,6 +467,11 @@ Java_com_tucavr_VRActivity_nativeSetByButtonAsBack(JNIEnv*, jobject, jboolean en
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetHoverHapticsEnabled(JNIEnv*, jobject, jboolean enabled) {
     g_hoverHapticsEnabled.store(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetDirectVideoLayerEnabled(JNIEnv*, jobject, jboolean enabled) {
+    g_directVideoLayerEnabled.store(enabled == JNI_TRUE);
 }
 
 extern "C" JNIEXPORT void JNICALL

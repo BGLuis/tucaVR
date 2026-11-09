@@ -37,5 +37,7 @@ void main() {
 
     vec3 finalLighting = baseLighting + glow;
     vec4 base = vColor * texture(baseColorTexture, vUv);
-    outColor = vec4(base.rgb * finalLighting, base.a);
+    // Always opaque: the compositor blends the projection layer by this alpha, and a texture alpha below 1 would
+    // open holes in the room. The mesh pipeline has blending off, so the texture alpha has no other effect.
+    outColor = vec4(base.rgb * finalLighting, 1.0);
 }

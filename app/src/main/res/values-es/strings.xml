@@ -54,6 +54,8 @@
     <string name="settings_foveated_mode_medium">Medio</string>
     <string name="settings_foveated_mode_high">Alto</string>
     <string name="settings_foveated_mode_auto">Automático (adaptativo)</string>
+    <string name="settings_direct_video_layer_label">Capa de video directa</string>
+    <string name="settings_direct_video_layer_description">Muestra el video 2D, SBS y OU plano como una capa propia para una imagen más nítida. Desactívala para comparar con el renderizado anterior. Solo Vulkan.</string>
     <string name="settings_ambient_mode_label">Modo Ambiente</string>
     <string name="settings_ambient_mode_description">Añade un halo de luz suave detrás de la pantalla, con el color del propio video. Solo visible en el entorno Void. Solo Vulkan.</string>
     <string name="settings_section_lighting">Iluminación y Entorno</string>

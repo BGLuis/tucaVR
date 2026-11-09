@@ -1,0 +1,223 @@
+// Video color pipeline shared by the shaders that sample the decoded YCbCr frame (included, not compiled alone):
+// HDR tone mapping, color temperature, SGSR1 sharpening and the sRGB linearization for the *_SRGB swapchains.
+// Only video_layer.frag includes it today; video.frag, stereo.frag and stereo_cubemap.frag still carry their own
+// copies of these functions.
+
+layout(set = 0, binding = 0) uniform sampler2D videoTexture;
+
+// ST 2084 (PQ EOTF): converts PQ signal [0.0, 1.0] to relative linear luminance [0.0, 1.0],
+// where 1.0 corresponds to the theoretical peak of 10,000 nits.
+vec3 PqEotf(vec3 pq) {
+    const float m1 = 0.1593017578125;
+    const float m2 = 78.84375;
+    const float c1 = 0.8359375;
+    const float c2 = 18.8515625;
+    const float c3 = 18.6875;
+    vec3 p = pow(clamp(pq, 0.0, 1.0), vec3(1.0 / m2));
+    vec3 num = max(p - c1, 0.0);
+    vec3 den = max(c2 - c3 * p, 1e-6);
+    return pow(num / den, vec3(1.0 / m1));
+}
+
+// BT.2100 HLG: inverse OETF -> scene light -> system OOTF (gamma 1.2,
+// 1000 nits nominal peak) -> display nits.
+vec3 HlgToDisplayNits(vec3 hlg) {
+    const float a = 0.17883277;
+    const float b = 0.28466892;
+    const float c = 0.55991073;
+    vec3 e = clamp(hlg, 0.0, 1.0);
+    vec3 sceneLight = mix((exp((e - c) / a) + b) / 12.0, e * e / 3.0, lessThanEqual(e, vec3(0.5)));
+    float ys = dot(sceneLight, vec3(0.2627, 0.6780, 0.0593));
+    return sceneLight * pow(max(ys, 1e-6), 0.2) * 1000.0;
+}
+
+// BT.2020 -> BT.709 primaries (ITU-R BT.2087) in linear light. Column by column (GLSL).
+const mat3 kBt2020ToBt709 = mat3(
+     1.6605, -0.1246, -0.0182,
+    -0.5876,  1.1329, -0.1006,
+    -0.0728, -0.0083,  1.1187);
+
+// Hable Filmic tone mapping curve (Uncharted 2 / John Hable)
+// Constants:
+//   A = 0.15 (Shoulder Strength)
+//   B = 0.50 (Linear Strength)
+//   C = 0.10 (Linear Angle)
+//   D = 0.20 (Toe Strength)
+//   E = 0.02 (Toe Numerator)
+//   F = 0.30 (Toe Denominator)
+vec3 HableFilmicCurve(vec3 x) {
+    const float A = 0.15;
+    const float B = 0.50;
+    const float C = 0.10;
+    const float D = 0.20;
+    const float E = 0.02;
+    const float F = 0.30;
+    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - (E / F);
+}
+
+float HableFilmicCurve(float x) {
+    const float A = 0.15;
+    const float B = 0.50;
+    const float C = 0.10;
+    const float D = 0.20;
+    const float E = 0.02;
+    const float F = 0.30;
+    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - (E / F);
+}
+
+// Converts linear RGB or sRGB to saturation [0.0, 1.0] (HSV saturation)
+float rgb2sat(vec3 rgb) {
+    float maxVal = max(max(rgb.r, rgb.g), rgb.b);
+    float minVal = min(min(rgb.r, rgb.g), rgb.b);
+    return (maxVal <= 1e-5) ? 0.0 : (maxVal - minVal) / maxVal;
+}
+
+// Adaptive Polynomial Cubic S-Curve
+// f(x) = x * x * (3.0 - 2.0 * x)
+// Fixed anchors at black (0.0), mid-tone (0.5), and white (1.0).
+// Eliminates mid-tone gamma drift and enriches micro-contrast without banding.
+vec3 ApplyCubicSCurve(vec3 color, float strength) {
+    if (strength <= 0.0) {
+        return color;
+    }
+    vec3 c = clamp(color, 0.0, 1.0);
+    vec3 s = c * c * (3.0 - 2.0 * c);
+    return mix(c, s, strength);
+}
+
+// Filmic HDR -> SDR Tonemapping (PQ / HLG for Quest 3 display)
+// `transfer`: 1 = PQ (ST 2084), 2 = HLG (BT.2100).
+vec3 TonemapHdrToSdr(vec3 hdrColor, int transfer) {
+    vec3 nits = (transfer == 2) ? HlgToDisplayNits(hdrColor) : PqEotf(hdrColor) * 10000.0;
+    // Linear BT.709 scene normalization (100 nits = 1.0 linear)
+    vec3 scene = max(kBt2020ToBt709 * (nits / 100.0), vec3(0.0));
+
+    // Linear white point W calibrated for cinema mastering peak (4,000 nits)
+    const float kW = 40.0;
+    const float kExposure = 2.0;
+    float whiteScale = 1.0 / max(HableFilmicCurve(kW * kExposure), 1e-4);
+
+    // 1. Per-channel Hable Filmic mapping (filmic curve with smooth shoulder and toe)
+    vec3 filmColor = max(HableFilmicCurve(scene * kExposure) * whiteScale, vec3(0.0));
+
+    // 2. Highlight Saturation Recovery (rgb2sat):
+    // Preserves chromaticity of bright light sources, fire, neon, and explosions.
+    const vec3 kBt709Luma = vec3(0.2126, 0.7152, 0.0722);
+    float sceneLuma = dot(scene, kBt709Luma);
+    float mappedLuma = max(HableFilmicCurve(sceneLuma * kExposure) * whiteScale, 0.0);
+    vec3 lumaMappedColor = scene * (mappedLuma / max(sceneLuma, 1e-5));
+
+    float origSat = rgb2sat(scene);
+    float highlightWeight = clamp(sceneLuma * 0.1, 0.0, 1.0);
+    vec3 tonemapped = mix(filmColor, lumaMappedColor, origSat * highlightWeight * 0.6);
+
+    // Gamut blowout protection preserving original hue
+    float peak = max(max(tonemapped.r, tonemapped.g), tonemapped.b);
+    if (peak > 1.0) {
+        tonemapped /= peak;
+    }
+    tonemapped = clamp(tonemapped, 0.0, 1.0);
+
+    // 3. Conversion to SDR display gamma (Rec.709 / sRGB 2.2)
+    vec3 gammaColor = pow(tonemapped, vec3(1.0 / 2.2));
+
+    // 4. Adaptive Polynomial Cubic S-Curve for cinematic contrast
+    return ApplyCubicSCurve(gammaColor, 0.18);
+}
+
+// Planckian locus approximation (2700K to 6500K Kelvin / Night Mode ~3000K)
+vec3 ApplyColorTemperature(vec3 color, float tempK) {
+    float t = tempK / 100.0;
+    vec3 tempColor;
+    if (t <= 66.0) {
+        tempColor.r = 1.0;
+    } else {
+        tempColor.r = clamp(1.292 * pow(t - 60.0, -0.1332), 0.0, 1.0);
+    }
+
+    if (t <= 66.0) {
+        tempColor.g = clamp(0.3901 * log(max(t, 1.0)) - 0.6318, 0.0, 1.0);
+    } else {
+        tempColor.g = clamp(1.130 * pow(t - 60.0, -0.0755), 0.0, 1.0);
+    }
+
+    if (t >= 66.0) {
+        tempColor.b = 1.0;
+    } else if (t <= 19.0) {
+        tempColor.b = 0.0;
+    } else {
+        tempColor.b = clamp(0.5432 * log(max(t - 10.0, 1.0)) - 1.1962, 0.0, 1.0);
+    }
+
+    return color * tempColor;
+}
+
+// SGSR1 kernel (Snapdragon Game Super Resolution v1 / edge-aware, 9 taps)
+vec3 ApplySGSR1(vec2 uv, float sharpness, vec2 texelSize) {
+    vec2 dx = vec2(texelSize.x, 0.0);
+    vec2 dy = vec2(0.0, texelSize.y);
+
+    // 9 taps: center, 4 cardinal, 4 diagonal
+    vec3 c  = texture(videoTexture, uv).rgb;
+    vec3 n  = texture(videoTexture, uv + dy).rgb;
+    vec3 s  = texture(videoTexture, uv - dy).rgb;
+    vec3 e  = texture(videoTexture, uv + dx).rgb;
+    vec3 w  = texture(videoTexture, uv - dx).rgb;
+    vec3 ne = texture(videoTexture, uv + dx + dy).rgb;
+    vec3 nw = texture(videoTexture, uv - dx + dy).rgb;
+    vec3 se = texture(videoTexture, uv + dx - dy).rgb;
+    vec3 sw = texture(videoTexture, uv - dx - dy).rgb;
+
+    // Luma for the gradient analysis
+    const vec3 luma = vec3(0.299, 0.587, 0.114);
+    float lC  = dot(c, luma);
+    float lN  = dot(n, luma);
+    float lS  = dot(s, luma);
+    float lE  = dot(e, luma);
+    float lW  = dot(w, luma);
+    float lNE = dot(ne, luma);
+    float lNW = dot(nw, luma);
+    float lSE = dot(se, luma);
+    float lSW = dot(sw, luma);
+
+    // Directional edge gradients
+    float gradH = abs((lNW + 2.0 * lW + lSW) - (lNE + 2.0 * lE + lSE));
+    float gradV = abs((lNW + 2.0 * lN + lNE) - (lSW + 2.0 * lS + lSE));
+    float gradD1 = abs((2.0 * lNW + lN + lW) - (2.0 * lSE + lS + lE));
+    float gradD2 = abs((2.0 * lNE + lN + lE) - (2.0 * lSW + lS + lW));
+
+    // Local min and max to clamp ringing
+    vec3 minColor = min(c, min(min(n, s), min(e, w)));
+    minColor = min(minColor, min(min(ne, nw), min(se, sw)));
+    vec3 maxColor = max(c, max(max(n, s), max(e, w)));
+    maxColor = max(maxColor, max(max(ne, nw), max(se, sw)));
+
+    // Directional adaptive weights
+    float wH = 1.0 / (1.0 + gradH * 4.0);
+    float wV = 1.0 / (1.0 + gradV * 4.0);
+    float wDiag = 1.0 / (1.0 + (gradD1 + gradD2) * 2.0);
+
+    vec3 cardinalAvg = (n + s) * wH + (e + w) * wV;
+    float cardinalSum = 2.0 * (wH + wV);
+    vec3 diagonalAvg = (ne + nw + se + sw) * wDiag;
+    float diagonalSum = 4.0 * wDiag;
+
+    vec3 reconstructed = (c * 2.0 + cardinalAvg + diagonalAvg * 0.5) / (2.0 + cardinalSum + diagonalSum * 0.5);
+
+    // Sharpening adapted to the local contrast
+    vec3 amp = sqrt(clamp(min(minColor, 2.0 - maxColor) / max(maxColor, vec3(0.001)), 0.0, 1.0));
+    float peak = -mix(8.0, 4.0, clamp(sharpness, 0.0, 1.0));
+    vec3 wgt = amp / peak;
+    vec3 sharpened = ((n + s + e + w) * wgt + reconstructed) / (1.0 + 4.0 * wgt);
+
+    vec3 finalColor = clamp(sharpened, minColor, maxColor);
+    return mix(c, finalColor, clamp(sharpness * 1.5, 0.0, 1.0));
+}
+
+// Exact piecewise sRGB EOTF. The eye swapchain is an *_SRGB format, so the hardware applies the
+// sRGB OETF on write; linearizing the video's gamma-coded value here makes that encode round-trip to the
+// original code value instead of encoding twice.
+vec3 SrgbEotf(vec3 c) {
+    c = clamp(c, 0.0, 1.0);
+    return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), greaterThan(c, vec3(0.04045)));
+}

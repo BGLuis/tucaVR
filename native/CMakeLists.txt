@@ -66,7 +66,7 @@ if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
         add_custom_command(
             OUTPUT ${SPV}
             COMMAND ${GLSLC_EXECUTABLE} --target-env=vulkan1.1 -O -o ${SPV} ${SRC}
-            DEPENDS ${SRC}
+            DEPENDS ${SRC} ${SHADER_SRC_DIR}/video_common.glsl
             COMMENT "glslc: ${SHADER_NAME} -> SPIR-V"
         )
         add_custom_command(
@@ -83,6 +83,9 @@ if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
     # Stage 3: video shaders with a YCbCr texture through AHardwareBuffer
     vrplayer_compile_shader(video.vert kVideoVertSpirv)
     vrplayer_compile_shader(video.frag kVideoFragSpirv)
+    # Direct video composition layer: converts the decoded frame into the layer swapchains
+    vrplayer_compile_shader(video_layer.vert kVideoLayerVertSpirv)
+    vrplayer_compile_shader(video_layer.frag kVideoLayerFragSpirv)
     # Stage 4: UI/controls panel shaders (normal RGBA8888)
     vrplayer_compile_shader(ui.vert kUiVertSpirv)
     vrplayer_compile_shader(ui.frag kUiFragSpirv)

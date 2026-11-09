@@ -9,5 +9,6 @@ layout(location = 0) out vec4 outColor;
 
 void main() {
     vec4 texColor = texture(equirectMap, vTexCoord);
-    outColor = texColor * vTintColor;
+    // Always opaque: the compositor blends the projection layer by this alpha.
+    outColor = vec4(texColor.rgb * vTintColor.rgb, 1.0);
 }
