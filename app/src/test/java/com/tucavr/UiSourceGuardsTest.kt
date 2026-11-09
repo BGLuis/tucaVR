@@ -264,6 +264,27 @@ class UiSourceGuardsTest {
     }
 
     @Test
+    fun `gamma-coded overlays are not encoded twice by the sRGB eye swapchain`() {
+        val rootDir = TestPaths.moduleDir.parentFile
+        val renderer = File(rootDir, "native/src/vr_player_app_vulkan.cpp").readText()
+        val ambientFrag = File(rootDir, "native/shaders/vulkan/ambient.frag").readText()
+
+        assertTrue(
+            "The PGS image must use an sRGB format so sampling decodes its gamma-coded RGB (Issue #248)",
+            Regex("""CreateUiImage\([^;]*state\.pgsSubtitleImage\b[^;]*VK_FORMAT_R8G8B8A8_SRGB""").containsMatchIn(renderer),
+        )
+        assertTrue(
+            "ambient.frag must define the exact piecewise sRGB EOTF (Issue #248)",
+            ambientFrag.contains("vec3 SrgbEotf(vec3 c)") && ambientFrag.contains("c / 12.92") && ambientFrag.contains("vec3(2.4)"),
+        )
+        val finalOutput = ambientFrag.lines().last { it.trim().startsWith("outColor = vec4(") }
+        assertTrue(
+            "ambient.frag must linearize the halo in its final outColor write (Issue #248)",
+            finalOutput.contains("SrgbEotf(color)"),
+        )
+    }
+
+    @Test
     fun `player controls guards view writes to prevent redundant invalidations`() {
         val file = File("src/main/java/com/tucavr/VRControlsPresentation.kt")
         val target = if (file.exists()) file else File("app/src/main/java/com/tucavr/VRControlsPresentation.kt")

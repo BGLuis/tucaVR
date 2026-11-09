@@ -5642,7 +5642,10 @@ static void EnsurePgsSubtitleTexture(AppState& state, uint32_t width, uint32_t h
             vkFreeMemory(state.vkDevice, state.pgsSubtitleImageMemory, nullptr);
             state.pgsSubtitleImageMemory = VK_NULL_HANDLE;
         }
-        CreateUiImage(state, width, height, state.pgsSubtitleImage, state.pgsSubtitleImageMemory, state.pgsSubtitleImageView);
+        // Gamma-coded palette colors drawn with the raw ui.frag: an sRGB view decodes on sampling so the eye
+        // swapchain's sRGB encode round-trips to the source color.
+        CreateUiImage(state, width, height, state.pgsSubtitleImage, state.pgsSubtitleImageMemory, state.pgsSubtitleImageView,
+                      VK_FORMAT_R8G8B8A8_SRGB);
         state.pgsSubtitleTexWidth = width;
         state.pgsSubtitleTexHeight = height;
         state.pgsSubtitleReady = true;
