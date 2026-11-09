@@ -70,6 +70,9 @@
     <string name="settings_color_temperature_label">Temperatura de Color</string>
     <string name="settings_color_temperature_description">Ajusta la calidez del color de la pantalla de video de cálido a neutro (2700K a 6500K).</string>
     <string name="settings_color_temperature_kelvin">%1$dK</string>
+    <string name="settings_hdr_luminance_label">Brillo HDR</string>
+    <string name="settings_hdr_luminance_description">Ajusta el brillo de los vídeos HDR. No afecta a los vídeos SDR.</string>
+    <string name="settings_hdr_luminance_percent">%1$d%%</string>
     <string name="settings_night_mode_label">Modo Nocturno</string>
     <string name="settings_night_mode_description">Reduce la emisión de luz azul (~3000K) para comodidad visual en entornos oscuros.</string>
     <string name="quality_warning_thermal">Límite térmico alcanzado: reduciendo calidad de renderizado para enfriar el dispositivo.</string>

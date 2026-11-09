@@ -14,6 +14,7 @@ layout(push_constant) uniform PushConstants {
     float texelHeight;
     int   isHdr;
     float colorTemperature;
+    float hdrLuminance;
 } pc;
 
 layout(location = 0) in vec2 vTexCoord;
@@ -26,7 +27,7 @@ void main() {
         ? texture(videoTexture, vTexCoord).rgb
         : ApplySGSR1(vTexCoord, pc.sharpness, texelSize);
     if (pc.isHdr != 0) {
-        color = TonemapHdrToSdr(color, pc.isHdr);
+        color = TonemapHdrToSdr(color, pc.isHdr, pc.hdrLuminance);
     }
 
     if (pc.colorTemperature < 0.0) {

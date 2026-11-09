@@ -13,7 +13,7 @@ layout(push_constant) uniform PushConstants {
     int   stereoLayout;  // 0 = mono, 1 = SBS, 2 = OU
     int   polar180;      // 0 = 360 completo, 1 = 180 hemisferio frontal
     float sharpness;     // 0.0 = amostragem direta, > 0.0 = forca do SGSR1
-    int   upscalingMode; // 0 = Off, 1 = Quality, 2 = Performance, 3 = Auto
+    float hdrLuminance; // viewer brightness multiplier on the HDR exposure, 1.0 = neutral
     // cubemapLayout/projectionType nao sao usados por este shader (so pelo
     // par stereo_cubemap), mas precisam ficar declarados aqui pra manter o
     // mesmo layout de offsets do push constant que StereoPushConstants no
@@ -37,7 +37,7 @@ layout(location = 2) flat out int vSwapEyes;
 layout(location = 3) flat out int vStereoLayout;
 layout(location = 4) flat out int vPolar180;
 layout(location = 5) flat out float vSharpness;
-layout(location = 6) flat out int vUpscalingMode;
+layout(location = 6) flat out float vHdrLuminance;
 layout(location = 7) flat out int vIsHdr;
 layout(location = 8) flat out vec2 vTexelSize;
 layout(location = 9) flat out int vChromaKeyEnabled;
@@ -54,7 +54,7 @@ void main() {
     vStereoLayout = pc.stereoLayout;
     vPolar180   = pc.polar180;
     vSharpness  = pc.sharpness;
-    vUpscalingMode = pc.upscalingMode;
+    vHdrLuminance = pc.hdrLuminance;
     vIsHdr = pc.isHdr;
     vTexelSize  = vec2(pc.texelWidth, pc.texelHeight);
     vChromaKeyEnabled = pc.chromaKeyEnabled;

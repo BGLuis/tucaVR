@@ -3,9 +3,9 @@
 #include <algorithm>
 #include <cmath>
 
-// Cinematic Color Grading & Tone Mapping (Hable Filmic + rgb2sat + Cubic Contrast S-Curve).
+// Cinematic Color Grading & Tone Mapping (Hable Filmic on max(R, G, B) + Cubic Contrast S-Curve).
 // Provides the exact C++ reference for functions executed in Vulkan shaders (video.frag, stereo.frag,
-// stereo_cubemap.frag) for host unit testing under ASan/UBSan and native processing.
+// stereo_cubemap.frag, video_common.glsl) for host unit testing under ASan/UBSan and native processing.
 
 namespace color_grading {
 // Hable Filmic constants
@@ -25,8 +25,13 @@ constexpr float kPqC3 = 18.6875f;
 
 // Cinematic HDR tonemapping constants
 constexpr float kW = 40.0f;
-constexpr float kExposure = 2.0f;
+constexpr float kExposure = 3.0f;
 constexpr float kSCurveStrength = 0.18f;
+
+// Viewer brightness multiplier on the exposure. Mirrored by HdrLuminanceStore in Kotlin.
+constexpr float kHdrLuminanceMin = 0.5f;
+constexpr float kHdrLuminanceDefault = 1.0f;
+constexpr float kHdrLuminanceMax = 2.0f;
 } // namespace color_grading
 
 struct ColorRgb {
@@ -63,20 +68,6 @@ inline float HableFilmicCurve(float x) {
     return (num / den) - (kHableE / kHableF);
 }
 
-inline ColorRgb HableFilmicCurve(ColorRgb x) {
-    return {HableFilmicCurve(x.r), HableFilmicCurve(x.g), HableFilmicCurve(x.b)};
-}
-
-// Converts linear RGB or sRGB to saturation [0.0, 1.0] (HSV saturation)
-inline float RgbToSat(ColorRgb rgb) {
-    float maxVal = std::max({rgb.r, rgb.g, rgb.b});
-    float minVal = std::min({rgb.r, rgb.g, rgb.b});
-    if (maxVal <= 1e-5f) {
-        return 0.0f;
-    }
-    return (maxVal - minVal) / maxVal;
-}
-
 // Exact piecewise sRGB EOTF (IEC 61966-2-1), mirroring SrgbEotf() in video.frag, stereo.frag and
 // stereo_cubemap.frag. The eye swapchain is *_SRGB, so shaders linearize the gamma-coded video value
 // and the hardware sRGB OETF restores it on write.
@@ -106,10 +97,6 @@ inline float ApplyCubicSCurve(float x, float strength) {
     float c = std::clamp(x, 0.0f, 1.0f);
     float s = c * c * (3.0f - 2.0f * c);
     return c + strength * (s - c);
-}
-
-inline ColorRgb ApplyCubicSCurve(ColorRgb c, float strength) {
-    return {ApplyCubicSCurve(c.r, strength), ApplyCubicSCurve(c.g, strength), ApplyCubicSCurve(c.b, strength)};
 }
 
 // ST 2084 (PQ EOTF): converts PQ signal [0.0, 1.0] to relative linear luminance [0.0, 1.0],
@@ -157,9 +144,11 @@ inline ColorRgb Bt2020ToBt709(ColorRgb bt2020) {
             -0.0182f * bt2020.r - 0.1006f * bt2020.g + 1.1187f * bt2020.b};
 }
 
-// Cinematic HDR -> SDR Tonemapping (PQ / HLG for Quest 3 SDR display)
+// HDR -> linear SDR, before the display gamma (PQ / HLG for Quest 3 SDR display).
 // `transfer`: 1 = PQ (ST 2084), 2 = HLG (BT.2100).
-inline ColorRgb TonemapHdrToSdr(ColorRgb hdrColor, int transfer) {
+// `luminance`: viewer brightness multiplier on the exposure, 1.0 = neutral.
+inline ColorRgb TonemapHdrToLinear(ColorRgb hdrColor, int transfer,
+                                   float luminance = color_grading::kHdrLuminanceDefault) {
     using namespace color_grading;
     ColorRgb nits = (transfer == 2) ? HlgToDisplayNits(hdrColor)
                                     : ColorRgb{PqEotf(hdrColor).r * 10000.0f, PqEotf(hdrColor).g * 10000.0f,
@@ -169,46 +158,33 @@ inline ColorRgb TonemapHdrToSdr(ColorRgb hdrColor, int transfer) {
     ColorRgb scene709 = Bt2020ToBt709(nitsDiv100);
     ColorRgb scene = {std::max(scene709.r, 0.0f), std::max(scene709.g, 0.0f), std::max(scene709.b, 0.0f)};
 
-    // Linear white point W calibrated for cinema mastering peak (4,000 nits)
-    float whiteVal = HableFilmicCurve(kW * kExposure);
-    float whiteScale = 1.0f / std::max(whiteVal, 1e-4f);
+    // Linear white point W calibrated for cinema mastering peak (4,000 nits). It moves with the exposure so
+    // 4,000 nits stays at 1.0 at any luminance setting.
+    float exposure = kExposure * luminance;
+    float whiteScale = 1.0f / std::max(HableFilmicCurve(kW * exposure), 1e-4f);
 
-    ColorRgb filmColor = {std::max(HableFilmicCurve(scene.r * kExposure) * whiteScale, 0.0f),
-                          std::max(HableFilmicCurve(scene.g * kExposure) * whiteScale, 0.0f),
-                          std::max(HableFilmicCurve(scene.b * kExposure) * whiteScale, 0.0f)};
+    // Map the largest channel and scale the others by the same ratio, which keeps R:G:B and so the hue.
+    float peak = std::max({scene.r, scene.g, scene.b});
+    float mappedPeak = std::clamp(HableFilmicCurve(peak * exposure) * whiteScale, 0.0f, 1.0f);
+    float ratio = mappedPeak / std::max(peak, 1e-5f);
 
-    // Highlight Saturation Recovery (RgbToSat)
-    constexpr float kBt709LumaR = 0.2126f;
-    constexpr float kBt709LumaG = 0.7152f;
-    constexpr float kBt709LumaB = 0.0722f;
-    float sceneLuma = scene.r * kBt709LumaR + scene.g * kBt709LumaG + scene.b * kBt709LumaB;
-    float mappedLuma = std::max(HableFilmicCurve(sceneLuma * kExposure) * whiteScale, 0.0f);
-    float lumaRatio = mappedLuma / std::max(sceneLuma, 1e-5f);
+    return {scene.r * ratio, scene.g * ratio, scene.b * ratio};
+}
 
-    ColorRgb lumaMappedColor = {scene.r * lumaRatio, scene.g * lumaRatio, scene.b * lumaRatio};
-
-    float origSat = RgbToSat(scene);
-    float highlightWeight = std::clamp(sceneLuma * 0.1f, 0.0f, 1.0f);
-    float blendFactor = origSat * highlightWeight * 0.6f;
-
-    ColorRgb tonemapped = {filmColor.r + blendFactor * (lumaMappedColor.r - filmColor.r),
-                           filmColor.g + blendFactor * (lumaMappedColor.g - filmColor.g),
-                           filmColor.b + blendFactor * (lumaMappedColor.b - filmColor.b)};
-
-    float peak = std::max({tonemapped.r, tonemapped.g, tonemapped.b});
-    if (peak > 1.0f) {
-        tonemapped.r /= peak;
-        tonemapped.g /= peak;
-        tonemapped.b /= peak;
-    }
-    tonemapped.r = std::clamp(tonemapped.r, 0.0f, 1.0f);
-    tonemapped.g = std::clamp(tonemapped.g, 0.0f, 1.0f);
-    tonemapped.b = std::clamp(tonemapped.b, 0.0f, 1.0f);
+// Cinematic HDR -> SDR Tonemapping: TonemapHdrToLinear, display gamma, then contrast.
+inline ColorRgb TonemapHdrToSdr(ColorRgb hdrColor, int transfer,
+                                float luminance = color_grading::kHdrLuminanceDefault) {
+    using namespace color_grading;
+    ColorRgb tonemapped = TonemapHdrToLinear(hdrColor, transfer, luminance);
 
     ColorRgb gammaColor = {std::pow(tonemapped.r, 1.0f / 2.2f), std::pow(tonemapped.g, 1.0f / 2.2f),
                            std::pow(tonemapped.b, 1.0f / 2.2f)};
 
-    return ApplyCubicSCurve(gammaColor, kSCurveStrength);
+    // On the peak for the same reason as the curve: a per-channel S-curve would shift the hue again.
+    float gammaPeak = std::max({gammaColor.r, gammaColor.g, gammaColor.b});
+    float contrastRatio = ApplyCubicSCurve(gammaPeak, kSCurveStrength) / std::max(gammaPeak, 1e-5f);
+
+    return {gammaColor.r * contrastRatio, gammaColor.g * contrastRatio, gammaColor.b * contrastRatio};
 }
 
 // Planckian locus approximation (Kelvin 2700K to 6500K / Night Mode ~3000K)

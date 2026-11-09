@@ -14,7 +14,7 @@ layout(push_constant) uniform PushConstants {
     int   stereoLayout;  // 0 = mono, 1 = SBS, 2 = OU
     int   polar180;      // não usado em cubemap (sempre 360)
     float sharpness;     // 0.0 = amostragem direta, > 0.0 = SGSR1
-    int   upscalingMode; // 0 = Off, 1 = Quality, 2 = Performance, 3 = Auto
+    float hdrLuminance; // viewer brightness multiplier on the HDR exposure, 1.0 = neutral
     int   cubemapLayout; // 0 = 3x2, 1 = 6x1, 2 = EAC 3x2, 3 = cross
     int   projectionType;// 0 = Linear Cubemap, 1 = EAC
     int   isHdr;         // T-HDR: 1 = fonte PQ/HLG, aplicar tonemap no fragment shader
@@ -32,7 +32,7 @@ layout(location = 1) flat out int vEye;
 layout(location = 2) flat out int vSwapEyes;
 layout(location = 3) flat out int vStereoLayout;
 layout(location = 4) flat out float vSharpness;
-layout(location = 5) flat out int vUpscalingMode;
+layout(location = 5) flat out float vHdrLuminance;
 layout(location = 6) flat out int vCubemapLayout;
 layout(location = 7) flat out int vProjectionType;
 layout(location = 8) out vec3 vWorldDirection;
@@ -47,7 +47,7 @@ void main() {
     vSwapEyes         = pc.swapEyes;
     vStereoLayout     = pc.stereoLayout;
     vSharpness        = pc.sharpness;
-    vUpscalingMode    = pc.upscalingMode;
+    vHdrLuminance    = pc.hdrLuminance;
     vCubemapLayout    = pc.cubemapLayout;
     vProjectionType   = pc.projectionType;
     vWorldDirection   = inPosition;

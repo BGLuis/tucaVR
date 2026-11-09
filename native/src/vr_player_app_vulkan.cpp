@@ -758,6 +758,7 @@ struct VideoLayerPushConstants {
     float texelHeight;
     int isHdr;
     float colorTemperature;
+    float hdrLuminance;
 };
 
 // Everything the conversion into the layer swapchains depends on: when it changes, the layers must be redrawn.
@@ -770,6 +771,7 @@ struct VideoLayerConversionKey {
     int isHdr = 0;
     float sharpness = 0.0f;
     float colorTemperature = 0.0f;
+    float hdrLuminance = 0.0f;
     XrSwapchain chains[kEyeCount] = {};
     bool operator==(const VideoLayerConversionKey&) const = default;
 };
@@ -1572,7 +1574,7 @@ struct QuadPushConstants {
 struct VideoPushConstants {
     Mat4  mvp;
     float sharpness;
-    int   upscalingMode;
+    float hdrLuminance;
     // T-HDR: 1 se o video atual e HDR (PQ/HLG) — o fragment shader aplica
     // tonemap HDR->SDR quando isto e nao-zero, ver video.frag.
     int   isHdr;
@@ -1600,7 +1602,7 @@ struct StereoPushConstants {
     int   stereoLayout;
     int   polar180;
     float sharpness;
-    int   upscalingMode;
+    float hdrLuminance;
     int   cubemapLayout;
     int   projectionType;
     // T-HDR: mesmo significado de VideoPushConstants::isHdr, ver stereo.frag/
@@ -3730,6 +3732,7 @@ static bool UpdateVideoLayerImages(AppState& state, const VideoFrame& frame, vrp
     key.isHdr = state.isHdr;
     key.sharpness = sharpness;
     key.colorTemperature = get_night_mode_enabled() ? -3000.0f : get_color_temperature();
+    key.hdrLuminance = get_hdr_luminance();
     for (uint32_t i = 0; i < layer.chainCount; i++) key.chains[i] = layer.chains[i].handle;
 
     bool allReleased = layer.chainCount > 0;
@@ -3802,6 +3805,7 @@ static bool UpdateVideoLayerImages(AppState& state, const VideoFrame& frame, vrp
         pc.texelHeight = texelHeight;
         pc.isHdr = state.isHdr;
         pc.colorTemperature = key.colorTemperature;
+        pc.hdrLuminance = key.hdrLuminance;
         vkCmdPushConstants(cmd, layer.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
                            sizeof(pc), &pc);
 
@@ -5642,7 +5646,10 @@ static void EnsurePgsSubtitleTexture(AppState& state, uint32_t width, uint32_t h
             vkFreeMemory(state.vkDevice, state.pgsSubtitleImageMemory, nullptr);
             state.pgsSubtitleImageMemory = VK_NULL_HANDLE;
         }
-        CreateUiImage(state, width, height, state.pgsSubtitleImage, state.pgsSubtitleImageMemory, state.pgsSubtitleImageView);
+        // Gamma-coded palette colors drawn with the raw ui.frag: an sRGB view decodes on sampling so the eye
+        // swapchain's sRGB encode round-trips to the source color.
+        CreateUiImage(state, width, height, state.pgsSubtitleImage, state.pgsSubtitleImageMemory, state.pgsSubtitleImageView,
+                      VK_FORMAT_R8G8B8A8_SRGB);
         state.pgsSubtitleTexWidth = width;
         state.pgsSubtitleTexHeight = height;
         state.pgsSubtitleReady = true;
@@ -8333,7 +8340,7 @@ void RecordVideoFlat(
     VideoPushConstants pc{};
     pc.mvp = mvp;
     pc.sharpness = state.upscalingSharpness;
-    pc.upscalingMode = static_cast<int>(state.upscalingMode);
+    pc.hdrLuminance = get_hdr_luminance();
     pc.isHdr = state.isHdr;
     float vw = (state.videoWidth > 0) ? static_cast<float>(state.videoWidth) : 1920.0f;
     float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1080.0f;
@@ -8504,7 +8511,7 @@ void RecordStereoFrame(
     spc.stereoLayout   = sp.stereoLayout;
     spc.polar180       = sp.polar180;
     spc.sharpness      = state.upscalingSharpness;
-    spc.upscalingMode  = static_cast<int>(state.upscalingMode);
+    spc.hdrLuminance   = get_hdr_luminance();
     spc.cubemapLayout  = sp.cubemapLayout;
     spc.projectionType = sp.projectionType;
     spc.isHdr          = state.isHdr;
@@ -8617,7 +8624,7 @@ void RecordPhotoFrame(
     spc.stereoLayout   = sp.stereoLayout;
     spc.polar180       = sp.polar180;
     spc.sharpness      = 0.0f;
-    spc.upscalingMode  = 0;
+    spc.hdrLuminance   = 1.0f;
     spc.cubemapLayout  = sp.cubemapLayout;
     spc.projectionType = sp.projectionType;
     // Sem decode HDR de foto estatica — sempre SDR.

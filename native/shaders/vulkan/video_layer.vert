@@ -11,6 +11,7 @@ layout(push_constant) uniform PushConstants {
     float texelHeight;      // 1.0 / decoded height
     int   isHdr;            // 1 = PQ, 2 = HLG
     float colorTemperature; // Kelvin, or negative for Night Mode
+    float hdrLuminance;     // viewer brightness multiplier on the HDR exposure, 1.0 = neutral
 } pc;
 
 layout(location = 0) out vec2 vTexCoord;
