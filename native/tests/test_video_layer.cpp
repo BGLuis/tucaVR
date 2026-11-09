@@ -18,16 +18,62 @@ static DirectVideoLayerInputs EligibleInputs() {
     return in;
 }
 
-static void TestOnlyFlatModesUseTheDirectPath() {
+static void TestEquirectNeedsTheExtensionAndFullSizeContent() {
+    DirectVideoLayerInputs in = EligibleInputs();
+    in.screenMode = ScreenMode::Vr180SBS;
+    in.equirectSupported = true;
+    in.contentFitsLayer = true;
+    assert(ShouldUseDirectVideoLayer(in));
+
+    in.equirectSupported = false;
+    assert(!ShouldUseDirectVideoLayer(in));
+
+    in.equirectSupported = true;
+    in.contentFitsLayer = false;
+    assert(!ShouldUseDirectVideoLayer(in));
+    assert(!vrplayer::IsVideoLayerCandidate(in));
+
+    in.screenMode = ScreenMode::Flat2D;
+    assert(ShouldUseDirectVideoLayer(in));
+    printf("[PASS] TestEquirectNeedsTheExtensionAndFullSizeContent\n");
+}
+
+static void TestSphereFitsOnlyWithoutDownscale() {
+    using vrplayer::FitsVideoLayerWithoutDownscale;
+    assert(FitsVideoLayerWithoutDownscale(7680, 3840, VideoLayerLayout::SideBySide, 4096, 4096));
+    assert(FitsVideoLayerWithoutDownscale(3840, 7680, VideoLayerLayout::OverUnder, 4096, 4096));
+    assert(!FitsVideoLayerWithoutDownscale(7680, 3840, VideoLayerLayout::Mono, 4096, 4096));
+    assert(!FitsVideoLayerWithoutDownscale(7680, 3840, VideoLayerLayout::SideBySide, 2048, 4096));
+    assert(!FitsVideoLayerWithoutDownscale(0, 3840, VideoLayerLayout::Mono, 4096, 4096));
+    printf("[PASS] TestSphereFitsOnlyWithoutDownscale\n");
+}
+
+static void TestEquirectAnglesCoverTheRightPortionOfTheSphere() {
+    constexpr float kPi = 3.14159265358979323846f;
+    const auto hemisphere = vrplayer::ComputeEquirectLayerAngles(ScreenMode::Vr180SBS);
+    assert(hemisphere.centralHorizontal == kPi);
+    assert(vrplayer::ComputeEquirectLayerAngles(ScreenMode::Sphere180).centralHorizontal == kPi);
+    const auto full = vrplayer::ComputeEquirectLayerAngles(ScreenMode::Sphere360OU);
+    assert(full.centralHorizontal == 2.0f * kPi);
+    assert(full.upperVertical == kPi * 0.5f);
+    assert(full.lowerVertical == -kPi * 0.5f);
+    printf("[PASS] TestEquirectAnglesCoverTheRightPortionOfTheSphere\n");
+}
+
+static void TestDirectPathCoversFlatAndEquirectModes() {
     for (uint32_t raw = 0; raw <= static_cast<uint32_t>(ScreenMode::Fisheye190SBS); ++raw) {
         DirectVideoLayerInputs in = EligibleInputs();
         in.screenMode = static_cast<ScreenMode>(raw);
-        const bool flat = in.screenMode == ScreenMode::Flat2D || in.screenMode == ScreenMode::SBS ||
-                          in.screenMode == ScreenMode::SBSHalf || in.screenMode == ScreenMode::OU ||
-                          in.screenMode == ScreenMode::OUHalf;
-        assert(ShouldUseDirectVideoLayer(in) == flat);
+        in.equirectSupported = true;
+        in.contentFitsLayer = true;
+        const bool expected = in.screenMode == ScreenMode::Flat2D || in.screenMode == ScreenMode::SBS ||
+                              in.screenMode == ScreenMode::SBSHalf || in.screenMode == ScreenMode::OU ||
+                              in.screenMode == ScreenMode::OUHalf || in.screenMode == ScreenMode::Sphere360 ||
+                              in.screenMode == ScreenMode::Sphere180 || in.screenMode == ScreenMode::Sphere360SBS ||
+                              in.screenMode == ScreenMode::Sphere360OU || in.screenMode == ScreenMode::Vr180SBS;
+        assert(ShouldUseDirectVideoLayer(in) == expected);
     }
-    printf("[PASS] TestOnlyFlatModesUseTheDirectPath\n");
+    printf("[PASS] TestDirectPathCoversFlatAndEquirectModes\n");
 }
 
 static void TestEveryDisqualifierFallsBackToTheEyeBuffer() {
@@ -80,6 +126,11 @@ static void TestLayoutFollowsTheScreenMode() {
     assert(vrplayer::VideoLayerLayoutForMode(ScreenMode::SBSHalf) == VideoLayerLayout::SideBySide);
     assert(vrplayer::VideoLayerLayoutForMode(ScreenMode::OU) == VideoLayerLayout::OverUnder);
     assert(vrplayer::VideoLayerLayoutForMode(ScreenMode::OUHalf) == VideoLayerLayout::OverUnder);
+    assert(vrplayer::VideoLayerLayoutForMode(ScreenMode::Sphere360) == VideoLayerLayout::Mono);
+    assert(vrplayer::VideoLayerLayoutForMode(ScreenMode::Sphere180) == VideoLayerLayout::Mono);
+    assert(vrplayer::VideoLayerLayoutForMode(ScreenMode::Sphere360SBS) == VideoLayerLayout::SideBySide);
+    assert(vrplayer::VideoLayerLayoutForMode(ScreenMode::Vr180SBS) == VideoLayerLayout::SideBySide);
+    assert(vrplayer::VideoLayerLayoutForMode(ScreenMode::Sphere360OU) == VideoLayerLayout::OverUnder);
 
     assert(!vrplayer::UsesPerEyeVideoLayers(VideoLayerLayout::Mono, false));
     assert(vrplayer::UsesPerEyeVideoLayers(VideoLayerLayout::SideBySide, false));
@@ -170,7 +221,10 @@ static void TestSwappedEyesExchangeTheHalves() {
 
 int main() {
     printf("--- Executing unit tests for video_layer.h ---\n");
-    TestOnlyFlatModesUseTheDirectPath();
+    TestDirectPathCoversFlatAndEquirectModes();
+    TestEquirectNeedsTheExtensionAndFullSizeContent();
+    TestSphereFitsOnlyWithoutDownscale();
+    TestEquirectAnglesCoverTheRightPortionOfTheSphere();
     TestEveryDisqualifierFallsBackToTheEyeBuffer();
     TestCurvedScreenNeedsTheCylinderExtension();
     TestLayoutFollowsTheScreenMode();

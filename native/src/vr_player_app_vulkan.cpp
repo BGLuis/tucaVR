@@ -942,6 +942,7 @@ struct AppState {
     bool upscalingEnabled = false;
     bool supportsMqsr = false;
     bool supportsCylinder = false;
+    bool supportsEquirect2 = false;
     bool supportsPerfMetrics = false;
     // F3: XR_META_performance_metrics.
     // `supportsPerfMetrics` acima so significa que a EXTENSAO foi habilitada — o SISTEMA de
@@ -1663,6 +1664,12 @@ void CreateXrInstance(AppState& state) {
         extensions.push_back(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME);
     if (isExtensionSupported(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME))
         extensions.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+
+    state.supportsEquirect2 = isExtensionSupported(XR_KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME);
+    if (state.supportsEquirect2) {
+        extensions.push_back(XR_KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME);
+    }
+    LOGI("OpenXR: XR_KHR_composition_layer_equirect2 %s", state.supportsEquirect2 ? "enabled" : "not available");
 
     // Cylinder composition layer (XR_KHR_composition_layer_cylinder)
     state.supportsCylinder = isExtensionSupported(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
@@ -3321,8 +3328,8 @@ void CreateYcbcrAndVideoPipeline(AppState& state) {
 // ===========================================================================
 // Direct video composition layer
 //
-// Flat cinema video (Flat2D/SBS/OU) is converted once per decoded frame into dedicated OpenXR swapchains that the
-// compositor shows as quad/cylinder layers underneath the projection layer, so the picture is resampled once by the
+// Flat cinema video and equirect spheres are converted once per decoded frame into dedicated OpenXR swapchains that the
+// compositor shows as quad, cylinder or equirect layers underneath the projection layer, so the picture is resampled once by the
 // compositor instead of twice. The eye buffer only keeps a transparent hole where the screen is. The rules deciding
 // when this path runs live in video_layer.h.
 // ===========================================================================
@@ -3710,6 +3717,10 @@ static bool PrepareVideoLayerChains(
 static bool UpdateVideoLayerImages(AppState& state, const VideoFrame& frame, vrplayer::VideoLayerLayout layout) {
     VideoLayerState& layer = state.videoLayer;
 
+    // Same exclusion as stereo.frag: the 180-degree crop makes the SGSR1 neighbours diverge on Adreno.
+    const bool hemisphereMode = (GetStereoParams(state.screenMode, 0).polar180 & 0xFF) != 0;
+    const float sharpness = hemisphereMode ? 0.0f : state.upscalingSharpness;
+
     VideoLayerConversionKey key;
     key.frameSerial = state.videoFrameSerial;
     key.layout = layout;
@@ -3717,7 +3728,7 @@ static bool UpdateVideoLayerImages(AppState& state, const VideoFrame& frame, vrp
     key.swapEyes = get_swap_eyes() != 0;
     key.monoView = get_mono_view() != 0;
     key.isHdr = state.isHdr;
-    key.sharpness = state.upscalingSharpness;
+    key.sharpness = sharpness;
     key.colorTemperature = get_night_mode_enabled() ? -3000.0f : get_color_temperature();
     for (uint32_t i = 0; i < layer.chainCount; i++) key.chains[i] = layer.chains[i].handle;
 
@@ -3786,7 +3797,7 @@ static bool UpdateVideoLayerImages(AppState& state, const VideoFrame& frame, vrp
         pc.uvOffset[1] = crop.offsetV;
         pc.uvScale[0] = crop.scaleU;
         pc.uvScale[1] = crop.scaleV;
-        pc.sharpness = state.upscalingSharpness;
+        pc.sharpness = sharpness;
         pc.texelWidth = texelWidth;
         pc.texelHeight = texelHeight;
         pc.isHdr = state.isHdr;
@@ -8370,12 +8381,13 @@ void RecordVideoFlat(
 
 // Direct video layer path: the screen is drawn as a transparent hole and the picture comes from the layers submitted
 // behind the projection layer. Environment, overlays and fade are drawn as in RecordVideoFlat. It serves Flat2D and
-// flat SBS/OU alike, since the hole does not depend on the stereo layout.
+// flat SBS/OU alike, since the hole does not depend on the stereo layout. A sphere surrounds the viewer and draws no
+// environment, so the whole eye buffer is the hole and only the overlays remain.
 void RecordVideoHole(
     AppState& state, VkCommandBuffer cmd, VkFramebuffer framebuffer, VkExtent2D extent,
-    const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
+    const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter, bool sphereMode) {
     std::array<VkClearValue, 2> clearValues{};
-    clearValues[0].color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
+    clearValues[0].color = {{0.0f, 0.0f, 0.0f, sphereMode ? 0.0f : PassthroughEnvAlpha(state)}};
     clearValues[1].depthStencil = {1.0f, 0};
 
     VkRenderPassBeginInfo renderPassBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
@@ -8397,37 +8409,39 @@ void RecordVideoHole(
     VkRect2D scissor{{0, 0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    DrawSkyboxIfLoaded(state, cmd, proj, view);
-    DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
-    DrawAmbientHalo(state, cmd, proj, view, headCenter);
+    if (!sphereMode) {
+        DrawSkyboxIfLoaded(state, cmd, proj, view);
+        DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
+        DrawAmbientHalo(state, cmd, proj, view, headCenter);
 
-    const bool isCurved = (state.screenCurvature > 1e-4f);
-    VkBuffer targetVb = isCurved ? state.curvedVideoVertexBuffer : state.videoVertexBuffer;
-    const uint32_t vertexCount = isCurved ? state.curvedVideoVertexCount : 4;
+        const bool isCurved = (state.screenCurvature > 1e-4f);
+        VkBuffer targetVb = isCurved ? state.curvedVideoVertexBuffer : state.videoVertexBuffer;
+        const uint32_t vertexCount = isCurved ? state.curvedVideoVertexCount : 4;
 
-    VkDeviceSize offset = 0;
-    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.videoLayer.holePipeline);
-    vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &offset);
-    QuadPushConstants holePush{};
-    holePush.mvp = mvp;
-    vkCmdPushConstants(cmd, state.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(holePush), &holePush);
-    vkCmdDraw(cmd, vertexCount, 1, 0, 0);
-    CountDrawCall(vertexCount);
-
-    // Scrub preview over the hole, same transform as the screen.
-    if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
-        VkDeviceSize ovOffset = 0;
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
-        vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &ovOffset);
-        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
-            state.uiPipelineLayout, 0, 1, &state.scrubOverlayDescriptorSet, 0, nullptr);
-        UiPushConstants ovpc{};
-        ovpc.mvp = mvp;
-        ovpc.alpha = 1.0f;
-        vkCmdPushConstants(cmd, state.uiPipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
+        VkDeviceSize offset = 0;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.videoLayer.holePipeline);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &offset);
+        QuadPushConstants holePush{};
+        holePush.mvp = mvp;
+        vkCmdPushConstants(cmd, state.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(holePush), &holePush);
         vkCmdDraw(cmd, vertexCount, 1, 0, 0);
         CountDrawCall(vertexCount);
+
+        // Scrub preview over the hole, same transform as the screen.
+        if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
+            VkDeviceSize ovOffset = 0;
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
+            vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &ovOffset);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                state.uiPipelineLayout, 0, 1, &state.scrubOverlayDescriptorSet, 0, nullptr);
+            UiPushConstants ovpc{};
+            ovpc.mvp = mvp;
+            ovpc.alpha = 1.0f;
+            vkCmdPushConstants(cmd, state.uiPipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
+            vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+            CountDrawCall(vertexCount);
+        }
     }
 
     DrawUiQuads(state, cmd, proj, view, headCenter);
@@ -9600,9 +9614,13 @@ void RenderFrame(AppState& state) {
         directInputs.packedAlphaActive = effectiveChromaMode >= 2;
         directInputs.curvedScreen = isCurved;
         directInputs.cylinderSupported = state.supportsCylinder;
+        directInputs.equirectSupported = state.supportsEquirect2;
+        directInputs.contentFitsLayer =
+            directInputs.hasVideoFrame &&
+            vrplayer::FitsVideoLayerWithoutDownscale(state.activeVideoFrame->width, state.activeVideoFrame->height,
+                                                     videoLayerLayout, state.videoLayer.maxWidth, state.videoLayer.maxHeight);
         directInputs.swapchainsReady =
-            directInputs.featureEnabled && directInputs.hasVideoFrame && !photoShown &&
-            vrplayer::IsDirectVideoLayerMode(state.screenMode) &&
+            vrplayer::IsVideoLayerCandidate(directInputs) &&
             PrepareVideoLayerChains(state, *state.activeVideoFrame, videoLayerLayout,
                                     vrplayer::UsesPerEyeVideoLayers(videoLayerLayout, get_mono_view() != 0));
         bool useDirectVideo = vrplayer::ShouldUseDirectVideoLayer(directInputs);
@@ -9695,7 +9713,7 @@ void RenderFrame(AppState& state) {
                 RecordPhotoFrame(state, cmd, fb, extent, photoMvp, proj, view, headCenter, pSphere, eye, sp);
             } else if (state.activeVideoFrame != nullptr) {
                 if (useDirectVideo) {
-                    RecordVideoHole(state, cmd, fb, extent, mvp, proj, view, headCenter);
+                    RecordVideoHole(state, cmd, fb, extent, mvp, proj, view, headCenter, sphereMode);
                 } else if (sphereMode || stereoFlat) {
                     const Mat4 sphereRot = state.bedModeEnabled ?
                         Mat4Multiply(state.sceneOrientationMatrix, Mat4RotationY(sphereMode ? state.videoSphereYawOffset : 0.0f)) :
@@ -9983,6 +10001,8 @@ void RenderFrame(AppState& state) {
         // transforms (bed mode, recenter, resize and grab), the same ones the eye buffer hole is drawn with.
         std::array<XrCompositionLayerQuad, kEyeCount> videoQuads{};
         std::array<XrCompositionLayerCylinderKHR, kEyeCount> videoCylinders{};
+        std::array<XrCompositionLayerEquirect2KHR, kEyeCount> videoEquirects{};
+        const bool equirectVideo = vrplayer::IsEquirectVideoLayerMode(state.screenMode);
         std::array<XrCompositionLayerSettingsFB, kEyeCount> videoSettings{};
         if (useDirectVideo) {
             const VideoLayerState& videoLayer = state.videoLayer;
@@ -10001,7 +10021,27 @@ void RenderFrame(AppState& state) {
                 }
                 const void* settingsChain = state.supportsMqsr ? &videoSettings[i] : nullptr;
 
-                if (isCurved) {
+                if (equirectVideo) {
+                    // Same orientation as the eye-buffer sphere, whose U = 0.5 faces -Z. Radius 0 is an infinite
+                    // sphere, matching a mesh that follows the head.
+                    const Mat4 sphereRotation =
+                        state.bedModeEnabled
+                            ? Mat4Multiply(state.sceneOrientationMatrix, Mat4RotationY(state.videoSphereYawOffset))
+                            : Mat4RotationY(state.sceneYawOffset + state.videoSphereYawOffset);
+                    const vrplayer::EquirectLayerAngles angles = vrplayer::ComputeEquirectLayerAngles(state.screenMode);
+                    XrCompositionLayerEquirect2KHR& equirect = videoEquirects[i];
+                    equirect = {XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR};
+                    equirect.next = settingsChain;
+                    equirect.space = state.localSpace;
+                    equirect.eyeVisibility = visibility;
+                    equirect.subImage = subImage;
+                    equirect.pose.position = headCenter;
+                    equirect.pose.orientation = QuatFromMat4(sphereRotation);
+                    equirect.radius = 0.0f;
+                    equirect.centralHorizontalAngle = angles.centralHorizontal;
+                    equirect.upperVerticalAngle = angles.upperVertical;
+                    equirect.lowerVerticalAngle = angles.lowerVertical;
+                } else if (isCurved) {
                     // The cylinder is centered on its axis, one radius behind the screen apex along the screen normal
                     // (the mesh curves towards +Z from the apex at the origin).
                     XrCompositionLayerCylinderKHR& cylinder = videoCylinders[i];
@@ -10042,7 +10082,9 @@ void RenderFrame(AppState& state) {
 
         if (useDirectVideo) {
             for (uint32_t i = 0; i < state.videoLayer.chainCount; i++) {
-                if (isCurved) {
+                if (equirectVideo) {
+                    submitLayer(&videoEquirects[i]);
+                } else if (isCurved) {
                     submitLayer(&videoCylinders[i]);
                 } else {
                     submitLayer(&videoQuads[i]);

@@ -26,17 +26,34 @@ constexpr uint32_t kFrameLayerCapacity =
 
 enum class VideoLayerLayout { Mono, SideBySide, OverUnder };
 
+// Spherical modes the compositor can project by itself. Cubemap, EAC and fisheye stay in the eye buffer.
+inline bool IsEquirectVideoLayerMode(ScreenMode mode) {
+    switch (mode) {
+    case ScreenMode::Sphere360:
+    case ScreenMode::Sphere180:
+    case ScreenMode::Sphere360SBS:
+    case ScreenMode::Sphere360OU:
+    case ScreenMode::Vr180SBS:
+        return true;
+    default:
+        return false;
+    }
+}
+
 inline bool IsDirectVideoLayerMode(ScreenMode mode) {
-    return mode == ScreenMode::Flat2D || IsFlatStereoMode(mode);
+    return mode == ScreenMode::Flat2D || IsFlatStereoMode(mode) || IsEquirectVideoLayerMode(mode);
 }
 
 inline VideoLayerLayout VideoLayerLayoutForMode(ScreenMode mode) {
     switch (mode) {
     case ScreenMode::SBS:
     case ScreenMode::SBSHalf:
+    case ScreenMode::Sphere360SBS:
+    case ScreenMode::Vr180SBS:
         return VideoLayerLayout::SideBySide;
     case ScreenMode::OU:
     case ScreenMode::OUHalf:
+    case ScreenMode::Sphere360OU:
         return VideoLayerLayout::OverUnder;
     default:
         return VideoLayerLayout::Mono;
@@ -58,22 +75,44 @@ struct DirectVideoLayerInputs {
     bool packedAlphaActive = false;
     bool curvedScreen = false;
     bool cylinderSupported = false;
+    bool equirectSupported = false;
+    // Whether the per-eye content fits a swapchain at full size (see FitsVideoLayerWithoutDownscale).
+    bool contentFitsLayer = false;
     bool swapchainsReady = false;
 };
 
-inline bool ShouldUseDirectVideoLayer(const DirectVideoLayerInputs &in) {
-    if (!in.featureEnabled || !in.hasVideoFrame || in.photoActive || !in.swapchainsReady) {
-        return false;
-    }
-    if (!IsDirectVideoLayerMode(in.screenMode)) {
+// Everything except the swapchains existing, so the renderer only creates them for content that can use them.
+inline bool IsVideoLayerCandidate(const DirectVideoLayerInputs &in) {
+    if (!in.featureEnabled || !in.hasVideoFrame || in.photoActive || !IsDirectVideoLayerMode(in.screenMode)) {
         return false;
     }
     // Both modes need a per-pixel alpha that the layer path does not produce.
     if (in.chromaKeyActive || in.packedAlphaActive) {
         return false;
     }
+    // A sphere shows its pixels close to 1:1, so clamping one would throw detail away; it keeps the eye buffer instead.
+    if (IsEquirectVideoLayerMode(in.screenMode)) {
+        return in.equirectSupported && in.contentFitsLayer;
+    }
     // A curved screen is a cylinder layer; without the extension it stays in the eye buffer.
     return !in.curvedScreen || in.cylinderSupported;
+}
+
+inline bool ShouldUseDirectVideoLayer(const DirectVideoLayerInputs &in) {
+    return in.swapchainsReady && IsVideoLayerCandidate(in);
+}
+
+// Portion of the sphere an equirect layer covers: the center of the image faces the layer pose's forward axis.
+struct EquirectLayerAngles {
+    float centralHorizontal = 0.0f;
+    float upperVertical = 0.0f;
+    float lowerVertical = 0.0f;
+};
+
+inline EquirectLayerAngles ComputeEquirectLayerAngles(ScreenMode mode) {
+    constexpr float kPi = 3.14159265358979323846f;
+    const bool hemisphere = mode == ScreenMode::Sphere180 || mode == ScreenMode::Vr180SBS;
+    return {hemisphere ? kPi : 2.0f * kPi, kPi * 0.5f, -kPi * 0.5f};
 }
 
 struct VideoLayerExtent {
@@ -110,6 +149,18 @@ inline VideoLayerExtent ComputeVideoLayerExtent(uint32_t bufferWidth, uint32_t b
         return std::clamp(static_cast<uint32_t>(std::lround(value * factor)), 1u, limit);
     };
     return {scaled(width, scale, limitWidth), scaled(height, scale, limitHeight)};
+}
+
+inline bool FitsVideoLayerWithoutDownscale(uint32_t bufferWidth, uint32_t bufferHeight, VideoLayerLayout layout,
+                                           uint32_t runtimeMaxWidth, uint32_t runtimeMaxHeight) {
+    if (bufferWidth == 0 || bufferHeight == 0) {
+        return false;
+    }
+    const uint32_t perEyeWidth = layout == VideoLayerLayout::SideBySide ? std::max(1u, bufferWidth / 2) : bufferWidth;
+    const uint32_t perEyeHeight = layout == VideoLayerLayout::OverUnder ? std::max(1u, bufferHeight / 2) : bufferHeight;
+    const VideoLayerExtent fitted =
+        ComputeVideoLayerExtent(bufferWidth, bufferHeight, layout, runtimeMaxWidth, runtimeMaxHeight);
+    return fitted.width == perEyeWidth && fitted.height == perEyeHeight;
 }
 
 // Sub-rectangle of the decoded frame an eye's layer shows: uv = frameUv * scale + offset.
