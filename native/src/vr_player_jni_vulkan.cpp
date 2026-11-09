@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <mutex>
 #include "vr_player_ambient.h"
+#include "color_grading.h"
 
 extern std::string g_sessionId;
 extern std::mutex g_sessionIdMutex;
@@ -852,6 +853,7 @@ Java_com_tucavr_VRActivity_nativeSetAmbientMode(JNIEnv*, jobject, jboolean enabl
 static std::atomic<float> g_environmentBrightness{1.0f};
 static std::atomic<float> g_screenGlowIntensity{0.85f};
 static std::atomic<float> g_colorTemperature{6500.0f};
+static std::atomic<float> g_hdrLuminance{color_grading::kHdrLuminanceDefault};
 static std::atomic<bool> g_nightModeEnabled{false};
 
 float get_environment_brightness() {
@@ -864,6 +866,10 @@ float get_screen_glow_intensity() {
 
 float get_color_temperature() {
     return g_colorTemperature.load(std::memory_order_relaxed);
+}
+
+float get_hdr_luminance() {
+    return g_hdrLuminance.load(std::memory_order_relaxed);
 }
 
 bool get_night_mode_enabled() {
@@ -892,6 +898,12 @@ Java_com_tucavr_VRActivity_nativeSetColorTemperature(JNIEnv*, jobject, jfloat ke
     if (clamped < 2700.0f) clamped = 2700.0f;
     if (clamped > 6500.0f) clamped = 6500.0f;
     g_colorTemperature.store(clamped, std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetHdrLuminance(JNIEnv*, jobject, jfloat luminance) {
+    g_hdrLuminance.store(std::clamp(luminance, color_grading::kHdrLuminanceMin, color_grading::kHdrLuminanceMax),
+                         std::memory_order_relaxed);
 }
 
 extern "C" JNIEXPORT void JNICALL

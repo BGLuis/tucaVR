@@ -205,12 +205,16 @@ class UiSourceGuardsTest {
         val videoFrag = File(rootDir, "native/shaders/vulkan/video.frag").readText()
         val stereoFrag = File(rootDir, "native/shaders/vulkan/stereo.frag").readText()
         val cubemapFrag = File(rootDir, "native/shaders/vulkan/stereo_cubemap.frag").readText()
+        val layerShaders =
+            File(rootDir, "native/shaders/vulkan/video_common.glsl").readText() +
+                File(rootDir, "native/shaders/vulkan/video_layer.frag").readText()
 
         val shaders =
             listOf(
                 "video.frag" to videoFrag,
                 "stereo.frag" to stereoFrag,
                 "stereo_cubemap.frag" to cubemapFrag,
+                "video_layer.frag with video_common.glsl" to layerShaders,
             )
 
         // 1. Verify Hable Filmic constants in header
@@ -230,10 +234,10 @@ class UiSourceGuardsTest {
 
         // 3. Verify tonemapping parameters in header
         assertTrue("color_grading.h must define kW = 40.0f", headerText.contains("kW = 40.0f"))
-        assertTrue("color_grading.h must define kExposure = 2.0f", headerText.contains("kExposure = 2.0f"))
+        assertTrue("color_grading.h must define kExposure = 3.0f", headerText.contains("kExposure = 3.0f"))
         assertTrue("color_grading.h must define kSCurveStrength = 0.18f", headerText.contains("kSCurveStrength = 0.18f"))
 
-        // 4. Verify parity across all three fragment shaders
+        // 4. Verify parity across all fragment shaders
         for ((name, code) in shaders) {
             assertTrue("$name must define Hable constant A = 0.15", code.contains("const float A = 0.15;"))
             assertTrue("$name must define Hable constant B = 0.50", code.contains("const float B = 0.50;"))
@@ -249,8 +253,17 @@ class UiSourceGuardsTest {
             assertTrue("$name must define PQ c3 = 18.6875", code.contains("const float c3 = 18.6875;"))
 
             assertTrue("$name must define kW = 40.0", code.contains("const float kW = 40.0;"))
-            assertTrue("$name must define kExposure = 2.0", code.contains("const float kExposure = 2.0;"))
-            assertTrue("$name must apply Cubic S-Curve at 0.18 for HDR", code.contains("ApplyCubicSCurve(gammaColor, 0.18);"))
+            assertTrue("$name must define kExposure = 3.0", code.contains("const float kExposure = 3.0;"))
+            assertTrue("$name must apply Cubic S-Curve at 0.18 for HDR", code.contains("ApplyCubicSCurve(gammaPeak, 0.18)"))
+            assertTrue("$name must scale the luminance into the exposure", code.contains("float exposure = kExposure * luminance;"))
+            assertTrue(
+                "$name must scale every channel by the mapped peak to keep the hue",
+                code.contains("vec3 tonemapped = scene * (mappedPeak / max(peak, 1e-5));"),
+            )
+            assertTrue(
+                "$name must pass the luminance setting to the tone mapping",
+                Regex("""TonemapHdrToSdr\(color, [\w.]+, [\w.]*[hH]drLuminance\)""").containsMatchIn(code),
+            )
 
             // 5. The eye swapchain is *_SRGB: output must be linearized or the hardware encodes video twice.
             assertTrue("$name must define SrgbEotf", code.contains("vec3 SrgbEotf(vec3 c)"))
@@ -261,6 +274,21 @@ class UiSourceGuardsTest {
                 finalOutput.contains("SrgbEotf(color)"),
             )
         }
+    }
+
+    @Test
+    fun `hdr luminance range matches native and reaches it at startup`() {
+        val rootDir = TestPaths.moduleDir.parentFile
+        val header = File(rootDir, "native/include/color_grading.h").readText()
+        assertTrue(header.contains("kHdrLuminanceMin = ${HdrLuminanceStore.MIN}f"))
+        assertTrue(header.contains("kHdrLuminanceDefault = ${HdrLuminanceStore.DEFAULT}f"))
+        assertTrue(header.contains("kHdrLuminanceMax = ${HdrLuminanceStore.MAX}f"))
+
+        val activity = File(TestPaths.mainSources, "com/tucavr/VRActivity.kt").readText()
+        assertTrue(
+            "VRActivity must push the persisted HDR luminance, or it is lost on restart (Issue #247)",
+            activity.contains("nativeSetHdrLuminance(HdrLuminanceStore(this).get())"),
+        )
     }
 
     @Test

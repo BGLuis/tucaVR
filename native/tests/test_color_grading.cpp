@@ -5,6 +5,25 @@
 #include <cstdio>
 #include <vector>
 
+// Inverse of PqEotf, for building PQ inputs from an exact luminance.
+static float PqEncode(float nits) {
+    using namespace color_grading;
+    float y = std::pow(nits / 10000.0f, kPqM1);
+    return std::pow((kPqC1 + kPqC2 * y) / (1.0f + kPqC3 * y), kPqM2);
+}
+
+static ColorRgb PqGray(float nits) {
+    float code = PqEncode(nits);
+    return {code, code, code};
+}
+
+// BT.709 display nits to BT.2020 PQ code values, so the color stays in gamut after Bt2020ToBt709.
+static ColorRgb Bt709NitsToPq(ColorRgb nits) {
+    return {PqEncode(0.6274f * nits.r + 0.3293f * nits.g + 0.0433f * nits.b),
+            PqEncode(0.0691f * nits.r + 0.9195f * nits.g + 0.0114f * nits.b),
+            PqEncode(0.0164f * nits.r + 0.0880f * nits.g + 0.8956f * nits.b)};
+}
+
 static void TestHableFilmicCurveMonotonicity() {
     float prev = HableFilmicCurve(0.0f);
     assert(std::abs(prev) < 1e-4f);
@@ -23,9 +42,7 @@ static void TestHableFilmicWhitePointAndToe() {
     float whiteVal = HableFilmicCurve(kW);
     assert(whiteVal > 0.70f && whiteVal < 0.75f);
 
-    constexpr float kW4000 = 40.0f;
-    constexpr float kExp = 2.0f;
-    float whiteVal4000 = HableFilmicCurve(kW4000 * kExp);
+    float whiteVal4000 = HableFilmicCurve(color_grading::kW * color_grading::kExposure);
     assert(whiteVal4000 > 0.88f && whiteVal4000 < 0.92f);
 
     // Toe smoothness: small input produces smooth non-negative curve
@@ -40,26 +57,6 @@ static void TestHableFilmicWhitePointAndToe() {
     assert(high2 < 1.0f); // Asymptote <= 1.0 (A/A = 1.0)
 
     printf("[PASS] TestHableFilmicWhitePointAndToe\n");
-}
-
-static void TestRgbToSatInvariants() {
-    // Pure neutral/grayscale: saturation must be 0.0
-    assert(RgbToSat({0.0f, 0.0f, 0.0f}) == 0.0f);
-    assert(RgbToSat({0.5f, 0.5f, 0.5f}) == 0.0f);
-    assert(RgbToSat({1.0f, 1.0f, 1.0f}) == 0.0f);
-    assert(RgbToSat({100.0f, 100.0f, 100.0f}) == 0.0f);
-
-    // Fully saturated primary colors: saturation must be 1.0
-    assert(std::abs(RgbToSat({1.0f, 0.0f, 0.0f}) - 1.0f) < 1e-5f);
-    assert(std::abs(RgbToSat({0.0f, 2.0f, 0.0f}) - 1.0f) < 1e-5f);
-    assert(std::abs(RgbToSat({0.0f, 0.0f, 50.0f}) - 1.0f) < 1e-5f);
-
-    // Intermediate saturation
-    // max=10.0, min=5.0 -> (10.0 - 5.0) / 10.0 = 0.5
-    float satMid = RgbToSat({10.0f, 5.0f, 7.5f});
-    assert(std::abs(satMid - 0.5f) < 1e-5f);
-
-    printf("[PASS] TestRgbToSatInvariants\n");
 }
 
 static void TestCubicSCurveInvariants() {
@@ -94,7 +91,7 @@ static void TestCubicSCurveInvariants() {
     printf("[PASS] TestCubicSCurveInvariants\n");
 }
 
-static void TestHighlightSaturationRecovery() {
+static void TestSaturatedHighlightsKeepTheirDominantChannel() {
     // Saturated HDR light source (fire/neon/explosion):
     // R is very high, G is moderate, B is low
     ColorRgb saturatedHdr = {0.85f, 0.35f, 0.05f}; // PQ code
@@ -116,7 +113,7 @@ static void TestHighlightSaturationRecovery() {
     assert(std::abs(mappedWhite.r - mappedWhite.b) < 0.02f);
     assert(mappedWhite.r > 0.85f); // High specular luminance
 
-    printf("[PASS] TestHighlightSaturationRecovery\n");
+    printf("[PASS] TestSaturatedHighlightsKeepTheirDominantChannel\n");
 }
 
 static void TestTonemapHdrToSdrPqAndHlg() {
@@ -128,11 +125,9 @@ static void TestTonemapHdrToSdrPqAndHlg() {
     ColorRgb pq203Nits = {0.580689f, 0.580689f, 0.580689f};
     ColorRgb mappedPq203 = TonemapHdrToSdr(pq203Nits, 1);
 
-    // Under Reinhard, 100 nits was compressed to 0.50 (linear) -> 0.73 (gamma 2.2).
-    // Under Hable Filmic + S-Curve calibrated for 4000 nits mastering, diffuse white
-    // is rendered vividly around ~0.78 to ~0.82 on Quest 3 display.
-    assert(mappedPq100.r > 0.60f && mappedPq100.r < 0.75f);
-    assert(mappedPq203.r > 0.75f && mappedPq203.r < 0.85f);
+    // Diffuse white stays below the shoulder so highlights keep room above it.
+    assert(mappedPq100.r > 0.72f && mappedPq100.r < 0.78f);
+    assert(mappedPq203.r > 0.82f && mappedPq203.r < 0.88f);
     assert(mappedPq203.r > mappedPq100.r);
     assert(std::abs(mappedPq100.r - mappedPq100.g) < 0.005f);
     assert(std::abs(mappedPq100.g - mappedPq100.b) < 0.005f);
@@ -159,6 +154,60 @@ static void TestTonemapHdrToSdrPqAndHlg() {
     assert(mappedPq4000.r <= 1.0f);
 
     printf("[PASS] TestTonemapHdrToSdrPqAndHlg\n");
+}
+
+static void TestShadowsAndMidtonesStayVisible() {
+    // Floors from issue #247: the previous curve gave 0.262 at 10 nits and 0.671 at 100 nits.
+    assert(TonemapHdrToSdr(PqGray(10.0f), 1).r >= 0.30f);
+    assert(TonemapHdrToSdr(PqGray(100.0f), 1).r >= 0.72f);
+
+    printf("[PASS] TestShadowsAndMidtonesStayVisible\n");
+}
+
+static void TestToneMappingKeepsChannelRatios() {
+    using namespace color_grading;
+    const ColorRgb inGamutNits[] = {
+        {200.0f, 80.0f, 20.0f}, {20.0f, 400.0f, 40.0f}, {30.0f, 60.0f, 1500.0f}, {8.0f, 2.0f, 1.0f}};
+
+    for (float luminance : {kHdrLuminanceMin, kHdrLuminanceDefault, kHdrLuminanceMax}) {
+        for (const ColorRgb &nits : inGamutNits) {
+            ColorRgb pq = Bt709NitsToPq(nits);
+            ColorRgb scene = Bt2020ToBt709(PqEotf(pq));
+
+            ColorRgb linear = TonemapHdrToLinear(pq, 1, luminance);
+            assert(std::abs((linear.g / linear.r) / (scene.g / scene.r) - 1.0f) < 0.01f);
+            assert(std::abs((linear.b / linear.r) / (scene.b / scene.r) - 1.0f) < 0.01f);
+
+            // The gamma step and the S-curve must not shift the hue back.
+            ColorRgb coded = TonemapHdrToSdr(pq, 1, luminance);
+            assert(std::abs(std::pow(coded.g / coded.r, 2.2f) / (scene.g / scene.r) - 1.0f) < 0.01f);
+            assert(std::abs(std::pow(coded.b / coded.r, 2.2f) / (scene.b / scene.r) - 1.0f) < 0.01f);
+        }
+    }
+
+    printf("[PASS] TestToneMappingKeepsChannelRatios\n");
+}
+
+static void TestLuminanceControl() {
+    using namespace color_grading;
+    ColorRgb pq100 = PqGray(100.0f);
+
+    float dimmest = TonemapHdrToSdr(pq100, 1, kHdrLuminanceMin).r;
+    float neutral = TonemapHdrToSdr(pq100, 1, kHdrLuminanceDefault).r;
+    float brightest = TonemapHdrToSdr(pq100, 1, kHdrLuminanceMax).r;
+    assert(dimmest < neutral);
+    assert(neutral < brightest);
+
+    for (float luminance : {kHdrLuminanceMin, kHdrLuminanceDefault, kHdrLuminanceMax}) {
+        assert(TonemapHdrToSdr({0.0f, 0.0f, 0.0f}, 1, luminance).r == 0.0f);
+        assert(std::abs(TonemapHdrToSdr(PqGray(4000.0f), 1, luminance).r - 1.0f) < 1e-3f);
+    }
+
+    // The white point moves with the setting, so raising it must not clip the highlights together.
+    assert(TonemapHdrToSdr(PqGray(2000.0f), 1, kHdrLuminanceMax).r <
+           TonemapHdrToSdr(PqGray(4000.0f), 1, kHdrLuminanceMax).r - 1e-3f);
+
+    printf("[PASS] TestLuminanceControl\n");
 }
 
 static void TestColorTemperature() {
@@ -211,8 +260,11 @@ static void TestColorGradingConstantsParity() {
     assert(kPqC3 == 18.6875f);
 
     assert(kW == 40.0f);
-    assert(kExposure == 2.0f);
+    assert(kExposure == 3.0f);
     assert(kSCurveStrength == 0.18f);
+
+    assert(kHdrLuminanceMin < kHdrLuminanceDefault && kHdrLuminanceDefault < kHdrLuminanceMax);
+    assert(kHdrLuminanceDefault == 1.0f);
 
     printf("[PASS] TestColorGradingConstantsParity\n");
 }
@@ -238,10 +290,12 @@ int main() {
     printf("--- Executing unit tests for color_grading.h ---\n");
     TestHableFilmicCurveMonotonicity();
     TestHableFilmicWhitePointAndToe();
-    TestRgbToSatInvariants();
     TestCubicSCurveInvariants();
-    TestHighlightSaturationRecovery();
+    TestSaturatedHighlightsKeepTheirDominantChannel();
     TestTonemapHdrToSdrPqAndHlg();
+    TestShadowsAndMidtonesStayVisible();
+    TestToneMappingKeepsChannelRatios();
+    TestLuminanceControl();
     TestColorTemperature();
     TestRgbToYcbcr();
     TestColorGradingConstantsParity();

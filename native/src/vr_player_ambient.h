@@ -65,4 +65,5 @@ constexpr float kAmbientDownsampleKernelScale = 2.0f;
 float get_environment_brightness();
 float get_screen_glow_intensity();
 float get_color_temperature();
+float get_hdr_luminance();
 bool get_night_mode_enabled();

@@ -8,7 +8,7 @@ layout(set = 0, binding = 0) uniform sampler2D videoTexture;
 
 layout(location = 0) in vec2 vTexCoord;
 layout(location = 1) flat in float vSharpness;
-layout(location = 2) flat in int vUpscalingMode;
+layout(location = 2) flat in float vHdrLuminance;
 layout(location = 3) flat in int vIsHdr;
 layout(location = 4) flat in vec2 vTexelSize;
 layout(location = 5) flat in int vChromaKeyEnabled;
@@ -67,16 +67,6 @@ const mat3 kBt2020ToBt709 = mat3(
 //   D = 0.20 (Toe Strength)
 //   E = 0.02 (Toe Numerator)
 //   F = 0.30 (Toe Denominator)
-vec3 HableFilmicCurve(vec3 x) {
-    const float A = 0.15;
-    const float B = 0.50;
-    const float C = 0.10;
-    const float D = 0.20;
-    const float E = 0.02;
-    const float F = 0.30;
-    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - (E / F);
-}
-
 float HableFilmicCurve(float x) {
     const float A = 0.15;
     const float B = 0.50;
@@ -87,64 +77,45 @@ float HableFilmicCurve(float x) {
     return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - (E / F);
 }
 
-// Converts linear RGB or sRGB to saturation [0.0, 1.0] (HSV saturation)
-float rgb2sat(vec3 rgb) {
-    float maxVal = max(max(rgb.r, rgb.g), rgb.b);
-    float minVal = min(min(rgb.r, rgb.g), rgb.b);
-    return (maxVal <= 1e-5) ? 0.0 : (maxVal - minVal) / maxVal;
-}
-
 // Adaptive Polynomial Cubic S-Curve
 // f(x) = x * x * (3.0 - 2.0 * x)
 // Fixed anchors at black (0.0), mid-tone (0.5), and white (1.0).
 // Eliminates mid-tone gamma drift and enriches micro-contrast without banding.
-vec3 ApplyCubicSCurve(vec3 color, float strength) {
+float ApplyCubicSCurve(float value, float strength) {
     if (strength <= 0.0) {
-        return color;
+        return value;
     }
-    vec3 c = clamp(color, 0.0, 1.0);
-    vec3 s = c * c * (3.0 - 2.0 * c);
+    float c = clamp(value, 0.0, 1.0);
+    float s = c * c * (3.0 - 2.0 * c);
     return mix(c, s, strength);
 }
 
 // Filmic HDR -> SDR Tonemapping (PQ / HLG for Quest 3 display)
 // `transfer`: 1 = PQ (ST 2084), 2 = HLG (BT.2100).
-vec3 TonemapHdrToSdr(vec3 hdrColor, int transfer) {
+// `luminance`: viewer brightness multiplier on the exposure, 1.0 = neutral.
+vec3 TonemapHdrToSdr(vec3 hdrColor, int transfer, float luminance) {
     vec3 nits = (transfer == 2) ? HlgToDisplayNits(hdrColor) : PqEotf(hdrColor) * 10000.0;
     // Linear BT.709 scene normalization (100 nits = 1.0 linear)
     vec3 scene = max(kBt2020ToBt709 * (nits / 100.0), vec3(0.0));
 
-    // Linear white point W calibrated for cinema mastering peak (4,000 nits)
+    // Linear white point W calibrated for cinema mastering peak (4,000 nits). It moves with the exposure so
+    // 4,000 nits stays at 1.0 at any luminance setting.
     const float kW = 40.0;
-    const float kExposure = 2.0;
-    float whiteScale = 1.0 / max(HableFilmicCurve(kW * kExposure), 1e-4);
+    const float kExposure = 3.0;
+    float exposure = kExposure * luminance;
+    float whiteScale = 1.0 / max(HableFilmicCurve(kW * exposure), 1e-4);
 
-    // 1. Per-channel Hable Filmic mapping (filmic curve with smooth shoulder and toe)
-    vec3 filmColor = max(HableFilmicCurve(scene * kExposure) * whiteScale, vec3(0.0));
+    // 1. Map the largest channel and scale the others by the same ratio, which keeps R:G:B and so the hue.
+    float peak = max(max(scene.r, scene.g), scene.b);
+    float mappedPeak = clamp(HableFilmicCurve(peak * exposure) * whiteScale, 0.0, 1.0);
+    vec3 tonemapped = scene * (mappedPeak / max(peak, 1e-5));
 
-    // 2. Highlight Saturation Recovery (rgb2sat):
-    // Preserves chromaticity of bright light sources, fire, neon, and explosions.
-    const vec3 kBt709Luma = vec3(0.2126, 0.7152, 0.0722);
-    float sceneLuma = dot(scene, kBt709Luma);
-    float mappedLuma = max(HableFilmicCurve(sceneLuma * kExposure) * whiteScale, 0.0);
-    vec3 lumaMappedColor = scene * (mappedLuma / max(sceneLuma, 1e-5));
-
-    float origSat = rgb2sat(scene);
-    float highlightWeight = clamp(sceneLuma * 0.1, 0.0, 1.0);
-    vec3 tonemapped = mix(filmColor, lumaMappedColor, origSat * highlightWeight * 0.6);
-
-    // Gamut blowout protection preserving original hue
-    float peak = max(max(tonemapped.r, tonemapped.g), tonemapped.b);
-    if (peak > 1.0) {
-        tonemapped /= peak;
-    }
-    tonemapped = clamp(tonemapped, 0.0, 1.0);
-
-    // 3. Conversion to SDR display gamma (Rec.709 / sRGB 2.2)
+    // 2. Conversion to SDR display gamma (Rec.709 / sRGB 2.2)
     vec3 gammaColor = pow(tonemapped, vec3(1.0 / 2.2));
 
-    // 4. Adaptive Polynomial Cubic S-Curve for cinematic contrast
-    return ApplyCubicSCurve(gammaColor, 0.18);
+    // 3. Cubic S-Curve for contrast, on the peak for the same reason as the curve
+    float gammaPeak = max(max(gammaColor.r, gammaColor.g), gammaColor.b);
+    return gammaColor * (ApplyCubicSCurve(gammaPeak, 0.18) / max(gammaPeak, 1e-5));
 }
 
 // Planckian locus approximation (Kelvin 2700K a 6500K / Night Mode ~3000K)
@@ -249,7 +220,7 @@ void main() {
         ? texture(videoTexture, vTexCoord).rgb
         : ApplySGSR1(vTexCoord, vSharpness, vTexelSize);
     if (vIsHdr != 0) {
-        color = TonemapHdrToSdr(color, vIsHdr);
+        color = TonemapHdrToSdr(color, vIsHdr, vHdrLuminance);
     }
 
     if (vColorTemperature < 0.0) {

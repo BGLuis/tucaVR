@@ -525,6 +525,7 @@ class VRActivity : NativeActivity() {
         nativeSetEnvironmentBrightness(FeatureFlags.getEnvironmentBrightness(this))
         nativeSetScreenGlowIntensity(FeatureFlags.getScreenGlowIntensityFloat(this))
         nativeSetColorTemperature(FeatureFlags.getColorTemperature(this))
+        nativeSetHdrLuminance(HdrLuminanceStore(this).get())
         nativeSetNightMode(FeatureFlags.isNightModeEnabled(this))
 
         // Fase 0.3 Seção 2: empurra o estado persistido do toggle de Passthrough.
@@ -2602,6 +2603,8 @@ class VRActivity : NativeActivity() {
     external fun nativeSetScreenGlowIntensity(intensity: Float)
 
     external fun nativeSetColorTemperature(kelvin: Float)
+
+    external fun nativeSetHdrLuminance(luminance: Float)
 
     external fun nativeSetNightMode(enabled: Boolean)
 

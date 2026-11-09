@@ -79,6 +79,9 @@
     <string name="settings_color_temperature_label">Color Temperature</string>
     <string name="settings_color_temperature_description">Adjusts the video screen color warmth from warm incandescent to neutral daylight.</string>
     <string name="settings_color_temperature_kelvin">%1$dK</string>
+    <string name="settings_hdr_luminance_label">HDR Brightness</string>
+    <string name="settings_hdr_luminance_description">Adjusts how bright HDR video looks. Has no effect on SDR video.</string>
+    <string name="settings_hdr_luminance_percent">%1$d%%</string>
     <string name="settings_night_mode_label">Night Mode</string>
     <string name="settings_night_mode_description">Reduces blue light emission (~3000K) for comfortable viewing in dark environments.</string>
     <string name="quality_warning_thermal">Thermal limit reached: reducing rendering quality to cool down device.</string>
