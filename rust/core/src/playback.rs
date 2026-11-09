@@ -5,7 +5,7 @@ use crate::sync::SyncManager;
 use crate::texture::TextureOutput;
 use audio::output::AudioOutput;
 use ndk::media::media_format::MediaFormat;
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -116,6 +116,31 @@ fn try_send_until_stopped<T>(
     }
 }
 
+/// Envia amostra de áudio checando `is_running` e `reopen_requested` entre tentativas —
+/// se a saída de áudio desconectar, aborta o envio para que a thread possa reabrir o stream (#171).
+fn try_send_sample_until_stopped(
+    sender: &crossbeam_channel::Sender<f32>,
+    mut item: f32,
+    is_running: &Mutex<bool>,
+    reopen_requested: &AtomicBool,
+) -> bool {
+    if reopen_requested.load(Ordering::SeqCst) {
+        return false;
+    }
+    loop {
+        match sender.send_timeout(item, std::time::Duration::from_millis(50)) {
+            Ok(()) => return true,
+            Err(crossbeam_channel::SendTimeoutError::Timeout(returned)) => {
+                item = returned;
+                if !*is_running.lock().unwrap() || reopen_requested.load(Ordering::SeqCst) {
+                    return false;
+                }
+            }
+            Err(crossbeam_channel::SendTimeoutError::Disconnected(_)) => return false,
+        }
+    }
+}
+
 /// Fonte de aleatoriedade barata para o jitter do backoff (ver
 /// `media_logic::retry_backoff::backoff_with_jitter`) — não precisa
 /// qualidade criptográfica, só evitar que sessões diferentes se recuperando
@@ -171,6 +196,7 @@ struct PlaybackSession {
     // (rust/media-logic/src/session.rs) que este struct agora usa em vez de
     // reimplementar a mesma bookkeeping na mao.
     generation: media_logic::session::Generation,
+    reopen_requested: Arc<AtomicBool>,
     demux_thread: Option<thread::JoinHandle<()>>,
     video_thread: Option<thread::JoinHandle<()>>,
     audio_thread: Option<thread::JoinHandle<()>>,
@@ -184,6 +210,10 @@ impl PlaybackSession {
 
     fn set_playing(&self, playing: bool) {
         self.generation.set_playing(playing);
+    }
+
+    fn request_audio_reopen(&self) {
+        self.reopen_requested.store(true, Ordering::SeqCst);
     }
 
     /// Sinaliza todas as threads da sessao para pararem e espera
@@ -677,9 +707,10 @@ impl PlaybackController {
             .audio_stream_index
             .and_then(|idx| AudioDecoder::new(&demuxer.input_context, idx).ok());
 
+        let reopen_requested = Arc::new(AtomicBool::new(false));
         let mut audio_out = None;
         if audio_decoder.is_some() {
-            if let Ok(mut out) = AudioOutput::new() {
+            if let Ok(mut out) = AudioOutput::new(reopen_requested.clone()) {
                 let _ = out.start();
                 audio_out = Some(out);
             }
@@ -1259,6 +1290,7 @@ impl PlaybackController {
         let sync_a = sync_manager.clone();
         let speed_bits_a = self.speed_bits.clone();
         let audio_output_for_thread = audio_output_clone.clone();
+        let reopen_requested_a = reopen_requested.clone();
 
         let mut audio_sender = None;
         if let Ok(out_guard) = audio_output_clone.lock() {
@@ -1272,6 +1304,7 @@ impl PlaybackController {
             let mut current_epoch: u64 = 0;
             let mut applied_speed = 1.0f32;
             let mut last_good_audio_pts: i64 = 0;
+            let mut reopen_failed = false;
             let layout = audio_decoder
                 .as_ref()
                 .map(|ad| ad.channel_layout())
@@ -1295,6 +1328,71 @@ impl PlaybackController {
             loop {
                 if !*is_running_a.lock().unwrap() {
                     break;
+                }
+
+                if !reopen_failed && reopen_requested_a.swap(false, Ordering::SeqCst) {
+                    // Libera a saida antiga antes de abrir a nova para nao concorrer por
+                    // endpoints exclusivos de hardware (AAudio Exclusive / MMAP).
+                    audio_sender = None;
+                    let old_volume = if let Ok(mut out_guard) = audio_output_for_thread.lock() {
+                        if let Some(mut old_out) = out_guard.take() {
+                            let vol = old_out.get_volume();
+                            let _ = old_out.stop();
+                            vol
+                        } else {
+                            1.0
+                        }
+                    } else {
+                        1.0
+                    };
+
+                    match AudioOutput::new(reopen_requested_a.clone()) {
+                        Ok(mut new_out) => {
+                            new_out.set_volume(old_volume);
+
+                            let is_playing = *is_playing_a.lock().unwrap();
+                            // Um novo stream Oboe nasce no estado Open/Stopped.
+                            // So chamamos start() se o playback estiver ativo; chamar pause()
+                            // em stream que nunca iniciou retorna ErrorInvalidState no AAudio.
+                            // Se pausado, o stream permanece aberto e pronto para play().
+                            let start_res = if is_playing {
+                                new_out.start()
+                            } else {
+                                Ok(())
+                            };
+
+                            if let Err(e) = start_res {
+                                reopen_failed = true;
+                                crate::log_error!("Failed to start reopened audio stream: {:?}", e);
+                                crate::log::report_playback_error(format!(
+                                    "Failed to start audio stream: {:?}",
+                                    e
+                                ));
+                                if let Ok(mut out_guard) = audio_output_for_thread.lock() {
+                                    *out_guard = None;
+                                }
+                            } else {
+                                audio_sender = Some(new_out.get_sender());
+                                let pts_sec = last_good_audio_pts as f64 * audio_time_base;
+                                sync_a.reset_to(pts_sec);
+                                if let Ok(mut out_guard) = audio_output_for_thread.lock() {
+                                    *out_guard = Some(new_out);
+                                }
+                                crate::log_info!("audio output reopened");
+                            }
+                        }
+                        Err(e) => {
+                            reopen_failed = true;
+                            crate::log_error!("Failed to reopen audio output: {:?}", e);
+                            crate::log::report_playback_error(format!(
+                                "Failed to reopen audio output: {:?}",
+                                e
+                            ));
+                            if let Ok(mut out_guard) = audio_output_for_thread.lock() {
+                                *out_guard = None;
+                            }
+                        }
+                    }
                 }
 
                 // Verificação de época no topo do loop: garante flush imediato do decoder
@@ -1386,7 +1484,12 @@ impl PlaybackController {
 
                                 if let Some(sender) = &audio_sender {
                                     for &sample in &binaural_buffer {
-                                        if !try_send_until_stopped(sender, sample, &is_running_a) {
+                                        if !try_send_sample_until_stopped(
+                                            sender,
+                                            sample,
+                                            &is_running_a,
+                                            &reopen_requested_a,
+                                        ) {
                                             break;
                                         }
                                     }
@@ -1400,6 +1503,7 @@ impl PlaybackController {
 
         self.session = Some(PlaybackSession {
             generation,
+            reopen_requested,
             demux_thread: Some(demux_thread),
             video_thread: Some(video_thread),
             audio_thread: Some(audio_thread),
@@ -1526,6 +1630,12 @@ impl PlaybackController {
     /// cycle_audio_track() para aplicar imediatamente.
     pub fn select_audio_track(&mut self, ordinal: usize) {
         self.desired_audio_track = ordinal;
+    }
+
+    pub fn request_audio_reopen(&self) {
+        if let Some(session) = &self.session {
+            session.request_audio_reopen();
+        }
     }
 
     /// Avanca para a proxima trilha de audio (com wrap-around) e recarrega
