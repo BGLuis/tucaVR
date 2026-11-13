@@ -2,7 +2,7 @@ name: tucaVR CI
 
 on:
   push:
-    branches: [ master, main, develop ]
+    branches: [ main, develop ]
     paths-ignore:
       - '**/*.md'
       - '.github/ISSUE_TEMPLATE/**'
@@ -11,7 +11,7 @@ on:
   # "Pending" forever, so docs-only PRs could only merge with an admin bypass.
   # The `changes` job below skips the heavy jobs instead.
   pull_request:
-    branches: [ master, main, develop ]
+    branches: [ main, develop ]
   workflow_dispatch:
     inputs:
       build_apk:
@@ -35,9 +35,14 @@ env:
 jobs:
   # Only pull requests are filtered. Pushes and manual runs keep running everything, because
   # release.yml reuses the APK built by the CI run of the pushed commit.
+  # Dependabot PRs are skipped automatically to save runner resources (blocked at CI Gate
+  # until validated manually via workflow_dispatch on the Dependabot branch).
   changes:
     name: Detect Changes
-    runs-on: ubuntu-24.04
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
       contents: read # paths-filter needs the repository metadata
@@ -89,6 +94,9 @@ jobs:
 
   security-and-workflows:
     name: Security & Workflows
+    if: >-
+      github.event_name != 'pull_request'
+      || github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     permissions:
@@ -99,10 +107,20 @@ jobs:
           persist-credentials: false
           fetch-depth: 0 # gitleaks scans a commit range, which a shallow clone cannot resolve
 
+      - name: Verify version.properties
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+        run: ./scripts/check-version.sh
+
       - name: Lint GitHub Actions workflows (actionlint)
         run: |
-          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
-          ./actionlint -color
+          curl -sSfL https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz -o actionlint.tar.gz
+          echo "8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8  actionlint.tar.gz" | sha256sum -c -
+          tar -xzf actionlint.tar.gz actionlint
+          # actionlint 1.7.12 predates the 2026 job-level `cache-mode` key
+          ./actionlint -color -ignore 'unexpected key "cache-mode" for "job" section'
+          rm -f actionlint actionlint.tar.gz
 
       - name: Check Rust dependencies & licenses (cargo-deny)
         run: |
@@ -132,13 +150,13 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust (Host)
-        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
           components: clippy, rustfmt
 
       - name: Rust Cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: "rust -> rust/target"
           save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
@@ -184,6 +202,8 @@ jobs:
             native/include/environment_validator.h \
             native/include/browser_pose.h \
             native/include/panel_pick.h \
+            native/include/controls_pose.h \
+            native/include/cylinder_hit.h \
             native/include/astc_transcode.h \
             native/include/frame_time_histogram.h \
             native/include/vulkan_msaa.h \
@@ -196,7 +216,7 @@ jobs:
         run: ./scripts/check-shaders.sh
 
       - name: Cache ccache (host C++ tests)
-        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+        uses: hendrikmuhs/ccache-action@dbeefd73e8e2ffc1bbc412570072735eb4db3607 # v1.2.25
         with:
           key: host-tests-${{ runner.os }}
           max-size: 200M
@@ -222,13 +242,13 @@ jobs:
           persist-credentials: false
 
       - name: Set up JDK ${{ env.JAVA_VERSION }}
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: ${{ env.JAVA_DISTRO }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           cache-provider: basic
           cache-read-only: ${{ github.event_name == 'pull_request' }}
@@ -271,14 +291,22 @@ jobs:
 
   # The only check branch protection needs. A skipped job reports success, so without this a
   # failed `changes` job would skip every dependent job and let the PR merge unchecked.
+  # Dependabot PRs are intentionally blocked here until validated via workflow_dispatch.
   ci-gate:
     name: CI Gate
     if: always()
     needs: [changes, security-and-workflows, rust-checks, cpp-checks, android-checks, markdown-checks]
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}
     steps:
+      - name: Block unvalidated Dependabot PRs
+        if: github.event_name == 'pull_request' && github.event.pull_request.user.login == 'dependabot[bot]'
+        run: |
+          echo "::error::Automatic CI is disabled for dependabot[bot] PRs to save runner resources."
+          echo "Validate manually before merging: gh workflow run main.yml --ref <dependabot-branch>"
+          exit 1
+
       - name: Require every job to have passed or been skipped
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
@@ -291,9 +319,11 @@ jobs:
   build-apk:
     name: Build Quest 3 APK
     needs: [changes, security-and-workflows, rust-checks, cpp-checks, android-checks]
-    # A needed job skipped by the path filter must not skip the APK build.
+    # Runs on push (main/develop) and workflow_dispatch — skipped on pull_request to avoid
+    # burning 5-14 min per PR push (release.yml only reuses APKs built on push to main).
     if: >-
       ${{ !cancelled() && !contains(needs.*.result, 'failure')
+      && github.event_name != 'pull_request'
       && needs.changes.outputs.apk == 'true'
       && (github.repository == 'BGLuis/vr-multmidia' || github.repository == 'BGLuis/tucaVR')
       && (inputs.build_apk == true || inputs.build_apk == null) }}
@@ -306,36 +336,35 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Setup External Dependencies (Meta OpenXR SDK)
-        run: ./scripts/setup-deps.sh
-
       - name: Set up JDK ${{ env.JAVA_VERSION }}
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: ${{ env.JAVA_DISTRO }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           cache-provider: basic
+          cache-read-only: ${{ github.ref != 'refs/heads/main' && github.ref != 'refs/heads/develop' }}
 
       - name: Setup Rust (Android)
-        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
           targets: aarch64-linux-android
 
       - name: Rust Cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: "rust -> rust/target"
+          save-if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop' }}
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
 
       - name: Cache ccache (native C++ build)
-        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
+        uses: hendrikmuhs/ccache-action@dbeefd73e8e2ffc1bbc412570072735eb4db3607 # v1.2.25
         with:
           key: native-build-${{ runner.os }}
           max-size: 500M
@@ -361,12 +390,7 @@ jobs:
       - name: Setup Android NDK
         if: steps.cache-ndk.outputs.cache-hit != 'true'
         run: |
-          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${{ env.NDK_VERSION }}"
-
-      - name: Configure Android NDK Environment
-        run: |
-          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${{ env.NDK_VERSION }}" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION"
 
       - name: Cache FFmpeg Build
         id: cache-ffmpeg
@@ -375,24 +399,36 @@ jobs:
           path: ffmpeg-android-maker
           key: ${{ runner.os }}-ffmpeg-${{ hashFiles('scripts/setup-deps.sh') }}-v2
 
+      - name: Cache Meta OpenXR SDK
+        id: cache-openxr
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: sdk/meta-openxr-sdk
+          key: ${{ runner.os }}-meta-openxr-sdk-v1
+
+      - name: Setup External Dependencies (Meta OpenXR SDK)
+        if: steps.cache-openxr.outputs.cache-hit != 'true'
+        run: ./scripts/setup-deps.sh
+
       - name: Setup and Compile FFmpeg
         if: steps.cache-ffmpeg.outputs.cache-hit != 'true'
         run: |
           ./scripts/setup-deps.sh
           cd ffmpeg-android-maker
           export ANDROID_SDK_HOME="$ANDROID_HOME"
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
           ./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26
 
       - name: Build Unified Script (Rust + C++ + Gradle)
-        run: ./scripts/build.sh
         env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
-          ANDROID_SDK_HOME: ${{ env.ANDROID_SDK_HOME }}
           PKG_CONFIG_PATH: ${{ github.workspace }}/ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/pkgconfig
-          BINDGEN_EXTRA_CLANG_ARGS: "-I${{ github.workspace }}/ffmpeg-android-maker/output/include/arm64-v8a -I${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
           RUSTC_WRAPPER: sccache
           SCCACHE_GHA_ENABLED: "true"
+        run: |
+          export ANDROID_SDK_HOME="$ANDROID_HOME"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          export BINDGEN_EXTRA_CLANG_ARGS="-I$GITHUB_WORKSPACE/ffmpeg-android-maker/output/include/arm64-v8a -I$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          ./scripts/build.sh
 
       - name: Sanitize artifact name
         id: artifact-meta
@@ -405,3 +441,5 @@ jobs:
         with:
           name: ${{ steps.artifact-meta.outputs.name }}
           path: app/build/outputs/apk/debug/app-debug.apk
+          retention-days: 7
+          if-no-files-found: error
