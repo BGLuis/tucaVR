@@ -187,7 +187,7 @@ dependencies {
     // because none of those classes touches real Android APIs in the
     // tested paths. See docs/TESTING-PLAN.md.
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     // Android's org.json is a stub on the JVM unit-test classpath.
     testImplementation("org.json:json:20250517")
 
