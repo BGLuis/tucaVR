@@ -2,8 +2,8 @@ name: Cargo Fuzz (Nightly)
 
 on:
   schedule:
-    # Daily at 04:00 UTC
-    - cron: '0 4 * * *'
+    # Daily at 04:17 UTC (off the hour to avoid top-of-hour queue spikes)
+    - cron: '17 4 * * *'
   workflow_dispatch:
     inputs:
       duration_seconds:
@@ -19,9 +19,42 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check-changes:
+    name: Check New Commits
+    if: github.repository == 'BGLuis/vr-multmidia' || github.repository == 'BGLuis/tucaVR'
+    runs-on: ubuntu-slim
+    timeout-minutes: 2
+    permissions:
+      actions: read # List previous runs of this workflow
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - name: Decide whether fuzzing should run
+        id: check
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          if [ "$EVENT_NAME" != "schedule" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          workflow_file=$(basename "${WORKFLOW_REF%@*}")
+          last_sha=$(gh run list -R "$GH_REPO" -w "$workflow_file" --status success --limit 1 --json headSha --jq '.[0].headSha // ""')
+          if [ "$last_sha" = "$HEAD_SHA" ]; then
+            echo "No new commits since last successful nightly fuzz ($HEAD_SHA); skipping."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   fuzz:
     name: Fuzz (${{ matrix.target }})
-    if: github.repository == 'BGLuis/vr-multmidia' || github.repository == 'BGLuis/tucaVR'
+    needs: check-changes
+    if: needs.check-changes.outputs.run == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     permissions:
@@ -44,15 +77,16 @@ jobs:
           persist-credentials: false
 
       - name: Setup Rust (Nightly)
-        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # nightly
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: nightly
 
       - name: Rust Cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: "rust/fuzz -> rust/fuzz/target"
           shared-key: "fuzz-nightly"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Cache cargo-fuzz
         id: cache-cargo-fuzz
