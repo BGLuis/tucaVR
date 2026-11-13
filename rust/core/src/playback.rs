@@ -1355,11 +1355,7 @@ impl PlaybackController {
                             // So chamamos start() se o playback estiver ativo; chamar pause()
                             // em stream que nunca iniciou retorna ErrorInvalidState no AAudio.
                             // Se pausado, o stream permanece aberto e pronto para play().
-                            let start_res = if is_playing {
-                                new_out.start()
-                            } else {
-                                Ok(())
-                            };
+                            let start_res = if is_playing { new_out.start() } else { Ok(()) };
 
                             if let Err(e) = start_res {
                                 reopen_failed = true;
