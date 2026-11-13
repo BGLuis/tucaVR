@@ -215,8 +215,9 @@ fn generate_from_session(
     }
 
     // Trabalho 4: detecção 3D gratuita antes de borrows mutáveis do demuxer
-    let (format_3d, _) =
+    let (mut format_3d, confidence, _) =
         crate::format3d_detect::detect(demuxer, path, decoder.width(), decoder.height());
+    let initial_format = format_3d;
 
     let primary_target_us = primary_seek_target_us(demuxer.input_context.duration());
     let _ = demuxer
@@ -228,7 +229,8 @@ fn generate_from_session(
         video_stream_index,
         max_width,
         max_height,
-        format_3d,
+        &mut format_3d,
+        confidence,
         cancel_token,
     );
 
@@ -260,9 +262,37 @@ fn generate_from_session(
             video_stream_index,
             max_width,
             max_height,
-            format_3d,
+            &mut format_3d,
+            confidence,
             cancel_token,
         );
+    }
+
+    if initial_format == Format3D::Flat2D
+        && confidence == media_logic::format3d::DetectionConfidence::Default
+        && format_3d != Format3D::Flat2D
+    {
+        let mut lines: Vec<&str> = session.metadata_wire.split('\n').collect();
+        if let Some(first) = lines.first_mut() {
+            let parts: Vec<&str> = first.split('\t').collect();
+            if parts.len() >= 7 && parts[0] == "F" {
+                let updated_f = format!(
+                    "F\t{}\t{}\t{}\t{}\t{}\t{}",
+                    parts[1],
+                    parts[2],
+                    parts[3],
+                    parts[4],
+                    format_3d.to_screen_mode_index(),
+                    media_logic::format3d::DetectionConfidence::FromVisualInspection as u8
+                );
+                let rest = if lines.len() > 1 {
+                    format!("\n{}", lines[1..].join("\n"))
+                } else {
+                    String::new()
+                };
+                session.metadata_wire = format!("{}{}", updated_f, rest);
+            }
+        }
     }
 
     image
@@ -277,7 +307,8 @@ fn decode_and_scale(
     video_stream_index: usize,
     max_width: u32,
     max_height: u32,
-    format_3d: Format3D,
+    format_3d: &mut Format3D,
+    confidence: media_logic::format3d::DetectionConfidence,
     cancel_token: u64,
 ) -> Option<ThumbnailImage> {
     let mut decoded = ffmpeg::frame::Video::empty();
@@ -290,7 +321,9 @@ fn decode_and_scale(
         }
         let (stream_index, packet) = match demuxer.read_packet() {
             ReadPacketOutcome::Packet(idx, packet) => (idx, packet),
-            ReadPacketOutcome::Eof | ReadPacketOutcome::Error(_) => break,
+            ReadPacketOutcome::Eof | ReadPacketOutcome::Error(_) | ReadPacketOutcome::Cancelled => {
+                break
+            }
         };
         if stream_index != video_stream_index {
             continue;
@@ -312,6 +345,20 @@ fn decode_and_scale(
     let src_h = decoded.height();
     if src_w == 0 || src_h == 0 {
         return None;
+    }
+
+    // Visual pixel detection fallback: if initial detection was Default (Flat2D) with
+    // no metadata or filename hint, inspect the decoded frame using format-aware stereo detection.
+    if *format_3d == Format3D::Flat2D
+        && confidence == media_logic::format3d::DetectionConfidence::Default
+    {
+        if let Some(promoted) = crate::format3d_detect::detect_decoded_frame_stereo(
+            &decoded,
+            src_w as usize,
+            src_h as usize,
+        ) {
+            *format_3d = promoted;
+        }
     }
 
     // Trabalho 4: aplica recorte estereoscópico para formatos 3D (olho esquerdo para SBS,
@@ -417,7 +464,7 @@ pub fn generate_strip(
         return generate_strip_hw(path, interval_secs, max_width, max_height);
     }
 
-    let (format_3d, _) =
+    let (mut format_3d, confidence, _) =
         crate::format3d_detect::detect(&demuxer, path, decoder.width(), decoder.height());
 
     let duration_secs = demuxer.input_context.duration() as f64 / 1_000_000.0;
@@ -449,7 +496,8 @@ pub fn generate_strip(
             video_stream_index,
             max_width,
             max_height,
-            format_3d,
+            &mut format_3d,
+            confidence,
             0,
         ) {
             chunk.copy_from_slice(&image.rgba);
@@ -621,7 +669,9 @@ fn decode_and_scale_hw(
     while tried < MAX_PACKETS_TRIED {
         let (stream_index, packet) = match demuxer.read_packet() {
             ReadPacketOutcome::Packet(idx, packet) => (idx, packet),
-            ReadPacketOutcome::Eof | ReadPacketOutcome::Error(_) => break,
+            ReadPacketOutcome::Eof | ReadPacketOutcome::Error(_) | ReadPacketOutcome::Cancelled => {
+                break
+            }
         };
         if stream_index != video_stream_index {
             continue;

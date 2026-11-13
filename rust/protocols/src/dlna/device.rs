@@ -1,5 +1,6 @@
 //! Parser e cliente de Device Description XML para servidores UPnP/DLNA (T7.2).
 
+use crate::xml_text;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use std::time::Duration;
@@ -40,7 +41,6 @@ pub fn resolve_url(base: &str, relative: &str) -> String {
 /// Faz o parse do XML de descrição do dispositivo UPnP (Device Description XML).
 pub fn parse_device_description(xml: &str, location: &str) -> Result<DlnaDevice, String> {
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
 
     let mut friendly_name: Option<String> = None;
     let mut model_name: Option<String> = None;
@@ -51,15 +51,17 @@ pub fn parse_device_description(xml: &str, location: &str) -> Result<DlnaDevice,
     let mut is_content_directory = false;
     let mut current_control_url: Option<String> = None;
     let mut current_tag = String::new();
+    let mut text = String::new();
 
     let mut buf = Vec::new();
 
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 let local_name = name.split(':').next_back().unwrap_or(&name).to_string();
                 current_tag = local_name.clone();
+                text.clear();
 
                 if local_name.eq_ignore_ascii_case("service") {
                     in_service = true;
@@ -68,8 +70,36 @@ pub fn parse_device_description(xml: &str, location: &str) -> Result<DlnaDevice,
                 }
             }
             Ok(Event::End(ref e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 let local_name = name.split(':').next_back().unwrap_or(&name).to_string();
+
+                let text = std::mem::take(&mut text);
+                let text = text.trim();
+                if !text.is_empty() {
+                    if in_service {
+                        if current_tag.eq_ignore_ascii_case("serviceType") {
+                            if text.contains("urn:schemas-upnp-org:service:ContentDirectory:")
+                                || text.contains("ContentDirectory")
+                            {
+                                is_content_directory = true;
+                            }
+                        } else if current_tag.eq_ignore_ascii_case("controlURL") {
+                            current_control_url = Some(text.to_string());
+                        }
+                    } else {
+                        if current_tag.eq_ignore_ascii_case("friendlyName")
+                            && friendly_name.is_none()
+                        {
+                            friendly_name = Some(text.to_string());
+                        } else if current_tag.eq_ignore_ascii_case("modelName")
+                            && model_name.is_none()
+                        {
+                            model_name = Some(text.to_string());
+                        } else if current_tag.eq_ignore_ascii_case("url") && icon_url.is_none() {
+                            icon_url = Some(resolve_url(location, text));
+                        }
+                    }
+                }
 
                 if local_name.eq_ignore_ascii_case("service") {
                     if is_content_directory && control_url.is_none() {
@@ -80,29 +110,8 @@ pub fn parse_device_description(xml: &str, location: &str) -> Result<DlnaDevice,
                 }
                 current_tag.clear();
             }
-            Ok(Event::Text(ref e)) => {
-                let text = e.unescape().map_err(|err| err.to_string())?.to_string();
-                if in_service {
-                    if current_tag.eq_ignore_ascii_case("serviceType") {
-                        if text.contains("urn:schemas-upnp-org:service:ContentDirectory:")
-                            || text.contains("ContentDirectory")
-                        {
-                            is_content_directory = true;
-                        }
-                    } else if current_tag.eq_ignore_ascii_case("controlURL") {
-                        current_control_url = Some(text);
-                    }
-                } else {
-                    if current_tag.eq_ignore_ascii_case("friendlyName") && friendly_name.is_none() {
-                        friendly_name = Some(text);
-                    } else if current_tag.eq_ignore_ascii_case("modelName") && model_name.is_none()
-                    {
-                        model_name = Some(text);
-                    } else if current_tag.eq_ignore_ascii_case("url") && icon_url.is_none() {
-                        icon_url = Some(resolve_url(location, &text));
-                    }
-                }
-            }
+            Ok(Event::Text(ref e)) => xml_text::push_text(&mut text, e),
+            Ok(Event::GeneralRef(ref e)) => xml_text::push_ref(&mut text, e)?,
             Ok(Event::Eof) => break,
             Err(e) => return Err(format!("Erro ao parsear Device Description XML: {e}")),
             _ => {}
@@ -126,7 +135,7 @@ pub fn parse_device_description(xml: &str, location: &str) -> Result<DlnaDevice,
 
 /// Baixa e faz parse do Device Description XML a partir da URL LOCATION.
 pub fn fetch_device_description(location_url: &str) -> Result<DlnaDevice, String> {
-    let client = reqwest::blocking::Client::builder()
+    let client = crate::http::client_builder()
         .timeout(Duration::from_secs(5))
         .build()
         .map_err(|e| e.to_string())?;
@@ -222,5 +231,30 @@ mod tests {
             "http://10.0.0.5:8080/desc/control"
         );
         assert_eq!(resolve_url(base, "http://other/ctrl"), "http://other/ctrl");
+    }
+
+    #[test]
+    fn entity_references_in_friendly_name_and_control_url_are_resolved_whole() {
+        let xml = r#"<?xml version="1.0"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0">
+  <device>
+    <friendlyName>Tom &amp; Jerry &lt;NAS&gt; &#38; co</friendlyName>
+    <serviceList>
+      <service>
+        <serviceType>urn:schemas-upnp-org:service:ContentDirectory:1</serviceType>
+        <controlURL>/ctl?svc=cd&amp;v=1</controlURL>
+      </service>
+    </serviceList>
+  </device>
+</root>"#;
+
+        let device =
+            parse_device_description(xml, "http://192.168.1.100:8200/rootDesc.xml").unwrap();
+        assert_eq!(device.friendly_name, "Tom & Jerry <NAS> & co");
+        assert!(
+            device.control_url.ends_with("/ctl?svc=cd&v=1"),
+            "{}",
+            device.control_url
+        );
     }
 }

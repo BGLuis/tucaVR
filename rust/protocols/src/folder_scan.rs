@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 const MEDIA_EXTENSIONS: &[&str] = &[
     // vídeo
     "mp4", "mkv", "avi", "mov", "webm", "flv", "ts", "m3u8", "mpd", "3gp", "wmv", "mpg", "mpeg",
-    // áudio
+    "m4v", "m2ts", "mts", "mk3d", // áudio
     "mp3", "flac", "aac", "ogg", "wav", "m4a", "opus", "wma", // imagem
     "jpg", "jpeg", "png", "webp", "gif", "bmp", "heic",
 ];
@@ -160,5 +160,21 @@ mod tests {
             ScanResult::from_walk(true, false, true),
             ScanResult::found()
         );
+    }
+
+    #[test]
+    fn media_extensions_contain_m4v_m2ts_mts_mk3d_and_exclude_vob_asf() {
+        for ext in &["m4v", "m2ts", "mts", "mk3d"] {
+            assert!(
+                MEDIA_EXTENSIONS.contains(ext),
+                "MEDIA_EXTENSIONS should contain {ext}"
+            );
+        }
+        for ext in &["vob", "asf"] {
+            assert!(
+                !MEDIA_EXTENSIONS.contains(ext),
+                "MEDIA_EXTENSIONS must not contain {ext}"
+            );
+        }
     }
 }

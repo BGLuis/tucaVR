@@ -18,6 +18,7 @@
 #include <cstdint>
 #include <mutex>
 #include "vr_player_ambient.h"
+#include "color_grading.h"
 
 extern std::string g_sessionId;
 extern std::mutex g_sessionIdMutex;
@@ -52,6 +53,10 @@ extern "C" {
     extern void set_3d_mode(uint32_t mode);
     extern void set_screen_mode_override(int32_t mode);
     extern uint32_t toggle_swap_eyes();
+    extern uint32_t get_swap_eyes();
+    extern uint32_t toggle_mono_view();
+    extern uint32_t get_mono_view();
+    extern void set_fisheye_fov(int fov);
     extern void set_keyboard_active(int active);
     // Fase 0.4 T5: Foveated Rendering (implementacao real em
     // vr_player_app_vulkan.cpp, ver ApplyFoveation).
@@ -83,6 +88,7 @@ extern "C" {
     // Upscaling de vídeo (Vulkan-only, MQSR & SGSR1)
     extern void set_upscaling_mode(uint32_t mode);
     extern uint32_t get_upscaling_mode();
+    extern void set_match_content_frame_rate(uint32_t enabled);
     // Fase 0.2 T14: Monitoramento Térmico (RNF-PERF-006).
     extern void set_thermal_level(uint32_t level);
     extern uint32_t get_thermal_level();
@@ -106,9 +112,11 @@ extern "C" {
     extern uint32_t load_external_subtitle(const char* path);
     extern uint32_t get_subtitle_track_count();
     extern char* get_subtitle_track_info_wire();
+    extern char* get_audio_track_info_wire();
     extern uint32_t get_active_subtitle_text(char* out_buf, size_t max_len);
     extern void set_preferred_subtitle_language(const char* lang); // T7.6
     extern char* take_last_playback_error();
+    extern void request_audio_reopen();
     extern void free_rust_string(char* s);
     extern char* probe_http_url(const char* url);
     // Download Offline (Fase 0.4 Seção 4)
@@ -343,6 +351,7 @@ extern std::atomic<float> g_uiCylinderRadius;
 extern std::atomic<float> g_uiCylinderCentralAngle;
 extern std::atomic<bool> g_byButtonAsBack;
 extern std::atomic<bool> g_hoverHapticsEnabled;
+extern std::atomic<bool> g_directVideoLayerEnabled;
 
 // Fase 0.3 Seção 8: Fotos 360° e 3D estéreo (T8.3, T8.4)
 extern std::atomic<bool> g_photoDirty;
@@ -463,6 +472,11 @@ Java_com_tucavr_VRActivity_nativeSetHoverHapticsEnabled(JNIEnv*, jobject, jboole
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetDirectVideoLayerEnabled(JNIEnv*, jobject, jboolean enabled) {
+    g_directVideoLayerEnabled.store(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeUpdateScrubOverlay(JNIEnv* env, jobject, jbyteArray rgba, jint width, jint height) {
     jsize len = env->GetArrayLength(rgba);
     std::vector<uint8_t> buf(static_cast<size_t>(len));
@@ -541,6 +555,11 @@ Java_com_tucavr_VRActivity_nativeTakeLastPlaybackError(JNIEnv* env, jobject) {
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRequestAudioReopen(JNIEnv*, jobject) {
+    request_audio_reopen();
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSeekVideo(JNIEnv*, jobject, jfloat positionSeconds) {
     seek_video_playback(positionSeconds);
     g_requestControlsPanelVisible.store(true);
@@ -586,6 +605,26 @@ Java_com_tucavr_VRActivity_nativeToggleSwapEyes(JNIEnv*, jobject) {
     return (jint)toggle_swap_eyes();
 }
 
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetSwapEyes(JNIEnv*, jobject) {
+    return (jboolean)(get_swap_eyes() != 0);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeToggleMonoView(JNIEnv*, jobject) {
+    return (jboolean)(toggle_mono_view() != 0);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetMonoView(JNIEnv*, jobject) {
+    return (jboolean)(get_mono_view() != 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetFisheyeFov(JNIEnv*, jobject, jint fov) {
+    set_fisheye_fov(static_cast<int>(fov));
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetKeyboardActive(JNIEnv*, jobject, jboolean active) {
     set_keyboard_active(active ? 1 : 0);
@@ -607,6 +646,10 @@ Java_com_tucavr_VRActivity_nativeGetFoveationMode(JNIEnv*, jobject) {
 }
 
 extern std::atomic<bool> g_resetScreenPositionRequested;
+extern std::atomic<bool> g_bedModeEnabled;
+extern std::atomic<bool> g_recenterRequested;
+extern std::atomic<float> g_screenCurvature;
+extern std::atomic<bool> g_screenCurvatureDirty;
 extern std::atomic<bool> g_setScreenTransformRequested;
 extern std::atomic<float> g_requestedScreenPosX;
 extern std::atomic<float> g_requestedScreenPosY;
@@ -708,6 +751,21 @@ Java_com_tucavr_VRActivity_nativeResetScreenPosition(JNIEnv*, jobject) {
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetBedMode(JNIEnv*, jobject, jboolean enabled) {
+    g_bedModeEnabled.store(enabled == JNI_TRUE);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetBedMode(JNIEnv*, jobject) {
+    return g_bedModeEnabled.load() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRecenter(JNIEnv*, jobject) {
+    g_recenterRequested.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetScreenTransform(
     JNIEnv*, jobject, jfloat posX, jfloat posY, jfloat posZ, jfloat scaleX, jfloat scaleY) {
     g_requestedScreenPosX.store(static_cast<float>(posX));
@@ -716,6 +774,17 @@ Java_com_tucavr_VRActivity_nativeSetScreenTransform(
     g_requestedScreenScaleX.store(static_cast<float>(scaleX));
     g_requestedScreenScaleY.store(static_cast<float>(scaleY));
     g_setScreenTransformRequested.store(true);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetScreenCurvature(JNIEnv*, jobject, jfloat curvature) {
+    g_screenCurvature.store(std::clamp(static_cast<float>(curvature), 0.0f, 1.0f));
+    g_screenCurvatureDirty.store(true);
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_tucavr_VRActivity_nativeGetScreenCurvature(JNIEnv*, jobject) {
+    return g_screenCurvature.load();
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -733,6 +802,43 @@ Java_com_tucavr_VRActivity_nativeSetEnvironment(JNIEnv* env, jobject, jstring en
     }
 }
 
+extern std::string g_customEnvironmentsDir;
+extern std::mutex g_customEnvironmentsDirMutex;
+std::string ValidateEnvironmentFileMessageKey(const char* path);
+int TranscodeEnvironmentTexturesToAstc(const char* modelPath);
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetCustomEnvironmentsDir(JNIEnv* env, jobject, jstring dir) {
+    if (!dir) return;
+    const char* dirStr = env->GetStringUTFChars(dir, nullptr);
+    if (!dirStr) return;
+    {
+        std::lock_guard<std::mutex> lock(g_customEnvironmentsDirMutex);
+        g_customEnvironmentsDir = dirStr;
+    }
+    env->ReleaseStringUTFChars(dir, dirStr);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeValidateEnvironmentFile(JNIEnv* env, jobject, jstring path) {
+    if (!path) return env->NewStringUTF("env_error_corrupt_file");
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+    if (!pathStr) return env->NewStringUTF("env_error_corrupt_file");
+    const std::string key = ValidateEnvironmentFileMessageKey(pathStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+    return env->NewStringUTF(key.c_str());
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_tucavr_VRActivity_nativeTranscodeEnvironmentTextures(JNIEnv* env, jobject, jstring path) {
+    if (!path) return 0;
+    const char* pathStr = env->GetStringUTFChars(path, nullptr);
+    if (!pathStr) return 0;
+    const int written = TranscodeEnvironmentTexturesToAstc(pathStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+    return written;
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetPauseOnExit(JNIEnv*, jobject, jboolean enabled) {
     set_pause_on_exit(enabled ? 1 : 0);
@@ -747,6 +853,7 @@ Java_com_tucavr_VRActivity_nativeSetAmbientMode(JNIEnv*, jobject, jboolean enabl
 static std::atomic<float> g_environmentBrightness{1.0f};
 static std::atomic<float> g_screenGlowIntensity{0.85f};
 static std::atomic<float> g_colorTemperature{6500.0f};
+static std::atomic<float> g_hdrLuminance{color_grading::kHdrLuminanceDefault};
 static std::atomic<bool> g_nightModeEnabled{false};
 
 float get_environment_brightness() {
@@ -759,6 +866,10 @@ float get_screen_glow_intensity() {
 
 float get_color_temperature() {
     return g_colorTemperature.load(std::memory_order_relaxed);
+}
+
+float get_hdr_luminance() {
+    return g_hdrLuminance.load(std::memory_order_relaxed);
 }
 
 bool get_night_mode_enabled() {
@@ -790,6 +901,12 @@ Java_com_tucavr_VRActivity_nativeSetColorTemperature(JNIEnv*, jobject, jfloat ke
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetHdrLuminance(JNIEnv*, jobject, jfloat luminance) {
+    g_hdrLuminance.store(std::clamp(luminance, color_grading::kHdrLuminanceMin, color_grading::kHdrLuminanceMax),
+                         std::memory_order_relaxed);
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetNightMode(JNIEnv*, jobject, jboolean enabled) {
     g_nightModeEnabled.store(enabled != JNI_FALSE, std::memory_order_relaxed);
 }
@@ -814,6 +931,11 @@ Java_com_tucavr_VRActivity_nativeGetHandTrackingEnabled(JNIEnv*, jobject) {
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetUpscalingMode(JNIEnv*, jobject, jint mode) {
     set_upscaling_mode(static_cast<uint32_t>(mode < 0 ? 0 : mode));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetMatchContentFrameRate(JNIEnv*, jobject, jboolean enabled) {
+    set_match_content_frame_rate(enabled ? 1 : 0);
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -849,6 +971,8 @@ Java_com_tucavr_VRActivity_nativePlaySmb(JNIEnv* env, jobject,
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
     env->ReleaseStringUTFChars(domain, d);
+    g_requestControlsPanelVisible.store(true);
+    g_newVideoSessionRequested.store(true);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -929,6 +1053,8 @@ Java_com_tucavr_VRActivity_nativePlayFtp(JNIEnv* env, jobject,
     env->ReleaseStringUTFChars(path, p);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
+    g_requestControlsPanelVisible.store(true);
+    g_newVideoSessionRequested.store(true);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -986,6 +1112,8 @@ Java_com_tucavr_VRActivity_nativePlaySftp(JNIEnv* env, jobject,
     env->ReleaseStringUTFChars(password, pw);
     env->ReleaseStringUTFChars(privateKey, k);
     env->ReleaseStringUTFChars(expectedFingerprint, fp);
+    g_requestControlsPanelVisible.store(true);
+    g_newVideoSessionRequested.store(true);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -1072,6 +1200,8 @@ Java_com_tucavr_VRActivity_nativePlayNfs(JNIEnv* env, jobject,
     env->ReleaseStringUTFChars(host, h);
     env->ReleaseStringUTFChars(exportPath, ep);
     env->ReleaseStringUTFChars(filePath, fp);
+    g_requestControlsPanelVisible.store(true);
+    g_newVideoSessionRequested.store(true);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -1132,6 +1262,8 @@ Java_com_tucavr_VRActivity_nativePlayWebdav(JNIEnv* env, jobject,
     env->ReleaseStringUTFChars(filePath, fp);
     env->ReleaseStringUTFChars(username, u);
     env->ReleaseStringUTFChars(password, pw);
+    g_requestControlsPanelVisible.store(true);
+    g_newVideoSessionRequested.store(true);
 }
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -1581,6 +1713,12 @@ Java_com_tucavr_VRActivity_nativeGetSubtitleTrackCount(JNIEnv* env, jobject) {
 extern "C" JNIEXPORT jstring JNICALL
 Java_com_tucavr_VRActivity_nativeGetSubtitleTrackInfoWire(JNIEnv* env, jobject) {
     char* result = get_subtitle_track_info_wire();
+    return RustStringToJStringAndFree(env, result);
+}
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_tucavr_VRActivity_nativeGetAudioTrackInfoWire(JNIEnv* env, jobject) {
+    char* result = get_audio_track_info_wire();
     return RustStringToJStringAndFree(env, result);
 }
 

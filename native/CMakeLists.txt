@@ -37,6 +37,7 @@ if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
     set(SOURCE_FILES
         src/vr_player_app_vulkan.cpp
         src/vr_player_jni_vulkan.cpp
+        src/astc_transcode.cpp
     )
 else()
     set(SOURCE_FILES
@@ -65,7 +66,7 @@ if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
         add_custom_command(
             OUTPUT ${SPV}
             COMMAND ${GLSLC_EXECUTABLE} --target-env=vulkan1.1 -O -o ${SPV} ${SRC}
-            DEPENDS ${SRC}
+            DEPENDS ${SRC} ${SHADER_SRC_DIR}/video_common.glsl
             COMMENT "glslc: ${SHADER_NAME} -> SPIR-V"
         )
         add_custom_command(
@@ -82,6 +83,9 @@ if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
     # Stage 3: video shaders with a YCbCr texture through AHardwareBuffer
     vrplayer_compile_shader(video.vert kVideoVertSpirv)
     vrplayer_compile_shader(video.frag kVideoFragSpirv)
+    # Direct video composition layer: converts the decoded frame into the layer swapchains
+    vrplayer_compile_shader(video_layer.vert kVideoLayerVertSpirv)
+    vrplayer_compile_shader(video_layer.frag kVideoLayerFragSpirv)
     # Stage 4: UI/controls panel shaders (normal RGBA8888)
     vrplayer_compile_shader(ui.vert kUiVertSpirv)
     vrplayer_compile_shader(ui.frag kUiFragSpirv)
@@ -118,6 +122,16 @@ add_library(vrplayer_native SHARED ${SOURCE_FILES})
 if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
     add_dependencies(vrplayer_native vrplayer_shaders)
     target_include_directories(vrplayer_native PRIVATE ${SHADER_GEN_DIR})
+endif()
+
+if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
+    # Vendored ARM astcenc (Apache-2.0), used to transcode environment textures at import.
+    file(GLOB ASTCENC_SOURCES third_party/astcenc/astcenc_*.cpp)
+    add_library(astcenc STATIC ${ASTCENC_SOURCES})
+    target_compile_definitions(astcenc PRIVATE
+        ASTCENC_NEON=1 ASTCENC_SVE=0 ASTCENC_SSE=0 ASTCENC_AVX=0
+        ASTCENC_POPCNT=0 ASTCENC_F16C=0 ASTCENC_DECOMPRESS_ONLY=0)
+    target_link_libraries(vrplayer_native astcenc)
 endif()
 
 # -----------------------------------------------------------------------------

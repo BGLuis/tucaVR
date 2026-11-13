@@ -12,6 +12,7 @@ pub use uri::{WebdavTarget, is_webdav_uri, redact};
 
 use crate::chunking::split_range;
 use crate::prefetch::RangeSource;
+use crate::xml_text;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use std::io;
@@ -44,12 +45,12 @@ pub struct WebdavDirEntry {
 
 /// Cria um cliente HTTP `reqwest::blocking::Client` com as configurações do `WebdavTarget`.
 pub fn create_client(target: &WebdavTarget) -> Result<reqwest::blocking::Client, String> {
-    let mut builder = reqwest::blocking::Client::builder()
+    let mut builder = crate::http::client_builder()
         .user_agent("VRMultimediaPlayer/0.1")
         .timeout(Duration::from_secs(10));
 
     if target.accept_invalid_certs {
-        builder = builder.danger_accept_invalid_certs(true);
+        builder = builder.tls_danger_accept_invalid_certs(true);
     }
 
     builder.build().map_err(|e| e.to_string())
@@ -85,7 +86,6 @@ pub fn parse_multistatus_xml<R: io::BufRead>(
     requested_url_path: &str,
 ) -> Result<Vec<WebdavDirEntry>, String> {
     let mut xml_reader = Reader::from_reader(reader);
-    xml_reader.config_mut().trim_text(true);
 
     let mut entries = Vec::new();
 
@@ -93,6 +93,7 @@ pub fn parse_multistatus_xml<R: io::BufRead>(
     let mut in_propstat = false;
     let mut in_resourcetype = false;
     let mut current_tag = Vec::new();
+    let mut text = String::new();
 
     let mut current_href = String::new();
     let mut current_display_name: Option<String> = None;
@@ -107,8 +108,9 @@ pub fn parse_multistatus_xml<R: io::BufRead>(
     loop {
         match xml_reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                let local = local_name(e.name().as_ref()).to_vec();
+                let local = local_name(e.name().as_ref().as_bytes()).to_vec();
                 current_tag = local.clone();
+                text.clear();
 
                 if local.eq_ignore_ascii_case(b"response") {
                     in_response = true;
@@ -130,39 +132,39 @@ pub fn parse_multistatus_xml<R: io::BufRead>(
             }
             Ok(Event::Empty(ref e)) => {
                 let name = e.name();
-                let local = local_name(name.as_ref());
+                let local = local_name(name.as_ref().as_bytes());
                 if in_resourcetype && local.eq_ignore_ascii_case(b"collection") {
                     is_collection = true;
                 }
             }
-            Ok(Event::Text(ref e)) => {
-                let text = match e.unescape() {
-                    Ok(t) => t.to_string(),
-                    Err(_) => String::from_utf8_lossy(e.as_ref()).to_string(),
-                };
-
-                if current_tag.eq_ignore_ascii_case(b"href") && in_response && !in_propstat {
-                    current_href.push_str(&text);
-                } else if current_tag.eq_ignore_ascii_case(b"displayname") && in_propstat {
-                    current_display_name = Some(text);
-                } else if current_tag.eq_ignore_ascii_case(b"getcontentlength") && in_propstat {
-                    if let Ok(len) = text.trim().parse::<u64>() {
-                        current_content_length = Some(len);
-                    }
-                } else if current_tag.eq_ignore_ascii_case(b"getlastmodified") && in_propstat {
-                    let trimmed = text.trim();
-                    if let Ok(dt) = chrono::DateTime::parse_from_rfc2822(trimmed)
-                        .or_else(|_| chrono::DateTime::parse_from_rfc3339(trimmed))
-                    {
-                        current_last_modified = dt.timestamp();
-                    }
-                } else if current_tag.eq_ignore_ascii_case(b"status") && in_propstat {
-                    current_status = text;
-                }
-            }
+            Ok(Event::Text(ref e)) => xml_text::push_text(&mut text, e),
+            Ok(Event::GeneralRef(ref e)) => xml_text::push_ref(&mut text, e)?,
             Ok(Event::End(ref e)) => {
                 let name = e.name();
-                let local = local_name(name.as_ref());
+                let local = local_name(name.as_ref().as_bytes());
+
+                let text = std::mem::take(&mut text);
+                let text = text.trim();
+                if !text.is_empty() {
+                    if current_tag.eq_ignore_ascii_case(b"href") && in_response && !in_propstat {
+                        current_href.push_str(text);
+                    } else if current_tag.eq_ignore_ascii_case(b"displayname") && in_propstat {
+                        current_display_name = Some(text.to_string());
+                    } else if current_tag.eq_ignore_ascii_case(b"getcontentlength") && in_propstat {
+                        if let Ok(len) = text.trim().parse::<u64>() {
+                            current_content_length = Some(len);
+                        }
+                    } else if current_tag.eq_ignore_ascii_case(b"getlastmodified") && in_propstat {
+                        let trimmed = text.trim();
+                        if let Ok(dt) = chrono::DateTime::parse_from_rfc2822(trimmed)
+                            .or_else(|_| chrono::DateTime::parse_from_rfc3339(trimmed))
+                        {
+                            current_last_modified = dt.timestamp();
+                        }
+                    } else if current_tag.eq_ignore_ascii_case(b"status") && in_propstat {
+                        current_status = text.to_string();
+                    }
+                }
                 current_tag.clear();
 
                 if local.eq_ignore_ascii_case(b"resourcetype") {
@@ -671,5 +673,37 @@ mod tests {
         let bytes_read = source.read_range(0, &mut buf).unwrap();
         assert_eq!(bytes_read, 10);
         assert_eq!(&buf, b"0123456789");
+    }
+
+    #[test]
+    fn entity_references_in_href_are_resolved_whole() {
+        let xml = r#"<?xml version="1.0" encoding="utf-8"?>
+<d:multistatus xmlns:d="DAV:">
+  <d:response>
+    <d:href>/dav/Tom &amp; Jerry &lt;1&gt; &#38; co.mp4</d:href>
+    <d:propstat>
+      <d:prop><d:resourcetype/><d:getcontentlength>10</d:getcontentlength></d:prop>
+      <d:status>HTTP/1.1 200 OK</d:status>
+    </d:propstat>
+  </d:response>
+</d:multistatus>"#;
+
+        let entries = parse_multistatus_xml(Cursor::new(xml), "/dav/").unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "Tom & Jerry <1> & co.mp4");
+    }
+
+    // quick-xml >= 0.42 rejects non-UTF-8 input in the reader itself, so the
+    // listing fails with a parse error instead of a lossy name.
+    #[test]
+    fn non_utf8_body_is_a_parse_error() {
+        let mut xml =
+            br#"<?xml version="1.0"?><d:multistatus xmlns:d="DAV:"><d:response><d:href>/dav/caf"#
+                .to_vec();
+        xml.push(0xE9);
+        xml.extend_from_slice(b".mp4</d:href></d:response></d:multistatus>");
+
+        let err = parse_multistatus_xml(Cursor::new(xml), "/dav/").unwrap_err();
+        assert!(err.starts_with("Erro de parse XML WebDAV"), "{err}");
     }
 }

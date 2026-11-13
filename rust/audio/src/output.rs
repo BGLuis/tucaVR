@@ -3,7 +3,7 @@ use oboe::{
     AudioOutputCallback, AudioOutputStream, AudioStream, AudioStreamAsync, AudioStreamBuilder,
     DataCallbackResult, Output, PerformanceMode, SharingMode, Stereo,
 };
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub struct AudioPlayerCallback {
@@ -17,6 +17,7 @@ pub struct AudioPlayerCallback {
     underrun_count: Arc<AtomicU64>,
     flush_count: Arc<AtomicU64>,
     local_flush_count: u64,
+    reopen_requested: Arc<AtomicBool>,
 }
 
 impl AudioOutputCallback for AudioPlayerCallback {
@@ -50,6 +51,14 @@ impl AudioOutputCallback for AudioPlayerCallback {
 
         DataCallbackResult::Continue
     }
+
+    fn on_error_after_close(
+        &mut self,
+        _audio_stream: &mut dyn oboe::AudioOutputStreamSafe,
+        _error: oboe::Error,
+    ) {
+        self.reopen_requested.store(true, Ordering::SeqCst);
+    }
 }
 
 pub struct AudioOutput {
@@ -58,10 +67,11 @@ pub struct AudioOutput {
     volume_bits: Arc<AtomicU32>,
     underrun_count: Arc<AtomicU64>,
     flush_count: Arc<AtomicU64>,
+    reopen_requested: Arc<AtomicBool>,
 }
 
 impl AudioOutput {
-    pub fn new() -> Result<Self, oboe::Error> {
+    pub fn new(reopen_requested: Arc<AtomicBool>) -> Result<Self, oboe::Error> {
         let (sender, receiver) = bounded(48000); // 0.5 sec of stereo audio buffer
         let volume_bits = Arc::new(AtomicU32::new(1.0f32.to_bits()));
         let underrun_count = Arc::new(AtomicU64::new(0));
@@ -72,6 +82,7 @@ impl AudioOutput {
             underrun_count: underrun_count.clone(),
             flush_count: flush_count.clone(),
             local_flush_count: 0,
+            reopen_requested: reopen_requested.clone(),
         };
 
         let builder = AudioStreamBuilder::default();
@@ -93,6 +104,7 @@ impl AudioOutput {
             volume_bits,
             underrun_count,
             flush_count,
+            reopen_requested,
         })
     }
 
@@ -126,6 +138,18 @@ impl AudioOutput {
     /// F4: contador cumulativo de underruns (canal vazio quando o Oboe pediu amostras).
     pub fn get_underrun_count(&self) -> u64 {
         self.underrun_count.load(Ordering::Relaxed)
+    }
+
+    pub fn is_reopen_requested(&self) -> bool {
+        self.reopen_requested.load(Ordering::SeqCst)
+    }
+
+    pub fn request_reopen(&self) {
+        self.reopen_requested.store(true, Ordering::SeqCst);
+    }
+
+    pub fn reopen_flag(&self) -> Arc<AtomicBool> {
+        self.reopen_requested.clone()
     }
 
     pub fn start(&mut self) -> Result<(), oboe::Error> {

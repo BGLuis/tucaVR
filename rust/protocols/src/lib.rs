@@ -19,6 +19,7 @@ mod session_pool;
 pub mod sftp;
 pub mod smb;
 pub mod webdav;
+mod xml_text;
 
 use std::sync::LazyLock;
 use tokio::runtime::Runtime;

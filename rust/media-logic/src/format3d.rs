@@ -68,6 +68,92 @@ pub enum VideoProjection {
     HalfEquirectangular,
     /// Fisheye 190° — lentes circulares olho de peixe com FOV de 190°.
     Fisheye190,
+    /// Tiled equirectangular com coordenadas de delimitação em ponto fixo 0.32
+    /// (FFmpeg `AV_SPHERICAL_EQUIRECTANGULAR_TILE`, comum em arquivos Google VR180 e Matroska).
+    EquirectangularTile {
+        bound_left: u32,
+        bound_top: u32,
+        bound_right: u32,
+        bound_bottom: u32,
+    },
+}
+
+/// Pose inicial da câmera/projeção esférica (yaw, pitch, roll em radianos).
+///
+/// Extraída de metadados de container (`AVSphericalMapping` / MP4 `prhd`).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct ProjectionPose {
+    /// Rotação em torno do eixo Y (up) em radianos.
+    pub yaw: f32,
+    /// Rotação em torno do eixo X (right) em radianos.
+    pub pitch: f32,
+    /// Rotação em torno do eixo Z (forward) em radianos.
+    pub roll: f32,
+}
+
+impl ProjectionPose {
+    /// Converte valores de graus em ponto fixo 16.16 (padrão exportado pelo FFmpeg) para radianos.
+    pub fn from_ffmpeg_fixed(yaw_fixed: i32, pitch_fixed: i32, roll_fixed: i32) -> Self {
+        const SCALE: f32 = 65536.0;
+        let yaw_deg = yaw_fixed as f32 / SCALE;
+        let pitch_deg = pitch_fixed as f32 / SCALE;
+        let roll_deg = roll_fixed as f32 / SCALE;
+        Self {
+            yaw: yaw_deg.to_radians(),
+            pitch: pitch_deg.to_radians(),
+            roll: roll_deg.to_radians(),
+        }
+    }
+
+    /// Retorna `true` se ao menos um dos ângulos for significativamente diferente de zero.
+    pub fn is_nonzero(&self) -> bool {
+        self.yaw.abs() > 1e-5 || self.pitch.abs() > 1e-5 || self.roll.abs() > 1e-5
+    }
+}
+
+/// Mapeia o valor de enum `AVStereo3DType` e flags (`AV_STEREO3D_FLAG_INVERT = 1`) do FFmpeg
+/// para [`VideoStereoMode`].
+pub fn map_av_stereo3d(type_val: i32, flags: i32) -> Option<VideoStereoMode> {
+    const AV_STEREO3D_FLAG_INVERT: i32 = 1 << 0;
+    let invert = (flags & AV_STEREO3D_FLAG_INVERT) != 0;
+    match type_val {
+        0 => Some(VideoStereoMode::Mono),
+        1 => Some(if invert {
+            VideoStereoMode::SideBySideRight
+        } else {
+            VideoStereoMode::SideBySideLeft
+        }),
+        2 => Some(if invert {
+            VideoStereoMode::TopBottomRight
+        } else {
+            VideoStereoMode::TopBottomLeft
+        }),
+        _ => None,
+    }
+}
+
+/// Mapeia o valor de enum `AVSphericalProjection` e bounds do FFmpeg para [`VideoProjection`].
+pub fn map_av_spherical_projection(
+    projection_val: i32,
+    bound_left: u32,
+    bound_top: u32,
+    bound_right: u32,
+    bound_bottom: u32,
+) -> Option<VideoProjection> {
+    match projection_val {
+        0 => Some(VideoProjection::Equirectangular),
+        1 => Some(VideoProjection::Cubemap),
+        2 => Some(VideoProjection::EquirectangularTile {
+            bound_left,
+            bound_top,
+            bound_right,
+            bound_bottom,
+        }),
+        3 => Some(VideoProjection::HalfEquirectangular),
+        4 => Some(VideoProjection::Rectangular),
+        5 => Some(VideoProjection::Fisheye190),
+        _ => None,
+    }
 }
 
 /// The format this crate/app actually drives UI and rendering off of. This
@@ -285,7 +371,7 @@ fn is_full_packing(is_sbs: bool, aspect: f64) -> bool {
     if is_sbs {
         aspect >= 2.4
     } else {
-        aspect <= 1.2
+        aspect > 0.0 && aspect <= 1.2
     }
 }
 
@@ -327,6 +413,41 @@ pub fn resolve_container_hint(
         } else {
             Format3D::Vr180Mono
         }),
+        Some(VideoProjection::EquirectangularTile {
+            bound_left,
+            bound_right,
+            ..
+        }) => {
+            let total = bound_left as u64 + bound_right as u64;
+            if total > u32::MAX as u64 {
+                None
+            } else {
+                let remaining = (u32::MAX as u64 - total) as f64 / u32::MAX as f64;
+                if (0.40..=0.60).contains(&remaining) {
+                    Some(if is_stereo {
+                        Format3D::Vr180Sbs
+                    } else {
+                        Format3D::Vr180Mono
+                    })
+                } else if remaining >= 0.90 {
+                    Some(if !is_stereo {
+                        Format3D::Spherical360Mono
+                    } else if is_sbs {
+                        if is_full_packing(true, aspect) {
+                            Format3D::Spherical360SbsFull
+                        } else {
+                            Format3D::Spherical360SbsHalf
+                        }
+                    } else if is_full_packing(false, aspect) {
+                        Format3D::Spherical360OverUnderFull
+                    } else {
+                        Format3D::Spherical360OverUnderHalf
+                    })
+                } else {
+                    None
+                }
+            }
+        }
         Some(VideoProjection::Equirectangular) => Some(if !is_stereo {
             Format3D::Spherical360Mono
         } else if is_sbs {
@@ -347,11 +468,31 @@ pub fn resolve_container_hint(
         } else {
             Format3D::Cubemap3x2Mono
         }),
-        Some(VideoProjection::EquiangularCubemap) => Some(if is_stereo {
-            Format3D::Eac3x2Sbs
-        } else {
-            Format3D::Eac3x2Mono
-        }),
+        Some(VideoProjection::EquiangularCubemap) => {
+            if width > 0 && width < 3840 {
+                // Sub-4K YouTube EAC sanity check: sub-4K streams are often flat or
+                // non-cubemap re-encodes. Revert safely to flat (or flat SBS/OU if stereo).
+                Some(if !is_stereo {
+                    Format3D::Flat2D
+                } else if is_sbs {
+                    if is_full_packing(true, aspect) {
+                        Format3D::SbsFull
+                    } else {
+                        Format3D::SbsHalf
+                    }
+                } else if is_full_packing(false, aspect) {
+                    Format3D::OverUnderFull
+                } else {
+                    Format3D::OverUnderHalf
+                })
+            } else {
+                Some(if is_stereo {
+                    Format3D::Eac3x2Sbs
+                } else {
+                    Format3D::Eac3x2Mono
+                })
+            }
+        }
         Some(VideoProjection::Fisheye190) => Some(if is_stereo {
             Format3D::Fisheye190Sbs
         } else {
@@ -376,21 +517,24 @@ pub fn resolve_container_hint(
 /// decide whether to show a "we're not fully sure" affordance next to the
 /// detected format. Ordered roughly by trustworthiness, most to least.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[repr(u8)]
 pub enum DetectionConfidence {
     /// Read straight out of container metadata (`st3d`/`sv3d`/`StereoMode`/
     /// `Projection`). The content itself declares its format — as
     /// trustworthy as detection gets.
-    FromMetadata,
+    FromMetadata = 0,
     /// Matched a known filename convention (e.g. `_sbs`, `_360`). Common
     /// and usually reliable, but filenames are free text — a false
     /// positive/negative is always possible.
-    FromFilename,
+    FromFilename = 1,
     /// No metadata, no filename pattern — inferred purely from aspect
     /// ratio + resolution. The T3.3 "último recurso" tier; easy to fool
     /// (e.g. an unusually-cropped flat 21:9 video near 32:9).
-    FromHeuristic,
+    FromHeuristic = 2,
+    /// Inferred from visual pixel inspection of decoded video frames.
+    FromVisualInspection = 3,
     /// No signal whatsoever — defaulted to flat 2D.
-    Default,
+    Default = 4,
 }
 
 /// Internal: stereo packing extracted from a filename, independent of
@@ -407,101 +551,191 @@ enum FilenameStereoLayout {
 /// Internal: projection/extent extracted from a filename.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FilenameProjection {
-    /// Fisheye 190° com identificador específico para SBS (ex: `_rf52`, `_vr190`).
+    /// Fisheye 190° specific SBS identifiers (e.g., `rf52`, `vr190`).
     Fisheye190Specific,
-    /// Fisheye 190° genérico (ex: `_fisheye190`, `190_fisheye`, `eyefish190`).
+    /// Fisheye 190° generic markers (e.g., `fisheye190`, `190fisheye`, `eyefish190`).
     Fisheye190Generic,
-    /// `_vr180`, `_180x180`, `_vr_` — explicitly VR180-branded markers.
+    /// `vr180`, `180vr`, `180x180`, `180`+`sbs`, `180`+`vr`, `vr`+`180` — explicitly VR180-branded markers.
     Vr180Specific,
-    /// Bare `_180` with no VR180-specific marker alongside it.
+    /// Bare `180` token with no VR180-specific marker alongside it.
     Vr180Generic,
-    /// `_360` or `_360x180`.
+    /// `360` or `360x180`.
     Spherical360,
-    /// Cubemap 3x2 / generic cubemap marker (`_cubemap`, `-cubemap`, `_cube`).
+    /// Cubemap 3x2 / generic cubemap marker (`cubemap`, `cube`).
     Cubemap,
-    /// Cubemap 6x1 (`_6x1`, `cubemap_6x1`).
+    /// Cubemap 6x1 (`6x1` combined with `cube`, `cubemap`, or `360`).
     Cubemap6x1,
-    /// EAC / Equi-Angular Cubemap marker (`_eac`, `-eac`).
+    /// EAC / Equi-Angular Cubemap marker (`eac`).
     Eac,
 }
 
-/// Detect [`Format3D`] from a filename, per T3.2's pattern table
-/// (case-insensitive `contains` matching). Returns `None` when nothing in
-/// the name matches any known convention, so callers can fall through to
+/// Detect [`Format3D`] from a filename using whole-token matching on non-alphanumeric separators.
+/// Returns `None` when nothing in the name matches any known convention, so callers can fall through to
 /// [`detect_from_resolution`].
 ///
-/// Projection extraction order (VR180-specific before generic `_180`):
-/// `_vr180` and `_180x180` both contain `_180` as a substring, so the
-/// specific markers are checked first — both this function's current
-/// mapping and a plain substring-first check happen to agree here, but
-/// checking the specific patterns first keeps that an explicit choice
-/// rather than a coincidence.
+/// Projection extraction order:
+/// Specific projections (Fisheye, EAC, Cubemap) are checked before `360`, which is checked
+/// before VR180-specific markers (`vr180`, `180vr`, `180x180`), which are checked before bare `180`.
 pub fn detect_from_filename(name: &str) -> Option<Format3D> {
-    let lower = name.to_lowercase();
+    let basename = name.rsplit(&['/', '\\'][..]).next().unwrap_or(name);
+    let clean_basename = basename.split(&['?', '#'][..]).next().unwrap_or(basename);
+    let (stem, ext) = match clean_basename.rsplit_once('.') {
+        Some((base, ext)) if !base.is_empty() => (base, ext),
+        _ => (clean_basename, ""),
+    };
+    let is_mk3d = ext.eq_ignore_ascii_case("mk3d");
 
-    let stereo_layout = if lower.contains("_hsbs") || lower.contains("_half_sbs") {
+    let lower = stem.to_lowercase();
+    let tokens: Vec<&str> = lower
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let has_token = |t: &str| tokens.contains(&t);
+    let has_pair = |t1: &str, t2: &str| tokens.windows(2).any(|w| w[0] == t1 && w[1] == t2);
+
+    let is_explicit_sbs_half = has_token("hsbs")
+        || has_token("halfsbs")
+        || has_pair("half", "sbs")
+        || has_pair("h", "sbs")
+        || has_pair("3d", "hsbs");
+
+    let is_explicit_sbs_full = has_token("fsbs")
+        || has_token("fullsbs")
+        || has_pair("full", "sbs")
+        || has_pair("f", "sbs")
+        || has_pair("3d", "fsbs");
+
+    let is_sbs_half =
+        is_explicit_sbs_half || (!is_explicit_sbs_full && has_token("half") && has_token("sbs"));
+
+    let is_explicit_ou_half = has_token("hou")
+        || has_token("halfou")
+        || has_token("htab")
+        || has_token("halftab")
+        || has_pair("half", "ou")
+        || has_pair("half", "tab")
+        || has_pair("half", "tb")
+        || has_pair("h", "ou")
+        || has_pair("h", "tab")
+        || has_pair("h", "tb")
+        || has_pair("3d", "hou")
+        || has_pair("3d", "htab");
+
+    let is_explicit_ou_full = has_token("fou")
+        || has_token("fullou")
+        || has_token("ftab")
+        || has_token("fulltab")
+        || has_pair("full", "ou")
+        || has_pair("full", "tab")
+        || has_pair("full", "tb")
+        || has_pair("f", "ou")
+        || has_pair("f", "tab")
+        || has_pair("f", "tb")
+        || has_pair("3d", "fou");
+
+    let has_any_ou_indicator = has_token("ou")
+        || has_token("tab")
+        || has_token("tb")
+        || has_token("overunder")
+        || has_token("topbottom")
+        || has_pair("over", "under")
+        || has_pair("top", "bottom")
+        || has_pair("3d", "ou")
+        || has_pair("3d", "tab")
+        || has_pair("3d", "tb");
+
+    let is_ou_half =
+        is_explicit_ou_half || (!is_explicit_ou_full && has_token("half") && has_any_ou_indicator);
+
+    let is_sbs_full = is_explicit_sbs_full
+        || has_token("sbs")
+        || has_token("lr")
+        || has_token("sidebyside")
+        || has_pair("3d", "sbs")
+        || has_pair("side", "by")
+        || has_pair("left", "right");
+
+    let is_ou_full = is_explicit_ou_full || has_any_ou_indicator;
+
+    let stereo_layout = if is_sbs_half {
         Some(FilenameStereoLayout::SbsHalf)
-    } else if lower.contains("_hou") {
+    } else if is_ou_half {
         Some(FilenameStereoLayout::OuHalf)
-    } else if lower.contains("_sbs")
-        || lower.contains("-sbs")
-        || lower.contains("_3d_sbs")
-        || lower.contains("_lr")
-    {
+    } else if is_sbs_full {
         Some(FilenameStereoLayout::SbsFull)
-    } else if lower.contains("_ou") || lower.contains("_tab") {
+    } else if is_ou_full {
         Some(FilenameStereoLayout::OuFull)
+    } else if is_mk3d {
+        // .mk3d files are always 3D: default to SbsHalf unless full or ou is specified.
+        if has_any_ou_indicator {
+            if has_token("full") {
+                Some(FilenameStereoLayout::OuFull)
+            } else {
+                Some(FilenameStereoLayout::OuHalf)
+            }
+        } else if has_token("full") {
+            Some(FilenameStereoLayout::SbsFull)
+        } else {
+            Some(FilenameStereoLayout::SbsHalf)
+        }
     } else {
         None
     };
 
-    let is_explicit_mono = lower.contains("_mono")
-        || lower.contains("-mono")
-        || lower.contains(".mono")
-        || lower.contains("2d_")
-        || lower.contains("_2d");
+    let is_explicit_mono = has_token("mono") || has_token("2d");
 
-    let projection = if lower.contains("_vr190")
-        || lower.contains("-vr190")
-        || lower.contains(".vr190")
-        || lower.contains("_rf52")
-        || lower.contains("-rf52")
-        || lower.contains(".rf52")
-    {
+    let is_fisheye_specific = has_token("vr190") || has_token("rf52");
+    let is_fisheye_generic = has_token("fisheye190")
+        || has_token("190fisheye")
+        || has_token("eyefish190")
+        || has_pair("fisheye", "190")
+        || has_pair("190", "fisheye")
+        || has_pair("eyefish", "190");
+
+    let is_eac = has_token("eac");
+    let is_cubemap_6x1 =
+        has_token("6x1") && (has_token("cube") || has_token("cubemap") || has_token("360"));
+    let is_cubemap = has_token("cubemap") || has_token("cube");
+
+    let is_spherical_360 = has_token("360x180")
+        || has_token("360")
+        || has_token("360vr")
+        || has_token("vr360")
+        || has_pair("360", "vr")
+        || has_pair("vr", "360");
+
+    // The old rule was `_vr_` (flanked by separators on both sides, e.g. `trip_vr_footage.mp4`).
+    // Replicate this by requiring `vr` to be an interior token so that boundary words like
+    // `family_vr.mp4` or `Movie.VR.mkv` do not trigger false positives.
+    let is_interior_vr = tokens.len() >= 3 && tokens[1..tokens.len() - 1].contains(&"vr");
+
+    let is_vr180_specific = has_token("vr180")
+        || has_token("180vr")
+        || has_token("180x180")
+        || has_pair("180", "sbs")
+        || has_pair("180", "vr")
+        || has_pair("vr", "180")
+        || is_interior_vr;
+
+    let is_vr180_generic = has_token("180");
+
+    let projection = if is_fisheye_specific {
         Some(FilenameProjection::Fisheye190Specific)
-    } else if lower.contains("fisheye190")
-        || lower.contains("fisheye_190")
-        || lower.contains("fisheye-190")
-        || lower.contains("190_fisheye")
-        || lower.contains("190-fisheye")
-        || lower.contains("190fisheye")
-        || lower.contains("eyefish190")
-        || lower.contains("eyefish_190")
-    {
+    } else if is_fisheye_generic {
         Some(FilenameProjection::Fisheye190Generic)
-    } else if lower.contains("_vr180")
-        || lower.contains("-vr180")
-        || lower.contains(".vr180")
-        || lower.contains("vr180")
-        || lower.contains("_180x180")
-        || lower.contains("-180x180")
-        || lower.contains("_vr_")
-        || lower.contains("180_sbs")
-        || lower.contains("180-sbs")
-        || lower.contains("180_vr")
-        || lower.contains("180vr")
-    {
-        Some(FilenameProjection::Vr180Specific)
-    } else if lower.contains("_360x180") || lower.contains("_360") {
-        Some(FilenameProjection::Spherical360)
-    } else if lower.contains("_180") {
-        Some(FilenameProjection::Vr180Generic)
-    } else if lower.contains("_eac") || lower.contains("-eac") {
+    } else if is_eac {
         Some(FilenameProjection::Eac)
-    } else if lower.contains("6x1") && (lower.contains("cube") || lower.contains("360")) {
+    } else if is_cubemap_6x1 {
         Some(FilenameProjection::Cubemap6x1)
-    } else if lower.contains("_cubemap") || lower.contains("-cubemap") || lower.contains("_cube") {
+    } else if is_cubemap {
         Some(FilenameProjection::Cubemap)
+    } else if is_spherical_360 {
+        Some(FilenameProjection::Spherical360)
+    } else if is_vr180_specific {
+        Some(FilenameProjection::Vr180Specific)
+    } else if is_vr180_generic {
+        Some(FilenameProjection::Vr180Generic)
     } else {
         None
     };
@@ -593,6 +827,25 @@ pub fn detect_from_resolution(width: u32, height: u32) -> Option<Format3D> {
         return Some(Format3D::SbsFull);
     }
 
+    // ~6:1 at >= 3K -> faixa horizontal de 6 faces cubemap mono (6x1)
+    if close_to(aspect, 6.0) && max_dim >= 3000 {
+        return Some(Format3D::Cubemap6x1Mono);
+    }
+
+    // ~3:1 at >= 3840 -> cubemap stereo SBS (duas metades 3x2 lado a lado)
+    if close_to(aspect, 3.0) && max_dim >= 3840 {
+        return Some(Format3D::Cubemap3x2Sbs);
+    }
+
+    // 5.7K+ Super-Wide resolution heuristic:
+    // Videos with width >= 5760 (or max_dim >= 5760) and aspect ratio >= 1.75
+    // that don't match 32:9/4:1/6:1/3:1 should be detected as VR 180° SBS (Format3D::Vr180Sbs).
+    if (width >= 5760 || max_dim >= 5760)
+        && (aspect >= 1.75 || 4 * (width as u64) >= 7 * (height as u64))
+    {
+        return Some(Format3D::Vr180Sbs);
+    }
+
     // ~2:1 at >= 4K -> classic 360° equirectangular mono (a stereo 360°
     // SBS/OU frame at this resolution would need to be *twice* as large in
     // one axis to give each eye a full 2:1 sphere).
@@ -606,52 +859,77 @@ pub fn detect_from_resolution(width: u32, height: u32) -> Option<Format3D> {
         return Some(Format3D::Spherical360OverUnderFull);
     }
 
-    // ~6:1 at >= 3K -> faixa horizontal de 6 faces cubemap mono (6x1)
-    if close_to(aspect, 6.0) && max_dim >= 3000 {
-        return Some(Format3D::Cubemap6x1Mono);
-    }
-
-    // ~3:1 at >= 3840 -> cubemap stereo SBS (duas metades 3x2 lado a lado)
-    if close_to(aspect, 3.0) && max_dim >= 3840 {
-        return Some(Format3D::Cubemap3x2Sbs);
-    }
-
     None
 }
 
 /// Compose all three detection sources in priority order — container
-/// metadata > filename > resolution heuristic > conservative default — and
+/// metadata > filename > resolution heuristic > visual inspection > conservative default — and
 /// report how confident the result is (T3.4 UI affordance).
-///
-/// `container_hint` is `Option<Format3D>` rather than
-/// `Option<(VideoStereoMode, VideoProjection)>` deliberately: turning raw
-/// box/element values into a `Format3D` needs the actual frame dimensions
-/// too (container metadata alone doesn't distinguish half- from
-/// full-resolution SBS/OU packing), and doing that combination correctly
-/// requires FFmpeg's parsed stream info, which only exists inside `core`.
-/// So `core` is expected to do that final `Format3D` resolution itself and
-/// hand the answer in here — this function only orchestrates priority.
-pub fn detect(
+pub fn detect_with_visual(
     filename: &str,
     width: u32,
     height: u32,
     container_hint: Option<Format3D>,
+    visual_hint: Option<Format3D>,
 ) -> (Format3D, DetectionConfidence) {
+    let sanitize_sub_4k_eac = |format: Format3D| -> Format3D {
+        if width > 0 && width < 3840 {
+            let aspect = if height > 0 {
+                width as f64 / height as f64
+            } else {
+                0.0
+            };
+            match format {
+                Format3D::Eac3x2Mono => Format3D::Flat2D,
+                Format3D::Eac3x2Sbs => {
+                    if is_full_packing(true, aspect) {
+                        Format3D::SbsFull
+                    } else {
+                        Format3D::SbsHalf
+                    }
+                }
+                other => other,
+            }
+        } else {
+            format
+        }
+    };
+
     if let Some(format) = container_hint {
-        return (format, DetectionConfidence::FromMetadata);
+        return (
+            sanitize_sub_4k_eac(format),
+            DetectionConfidence::FromMetadata,
+        );
     }
 
     if let Some(format) = detect_from_filename(filename) {
-        return (format, DetectionConfidence::FromFilename);
+        return (
+            sanitize_sub_4k_eac(format),
+            DetectionConfidence::FromFilename,
+        );
     }
 
     if let Some(format) = detect_from_resolution(width, height) {
         return (format, DetectionConfidence::FromHeuristic);
     }
 
+    if let Some(format) = visual_hint {
+        return (format, DetectionConfidence::FromVisualInspection);
+    }
+
     // No signal whatsoever: per the module-level CAUTION, never guess a
     // stereo/spherical mode with nothing backing it up.
     (Format3D::Flat2D, DetectionConfidence::Default)
+}
+
+/// Compose detection sources without visual pixel hint (defaults `visual_hint` to None).
+pub fn detect(
+    filename: &str,
+    width: u32,
+    height: u32,
+    container_hint: Option<Format3D>,
+) -> (Format3D, DetectionConfidence) {
+    detect_with_visual(filename, width, height, container_hint, None)
 }
 
 #[cfg(test)]
@@ -979,6 +1257,93 @@ mod tests {
         );
     }
 
+    #[test]
+    fn filename_whole_token_matching_acceptance_criteria() {
+        // Positive cases from acceptance criteria
+        assert_eq!(
+            detect_from_filename("Film.SBS.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("Film.fsbs.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("Film.hsbs.mkv"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("Film.fou.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("Film.TB.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("Film.360.sbs.mkv"),
+            Some(Format3D::Spherical360SbsFull)
+        );
+
+        // Negative cases from acceptance criteria
+        assert_eq!(detect_from_filename("Film_360p.mp4"), None);
+        assert_eq!(detect_from_filename("Film_180p.mp4"), None);
+        assert_eq!(detect_from_filename("Film_out.mkv"), None);
+        assert_eq!(detect_from_filename("Film_ou2.mkv"), None);
+        assert_eq!(detect_from_filename("Film_lrx.mkv"), None);
+        assert_eq!(detect_from_filename("Film_table.mkv"), None);
+
+        // Edge cases: 360 combined with vr, vr360, 360vr, and fisheye variations
+        assert_eq!(
+            detect_from_filename("Film_360_vr.mp4"),
+            Some(Format3D::Spherical360Mono)
+        );
+        assert_eq!(
+            detect_from_filename("Film.360.vr.sbs.mkv"),
+            Some(Format3D::Spherical360SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("space_vr360.mp4"),
+            Some(Format3D::Spherical360Mono)
+        );
+        assert_eq!(
+            detect_from_filename("rollercoaster_360vr.mp4"),
+            Some(Format3D::Spherical360Mono)
+        );
+        // Bare 'vr' without 180 or 360 does not match VR180 SBS
+        assert_eq!(detect_from_filename("family_vr.mp4"), None);
+        assert_eq!(detect_from_filename("Movie.VR.mkv"), None);
+
+        // Unrequested fisheye variants are not matched without explicit 190 indicator
+        assert_eq!(detect_from_filename("clip_fisheye_220.mp4"), None);
+        assert_eq!(detect_from_filename("clip_fisheye_200.mp4"), None);
+        assert_eq!(detect_from_filename("film_mkx200.mp4"), None);
+
+        // Cubemap 6x1 with '360' token takes precedence over spherical 360
+        assert_eq!(
+            detect_from_filename("tour.360.6x1.mp4"),
+            Some(Format3D::Cubemap6x1Mono)
+        );
+        assert_eq!(
+            detect_from_filename("tour-6x1-360.mp4"),
+            Some(Format3D::Cubemap6x1Mono)
+        );
+        assert_eq!(
+            detect_from_filename("Tour.360.Cube.6x1.mp4"),
+            Some(Format3D::Cubemap6x1Mono)
+        );
+
+        // EAC and Cubemap with '360' token take precedence over spherical 360
+        assert_eq!(
+            detect_from_filename("flight.360.eac.mp4"),
+            Some(Format3D::Eac3x2Mono)
+        );
+        assert_eq!(
+            detect_from_filename("space.360.cubemap.mp4"),
+            Some(Format3D::Cubemap3x2Mono)
+        );
+    }
+
     // ---- detect_from_resolution ----
 
     #[test]
@@ -995,13 +1360,19 @@ mod tests {
 
     #[test]
     fn resolution_2_to_1_at_4k_is_spherical_360_mono() {
-        assert_eq!(
-            detect_from_resolution(7680, 3840),
-            Some(Format3D::Spherical360Mono)
-        );
-        // Also the canonical 4K equirect: 3840x1920.
+        // Canonical 4K equirect: 3840x1920.
         assert_eq!(
             detect_from_resolution(3840, 1920),
+            Some(Format3D::Spherical360Mono)
+        );
+        // 4K DCI equirect: 4096x2048.
+        assert_eq!(
+            detect_from_resolution(4096, 2048),
+            Some(Format3D::Spherical360Mono)
+        );
+        // Sub-5.7K 2:1 equirect: 5000x2500.
+        assert_eq!(
+            detect_from_resolution(5000, 2500),
             Some(Format3D::Spherical360Mono)
         );
     }
@@ -1082,6 +1453,49 @@ mod tests {
         assert_eq!(confidence, DetectionConfidence::Default);
     }
 
+    #[test]
+    fn detect_uses_visual_inspection_when_metadata_filename_and_resolution_are_absent() {
+        let (format, confidence) = detect_with_visual(
+            "family_video.mp4",
+            1920,
+            1080,
+            None,
+            Some(Format3D::SbsHalf),
+        );
+        assert_eq!(format, Format3D::SbsHalf);
+        assert_eq!(confidence, DetectionConfidence::FromVisualInspection);
+
+        let (format_ou, confidence_ou) =
+            detect_with_visual("clip.mp4", 1920, 1080, None, Some(Format3D::OverUnderHalf));
+        assert_eq!(format_ou, Format3D::OverUnderHalf);
+        assert_eq!(confidence_ou, DetectionConfidence::FromVisualInspection);
+    }
+
+    #[test]
+    fn detect_prefers_metadata_and_filename_over_visual_inspection() {
+        // Metadata outranks visual hint
+        let (format, confidence) = detect_with_visual(
+            "clip.mp4",
+            1920,
+            1080,
+            Some(Format3D::Flat2D),
+            Some(Format3D::SbsHalf),
+        );
+        assert_eq!(format, Format3D::Flat2D);
+        assert_eq!(confidence, DetectionConfidence::FromMetadata);
+
+        // Filename outranks visual hint
+        let (format2, confidence2) = detect_with_visual(
+            "clip_sbs.mp4",
+            1920,
+            1080,
+            None,
+            Some(Format3D::OverUnderHalf),
+        );
+        assert_eq!(format2, Format3D::SbsFull);
+        assert_eq!(confidence2, DetectionConfidence::FromFilename);
+    }
+
     // ---- to_screen_mode_index: mapeamento exaustivo pros 10 indices nativos ----
 
     #[test]
@@ -1144,6 +1558,158 @@ mod tests {
             ),
             Some(Format3D::Vr180Sbs)
         );
+    }
+
+    #[test]
+    fn resolve_container_hint_tile_vr180() {
+        // Tile com bound_left e bound_right de 90° cada (2^30), deixando 180° frontais (~0.5 da esfera)
+        // Arquivos Google VR180 reais usam bound_left = 1073741824, bound_right = 1073741824
+        let vr180_tile = VideoProjection::EquirectangularTile {
+            bound_left: 1073741824,
+            bound_top: 0,
+            bound_right: 1073741824,
+            bound_bottom: 0,
+        };
+
+        // VR180 tile mono
+        assert_eq!(
+            resolve_container_hint(Some(VideoStereoMode::Mono), Some(vr180_tile), 1920, 1920),
+            Some(Format3D::Vr180Mono)
+        );
+        assert_eq!(
+            resolve_container_hint(None, Some(vr180_tile), 1920, 1920),
+            Some(Format3D::Vr180Mono)
+        );
+
+        // VR180 tile stereo SBS
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(vr180_tile),
+                3840,
+                1920
+            ),
+            Some(Format3D::Vr180Sbs)
+        );
+        // VR180 tile stereo SBS right-first
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideRight),
+                Some(vr180_tile),
+                3840,
+                1920
+            ),
+            Some(Format3D::Vr180Sbs)
+        );
+
+        // Tile de largura total (bounds = 0) vira 360° mono
+        let full_tile = VideoProjection::EquirectangularTile {
+            bound_left: 0,
+            bound_top: 0,
+            bound_right: 0,
+            bound_bottom: 0,
+        };
+        assert_eq!(
+            resolve_container_hint(None, Some(full_tile), 3840, 1920),
+            Some(Format3D::Spherical360Mono)
+        );
+
+        // Tile recortado fora dos padrões conhecidos (ex: 25% da esfera) retorna None (fallback seguro)
+        let narrow_tile = VideoProjection::EquirectangularTile {
+            bound_left: 3221225472, // 75% da esfera à esquerda
+            bound_top: 0,
+            bound_right: 0,
+            bound_bottom: 0,
+        };
+        assert_eq!(
+            resolve_container_hint(None, Some(narrow_tile), 1920, 1080),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_container_hint_fisheye190() {
+        // Fisheye 190 mono
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::Mono),
+                Some(VideoProjection::Fisheye190),
+                1920,
+                1920
+            ),
+            Some(Format3D::Fisheye190Mono)
+        );
+        assert_eq!(
+            resolve_container_hint(None, Some(VideoProjection::Fisheye190), 1920, 1920),
+            Some(Format3D::Fisheye190Mono)
+        );
+
+        // Fisheye 190 stereo SBS (left-first e right-first)
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(VideoProjection::Fisheye190),
+                3840,
+                1920
+            ),
+            Some(Format3D::Fisheye190Sbs)
+        );
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideRight),
+                Some(VideoProjection::Fisheye190),
+                3840,
+                1920
+            ),
+            Some(Format3D::Fisheye190Sbs)
+        );
+    }
+
+    #[test]
+    fn test_map_av_spherical_projection_and_stereo3d() {
+        // AV_SPHERICAL_FISHEYE (5) -> Fisheye190
+        assert_eq!(
+            map_av_spherical_projection(5, 0, 0, 0, 0),
+            Some(VideoProjection::Fisheye190)
+        );
+
+        // AV_STEREO3D_FLAG_INVERT (1) com SBS (1) -> SideBySideRight
+        assert_eq!(
+            map_av_stereo3d(1, 1),
+            Some(VideoStereoMode::SideBySideRight)
+        );
+
+        // SBS normal sem flag invert -> SideBySideLeft
+        assert_eq!(map_av_stereo3d(1, 0), Some(VideoStereoMode::SideBySideLeft));
+
+        // Top-bottom com flag invert -> TopBottomRight
+        assert_eq!(map_av_stereo3d(2, 1), Some(VideoStereoMode::TopBottomRight));
+
+        // AV_SPHERICAL_EQUIRECTANGULAR_TILE (2) -> EquirectangularTile preservando bounds
+        assert_eq!(
+            map_av_spherical_projection(2, 1073741824, 0, 1073741824, 0),
+            Some(VideoProjection::EquirectangularTile {
+                bound_left: 1073741824,
+                bound_top: 0,
+                bound_right: 1073741824,
+                bound_bottom: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn test_projection_pose_from_ffmpeg_fixed() {
+        // 90 graus em 16.16 fixed point: 90 * 65536 = 5898240
+        let pose = ProjectionPose::from_ffmpeg_fixed(5898240, 0, 0);
+        assert!(pose.is_nonzero());
+        let expected_yaw = 90.0f32.to_radians();
+        assert!((pose.yaw - expected_yaw).abs() < 1e-4);
+        assert_eq!(pose.pitch, 0.0);
+        assert_eq!(pose.roll, 0.0);
+
+        // Pose zerada
+        let zero_pose = ProjectionPose::from_ffmpeg_fixed(0, 0, 0);
+        assert!(!zero_pose.is_nonzero());
     }
 
     #[test]
@@ -1257,10 +1823,15 @@ mod tests {
             ),
             Some(Format3D::Cubemap3x2Sbs)
         );
-        // EAC mono
+        // EAC mono at >= 4K
+        assert_eq!(
+            resolve_container_hint(None, Some(VideoProjection::EquiangularCubemap), 3840, 2160),
+            Some(Format3D::Eac3x2Mono)
+        );
+        // EAC mono at sub-4K downgrades to Flat2D
         assert_eq!(
             resolve_container_hint(None, Some(VideoProjection::EquiangularCubemap), 1920, 1080),
-            Some(Format3D::Eac3x2Mono)
+            Some(Format3D::Flat2D)
         );
         // EAC stereo SBS
         assert_eq!(
@@ -1545,6 +2116,366 @@ mod tests {
         assert_eq!(
             produced, expected,
             "Format3D deve cobrir exatamente os modos do C++"
+        );
+    }
+
+    // ---- 5.7K+ VR180 SBS resolution heuristic tests ----
+
+    #[test]
+    fn resolution_5_7k_plus_vr180_sbs_heuristic() {
+        // Canon R5 / standard 5.7K VR180 SBS (5760x2880, aspect 2:1)
+        assert_eq!(detect_from_resolution(5760, 2880), Some(Format3D::Vr180Sbs));
+        // 6.4K VR180 SBS (6400x3200, aspect 2:1)
+        assert_eq!(detect_from_resolution(6400, 3200), Some(Format3D::Vr180Sbs));
+        // 8K VR180 SBS (7680x3840, aspect 2:1)
+        assert_eq!(detect_from_resolution(7680, 3840), Some(Format3D::Vr180Sbs));
+        // 8K DCI VR180 SBS (8192x4096, aspect 2:1)
+        assert_eq!(detect_from_resolution(8192, 4096), Some(Format3D::Vr180Sbs));
+        // 5.7K 16:9 super-wide (5760x3240, aspect ~1.7778 >= 1.75)
+        assert_eq!(detect_from_resolution(5760, 3240), Some(Format3D::Vr180Sbs));
+
+        // Boundary and aspect ratio cases:
+        // Sub-5.7K 2:1 (5759x2880) does not trigger 5.7K+ heuristic; falls back to 4K 360 mono
+        assert_eq!(
+            detect_from_resolution(5759, 2880),
+            Some(Format3D::Spherical360Mono)
+        );
+        // 5.7K square/1:1 (5760x5760, aspect 1.0 < 1.75) is 360 OU, not VR180 SBS
+        assert_eq!(
+            detect_from_resolution(5760, 5760),
+            Some(Format3D::Spherical360OverUnderFull)
+        );
+        // Aspect ratio strictly below 1.75 (5760x3292 -> aspect ~1.7496) does not match
+        assert_eq!(detect_from_resolution(5760, 3292), None);
+
+        // Aspect ratios with specific geometry overrides take precedence:
+        // 4:1 full SBS (7680x1920)
+        assert_eq!(detect_from_resolution(7680, 1920), Some(Format3D::SbsFull));
+        // 32:9 full SBS (7680x2160)
+        assert_eq!(detect_from_resolution(7680, 2160), Some(Format3D::SbsFull));
+        // 6:1 cubemap mono (6000x1000)
+        assert_eq!(
+            detect_from_resolution(6000, 1000),
+            Some(Format3D::Cubemap6x1Mono)
+        );
+        // 3:1 cubemap stereo SBS (6000x2000)
+        assert_eq!(
+            detect_from_resolution(6000, 2000),
+            Some(Format3D::Cubemap3x2Sbs)
+        );
+        // Portrait orientation (2880x5760, aspect 0.5 < 1.75) does not match
+        assert_eq!(detect_from_resolution(2880, 5760), None);
+    }
+
+    // ---- Sub-4K YouTube EAC downgrade sanity check ----
+
+    #[test]
+    fn sub_4k_eac_downgrade_sanity_check() {
+        // resolve_container_hint: mono sub-4K EAC downgrades to Flat2D
+        assert_eq!(
+            resolve_container_hint(None, Some(VideoProjection::EquiangularCubemap), 1920, 1080),
+            Some(Format3D::Flat2D)
+        );
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::Mono),
+                Some(VideoProjection::EquiangularCubemap),
+                1280,
+                720
+            ),
+            Some(Format3D::Flat2D)
+        );
+        // resolve_container_hint: stereo sub-4K EAC downgrades to flat SBS (Half vs Full)
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(VideoProjection::EquiangularCubemap),
+                1920,
+                1080
+            ),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(VideoProjection::EquiangularCubemap),
+                2560,
+                720 // aspect ~3.55 >= 2.4 -> Full
+            ),
+            Some(Format3D::SbsFull)
+        );
+        // resolve_container_hint: >= 4K EAC remains EAC
+        assert_eq!(
+            resolve_container_hint(None, Some(VideoProjection::EquiangularCubemap), 3840, 2160),
+            Some(Format3D::Eac3x2Mono)
+        );
+        assert_eq!(
+            resolve_container_hint(
+                Some(VideoStereoMode::SideBySideLeft),
+                Some(VideoProjection::EquiangularCubemap),
+                3840,
+                1280
+            ),
+            Some(Format3D::Eac3x2Sbs)
+        );
+        // resolve_container_hint: unknown dimensions (0x0) preserve EAC
+        assert_eq!(
+            resolve_container_hint(None, Some(VideoProjection::EquiangularCubemap), 0, 0),
+            Some(Format3D::Eac3x2Mono)
+        );
+
+        // detect: sub-4K EAC via filename or metadata downgrades safely
+        assert_eq!(
+            detect("flight.eac.mp4", 1920, 1080, None),
+            (Format3D::Flat2D, DetectionConfidence::FromFilename)
+        );
+        assert_eq!(
+            detect("flight.eac.mp4", 3840, 2160, None),
+            (Format3D::Eac3x2Mono, DetectionConfidence::FromFilename)
+        );
+        assert_eq!(
+            detect("sample.mp4", 1920, 1080, Some(Format3D::Eac3x2Mono)),
+            (Format3D::Flat2D, DetectionConfidence::FromMetadata)
+        );
+        assert_eq!(
+            detect("sample.mp4", 1920, 1080, Some(Format3D::Eac3x2Sbs)),
+            (Format3D::SbsHalf, DetectionConfidence::FromMetadata)
+        );
+        assert_eq!(
+            detect("sample.mp4", 2560, 720, Some(Format3D::Eac3x2Sbs)),
+            (Format3D::SbsFull, DetectionConfidence::FromMetadata)
+        );
+        assert_eq!(
+            detect("sample.mp4", 3840, 2160, Some(Format3D::Eac3x2Mono)),
+            (Format3D::Eac3x2Mono, DetectionConfidence::FromMetadata)
+        );
+    }
+
+    // ---- .mk3d file extension detection ----
+
+    #[test]
+    fn filename_mk3d_detection() {
+        // Bare .mk3d defaults to SbsHalf
+        assert_eq!(
+            detect_from_filename("feature.mk3d"),
+            Some(Format3D::SbsHalf)
+        );
+        // Case-insensitivity
+        assert_eq!(
+            detect_from_filename("Feature.MK3D"),
+            Some(Format3D::SbsHalf)
+        );
+        // Explicit full specified
+        assert_eq!(
+            detect_from_filename("movie.full.mk3d"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("movie.full.sbs.mk3d"),
+            Some(Format3D::SbsFull)
+        );
+        // Explicit OU specified
+        assert_eq!(
+            detect_from_filename("movie.ou.mk3d"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("movie.half.ou.mk3d"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("movie.full.ou.mk3d"),
+            Some(Format3D::OverUnderFull)
+        );
+        // Explicit hsbs specified
+        assert_eq!(
+            detect_from_filename("movie.hsbs.mk3d"),
+            Some(Format3D::SbsHalf)
+        );
+        // Full path with .mk3d
+        assert_eq!(
+            detect_from_filename("/storage/emulated/0/Movies/sample.mk3d"),
+            Some(Format3D::SbsHalf)
+        );
+        // URL with query parameters and fragment
+        assert_eq!(
+            detect_from_filename("https://example.com/stream/sample.mk3d?token=xyz#frag"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("https://example.com/stream/sample.full.mk3d?token=xyz"),
+            Some(Format3D::SbsFull)
+        );
+    }
+
+    // ---- New filename tokens & Title safety ----
+
+    #[test]
+    fn filename_additional_tokens_and_title_safety() {
+        // half.sbs, full.sbs, half.ou, full.ou with various delimiters
+        assert_eq!(
+            detect_from_filename("clip.half.sbs.mp4"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip-half-sbs.mp4"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip_half_sbs.mp4"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip.full.sbs.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("clip-full-sbs.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("clip_full_sbs.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("clip.half.ou.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip-half-ou.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip_half_ou.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip.full.ou.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("clip-full-ou.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("clip_full_ou.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("clip.half.tab.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip.full.tab.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("clip.halfsbs.mp4"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("clip.fullsbs.mp4"),
+            Some(Format3D::SbsFull)
+        );
+
+        // Delimiters with single letter indicators (h-sbs, h-ou, f-sbs, f-ou)
+        assert_eq!(
+            detect_from_filename("movie.h.sbs.mkv"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("movie-h-sbs.mp4"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("movie.h.ou.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("movie-h-tab.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("movie.f.sbs.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("movie.f.ou.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+
+        // Separated / non-adjacent tokens (e.g. resolution or tags between half/full and sbs/ou)
+        assert_eq!(
+            detect_from_filename("Avatar.Half.1080p.SBS.mkv"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("Avatar.Half.3D.SBS.mkv"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.Half.1080p.OU.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.Half.1080p.TAB.mkv"),
+            Some(Format3D::OverUnderHalf)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.Full.1080p.SBS.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.Full.1080p.OU.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+
+        // Compound single-word markers
+        assert_eq!(
+            detect_from_filename("movie.sidebyside.mp4"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("movie.overunder.mp4"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("movie.topbottom.mp4"),
+            Some(Format3D::OverUnderFull)
+        );
+
+        // H.264 / H.265 safety: H.264 token must not falsely trigger half SBS
+        assert_eq!(
+            detect_from_filename("Series.S01E02.720p.H.264.SBS.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.2024.1080p.H.265.OU.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+
+        // Title safety: generic "3d" without stereo indicators must NOT match
+        assert_eq!(detect_from_filename("Step.Up.3D.1080p.mkv"), None);
+        assert_eq!(detect_from_filename("Avatar.3D.mkv"), None);
+        assert_eq!(detect_from_filename("Piranha.3D.mp4"), None);
+        assert_eq!(detect_from_filename("Jackass_3D.mp4"), None);
+
+        // Generic "3d" accompanied by stereo indicators matches appropriately
+        assert_eq!(
+            detect_from_filename("Movie.3D.SBS.mkv"),
+            Some(Format3D::SbsFull)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.3D.Half-SBS.mkv"),
+            Some(Format3D::SbsHalf)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.3D.OU.mkv"),
+            Some(Format3D::OverUnderFull)
+        );
+        assert_eq!(
+            detect_from_filename("Movie.3D.Half-OU.mkv"),
+            Some(Format3D::OverUnderHalf)
         );
     }
 }

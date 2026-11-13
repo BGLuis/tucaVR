@@ -5,7 +5,7 @@ use crate::sync::SyncManager;
 use crate::texture::TextureOutput;
 use audio::output::AudioOutput;
 use ndk::media::media_format::MediaFormat;
-use std::sync::atomic::{AtomicI32, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -31,15 +31,12 @@ pub static AUDIO_THREAD_TID: AtomicI32 = AtomicI32::new(0);
 /// fixo pre-existente.
 pub static DEVICE_TOTAL_MEMORY_BYTES: AtomicU64 = AtomicU64::new(0);
 
-const LATE_FRAME_RENDER_SKIP_SEC: f64 = 0.1;
-
-/// Quando o proximo pacote de video ja nasce mais atrasado que isto em
-/// relacao ao master_clock, pacotes nao-chave sao descartados sem decodificar
-/// ate a proxima keyframe (ver video_thread). Sem isso, um atraso persistente
-/// (decode mais lento que o exigido pela velocidade pedida, ex: 2x em 8K60,
-/// onde o hardware ja decodifica perto do limite em 1x) nunca se recupera —
-/// LATE_FRAME_RENDER_SKIP_SEC so descarta no render, sem reduzir o backlog,
-/// entao o atraso so cresce e trava no ultimo frame renderizado pra sempre.
+/// When the next video packet arrives with more delay than this threshold relative
+/// to the master clock, non-key packets are dropped without decoding until the next
+/// keyframe (see video_thread). Without this, persistent delay (e.g. decoding slower
+/// than required playback speed, such as 2x at 8K60) never recovers — dropping late frames
+/// at render time (via late_skip_sec) alone only discards frames at presentation without
+/// reducing the queue backlog, causing delay to grow indefinitely.
 const CATCH_UP_SKIP_THRESHOLD_SEC: f64 = 0.5;
 
 /// Quantas vezes seguidas a thread de demux tenta retomar perto da ultima
@@ -119,6 +116,31 @@ fn try_send_until_stopped<T>(
     }
 }
 
+/// Envia amostra de áudio checando `is_running` e `reopen_requested` entre tentativas —
+/// se a saída de áudio desconectar, aborta o envio para que a thread possa reabrir o stream (#171).
+fn try_send_sample_until_stopped(
+    sender: &crossbeam_channel::Sender<f32>,
+    mut item: f32,
+    is_running: &Mutex<bool>,
+    reopen_requested: &AtomicBool,
+) -> bool {
+    if reopen_requested.load(Ordering::SeqCst) {
+        return false;
+    }
+    loop {
+        match sender.send_timeout(item, std::time::Duration::from_millis(50)) {
+            Ok(()) => return true,
+            Err(crossbeam_channel::SendTimeoutError::Timeout(returned)) => {
+                item = returned;
+                if !*is_running.lock().unwrap() || reopen_requested.load(Ordering::SeqCst) {
+                    return false;
+                }
+            }
+            Err(crossbeam_channel::SendTimeoutError::Disconnected(_)) => return false,
+        }
+    }
+}
+
 /// Fonte de aleatoriedade barata para o jitter do backoff (ver
 /// `media_logic::retry_backoff::backoff_with_jitter`) — não precisa
 /// qualidade criptográfica, só evitar que sessões diferentes se recuperando
@@ -174,6 +196,7 @@ struct PlaybackSession {
     // (rust/media-logic/src/session.rs) que este struct agora usa em vez de
     // reimplementar a mesma bookkeeping na mao.
     generation: media_logic::session::Generation,
+    reopen_requested: Arc<AtomicBool>,
     demux_thread: Option<thread::JoinHandle<()>>,
     video_thread: Option<thread::JoinHandle<()>>,
     audio_thread: Option<thread::JoinHandle<()>>,
@@ -187,6 +210,10 @@ impl PlaybackSession {
 
     fn set_playing(&self, playing: bool) {
         self.generation.set_playing(playing);
+    }
+
+    fn request_audio_reopen(&self) {
+        self.reopen_requested.store(true, Ordering::SeqCst);
     }
 
     /// Sinaliza todas as threads da sessao para pararem e espera
@@ -229,7 +256,9 @@ pub struct PlaybackController {
     // seek() ja faz.
     desired_audio_track: usize,
     audio_track_count: usize,
+    available_audio_tracks: Vec<media_logic::track_info::AudioTrackInfo>,
     detected_screen_mode: u32,
+    initial_pose: Option<media_logic::format3d::ProjectionPose>,
     // T-HDR: transfer characteristic (EOTF) do stream de video atual,
     // detectada uma vez em load_at() a partir do que o FFmpeg reporta (ver
     // media_logic::color) — exposta pro C++ (bridge) escolher o pipeline
@@ -237,6 +266,8 @@ pub struct PlaybackController {
     // default seguro antes do primeiro load_at() ou se o container nao
     // informa nada (mesma suposicao implicita que o pipeline sempre teve).
     hdr_transfer: media_logic::color::TransferFunction,
+    video_fps: f32,
+    video_sar: (u32, u32),
     auto_paused: bool,
     // Instrumentacao (docs/DEBUGGING.md), capturada em load_at() antes de
     // mover o Demuxer/HwDecoder pra dentro das threads de sessao — ver
@@ -268,7 +299,8 @@ pub struct PlaybackController {
     load_phase_demux_open_ms: Arc<AtomicU32>,
     load_phase_decoder_ready_ms: Arc<AtomicU32>,
     load_phase_audio_ready_ms: Arc<AtomicU32>,
-    av_drift_ms: Arc<AtomicI32>,
+    // f32 bits of the smoothed A/V drift (ms), see media_logic::sync::av_drift_ema_ms.
+    av_drift_ms: Arc<AtomicU32>,
     // "Buffer estilo YouTube" (ver rust/media-logic/src/buffer_gate.rs): DTS
     // (bits de f64, convertido em segundos) do ultimo pacote de video que a
     // thread de demux enfileirou com sucesso, publicado a cada pacote — DTS
@@ -321,8 +353,12 @@ impl PlaybackController {
             speed_bits,
             desired_audio_track: 0,
             audio_track_count: 0,
+            available_audio_tracks: Vec::new(),
             detected_screen_mode: 0,
+            initial_pose: None,
             hdr_transfer: media_logic::color::TransferFunction::Sdr,
+            video_fps: 0.0,
+            video_sar: (1, 1),
             auto_paused: false,
             network_stats: None,
             video_queue: None,
@@ -337,7 +373,7 @@ impl PlaybackController {
             load_phase_demux_open_ms: Arc::new(AtomicU32::new(0)),
             load_phase_decoder_ready_ms: Arc::new(AtomicU32::new(0)),
             load_phase_audio_ready_ms: Arc::new(AtomicU32::new(0)),
-            av_drift_ms: Arc::new(AtomicI32::new(0)),
+            av_drift_ms: Arc::new(AtomicU32::new(0.0f32.to_bits())),
             last_enqueued_video_dts_bits: Arc::new(AtomicU64::new(0.0f64.to_bits())),
             video_bytes_queued: Arc::new(AtomicU64::new(0)),
             audio_bytes_queued: Arc::new(AtomicU64::new(0)),
@@ -366,6 +402,9 @@ impl PlaybackController {
         *self.seek_started_at.lock().unwrap() = Some(Instant::now());
 
         if let Some(session) = &self.session {
+            // Signal seek interruption to unblock any waiting read_packet() call
+            // and let the top of the demux loop handle the SeekTo command (#173).
+            session.generation.trigger_seek();
             if session
                 .command_tx
                 .send(DemuxCommand::SeekTo(position_sec))
@@ -409,8 +448,10 @@ impl PlaybackController {
         }
 
         self.current_path = Some(path.to_string());
-        let mut demuxer =
-            Demuxer::open(path, Some(&mut self.connection_cache)).map_err(|e| e.to_string())?;
+        let generation = media_logic::session::Generation::new();
+        let interrupt = generation.interrupt_handle();
+        let mut demuxer = Demuxer::open(path, Some(&mut self.connection_cache), Some(interrupt))
+            .map_err(|e| e.to_string())?;
         crate::log_info!(
             "load_at: demux_open={}ms",
             load_started_at.elapsed().as_millis()
@@ -424,8 +465,45 @@ impl PlaybackController {
         );
         self.network_stats = demuxer.network_stats.clone();
         self.demux_corrupt_packets = Some(demuxer.corrupt_packets.clone());
-        demuxer.select_audio_track(self.desired_audio_track);
         self.audio_track_count = demuxer.audio_streams.len();
+        self.desired_audio_track = self.audio_track_index();
+        demuxer.select_audio_track(self.desired_audio_track);
+        self.available_audio_tracks.clear();
+        for (i, &stream_idx) in demuxer.audio_streams.iter().enumerate() {
+            if let Some(stream) = demuxer.input_context.stream(stream_idx) {
+                let meta = stream.metadata();
+                let lang = meta.get("language").unwrap_or_default().to_string();
+                let title = meta.get("title").unwrap_or_default().to_string();
+                let params = stream.parameters();
+                let codec = params.id().name().to_string();
+                let (channels, sample_rate) = unsafe {
+                    let p = params.as_ptr();
+                    if p.is_null() {
+                        (2, 48000)
+                    } else {
+                        let ch = (*p).ch_layout.nb_channels;
+                        let sr = (*p).sample_rate;
+                        (
+                            if ch > 0 { ch as u32 } else { 2 },
+                            if sr > 0 { sr as u32 } else { 48000 },
+                        )
+                    }
+                };
+                self.available_audio_tracks
+                    .push(media_logic::track_info::AudioTrackInfo {
+                        index: i,
+                        codec,
+                        language: lang,
+                        title: if title.is_empty() {
+                            format!("Track {}", i + 1)
+                        } else {
+                            title
+                        },
+                        channels,
+                        sample_rate,
+                    });
+            }
+        }
         self.duration = demuxer.input_context.duration() as f64 / 1_000_000.0;
 
         let video_idx = demuxer.video_stream_index.ok_or("No video stream")?;
@@ -436,6 +514,7 @@ impl PlaybackController {
         let mut transfer_function = media_logic::color::TransferFunction::Sdr;
         let mut avcol_spc = 2; // AVCOL_SPC_UNSPECIFIED
         let mut avcol_range = 0; // AVCOL_RANGE_UNSPECIFIED
+        let mut video_sar = (1, 1);
         if let Some(stream) = demuxer.input_context.stream(video_idx) {
             codec_id = stream.parameters().id();
             let avg_fps = stream.avg_frame_rate();
@@ -461,13 +540,30 @@ impl PlaybackController {
                     let range: ffmpeg_next::ffi::AVColorRange =
                         video_decoder_ctx.color_range().into();
                     avcol_range = range as i32;
+                    let codec_sar = video_decoder_ctx.aspect_ratio();
+                    let stream_sar = unsafe { (*stream.as_ptr()).sample_aspect_ratio };
+                    video_sar = media_logic::sar::preferred_sar(
+                        (stream_sar.num, stream_sar.den),
+                        (codec_sar.numerator(), codec_sar.denominator()),
+                    );
                 }
             }
         }
         self.hdr_transfer = transfer_function;
+        self.video_fps = video_fps;
+        self.video_sar = video_sar;
 
-        let (fmt3d, _) = crate::format3d_detect::detect(&demuxer, path, width, height);
+        let (mut fmt3d, confidence, pose) =
+            crate::format3d_detect::detect(&demuxer, path, width, height);
+        if fmt3d == media_logic::format3d::Format3D::Flat2D
+            && confidence == media_logic::format3d::DetectionConfidence::Default
+        {
+            if let Some(promoted) = crate::format3d_detect::detect_visual_sample(&mut demuxer) {
+                fmt3d = promoted;
+            }
+        }
         self.detected_screen_mode = fmt3d.to_screen_mode_index();
+        self.initial_pose = pose;
 
         // Descoberta de legendas sidecar (.srt/.vtt) e trilhas embutidas (T9.1, T9.6)
         self.available_subtitle_tracks = crate::subtitle_loader::probe_sidecar_subtitles(path);
@@ -611,9 +707,10 @@ impl PlaybackController {
             .audio_stream_index
             .and_then(|idx| AudioDecoder::new(&demuxer.input_context, idx).ok());
 
+        let reopen_requested = Arc::new(AtomicBool::new(false));
         let mut audio_out = None;
         if audio_decoder.is_some() {
-            if let Ok(mut out) = AudioOutput::new() {
+            if let Ok(mut out) = AudioOutput::new(reopen_requested.clone()) {
                 let _ = out.start();
                 audio_out = Some(out);
             }
@@ -709,10 +806,9 @@ impl PlaybackController {
         let audio_bytes_queued_d = self.audio_bytes_queued.clone();
         let audio_bytes_queued_a = self.audio_bytes_queued.clone();
 
-        // Flags desta geracao: nao sao compartilhadas com nenhuma
-        // sessao anterior ou futura (ver media_logic::session::Generation e
-        // seus testes em rust/media-logic/src/session.rs).
-        let generation = media_logic::session::Generation::new();
+        // Flags desta geracao: compartilhadas com Demuxer::open acima (interrupt_handle)
+        // e com as threads abaixo (ver media_logic::session::Generation).
+        let generation_d = generation.clone();
         let is_playing = generation.is_playing_handle();
         let is_running = generation.is_running_handle();
 
@@ -745,6 +841,7 @@ impl PlaybackController {
                 }
 
                 if let Ok(DemuxCommand::SeekTo(target_sec)) = command_rx.try_recv() {
+                    generation_d.clear_seek();
                     let target_ts = (target_sec * 1_000_000.0) as i64;
                     // Limite superior explícito (..target_ts) força o FFmpeg a encontrar
                     // uma keyframe <= target_ts (AVSEEK_FLAG_BACKWARD), evitando que seeks
@@ -864,6 +961,23 @@ impl PlaybackController {
                             }
                         }
                     }
+                    crate::demuxer::ReadPacketOutcome::Cancelled => {
+                        let is_running = *is_running_d.lock().unwrap();
+                        match media_logic::session::resolve_cancel_action(
+                            generation_d.is_stopped(),
+                            is_running,
+                        ) {
+                            media_logic::session::CancelAction::ExitThread => {
+                                crate::log_info!("Demuxer: session stopped, exiting demux thread");
+                                break;
+                            }
+                            media_logic::session::CancelAction::Continue => {
+                                generation_d.clear_seek();
+                                demuxer.input_context.clear_interrupt();
+                                continue;
+                            }
+                        }
+                    }
                     crate::demuxer::ReadPacketOutcome::Eof => {
                         let _ = demuxer.input_context.seek(0, 0..1);
                         sync_d.reset();
@@ -926,6 +1040,7 @@ impl PlaybackController {
         // Thread 2: Video Decoder
         let sync_v = sync_manager.clone();
         let video_present_pending_v = self.video_present_pending.clone();
+        let late_skip_sec = media_logic::frame_timing::late_skip_sec_from_fps(video_fps);
         let video_thread = thread::spawn(move || {
             VIDEO_THREAD_TID.store(unsafe { libc::gettid() }, Ordering::Relaxed);
             if let Some(sps) = sps_pps {
@@ -970,12 +1085,10 @@ impl PlaybackController {
                         let master_clock = sync_v.get_master_clock();
                         let inst_drift_ms = ((master_clock - pts_sec) * 1000.0)
                             .clamp(i32::MIN as f64, i32::MAX as f64);
-                        let prev_drift_ms = av_drift_v.load(Ordering::Relaxed) as f64;
-                        let smoothed_drift_ms = prev_drift_ms * 0.9 + inst_drift_ms * 0.1;
-                        av_drift_v.store(
-                            smoothed_drift_ms.clamp(i32::MIN as f64, i32::MAX as f64) as i32,
-                            Ordering::Relaxed,
-                        );
+                        let prev_drift_ms = f32::from_bits(av_drift_v.load(Ordering::Relaxed));
+                        let smoothed_drift_ms =
+                            media_logic::sync::av_drift_ema_ms(prev_drift_ms, inst_drift_ms);
+                        av_drift_v.store(smoothed_drift_ms.to_bits(), Ordering::Relaxed);
                     }
                 };
             }
@@ -1027,7 +1140,7 @@ impl PlaybackController {
                         pts_sec,
                         master_clock,
                         is_landing,
-                        LATE_FRAME_RENDER_SKIP_SEC,
+                        late_skip_sec,
                     ) {
                         media_logic::frame_timing::FrameAction::WaitThenRender(d) => {
                             if d <= std::time::Duration::from_millis(15) {
@@ -1177,6 +1290,7 @@ impl PlaybackController {
         let sync_a = sync_manager.clone();
         let speed_bits_a = self.speed_bits.clone();
         let audio_output_for_thread = audio_output_clone.clone();
+        let reopen_requested_a = reopen_requested.clone();
 
         let mut audio_sender = None;
         if let Ok(out_guard) = audio_output_clone.lock() {
@@ -1190,6 +1304,7 @@ impl PlaybackController {
             let mut current_epoch: u64 = 0;
             let mut applied_speed = 1.0f32;
             let mut last_good_audio_pts: i64 = 0;
+            let mut reopen_failed = false;
             let layout = audio_decoder
                 .as_ref()
                 .map(|ad| ad.channel_layout())
@@ -1213,6 +1328,67 @@ impl PlaybackController {
             loop {
                 if !*is_running_a.lock().unwrap() {
                     break;
+                }
+
+                if !reopen_failed && reopen_requested_a.swap(false, Ordering::SeqCst) {
+                    // Libera a saida antiga antes de abrir a nova para nao concorrer por
+                    // endpoints exclusivos de hardware (AAudio Exclusive / MMAP).
+                    audio_sender = None;
+                    let old_volume = if let Ok(mut out_guard) = audio_output_for_thread.lock() {
+                        if let Some(mut old_out) = out_guard.take() {
+                            let vol = old_out.get_volume();
+                            let _ = old_out.stop();
+                            vol
+                        } else {
+                            1.0
+                        }
+                    } else {
+                        1.0
+                    };
+
+                    match AudioOutput::new(reopen_requested_a.clone()) {
+                        Ok(mut new_out) => {
+                            new_out.set_volume(old_volume);
+
+                            let is_playing = *is_playing_a.lock().unwrap();
+                            // Um novo stream Oboe nasce no estado Open/Stopped.
+                            // So chamamos start() se o playback estiver ativo; chamar pause()
+                            // em stream que nunca iniciou retorna ErrorInvalidState no AAudio.
+                            // Se pausado, o stream permanece aberto e pronto para play().
+                            let start_res = if is_playing { new_out.start() } else { Ok(()) };
+
+                            if let Err(e) = start_res {
+                                reopen_failed = true;
+                                crate::log_error!("Failed to start reopened audio stream: {:?}", e);
+                                crate::log::report_playback_error(format!(
+                                    "Failed to start audio stream: {:?}",
+                                    e
+                                ));
+                                if let Ok(mut out_guard) = audio_output_for_thread.lock() {
+                                    *out_guard = None;
+                                }
+                            } else {
+                                audio_sender = Some(new_out.get_sender());
+                                let pts_sec = last_good_audio_pts as f64 * audio_time_base;
+                                sync_a.reset_to(pts_sec);
+                                if let Ok(mut out_guard) = audio_output_for_thread.lock() {
+                                    *out_guard = Some(new_out);
+                                }
+                                crate::log_info!("audio output reopened");
+                            }
+                        }
+                        Err(e) => {
+                            reopen_failed = true;
+                            crate::log_error!("Failed to reopen audio output: {:?}", e);
+                            crate::log::report_playback_error(format!(
+                                "Failed to reopen audio output: {:?}",
+                                e
+                            ));
+                            if let Ok(mut out_guard) = audio_output_for_thread.lock() {
+                                *out_guard = None;
+                            }
+                        }
+                    }
                 }
 
                 // Verificação de época no topo do loop: garante flush imediato do decoder
@@ -1304,7 +1480,12 @@ impl PlaybackController {
 
                                 if let Some(sender) = &audio_sender {
                                     for &sample in &binaural_buffer {
-                                        if !try_send_until_stopped(sender, sample, &is_running_a) {
+                                        if !try_send_sample_until_stopped(
+                                            sender,
+                                            sample,
+                                            &is_running_a,
+                                            &reopen_requested_a,
+                                        ) {
                                             break;
                                         }
                                     }
@@ -1318,6 +1499,7 @@ impl PlaybackController {
 
         self.session = Some(PlaybackSession {
             generation,
+            reopen_requested,
             demux_thread: Some(demux_thread),
             video_thread: Some(video_thread),
             audio_thread: Some(audio_thread),
@@ -1417,6 +1599,26 @@ impl PlaybackController {
         self.audio_track_count
     }
 
+    pub fn get_available_audio_tracks(&self) -> &[media_logic::track_info::AudioTrackInfo] {
+        &self.available_audio_tracks
+    }
+
+    pub fn get_audio_track_info(
+        &self,
+        index: usize,
+    ) -> Option<&media_logic::track_info::AudioTrackInfo> {
+        self.available_audio_tracks.get(index)
+    }
+
+    /// Indice da trilha de audio atualmente selecionada (0 se nada foi carregado,
+    /// delimitado entre 0 e audio_track_count - 1).
+    pub fn audio_track_index(&self) -> usize {
+        media_logic::playback_params::clamp_audio_track_index(
+            self.desired_audio_track,
+            self.audio_track_count,
+        )
+    }
+
     /// Seleciona a trilha de audio pela posicao ordinal (0 = primeira).
     /// So tem efeito no PROXIMO load_at() — nao troca a trilha "ao vivo"
     /// no meio da reproducao (isso exigiria recriar o AudioDecoder e o
@@ -1424,6 +1626,12 @@ impl PlaybackController {
     /// cycle_audio_track() para aplicar imediatamente.
     pub fn select_audio_track(&mut self, ordinal: usize) {
         self.desired_audio_track = ordinal;
+    }
+
+    pub fn request_audio_reopen(&self) {
+        if let Some(session) = &self.session {
+            session.request_audio_reopen();
+        }
     }
 
     /// Avanca para a proxima trilha de audio (com wrap-around) e recarrega
@@ -1508,8 +1716,8 @@ impl PlaybackController {
             .unwrap_or(0)
     }
 
-    /// Debug (docs/DEBUGGING.md) — frames que o MediaCodec produziu mas o
-    /// callback de sync descartou por atraso (LATE_FRAME_RENDER_SKIP_SEC).
+    /// Debug (docs/DEBUGGING.md) — frames that MediaCodec produced but were
+    /// dropped at render time due to late arrival (late_skip_sec threshold).
     pub fn get_frames_dropped_count(&self) -> u64 {
         self.frames_dropped
             .as_ref()
@@ -1581,7 +1789,7 @@ impl PlaybackController {
     /// Debug (docs/DEBUGGING.md) — bytes recebidos da rede pelo
     /// PrefetchReader da fonte atual, soma cumulativa. 0 para arquivo local
     /// ou `http://` puro (sem PrefetchReader envolvido). O C++ amostra isto
-    /// ao longo do tempo e calcula MB/s, mesmo padrao de decFps.
+    /// ao longo do tempo e calcula MiB/s, mesmo padrao de decFps.
     pub fn get_network_bytes_read(&self) -> u64 {
         self.network_stats
             .as_ref()
@@ -1601,8 +1809,17 @@ impl PlaybackController {
             .unwrap_or(0.0)
     }
 
-    /// Debug (docs/DEBUGGING.md) — quantos blocos foram buscados no total
-    /// (sucesso ou erro) e quantos desses foram descartados por um seek real
+    /// Debug (docs/DEBUGGING.md) — link throughput of the last fetched block in MiB/s
+    /// (see PrefetchStats::last_block_mibs); 0 without a PrefetchReader.
+    pub fn get_network_last_block_mibs(&self) -> f32 {
+        self.network_stats
+            .as_ref()
+            .map(|s| s.last_block_mibs())
+            .unwrap_or(0.0)
+    }
+
+    /// Debug (docs/DEBUGGING.md) — quantos blocos foram buscados com sucesso
+    /// (falhas ficam em fetch_failures) e quantos desses foram descartados por um seek real
     /// antes de serem consumidos. Alto `discarded` relativo a `fetched`
     /// durante playback estavel (nao logo apos abrir o arquivo) indica
     /// acesso menos sequencial do que o esperado.
@@ -1664,9 +1881,9 @@ impl PlaybackController {
         self.load_phase_audio_ready_ms.load(Ordering::Relaxed)
     }
 
-    // Drift A/V (master_clock - video_pts) do ultimo frame decodificado, em ms.
+    // Smoothed A/V drift (master_clock - video_pts, EMA with α = 0.1) of released frames, in ms.
     pub fn get_last_av_drift_ms(&self) -> f32 {
-        self.av_drift_ms.load(Ordering::Relaxed) as f32
+        f32::from_bits(self.av_drift_ms.load(Ordering::Relaxed))
     }
 
     pub fn toggle_play_pause(&mut self) {
@@ -1709,6 +1926,13 @@ impl PlaybackController {
         self.duration = 0.0;
         self.current_path = None;
         self.auto_paused = false;
+        self.available_audio_tracks.clear();
+        self.audio_track_count = 0;
+        self.available_subtitle_tracks.clear();
+        self.selected_subtitle_track = -1;
+        self.subtitle_entries = None;
+        self.ass_subtitle = None;
+        self.pgs_subtitles = None;
     }
 
     pub fn get_progress(&self) -> (f64, f64) {
@@ -1719,11 +1943,26 @@ impl PlaybackController {
         self.detected_screen_mode
     }
 
+    pub fn initial_pose(&self) -> Option<media_logic::format3d::ProjectionPose> {
+        self.initial_pose
+    }
+
+    /// Sample aspect ratio (numerator, denominator) of the current video; (1, 1) when unknown
+    /// or before the first load_at().
+    pub fn video_sar(&self) -> (u32, u32) {
+        self.video_sar
+    }
+
     /// T-HDR: transfer characteristic do video atual (PQ/HLG/SDR, ver
     /// media_logic::color) — consumida pelo C++ (bridge) pra escolher o
     /// tonemap Vulkan certo. SDR antes do primeiro load_at().
     pub fn hdr_transfer(&self) -> media_logic::color::TransferFunction {
         self.hdr_transfer
+    }
+
+    /// Taxa de quadros (fps) média do stream de vídeo, lida em load_at() do container.
+    pub fn video_fps(&self) -> f32 {
+        self.video_fps
     }
 
     pub fn set_subtitle_track(&mut self, track: i32) {

@@ -135,6 +135,7 @@ class FullDebugStatsView(
                 listOf(
                     "source" to R.string.debug_stats_label_source,
                     "net_speed" to R.string.debug_stats_label_network_speed,
+                    "net_link_speed" to R.string.debug_stats_label_network_link_speed,
                     "buffer_queue" to R.string.debug_stats_label_buffer_queue,
                     "presentation_pending" to R.string.debug_stats_label_presentation_pending,
                     "fetch_latency" to R.string.debug_stats_label_fetch_latency,
@@ -192,11 +193,11 @@ class FullDebugStatsView(
                     )
             }
 
-        lowerCharts.addView(buildChartColumn("g1", R.string.stats_chart_bottleneck_title))
-        lowerCharts.addView(buildChartColumn("g2", R.string.stats_chart_network_title))
-        lowerCharts.addView(buildChartColumn("g3", R.string.stats_chart_buffer_title))
+        lowerCharts.addView(buildChartColumn("g1", R.string.debug_stats_chart_g1_title))
+        lowerCharts.addView(buildChartColumn("g2", R.string.debug_stats_chart_g2_title))
+        lowerCharts.addView(buildChartColumn("g3", R.string.debug_stats_chart_g3_title))
         lowerCharts.addView(buildChartColumn("g4", R.string.debug_stats_chart_g4_title))
-        lowerCharts.addView(buildChartColumn("g5", R.string.stats_chart_gpu_title))
+        lowerCharts.addView(buildChartColumn("g5", R.string.debug_stats_chart_g5_title))
         root.addView(lowerCharts)
 
         addView(root)
@@ -357,7 +358,7 @@ class FullDebugStatsView(
     ) {
         val stats = DebugStatsParser.parse(text) ?: return
         val videoTrack = meta?.videoTracks?.firstOrNull()
-        val audioTrack = meta?.audioTracks?.firstOrNull()
+        val audioTrack = meta?.audioTracks?.getOrNull(stats.audioTrackIndex) ?: meta?.audioTracks?.firstOrNull()
 
         // 1. Vídeo
         val bottleneckText =
@@ -434,7 +435,8 @@ class FullDebugStatsView(
             }
         statViews["source"]?.text = srcText
 
-        setValue("net_speed", String.format(Locale.US, "%.2f MB/s", stats.netMBs), stats.networkStatsAgeMs)
+        setValue("net_speed", String.format(Locale.US, "%.2f MiB/s", stats.netMBs), stats.networkStatsAgeMs)
+        setValue("net_link_speed", String.format(Locale.US, "%.2f MiB/s", stats.netBlockMBs), stats.networkStatsAgeMs)
         setValue("buffer_queue", "${stats.queueDepth} pkts", stats.networkStatsAgeMs)
         setValue("presentation_pending", "${stats.presentationPending} frames", stats.networkStatsAgeMs)
         setValue("fetch_latency", String.format(Locale.US, "%.1f ms", stats.netLastFetchMs), stats.networkStatsAgeMs)
@@ -444,9 +446,13 @@ class FullDebugStatsView(
 
         // 3. Áudio
         setValue("av_drift", String.format(Locale.US, "%+.1f ms", stats.avDriftMs), stats.audioStatsAgeMs)
+        val resolvedAudio =
+            audioTrack ?: (context as? com.tucavr.VRActivity)?.nativeGetAudioTrackInfoWire()?.let { wire ->
+                parseAudioWire(wire).getOrNull(stats.audioTrackIndex) ?: parseAudioWire(wire).firstOrNull()
+            }
         val audioFmt =
-            if (audioTrack != null) {
-                "${audioTrack.codec.uppercase()} (${audioTrack.channels}ch)"
+            if (resolvedAudio != null) {
+                "${resolvedAudio.codec.uppercase()} (${resolvedAudio.channels}ch)"
             } else {
                 "${stats.audioTrackIndex + 1}/${stats.audioTrackCount}"
             }
@@ -498,7 +504,7 @@ class FullDebugStatsView(
     }
 
     private fun updateCharts(stats: NativeDebugStats) {
-        val bufferHealthSeconds = if (stats.videoFps > 0f) stats.queueDepth / stats.videoFps else 0f
+        val bufferHealthSeconds = stats.bufferedAheadSec
 
         bottleneckHistory.addLast(BottleneckStageAnalyzer.analyze(stats))
         while (bottleneckHistory.size > HISTORY_MAX_SAMPLES) bottleneckHistory.removeFirst()

@@ -460,6 +460,57 @@ again.
 See `docs/TESTING-PLAN.md` for what else requires a physical headset and had
 not yet been validated in this review.
 
+### 4.1.4 4x MSAA with Transient On-Chip Resolve (#47)
+
+Phase 0.6 §3 (`T3.1–T3.3`, Issue `#47`) introduces 4× MSAA on the main eye render
+pass (`state.renderPass` in `native/src/vr_player_app_vulkan.cpp`, helper logic in
+`native/include/vulkan_msaa.h`) using Vulkan's single-subpass resolve path for
+Adreno 740 tile-based GMEM:
+
+- **Attachment 0 (MSAA color):** `VK_SAMPLE_COUNT_4_BIT`, `loadOp = CLEAR`,
+  `storeOp = DONT_CARE`, backed by a per-swapchain-image `VkImage` with
+  `VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT`
+  and `VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT` (falling back to
+  `VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT` if the driver rejects transient usage).
+- **Attachment 1 (MSAA depth):** `VK_SAMPLE_COUNT_4_BIT`, `loadOp = CLEAR`,
+  `storeOp = DONT_CARE`, transient + lazily allocated in on-chip GMEM.
+- **Attachment 2 (1× resolve target):** `VK_SAMPLE_COUNT_1_BIT` (`eyeChain.imageViews[i]`
+  from the OpenXR swapchain), `loadOp = DONT_CARE`, `storeOp = STORE`,
+  `finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL`, wired via
+  `VkSubpassDescription::pResolveAttachments`.
+- **Pipeline parity (`VUID-06853`):** All 13 graphics pipelines bound to
+  `state.renderPass` (`pipeline`, `videoPipeline`, `uiPipeline`,
+  `stereoPipeline`/`stereoFlatPipeline`/`stereoCubemapPipeline`,
+  `photoStereoPipeline`/`photoStereoFlatPipeline`, `beamPipeline`,
+  `feedbackPipeline`, `subtitlePipeline`, `envPipeline`, `skyboxPipeline`,
+  `particlesPipeline`, `envFadePipeline`, and `ambientHaloPipeline`) set
+  `rasterizationSamples = state.msaaSamples`. The offscreen 16×16 ambient
+  downsample pass (`state.ambientRenderPass` / `ambientDownsamplePipeline`) and
+  all sampled 2D/external textures remain `VK_SAMPLE_COUNT_1_BIT`.
+- **Runtime A/B switch for hardware benchmarking:** `CreateRenderPass` reads the
+  Android system property `debug.tucavr.msaa` (`1` forces 1× single-sampled;
+  `4` or unset selects 4× MSAA when supported by
+  `framebufferColorSampleCounts & framebufferDepthSampleCounts`). Both 1× and 4×
+  can therefore be measured on the exact same APK build and commit:
+
+  ```bash
+  # 1x baseline
+  adb shell setprop debug.tucavr.msaa 1
+  adb shell am force-stop com.tucavr
+  # 4x MSAA (default)
+  adb shell setprop debug.tucavr.msaa 4
+  adb shell am force-stop com.tucavr
+  ```
+
+- **Quest 3 Hardware Timing Record (Block 7 of `docs/HARDWARE-VALIDATION-CHECKLIST.md`):**
+
+| Environment | Mode (`debug.tucavr.msaa`) | Runs (`n`) | Median `smoothed_gpu_time_ms` | Output FPS | Commit |
+|---|---|---|---|---|---|
+| `cinema` | `1` (1× baseline) | *pending Quest 3 run* | *pending* | *pending* | *pending* |
+| `cinema` | `4` (4× MSAA) | *pending Quest 3 run* | *pending* | *pending* | *pending* |
+| `space` | `1` (1× baseline) | *pending Quest 3 run* | *pending* | *pending* | *pending* |
+| `space` | `4` (4× MSAA) | *pending Quest 3 run* | *pending* | *pending* | *pending* |
+
 ## 5. Before Starting — Validating the Premise (historical)
 
 This app essentially renders 1-2 quads/a sphere with video — a low geometric

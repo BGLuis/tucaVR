@@ -1,6 +1,14 @@
 # cargo-deny configuration for supply-chain validation in tucaVR
 # https://embarkstudios.github.io/cargo-deny/
 
+[advisories]
+yanked = "warn"
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "rsa timing side channel (Marvin); pulled in by russh/ssh-key and no fixed release exists" },
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.37 DoS; the fix needs 0.41, which moves entity handling to Event::GeneralRef and requires reworking the DASH/DLNA/WebDAV parsers (tracked as follow-up)" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml 0.37 DoS; same upgrade as RUSTSEC-2026-0194" },
+]
+
 [licenses]
 allow = [
     "MIT",

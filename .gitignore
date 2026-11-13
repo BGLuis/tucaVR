@@ -20,7 +20,6 @@ captures/
 # Rust/Cargo
 **/target/
 **/*.rs.bk
-Cargo.lock
 
 # C++/CMake
 CMakeCache.txt

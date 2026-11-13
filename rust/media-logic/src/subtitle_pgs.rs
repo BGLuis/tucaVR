@@ -187,6 +187,13 @@ pub fn find_active_pgs(subs: &[PgsSubtitle], pts_ms: i64, offset_ms: i64) -> Opt
 // Descompressão RLE  (formato PGS/HDMV, por linha)
 // ============================================================================
 
+/// Maximum dimensions and pixel count accepted for a single PGS object or
+/// composed bounding box (UHD Blu-ray 3840×2160). Prevents out-of-memory
+/// allocations on malformed or fuzzed ODS/PCS headers announcing 65535×65535.
+const MAX_PGS_DIMENSION: usize = 4096;
+const MAX_PGS_PIXELS: usize = 3840 * 2160;
+const MAX_ODS_RLE_BYTES: usize = 4 * 1024 * 1024;
+
 /// Descomprime o RLE de um objeto PGS num buffer `width * height` de índices de
 /// paleta. Tolerante a truncamento: pixels faltantes ficam 0 (transparente).
 ///
@@ -200,10 +207,12 @@ pub fn find_active_pgs(subs: &[PgsSubtitle], pts_ms: i64, offset_ms: i64) -> Opt
 pub fn rle_decode(data: &[u8], width: u16, height: u16) -> Vec<u8> {
     let w = width as usize;
     let h = height as usize;
-    let mut out = vec![0u8; w.saturating_mul(h)];
-    if w == 0 || h == 0 {
-        return out;
+    let total = w.saturating_mul(h);
+    if w == 0 || h == 0 || w > MAX_PGS_DIMENSION || h > MAX_PGS_DIMENSION || total > MAX_PGS_PIXELS
+    {
+        return Vec::new();
     }
+    let mut out = vec![0u8; total];
 
     let mut x = 0usize;
     let mut y = 0usize;
@@ -401,11 +410,17 @@ fn composite(
 
     let bbox_w = (max_x - min_x) as usize;
     let bbox_h = (max_y - min_y) as usize;
-    if bbox_w == 0 || bbox_h == 0 {
+    let bbox_pixels = bbox_w.saturating_mul(bbox_h);
+    if bbox_w == 0
+        || bbox_h == 0
+        || bbox_w > MAX_PGS_DIMENSION
+        || bbox_h > MAX_PGS_DIMENSION
+        || bbox_pixels > MAX_PGS_PIXELS
+    {
         return None;
     }
 
-    let mut rgba = vec![0u8; bbox_w * bbox_h * 4];
+    let mut rgba = vec![0u8; bbox_pixels * 4];
 
     for co in &pcs.objects {
         let Some(obj) = objects.get(&co.object_id) else {
@@ -551,9 +566,19 @@ fn parse_ods(
             Some(v) => v,
             None => return,
         };
-        let expected = data_len.saturating_sub(4);
-        let mut data = Vec::with_capacity(expected);
-        data.extend_from_slice(&p[11..]);
+        if width == 0
+            || height == 0
+            || (width as usize) > MAX_PGS_DIMENSION
+            || (height as usize) > MAX_PGS_DIMENSION
+            || (width as usize).saturating_mul(height as usize) > MAX_PGS_PIXELS
+        {
+            return;
+        }
+        let expected = data_len.saturating_sub(4).min(MAX_ODS_RLE_BYTES);
+        let payload = &p[11..];
+        let mut data = Vec::with_capacity(expected.min(payload.len().max(64)));
+        let to_take = payload.len().min(MAX_ODS_RLE_BYTES);
+        data.extend_from_slice(&payload[..to_take]);
         accum.insert(
             object_id,
             ObjAccum {
@@ -564,20 +589,25 @@ fn parse_ods(
             },
         );
     } else if let Some(acc) = accum.get_mut(&object_id) {
-        acc.data.extend_from_slice(&p[4..]);
+        let remaining = MAX_ODS_RLE_BYTES.saturating_sub(acc.data.len());
+        let payload = &p[4..];
+        acc.data
+            .extend_from_slice(&payload[..payload.len().min(remaining)]);
     }
 
     if last {
         if let Some(acc) = accum.remove(&object_id) {
             let indices = rle_decode(&acc.data, acc.width, acc.height);
-            objects.insert(
-                object_id,
-                DecodedObject {
-                    width: acc.width,
-                    height: acc.height,
-                    indices,
-                },
-            );
+            if indices.len() == (acc.width as usize) * (acc.height as usize) {
+                objects.insert(
+                    object_id,
+                    DecodedObject {
+                        width: acc.width,
+                        height: acc.height,
+                        indices,
+                    },
+                );
+            }
             let _ = acc.expected;
         }
     }
@@ -824,5 +854,38 @@ mod tests {
         assert!(subs.is_empty());
         let subs = parse_pgs_sup(b"not a pgs file at all");
         assert!(subs.is_empty());
+    }
+
+    #[test]
+    fn test_oversized_ods_dimensions_rejected_without_oom() {
+        assert!(rle_decode(&[0x01, 0x00, 0x00], u16::MAX, u16::MAX).is_empty());
+        assert!(rle_decode(&[0x01, 0x00, 0x00], 4097, 1).is_empty());
+
+        let mut ods = vec![
+            0x00, 0x00, // object_id
+            0x00, // version
+            0xC0, // first | last
+            0xFF, 0xFF, 0xFF, // huge declared data_len (16 MiB - 1)
+            0xFF, 0xFF, 0xFF, 0xFF, // width = 65535, height = 65535
+            0x01, 0x00, 0x00,
+        ];
+        #[rustfmt::skip]
+        let pcs = [
+            0x00, 0x02, 0x00, 0x02, 0x10, 0x00, 0x00, 0x80, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        ];
+        let mut sup = Vec::new();
+        sup.extend(sup_seg(1000, 0x16, &pcs));
+        sup.extend(sup_seg(1000, 0x15, &ods));
+        sup.extend(sup_seg(1000, 0x80, &[]));
+        assert!(parse_pgs_sup(&sup).is_empty());
+
+        // Valid dimensions with a huge declared data_len must not pre-allocate 16 MiB
+        ods[7..11].copy_from_slice(&[0x00, 0x01, 0x00, 0x01]);
+        let mut sup2 = Vec::new();
+        sup2.extend(sup_seg(1000, 0x16, &pcs));
+        sup2.extend(sup_seg(1000, 0x15, &ods));
+        sup2.extend(sup_seg(1000, 0x80, &[]));
+        assert_eq!(parse_pgs_sup(&sup2).len(), 1);
     }
 }

@@ -12,7 +12,7 @@ layout(location = 2) flat in int vSwapEyes;
 layout(location = 3) flat in int vStereoLayout;
 layout(location = 4) flat in int vPolar180;
 layout(location = 5) flat in float vSharpness;
-layout(location = 6) flat in int vUpscalingMode;
+layout(location = 6) flat in float vHdrLuminance;
 layout(location = 7) flat in int vIsHdr;
 layout(location = 8) flat in vec2  vTexelSize;
 layout(location = 9) flat in int vChromaKeyEnabled;
@@ -23,7 +23,7 @@ layout(location = 13) flat in float vColorTemperature;
 
 layout(location = 0) out vec4 outColor;
 
-// Conversao RGB para YCbCr para medicao de distancia cromatica invariante a iluminacao
+// RGB to YCbCr conversion for illumination-invariant color distance measurement
 vec3 RgbToYcbcr(vec3 rgb) {
     float y  =  0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
     float cb = -0.168736 * rgb.r - 0.331264 * rgb.g + 0.5 * rgb.b;
@@ -31,7 +31,8 @@ vec3 RgbToYcbcr(vec3 rgb) {
     return vec3(y, cb, cr);
 }
 
-// T-HDR (Fase 2, primeira versao) — ver o comentario completo em video.frag.
+// ST 2084 (PQ EOTF): converts PQ signal [0.0, 1.0] to relative linear luminance [0.0, 1.0],
+// where 1.0 corresponds to the theoretical peak of 10,000 nits.
 vec3 PqEotf(vec3 pq) {
     const float m1 = 0.1593017578125;
     const float m2 = 78.84375;
@@ -44,8 +45,8 @@ vec3 PqEotf(vec3 pq) {
     return pow(num / den, vec3(1.0 / m1));
 }
 
-// BT.2100 HLG: inverso da OETF -> luz de cena -> OOTF do sistema (gamma 1.2,
-// pico nominal de 1000 nits) -> nits de display.
+// BT.2100 HLG: inverse OETF -> scene light -> system OOTF (gamma 1.2,
+// 1000 nits nominal peak) -> display nits.
 vec3 HlgToDisplayNits(vec3 hlg) {
     const float a = 0.17883277;
     const float b = 0.28466892;
@@ -56,18 +57,69 @@ vec3 HlgToDisplayNits(vec3 hlg) {
     return sceneLight * pow(max(ys, 1e-6), 0.2) * 1000.0;
 }
 
-// Primarias BT.2020 -> BT.709 (ITU-R BT.2087), em luz linear. Coluna a coluna (GLSL).
+// BT.2020 -> BT.709 primaries (ITU-R BT.2087) in linear light. Column by column (GLSL).
 const mat3 kBt2020ToBt709 = mat3(
      1.6605, -0.1246, -0.0182,
     -0.5876,  1.1329, -0.1006,
     -0.0728, -0.0083,  1.1187);
 
-// `transfer`: 1 = PQ, 2 = HLG (mesmo codigo de get_video_is_hdr).
-vec3 TonemapHdrToSdr(vec3 hdrColor, int transfer) {
+// Hable Filmic tone mapping curve (Uncharted 2 / John Hable)
+// Constants:
+//   A = 0.15 (Shoulder Strength)
+//   B = 0.50 (Linear Strength)
+//   C = 0.10 (Linear Angle)
+//   D = 0.20 (Toe Strength)
+//   E = 0.02 (Toe Numerator)
+//   F = 0.30 (Toe Denominator)
+float HableFilmicCurve(float x) {
+    const float A = 0.15;
+    const float B = 0.50;
+    const float C = 0.10;
+    const float D = 0.20;
+    const float E = 0.02;
+    const float F = 0.30;
+    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - (E / F);
+}
+
+// Adaptive Polynomial Cubic S-Curve
+// f(x) = x * x * (3.0 - 2.0 * x)
+// Fixed anchors at black (0.0), mid-tone (0.5), and white (1.0).
+// Eliminates mid-tone gamma drift and enriches micro-contrast without banding.
+float ApplyCubicSCurve(float value, float strength) {
+    if (strength <= 0.0) {
+        return value;
+    }
+    float c = clamp(value, 0.0, 1.0);
+    float s = c * c * (3.0 - 2.0 * c);
+    return mix(c, s, strength);
+}
+
+// Filmic HDR -> SDR Tonemapping (PQ / HLG for Quest 3 display)
+// `transfer`: 1 = PQ (ST 2084), 2 = HLG (BT.2100).
+// `luminance`: viewer brightness multiplier on the exposure, 1.0 = neutral.
+vec3 TonemapHdrToSdr(vec3 hdrColor, int transfer, float luminance) {
     vec3 nits = (transfer == 2) ? HlgToDisplayNits(hdrColor) : PqEotf(hdrColor) * 10000.0;
+    // Linear BT.709 scene normalization (100 nits = 1.0 linear)
     vec3 scene = max(kBt2020ToBt709 * (nits / 100.0), vec3(0.0));
-    vec3 tonemapped = scene / (1.0 + scene);
-    return pow(clamp(tonemapped, 0.0, 1.0), vec3(1.0 / 2.2));
+
+    // Linear white point W calibrated for cinema mastering peak (4,000 nits). It moves with the exposure so
+    // 4,000 nits stays at 1.0 at any luminance setting.
+    const float kW = 40.0;
+    const float kExposure = 3.0;
+    float exposure = kExposure * luminance;
+    float whiteScale = 1.0 / max(HableFilmicCurve(kW * exposure), 1e-4);
+
+    // 1. Map the largest channel and scale the others by the same ratio, which keeps R:G:B and so the hue.
+    float peak = max(max(scene.r, scene.g), scene.b);
+    float mappedPeak = clamp(HableFilmicCurve(peak * exposure) * whiteScale, 0.0, 1.0);
+    vec3 tonemapped = scene * (mappedPeak / max(peak, 1e-5));
+
+    // 2. Conversion to SDR display gamma (Rec.709 / sRGB 2.2)
+    vec3 gammaColor = pow(tonemapped, vec3(1.0 / 2.2));
+
+    // 3. Cubic S-Curve for contrast, on the peak for the same reason as the curve
+    float gammaPeak = max(max(gammaColor.r, gammaColor.g), gammaColor.b);
+    return gammaColor * (ApplyCubicSCurve(gammaPeak, 0.18) / max(gammaPeak, 1e-5));
 }
 
 // Planckian locus approximation (Kelvin 2700K a 6500K / Night Mode ~3000K)
@@ -152,85 +204,96 @@ vec3 ApplySGSR1(vec2 uv, float sharpness, vec2 texelSize) {
     return mix(c, finalColor, clamp(sharpness * 1.5, 0.0, 1.0));
 }
 
+// Exact piecewise sRGB EOTF. The eye swapchain is an *_SRGB format, so the hardware applies the
+// sRGB OETF on write; linearizing the video's gamma-coded value here makes that encode round-trip to the
+// original code value instead of encoding twice.
+vec3 SrgbEotf(vec3 c) {
+    c = clamp(c, 0.0, 1.0);
+    return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), greaterThan(c, vec3(0.04045)));
+}
+
 void main() {
     vec2 uv = vTexCoord;
 
-    // Inversao de olho se requisitada (swapEyes)
+    // Eye swap if requested (swapEyes)
     int eye = (vSwapEyes != 0) ? (1 - vEye) : vEye;
 
-    // Mapeamento hemisferio frontal 180 graus (T6.4) ou Fisheye 190 graus:
-    // A malha da esfera mapeia U de 0 a 1 em torno de 360 graus.
-    // Para video 180 (polar180 == 1), o conteudo util esta no
-    // hemisferio frontal [-90, +90], que corresponde a U em [0.25, 0.75].
-    // Reescalamos U para que [0.25, 0.75] cubra toda a faixa [0, 1] do frame.
-    // Pixels fora do hemisferio frontal ficam 100% transparentes (alpha 0)
-    // para revelar o Passthrough (mundo real) atras do usuario.
+    // Front hemisphere 180° mapping (T6.4) or Fisheye (180°, 190°, 200°, 220°):
+    // The sphere mesh maps U from 0 to 1 around 360 degrees.
+    // For 180 video (polarMode == 1), useful content is in the
+    // front hemisphere [-90, +90], corresponding to U in [0.25, 0.75].
+    // Rescale U so [0.25, 0.75] covers the full [0, 1] range of the frame.
+    // Pixels outside the front hemisphere are 100% transparent (alpha 0)
+    // to reveal Passthrough (real world) behind the user.
+    int polarMode = vPolar180 & 0xFF;
+    int rawFov = (vPolar180 >> 8) & 0xFFFF;
     float hemisphereAlpha = 1.0;
-    if (vPolar180 == 1) {
+    if (polarMode == 1) {
         if (uv.x < 0.25 || uv.x > 0.75) {
             outColor = vec4(0.0, 0.0, 0.0, 0.0);
             return;
         }
-        // Suavizacao (feathering) de ~5 graus na borda de 180 graus
+        // Feathering (~5 degrees) on 180-degree edge
         const float feather = 0.02;
         float edgeL = smoothstep(0.25, 0.25 + feather, uv.x);
         float edgeR = smoothstep(0.75, 0.75 - feather, uv.x);
         hemisphereAlpha = min(edgeL, edgeR);
 
         uv.x = (uv.x - 0.25) * 2.0;
-    } else if (vPolar180 == 2) {
-        // Projeção Fisheye 190° (equidistante f-theta com FOV total de 190° / semi-FOV 95°)
+    } else if (polarMode == 2) {
+        // Fisheye projection (equidistant f-theta with configurable FOV: 180°, 190°, 200°, 220°)
         const float PI = 3.141592653589793;
         float theta = 2.0 * PI * (vTexCoord.x - 0.5);
         float phi   = PI * vTexCoord.y;
         float sinPhi = sin(phi);
         vec3 dir = vec3(sinPhi * sin(theta), cos(phi), -sinPhi * cos(theta));
 
-        // Ângulo óptico a partir do eixo frontal (-Z)
+        // Optical angle from the forward axis (-Z)
         float cosPsi = clamp(-dir.z, -1.0, 1.0);
         float psi = acos(cosPsi);
-        const float kMaxHalfFov = 190.0 * PI / 360.0; // 95 graus em radianos (~1.65806 rad)
+        float fisheyeFov = (rawFov == 0) ? 190.0 : float(rawFov);
+        float kMaxHalfFov = fisheyeFov * PI / 360.0;
 
         if (psi > kMaxHalfFov) {
             outColor = vec4(0.0, 0.0, 0.0, 0.0);
             return;
         }
 
-        // Suavizacao de borda na margem externa de 190° (feathering de ~3 graus)
+        // Edge feathering on the outer margin (~3 degrees feather)
         const float kFeatherAngle = 3.0 * PI / 180.0;
         hemisphereAlpha = smoothstep(kMaxHalfFov, kMaxHalfFov - kFeatherAngle, psi);
 
-        // Projeção azimutal equidistante: r = psi / kMaxHalfFov
+        // Equidistant azimuthal projection: r = psi / kMaxHalfFov
         float rho = length(dir.xy);
         vec2 planeDir = (rho > 1e-6) ? (dir.xy / rho) : vec2(0.0, 0.0);
-        float rNorm = psi / kMaxHalfFov; // 0.0 no centro óptico até 1.0 na borda do círculo de 190°
+        float rNorm = psi / kMaxHalfFov; // 0.0 at optical center up to 1.0 at circle edge
 
-        // Coordenadas UV locais no círculo fisheye do olho [0, 1] x [0, 1]
+        // Local UV coordinates in eye fisheye circle [0, 1] x [0, 1]
         uv = vec2(0.5 + 0.5 * rNorm * planeDir.x, 0.5 - 0.5 * rNorm * planeDir.y);
     }
 
-    // Coordenadas UV locais do olho antes do recorte estéreo para desempacotamento de máscara
+    // Local eye UV coordinates before stereo crop for mask unpacking
     vec2 eyeLocalUv = clamp(uv, 0.0, 1.0);
 
-    // Recorte estereo por olho
+    // Per-eye stereo crop
     if (vStereoLayout == 2) {
-        // OU: recorta em Y — olho esquerdo = metade superior
+        // OU: crop in Y — left eye = top half
         uv.y = uv.y * 0.5 + float(eye) * 0.5;
     } else if (vStereoLayout == 1) {
-        // SBS: recorta em X — olho esquerdo = metade esquerda
+        // SBS: crop in X — left eye = left half
         uv.x = uv.x * 0.5 + float(eye) * 0.5;
     }
 
-    // vPolar180 != 0: pula SGSR1 perto do `return` de recorte acima (derivada de LOD diverge, tela preta no Adreno).
-    vec3 color = (vSharpness <= 0.01 || vTexelSize.x <= 0.0 || vTexelSize.y <= 0.0 || vPolar180 != 0)
+    // polarMode != 0: skip SGSR1 near crop return above (LOD derivative diverges, black screen on Adreno).
+    vec3 color = (vSharpness <= 0.01 || vTexelSize.x <= 0.0 || vTexelSize.y <= 0.0 || polarMode != 0)
         ? texture(videoTexture, uv).rgb
         : ApplySGSR1(uv, vSharpness, vTexelSize);
     if (vIsHdr != 0) {
-        color = TonemapHdrToSdr(color, vIsHdr);
+        color = TonemapHdrToSdr(color, vIsHdr, vHdrLuminance);
     }
 
     if (vColorTemperature < 0.0) {
-        // Night Mode: reduz luz azul (~3000K)
+        // Night Mode: reduce blue light (~3000K)
         color = ApplyColorTemperature(color, 3000.0);
     } else if (abs(vColorTemperature - 6500.0) > 1.0 && vColorTemperature > 1000.0) {
         color = ApplyColorTemperature(color, vColorTemperature);
@@ -343,5 +406,5 @@ void main() {
     }
 
     // Pre-multiplied alpha para o compositor OpenXR (XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT)
-    outColor = vec4(color * finalAlpha, finalAlpha);
+    outColor = vec4(SrgbEotf(color) * finalAlpha, finalAlpha);
 }

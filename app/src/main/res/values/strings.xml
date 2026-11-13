@@ -63,6 +63,8 @@
     <string name="settings_foveated_mode_medium">Medium</string>
     <string name="settings_foveated_mode_high">High</string>
     <string name="settings_foveated_mode_auto">Auto (Adaptive)</string>
+    <string name="settings_direct_video_layer_label">Direct video layer</string>
+    <string name="settings_direct_video_layer_description">Shows flat 2D, SBS and OU video as its own layer for a sharper picture. Turn off to compare with the previous rendering. Vulkan only.</string>
     <string name="settings_ambient_mode_label">Ambient Mode</string>
     <string name="settings_ambient_mode_description">Adds a soft glow behind the screen, colored from the video frame. Only visible in the Void environment. Vulkan only.</string>
     <string name="settings_section_lighting">Environment &amp; Lighting</string>
@@ -77,10 +79,15 @@
     <string name="settings_color_temperature_label">Color Temperature</string>
     <string name="settings_color_temperature_description">Adjusts the video screen color warmth from warm incandescent to neutral daylight.</string>
     <string name="settings_color_temperature_kelvin">%1$dK</string>
+    <string name="settings_hdr_luminance_label">HDR Brightness</string>
+    <string name="settings_hdr_luminance_description">Adjusts how bright HDR video looks. Has no effect on SDR video.</string>
+    <string name="settings_hdr_luminance_percent">%1$d%%</string>
     <string name="settings_night_mode_label">Night Mode</string>
     <string name="settings_night_mode_description">Reduces blue light emission (~3000K) for comfortable viewing in dark environments.</string>
     <string name="quality_warning_thermal">Thermal limit reached: reducing rendering quality to cool down device.</string>
     <string name="quality_warning_8k60">High framerate 8K video may experience frame drops on mobile hardware.</string>
+    <string name="settings_match_content_frame_rate_label">Match content frame rate</string>
+    <string name="settings_match_content_frame_rate_description">Sync display refresh rate to video fps (e.g. 72 or 120 Hz for 24 fps) to eliminate judder.</string>
     <string name="settings_pause_on_exit_label">Pause on exit</string>
     <string name="settings_pause_on_exit_description">Automatically pause playback when returning to the system menu or passthrough.</string>
     <string name="settings_section_audio">Audio</string>
@@ -162,6 +169,9 @@
     <string name="env_passthrough_title">Passthrough (MR)</string>
     <string name="env_passthrough_desc">Mixed Reality displaying your physical room as background.</string>
     <string name="env_reset_anchor_button">Reset to Environment Anchor</string>
+    <string name="env_import_button">Import environment</string>
+    <string name="env_import_success">Environment imported</string>
+    <string name="env_import_failed">Could not import the environment</string>
 
     <!-- Environment Validation (Phase 1.0 §1 T1.1 / Issue #62) -->
     <string name="env_validate_ok">Environment is valid</string>
@@ -458,6 +468,9 @@
     <string name="player_menu_screen_curve">CURVATURE</string>
     <string name="player_menu_screen_curve_flat">Flat</string>
     <string name="player_menu_screen_curve_curved">Curved</string>
+    <string name="player_menu_screen_bed_mode">BED MODE</string>
+    <string name="player_menu_screen_bed_mode_off">Normal</string>
+    <string name="player_menu_screen_bed_mode_on">Bed (3DoF)</string>
     <string name="player_menu_speed_title">Playback Speed</string>
     <string name="player_menu_volume_title">Volume</string>
     <string name="player_menu_volume_hint">Left stick also controls volume</string>
@@ -483,6 +496,10 @@
     <string name="player_mode_fisheye_190_mono">Fisheye 190°</string>
     <string name="player_mode_fisheye_190_sbs">Fisheye 190° 3D (SBS)</string>
     <string name="player_btn_swap_eyes">Swap eyes</string>
+    <string name="player_btn_2d_view">2D view</string>
+    <string name="format_section_3d">3D View</string>
+    <string name="format_fisheye_fov_label">Lens FOV</string>
+    <string name="format_fisheye_fov_value">%1$d°</string>
     <string name="player_btn_recenter">Recenter</string>
 
     <!-- Screen Format Selector (ScreenFormatModal - T3.4) -->
@@ -597,8 +614,8 @@
 
     <string name="debug_stats_section_charts">Charts</string>
     <string name="debug_stats_chart_g1_title">Pipeline stage (60s)</string>
-    <string name="debug_stats_chart_g2_title">Frame time histogram (buckets: &lt;11.1/16.7/20/33.3/50/100/250/≥250ms)</string>
-    <string name="debug_stats_chart_g3_title">Buffer health (s) / Network (MB/s)</string>
+    <string name="debug_stats_chart_g2_title">Frame time histogram (buckets: on time/+1/+2 vsyncs, &lt;50/100/150/250/≥250ms)</string>
+    <string name="debug_stats_chart_g3_title">Buffer health (s) / Network (MiB/s)</string>
     <string name="debug_stats_chart_g4_title">A/V drift (ms)</string>
     <string name="debug_stats_chart_g5_title">GPU time vs. budget (ms)</string>
 
@@ -613,6 +630,7 @@
 
     <string name="debug_stats_label_source">Source / Protocol</string>
     <string name="debug_stats_label_network_speed">Network Throughput</string>
+    <string name="debug_stats_label_network_link_speed">Link Throughput (last block)</string>
     <string name="debug_stats_label_buffer_queue">Buffer Queue</string>
     <string name="debug_stats_label_presentation_pending">Frames Pending Display</string>
     <string name="debug_stats_label_fetch_latency">Block Fetch Latency</string>

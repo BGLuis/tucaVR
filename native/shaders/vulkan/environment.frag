@@ -1,6 +1,7 @@
 #version 450
 
 layout(set = 0, binding = 0) uniform sampler2D screenAmbientTexture;
+layout(set = 1, binding = 0) uniform sampler2D baseColorTexture;
 
 layout(push_constant) uniform PushConstants {
     mat4 mvp;
@@ -12,6 +13,7 @@ layout(push_constant) uniform PushConstants {
 layout(location = 0) in vec3 vWorldPosition;
 layout(location = 1) in vec3 vNormal;
 layout(location = 2) in vec4 vColor;
+layout(location = 3) in vec2 vUv;
 
 layout(location = 0) out vec4 outColor;
 
@@ -34,5 +36,8 @@ void main() {
     }
 
     vec3 finalLighting = baseLighting + glow;
-    outColor = vec4(vColor.rgb * finalLighting, vColor.a);
+    vec4 base = vColor * texture(baseColorTexture, vUv);
+    // Always opaque: the compositor blends the projection layer by this alpha, and a texture alpha below 1 would
+    // open holes in the room. The mesh pipeline has blending off, so the texture alpha has no other effect.
+    outColor = vec4(base.rgb * finalLighting, 1.0);
 }

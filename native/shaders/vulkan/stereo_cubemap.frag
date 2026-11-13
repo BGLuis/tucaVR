@@ -12,7 +12,7 @@ layout(location = 1) flat in int vEye;
 layout(location = 2) flat in int vSwapEyes;
 layout(location = 3) flat in int vStereoLayout;
 layout(location = 4) flat in float vSharpness;
-layout(location = 5) flat in int vUpscalingMode;
+layout(location = 5) flat in float vHdrLuminance;
 layout(location = 6) flat in int vCubemapLayout;
 layout(location = 7) flat in int vProjectionType;
 layout(location = 8) in vec3 vWorldDirection;
@@ -24,7 +24,8 @@ layout(location = 0) out vec4 outColor;
 
 const float PI = 3.14159265358979323846;
 
-// T-HDR (Fase 2, primeira versao) — ver o comentario completo em video.frag.
+// ST 2084 (PQ EOTF): converts PQ signal [0.0, 1.0] to relative linear luminance [0.0, 1.0],
+// where 1.0 corresponds to the theoretical peak of 10,000 nits.
 vec3 PqEotf(vec3 pq) {
     const float m1 = 0.1593017578125;
     const float m2 = 78.84375;
@@ -37,8 +38,8 @@ vec3 PqEotf(vec3 pq) {
     return pow(num / den, vec3(1.0 / m1));
 }
 
-// BT.2100 HLG: inverso da OETF -> luz de cena -> OOTF do sistema (gamma 1.2,
-// pico nominal de 1000 nits) -> nits de display.
+// BT.2100 HLG: inverse OETF -> scene light -> system OOTF (gamma 1.2,
+// 1000 nits nominal peak) -> display nits.
 vec3 HlgToDisplayNits(vec3 hlg) {
     const float a = 0.17883277;
     const float b = 0.28466892;
@@ -49,18 +50,69 @@ vec3 HlgToDisplayNits(vec3 hlg) {
     return sceneLight * pow(max(ys, 1e-6), 0.2) * 1000.0;
 }
 
-// Primarias BT.2020 -> BT.709 (ITU-R BT.2087), em luz linear. Coluna a coluna (GLSL).
+// BT.2020 -> BT.709 primaries (ITU-R BT.2087) in linear light. Column by column (GLSL).
 const mat3 kBt2020ToBt709 = mat3(
      1.6605, -0.1246, -0.0182,
     -0.5876,  1.1329, -0.1006,
     -0.0728, -0.0083,  1.1187);
 
-// `transfer`: 1 = PQ, 2 = HLG (mesmo codigo de get_video_is_hdr).
-vec3 TonemapHdrToSdr(vec3 hdrColor, int transfer) {
+// Hable Filmic tone mapping curve (Uncharted 2 / John Hable)
+// Constants:
+//   A = 0.15 (Shoulder Strength)
+//   B = 0.50 (Linear Strength)
+//   C = 0.10 (Linear Angle)
+//   D = 0.20 (Toe Strength)
+//   E = 0.02 (Toe Numerator)
+//   F = 0.30 (Toe Denominator)
+float HableFilmicCurve(float x) {
+    const float A = 0.15;
+    const float B = 0.50;
+    const float C = 0.10;
+    const float D = 0.20;
+    const float E = 0.02;
+    const float F = 0.30;
+    return ((x * (A * x + C * B) + D * E) / (x * (A * x + B) + D * F)) - (E / F);
+}
+
+// Adaptive Polynomial Cubic S-Curve
+// f(x) = x * x * (3.0 - 2.0 * x)
+// Fixed anchors at black (0.0), mid-tone (0.5), and white (1.0).
+// Eliminates mid-tone gamma drift and enriches micro-contrast without banding.
+float ApplyCubicSCurve(float value, float strength) {
+    if (strength <= 0.0) {
+        return value;
+    }
+    float c = clamp(value, 0.0, 1.0);
+    float s = c * c * (3.0 - 2.0 * c);
+    return mix(c, s, strength);
+}
+
+// Filmic HDR -> SDR Tonemapping (PQ / HLG for Quest 3 display)
+// `transfer`: 1 = PQ (ST 2084), 2 = HLG (BT.2100).
+// `luminance`: viewer brightness multiplier on the exposure, 1.0 = neutral.
+vec3 TonemapHdrToSdr(vec3 hdrColor, int transfer, float luminance) {
     vec3 nits = (transfer == 2) ? HlgToDisplayNits(hdrColor) : PqEotf(hdrColor) * 10000.0;
+    // Linear BT.709 scene normalization (100 nits = 1.0 linear)
     vec3 scene = max(kBt2020ToBt709 * (nits / 100.0), vec3(0.0));
-    vec3 tonemapped = scene / (1.0 + scene);
-    return pow(clamp(tonemapped, 0.0, 1.0), vec3(1.0 / 2.2));
+
+    // Linear white point W calibrated for cinema mastering peak (4,000 nits). It moves with the exposure so
+    // 4,000 nits stays at 1.0 at any luminance setting.
+    const float kW = 40.0;
+    const float kExposure = 3.0;
+    float exposure = kExposure * luminance;
+    float whiteScale = 1.0 / max(HableFilmicCurve(kW * exposure), 1e-4);
+
+    // 1. Map the largest channel and scale the others by the same ratio, which keeps R:G:B and so the hue.
+    float peak = max(max(scene.r, scene.g), scene.b);
+    float mappedPeak = clamp(HableFilmicCurve(peak * exposure) * whiteScale, 0.0, 1.0);
+    vec3 tonemapped = scene * (mappedPeak / max(peak, 1e-5));
+
+    // 2. Conversion to SDR display gamma (Rec.709 / sRGB 2.2)
+    vec3 gammaColor = pow(tonemapped, vec3(1.0 / 2.2));
+
+    // 3. Cubic S-Curve for contrast, on the peak for the same reason as the curve
+    float gammaPeak = max(max(gammaColor.r, gammaColor.g), gammaColor.b);
+    return gammaColor * (ApplyCubicSCurve(gammaPeak, 0.18) / max(gammaPeak, 1e-5));
 }
 
 // Planckian locus approximation (Kelvin 2700K a 6500K / Night Mode ~3000K)
@@ -257,6 +309,14 @@ vec4 GetFaceRectAndRotation(int face, int cbLayout, out int rotation) {
     return vec4(cw, 2.0 * ch, 2.0 * cw, 1.0);                 // Bottom
 }
 
+// Exact piecewise sRGB EOTF. The eye swapchain is an *_SRGB format, so the hardware applies the
+// sRGB OETF on write; linearizing the video's gamma-coded value here makes that encode round-trip to the
+// original code value instead of encoding twice.
+vec3 SrgbEotf(vec3 c) {
+    c = clamp(c, 0.0, 1.0);
+    return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), greaterThan(c, vec3(0.04045)));
+}
+
 void main() {
     int eye = vEye;
     if (vSwapEyes != 0) {
@@ -300,13 +360,13 @@ void main() {
         ? texture(videoTexture, texUV).rgb
         : ApplySGSR1(texUV, vSharpness, vTexelSize);
     if (vIsHdr != 0) {
-        color = TonemapHdrToSdr(color, vIsHdr);
+        color = TonemapHdrToSdr(color, vIsHdr, vHdrLuminance);
     }
     if (vColorTemperature < 0.0) {
-        // Night Mode: reduz luz azul (~3000K)
+        // Night Mode: reduce blue light (~3000K)
         color = ApplyColorTemperature(color, 3000.0);
     } else if (abs(vColorTemperature - 6500.0) > 1.0 && vColorTemperature > 1000.0) {
         color = ApplyColorTemperature(color, vColorTemperature);
     }
-    outColor = vec4(color, 1.0);
+    outColor = vec4(SrgbEotf(color), 1.0);
 }

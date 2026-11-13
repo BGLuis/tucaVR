@@ -54,6 +54,8 @@
     <string name="settings_foveated_mode_medium">Medio</string>
     <string name="settings_foveated_mode_high">Alto</string>
     <string name="settings_foveated_mode_auto">Automatico (Adaptativo)</string>
+    <string name="settings_direct_video_layer_label">Camada de vídeo direta</string>
+    <string name="settings_direct_video_layer_description">Exibe vídeo 2D, SBS e OU plano como uma camada própria para uma imagem mais nítida. Desative para comparar com a renderização anterior. Somente Vulkan.</string>
     <string name="settings_ambient_mode_label">Modo Ambiente</string>
     <string name="settings_ambient_mode_description">Adiciona um halo de luz suave atras da tela, com a cor do proprio video. So visivel no ambiente Void. So no Vulkan.</string>
     <string name="settings_section_lighting">Iluminação e Ambiente</string>
@@ -68,10 +70,15 @@
     <string name="settings_color_temperature_label">Temperatura de Cor</string>
     <string name="settings_color_temperature_description">Ajusta o calor da cor da tela de vídeo de quente a neutro (2700K a 6500K).</string>
     <string name="settings_color_temperature_kelvin">%1$dK</string>
+    <string name="settings_hdr_luminance_label">Brilho HDR</string>
+    <string name="settings_hdr_luminance_description">Ajusta o brilho dos vídeos HDR. Não afeta vídeos SDR.</string>
+    <string name="settings_hdr_luminance_percent">%1$d%%</string>
     <string name="settings_night_mode_label">Modo Noturno</string>
     <string name="settings_night_mode_description">Reduz a emissão de luz azul (~3000K) para conforto visual em ambientes escuros.</string>
     <string name="quality_warning_thermal">Limite termico atingido: reduzindo qualidade para resfriar o dispositivo.</string>
     <string name="quality_warning_8k60">Video 8K com alta taxa de quadros pode apresentar quedas em hardware movel.</string>
+    <string name="settings_match_content_frame_rate_label">Sincronizar taxa de quadros</string>
+    <string name="settings_match_content_frame_rate_description">Sincroniza a taxa do display com o fps do vídeo (ex: 72 ou 120 Hz para 24 fps) para eliminar trepidação.</string>
     <string name="settings_pause_on_exit_label">Pausar ao sair</string>
     <string name="settings_pause_on_exit_description">Pausa o video automaticamente ao voltar ao menu do sistema ou passthrough.</string>
     <string name="settings_section_audio">Audio</string>
@@ -153,6 +160,9 @@
     <string name="env_passthrough_title">Passthrough (MR)</string>
     <string name="env_passthrough_desc">Realidade Mista exibindo o ambiente real ao seu redor.</string>
     <string name="env_reset_anchor_button">Redefinir para Âncora do Ambiente</string>
+    <string name="env_import_button">Importar ambiente</string>
+    <string name="env_import_success">Ambiente importado</string>
+    <string name="env_import_failed">Não foi possível importar o ambiente</string>
 
     <!-- Environment Validation (Phase 1.0 §1 T1.1 / Issue #62) -->
     <string name="env_validate_ok">Ambiente válido</string>
@@ -448,6 +458,9 @@
     <string name="player_menu_screen_curve">CURVATURA</string>
     <string name="player_menu_screen_curve_flat">Plana</string>
     <string name="player_menu_screen_curve_curved">Curva</string>
+    <string name="player_menu_screen_bed_mode">MODO CAMA</string>
+    <string name="player_menu_screen_bed_mode_off">Normal</string>
+    <string name="player_menu_screen_bed_mode_on">Cama (3DoF)</string>
     <string name="player_menu_speed_title">Velocidade</string>
     <string name="player_menu_volume_title">Volume</string>
     <string name="player_menu_volume_hint">O stick esquerdo também muda o volume</string>
@@ -471,6 +484,10 @@
     <string name="player_mode_fisheye_190_mono">Fisheye 190°</string>
     <string name="player_mode_fisheye_190_sbs">Fisheye 190° 3D (SBS)</string>
     <string name="player_btn_swap_eyes">Trocar olhos</string>
+    <string name="player_btn_2d_view">Visão 2D</string>
+    <string name="format_section_3d">Visão 3D</string>
+    <string name="format_fisheye_fov_label">Ângulo da lente</string>
+    <string name="format_fisheye_fov_value">%1$d°</string>
     <string name="player_btn_recenter">Recentralizar</string>
 
     <!-- Seletor de Formato de Tela (ScreenFormatModal - T3.4) -->
@@ -585,8 +602,8 @@
 
     <string name="debug_stats_section_charts">Gráficos</string>
     <string name="debug_stats_chart_g1_title">Estágio do pipeline (60s)</string>
-    <string name="debug_stats_chart_g2_title">Histograma de frame time (buckets: &lt;11,1/16,7/20/33,3/50/100/250/≥250ms)</string>
-    <string name="debug_stats_chart_g3_title">Saúde do buffer (s) / Rede (MB/s)</string>
+    <string name="debug_stats_chart_g2_title">Histograma de frame time (buckets: no tempo/+1/+2 vsyncs, &lt;50/100/150/250/≥250ms)</string>
+    <string name="debug_stats_chart_g3_title">Saúde do buffer (s) / Rede (MiB/s)</string>
     <string name="debug_stats_chart_g4_title">Drift A/V (ms)</string>
     <string name="debug_stats_chart_g5_title">Tempo de GPU vs. orçamento (ms)</string>
 
@@ -601,6 +618,7 @@
 
     <string name="debug_stats_label_source">Origem / Protocolo</string>
     <string name="debug_stats_label_network_speed">Taxa de Rede</string>
+    <string name="debug_stats_label_network_link_speed">Taxa do Link (último bloco)</string>
     <string name="debug_stats_label_buffer_queue">Fila de Buffer</string>
     <string name="debug_stats_label_presentation_pending">Frames Aguardando Exibição</string>
     <string name="debug_stats_label_fetch_latency">Latência por Bloco</string>

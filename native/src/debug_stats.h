@@ -33,6 +33,9 @@ struct DebugStats {
     // So populado no backend Vulkan; fica 0 no GLES (congelado, sem essa
     // reestruturacao de decode/apresentacao).
     uint32_t videoPresentationPending = 0;
+    // #204: segundos de video bufferizados a frente do relogio mestre no demux/playback controller
+    // (get_buffered_ahead_sec).
+    float bufferedAheadSec = 0.0f;
     uint32_t seekLatencyMs = 0;
     float smoothedFps = 0.0f;
     float lastFrameMs = 0.0f;
@@ -43,6 +46,9 @@ struct DebugStats {
     float displayRefreshRate = 0.0f;
     float avDriftMs = 0.0f;
     float netLastFetchMs = 0.0f;
+    // #199: link throughput of the last prefetch block (MiB/s); netMBs above is the delivered
+    // average, which moves in whole-block steps.
+    float netBlockMBs = 0.0f;
     uint64_t netBlocksFetched = 0;
     uint64_t netBlocksDiscarded = 0;
     int foveationEnabled = 0;
@@ -114,8 +120,8 @@ struct DebugStats {
     float perfDeviceGpuUtil = 0.0f;          // bit 9
 
     // F5 G2 — histograma de frame time, 8 buckets cumulativos (ver
-    // kFrameTimeHistogramEdgesMs em vr_player_app_vulkan.cpp: <11.1, <16.7, <20, <33.3, <50,
-    // <100, <250, >=250 ms). Acumulado a cada frame no loop de render, nao a cada amostra do
+    // native/include/frame_time_histogram.h: on time, +1 vsync, +2 vsyncs at the current refresh
+    // rate, then <50, <100, <150, <250, >=250 ms). Acumulado a cada frame no loop de render, nao a cada amostra do
     // HUD — e assim que captura a distribuicao real a 90Hz sem transportar 90 amostras/s.
     uint32_t histBucket0 = 0;
     uint32_t histBucket1 = 0;
@@ -147,6 +153,7 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         "net_mbs\t%.2f\n"
         "queue_depth\t%u\n"
         "presentation_pending\t%u\n"
+        "buffered_ahead_sec\t%.2f\n"
         "seek_latency_ms\t%u\n"
         "smoothed_fps\t%.1f\n"
         "frame_time_ms\t%.1f\n"
@@ -166,6 +173,7 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         "refresh_rate\t%.1f\n"
         "av_drift_ms\t%.1f\n"
         "net_last_fetch_ms\t%.1f\n"
+        "net_block_mbs\t%.2f\n"
         "net_blocks_fetched\t%llu\n"
         "net_blocks_discarded\t%llu\n"
         "foveation\t%d\n"
@@ -214,7 +222,7 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         s.backend ? s.backend : "UNKNOWN",
         s.screenMode ? s.screenMode : "Flat2D",
         s.stereoLayout,
-        s.polar180,
+        s.polar180 & 0xFF,
         s.swapEyes,
         s.hasActiveFrame,
         s.msSinceLastVideoFrame,
@@ -226,6 +234,7 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         s.netMBs,
         s.videoQueueDepth,
         s.videoPresentationPending,
+        s.bufferedAheadSec,
         s.seekLatencyMs,
         s.smoothedFps,
         s.lastFrameMs,
@@ -245,6 +254,7 @@ inline size_t SerializeDebugStats(const DebugStats& s, char* buffer, size_t buff
         s.displayRefreshRate,
         s.avDriftMs,
         s.netLastFetchMs,
+        s.netBlockMBs,
         (unsigned long long)s.netBlocksFetched,
         (unsigned long long)s.netBlocksDiscarded,
         s.foveationEnabled,

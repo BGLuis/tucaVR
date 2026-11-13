@@ -13,6 +13,7 @@ import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import com.tucavr.FeatureFlags
+import com.tucavr.HdrLuminanceStore
 import com.tucavr.R
 import com.tucavr.UpscalingModeStore
 import com.tucavr.VRActivity
@@ -377,11 +378,20 @@ class SettingsScreen(
             Category.VIDEO -> {
                 content.addView(buildUpscalingRow())
                 content.addView(buildFoveationRow())
+                content.addView(
+                    buildFlagRow(
+                        labelRes = R.string.settings_direct_video_layer_label,
+                        descriptionRes = R.string.settings_direct_video_layer_description,
+                        flag = FeatureFlags.Flag.DIRECT_VIDEO_LAYER,
+                        onChanged = { enabled -> activity.nativeSetDirectVideoLayerEnabled(enabled) },
+                    ),
+                )
             }
             Category.LIGHTING -> {
                 content.addView(buildEnvironmentBrightnessRow())
                 content.addView(buildScreenGlowRow())
                 content.addView(buildColorTemperatureRow())
+                content.addView(buildHdrLuminanceRow())
                 content.addView(
                     buildFlagRow(
                         labelRes = R.string.settings_night_mode_label,
@@ -441,6 +451,14 @@ class SettingsScreen(
             Category.PLAYBACK -> {
                 content.addView(
                     buildFlagRow(
+                        labelRes = R.string.settings_match_content_frame_rate_label,
+                        descriptionRes = R.string.settings_match_content_frame_rate_description,
+                        flag = FeatureFlags.Flag.MATCH_CONTENT_FRAME_RATE,
+                        onChanged = { enabled -> activity.nativeSetMatchContentFrameRate(enabled) },
+                    ),
+                )
+                content.addView(
+                    buildFlagRow(
                         labelRes = R.string.settings_pause_on_exit_label,
                         descriptionRes = R.string.settings_pause_on_exit_description,
                         flag = FeatureFlags.Flag.PAUSE_ON_EXIT,
@@ -493,7 +511,7 @@ class SettingsScreen(
                         labelRes = R.string.settings_telemetry_export_label,
                         descriptionRes = R.string.settings_telemetry_export_description,
                         flag = FeatureFlags.Flag.DEBUG_STATS_EXPORT,
-                        onChanged = { /* flag persisted automatically */ },
+                        onChanged = { activity.refreshNativeDebugStatsStream() },
                     ),
                 )
             }
@@ -661,7 +679,7 @@ class SettingsScreen(
 
             if (actionButtonTextRes != null && onActionClicked != null) {
                 actionBtn =
-                    VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                    VoidButton(context, VoidButtonStyle.SECONDARY, isCompact = true).apply {
                         text = context.getString(actionButtonTextRes)
                         textSize = 13f
                         layoutParams =
@@ -810,7 +828,6 @@ class SettingsScreen(
                     onOptionSelected = { mode ->
                         FeatureFlags.setFoveatedRenderingMode(context, mode)
                         activity.nativeSetFoveationMode(mode)
-                        activity.nativeSetFoveationEnabled(mode != 0)
                     },
                 )
             addView(selector)
@@ -1012,6 +1029,88 @@ class SettingsScreen(
                                 if (fromUser) {
                                     FeatureFlags.setColorTemperature(context, kelvin)
                                     activity.nativeSetColorTemperature(kelvin)
+                                }
+                            }
+
+                            override fun onStartTrackingTouch(sb: SeekBar?) {}
+
+                            override fun onStopTrackingTouch(sb: SeekBar?) {}
+                        },
+                    )
+                }
+            addView(seekBar)
+        }
+
+    private fun buildHdrLuminanceRow(): LinearLayout =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams =
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = VoidTheme.dpToPx(context, 16f) }
+
+            val store = HdrLuminanceStore(context)
+            val luminanceStep = 0.05f
+            val maxProgress = ((HdrLuminanceStore.MAX - HdrLuminanceStore.MIN) / luminanceStep).roundToInt()
+            val current = store.get()
+            val percentText = { luminance: Float ->
+                context.getString(R.string.settings_hdr_luminance_percent, (luminance * 100f).roundToInt())
+            }
+
+            val headerRow =
+                LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams =
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                        )
+                }
+
+            val titleView =
+                VoidText.title(context, context.getString(R.string.settings_hdr_luminance_label), sizeSp = 16f).apply {
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                }
+            val valueView = VoidText.body(context, percentText(current), sizeSp = 14f, secondary = true)
+            headerRow.addView(titleView)
+            headerRow.addView(valueView)
+            addView(headerRow)
+
+            addView(
+                VoidText.body(
+                    context,
+                    context.getString(R.string.settings_hdr_luminance_description),
+                    sizeSp = 13f,
+                    secondary = true,
+                ).apply {
+                    setPadding(0, VoidTheme.dpToPx(context, 2f), 0, VoidTheme.dpToPx(context, 4f))
+                },
+            )
+
+            val seekBar =
+                SeekBar(context).apply {
+                    max = maxProgress
+                    progress = ((current - HdrLuminanceStore.MIN) / luminanceStep).roundToInt().coerceIn(0, maxProgress)
+                    layoutParams =
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            VoidTheme.dpToPx(context, 44f),
+                        )
+                    progressTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                    thumbTintList = ColorStateList.valueOf(VoidTheme.colorAccent)
+                    setOnSeekBarChangeListener(
+                        object : SeekBar.OnSeekBarChangeListener {
+                            override fun onProgressChanged(
+                                sb: SeekBar?,
+                                prog: Int,
+                                fromUser: Boolean,
+                            ) {
+                                val luminance = HdrLuminanceStore.MIN + prog * luminanceStep
+                                valueView.text = percentText(luminance)
+                                if (fromUser) {
+                                    store.set(luminance)
+                                    activity.nativeSetHdrLuminance(luminance)
                                 }
                             }
 

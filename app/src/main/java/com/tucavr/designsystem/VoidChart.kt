@@ -60,7 +60,7 @@ class VoidChart
                 invalidate()
             }
 
-        /** Linhas horizontais de referência (G2: 11.1/20/250ms; G4: banda ±40ms; G5: orçamento). */
+        /** Linhas horizontais de referência (G2: limites de frame time; G4: banda ±40ms; G5: orçamento). */
         var markers: List<ChartMarker> = emptyList()
             set(value) {
                 field = value

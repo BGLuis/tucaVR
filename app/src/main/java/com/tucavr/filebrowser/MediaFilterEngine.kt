@@ -63,7 +63,9 @@ object MediaFilterEngine {
             lower.contains("top-bottom") || lower.contains(".ou.") || lower.contains("_ou_") ||
             lower.contains("_ou.") || lower.contains("-ou.") || lower.contains(".hou.") ||
             lower.contains("half-ou") || lower.contains("3dv") || lower.contains("3d-ou") ||
-            lower.contains("3d.ou")
+            lower.contains("3d.ou") || lower.contains(".fou.") || lower.contains("_fou_") ||
+            lower.contains("-fou") || lower.contains("_fou.") || lower.contains(".tb.") ||
+            lower.contains("_tb_") || lower.contains("-tb") || lower.contains("_tb.")
         ) {
             return Format3DType.OU
         }
@@ -73,7 +75,9 @@ object MediaFilterEngine {
             lower.contains("_sbs.") || lower.contains(".sbs") || lower.contains("half-sbs") ||
             lower.contains(".hsbs.") || lower.contains("_hsbs_") || lower.contains(" 3d sbs") ||
             lower.contains("3d-sbs") || lower.contains("3d.sbs") || lower.contains("3dh") ||
-            lower.contains("sidebyside") || lower.contains("side-by-side")
+            lower.contains("sidebyside") || lower.contains("side-by-side") ||
+            lower.contains(".fsbs.") || lower.contains("_fsbs_") || lower.contains("-fsbs") ||
+            lower.contains("_fsbs.")
         ) {
             return Format3DType.SBS
         }

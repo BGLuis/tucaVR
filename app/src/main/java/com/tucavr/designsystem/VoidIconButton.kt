@@ -6,6 +6,12 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.drawable.RippleDrawable
 import android.widget.ImageButton
 
+// The ACTIVE icon is colorBackground, so without its accent fill it vanishes into the player bar.
+internal fun iconButtonDrawsContainer(
+    style: VoidButtonStyle,
+    isTransparent: Boolean,
+): Boolean = !isTransparent || style == VoidButtonStyle.ACTIVE
+
 class VoidIconButton
     @JvmOverloads
     constructor(
@@ -59,13 +65,14 @@ class VoidIconButton
                 }
             }
 
+            val drawsContainer = iconButtonDrawsContainer(style, isTransparent)
             val baseBg =
                 GradientDrawable().apply {
-                    setColor(if (isTransparent) android.graphics.Color.TRANSPARENT else bgColor)
+                    setColor(if (drawsContainer) bgColor else android.graphics.Color.TRANSPARENT)
                     cornerRadius = if (isCircular) VoidTheme.dp(context, 200f) else VoidTheme.dp(context, VoidTheme.cornerRadiusDp)
                     setStroke(
-                        if (isTransparent) 0 else VoidTheme.dpToPx(context, VoidTheme.borderWidthDp),
-                        if (isTransparent) android.graphics.Color.TRANSPARENT else borderColor,
+                        if (drawsContainer) VoidTheme.dpToPx(context, VoidTheme.borderWidthDp) else 0,
+                        if (drawsContainer) borderColor else android.graphics.Color.TRANSPARENT,
                     )
                 }
 

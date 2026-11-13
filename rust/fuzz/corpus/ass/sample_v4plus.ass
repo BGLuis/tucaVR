@@ -1,0 +1,19 @@
+[Script Info]
+Title: Amostra
+ScriptType: v4.00+
+PlayResX: 1920
+PlayResY: 1080
+WrapStyle: 0
+ScaledBorderAndShadow: yes
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,Arial,72,&H00FFFFFF,&H000000FF,&H00202020,&H80000000,0,0,0,0,100,100,0,0,1,3,1,2,20,20,40,1
+Style: Titulo,Times New Roman,90,&H0000FFFF,&H000000FF,&H00000000,&H00000000,-1,0,0,0,100,100,0,0,1,2,0,8,10,10,10,1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+Dialogue: 0,0:00:01.00,0:00:03.50,Default,,0,0,0,,Primeira linha\Nsegunda linha
+Dialogue: 0,0:00:04.00,0:00:06.00,Default,,0,0,0,,{\pos(960,540)\c&H0000FF&\b1}Vermelho em negrito{\r} normal
+Dialogue: 0,0:00:07.00,0:00:09.00,Titulo,,0,0,0,,{\an5}{\t(0,500,\fscx120)}{\move(0,0,100,100)}Com tags fora de escopo
+Comment: 0,0:00:07.00,0:00:09.00,Default,,0,0,0,,isto deve ser ignorado

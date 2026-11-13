@@ -107,6 +107,7 @@ extern "C" {
     extern char* probe_http_url(const char* url);
     extern void free_rust_string(char* ptr);
     extern char* take_last_playback_error();
+    extern void request_audio_reopen();
 
     // T6.4: FTP — mesmo padrao de start_smb_playback/smb_list_directory
     // (credenciais como parametros separados, nunca uma URI unica cruzando
@@ -225,6 +226,9 @@ extern "C" {
     extern void set_screen_mode_override(int32_t mode);
     extern uint32_t toggle_swap_eyes();
     extern uint32_t get_swap_eyes();
+    extern uint32_t toggle_mono_view();
+    extern uint32_t get_mono_view();
+    extern uint32_t consume_initial_orientation(float* yaw, float* pitch, float* roll);
 
     // Bug de auto-hide durante digitacao no teclado nativo — ver comentario
     // completo em rust/bridge/src/lib.rs junto de KEYBOARD_ACTIVE.
@@ -302,6 +306,7 @@ extern "C" {
     extern float get_last_av_drift_ms();
     extern uint32_t get_foveation_enabled();
     extern uint32_t get_audio_track_count();
+    extern uint32_t get_audio_track_index();
     extern int32_t get_subtitle_track();
     extern int64_t get_subtitle_offset_ms();
 }
@@ -424,6 +429,9 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetHoverHapticsEnabled(JNIEnv*, jobject, jboolean) {}
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetDirectVideoLayerEnabled(JNIEnv*, jobject, jboolean) {}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeRequestFrameCapture(JNIEnv* env, jobject thiz, jstring path) {
     const char* pathStr = env->GetStringUTFChars(path, nullptr);
     {
@@ -521,6 +529,11 @@ Java_com_tucavr_VRActivity_nativeTakeLastPlaybackError(JNIEnv* env, jobject thiz
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRequestAudioReopen(JNIEnv* env, jobject thiz) {
+    request_audio_reopen();
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSeekVideo(JNIEnv* env, jobject thiz, jfloat positionSeconds) {
     seek_video_playback(positionSeconds);
     g_requestControlsPanelVisible.store(true);
@@ -570,6 +583,26 @@ Java_com_tucavr_VRActivity_nativeSetScreenModeOverride(JNIEnv* env, jobject thiz
 extern "C" JNIEXPORT jint JNICALL
 Java_com_tucavr_VRActivity_nativeToggleSwapEyes(JNIEnv* env, jobject thiz) {
     return (jint)toggle_swap_eyes();
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetSwapEyes(JNIEnv* env, jobject thiz) {
+    return (jboolean)(get_swap_eyes() != 0);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeToggleMonoView(JNIEnv* env, jobject thiz) {
+    return (jboolean)(toggle_mono_view() != 0);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetMonoView(JNIEnv* env, jobject thiz) {
+    return (jboolean)(get_mono_view() != 0);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetFisheyeFov(JNIEnv* env, jobject thiz, jint fov) {
+    // No-op in frozen GLES fallback backend
 }
 
 // Bug de auto-hide durante digitacao — ver KEYBOARD_ACTIVE em
@@ -695,9 +728,34 @@ Java_com_tucavr_VRActivity_nativeResetScreenPosition(JNIEnv* env, jobject thiz) 
 }
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetBedMode(JNIEnv* env, jobject thiz, jboolean enabled) {
+    // No-op em GLES
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeGetBedMode(JNIEnv* env, jobject thiz) {
+    return JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeRecenter(JNIEnv* env, jobject thiz) {
+    // No-op em GLES
+}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetScreenTransform(
     JNIEnv* env, jobject thiz, jfloat posX, jfloat posY, jfloat posZ, jfloat scaleX, jfloat scaleY) {
     // No-op em GLES
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetScreenCurvature(JNIEnv* env, jobject thiz, jfloat curvature) {
+    // No-op em GLES
+}
+
+extern "C" JNIEXPORT jfloat JNICALL
+Java_com_tucavr_VRActivity_nativeGetScreenCurvature(JNIEnv* env, jobject thiz) {
+    return 0.0f;
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -2394,6 +2452,18 @@ public:
                 m_uPolar180, m_swapEyesF);
         }
 
+        {
+            float initYaw = 0.0f;
+            float initPitch = 0.0f;
+            float initRoll = 0.0f;
+            if (consume_initial_orientation(&initYaw, &initPitch, &initRoll) != 0) {
+                // Aplica rotacao de yaw apenas a esfera de video. Pitch e roll sao ignorados
+                // para manter o horizonte nivelado e prevenir enjoo em VR.
+                m_videoSphereYawOffset = -initYaw;
+                LOGI("VRPlayerApp: Applied initial sphere orientation from metadata (yaw=%.2f rad)", initYaw);
+            }
+        }
+
         // T2.6: a esfera acompanha a TRANSLACAO da cabeca (o usuario sempre
         // fica no centro dela) mas NAO a rotacao — a rotacao "de olhar ao
         // redor" ja acontece de graca via viewProjection[eye] em
@@ -2405,7 +2475,8 @@ public:
         // "dentro" da esfera mesmo andando fisicamente no espaco do
         // Guardian) importa. `m_sceneYawOffset` e o unico ajuste manual de
         // rotacao, aplicado so pelo recenter (T4.3, abaixo).
-        m_sphereTransform = OVR::Matrix4f::Translation(in.HeadPose.Translation) * OVR::Matrix4f::RotationY(m_sceneYawOffset);
+        const float sphereYaw = m_sceneYawOffset + (IsSphereMode(m_screenMode) ? m_videoSphereYawOffset : 0.0f);
+        m_sphereTransform = OVR::Matrix4f::Translation(in.HeadPose.Translation) * OVR::Matrix4f::RotationY(sphereYaw);
 
         // Tela de video (usada apenas para detectar "apontando para a tela" -> mostra controles)
         OVR::Vector3f worldScreenPos = m_sceneTranslationOffset + OVR::Matrix4f::RotationY(m_sceneYawOffset).Transform(m_screenPosition);
@@ -2833,7 +2904,7 @@ public:
                 stats.spatialHeadTracking = (int)get_spatial_audio_head_tracking();
                 stats.playbackSpeed = get_playback_speed();
                 stats.audioVolume = get_video_volume();
-                stats.audioTrackIndex = 0;
+                stats.audioTrackIndex = (int)get_audio_track_index();
                 stats.audioTrackCount = (int)get_audio_track_count();
                 stats.subtitleTrackIndex = get_subtitle_track();
                 stats.subtitleOffsetMs = (int32_t)get_subtitle_offset_ms();
@@ -3401,6 +3472,7 @@ private:
     float m_swapEyesF = 0.0f; // T1.5: espelha get_swap_eyes(), compartilhado pelos 2 programas estereo
     float m_sharpness = 0.5f; // uniform CAS: 0=mais leve (peak -8), 1=mais forte (peak -5). So usado se kSharpenEnabled.
     float m_sceneYawOffset = 0.0f; // T4.3: recenter — offset de yaw aplicado a cena
+    float m_videoSphereYawOffset = 0.0f; // Rotacao inicial da esfera extraida de metadados do container
     PFN_xrRequestDisplayRefreshRateFB m_pfnRequestDisplayRefreshRateFB = nullptr;
     uint32_t m_thermalLevel = 0;
     OVR::Vector3f m_sceneTranslationOffset = OVR::Vector3f(0.0f, 0.0f, 0.0f);

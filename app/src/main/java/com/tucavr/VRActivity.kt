@@ -9,10 +9,14 @@ import android.content.IntentFilter
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.Editable
 import android.text.TextWatcher
@@ -32,10 +36,13 @@ import com.tucavr.chroma.PassthroughMaskMode
 import com.tucavr.debug.DebugTelemetryExporter
 import com.tucavr.debug.VRLog
 import com.tucavr.designsystem.KeyboardBinding
+import com.tucavr.environment.CustomEnvironmentInstaller
+import com.tucavr.environment.InstallResult
 import com.tucavr.history.AppDatabase
 import com.tucavr.history.PlaybackHistoryTracker
 import com.tucavr.history.historyKey
 import com.tucavr.navigation.PlaybackSource
+import com.tucavr.network.FisheyeFovPreferenceStore
 import com.tucavr.network.Format3DPreferenceStore
 import com.tucavr.network.FtpCredentialStore
 import com.tucavr.network.LegacyCredentialMigrator
@@ -51,6 +58,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.IOException
 
 class VRActivity : NativeActivity() {
     private var virtualDisplay: android.hardware.display.VirtualDisplay? = null
@@ -128,6 +136,7 @@ class VRActivity : NativeActivity() {
     val historyTracker: PlaybackHistoryTracker by lazy { PlaybackHistoryTracker(this) }
     val playlistQueueManager: PlaylistQueueManager by lazy { PlaylistQueueManager() }
     val format3dStore: Format3DPreferenceStore by lazy { Format3DPreferenceStore(this) }
+    val fisheyeFovStore: FisheyeFovPreferenceStore by lazy { FisheyeFovPreferenceStore(this) }
     val upscalingStore: UpscalingModeStore by lazy { UpscalingModeStore(this) }
     val thermalMonitor: ThermalMonitor by lazy { ThermalMonitor(this) }
     val screenTransformStore: ScreenTransformStore by lazy { ScreenTransformStore(this) }
@@ -212,6 +221,7 @@ class VRActivity : NativeActivity() {
     var currentPlaybackSource: PlaybackSource? = null
         private set
 
+    @Volatile
     var currentMediaMetadata: com.tucavr.filebrowser.MediaMetadata? = null
         private set
 
@@ -226,10 +236,20 @@ class VRActivity : NativeActivity() {
 
     fun setDebugStatsEnabled(enabled: Boolean) {
         isDebugStatsEnabled = enabled
-        nativeSetDebugStatsEnabled(enabled)
+        refreshNativeDebugStatsStream()
         controlsPresentation?.onDebugStatsFlagChanged(enabled)
     }
 
+    fun refreshNativeDebugStatsStream() {
+        nativeSetDebugStatsEnabled(
+            DebugTelemetryExporter.shouldStreamNativeStats(
+                panelEnabled = isDebugStatsEnabled,
+                exportEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.DEBUG_STATS_EXPORT),
+            ),
+        )
+    }
+
+    @Volatile
     var currentAudioTrackOrdinal: Int = 0
 
     private fun updateCurrentPlaybackSource(source: PlaybackSource?) {
@@ -238,7 +258,7 @@ class VRActivity : NativeActivity() {
         currentAudioTrackOrdinal = 0
         if (source != null) {
             CoroutineScope(Dispatchers.IO).launch {
-                currentMediaMetadata = com.tucavr.filebrowser.MediaMetadataReader.read(this@VRActivity, source)
+                currentMediaMetadata = com.tucavr.filebrowser.MediaMetadataReader.readCached(this@VRActivity, source)
             }
         }
         runOnUiThread {
@@ -246,9 +266,29 @@ class VRActivity : NativeActivity() {
         }
     }
 
+    // #171: Notifica o motor nativo quando novos dispositivos de saída de áudio
+    // (fones Bluetooth, etc.) são conectados no meio da reprodução.
+    // Debounce de 500ms para evitar disparos repetidos quando o Android reporta
+    // múltiplos perfis (ex.: A2DP e LE Audio) do mesmo dispositivo.
+    private var lastAudioReopenRequestTimeMs = 0L
+
+    private val audioDeviceCallback =
+        object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+                super.onAudioDevicesAdded(addedDevices)
+                if (addedDevices?.any { it.isSink } == true) {
+                    val now = android.os.SystemClock.uptimeMillis()
+                    if (now - lastAudioReopenRequestTimeMs >= 500L) {
+                        lastAudioReopenRequestTimeMs = now
+                        nativeRequestAudioReopen()
+                    }
+                }
+            }
+        }
+
     // Ferramenta de debug (ver docs/DEBUGGING.md): troca o ScreenMode de um
     // video JA tocando sem precisar reiniciar o app/relançar o intent, ex.
-    // `adb shell am broadcast -a com.tucavr.debug.SET_SCREEN_MODE --ei mode 6`
+    // `adb shell am broadcast -a com.tucavr.debug.SET_SCREEN_MODE --ei screen_mode 6`
     // (6 = Sphere180, ver a ordem do enum ScreenMode em vr_player_app.cpp/
     // vr_player_app_vulkan.cpp). So registrado se o app estiver debuggable
     // (`FLAG_DEBUGGABLE` — verdadeiro pro build `debug` do Gradle por
@@ -393,6 +433,9 @@ class VRActivity : NativeActivity() {
 
         applyTaskDescription()
 
+        (getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
+            ?.registerAudioDeviceCallback(audioDeviceCallback, null)
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             if (!Environment.isExternalStorageManager()) {
                 val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
@@ -449,6 +492,12 @@ class VRActivity : NativeActivity() {
 
         registerDebugReceiverIfDebuggable()
         EnvironmentRegistry.loadFromAssets(assets)
+        try {
+            nativeSetCustomEnvironmentsDir(customEnvironmentInstaller.environmentsRoot.absolutePath)
+        } catch (_: UnsatisfiedLinkError) {
+            // The frozen GLES back-end does not implement custom environments.
+        }
+        CoroutineScope(Dispatchers.IO).launch { customEnvironmentInstaller.registerInstalled() }
 
         // "Buffer estilo YouTube" (ver media_logic::buffer_gate no lado
         // Rust): reporta a RAM total do aparelho uma vez no startup, pra o
@@ -465,7 +514,6 @@ class VRActivity : NativeActivity() {
         // Fase 0.4 T5: empurra o modo persistido de Foveated Rendering pro Rust/C++
         val fovMode = FeatureFlags.getFoveatedRenderingMode(this)
         nativeSetFoveationMode(fovMode)
-        nativeSetFoveationEnabled(fovMode != 0)
 
         // Pausar ao sair: empurra preferência inicial de auto-pause para a camada nativa
         nativeSetPauseOnExit(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PAUSE_ON_EXIT))
@@ -477,6 +525,7 @@ class VRActivity : NativeActivity() {
         nativeSetEnvironmentBrightness(FeatureFlags.getEnvironmentBrightness(this))
         nativeSetScreenGlowIntensity(FeatureFlags.getScreenGlowIntensityFloat(this))
         nativeSetColorTemperature(FeatureFlags.getColorTemperature(this))
+        nativeSetHdrLuminance(HdrLuminanceStore(this).get())
         nativeSetNightMode(FeatureFlags.isNightModeEnabled(this))
 
         // Fase 0.3 Seção 2: empurra o estado persistido do toggle de Passthrough.
@@ -513,7 +562,7 @@ class VRActivity : NativeActivity() {
 
         // Painel de Estatísticas Técnicas / Stats for Nerds (ver docs/DEBUGGING.md)
         isDebugStatsEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.DEBUG_STATS_PANEL)
-        nativeSetDebugStatsEnabled(isDebugStatsEnabled)
+        refreshNativeDebugStatsStream()
 
         // Issue #100: Geometria dinâmica da superfície cilíndrica da UI e preferências de controle
         val fovDeg = FeatureFlags.getUiPanelFov(this)
@@ -521,6 +570,7 @@ class VRActivity : NativeActivity() {
         nativeSetUiPanelGeometry(distanceM, fovDeg)
         nativeSetByButtonAsBack(FeatureFlags.isEnabled(this, FeatureFlags.Flag.BY_BUTTON_AS_BACK))
         nativeSetHoverHapticsEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.HOVER_HAPTICS))
+        nativeSetDirectVideoLayerEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.DIRECT_VIDEO_LAYER))
 
         // F8: ANR e crash nativo (inclusive o abort do ART no teardown Vulkan)
         // não deixam rastro no handler de exceções da JVM abaixo — ApplicationExitInfo
@@ -562,9 +612,13 @@ class VRActivity : NativeActivity() {
 
         // Upscaling de vídeo (Vulkan MQSR / SGSR1): empurra modo persistido pro nativo
         nativeSetUpscalingMode(upscalingStore.get().id)
+        nativeSetMatchContentFrameRate(FeatureFlags.isEnabled(this, FeatureFlags.Flag.MATCH_CONTENT_FRAME_RATE))
     }
 
     override fun onDestroy() {
+        (getSystemService(Context.AUDIO_SERVICE) as? AudioManager)
+            ?.unregisterAudioDeviceCallback(audioDeviceCallback)
+
         // R-02: Para o vídeo e decodificadores/áudio nativos antes do teardown nativo
         stopPlayback()
 
@@ -792,6 +846,7 @@ class VRActivity : NativeActivity() {
         }
 
         private const val PICK_VIDEO_REQUEST_CODE = 1001
+        private const val PICK_ENVIRONMENT_REQUEST_CODE = 1002
 
         // Ver hook de auto-play em onCreate/onNewIntent/onResume.
         const val EXTRA_AUTO_PLAY_PATH = "video_path"
@@ -839,6 +894,19 @@ class VRActivity : NativeActivity() {
                         type = "video/*"
                     }
                 activity.startActivityForResult(intent, PICK_VIDEO_REQUEST_CODE)
+            }
+        }
+
+        @JvmStatic
+        fun openEnvironmentFilePicker(activity: VRActivity) {
+            activity.runOnUiThread {
+                val intent =
+                    Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                        putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("model/gltf-binary", "application/octet-stream"))
+                    }
+                activity.startActivityForResult(intent, PICK_ENVIRONMENT_REQUEST_CODE)
             }
         }
 
@@ -1317,8 +1385,49 @@ class VRActivity : NativeActivity() {
             data?.data?.let { uri ->
                 processVideoUri(uri)
             }
+        } else if (requestCode == PICK_ENVIRONMENT_REQUEST_CODE && resultCode == RESULT_OK) {
+            data?.data?.let { uri -> importEnvironment(uri) }
         }
     }
+
+    val customEnvironmentInstaller: CustomEnvironmentInstaller by lazy {
+        CustomEnvironmentInstaller(
+            environmentsRoot = File(filesDir, "environments"),
+            dao = AppDatabase.getInstance(this).customEnvironmentDao(),
+            validate = ::nativeValidateEnvironmentFile,
+            transcodeTextures = ::nativeTranscodeEnvironmentTextures,
+        )
+    }
+
+    private fun importEnvironment(uri: Uri) {
+        CoroutineScope(Dispatchers.IO).launch {
+            val result =
+                try {
+                    val name = displayNameOf(uri)?.substringBeforeLast('.') ?: ""
+                    contentResolver.openInputStream(uri)?.let { customEnvironmentInstaller.install(name, it) }
+                        ?: InstallResult.Failed
+                } catch (e: IOException) {
+                    InstallResult.Failed
+                } catch (e: SecurityException) {
+                    InstallResult.Failed
+                }
+            val messageRes =
+                when (result) {
+                    is InstallResult.Installed -> R.string.env_import_success
+                    is InstallResult.Rejected -> resources.getIdentifier(result.messageKey, "string", packageName)
+                    InstallResult.Failed -> R.string.env_import_failed
+                }
+            withContext(Dispatchers.Main) {
+                val text = getString(messageRes.takeIf { it != 0 } ?: R.string.env_import_failed)
+                Toast.makeText(this@VRActivity, text, Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun displayNameOf(uri: Uri): String? =
+        contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0) else null
+        }
 
     @Volatile
     var currentSessionId: String? = null
@@ -1360,6 +1469,8 @@ class VRActivity : NativeActivity() {
     private fun applyFormat3dOverride(source: PlaybackSource) {
         val cached = format3dStore.get(source.historyKey())
         nativeSetScreenModeOverride(cached ?: -1)
+        val fov = fisheyeFovStore.get(source.historyKey())
+        nativeSetFisheyeFov(fov)
         applyPassthroughMaskForSource(source)
     }
 
@@ -1646,6 +1757,12 @@ class VRActivity : NativeActivity() {
 
     external fun nativeStopVideo()
 
+    external fun nativeSetCustomEnvironmentsDir(dir: String)
+
+    external fun nativeValidateEnvironmentFile(path: String): String
+
+    external fun nativeTranscodeEnvironmentTextures(modelPath: String): Int
+
     external fun nativeTogglePlayPause()
 
     external fun nativeSeekVideo(positionSeconds: Float)
@@ -1655,6 +1772,8 @@ class VRActivity : NativeActivity() {
     external fun nativeSetSpeed(speed: Float)
 
     external fun nativeCycleAudioTrack()
+
+    external fun nativeRequestAudioReopen()
 
     // T1.4/T1.5: modo de exibicao 3D (ver ScreenMode em
     // native/src/vr_player_app.cpp e a codificacao em rust/bridge/src/lib.rs)
@@ -1669,6 +1788,14 @@ class VRActivity : NativeActivity() {
     external fun nativeSetScreenModeOverride(mode: Int)
 
     external fun nativeToggleSwapEyes(): Int
+
+    external fun nativeGetSwapEyes(): Boolean
+
+    external fun nativeToggleMonoView(): Boolean
+
+    external fun nativeGetMonoView(): Boolean
+
+    external fun nativeSetFisheyeFov(fov: Int)
 
     external fun nativeRequestUiPanelVisible()
 
@@ -1701,6 +1828,8 @@ class VRActivity : NativeActivity() {
     external fun nativeSetByButtonAsBack(enabled: Boolean)
 
     external fun nativeSetHoverHapticsEnabled(enabled: Boolean)
+
+    external fun nativeSetDirectVideoLayerEnabled(enabled: Boolean)
 
     external fun nativeRequestFrameCapture(path: String)
 
@@ -1753,16 +1882,6 @@ class VRActivity : NativeActivity() {
         panY: Float,
     ) {
         nativeSetPhotoPan(panX, panY)
-    }
-
-    /**
-     * Exibe o modal de formato de tela no 3º Quad dedicado frontal (VRModalPresentation).
-     */
-    fun openScreenFormatModal() {
-        runOnUiThread {
-            nativeShowModalPanel()
-            modalPresentation?.showScreenFormatModal()
-        }
     }
 
     /**
@@ -1998,26 +2117,6 @@ class VRActivity : NativeActivity() {
         nativeSetAudioTrack(ordinal)
         if (currentPlaybackSource != null && lastMediaProgressCurrent > 0f) {
             nativeSeekVideo(lastMediaProgressCurrent)
-        }
-    }
-
-    /**
-     * Exibe o modal de Legendas no 3º Quad dedicado frontal (VRModalPresentation).
-     */
-    fun openSubtitlesModal() {
-        runOnUiThread {
-            nativeShowModalPanel()
-            modalPresentation?.showSubtitlesModal()
-        }
-    }
-
-    /**
-     * Exibe o modal de Trilhas de Áudio no 3º Quad dedicado frontal (VRModalPresentation).
-     */
-    fun openAudioTracksModal() {
-        runOnUiThread {
-            nativeShowModalPanel()
-            modalPresentation?.showAudioTracksModal()
         }
     }
 
@@ -2481,6 +2580,10 @@ class VRActivity : NativeActivity() {
     // (padrao de build); GLES aceita a chamada mas nao aplica — ver
     // comentario em native/src/vr_player_app.cpp. Chamada barata (so um
     // atomic no lado Rust), segura direto da UI thread.
+    @Deprecated(
+        "Overrides granular foveation mode to Auto (4). Use nativeSetFoveationMode instead.",
+        replaceWith = ReplaceWith("nativeSetFoveationMode(if (enabled) 4 else 0)"),
+    )
     external fun nativeSetFoveationEnabled(enabled: Boolean)
 
     external fun nativeSetFoveationMode(mode: Int)
@@ -2500,6 +2603,8 @@ class VRActivity : NativeActivity() {
     external fun nativeSetScreenGlowIntensity(intensity: Float)
 
     external fun nativeSetColorTemperature(kelvin: Float)
+
+    external fun nativeSetHdrLuminance(luminance: Float)
 
     external fun nativeSetNightMode(enabled: Boolean)
 
@@ -2545,6 +2650,12 @@ class VRActivity : NativeActivity() {
 
     external fun nativeResetScreenPosition()
 
+    external fun nativeSetBedMode(enabled: Boolean)
+
+    external fun nativeGetBedMode(): Boolean
+
+    external fun nativeRecenter()
+
     external fun nativeSetScreenTransform(
         posX: Float,
         posY: Float,
@@ -2552,6 +2663,10 @@ class VRActivity : NativeActivity() {
         scaleX: Float,
         scaleY: Float,
     )
+
+    external fun nativeSetScreenCurvature(curvature: Float)
+
+    external fun nativeGetScreenCurvature(): Float
 
     external fun nativeSetEnvironment(environmentId: String)
 
@@ -2637,6 +2752,8 @@ class VRActivity : NativeActivity() {
 
     external fun nativeGetSubtitleTrackInfoWire(): String?
 
+    external fun nativeGetAudioTrackInfoWire(): String?
+
     // T7.6: idioma do sistema para auto-selecao de faixa embutida.
     external fun nativeSetPreferredSubtitleLanguage(lang: String)
 
@@ -2661,4 +2778,6 @@ class VRActivity : NativeActivity() {
 
     // Upscaling de vídeo (Vulkan MQSR / SGSR1): 0=OFF, 1=QUALITY, 2=PERFORMANCE, 3=AUTO
     external fun nativeSetUpscalingMode(mode: Int)
+
+    external fun nativeSetMatchContentFrameRate(enabled: Boolean)
 }

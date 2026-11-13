@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<root xmlns="urn:schemas-upnp-org:device-1-0">
+  <specVersion>
+    <major>1</major>
+    <minor>0</minor>
+  </specVersion>
+  <device>
+    <deviceType>urn:schemas-upnp-org:device:MediaServer:1</deviceType>
+    <friendlyName>Home Media Server (MiniDLNA)</friendlyName>
+    <manufacturer>Justin Maggard</manufacturer>
+    <modelName>Windows Media Connect compatible</modelName>
+    <modelNumber>1.0</modelNumber>
+    <iconList>
+      <icon>
+        <mimetype>image/png</mimetype>
+        <width>48</width>
+        <height>48</height>
+        <depth>24</depth>
+        <url>/icons/sm.png</url>
+      </icon>
+    </iconList>
+    <serviceList>
+      <service>
+        <serviceType>urn:schemas-upnp-org:service:ContentDirectory:1</serviceType>
+        <serviceId>urn:upnp-org:serviceId:ContentDirectory</serviceId>
+        <controlURL>/ctl/ContentDir</controlURL>
+        <eventSubURL>/evt/ContentDir</eventSubURL>
+        <SCPDURL>/ContentDir.xml</SCPDURL>
+      </service>
+    </serviceList>
+  </device>
+</root>

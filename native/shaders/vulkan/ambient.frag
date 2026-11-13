@@ -26,6 +26,13 @@ layout(location = 3) flat in float vIntensity;
 layout(location = 4) flat in float vAspect;
 layout(location = 0) out vec4 outColor;
 
+// The downsampled video is gamma-coded and the eye swapchain is *_SRGB: linearize so the hardware encode
+// round-trips to the source color, as video.frag does.
+vec3 SrgbEotf(vec3 c) {
+    c = clamp(c, 0.0, 1.0);
+    return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), greaterThan(c, vec3(0.04045)));
+}
+
 void main() {
     vec2 p = (vTexCoord - 0.5) * vec2(vAspect, 1.0);
     vec2 rectHalf = vec2(vInsetScale * 0.5 * vAspect, vInsetScale * 0.5);
@@ -38,5 +45,5 @@ void main() {
     vec2 texUv = clamp((vTexCoord - rectMin) / vInsetScale, 0.0, 1.0);
     vec3 color = texture(ambientTexture, texUv).rgb;
 
-    outColor = vec4(color, alpha);
+    outColor = vec4(SrgbEotf(color), alpha);
 }

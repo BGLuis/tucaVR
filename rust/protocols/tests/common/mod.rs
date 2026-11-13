@@ -2,6 +2,10 @@
 //! authentication each) and can cut every live one to simulate a dropped link.
 //! It is used instead of parsing container logs because it needs no extra
 //! container settings and works the same for SMB and SFTP.
+// Each test binary compiles this module whole but uses only part of it.
+#![allow(dead_code)]
+
+use sha2::{Digest, Sha256};
 use std::io;
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -69,4 +73,11 @@ fn pipe(from: io::Result<TcpStream>, to: io::Result<TcpStream>) {
         let _ = io::copy(&mut from, &mut to);
         let _ = to.shutdown(Shutdown::Both);
     });
+}
+
+pub fn sha256_hex(data: &[u8]) -> String {
+    Sha256::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }

@@ -97,6 +97,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # gitleaks scans a commit range, which a shallow clone cannot resolve
 
       - name: Lint GitHub Actions workflows (actionlint)
         run: |
@@ -108,7 +109,7 @@ jobs:
           curl -sSfL https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz -o cargo-deny.tar.gz
           echo "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f  cargo-deny.tar.gz" | sha256sum -c -
           tar -xzf cargo-deny.tar.gz
-          ./cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny --manifest-path rust/Cargo.toml --config rust/deny.toml check licenses bans sources
+          ./cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny --manifest-path rust/Cargo.toml --config rust/deny.toml check advisories licenses bans sources
           rm -rf cargo-deny-0.20.2-x86_64-unknown-linux-musl cargo-deny.tar.gz
 
       - name: Scan repository for secrets (gitleaks)
@@ -116,7 +117,6 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITLEAKS_ENABLE_SUMMARY: true
-        continue-on-error: true # Reports in the step summary without aborting in case of a false positive in tests
 
   rust-checks:
     name: Rust Quality & Tests
@@ -147,10 +147,10 @@ jobs:
         run: cd rust && cargo fmt --check
 
       - name: Lint Rust (clippy --all-targets --all-features)
-        run: cd rust && cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings
+        run: cd rust && cargo clippy --locked -p protocols -p media-logic --all-targets --all-features -- -D warnings
 
       - name: Run Rust unit tests (host-testable crates)
-        run: cd rust && cargo test -p protocols -p media-logic
+        run: cd rust && cargo test --locked -p protocols -p media-logic
 
   cpp-checks:
     name: C++ Native & Shaders
@@ -177,12 +177,20 @@ jobs:
             native/tests/*.cpp \
             native/include/vk_math.h \
             native/include/screen_mode.h \
+            native/include/polar_mode.h \
             native/include/subtitle_layout.h \
             native/include/hand_tracking.h \
             native/include/environment_config.h \
             native/include/environment_validator.h \
             native/include/browser_pose.h \
-            native/include/panel_pick.h
+            native/include/panel_pick.h \
+            native/include/astc_transcode.h \
+            native/include/frame_time_histogram.h \
+            native/include/vulkan_msaa.h \
+            native/include/screen_layout.h \
+            native/include/bed_mode.h \
+            native/include/color_grading.h \
+            native/include/video_layer.h
 
       - name: Validate Vulkan Shaders (glslc)
         run: ./scripts/check-shaders.sh
@@ -220,8 +228,9 @@ jobs:
           distribution: ${{ env.JAVA_DISTRO }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
+          cache-provider: basic
           cache-read-only: ${{ github.event_name == 'pull_request' }}
 
       - name: Lint Kotlin (ktlint)
@@ -307,7 +316,9 @@ jobs:
           distribution: ${{ env.JAVA_DISTRO }}
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          cache-provider: basic
 
       - name: Setup Rust (Android)
         uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable

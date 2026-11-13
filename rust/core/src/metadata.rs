@@ -51,7 +51,7 @@ pub fn extract_from(demuxer: &Demuxer, path: &str) -> MediaMetadata {
         .map(|t| (t.width, t.height))
         .unwrap_or((0, 0));
 
-    let (fmt, confidence) = crate::format3d_detect::detect(demuxer, path, video_w, video_h);
+    let (fmt, confidence, _) = crate::format3d_detect::detect(demuxer, path, video_w, video_h);
     let format3d_index = fmt.to_screen_mode_index();
     let detection_confidence = confidence as u8;
 

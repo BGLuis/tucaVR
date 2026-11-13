@@ -33,16 +33,21 @@
 #include <math.h>
 #include <unistd.h>
 #include <dlfcn.h>
+#include <sys/system_properties.h>
 #include <android/api-level.h>
 #include <android/performance_hint.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <mutex>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -53,14 +58,26 @@
 #include "controls_pose.h"
 #include "browser_pose.h"
 #include "panel_pick.h"
+#include "frame_time_histogram.h"
 #include "hand_tracking.h"
+#include "polar_mode.h"
 #include "screen_mode.h"
 #include "vr_player_feedback_overlay.h"
 #include "debug_stats.h"
+#include "vulkan_msaa.h"
+#include "screen_layout.h"
+#include "bed_mode.h"
+#include "video_layer.h"
+
+static_assert(VK_SAMPLE_COUNT_1_BIT == vrplayer::kMsaaSampleCount1 &&
+                  VK_SAMPLE_COUNT_4_BIT == vrplayer::kMsaaSampleCount4,
+              "VkSampleCountFlagBits must match vulkan_msaa constants");
 #include "quad.vert.h"
 #include "quad.frag.h"
 #include "video.vert.h"
 #include "video.frag.h"
+#include "video_layer.vert.h"
+#include "video_layer.frag.h"
 #include "ui.vert.h"
 #include "ui.frag.h"
 #include "stereo.vert.h"
@@ -90,6 +107,7 @@
 #include "cgltf.h"
 #undef CGLTF_IMPLEMENTATION
 #include "environment_validator.h"
+#include "astc_transcode.h"
 #include <android/asset_manager.h>
 
 #ifndef XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME
@@ -108,6 +126,62 @@ std::atomic<float> g_debugCameraPitch{0.0f};
 std::atomic<float> g_debugCameraX{0.0f};
 std::atomic<float> g_debugCameraY{0.0f};
 std::atomic<float> g_debugCameraZ{0.0f};
+std::string g_customEnvironmentsDir;
+std::mutex g_customEnvironmentsDirMutex;
+
+std::string ValidateEnvironmentFileMessageKey(const char* path) {
+    EnvironmentValidationReport report;
+    ValidateEnvironmentFile(path, &report);
+    return report.messageKey;
+}
+
+static bool IsEnvironmentImageSrgb(const cgltf_data* data, const cgltf_image* image) {
+    for (size_t m = 0; m < data->materials_count; ++m) {
+        const cgltf_material& mat = data->materials[m];
+        const cgltf_texture* base = mat.pbr_metallic_roughness.base_color_texture.texture;
+        const cgltf_texture* emissive = mat.emissive_texture.texture;
+        if ((base && base->image == image) || (emissive && emissive->image == image)) return true;
+    }
+    return false;
+}
+
+// Writes <model>.<imageIndex>.astc next to the model for every embedded image. Returns the number written.
+int TranscodeEnvironmentTexturesToAstc(const char* modelPath) {
+    cgltf_options options{};
+    cgltf_data* data = nullptr;
+    if (cgltf_parse_file(&options, modelPath, &data) != cgltf_result_success || !data) return 0;
+    int written = 0;
+    if (cgltf_load_buffers(&options, data, modelPath) == cgltf_result_success) {
+        for (size_t i = 0; i < data->images_count; ++i) {
+            const cgltf_image& img = data->images[i];
+            if (!img.buffer_view) continue;
+
+            const bool srgb = IsEnvironmentImageSrgb(data, &img);
+
+            int w = 0, h = 0, channels = 0;
+            stbi_uc* pixels = stbi_load_from_memory(
+                reinterpret_cast<const stbi_uc*>(cgltf_buffer_view_data(img.buffer_view)),
+                static_cast<int>(img.buffer_view->size), &w, &h, &channels, 4);
+            if (!pixels) continue;
+            AstcImage astc;
+            const bool ok = TranscodeRgbaToAstc6x6(pixels, static_cast<uint32_t>(w), static_cast<uint32_t>(h), srgb, &astc);
+            stbi_image_free(pixels);
+            if (!ok) continue;
+
+            const std::vector<uint8_t> bytes = SerializeAstcCache(astc);
+            std::ofstream out(std::string(modelPath) + "." + std::to_string(i) + ".astc", std::ios::binary);
+            if (out.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()))) ++written;
+        }
+    }
+    cgltf_free(data);
+    return written;
+}
+
+static std::string CustomEnvironmentConfigPath(const std::string& envId) {
+    std::lock_guard<std::mutex> lock(g_customEnvironmentsDirMutex);
+    if (g_customEnvironmentsDir.empty()) return {};
+    return g_customEnvironmentsDir + "/" + envId + "/config.ini";
+}
 
 static inline std::string get_current_session_id_vk_app() {
     std::lock_guard<std::mutex> lock(g_sessionIdMutex);
@@ -135,6 +209,8 @@ extern "C" {
     extern void get_video_progress(float* current, float* total);
     extern uint32_t get_3d_mode();
     extern uint32_t get_swap_eyes();
+    extern uint32_t get_mono_view();
+    extern uint32_t consume_initial_orientation(float* yaw, float* pitch, float* roll);
     // Fase 0.4 T5: Foveated Rendering — ver ApplyFoveation abaixo.
     extern uint32_t get_foveation_enabled();
     extern uint32_t get_foveation_mode();
@@ -176,6 +252,8 @@ extern "C" {
     );
     extern uint32_t quality_controller_get_level();
     extern uint32_t quality_controller_get_reason();
+    extern void set_supported_refresh_rates(const float* rates, uint32_t count);
+    extern void set_match_content_frame_rate(uint32_t enabled);
     // P-05: tid das 3 threads do pipeline Rust, pra registro via xrSetAndroidApplicationThreadKHR.
     // Retornam 0 enquanto a thread correspondente ainda nao subiu.
     extern int32_t get_demux_thread_tid();
@@ -228,6 +306,7 @@ extern "C" {
     // e contagem de blocos buscados/descartados — logado a 1Hz junto com
     // decFps/netMBs, ver bloco de amostragem em RenderFrame.
     extern float get_network_last_block_fetch_ms();
+    extern float get_network_last_block_mibs();
     extern uint64_t get_network_blocks_fetched();
     extern uint64_t get_network_blocks_discarded();
     extern uint32_t get_last_seek_latency_ms(); // debug, ver docs/DEBUGGING.md
@@ -259,10 +338,12 @@ extern "C" {
     extern uint32_t get_spatial_audio_head_tracking();
     extern float get_playback_speed();
     extern uint32_t get_audio_track_count();
+    extern uint32_t get_audio_track_index();
     // T-HDR: 1 se o video atual foi detectado como HDR (PQ/HLG, ver
     // media_logic::color) — usado pra escolher o pipeline de cor do shader
     // de video (tonemap HDR->SDR) e o modelo YCbCr certo.
     extern uint32_t get_video_is_hdr();
+    extern uint64_t get_video_sample_aspect_ratio();
     extern void reset_process_state();
     extern void on_app_focus_lost();
     extern void on_app_focus_gained();
@@ -284,6 +365,10 @@ extern "C" {
 }
 
 std::atomic<bool> g_resetScreenPositionRequested{false};
+std::atomic<bool> g_bedModeEnabled{false};
+std::atomic<bool> g_recenterRequested{false};
+std::atomic<float> g_screenCurvature{0.0f};
+std::atomic<bool> g_screenCurvatureDirty{false};
 std::atomic<bool> g_setScreenTransformRequested{false};
 std::atomic<float> g_requestedScreenPosX{0.0f};
 std::atomic<float> g_requestedScreenPosY{1.5f};
@@ -328,6 +413,16 @@ std::atomic<float> g_uiCylinderRadius{vrplayer::kUiCylinderRadius};
 std::atomic<float> g_uiCylinderCentralAngle{vrplayer::kUiCylinderCentralAngle};
 std::atomic<bool> g_byButtonAsBack{true};
 std::atomic<bool> g_hoverHapticsEnabled{true};
+std::atomic<bool> g_directVideoLayerEnabled{true};
+
+// Fisheye lens field of view setting (#214)
+std::atomic<int> g_fisheyeFovDegrees{DEFAULT_FISHEYE_FOV_DEGREES};
+
+extern "C" void set_fisheye_fov(int fov) {
+    if (fov == 180 || fov == 190 || fov == 200 || fov == 220) {
+        g_fisheyeFovDegrees.store(fov, std::memory_order_relaxed);
+    }
+}
 
 // Fase 0.3 Seção 8: Fotos 360° e 3D estéreo (T8.3, T8.4)
 std::atomic<bool> g_photoDirty{false};
@@ -374,6 +469,7 @@ void ResetGlobalState() {
     g_photoZoom.store(1.0f);
     g_photoPanX.store(0.0f);
     g_photoPanY.store(0.0f);
+    g_fisheyeFovDegrees.store(DEFAULT_FISHEYE_FOV_DEGREES);
 }
 
 namespace {
@@ -418,14 +514,10 @@ using vrplayer::kUiCylinderRadius;
 constexpr float kStutterThresholdMs = 20.0f; // ~1 vsync perdido a 90Hz
 constexpr float kFreezeThresholdMs = 250.0f; // stall claro, nao so reprojection
 
-// F5, G2: bordas do histograma de frame
-// time. 11.1 = cadencia alvo a 90Hz, 20 = kStutterThresholdMs, 250 = kFreezeThresholdMs —
-// os tres marcos que o relatorio pede desenhados no grafico; os demais so dao granularidade
-// na faixa intermediaria. 7 bordas -> 8 buckets (o ultimo pega tudo acima de 250ms).
-constexpr int kFrameTimeHistogramBucketCount = 8;
-constexpr float kFrameTimeHistogramEdgesMs[kFrameTimeHistogramBucketCount - 1] = {
-    11.1f, 16.7f, 20.0f, 33.3f, 50.0f, 100.0f, 250.0f
-};
+// F5, G2: the frame time histogram buckets follow the display refresh rate, see
+// frame_time_histogram.h.
+using vrplayer::FrameTimeHistogramBucket;
+using vrplayer::kFrameTimeHistogramBucketCount;
 constexpr float kVideoStallThresholdMs = 500.0f; // decode/rede travado (ver AppState.msSinceLastVideoFrame)
 
 // ScreenMode e helpers estao centralizados em screen_mode.h
@@ -440,12 +532,17 @@ struct StereoParams {
     int projectionType = 0; // 0=Standard Cubemap, 1=EAC
 };
 
+int get_fisheye_fov() {
+    return g_fisheyeFovDegrees.load(std::memory_order_relaxed);
+}
+
 StereoParams GetStereoParams(ScreenMode mode, int eye) {
     StereoParams p;
     p.eyeIndex   = eye;
     p.swapEyes   = (int)(get_swap_eyes() != 0);
-    p.polar180   = (mode == ScreenMode::Sphere180 || mode == ScreenMode::Vr180SBS) ? 1 :
-                   (mode == ScreenMode::Fisheye190 || mode == ScreenMode::Fisheye190SBS) ? 2 : 0;
+    int rawPolarMode = (mode == ScreenMode::Sphere180 || mode == ScreenMode::Vr180SBS) ? 1 :
+                       (mode == ScreenMode::Fisheye190 || mode == ScreenMode::Fisheye190SBS) ? 2 : 0;
+    p.polar180   = (rawPolarMode == 2) ? EncodePolar180(2, get_fisheye_fov()) : EncodePolar180(rawPolarMode);
     switch (mode) {
         case ScreenMode::SBS:
         case ScreenMode::SBSHalf:
@@ -487,6 +584,10 @@ StereoParams GetStereoParams(ScreenMode mode, int eye) {
         default:
             p.stereoLayout = 0;
             break;
+    }
+    if (get_mono_view() != 0 && p.stereoLayout != 0) {
+        p.eyeIndex = 0;
+        p.swapEyes = 0;
     }
     return p;
 }
@@ -546,6 +647,21 @@ struct EnvironmentVertex {
     float pos[3];
     float normal[3];
     float color[4];
+    float uv[2];
+};
+
+// texture indexes the environment texture list; -1 draws with the white fallback.
+struct EnvironmentDrawRange {
+    uint32_t firstIndex = 0;
+    uint32_t indexCount = 0;
+    int32_t texture = -1;
+};
+
+struct EnvironmentTexture {
+    VkImage image = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    VkImageView view = VK_NULL_HANDLE;
+    VkDescriptorSet set = VK_NULL_HANDLE;
 };
 
 enum class EnvironmentTransitionPhase {
@@ -554,6 +670,14 @@ enum class EnvironmentTransitionPhase {
     LOADING_WORKER,
     GPU_SWAP,
     FADING_IN
+};
+
+struct CpuEnvironmentTexture {
+    uint32_t width = 0;
+    uint32_t height = 0;
+    bool srgb = false;
+    bool astc = false;
+    std::vector<uint8_t> bytes;
 };
 
 struct CpuEnvironmentData {
@@ -567,6 +691,8 @@ struct CpuEnvironmentData {
     bool hasMesh = false;
     std::vector<EnvironmentVertex> vertices;
     std::vector<uint32_t> indices;
+    std::vector<EnvironmentDrawRange> drawRanges;
+    std::vector<CpuEnvironmentTexture> textures;
 };
 
 // Auditoria pos-reinicio (P-01/P-04/P-06):
@@ -598,6 +724,9 @@ struct EyeSwapchain {
     std::vector<XrSwapchainImageVulkanKHR> images;
     std::vector<VkImageView> imageViews;
     std::vector<VkFramebuffer> framebuffers;
+    std::vector<VkImage> msaaColorImages;
+    std::vector<VkDeviceMemory> msaaColorMemories;
+    std::vector<VkImageView> msaaColorImageViews;
     std::vector<VkImage> depthImages;
     std::vector<VkDeviceMemory> depthMemories;
     std::vector<VkImageView> depthImageViews;
@@ -618,6 +747,62 @@ struct VideoFrame {
     // e GetOrImportVideoFrame) — a evicao anterior usava unordered_map::begin(),
     // que e um bucket arbitrario do hash, nao o mais antigo de verdade.
     uint64_t lastUsedFrame = 0;
+};
+
+// Push constants of video_layer.vert/frag.
+struct VideoLayerPushConstants {
+    float uvOffset[2];
+    float uvScale[2];
+    float sharpness;
+    float texelWidth;
+    float texelHeight;
+    int isHdr;
+    float colorTemperature;
+    float hdrLuminance;
+};
+
+// Everything the conversion into the layer swapchains depends on: when it changes, the layers must be redrawn.
+struct VideoLayerConversionKey {
+    uint64_t frameSerial = 0;
+    AHardwareBuffer* buffer = nullptr;
+    vrplayer::VideoLayerLayout layout = vrplayer::VideoLayerLayout::Mono;
+    bool swapEyes = false;
+    bool monoView = false;
+    int isHdr = 0;
+    float sharpness = 0.0f;
+    float colorTemperature = 0.0f;
+    float hdrLuminance = 0.0f;
+    XrSwapchain chains[kEyeCount] = {};
+    bool operator==(const VideoLayerConversionKey&) const = default;
+};
+
+struct RetiredVideoLayerChain {
+    EyeSwapchain chain;
+    uint32_t framesLeft = 0;
+};
+
+// Direct video composition layer: see CreateVideoLayerResources.
+struct VideoLayerState {
+    bool available = false;
+    uint32_t maxWidth = 0;
+    uint32_t maxHeight = 0;
+    VkRenderPass renderPass = VK_NULL_HANDLE;
+    VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+    VkPipeline pipeline = VK_NULL_HANDLE;
+    VkPipeline holePipeline = VK_NULL_HANDLE;
+
+    // One swapchain for mono content, one per eye for stereo content.
+    EyeSwapchain chains[kEyeCount];
+    uint32_t chainCount = 0;
+    vrplayer::VideoLayerExtent extent;
+    // OpenXR composes the most recently released image, so a layer may only be referenced once its swapchain released one.
+    bool released[kEyeCount] = {};
+    bool hasConverted = false;
+    VideoLayerConversionKey convertedKey;
+    std::vector<RetiredVideoLayerChain> retired;
+    // Size that the runtime refused, so creation is not retried every frame.
+    uint32_t failedChainCount = 0;
+    vrplayer::VideoLayerExtent failedExtent;
 };
 
 // D-04: sinal de frescor por grupo de campos.
@@ -737,10 +922,12 @@ struct AppState {
     uint32_t vkQueueFamilyIndex = UINT32_MAX;
     VkQueue vkQueue = VK_NULL_HANDLE;
     bool supportsAnisotropy = false; // ver CreateVulkanInstanceAndDevice
+    bool supportsAstc = false;       // ASTC 6x6 sampled images, see CreateVulkanInstanceAndDevice
     static constexpr uint32_t kMaxFramesInFlight = 2;
     uint32_t currentFrameIndex = 0;
     VkCommandPool vkCommandPool = VK_NULL_HANDLE;
     VkCommandBuffer commandBuffers[kMaxFramesInFlight][kEyeCount] = {};
+    VkCommandBuffer videoLayerCommandBuffers[kMaxFramesInFlight] = {};
     VkFence inFlightFences[kMaxFramesInFlight] = {VK_NULL_HANDLE, VK_NULL_HANDLE};
     VkQueryPool queryPool = VK_NULL_HANDLE;
     float timestampPeriod = 0.0f;
@@ -757,6 +944,7 @@ struct AppState {
     bool upscalingEnabled = false;
     bool supportsMqsr = false;
     bool supportsCylinder = false;
+    bool supportsEquirect2 = false;
     bool supportsPerfMetrics = false;
     // F3: XR_META_performance_metrics.
     // `supportsPerfMetrics` acima so significa que a EXTENSAO foi habilitada — o SISTEMA de
@@ -819,6 +1007,7 @@ struct AppState {
     uint32_t videoHeight = 0;
     VkFormat swapchainFormat = VK_FORMAT_UNDEFINED;
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
+    VkSampleCountFlagBits msaaSamples = VK_SAMPLE_COUNT_1_BIT;
 
     // Estagio 2 — pipeline do quad estatico (fallback sem frame de video).
     VkRenderPass renderPass = VK_NULL_HANDLE;
@@ -837,11 +1026,23 @@ struct AppState {
     VkBuffer videoVertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory videoVertexMemory = VK_NULL_HANDLE;
 
+    // Cylindrical curved screen (Curved Cinema Screen)
+    float screenCurvature = 0.0f;
+    float lastGeneratedCurvature = -1.0f;
+    float lastGeneratedScaleX = -1.0f;
+    float lastGeneratedScaleY = -1.0f;
+    VkBuffer curvedVideoVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory curvedVideoVertexMemory = VK_NULL_HANDLE;
+    uint32_t curvedVideoVertexCount = 0;
+
     std::unordered_map<AHardwareBuffer*, VideoFrame> videoImageCache;
     // Relogio logico pra LRU de videoImageCache — incrementado a cada
     // acesso (hit ou insercao nova), carimbado em VideoFrame::lastUsedFrame.
     uint64_t videoFrameCacheClock = 0;
     AHardwareBuffer* lastVideoBuffer = nullptr;
+    // Incremented each time a new decoded frame becomes the active one (see UpdateVideoFrame).
+    uint64_t videoFrameSerial = 0;
+    VideoLayerState videoLayer;
     VideoFrame* activeVideoFrame = nullptr;
 
     // Estagio 4 — pipeline UI/controles (RGBA8888 normal, com alpha blending).
@@ -945,6 +1146,11 @@ struct AppState {
     VkDeviceMemory envIndexMemory = VK_NULL_HANDLE;
     uint32_t envIndexCount = 0;
     bool envMeshLoaded = false;
+    VkSampler envTextureSampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout envTextureSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool envTexturePool = VK_NULL_HANDLE;
+    std::vector<EnvironmentTexture> envTextures; // [0] is the 1x1 white fallback
+    std::vector<EnvironmentDrawRange> envDrawRanges;
     std::string currentEnvironmentId = "void";
     XrVector3f envSpawnOffset = {0.0f, 0.0f, 0.0f};
 
@@ -1096,6 +1302,8 @@ struct AppState {
     bool photoActive = false;
     uint32_t photoTexWidth = 0;
     uint32_t photoTexHeight = 0;
+    uint32_t photoWidth = 0;
+    uint32_t photoHeight = 0;
     ScreenMode photoScreenMode = ScreenMode::Flat2D;
 
     // Estagio 5 — BeamRenderer: linha simples de laser do controller.
@@ -1162,19 +1370,28 @@ struct AppState {
     ScreenMode screenMode = ScreenMode::Flat2D;
     // T-HDR: detectado uma vez por load (ver get_video_is_hdr), lido a
     // cada frame junto com screenMode — usado pelo shader de video pra
-    // decidir se aplica o tonemap HDR->SDR.
-    bool isHdr = false;
+    // decidir se aplica o tonemap HDR->SDR (0 = SDR, 1 = PQ, 2 = HLG).
+    int isHdr = 0;
 
     // Estado de cena / recenter — espelha m_sceneYawOffset/m_sceneTranslationOffset
     // do caminho GLES (vr_player_app.cpp). Toda a UI/controles/tela/esfera sao
     // posicionados em coordenadas "base" e transformados por este offset no
     // momento do desenho e do hit-test (ver ComputeSceneTransforms).
     float sceneYawOffset = 0.0f;
+    // Rotação inicial da esfera esférica extraída de metadados do container (MP4 prhd /
+    // AVSphericalMapping). Mantida separada de sceneYawOffset para preservar a orientação
+    // calibrada de cabeça do usuário no espaço Stage do OpenXR.
+    float videoSphereYawOffset = 0.0f;
     XrVector3f sceneTranslationOffset = {0.0f, 0.0f, 0.0f};
     bool needsOsRecenter = false;
     // Dispara uma calibracao inicial no 1o frame com pose valida, pra cena
     // nascer na altura dos olhos sem exigir long-press manual.
     bool sceneCalibrated = false;
+
+    // Bed Mode (Reclined 3DoF playback)
+    bool bedModeEnabled = false;
+    XrQuaternionf sceneOrientation = {0.0f, 0.0f, 0.0f, 1.0f};
+    Mat4 sceneOrientationMatrix = Mat4Identity();
 
     // Tela virtual ajustavel via thumbstick (Etapa 6) — posicao/escala em
     // espaco "base" (antes do offset de cena acima).
@@ -1184,6 +1401,16 @@ struct AppState {
     XrVector3f defaultScreenPosition = {0.0f, 1.5f, -2.4f};
     float defaultScreenScaleX = 2.8f;
     float defaultScreenScaleY = 1.575f;
+    float baseScaleX = 2.8f;
+    float baseScaleY = 1.575f;
+    uint32_t lastAspectVideoWidth = 0;
+    uint32_t lastAspectVideoHeight = 0;
+    ScreenMode lastAspectScreenMode = ScreenMode::Flat2D;
+    uint64_t lastAspectSarPacked = 0;
+    vrplayer::SampleAspectRatio videoSar;
+    bool userCustomScreenScale = false;
+    // Width of the user-chosen 16:9 bounding box; screenScaleX/Y are the content fitted inside it.
+    float userScreenBoundWidth = 2.8f;
 
     // Fase 0.3 Seção 2: Grab & Drag da tela virtual (T2.5)
     bool isScreenGrabbed = false;
@@ -1220,22 +1447,18 @@ struct AppState {
     bool cursorDotVisible = false;
     XrVector3f cursorDotPos = {0.0f, 0.0f, 0.0f};
 
-    // Metricas de performance (debug, ver docs/DEBUGGING.md) — medido em
-    // wall-clock (std::chrono) entre chamadas consecutivas de RenderFrame,
-    // nao a partir de predictedDisplayTime: xrWaitFrame devolve o horario
-    // que o COMPOSITOR pretende mostrar o proximo frame, nao quanto tempo
-    // o app de fato levou — um stall real (decode bloqueando,
-    // vkQueueWaitIdle demorado) atrasa a PROXIMA chamada de RenderFrame,
-    // que e exatamente o que o wall-clock aqui capta.
+    // Performance metrics (debug, see docs/DEBUGGING.md), measured as the delta between
+    // consecutive predictedDisplayTime values from xrWaitFrame: a frame the app delivers late
+    // pushes the next predicted display time out by whole display periods. Reset per video
+    // in UpdateVideoFrame; the READY handler clears lastPredictedDisplayTime so a session
+    // pause is not counted as one long frame.
     float smoothedFps = 0.0f;
     float lastFrameMs = 0.0f;
     int stutterCount = 0;
     int freezeCount = 0;
-    // F5 G2: contagens cumulativas por bucket (ver kFrameTimeHistogramEdgesMs) — acumulado a
+    // F5 G2: contagens cumulativas por bucket (ver frame_time_histogram.h) — acumulado a
     // cada frame no proprio loop de render, exportado no wire so a 10Hz do HUD.
     uint32_t frameTimeHistogram[kFrameTimeHistogramBucketCount] = {};
-    std::chrono::steady_clock::time_point lastFrameTimestamp{};
-    bool hasLastFrameTimestamp = false;
 
     // Metrica SEPARADA das acima: fps/stutter/freeze medem o LOOP DE
     // RENDER, nao o video em si — o loop pode rodar liso redesenhando o
@@ -1351,7 +1574,7 @@ struct QuadPushConstants {
 struct VideoPushConstants {
     Mat4  mvp;
     float sharpness;
-    int   upscalingMode;
+    float hdrLuminance;
     // T-HDR: 1 se o video atual e HDR (PQ/HLG) — o fragment shader aplica
     // tonemap HDR->SDR quando isto e nao-zero, ver video.frag.
     int   isHdr;
@@ -1379,7 +1602,7 @@ struct StereoPushConstants {
     int   stereoLayout;
     int   polar180;
     float sharpness;
-    int   upscalingMode;
+    float hdrLuminance;
     int   cubemapLayout;
     int   projectionType;
     // T-HDR: mesmo significado de VideoPushConstants::isHdr, ver stereo.frag/
@@ -1394,6 +1617,7 @@ struct StereoPushConstants {
     float chromaSmoothness;
     float colorTemperature;
 };
+static_assert(sizeof(StereoPushConstants) == 128, "StereoPushConstants must be 128 bytes");
 
 struct BeamPushConstants {
     Mat4  mvp;
@@ -1442,6 +1666,12 @@ void CreateXrInstance(AppState& state) {
         extensions.push_back(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME);
     if (isExtensionSupported(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME))
         extensions.push_back(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME);
+
+    state.supportsEquirect2 = isExtensionSupported(XR_KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME);
+    if (state.supportsEquirect2) {
+        extensions.push_back(XR_KHR_COMPOSITION_LAYER_EQUIRECT2_EXTENSION_NAME);
+    }
+    LOGI("OpenXR: XR_KHR_composition_layer_equirect2 %s", state.supportsEquirect2 ? "enabled" : "not available");
 
     // Cylinder composition layer (XR_KHR_composition_layer_cylinder)
     state.supportsCylinder = isExtensionSupported(XR_KHR_COMPOSITION_LAYER_CYLINDER_EXTENSION_NAME);
@@ -1509,7 +1739,7 @@ void CreateXrInstance(AppState& state) {
     appInfo.applicationVersion = 1;
     std::strncpy(appInfo.engineName, "tucaVR", XR_MAX_ENGINE_NAME_SIZE - 1);
     appInfo.engineVersion = 1;
-    appInfo.apiVersion = XR_CURRENT_API_VERSION;
+    appInfo.apiVersion = XR_API_VERSION_1_0;
 
     XrInstanceCreateInfo createInfo{XR_TYPE_INSTANCE_CREATE_INFO};
     createInfo.applicationInfo = appInfo;
@@ -1745,6 +1975,14 @@ void CreateVulkanInstanceAndDevice(AppState& state) {
     VkPhysicalDeviceFeatures enabledFeatures{};
     enabledFeatures.samplerAnisotropy = state.supportsAnisotropy ? VK_TRUE : VK_FALSE;
 
+    state.supportsAstc = supportedFeatures.textureCompressionASTC_LDR == VK_TRUE;
+    for (VkFormat astcFormat : {VK_FORMAT_ASTC_6x6_SRGB_BLOCK, VK_FORMAT_ASTC_6x6_UNORM_BLOCK}) {
+        VkFormatProperties props{};
+        vkGetPhysicalDeviceFormatProperties(state.vkPhysicalDevice, astcFormat, &props);
+        if (!(props.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) state.supportsAstc = false;
+    }
+    enabledFeatures.textureCompressionASTC_LDR = state.supportsAstc ? VK_TRUE : VK_FALSE;
+
     VkDeviceCreateInfo deviceCreateInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
     deviceCreateInfo.pNext = &ycbcrFeatures;
     deviceCreateInfo.queueCreateInfoCount = 1;
@@ -1838,6 +2076,8 @@ void CreateSwapchains(AppState& state) {
         }
     }
     if (chosenFormat == 0) {
+        // The video fragment shaders linearize for an sRGB attachment, so video renders too dark here.
+        LOGW("No sRGB swapchain format offered by the runtime; falling back to UNORM (video will look darker)");
         for (int64_t format : formats) {
             if (format == VK_FORMAT_R8G8B8A8_UNORM || format == VK_FORMAT_B8G8R8A8_UNORM) {
                 chosenFormat = format;
@@ -2377,29 +2617,47 @@ static uint32_t FindMemoryTypeWithFallback(AppState& state, uint32_t typeBits,
     std::abort();
 }
 
-// RenderPass com Color Attachment + Depth Attachment.
-// Depth buffer usa loadOp=CLEAR e storeOp=DONT_CARE com transient allocation,
-// operando 100% na GMEM on-chip da GPU Adreno 740 sem gastar largura de banda de DRAM.
+// RenderPass with 4x MSAA transient color + depth attachments resolved on-chip
+// into the 1x OpenXR swapchain image via pResolveAttachments (falls back to 1x
+// if the device does not advertise 4x color+depth or debug.tucavr.msaa=1).
+// Transient MSAA color and depth use loadOp=CLEAR and storeOp=DONT_CARE with
+// lazy allocation so they stay in Adreno 740 on-chip GMEM without DRAM writeback.
 void CreateRenderPass(AppState& state) {
     state.depthFormat = FindSupportedDepthFormat(state);
 
+    VkPhysicalDeviceProperties devProps{};
+    vkGetPhysicalDeviceProperties(state.vkPhysicalDevice, &devProps);
+
+    char msaaProp[PROP_VALUE_MAX] = {};
+    __system_property_get("debug.tucavr.msaa", msaaProp);
+    const uint32_t requestedSamples = vrplayer::ParseMsaaOverrideProperty(msaaProp);
+    const uint32_t selectedSamples = vrplayer::SelectEyeMsaaSampleCount(
+        devProps.limits.framebufferColorSampleCounts,
+        devProps.limits.framebufferDepthSampleCounts,
+        requestedSamples);
+    state.msaaSamples = static_cast<VkSampleCountFlagBits>(selectedSamples);
+    const vrplayer::EyeRenderPassMsaaConfig msaaCfg =
+        vrplayer::BuildEyeRenderPassMsaaConfig(selectedSamples);
+
     VkAttachmentDescription colorAttachment{};
     colorAttachment.format = state.swapchainFormat;
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.samples = state.msaaSamples;
     colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachment.storeOp = msaaCfg.hasResolveAttachment
+                                  ? VK_ATTACHMENT_STORE_OP_DONT_CARE
+                                  : VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     VkAttachmentReference colorRef{};
-    colorRef.attachment = 0;
+    colorRef.attachment = msaaCfg.colorAttachmentIndex;
     colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     VkAttachmentDescription depthAttachment{};
     depthAttachment.format = state.depthFormat;
-    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.samples = state.msaaSamples;
     depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -2408,13 +2666,28 @@ void CreateRenderPass(AppState& state) {
     depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
 
     VkAttachmentReference depthRef{};
-    depthRef.attachment = 1;
+    depthRef.attachment = msaaCfg.depthAttachmentIndex;
     depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentDescription resolveAttachment{};
+    resolveAttachment.format = state.swapchainFormat;
+    resolveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    resolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    resolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    resolveAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    resolveAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    resolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    resolveAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference resolveRef{};
+    resolveRef.attachment = msaaCfg.resolveAttachmentIndex;
+    resolveRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     VkSubpassDescription subpass{};
     subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorRef;
+    subpass.pResolveAttachments = msaaCfg.hasResolveAttachment ? &resolveRef : nullptr;
     subpass.pDepthStencilAttachment = &depthRef;
 
     VkSubpassDependency dependency{};
@@ -2428,25 +2701,35 @@ void CreateRenderPass(AppState& state) {
     dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-    std::array<VkAttachmentDescription, 2> attachments = {colorAttachment, depthAttachment};
+    std::array<VkAttachmentDescription, 3> attachments = {
+        colorAttachment, depthAttachment, resolveAttachment};
 
     VkRenderPassCreateInfo renderPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
-    renderPassInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+    renderPassInfo.attachmentCount = msaaCfg.attachmentCount;
     renderPassInfo.pAttachments = attachments.data();
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
     renderPassInfo.dependencyCount = 1;
     renderPassInfo.pDependencies = &dependency;
     VKR(vkCreateRenderPass(state.vkDevice, &renderPassInfo, nullptr, &state.renderPass));
-    LOGI("CreateRenderPass: renderPass criado com color (%d) e depth (%d)",
-         state.swapchainFormat, state.depthFormat);
+    LOGI("CreateRenderPass: renderPass created with color (%d), depth (%d), msaa=%ux (prop='%s')",
+         state.swapchainFormat, state.depthFormat, selectedSamples, msaaProp);
 }
 
-// Uma VkImageView (Color) + VkImageView (Depth) + VkFramebuffer por imagem de cada swapchain de olho.
+// Per swapchain image: 1x resolve VkImageView + optional transient 4x MSAA color
+// VkImage/VkImageView + transient depth VkImage/VkImageView + VkFramebuffer.
 void CreateFramebuffers(AppState& state) {
+    const vrplayer::EyeRenderPassMsaaConfig msaaCfg =
+        vrplayer::BuildEyeRenderPassMsaaConfig(static_cast<uint32_t>(state.msaaSamples));
+
     for (auto& eyeChain : state.eyes) {
         eyeChain.imageViews.resize(eyeChain.images.size());
         eyeChain.framebuffers.resize(eyeChain.images.size());
+        if (msaaCfg.hasResolveAttachment) {
+            eyeChain.msaaColorImages.resize(eyeChain.images.size(), VK_NULL_HANDLE);
+            eyeChain.msaaColorMemories.resize(eyeChain.images.size(), VK_NULL_HANDLE);
+            eyeChain.msaaColorImageViews.resize(eyeChain.images.size(), VK_NULL_HANDLE);
+        }
         eyeChain.depthImages.resize(eyeChain.images.size());
         eyeChain.depthMemories.resize(eyeChain.images.size());
         eyeChain.depthImageViews.resize(eyeChain.images.size());
@@ -2461,7 +2744,61 @@ void CreateFramebuffers(AppState& state) {
             viewInfo.subresourceRange.layerCount = 1;
             VKR(vkCreateImageView(state.vkDevice, &viewInfo, nullptr, &eyeChain.imageViews[i]));
 
-            // Criar Depth Image para este framebuffer
+            if (msaaCfg.hasResolveAttachment) {
+                VkImageCreateInfo msaaImageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+                msaaImageInfo.imageType = VK_IMAGE_TYPE_2D;
+                msaaImageInfo.extent.width = static_cast<uint32_t>(eyeChain.width);
+                msaaImageInfo.extent.height = static_cast<uint32_t>(eyeChain.height);
+                msaaImageInfo.extent.depth = 1;
+                msaaImageInfo.mipLevels = 1;
+                msaaImageInfo.arrayLayers = 1;
+                msaaImageInfo.format = state.swapchainFormat;
+                msaaImageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+                msaaImageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+                msaaImageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+                                      VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
+                msaaImageInfo.samples = state.msaaSamples;
+                msaaImageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+                VkResult msaaRes = vkCreateImage(
+                    state.vkDevice, &msaaImageInfo, nullptr, &eyeChain.msaaColorImages[i]);
+                const bool msaaIsTransient = (msaaRes == VK_SUCCESS);
+                if (!msaaIsTransient) {
+                    msaaImageInfo.usage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+                    VKR(vkCreateImage(
+                        state.vkDevice, &msaaImageInfo, nullptr, &eyeChain.msaaColorImages[i]));
+                }
+
+                VkMemoryRequirements msaaMemReq{};
+                vkGetImageMemoryRequirements(
+                    state.vkDevice, eyeChain.msaaColorImages[i], &msaaMemReq);
+
+                VkMemoryAllocateInfo msaaAllocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+                msaaAllocInfo.allocationSize = msaaMemReq.size;
+                msaaAllocInfo.memoryTypeIndex = FindMemoryTypeWithFallback(
+                    state, msaaMemReq.memoryTypeBits,
+                    msaaIsTransient ? VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT
+                                    : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+                    VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+                VKR(vkAllocateMemory(
+                    state.vkDevice, &msaaAllocInfo, nullptr, &eyeChain.msaaColorMemories[i]));
+                VKR(vkBindImageMemory(
+                    state.vkDevice, eyeChain.msaaColorImages[i], eyeChain.msaaColorMemories[i], 0));
+
+                VkImageViewCreateInfo msaaViewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+                msaaViewInfo.image = eyeChain.msaaColorImages[i];
+                msaaViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                msaaViewInfo.format = state.swapchainFormat;
+                msaaViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                msaaViewInfo.subresourceRange.baseMipLevel = 0;
+                msaaViewInfo.subresourceRange.levelCount = 1;
+                msaaViewInfo.subresourceRange.baseArrayLayer = 0;
+                msaaViewInfo.subresourceRange.layerCount = 1;
+                VKR(vkCreateImageView(
+                    state.vkDevice, &msaaViewInfo, nullptr, &eyeChain.msaaColorImageViews[i]));
+            }
+
+            // Create Depth Image for this framebuffer
             VkImageCreateInfo depthImageInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
             depthImageInfo.imageType = VK_IMAGE_TYPE_2D;
             depthImageInfo.extent.width = static_cast<uint32_t>(eyeChain.width);
@@ -2474,12 +2811,13 @@ void CreateFramebuffers(AppState& state) {
             depthImageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
             depthImageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                                    VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT;
-            depthImageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+            depthImageInfo.samples = state.msaaSamples;
             depthImageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-            // Fallback sem TRANSIENT_ATTACHMENT_BIT se o driver rejeitar
+            // Fallback without TRANSIENT_ATTACHMENT_BIT if rejected by the driver
             VkResult imgRes = vkCreateImage(state.vkDevice, &depthImageInfo, nullptr, &eyeChain.depthImages[i]);
-            if (imgRes != VK_SUCCESS) {
+            const bool depthIsTransient = (imgRes == VK_SUCCESS);
+            if (!depthIsTransient) {
                 depthImageInfo.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
                 VKR(vkCreateImage(state.vkDevice, &depthImageInfo, nullptr, &eyeChain.depthImages[i]));
             }
@@ -2491,7 +2829,8 @@ void CreateFramebuffers(AppState& state) {
             allocInfo.allocationSize = memReq.size;
             allocInfo.memoryTypeIndex = FindMemoryTypeWithFallback(
                 state, memReq.memoryTypeBits,
-                VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT,
+                depthIsTransient ? VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT
+                                 : VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                 VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
             VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &eyeChain.depthMemories[i]));
             VKR(vkBindImageMemory(state.vkDevice, eyeChain.depthImages[i], eyeChain.depthMemories[i], 0));
@@ -2510,11 +2849,19 @@ void CreateFramebuffers(AppState& state) {
             depthViewInfo.subresourceRange.layerCount = 1;
             VKR(vkCreateImageView(state.vkDevice, &depthViewInfo, nullptr, &eyeChain.depthImageViews[i]));
 
-            std::array<VkImageView, 2> attachments = {eyeChain.imageViews[i], eyeChain.depthImageViews[i]};
+            std::array<VkImageView, 3> attachments{};
+            if (msaaCfg.hasResolveAttachment) {
+                attachments[0] = eyeChain.msaaColorImageViews[i];
+                attachments[1] = eyeChain.depthImageViews[i];
+                attachments[2] = eyeChain.imageViews[i];
+            } else {
+                attachments[0] = eyeChain.imageViews[i];
+                attachments[1] = eyeChain.depthImageViews[i];
+            }
 
             VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
             fbInfo.renderPass = state.renderPass;
-            fbInfo.attachmentCount = static_cast<uint32_t>(attachments.size());
+            fbInfo.attachmentCount = msaaCfg.attachmentCount;
             fbInfo.pAttachments = attachments.data();
             fbInfo.width = static_cast<uint32_t>(eyeChain.width);
             fbInfo.height = static_cast<uint32_t>(eyeChain.height);
@@ -2594,6 +2941,69 @@ void CreateVideoVertexBuffer(AppState& state) {
     vkUnmapMemory(state.vkDevice, state.videoVertexMemory);
 }
 
+void CreateCurvedVideoVertexBuffer(AppState& state) {
+    const uint32_t maxVertices = (vrplayer::kCurvedScreenSlices + 1) * 2;
+    const VkDeviceSize bufferSize = maxVertices * sizeof(vrplayer::ScreenVertex);
+
+    VkBufferCreateInfo bufferInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bufferInfo.size = bufferSize;
+    bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VKR(vkCreateBuffer(state.vkDevice, &bufferInfo, nullptr, &state.curvedVideoVertexBuffer));
+
+    VkMemoryRequirements memReq{};
+    vkGetBufferMemoryRequirements(state.vkDevice, state.curvedVideoVertexBuffer, &memReq);
+
+    VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocInfo.allocationSize = memReq.size;
+    allocInfo.memoryTypeIndex = FindMemoryType(
+        state, memReq.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &state.curvedVideoVertexMemory));
+    VKR(vkBindBufferMemory(state.vkDevice, state.curvedVideoVertexBuffer, state.curvedVideoVertexMemory, 0));
+
+    state.lastGeneratedCurvature = -1.0f;
+    state.lastGeneratedScaleX = -1.0f;
+    state.lastGeneratedScaleY = -1.0f;
+    state.curvedVideoVertexCount = 0;
+}
+
+void WaitForAllFences(AppState& state) {
+    if (state.vkDevice != VK_NULL_HANDLE && state.inFlightFences[0] != VK_NULL_HANDLE) {
+        vkWaitForFences(state.vkDevice, AppState::kMaxFramesInFlight, state.inFlightFences, VK_TRUE, 1000000000ULL);
+    }
+}
+
+void UpdateCurvedScreenVertexBuffer(AppState& state) {
+    if (state.curvedVideoVertexBuffer == VK_NULL_HANDLE || state.curvedVideoVertexMemory == VK_NULL_HANDLE) {
+        return;
+    }
+
+    if (std::fabs(state.screenCurvature - state.lastGeneratedCurvature) < 1e-4f &&
+        std::fabs(state.screenScaleX - state.lastGeneratedScaleX) < 1e-4f &&
+        std::fabs(state.screenScaleY - state.lastGeneratedScaleY) < 1e-4f) {
+        return;
+    }
+
+    const auto params = vrplayer::ComputeCurvedScreenParams(
+        state.screenCurvature, state.screenScaleX, state.screenScaleY);
+    std::vector<vrplayer::ScreenVertex> vertices;
+    vrplayer::GenerateCurvedScreenVertices(params, vertices, vrplayer::kCurvedScreenSlices);
+
+    WaitForAllFences(state);
+
+    void* mapped = nullptr;
+    const VkDeviceSize copySize = vertices.size() * sizeof(vrplayer::ScreenVertex);
+    VKR(vkMapMemory(state.vkDevice, state.curvedVideoVertexMemory, 0, copySize, 0, &mapped));
+    std::memcpy(mapped, vertices.data(), copySize);
+    vkUnmapMemory(state.vkDevice, state.curvedVideoVertexMemory);
+
+    state.lastGeneratedCurvature = state.screenCurvature;
+    state.lastGeneratedScaleX = state.screenScaleX;
+    state.lastGeneratedScaleY = state.screenScaleY;
+    state.curvedVideoVertexCount = static_cast<uint32_t>(vertices.size());
+}
+
 VkShaderModule CreateShaderModule(AppState& state, const unsigned char* spirv, size_t size) {
     VkShaderModuleCreateInfo createInfo{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};
     createInfo.codeSize = size;
@@ -2657,7 +3067,7 @@ void CreateGraphicsPipeline(AppState& state) {
 
     VkPipelineMultisampleStateCreateInfo multisample{
         VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisample.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState blendAttachment{};
     blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -2873,7 +3283,7 @@ void CreateYcbcrAndVideoPipeline(AppState& state) {
 
     VkPipelineMultisampleStateCreateInfo multisample{
         VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisample.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState blendAttachment{};
     blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -2918,6 +3328,537 @@ void CreateYcbcrAndVideoPipeline(AppState& state) {
 }
 
 // ===========================================================================
+// Direct video composition layer
+//
+// Flat cinema video and equirect spheres are converted once per decoded frame into dedicated OpenXR swapchains that the
+// compositor shows as quad, cylinder or equirect layers underneath the projection layer, so the picture is resampled once by the
+// compositor instead of twice. The eye buffer only keeps a transparent hole where the screen is. The rules deciding
+// when this path runs live in video_layer.h.
+// ===========================================================================
+
+// Frames a replaced swapchain is kept alive after its last submitted layer: the compositor may still read the
+// last submitted frame, and xrDestroySwapchain must not race with it.
+constexpr uint32_t kRetiredVideoLayerFrames = 3;
+
+static bool IsSrgbSwapchainFormat(VkFormat format) {
+    return format == VK_FORMAT_R8G8B8A8_SRGB || format == VK_FORMAT_B8G8R8A8_SRGB;
+}
+
+static void CreateVideoLayerRenderPass(AppState& state) {
+    VideoLayerState& layer = state.videoLayer;
+
+    VkAttachmentDescription color{};
+    color.format = state.swapchainFormat;
+    color.samples = VK_SAMPLE_COUNT_1_BIT;
+    color.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE; // every texel is written by the fullscreen strip
+    color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    color.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    color.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    color.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    // OpenXR requires color swapchain images to be in this layout when they are released.
+    color.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentReference colorRef{0, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL};
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorRef;
+
+    VkSubpassDependency dependency{};
+    dependency.srcSubpass = VK_SUBPASS_EXTERNAL;
+    dependency.dstSubpass = 0;
+    dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+    dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+
+    VkRenderPassCreateInfo info{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+    info.attachmentCount = 1;
+    info.pAttachments = &color;
+    info.subpassCount = 1;
+    info.pSubpasses = &subpass;
+    info.dependencyCount = 1;
+    info.pDependencies = &dependency;
+    VKR(vkCreateRenderPass(state.vkDevice, &info, nullptr, &layer.renderPass));
+}
+
+static void CreateVideoLayerConversionPipeline(AppState& state) {
+    VideoLayerState& layer = state.videoLayer;
+
+    VkPushConstantRange pushRange{};
+    pushRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
+    pushRange.size = sizeof(VideoLayerPushConstants);
+
+    // The YCbCr sampler is immutable inside this set layout, so the layout is shared with the eye-buffer video path.
+    VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
+    layoutInfo.setLayoutCount = 1;
+    layoutInfo.pSetLayouts = &state.videoDescriptorSetLayout;
+    layoutInfo.pushConstantRangeCount = 1;
+    layoutInfo.pPushConstantRanges = &pushRange;
+    VKR(vkCreatePipelineLayout(state.vkDevice, &layoutInfo, nullptr, &layer.pipelineLayout));
+
+    VkShaderModule vertModule = CreateShaderModule(state, kVideoLayerVertSpirv, kVideoLayerVertSpirv_size);
+    VkShaderModule fragModule = CreateShaderModule(state, kVideoLayerFragSpirv, kVideoLayerFragSpirv_size);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName = "main";
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName = "main";
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+
+    VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisample.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineColorBlendAttachmentState blendAttachment{};
+    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo colorBlend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    colorBlend.attachmentCount = 1;
+    colorBlend.pAttachments = &blendAttachment;
+
+    VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(std::size(dynamicStates));
+    dynamicState.pDynamicStates = dynamicStates;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisample;
+    pipelineInfo.pColorBlendState = &colorBlend;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = layer.pipelineLayout;
+    pipelineInfo.renderPass = layer.renderPass;
+    VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &layer.pipeline));
+
+    vkDestroyShaderModule(state.vkDevice, vertModule, nullptr);
+    vkDestroyShaderModule(state.vkDevice, fragModule, nullptr);
+}
+
+// Draws the screen geometry (flat quad or curved mesh, which share the interleaved position+UV buffers) as
+// (0,0,0,0) with the eye buffer's depth test, so the environment still occludes it and the layer behind shows through.
+static void CreateVideoLayerHolePipeline(AppState& state) {
+    VkShaderModule vertModule = CreateShaderModule(state, kQuadVertSpirv, kQuadVertSpirv_size);
+    VkShaderModule fragModule = CreateShaderModule(state, kQuadFragSpirv, kQuadFragSpirv_size);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vertModule;
+    stages[0].pName = "main";
+    stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fragModule;
+    stages[1].pName = "main";
+
+    VkVertexInputBindingDescription binding{};
+    binding.stride = sizeof(float) * 5;
+    binding.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription position{};
+    position.format = VK_FORMAT_R32G32B32_SFLOAT;
+
+    VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vertexInput.vertexBindingDescriptionCount = 1;
+    vertexInput.pVertexBindingDescriptions = &binding;
+    vertexInput.vertexAttributeDescriptionCount = 1;
+    vertexInput.pVertexAttributeDescriptions = &position;
+
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
+
+    VkPipelineViewportStateCreateInfo viewportState{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    viewportState.viewportCount = 1;
+    viewportState.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rasterizer{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL;
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    rasterizer.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rasterizer.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo multisample{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    multisample.rasterizationSamples = state.msaaSamples;
+
+    // Blending stays off: the hole must replace the destination, not mix with it.
+    VkPipelineColorBlendAttachmentState blendAttachment{};
+    blendAttachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+    VkPipelineColorBlendStateCreateInfo colorBlend{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    colorBlend.attachmentCount = 1;
+    colorBlend.pAttachments = &blendAttachment;
+
+    VkDynamicState dynamicStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dynamicState{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dynamicState.dynamicStateCount = static_cast<uint32_t>(std::size(dynamicStates));
+    dynamicState.pDynamicStates = dynamicStates;
+
+    VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    depthStencil.depthTestEnable = VK_TRUE;
+    depthStencil.depthWriteEnable = VK_TRUE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
+
+    VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    pipelineInfo.stageCount = 2;
+    pipelineInfo.pStages = stages;
+    pipelineInfo.pVertexInputState = &vertexInput;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisample;
+    pipelineInfo.pColorBlendState = &colorBlend;
+    pipelineInfo.pDepthStencilState = &depthStencil;
+    pipelineInfo.pDynamicState = &dynamicState;
+    pipelineInfo.layout = state.pipelineLayout;
+    pipelineInfo.renderPass = state.renderPass;
+    VKR(vkCreateGraphicsPipelines(
+        state.vkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &state.videoLayer.holePipeline));
+
+    vkDestroyShaderModule(state.vkDevice, vertModule, nullptr);
+    vkDestroyShaderModule(state.vkDevice, fragModule, nullptr);
+}
+
+// The layer path needs an sRGB swapchain: the conversion shader linearizes for the hardware sRGB encode, exactly like
+// the eye buffer path. Without one the feature stays unavailable and video keeps using the eye buffer.
+void CreateVideoLayerResources(AppState& state) {
+    VideoLayerState& layer = state.videoLayer;
+    if (!IsSrgbSwapchainFormat(state.swapchainFormat)) {
+        LOGW("Direct video layer unavailable: the swapchain format %d is not sRGB", state.swapchainFormat);
+        return;
+    }
+
+    XrSystemProperties systemProperties{XR_TYPE_SYSTEM_PROPERTIES};
+    OXR(xrGetSystemProperties(state.instance, state.systemId, &systemProperties));
+    layer.maxWidth = systemProperties.graphicsProperties.maxSwapchainImageWidth;
+    layer.maxHeight = systemProperties.graphicsProperties.maxSwapchainImageHeight;
+
+    CreateVideoLayerRenderPass(state);
+    CreateVideoLayerConversionPipeline(state);
+    CreateVideoLayerHolePipeline(state);
+
+    VkCommandBufferAllocateInfo allocInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    allocInfo.commandPool = state.vkCommandPool;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = AppState::kMaxFramesInFlight;
+    VKR(vkAllocateCommandBuffers(state.vkDevice, &allocInfo, state.videoLayerCommandBuffers));
+
+    layer.available = true;
+    LOGI("Direct video layer ready (runtime swapchain limit %ux%u)", layer.maxWidth, layer.maxHeight);
+}
+
+static void DestroyVideoLayerChain(AppState& state, EyeSwapchain& chain) {
+    for (VkFramebuffer framebuffer : chain.framebuffers) {
+        if (framebuffer != VK_NULL_HANDLE) vkDestroyFramebuffer(state.vkDevice, framebuffer, nullptr);
+    }
+    for (VkImageView view : chain.imageViews) {
+        if (view != VK_NULL_HANDLE) vkDestroyImageView(state.vkDevice, view, nullptr);
+    }
+    if (chain.handle != XR_NULL_HANDLE) xrDestroySwapchain(chain.handle);
+    chain = EyeSwapchain{};
+}
+
+static bool CreateVideoLayerChain(AppState& state, EyeSwapchain& chain, const vrplayer::VideoLayerExtent& extent) {
+    XrSwapchainCreateInfo info{XR_TYPE_SWAPCHAIN_CREATE_INFO};
+    info.usageFlags = XR_SWAPCHAIN_USAGE_COLOR_ATTACHMENT_BIT | XR_SWAPCHAIN_USAGE_SAMPLED_BIT;
+    info.format = static_cast<int64_t>(state.swapchainFormat);
+    info.sampleCount = 1;
+    info.width = extent.width;
+    info.height = extent.height;
+    info.faceCount = 1;
+    info.arraySize = 1;
+    info.mipCount = 1;
+
+    XrSwapchain handle = XR_NULL_HANDLE;
+    const XrResult created = xrCreateSwapchain(state.session, &info, &handle);
+    if (XR_FAILED(created)) {
+        LOGW("Direct video layer: xrCreateSwapchain %ux%u failed (%d)", extent.width, extent.height, created);
+        return false;
+    }
+    chain.handle = handle;
+    chain.width = static_cast<int32_t>(extent.width);
+    chain.height = static_cast<int32_t>(extent.height);
+
+    uint32_t imageCount = 0;
+    OXR(xrEnumerateSwapchainImages(chain.handle, 0, &imageCount, nullptr));
+    chain.images.assign(imageCount, XrSwapchainImageVulkanKHR{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
+    OXR(xrEnumerateSwapchainImages(
+        chain.handle, imageCount, &imageCount, reinterpret_cast<XrSwapchainImageBaseHeader*>(chain.images.data())));
+
+    chain.imageViews.assign(imageCount, VK_NULL_HANDLE);
+    chain.framebuffers.assign(imageCount, VK_NULL_HANDLE);
+    for (uint32_t i = 0; i < imageCount; i++) {
+        VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+        viewInfo.image = chain.images[i].image;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = state.swapchainFormat;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.layerCount = 1;
+        VKR(vkCreateImageView(state.vkDevice, &viewInfo, nullptr, &chain.imageViews[i]));
+
+        VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
+        fbInfo.renderPass = state.videoLayer.renderPass;
+        fbInfo.attachmentCount = 1;
+        fbInfo.pAttachments = &chain.imageViews[i];
+        fbInfo.width = extent.width;
+        fbInfo.height = extent.height;
+        fbInfo.layers = 1;
+        VKR(vkCreateFramebuffer(state.vkDevice, &fbInfo, nullptr, &chain.framebuffers[i]));
+    }
+    return true;
+}
+
+// Forgets what the layer swapchains hold, so nothing is submitted until a frame is converted again. The swapchains
+// themselves are kept: used when playback stops, a new video starts or the session stops.
+void InvalidateVideoLayerImages(AppState& state) {
+    VideoLayerState& layer = state.videoLayer;
+    layer.hasConverted = false;
+    std::fill(std::begin(layer.released), std::end(layer.released), false);
+}
+
+// Replaces the swapchains without destroying them: the last submitted frame can still reference them.
+static void RetireVideoLayerChains(AppState& state) {
+    VideoLayerState& layer = state.videoLayer;
+    for (uint32_t i = 0; i < layer.chainCount; i++) {
+        layer.retired.push_back({std::move(layer.chains[i]), kRetiredVideoLayerFrames});
+        layer.chains[i] = EyeSwapchain{};
+    }
+    layer.chainCount = 0;
+    layer.extent = {};
+    InvalidateVideoLayerImages(state);
+}
+
+// Called once per submitted frame. A retired swapchain is destroyed only after the frames it may still appear in have
+// passed and the GPU is done with its images, as for the environment swap.
+static void DestroyExpiredVideoLayerChains(AppState& state) {
+    VideoLayerState& layer = state.videoLayer;
+    if (layer.retired.empty()) return;
+    bool anyExpired = false;
+    for (auto& entry : layer.retired) {
+        if (entry.framesLeft > 0) entry.framesLeft--;
+        anyExpired = anyExpired || entry.framesLeft == 0;
+    }
+    if (!anyExpired) return;
+    WaitForAllFences(state);
+    for (auto it = layer.retired.begin(); it != layer.retired.end();) {
+        if (it->framesLeft == 0) {
+            DestroyVideoLayerChain(state, it->chain);
+            it = layer.retired.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+// Makes sure swapchains of the right size and count exist for the decoded frame. They are recreated only when the
+// per-eye size or the number of layers changes.
+static bool PrepareVideoLayerChains(
+    AppState& state, const VideoFrame& frame, vrplayer::VideoLayerLayout layout, bool perEye) {
+    VideoLayerState& layer = state.videoLayer;
+    if (!layer.available) return false;
+
+    const vrplayer::VideoLayerExtent extent =
+        vrplayer::ComputeVideoLayerExtent(frame.width, frame.height, layout, layer.maxWidth, layer.maxHeight);
+    if (extent.width == 0 || extent.height == 0) return false;
+
+    const uint32_t wantedCount = perEye ? kEyeCount : 1;
+    if (layer.chainCount == wantedCount && layer.extent.width == extent.width && layer.extent.height == extent.height) {
+        return true;
+    }
+    if (layer.failedChainCount == wantedCount && layer.failedExtent.width == extent.width &&
+        layer.failedExtent.height == extent.height) {
+        return false;
+    }
+
+    RetireVideoLayerChains(state);
+    for (uint32_t i = 0; i < wantedCount; i++) {
+        if (!CreateVideoLayerChain(state, layer.chains[i], extent)) {
+            DestroyVideoLayerChain(state, layer.chains[i]);
+            for (uint32_t j = 0; j < i; j++) DestroyVideoLayerChain(state, layer.chains[j]);
+            layer.failedChainCount = wantedCount;
+            layer.failedExtent = extent;
+            return false;
+        }
+    }
+    layer.chainCount = wantedCount;
+    layer.extent = extent;
+    layer.failedChainCount = 0;
+    LOGI("Direct video layer: %u swapchain(s) %ux%u for a %ux%u decoded frame", wantedCount, extent.width,
+         extent.height, frame.width, frame.height);
+    return true;
+}
+
+// Converts the decoded frame into the layer swapchains when it, or anything its conversion depends on, changed since
+// the last conversion. Between conversions nothing is acquired: the compositor keeps composing the last released
+// image. Returns whether the layers hold a valid image to reference.
+static bool UpdateVideoLayerImages(AppState& state, const VideoFrame& frame, vrplayer::VideoLayerLayout layout) {
+    VideoLayerState& layer = state.videoLayer;
+
+    // Same exclusion as stereo.frag: the 180-degree crop makes the SGSR1 neighbours diverge on Adreno.
+    const bool hemisphereMode = (GetStereoParams(state.screenMode, 0).polar180 & 0xFF) != 0;
+    const float sharpness = hemisphereMode ? 0.0f : state.upscalingSharpness;
+
+    VideoLayerConversionKey key;
+    key.frameSerial = state.videoFrameSerial;
+    key.layout = layout;
+    key.buffer = state.lastVideoBuffer;
+    key.swapEyes = get_swap_eyes() != 0;
+    key.monoView = get_mono_view() != 0;
+    key.isHdr = state.isHdr;
+    key.sharpness = sharpness;
+    key.colorTemperature = get_night_mode_enabled() ? -3000.0f : get_color_temperature();
+    key.hdrLuminance = get_hdr_luminance();
+    for (uint32_t i = 0; i < layer.chainCount; i++) key.chains[i] = layer.chains[i].handle;
+
+    bool allReleased = layer.chainCount > 0;
+    for (uint32_t i = 0; i < layer.chainCount; i++) allReleased = allReleased && layer.released[i];
+    if (allReleased && layer.hasConverted && layer.convertedKey == key) {
+        return true;
+    }
+
+    uint32_t imageIndices[kEyeCount] = {};
+    for (uint32_t i = 0; i < layer.chainCount; i++) {
+        XrSwapchainImageAcquireInfo acquireInfo{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
+        OXR(xrAcquireSwapchainImage(layer.chains[i].handle, &acquireInfo, &imageIndices[i]));
+        XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
+        waitInfo.timeout = XR_INFINITE_DURATION;
+        OXR(xrWaitSwapchainImage(layer.chains[i].handle, &waitInfo));
+    }
+
+    VkCommandBuffer cmd = state.videoLayerCommandBuffers[state.currentFrameIndex];
+    VKR(vkResetCommandBuffer(cmd, 0));
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VKR(vkBeginCommandBuffer(cmd, &beginInfo));
+
+    // MediaCodec fills the AHardwareBuffer outside the Vulkan queue, same acquire as the eye buffer path.
+    VkImageMemoryBarrier imgBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    imgBarrier.srcAccessMask = VK_ACCESS_NONE;
+    imgBarrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    imgBarrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    imgBarrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    imgBarrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_FOREIGN_EXT;
+    imgBarrier.dstQueueFamilyIndex = state.vkQueueFamilyIndex;
+    imgBarrier.image = frame.image;
+    imgBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr,
+                         0, nullptr, 1, &imgBarrier);
+
+    const float texelWidth = frame.width > 0 ? 1.0f / static_cast<float>(frame.width) : 0.0f;
+    const float texelHeight = frame.height > 0 ? 1.0f / static_cast<float>(frame.height) : 0.0f;
+
+    for (uint32_t i = 0; i < layer.chainCount; i++) {
+        EyeSwapchain& chain = layer.chains[i];
+        const VkExtent2D extent{static_cast<uint32_t>(chain.width), static_cast<uint32_t>(chain.height)};
+
+        VkRenderPassBeginInfo passBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+        passBegin.renderPass = layer.renderPass;
+        passBegin.framebuffer = chain.framebuffers[imageIndices[i]];
+        passBegin.renderArea.extent = extent;
+        vkCmdBeginRenderPass(cmd, &passBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+        VkViewport viewport{0.0f, 0.0f, static_cast<float>(extent.width), static_cast<float>(extent.height), 0.0f, 1.0f};
+        vkCmdSetViewport(cmd, 0, 1, &viewport);
+        VkRect2D scissor{{0, 0}, extent};
+        vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layer.pipeline);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, layer.pipelineLayout, 0, 1,
+                                &frame.descriptorSet, 0, nullptr);
+
+        // The mono view forces the left half to both eyes; GetStereoParams already folds that in.
+        const StereoParams eyeParams = GetStereoParams(state.screenMode, static_cast<int>(i));
+        const vrplayer::VideoLayerCrop crop =
+            vrplayer::ComputeEyeCrop(layout, eyeParams.eyeIndex, eyeParams.swapEyes != 0);
+        VideoLayerPushConstants pc{};
+        pc.uvOffset[0] = crop.offsetU;
+        pc.uvOffset[1] = crop.offsetV;
+        pc.uvScale[0] = crop.scaleU;
+        pc.uvScale[1] = crop.scaleV;
+        pc.sharpness = sharpness;
+        pc.texelWidth = texelWidth;
+        pc.texelHeight = texelHeight;
+        pc.isHdr = state.isHdr;
+        pc.colorTemperature = key.colorTemperature;
+        pc.hdrLuminance = key.hdrLuminance;
+        vkCmdPushConstants(cmd, layer.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0,
+                           sizeof(pc), &pc);
+
+        vkCmdDraw(cmd, 4, 1, 0, 0);
+        CountDrawCall(4);
+        vkCmdEndRenderPass(cmd);
+    }
+    VKR(vkEndCommandBuffer(cmd));
+
+    // Submitted before the release: the runtime orders its use of the image after this queue submission.
+    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
+
+    for (uint32_t i = 0; i < layer.chainCount; i++) {
+        XrSwapchainImageReleaseInfo releaseInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
+        OXR(xrReleaseSwapchainImage(layer.chains[i].handle, &releaseInfo));
+        layer.released[i] = true;
+    }
+    layer.convertedKey = key;
+    layer.hasConverted = true;
+    return true;
+}
+
+static void DestroyVideoLayerResources(AppState& state) {
+    VideoLayerState& layer = state.videoLayer;
+    for (uint32_t i = 0; i < layer.chainCount; i++) DestroyVideoLayerChain(state, layer.chains[i]);
+    layer.chainCount = 0;
+    for (auto& entry : layer.retired) DestroyVideoLayerChain(state, entry.chain);
+    layer.retired.clear();
+    InvalidateVideoLayerImages(state);
+
+    if (layer.holePipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, layer.holePipeline, nullptr);
+        layer.holePipeline = VK_NULL_HANDLE;
+    }
+    if (layer.pipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, layer.pipeline, nullptr);
+        layer.pipeline = VK_NULL_HANDLE;
+    }
+    if (layer.pipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, layer.pipelineLayout, nullptr);
+        layer.pipelineLayout = VK_NULL_HANDLE;
+    }
+    if (layer.renderPass != VK_NULL_HANDLE) {
+        vkDestroyRenderPass(state.vkDevice, layer.renderPass, nullptr);
+        layer.renderPass = VK_NULL_HANDLE;
+    }
+    layer.available = false;
+}
+
+// ===========================================================================
 // ESTÁGIO 4 — Pipeline de UI/controles (RGBA8888 com alpha blending)
 // Equivalente ao bloco GLES (vr_player_app.cpp:858-934): AImageReader cria
 // uma ANativeWindow que o Kotlin usa como Surface de um VirtualDisplay/
@@ -2929,10 +3870,11 @@ void CreateYcbcrAndVideoPipeline(AppState& state) {
 // Cria um VkImage RGBA8888 vazio de dadas dimensoes, com layout UNDEFINED.
 // Usado para alocar as texturas de UI/controles antes do primeiro frame.
 static void CreateUiImage(AppState& state, uint32_t width, uint32_t height,
-                          VkImage& outImage, VkDeviceMemory& outMemory, VkImageView& outView) {
+                          VkImage& outImage, VkDeviceMemory& outMemory, VkImageView& outView,
+                          VkFormat format = VK_FORMAT_R8G8B8A8_UNORM) {
     VkImageCreateInfo imgInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     imgInfo.imageType   = VK_IMAGE_TYPE_2D;
-    imgInfo.format      = VK_FORMAT_R8G8B8A8_UNORM;
+    imgInfo.format      = format;
     imgInfo.extent      = {width, height, 1};
     imgInfo.mipLevels   = 1;
     imgInfo.arrayLayers = 1;
@@ -2963,7 +3905,7 @@ static void CreateUiImage(AppState& state, uint32_t width, uint32_t height,
     VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
     viewInfo.image    = outImage;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format   = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.format   = format;
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
@@ -3359,8 +4301,9 @@ static void InitBeamSwapchain(AppState& state) {
 // crus em memoria (nao um AHardwareBuffer) — usado pelo preview de arrasto
 // (ver g_scrubOverlay* acima). Sem stride/lock: o buffer chega do Kotlin via
 // JNI ja compacto (largura*4 bytes por linha).
-static void UpdateUiImageFromBytes(AppState& state, const uint8_t* data, uint32_t width, uint32_t height, VkImage dstImage) {
-    const VkDeviceSize bufSize = (VkDeviceSize)width * height * 4;
+static void UpdateUiImageFromBytes(AppState& state, const uint8_t* data, uint32_t width, uint32_t height, VkImage dstImage,
+                                   VkDeviceSize sizeBytes = 0) {
+    const VkDeviceSize bufSize = sizeBytes ? sizeBytes : (VkDeviceSize)width * height * 4;
     VkBuffer stagingBuf;
     VkDeviceMemory stagingMem;
 
@@ -3458,7 +4401,10 @@ static void EnsureScrubOverlayTexture(AppState& state, uint32_t width, uint32_t 
             vkFreeMemory(state.vkDevice, state.scrubOverlayImageMemory, nullptr);
             state.scrubOverlayImageMemory = VK_NULL_HANDLE;
         }
-        CreateUiImage(state, width, height, state.scrubOverlayImage, state.scrubOverlayImageMemory, state.scrubOverlayImageView);
+        // Gamma-coded video thumbnails drawn with the raw ui.frag: an sRGB view decodes on sampling so the
+        // eye swapchain's sRGB encode round-trips, matching the linearized video underneath.
+        CreateUiImage(state, width, height, state.scrubOverlayImage, state.scrubOverlayImageMemory, state.scrubOverlayImageView,
+                      VK_FORMAT_R8G8B8A8_SRGB);
         state.scrubOverlayTexWidth = width;
         state.scrubOverlayTexHeight = height;
         state.scrubOverlayReady = true;
@@ -3585,7 +4531,7 @@ void CreateUiPipeline(AppState& state, android_app* app) {
     rast.lineWidth   = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = state.msaaSamples;
 
     // Alpha blending (SRC_ALPHA / ONE_MINUS_SRC_ALPHA) — mesmo do GLES (vr_player_app.cpp:863-868)
     VkPipelineColorBlendAttachmentState blendAtt{};
@@ -3593,7 +4539,9 @@ void CreateUiPipeline(AppState& state, android_app* app) {
     blendAtt.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
     blendAtt.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.colorBlendOp        = VK_BLEND_OP_ADD;
-    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    // ONE rather than SRC_ALPHA for the alpha channel: SRC_ALPHA squares the source alpha, so over the transparent
+    // hole of the direct video layer an overlay would end up fainter than it is.
+    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     blendAtt.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.alphaBlendOp        = VK_BLEND_OP_ADD;
     blendAtt.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -4034,7 +4982,7 @@ void CreateStereoPipeline(AppState& state) {
     rast.lineWidth   = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState blendAtt{};
     blendAtt.colorWriteMask = 0xF;
@@ -4125,6 +5073,8 @@ static void DestroyPhotoTexture(AppState& state) {
     }
     state.photoTexWidth = 0;
     state.photoTexHeight = 0;
+    state.photoWidth = 0;
+    state.photoHeight = 0;
     state.photoTextureReady = false;
 }
 
@@ -4134,6 +5084,8 @@ static void EnsurePhotoTexture(AppState& state, uint32_t width, uint32_t height)
         CreateUiImage(state, width, height, state.photoImage, state.photoImageMemory, state.photoImageView);
         state.photoTexWidth = width;
         state.photoTexHeight = height;
+        state.photoWidth = width;
+        state.photoHeight = height;
         state.photoTextureReady = true;
 
         VkDescriptorImageInfo imgInfo{};
@@ -4228,7 +5180,7 @@ static void CreatePhotoPipeline(AppState& state) {
     rast.lineWidth   = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState attState{};
     attState.blendEnable         = VK_FALSE;
@@ -4358,7 +5310,7 @@ void CreateBeamResources(AppState& state) {
     rast.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rast.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState blendAtt{};
     blendAtt.colorWriteMask = 0xF;
@@ -4450,14 +5402,14 @@ void CreateFeedbackResources(AppState& state) {
     rast.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rast.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState blendAtt{};
     blendAtt.blendEnable = VK_TRUE;
     blendAtt.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
     blendAtt.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.colorBlendOp = VK_BLEND_OP_ADD;
-    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     blendAtt.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.alphaBlendOp = VK_BLEND_OP_ADD;
     blendAtt.colorWriteMask = 0xF;
@@ -4586,14 +5538,14 @@ void CreateSubtitlePipeline(AppState& state) {
     rast.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE; rast.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    ms.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState blendAtt{};
     blendAtt.blendEnable = VK_TRUE;
     blendAtt.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
     blendAtt.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.colorBlendOp = VK_BLEND_OP_ADD;
-    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     blendAtt.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.alphaBlendOp = VK_BLEND_OP_ADD;
     blendAtt.colorWriteMask = 0xF;
@@ -4694,7 +5646,10 @@ static void EnsurePgsSubtitleTexture(AppState& state, uint32_t width, uint32_t h
             vkFreeMemory(state.vkDevice, state.pgsSubtitleImageMemory, nullptr);
             state.pgsSubtitleImageMemory = VK_NULL_HANDLE;
         }
-        CreateUiImage(state, width, height, state.pgsSubtitleImage, state.pgsSubtitleImageMemory, state.pgsSubtitleImageView);
+        // Gamma-coded palette colors drawn with the raw ui.frag: an sRGB view decodes on sampling so the eye
+        // swapchain's sRGB encode round-trips to the source color.
+        CreateUiImage(state, width, height, state.pgsSubtitleImage, state.pgsSubtitleImageMemory, state.pgsSubtitleImageView,
+                      VK_FORMAT_R8G8B8A8_SRGB);
         state.pgsSubtitleTexWidth = width;
         state.pgsSubtitleTexHeight = height;
         state.pgsSubtitleReady = true;
@@ -4766,11 +5721,19 @@ static bool DrawPgsSubtitle(AppState& state, VkCommandBuffer cmd, const Mat4& pr
 
     Mat4 pgsModel;
     if (sphereMode) {
-        Mat4 pgsTrans = Mat4Translation(headCenter.x + quadPosX, headCenter.y + quadPosY, headCenter.z - 2.2f);
+        Mat4 pgsTrans = Mat4Multiply(
+            Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
+            Mat4Multiply(state.sceneOrientationMatrix, Mat4Translation(quadPosX, quadPosY, -2.2f)));
         pgsModel = Mat4Multiply(pgsTrans, Mat4Scale(quadScaleX * state.subtitleScale, quadScaleY * state.subtitleScale, 1.0f));
     } else {
         SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
-        Mat4 pgsTrans = Mat4Multiply(scene.screenModelNoScale, Mat4Translation(quadPosX, quadPosY, 0.04f));
+        const auto curParams = vrplayer::ComputeCurvedScreenParams(
+            state.screenCurvature, state.screenScaleX, state.screenScaleY);
+        const auto curvedPos = vrplayer::ProjectToCurvedScreen(curParams, quadPosX, 0.04f);
+        Mat4 pgsRot = (curvedPos.yaw != 0.0f) ? Mat4RotationY(curvedPos.yaw) : Mat4Identity();
+        Mat4 pgsTrans = Mat4Multiply(
+            scene.screenModelNoScale,
+            Mat4Multiply(Mat4Translation(curvedPos.x, quadPosY, curvedPos.z), pgsRot));
         pgsModel = Mat4Multiply(pgsTrans, Mat4Scale(quadScaleX * state.subtitleScale, quadScaleY * state.subtitleScale, 1.0f));
     }
 
@@ -4986,12 +5949,20 @@ static void DrawSubtitles(AppState& state, VkCommandBuffer cmd, const Mat4& proj
     Mat4 subModel;
     if (sphereMode) {
         // Modo esférico (360°/180°): Lazy Follow suave (~0.5s)
-        Mat4 subTrans = Mat4Translation(headCenter.x + subXOffset, headCenter.y + subYOffset, headCenter.z - 2.2f);
+        Mat4 subTrans = Mat4Multiply(
+            Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
+            Mat4Multiply(state.sceneOrientationMatrix, Mat4Translation(subXOffset, subYOffset, -2.2f)));
         subModel = Mat4Multiply(subTrans, Mat4Scale(state.subtitleScale, state.subtitleScale, 1.0f));
     } else {
-        // Modo plano (2D, SBS, OU): posicionado relativo à tela virtual
+        // Planar mode (2D, SBS, OU): positioned relative to virtual screen (with cylindrical projection if curved)
         SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
-        Mat4 subTrans = Mat4Multiply(scene.screenModelNoScale, Mat4Translation(subXOffset, subYOffset, 0.04f));
+        const auto curParams = vrplayer::ComputeCurvedScreenParams(
+            state.screenCurvature, state.screenScaleX, state.screenScaleY);
+        const auto curvedPos = vrplayer::ProjectToCurvedScreen(curParams, subXOffset, 0.04f);
+        Mat4 subRot = (curvedPos.yaw != 0.0f) ? Mat4RotationY(curvedPos.yaw) : Mat4Identity();
+        Mat4 subTrans = Mat4Multiply(
+            scene.screenModelNoScale,
+            Mat4Multiply(Mat4Translation(curvedPos.x, subYOffset, curvedPos.z), subRot));
         subModel = Mat4Multiply(subTrans, Mat4Scale(state.subtitleScale, state.subtitleScale, 1.0f));
     }
 
@@ -5120,6 +6091,34 @@ struct EnvironmentPushConstants {
     XrVector4f screenPos;  // xyz: screenWorldPosition
 };
 
+// glTF textures default to REPEAT wrapping, unlike the clamped UI sampler.
+static void CreateEnvironmentTextureLayout(AppState& state) {
+    if (state.envTextureSetLayout != VK_NULL_HANDLE) return;
+
+    VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+    samplerInfo.anisotropyEnable = state.supportsAnisotropy ? VK_TRUE : VK_FALSE;
+    samplerInfo.maxAnisotropy = state.supportsAnisotropy ? 4.0f : 1.0f;
+    VKR(vkCreateSampler(state.vkDevice, &samplerInfo, nullptr, &state.envTextureSampler));
+
+    VkDescriptorSetLayoutBinding binding{};
+    binding.binding = 0;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    binding.descriptorCount = 1;
+    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    binding.pImmutableSamplers = &state.envTextureSampler;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &binding;
+    VKR(vkCreateDescriptorSetLayout(state.vkDevice, &layoutInfo, nullptr, &state.envTextureSetLayout));
+}
+
 static void CreateEnvironmentPipeline(AppState& state) {
     VkShaderModule vertModule = CreateShaderModule(state, kEnvironmentVertSpirv, kEnvironmentVertSpirv_size);
     VkShaderModule fragModule = CreateShaderModule(state, kEnvironmentFragSpirv, kEnvironmentFragSpirv_size);
@@ -5139,7 +6138,7 @@ static void CreateEnvironmentPipeline(AppState& state) {
     bindingDesc.stride = sizeof(EnvironmentVertex);
     bindingDesc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
 
-    VkVertexInputAttributeDescription attrDesc[3]{};
+    VkVertexInputAttributeDescription attrDesc[4]{};
     attrDesc[0].location = 0;
     attrDesc[0].binding = 0;
     attrDesc[0].format = VK_FORMAT_R32G32B32_SFLOAT;
@@ -5155,10 +6154,15 @@ static void CreateEnvironmentPipeline(AppState& state) {
     attrDesc[2].format = VK_FORMAT_R32G32B32A32_SFLOAT;
     attrDesc[2].offset = offsetof(EnvironmentVertex, color);
 
+    attrDesc[3].location = 3;
+    attrDesc[3].binding = 0;
+    attrDesc[3].format = VK_FORMAT_R32G32_SFLOAT;
+    attrDesc[3].offset = offsetof(EnvironmentVertex, uv);
+
     VkPipelineVertexInputStateCreateInfo vertexInput{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
     vertexInput.vertexBindingDescriptionCount = 1;
     vertexInput.pVertexBindingDescriptions = &bindingDesc;
-    vertexInput.vertexAttributeDescriptionCount = 3;
+    vertexInput.vertexAttributeDescriptionCount = 4;
     vertexInput.pVertexAttributeDescriptions = attrDesc;
 
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
@@ -5175,7 +6179,7 @@ static void CreateEnvironmentPipeline(AppState& state) {
     rasterizer.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisampling.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.blendEnable = VK_FALSE;
@@ -5197,9 +6201,12 @@ static void CreateEnvironmentPipeline(AppState& state) {
     pushConstantRange.offset = 0;
     pushConstantRange.size = sizeof(EnvironmentPushConstants);
 
+    // Set 0 = screen ambient texture, set 1 = the draw range's base color texture.
+    CreateEnvironmentTextureLayout(state);
+    const VkDescriptorSetLayout setLayouts[2] = {state.uiDescriptorSetLayout, state.envTextureSetLayout};
     VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
-    layoutInfo.setLayoutCount = 1;
-    layoutInfo.pSetLayouts = &state.uiDescriptorSetLayout;
+    layoutInfo.setLayoutCount = 2;
+    layoutInfo.pSetLayouts = setLayouts;
     layoutInfo.pushConstantRangeCount = 1;
     layoutInfo.pPushConstantRanges = &pushConstantRange;
 
@@ -5333,7 +6340,7 @@ static void CreateSkyboxPipeline(AppState& state) {
     rasterizer.lineWidth   = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisampling.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.blendEnable    = VK_FALSE;
@@ -5474,8 +6481,8 @@ static void DrawSkyboxIfLoaded(
     vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
     vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
 
-    // Skybox rotaciona com a orientação da cabeça e com o yaw da cena, mas sem translação
-    Mat4 skyboxModel = Mat4RotationY(state.sceneYawOffset);
+    // Skybox rotates with scene orientation (yaw-only or 3DoF in Bed Mode), without translation
+    Mat4 skyboxModel = state.sceneOrientationMatrix;
     Mat4 viewNoTrans = view;
     viewNoTrans.m[12] = 0.0f;
     viewNoTrans.m[13] = 0.0f;
@@ -5551,7 +6558,7 @@ static void CreateParticlesPipeline(AppState& state) {
     rasterizer.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisampling.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.blendEnable = VK_TRUE;
@@ -5842,7 +6849,7 @@ static void CreateEnvironmentFadePipeline(AppState& state) {
     rasterizer.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisampling.rasterizationSamples = state.msaaSamples;
 
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.blendEnable = VK_TRUE;
@@ -5914,7 +6921,9 @@ static void DrawEnvironmentFade(AppState& state, VkCommandBuffer cmd) {
 }
 
 // Carregamento de dados de CPU assíncrono (Fase 0.5 §3 T3.5 / #53)
-static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, const std::string& envId) {
+constexpr size_t kMaxEnvironmentTextures = 8;
+
+static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, const std::string& envId, bool astcSupported) {
     CpuEnvironmentData data;
     data.envId = envId;
 
@@ -5933,6 +6942,16 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
             data.hasConfig = true;
         }
         AAsset_close(cfgAsset);
+    } else {
+        const std::string customConfigPath = CustomEnvironmentConfigPath(envId);
+        std::ifstream customConfig;
+        if (!customConfigPath.empty()) customConfig.open(customConfigPath);
+        if (customConfig) {
+            std::stringstream buffer;
+            buffer << customConfig.rdbuf();
+            data.config = EnvironmentConfig::Parse(buffer.str());
+            data.hasConfig = true;
+        }
     }
 
     // Skybox
@@ -5968,6 +6987,8 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
     std::string modelTarget = data.config.modelFile.empty() ? ("environments/" + envId + "/model.glb") : data.config.modelFile;
     cgltf_options options{};
     cgltf_data* gltfData = nullptr;
+    // cgltf keeps pointers into the GLB's binary chunk, so the asset must outlive every accessor read.
+    AAsset* modelAsset = nullptr;
     bool isFilePath = (!modelTarget.empty() && modelTarget[0] == '/');
 
     if (isFilePath) {
@@ -5987,10 +7008,10 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
         if (assetPath.rfind("environments/", 0) != 0) {
             assetPath = "environments/" + assetPath;
         }
-        AAsset* asset = AAssetManager_open(assetManager, assetPath.c_str(), AASSET_MODE_BUFFER);
-        if (asset) {
-            size_t assetSize = static_cast<size_t>(AAsset_getLength(asset));
-            const void* assetBuffer = AAsset_getBuffer(asset);
+        modelAsset = AAssetManager_open(assetManager, assetPath.c_str(), AASSET_MODE_BUFFER);
+        if (modelAsset) {
+            size_t assetSize = static_cast<size_t>(AAsset_getLength(modelAsset));
+            const void* assetBuffer = AAsset_getBuffer(modelAsset);
             if (assetBuffer && assetSize > 0) {
                 cgltf_result res = cgltf_parse(&options, assetBuffer, assetSize, &gltfData);
                 if (res == cgltf_result_success && gltfData) {
@@ -6001,7 +7022,6 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
                     }
                 }
             }
-            AAsset_close(asset);
         }
     }
 
@@ -6018,6 +7038,38 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
     }
 
     if (gltfData) {
+        const size_t textureCount = std::min(gltfData->images_count, kMaxEnvironmentTextures);
+        data.textures.resize(textureCount);
+        for (size_t i = 0; i < textureCount; ++i) {
+            const cgltf_image& img = gltfData->images[i];
+            CpuEnvironmentTexture& tex = data.textures[i];
+            tex.srgb = IsEnvironmentImageSrgb(gltfData, &img);
+
+            if (isFilePath && astcSupported) {
+                std::ifstream cacheFile(modelTarget + "." + std::to_string(i) + ".astc", std::ios::binary);
+                const std::vector<uint8_t> cacheBytes((std::istreambuf_iterator<char>(cacheFile)), std::istreambuf_iterator<char>());
+                AstcImage cached;
+                if (ParseAstcCache(cacheBytes.data(), cacheBytes.size(), &cached) && cached.srgb == tex.srgb) {
+                    tex.width = cached.width;
+                    tex.height = cached.height;
+                    tex.astc = true;
+                    tex.bytes = std::move(cached.blocks);
+                    continue;
+                }
+            }
+
+            if (!img.buffer_view) continue;
+            int w = 0, h = 0, channels = 0;
+            stbi_uc* pixels = stbi_load_from_memory(
+                reinterpret_cast<const stbi_uc*>(cgltf_buffer_view_data(img.buffer_view)),
+                static_cast<int>(img.buffer_view->size), &w, &h, &channels, 4);
+            if (!pixels) continue;
+            tex.width = static_cast<uint32_t>(w);
+            tex.height = static_cast<uint32_t>(h);
+            tex.bytes.assign(pixels, pixels + static_cast<size_t>(w) * static_cast<size_t>(h) * 4);
+            stbi_image_free(pixels);
+        }
+
         for (size_t m = 0; m < gltfData->meshes_count; ++m) {
             const auto& mesh = gltfData->meshes[m];
             for (size_t p = 0; p < mesh.primitives_count; ++p) {
@@ -6028,11 +7080,13 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
                 cgltf_accessor* posAcc = nullptr;
                 cgltf_accessor* normAcc = nullptr;
                 cgltf_accessor* colorAcc = nullptr;
+                cgltf_accessor* uvAcc = nullptr;
 
                 for (size_t a = 0; a < prim.attributes_count; ++a) {
                     if (prim.attributes[a].type == cgltf_attribute_type_position) posAcc = prim.attributes[a].data;
                     else if (prim.attributes[a].type == cgltf_attribute_type_normal) normAcc = prim.attributes[a].data;
                     else if (prim.attributes[a].type == cgltf_attribute_type_color) colorAcc = prim.attributes[a].data;
+                    else if (prim.attributes[a].type == cgltf_attribute_type_texcoord && prim.attributes[a].index == 0) uvAcc = prim.attributes[a].data;
                 }
 
                 if (!posAcc) continue;
@@ -6045,6 +7099,7 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
                     v.color[0] = v.color[1] = v.color[2] = v.color[3] = 1.0f;
 
                     cgltf_accessor_read_float(posAcc, i, v.pos, 3);
+                    if (uvAcc) cgltf_accessor_read_float(uvAcc, i, v.uv, 2);
                     if (normAcc) cgltf_accessor_read_float(normAcc, i, v.normal, 3);
                     if (colorAcc) {
                         float c[4] = {1.0f, 1.0f, 1.0f, 1.0f};
@@ -6053,6 +7108,18 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
                     }
                     data.vertices.push_back(v);
                 }
+
+                int32_t textureIndex = -1;
+                if (prim.material && uvAcc) {
+                    const cgltf_texture* base = prim.material->pbr_metallic_roughness.base_color_texture.texture;
+                    if (base && base->image) {
+                        const size_t imageIndex = static_cast<size_t>(base->image - gltfData->images);
+                        if (imageIndex < data.textures.size() && !data.textures[imageIndex].bytes.empty()) {
+                            textureIndex = static_cast<int32_t>(imageIndex);
+                        }
+                    }
+                }
+                const uint32_t firstIndex = static_cast<uint32_t>(data.indices.size());
 
                 if (prim.indices) {
                     size_t icount = prim.indices->count;
@@ -6064,6 +7131,13 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
                         data.indices.push_back(vertexBase + static_cast<uint32_t>(i));
                     }
                 }
+
+                const uint32_t indexCount = static_cast<uint32_t>(data.indices.size()) - firstIndex;
+                if (!data.drawRanges.empty() && data.drawRanges.back().texture == textureIndex) {
+                    data.drawRanges.back().indexCount += indexCount;
+                } else {
+                    data.drawRanges.push_back({firstIndex, indexCount, textureIndex});
+                }
             }
         }
         if (!data.vertices.empty() && !data.indices.empty()) {
@@ -6071,11 +7145,81 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
         }
         cgltf_free(gltfData);
     }
+    if (modelAsset) AAsset_close(modelAsset);
 
     return data;
 }
 
+static void DestroyEnvironmentTextures(AppState& state) {
+    for (EnvironmentTexture& tex : state.envTextures) {
+        if (tex.view != VK_NULL_HANDLE) vkDestroyImageView(state.vkDevice, tex.view, nullptr);
+        if (tex.image != VK_NULL_HANDLE) vkDestroyImage(state.vkDevice, tex.image, nullptr);
+        if (tex.memory != VK_NULL_HANDLE) vkFreeMemory(state.vkDevice, tex.memory, nullptr);
+    }
+    state.envTextures.clear();
+    state.envDrawRanges.clear();
+    if (state.envTexturePool != VK_NULL_HANDLE) {
+        vkResetDescriptorPool(state.vkDevice, state.envTexturePool, 0);
+    }
+}
+
+static void AddEnvironmentTexture(AppState& state, uint32_t width, uint32_t height, VkFormat format,
+                                  const uint8_t* bytes, VkDeviceSize sizeBytes) {
+    EnvironmentTexture tex;
+    CreateUiImage(state, width, height, tex.image, tex.memory, tex.view, format);
+    UpdateUiImageFromBytes(state, bytes, width, height, tex.image, sizeBytes);
+
+    VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    alloc.descriptorPool = state.envTexturePool;
+    alloc.descriptorSetCount = 1;
+    alloc.pSetLayouts = &state.envTextureSetLayout;
+    VKR(vkAllocateDescriptorSets(state.vkDevice, &alloc, &tex.set));
+
+    VkDescriptorImageInfo imgInfo{};
+    imgInfo.imageView = tex.view;
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet = tex.set;
+    write.dstBinding = 0;
+    write.descriptorCount = 1;
+    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo = &imgInfo;
+    vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+
+    state.envTextures.push_back(tex);
+}
+
+// envTextures[0] is the white fallback, so draw range texture N lives at envTextures[N + 1].
+static void UploadEnvironmentTextures(AppState& state, const CpuEnvironmentData& data) {
+    CreateEnvironmentTextureLayout(state);
+    if (state.envTexturePool == VK_NULL_HANDLE) {
+        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+                                      static_cast<uint32_t>(kMaxEnvironmentTextures + 1)};
+        VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+        poolInfo.maxSets = static_cast<uint32_t>(kMaxEnvironmentTextures + 1);
+        poolInfo.poolSizeCount = 1;
+        poolInfo.pPoolSizes = &poolSize;
+        VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.envTexturePool));
+    }
+
+    const uint8_t white[4] = {255, 255, 255, 255};
+    AddEnvironmentTexture(state, 1, 1, VK_FORMAT_R8G8B8A8_UNORM, white, sizeof(white));
+    for (const CpuEnvironmentTexture& tex : data.textures) {
+        if (tex.bytes.empty()) {
+            state.envTextures.push_back({});
+            continue;
+        }
+        VkFormat format = tex.srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
+        if (tex.astc) format = tex.srgb ? VK_FORMAT_ASTC_6x6_SRGB_BLOCK : VK_FORMAT_ASTC_6x6_UNORM_BLOCK;
+        AddEnvironmentTexture(state, tex.width, tex.height, format, tex.bytes.data(), tex.bytes.size());
+        LOGI("Ambiente: textura %zu carregada (%ux%u, %s)", state.envTextures.size() - 2, tex.width, tex.height,
+             tex.astc ? "ASTC 6x6" : "RGBA8");
+    }
+    state.envDrawRanges = data.drawRanges;
+}
+
 static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& data) {
+    DestroyEnvironmentTextures(state);
     if (state.envVertexBuffer != VK_NULL_HANDLE) {
         vkDestroyBuffer(state.vkDevice, state.envVertexBuffer, nullptr);
         state.envVertexBuffer = VK_NULL_HANDLE;
@@ -6099,14 +7243,20 @@ static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& da
 
     if (data.envId == "void" || data.envId.empty()) {
         state.screenPosition = {0.0f, 1.5f, -2.4f};
-        state.screenScaleX = 2.8f;
-        state.screenScaleY = 1.575f;
+        state.baseScaleX = 2.8f;
+        state.baseScaleY = 1.575f;
         state.defaultScreenPosition = state.screenPosition;
-        state.defaultScreenScaleX = state.screenScaleX;
-        state.defaultScreenScaleY = state.screenScaleY;
+        state.userCustomScreenScale = false;
+        state.lastAspectVideoWidth = 0;
+        state.lastAspectVideoHeight = 0;
+        const auto fit = vrplayer::ComputeFitBounds(VideoContentAspect(state), state.baseScaleX, state.baseScaleY);
+        state.screenScaleX = fit.x;
+        state.screenScaleY = fit.y;
+        state.defaultScreenScaleX = fit.x;
+        state.defaultScreenScaleY = fit.y;
         state.envSpawnOffset = {0.0f, 0.0f, 0.0f};
         state.envParticlesEnabled = false;
-        LOGI("Ambiente: Modo Void aplicado com sucesso");
+        LOGI("Ambiente: Modo Void aplicado com sucesso (scale=%.2f,%.2f)", state.screenScaleX, state.screenScaleY);
         return;
     }
 
@@ -6114,11 +7264,17 @@ static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& da
         state.screenPosition.x = data.config.screenPosX;
         state.screenPosition.y = data.config.screenPosY;
         state.screenPosition.z = data.config.screenPosZ;
-        state.screenScaleX = data.config.screenScaleX;
-        state.screenScaleY = data.config.screenScaleY;
+        state.baseScaleX = data.config.screenScaleX;
+        state.baseScaleY = data.config.screenScaleY;
         state.defaultScreenPosition = state.screenPosition;
-        state.defaultScreenScaleX = state.screenScaleX;
-        state.defaultScreenScaleY = state.screenScaleY;
+        state.userCustomScreenScale = false;
+        state.lastAspectVideoWidth = 0;
+        state.lastAspectVideoHeight = 0;
+        const auto fit = vrplayer::ComputeFitBounds(VideoContentAspect(state), state.baseScaleX, state.baseScaleY);
+        state.screenScaleX = fit.x;
+        state.screenScaleY = fit.y;
+        state.defaultScreenScaleX = fit.x;
+        state.defaultScreenScaleY = fit.y;
         state.envSpawnOffset = {data.config.spawnPosX, data.config.spawnPosY, data.config.spawnPosZ};
         state.envParticlesEnabled = data.config.particlesEnabled;
         if (state.envParticlesEnabled && !state.particlesLoaded) {
@@ -6199,6 +7355,7 @@ static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& da
         vkUnmapMemory(state.vkDevice, state.envIndexMemory);
 
         state.envIndexCount = static_cast<uint32_t>(data.indices.size());
+        UploadEnvironmentTextures(state, data);
         state.envMeshLoaded = true;
         LOGI("Ambiente: '%s' malha carregada com sucesso (%zu vertices, %u indices, %zu bytes)",
              data.envId.c_str(), data.vertices.size(), state.envIndexCount, vbInfo.size + ibInfo.size);
@@ -6207,7 +7364,7 @@ static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& da
 
 static bool LoadEnvironmentMesh(AppState& state, const std::string& envId) {
     AAssetManager* assetMgr = (state.app && state.app->activity) ? state.app->activity->assetManager : nullptr;
-    CpuEnvironmentData data = LoadEnvironmentCpuData(assetMgr, envId);
+    CpuEnvironmentData data = LoadEnvironmentCpuData(assetMgr, envId, state.supportsAstc);
     ApplyLoadedEnvironment(state, data);
     return true;
 }
@@ -6220,13 +7377,9 @@ static void DrawEnvironmentIfLoaded(
 
     const float envBrightness = get_environment_brightness();
     EnvironmentPushConstants envPc{};
-    Mat4 envModel = Mat4Multiply(
-        Mat4Translation(state.sceneTranslationOffset.x, state.sceneTranslationOffset.y, state.sceneTranslationOffset.z),
-        Mat4Multiply(
-            Mat4RotationY(state.sceneYawOffset),
-            Mat4Translation(-state.envSpawnOffset.x, -state.envSpawnOffset.y, -state.envSpawnOffset.z)
-        )
-    );
+    const Mat4 envModel = vrplayer::ComputeEnvironmentModel(
+        state.bedModeEnabled, headCenter, state.sceneTranslationOffset, state.sceneOrientationMatrix,
+        state.envSpawnOffset);
     envPc.mvp = Mat4Multiply(Mat4Multiply(proj, view), envModel);
     envPc.tintColor = {envBrightness, envBrightness, envBrightness, 1.0f};
 
@@ -6258,8 +7411,16 @@ static void DrawEnvironmentIfLoaded(
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
             0, sizeof(envPc), &envPc);
 
-        vkCmdDrawIndexed(cmd, state.envIndexCount, 1, 0, 0, 0);
-        CountDrawCallIndexed(state.envIndexCount);
+        for (const EnvironmentDrawRange& range : state.envDrawRanges) {
+            const size_t slot = static_cast<size_t>(range.texture + 1);
+            const bool hasTexture = slot < state.envTextures.size() && state.envTextures[slot].set != VK_NULL_HANDLE;
+            const VkDescriptorSet textureSet = state.envTextures[hasTexture ? slot : 0].set;
+            vkCmdBindDescriptorSets(
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.envPipelineLayout,
+                1, 1, &textureSet, 0, nullptr);
+            vkCmdDrawIndexed(cmd, range.indexCount, 1, range.firstIndex, 0, 0);
+            CountDrawCallIndexed(range.indexCount);
+        }
     }
 
     // Partículas cósmicas (~200 billboards com twinkle sinusoidal) (Fase 0.5 §3 T3.3 / #54)
@@ -6620,7 +7781,7 @@ static void CreateAmbientHaloPipeline(AppState& state) {
     rasterizer.lineWidth = 1.0f;
 
     VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+    multisampling.rasterizationSamples = state.msaaSamples;
 
     // Alpha blending (SRC_ALPHA / ONE_MINUS_SRC_ALPHA) — copia literal do
     // bloco de CreateUiPipeline.
@@ -6629,7 +7790,7 @@ static void CreateAmbientHaloPipeline(AppState& state) {
     blendAtt.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
     blendAtt.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.colorBlendOp = VK_BLEND_OP_ADD;
-    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blendAtt.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     blendAtt.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
     blendAtt.alphaBlendOp = VK_BLEND_OP_ADD;
     blendAtt.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -7165,8 +8326,12 @@ void RecordVideoFlat(
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.videoPipeline);
 
+    const bool isCurved = (state.screenCurvature > 1e-4f);
+    VkBuffer targetVb = isCurved ? state.curvedVideoVertexBuffer : state.videoVertexBuffer;
+    uint32_t vertexCount = isCurved ? state.curvedVideoVertexCount : 4;
+
     VkDeviceSize offset = 0;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
+    vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &offset);
 
     vkCmdBindDescriptorSets(
         cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -7175,8 +8340,8 @@ void RecordVideoFlat(
     VideoPushConstants pc{};
     pc.mvp = mvp;
     pc.sharpness = state.upscalingSharpness;
-    pc.upscalingMode = static_cast<int>(state.upscalingMode);
-    pc.isHdr = state.isHdr ? 1 : 0;
+    pc.hdrLuminance = get_hdr_luminance();
+    pc.isHdr = state.isHdr;
     float vw = (state.videoWidth > 0) ? static_cast<float>(state.videoWidth) : 1920.0f;
     float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1080.0f;
     pc.texelWidth = 1.0f / vw;
@@ -7195,15 +8360,15 @@ void RecordVideoFlat(
         VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
         0, sizeof(pc), &pc);
 
-    vkCmdDraw(cmd, 4, 1, 0, 0);
-    CountDrawCall(4);
+    vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+    CountDrawCall(vertexCount);
 
     // Preview de arrasto (T-seek-ux): mesmo transform do quad de video
     // (Flat2D), reaproveitando o pipeline de UI (RGBA8 simples, sem YCbCr).
     if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
         VkDeviceSize ovOffset = 0;
         vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
-        vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &ovOffset);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &ovOffset);
         vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
             state.uiPipelineLayout, 0, 1, &state.scrubOverlayDescriptorSet, 0, nullptr);
         UiPushConstants ovpc{};
@@ -7211,8 +8376,79 @@ void RecordVideoFlat(
         ovpc.alpha = 1.0f;
         vkCmdPushConstants(cmd, state.uiPipelineLayout,
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
-        vkCmdDraw(cmd, 4, 1, 0, 0);
-        CountDrawCall(4);
+        vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+        CountDrawCall(vertexCount);
+    }
+
+    DrawUiQuads(state, cmd, proj, view, headCenter);
+    DrawEnvironmentFade(state, cmd);
+
+    vkCmdEndRenderPass(cmd);
+}
+
+// Direct video layer path: the screen is drawn as a transparent hole and the picture comes from the layers submitted
+// behind the projection layer. Environment, overlays and fade are drawn as in RecordVideoFlat. It serves Flat2D and
+// flat SBS/OU alike, since the hole does not depend on the stereo layout. A sphere surrounds the viewer and draws no
+// environment, so the whole eye buffer is the hole and only the overlays remain.
+void RecordVideoHole(
+    AppState& state, VkCommandBuffer cmd, VkFramebuffer framebuffer, VkExtent2D extent,
+    const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter, bool sphereMode) {
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = {{0.0f, 0.0f, 0.0f, sphereMode ? 0.0f : PassthroughEnvAlpha(state)}};
+    clearValues[1].depthStencil = {1.0f, 0};
+
+    VkRenderPassBeginInfo renderPassBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    renderPassBegin.renderPass = state.renderPass;
+    renderPassBegin.framebuffer = framebuffer;
+    renderPassBegin.renderArea.offset = {0, 0};
+    renderPassBegin.renderArea.extent = extent;
+    renderPassBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    renderPassBegin.pClearValues = clearValues.data();
+    vkCmdBeginRenderPass(cmd, &renderPassBegin, VK_SUBPASS_CONTENTS_INLINE);
+
+    VkViewport viewport{};
+    viewport.width = static_cast<float>(extent.width);
+    viewport.height = static_cast<float>(extent.height);
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+    vkCmdSetViewport(cmd, 0, 1, &viewport);
+
+    VkRect2D scissor{{0, 0}, extent};
+    vkCmdSetScissor(cmd, 0, 1, &scissor);
+
+    if (!sphereMode) {
+        DrawSkyboxIfLoaded(state, cmd, proj, view);
+        DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
+        DrawAmbientHalo(state, cmd, proj, view, headCenter);
+
+        const bool isCurved = (state.screenCurvature > 1e-4f);
+        VkBuffer targetVb = isCurved ? state.curvedVideoVertexBuffer : state.videoVertexBuffer;
+        const uint32_t vertexCount = isCurved ? state.curvedVideoVertexCount : 4;
+
+        VkDeviceSize offset = 0;
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.videoLayer.holePipeline);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &offset);
+        QuadPushConstants holePush{};
+        holePush.mvp = mvp;
+        vkCmdPushConstants(cmd, state.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(holePush), &holePush);
+        vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+        CountDrawCall(vertexCount);
+
+        // Scrub preview over the hole, same transform as the screen.
+        if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
+            VkDeviceSize ovOffset = 0;
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
+            vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &ovOffset);
+            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                state.uiPipelineLayout, 0, 1, &state.scrubOverlayDescriptorSet, 0, nullptr);
+            UiPushConstants ovpc{};
+            ovpc.mvp = mvp;
+            ovpc.alpha = 1.0f;
+            vkCmdPushConstants(cmd, state.uiPipelineLayout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
+            vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+            CountDrawCall(vertexCount);
+        }
     }
 
     DrawUiQuads(state, cmd, proj, view, headCenter);
@@ -7275,10 +8511,10 @@ void RecordStereoFrame(
     spc.stereoLayout   = sp.stereoLayout;
     spc.polar180       = sp.polar180;
     spc.sharpness      = state.upscalingSharpness;
-    spc.upscalingMode  = static_cast<int>(state.upscalingMode);
+    spc.hdrLuminance   = get_hdr_luminance();
     spc.cubemapLayout  = sp.cubemapLayout;
     spc.projectionType = sp.projectionType;
-    spc.isHdr          = state.isHdr ? 1 : 0;
+    spc.isHdr          = state.isHdr;
     float vw = (state.videoWidth > 0) ? static_cast<float>(state.videoWidth) : 3840.0f;
     float vh = (state.videoHeight > 0) ? static_cast<float>(state.videoHeight) : 1920.0f;
     spc.texelWidth     = 1.0f / vw;
@@ -7318,15 +8554,19 @@ void RecordStereoFrame(
         vkCmdDrawIndexed(cmd, state.sphereIndexCount, 1, 0, 0, 0);
         CountDrawCallIndexed(state.sphereIndexCount);
     } else {
+        const bool isCurved = (state.screenCurvature > 1e-4f);
+        VkBuffer targetVb = isCurved ? state.curvedVideoVertexBuffer : state.videoVertexBuffer;
+        uint32_t vertexCount = isCurved ? state.curvedVideoVertexCount : 4;
+
         VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
-        vkCmdDraw(cmd, 4, 1, 0, 0);
-        CountDrawCall(4);
+        vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &offset);
+        vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+        CountDrawCall(vertexCount);
 
         if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
             VkDeviceSize ovOffset = 0;
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
-            vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &ovOffset);
+            vkCmdBindVertexBuffers(cmd, 0, 1, &targetVb, &ovOffset);
             vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
                 state.uiPipelineLayout, 0, 1, &state.scrubOverlayDescriptorSet, 0, nullptr);
             UiPushConstants ovpc{};
@@ -7334,8 +8574,8 @@ void RecordStereoFrame(
             ovpc.alpha = 1.0f;
             vkCmdPushConstants(cmd, state.uiPipelineLayout,
                 VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(ovpc), &ovpc);
-            vkCmdDraw(cmd, 4, 1, 0, 0);
-            CountDrawCall(4);
+            vkCmdDraw(cmd, vertexCount, 1, 0, 0);
+            CountDrawCall(vertexCount);
         }
     }
 
@@ -7384,7 +8624,7 @@ void RecordPhotoFrame(
     spc.stereoLayout   = sp.stereoLayout;
     spc.polar180       = sp.polar180;
     spc.sharpness      = 0.0f;
-    spc.upscalingMode  = 0;
+    spc.hdrLuminance   = 1.0f;
     spc.cubemapLayout  = sp.cubemapLayout;
     spc.projectionType = sp.projectionType;
     // Sem decode HDR de foto estatica — sempre SDR.
@@ -7464,6 +8704,44 @@ void PushVideoGapSample(AppState& state, float gapMs) {
     state.videoJitterMs = maxV - minV;
 }
 
+// Updates virtual screen dimensions dynamically according to the decoded video frame's
+// native aspect ratio and anamorphic stereoscopic format, fitting proportionally within
+// the environment's base bounds (fit bounds).
+void ApplyDynamicAspectRatio(AppState& state) {
+    if (state.videoWidth == 0 || state.videoHeight == 0) {
+        return;
+    }
+    ScreenMode currentMode = state.screenMode;
+    const uint64_t sarPacked = get_video_sample_aspect_ratio();
+    if (state.videoWidth == state.lastAspectVideoWidth &&
+        state.videoHeight == state.lastAspectVideoHeight &&
+        currentMode == state.lastAspectScreenMode &&
+        sarPacked == state.lastAspectSarPacked) {
+        return;
+    }
+
+    state.lastAspectVideoWidth = state.videoWidth;
+    state.lastAspectVideoHeight = state.videoHeight;
+    state.lastAspectScreenMode = currentMode;
+    state.lastAspectSarPacked = sarPacked;
+    state.videoSar = vrplayer::UnpackSampleAspectRatio(sarPacked);
+
+    const float aspect = VideoContentAspect(state);
+    const vrplayer::ScreenScale fit = vrplayer::ComputeFitBounds(
+        aspect, state.baseScaleX, state.baseScaleY);
+
+    state.defaultScreenScaleX = fit.x;
+    state.defaultScreenScaleY = fit.y;
+
+    const vrplayer::ScreenScale shown = ComputeScreenFit(state, aspect);
+    state.screenScaleX = shown.x;
+    state.screenScaleY = shown.y;
+
+    LOGI("Dynamic Aspect Ratio: video %ux%u mode %s -> aspect %.3f (scale=%.3fx%.3f, default=%.3fx%.3f)",
+         state.videoWidth, state.videoHeight, ScreenModeName(currentMode), aspect,
+         state.screenScaleX, state.screenScaleY, state.defaultScreenScaleX, state.defaultScreenScaleY);
+}
+
 // Estagio 3: atualiza o frame de video ativo a partir do bridge Rust.
 // Chamado uma vez por loop de frame, antes de RenderFrame.
 // Equivale ao bloco vr_player_app.cpp:1354-1400 (m_eglImageCache).
@@ -7471,10 +8749,11 @@ void UpdateVideoFrame(AppState& state) {
     bool stopRequested = g_stopVideoRequested.exchange(false);
     bool newSessionRequested = g_newVideoSessionRequested.exchange(false);
     if (stopRequested || newSessionRequested) {
-        LOGI("Video: %s — limpando frame ativo e cache Vulkan",
-             stopRequested ? "parada solicitada" : "nova sessao de video iniciada");
+        LOGI("Video: %s — clearing active frame and Vulkan cache",
+             stopRequested ? "stop requested" : "new video session started");
         state.activeVideoFrame = nullptr;
         state.lastVideoBuffer = nullptr;
+        InvalidateVideoLayerImages(state);
         state.msSinceLastVideoFrame = 0.0f;
         state.videoStallLogged = false;
         state.videoGapHistoryCount = 0;
@@ -7483,14 +8762,37 @@ void UpdateVideoFrame(AppState& state) {
         state.controlsAlpha = 0.0f;
         state.controlsIdleTime = kUiAutoHideSeconds;
         ClearVideoImageCache(state);
-        if (stopRequested) {
+        state.lastAspectVideoWidth = 0;
+        state.lastAspectVideoHeight = 0;
+        if (newSessionRequested) {
+            state.hasActiveMedia = true;
+            state.stutterCount = 0;
+            state.freezeCount = 0;
+            state.videoStallCount = 0;
+            std::fill(std::begin(state.frameTimeHistogram), std::end(state.frameTimeHistogram), 0u);
+        } else if (stopRequested) {
             state.hasActiveMedia = false;
+            state.videoWidth = 0;
+            state.videoHeight = 0;
+            const auto fit = vrplayer::ComputeFitBounds(
+                vrplayer::kDefaultAspectRatio, state.baseScaleX, state.baseScaleY);
+            const auto shown = ComputeScreenFit(state, vrplayer::kDefaultAspectRatio);
+            state.screenScaleX = shown.x;
+            state.screenScaleY = shown.y;
+            state.defaultScreenScaleX = fit.x;
+            state.defaultScreenScaleY = fit.y;
             g_requestUiPanelVisible.store(true);
             return;
         }
-        if (newSessionRequested) {
-            state.hasActiveMedia = true;
-        }
+    }
+
+    ScreenMode currentMode = static_cast<ScreenMode>(get_3d_mode());
+    if (currentMode != state.screenMode) {
+        StereoParams spLog = GetStereoParams(currentMode, 0);
+        LOGI("Video: ScreenMode -> %s (stereoLayout=%d, polar180=%d, swapEyes=%d, cubemapLayout=%d, projectionType=%d)",
+             ScreenModeName(currentMode), spLog.stereoLayout, spLog.polar180 & 0xFF, spLog.swapEyes, spLog.cubemapLayout, spLog.projectionType);
+        state.screenMode = currentMode;
+        ApplyDynamicAspectRatio(state);
     }
 
     AHardwareBuffer* buffer = get_current_video_frame();
@@ -7548,11 +8850,18 @@ void UpdateVideoFrame(AppState& state) {
     }
 
     state.lastVideoBuffer = buffer;
+    state.videoFrameSerial++;
     state.msSinceLastVideoFrame = 0.0f;
     state.videoStallLogged = false;
     state.activeVideoFrame = GetOrImportVideoFrame(state, buffer);
     if (state.activeVideoFrame == nullptr) {
         LOGE("Video: GetOrImportVideoFrame falhou para o buffer %p — frame sera ignorado (fallback quad solido)", (void*)buffer);
+    } else {
+        // Content aspect ratio comes from the AHardwareBuffer dimensions plus the stream's sample
+        // aspect ratio. Container crop rectangles are not applied yet: Issue #176.
+        state.videoWidth = state.activeVideoFrame->width;
+        state.videoHeight = state.activeVideoFrame->height;
+        ApplyDynamicAspectRatio(state);
     }
 }
 
@@ -7744,13 +9053,7 @@ void RenderFrame(AppState& state) {
     if (state.lastPredictedDisplayTime > 0) {
         float frameMs = static_cast<float>(frameState.predictedDisplayTime - state.lastPredictedDisplayTime) * 1e-6f;
         state.lastFrameMs = frameMs;
-        {
-            int bucket = kFrameTimeHistogramBucketCount - 1;
-            for (int i = 0; i < kFrameTimeHistogramBucketCount - 1; ++i) {
-                if (frameMs < kFrameTimeHistogramEdgesMs[i]) { bucket = i; break; }
-            }
-            state.frameTimeHistogram[bucket]++;
-        }
+        state.frameTimeHistogram[FrameTimeHistogramBucket(frameMs, state.displayRefreshRate)]++;
         ReportAdpfWorkDuration(state, frameMs); // F8: declara ao SO a duracao real deste frame
         if (frameMs > 0.0f) {
             float instFps = 1000.0f / frameMs;
@@ -7821,8 +9124,8 @@ void RenderFrame(AppState& state) {
             state.videoPresentationPending = get_video_presentation_pending();
 
             if (state.lastNetworkBytes > 0 || get_network_blocks_fetched() > 0) {
-                LOGI("net: %.2fMB/s blockFetchMs=%.0f blocksFetched=%llu blocksDiscarded=%llu q=%u",
-                    state.netMBs, get_network_last_block_fetch_ms(),
+                LOGI("net: %.2fMiB/s link=%.2fMiB/s blockFetchMs=%.0f blocksFetched=%llu blocksDiscarded=%llu q=%u",
+                    state.netMBs, get_network_last_block_mibs(), get_network_last_block_fetch_ms(),
                     (unsigned long long)get_network_blocks_fetched(),
                     (unsigned long long)get_network_blocks_discarded(),
                     state.videoQueueDepth);
@@ -7922,11 +9225,17 @@ void RenderFrame(AppState& state) {
 
     std::array<XrCompositionLayerProjectionView, kEyeCount> projectionViews{};
     const bool shouldSubmitLayer = frameState.shouldRender;
-    // [0]=passthrough (Fase 0.3 Seção 2, quando ativo) + projection + ui +
-    // controls + modal + beam + cursor = 7 (alocado 8 por margem). Passthrough SEMPRE vai no indice 0
-    // (fundo) e o projection layer passa a compor com o alpha do swapchain.
-    const XrCompositionLayerBaseHeader* layers[8]{};
+    // Underlay order: passthrough (Fase 0.3 Seção 2, quando ativo), direct video layers, projection, then the UI
+    // panels, beam and cursor. vrplayer::kFrameLayerCapacity is the worst case of all of them together.
+    const XrCompositionLayerBaseHeader* layers[vrplayer::kFrameLayerCapacity]{};
     uint32_t layerCount = 0;
+    auto submitLayer = [&](const void* layer) {
+        if (layerCount < vrplayer::kFrameLayerCapacity) {
+            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(layer);
+        } else {
+            LOGE("xrEndFrame: dropping a composition layer, the frame already holds %u", layerCount);
+        }
+    };
     // Declarada aqui (mesmo escopo de `layers` e `endFrameInfo`) porque
     // xrEndFrame roda FORA do `if (shouldSubmitLayer)` abaixo e le os
     // ponteiros de `layers`.
@@ -7952,13 +9261,14 @@ void RenderFrame(AppState& state) {
             XR_VIEW_STATE_POSITION_VALID_BIT | XR_VIEW_STATE_ORIENTATION_VALID_BIT;
         bool poseValidForCalibration = (viewState.viewStateFlags & kPoseValidFlags) == kPoseValidFlags;
         if (poseValidForCalibration && (state.needsOsRecenter || !state.sceneCalibrated)) {
-            Mat4 rot0 = Mat4FromXrPose(views[0].pose);
-            XrVector3f fwd = {-rot0.m[8], -rot0.m[9], -rot0.m[10]};
-            state.sceneYawOffset = atan2f(-fwd.x, -fwd.z);
-            state.sceneTranslationOffset = headCenter;
-            state.sceneTranslationOffset.y = headCenter.y - 1.5f;
+            const auto res = vrplayer::ComputeRecenter(
+                state.bedModeEnabled, views[0].pose.orientation, headCenter, 1.5f);
+            vrplayer::ApplyRecenter(state, res);
             state.needsOsRecenter = false;
             state.sceneCalibrated = true;
+            LOGI("Recenter (OS/calib): bedMode=%d, yaw=%.2f deg, pitch=%.2f deg",
+                 (int)state.bedModeEnabled, res.yawOffset * (180.0f / 3.14159265f),
+                 res.pitchOffset * (180.0f / 3.14159265f));
         }
 
         // Processa troca pendente de ambiente virtual 3D com transição suave (Fase 0.5 §3 T3.5 / #53)
@@ -8032,7 +9342,7 @@ void RenderFrame(AppState& state) {
                     AAssetManager* assetMgr = (state.app && state.app->activity) ? state.app->activity->assetManager : nullptr;
 
                     state.envWorkerThread = std::thread([&state, assetMgr, targetEnv]() {
-                        state.envLoadedData = LoadEnvironmentCpuData(assetMgr, targetEnv);
+                        state.envLoadedData = LoadEnvironmentCpuData(assetMgr, targetEnv, state.supportsAstc);
                         state.envWorkerFinished = true;
                     });
                 }
@@ -8049,8 +9359,8 @@ void RenderFrame(AppState& state) {
 
         if (state.envTransitionPhase == EnvironmentTransitionPhase::GPU_SWAP) {
             state.envTransitionAlpha = 1.0f;
-            // Sincroniza apenas com as fences dos quadros em voo (< 1ms), sem vkDeviceWaitIdle
-            vkWaitForFences(state.vkDevice, AppState::kMaxFramesInFlight, state.inFlightFences, VK_TRUE, 1000000000ULL);
+            // Synchronize with in-flight frame fences (< 1ms) without calling vkDeviceWaitIdle
+            WaitForAllFences(state);
 
             ApplyLoadedEnvironment(state, state.envLoadedData);
             state.envLoadedData = CpuEnvironmentData{};
@@ -8085,28 +9395,53 @@ void RenderFrame(AppState& state) {
             views[0].pose.orientation.w
         );
 
-        // Posicao/escala da tela virtual — mesma base do caminho GLES
-        // (vr_player_app.cpp: m_screenPosition = {0, 1.5, -2},
-        //  m_screenScale = {1.6, 0.9}), ajustavel via thumbstick (Estagio 6)
-        // e deslocada pelo offset de cena/recenter acima.
-        SceneTransforms sceneForScreen = ComputeSceneTransforms(state, headCenter);
-        const Mat4 screenModel = Mat4Multiply(
-            sceneForScreen.screenModelNoScale,
-            Mat4Scale(state.screenScaleX, state.screenScaleY, 1.0f));
-
-        // Estagio 5: lerencia do ScreenMode a cada frame (mesmo que o GLES:
+        // Estagio 5: leitura do ScreenMode a cada frame (mesmo que o GLES:
         // vr_player_app.cpp:993 "m_screenMode = static_cast<ScreenMode>(get_3d_mode())")
         {
             ScreenMode newMode = static_cast<ScreenMode>(get_3d_mode());
             if (newMode != state.screenMode) {
                 StereoParams spLog = GetStereoParams(newMode, 0);
                 LOGI("Video: ScreenMode -> %s (stereoLayout=%d, polar180=%d, swapEyes=%d, cubemapLayout=%d, projectionType=%d)",
-                    ScreenModeName(newMode), spLog.stereoLayout, spLog.polar180, spLog.swapEyes, spLog.cubemapLayout, spLog.projectionType);
+                    ScreenModeName(newMode), spLog.stereoLayout, spLog.polar180 & 0xFF, spLog.swapEyes, spLog.cubemapLayout, spLog.projectionType);
+                state.screenMode = newMode;
+                ApplyDynamicAspectRatio(state);
             }
-            state.screenMode = newMode;
         }
         // T-HDR: mesma cadencia de leitura por frame que screenMode acima.
-        state.isHdr = get_video_is_hdr() != 0;
+        state.isHdr = static_cast<int>(get_video_is_hdr());
+
+        // Screen curvature synchronization requested via JNI
+        if (::g_screenCurvatureDirty.exchange(false)) {
+            state.screenCurvature = ::g_screenCurvature.load();
+            LOGI("Screen: Curvature updated via JNI -> %.2f", state.screenCurvature);
+        }
+        UpdateCurvedScreenVertexBuffer(state);
+
+        // Virtual screen position/scale — same baseline as GLES path
+        // (vr_player_app.cpp: m_screenPosition = {0, 1.5, -2},
+        //  m_screenScale = {1.6, 0.9}), adjustable via thumbstick (Stage 6)
+        // and offset by scene/recenter above.
+        SceneTransforms sceneForScreen = ComputeSceneTransforms(state, headCenter);
+        const Mat4 screenModel = Mat4Multiply(
+            sceneForScreen.screenModelNoScale,
+            Mat4Scale(state.screenScaleX, state.screenScaleY, 1.0f));
+        const bool isCurved = (state.screenCurvature > 1e-4f);
+        const Mat4 effectiveVideoModel = isCurved ? sceneForScreen.screenModelNoScale : screenModel;
+
+        // Orientação inicial vinda dos metadados do container (MP4 prhd / AVSphericalMapping)
+        {
+            float initYaw = 0.0f;
+            float initPitch = 0.0f;
+            float initRoll = 0.0f;
+            if (consume_initial_orientation(&initYaw, &initPitch, &initRoll) != 0) {
+                // Aplica rotação de yaw apenas à esfera de vídeo, preservando a calibração de cabeça
+                // do usuário em sceneYawOffset. Pitch e roll são deliberadamente ignorados para manter
+                // o horizonte nivelado e prevenir enjoo de movimento (simulator sickness) em VR.
+                state.videoSphereYawOffset = -initYaw;
+                LOGI("Video: Applied initial sphere orientation from metadata (yaw=%.2f rad / %.1f deg)",
+                     initYaw, initYaw * 180.0f / 3.14159265f);
+            }
+        }
         const bool sphereMode = IsSphereMode(state.screenMode);
         const bool stereoFlat = IsFlatStereoMode(state.screenMode);
 
@@ -8119,7 +9454,7 @@ void RenderFrame(AppState& state) {
             }
         }
 
-        // Processa upload ou limpeza de foto estática (Fase 0.3 Seção 8)
+        // Process static photo upload or cleanup (Phase 0.3 Section 8)
         if (g_photoDirty.exchange(false)) {
             bool active = g_photoActive.load();
             if (active) {
@@ -8137,12 +9472,40 @@ void RenderFrame(AppState& state) {
                     UpdateUiImageFromBytes(state, rgba.data(), w, h, state.photoImage);
                     state.photoActive = true;
                     state.photoScreenMode = static_cast<ScreenMode>(sm);
-                    LOGI("Foto: textura carregada %ux%u no modo %s", w, h, ScreenModeName(state.photoScreenMode));
+                    state.photoWidth = w;
+                    state.photoHeight = h;
+                    state.lastAspectVideoWidth = 0;
+                    state.lastAspectVideoHeight = 0;
+                    const float photoAspect = vrplayer::CalculateContentAspectRatio(w, h, state.photoScreenMode);
+                    const auto fit = vrplayer::ComputeFitBounds(photoAspect, state.baseScaleX, state.baseScaleY);
+                    const auto shown = ComputeScreenFit(state, photoAspect);
+                    state.screenScaleX = shown.x;
+                    state.screenScaleY = shown.y;
+                    state.defaultScreenScaleX = fit.x;
+                    state.defaultScreenScaleY = fit.y;
+                    LOGI("Photo: texture loaded %ux%u in mode %s (scale=%.2fx%.2f)",
+                         w, h, ScreenModeName(state.photoScreenMode), shown.x, shown.y);
                 }
             } else {
                 state.photoActive = false;
+                state.photoWidth = 0;
+                state.photoHeight = 0;
                 DestroyPhotoTexture(state);
-                LOGI("Foto: textura descarregada");
+                state.lastAspectVideoWidth = 0;
+                state.lastAspectVideoHeight = 0;
+                if (state.videoWidth > 0 && state.videoHeight > 0) {
+                    ApplyDynamicAspectRatio(state);
+                } else {
+                    const auto fit = vrplayer::ComputeFitBounds(
+                        vrplayer::kDefaultAspectRatio, state.baseScaleX, state.baseScaleY);
+                    const auto shown = ComputeScreenFit(state, vrplayer::kDefaultAspectRatio);
+                    state.screenScaleX = shown.x;
+                    state.screenScaleY = shown.y;
+                    state.defaultScreenScaleX = fit.x;
+                    state.defaultScreenScaleY = fit.y;
+                }
+                LOGI("Foto: textura descarregada (scale restaurada=%.2fx%.2f)",
+                     state.screenScaleX, state.screenScaleY);
             }
         }
 
@@ -8242,6 +9605,36 @@ void RenderFrame(AppState& state) {
             }
         }
 
+        // Direct video layer: flat video is converted into its own swapchains and shown as quad/cylinder layers; the
+        // eye buffer then only carries a hole where the screen is. Anything the predicate rejects keeps the eye buffer.
+        DestroyExpiredVideoLayerChains(state);
+        const vrplayer::VideoLayerLayout videoLayerLayout = vrplayer::VideoLayerLayoutForMode(state.screenMode);
+        const bool photoShown = state.photoActive && state.photoTextureReady;
+        vrplayer::DirectVideoLayerInputs directInputs;
+        directInputs.featureEnabled = g_directVideoLayerEnabled.load() && !g_captureRequested.load();
+        directInputs.screenMode = state.screenMode;
+        directInputs.hasVideoFrame = state.activeVideoFrame != nullptr;
+        directInputs.photoActive = photoShown;
+        // Chroma key and packed alpha only take effect while passthrough is active (see RecordVideoFlat/RecordStereoFrame).
+        const uint32_t effectiveChromaMode = state.passthroughActive ? get_chroma_key_enabled() : 0;
+        directInputs.chromaKeyActive = effectiveChromaMode == 1;
+        directInputs.packedAlphaActive = effectiveChromaMode >= 2;
+        directInputs.curvedScreen = isCurved;
+        directInputs.cylinderSupported = state.supportsCylinder;
+        directInputs.equirectSupported = state.supportsEquirect2;
+        directInputs.contentFitsLayer =
+            directInputs.hasVideoFrame &&
+            vrplayer::FitsVideoLayerWithoutDownscale(state.activeVideoFrame->width, state.activeVideoFrame->height,
+                                                     videoLayerLayout, state.videoLayer.maxWidth, state.videoLayer.maxHeight);
+        directInputs.swapchainsReady =
+            vrplayer::IsVideoLayerCandidate(directInputs) &&
+            PrepareVideoLayerChains(state, *state.activeVideoFrame, videoLayerLayout,
+                                    vrplayer::UsesPerEyeVideoLayers(videoLayerLayout, get_mono_view() != 0));
+        bool useDirectVideo = vrplayer::ShouldUseDirectVideoLayer(directInputs);
+        if (useDirectVideo) {
+            useDirectVideo = UpdateVideoLayerImages(state, *state.activeVideoFrame, videoLayerLayout);
+        }
+
         // R-07: reseta os contadores de draw call/triangulo uma vez por frame (nao por olho) —
         // agregados em AppState.lastFrameDrawCallCount/lastFrameTriangleCount ao final do loop.
         g_frameDrawCallCount = 0;
@@ -8271,7 +9664,8 @@ void RenderFrame(AppState& state) {
                 view = Mat4Multiply(Mat4Multiply(rot, trans), viewBase);
             }
             const Mat4 proj = Mat4ProjectionFromFov(views[eye].fov, 0.05f, 100.0f);
-            const Mat4 mvp  = Mat4Multiply(Mat4Multiply(proj, view), screenModel);
+            const Mat4 mvp  = Mat4Multiply(Mat4Multiply(proj, view), effectiveVideoModel);
+            const Mat4 fallbackMvp = Mat4Multiply(Mat4Multiply(proj, view), screenModel);
 
             const int32_t renderW = static_cast<int32_t>(eyeChain.width * state.renderResolutionScale);
             const int32_t renderH = static_cast<int32_t>(eyeChain.height * state.renderResolutionScale);
@@ -8308,7 +9702,7 @@ void RenderFrame(AppState& state) {
                 if (pSphere) {
                     pScreenModel = Mat4Multiply(
                         Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
-                        Mat4RotationY(state.sceneYawOffset));
+                        state.sceneOrientationMatrix);
                 } else {
                     float z = g_photoZoom.load();
                     if (z < 0.1f) z = 1.0f;
@@ -8325,10 +9719,15 @@ void RenderFrame(AppState& state) {
                 const Mat4 photoMvp = Mat4Multiply(Mat4Multiply(proj, view), pScreenModel);
                 RecordPhotoFrame(state, cmd, fb, extent, photoMvp, proj, view, headCenter, pSphere, eye, sp);
             } else if (state.activeVideoFrame != nullptr) {
-                if (sphereMode || stereoFlat) {
+                if (useDirectVideo) {
+                    RecordVideoHole(state, cmd, fb, extent, mvp, proj, view, headCenter, sphereMode);
+                } else if (sphereMode || stereoFlat) {
+                    const Mat4 sphereRot = state.bedModeEnabled ?
+                        Mat4Multiply(state.sceneOrientationMatrix, Mat4RotationY(sphereMode ? state.videoSphereYawOffset : 0.0f)) :
+                        Mat4RotationY(state.sceneYawOffset + (sphereMode ? state.videoSphereYawOffset : 0.0f));
                     const Mat4 sphereModel = Mat4Multiply(
                         Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
-                        Mat4RotationY(state.sceneYawOffset));
+                        sphereRot);
                     const Mat4 sphereMvp = Mat4Multiply(Mat4Multiply(proj, view), sphereModel);
                     StereoParams sp = GetStereoParams(state.screenMode, eye);
                     RecordStereoFrame(state, cmd, fb, extent, mvp, proj, view, headCenter, sphereMode, sphereMvp, eye, sp);
@@ -8336,7 +9735,7 @@ void RenderFrame(AppState& state) {
                     RecordVideoFlat(state, cmd, fb, extent, mvp, proj, view, headCenter, state.activeVideoFrame);
                 }
             } else {
-                RecordFallbackQuad(state, cmd, fb, extent, mvp, proj, view, headCenter);
+                RecordFallbackQuad(state, cmd, fb, extent, fallbackMvp, proj, view, headCenter);
             }
 
             if (state.queryPool != VK_NULL_HANDLE) {
@@ -8398,7 +9797,10 @@ void RenderFrame(AppState& state) {
         // O clear dos Record* passa a usar alpha 0 (ver PassthroughEnvAlpha),
         // entao tudo que nao for desenhado (fundo ao redor do video 2D) revela
         // o mundo real; o quad/esfera de video seguem opacos (alpha 1).
-        if (state.passthroughActive) {
+        // The direct video layers need the same blend: the screen hole is alpha 0 and the video layer behind it shows
+        // through. Outside the hole the clear alpha stays 1 without passthrough (PassthroughEnvAlpha), so the
+        // surroundings remain opaque.
+        if (state.passthroughActive || useDirectVideo) {
             projectionLayer.layerFlags |= XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
         }
 
@@ -8414,12 +9816,17 @@ void RenderFrame(AppState& state) {
         uiCylinder.subImage.swapchain = state.uiPanelSwapchain.handle;
         uiCylinder.subImage.imageRect.offset = {0, 0};
         uiCylinder.subImage.imageRect.extent = {static_cast<int32_t>(kUiTexWidth), static_cast<int32_t>(kUiTexHeight)};
-        XrVector3f toHead = Vec3Sub(headCenter, scene.uiCenter);
-        toHead.y = 0.0f;
-        float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
-        float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : state.sceneYawOffset;
-        uiCylinder.pose.position = Vec3Add(scene.uiCenter, Vec3RotateY({0.0f, 0.0f, state.uiCylinderRadius}, uiYaw));
-        uiCylinder.pose.orientation = QuatFromYaw(uiYaw);
+        if (state.bedModeEnabled) {
+            uiCylinder.pose.position = Vec3Add(scene.uiCenter, vrplayer::Mat4TransformVector(scene.uiModelNoScale, {0.0f, 0.0f, state.uiCylinderRadius}));
+            uiCylinder.pose.orientation = scene.uiOrientation;
+        } else {
+            XrVector3f toHead = Vec3Sub(headCenter, scene.uiCenter);
+            toHead.y = 0.0f;
+            float toHeadLen = sqrtf(toHead.x * toHead.x + toHead.z * toHead.z);
+            float uiYaw = (toHeadLen > 1e-4f) ? atan2f(toHead.x / toHeadLen, toHead.z / toHeadLen) : state.sceneYawOffset;
+            uiCylinder.pose.position = Vec3Add(scene.uiCenter, Vec3RotateY({0.0f, 0.0f, state.uiCylinderRadius}, uiYaw));
+            uiCylinder.pose.orientation = QuatFromYaw(uiYaw);
+        }
         uiCylinder.radius = state.uiCylinderRadius;
         uiCylinder.centralAngle = state.uiCylinderCentralAngle;
         uiCylinder.aspectRatio = static_cast<float>(kUiTexWidth) / static_cast<float>(kUiTexHeight);
@@ -8432,9 +9839,8 @@ void RenderFrame(AppState& state) {
         controlsCylinder.subImage.swapchain = state.controlsPanelSwapchain.handle;
         controlsCylinder.subImage.imageRect.offset = {0, 0};
         controlsCylinder.subImage.imageRect.extent = {static_cast<int32_t>(kControlsTexWidth), static_cast<int32_t>(kControlsTexHeight)};
-        Mat4 controlsRot = Mat4Multiply(Mat4RotationY(state.sceneYawOffset), Mat4RotationX(kControlsPitch));
-        controlsCylinder.pose.position = vrplayer::ComputeControlsCylinderCenter(scene.controlsCenter, state.sceneYawOffset, kControlsCylinderRadius, kControlsPitch);
-        controlsCylinder.pose.orientation = QuatFromMat4(controlsRot);
+        controlsCylinder.pose.position = vrplayer::ComputeControlsCylinderCenter3DoF(scene.controlsCenter, scene.controlsModelNoScale, kControlsCylinderRadius);
+        controlsCylinder.pose.orientation = scene.controlsOrientation;
         controlsCylinder.radius = kControlsCylinderRadius;
         controlsCylinder.centralAngle = kControlsCylinderCentralAngle;
         controlsCylinder.aspectRatio = static_cast<float>(kControlsTexWidth) / static_cast<float>(kControlsTexHeight);
@@ -8448,7 +9854,7 @@ void RenderFrame(AppState& state) {
         modalQuad.subImage.imageRect.offset = {0, 0};
         modalQuad.subImage.imageRect.extent = {static_cast<int32_t>(kModalTexWidth), static_cast<int32_t>(kModalTexHeight)};
         modalQuad.pose.position = scene.modalCenter;
-        modalQuad.pose.orientation = QuatFromYaw(scene.modalYaw);
+        modalQuad.pose.orientation = scene.modalOrientation;
         modalQuad.size = {kModalPanelScaleX, kModalPanelScaleY};
 
         // Browser panel: quad and cylinder
@@ -8460,7 +9866,7 @@ void RenderFrame(AppState& state) {
         browserQuad.subImage.imageRect.offset = {0, 0};
         browserQuad.subImage.imageRect.extent = {static_cast<int32_t>(kBrowserTexWidth), static_cast<int32_t>(kBrowserTexHeight)};
         browserQuad.pose.position = scene.browserCenter;
-        browserQuad.pose.orientation = QuatFromYaw(scene.browserYaw);
+        browserQuad.pose.orientation = scene.browserOrientation;
         browserQuad.size = {state.browserScaleX, state.browserScaleY};
 
         float browserScaleFactor = state.browserScaleX / kBrowserPanelScaleX;
@@ -8472,8 +9878,13 @@ void RenderFrame(AppState& state) {
         browserCylinder.subImage.swapchain = state.browserPanelSwapchain.handle;
         browserCylinder.subImage.imageRect.offset = {0, 0};
         browserCylinder.subImage.imageRect.extent = {static_cast<int32_t>(kBrowserTexWidth), static_cast<int32_t>(kBrowserTexHeight)};
-        browserCylinder.pose.position = Vec3Add(scene.browserCenter, Vec3RotateY({0.0f, 0.0f, cylinderRadius}, scene.browserYaw));
-        browserCylinder.pose.orientation = QuatFromYaw(scene.browserYaw);
+        if (state.bedModeEnabled) {
+            browserCylinder.pose.position = Vec3Add(scene.browserCenter, vrplayer::Mat4TransformVector(scene.browserModelNoScale, {0.0f, 0.0f, cylinderRadius}));
+            browserCylinder.pose.orientation = scene.browserOrientation;
+        } else {
+            browserCylinder.pose.position = Vec3Add(scene.browserCenter, Vec3RotateY({0.0f, 0.0f, cylinderRadius}, scene.browserYaw));
+            browserCylinder.pose.orientation = QuatFromYaw(scene.browserYaw);
+        }
         browserCylinder.radius = cylinderRadius;
         browserCylinder.centralAngle = kBrowserCylinderCentralAngle;
         browserCylinder.aspectRatio = (float)kBrowserTexWidth / (float)kBrowserTexHeight;
@@ -8571,8 +9982,12 @@ void RenderFrame(AppState& state) {
             cursorQuad.pose.orientation = uiCylinder.pose.orientation;
         } else if (state.lastHoverPanel == 2) {
             cursorQuad.pose.orientation = controlsCylinder.pose.orientation;
+        } else if (state.lastHoverPanel == 3) {
+            cursorQuad.pose.orientation = modalQuad.pose.orientation;
+        } else if (state.lastHoverPanel == 4) {
+            cursorQuad.pose.orientation = g_browserCurvedGeometry.load() ? browserCylinder.pose.orientation : browserQuad.pose.orientation;
         } else {
-            cursorQuad.pose.orientation = QuatFromYaw(state.sceneYawOffset);
+            cursorQuad.pose.orientation = state.sceneOrientation;
         }
         cursorQuad.size = {0.025f, 0.025f}; // 2.5 cm diâmetro
 
@@ -8589,38 +10004,124 @@ void RenderFrame(AppState& state) {
             modalQuad.next = &modalMqsr;
         }
 
+        // Direct video layers: one for mono content, one per eye for stereo content. The pose comes from the scene
+        // transforms (bed mode, recenter, resize and grab), the same ones the eye buffer hole is drawn with.
+        std::array<XrCompositionLayerQuad, kEyeCount> videoQuads{};
+        std::array<XrCompositionLayerCylinderKHR, kEyeCount> videoCylinders{};
+        std::array<XrCompositionLayerEquirect2KHR, kEyeCount> videoEquirects{};
+        const bool equirectVideo = vrplayer::IsEquirectVideoLayerMode(state.screenMode);
+        std::array<XrCompositionLayerSettingsFB, kEyeCount> videoSettings{};
+        if (useDirectVideo) {
+            const VideoLayerState& videoLayer = state.videoLayer;
+            const vrplayer::CurvedScreenParams curvedScreen =
+                vrplayer::ComputeCurvedScreenParams(state.screenCurvature, state.screenScaleX, state.screenScaleY);
+            for (uint32_t i = 0; i < videoLayer.chainCount; i++) {
+                const EyeSwapchain& chain = videoLayer.chains[i];
+                const XrEyeVisibility visibility = videoLayer.chainCount == 1 ? XR_EYE_VISIBILITY_BOTH
+                                                   : (i == 0 ? XR_EYE_VISIBILITY_LEFT : XR_EYE_VISIBILITY_RIGHT);
+                const XrSwapchainSubImage subImage{chain.handle, {{0, 0}, {chain.width, chain.height}}, 0};
+
+                if (state.supportsMqsr) {
+                    videoSettings[i] = {XR_TYPE_COMPOSITION_LAYER_SETTINGS_FB};
+                    videoSettings[i].layerFlags = XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SUPER_SAMPLING_BIT_FB |
+                                                  XR_COMPOSITION_LAYER_SETTINGS_QUALITY_SHARPENING_BIT_FB;
+                }
+                const void* settingsChain = state.supportsMqsr ? &videoSettings[i] : nullptr;
+
+                if (equirectVideo) {
+                    // Same orientation as the eye-buffer sphere, whose U = 0.5 faces -Z. Radius 0 is an infinite
+                    // sphere, matching a mesh that follows the head.
+                    const Mat4 sphereRotation =
+                        state.bedModeEnabled
+                            ? Mat4Multiply(state.sceneOrientationMatrix, Mat4RotationY(state.videoSphereYawOffset))
+                            : Mat4RotationY(state.sceneYawOffset + state.videoSphereYawOffset);
+                    const vrplayer::EquirectLayerAngles angles = vrplayer::ComputeEquirectLayerAngles(state.screenMode);
+                    XrCompositionLayerEquirect2KHR& equirect = videoEquirects[i];
+                    equirect = {XR_TYPE_COMPOSITION_LAYER_EQUIRECT2_KHR};
+                    equirect.next = settingsChain;
+                    equirect.space = state.localSpace;
+                    equirect.eyeVisibility = visibility;
+                    equirect.subImage = subImage;
+                    equirect.pose.position = headCenter;
+                    equirect.pose.orientation = QuatFromMat4(sphereRotation);
+                    equirect.radius = 0.0f;
+                    equirect.centralHorizontalAngle = angles.centralHorizontal;
+                    equirect.upperVerticalAngle = angles.upperVertical;
+                    equirect.lowerVerticalAngle = angles.lowerVertical;
+                } else if (isCurved) {
+                    // The cylinder is centered on its axis, one radius behind the screen apex along the screen normal
+                    // (the mesh curves towards +Z from the apex at the origin).
+                    XrCompositionLayerCylinderKHR& cylinder = videoCylinders[i];
+                    cylinder = {XR_TYPE_COMPOSITION_LAYER_CYLINDER_KHR};
+                    cylinder.next = settingsChain;
+                    cylinder.space = state.localSpace;
+                    cylinder.eyeVisibility = visibility;
+                    cylinder.subImage = subImage;
+                    cylinder.pose.position = Vec3Add(
+                        scene.screenCenter,
+                        vrplayer::Mat4TransformVector(scene.screenModelNoScale, {0.0f, 0.0f, curvedScreen.radius}));
+                    cylinder.pose.orientation = scene.screenOrientation;
+                    cylinder.radius = curvedScreen.radius;
+                    cylinder.centralAngle = curvedScreen.centralAngle;
+                    cylinder.aspectRatio = curvedScreen.arcLength / curvedScreen.height;
+                } else {
+                    XrCompositionLayerQuad& quad = videoQuads[i];
+                    quad = {XR_TYPE_COMPOSITION_LAYER_QUAD};
+                    quad.next = settingsChain;
+                    quad.space = state.localSpace;
+                    quad.eyeVisibility = visibility;
+                    quad.subImage = subImage;
+                    quad.pose.position = scene.screenCenter;
+                    quad.pose.orientation = scene.screenOrientation;
+                    quad.size = {state.screenScaleX, state.screenScaleY};
+                }
+            }
+        }
+
         // Fase 0.3 Seção 2: passthrough é o PRIMEIRO layer (fundo), antes do
         // projection. Só entra quando a layer está efetivamente resumed.
         if (state.passthroughActive && state.passthroughLayer != XR_NULL_HANDLE) {
             passthroughLayerComp.flags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
             passthroughLayerComp.space = XR_NULL_HANDLE; // não usado p/ RECONSTRUCTION
             passthroughLayerComp.layerHandle = state.passthroughLayer;
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&passthroughLayerComp);
+            submitLayer(&passthroughLayerComp);
         }
 
-        layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&projectionLayer);
+        if (useDirectVideo) {
+            for (uint32_t i = 0; i < state.videoLayer.chainCount; i++) {
+                if (equirectVideo) {
+                    submitLayer(&videoEquirects[i]);
+                } else if (isCurved) {
+                    submitLayer(&videoCylinders[i]);
+                } else {
+                    submitLayer(&videoQuads[i]);
+                }
+            }
+        }
+
+        submitLayer(&projectionLayer);
 
         if (state.uiHasFrame && state.uiAlpha > 0.05f) {
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&uiCylinder);
+            submitLayer(&uiCylinder);
         }
         if (state.browserHasFrame && state.browserActive) {
             if (g_browserCurvedGeometry.load()) {
-                layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&browserCylinder);
+                submitLayer(&browserCylinder);
             } else {
-                layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&browserQuad);
+                submitLayer(&browserQuad);
             }
         }
         if (state.controlsHasFrame && state.controlsAlpha > 0.05f) {
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&controlsCylinder);
+            submitLayer(&controlsCylinder);
         }
         if (state.modalHasFrame && state.modalAlpha > 0.05f) {
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&modalQuad);
+            submitLayer(&modalQuad);
         }
         if (beamActive) {
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&beamQuad);
+            submitLayer(&beamQuad);
         }
         if (state.cursorDotVisible && state.hasRay) {
-            layers[layerCount++] = reinterpret_cast<const XrCompositionLayerBaseHeader*>(&cursorQuad);
+            submitLayer(&cursorQuad);
         }
     }
 
@@ -8729,6 +10230,9 @@ void PollXrEvents(AppState& state) {
                     OXR(xrBeginSession(state.session, &beginInfo));
                     AttachInputsToSession(state);
                     state.sessionRunning = true;
+                    // No frames ran while the session was stopped: without this, the first frame
+                    // after resuming would measure the whole pause as one frame (freeze, bucket 7).
+                    state.lastPredictedDisplayTime = 0;
                     break;
                 }
                 case XR_SESSION_STATE_STOPPING:
@@ -8736,6 +10240,7 @@ void PollXrEvents(AppState& state) {
                     on_app_focus_lost();
                     OXR(xrEndSession(state.session));
                     state.sessionRunning = false;
+                    InvalidateVideoLayerImages(state);
                     break;
                 case XR_SESSION_STATE_EXITING:
                 case XR_SESSION_STATE_LOSS_PENDING:
@@ -8801,6 +10306,14 @@ void DestroyAppResources(AppState& state) {
     if (state.videoVertexMemory != VK_NULL_HANDLE) {
         vkFreeMemory(state.vkDevice, state.videoVertexMemory, nullptr);
         state.videoVertexMemory = VK_NULL_HANDLE;
+    }
+    if (state.curvedVideoVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.curvedVideoVertexBuffer, nullptr);
+        state.curvedVideoVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.curvedVideoVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.curvedVideoVertexMemory, nullptr);
+        state.curvedVideoVertexMemory = VK_NULL_HANDLE;
     }
 
     // 2. Recursos do Beam
@@ -9063,7 +10576,10 @@ void DestroyAppResources(AppState& state) {
         state.pipelineLayout = VK_NULL_HANDLE;
     }
 
-    // 9. Framebuffers e ImageViews dos olhos (e Depth buffers)
+    // Direct video layer: swapchains, conversion pass and hole pipeline
+    DestroyVideoLayerResources(state);
+
+    // 9. Framebuffers e ImageViews dos olhos (e Depth / MSAA buffers)
     for (auto& eyeChain : state.eyes) {
         for (auto framebuffer : eyeChain.framebuffers) {
             if (framebuffer != VK_NULL_HANDLE) {
@@ -9071,6 +10587,24 @@ void DestroyAppResources(AppState& state) {
             }
         }
         eyeChain.framebuffers.clear();
+        for (auto msaaImageView : eyeChain.msaaColorImageViews) {
+            if (msaaImageView != VK_NULL_HANDLE) {
+                vkDestroyImageView(state.vkDevice, msaaImageView, nullptr);
+            }
+        }
+        eyeChain.msaaColorImageViews.clear();
+        for (auto msaaImage : eyeChain.msaaColorImages) {
+            if (msaaImage != VK_NULL_HANDLE) {
+                vkDestroyImage(state.vkDevice, msaaImage, nullptr);
+            }
+        }
+        eyeChain.msaaColorImages.clear();
+        for (auto msaaMemory : eyeChain.msaaColorMemories) {
+            if (msaaMemory != VK_NULL_HANDLE) {
+                vkFreeMemory(state.vkDevice, msaaMemory, nullptr);
+            }
+        }
+        eyeChain.msaaColorMemories.clear();
         for (auto depthImageView : eyeChain.depthImageViews) {
             if (depthImageView != VK_NULL_HANDLE) {
                 vkDestroyImageView(state.vkDevice, depthImageView, nullptr);
@@ -9098,6 +10632,19 @@ void DestroyAppResources(AppState& state) {
     }
 
     // 10. Recursos de Ambiente Virtual 3D
+    DestroyEnvironmentTextures(state);
+    if (state.envTexturePool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.envTexturePool, nullptr);
+        state.envTexturePool = VK_NULL_HANDLE;
+    }
+    if (state.envTextureSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(state.vkDevice, state.envTextureSetLayout, nullptr);
+        state.envTextureSetLayout = VK_NULL_HANDLE;
+    }
+    if (state.envTextureSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(state.vkDevice, state.envTextureSampler, nullptr);
+        state.envTextureSampler = VK_NULL_HANDLE;
+    }
     if (state.envPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(state.vkDevice, state.envPipeline, nullptr);
         state.envPipeline = VK_NULL_HANDLE;
@@ -9271,6 +10818,7 @@ void android_main(android_app* app) {
                 XrResult enumResult = state.pfnEnumerateDisplayRefreshRatesFB(
                     state.session, rateCount, &rateCount, rates.data());
                 if (!XR_FAILED(enumResult) && !rates.empty()) {
+                    set_supported_refresh_rates(rates.data(), static_cast<uint32_t>(rates.size()));
                     float bestAtOrBelow = -1.0f;
                     float lowestAbove = -1.0f;
                     for (float hz : rates) {
@@ -9311,6 +10859,8 @@ void android_main(android_app* app) {
     // Estagio 3: YCbCr + pipeline de video + vertex buffer de video
     CreateYcbcrAndVideoPipeline(state);
     CreateVideoVertexBuffer(state);
+    CreateCurvedVideoVertexBuffer(state);
+    CreateVideoLayerResources(state);
     // Estagio 4: pipeline de UI/controles (RGBA8888 + AImageReader)
     CreateUiPipeline(state, app);
     InitCursorSwapchain(state);

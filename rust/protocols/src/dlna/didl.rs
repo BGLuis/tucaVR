@@ -1,5 +1,7 @@
 //! Parser de metadados DIDL-Lite XML para UPnP ContentDirectory (T7.3).
 
+use crate::xml_text;
+use quick_xml::XmlVersion;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 
@@ -41,13 +43,13 @@ pub fn parse_duration_to_seconds(duration_str: &str) -> Option<f64> {
 /// Faz o parse do fragmento XML DIDL-Lite extraído da resposta SOAP do ContentDirectory.
 pub fn parse_didl_lite(xml: &str) -> Result<Vec<DlnaItem>, String> {
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
 
     let mut items = Vec::new();
 
     let mut in_container = false;
     let mut in_item = false;
     let mut current_tag = String::new();
+    let mut text = String::new();
 
     // Campos temporários do elemento atual
     let mut current_id = String::new();
@@ -66,9 +68,10 @@ pub fn parse_didl_lite(xml: &str) -> Result<Vec<DlnaItem>, String> {
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Start(ref e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 let local_name = name.split(':').next_back().unwrap_or(&name).to_string();
                 current_tag = local_name.clone();
+                text.clear();
 
                 if local_name.eq_ignore_ascii_case("container") {
                     in_container = true;
@@ -85,8 +88,11 @@ pub fn parse_didl_lite(xml: &str) -> Result<Vec<DlnaItem>, String> {
                     current_upnp_class = None;
 
                     for attr in e.attributes().flatten() {
-                        let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                        let val = attr.unescape_value().unwrap_or_default().to_string();
+                        let key = attr.key.as_ref().to_string();
+                        let val = attr
+                            .normalized_value(XmlVersion::Implicit1_0)
+                            .unwrap_or_default()
+                            .to_string();
                         if key.eq_ignore_ascii_case("id") {
                             current_id = val;
                         } else if key.eq_ignore_ascii_case("parentID") {
@@ -110,8 +116,11 @@ pub fn parse_didl_lite(xml: &str) -> Result<Vec<DlnaItem>, String> {
                     current_upnp_class = None;
 
                     for attr in e.attributes().flatten() {
-                        let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                        let val = attr.unescape_value().unwrap_or_default().to_string();
+                        let key = attr.key.as_ref().to_string();
+                        let val = attr
+                            .normalized_value(XmlVersion::Implicit1_0)
+                            .unwrap_or_default()
+                            .to_string();
                         if key.eq_ignore_ascii_case("id") {
                             current_id = val;
                         } else if key.eq_ignore_ascii_case("parentID") {
@@ -120,8 +129,11 @@ pub fn parse_didl_lite(xml: &str) -> Result<Vec<DlnaItem>, String> {
                     }
                 } else if local_name.eq_ignore_ascii_case("res") && in_item {
                     for attr in e.attributes().flatten() {
-                        let key = String::from_utf8_lossy(attr.key.as_ref()).to_string();
-                        let val = attr.unescape_value().unwrap_or_default().to_string();
+                        let key = attr.key.as_ref().to_string();
+                        let val = attr
+                            .normalized_value(XmlVersion::Implicit1_0)
+                            .unwrap_or_default()
+                            .to_string();
                         if key.eq_ignore_ascii_case("size") && current_size.is_none() {
                             current_size = val.parse().ok();
                         } else if key.eq_ignore_ascii_case("duration")
@@ -137,8 +149,30 @@ pub fn parse_didl_lite(xml: &str) -> Result<Vec<DlnaItem>, String> {
                 }
             }
             Ok(Event::End(ref e)) => {
-                let name = String::from_utf8_lossy(e.name().as_ref()).to_string();
+                let name = e.name().as_ref().to_string();
                 let local_name = name.split(':').next_back().unwrap_or(&name).to_string();
+
+                let text = std::mem::take(&mut text);
+                let text = text.trim();
+                if !text.is_empty() && (in_container || in_item) {
+                    if current_tag.eq_ignore_ascii_case("title") && current_title.is_none() {
+                        current_title = Some(text.to_string());
+                    } else if (current_tag.eq_ignore_ascii_case("albumArtURI")
+                        || current_tag.eq_ignore_ascii_case("icon"))
+                        && current_album_art.is_none()
+                    {
+                        current_album_art = Some(text.to_string());
+                    } else if current_tag.eq_ignore_ascii_case("class")
+                        && current_upnp_class.is_none()
+                    {
+                        current_upnp_class = Some(text.to_string());
+                    } else if current_tag.eq_ignore_ascii_case("res")
+                        && in_item
+                        && current_res_url.is_none()
+                    {
+                        current_res_url = Some(text.to_string());
+                    }
+                }
 
                 if local_name.eq_ignore_ascii_case("container") && in_container {
                     items.push(DlnaItem {
@@ -177,28 +211,8 @@ pub fn parse_didl_lite(xml: &str) -> Result<Vec<DlnaItem>, String> {
                 }
                 current_tag.clear();
             }
-            Ok(Event::Text(ref e)) => {
-                let text = e.unescape().map_err(|err| err.to_string())?.to_string();
-                if in_container || in_item {
-                    if current_tag.eq_ignore_ascii_case("title") && current_title.is_none() {
-                        current_title = Some(text);
-                    } else if (current_tag.eq_ignore_ascii_case("albumArtURI")
-                        || current_tag.eq_ignore_ascii_case("icon"))
-                        && current_album_art.is_none()
-                    {
-                        current_album_art = Some(text);
-                    } else if current_tag.eq_ignore_ascii_case("class")
-                        && current_upnp_class.is_none()
-                    {
-                        current_upnp_class = Some(text);
-                    } else if current_tag.eq_ignore_ascii_case("res")
-                        && in_item
-                        && current_res_url.is_none()
-                    {
-                        current_res_url = Some(text);
-                    }
-                }
-            }
+            Ok(Event::Text(ref e)) => xml_text::push_text(&mut text, e),
+            Ok(Event::GeneralRef(ref e)) => xml_text::push_ref(&mut text, e)?,
             Ok(Event::Eof) => break,
             Err(e) => return Err(format!("Erro ao parsear DIDL-Lite XML: {e}")),
             _ => {}
@@ -263,5 +277,22 @@ mod tests {
         );
         assert_eq!(parse_duration_to_seconds("05:30"), Some(330.0));
         assert_eq!(parse_duration_to_seconds("120"), Some(120.0));
+    }
+
+    #[test]
+    fn entity_references_in_title_and_res_url_are_resolved_whole() {
+        let xml = r#"<DIDL-Lite xmlns="urn:schemas-upnp-org:metadata-1-0/DIDL-Lite/" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <item id="7" parentID="1">
+    <dc:title>Tom &amp; Jerry &lt;3 &#38; more</dc:title>
+    <res protocolInfo="http-get:*:video/x-matroska:*">http://nas:8200/v?id=1&amp;fmt=mkv</res>
+  </item>
+</DIDL-Lite>"#;
+
+        let items = parse_didl_lite(xml).unwrap();
+        assert_eq!(items[0].title, "Tom & Jerry <3 & more");
+        assert_eq!(
+            items[0].res_url.as_deref(),
+            Some("http://nas:8200/v?id=1&fmt=mkv")
+        );
     }
 }

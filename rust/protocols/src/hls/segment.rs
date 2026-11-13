@@ -1,11 +1,54 @@
-//! Download e descriptografia de segmentos HLS (T8.2 / RFC 8216).
+//! Download and decryption of HLS segments (T8.2 / RFC 8216).
 
-use super::playlist::{HlsKey, HlsSegment};
-use aes::cipher::{BlockDecrypt, KeyInit};
+use super::playlist::{HlsKey, HlsMap, HlsSegment};
+use aes::cipher::{BlockCipherDecrypt, KeyInit};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
-/// Baixa os bytes brutos de um segmento HLS via HTTP/HTTPS, aplicando range headers e descriptografia AES-128 se necessário.
+/// Formats an HTTP Range header value safely, checking for zero length and overflow.
+pub(crate) fn format_byte_range_header(offset: u64, length: u64) -> Result<String, String> {
+    if length == 0 {
+        return Err("Invalid byte range: length must be greater than zero".to_string());
+    }
+    let end = offset
+        .checked_add(length)
+        .and_then(|sum| sum.checked_sub(1))
+        .ok_or_else(|| "Byte range arithmetic overflow".to_string())?;
+    Ok(format!("bytes={offset}-{end}"))
+}
+
+/// Fetches raw bytes of an HLS initialization segment (EXT-X-MAP) applying byte range if present.
+pub fn fetch_init_segment(
+    client: &reqwest::blocking::Client,
+    map: &HlsMap,
+) -> Result<Vec<u8>, String> {
+    let mut req = client.get(&map.uri);
+
+    if let Some((offset, length)) = map.byte_range {
+        let range_hdr = format_byte_range_header(offset, length)?;
+        req = req.header("Range", range_hdr);
+    }
+
+    let resp = req
+        .send()
+        .map_err(|e| format!("Failed to fetch HLS init segment ({}): {e}", map.uri))?;
+
+    if !resp.status().is_success() && resp.status().as_u16() != 206 {
+        return Err(format!(
+            "HTTP error {} while fetching HLS init segment",
+            resp.status()
+        ));
+    }
+
+    let raw_bytes = resp
+        .bytes()
+        .map_err(|e| format!("Failed to read HLS init segment body: {e}"))?
+        .to_vec();
+
+    Ok(raw_bytes)
+}
+
+/// Fetches raw bytes of an HLS segment via HTTP/HTTPS, applying range headers and AES-128 decryption if needed.
 pub fn fetch_segment(
     client: &reqwest::blocking::Client,
     segment: &HlsSegment,
@@ -15,8 +58,8 @@ pub fn fetch_segment(
     let mut req = client.get(&segment.url);
 
     if let Some((offset, length)) = segment.byte_range {
-        let end = offset + length - 1;
-        req = req.header("Range", format!("bytes={offset}-{end}"));
+        let range_hdr = format_byte_range_header(offset, length)?;
+        req = req.header("Range", range_hdr);
     }
 
     let resp = req
@@ -125,7 +168,7 @@ pub fn decrypt_aes128_cbc(
     let mut prev_block = *iv;
 
     for chunk in ciphertext.as_chunks::<16>().0 {
-        let mut block = aes::Block::clone_from_slice(chunk);
+        let mut block = aes::Block::from(*chunk);
         cipher.decrypt_block(&mut block);
         for i in 0..16 {
             block[i] ^= prev_block[i];
@@ -158,9 +201,48 @@ pub fn decrypt_aes128_cbc(
 mod tests {
     use super::*;
 
+    fn hex16(s: &str) -> [u8; 16] {
+        let mut out = [0u8; 16];
+        for (i, byte) in out.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap();
+        }
+        out
+    }
+
+    // NIST SP 800-38A, F.2.2 CBC-AES128.Decrypt. The last plaintext byte is
+    // 0x10 but the block is not all 0x10, so the PKCS#7 strip keeps it.
+    #[test]
+    fn aes128_cbc_nist_sp800_38a_f22() {
+        let key = hex16("2b7e151628aed2a6abf7158809cf4f3c");
+        let iv = hex16("000102030405060708090a0b0c0d0e0f");
+        let ciphertext: Vec<u8> = [
+            "7649abac8119b246cee98e9b12e9197d",
+            "5086cb9b507219ee95db113a917678b2",
+            "73bed6b8e3c1743b7116e69e22229516",
+            "3ff1caa1681fac09120eca307586e1a7",
+        ]
+        .iter()
+        .flat_map(|b| hex16(b))
+        .collect();
+        let plaintext: Vec<u8> = [
+            "6bc1bee22e409f96e93d7e117393172a",
+            "ae2d8a571e03ac9c9eb76fac45af8e51",
+            "30c81c46a35ce411e5fbc1191a0a52ef",
+            "f69f2445df4f9b17ad2b417be66c3710",
+        ]
+        .iter()
+        .flat_map(|b| hex16(b))
+        .collect();
+
+        assert_eq!(
+            decrypt_aes128_cbc(&key, &iv, &ciphertext).unwrap(),
+            plaintext
+        );
+    }
+
     #[test]
     fn aes128_cbc_roundtrip() {
-        use aes::cipher::BlockEncrypt;
+        use aes::cipher::BlockCipherEncrypt;
 
         let key = [
             0x2b, 0x7e, 0x15, 0x16, 0x28, 0xae, 0xd2, 0xa6, 0xab, 0xf7, 0x15, 0x88, 0x09, 0xcf,
@@ -183,7 +265,7 @@ mod tests {
         let mut prev = iv;
 
         for chunk in padded.as_chunks::<16>().0 {
-            let mut block = aes::Block::clone_from_slice(chunk);
+            let mut block = aes::Block::from(*chunk);
             for i in 0..16 {
                 block[i] ^= prev[i];
             }
@@ -195,5 +277,21 @@ mod tests {
         // Decripta
         let decrypted = decrypt_aes128_cbc(&key, &iv, &ciphertext).unwrap();
         assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn test_format_byte_range_header_valid_and_edge_cases() {
+        assert_eq!(format_byte_range_header(0, 500).unwrap(), "bytes=0-499");
+        assert_eq!(
+            format_byte_range_header(1000, 200).unwrap(),
+            "bytes=1000-1199"
+        );
+
+        // Zero length must return error rather than underflowing
+        assert!(format_byte_range_header(0, 0).is_err());
+        assert!(format_byte_range_header(500, 0).is_err());
+
+        // Overflow check
+        assert!(format_byte_range_header(u64::MAX - 10, 20).is_err());
     }
 }

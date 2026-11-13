@@ -28,10 +28,13 @@ import com.tucavr.designsystem.VoidButtonStyle
 import com.tucavr.designsystem.VoidIconButton
 import com.tucavr.designsystem.VoidTheme
 import com.tucavr.designsystem.VolumeMenuModal
+import com.tucavr.designsystem.parseAudioWire
+import com.tucavr.designsystem.parseSubtitleWire
 import com.tucavr.filebrowser.NetworkThumbnailGenerator
 import com.tucavr.filebrowser.ScrubStrip
 import com.tucavr.history.historyKey
 import com.tucavr.navigation.PlaybackSource
+import com.tucavr.network.FisheyeFovPreferenceStore
 import com.tucavr.playlist.PlaybackMode
 import com.tucavr.playlist.PlaylistItem
 import com.tucavr.playlist.PlaylistQueueManager
@@ -54,6 +57,7 @@ class VRControlsPresentation(
     private val onPlayPause: () -> Unit,
 ) : Presentation(outerContext, display, android.R.style.Theme_NoTitleBar_Fullscreen) {
     internal val popupCoordinator = ControlsPopupCoordinator()
+    internal val viewCache = ControlsViewCache()
     private var currentPopupView: View? = null
     private var currentSpeed: Float = 1.0f
     private var currentVolume: Float = 1.0f
@@ -230,12 +234,26 @@ class VRControlsPresentation(
         val currentMode = activity.nativeGet3DMode()
         val meta = activity.currentMediaMetadata
         val detectedMode = meta?.format3dIndex
-        val confidence = meta?.detectionConfidence ?: 3
+        val confidence = meta?.detectionConfidence ?: 4
+        val currentFov =
+            currentSource?.let { src -> activity.fisheyeFovStore.get(src.historyKey()) }
+                ?: FisheyeFovPreferenceStore.DEFAULT_FOV
         return ScreenFormatModal(
             context = context,
             currentMode = currentMode,
             detectedMode = detectedMode,
             detectionConfidence = confidence,
+            isSwapEyes = { activity.nativeGetSwapEyes() },
+            onToggleSwapEyes = { activity.nativeToggleSwapEyes() != 0 },
+            isMonoView = { activity.nativeGetMonoView() },
+            onToggleMonoView = { activity.nativeToggleMonoView() },
+            currentFisheyeFov = currentFov,
+            onFisheyeFovSelected = { fov ->
+                activity.nativeSetFisheyeFov(fov)
+                currentSource?.let { src ->
+                    activity.fisheyeFovStore.set(src.historyKey(), fov)
+                }
+            },
             onModeSelected = { mode ->
                 activity.nativeSetScreenMode(mode)
                 currentSource?.let { src ->
@@ -262,11 +280,13 @@ class VRControlsPresentation(
     private fun createScreenModal(): View {
         val currentEnv = activity.environmentStore.getActiveEnvironment()
         val currentT = activity.screenTransformStore.get(currentEnv)
+        isScreenCurved = activity.nativeGetScreenCurvature() > 0.05f
         return ScreenSettingsModal(
             context = context,
             currentScaleX = currentT.scaleX,
             currentDistanceZ = currentT.posZ,
             isCurved = isScreenCurved,
+            isBedMode = activity.nativeGetBedMode(),
             onScaleSelected = { scaleX ->
                 val t = activity.screenTransformStore.get(currentEnv)
                 val scaleY = scaleX * (9.0f / 16.0f)
@@ -280,13 +300,18 @@ class VRControlsPresentation(
             },
             onCurvedToggled = { curved ->
                 isScreenCurved = curved
+                activity.nativeSetScreenCurvature(if (curved) 0.5f else 0.0f)
                 activity.setBrowserGeometryMode(curved)
+            },
+            onBedModeToggled = { bedMode ->
+                activity.nativeSetBedMode(bedMode)
             },
             onRecenter = {
                 activity.screenTransformStore.reset(currentEnv)
                 val defaultT = ScreenTransformStore.getDefaultTransform(currentEnv)
                 activity.nativeSetScreenTransform(defaultT.posX, defaultT.posY, defaultT.posZ, defaultT.scaleX, defaultT.scaleY)
                 activity.nativeResetScreenPosition()
+                activity.nativeRecenter()
                 dismissOpenPopup()
             },
             onDismiss = { dismissOpenPopup() },
@@ -304,6 +329,10 @@ class VRControlsPresentation(
             },
             onResetAnchor = {
                 activity.nativeResetScreenPosition()
+                activity.nativeRecenter()
+            },
+            onImportEnvironment = {
+                VRActivity.openEnvironmentFilePicker(activity)
             },
             onDismiss = { dismissOpenPopup() },
         )
@@ -313,6 +342,13 @@ class VRControlsPresentation(
         val trackCount = activity.nativeGetSubtitleTrackCount()
         val currentTrack = activity.nativeGetSubtitleTrack()
         val currentOffsetMs = activity.nativeGetSubtitleOffsetMs()
+        val wire = activity.nativeGetSubtitleTrackInfoWire()
+        val trackItems =
+            parseSubtitleWire(
+                wire = wire,
+                trackCount = trackCount,
+                fallbackTracks = activity.currentMediaMetadata?.subtitleTracks ?: emptyList(),
+            )
         return SubtitleSelectionModal(
             context = context,
             trackCount = trackCount,
@@ -325,11 +361,18 @@ class VRControlsPresentation(
                 activity.nativeSetSubtitleOffsetMs(offsetMs)
             },
             onDismiss = { dismissOpenPopup() },
+            trackItems = trackItems,
         )
     }
 
     private fun createAudioModal(): View {
-        val tracks = activity.currentMediaMetadata?.tracks ?: emptyList()
+        var tracks = activity.currentMediaMetadata?.audioTracks ?: emptyList()
+        if (tracks.isEmpty()) {
+            val wire = activity.nativeGetAudioTrackInfoWire()
+            if (!wire.isNullOrBlank()) {
+                tracks = parseAudioWire(wire)
+            }
+        }
         return AudioTrackModal(
             context = context,
             tracks = tracks,
@@ -388,15 +431,23 @@ class VRControlsPresentation(
         }
     }
 
+    private fun TextView.setTextIfChanged(newText: CharSequence): Boolean {
+        if (text?.toString() != newText.toString()) {
+            text = newText
+            return true
+        }
+        return false
+    }
+
     private fun updateSpeedButtonLabel(speed: Float) {
         if (::btnSpeed.isInitialized) {
-            btnSpeed.text = formatSpeedText(speed)
+            btnSpeed.setTextIfChanged(formatSpeedText(speed))
         }
     }
 
     fun updateTitle(title: String) {
         if (::titleLabel.isInitialized) {
-            titleLabel.text = title
+            titleLabel.setTextIfChanged(title)
         }
     }
 
@@ -421,6 +472,7 @@ class VRControlsPresentation(
         if (::loadingSpinner.isInitialized) {
             loadingSpinner.visibility = View.GONE
         }
+        viewCache.reset()
     }
 
     fun updateProgress(
@@ -430,11 +482,20 @@ class VRControlsPresentation(
         totalDuration = totalSec
         lastKnownCurrentSec = currentSec
         if (!isDragging && totalSec > 0 && (System.currentTimeMillis() - lastSeekTime > 800)) {
-            seekBar.progress = ((currentSec / totalSec) * SEEK_BAR_MAX).toInt()
-            timeLabel.text = formatTime(currentSec)
+            val progress = ((currentSec / totalSec) * SEEK_BAR_MAX).toInt()
+            if (::seekBar.isInitialized && viewCache.shouldWriteProgress(progress)) {
+                seekBar.progress = progress
+            }
+            val timeText = formatTime(currentSec)
+            if (::timeLabel.isInitialized && viewCache.shouldWriteTime(timeText)) {
+                timeLabel.text = timeText
+            }
         }
         if (::totalTimeLabel.isInitialized) {
-            totalTimeLabel.text = formatTime(totalSec)
+            val totalTimeText = formatTime(totalSec)
+            if (viewCache.shouldWriteTotalTime(totalTimeText)) {
+                totalTimeLabel.text = totalTimeText
+            }
         }
         lastKnownMode = activity.nativeGet3DMode()
     }
@@ -523,8 +584,11 @@ class VRControlsPresentation(
         isLoading: Boolean,
         isPlaying: Boolean,
     ) {
-        loadingSpinner.visibility = if (isLoading) View.VISIBLE else View.GONE
-        if (::btnPlayPause.isInitialized) {
+        val targetLoadingVisibility = if (isLoading) View.VISIBLE else View.GONE
+        if (::loadingSpinner.isInitialized && loadingSpinner.visibility != targetLoadingVisibility) {
+            loadingSpinner.visibility = targetLoadingVisibility
+        }
+        if (viewCache.shouldWritePlaying(isPlaying) && ::btnPlayPause.isInitialized) {
             btnPlayPause.setImageResource(if (isPlaying) R.drawable.icon_pause else R.drawable.icon_play)
         }
     }
@@ -997,7 +1061,10 @@ class VRControlsPresentation(
                         ) {
                             if (fromUser && totalDuration > 0) {
                                 val target = (progress.toFloat() / SEEK_BAR_MAX) * totalDuration
-                                timeLabel.text = formatTime(target)
+                                val timeText = formatTime(target)
+                                if (viewCache.shouldWriteTime(timeText)) {
+                                    timeLabel.text = timeText
+                                }
                                 updateTooltipPosition(progress)
                                 updateScrubPreview(target)
                             }
@@ -1017,7 +1084,10 @@ class VRControlsPresentation(
                             lastSeekTime = System.currentTimeMillis()
                             if (totalDuration > 0) {
                                 val target = (progress.toFloat() / SEEK_BAR_MAX) * totalDuration
-                                timeLabel.text = formatTime(target)
+                                val timeText = formatTime(target)
+                                if (viewCache.shouldWriteTime(timeText)) {
+                                    timeLabel.text = timeText
+                                }
                                 activity.nativeSeekVideo(target)
                             }
                         }

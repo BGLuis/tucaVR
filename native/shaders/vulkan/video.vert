@@ -9,7 +9,7 @@ layout(location = 1) in vec2 inTexCoord;
 layout(push_constant) uniform PushConstants {
     mat4  mvp;
     float sharpness;        // 0.0 = amostragem bilinear direta, > 0.0 = forca do kernel SGSR1
-    int   upscalingMode;    // 0 = Off, 1 = Quality, 2 = Performance, 3 = Auto
+    float hdrLuminance;    // viewer brightness multiplier on the HDR exposure, 1.0 = neutral
     int   isHdr;            // T-HDR: 1 = fonte PQ/HLG, aplicar tonemap no fragment shader
     float texelWidth;       // 1.0 / videoWidth
     float texelHeight;      // 1.0 / videoHeight
@@ -22,7 +22,7 @@ layout(push_constant) uniform PushConstants {
 
 layout(location = 0) out vec2 vTexCoord;
 layout(location = 1) flat out float vSharpness;
-layout(location = 2) flat out int vUpscalingMode;
+layout(location = 2) flat out float vHdrLuminance;
 layout(location = 3) flat out int vIsHdr;
 layout(location = 4) flat out vec2 vTexelSize;
 layout(location = 5) flat out int vChromaKeyEnabled;
@@ -35,7 +35,7 @@ void main() {
     gl_Position = pc.mvp * vec4(inPosition, 1.0);
     vTexCoord = inTexCoord;
     vSharpness = pc.sharpness;
-    vUpscalingMode = pc.upscalingMode;
+    vHdrLuminance = pc.hdrLuminance;
     vIsHdr = pc.isHdr;
     vTexelSize = vec2(pc.texelWidth, pc.texelHeight);
     vChromaKeyEnabled = pc.chromaKeyEnabled;

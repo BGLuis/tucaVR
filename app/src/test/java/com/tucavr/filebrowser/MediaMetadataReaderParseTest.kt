@@ -67,7 +67,7 @@ class MediaMetadataReaderParseTest {
         assertEquals("mp4", meta.container)
         assertEquals(0L, meta.durationMs)
         assertEquals(0, meta.format3dIndex)
-        assertEquals(3, meta.detectionConfidence)
+        assertEquals(4, meta.detectionConfidence)
         assertTrue(meta.tags.isEmpty())
         assertTrue(meta.tracks.isEmpty())
     }
@@ -101,5 +101,191 @@ class MediaMetadataReaderParseTest {
         assertEquals(1, meta.subtitleTracks.size)
         assertEquals("subrip", meta.subtitleTracks[0].codec)
         assertEquals("", meta.subtitleTracks[0].language)
+    }
+
+    @Test
+    fun roundTripSerializationCacheEntry() {
+        val tracks =
+            listOf(
+                TrackInfo(
+                    kind = TrackKind.VIDEO,
+                    ordinal = 0,
+                    codec = "hevc",
+                    language = "",
+                    title = "Video",
+                    width = 3840,
+                    height = 2160,
+                    fpsMilli = 60000,
+                    channels = 0,
+                    sampleRate = 0,
+                    bitRate = 20000000L,
+                    isDefault = true,
+                ),
+                TrackInfo(
+                    kind = TrackKind.AUDIO,
+                    ordinal = 1,
+                    codec = "aac",
+                    language = "por",
+                    title = "Portuguese",
+                    width = 0,
+                    height = 0,
+                    fpsMilli = 0,
+                    channels = 6,
+                    sampleRate = 48000,
+                    bitRate = 384000L,
+                    isDefault = false,
+                ),
+                TrackInfo(
+                    kind = TrackKind.SUBTITLE,
+                    ordinal = 2,
+                    codec = "subrip",
+                    language = "eng",
+                    title = "English Sub",
+                    width = 0,
+                    height = 0,
+                    fpsMilli = 0,
+                    channels = 0,
+                    sampleRate = 0,
+                    bitRate = 0L,
+                    isDefault = false,
+                ),
+            )
+        val tags = listOf("title" to "Test Title", "artist" to "Test Artist")
+
+        val tracksJson = serializeTracks(tracks)
+        val tagsJson = serializeTags(tags)
+
+        val deserializedTracks = deserializeTracks(tracksJson)
+        val deserializedTags = deserializeTags(tagsJson)
+
+        assertEquals(tracks, deserializedTracks)
+        assertEquals(tags, deserializedTags)
+
+        val entry =
+            MediaMetadataCacheEntry(
+                mediaKey = "test_key",
+                container = "mkv",
+                containerLong = "Matroska",
+                durationMs = 120000L,
+                bitRate = 25000000L,
+                format3dIndex = 2,
+                detectionConfidence = 3,
+                videoWidth = 3840,
+                videoHeight = 2160,
+                videoCodec = "hevc",
+                fetchedAt = 1000L,
+                tracksJson = tracksJson,
+                tagsJson = tagsJson,
+                fileSizeBytes = 500000000L,
+            )
+
+        val meta = entry.toMediaMetadata()
+        assertEquals("mkv", meta.container)
+        assertEquals("Matroska", meta.containerLong)
+        assertEquals(120000L, meta.durationMs)
+        assertEquals(25000000L, meta.bitRate)
+        assertEquals(2, meta.format3dIndex)
+        assertEquals(3, meta.detectionConfidence)
+        assertEquals(tags, meta.tags)
+        assertEquals(tracks, meta.tracks)
+        assertEquals(1, meta.videoTracks.size)
+        assertEquals(1, meta.audioTracks.size)
+        assertEquals(1, meta.subtitleTracks.size)
+    }
+
+    @Test
+    fun parsesSubtitleWireAndAudioWire() {
+        val subWire = "por\tPortuguês\t0\neng\tEnglish\t1"
+        val subItems = com.tucavr.designsystem.parseSubtitleWire(subWire)
+        assertEquals(2, subItems.size)
+        assertEquals(0, subItems[0].index)
+        assertEquals("por", subItems[0].language)
+        assertEquals("Português", subItems[0].title)
+        assertEquals(false, subItems[0].isExternal)
+        assertEquals(1, subItems[1].index)
+        assertEquals("eng", subItems[1].language)
+        assertEquals("English", subItems[1].title)
+        assertEquals(true, subItems[1].isExternal)
+
+        val audioWire = "0\taac\tpor\tDublado\t6\t48000\n1\tac3\teng\tOriginal\t2\t44100"
+        val audioTracks = com.tucavr.designsystem.parseAudioWire(audioWire)
+        assertEquals(2, audioTracks.size)
+        assertEquals(0, audioTracks[0].ordinal)
+        assertEquals("aac", audioTracks[0].codec)
+        assertEquals("por", audioTracks[0].language)
+        assertEquals("Dublado", audioTracks[0].title)
+        assertEquals(6, audioTracks[0].channels)
+        assertEquals(48000, audioTracks[0].sampleRate)
+        assertEquals(TrackKind.AUDIO, audioTracks[0].kind)
+
+        assertEquals(1, audioTracks[1].ordinal)
+        assertEquals("ac3", audioTracks[1].codec)
+        assertEquals("eng", audioTracks[1].language)
+        assertEquals("Original", audioTracks[1].title)
+        assertEquals(2, audioTracks[1].channels)
+        assertEquals(44100, audioTracks[1].sampleRate)
+    }
+
+    @Test
+    fun handlesCorruptJsonInDeserialize() {
+        assertEquals(emptyList<TrackInfo>(), deserializeTracks("not valid json"))
+        assertEquals(emptyList<TrackInfo>(), deserializeTracks("{ \"not\": \"an array\" }"))
+        assertEquals(emptyList<Pair<String, String>>(), deserializeTags("invalid json"))
+    }
+
+    @Test
+    fun parsesAudioWireWithFewerFieldsGracefully() {
+        val audioWire = "0\topus\tjpn\tJapanese"
+        val audioTracks = com.tucavr.designsystem.parseAudioWire(audioWire)
+        assertEquals(1, audioTracks.size)
+        assertEquals(0, audioTracks[0].ordinal)
+        assertEquals("opus", audioTracks[0].codec)
+        assertEquals("jpn", audioTracks[0].language)
+        assertEquals("Japanese", audioTracks[0].title)
+        assertEquals(2, audioTracks[0].channels)
+        assertEquals(48000, audioTracks[0].sampleRate)
+    }
+
+    @Test
+    fun parsesSubtitleWirePreservingFallbackCodecAndPaddingMissing() {
+        val fallback =
+            listOf(
+                TrackInfo(
+                    kind = TrackKind.SUBTITLE,
+                    ordinal = 0,
+                    codec = "subrip",
+                    language = "por",
+                    title = "Legenda PT",
+                    width = 0,
+                    height = 0,
+                    fpsMilli = 0,
+                    channels = 0,
+                    sampleRate = 0,
+                    bitRate = 0L,
+                    isDefault = false,
+                ),
+                TrackInfo(
+                    kind = TrackKind.SUBTITLE,
+                    ordinal = 1,
+                    codec = "ass",
+                    language = "eng",
+                    title = "English Sub",
+                    width = 0,
+                    height = 0,
+                    fpsMilli = 0,
+                    channels = 0,
+                    sampleRate = 0,
+                    bitRate = 0L,
+                    isDefault = false,
+                ),
+            )
+        val wire = "por\tLegenda PT\t0"
+        val items = com.tucavr.designsystem.parseSubtitleWire(wire, trackCount = 2, fallbackTracks = fallback)
+        assertEquals(2, items.size)
+        assertEquals("subrip", items[0].codec)
+        assertEquals("por", items[0].language)
+        assertEquals(1, items[1].index)
+        assertEquals("ass", items[1].codec)
+        assertEquals("eng", items[1].language)
     }
 }

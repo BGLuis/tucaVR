@@ -12,12 +12,11 @@
 //! `cargo test -p protocols -- --ignored`.
 mod common;
 
-use common::TcpProxy;
+use common::{TcpProxy, sha256_hex};
 use protocols::prefetch::PrefetchReader;
 use protocols::sftp::{
     SftpFileSource, SftpTarget, close_pooled_sessions, list_directory, scan_has_media,
 };
-use sha2::{Digest, Sha256};
 use std::io::Read;
 
 fn env_or(key: &str, default: &str) -> String {
@@ -91,12 +90,6 @@ fn expected_sha256() -> String {
     std::env::var("VRPLAYER_TEST_FILE_SHA256").expect(
         "VRPLAYER_TEST_FILE_SHA256 nao definido — rode via scripts/test-network-protocols.sh",
     )
-}
-
-fn sha256_hex(data: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(data);
-    format!("{:x}", hasher.finalize())
 }
 
 /// Navegacao de diretorio via autenticacao por senha (T6.2) — tambem cobre o

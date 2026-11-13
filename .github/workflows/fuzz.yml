@@ -1,0 +1,83 @@
+name: Cargo Fuzz (Nightly)
+
+on:
+  schedule:
+    # Daily at 04:00 UTC
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      duration_seconds:
+        description: 'Fuzzing duration per target in seconds (default: 600 = 10 min)'
+        type: number
+        default: 600
+
+# Least privilege at the global scope
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  fuzz:
+    name: Fuzz (${{ matrix.target }})
+    if: github.repository == 'BGLuis/vr-multmidia' || github.repository == 'BGLuis/tucaVR'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    permissions:
+      contents: read # Needed to check out the repository and seed corpora
+    # Non-blocking nightly job: continue across matrix entries even if one target finds a crash
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - pgs
+          - ass
+          - hls
+          - dash
+          - didl
+          - nfs_rpc
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Setup Rust (Nightly)
+        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # nightly
+        with:
+          toolchain: nightly
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: "rust/fuzz -> rust/fuzz/target"
+          shared-key: "fuzz-nightly"
+
+      - name: Cache cargo-fuzz
+        id: cache-cargo-fuzz
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          key: ${{ runner.os }}-cargo-fuzz-bin-v1
+
+      - name: Install cargo-fuzz
+        if: steps.cache-cargo-fuzz.outputs.cache-hit != 'true'
+        run: cargo install cargo-fuzz --locked
+
+      - name: Run fuzz target (10 min)
+        working-directory: rust/fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+          DURATION: ${{ inputs.duration_seconds || 600 }}
+        run: |
+          cargo +nightly fuzz run "$TARGET" -- -max_total_time="$DURATION"
+
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-crashes-${{ matrix.target }}-${{ github.run_id }}
+          path: rust/fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: ignore
+          retention-days: 14

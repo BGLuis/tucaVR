@@ -1,0 +1,19 @@
+# Baseline of permitted AndroidManifest.xml permissions and features (Issue #215).
+# Any additions or removals must be intentionally reviewed and updated here.
+
+permission:android.permission.READ_EXTERNAL_STORAGE
+permission:android.permission.MANAGE_EXTERNAL_STORAGE
+permission:android.permission.INTERNET
+permission:android.permission.ACCESS_WIFI_STATE
+permission:android.permission.CHANGE_WIFI_MULTICAST_STATE
+permission:android.permission.ACCESS_NETWORK_STATE
+permission:android.permission.FOREGROUND_SERVICE
+permission:android.permission.FOREGROUND_SERVICE_DATA_SYNC
+permission:android.permission.POST_NOTIFICATIONS
+permission:com.oculus.permission.USE_SCENE
+permission:com.oculus.permission.HAND_TRACKING
+
+feature:oculus.software.overlay_keyboard
+feature:com.oculus.feature.PASSTHROUGH
+feature:android.hardware.vr.headtracking
+feature:oculus.software.handtracking

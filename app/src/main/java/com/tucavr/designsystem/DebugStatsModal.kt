@@ -198,6 +198,7 @@ class DebugStatsModal(
             listOf(
                 "source" to context.getString(R.string.debug_stats_label_source),
                 "net_speed" to context.getString(R.string.debug_stats_label_network_speed),
+                "net_link_speed" to context.getString(R.string.debug_stats_label_network_link_speed),
                 "buffer_queue" to context.getString(R.string.debug_stats_label_buffer_queue),
                 "presentation_pending" to context.getString(R.string.debug_stats_label_presentation_pending),
                 "fetch_latency" to context.getString(R.string.debug_stats_label_fetch_latency),
@@ -383,7 +384,7 @@ class DebugStatsModal(
         val stats = DebugStatsParser.parse(text) ?: return
 
         val videoTrack = meta?.videoTracks?.firstOrNull()
-        val audioTrack = meta?.audioTracks?.firstOrNull()
+        val audioTrack = meta?.audioTracks?.getOrNull(stats.audioTrackIndex) ?: meta?.audioTracks?.firstOrNull()
 
         // 1. Vídeo & Renderização
         val bottleneckText =
@@ -461,9 +462,23 @@ class DebugStatsModal(
         debugStatValueViews["drawcalls"]?.text = "${stats.drawCallCount} / ${stats.triangleCount}"
 
         // 2. Áudio & Sincronização
+        val resolvedAudio =
+            audioTrack ?: (context as? com.tucavr.VRActivity)?.nativeGetAudioTrackInfoWire()?.let { wire ->
+                parseAudioWire(wire).getOrNull(stats.audioTrackIndex) ?: parseAudioWire(wire).firstOrNull()
+            }
         val audioCodecStr =
-            if (audioTrack != null && audioTrack.codec.isNotEmpty()) {
-                "${audioTrack.codec.uppercase()} (${audioTrack.channels}ch, ${audioTrack.sampleRate / 1000}kHz)"
+            if (resolvedAudio != null && resolvedAudio.codec.isNotEmpty()) {
+                val sampleRateStr = if (resolvedAudio.sampleRate > 0) "${resolvedAudio.sampleRate / 1000}kHz" else ""
+                val details =
+                    listOfNotNull(
+                        if (resolvedAudio.channels > 0) "${resolvedAudio.channels}ch" else null,
+                        sampleRateStr.ifEmpty { null },
+                    ).joinToString(", ")
+                if (details.isNotEmpty()) {
+                    "${resolvedAudio.codec.uppercase()} ($details)"
+                } else {
+                    resolvedAudio.codec.uppercase()
+                }
             } else {
                 "—"
             }
@@ -506,7 +521,8 @@ class DebugStatsModal(
             }
         debugStatValueViews["source"]?.text = srcText
 
-        setValue("net_speed", String.format(Locale.US, "%.2f MB/s", stats.netMBs), stats.networkStatsAgeMs)
+        setValue("net_speed", String.format(Locale.US, "%.2f MiB/s", stats.netMBs), stats.networkStatsAgeMs)
+        setValue("net_link_speed", String.format(Locale.US, "%.2f MiB/s", stats.netBlockMBs), stats.networkStatsAgeMs)
         setValue("buffer_queue", "${stats.queueDepth} packets", stats.networkStatsAgeMs)
         setValue("presentation_pending", "${stats.presentationPending} frames", stats.networkStatsAgeMs)
         setValue("fetch_latency", String.format(Locale.US, "%.1f ms", stats.netLastFetchMs), stats.networkStatsAgeMs)
@@ -536,7 +552,7 @@ class DebugStatsModal(
      * F5: acumula a amostra corrente nos históricos rolantes e redesenha os 5 gráficos.
      */
     private fun updateCharts(stats: NativeDebugStats) {
-        val bufferHealthSeconds = if (stats.videoFps > 0f) stats.queueDepth / stats.videoFps else 0f
+        val bufferHealthSeconds = stats.bufferedAheadSec
 
         bottleneckHistory.pushCapped(BottleneckStageAnalyzer.analyze(stats))
         bufferHealthHistory.pushCapped(bufferHealthSeconds)

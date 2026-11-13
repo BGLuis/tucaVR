@@ -17,9 +17,8 @@ object FeatureFlags {
         // perceptiveis ao arrastar o seekbar (ver VRControlsPresentation).
         SCRUB_PREVIEW("scrub_preview", defaultEnabled = false),
 
-        // Fase 0.4 T5: Foveated Rendering fixo (XR_FB_foveation, so caminho
-        // Vulkan — ver vr_player_app_vulkan.cpp::ApplyFoveation). Desligado
-        // por padrao: nunca validado em headset real ate agora.
+        // Phase 0.4 T5: fixed foveated rendering (XR_FB_foveation, Vulkan only, see ApplyFoveation).
+        // Off: it has no effect on Vulkan yet (#232, HARDWARE-VALIDATION-CHECKLIST.md Block 1).
         FOVEATED_RENDERING("foveated_rendering", defaultEnabled = false),
 
         // Fase 0.3 Seção 3/4: Áudio Espacial 3D (HRTF Binaural para 5.1/7.1 e Ambisonics).
@@ -55,10 +54,8 @@ object FeatureFlags {
         // Chroma Key: recorte de fundo (verde/azul) para vídeos 3D/2D em Passthrough
         CHROMA_KEY("chroma_key", defaultEnabled = false),
 
-        // Modo Ambiente: halo de luz atrás da tela derivado da cor
-        // do frame (bias lighting), só ambiente Void, só caminho Vulkan — ver
-        // vr_player_app_vulkan.cpp::shouldDrawAmbientHalo. Desligado por padrão:
-        // nunca validado em headset real até agora.
+        // Ambient mode: light halo behind the screen from the frame colour (Vulkan only, see vr_player_input_vulkan.h).
+        // Off: cost passed, but colour latency and flicker are unchecked (#233, HARDWARE-VALIDATION-CHECKLIST.md Block 4).
         AMBIENT_MODE("ambient_mode", defaultEnabled = false),
 
         // RF-ENV-007: Modo Noturno (aquecimento ~3000K para redução de luz azul)
@@ -72,6 +69,13 @@ object FeatureFlags {
 
         // Vibração háptica no hover ao apontar controles (Issue #100)
         HOVER_HAPTICS("hover_haptics", defaultEnabled = true),
+
+        // Match display refresh rate to content frame rate (Issue #174)
+        MATCH_CONTENT_FRAME_RATE("match_content_frame_rate", defaultEnabled = true),
+
+        // Flat 2D/SBS/OU video as its own compositor layer instead of the eye buffer (Vulkan only).
+        // On: unvalidated on a headset, so the setting stays available for A/B comparison.
+        DIRECT_VIDEO_LAYER("direct_video_layer", defaultEnabled = true),
     }
 
     /** Chave usada para persistir o brilho do ambiente 3D/Skybox (0.0f a 1.0f). Padrão: 1.0f (100%). */

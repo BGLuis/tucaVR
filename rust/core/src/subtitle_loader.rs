@@ -137,7 +137,7 @@ pub fn load_embedded_subtitle(path: &str, stream_index: usize) -> Result<LoadedS
     loop {
         let (sidx, packet) = match demuxer.read_packet() {
             ReadPacketOutcome::Packet(i, p) => (i, p),
-            ReadPacketOutcome::Eof => break,
+            ReadPacketOutcome::Eof | ReadPacketOutcome::Cancelled => break,
             ReadPacketOutcome::Error(e) => return Err(format!("erro de leitura: {e}")),
         };
         if sidx != stream_index {

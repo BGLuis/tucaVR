@@ -1121,7 +1121,7 @@ class PassthroughSettingsModal(
         posSection.addView(grabHintText)
 
         val btnResetScreen =
-            VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+            VoidButton(context, VoidButtonStyle.SECONDARY, isCompact = true).apply {
                 text = context.getString(R.string.passthrough_reset_screen_button)
                 layoutParams =
                     LinearLayout.LayoutParams(

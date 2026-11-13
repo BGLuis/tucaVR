@@ -57,6 +57,7 @@ static CONTROLLER: Lazy<Arc<Mutex<PlaybackController>>> = Lazy::new(|| {
     log::set_max_level(log::LevelFilter::Info);
     // Sem isto, panic em thread de fundo morre silencioso: stderr nao vai pro logcat neste app.
     std::panic::set_hook(Box::new(|info| log::error!("PANIC: {info}")));
+    core::log::set_error_callback(set_last_playback_error);
     Arc::new(Mutex::new(PlaybackController::new()))
 });
 
@@ -206,6 +207,11 @@ pub extern "C" fn get_audio_thread_tid() -> i32 {
 static SCREEN_MODE: AtomicU32 = AtomicU32::new(0);
 const SCREEN_MODE_COUNT: u32 = 17;
 static SWAP_EYES: AtomicBool = AtomicBool::new(false);
+static MONO_VIEW: AtomicBool = AtomicBool::new(false);
+static INITIAL_ORIENTATION_PENDING: AtomicBool = AtomicBool::new(false);
+static INITIAL_ORIENTATION_YAW: AtomicU32 = AtomicU32::new(0);
+static INITIAL_ORIENTATION_PITCH: AtomicU32 = AtomicU32::new(0);
+static INITIAL_ORIENTATION_ROLL: AtomicU32 = AtomicU32::new(0);
 
 // Bug reportado em validacao real de headset: o painel "Adicionar servidor"
 // (e qualquer outro com EditText) ficava transparente durante a digitacao,
@@ -542,6 +548,24 @@ pub extern "C" fn quality_controller_get_reason() -> u32 {
 }
 
 #[no_mangle]
+pub extern "C" fn set_supported_refresh_rates(rates: *const f32, count: u32) {
+    if rates.is_null() || count == 0 {
+        return;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(rates, count as usize) };
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        qc.set_supported_refresh_rates(slice.to_vec());
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn set_match_content_frame_rate(enabled: u32) {
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        qc.set_match_content_frame_rate(enabled != 0);
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn quality_controller_evaluate_and_resolve(
     thermal_level: u32,
     smoothed_gpu_time_ms: f32,
@@ -661,6 +685,18 @@ fn apply_screen_mode_after_load(controller: &core::playback::PlaybackController)
         controller.detected_screen_mode()
     };
     set_3d_mode(final_mode);
+
+    if let Some(pose) = controller.initial_pose() {
+        INITIAL_ORIENTATION_YAW.store(pose.yaw.to_bits(), Ordering::Relaxed);
+        INITIAL_ORIENTATION_PITCH.store(pose.pitch.to_bits(), Ordering::Relaxed);
+        INITIAL_ORIENTATION_ROLL.store(pose.roll.to_bits(), Ordering::Relaxed);
+        INITIAL_ORIENTATION_PENDING.store(true, Ordering::Release);
+    } else {
+        INITIAL_ORIENTATION_YAW.store(0, Ordering::Relaxed);
+        INITIAL_ORIENTATION_PITCH.store(0, Ordering::Relaxed);
+        INITIAL_ORIENTATION_ROLL.store(0, Ordering::Relaxed);
+        INITIAL_ORIENTATION_PENDING.store(true, Ordering::Release);
+    }
 }
 
 /// T9 (historico): ao carregar um arquivo novo, o modo 3D da reproducao
@@ -677,6 +713,40 @@ fn apply_screen_mode_after_load(controller: &core::playback::PlaybackController)
 #[no_mangle]
 pub extern "C" fn reset_3d_mode() {
     SCREEN_MODE.store(0, Ordering::Relaxed);
+    INITIAL_ORIENTATION_YAW.store(0, Ordering::Relaxed);
+    INITIAL_ORIENTATION_PITCH.store(0, Ordering::Relaxed);
+    INITIAL_ORIENTATION_ROLL.store(0, Ordering::Relaxed);
+    INITIAL_ORIENTATION_PENDING.store(true, Ordering::Release);
+}
+
+/// Consome a orientação inicial da câmera/cena (yaw, pitch, roll em radianos)
+/// especificada nos metadados do container de vídeo (ex: MP4 prhd / AVSphericalMapping).
+///
+/// Retorna 1 se uma nova orientação estiver disponível e preenche os ponteiros não-nulos;
+/// retorna 0 se nenhuma orientação inicial pendente existir.
+#[no_mangle]
+pub extern "C" fn consume_initial_orientation(
+    yaw: *mut f32,
+    pitch: *mut f32,
+    roll: *mut f32,
+) -> u32 {
+    if INITIAL_ORIENTATION_PENDING.swap(false, Ordering::AcqRel) {
+        if !yaw.is_null() {
+            let bits = INITIAL_ORIENTATION_YAW.load(Ordering::Relaxed);
+            unsafe { *yaw = f32::from_bits(bits) };
+        }
+        if !pitch.is_null() {
+            let bits = INITIAL_ORIENTATION_PITCH.load(Ordering::Relaxed);
+            unsafe { *pitch = f32::from_bits(bits) };
+        }
+        if !roll.is_null() {
+            let bits = INITIAL_ORIENTATION_ROLL.load(Ordering::Relaxed);
+            unsafe { *roll = f32::from_bits(bits) };
+        }
+        1
+    } else {
+        0
+    }
 }
 
 /// T1.5: "swap eyes" — inverte qual metade do frame SBS/OU vai pro olho
@@ -698,6 +768,18 @@ pub extern "C" fn toggle_swap_eyes() -> u32 {
 #[no_mangle]
 pub extern "C" fn get_swap_eyes() -> u32 {
     SWAP_EYES.load(Ordering::Relaxed) as u32
+}
+
+#[no_mangle]
+pub extern "C" fn toggle_mono_view() -> u32 {
+    let next = !MONO_VIEW.load(Ordering::Relaxed);
+    MONO_VIEW.store(next, Ordering::Relaxed);
+    next as u32
+}
+
+#[no_mangle]
+pub extern "C" fn get_mono_view() -> u32 {
+    MONO_VIEW.load(Ordering::Relaxed) as u32
 }
 
 #[no_mangle]
@@ -733,6 +815,24 @@ static LAST_FRAMES_DECODED: AtomicU64 = AtomicU64::new(0);
 static LAST_FRAMES_OUTPUT: AtomicU64 = AtomicU64::new(0);
 static LAST_FRAMES_DROPPED: AtomicU64 = AtomicU64::new(0);
 static LAST_NETWORK_BYTES: AtomicU64 = AtomicU64::new(0);
+static LAST_VIDEO_QUEUE_DEPTH: AtomicU32 = AtomicU32::new(0);
+// (1 << 32) | 1: square pixels until a video reports its SAR.
+static LAST_VIDEO_SAR: AtomicU64 = AtomicU64::new((1 << 32) | 1);
+static LAST_VIDEO_PRESENTATION_PENDING: AtomicU32 = AtomicU32::new(0);
+static LAST_NETWORK_LAST_BLOCK_FETCH_MS: media_logic::session::AtomicF32 =
+    media_logic::session::AtomicF32::new(0.0);
+static LAST_NETWORK_LAST_BLOCK_MIBS: media_logic::session::AtomicF32 =
+    media_logic::session::AtomicF32::new(0.0);
+static LAST_NETWORK_BLOCKS_FETCHED: AtomicU64 = AtomicU64::new(0);
+static LAST_NETWORK_BLOCKS_DISCARDED: AtomicU64 = AtomicU64::new(0);
+static LAST_NETWORK_FETCH_FAILURES: AtomicU64 = AtomicU64::new(0);
+static LAST_AUDIO_QUEUE_DEPTH: AtomicU32 = AtomicU32::new(0);
+static LAST_DECODE_ERROR_COUNT: AtomicU64 = AtomicU64::new(0);
+static LAST_DEMUX_CORRUPT_PACKET_COUNT: AtomicU64 = AtomicU64::new(0);
+static LAST_AUDIO_UNDERRUN_COUNT: AtomicU64 = AtomicU64::new(0);
+static LAST_SEEK_LATENCY_MS: AtomicU32 = AtomicU32::new(0);
+static LAST_AV_DRIFT_MS: media_logic::session::AtomicF32 =
+    media_logic::session::AtomicF32::new(0.0);
 
 /// Debug (docs/DEBUGGING.md): total de frames REALMENTE decodificados pela
 /// thread de decode, independente de quantas vezes o C++ chama
@@ -746,14 +846,9 @@ static LAST_NETWORK_BYTES: AtomicU64 = AtomicU64::new(0);
 /// ultimo valor conhecido (ver LAST_FRAMES_DECODED acima), nao 0.
 #[no_mangle]
 pub extern "C" fn get_video_frames_decoded_count() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => {
-            let v = controller.get_frames_decoded_count();
-            LAST_FRAMES_DECODED.store(v, Ordering::Relaxed);
-            v
-        }
-        Err(_) => LAST_FRAMES_DECODED.load(Ordering::Relaxed),
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_FRAMES_DECODED, |controller| {
+        controller.get_frames_decoded_count()
+    })
 }
 
 /// Debug (docs/DEBUGGING.md): total de buffers de saida que o MediaCodec
@@ -765,51 +860,51 @@ pub extern "C" fn get_video_frames_decoded_count() -> u64 {
 /// filtrado pelo mesmo descarte por atraso — este contador nao e.
 #[no_mangle]
 pub extern "C" fn get_video_frames_output_count() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => {
-            let v = controller.get_frames_output_count();
-            LAST_FRAMES_OUTPUT.store(v, Ordering::Relaxed);
-            v
-        }
-        Err(_) => LAST_FRAMES_OUTPUT.load(Ordering::Relaxed),
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_FRAMES_OUTPUT, |controller| {
+        controller.get_frames_output_count()
+    })
 }
 
-/// Debug (docs/DEBUGGING.md): frames que o MediaCodec produziu mas foram
-/// descartados por chegarem atrasados (LATE_FRAME_RENDER_SKIP_SEC).
+/// Debug (docs/DEBUGGING.md): frames produced by MediaCodec that were
+/// dropped at presentation time due to arriving late (late_skip_sec threshold).
 #[no_mangle]
 pub extern "C" fn get_video_frames_dropped_count() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => {
-            let v = controller.get_frames_dropped_count();
-            LAST_FRAMES_DROPPED.store(v, Ordering::Relaxed);
-            v
-        }
-        Err(_) => LAST_FRAMES_DROPPED.load(Ordering::Relaxed),
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_FRAMES_DROPPED, |controller| {
+        controller.get_frames_dropped_count()
+    })
 }
 
 /// Debug (docs/DEBUGGING.md): quantos pacotes de video estao bufferizados
-/// entre a thread de demux e a de decode agora — sem cache-on-contencao
-/// porque um valor "errado por um frame" aqui nao produz nenhum artefato
-/// tipo wraparound (nao e usado pra calcular delta), so um numero levemente
-/// atrasado.
+/// entre a thread de demux e a de decode agora. Usa try_sample_cached para
+/// reter o ultimo valor durante contencao (ex.: load/seek).
 #[no_mangle]
 pub extern "C" fn get_video_queue_depth() -> u32 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_video_queue_depth(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_VIDEO_QUEUE_DEPTH, |controller| {
+        controller.get_video_queue_depth()
+    })
 }
 
 /// Debug (docs/DEBUGGING.md): frames que o MediaCodec ja decodificou mas a
 /// video_thread ainda nao liberou/mostrou — ver PlaybackController::get_video_presentation_pending.
+/// Usa try_sample_cached para reter o ultimo valor durante contencao.
 #[no_mangle]
 pub extern "C" fn get_video_presentation_pending() -> u32 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_video_presentation_pending(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(
+        &CONTROLLER,
+        &LAST_VIDEO_PRESENTATION_PENDING,
+        |controller| controller.get_video_presentation_pending(),
+    )
+}
+
+/// Sample aspect ratio of the current video packed as `numerator << 32 | denominator`
+/// (see media_logic::sar::pack_sar). Square pixels (1:1) when unknown. Retains the last
+/// value under lock contention (try_sample_cached) so the render loop never sees a bogus SAR.
+#[no_mangle]
+pub extern "C" fn get_video_sample_aspect_ratio() -> u64 {
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_VIDEO_SAR, |controller| {
+        let (num, den) = controller.video_sar();
+        media_logic::sar::pack_sar(num, den)
+    })
 }
 
 /// T-HDR: 0 = SDR (inclui antes do primeiro load), 1 = PQ, 2 = HLG (ver
@@ -825,57 +920,68 @@ pub extern "C" fn get_video_is_hdr() -> u32 {
 
 /// Debug (docs/DEBUGGING.md): bytes recebidos da rede pelo PrefetchReader da
 /// fonte atual, soma cumulativa (0 para arquivo local/`http://` puro). O C++
-/// amostra isto ao longo do tempo e calcula MB/s, mesmo padrao de decFps.
+/// amostra isto ao longo do tempo e calcula MiB/s, mesmo padrao de decFps.
 #[no_mangle]
 pub extern "C" fn get_network_bytes_read() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => {
-            let v = controller.get_network_bytes_read();
-            LAST_NETWORK_BYTES.store(v, Ordering::Relaxed);
-            v
-        }
-        Err(_) => LAST_NETWORK_BYTES.load(Ordering::Relaxed),
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_NETWORK_BYTES, |controller| {
+        controller.get_network_bytes_read()
+    })
 }
 
 /// Debug (docs/DEBUGGING.md): duracao do ULTIMO fetch de bloco completo do
 /// PrefetchReader, em ms — diferencia throughput estavel de media baixa por
-/// stalls pontuais. Sem cache-on-contencao: um valor levemente atrasado nao
-/// produz artefato (nao e usado em calculo de delta).
+/// stalls pontuais. Usa try_sample_cached para reter o ultimo valor sob contencao.
 #[no_mangle]
 pub extern "C" fn get_network_last_block_fetch_ms() -> f32 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_network_last_block_fetch_ms(),
-        Err(_) => 0.0,
-    }
+    media_logic::session::try_sample_cached(
+        &CONTROLLER,
+        &LAST_NETWORK_LAST_BLOCK_FETCH_MS,
+        |controller| controller.get_network_last_block_fetch_ms(),
+    )
+}
+
+/// Debug (docs/DEBUGGING.md): link throughput of the last block fetched by the
+/// PrefetchReader, in MiB/s. Usa try_sample_cached para reter o ultimo valor sob contencao.
+#[no_mangle]
+pub extern "C" fn get_network_last_block_mibs() -> f32 {
+    media_logic::session::try_sample_cached(
+        &CONTROLLER,
+        &LAST_NETWORK_LAST_BLOCK_MIBS,
+        |controller| controller.get_network_last_block_mibs(),
+    )
+}
+
+/// Debug (docs/DEBUGGING.md): blocos buscados pelo PrefetchReader.
+/// Usa try_sample_cached para reter o valor cumulativo sob contencao,
+/// evitando queda para 0 e falsos resets no sinal de frescor (FreshnessTracker).
+#[no_mangle]
+pub extern "C" fn get_network_blocks_fetched() -> u64 {
+    media_logic::session::try_sample_cached(
+        &CONTROLLER,
+        &LAST_NETWORK_BLOCKS_FETCHED,
+        |controller| controller.get_network_blocks_fetched(),
+    )
 }
 
 /// Debug (docs/DEBUGGING.md): blocos buscados e descartados por seek do
 /// PrefetchReader — ver PlaybackController::get_network_blocks_discarded.
 #[no_mangle]
-pub extern "C" fn get_network_blocks_fetched() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_network_blocks_fetched(),
-        Err(_) => 0,
-    }
-}
-
-#[no_mangle]
 pub extern "C" fn get_network_blocks_discarded() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_network_blocks_discarded(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(
+        &CONTROLLER,
+        &LAST_NETWORK_BLOCKS_DISCARDED,
+        |controller| controller.get_network_blocks_discarded(),
+    )
 }
 
-/// F4: falhas de fetch de rede — antes so
-/// visiveis no logcat.
+/// F4: falhas de fetch de rede — mantem valor sob contencao.
 #[no_mangle]
 pub extern "C" fn get_network_fetch_failures() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_network_fetch_failures(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(
+        &CONTROLLER,
+        &LAST_NETWORK_FETCH_FAILURES,
+        |controller| controller.get_network_fetch_failures(),
+    )
 }
 
 /// F4: blocos especulativos consecutivos desde o ultimo seek nao-sequencial.
@@ -897,13 +1003,12 @@ pub extern "C" fn get_network_throttled() -> u32 {
 }
 
 /// F4: profundidade da fila de audio entre demux e decode — espelho de
-/// get_video_queue_depth() acima, antes invisivel de fora.
+/// get_video_queue_depth() acima.
 #[no_mangle]
 pub extern "C" fn get_audio_queue_depth() -> u32 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_audio_queue_depth(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_AUDIO_QUEUE_DEPTH, |controller| {
+        controller.get_audio_queue_depth()
+    })
 }
 
 /// "Buffer estilo YouTube": segundos de video ja bufferizados a frente do
@@ -923,28 +1028,27 @@ pub extern "C" fn get_buffered_ahead_sec() -> f32 {
 /// F4: contador de erros de decode de video (ver HwDecoder::decode_packet), por sessao.
 #[no_mangle]
 pub extern "C" fn get_decode_error_count() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_decode_error_count(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_DECODE_ERROR_COUNT, |controller| {
+        controller.get_decode_error_count()
+    })
 }
 
 /// F4: contador de pacotes corrompidos descartados pelo demuxer, por sessao.
 #[no_mangle]
 pub extern "C" fn get_demux_corrupt_packet_count() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_demux_corrupt_packet_count(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(
+        &CONTROLLER,
+        &LAST_DEMUX_CORRUPT_PACKET_COUNT,
+        |controller| controller.get_demux_corrupt_packet_count(),
+    )
 }
 
 /// F4: contador cumulativo de underruns de audio (canal vazio quando o Oboe pediu amostras).
 #[no_mangle]
 pub extern "C" fn get_audio_underrun_count() -> u64 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_audio_underrun_count(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_AUDIO_UNDERRUN_COUNT, |controller| {
+        controller.get_audio_underrun_count()
+    })
 }
 
 /// F4: fases do load_at() — antes so no logcat, agora consultaveis. 0 antes do primeiro load.
@@ -975,19 +1079,18 @@ pub extern "C" fn get_load_phase_audio_ready_ms() -> u32 {
 // Debug (docs/DEBUGGING.md): duracao do ultimo seek concluido, em ms.
 #[no_mangle]
 pub extern "C" fn get_last_seek_latency_ms() -> u32 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_last_seek_latency_ms(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_SEEK_LATENCY_MS, |controller| {
+        controller.get_last_seek_latency_ms()
+    })
 }
 
-/// Debug (docs/DEBUGGING.md): desvio A/V instantaneo (master_clock - video_pts), em ms.
+/// Debug (docs/DEBUGGING.md): smoothed A/V drift (master_clock - video_pts), an EMA with
+/// α = 0.1 over released video frames, in ms.
 #[no_mangle]
 pub extern "C" fn get_last_av_drift_ms() -> f32 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.get_last_av_drift_ms(),
-        Err(_) => 0.0,
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_AV_DRIFT_MS, |controller| {
+        controller.get_last_av_drift_ms()
+    })
 }
 
 #[no_mangle]
@@ -2338,8 +2441,14 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
                     log(6, &format!("Error loading video: {:?}", e));
                 }
                 set_last_playback_error(format!("{:?}", e));
+                if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+                    qc.set_content_fps(0.0);
+                }
             } else {
                 apply_screen_mode_after_load(&controller);
+                if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+                    qc.set_content_fps(controller.video_fps());
+                }
                 unsafe {
                     log(4, "Video loaded successfully!");
                 }
@@ -2351,6 +2460,9 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
 #[no_mangle]
 pub extern "C" fn stop_video_playback() {
     DOWNLOAD_MANAGER.set_playback_active(false);
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        qc.set_content_fps(0.0);
+    }
     std::thread::spawn(|| {
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
@@ -2363,6 +2475,9 @@ pub extern "C" fn stop_video_playback() {
 #[no_mangle]
 pub extern "C" fn reset_process_state() {
     DOWNLOAD_MANAGER.set_playback_active(false);
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        qc.set_content_fps(0.0);
+    }
     if let Ok(mut controller) = CONTROLLER.try_lock() {
         controller.stop();
     } else {
@@ -2375,13 +2490,31 @@ pub extern "C" fn reset_process_state() {
     LOADING_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
     FEEDBACK_EVENT.store(0, std::sync::atomic::Ordering::SeqCst);
     SCREEN_MODE.store(0, std::sync::atomic::Ordering::SeqCst);
+    INITIAL_ORIENTATION_PENDING.store(false, std::sync::atomic::Ordering::SeqCst);
+    INITIAL_ORIENTATION_YAW.store(0, std::sync::atomic::Ordering::SeqCst);
+    INITIAL_ORIENTATION_PITCH.store(0, std::sync::atomic::Ordering::SeqCst);
+    INITIAL_ORIENTATION_ROLL.store(0, std::sync::atomic::Ordering::SeqCst);
     SWAP_EYES.store(false, std::sync::atomic::Ordering::SeqCst);
+    MONO_VIEW.store(false, std::sync::atomic::Ordering::SeqCst);
     KEYBOARD_ACTIVE.store(false, std::sync::atomic::Ordering::SeqCst);
     SCREEN_MODE_OVERRIDE.store(u32::MAX, std::sync::atomic::Ordering::SeqCst);
     LAST_FRAMES_DECODED.store(0, std::sync::atomic::Ordering::SeqCst);
     LAST_FRAMES_OUTPUT.store(0, std::sync::atomic::Ordering::SeqCst);
     LAST_FRAMES_DROPPED.store(0, std::sync::atomic::Ordering::SeqCst);
     LAST_NETWORK_BYTES.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_VIDEO_QUEUE_DEPTH.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_VIDEO_PRESENTATION_PENDING.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_NETWORK_LAST_BLOCK_FETCH_MS.store(0.0, std::sync::atomic::Ordering::SeqCst);
+    LAST_NETWORK_LAST_BLOCK_MIBS.store(0.0, std::sync::atomic::Ordering::SeqCst);
+    LAST_NETWORK_BLOCKS_FETCHED.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_NETWORK_BLOCKS_DISCARDED.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_NETWORK_FETCH_FAILURES.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_AUDIO_QUEUE_DEPTH.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_DECODE_ERROR_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_DEMUX_CORRUPT_PACKET_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_AUDIO_UNDERRUN_COUNT.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_SEEK_LATENCY_MS.store(0, std::sync::atomic::Ordering::SeqCst);
+    LAST_AV_DRIFT_MS.store(0.0, std::sync::atomic::Ordering::SeqCst);
     DESIRED_AUDIO_TRACK.store(0, std::sync::atomic::Ordering::Relaxed);
     SUBTITLE_OFFSET_MS.store(0, std::sync::atomic::Ordering::Relaxed);
     PLAYBACK_SPEED_BITS.store(0x3F800000, std::sync::atomic::Ordering::Relaxed);
@@ -2456,11 +2589,27 @@ pub extern "C" fn cycle_audio_track() {
 }
 
 #[no_mangle]
+pub extern "C" fn request_audio_reopen() {
+    if let Ok(controller) = CONTROLLER.lock() {
+        controller.request_audio_reopen();
+    }
+}
+
+#[no_mangle]
 pub extern "C" fn get_audio_track_count() -> u32 {
     // try_sample_or: chamada periodica do render loop (C++ HUD / telemetry a 90Hz).
     // Se o lock estiver ocupado (load_at em background), devolve 0 sem bloquear a render thread.
     media_logic::session::try_sample_or(&CONTROLLER, 0, |controller| {
         controller.audio_track_count() as u32
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn get_audio_track_index() -> u32 {
+    // try_sample_or: chamada periodica do render loop (C++ HUD / telemetry a 90Hz).
+    // Se o lock estiver ocupado (load_at em background), devolve 0 sem bloquear a render thread.
+    media_logic::session::try_sample_or(&CONTROLLER, 0, |controller| {
+        controller.audio_track_index() as u32
     })
 }
 
@@ -3321,6 +3470,18 @@ pub extern "C" fn get_subtitle_track_info_wire() -> *mut std::os::raw::c_char {
             }
         }
         string_to_c_char(lines.join("\n"))
+    } else {
+        string_to_c_char(String::new())
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_audio_track_info_wire() -> *mut std::os::raw::c_char {
+    if let Ok(controller) = CONTROLLER.try_lock() {
+        let wire = media_logic::track_info::format_audio_track_info_wire(
+            controller.get_available_audio_tracks(),
+        );
+        string_to_c_char(wire)
     } else {
         string_to_c_char(String::new())
     }

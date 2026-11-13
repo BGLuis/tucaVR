@@ -15,6 +15,44 @@ import com.tucavr.filebrowser.TrackInfo
 import com.tucavr.filebrowser.TrackKind
 
 /**
+ * Parses wire format lines from Rust bridge into a list of audio [TrackInfo].
+ * Expected format per line: index\tcodec\tlanguage\ttitle\tchannels\tsample_rate
+ */
+fun parseAudioWire(wire: String?): List<TrackInfo> {
+    if (wire.isNullOrBlank()) return emptyList()
+    val list = mutableListOf<TrackInfo>()
+    wire.lines().forEach { line ->
+        if (line.isBlank()) return@forEach
+        val parts = line.split('\t')
+        if (parts.size >= 4) {
+            val index = parts[0].toIntOrNull() ?: list.size
+            val codec = parts[1]
+            val language = parts[2]
+            val title = parts[3]
+            val channels = parts.getOrNull(4)?.toIntOrNull() ?: 2
+            val sampleRate = parts.getOrNull(5)?.toIntOrNull() ?: 48000
+            list.add(
+                TrackInfo(
+                    kind = TrackKind.AUDIO,
+                    ordinal = index,
+                    codec = codec,
+                    language = language,
+                    title = title,
+                    width = 0,
+                    height = 0,
+                    fpsMilli = 0,
+                    channels = channels,
+                    sampleRate = sampleRate,
+                    bitRate = 0L,
+                    isDefault = false,
+                ),
+            )
+        }
+    }
+    return list
+}
+
+/**
  * Floating modal for selecting audio tracks.
  *
  * Rendered on the floating Quad in VR space (VRModalPresentation) at 1.35m in front of the user.

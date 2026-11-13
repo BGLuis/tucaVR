@@ -9,24 +9,16 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.FrameLayout
-import com.tucavr.designsystem.AudioTrackModal
 import com.tucavr.designsystem.CompactDebugStatsView
 import com.tucavr.designsystem.ConfirmDeleteModal
 import com.tucavr.designsystem.DebugStatsModal
 import com.tucavr.designsystem.PassthroughSettingsModal
 import com.tucavr.designsystem.ResumePromptModal
-import com.tucavr.designsystem.ScreenFormatModal
-import com.tucavr.designsystem.SubtitleSelectionModal
-import com.tucavr.designsystem.SubtitleTrackItem
-import com.tucavr.filebrowser.MediaMetadataReader
 import com.tucavr.history.PlaybackHistory
-import com.tucavr.history.historyKey
-import com.tucavr.screens.ScreenFormatCatalog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.launch
 
 /**
  * Apresentação dedicada para o 3º Quad 3D no OpenXR (painel modal frontal flutuante).
@@ -175,132 +167,6 @@ class VRModalPresentation(
             batteryPercent = batteryPct,
             isDebuggable = activity.isDebuggable,
         )
-    }
-
-    /**
-     * Prepara e exibe o modal de formato de tela ([ScreenFormatModal]).
-     */
-    fun showScreenFormatModal() {
-        val currentSource = activity.currentPlaybackSource
-        val currentMode = activity.nativeGet3DMode()
-
-        scope.launch {
-            val meta =
-                currentSource?.let { src ->
-                    MediaMetadataReader.read(activity, src)
-                }
-            val detectedMode = meta?.format3dIndex
-            val confidence = meta?.detectionConfidence ?: 3
-
-            val modal =
-                ScreenFormatModal(
-                    context = context,
-                    currentMode = currentMode,
-                    detectedMode = detectedMode,
-                    detectionConfidence = confidence,
-                    onModeSelected = { mode ->
-                        activity.nativeSetScreenMode(mode)
-                        currentSource?.let { src ->
-                            activity.format3dStore.set(src.historyKey(), mode)
-                        }
-                    },
-                    onUseAutoDetection = {
-                        activity.nativeSetScreenModeOverride(-1)
-                        currentSource?.let { src ->
-                            activity.format3dStore.clear(src.historyKey())
-                        }
-                        if (detectedMode != null && ScreenFormatCatalog.isValid(detectedMode)) {
-                            activity.nativeSetScreenMode(detectedMode)
-                        }
-                    },
-                    onDismiss = {
-                        dismissModal()
-                    },
-                )
-            showModal(modal)
-        }
-    }
-
-    /**
-     * Prepara e exibe o modal de seleção e sincronização de legendas ([SubtitleSelectionModal]).
-     */
-    fun showSubtitlesModal() {
-        val trackCount = activity.nativeGetSubtitleTrackCount()
-        val currentTrack = activity.nativeGetSubtitleTrack()
-        val currentOffsetMs = activity.nativeGetSubtitleOffsetMs()
-
-        val items = mutableListOf<SubtitleTrackItem>()
-        val wire = activity.nativeGetSubtitleTrackInfoWire()
-        if (!wire.isNullOrBlank()) {
-            wire.lines().forEachIndexed { index, line ->
-                val parts = line.split('\t')
-                if (parts.size >= 3) {
-                    val lang = parts[0]
-                    val title = parts[1]
-                    val isExternal = parts[2] == "1"
-                    items.add(SubtitleTrackItem(index, lang, title, isExternal))
-                }
-            }
-        }
-
-        if (items.isEmpty() && trackCount > 0) {
-            val meta = activity.currentMediaMetadata
-            val subTracks = meta?.subtitleTracks ?: emptyList()
-            for (i in 0 until trackCount) {
-                val track = subTracks.getOrNull(i)
-                items.add(
-                    SubtitleTrackItem(
-                        index = i,
-                        language = track?.language ?: "",
-                        title = track?.title ?: "",
-                        isExternal = false,
-                        codec = track?.codec ?: "",
-                    ),
-                )
-            }
-        }
-
-        val modal =
-            SubtitleSelectionModal(
-                context = context,
-                trackCount = trackCount,
-                currentTrack = currentTrack,
-                currentOffsetMs = currentOffsetMs,
-                onTrackSelected = { trackIndex ->
-                    activity.nativeSetSubtitleTrack(trackIndex)
-                },
-                onOffsetChanged = { offsetMs ->
-                    activity.nativeSetSubtitleOffsetMs(offsetMs)
-                },
-                onDismiss = { dismissModal() },
-                trackItems = items,
-            )
-        showModal(modal)
-    }
-
-    /**
-     * Prepara e exibe o modal de seleção de faixas de áudio ([AudioTrackModal]).
-     */
-    fun showAudioTracksModal() {
-        val currentSource = activity.currentPlaybackSource
-        scope.launch {
-            val meta =
-                activity.currentMediaMetadata ?: currentSource?.let { src ->
-                    MediaMetadataReader.read(activity, src)
-                }
-            val tracks = meta?.tracks ?: emptyList()
-            val modal =
-                AudioTrackModal(
-                    context = context,
-                    tracks = tracks,
-                    activeOrdinal = activity.currentAudioTrackOrdinal,
-                    onTrackSelected = { ordinal ->
-                        activity.switchAudioTrack(ordinal)
-                    },
-                    onDismiss = { dismissModal() },
-                )
-            showModal(modal)
-        }
     }
 
     /**
@@ -499,6 +365,9 @@ class VRModalPresentation(
                 },
                 onResetAnchor = {
                     activity.resetScreenPosition()
+                },
+                onImportEnvironment = {
+                    VRActivity.openEnvironmentFilePicker(activity)
                 },
                 onDismiss = { dismissModal() },
             )

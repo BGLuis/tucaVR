@@ -20,6 +20,7 @@ data class NativeDebugStats(
     val netMBs: Float = 0.0f,
     val queueDepth: Int = 0,
     val presentationPending: Int = 0,
+    val bufferedAheadSec: Float = 0.0f,
     val seekLatencyMs: Int = 0,
     val smoothedFps: Float = 0.0f,
     val frameTimeMs: Float = 0.0f,
@@ -30,6 +31,7 @@ data class NativeDebugStats(
     val refreshRate: Float = 90.0f,
     val avDriftMs: Float = 0.0f,
     val netLastFetchMs: Float = 0.0f,
+    val netBlockMBs: Float = 0.0f,
     val netBlocksFetched: Long = 0L,
     val netBlocksDiscarded: Long = 0L,
     val foveationEnabled: Boolean = false,
@@ -102,6 +104,7 @@ object DebugStatsParser {
         var netMBs = 0.0f
         var queueDepth = 0
         var presentationPending = 0
+        var bufferedAheadSec = 0.0f
         var seekLatencyMs = 0
         var smoothedFps = 0.0f
         var frameTimeMs = 0.0f
@@ -148,6 +151,7 @@ object DebugStatsParser {
         var refreshRate = 90.0f
         var avDriftMs = 0.0f
         var netLastFetchMs = 0.0f
+        var netBlockMBs = 0.0f
         var netBlocksFetched = 0L
         var netBlocksDiscarded = 0L
         var foveationEnabled = false
@@ -232,6 +236,10 @@ object DebugStatsParser {
                     presentationPending = value.toIntOrNull() ?: 0
                     recognizedKeys++
                 }
+                "buffered_ahead_sec" -> {
+                    bufferedAheadSec = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
                 "seek_latency_ms" -> {
                     seekLatencyMs = value.toIntOrNull() ?: 0
                     recognizedKeys++
@@ -306,6 +314,10 @@ object DebugStatsParser {
                 }
                 "net_last_fetch_ms" -> {
                     netLastFetchMs = value.toFloatOrNull() ?: 0f
+                    recognizedKeys++
+                }
+                "net_block_mbs" -> {
+                    netBlockMBs = value.toFloatOrNull() ?: 0f
                     recognizedKeys++
                 }
                 "net_blocks_fetched" -> {
@@ -509,6 +521,7 @@ object DebugStatsParser {
             netMBs = netMBs,
             queueDepth = queueDepth,
             presentationPending = presentationPending,
+            bufferedAheadSec = bufferedAheadSec,
             seekLatencyMs = seekLatencyMs,
             smoothedFps = smoothedFps,
             frameTimeMs = frameTimeMs,
@@ -519,6 +532,7 @@ object DebugStatsParser {
             refreshRate = refreshRate,
             avDriftMs = avDriftMs,
             netLastFetchMs = netLastFetchMs,
+            netBlockMBs = netBlockMBs,
             netBlocksFetched = netBlocksFetched,
             netBlocksDiscarded = netBlocksDiscarded,
             foveationEnabled = foveationEnabled,

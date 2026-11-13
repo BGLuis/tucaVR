@@ -30,7 +30,7 @@ data class MediaMetadata(
     val durationMs: Long,
     val bitRate: Long,
     val format3dIndex: Int = 0,
-    val detectionConfidence: Int = 3,
+    val detectionConfidence: Int = 4,
     val tags: List<Pair<String, String>>,
     val tracks: List<TrackInfo>,
 ) {
@@ -39,19 +39,45 @@ data class MediaMetadata(
     val subtitleTracks get() = tracks.filter { it.kind == TrackKind.SUBTITLE }
 }
 
+internal fun PlaybackSource.fileSizeBytes(): Long =
+    when (this) {
+        is PlaybackSource.LocalFile ->
+            if (sizeBytes > 0L) {
+                sizeBytes
+            } else {
+                runCatching { java.io.File(path).length() }.getOrDefault(0L)
+            }
+        is PlaybackSource.Smb -> sizeBytes
+        is PlaybackSource.Ftp -> sizeBytes
+        is PlaybackSource.Sftp -> sizeBytes
+        is PlaybackSource.Nfs -> sizeBytes
+        is PlaybackSource.Dlna -> sizeBytes
+        is PlaybackSource.Webdav -> sizeBytes
+        is PlaybackSource.Http -> 0L
+    }
+
 // Le metadados de midia (T13.1) via Rust (rust/media_logic/src/metadata_wire.rs
 // define a gramatica) -- caminho unico pra local e rede, substitui o antigo
 // VideoMetadataReader (MediaMetadataRetriever, so local, so 3 campos).
 object MediaMetadataReader {
-    // Sempre busca fresco do Rust -- usado por telas de detalhe/player, que precisam de
-    // tags/tracks completos (nunca guardados no cache, ver [MediaMetadataCacheEntry]).
-    // Write-through: ao obter um resultado, grava o resumo em media_metadata_cache pra
-    // popular o badge rápido de [readCachedSummary] na próxima vez que a listagem renderizar.
+    // Cache-first: se o Room tiver metadados completos (tracksJson preenchido)
+    // e o tamanho do arquivo bater, devolve o cache imediatamente sem probe Rust.
+    // Em cache miss, busca do Rust e grava o registro completo via [cacheSummary].
     suspend fun read(
         activity: VRActivity,
         source: PlaybackSource,
     ): MediaMetadata? =
         withContext(Dispatchers.IO) {
+            val key = runCatching { CacheKeys.forSource(source) }.getOrNull()
+            if (key != null) {
+                val cached = AppDatabase.getInstance(activity).mediaMetadataCacheDao().find(key)
+                val sourceSize = source.fileSizeBytes()
+                val sizeMatches = sourceSize == 0L || cached?.fileSizeBytes == 0L || cached?.fileSizeBytes == sourceSize
+                if (cached != null && cached.tracksJson.isNotEmpty() && sizeMatches) {
+                    return@withContext cached.toMediaMetadata()
+                }
+            }
+
             val wire =
                 when (source) {
                     is PlaybackSource.LocalFile -> activity.nativeReadMediaMetadata(source.path)
@@ -138,6 +164,27 @@ object MediaMetadataReader {
             AppDatabase.getInstance(context).mediaMetadataCacheDao().find(key)
         }
 
+    /**
+     * Leitura SOMENTE do cache Room de [MediaMetadata] completo (nunca chama o Rust).
+     * Devolve nulo se não houver entrada no cache, se as faixas não estiverem gravadas
+     * ou se o tamanho do arquivo não bater com o tamanho esperado.
+     */
+    suspend fun readCached(
+        context: Context,
+        source: PlaybackSource,
+    ): MediaMetadata? =
+        withContext(Dispatchers.IO) {
+            val key = runCatching { CacheKeys.forSource(source) }.getOrNull() ?: return@withContext null
+            val entry = AppDatabase.getInstance(context).mediaMetadataCacheDao().find(key) ?: return@withContext null
+            val sourceSize = source.fileSizeBytes()
+            val sizeMatches = sourceSize == 0L || entry.fileSizeBytes == 0L || entry.fileSizeBytes == sourceSize
+            if (entry.tracksJson.isNotEmpty() && sizeMatches) {
+                entry.toMediaMetadata()
+            } else {
+                null
+            }
+        }
+
     internal suspend fun cacheSummary(
         context: Context,
         source: PlaybackSource,
@@ -158,6 +205,9 @@ object MediaMetadataReader {
                 videoHeight = videoTrack?.height ?: 0,
                 videoCodec = videoTrack?.codec ?: "",
                 fetchedAt = System.currentTimeMillis(),
+                tracksJson = serializeTracks(metadata.tracks),
+                tagsJson = serializeTags(metadata.tags),
+                fileSizeBytes = source.fileSizeBytes(),
             )
         runCatching { AppDatabase.getInstance(context).mediaMetadataCacheDao().upsert(entry) }
     }
@@ -173,7 +223,7 @@ object MediaMetadataReader {
         var durationMs = 0L
         var bitRate = 0L
         var format3dIndex = 0
-        var detectionConfidence = 3
+        var detectionConfidence = 4
         val tags = mutableListOf<Pair<String, String>>()
         val tracks = mutableListOf<TrackInfo>()
 
@@ -186,7 +236,7 @@ object MediaMetadataReader {
                     durationMs = ((parts.getOrNull(3)?.toLongOrNull() ?: 0L) / 1000L)
                     bitRate = parts.getOrNull(4)?.toLongOrNull() ?: 0L
                     format3dIndex = parts.getOrNull(5)?.toIntOrNull() ?: 0
-                    detectionConfidence = parts.getOrNull(6)?.toIntOrNull() ?: 3
+                    detectionConfidence = parts.getOrNull(6)?.toIntOrNull() ?: 4
                 }
                 "M" -> {
                     val key = parts.getOrNull(1) ?: return@forEach

@@ -28,7 +28,7 @@ pub fn normalize_dash_url(url: &str) -> String {
 /// Faz o download do manifesto MPD e extrai as representações de vídeo ordenadas por bandwidth.
 pub fn fetch_and_probe_representations(url: &str) -> Result<Vec<DashRepresentation>, String> {
     let normalized = normalize_dash_url(url);
-    let client = reqwest::blocking::Client::builder()
+    let client = crate::http::client_builder()
         .timeout(Duration::from_secs(10))
         // R-01: sem redirect automático — um redirecionamento HTTP 3xx da mesma origem já
         // validada por `resolve_dash_url` poderia apontar para fora dela, contornando a
@@ -86,7 +86,7 @@ pub struct DashStreamSource {
 impl DashStreamSource {
     pub fn open(url: &str) -> Result<Self, String> {
         let normalized = normalize_dash_url(url);
-        let client = reqwest::blocking::Client::builder()
+        let client = crate::http::client_builder()
             .timeout(Duration::from_secs(10))
             // R-01: mesma razão do client de fetch_and_probe_representations acima.
             .redirect(reqwest::redirect::Policy::none())

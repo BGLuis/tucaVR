@@ -22,6 +22,7 @@ class EnvironmentSelectorModal(
     private var activeEnvironmentId: String,
     private val onEnvironmentSelected: (envId: String) -> Unit,
     private val onResetAnchor: () -> Unit,
+    private val onImportEnvironment: () -> Unit,
     private val onDismiss: () -> Unit,
 ) : FrameLayout(context) {
     private data class EnvironmentOption(
@@ -170,12 +171,23 @@ class EnvironmentSelectorModal(
             VoidButton(
                 context,
                 VoidButtonStyle.SECONDARY,
+                isCompact = true,
             ).apply {
                 text = context.getString(R.string.env_reset_anchor_button)
                 setOnClickListener {
                     onResetAnchor()
                 }
             }
+        val importBtn =
+            VoidButton(
+                context,
+                VoidButtonStyle.SECONDARY,
+                isCompact = true,
+            ).apply {
+                text = context.getString(R.string.env_import_button)
+                setOnClickListener { onImportEnvironment() }
+            }
+        footer.addView(importBtn)
         footer.addView(resetAnchorBtn)
         panel.addView(footer)
 
