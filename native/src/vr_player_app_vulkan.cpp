@@ -1301,6 +1301,14 @@ struct AppState {
     VkDeviceMemory sphereIndexMemory = VK_NULL_HANDLE;
     uint32_t sphereIndexCount = 0;
 
+    // Fisheye hemisphere geometry (#253)
+    VkBuffer fisheyeVertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory fisheyeVertexMemory = VK_NULL_HANDLE;
+    VkBuffer fisheyeIndexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory fisheyeIndexMemory = VK_NULL_HANDLE;
+    uint32_t fisheyeIndexCount = 0;
+    int fisheyeMeshFov = 0;
+
     // Fase 0.3 Seção 8 — Fotos 360° e Fotos 3D (T8.3, T8.4)
     VkPipelineLayout photoPipelineLayout = VK_NULL_HANDLE;
     VkPipeline photoStereoPipeline = VK_NULL_HANDLE;     // TRIANGLE_LIST — esfera 360/180
@@ -5172,6 +5180,86 @@ void CreateSphereGeometry(AppState& state) {
     LOGI("Estagio 5: esfera gerada (%d vertices, %d indices)", (int)verts.size(), (int)indices.size());
 }
 
+// Releases Vulkan resources allocated for the fisheye mesh (#253).
+void DestroyFisheyeGeometry(AppState& state) {
+    if (state.fisheyeIndexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.fisheyeIndexBuffer, nullptr);
+        state.fisheyeIndexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.fisheyeIndexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.fisheyeIndexMemory, nullptr);
+        state.fisheyeIndexMemory = VK_NULL_HANDLE;
+    }
+    if (state.fisheyeVertexBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.fisheyeVertexBuffer, nullptr);
+        state.fisheyeVertexBuffer = VK_NULL_HANDLE;
+    }
+    if (state.fisheyeVertexMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.fisheyeVertexMemory, nullptr);
+        state.fisheyeVertexMemory = VK_NULL_HANDLE;
+    }
+    state.fisheyeIndexCount = 0;
+    state.fisheyeMeshFov = 0;
+}
+
+// Generates and uploads the fisheye hemisphere mesh with equidistant UVs (#253).
+void EnsureFisheyeGeometry(AppState& state, int fovDegrees) {
+    if (state.fisheyeVertexBuffer != VK_NULL_HANDLE && state.fisheyeMeshFov == fovDegrees) {
+        return;
+    }
+    if (state.fisheyeVertexBuffer != VK_NULL_HANDLE && state.vkDevice != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(state.vkDevice);
+    }
+    DestroyFisheyeGeometry(state);
+
+    constexpr int kFisheyeRings = 64;
+    constexpr int kFisheyeSectors = 128;
+
+    std::vector<FisheyeVertex> verts;
+    std::vector<uint32_t> indices;
+    GenerateFisheyeHemisphereMesh(static_cast<float>(fovDegrees), kFisheyeRings, kFisheyeSectors, verts, indices);
+
+    state.fisheyeIndexCount = static_cast<uint32_t>(indices.size());
+    state.fisheyeMeshFov = fovDegrees;
+
+    auto createDeviceBuffer = [&](VkBufferUsageFlags usage, const void* data, VkDeviceSize size,
+                                  VkBuffer& outBuf, VkDeviceMemory& outMem) {
+        VkBufferCreateInfo bInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+        bInfo.size  = size;
+        bInfo.usage = usage;
+        VKR(vkCreateBuffer(state.vkDevice, &bInfo, nullptr, &outBuf));
+
+        VkMemoryRequirements mr;
+        vkGetBufferMemoryRequirements(state.vkDevice, outBuf, &mr);
+        VkPhysicalDeviceMemoryProperties mp;
+        vkGetPhysicalDeviceMemoryProperties(state.vkPhysicalDevice, &mp);
+        uint32_t mIdx = UINT32_MAX;
+        const auto hv = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+        for (uint32_t i = 0; i < mp.memoryTypeCount; i++) {
+            if ((mr.memoryTypeBits & (1u << i)) && ((mp.memoryTypes[i].propertyFlags & hv) == hv)) {
+                mIdx = i; break;
+            }
+        }
+        VkMemoryAllocateInfo ai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+        ai.allocationSize = mr.size; ai.memoryTypeIndex = mIdx;
+        VKR(vkAllocateMemory(state.vkDevice, &ai, nullptr, &outMem));
+        VKR(vkBindBufferMemory(state.vkDevice, outBuf, outMem, 0));
+        void* dst; VKR(vkMapMemory(state.vkDevice, outMem, 0, size, 0, &dst));
+        memcpy(dst, data, (size_t)size);
+        vkUnmapMemory(state.vkDevice, outMem);
+    };
+
+    createDeviceBuffer(VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+        verts.data(), verts.size() * sizeof(FisheyeVertex),
+        state.fisheyeVertexBuffer, state.fisheyeVertexMemory);
+    createDeviceBuffer(VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+        indices.data(), indices.size() * sizeof(uint32_t),
+        state.fisheyeIndexBuffer, state.fisheyeIndexMemory);
+
+    LOGI("Fisheye: mesh generated (fov=%d, %d vertices, %d indices)",
+        fovDegrees, (int)verts.size(), (int)indices.size());
+}
+
 // Cria o pipeline estereo (stereo.vert/frag) que serve SBS/OU/Sphere360/Sphere180.
 // Reusa o videoDescriptorSetLayout (mesmo sampler YCbCr imutavel do Estagio 3)
 // pois a textura de fonte e identica ao Estagio 3 — so a logica de UV muda.
@@ -8899,12 +8987,20 @@ void RecordStereoFrame(
         state.stereoPipelineLayout, 0, 1,
         &state.activeVideoFrame->descriptorSet, 0, nullptr);
 
+    const bool isFisheye = IsFisheyeMode(state.screenMode);
     if (sphereMode) {
         VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
-        vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, state.sphereIndexCount, 1, 0, 0, 0);
-        CountDrawCallIndexed(state.sphereIndexCount);
+        if (isFisheye && state.fisheyeVertexBuffer != VK_NULL_HANDLE) {
+            vkCmdBindVertexBuffers(cmd, 0, 1, &state.fisheyeVertexBuffer, &offset);
+            vkCmdBindIndexBuffer(cmd, state.fisheyeIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, state.fisheyeIndexCount, 1, 0, 0, 0);
+            CountDrawCallIndexed(state.fisheyeIndexCount);
+        } else {
+            vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
+            vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, state.sphereIndexCount, 1, 0, 0, 0);
+            CountDrawCallIndexed(state.sphereIndexCount);
+        }
     } else {
         const bool isCurved = (state.screenCurvature > 1e-4f);
         VkBuffer targetVb = isCurved ? state.curvedVideoVertexBuffer : state.videoVertexBuffer;
@@ -9005,12 +9101,20 @@ void RecordPhotoFrame(
         state.photoPipelineLayout, 0, 1,
         &state.photoDescriptorSet, 0, nullptr);
 
+    const bool isFisheye = IsFisheyeMode(state.photoScreenMode);
     if (sphereMode) {
         VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
-        vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-        vkCmdDrawIndexed(cmd, state.sphereIndexCount, 1, 0, 0, 0);
-        CountDrawCallIndexed(state.sphereIndexCount);
+        if (isFisheye && state.fisheyeVertexBuffer != VK_NULL_HANDLE) {
+            vkCmdBindVertexBuffers(cmd, 0, 1, &state.fisheyeVertexBuffer, &offset);
+            vkCmdBindIndexBuffer(cmd, state.fisheyeIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, state.fisheyeIndexCount, 1, 0, 0, 0);
+            CountDrawCallIndexed(state.fisheyeIndexCount);
+        } else {
+            vkCmdBindVertexBuffers(cmd, 0, 1, &state.sphereVertexBuffer, &offset);
+            vkCmdBindIndexBuffer(cmd, state.sphereIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+            vkCmdDrawIndexed(cmd, state.sphereIndexCount, 1, 0, 0, 0);
+            CountDrawCallIndexed(state.sphereIndexCount);
+        }
     } else {
         VkDeviceSize offset = 0;
         vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
@@ -9998,6 +10102,12 @@ void RenderFrame(AppState& state) {
         g_frameDrawCallCount = 0;
         g_frameTriangleCount = 0;
 
+        const ScreenMode effectiveRenderMode =
+            (state.photoActive && state.photoTextureReady) ? state.photoScreenMode : state.screenMode;
+        if (IsFisheyeMode(effectiveRenderMode)) {
+            EnsureFisheyeGeometry(state, get_fisheye_fov());
+        }
+
         for (int eye = 0; eye < kEyeCount; eye++) {
             EyeSwapchain& eyeChain = state.eyes[eye];
 
@@ -10058,9 +10168,12 @@ void RenderFrame(AppState& state) {
 
                 Mat4 pScreenModel;
                 if (pSphere) {
-                    pScreenModel = Mat4Multiply(
+                    Mat4 baseSphereModel = Mat4Multiply(
                         Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
                         state.sceneOrientationMatrix);
+                    pScreenModel = IsFisheyeMode(pMode)
+                        ? Mat4Multiply(baseSphereModel, Mat4Scale(kSphereRadius, kSphereRadius, kSphereRadius))
+                        : baseSphereModel;
                 } else {
                     float z = g_photoZoom.load();
                     if (z < 0.1f) z = 1.0f;
@@ -10086,7 +10199,10 @@ void RenderFrame(AppState& state) {
                     const Mat4 sphereModel = Mat4Multiply(
                         Mat4Translation(headCenter.x, headCenter.y, headCenter.z),
                         sphereRot);
-                    const Mat4 sphereMvp = Mat4Multiply(Mat4Multiply(proj, view), sphereModel);
+                    const Mat4 effectiveSphereModel = IsFisheyeMode(state.screenMode)
+                        ? Mat4Multiply(sphereModel, Mat4Scale(kSphereRadius, kSphereRadius, kSphereRadius))
+                        : sphereModel;
+                    const Mat4 sphereMvp = Mat4Multiply(Mat4Multiply(proj, view), effectiveSphereModel);
                     StereoParams sp = GetStereoParams(state.screenMode, eye);
                     RecordStereoFrame(state, cmd, fb, extent, mvp, proj, view, headCenter, sphereMode, sphereMvp, eye, sp);
                 } else {
@@ -10833,6 +10949,7 @@ void DestroyAppResources(AppState& state) {
         vkFreeMemory(state.vkDevice, state.sphereVertexMemory, nullptr);
         state.sphereVertexMemory = VK_NULL_HANDLE;
     }
+    DestroyFisheyeGeometry(state);
 
     // 7. UI / Controles / Modal (Pipelines, descritores, imagens)
     if (state.uiPipeline != VK_NULL_HANDLE) {
@@ -11220,6 +11337,7 @@ void android_main(android_app* app) {
     InitBeamSwapchain(state);
     // Estagio 5: geometria de esfera, pipeline estereo, beam cursor
     CreateSphereGeometry(state);
+    EnsureFisheyeGeometry(state, DEFAULT_FISHEYE_FOV_DEGREES);
     CreateStereoPipeline(state);
     CreateBeamResources(state);
     CreateFeedbackResources(state);
