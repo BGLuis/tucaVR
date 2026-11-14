@@ -53,35 +53,18 @@ void main() {
 
         uv.x = (uv.x - 0.25) * 2.0;
     } else if (polarMode == 2) {
-        // Fisheye projection (equidistant f-theta with configurable FOV: 180°, 190°, 200°, 220°)
-        const float PI = 3.141592653589793;
-        float theta = 2.0 * PI * (vTexCoord.x - 0.5);
-        float phi   = PI * vTexCoord.y;
-        float sinPhi = sin(phi);
-        vec3 dir = vec3(sinPhi * sin(theta), cos(phi), -sinPhi * cos(theta));
-
-        // Optical angle from the forward axis (-Z)
-        float cosPsi = clamp(-dir.z, -1.0, 1.0);
-        float psi = acos(cosPsi);
-        float fisheyeFov = (rawFov == 0) ? 190.0 : float(rawFov);
-        float kMaxHalfFov = fisheyeFov * PI / 360.0;
-
-        if (psi > kMaxHalfFov) {
+        // Fisheye projection: unwrapped via subdivided mesh with precomputed equidistant UVs (#253).
+        // Discard fragments and apply smooth edge feathering outside the active circular lens aperture.
+        float r = length(uv - vec2(0.5)) * 2.0;
+        if (r > 1.0) {
             outColor = vec4(0.0, 0.0, 0.0, 0.0);
             return;
         }
 
         // Edge feathering on the outer margin (~3 degrees feather)
-        const float kFeatherAngle = 3.0 * PI / 180.0;
-        hemisphereAlpha = smoothstep(kMaxHalfFov, kMaxHalfFov - kFeatherAngle, psi);
-
-        // Equidistant azimuthal projection: r = psi / kMaxHalfFov
-        float rho = length(dir.xy);
-        vec2 planeDir = (rho > 1e-6) ? (dir.xy / rho) : vec2(0.0, 0.0);
-        float rNorm = psi / kMaxHalfFov; // 0.0 at optical center up to 1.0 at circle edge
-
-        // Local UV coordinates in eye fisheye circle [0, 1] x [0, 1]
-        uv = vec2(0.5 + 0.5 * rNorm * planeDir.x, 0.5 - 0.5 * rNorm * planeDir.y);
+        float fisheyeFov = (rawFov == 0) ? 190.0 : float(rawFov);
+        float feather = 6.0 / fisheyeFov;
+        hemisphereAlpha = 1.0 - smoothstep(1.0 - feather, 1.0, r);
     }
 
     // Local eye UV coordinates before stereo crop for mask unpacking
