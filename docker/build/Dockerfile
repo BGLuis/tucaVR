@@ -92,7 +92,11 @@ RUN <<EOT
     git clone https://github.com/Javernaut/ffmpeg-android-maker.git /opt/ffmpeg-android-maker
     cd /opt/ffmpeg-android-maker
     git checkout "${FFMPEG_MAKER_REF}"
-    ./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26
+    # Keep in sync with scripts/build-ffmpeg.sh (Docker context is docker/build/).
+    sed -i 's|^export EXTRA_BUILD_CONFIGURATION_FLAGS=$|export EXTRA_BUILD_CONFIGURATION_FLAGS="${TUCAVR_FFMPEG_FLAGS:-}"|' scripts/export-build-variables.sh
+    grep -q 'TUCAVR_FFMPEG_FLAGS' scripts/export-build-variables.sh
+    TUCAVR_FFMPEG_FLAGS="--disable-doc --disable-programs --disable-avdevice --disable-avfilter --disable-encoders --disable-muxers --disable-devices --disable-filters --disable-outdevs --disable-indevs" \
+        ./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26
     # Only the result: no sources, .git or the maker script.
     mkdir -p /out/build/ffmpeg /out/output/include
     cp -a build/ffmpeg/arm64-v8a /out/build/ffmpeg/arm64-v8a

@@ -141,10 +141,9 @@ jobs:
       - name: Setup and Compile FFmpeg
         if: steps.reuse.outcome != 'success'
         run: |
-          cd ffmpeg-android-maker
           export ANDROID_SDK_HOME="$ANDROID_HOME"
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
-          ./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26
+          ./scripts/build-ffmpeg.sh ffmpeg-android-maker
 
       - name: Determine Release Configuration
         id: config

@@ -119,6 +119,18 @@ endif()
 # -----------------------------------------------------------------------------
 add_library(vrplayer_native SHARED ${SOURCE_FILES})
 
+target_compile_options(vrplayer_native PRIVATE
+    -ffunction-sections
+    -fdata-sections
+    -fvisibility=hidden
+    $<$<NOT:$<CONFIG:Debug>>:-flto=thin>
+)
+target_link_options(vrplayer_native PRIVATE
+    -Wl,--gc-sections
+    -Wl,--icf=safe
+    $<$<NOT:$<CONFIG:Debug>>:-flto=thin>
+)
+
 if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
     add_dependencies(vrplayer_native vrplayer_shaders)
     target_include_directories(vrplayer_native PRIVATE ${SHADER_GEN_DIR})
@@ -131,6 +143,12 @@ if(VRPLAYER_GRAPHICS_API STREQUAL "VULKAN")
     target_compile_definitions(astcenc PRIVATE
         ASTCENC_NEON=1 ASTCENC_SVE=0 ASTCENC_SSE=0 ASTCENC_AVX=0
         ASTCENC_POPCNT=0 ASTCENC_F16C=0 ASTCENC_DECOMPRESS_ONLY=0)
+    target_compile_options(astcenc PRIVATE
+        -ffunction-sections
+        -fdata-sections
+        -fvisibility=hidden
+        $<$<NOT:$<CONFIG:Debug>>:-flto=thin>
+    )
     target_link_libraries(vrplayer_native astcenc)
 endif()
 
