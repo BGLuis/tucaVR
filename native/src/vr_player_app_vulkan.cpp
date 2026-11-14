@@ -4388,6 +4388,19 @@ static void CreateUiImage(AppState& state, uint32_t width, uint32_t height,
     VKR(vkCreateImageView(state.vkDevice, &viewInfo, nullptr, &outView));
 }
 
+// The panel AImageReaders only allow 2 acquired images, so a copied frame must go back to its reader as soon as the
+// GPU copy finishes. Holding it until its swapchain slot is reacquired keeps up to one image per slot (3), starving
+// the reader: acquireLatestImage then fails forever and the panel freezes on its first (blank) frame.
+static void ReleaseCompletedPanelImages(AppState& state, EyeSwapchain& chain) {
+    for (size_t i = 0; i < chain.pendingImages.size(); i++) {
+        if (chain.pendingImages[i] == nullptr) continue;
+        const VkFence fence = (i < chain.copyFences.size()) ? chain.copyFences[i] : VK_NULL_HANDLE;
+        if (fence != VK_NULL_HANDLE && vkGetFenceStatus(state.vkDevice, fence) != VK_SUCCESS) continue;
+        AImage_delete(chain.pendingImages[i]);
+        chain.pendingImages[i] = nullptr;
+    }
+}
+
 // R-01 & R-06: Atualiza o swapchain OpenXR do painel a partir de um AHardwareBuffer
 // usando importacao direta como VkImage externa e copia por GPU (zero-copy),
 // eliminando lock de CPU, memcpy e vkQueueWaitIdle via fences por slot (Issue #151).
@@ -5344,6 +5357,11 @@ void CreateBrowserPipeline(AppState& state, android_app* app) {
 // Atualiza swapchains de UI/controles/modal a partir dos AImageReaders.
 // Chamado a cada frame antes de RenderFrame.
 void UpdateUiFrames(AppState& state) {
+    ReleaseCompletedPanelImages(state, state.uiPanelSwapchain);
+    ReleaseCompletedPanelImages(state, state.controlsPanelSwapchain);
+    ReleaseCompletedPanelImages(state, state.modalPanelSwapchain);
+    ReleaseCompletedPanelImages(state, state.browserPanelSwapchain);
+
     auto acquireAndUpdate = [&](AImageReader* reader, EyeSwapchain& panelChain, bool& hasFrame,
                                  uint32_t w, uint32_t h) {
         if (!reader) return;
@@ -11550,6 +11568,12 @@ void DestroyAppResources(AppState& state) {
     }
 
     // 10. AImageReaders (NDK) - deletados após recursos Vulkan estarem desfeitos
+    // AImageReader_delete frees its acquired images, so the panels' pending ones must go first (the device is idle
+    // here, so every copy fence has signaled).
+    ReleaseCompletedPanelImages(state, state.uiPanelSwapchain);
+    ReleaseCompletedPanelImages(state, state.controlsPanelSwapchain);
+    ReleaseCompletedPanelImages(state, state.modalPanelSwapchain);
+    ReleaseCompletedPanelImages(state, state.browserPanelSwapchain);
     if (state.uiImageReader != nullptr) {
         AImageReader_delete(state.uiImageReader);
         state.uiImageReader = nullptr;
@@ -11664,6 +11688,9 @@ void android_main(android_app* app) {
     }
 
     CreateReferenceSpace(state);
+    // Before CreateSwapchains: CreatePanelSwapchain allocates each panel's per-slot copy command buffers and fences
+    // from this pool, and without them every panel copy shares uiCopyCmd with no fence.
+    CreateCommandResources(state);
     CreateSwapchains(state);
     // Fase 0.4 T5: estado inicial do modo de foveação, persistido pelo Kotlin e
     // empurrado no startup (VRActivity.onCreate -> nativeSetFoveationMode / nativeSetFoveationEnabled).
@@ -11683,7 +11710,6 @@ void android_main(android_app* app) {
     CreateFramebuffers(state);
     CreateGraphicsPipeline(state);
     CreateQuadVertexBuffer(state);
-    CreateCommandResources(state);
     // 3D .cube Color LUT: sampler e textura de identidade inicial
     CreateLutResources(state);
     // Estagio 3: YCbCr + pipeline de video + vertex buffer de video
