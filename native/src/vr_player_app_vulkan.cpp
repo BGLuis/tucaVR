@@ -68,6 +68,7 @@
 #include "screen_layout.h"
 #include "bed_mode.h"
 #include "video_layer.h"
+#include "ycbcr_format.h"
 
 static_assert(VK_SAMPLE_COUNT_1_BIT == vrplayer::kMsaaSampleCount1 &&
                   VK_SAMPLE_COUNT_4_BIT == vrplayer::kMsaaSampleCount4,
@@ -733,6 +734,9 @@ struct EyeSwapchain {
     bool hasFdm = false;
     std::vector<VkImage> fdmImages;
     std::vector<VkImageView> fdmImageViews;
+    std::vector<VkCommandBuffer> copyCmds;
+    std::vector<VkFence> copyFences;
+    std::vector<AImage*> pendingImages;
 };
 
 // Representa um frame de video importado como VkImage a partir de um
@@ -1030,6 +1034,8 @@ struct AppState {
     VkDescriptorPool videoDescriptorPool = VK_NULL_HANDLE;
     VkPipelineLayout videoPipelineLayout = VK_NULL_HANDLE;
     VkPipeline videoPipeline = VK_NULL_HANDLE;
+    vrplayer::YcbcrFormatKey currentYcbcrKey{};
+    bool hasYcbcrKey = false;
     VkBuffer videoVertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory videoVertexMemory = VK_NULL_HANDLE;
 
@@ -2113,6 +2119,57 @@ void CreatePanelSwapchain(AppState& state, EyeSwapchain& chain, uint32_t width, 
     OXR(xrEnumerateSwapchainImages(
         chain.handle, imgCount, &imgCount,
         reinterpret_cast<XrSwapchainImageBaseHeader*>(chain.images.data())));
+
+    chain.copyCmds.resize(imgCount, VK_NULL_HANDLE);
+    chain.copyFences.resize(imgCount, VK_NULL_HANDLE);
+    chain.pendingImages.assign(imgCount, nullptr);
+
+    if (imgCount > 0 && state.vkDevice != VK_NULL_HANDLE && state.vkCommandPool != VK_NULL_HANDLE) {
+        VkCommandBufferAllocateInfo cmdAlloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+        cmdAlloc.commandPool = state.vkCommandPool;
+        cmdAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        cmdAlloc.commandBufferCount = imgCount;
+        VKR(vkAllocateCommandBuffers(state.vkDevice, &cmdAlloc, chain.copyCmds.data()));
+
+        VkFenceCreateInfo fenceInfo{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+        fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+        for (uint32_t i = 0; i < imgCount; i++) {
+            VKR(vkCreateFence(state.vkDevice, &fenceInfo, nullptr, &chain.copyFences[i]));
+        }
+    }
+}
+
+void DestroyPanelSwapchain(AppState& state, EyeSwapchain& chain) {
+    if (state.vkDevice != VK_NULL_HANDLE) {
+        if (!chain.copyFences.empty()) {
+            vkWaitForFences(state.vkDevice, static_cast<uint32_t>(chain.copyFences.size()),
+                            chain.copyFences.data(), VK_TRUE, UINT64_MAX);
+            for (VkFence& fence : chain.copyFences) {
+                if (fence != VK_NULL_HANDLE) {
+                    vkDestroyFence(state.vkDevice, fence, nullptr);
+                    fence = VK_NULL_HANDLE;
+                }
+            }
+            chain.copyFences.clear();
+        }
+        if (!chain.copyCmds.empty() && state.vkCommandPool != VK_NULL_HANDLE) {
+            vkFreeCommandBuffers(state.vkDevice, state.vkCommandPool,
+                                 static_cast<uint32_t>(chain.copyCmds.size()), chain.copyCmds.data());
+            chain.copyCmds.clear();
+        }
+    }
+    for (AImage*& img : chain.pendingImages) {
+        if (img != nullptr) {
+            AImage_delete(img);
+            img = nullptr;
+        }
+    }
+    chain.pendingImages.clear();
+    chain.images.clear();
+    if (chain.handle != XR_NULL_HANDLE) {
+        xrDestroySwapchain(chain.handle);
+        chain.handle = XR_NULL_HANDLE;
+    }
 }
 
 void CreateSwapchains(AppState& state) {
@@ -3247,29 +3304,12 @@ void CreateGraphicsPipeline(AppState& state) {
 // Quest 3 nao suportar o formato exato que o MediaCodec produz via
 // VkSamplerYcbcrConversion, esta funcao pode falhar ou produzir artefatos
 // de cor. A validacao em hardware e o ponto critico deste estagio.
-void CreateYcbcrAndVideoPipeline(AppState& state) {
+void CreateYcbcrAndVideoPipeline(AppState& state, const vrplayer::YcbcrFormatKey& key = vrplayer::YcbcrFormatKey{}) {
     // --- VkSamplerYcbcrConversion ---
-    // VK_FORMAT_UNDEFINED instrui o driver a usar o formato nativo do
-    // AHardwareBuffer (necessario para buffers externos Android).
-    VkExternalFormatANDROID externalFormat{VK_STRUCTURE_TYPE_EXTERNAL_FORMAT_ANDROID};
-    externalFormat.externalFormat = 0; // sera preenchido em GetOrImportVideoFrame
+    VkExternalFormatANDROID externalFormat{};
+    VkSamplerYcbcrConversionCreateInfo ycbcrInfo{};
+    vrplayer::PopulateYcbcrConversionCreateInfo(key, ycbcrInfo, externalFormat);
 
-    VkSamplerYcbcrConversionCreateInfo ycbcrInfo{
-        VK_STRUCTURE_TYPE_SAMPLER_YCBCR_CONVERSION_CREATE_INFO};
-    ycbcrInfo.pNext = &externalFormat;
-    ycbcrInfo.format = VK_FORMAT_UNDEFINED; // formato externo via AHardwareBuffer
-    // BT.709 e a matriz correta para o conteudo HD/4K/8K que o app foi feito
-    // para tocar (BT.601 e SD e desloca cor perceptivelmente, sobretudo em
-    // tons de pele/vermelhos).
-    ycbcrInfo.ycbcrModel = VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_709;
-    ycbcrInfo.ycbcrRange = VK_SAMPLER_YCBCR_RANGE_ITU_NARROW;
-    ycbcrInfo.components = {
-        VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY,
-        VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
-    ycbcrInfo.xChromaOffset = VK_CHROMA_LOCATION_MIDPOINT;
-    ycbcrInfo.yChromaOffset = VK_CHROMA_LOCATION_MIDPOINT;
-    ycbcrInfo.chromaFilter = VK_FILTER_LINEAR;
-    ycbcrInfo.forceExplicitReconstruction = VK_FALSE;
     // vkCreateSamplerYcbcrConversion foi promovida para core no Vulkan 1.1,
     // mas a libvulkan.so do NDK Android 26 pode nao a exportar diretamente.
     // Carregar via vkGetDeviceProcAddr e o caminho seguro (mesmo padrao usado
@@ -3289,8 +3329,8 @@ void CreateYcbcrAndVideoPipeline(AppState& state) {
 
     VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
     samplerInfo.pNext = &conversionInfo;
-    samplerInfo.magFilter = VK_FILTER_LINEAR;
-    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.magFilter = key.chromaFilter;
+    samplerInfo.minFilter = key.chromaFilter;
     samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
@@ -3568,6 +3608,18 @@ static void CreateVideoLayerConversionPipeline(AppState& state) {
 
     vkDestroyShaderModule(state.vkDevice, vertModule, nullptr);
     vkDestroyShaderModule(state.vkDevice, fragModule, nullptr);
+}
+
+static void DestroyVideoLayerConversionPipeline(AppState& state) {
+    VideoLayerState& layer = state.videoLayer;
+    if (layer.pipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, layer.pipeline, nullptr);
+        layer.pipeline = VK_NULL_HANDLE;
+    }
+    if (layer.pipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, layer.pipelineLayout, nullptr);
+        layer.pipelineLayout = VK_NULL_HANDLE;
+    }
 }
 
 // Draws the screen geometry (flat quad or curved mesh, which share the interleaved position+UV buffers) as
@@ -3954,14 +4006,7 @@ static void DestroyVideoLayerResources(AppState& state) {
         vkDestroyPipeline(state.vkDevice, layer.holePipeline, nullptr);
         layer.holePipeline = VK_NULL_HANDLE;
     }
-    if (layer.pipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(state.vkDevice, layer.pipeline, nullptr);
-        layer.pipeline = VK_NULL_HANDLE;
-    }
-    if (layer.pipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(state.vkDevice, layer.pipelineLayout, nullptr);
-        layer.pipelineLayout = VK_NULL_HANDLE;
-    }
+    DestroyVideoLayerConversionPipeline(state);
     if (layer.renderPass != VK_NULL_HANDLE) {
         vkDestroyRenderPass(state.vkDevice, layer.renderPass, nullptr);
         layer.renderPass = VK_NULL_HANDLE;
@@ -4028,10 +4073,11 @@ static void CreateUiImage(AppState& state, uint32_t width, uint32_t height,
 
 // R-01 & R-06: Atualiza o swapchain OpenXR do painel a partir de um AHardwareBuffer
 // usando importacao direta como VkImage externa e copia por GPU (zero-copy),
-// eliminando lock de CPU, memcpy e vkQueueWaitIdle.
-static void UpdatePanelSwapchainFromHwb(AppState& state, EyeSwapchain& panelChain,
-                                       AHardwareBuffer* hwb, uint32_t width, uint32_t height) {
-    if (!hwb || panelChain.handle == XR_NULL_HANDLE || state.uiCopyCmd == VK_NULL_HANDLE) return;
+// eliminando lock de CPU, memcpy e vkQueueWaitIdle via fences por slot (Issue #151).
+static bool UpdatePanelSwapchainFromHwb(AppState& state, EyeSwapchain& panelChain,
+                                        AHardwareBuffer* hwb, uint32_t width, uint32_t height,
+                                        AImage* image = nullptr) {
+    if (!hwb || panelChain.handle == XR_NULL_HANDLE) return false;
 
     // 1. Obter ou importar VkImage vinculada ao AHardwareBuffer
     auto it = state.uiHwbCache.find(hwb);
@@ -4040,7 +4086,7 @@ static void UpdatePanelSwapchainFromHwb(AppState& state, EyeSwapchain& panelChai
             vkGetDeviceProcAddr(state.vkDevice, "vkGetAndroidHardwareBufferPropertiesANDROID"));
         if (!pfnGetProperties) {
             LOGE("vkGetAndroidHardwareBufferPropertiesANDROID nao disponivel para UI");
-            return;
+            return false;
         }
 
         VkAndroidHardwareBufferFormatPropertiesANDROID formatProps{
@@ -4051,7 +4097,7 @@ static void UpdatePanelSwapchainFromHwb(AppState& state, EyeSwapchain& panelChai
 
         if (pfnGetProperties(state.vkDevice, hwb, &hwbProps) != VK_SUCCESS) {
             LOGE("vkGetAndroidHardwareBufferPropertiesANDROID falhou para UI");
-            return;
+            return false;
         }
 
         VkExternalMemoryImageCreateInfo extMemInfo{
@@ -4078,7 +4124,7 @@ static void UpdatePanelSwapchainFromHwb(AppState& state, EyeSwapchain& panelChai
         AppState::ImportedUiHwb imported{};
         if (vkCreateImage(state.vkDevice, &imgInfo, nullptr, &imported.image) != VK_SUCCESS) {
             LOGE("vkCreateImage para UI AHardwareBuffer falhou");
-            return;
+            return false;
         }
 
         VkImportAndroidHardwareBufferInfoANDROID importInfo{
@@ -4097,7 +4143,7 @@ static void UpdatePanelSwapchainFromHwb(AppState& state, EyeSwapchain& panelChai
         if (vkAllocateMemory(state.vkDevice, &memAlloc, nullptr, &imported.memory) != VK_SUCCESS) {
             LOGE("vkAllocateMemory para UI AHardwareBuffer falhou");
             vkDestroyImage(state.vkDevice, imported.image, nullptr);
-            return;
+            return false;
         }
         vkBindImageMemory(state.vkDevice, imported.image, imported.memory, 0);
         state.uiHwbCache[hwb] = imported;
@@ -4111,23 +4157,37 @@ static void UpdatePanelSwapchainFromHwb(AppState& state, EyeSwapchain& panelChai
     uint32_t imageIndex = 0;
     if (xrAcquireSwapchainImage(panelChain.handle, &acqInfo, &imageIndex) != XR_SUCCESS) {
         LOGE("xrAcquireSwapchainImage falhou para painel de UI");
-        return;
+        return false;
     }
 
     XrSwapchainImageWaitInfo waitInfo{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO};
     waitInfo.timeout = XR_INFINITE_DURATION;
     if (xrWaitSwapchainImage(panelChain.handle, &waitInfo) != XR_SUCCESS) {
         LOGE("xrWaitSwapchainImage falhou para painel de UI");
-        return;
+        return false;
     }
 
     VkImage dstImage = panelChain.images[imageIndex].image;
 
+    // Wait on the fence of the slot before reusing its command buffer or dropping its previous pending image (P-03).
+    if (imageIndex < panelChain.copyFences.size() && panelChain.copyFences[imageIndex] != VK_NULL_HANDLE) {
+        VKR(vkWaitForFences(state.vkDevice, 1, &panelChain.copyFences[imageIndex], VK_TRUE, UINT64_MAX));
+        VKR(vkResetFences(state.vkDevice, 1, &panelChain.copyFences[imageIndex]));
+    }
+    if (imageIndex < panelChain.pendingImages.size() && panelChain.pendingImages[imageIndex] != nullptr) {
+        AImage_delete(panelChain.pendingImages[imageIndex]);
+        panelChain.pendingImages[imageIndex] = nullptr;
+    }
+
+    VkCommandBuffer cmd = (imageIndex < panelChain.copyCmds.size() && panelChain.copyCmds[imageIndex] != VK_NULL_HANDLE)
+                              ? panelChain.copyCmds[imageIndex]
+                              : state.uiCopyCmd;
+
     // 3. Gravar cópia direta GPU -> GPU sem bloqueio de CPU (R-06)
-    VKR(vkResetCommandBuffer(state.uiCopyCmd, 0));
+    VKR(vkResetCommandBuffer(cmd, 0));
     VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
     beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    VKR(vkBeginCommandBuffer(state.uiCopyCmd, &beginInfo));
+    VKR(vkBeginCommandBuffer(cmd, &beginInfo));
 
     VkImageMemoryBarrier barriers[2]{};
     barriers[0].sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -4146,14 +4206,14 @@ static void UpdatePanelSwapchainFromHwb(AppState& state, EyeSwapchain& panelChai
     barriers[1].image = dstImage;
     barriers[1].subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
-    vkCmdPipelineBarrier(state.uiCopyCmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 2, barriers);
 
     VkImageCopy region{};
     region.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
     region.extent = {width, height, 1};
-    vkCmdCopyImage(state.uiCopyCmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+    vkCmdCopyImage(cmd, srcImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
                    dstImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
     VkImageMemoryBarrier dstBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
@@ -4165,26 +4225,27 @@ static void UpdatePanelSwapchainFromHwb(AppState& state, EyeSwapchain& panelChai
     dstBarrier.image = dstImage;
     dstBarrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
 
-    vkCmdPipelineBarrier(state.uiCopyCmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
         VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
         0, 0, nullptr, 0, nullptr, 1, &dstBarrier);
 
-    VKR(vkEndCommandBuffer(state.uiCopyCmd));
+    VKR(vkEndCommandBuffer(cmd));
 
+    VkFence submitFence = (imageIndex < panelChain.copyFences.size()) ? panelChain.copyFences[imageIndex] : VK_NULL_HANDLE;
     VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &state.uiCopyCmd;
-    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
+    submitInfo.pCommandBuffers = &cmd;
+    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, submitFence));
 
-    // D-01 fix: Aguardar conclusão da cópia GPU antes de liberar o swapchain
-    // para o compositor OpenXR. Sem este wait, o compositor pode ler a imagem
-    // parcialmente escrita, causando blocos visuais e desaparecimento dos painéis.
-    // Custo: ~0.1-0.5ms por frame (aceitável no budget de 11.1ms a 90Hz).
-    VKR(vkQueueWaitIdle(state.vkQueue));
+    // Store the adopted AImage to only be deleted once the slot's fence signals (P-03).
+    if (imageIndex < panelChain.pendingImages.size()) {
+        panelChain.pendingImages[imageIndex] = image;
+    }
 
     // 4. Liberar swapchain para o compositor OpenXR
     XrSwapchainImageReleaseInfo relInfo{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
     OXR(xrReleaseSwapchainImage(panelChain.handle, &relInfo));
+    return true;
 }
 
 // Inicializa a imagem do retículo laser uma única vez no swapchain dedicado
@@ -4973,15 +5034,34 @@ void UpdateUiFrames(AppState& state) {
         if (AImageReader_acquireLatestImage(reader, &image) == AMEDIA_OK && image) {
             AHardwareBuffer* hwb = nullptr;
             AImage_getHardwareBuffer(image, &hwb);
+            bool adopted = false;
             if (hwb) {
-                UpdatePanelSwapchainFromHwb(state, panelChain, hwb, w, h);
-                hasFrame = true;
+                adopted = UpdatePanelSwapchainFromHwb(state, panelChain, hwb, w, h, image);
+                if (adopted) {
+                    hasFrame = true;
+                }
             }
-            AImage_delete(image);
+            if (!adopted) {
+                AImage_delete(image);
+            }
         }
     };
     acquireAndUpdate(state.uiImageReader, state.uiPanelSwapchain, state.uiHasFrame, kUiTexWidth, kUiTexHeight);
-    acquireAndUpdate(state.controlsImageReader, state.controlsPanelSwapchain, state.controlsHasFrame, kControlsTexWidth, kControlsTexHeight);
+
+    const bool controlsVisible = (state.controlsAlpha > 0.05f);
+    if (!controlsVisible && state.controlsHasFrame) {
+        // Discard any incoming frame while hidden without copying to GPU swapchain (P-02)
+        if (state.controlsImageReader) {
+            AImage* image = nullptr;
+            if (AImageReader_acquireLatestImage(state.controlsImageReader, &image) == AMEDIA_OK && image) {
+                AImage_delete(image);
+            }
+        }
+    } else {
+        acquireAndUpdate(state.controlsImageReader, state.controlsPanelSwapchain, state.controlsHasFrame,
+                         kControlsTexWidth, kControlsTexHeight);
+    }
+
     acquireAndUpdate(state.modalImageReader, state.modalPanelSwapchain, state.modalHasFrame, kModalTexWidth, kModalTexHeight);
     if (g_browserActive.load() && !state.browserPipelineCreated) {
         state.browserPipelineCreated = true;
@@ -5223,6 +5303,25 @@ void CreateStereoPipeline(AppState& state) {
     vkDestroyShaderModule(state.vkDevice, vertMod, nullptr);
     vkDestroyShaderModule(state.vkDevice, fragMod, nullptr);
     LOGI("Estagio 5: pipeline estereo/esfera e cubemap/EAC criados");
+}
+
+static void DestroyStereoPipelines(AppState& state) {
+    if (state.stereoCubemapPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.stereoCubemapPipeline, nullptr);
+        state.stereoCubemapPipeline = VK_NULL_HANDLE;
+    }
+    if (state.stereoFlatPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.stereoFlatPipeline, nullptr);
+        state.stereoFlatPipeline = VK_NULL_HANDLE;
+    }
+    if (state.stereoPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.stereoPipeline, nullptr);
+        state.stereoPipeline = VK_NULL_HANDLE;
+    }
+    if (state.stereoPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.stereoPipelineLayout, nullptr);
+        state.stereoPipelineLayout = VK_NULL_HANDLE;
+    }
 }
 
 // Fase 0.3 Seção 8: Fotos 360° e Fotos 3D estéreo (T8.3, T8.4)
@@ -7900,6 +7999,17 @@ static void CreateAmbientDownsamplePipeline(AppState& state) {
     vkDestroyShaderModule(state.vkDevice, vertModule, nullptr);
 }
 
+static void DestroyAmbientDownsamplePipeline(AppState& state) {
+    if (state.ambientDownsamplePipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.ambientDownsamplePipeline, nullptr);
+        state.ambientDownsamplePipeline = VK_NULL_HANDLE;
+    }
+    if (state.ambientDownsamplePipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.ambientDownsamplePipelineLayout, nullptr);
+        state.ambientDownsamplePipelineLayout = VK_NULL_HANDLE;
+    }
+}
+
 // F3: pipeline do halo — reusa state.uiDescriptorSetLayout (amostra a
 // textura reduzida, RGBA normal); pipeline propria por causa do vertex
 // layout/push constant/fragment diferentes de CreateUiPipeline (mas o
@@ -8231,6 +8341,66 @@ void ClearVideoImageCache(AppState& state) {
     state.videoImageCache.clear();
 }
 
+static void RebuildYcbcrPipelines(AppState& state, const vrplayer::YcbcrFormatKey& key) {
+    // 1. Drain GPU queue so no pending draw call uses the retiring pipelines or layouts
+    if (state.vkQueue != VK_NULL_HANDLE) {
+        VKR(vkQueueWaitIdle(state.vkQueue));
+    }
+
+    // 2. Free all cached video frames tied to the old descriptor pool / conversion
+    ClearVideoImageCache(state);
+
+    // 3. Invalidate direct video layer state and destroy its conversion pipeline
+    InvalidateVideoLayerImages(state);
+    DestroyVideoLayerConversionPipeline(state);
+
+    // 4. Destroy stereo and ambient pipelines sharing videoDescriptorSetLayout
+    DestroyStereoPipelines(state);
+    DestroyAmbientDownsamplePipeline(state);
+
+    // 5. Destroy eye-buffer video pipeline, layouts, descriptor pool, sampler and conversion
+    if (state.videoPipeline != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.videoPipeline, nullptr);
+        state.videoPipeline = VK_NULL_HANDLE;
+    }
+    if (state.videoPipelineLayout != VK_NULL_HANDLE) {
+        vkDestroyPipelineLayout(state.vkDevice, state.videoPipelineLayout, nullptr);
+        state.videoPipelineLayout = VK_NULL_HANDLE;
+    }
+    if (state.videoDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.videoDescriptorPool, nullptr);
+        state.videoDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (state.videoDescriptorSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(state.vkDevice, state.videoDescriptorSetLayout, nullptr);
+        state.videoDescriptorSetLayout = VK_NULL_HANDLE;
+    }
+    if (state.videoSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(state.vkDevice, state.videoSampler, nullptr);
+        state.videoSampler = VK_NULL_HANDLE;
+    }
+    if (state.ycbcrConversion != VK_NULL_HANDLE) {
+        auto pfnDestroyYcbcrConversion = reinterpret_cast<PFN_vkDestroySamplerYcbcrConversion>(
+            vkGetDeviceProcAddr(state.vkDevice, "vkDestroySamplerYcbcrConversion"));
+        if (pfnDestroyYcbcrConversion) {
+            pfnDestroyYcbcrConversion(state.vkDevice, state.ycbcrConversion, nullptr);
+        }
+        state.ycbcrConversion = VK_NULL_HANDLE;
+    }
+
+    // 6. Build new YCbCr conversion, sampler, layouts, pool, and eye-buffer pipeline
+    CreateYcbcrAndVideoPipeline(state, key);
+
+    // 7. Recreate dependent pipelines using the new videoDescriptorSetLayout
+    CreateVideoLayerConversionPipeline(state);
+    CreateStereoPipeline(state);
+    CreateAmbientDownsamplePipeline(state);
+
+    // 8. Update active key
+    state.currentYcbcrKey = key;
+    state.hasYcbcrKey = true;
+}
+
 // Estagio 3: importa um AHardwareBuffer como VkImage via
 // VK_ANDROID_external_memory_android_hardware_buffer, cria ImageView e
 // aloca um descriptor set para ele. O resultado e armazenado no cache
@@ -8296,6 +8466,15 @@ VideoFrame* GetOrImportVideoFrame(AppState& state, AHardwareBuffer* buffer) {
         return nullptr;
     }
 
+    // Per-format YCbCr conversion and dependent pipeline rebuild (Issue #151)
+    vrplayer::YcbcrFormatKey key = vrplayer::YcbcrFormatKey::FromAndroidProperties(formatProps);
+    if (!state.hasYcbcrKey || state.currentYcbcrKey != key) {
+        LOGI("Video: YCbCr format change detected (model=%d range=%d externalFormat=0x%llx)",
+             static_cast<int>(key.ycbcrModel), static_cast<int>(key.ycbcrRange),
+             static_cast<unsigned long long>(key.externalFormat));
+        RebuildYcbcrPipelines(state, key);
+    }
+
     // Criar VkImage vinculada ao AHardwareBuffer externo
     VkExternalMemoryImageCreateInfo extMemInfo{
         VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO};
@@ -8304,16 +8483,17 @@ VideoFrame* GetOrImportVideoFrame(AppState& state, AHardwareBuffer* buffer) {
 
     VkExternalFormatANDROID extFormat{VK_STRUCTURE_TYPE_EXTERNAL_FORMAT_ANDROID};
     extFormat.pNext = &extMemInfo;
-    extFormat.externalFormat = formatProps.externalFormat;
+    extFormat.externalFormat = key.externalFormat;
 
     // Consultar dimensoes do AHardwareBuffer
     AHardwareBuffer_Desc hwbDesc{};
     AHardwareBuffer_describe(buffer, &hwbDesc);
 
     VkImageCreateInfo imageCreateInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
-    imageCreateInfo.pNext = &extFormat;
+    imageCreateInfo.pNext = (key.format == VK_FORMAT_UNDEFINED) ? static_cast<void*>(&extFormat)
+                                                                 : static_cast<void*>(&extMemInfo);
     imageCreateInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageCreateInfo.format = VK_FORMAT_UNDEFINED; // formato externo
+    imageCreateInfo.format = key.format; // formato externo ou conhecido
     imageCreateInfo.extent = {hwbDesc.width, hwbDesc.height, 1};
     imageCreateInfo.mipLevels = 1;
     imageCreateInfo.arrayLayers = 1;
@@ -8392,7 +8572,7 @@ VideoFrame* GetOrImportVideoFrame(AppState& state, AHardwareBuffer* buffer) {
     viewInfo.pNext = &viewConvInfo;
     viewInfo.image = frame.image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = VK_FORMAT_UNDEFINED; // deve coincidir com a imagem
+    viewInfo.format = key.format; // deve coincidir com a imagem
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.levelCount = 1;
     viewInfo.subresourceRange.layerCount = 1;
@@ -10613,22 +10793,8 @@ void DestroyAppResources(AppState& state) {
     state.pgsSubtitleReady = false;
 
     // 6. Pipelines estéreo, esfera 360/180 e cubemap/EAC
-    if (state.stereoCubemapPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(state.vkDevice, state.stereoCubemapPipeline, nullptr);
-        state.stereoCubemapPipeline = VK_NULL_HANDLE;
-    }
-    if (state.stereoFlatPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(state.vkDevice, state.stereoFlatPipeline, nullptr);
-        state.stereoFlatPipeline = VK_NULL_HANDLE;
-    }
-    if (state.stereoPipeline != VK_NULL_HANDLE) {
-        vkDestroyPipeline(state.vkDevice, state.stereoPipeline, nullptr);
-        state.stereoPipeline = VK_NULL_HANDLE;
-    }
-    if (state.stereoPipelineLayout != VK_NULL_HANDLE) {
-        vkDestroyPipelineLayout(state.vkDevice, state.stereoPipelineLayout, nullptr);
-        state.stereoPipelineLayout = VK_NULL_HANDLE;
-    }
+    DestroyStereoPipelines(state);
+
     // Fase 0.3 Seção 8: Pipelines e recursos de foto estática (T8.3, T8.4)
     DestroyPhotoTexture(state);
     if (state.photoStereoFlatPipeline != VK_NULL_HANDLE) {
@@ -11111,10 +11277,10 @@ void android_main(android_app* app) {
     for (auto& eye : state.eyes) {
         if (eye.handle != XR_NULL_HANDLE) xrDestroySwapchain(eye.handle);
     }
-    if (state.uiPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.uiPanelSwapchain.handle);
-    if (state.controlsPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.controlsPanelSwapchain.handle);
-    if (state.modalPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.modalPanelSwapchain.handle);
-    if (state.browserPanelSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.browserPanelSwapchain.handle);
+    DestroyPanelSwapchain(state, state.uiPanelSwapchain);
+    DestroyPanelSwapchain(state, state.controlsPanelSwapchain);
+    DestroyPanelSwapchain(state, state.modalPanelSwapchain);
+    DestroyPanelSwapchain(state, state.browserPanelSwapchain);
     if (state.cursorSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.cursorSwapchain.handle);
     if (state.beamSwapchain.handle != XR_NULL_HANDLE) xrDestroySwapchain(state.beamSwapchain.handle);
     if (state.localSpace != XR_NULL_HANDLE) xrDestroySpace(state.localSpace);

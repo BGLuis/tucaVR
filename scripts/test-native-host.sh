@@ -5,8 +5,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-BUILD_DIR="/tmp/tucavr_native_tests_build"
-mkdir -p "$BUILD_DIR"
+BUILD_DIR="$(mktemp -d /tmp/tucavr_native_tests_XXXXXX)"
 
 echo "=== Building and Running the Native C++ Unit Tests (Host) ==="
 
@@ -36,6 +35,7 @@ TESTS=(
     "test_color_grading"
     "test_video_layer"
     "test_frame_layer_bound"
+    "test_ycbcr_format"
 )
 
 EXTRA_FLAGS=()
