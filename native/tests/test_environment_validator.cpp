@@ -372,6 +372,15 @@ static void TestValidateEnvironmentFile() {
     std::cout << "[PASS] TestValidateEnvironmentFile (file loading variant tested)\n";
 }
 
+static void TestComputeEnvironmentTextureMipLevels() {
+    assert(ComputeEnvironmentTextureMipLevels(1, 1, false) == 1);
+    assert(ComputeEnvironmentTextureMipLevels(1024, 512, false) == 11);
+    assert(ComputeEnvironmentTextureMipLevels(2048, 2048, false) == 12);
+    assert(ComputeEnvironmentTextureMipLevels(0, 0, false) == 1);
+    assert(ComputeEnvironmentTextureMipLevels(2048, 2048, true) == 1);
+    std::cout << "[PASS] TestComputeEnvironmentTextureMipLevels (texture mip levels calculation)\n";
+}
+
 int main() {
     std::cout << "--- Executing unit tests for environment_validator.h ---\n";
     Test100kTrianglesAccepted();
@@ -384,6 +393,7 @@ int main() {
     TestInvalidGltfRejected();
     TestNonIndexedTriangles();
     TestValidateEnvironmentFile();
+    TestComputeEnvironmentTextureMipLevels();
     std::cout << "--- All environment_validator.h unit tests passed successfully! ---\n";
     return 0;
 }

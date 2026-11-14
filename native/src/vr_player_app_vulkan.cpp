@@ -3871,16 +3871,19 @@ static void DestroyVideoLayerResources(AppState& state) {
 // Usado para alocar as texturas de UI/controles antes do primeiro frame.
 static void CreateUiImage(AppState& state, uint32_t width, uint32_t height,
                           VkImage& outImage, VkDeviceMemory& outMemory, VkImageView& outView,
-                          VkFormat format = VK_FORMAT_R8G8B8A8_UNORM) {
+                          VkFormat format = VK_FORMAT_R8G8B8A8_UNORM,
+                          uint32_t mipLevels = 1) {
     VkImageCreateInfo imgInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
     imgInfo.imageType   = VK_IMAGE_TYPE_2D;
     imgInfo.format      = format;
     imgInfo.extent      = {width, height, 1};
-    imgInfo.mipLevels   = 1;
+    imgInfo.mipLevels   = mipLevels;
     imgInfo.arrayLayers = 1;
     imgInfo.samples     = VK_SAMPLE_COUNT_1_BIT;
     imgInfo.tiling      = VK_IMAGE_TILING_OPTIMAL;
-    imgInfo.usage       = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imgInfo.usage       = (mipLevels > 1)
+        ? (VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT)
+        : (VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     VKR(vkCreateImage(state.vkDevice, &imgInfo, nullptr, &outImage));
 
     VkMemoryRequirements memReqs;
@@ -3907,7 +3910,7 @@ static void CreateUiImage(AppState& state, uint32_t width, uint32_t height,
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format   = format;
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.levelCount = mipLevels;
     viewInfo.subresourceRange.layerCount = 1;
     VKR(vkCreateImageView(state.vkDevice, &viewInfo, nullptr, &outView));
 }
@@ -4302,7 +4305,7 @@ static void InitBeamSwapchain(AppState& state) {
 // (ver g_scrubOverlay* acima). Sem stride/lock: o buffer chega do Kotlin via
 // JNI ja compacto (largura*4 bytes por linha).
 static void UpdateUiImageFromBytes(AppState& state, const uint8_t* data, uint32_t width, uint32_t height, VkImage dstImage,
-                                   VkDeviceSize sizeBytes = 0) {
+                                   VkDeviceSize sizeBytes = 0, uint32_t mipLevels = 1) {
     const VkDeviceSize bufSize = sizeBytes ? sizeBytes : (VkDeviceSize)width * height * 4;
     VkBuffer stagingBuf;
     VkDeviceMemory stagingMem;
@@ -4352,7 +4355,7 @@ static void UpdateUiImageFromBytes(AppState& state, const uint8_t* data, uint32_
     barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
     barrier.image = dstImage;
-    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, mipLevels, 0, 1};
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
 
@@ -4363,12 +4366,66 @@ static void UpdateUiImageFromBytes(AppState& state, const uint8_t* data, uint32_
     vkCmdCopyBufferToImage(cmd, stagingBuf, dstImage,
         VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
-    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
-    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
-    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
-        VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    if (mipLevels <= 1) {
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    } else {
+        for (uint32_t level = 1; level < mipLevels; ++level) {
+            const int32_t prevWidth = static_cast<int32_t>(std::max(1u, width >> (level - 1)));
+            const int32_t prevHeight = static_cast<int32_t>(std::max(1u, height >> (level - 1)));
+            const int32_t curWidth = static_cast<int32_t>(std::max(1u, width >> level));
+            const int32_t curHeight = static_cast<int32_t>(std::max(1u, height >> level));
+
+            // 1. Pipeline barrier on level - 1: TRANSFER_DST_OPTIMAL -> TRANSFER_SRC_OPTIMAL
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 1, 0, 1};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+            // 2. Blit from level - 1 to level
+            VkImageBlit blit{};
+            blit.srcOffsets[0] = {0, 0, 0};
+            blit.srcOffsets[1] = {prevWidth, prevHeight, 1};
+            blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            blit.srcSubresource.mipLevel = level - 1;
+            blit.srcSubresource.baseArrayLayer = 0;
+            blit.srcSubresource.layerCount = 1;
+            blit.dstOffsets[0] = {0, 0, 0};
+            blit.dstOffsets[1] = {curWidth, curHeight, 1};
+            blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+            blit.dstSubresource.mipLevel = level;
+            blit.dstSubresource.baseArrayLayer = 0;
+            blit.dstSubresource.layerCount = 1;
+            vkCmdBlitImage(cmd, dstImage, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                           dstImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+
+            // 3. Pipeline barrier on level - 1: TRANSFER_SRC_OPTIMAL -> SHADER_READ_ONLY_OPTIMAL
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, level - 1, 1, 0, 1};
+            vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+        }
+
+        // Transition the last level (mipLevels - 1, levelCount = 1) from TRANSFER_DST_OPTIMAL to SHADER_READ_ONLY_OPTIMAL
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+        barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, mipLevels - 1, 1, 0, 1};
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    }
 
     VKR(vkEndCommandBuffer(cmd));
     VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
@@ -6104,6 +6161,7 @@ static void CreateEnvironmentTextureLayout(AppState& state) {
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_REPEAT;
     samplerInfo.anisotropyEnable = state.supportsAnisotropy ? VK_TRUE : VK_FALSE;
     samplerInfo.maxAnisotropy = state.supportsAnisotropy ? 4.0f : 1.0f;
+    samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
     VKR(vkCreateSampler(state.vkDevice, &samplerInfo, nullptr, &state.envTextureSampler));
 
     VkDescriptorSetLayoutBinding binding{};
@@ -7165,9 +7223,12 @@ static void DestroyEnvironmentTextures(AppState& state) {
 
 static void AddEnvironmentTexture(AppState& state, uint32_t width, uint32_t height, VkFormat format,
                                   const uint8_t* bytes, VkDeviceSize sizeBytes) {
+    const bool isAstc = (format == VK_FORMAT_ASTC_6x6_SRGB_BLOCK || format == VK_FORMAT_ASTC_6x6_UNORM_BLOCK);
+    const uint32_t mipLevels = ComputeEnvironmentTextureMipLevels(width, height, isAstc);
+
     EnvironmentTexture tex;
-    CreateUiImage(state, width, height, tex.image, tex.memory, tex.view, format);
-    UpdateUiImageFromBytes(state, bytes, width, height, tex.image, sizeBytes);
+    CreateUiImage(state, width, height, tex.image, tex.memory, tex.view, format, mipLevels);
+    UpdateUiImageFromBytes(state, bytes, width, height, tex.image, sizeBytes, mipLevels);
 
     VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
     alloc.descriptorPool = state.envTexturePool;
