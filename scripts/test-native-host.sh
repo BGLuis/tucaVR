@@ -52,6 +52,17 @@ if ! echo '#include <openxr/openxr.h>' | $CXX -E - >/dev/null 2>&1; then
     fi
 fi
 
+VULKAN_INCLUDE_FLAGS=()
+if ! echo '#include <vulkan/vulkan.h>' | $CXX -E - >/dev/null 2>&1; then
+    VULKAN_HEADER=$(find /opt/android-sdk /opt/android-ndk "$HOME/Android" "$HOME/.gradle/caches" -path "*/vulkan/src/include/vulkan/vulkan.h" -print -quit 2>/dev/null || true)
+    if [ -z "$VULKAN_HEADER" ]; then
+        VULKAN_HEADER=$(find /opt/android-sdk /opt/android-ndk "$HOME/Android" "$HOME/.gradle/caches" -name "vulkan.h" -print -quit 2>/dev/null || true)
+    fi
+    if [ -n "$VULKAN_HEADER" ]; then
+        VULKAN_INCLUDE_FLAGS+=("-I" "$(dirname "$(dirname "$VULKAN_HEADER")")")
+    fi
+fi
+
 # Extra sources a test links against (the vendored encoder is third-party code).
 ASTC_SOURCES=(native/src/astc_transcode.cpp native/third_party/astcenc/astcenc_*.cpp)
 
@@ -65,6 +76,7 @@ compile_test() {
         "${EXTRA_FLAGS[@]}" \
         -I native/include \
         "${OPENXR_INCLUDE_FLAGS[@]}" \
+        "${VULKAN_INCLUDE_FLAGS[@]}" \
         "native/tests/${name}.cpp" \
         "${extra_sources[@]}" \
         -pthread -o "$BUILD_DIR/${name}"

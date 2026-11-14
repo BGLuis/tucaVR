@@ -730,6 +730,9 @@ struct EyeSwapchain {
     std::vector<VkImage> depthImages;
     std::vector<VkDeviceMemory> depthMemories;
     std::vector<VkImageView> depthImageViews;
+    bool hasFdm = false;
+    std::vector<VkImage> fdmImages;
+    std::vector<VkImageView> fdmImageViews;
 };
 
 // Representa um frame de video importado como VkImage a partir de um
@@ -838,7 +841,11 @@ struct AppState {
     XrSpace localSpace = XR_NULL_HANDLE;
     std::array<EyeSwapchain, kEyeCount> eyes;
 
-    // Fase 0.4 T5: Foveated Rendering (XR_FB_foveation) — ver ApplyFoveation.
+    // Fase 0.4 T5: Foveated Rendering (XR_FB_foveation + XR_FB_foveation_vulkan + VK_EXT_fragment_density_map).
+    bool supportsFoveation = false;
+    bool supportsFoveationVulkan = false;
+    bool supportsFragmentDensityMap = false;
+    bool useFoveationFdm = false;
     PFN_xrCreateFoveationProfileFB pfnCreateFoveationProfileFB = nullptr;
     PFN_xrDestroyFoveationProfileFB pfnDestroyFoveationProfileFB = nullptr;
     PFN_xrUpdateSwapchainFB pfnUpdateSwapchainFB = nullptr;
@@ -1658,10 +1665,17 @@ void CreateXrInstance(AppState& state) {
 
     std::vector<const char*> extensions;
     extensions.push_back(XR_KHR_VULKAN_ENABLE_EXTENSION_NAME);
-    if (isExtensionSupported(XR_FB_FOVEATION_EXTENSION_NAME))
+    state.supportsFoveation = isExtensionSupported(XR_FB_FOVEATION_EXTENSION_NAME);
+    if (state.supportsFoveation)
         extensions.push_back(XR_FB_FOVEATION_EXTENSION_NAME);
     if (isExtensionSupported(XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME))
         extensions.push_back(XR_FB_FOVEATION_CONFIGURATION_EXTENSION_NAME);
+    state.supportsFoveationVulkan = isExtensionSupported(XR_FB_FOVEATION_VULKAN_EXTENSION_NAME);
+    if (state.supportsFoveationVulkan)
+        extensions.push_back(XR_FB_FOVEATION_VULKAN_EXTENSION_NAME);
+    LOGI("OpenXR: XR_FB_foveation %s, XR_FB_foveation_vulkan %s",
+         state.supportsFoveation ? "enabled" : "not available",
+         state.supportsFoveationVulkan ? "enabled" : "not available");
     if (isExtensionSupported(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME))
         extensions.push_back(XR_FB_SWAPCHAIN_UPDATE_STATE_EXTENSION_NAME);
     if (isExtensionSupported(XR_FB_DISPLAY_REFRESH_RATE_EXTENSION_NAME))
@@ -1934,6 +1948,47 @@ void CreateVulkanInstanceAndDevice(AppState& state) {
     addIfMissing(deviceExtStrings, VK_KHR_BIND_MEMORY_2_EXTENSION_NAME);
     addIfMissing(deviceExtStrings, VK_KHR_GET_MEMORY_REQUIREMENTS_2_EXTENSION_NAME);
 
+    // Fragment Density Map (VK_EXT_fragment_density_map) para foveated rendering Vulkan (T1.4 / #232).
+    uint32_t devExtCount = 0;
+    vkEnumerateDeviceExtensionProperties(state.vkPhysicalDevice, nullptr, &devExtCount, nullptr);
+    std::vector<VkExtensionProperties> devExtProps(devExtCount);
+    vkEnumerateDeviceExtensionProperties(state.vkPhysicalDevice, nullptr, &devExtCount, devExtProps.data());
+    bool deviceHasFdmExt = false;
+    for (const auto& ext : devExtProps) {
+        if (std::strcmp(ext.extensionName, VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME) == 0) {
+            deviceHasFdmExt = true;
+            break;
+        }
+    }
+
+    bool fdmFeatureSupported = false;
+    if (deviceHasFdmExt && state.supportsFoveationVulkan) {
+        auto pfnGetPhysicalDeviceFeatures2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+            vkGetInstanceProcAddr(state.vkInstance, "vkGetPhysicalDeviceFeatures2"));
+        if (!pfnGetPhysicalDeviceFeatures2) {
+            pfnGetPhysicalDeviceFeatures2 = reinterpret_cast<PFN_vkGetPhysicalDeviceFeatures2>(
+                vkGetInstanceProcAddr(state.vkInstance, "vkGetPhysicalDeviceFeatures2KHR"));
+        }
+        if (pfnGetPhysicalDeviceFeatures2) {
+            VkPhysicalDeviceFragmentDensityMapFeaturesEXT fdmFeaturesQuery{
+                VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT};
+            VkPhysicalDeviceFeatures2 features2Query{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+            features2Query.pNext = &fdmFeaturesQuery;
+            pfnGetPhysicalDeviceFeatures2(state.vkPhysicalDevice, &features2Query);
+            if (fdmFeaturesQuery.fragmentDensityMap == VK_TRUE) {
+                fdmFeatureSupported = true;
+            }
+        }
+    }
+
+    state.supportsFragmentDensityMap = fdmFeatureSupported;
+    if (state.supportsFragmentDensityMap) {
+        addIfMissing(deviceExtStrings, VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME);
+        LOGI("Vulkan: VK_EXT_fragment_density_map detectada e habilitada");
+    } else {
+        LOGI("Vulkan: VK_EXT_fragment_density_map nao disponivel ou nao suportada");
+    }
+
     std::vector<const char*> deviceExtPtrs;
     for (const auto& s : deviceExtStrings) deviceExtPtrs.push_back(s.c_str());
 
@@ -1983,13 +2038,27 @@ void CreateVulkanInstanceAndDevice(AppState& state) {
     }
     enabledFeatures.textureCompressionASTC_LDR = state.supportsAstc ? VK_TRUE : VK_FALSE;
 
+    VkPhysicalDeviceFragmentDensityMapFeaturesEXT enabledFdmFeatures{
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT};
+    enabledFdmFeatures.fragmentDensityMap = VK_TRUE;
+
+    VkPhysicalDeviceFeatures2 deviceFeatures2{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2};
+    deviceFeatures2.features = enabledFeatures;
+
     VkDeviceCreateInfo deviceCreateInfo{VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO};
-    deviceCreateInfo.pNext = &ycbcrFeatures;
+    if (state.supportsFragmentDensityMap) {
+        deviceFeatures2.pNext = &ycbcrFeatures;
+        ycbcrFeatures.pNext = &enabledFdmFeatures;
+        deviceCreateInfo.pNext = &deviceFeatures2;
+        deviceCreateInfo.pEnabledFeatures = nullptr; // VUID-VkDeviceCreateInfo-pNext-00373
+    } else {
+        deviceCreateInfo.pNext = &ycbcrFeatures;
+        deviceCreateInfo.pEnabledFeatures = &enabledFeatures;
+    }
     deviceCreateInfo.queueCreateInfoCount = 1;
     deviceCreateInfo.pQueueCreateInfos = &queueCreateInfo;
     deviceCreateInfo.enabledExtensionCount = static_cast<uint32_t>(deviceExtPtrs.size());
     deviceCreateInfo.ppEnabledExtensionNames = deviceExtPtrs.data();
-    deviceCreateInfo.pEnabledFeatures = &enabledFeatures;
     VKR(vkCreateDevice(state.vkPhysicalDevice, &deviceCreateInfo, nullptr, &state.vkDevice));
 
     vkGetDeviceQueue(state.vkDevice, state.vkQueueFamilyIndex, 0, &state.vkQueue);
@@ -2103,15 +2172,76 @@ void CreateSwapchains(AppState& state) {
         createInfo.faceCount = 1;
         createInfo.arraySize = 1;
         createInfo.mipCount = 1;
+
+        XrSwapchainCreateInfoFoveationFB fdmCreateInfo{XR_TYPE_SWAPCHAIN_CREATE_INFO_FOVEATION_FB};
+        fdmCreateInfo.flags = XR_SWAPCHAIN_CREATE_FOVEATION_FRAGMENT_DENSITY_MAP_BIT_FB;
+        const bool canUseFdm = state.supportsFoveation &&
+                               state.supportsFoveationVulkan &&
+                               state.supportsFragmentDensityMap;
+        if (canUseFdm) {
+            createInfo.next = &fdmCreateInfo;
+        }
+
         OXR(xrCreateSwapchain(state.session, &createInfo, &eyeChain.handle));
 
         uint32_t imageCount = 0;
         OXR(xrEnumerateSwapchainImages(eyeChain.handle, 0, &imageCount, nullptr));
         eyeChain.images.assign(imageCount, XrSwapchainImageVulkanKHR{XR_TYPE_SWAPCHAIN_IMAGE_VULKAN_KHR});
+
+        std::vector<XrSwapchainImageFoveationVulkanFB> fdmSwapchainImages;
+        if (canUseFdm) {
+            fdmSwapchainImages.assign(
+                imageCount,
+                XrSwapchainImageFoveationVulkanFB{XR_TYPE_SWAPCHAIN_IMAGE_FOVEATION_VULKAN_FB});
+            for (uint32_t j = 0; j < imageCount; j++) {
+                eyeChain.images[j].next = &fdmSwapchainImages[j];
+            }
+        }
+
         OXR(xrEnumerateSwapchainImages(
             eyeChain.handle, imageCount, &imageCount,
             reinterpret_cast<XrSwapchainImageBaseHeader*>(eyeChain.images.data())));
+
+        if (canUseFdm) {
+            bool allImagesValid = true;
+            for (uint32_t j = 0; j < imageCount; j++) {
+                if (fdmSwapchainImages[j].image == VK_NULL_HANDLE) {
+                    allImagesValid = false;
+                    break;
+                }
+            }
+            if (allImagesValid) {
+                eyeChain.fdmImages.resize(imageCount);
+                eyeChain.fdmImageViews.resize(imageCount, VK_NULL_HANDLE);
+                for (uint32_t j = 0; j < imageCount; j++) {
+                    eyeChain.fdmImages[j] = fdmSwapchainImages[j].image;
+
+                    VkImageViewCreateInfo fdmViewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+                    fdmViewInfo.image = eyeChain.fdmImages[j];
+                    fdmViewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+                    fdmViewInfo.format = VK_FORMAT_R8G8_UNORM;
+                    fdmViewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+                    fdmViewInfo.subresourceRange.baseMipLevel = 0;
+                    fdmViewInfo.subresourceRange.levelCount = 1;
+                    fdmViewInfo.subresourceRange.baseArrayLayer = 0;
+                    fdmViewInfo.subresourceRange.layerCount = 1;
+                    VKR(vkCreateImageView(state.vkDevice, &fdmViewInfo, nullptr, &eyeChain.fdmImageViews[j]));
+                }
+                eyeChain.hasFdm = true;
+                LOGI("Eye %d: Fragment density map swapchain images enumerated and views created (%u images)",
+                     eye, imageCount);
+            } else {
+                LOGW("Eye %d: XrSwapchainImageFoveationVulkanFB had null images, FDM disabled for this eye", eye);
+                eyeChain.hasFdm = false;
+            }
+        }
     }
+
+    state.useFoveationFdm = (state.eyes[0].hasFdm && state.eyes[1].hasFdm);
+    LOGI("Foveation: useFoveationFdm = %s (eye0=%s, eye1=%s)",
+         state.useFoveationFdm ? "true" : "false",
+         state.eyes[0].hasFdm ? "true" : "false",
+         state.eyes[1].hasFdm ? "true" : "false");
 
     auto createPanelChain = [&](EyeSwapchain& chain, uint32_t width, uint32_t height) {
         CreatePanelSwapchain(state, chain, width, height);
@@ -2124,16 +2254,14 @@ void CreateSwapchains(AppState& state) {
     createPanelChain(state.beamSwapchain, 32, 128);
 }
 
-// Fase 0.4 T5: Foveated Rendering fixo via XR_FB_foveation — NAO e Vulkan
-// VRS. E aplicado pelo COMPOSITOR do runtime OpenXR (ver aviso CAUTION da
-// secao 5 em docs/phases/PHASE-0.4-ADVANCED.md: foveacao manual no shader
-// causaria foveacao dupla). Chamada tanto na inicializacao quanto sempre que
-// get_foveation_enabled() muda de valor (polling de baixa frequencia no loop
-// principal — xrUpdateSwapchainFB troca estado do swapchain, nao e uma
-// operacao de frame). Nivel unico MEDIUM quando ligado, `dynamic =
-// LEVEL_ENABLED_FB` deixa o compositor ajustar a intensidade sozinho — nao
-// ha AdaptiveQualityManager/ThermalMonitor neste projeto ainda pra guiar
-// multiplos niveis (fase 0.2 secao 14, task separada).
+// Foveated Rendering: OpenXR XR_FB_foveation + XR_FB_foveation_vulkan combined with
+// the Vulkan VK_EXT_fragment_density_map device extension.
+// The OpenXR runtime allocates a 2D fragment density map (FDM) per swapchain image
+// via XrSwapchainCreateInfoFoveationFB and returns it in XrSwapchainImageFoveationVulkanFB.
+// This FDM is bound as an attachment to the eye render pass (VkRenderPassFragmentDensityMapCreateInfoEXT),
+// directing the Adreno GPU hardware to shade peripheral fragments at reduced densities.
+// Profiles are created via xrCreateFoveationProfileFB and applied to eye swapchains via
+// xrUpdateSwapchainFB whenever the enabled state, mode, or quality controller level changes.
 // ============================================================================
 // Fase 0.3 Seção 2 — Passthrough / Mixed Reality (XR_FB_passthrough)
 // ============================================================================
@@ -2637,47 +2765,16 @@ void CreateRenderPass(AppState& state) {
         requestedSamples);
     state.msaaSamples = static_cast<VkSampleCountFlagBits>(selectedSamples);
     const vrplayer::EyeRenderPassMsaaConfig msaaCfg =
-        vrplayer::BuildEyeRenderPassMsaaConfig(selectedSamples);
-
-    VkAttachmentDescription colorAttachment{};
-    colorAttachment.format = state.swapchainFormat;
-    colorAttachment.samples = state.msaaSamples;
-    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    colorAttachment.storeOp = msaaCfg.hasResolveAttachment
-                                  ? VK_ATTACHMENT_STORE_OP_DONT_CARE
-                                  : VK_ATTACHMENT_STORE_OP_STORE;
-    colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+        vrplayer::BuildEyeRenderPassMsaaConfig(
+            state.msaaSamples, state.swapchainFormat, state.depthFormat, state.useFoveationFdm);
 
     VkAttachmentReference colorRef{};
     colorRef.attachment = msaaCfg.colorAttachmentIndex;
     colorRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
-    VkAttachmentDescription depthAttachment{};
-    depthAttachment.format = state.depthFormat;
-    depthAttachment.samples = state.msaaSamples;
-    depthAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-    depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    depthAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    depthAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    depthAttachment.finalLayout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
     VkAttachmentReference depthRef{};
     depthRef.attachment = msaaCfg.depthAttachmentIndex;
     depthRef.layout = VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL;
-
-    VkAttachmentDescription resolveAttachment{};
-    resolveAttachment.format = state.swapchainFormat;
-    resolveAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
-    resolveAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    resolveAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    resolveAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
-    resolveAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-    resolveAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    resolveAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     VkAttachmentReference resolveRef{};
     resolveRef.attachment = msaaCfg.resolveAttachmentIndex;
@@ -2701,26 +2798,34 @@ void CreateRenderPass(AppState& state) {
     dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-    std::array<VkAttachmentDescription, 3> attachments = {
-        colorAttachment, depthAttachment, resolveAttachment};
+    VkRenderPassFragmentDensityMapCreateInfoEXT fdmCreateInfo{
+        VK_STRUCTURE_TYPE_RENDER_PASS_FRAGMENT_DENSITY_MAP_CREATE_INFO_EXT};
+    if (state.useFoveationFdm) {
+        fdmCreateInfo.fragmentDensityMapAttachment.attachment = msaaCfg.fdmAttachmentIndex;
+        fdmCreateInfo.fragmentDensityMapAttachment.layout =
+            VK_IMAGE_LAYOUT_FRAGMENT_DENSITY_MAP_OPTIMAL_EXT;
+    }
 
     VkRenderPassCreateInfo renderPassInfo{VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO};
+    renderPassInfo.pNext = state.useFoveationFdm ? &fdmCreateInfo : nullptr;
     renderPassInfo.attachmentCount = msaaCfg.attachmentCount;
-    renderPassInfo.pAttachments = attachments.data();
+    renderPassInfo.pAttachments = msaaCfg.attachments.data();
     renderPassInfo.subpassCount = 1;
     renderPassInfo.pSubpasses = &subpass;
     renderPassInfo.dependencyCount = 1;
     renderPassInfo.pDependencies = &dependency;
     VKR(vkCreateRenderPass(state.vkDevice, &renderPassInfo, nullptr, &state.renderPass));
-    LOGI("CreateRenderPass: renderPass created with color (%d), depth (%d), msaa=%ux (prop='%s')",
-         state.swapchainFormat, state.depthFormat, selectedSamples, msaaProp);
+    LOGI("CreateRenderPass: renderPass created with color (%d), depth (%d), msaa=%ux (prop='%s'), fdm=%s",
+         state.swapchainFormat, state.depthFormat, selectedSamples, msaaProp,
+         state.useFoveationFdm ? "true" : "false");
 }
 
 // Per swapchain image: 1x resolve VkImageView + optional transient 4x MSAA color
 // VkImage/VkImageView + transient depth VkImage/VkImageView + VkFramebuffer.
 void CreateFramebuffers(AppState& state) {
     const vrplayer::EyeRenderPassMsaaConfig msaaCfg =
-        vrplayer::BuildEyeRenderPassMsaaConfig(static_cast<uint32_t>(state.msaaSamples));
+        vrplayer::BuildEyeRenderPassMsaaConfig(
+            state.msaaSamples, state.swapchainFormat, state.depthFormat, state.useFoveationFdm);
 
     for (auto& eyeChain : state.eyes) {
         eyeChain.imageViews.resize(eyeChain.images.size());
@@ -2849,14 +2954,20 @@ void CreateFramebuffers(AppState& state) {
             depthViewInfo.subresourceRange.layerCount = 1;
             VKR(vkCreateImageView(state.vkDevice, &depthViewInfo, nullptr, &eyeChain.depthImageViews[i]));
 
-            std::array<VkImageView, 3> attachments{};
+            std::array<VkImageView, 4> attachments{};
             if (msaaCfg.hasResolveAttachment) {
                 attachments[0] = eyeChain.msaaColorImageViews[i];
                 attachments[1] = eyeChain.depthImageViews[i];
                 attachments[2] = eyeChain.imageViews[i];
+                if (state.useFoveationFdm) {
+                    attachments[3] = eyeChain.fdmImageViews[i];
+                }
             } else {
                 attachments[0] = eyeChain.imageViews[i];
                 attachments[1] = eyeChain.depthImageViews[i];
+                if (state.useFoveationFdm) {
+                    attachments[2] = eyeChain.fdmImageViews[i];
+                }
             }
 
             VkFramebufferCreateInfo fbInfo{VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO};
@@ -9140,11 +9251,15 @@ void RenderFrame(AppState& state) {
         state.foveationPollAccumMs += frameMs;
         if (state.foveationPollAccumMs >= AppState::kFoveationPollIntervalMs) {
             state.foveationPollAccumMs = 0.0f;
-            uint32_t fovMode = get_foveation_mode();
+            const uint32_t fovEnabled = get_foveation_enabled();
+            const uint32_t fovMode = get_foveation_mode();
             uint32_t targetLevel = 0;
             float targetOffset = 0.0f;
 
-            if (fovMode == 4) { // Auto: guiado pelo QualityController
+            if (fovEnabled == 0) {
+                targetLevel = 0;
+                targetOffset = 0.0f;
+            } else if (fovMode == 4) { // Auto: guiado pelo QualityController
                 targetLevel = state.activeFoveationLevel;
                 targetOffset = state.activeFoveationVerticalOffset;
             } else if (fovMode >= 1 && fovMode <= 3) { // Fixo: Low, Medium, High
@@ -9155,7 +9270,9 @@ void RenderFrame(AppState& state) {
                 targetOffset = 0.0f;
             }
 
-            if (targetLevel != state.foveationCurrentlyAppliedLevel ||
+            const bool enabledChanged = ((targetLevel != 0) != state.foveationCurrentlyApplied);
+            if (enabledChanged ||
+                targetLevel != state.foveationCurrentlyAppliedLevel ||
                 std::abs(targetOffset - state.foveationCurrentlyAppliedOffset) > 0.1f) {
                 ApplyFoveation(state, targetLevel, targetOffset);
             }
@@ -10629,6 +10746,14 @@ void DestroyAppResources(AppState& state) {
             }
         }
         eyeChain.imageViews.clear();
+        for (auto fdmImageView : eyeChain.fdmImageViews) {
+            if (fdmImageView != VK_NULL_HANDLE) {
+                vkDestroyImageView(state.vkDevice, fdmImageView, nullptr);
+            }
+        }
+        eyeChain.fdmImageViews.clear();
+        eyeChain.fdmImages.clear();
+        eyeChain.hasFdm = false;
     }
 
     // 10. Recursos de Ambiente Virtual 3D
@@ -10839,9 +10964,10 @@ void android_main(android_app* app) {
     CreateReferenceSpace(state);
     CreateSwapchains(state);
     // Fase 0.4 T5: estado inicial do modo de foveação, persistido pelo Kotlin e
-    // empurrado no startup (VRActivity.onCreate -> nativeSetFoveationMode).
+    // empurrado no startup (VRActivity.onCreate -> nativeSetFoveationMode / nativeSetFoveationEnabled).
+    uint32_t startupFovEnabled = get_foveation_enabled();
     uint32_t startupFovMode = get_foveation_mode();
-    uint32_t startupLevel = (startupFovMode == 4) ? 1 : startupFovMode;
+    uint32_t startupLevel = (startupFovEnabled == 0) ? 0 : ((startupFovMode == 4) ? 1 : startupFovMode);
     state.activeFoveationLevel = startupLevel;
     state.activeFoveationVerticalOffset = 0.0f;
     ApplyFoveation(state, startupLevel, 0.0f);
