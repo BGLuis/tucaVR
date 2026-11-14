@@ -463,15 +463,44 @@ jobs:
           ./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26
 
       - name: Build Unified Script (Rust + C++ + Gradle)
+        id: apk-build
         env:
           PKG_CONFIG_PATH: ${{ github.workspace }}/ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/pkgconfig
           RUSTC_WRAPPER: sccache
           SCCACHE_GHA_ENABLED: "true"
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           export ANDROID_SDK_HOME="$ANDROID_HOME"
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
           export BINDGEN_EXTRA_CLANG_ARGS="-I$GITHUB_WORKSPACE/ffmpeg-android-maker/output/include/arm64-v8a -I$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          ./scripts/build.sh
+          KEYSTORE_FILE=""
+          cleanup() {
+            if [ -n "$KEYSTORE_FILE" ] && [ -f "$KEYSTORE_FILE" ]; then
+              rm -f "$KEYSTORE_FILE"
+            fi
+          }
+          trap cleanup EXIT
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            KEYSTORE_FILE="$RUNNER_TEMP/release-keystore.jks"
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_FILE"
+            export KEYSTORE_PATH="$KEYSTORE_FILE"
+          else
+            echo "::warning::Release signing secrets not configured; building unsigned release APK."
+          fi
+          ./scripts/build.sh --release
+          if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
+            APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+            "$APKSIGNER" verify --verbose app/build/outputs/apk/release/app-release.apk
+            echo "apk_path=app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_OUTPUT"
+          elif [ -f "app/build/outputs/apk/release/app-release-unsigned.apk" ]; then
+            echo "apk_path=app/build/outputs/apk/release/app-release-unsigned.apk" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::No release APK was produced."
+            exit 1
+          fi
 
       - name: Sanitize artifact name
         id: artifact-meta
@@ -483,6 +512,6 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.artifact-meta.outputs.name }}
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.apk-build.outputs.apk_path }}
           retention-days: 7
           if-no-files-found: error
