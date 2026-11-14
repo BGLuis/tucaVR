@@ -96,10 +96,10 @@ void main() {
         uv.x = uv.x * 0.5 + float(eye) * 0.5;
     }
 
-    // polarMode != 0: skip SGSR1 near crop return above (LOD derivative diverges, black screen on Adreno).
-    vec3 color = (vSharpness <= 0.01 || vTexelSize.x <= 0.0 || vTexelSize.y <= 0.0 || polarMode != 0)
+    // polarMode != 0: skip SGSR1 / derivative downsampling near crop return above (LOD derivative diverges).
+    vec3 color = (polarMode != 0 || vTexelSize.x <= 0.0 || vTexelSize.y <= 0.0)
         ? texture(videoTexture, uv).rgb
-        : ApplySGSR1(uv, vSharpness, vTexelSize);
+        : SampleVideoSgsrOrLinear(uv, vSharpness, vTexelSize);
     if (vIsHdr != 0) {
         color = TonemapHdrToSdr(color, vIsHdr, vHdrLuminance);
     }

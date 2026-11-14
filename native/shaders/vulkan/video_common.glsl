@@ -193,6 +193,38 @@ vec3 ApplySGSR1(vec2 uv, float sharpness, vec2 texelSize) {
     return mix(c, finalColor, clamp(sharpness * 1.5, 0.0, 1.0));
 }
 
+// Multi-tap box-bilinear area downsampling filter.
+// Smooths high-frequency detail and eliminates shimmering when minifying video textures.
+vec3 SampleVideoDownscale(vec2 uv, vec2 texelSize) {
+    vec2 fw = max(fwidth(uv), texelSize);
+    vec2 offset = fw * 0.333333;
+    vec3 center = texture(videoTexture, uv).rgb;
+    vec3 s0 = texture(videoTexture, uv + vec2(-offset.x, -offset.y)).rgb;
+    vec3 s1 = texture(videoTexture, uv + vec2( offset.x, -offset.y)).rgb;
+    vec3 s2 = texture(videoTexture, uv + vec2(-offset.x,  offset.y)).rgb;
+    vec3 s3 = texture(videoTexture, uv + vec2( offset.x,  offset.y)).rgb;
+    return center * 0.36 + (s0 + s1 + s2 + s3) * 0.16;
+}
+
+// Unified video texture sampler:
+// - Uses multi-tap area downsampling when minifying (downscaling) the video texture
+//   to eliminate high-frequency shimmering and aliasing.
+// - Uses SGSR1 edge-adaptive upscaling when magnifying with sharpness > 0.01.
+// - Falls back to standard bilinear texture fetch otherwise.
+vec3 SampleVideoSgsrOrLinear(vec2 uv, float sharpness, vec2 texelSize) {
+    if (texelSize.x <= 0.0 || texelSize.y <= 0.0) {
+        return texture(videoTexture, uv).rgb;
+    }
+    vec2 fw = fwidth(uv);
+    if (fw.x > texelSize.x * 1.05 || fw.y > texelSize.y * 1.05) {
+        return SampleVideoDownscale(uv, texelSize);
+    }
+    if (sharpness > 0.01) {
+        return ApplySGSR1(uv, sharpness, texelSize);
+    }
+    return texture(videoTexture, uv).rgb;
+}
+
 // Exact piecewise sRGB EOTF. The eye swapchain is an *_SRGB format, so the hardware applies the
 // sRGB OETF on write; linearizing the video's gamma-coded value here makes that encode round-trip to the
 // original code value instead of encoding twice.

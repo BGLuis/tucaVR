@@ -44,6 +44,11 @@ struct ScreenScale {
     float y = kDefaultBaseScreenHeight;
 };
 
+struct PanelTargetExtent {
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
+
 struct SampleAspectRatio {
     uint32_t num = 1;
     uint32_t den = 1;
@@ -147,6 +152,74 @@ inline ScreenScale CalculateVideoFitBounds(uint32_t videoWidth, uint32_t videoHe
                                            float maxBoundHeight = kDefaultBaseScreenHeight) {
     const float aspect = CalculateContentAspectRatio(videoWidth, videoHeight, mode);
     return ComputeFitBounds(aspect, maxBoundWidth, maxBoundHeight);
+}
+
+// Computes the target video resolution (pixel width and height) adapted to the angular resolution
+// of the virtual screen on the physical headset display.
+//
+// Angular subtense formula:
+//   theta = 2.0f * std::atan(size / (2.0f * distance)) * (180.0f / pi)
+// Target lines = theta * panelPpd * oversampleFactor
+//
+// Preserves the video's aspect ratio and ensures that content is never upscaled above its
+// native dimensions (videoWidth x videoHeight). Dimensions are aligned to even values for
+// hardware video/YCbCr swapchains.
+inline PanelTargetExtent ComputePanelTargetVideoExtent(uint32_t videoWidth, uint32_t videoHeight, float screenWidthM,
+                                                       float screenHeightM, float distanceM, float panelPpd = 25.0f,
+                                                       float oversampleFactor = 2.0f) {
+    if (videoWidth == 0 || videoHeight == 0) {
+        return {0, 0};
+    }
+    if (!std::isfinite(distanceM) || distanceM <= 0.001f || !std::isfinite(panelPpd) || panelPpd <= 0.001f ||
+        !std::isfinite(oversampleFactor) || oversampleFactor <= 0.001f ||
+        (!std::isfinite(screenWidthM) && !std::isfinite(screenHeightM)) ||
+        (screenWidthM <= 0.001f && screenHeightM <= 0.001f)) {
+        return {videoWidth, videoHeight};
+    }
+
+    constexpr float kPi = 3.14159265358979323846f;
+    const float videoAspect = static_cast<float>(videoWidth) / static_cast<float>(videoHeight);
+
+    float contentW = 0.0f;
+    float contentH = 0.0f;
+    if (screenWidthM <= 0.001f) {
+        contentH = screenHeightM;
+        contentW = screenHeightM * videoAspect;
+    } else if (screenHeightM <= 0.001f) {
+        contentW = screenWidthM;
+        contentH = screenWidthM / videoAspect;
+    } else {
+        const ScreenScale fit = ComputeFitBounds(videoAspect, screenWidthM, screenHeightM);
+        contentW = fit.x;
+        contentH = fit.y;
+    }
+
+    const float radH = 2.0f * std::atan(contentH / (2.0f * distanceM));
+    const float degH = radH * (180.0f / kPi);
+    const float targetLinesH = degH * panelPpd * oversampleFactor;
+
+    const float radW = 2.0f * std::atan(contentW / (2.0f * distanceM));
+    const float degW = radW * (180.0f / kPi);
+    const float targetLinesW = degW * panelPpd * oversampleFactor;
+
+    const float scaleH = targetLinesH / static_cast<float>(videoHeight);
+    const float scaleW = targetLinesW / static_cast<float>(videoWidth);
+    const float scale = std::min(1.0f, std::max(scaleH, scaleW));
+
+    uint32_t targetH = static_cast<uint32_t>(std::lround(static_cast<float>(videoHeight) * scale));
+    uint32_t targetW = static_cast<uint32_t>(std::lround(static_cast<float>(videoWidth) * scale));
+
+    if (targetH > 2 && (targetH % 2 != 0)) {
+        targetH = (targetH + 1u <= videoHeight) ? (targetH + 1u) : (targetH - 1u);
+    }
+    if (targetW > 2 && (targetW % 2 != 0)) {
+        targetW = (targetW + 1u <= videoWidth) ? (targetW + 1u) : (targetW - 1u);
+    }
+
+    targetW = std::clamp(targetW, 2u, videoWidth);
+    targetH = std::clamp(targetH, 2u, videoHeight);
+
+    return {targetW, targetH};
 }
 
 // Computes geometric curvature parameters for a cylindrical screen given curvature in [0, 1]

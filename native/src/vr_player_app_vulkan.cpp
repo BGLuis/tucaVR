@@ -3793,8 +3793,27 @@ static bool PrepareVideoLayerChains(
     VideoLayerState& layer = state.videoLayer;
     if (!layer.available) return false;
 
+    uint32_t targetMaxWidth = 0;
+    uint32_t targetMaxHeight = 0;
+    if (!vrplayer::IsEquirectVideoLayerMode(state.screenMode)) {
+        const float baseDistance = std::fabs(state.defaultScreenPosition.z) > 0.1f
+                                       ? std::fabs(state.defaultScreenPosition.z)
+                                       : 2.4f;
+        const float baseW = state.baseScaleX > 0.1f ? state.baseScaleX : vrplayer::kDefaultBaseScreenWidth;
+        const float baseH = state.baseScaleY > 0.1f ? state.baseScaleY : vrplayer::kDefaultBaseScreenHeight;
+        const uint32_t perEyeW =
+            (layout == vrplayer::VideoLayerLayout::SideBySide) ? std::max(1u, frame.width / 2) : frame.width;
+        const uint32_t perEyeH =
+            (layout == vrplayer::VideoLayerLayout::OverUnder) ? std::max(1u, frame.height / 2) : frame.height;
+        const vrplayer::PanelTargetExtent target =
+            vrplayer::ComputePanelTargetVideoExtent(perEyeW, perEyeH, baseW, baseH, baseDistance);
+        targetMaxWidth = target.width;
+        targetMaxHeight = target.height;
+    }
+
     const vrplayer::VideoLayerExtent extent =
-        vrplayer::ComputeVideoLayerExtent(frame.width, frame.height, layout, layer.maxWidth, layer.maxHeight);
+        vrplayer::ComputeVideoLayerExtent(frame.width, frame.height, layout, layer.maxWidth, layer.maxHeight,
+                                          targetMaxWidth, targetMaxHeight);
     if (extent.width == 0 || extent.height == 0) return false;
 
     const uint32_t wantedCount = perEye ? kEyeCount : 1;

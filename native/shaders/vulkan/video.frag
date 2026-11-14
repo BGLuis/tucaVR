@@ -21,9 +21,7 @@ layout(location = 9) flat in float vColorTemperature;
 layout(location = 0) out vec4 outColor;
 
 void main() {
-    vec3 color = (vSharpness <= 0.01 || vTexelSize.x <= 0.0 || vTexelSize.y <= 0.0)
-        ? texture(videoTexture, vTexCoord).rgb
-        : ApplySGSR1(vTexCoord, vSharpness, vTexelSize);
+    vec3 color = SampleVideoSgsrOrLinear(vTexCoord, vSharpness, vTexelSize);
     if (vIsHdr != 0) {
         color = TonemapHdrToSdr(color, vIsHdr, vHdrLuminance);
     }
