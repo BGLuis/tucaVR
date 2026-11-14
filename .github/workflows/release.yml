@@ -2,8 +2,9 @@ name: tucaVR Release (Auto & Manual)
 
 on:
   # Triggers after the CI (tucaVR CI / main.yml) finishes successfully on main — the
-  # pre-release so nasce apos a validacao, e reaproveitamos o APK que o CI ja compilou
+  # pre-release is only created after validation, and we reuse the APK already built by CI
   # instead of rebuilding from scratch (see the build-and-release job below).
+  # zizmor: ignore[dangerous-triggers] - guarded on every job to only accept push events on main from this repository
   workflow_run:
     workflows: [ "tucaVR CI" ]
     types: [ completed ]
@@ -27,8 +28,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false # Releases must not be aborted if new commits come in
 
-permissions:
-  contents: read
+permissions: {}
 
 env:
   JAVA_VERSION: '17'
@@ -39,11 +39,17 @@ jobs:
   # Looks for a successful tucaVR CI (main.yml) run, for the commit being released,
   # that has already built the same APK — avoids rebuilding from scratch on every push to main.
   locate-artifact:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
-    runs-on: ubuntu-24.04
+    name: Locate CI Artifact
+    if: >-
+      github.event_name != 'workflow_run'
+      || (github.event.workflow_run.conclusion == 'success'
+          && github.event.workflow_run.event == 'push'
+          && github.event.workflow_run.head_branch == 'main'
+          && github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-slim
     timeout-minutes: 5
     permissions:
-      actions: read
+      actions: read # List workflow runs to locate the prebuilt APK artifact
     outputs:
       run_id: ${{ steps.find.outputs.run_id }}
     steps:
@@ -51,26 +57,36 @@ jobs:
         id: find
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
-          RUN_ID=$(gh api "repos/${{ github.repository }}/actions/runs?head_sha=${SHA}&status=success&per_page=20" \
+          RUN_ID=$(gh api "repos/${GH_REPO}/actions/runs?head_sha=${SHA}&status=success&per_page=20" \
             --jq '[.workflow_runs[] | select(.name=="tucaVR CI")] | sort_by(.created_at) | reverse | .[0].id // empty')
           echo "run_id=${RUN_ID}" >> "$GITHUB_OUTPUT"
-          echo "Commit ${SHA}: run_id do tucaVR CI encontrado = '${RUN_ID:-<nenhum>}'"
+          echo "Commit ${SHA}: tucaVR CI run_id = '${RUN_ID:-<none>}'"
 
   build-and-release:
+    name: Build & Publish Release
     needs: locate-artifact
-    if: always() && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
+    if: >-
+      !cancelled()
+      && (github.event_name != 'workflow_run'
+          || (github.event.workflow_run.conclusion == 'success'
+              && github.event.workflow_run.event == 'push'
+              && github.event.workflow_run.head_branch == 'main'
+              && github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-24.04
     timeout-minutes: 40
+    cache-mode: none # Release/publish job: never restore or save caches
     permissions:
-      contents: write # Strictly needed only to create the release
-      actions: read # Needed to download an artifact from another run (reusing the CI's APK)
+      contents: write # Create the GitHub Release and upload assets
+      actions: read # Download the prebuilt APK artifact from the matching CI run
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
 
       # Fast path: the tucaVR CI already built this exact commit — reuse its APK
       # instead of redoing the whole Rust+FFmpeg+C+++Gradle build. If it fails (artifact
@@ -95,87 +111,39 @@ jobs:
 
       - name: Set up JDK ${{ env.JAVA_VERSION }}
         if: steps.reuse.outcome != 'success'
-        uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6 # v6.0.1
+        uses: actions/setup-java@77dd5b2ce225ea11469928ac317850245a74ae78 # v6.2.0
         with:
           java-version: ${{ env.JAVA_VERSION }}
           distribution: ${{ env.JAVA_DISTRO }}
 
       - name: Setup Gradle
         if: steps.reuse.outcome != 'success'
-        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
-          cache-provider: basic
+          cache-disabled: true
 
       - name: Setup Rust (Android)
         if: steps.reuse.outcome != 'success'
-        uses: dtolnay/rust-toolchain@686976e191b89faba57d3206551f0f330d8cb249 # stable
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
           targets: aarch64-linux-android
 
-      - name: Rust Cache
-        if: steps.reuse.outcome != 'success'
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          workspaces: "rust -> rust/target"
-
-      - name: Setup sccache
-        if: steps.reuse.outcome != 'success'
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-
-      - name: Cache ccache (native C++ build)
-        if: steps.reuse.outcome != 'success'
-        uses: hendrikmuhs/ccache-action@f09c25b45002a07be2955cbe52e8cee55643f89d # v1.2.24
-        with:
-          key: native-build-${{ runner.os }}
-          max-size: 500M
-
-      - name: Cache cargo-ndk
-        if: steps.reuse.outcome != 'success'
-        id: cache-cargo-ndk
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ~/.cargo/bin/cargo-ndk
-          key: ${{ runner.os }}-cargo-ndk-bin-v1
-
       - name: Install cargo-ndk
-        if: steps.reuse.outcome != 'success' && steps.cache-cargo-ndk.outputs.cache-hit != 'true'
+        if: steps.reuse.outcome != 'success'
         run: cargo install cargo-ndk --locked
 
-      - name: Cache Android NDK
-        if: steps.reuse.outcome != 'success'
-        id: cache-ndk
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: /usr/local/lib/android/sdk/ndk/26.3.11579264
-          key: ${{ runner.os }}-ndk-${{ env.NDK_VERSION }}
-
       - name: Setup Android NDK
-        if: steps.reuse.outcome != 'success' && steps.cache-ndk.outputs.cache-hit != 'true'
-        run: |
-          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;${{ env.NDK_VERSION }}"
-
-      - name: Configure Android NDK Environment
         if: steps.reuse.outcome != 'success'
         run: |
-          echo "ANDROID_NDK_HOME=${ANDROID_HOME}/ndk/${{ env.NDK_VERSION }}" >> "$GITHUB_ENV"
-          echo "ANDROID_SDK_HOME=${ANDROID_HOME}" >> "$GITHUB_ENV"
-
-      - name: Cache FFmpeg Build
-        if: steps.reuse.outcome != 'success'
-        id: cache-ffmpeg
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ffmpeg-android-maker
-          key: ${{ runner.os }}-ffmpeg-${{ hashFiles('scripts/setup-deps.sh') }}-v2
+          echo "y" | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$NDK_VERSION"
 
       - name: Setup and Compile FFmpeg
-        if: steps.reuse.outcome != 'success' && steps.cache-ffmpeg.outputs.cache-hit != 'true'
+        if: steps.reuse.outcome != 'success'
         run: |
-          ./scripts/setup-deps.sh
           cd ffmpeg-android-maker
           export ANDROID_SDK_HOME="$ANDROID_HOME"
-          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/${{ env.NDK_VERSION }}"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
           ./ffmpeg-android-maker.sh --target-abis=arm64-v8a --android-api-level=26
 
       - name: Determine Release Configuration
@@ -204,9 +172,10 @@ jobs:
               echo "rel_name=Release $INPUT_TAG"
               echo "rel_tag=$INPUT_TAG"
               echo "is_prerelease=$INPUT_PRERELEASE"
-              echo "APP_VERSION_NAME=$CLEAN_VERSION"
-              echo "APP_VERSION_CODE=$SYS_CODE"
-            } >> "$GITHUB_ENV"
+              echo "app_version_name=$CLEAN_VERSION"
+              echo "app_version_code=$SYS_CODE"
+              echo "ref_type=$REF_TYPE"
+            } >> "$GITHUB_OUTPUT"
           elif [[ "$REF_TYPE" == "tag" ]]; then
             CLEAN_VERSION="${REF_NAME#v}"
             IS_PRE="false"
@@ -217,45 +186,63 @@ jobs:
               echo "rel_name=Release $REF_NAME"
               echo "rel_tag=$REF_NAME"
               echo "is_prerelease=$IS_PRE"
-              echo "APP_VERSION_NAME=$CLEAN_VERSION"
-              echo "APP_VERSION_CODE=$SYS_CODE"
-            } >> "$GITHUB_ENV"
+              echo "app_version_name=$CLEAN_VERSION"
+              echo "app_version_code=$SYS_CODE"
+              echo "ref_type=$REF_TYPE"
+            } >> "$GITHUB_OUTPUT"
           else
             # Push to the main branch: uses the system version with the build number
             {
               echo "rel_name=Release v${SYS_VERSION} (Build #${RUN_NUMBER})"
               echo "rel_tag=v${SYS_VERSION}-build.${RUN_NUMBER}"
               echo "is_prerelease=true"
-              echo "APP_VERSION_NAME=${SYS_VERSION}-build.${RUN_NUMBER}"
-              echo "APP_VERSION_CODE=$SYS_CODE"
-            } >> "$GITHUB_ENV"
+              echo "app_version_name=${SYS_VERSION}-build.${RUN_NUMBER}"
+              echo "app_version_code=$SYS_CODE"
+              echo "ref_type=$REF_TYPE"
+            } >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build Unified Script (Rust + C++ + Gradle)
         if: steps.reuse.outcome != 'success'
-        run: ./scripts/build.sh
         env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
-          ANDROID_SDK_HOME: ${{ env.ANDROID_SDK_HOME }}
-          PKG_CONFIG_PATH: ${{ github.workspace }}/ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/pkgconfig
-          BINDGEN_EXTRA_CLANG_ARGS: "-I${{ github.workspace }}/ffmpeg-android-maker/output/include/arm64-v8a -I${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=${{ env.ANDROID_NDK_HOME }}/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          APP_VERSION_NAME: ${{ env.APP_VERSION_NAME }}
-          APP_VERSION_CODE: ${{ env.APP_VERSION_CODE }}
-          RUSTC_WRAPPER: sccache
-          SCCACHE_GHA_ENABLED: "true"
+          APP_VERSION_NAME: ${{ steps.config.outputs.app_version_name }}
+          APP_VERSION_CODE: ${{ steps.config.outputs.app_version_code }}
+        run: |
+          export ANDROID_SDK_HOME="$ANDROID_HOME"
+          export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
+          export PKG_CONFIG_PATH="$GITHUB_WORKSPACE/ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/pkgconfig"
+          export BINDGEN_EXTRA_CLANG_ARGS="-I$GITHUB_WORKSPACE/ffmpeg-android-maker/output/include/arm64-v8a -I$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
+          ./scripts/build.sh
 
       - name: Prepare Release Artifacts
+        env:
+          REL_TAG: ${{ steps.config.outputs.rel_tag }}
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk "tucaVR-${{ env.rel_tag }}.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "tucaVR-${REL_TAG}.apk"
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
-        with:
-          files: |
-            tucaVR-${{ env.rel_tag }}.apk
-            app/build/outputs/apk/debug/app-debug.apk
-          name: ${{ env.rel_name }}
-          tag_name: ${{ env.rel_tag }}
-          generate_release_notes: true
-          prerelease: ${{ env.is_prerelease == 'true' }}
-          draft: false
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          REL_TAG: ${{ steps.config.outputs.rel_tag }}
+          REL_NAME: ${{ steps.config.outputs.rel_name }}
+          IS_PRERELEASE: ${{ steps.config.outputs.is_prerelease }}
+          REF_TYPE: ${{ steps.config.outputs.ref_type }}
+          TARGET_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          args=(
+            "$REL_TAG"
+            "tucaVR-${REL_TAG}.apk"
+            "app/build/outputs/apk/debug/app-debug.apk"
+            --title "$REL_NAME"
+            --generate-notes
+          )
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            args+=(--prerelease)
+          fi
+          if [[ "$REF_TYPE" == "tag" ]]; then
+            args+=(--verify-tag)
+          else
+            args+=(--target "$TARGET_SHA")
+          fi
+          gh release create "${args[@]}"
