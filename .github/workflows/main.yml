@@ -153,7 +153,14 @@ jobs:
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
-          components: clippy, rustfmt
+          components: clippy, rustfmt, llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        run: |
+          curl -sSfL https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.9.1/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz -o cargo-llvm-cov.tar.gz
+          echo "b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a  cargo-llvm-cov.tar.gz" | sha256sum -c -
+          tar -xzf cargo-llvm-cov.tar.gz -C "${CARGO_HOME:-$HOME/.cargo}/bin" cargo-llvm-cov
+          rm -f cargo-llvm-cov.tar.gz
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -167,8 +174,43 @@ jobs:
       - name: Lint Rust (clippy --all-targets --all-features)
         run: cd rust && cargo clippy --locked -p protocols -p media-logic --all-targets --all-features -- -D warnings
 
-      - name: Run Rust unit tests (host-testable crates)
-        run: cd rust && cargo test --locked -p protocols -p media-logic
+      - name: Run Rust unit tests & coverage (host-testable crates)
+        run: |
+          cd rust
+          cargo llvm-cov --locked -p protocols -p media-logic --fail-under-lines 78
+          cov_json="$(mktemp)"
+          status=0
+          if cargo llvm-cov report --json --summary-only > "$cov_json"; then
+            python3 - "$cov_json" <<'PY' || status=$?
+          import json, os, sys
+          with open(sys.argv[1], "r", encoding="utf-8") as fp:
+              data = json.load(fp)["data"][0]
+          total = data["totals"]["lines"]
+          rows = []
+          for crate in ("media-logic", "protocols"):
+              prefix = f"{crate}/src/"
+              files = [f for f in data["files"] if prefix in f["filename"]]
+              covered = sum(f["summary"]["lines"]["covered"] for f in files)
+              count = sum(f["summary"]["lines"]["count"] for f in files)
+              pct = (covered * 100.0 / count) if count else 0.0
+              rows.append((crate, covered, count, pct))
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as out:
+                  out.write("## Rust Host Coverage (cargo-llvm-cov)\n\n")
+                  out.write("| Crate | Covered | Total | Lines |\n")
+                  out.write("| :--- | ---: | ---: | ---: |\n")
+                  for crate, cov, cnt, pct in rows:
+                      out.write(f"| `{crate}` | {cov} | {cnt} | {pct:.2f}% |\n")
+                  tcov, tcnt, tpct = total["covered"], total["count"], total["percent"]
+                  out.write(f"| **Total** | **{tcov}** | **{tcnt}** | **{tpct:.2f}%** |\n\n")
+                  out.write("Minimum enforced threshold: **78%** lines.\n")
+          PY
+          else
+            status=$?
+          fi
+          rm -f "$cov_json"
+          exit "$status"
 
   cpp-checks:
     name: C++ Native & Shaders
