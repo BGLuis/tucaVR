@@ -337,6 +337,30 @@ class UiSourceGuardsTest {
         )
     }
 
+    @Test
+    fun `panel swapchain copy does not stall GPU with vkQueueWaitIdle and YCbCr conversion is dynamic`() {
+        val rootDir = TestPaths.moduleDir.parentFile
+        val renderer = File(rootDir, "native/src/vr_player_app_vulkan.cpp").readText()
+
+        val updateFn =
+            renderer
+                .substringAfter("UpdatePanelSwapchainFromHwb(")
+                .substringBefore("\nstatic void InitCursorSwapchain(")
+        assertFalse(
+            "UpdatePanelSwapchainFromHwb must not call vkQueueWaitIdle (Issue #151)",
+            updateFn.contains("vkQueueWaitIdle"),
+        )
+
+        val createPipelineFn =
+            renderer
+                .substringAfter("CreateYcbcrAndVideoPipeline(")
+                .substringBefore("\nvoid CreateStereoPipeline(")
+        assertFalse(
+            "CreateYcbcrAndVideoPipeline must not hardcode VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_709 (Issue #151)",
+            createPipelineFn.contains("VK_SAMPLER_YCBCR_MODEL_CONVERSION_YCBCR_709"),
+        )
+    }
+
     private fun readShaderWithIncludes(shaderFile: File): String {
         val baseDir = shaderFile.parentFile
         val includeRegex = Regex("""^\s*#include\s+"([^"]+)"""", RegexOption.MULTILINE)
