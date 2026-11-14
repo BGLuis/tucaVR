@@ -229,7 +229,7 @@ graph TB
 
 | ID | Requirement | Target |
 |----|-------------|--------|
-| RNF-QUAL-001 | Rust core unit tests | ≥ 80% coverage |
+| RNF-QUAL-001 | Rust host-testable unit tests (`media-logic` + `protocols`) | ≥ 80% coverage (enforced in CI via `cargo-llvm-cov` with a 78% floor) |
 | RNF-QUAL-002 | Kotlin ↔ Rust (JNI) integration tests | Mandatory |
 | RNF-QUAL-003 | CI/CD (GitHub Actions) | Automatic build + test |
 | RNF-QUAL-004 | Linting: `clippy` (Rust) + `ktlint` (Kotlin) | Mandatory |

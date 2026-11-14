@@ -100,7 +100,7 @@ Enable community localization contributions with CI verification and translator 
 - [ ] **T6.1** — Credential storage security audit (`EncryptedSharedPreferences`, no plaintext passwords)
 - [ ] **T6.2** — Network TLS/SSL audit (valid certificate enforcement)
 - [ ] **T6.3** — Verify complete absence of telemetry or analytics tracking
-- [ ] **T6.4** — Reach target unit test coverage (RNF-QUAL-001/002)
+- [~] **T6.4** — Reach target unit test coverage (RNF-QUAL-001/002; Rust host crates `media-logic` 91.5% + `protocols` 70.1% / 80.3% combined enforced in CI via `cargo-llvm-cov`, Kotlin tracked separately)
 - [ ] **T6.5** — Fully green CI/CD build matrix
 - [ ] **T6.6** — Comprehensive structured logging audit
 
