@@ -153,7 +153,14 @@ jobs:
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
-          components: clippy, rustfmt
+          components: clippy, rustfmt, llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        run: |
+          curl -sSfL https://github.com/taiki-e/cargo-llvm-cov/releases/download/v0.9.1/cargo-llvm-cov-x86_64-unknown-linux-gnu.tar.gz -o cargo-llvm-cov.tar.gz
+          echo "b3f68e625481fed9b16444174f3fa5ebcdbde4a1878803a35eabe2dcefcdc41a  cargo-llvm-cov.tar.gz" | sha256sum -c -
+          tar -xzf cargo-llvm-cov.tar.gz -C "${CARGO_HOME:-$HOME/.cargo}/bin" cargo-llvm-cov
+          rm -f cargo-llvm-cov.tar.gz
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
@@ -167,8 +174,43 @@ jobs:
       - name: Lint Rust (clippy --all-targets --all-features)
         run: cd rust && cargo clippy --locked -p protocols -p media-logic --all-targets --all-features -- -D warnings
 
-      - name: Run Rust unit tests (host-testable crates)
-        run: cd rust && cargo test --locked -p protocols -p media-logic
+      - name: Run Rust unit tests & coverage (host-testable crates)
+        run: |
+          cd rust
+          cargo llvm-cov --locked -p protocols -p media-logic --fail-under-lines 78
+          cov_json="$(mktemp)"
+          status=0
+          if cargo llvm-cov report --json --summary-only > "$cov_json"; then
+            python3 - "$cov_json" <<'PY' || status=$?
+          import json, os, sys
+          with open(sys.argv[1], "r", encoding="utf-8") as fp:
+              data = json.load(fp)["data"][0]
+          total = data["totals"]["lines"]
+          rows = []
+          for crate in ("media-logic", "protocols"):
+              prefix = f"{crate}/src/"
+              files = [f for f in data["files"] if prefix in f["filename"]]
+              covered = sum(f["summary"]["lines"]["covered"] for f in files)
+              count = sum(f["summary"]["lines"]["count"] for f in files)
+              pct = (covered * 100.0 / count) if count else 0.0
+              rows.append((crate, covered, count, pct))
+          summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
+          if summary_path:
+              with open(summary_path, "a", encoding="utf-8") as out:
+                  out.write("## Rust Host Coverage (cargo-llvm-cov)\n\n")
+                  out.write("| Crate | Covered | Total | Lines |\n")
+                  out.write("| :--- | ---: | ---: | ---: |\n")
+                  for crate, cov, cnt, pct in rows:
+                      out.write(f"| `{crate}` | {cov} | {cnt} | {pct:.2f}% |\n")
+                  tcov, tcnt, tpct = total["covered"], total["count"], total["percent"]
+                  out.write(f"| **Total** | **{tcov}** | **{tcnt}** | **{tpct:.2f}%** |\n\n")
+                  out.write("Minimum enforced threshold: **78%** lines.\n")
+          PY
+          else
+            status=$?
+          fi
+          rm -f "$cov_json"
+          exit "$status"
 
   cpp-checks:
     name: C++ Native & Shaders
@@ -420,15 +462,44 @@ jobs:
           ./scripts/build-ffmpeg.sh ffmpeg-android-maker
 
       - name: Build Unified Script (Rust + C++ + Gradle)
+        id: apk-build
         env:
           PKG_CONFIG_PATH: ${{ github.workspace }}/ffmpeg-android-maker/build/ffmpeg/arm64-v8a/lib/pkgconfig
           RUSTC_WRAPPER: sccache
           SCCACHE_GHA_ENABLED: "true"
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
           export ANDROID_SDK_HOME="$ANDROID_HOME"
           export ANDROID_NDK_HOME="$ANDROID_HOME/ndk/$NDK_VERSION"
           export BINDGEN_EXTRA_CLANG_ARGS="-I$GITHUB_WORKSPACE/ffmpeg-android-maker/output/include/arm64-v8a -I$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot/usr/include --sysroot=$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/sysroot"
-          ./scripts/build.sh
+          KEYSTORE_FILE=""
+          cleanup() {
+            if [ -n "$KEYSTORE_FILE" ] && [ -f "$KEYSTORE_FILE" ]; then
+              rm -f "$KEYSTORE_FILE"
+            fi
+          }
+          trap cleanup EXIT
+          if [ -n "$KEYSTORE_BASE64" ] && [ -n "$KEYSTORE_PASSWORD" ] && [ -n "$KEY_ALIAS" ] && [ -n "$KEY_PASSWORD" ]; then
+            KEYSTORE_FILE="$RUNNER_TEMP/release-keystore.jks"
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$KEYSTORE_FILE"
+            export KEYSTORE_PATH="$KEYSTORE_FILE"
+          else
+            echo "::warning::Release signing secrets not configured; building unsigned release APK."
+          fi
+          ./scripts/build.sh --release
+          if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
+            APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner -type f | sort -V | tail -n 1)
+            "$APKSIGNER" verify --verbose app/build/outputs/apk/release/app-release.apk
+            echo "apk_path=app/build/outputs/apk/release/app-release.apk" >> "$GITHUB_OUTPUT"
+          elif [ -f "app/build/outputs/apk/release/app-release-unsigned.apk" ]; then
+            echo "apk_path=app/build/outputs/apk/release/app-release-unsigned.apk" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::No release APK was produced."
+            exit 1
+          fi
 
       - name: Sanitize artifact name
         id: artifact-meta
@@ -440,6 +511,6 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.artifact-meta.outputs.name }}
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: ${{ steps.apk-build.outputs.apk_path }}
           retention-days: 7
           if-no-files-found: error

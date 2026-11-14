@@ -4,13 +4,14 @@
 # on the host).
 #
 # Usage:
-#   ./scripts/docker-build.sh            # builds the image (cached) and compiles the APK
+#   ./scripts/docker-build.sh            # builds the image (cached) and compiles the debug APK
+#   ./scripts/docker-build.sh --release  # compiles the release APK (signed if KEYSTORE_* env vars are set)
 #   ./scripts/docker-build.sh --clean    # discards build caches and recompiles everything
 #   ./scripts/docker-build.sh --rebuild  # rebuilds the image from scratch (--no-cache --pull)
 #   ./scripts/docker-build.sh --shell    # interactive shell in the container
 #
-# Variables: APP_VERSION_NAME, APP_VERSION_CODE (passed to Gradle) and
-# DOCKER (default: docker; e.g. DOCKER=podman).
+# Variables: APP_VERSION_NAME, APP_VERSION_CODE, KEYSTORE_PATH, KEYSTORE_PASSWORD,
+# KEY_ALIAS, KEY_PASSWORD (passed to Gradle) and DOCKER (default: docker; e.g. DOCKER=podman).
 # =============================================================================
 set -euo pipefail
 
@@ -24,14 +25,16 @@ DOCKERFILE_DIR="docker/build"
 FORCE_REBUILD=false
 INTERACTIVE_SHELL=false
 FORCE_CLEAN=false
+RELEASE_BUILD=false
 
 for arg in "$@"; do
     case "$arg" in
         --rebuild) FORCE_REBUILD=true ;;
         --shell)   INTERACTIVE_SHELL=true ;;
         --clean)   FORCE_CLEAN=true ;;
+        --release) RELEASE_BUILD=true ;;
         --help|-h)
-            sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+            sed -n '2,15p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             exit 0
             ;;
         *)
@@ -87,6 +90,10 @@ RUN_ARGS=(
     -v tucavr-cargo-cache:/cache/cargo
     -e APP_VERSION_NAME
     -e APP_VERSION_CODE
+    -e KEYSTORE_PATH
+    -e KEYSTORE_PASSWORD
+    -e KEY_ALIAS
+    -e KEY_PASSWORD
 )
 # Rootless Podman: keeps the host's UID inside the container.
 if [[ "$(basename "$DOCKER")" == podman* ]]; then
@@ -169,6 +176,17 @@ else
     if $FORCE_CLEAN; then
         BUILD_ARGS+=(--clean)
     fi
+    if $RELEASE_BUILD; then
+        BUILD_ARGS+=(--release)
+    fi
     "$DOCKER" run "${RUN_ARGS[@]}" "$IMAGE_NAME" "${BUILD_ARGS[@]}"
-    echo "📦 APK: app/build/outputs/apk/debug/app-debug.apk"
+    if $RELEASE_BUILD; then
+        if [[ -f "app/build/outputs/apk/release/app-release.apk" ]]; then
+            echo "📦 APK: app/build/outputs/apk/release/app-release.apk"
+        else
+            echo "📦 APK: app/build/outputs/apk/release/app-release-unsigned.apk"
+        fi
+    else
+        echo "📦 APK: app/build/outputs/apk/debug/app-debug.apk"
+    fi
 fi

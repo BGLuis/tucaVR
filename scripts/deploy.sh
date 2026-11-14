@@ -10,6 +10,7 @@
 #   ./scripts/deploy.sh --keep-awake         # Bypass proximity sensor (prox_close)
 #   ./scripts/deploy.sh -s <device_serial>   # Target a specific device
 #   ./scripts/deploy.sh --apk <path>         # Custom APK path
+#   ./scripts/deploy.sh --release            # Deploy the release APK (signed or unsigned)
 #
 # Environment variables:
 #   DEVICE_SERIAL / ANDROID_SERIAL : Specific device serial
@@ -25,7 +26,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # Default configurations
 DEFAULT_APK="$REPO_ROOT/app/build/outputs/apk/debug/app-debug.apk"
-APK_PATH="${APK_PATH:-$DEFAULT_APK}"
+APK_PATH="${APK_PATH:-}"
+RELEASE_BUILD=false
 APP_PACKAGE="com.tucavr"
 APP_ACTIVITY="$APP_PACKAGE/.VRActivity"
 
@@ -56,6 +58,7 @@ while [[ $# -gt 0 ]]; do
         --no-keep-awake)   KEEP_AWAKE=0; shift ;;
         -s|--device)       TARGET_SERIAL="$2"; shift 2 ;;
         --apk)             APK_PATH="$2"; shift 2 ;;
+        --release)         RELEASE_BUILD=true; shift ;;
         -h|--help)
             echo "Usage: $0 [options]"
             echo ""
@@ -65,6 +68,7 @@ while [[ $# -gt 0 ]]; do
             echo "  --keep-awake                Bypass proximity sensor (keep displays on)"
             echo "  -s, --device <SERIAL>       Specify ADB device serial"
             echo "  --apk <PATH>                Specify custom APK path"
+            echo "  --release                   Deploy the release APK (signed or unsigned)"
             echo "  -h, --help                  Show this help message"
             exit 0
             ;;
@@ -74,6 +78,18 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ -z "$APK_PATH" ]]; then
+    if $RELEASE_BUILD; then
+        if [[ -f "$REPO_ROOT/app/build/outputs/apk/release/app-release.apk" ]]; then
+            APK_PATH="$REPO_ROOT/app/build/outputs/apk/release/app-release.apk"
+        else
+            APK_PATH="$REPO_ROOT/app/build/outputs/apk/release/app-release-unsigned.apk"
+        fi
+    else
+        APK_PATH="$DEFAULT_APK"
+    fi
+fi
 
 # ---------------------------------------------------------------------------
 # Validate ADB and APK
