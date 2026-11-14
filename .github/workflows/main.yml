@@ -178,7 +178,7 @@ jobs:
         run: |
           cd rust
           cargo llvm-cov --locked -p protocols -p media-logic --fail-under-lines 78
-          cargo llvm-cov report --json --summary-only | python3 -c '
+          cargo llvm-cov report --json --summary-only | python3 - <<'PY'
           import json, os, sys
           data = json.load(sys.stdin)["data"][0]
           total = data["totals"]["lines"]
@@ -201,7 +201,7 @@ jobs:
                   tcov, tcnt, tpct = total["covered"], total["count"], total["percent"]
                   out.write(f"| **Total** | **{tcov}** | **{tcnt}** | **{tpct:.2f}%** |\n\n")
                   out.write("Minimum enforced threshold: **78%** lines.\n")
-          '
+          PY
 
   cpp-checks:
     name: C++ Native & Shaders
@@ -219,8 +219,8 @@ jobs:
       - name: Install C++ Host Dependencies
         uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
         with:
-          packages: libopenxr-dev glslc
-          version: 1.2
+          packages: libopenxr-dev libvulkan-dev glslc
+          version: 1.3
 
       - name: Check C++ Code Formatting (clang-format)
         run: |
