@@ -1,9 +1,17 @@
 // Video color pipeline shared by the shaders that sample the decoded YCbCr frame (included, not compiled alone):
-// HDR tone mapping, color temperature, SGSR1 sharpening and the sRGB linearization for the *_SRGB swapchains.
-// Only video_layer.frag includes it today; video.frag, stereo.frag and stereo_cubemap.frag still carry their own
-// copies of these functions.
+// HDR tone mapping, color temperature, SGSR1 sharpening, sRGB linearization for the *_SRGB swapchains, and
+// ITU-R BT.601 RGB-to-YCbCr conversion.
+// Included by video.frag, stereo.frag, stereo_cubemap.frag, and video_layer.frag.
 
 layout(set = 0, binding = 0) uniform sampler2D videoTexture;
+
+// RGB to YCbCr conversion (ITU-R BT.601) for illumination-invariant color distance measurement
+vec3 RgbToYcbcr(vec3 rgb) {
+    float y  =  0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
+    float cb = -0.168736 * rgb.r - 0.331264 * rgb.g + 0.5 * rgb.b;
+    float cr =  0.5 * rgb.r - 0.418688 * rgb.g - 0.081312 * rgb.b;
+    return vec3(y, cb, cr);
+}
 
 // ST 2084 (PQ EOTF): converts PQ signal [0.0, 1.0] to relative linear luminance [0.0, 1.0],
 // where 1.0 corresponds to the theoretical peak of 10,000 nits.
