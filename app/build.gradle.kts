@@ -86,6 +86,9 @@ android {
 
     packaging {
         jniLibs {
+            // Keep uncompressed native libs page-aligned inside the APK so Quest mmaps them
+            // directly instead of storing an extra extracted copy on /data/app.
+            useLegacyPackaging = false
             if (project.findProperty("enableVulkanValidation") != "true") {
                 excludes.add("**/libVkLayer_khronos_validation.so")
             }

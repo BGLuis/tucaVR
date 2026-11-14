@@ -188,7 +188,17 @@ export BINDGEN_EXTRA_CLANG_ARGS="-I$FFMPEG_MAKER_DIR/output/include/arm64-v8a -I
 cd rust
 cargo ndk -t aarch64-linux-android -P 26 -o ../app/src/main/jniLibs build --release --locked
 
-copy_all_if_changed "$FFMPEG_MAKER_DIR/build/ffmpeg/arm64-v8a/lib" "../app/src/main/jniLibs/arm64-v8a" "*.so"
+for ffmpeg_lib in libavcodec.so libavformat.so libavutil.so libswresample.so libswscale.so; do
+    if [[ -f "$FFMPEG_MAKER_DIR/build/ffmpeg/arm64-v8a/lib/$ffmpeg_lib" ]]; then
+        copy_if_changed \
+            "$FFMPEG_MAKER_DIR/build/ffmpeg/arm64-v8a/lib/$ffmpeg_lib" \
+            "../app/src/main/jniLibs/arm64-v8a/$ffmpeg_lib"
+    fi
+done
+rm -f \
+    ../app/src/main/jniLibs/arm64-v8a/libavdevice.so \
+    ../app/src/main/jniLibs/arm64-v8a/libavfilter.so \
+    ../app/src/main/jniLibs/arm64-v8a/libpostproc.so
 
 mkdir -p "$ROOT_DIR/rust/target/aarch64-linux-android/release"
 if [[ -f "$ROOT_DIR/app/src/main/jniLibs/arm64-v8a/libbridge.so" ]]; then
