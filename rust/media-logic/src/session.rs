@@ -650,4 +650,46 @@ mod tests {
 
         assert_eq!(sampler.sample(&lock, |v| *v), 15);
     }
+
+    #[test]
+    fn try_sample_cached_preserves_hdr_transfer_code_under_lock_contention() {
+        // Simulates HDR transfer code: 0 = SDR, 1 = PQ, 2 = HLG (#254).
+        let controller_lock = Arc::new(Mutex::new(1u32)); // PQ
+        let cache = AtomicU32::new(0);
+
+        // Initial sample populates cache with PQ (1).
+        let val1 = try_sample_cached(&controller_lock, &cache, |v| *v);
+        assert_eq!(val1, 1);
+        assert_eq!(cache.load(Ordering::Relaxed), 1);
+
+        // Simulate lock contention while controller is locked (e.g. during seek or demux).
+        let (started_tx, started_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+
+        let lock_clone = controller_lock.clone();
+        let background_thread = thread::spawn(move || {
+            let mut guard = lock_clone.lock().unwrap();
+            *guard = 2; // HLG updated during session transition
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+        });
+
+        started_rx.recv().unwrap();
+
+        // Under contention, MUST return the last known HDR code (1 / PQ), NOT 0 (SDR fallback).
+        let contended_val = try_sample_cached(&controller_lock, &cache, |v| *v);
+        assert_eq!(
+            contended_val, 1,
+            "must return last successful HDR code during lock contention to prevent 1-frame SDR flash"
+        );
+
+        // Release lock
+        release_tx.send(()).unwrap();
+        background_thread.join().unwrap();
+
+        // Once free, updates to new HDR transfer code (2 / HLG)
+        let new_val = try_sample_cached(&controller_lock, &cache, |v| *v);
+        assert_eq!(new_val, 2);
+        assert_eq!(cache.load(Ordering::Relaxed), 2);
+    }
 }

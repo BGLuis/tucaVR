@@ -818,6 +818,7 @@ static LAST_NETWORK_BYTES: AtomicU64 = AtomicU64::new(0);
 static LAST_VIDEO_QUEUE_DEPTH: AtomicU32 = AtomicU32::new(0);
 // (1 << 32) | 1: square pixels until a video reports its SAR.
 static LAST_VIDEO_SAR: AtomicU64 = AtomicU64::new((1 << 32) | 1);
+static LAST_VIDEO_HDR: AtomicU32 = AtomicU32::new(0);
 static LAST_VIDEO_PRESENTATION_PENDING: AtomicU32 = AtomicU32::new(0);
 static LAST_NETWORK_LAST_BLOCK_FETCH_MS: media_logic::session::AtomicF32 =
     media_logic::session::AtomicF32::new(0.0);
@@ -912,10 +913,9 @@ pub extern "C" fn get_video_sample_aspect_ratio() -> u64 {
 /// HDR. O C++ repassa o codigo ao shader pra escolher o tonemap certo.
 #[no_mangle]
 pub extern "C" fn get_video_is_hdr() -> u32 {
-    match CONTROLLER.try_lock() {
-        Ok(controller) => controller.hdr_transfer().shader_code(),
-        Err(_) => 0,
-    }
+    media_logic::session::try_sample_cached(&CONTROLLER, &LAST_VIDEO_HDR, |controller| {
+        controller.hdr_transfer().shader_code()
+    })
 }
 
 /// Debug (docs/DEBUGGING.md): bytes recebidos da rede pelo PrefetchReader da
@@ -2518,6 +2518,7 @@ pub extern "C" fn reset_process_state() {
     DESIRED_AUDIO_TRACK.store(0, std::sync::atomic::Ordering::Relaxed);
     SUBTITLE_OFFSET_MS.store(0, std::sync::atomic::Ordering::Relaxed);
     PLAYBACK_SPEED_BITS.store(0x3F800000, std::sync::atomic::Ordering::Relaxed);
+    LAST_VIDEO_HDR.store(0, Ordering::Relaxed);
     ERROR_RING.clear();
 }
 
