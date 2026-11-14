@@ -7,6 +7,8 @@
 #include "stb_image.h"
 #endif
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -15,6 +17,19 @@
 // per Phase 1.0 §1 T1.1 (Issue #62).
 constexpr size_t kMaxEnvironmentTriangles = 100000;
 constexpr int kMaxEnvironmentTextureDimension = 4096;
+
+/**
+ * Computes the number of mip levels for an environment texture.
+ * Vulkan / Adreno forbids vkCmdBlitImage on ASTC block-compressed formats,
+ * so ASTC textures remain single-level (mipLevels = 1).
+ * RGBA uncompressed textures generate a full mip chain.
+ */
+inline uint32_t ComputeEnvironmentTextureMipLevels(uint32_t width, uint32_t height, bool isAstcBlockCompressed) {
+    if (width == 0 || height == 0 || isAstcBlockCompressed) {
+        return 1;
+    }
+    return static_cast<uint32_t>(std::floor(std::log2(std::max(width, height)))) + 1;
+}
 
 enum class EnvironmentValidationResult {
     Ok,
