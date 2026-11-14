@@ -2474,6 +2474,12 @@ pub extern "C" fn stop_video_playback() {
 /// herde modo de tela, contadores ou sessão anterior em processos em cache.
 #[no_mangle]
 pub extern "C" fn reset_process_state() {
+    if let Ok(mut lock) = ACTIVE_LUT.write() {
+        if lock.is_some() {
+            *lock = None;
+            LUT_GENERATION_COUNTER.fetch_add(1, Ordering::SeqCst);
+        }
+    }
     DOWNLOAD_MANAGER.set_playback_active(false);
     if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
         qc.set_content_fps(0.0);
@@ -3818,4 +3824,96 @@ pub extern "C" fn download_get_stats(
 #[no_mangle]
 pub extern "C" fn download_set_playback_active(active: u32) {
     DOWNLOAD_MANAGER.set_playback_active(active != 0);
+}
+
+// ---------------------------------------------------------------------------
+// 3D .cube Color LUT
+// ---------------------------------------------------------------------------
+
+struct ActiveLutState {
+    size: u32,
+    data: Vec<u8>,
+}
+
+static ACTIVE_LUT: Lazy<RwLock<Option<ActiveLutState>>> = Lazy::new(|| RwLock::new(None));
+static LUT_GENERATION_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+#[no_mangle]
+pub extern "C" fn load_video_lut_cube(data: *const u8, len: usize) -> i32 {
+    if data.is_null() || len == 0 {
+        return 0;
+    }
+    let slice = unsafe { std::slice::from_raw_parts(data, len) };
+    match media_logic::lut::parse_cube_lut_bytes(slice) {
+        Ok(lut) => {
+            if let Ok(mut lock) = ACTIVE_LUT.write() {
+                *lock = Some(ActiveLutState {
+                    size: lut.size,
+                    data: lut.data,
+                });
+                LUT_GENERATION_COUNTER.fetch_add(1, Ordering::SeqCst);
+                1
+            } else {
+                0
+            }
+        }
+        Err(e) => {
+            log::warn!("load_video_lut_cube failed: {e}");
+            0
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn clear_video_lut() {
+    if let Ok(mut lock) = ACTIVE_LUT.write() {
+        if lock.is_some() {
+            *lock = None;
+            LUT_GENERATION_COUNTER.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn get_video_lut_generation() -> u64 {
+    LUT_GENERATION_COUNTER.load(Ordering::SeqCst)
+}
+
+#[no_mangle]
+pub extern "C" fn copy_video_lut_rgba8(
+    out_buf: *mut u8,
+    capacity: usize,
+    out_size: *mut u32,
+) -> i32 {
+    if out_size.is_null() {
+        return -1;
+    }
+    if let Ok(lock) = ACTIVE_LUT.read() {
+        match lock.as_ref() {
+            Some(lut) => {
+                unsafe {
+                    *out_size = lut.size;
+                }
+                let needed = lut.data.len();
+                if out_buf.is_null() {
+                    return needed as i32;
+                }
+                if capacity < needed {
+                    return -1;
+                }
+                unsafe {
+                    std::ptr::copy_nonoverlapping(lut.data.as_ptr(), out_buf, needed);
+                }
+                needed as i32
+            }
+            None => {
+                unsafe {
+                    *out_size = 0;
+                }
+                0
+            }
+        }
+    } else {
+        -1
+    }
 }

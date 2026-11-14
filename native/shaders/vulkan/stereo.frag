@@ -94,6 +94,8 @@ void main() {
         color = ApplyColorTemperature(color, vColorTemperature);
     }
 
+    color = ApplyLut3D(color);
+
     // Calculo de Alpha: composicao do hemisferio, Chroma Key ou Packed Alpha (DeoVR/HereSphere)
     float finalAlpha = hemisphereAlpha;
     if (vChromaKeyEnabled == 1) {

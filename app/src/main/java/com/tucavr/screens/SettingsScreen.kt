@@ -386,6 +386,7 @@ class SettingsScreen(
                         onChanged = { enabled -> activity.nativeSetDirectVideoLayerEnabled(enabled) },
                     ),
                 )
+                content.addView(buildLutRow())
             }
             Category.LIGHTING -> {
                 content.addView(buildEnvironmentBrightnessRow())
@@ -831,6 +832,85 @@ class SettingsScreen(
                     },
                 )
             addView(selector)
+        }
+
+    private fun buildLutRow(): LinearLayout =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams =
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = VoidTheme.dpToPx(context, 16f) }
+
+            addView(
+                VoidText.title(context, context.getString(R.string.settings_lut_label), sizeSp = 16f).apply {
+                    setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+                },
+            )
+
+            addView(
+                VoidText.body(context, context.getString(R.string.settings_lut_description), sizeSp = 13f, secondary = true).apply {
+                    setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
+                },
+            )
+
+            val activeTitle = activity.lutStore.getActiveTitle() ?: context.getString(R.string.settings_lut_none)
+            val currentLutText =
+                VoidText.body(context, activeTitle, sizeSp = 14f, secondary = !activity.lutStore.hasActiveLut()).apply {
+                    setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
+                }
+            addView(currentLutText)
+
+            val buttonRow =
+                LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    layoutParams =
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                        )
+
+                    val loadBtn =
+                        VoidButton(context, VoidButtonStyle.SECONDARY, isCompact = true).apply {
+                            text = context.getString(R.string.settings_lut_load_button)
+                            textSize = 13f
+                            layoutParams =
+                                LinearLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                                    VoidTheme.dpToPx(context, 48f),
+                                ).apply {
+                                    rightMargin = VoidTheme.dpToPx(context, 8f)
+                                }
+                            setOnClickListener {
+                                activity.openLutFilePicker()
+                            }
+                        }
+                    addView(loadBtn)
+
+                    val clearBtn =
+                        VoidButton(context, VoidButtonStyle.SECONDARY, isCompact = true).apply {
+                            text = context.getString(R.string.settings_lut_clear_button)
+                            textSize = 13f
+                            layoutParams =
+                                LinearLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                                    VoidTheme.dpToPx(context, 48f),
+                                )
+                            visibility = if (activity.lutStore.hasActiveLut()) View.VISIBLE else View.GONE
+                            setOnClickListener {
+                                activity.clearLut()
+                            }
+                        }
+                    addView(clearBtn)
+
+                    activity.onLutChanged = {
+                        val title = activity.lutStore.getActiveTitle() ?: context.getString(R.string.settings_lut_none)
+                        currentLutText.text = title
+                        clearBtn.visibility = if (activity.lutStore.hasActiveLut()) View.VISIBLE else View.GONE
+                    }
+                }
+            addView(buttonRow)
         }
 
     private fun buildEnvironmentBrightnessRow(): LinearLayout =

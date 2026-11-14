@@ -187,5 +187,6 @@ void main() {
     } else if (abs(vColorTemperature - 6500.0) > 1.0 && vColorTemperature > 1000.0) {
         color = ApplyColorTemperature(color, vColorTemperature);
     }
+    color = ApplyLut3D(color);
     outColor = vec4(SrgbEotf(color), 1.0);
 }

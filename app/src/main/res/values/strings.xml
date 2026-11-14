@@ -65,6 +65,11 @@
     <string name="settings_foveated_mode_auto">Auto (Adaptive)</string>
     <string name="settings_direct_video_layer_label">Direct video layer</string>
     <string name="settings_direct_video_layer_description">Shows flat 2D, SBS and OU video as its own layer for a sharper picture. Turn off to compare with the previous rendering. Vulkan only.</string>
+    <string name="settings_lut_label">3D Color LUT (.cube)</string>
+    <string name="settings_lut_description">Apply a creative color grading LUT to video playback.</string>
+    <string name="settings_lut_none">None</string>
+    <string name="settings_lut_load_button">Load LUT</string>
+    <string name="settings_lut_clear_button">Clear LUT</string>
     <string name="settings_ambient_mode_label">Ambient Mode</string>
     <string name="settings_ambient_mode_description">Adds a soft glow behind the screen, colored from the video frame. Only visible in the Void environment. Vulkan only.</string>
     <string name="settings_section_lighting">Environment &amp; Lighting</string>

@@ -2,6 +2,7 @@
 
 #include <cassert>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <vector>
 
@@ -286,6 +287,63 @@ static void TestSrgbEotfRoundTripsEightBitCodes() {
     printf("[PASS] TestSrgbEotfRoundTripsEightBitCodes\n");
 }
 
+static void TestIdentityLut3DTrilinearAccuracy() {
+    // 1. Test 2x2x2 identity LUT across a 256-step color ramp
+    constexpr uint32_t kSize2 = 2;
+    std::vector<uint8_t> lut2(kSize2 * kSize2 * kSize2 * 4);
+    for (uint32_t b = 0; b < kSize2; ++b) {
+        uint8_t bByte = static_cast<uint8_t>(std::lround((static_cast<float>(b) / (kSize2 - 1)) * 255.0f));
+        for (uint32_t g = 0; g < kSize2; ++g) {
+            uint8_t gByte = static_cast<uint8_t>(std::lround((static_cast<float>(g) / (kSize2 - 1)) * 255.0f));
+            for (uint32_t r = 0; r < kSize2; ++r) {
+                uint8_t rByte = static_cast<uint8_t>(std::lround((static_cast<float>(r) / (kSize2 - 1)) * 255.0f));
+                size_t idx = ((static_cast<size_t>(b) * kSize2 + g) * kSize2 + r) * 4;
+                lut2[idx + 0] = rByte;
+                lut2[idx + 1] = gByte;
+                lut2[idx + 2] = bByte;
+                lut2[idx + 3] = 255;
+            }
+        }
+    }
+
+    const float kTolerance = 1.0f / 255.0f;
+    for (int step = 0; step <= 255; ++step) {
+        float inVal = static_cast<float>(step) / 255.0f;
+        float outR = 0.0f, outG = 0.0f, outB = 0.0f;
+        SampleLut3DTrilinear(lut2.data(), kSize2, inVal, inVal, inVal, outR, outG, outB);
+        assert(std::abs(outR - inVal) <= kTolerance);
+        assert(std::abs(outG - inVal) <= kTolerance);
+        assert(std::abs(outB - inVal) <= kTolerance);
+    }
+
+    // Also test independent channels (asymmetric ramp)
+    for (int step = 0; step <= 255; ++step) {
+        float rIn = static_cast<float>(step) / 255.0f;
+        float gIn = static_cast<float>(255 - step) / 255.0f;
+        float bIn = static_cast<float>((step * 7) % 256) / 255.0f;
+        float outR = 0.0f, outG = 0.0f, outB = 0.0f;
+        SampleLut3DTrilinear(lut2.data(), kSize2, rIn, gIn, bIn, outR, outG, outB);
+        assert(std::abs(outR - rIn) <= kTolerance);
+        assert(std::abs(outG - gIn) <= kTolerance);
+        assert(std::abs(outB - bIn) <= kTolerance);
+    }
+
+    // 2. Edge and out-of-range clamping
+    float outR = 0.0f, outG = 0.0f, outB = 0.0f;
+    SampleLut3DTrilinear(lut2.data(), kSize2, -1.5f, 2.5f, 0.5f, outR, outG, outB);
+    assert(std::abs(outR - 0.0f) <= kTolerance);
+    assert(std::abs(outG - 1.0f) <= kTolerance);
+    assert(std::abs(outB - 0.5f) <= kTolerance);
+
+    // 3. Null buffer fallback (safely clamps and passes through input)
+    SampleLut3DTrilinear(nullptr, kSize2, -0.2f, 0.4f, 1.5f, outR, outG, outB);
+    assert(outR == 0.0f);
+    assert(outG == 0.4f);
+    assert(outB == 1.0f);
+
+    printf("[PASS] TestIdentityLut3DTrilinearAccuracy\n");
+}
+
 int main() {
     printf("--- Executing unit tests for color_grading.h ---\n");
     TestHableFilmicCurveMonotonicity();
@@ -300,6 +358,7 @@ int main() {
     TestRgbToYcbcr();
     TestColorGradingConstantsParity();
     TestSrgbEotfRoundTripsEightBitCodes();
+    TestIdentityLut3DTrilinearAccuracy();
     printf("--- All color_grading.h unit tests passed successfully! ---\n");
     return 0;
 }
