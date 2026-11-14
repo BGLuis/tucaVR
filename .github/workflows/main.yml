@@ -178,9 +178,13 @@ jobs:
         run: |
           cd rust
           cargo llvm-cov --locked -p protocols -p media-logic --fail-under-lines 78
-          cargo llvm-cov report --json --summary-only | python3 - <<'PY'
+          cov_json="$(mktemp)"
+          status=0
+          if cargo llvm-cov report --json --summary-only > "$cov_json"; then
+            python3 - "$cov_json" <<'PY' || status=$?
           import json, os, sys
-          data = json.load(sys.stdin)["data"][0]
+          with open(sys.argv[1], "r", encoding="utf-8") as fp:
+              data = json.load(fp)["data"][0]
           total = data["totals"]["lines"]
           rows = []
           for crate in ("media-logic", "protocols"):
@@ -202,6 +206,11 @@ jobs:
                   out.write(f"| **Total** | **{tcov}** | **{tcnt}** | **{tpct:.2f}%** |\n\n")
                   out.write("Minimum enforced threshold: **78%** lines.\n")
           PY
+          else
+            status=$?
+          fi
+          rm -f "$cov_json"
+          exit "$status"
 
   cpp-checks:
     name: C++ Native & Shaders
