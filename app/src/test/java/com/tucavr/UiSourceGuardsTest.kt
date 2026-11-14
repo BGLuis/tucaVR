@@ -202,20 +202,25 @@ class UiSourceGuardsTest {
                 ?: error("Repository root with native/include/color_grading.h not found")
 
         val headerText = File(rootDir, "native/include/color_grading.h").readText()
-        val videoFrag = File(rootDir, "native/shaders/vulkan/video.frag").readText()
-        val stereoFrag = File(rootDir, "native/shaders/vulkan/stereo.frag").readText()
-        val cubemapFrag = File(rootDir, "native/shaders/vulkan/stereo_cubemap.frag").readText()
-        val layerShaders =
-            File(rootDir, "native/shaders/vulkan/video_common.glsl").readText() +
-                File(rootDir, "native/shaders/vulkan/video_layer.frag").readText()
+        val rawShaderFiles =
+            listOf(
+                "video.frag" to File(rootDir, "native/shaders/vulkan/video.frag"),
+                "stereo.frag" to File(rootDir, "native/shaders/vulkan/stereo.frag"),
+                "stereo_cubemap.frag" to File(rootDir, "native/shaders/vulkan/stereo_cubemap.frag"),
+                "video_layer.frag" to File(rootDir, "native/shaders/vulkan/video_layer.frag"),
+            )
+
+        for ((name, file) in rawShaderFiles) {
+            assertTrue(
+                "$name must include video_common.glsl",
+                file.readText().contains("#include \"video_common.glsl\""),
+            )
+        }
 
         val shaders =
-            listOf(
-                "video.frag" to videoFrag,
-                "stereo.frag" to stereoFrag,
-                "stereo_cubemap.frag" to cubemapFrag,
-                "video_layer.frag with video_common.glsl" to layerShaders,
-            )
+            rawShaderFiles.map { (name, file) ->
+                name to readShaderWithIncludes(file)
+            }
 
         // 1. Verify Hable Filmic constants in header
         assertTrue("color_grading.h must define kHableA = 0.15f", headerText.contains("kHableA = 0.15f"))
@@ -302,6 +307,10 @@ class UiSourceGuardsTest {
             Regex("""CreateUiImage\([^;]*state\.pgsSubtitleImage\b[^;]*VK_FORMAT_R8G8B8A8_SRGB""").containsMatchIn(renderer),
         )
         assertTrue(
+            "The scrub overlay image must use an sRGB format so sampling decodes its gamma-coded RGB",
+            Regex("""CreateUiImage\([^;]*state\.scrubOverlayImage\b[^;]*VK_FORMAT_R8G8B8A8_SRGB""").containsMatchIn(renderer),
+        )
+        assertTrue(
             "ambient.frag must define the exact piecewise sRGB EOTF (Issue #248)",
             ambientFrag.contains("vec3 SrgbEotf(vec3 c)") && ambientFrag.contains("c / 12.92") && ambientFrag.contains("vec3(2.4)"),
         )
@@ -326,6 +335,17 @@ class UiSourceGuardsTest {
                 content.contains("viewCache.shouldWritePlaying") &&
                 content.contains("viewCache.reset()"),
         )
+    }
+
+    private fun readShaderWithIncludes(shaderFile: File): String {
+        val baseDir = shaderFile.parentFile
+        val includeRegex = Regex("""^\s*#include\s+"([^"]+)"""", RegexOption.MULTILINE)
+        return includeRegex.replace(shaderFile.readText()) { matchResult ->
+            val includedFileName = matchResult.groupValues[1]
+            val includedFile = File(baseDir, includedFileName)
+            assertTrue("Included file $includedFileName must exist in $baseDir", includedFile.isFile)
+            readShaderWithIncludes(includedFile)
+        }
     }
 
     private fun assertMatchesBaseline(rule: String) {
