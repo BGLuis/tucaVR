@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Never back up Tink keysets or encrypted network credentials to cloud storage. -->
+    <exclude domain="sharedpref" path="server_credentials_encrypted.xml" />
+</full-backup-content>

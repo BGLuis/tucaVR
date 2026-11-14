@@ -81,6 +81,7 @@ android {
         ndk {
             abiFilters.add("arm64-v8a")
         }
+        resourceConfigurations += listOf("en", "pt-rBR", "es")
     }
 
     packaging {
@@ -91,13 +92,51 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val keystorePath =
+                (project.findProperty("KEYSTORE_PATH") as String?)
+                    ?: System.getenv("KEYSTORE_PATH")
+            val storePass =
+                (project.findProperty("KEYSTORE_PASSWORD") as String?)
+                    ?: System.getenv("KEYSTORE_PASSWORD")
+            val alias =
+                (project.findProperty("KEY_ALIAS") as String?)
+                    ?: System.getenv("KEY_ALIAS")
+            val keyPass =
+                (project.findProperty("KEY_PASSWORD") as String?)
+                    ?: System.getenv("KEY_PASSWORD")
+            if (!keystorePath.isNullOrBlank() &&
+                !storePass.isNullOrBlank() &&
+                !alias.isNullOrBlank() &&
+                !keyPass.isNullOrBlank()
+            ) {
+                storeFile = file(keystorePath)
+                storePassword = storePass
+                keyAlias = alias
+                keyPassword = keyPass
+                enableV1Signing = false
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            ndk {
+                debugSymbolLevel = "NONE"
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",
             )
+            val releaseSigning = signingConfigs.findByName("release")
+            if (releaseSigning?.storeFile?.exists() == true) {
+                signingConfig = releaseSigning
+            }
         }
     }
 
