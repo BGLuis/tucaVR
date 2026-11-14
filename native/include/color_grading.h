@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 
 // Cinematic Color Grading & Tone Mapping (Hable Filmic on max(R, G, B) + Cubic Contrast S-Curve).
 // Provides the exact C++ reference for functions executed in Vulkan shaders (video.frag, stereo.frag,
@@ -213,4 +214,80 @@ inline ColorRgb ApplyColorTemperature(ColorRgb color, float tempK) {
     }
 
     return {color.r * tempColor.r, color.g * tempColor.g, color.b * tempColor.b};
+}
+
+// Trilinear sampling of a 3D RGBA8 LUT table (size x size x size entries).
+// Ordering: for b in 0..size { for g in 0..size { for r in 0..size { ... } } }
+// Matches Vulkan normalized coordinate half-texel mapping:
+//   coord = (clamp(val, 0.0, 1.0) * (size - 1) + 0.5) / size
+// Output is in [0.0, 1.0].
+inline void SampleLut3DTrilinear(const uint8_t *rgba8, uint32_t size, float r, float g, float b, float &outR,
+                                 float &outG, float &outB) {
+    if (rgba8 == nullptr || size < 2) {
+        outR = std::clamp(r, 0.0f, 1.0f);
+        outG = std::clamp(g, 0.0f, 1.0f);
+        outB = std::clamp(b, 0.0f, 1.0f);
+        return;
+    }
+
+    float clR = std::clamp(r, 0.0f, 1.0f);
+    float clG = std::clamp(g, 0.0f, 1.0f);
+    float clB = std::clamp(b, 0.0f, 1.0f);
+
+    float span = static_cast<float>(size - 1);
+    float x = clR * span;
+    float y = clG * span;
+    float z = clB * span;
+
+    uint32_t i0 = static_cast<uint32_t>(x);
+    uint32_t i1 = std::min(i0 + 1, size - 1);
+    float fx = x - static_cast<float>(i0);
+
+    uint32_t j0 = static_cast<uint32_t>(y);
+    uint32_t j1 = std::min(j0 + 1, size - 1);
+    float fy = y - static_cast<float>(j0);
+
+    uint32_t k0 = static_cast<uint32_t>(z);
+    uint32_t k1 = std::min(k0 + 1, size - 1);
+    float fz = z - static_cast<float>(k0);
+
+    auto sampleAt = [rgba8, size](uint32_t i, uint32_t j, uint32_t k) -> ColorRgb {
+        size_t idx = ((static_cast<size_t>(k) * size + j) * size + i) * 4;
+        return {
+            static_cast<float>(rgba8[idx + 0]) / 255.0f,
+            static_cast<float>(rgba8[idx + 1]) / 255.0f,
+            static_cast<float>(rgba8[idx + 2]) / 255.0f,
+        };
+    };
+
+    ColorRgb c000 = sampleAt(i0, j0, k0);
+    ColorRgb c100 = sampleAt(i1, j0, k0);
+    ColorRgb c010 = sampleAt(i0, j1, k0);
+    ColorRgb c110 = sampleAt(i1, j1, k0);
+    ColorRgb c001 = sampleAt(i0, j0, k1);
+    ColorRgb c101 = sampleAt(i1, j0, k1);
+    ColorRgb c011 = sampleAt(i0, j1, k1);
+    ColorRgb c111 = sampleAt(i1, j1, k1);
+
+    auto lerpColor = [](ColorRgb a, ColorRgb b, float t) -> ColorRgb {
+        return {
+            a.r + (b.r - a.r) * t,
+            a.g + (b.g - a.g) * t,
+            a.b + (b.b - a.b) * t,
+        };
+    };
+
+    ColorRgb c00 = lerpColor(c000, c100, fx);
+    ColorRgb c10 = lerpColor(c010, c110, fx);
+    ColorRgb c01 = lerpColor(c001, c101, fx);
+    ColorRgb c11 = lerpColor(c011, c111, fx);
+
+    ColorRgb c0 = lerpColor(c00, c10, fy);
+    ColorRgb c1 = lerpColor(c01, c11, fy);
+
+    ColorRgb c = lerpColor(c0, c1, fz);
+
+    outR = c.r;
+    outG = c.g;
+    outB = c.b;
 }

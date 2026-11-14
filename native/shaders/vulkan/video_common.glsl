@@ -4,6 +4,7 @@
 // Included by video.frag, stereo.frag, stereo_cubemap.frag, and video_layer.frag.
 
 layout(set = 0, binding = 0) uniform sampler2D videoTexture;
+layout(set = 0, binding = 1) uniform sampler3D lutTexture;
 
 // RGB to YCbCr conversion (ITU-R BT.601) for illumination-invariant color distance measurement
 vec3 RgbToYcbcr(vec3 rgb) {
@@ -231,4 +232,13 @@ vec3 SampleVideoSgsrOrLinear(vec2 uv, float sharpness, vec2 texelSize) {
 vec3 SrgbEotf(vec3 c) {
     c = clamp(c, 0.0, 1.0);
     return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), greaterThan(c, vec3(0.04045)));
+}
+
+// 3D .cube Color LUT evaluation. Maps input normalized SDR RGB to half-texel centered
+// coordinates in [0.5/size, 1.0 - 0.5/size] to perform seamless trilinear interpolation
+// across the table entries.
+vec3 ApplyLut3D(vec3 sdrRgb) {
+    vec3 texSize = vec3(textureSize(lutTexture, 0));
+    vec3 coord = (0.5 / texSize) + clamp(sdrRgb, 0.0, 1.0) * ((texSize - 1.0) / texSize);
+    return texture(lutTexture, coord).rgb;
 }

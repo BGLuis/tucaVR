@@ -33,6 +33,8 @@ void main() {
         color = ApplyColorTemperature(color, vColorTemperature);
     }
 
+    color = ApplyLut3D(color);
+
     float finalAlpha = 1.0;
     if (vChromaKeyEnabled == 1) {
         vec3 keyColor = vec3(

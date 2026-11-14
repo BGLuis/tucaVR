@@ -25,6 +25,7 @@ pub mod error_ring;
 pub mod focus_pause;
 pub mod format3d;
 pub mod frame_timing;
+pub mod lut;
 pub mod metadata_wire;
 pub mod pixel_detect;
 pub mod playback_params;

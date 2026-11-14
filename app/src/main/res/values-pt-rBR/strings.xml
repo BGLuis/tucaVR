@@ -56,6 +56,11 @@
     <string name="settings_foveated_mode_auto">Automatico (Adaptativo)</string>
     <string name="settings_direct_video_layer_label">Camada de vídeo direta</string>
     <string name="settings_direct_video_layer_description">Exibe vídeo 2D, SBS e OU plano como uma camada própria para uma imagem mais nítida. Desative para comparar com a renderização anterior. Somente Vulkan.</string>
+    <string name="settings_lut_label">LUT de Cor 3D (.cube)</string>
+    <string name="settings_lut_description">Aplica uma LUT criativa de gradação de cor à reprodução de vídeo.</string>
+    <string name="settings_lut_none">Nenhum</string>
+    <string name="settings_lut_load_button">Carregar LUT</string>
+    <string name="settings_lut_clear_button">Limpar LUT</string>
     <string name="settings_ambient_mode_label">Modo Ambiente</string>
     <string name="settings_ambient_mode_description">Adiciona um halo de luz suave atras da tela, com a cor do proprio video. So visivel no ambiente Void. So no Vulkan.</string>
     <string name="settings_section_lighting">Iluminação e Ambiente</string>

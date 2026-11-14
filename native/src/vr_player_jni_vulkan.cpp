@@ -33,6 +33,11 @@ static inline std::string get_current_session_id_vk() {
     __android_log_print(ANDROID_LOG_INFO, "VRPlayerJNI_VK", "[s:%s] " fmt, _sId.c_str(), ##__VA_ARGS__); \
 } while (0)
 
+#define LOGW(fmt, ...) do { \
+    std::string _sId = get_current_session_id_vk(); \
+    __android_log_print(ANDROID_LOG_WARN, "VRPlayerJNI_VK", "[s:%s] " fmt, _sId.c_str(), ##__VA_ARGS__); \
+} while (0)
+
 #define LOGE(fmt, ...) do { \
     std::string _sId = get_current_session_id_vk(); \
     __android_log_print(ANDROID_LOG_ERROR, "VRPlayerJNI_VK", "[s:%s] " fmt, _sId.c_str(), ##__VA_ARGS__); \
@@ -394,6 +399,44 @@ Java_com_tucavr_VRActivity_nativeClearPhoto(JNIEnv*, jobject) {
     g_photoActive.store(false);
     g_photoDirty.store(true);
     LOGI("nativeClearPhoto: foto descarregada");
+}
+
+extern "C" {
+__attribute__((weak)) int32_t load_video_lut_cube(const uint8_t* data, size_t len);
+__attribute__((weak)) void clear_video_lut();
+__attribute__((weak)) uint64_t get_video_lut_generation();
+__attribute__((weak)) int32_t copy_video_lut_rgba8(uint8_t* out_buf, size_t capacity, uint32_t* out_size);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL
+Java_com_tucavr_VRActivity_nativeLoadVideoLut(JNIEnv* env, jobject, jbyteArray data) {
+    if (data == nullptr) {
+        return JNI_FALSE;
+    }
+    jsize len = env->GetArrayLength(data);
+    if (len <= 0) {
+        return JNI_FALSE;
+    }
+    std::vector<uint8_t> buf(static_cast<size_t>(len));
+    env->GetByteArrayRegion(data, 0, len, reinterpret_cast<jbyte*>(buf.data()));
+
+    if (load_video_lut_cube != nullptr) {
+        int32_t res = load_video_lut_cube(buf.data(), buf.size());
+        LOGI("nativeLoadVideoLut: %d bytes, resultado=%d", (int)len, (int)res);
+        return (res > 0) ? JNI_TRUE : JNI_FALSE;
+    }
+    LOGW("nativeLoadVideoLut: load_video_lut_cube nao disponivel");
+    return JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeClearVideoLut(JNIEnv*, jobject) {
+    if (clear_video_lut != nullptr) {
+        clear_video_lut();
+        LOGI("nativeClearVideoLut: LUT limpa");
+    } else {
+        LOGW("nativeClearVideoLut: clear_video_lut nao disponivel");
+    }
 }
 
 extern "C" JNIEXPORT void JNICALL

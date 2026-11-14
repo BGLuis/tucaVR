@@ -348,6 +348,11 @@ extern "C" {
     extern void reset_process_state();
     extern void on_app_focus_lost();
     extern void on_app_focus_gained();
+    // 3D .cube Color LUT
+    __attribute__((weak)) int32_t load_video_lut_cube(const uint8_t* data, size_t len);
+    __attribute__((weak)) void clear_video_lut();
+    __attribute__((weak)) uint64_t get_video_lut_generation();
+    __attribute__((weak)) int32_t copy_video_lut_rgba8(uint8_t* out_buf, size_t capacity, uint32_t* out_size);
     // Fase 0.3 Seção 2: Passthrough / Mixed Reality — estado desejado pelo
     // usuario (get_) e capacidade do runtime (set_, escrito daqui).
     extern uint32_t get_passthrough_enabled();
@@ -780,6 +785,7 @@ struct VideoLayerConversionKey {
     float colorTemperature = 0.0f;
     float hdrLuminance = 0.0f;
     XrSwapchain chains[kEyeCount] = {};
+    uint64_t lutGeneration = 0;
     bool operator==(const VideoLayerConversionKey&) const = default;
 };
 
@@ -1057,6 +1063,14 @@ struct AppState {
     uint64_t videoFrameSerial = 0;
     VideoLayerState videoLayer;
     VideoFrame* activeVideoFrame = nullptr;
+
+    // 3D .cube Color LUT texture & sampler
+    uint64_t lutGeneration = 0;
+    uint32_t lutSize = 0;
+    VkImage lutImage = VK_NULL_HANDLE;
+    VkDeviceMemory lutMemory = VK_NULL_HANDLE;
+    VkImageView lutImageView = VK_NULL_HANDLE;
+    VkSampler lutSampler = VK_NULL_HANDLE;
 
     // Estagio 4 — pipeline UI/controles (RGBA8888 normal, com alpha blending).
     // Usa AImageReader + ANativeWindow_toSurface igual ao caminho GLES.
@@ -3297,6 +3311,275 @@ void CreateGraphicsPipeline(AppState& state) {
     vkDestroyShaderModule(state.vkDevice, fragModule, nullptr);
 }
 
+// ---------------------------------------------------------------------------
+// 3D .cube Color LUT texture & sampler management
+// ---------------------------------------------------------------------------
+
+void UploadLut3DTexture(AppState& state, const uint8_t* rgba8, uint32_t size) {
+    if (state.vkDevice == VK_NULL_HANDLE || state.vkQueue == VK_NULL_HANDLE) {
+        return;
+    }
+
+    VKR(vkQueueWaitIdle(state.vkQueue));
+
+    if (state.lutImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.lutImageView, nullptr);
+        state.lutImageView = VK_NULL_HANDLE;
+    }
+    if (state.lutImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.lutImage, nullptr);
+        state.lutImage = VK_NULL_HANDLE;
+    }
+    if (state.lutMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.lutMemory, nullptr);
+        state.lutMemory = VK_NULL_HANDLE;
+    }
+
+    std::vector<uint8_t> defaultIdentity;
+    if (rgba8 == nullptr || size < 2) {
+        size = 2;
+        defaultIdentity.resize(32);
+        for (uint32_t b = 0; b < 2; ++b) {
+            for (uint32_t g = 0; g < 2; ++g) {
+                for (uint32_t r = 0; r < 2; ++r) {
+                    size_t idx = ((static_cast<size_t>(b) * 2 + g) * 2 + r) * 4;
+                    defaultIdentity[idx + 0] = static_cast<uint8_t>(r * 255);
+                    defaultIdentity[idx + 1] = static_cast<uint8_t>(g * 255);
+                    defaultIdentity[idx + 2] = static_cast<uint8_t>(b * 255);
+                    defaultIdentity[idx + 3] = 255;
+                }
+            }
+        }
+        rgba8 = defaultIdentity.data();
+    }
+    state.lutSize = size;
+
+    VkDeviceSize bufSize = static_cast<VkDeviceSize>(size) * size * size * 4;
+
+    VkImageCreateInfo imgInfo{VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO};
+    imgInfo.imageType = VK_IMAGE_TYPE_3D;
+    imgInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    imgInfo.extent = {size, size, size};
+    imgInfo.mipLevels = 1;
+    imgInfo.arrayLayers = 1;
+    imgInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imgInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
+    imgInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
+    imgInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imgInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    VKR(vkCreateImage(state.vkDevice, &imgInfo, nullptr, &state.lutImage));
+
+    VkMemoryRequirements memReqs;
+    vkGetImageMemoryRequirements(state.vkDevice, state.lutImage, &memReqs);
+
+    VkPhysicalDeviceMemoryProperties memProps;
+    vkGetPhysicalDeviceMemoryProperties(state.vkPhysicalDevice, &memProps);
+    uint32_t memTypeIdx = UINT32_MAX;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        if ((memReqs.memoryTypeBits & (1u << i)) &&
+            (memProps.memoryTypes[i].propertyFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)) {
+            memTypeIdx = i;
+            break;
+        }
+    }
+    if (memTypeIdx == UINT32_MAX) {
+        for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+            if (memReqs.memoryTypeBits & (1u << i)) {
+                memTypeIdx = i;
+                break;
+            }
+        }
+    }
+
+    VkMemoryAllocateInfo allocInfo{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    allocInfo.allocationSize = memReqs.size;
+    allocInfo.memoryTypeIndex = memTypeIdx;
+    VKR(vkAllocateMemory(state.vkDevice, &allocInfo, nullptr, &state.lutMemory));
+    VKR(vkBindImageMemory(state.vkDevice, state.lutImage, state.lutMemory, 0));
+
+    // Staging buffer
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+    VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bufInfo.size = bufSize;
+    bufInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VKR(vkCreateBuffer(state.vkDevice, &bufInfo, nullptr, &stagingBuf));
+
+    VkMemoryRequirements stagingReqs;
+    vkGetBufferMemoryRequirements(state.vkDevice, stagingBuf, &stagingReqs);
+    uint32_t stagingTypeIdx = UINT32_MAX;
+    const auto hostVisible = VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT;
+    for (uint32_t i = 0; i < memProps.memoryTypeCount; i++) {
+        if ((stagingReqs.memoryTypeBits & (1u << i)) &&
+            ((memProps.memoryTypes[i].propertyFlags & hostVisible) == hostVisible)) {
+            stagingTypeIdx = i;
+            break;
+        }
+    }
+    VkMemoryAllocateInfo stagingAlloc{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    stagingAlloc.allocationSize = stagingReqs.size;
+    stagingAlloc.memoryTypeIndex = stagingTypeIdx;
+    VKR(vkAllocateMemory(state.vkDevice, &stagingAlloc, nullptr, &stagingMem));
+    VKR(vkBindBufferMemory(state.vkDevice, stagingBuf, stagingMem, 0));
+
+    void* mapped = nullptr;
+    VKR(vkMapMemory(state.vkDevice, stagingMem, 0, bufSize, 0, &mapped));
+    memcpy(mapped, rgba8, static_cast<size_t>(bufSize));
+    vkUnmapMemory(state.vkDevice, stagingMem);
+
+    VkCommandBufferAllocateInfo cbAlloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cbAlloc.commandPool = state.vkCommandPool;
+    cbAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbAlloc.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VKR(vkAllocateCommandBuffers(state.vkDevice, &cbAlloc, &cmd));
+
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VKR(vkBeginCommandBuffer(cmd, &beginInfo));
+
+    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.srcAccessMask = 0;
+    barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+    barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.image = state.lutImage;
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent = {size, size, size};
+    vkCmdCopyBufferToImage(cmd, stagingBuf, state.lutImage, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+
+    barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+    barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+    barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                         VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+
+    VKR(vkEndCommandBuffer(cmd));
+
+    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
+    VKR(vkQueueWaitIdle(state.vkQueue));
+
+    vkFreeCommandBuffers(state.vkDevice, state.vkCommandPool, 1, &cmd);
+    vkDestroyBuffer(state.vkDevice, stagingBuf, nullptr);
+    vkFreeMemory(state.vkDevice, stagingMem, nullptr);
+
+    VkImageViewCreateInfo viewInfo{VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO};
+    viewInfo.image = state.lutImage;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_3D;
+    viewInfo.format = VK_FORMAT_R8G8B8A8_UNORM;
+    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    VKR(vkCreateImageView(state.vkDevice, &viewInfo, nullptr, &state.lutImageView));
+
+    // Update existing descriptor sets in videoImageCache
+    for (auto& [buf, frame] : state.videoImageCache) {
+        if (frame.descriptorSet != VK_NULL_HANDLE) {
+            VkDescriptorImageInfo lutDsInfo{};
+            lutDsInfo.sampler = state.lutSampler;
+            lutDsInfo.imageView = state.lutImageView;
+            lutDsInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+            VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+            write.dstSet = frame.descriptorSet;
+            write.dstBinding = 1;
+            write.descriptorCount = 1;
+            write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            write.pImageInfo = &lutDsInfo;
+            vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+        }
+    }
+
+    // Update photo descriptor set if allocated
+    if (state.photoDescriptorSet != VK_NULL_HANDLE) {
+        VkDescriptorImageInfo lutDsInfo{};
+        lutDsInfo.sampler = state.lutSampler;
+        lutDsInfo.imageView = state.lutImageView;
+        lutDsInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet = state.photoDescriptorSet;
+        write.dstBinding = 1;
+        write.descriptorCount = 1;
+        write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo = &lutDsInfo;
+        vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+    }
+
+    LOGI("3D LUT: uploaded %ux%ux%u texture (generation %llu)", size, size, size,
+         static_cast<unsigned long long>(state.lutGeneration));
+}
+
+void CreateLutResources(AppState& state) {
+    VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    samplerInfo.magFilter = VK_FILTER_LINEAR;
+    samplerInfo.minFilter = VK_FILTER_LINEAR;
+    samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    samplerInfo.maxLod = 0.0f;
+    VKR(vkCreateSampler(state.vkDevice, &samplerInfo, nullptr, &state.lutSampler));
+
+    UploadLut3DTexture(state, nullptr, 0);
+}
+
+void DestroyLutResources(AppState& state) {
+    if (state.vkDevice == VK_NULL_HANDLE) return;
+    if (state.lutImageView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.lutImageView, nullptr);
+        state.lutImageView = VK_NULL_HANDLE;
+    }
+    if (state.lutImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.lutImage, nullptr);
+        state.lutImage = VK_NULL_HANDLE;
+    }
+    if (state.lutMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.lutMemory, nullptr);
+        state.lutMemory = VK_NULL_HANDLE;
+    }
+    if (state.lutSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(state.vkDevice, state.lutSampler, nullptr);
+        state.lutSampler = VK_NULL_HANDLE;
+    }
+}
+
+void UpdateLut(AppState& state) {
+    if (get_video_lut_generation == nullptr) {
+        return;
+    }
+    uint64_t gen = get_video_lut_generation();
+    if (gen == state.lutGeneration) {
+        return;
+    }
+    state.lutGeneration = gen;
+
+    uint32_t size = 0;
+    std::vector<uint8_t> lutData;
+    if (copy_video_lut_rgba8 != nullptr) {
+        int32_t byteCount = copy_video_lut_rgba8(nullptr, 0, &size);
+        if (byteCount > 0 && size >= 2) {
+            lutData.resize(static_cast<size_t>(byteCount));
+            int32_t copied = copy_video_lut_rgba8(lutData.data(), lutData.size(), &size);
+            if (copied <= 0) {
+                lutData.clear();
+                size = 0;
+            }
+        }
+    }
+
+    UploadLut3DTexture(state, lutData.empty() ? nullptr : lutData.data(), size);
+}
+
 // Estagio 3: cria VkSamplerYcbcrConversion + sampler imutavel + descriptor
 // set layout + descriptor pool + pipeline de video com textura YCbCr.
 //
@@ -3345,24 +3628,30 @@ void CreateYcbcrAndVideoPipeline(AppState& state, const vrplayer::YcbcrFormatKey
     samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     VKR(vkCreateSampler(state.vkDevice, &samplerInfo, nullptr, &state.videoSampler));
 
-    // --- Descriptor Set Layout (sampler imutavel obrigatorio para YCbCr) ---
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    binding.pImmutableSamplers = &state.videoSampler; // obrigatorio para YCbCr
+    // --- Descriptor Set Layout (sampler imutavel obrigatorio para YCbCr em binding 0, sampler 3D lut em binding 1) ---
+    VkDescriptorSetLayoutBinding bindings[2]{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[0].pImmutableSamplers = &state.videoSampler; // obrigatorio para YCbCr
+
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].pImmutableSamplers = nullptr;
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &binding;
+    layoutInfo.bindingCount = 2;
+    layoutInfo.pBindings = bindings;
     VKR(vkCreateDescriptorSetLayout(
         state.vkDevice, &layoutInfo, nullptr, &state.videoDescriptorSetLayout));
 
-    // --- Descriptor Pool (kVideoImageCacheLimit sets para o cache de frames) ---
+    // --- Descriptor Pool (kVideoImageCacheLimit sets para o cache de frames, 2 desc por set) ---
     VkDescriptorPoolSize poolSize{};
     poolSize.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    poolSize.descriptorCount = static_cast<uint32_t>(kVideoImageCacheLimit);
+    poolSize.descriptorCount = static_cast<uint32_t>(kVideoImageCacheLimit * 2);
 
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
@@ -3923,6 +4212,7 @@ static bool UpdateVideoLayerImages(AppState& state, const VideoFrame& frame, vrp
     key.sharpness = sharpness;
     key.colorTemperature = get_night_mode_enabled() ? -3000.0f : get_color_temperature();
     key.hdrLuminance = get_hdr_luminance();
+    key.lutGeneration = state.lutGeneration;
     for (uint32_t i = 0; i < layer.chainCount; i++) key.chains[i] = layer.chains[i].handle;
 
     bool allReleased = layer.chainCount > 0;
@@ -5466,32 +5756,52 @@ static void EnsurePhotoTexture(AppState& state, uint32_t width, uint32_t height)
         imgInfo.sampler     = state.uiSampler;
         imgInfo.imageView   = state.photoImageView;
         imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        write.dstSet          = state.photoDescriptorSet;
-        write.dstBinding      = 0;
-        write.descriptorCount = 1;
-        write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.pImageInfo      = &imgInfo;
-        vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+
+        VkDescriptorImageInfo lutDsInfo{};
+        lutDsInfo.sampler   = state.lutSampler;
+        lutDsInfo.imageView = state.lutImageView;
+        lutDsInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkWriteDescriptorSet writes[2]{};
+        writes[0].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet          = state.photoDescriptorSet;
+        writes[0].dstBinding      = 0;
+        writes[0].descriptorCount = 1;
+        writes[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].pImageInfo      = &imgInfo;
+
+        writes[1].sType           = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet          = state.photoDescriptorSet;
+        writes[1].dstBinding      = 1;
+        writes[1].descriptorCount = 1;
+        writes[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[1].pImageInfo      = &lutDsInfo;
+        vkUpdateDescriptorSets(state.vkDevice, 2, writes, 0, nullptr);
     }
 }
 
 static void CreatePhotoPipeline(AppState& state) {
-    // Descriptor set layout com sampler imutável uiSampler (RGBA)
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding         = 0;
-    binding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
-    binding.pImmutableSamplers = &state.uiSampler;
+    // Descriptor set layout com sampler imutável uiSampler (RGBA) e sampler 3D lut
+    VkDescriptorSetLayoutBinding bindings[2]{};
+    bindings[0].binding         = 0;
+    bindings[0].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[0].pImmutableSamplers = &state.uiSampler;
+
+    bindings[1].binding         = 1;
+    bindings[1].descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[1].pImmutableSamplers = nullptr;
 
     VkDescriptorSetLayoutCreateInfo dsLayout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    dsLayout.bindingCount = 1;
-    dsLayout.pBindings    = &binding;
+    dsLayout.bindingCount = 2;
+    dsLayout.pBindings    = bindings;
     VKR(vkCreateDescriptorSetLayout(state.vkDevice, &dsLayout, nullptr, &state.photoDescriptorSetLayout));
 
-    // Descriptor Pool para foto
-    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2};
+    // Descriptor Pool para foto (2 sets * 2 descriptors cada)
+    VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 4};
     VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
     poolInfo.flags         = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
     poolInfo.maxSets       = 2;
@@ -5505,6 +5815,21 @@ static void CreatePhotoPipeline(AppState& state) {
     dsAlloc.descriptorSetCount = 1;
     dsAlloc.pSetLayouts        = &state.photoDescriptorSetLayout;
     VKR(vkAllocateDescriptorSets(state.vkDevice, &dsAlloc, &state.photoDescriptorSet));
+
+    if (state.lutImageView != VK_NULL_HANDLE && state.lutSampler != VK_NULL_HANDLE) {
+        VkDescriptorImageInfo lutDsInfo{};
+        lutDsInfo.sampler   = state.lutSampler;
+        lutDsInfo.imageView = state.lutImageView;
+        lutDsInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        write.dstSet          = state.photoDescriptorSet;
+        write.dstBinding      = 1;
+        write.descriptorCount = 1;
+        write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        write.pImageInfo      = &lutDsInfo;
+        vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+    }
 
     // Pipeline Layout (mesma StereoPushConstants dos shaders stereo)
     VkPushConstantRange pcRange{VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof(StereoPushConstants)};
@@ -8713,13 +9038,26 @@ VideoFrame* GetOrImportVideoFrame(AppState& state, AHardwareBuffer* buffer) {
     dsImageInfo.imageView = frame.imageView;
     dsImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
 
-    VkWriteDescriptorSet writeDs{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    writeDs.dstSet = frame.descriptorSet;
-    writeDs.dstBinding = 0;
-    writeDs.descriptorCount = 1;
-    writeDs.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    writeDs.pImageInfo = &dsImageInfo;
-    vkUpdateDescriptorSets(state.vkDevice, 1, &writeDs, 0, nullptr);
+    VkDescriptorImageInfo lutImageInfo{};
+    lutImageInfo.sampler = state.lutSampler;
+    lutImageInfo.imageView = state.lutImageView;
+    lutImageInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet writeDs[2]{};
+    writeDs[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writeDs[0].dstSet = frame.descriptorSet;
+    writeDs[0].dstBinding = 0;
+    writeDs[0].descriptorCount = 1;
+    writeDs[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writeDs[0].pImageInfo = &dsImageInfo;
+
+    writeDs[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    writeDs[1].dstSet = frame.descriptorSet;
+    writeDs[1].dstBinding = 1;
+    writeDs[1].descriptorCount = 1;
+    writeDs[1].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    writeDs[1].pImageInfo = &lutImageInfo;
+    vkUpdateDescriptorSets(state.vkDevice, 2, writeDs, 0, nullptr);
 
     LOGI("Cache de video: importado AHardwareBuffer %p (%ux%u)",
          static_cast<void*>(buffer), hwbDesc.width, hwbDesc.height);
@@ -10763,6 +11101,7 @@ void DestroyAppResources(AppState& state) {
     // Modo Ambiente (halo de luz) — nao usa
     // nenhum handle de propriedade do video/UI, so os seus proprios.
     DestroyAmbientResources(state);
+    DestroyLutResources(state);
 
     if (state.videoDescriptorPool != VK_NULL_HANDLE) {
         vkDestroyDescriptorPool(state.vkDevice, state.videoDescriptorPool, nullptr);
@@ -11345,6 +11684,8 @@ void android_main(android_app* app) {
     CreateGraphicsPipeline(state);
     CreateQuadVertexBuffer(state);
     CreateCommandResources(state);
+    // 3D .cube Color LUT: sampler e textura de identidade inicial
+    CreateLutResources(state);
     // Estagio 3: YCbCr + pipeline de video + vertex buffer de video
     CreateYcbcrAndVideoPipeline(state);
     CreateVideoVertexBuffer(state);
@@ -11388,6 +11729,8 @@ void android_main(android_app* app) {
         if (app->destroyRequested != 0 || state.requestExit) break;
         if (!state.sessionRunning) continue;
 
+        // 3D .cube Color LUT: poll de atualizacao antes do frame
+        UpdateLut(state);
         // Estagio 3: atualizar frame de video antes de renderizar
         UpdateVideoFrame(state);
         // Estagio 4: atualizar texturas de UI/controles a partir dos AImageReaders

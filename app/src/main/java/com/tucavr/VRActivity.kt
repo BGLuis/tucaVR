@@ -141,6 +141,7 @@ class VRActivity : NativeActivity() {
     val thermalMonitor: ThermalMonitor by lazy { ThermalMonitor(this) }
     val screenTransformStore: ScreenTransformStore by lazy { ScreenTransformStore(this) }
     val environmentStore: EnvironmentStore by lazy { EnvironmentStore(this) }
+    val lutStore: LutStore by lazy { LutStore(this) }
 
     fun applySavedScreenTransform(environmentId: String = environmentStore.getActiveEnvironment()) {
         val t = screenTransformStore.get(environmentId)
@@ -571,6 +572,11 @@ class VRActivity : NativeActivity() {
         nativeSetByButtonAsBack(FeatureFlags.isEnabled(this, FeatureFlags.Flag.BY_BUTTON_AS_BACK))
         nativeSetHoverHapticsEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.HOVER_HAPTICS))
         nativeSetDirectVideoLayerEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.DIRECT_VIDEO_LAYER))
+        if (lutStore.hasActiveLut()) {
+            lutStore.getActiveLutBytes()?.let { bytes ->
+                nativeLoadVideoLut(bytes)
+            }
+        }
 
         // F8: ANR e crash nativo (inclusive o abort do ART no teardown Vulkan)
         // não deixam rastro no handler de exceções da JVM abaixo — ApplicationExitInfo
@@ -847,6 +853,7 @@ class VRActivity : NativeActivity() {
 
         private const val PICK_VIDEO_REQUEST_CODE = 1001
         private const val PICK_ENVIRONMENT_REQUEST_CODE = 1002
+        private const val PICK_LUT_REQUEST_CODE = 1003
 
         // Ver hook de auto-play em onCreate/onNewIntent/onResume.
         const val EXTRA_AUTO_PLAY_PATH = "video_path"
@@ -907,6 +914,18 @@ class VRActivity : NativeActivity() {
                         putExtra(Intent.EXTRA_MIME_TYPES, arrayOf("model/gltf-binary", "application/octet-stream"))
                     }
                 activity.startActivityForResult(intent, PICK_ENVIRONMENT_REQUEST_CODE)
+            }
+        }
+
+        @JvmStatic
+        fun openLutFilePicker(activity: VRActivity) {
+            activity.runOnUiThread {
+                val intent =
+                    Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        type = "*/*"
+                    }
+                activity.startActivityForResult(intent, PICK_LUT_REQUEST_CODE)
             }
         }
 
@@ -1387,6 +1406,8 @@ class VRActivity : NativeActivity() {
             }
         } else if (requestCode == PICK_ENVIRONMENT_REQUEST_CODE && resultCode == RESULT_OK) {
             data?.data?.let { uri -> importEnvironment(uri) }
+        } else if (requestCode == PICK_LUT_REQUEST_CODE && resultCode == RESULT_OK) {
+            data?.data?.let { uri -> loadLutFromUri(uri) }
         }
     }
 
@@ -1882,6 +1903,43 @@ class VRActivity : NativeActivity() {
         panY: Float,
     ) {
         nativeSetPhotoPan(panX, panY)
+    }
+
+    external fun nativeLoadVideoLut(data: ByteArray): Boolean
+
+    external fun nativeClearVideoLut()
+
+    var onLutChanged: (() -> Unit)? = null
+
+    fun openLutFilePicker() = openLutFilePicker(this)
+
+    fun clearLut() {
+        nativeClearVideoLut()
+        lutStore.clear()
+        runOnUiThread { onLutChanged?.invoke() }
+    }
+
+    fun loadLutFromUri(uri: Uri) {
+        CoroutineScope(Dispatchers.IO).launch {
+            try {
+                val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                if (bytes == null || bytes.isEmpty()) {
+                    return@launch
+                }
+                val success = nativeLoadVideoLut(bytes)
+                if (success) {
+                    val name = displayNameOf(uri) ?: "custom.cube"
+                    lutStore.save(name, bytes)
+                    withContext(Dispatchers.Main) {
+                        onLutChanged?.invoke()
+                    }
+                } else {
+                    VRLog.w("Failed to parse or load .cube LUT from $uri")
+                }
+            } catch (e: Exception) {
+                VRLog.e("Error loading LUT: ${e.message}")
+            }
+        }
     }
 
     /**

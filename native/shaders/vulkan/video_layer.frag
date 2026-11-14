@@ -34,5 +34,7 @@ void main() {
         color = ApplyColorTemperature(color, pc.colorTemperature);
     }
 
+    color = ApplyLut3D(color);
+
     outColor = vec4(SrgbEotf(color), 1.0);
 }
