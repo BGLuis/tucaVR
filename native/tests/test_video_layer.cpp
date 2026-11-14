@@ -190,6 +190,28 @@ static void TestOversizeContentIsClampedKeepingAspect() {
     printf("[PASS] TestOversizeContentIsClampedKeepingAspect\n");
 }
 
+static void TestTargetResolutionClamping() {
+    constexpr uint32_t kLimit = 8192;
+
+    // 4K mono downscaled to target 2410x1356:
+    auto mono4k = ComputeVideoLayerExtent(3840, 2160, VideoLayerLayout::Mono, kLimit, kLimit, 2410, 1356);
+    assert(mono4k.width == 2410 && mono4k.height == 1356);
+
+    // 1080p mono with target 2410x1356 is smaller than target: keeps 1920x1080 (never upscaled)
+    auto mono1080p = ComputeVideoLayerExtent(1920, 1080, VideoLayerLayout::Mono, kLimit, kLimit, 2410, 1356);
+    assert(mono1080p.width == 1920 && mono1080p.height == 1080);
+
+    // Full SBS 7680x2160 (each eye 3840x2160) with per-eye target 2410x1356:
+    auto sbs4k = ComputeVideoLayerExtent(7680, 2160, VideoLayerLayout::SideBySide, kLimit, kLimit, 2410, 1356);
+    assert(sbs4k.width == 2410 && sbs4k.height == 1356);
+
+    // Zero target defaults to standard behavior
+    auto untargeted = ComputeVideoLayerExtent(3840, 2160, VideoLayerLayout::Mono, kLimit, kLimit, 0, 0);
+    assert(untargeted.width == 3840 && untargeted.height == 2160);
+
+    printf("[PASS] TestTargetResolutionClamping\n");
+}
+
 static void TestEyeCropRectangles() {
     auto mono = ComputeEyeCrop(VideoLayerLayout::Mono, 1, false);
     assert(mono.offsetU == 0.0f && mono.offsetV == 0.0f && mono.scaleU == 1.0f && mono.scaleV == 1.0f);
@@ -230,6 +252,7 @@ int main() {
     TestLayoutFollowsTheScreenMode();
     TestExtentFollowsPerEyeContent();
     TestOversizeContentIsClampedKeepingAspect();
+    TestTargetResolutionClamping();
     TestEyeCropRectangles();
     TestSwappedEyesExchangeTheHalves();
     printf("--- All video_layer.h unit tests passed successfully! ---\n");

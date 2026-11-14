@@ -121,10 +121,11 @@ struct VideoLayerExtent {
 };
 
 // Per-eye content size from the decoded buffer. It ignores the display aspect: Half SBS/OU frames are squeezed on
-// purpose and the compositor stretches them to the screen. Clamped to the runtime limits and to kVideoLayerMaxExtent
-// on each axis, preserving the aspect ratio.
+// purpose and the compositor stretches them to the screen. Clamped to runtime limits, target limits (if specified),
+// and to kVideoLayerMaxExtent on each axis, preserving the aspect ratio.
 inline VideoLayerExtent ComputeVideoLayerExtent(uint32_t bufferWidth, uint32_t bufferHeight, VideoLayerLayout layout,
-                                                uint32_t runtimeMaxWidth, uint32_t runtimeMaxHeight) {
+                                                uint32_t runtimeMaxWidth, uint32_t runtimeMaxHeight,
+                                                uint32_t targetMaxWidth = 0, uint32_t targetMaxHeight = 0) {
     if (bufferWidth == 0 || bufferHeight == 0) {
         return {};
     }
@@ -136,10 +137,15 @@ inline VideoLayerExtent ComputeVideoLayerExtent(uint32_t bufferWidth, uint32_t b
         height = std::max(1u, height / 2);
     }
 
-    const uint32_t limitWidth =
-        std::min(runtimeMaxWidth == 0 ? kVideoLayerMaxExtent : runtimeMaxWidth, kVideoLayerMaxExtent);
-    const uint32_t limitHeight =
+    uint32_t limitWidth = std::min(runtimeMaxWidth == 0 ? kVideoLayerMaxExtent : runtimeMaxWidth, kVideoLayerMaxExtent);
+    uint32_t limitHeight =
         std::min(runtimeMaxHeight == 0 ? kVideoLayerMaxExtent : runtimeMaxHeight, kVideoLayerMaxExtent);
+    if (targetMaxWidth > 0) {
+        limitWidth = std::min(limitWidth, targetMaxWidth);
+    }
+    if (targetMaxHeight > 0) {
+        limitHeight = std::min(limitHeight, targetMaxHeight);
+    }
     const double scale =
         std::min({1.0, static_cast<double>(limitWidth) / width, static_cast<double>(limitHeight) / height});
     if (scale >= 1.0) {

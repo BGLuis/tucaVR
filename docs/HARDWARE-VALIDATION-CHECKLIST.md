@@ -330,3 +330,50 @@ Executes the measurement protocol for 4× MSAA on geometry pipelines (`vr_player
 - **Vulkan Validation (VUID-06853):** [ ] Clean (0 errors) | [ ] Layer violation
 - **Status:** [ ] PASSED | [ ] FAILED (Issue: #_____)
 - **Formal Decision:** [ ] Enable 4× MSAA (T3.2) | [ ] Descope & Document in VULKAN-MIGRATION-PLAN.md (T3.3)
+
+---
+
+## Block 8: 4K Flat Video Downscaling to Panel Angular Resolution — Issue #250
+
+Validates that 4K video rendered on flat and curved virtual screens is downscaled to the headset's panel angular resolution with multi-tap area filtering, stopping high-frequency shimmering and aliasing while preserving fine detail.
+
+### Session Metadata
+- **Date:** 
+- **Build Commit:** 
+- **Quest Firmware:** 
+- **Tester / Device Serial:** 
+
+### Debug Switch & Setup
+- **Test Asset:**
+  Generate the synthetic 4K pattern test clip:
+  ```bash
+  ./scripts/generate-downscale-test-clip.sh
+  ```
+- **Deploy to Quest 3:**
+  ```bash
+  adb push testdata/4k-downscale-test-clip.mp4 /sdcard/Movies/
+  ```
+- **Screen Geometry:**
+  Default Cinema / Void environment screen (1.35 m tall screen at 2.8 m distance).
+
+### Objective Pass Criteria & Measurement Protocol
+1. **Swapchain Resolution & Memory:**
+   - In direct composition layer mode (`videoLayer`), swapchain extent is capped to target angular extent (`<= 1400` lines for 1.35 m @ 2.8 m).
+   - Video smaller than target angular area (e.g. 1080p, 720p) keeps its native dimensions without upscaling.
+2. **Visual Anti-Aliasing (Shimmering & Moire Elimination):**
+   - Head rotation or gentle movement does not produce crawling shimmering or moire on the 1px, 2px, and 3px line pair patterns.
+   - Record smallest legible text pattern (e.g., 14px vs 10px) with downscale area filtering compared to unfiltered single bilinear tap.
+3. **Performance Stability:**
+   - Playback holds $\ge 72\text{ FPS}$ continuously without frame drops or swapchain recreation thrashing during thumbstick zoom/drag.
+
+### Results & Metrics
+- **4K Extent on 1.35m @ 2.8m:** Configured target lines: _____ (expected: <= 1400 lines)
+- **1080p Extent:** Configured target lines: 1080 lines (native preserved)
+- **Line Pair Legibility (1px / 2px / 3px):**
+  - Feature ON: _____
+  - Feature OFF: _____
+- **Smallest Legible Text:**
+  - Feature ON: _____
+  - Feature OFF: _____
+- **Status:** [ ] PASSED | [ ] FAILED (Issue: #250) [not verified on real hardware]
+

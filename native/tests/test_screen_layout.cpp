@@ -550,6 +550,116 @@ static void TestSampleAspectRatioCompensation() {
     std::cout << "[PASS] TestSampleAspectRatioCompensation\n";
 }
 
+static void TestComputePanelTargetVideoExtent() {
+    using vrplayer::ComputePanelTargetVideoExtent;
+
+    // 1. 4K 3840x2160 on a 1.35 m screen at 2.8 m distance:
+    // Angular subtense ~27.1 deg -> ~678 panel lines at 25 PPD -> ~1356 lines at 2x oversampling.
+    // Acceptance criterion: target height <= 1400 lines!
+    {
+        const auto target = ComputePanelTargetVideoExtent(3840, 2160, 2.4f, 1.35f, 2.8f);
+        assert(target.height <= 1400);
+        assert(target.height >= 1350);
+        assert(target.width <= 3840);
+        assert(target.width % 2 == 0);
+        assert(target.height % 2 == 0);
+        assert(Near(static_cast<float>(target.width) / static_cast<float>(target.height), 16.0f / 9.0f, 0.01f));
+    }
+
+    // 2. 4K portrait 2160x3840 on a 1.35 m screen at 2.8 m:
+    // Fits height 1.35m -> height <= 1400 lines.
+    {
+        const auto target = ComputePanelTargetVideoExtent(2160, 3840, 2.4f, 1.35f, 2.8f);
+        assert(target.height <= 1400);
+        assert(target.width <= 2160);
+        assert(target.width % 2 == 0);
+        assert(target.height % 2 == 0);
+        assert(Near(static_cast<float>(target.width) / static_cast<float>(target.height), 2160.0f / 3840.0f, 0.01f));
+    }
+
+    // 3. 1080p and 720p smaller than panel angular area keep their exact native size (never upscaled)
+    {
+        const auto target1080 = ComputePanelTargetVideoExtent(1920, 1080, 2.4f, 1.35f, 2.8f);
+        assert(target1080.width == 1920);
+        assert(target1080.height == 1080);
+
+        const auto target720 = ComputePanelTargetVideoExtent(1280, 720, 2.4f, 1.35f, 2.8f);
+        assert(target720.width == 1280);
+        assert(target720.height == 720);
+
+        const auto target480 = ComputePanelTargetVideoExtent(640, 480, 2.4f, 1.35f, 2.8f);
+        assert(target480.width == 640);
+        assert(target480.height == 480);
+    }
+
+    // 4. Larger screens / closer distances: clamp to source resolution (never upscaled above native)
+    {
+        // 4.0 m screen at 1.5 m distance
+        const auto targetHuge = ComputePanelTargetVideoExtent(3840, 2160, 4.0f, 2.25f, 1.5f);
+        assert(targetHuge.width == 3840);
+        assert(targetHuge.height == 2160);
+
+        // Very close viewer (0.5 m)
+        const auto targetClose = ComputePanelTargetVideoExtent(3840, 2160, 2.8f, 1.575f, 0.5f);
+        assert(targetClose.width == 3840);
+        assert(targetClose.height == 2160);
+    }
+
+    // 5. Extreme aspect ratios
+    {
+        // 21:9 Cinemascope (3840x1606)
+        const auto target219 = ComputePanelTargetVideoExtent(3840, 1606, 2.8f, 1.575f, 2.8f);
+        assert(target219.width <= 3840);
+        assert(target219.height <= 1606);
+        assert(target219.width % 2 == 0);
+        assert(target219.height % 2 == 0);
+        assert(
+            Near(static_cast<float>(target219.width) / static_cast<float>(target219.height), 3840.0f / 1606.0f, 0.02f));
+
+        // 32:9 Super ultrawide (3840x1080)
+        const auto target329 = ComputePanelTargetVideoExtent(3840, 1080, 2.8f, 1.575f, 2.8f);
+        assert(target329.width <= 3840);
+        assert(target329.height <= 1080);
+        assert(target329.width % 2 == 0);
+        assert(target329.height % 2 == 0);
+
+        // 1:1 Square (2160x2160)
+        const auto target11 = ComputePanelTargetVideoExtent(2160, 2160, 2.8f, 1.575f, 2.8f);
+        assert(target11.width <= 2160);
+        assert(target11.height <= 2160);
+        assert(target11.width % 2 == 0);
+        assert(target11.height % 2 == 0);
+    }
+
+    // 6. Invalid / zero inputs
+    {
+        // Zero dimensions
+        assert(ComputePanelTargetVideoExtent(0, 0, 2.4f, 1.35f, 2.8f).width == 0);
+        assert(ComputePanelTargetVideoExtent(0, 2160, 2.4f, 1.35f, 2.8f).width == 0);
+        assert(ComputePanelTargetVideoExtent(3840, 0, 2.4f, 1.35f, 2.8f).height == 0);
+
+        // Zero or negative distance
+        const auto tDist0 = ComputePanelTargetVideoExtent(3840, 2160, 2.4f, 1.35f, 0.0f);
+        assert(tDist0.width == 3840 && tDist0.height == 2160);
+        const auto tDistNeg = ComputePanelTargetVideoExtent(3840, 2160, 2.4f, 1.35f, -1.0f);
+        assert(tDistNeg.width == 3840 && tDistNeg.height == 2160);
+
+        // NaN / Inf
+        const auto tNan =
+            ComputePanelTargetVideoExtent(3840, 2160, 2.4f, 1.35f, std::numeric_limits<float>::quiet_NaN());
+        assert(tNan.width == 3840 && tNan.height == 2160);
+        const auto tInf =
+            ComputePanelTargetVideoExtent(3840, 2160, 2.4f, 1.35f, std::numeric_limits<float>::infinity());
+        assert(tInf.width == 3840 && tInf.height == 2160);
+
+        // Both screen width and height <= 0
+        const auto tSize0 = ComputePanelTargetVideoExtent(3840, 2160, 0.0f, 0.0f, 2.8f);
+        assert(tSize0.width == 3840 && tSize0.height == 2160);
+    }
+
+    std::cout << "[PASS] TestComputePanelTargetVideoExtent\n";
+}
+
 int main() {
     std::cout << "--- Executing unit tests for screen_layout.h ---\n";
     TestCalculateContentAspectRatio();
@@ -561,6 +671,7 @@ int main() {
     TestCurvedScreenParamsCalculation();
     TestGenerateCurvedScreenVertices();
     TestProjectToCurvedScreen();
+    TestComputePanelTargetVideoExtent();
     std::cout << "--- All screen_layout.h unit tests passed successfully! ---\n";
     return 0;
 }

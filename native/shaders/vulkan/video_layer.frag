@@ -23,9 +23,7 @@ layout(location = 0) out vec4 outColor;
 
 void main() {
     const vec2 texelSize = vec2(pc.texelWidth, pc.texelHeight);
-    vec3 color = (pc.sharpness <= 0.01 || texelSize.x <= 0.0 || texelSize.y <= 0.0)
-        ? texture(videoTexture, vTexCoord).rgb
-        : ApplySGSR1(vTexCoord, pc.sharpness, texelSize);
+    vec3 color = SampleVideoSgsrOrLinear(vTexCoord, pc.sharpness, texelSize);
     if (pc.isHdr != 0) {
         color = TonemapHdrToSdr(color, pc.isHdr, pc.hdrLuminance);
     }
