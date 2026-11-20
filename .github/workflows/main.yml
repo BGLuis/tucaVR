@@ -53,6 +53,7 @@ jobs:
       android: ${{ github.event_name != 'pull_request' || steps.filter.outputs.android == 'true' }}
       apk: ${{ github.event_name != 'pull_request' || steps.filter.outputs.apk == 'true' }}
       docs: ${{ github.event_name != 'pull_request' || steps.filter.outputs.docs == 'true' }}
+      brand: ${{ github.event_name != 'pull_request' || steps.filter.outputs.brand == 'true' }}
     steps:
       - name: Filter changed paths
         id: filter
@@ -91,6 +92,18 @@ jobs:
               - '.github/workflows/main.yml'
               - '**/*.md'
               - '.markdownlint-cli2.jsonc'
+            brand:
+              - '.github/workflows/main.yml'
+              - 'design/logo/**'
+              - 'scripts/test_brand_transition.py'
+              - 'scripts/test-brand-transition.sh'
+              - 'app/src/main/assets/intro.json'
+              - 'app/src/main/assets/vr_splash.png'
+              - 'app/src/main/res/drawable/ic_launcher_*'
+              - 'app/src/main/res/mipmap-anydpi-v26/**'
+              - 'app/src/main/AndroidManifest.xml'
+              - 'app/src/main/java/com/tucavr/IntroSequenceController.kt'
+              - 'app/build.gradle.kts'
 
   security-and-workflows:
     name: Security & Workflows
@@ -332,13 +345,37 @@ jobs:
       - name: Lint Markdown (markdownlint-cli2)
         run: npx --yes markdownlint-cli2@0.18.1
 
+  brand-checks:
+    name: Brand Assets
+    needs: changes
+    if: needs.changes.outputs.brand == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # Needed to regenerate the brand assets and compare them with the checkout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # cairosvg renders vr_splash.png through the system libcairo
+      - name: Install brand generator system dependencies
+        uses: awalsh128/cache-apt-pkgs-action@553a35bb8ebd9fcabcb1c9451aa4c98e1b4ca8a9 # v1.6.3
+        with:
+          packages: libcairo2 python3-venv
+          version: 1.0
+
+      # --skip-gradle: its Gradle-backed tests repeat android-checks (JVM tests, ktlint, lint)
+      - name: Run brand asset tests
+        run: ./scripts/test-brand-transition.sh --skip-gradle
+
   # The only check branch protection needs. A skipped job reports success, so without this a
   # failed `changes` job would skip every dependent job and let the PR merge unchecked.
   # Dependabot PRs are intentionally blocked here until validated via workflow_dispatch.
   ci-gate:
     name: CI Gate
     if: always()
-    needs: [changes, security-and-workflows, rust-checks, cpp-checks, android-checks, markdown-checks]
+    needs: [changes, security-and-workflows, rust-checks, cpp-checks, android-checks, markdown-checks, brand-checks]
     runs-on: ubuntu-slim
     timeout-minutes: 2
     permissions: {}

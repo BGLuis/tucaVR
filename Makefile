@@ -27,10 +27,14 @@ launch:
 
 deploy: build install launch
 
+# The brand suite's Gradle-backed tests repeat the JVM tests or run lint, which `test`
+# leaves out, hence --skip-gradle.
 test:
-	@echo "=== [1/3] Running the Rust unit tests (host) ==="
+	@echo "=== [1/4] Running the Rust unit tests (host) ==="
 	cd rust && cargo test -p protocols -p media-logic
-	@echo "=== [2/3] Running the native C++ unit tests (host) ==="
+	@echo "=== [2/4] Running the native C++ unit tests (host) ==="
 	./scripts/test-native-host.sh
-	@echo "=== [3/3] Running the Kotlin JVM unit tests ==="
+	@echo "=== [3/4] Running the Kotlin JVM unit tests ==="
 	./gradlew testDebugUnitTest
+	@echo "=== [4/4] Running the brand asset tests (host) ==="
+	./scripts/test-brand-transition.sh --skip-gradle

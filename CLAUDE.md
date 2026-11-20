@@ -90,7 +90,11 @@ cd rust && cargo test -p media-logic sync::tests::some_test_name
 ./gradlew ktlintCheck
 ./gradlew :app:lintDebug
 
-# Run all host unit tests at once (Rust + C++ host + Kotlin JVM; no lint)
+# Brand asset tests (system splash, intro Lottie, launcher icon); the first run builds
+# build/brand-venv from design/logo/requirements.txt, so it needs network access once
+./scripts/test-brand-transition.sh --skip-gradle
+
+# Run all host unit tests at once (Rust + C++ host + Kotlin JVM + brand assets; no lint)
 make test
 ```
 
@@ -115,14 +119,15 @@ Android Lint's `HardcodedText` only checks XML, so `UiSourceGuardsTest` (in `tes
 
 ## CI (`.github/workflows/main.yml`)
 
-The CI workflow (`tucaVR CI`) runs these parallel jobs. On pull requests a `changes` job path-filters them (Rust, C++, Android, APK, docs); pushes and manual runs run everything:
+The CI workflow (`tucaVR CI`) runs these parallel jobs. On pull requests a `changes` job path-filters them (Rust, C++, Android, APK, docs, brand); pushes and manual runs run everything:
 1. `security-and-workflows`: `actionlint` (workflow lint), `cargo-deny` (`check licenses bans sources`), `gitleaks` (secret scan, non-blocking: `continue-on-error`).
 2. `rust-checks`: `cargo fmt --check`, `cargo clippy -p protocols -p media-logic --all-targets --all-features -- -D warnings`, `cargo test -p protocols -p media-logic`.
 3. `cpp-checks`: `clang-format --dry-run -Werror`, `./scripts/check-shaders.sh`, `ENABLE_ASAN=1 ./scripts/test-native-host.sh`.
 4. `android-checks`: `./gradlew ktlintCheck`, `./gradlew :app:lintDebug`, `./gradlew testDebugUnitTest`.
 5. `markdown-checks`: `markdownlint-cli2` (config in `.markdownlint-cli2.jsonc`).
-6. `ci-gate`: the single check branch protection needs; it fails if any job failed and treats path-filter skips as success.
+6. `brand-checks`: `./scripts/test-brand-transition.sh --skip-gradle` (regenerates the brand assets from `design/logo/` and checks the splash, intro and launcher icon; its Gradle-backed tests are skipped because `android-checks` already covers them).
+7. `ci-gate`: the single check branch protection needs; it fails if any job failed and treats path-filter skips as success.
 
-`build-apk` (runs only on `BGLuis/vr-multmidia` or `BGLuis/tucaVR`, when the APK path filter matches) depends on `changes` and the four check jobs above not failing, executes the real native/C++ + Rust + Gradle build, and uploads `VR-Player-APK-<ref>-<run_id>` as an artifact. Both native (CMake/NDK) and Rust (`cargo ndk`) compiles are wrapped with `hendrikmuhs/ccache-action` and `mozilla-actions/sccache-action` respectively to avoid full rebuilds from scratch on every run — see the `ccachePath` detection in `app/build.gradle.kts` (only activates when `ccache` is on `PATH`, so local dev builds are unaffected).
+`build-apk` (runs only on `BGLuis/vr-multmidia` or `BGLuis/tucaVR`, when the APK path filter matches) depends on `changes` and the first four check jobs above not failing, executes the real native/C++ + Rust + Gradle build, and uploads `VR-Player-APK-<ref>-<run_id>` as an artifact. Both native (CMake/NDK) and Rust (`cargo ndk`) compiles are wrapped with `hendrikmuhs/ccache-action` and `mozilla-actions/sccache-action` respectively to avoid full rebuilds from scratch on every run — see the `ccachePath` detection in `app/build.gradle.kts` (only activates when `ccache` is on `PATH`, so local dev builds are unaffected).
 
 `.github/workflows/release.yml` reuses the CI build instead of compiling the APK itself: it triggers via `workflow_run` after `tucaVR CI` succeeds, looks up that CI run's `VR-Player-APK-*` artifact for the exact commit (`locate-artifact` job, via `gh api .../actions/runs?head_sha=...`) and publishes that. If no matching CI run is found (e.g. releasing an old tag whose artifact expired), it transparently falls back to the full build steps — same job, steps gated by `steps.reuse.outcome != 'success'`.

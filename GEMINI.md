@@ -188,7 +188,11 @@ clang-format --dry-run -Werror native/tests/*.cpp native/include/vk_math.h nativ
 # Requires g++ and libopenxr-dev (or run via ./scripts/test-native-host.sh)
 ./scripts/test-native-host.sh
 
-# Run all host test suites (Rust + C++ host + Kotlin JVM; no lint)
+# Brand asset tests (system splash, intro Lottie, launcher icon); the first run builds
+# build/brand-venv from design/logo/requirements.txt, so it needs network access once
+./scripts/test-brand-transition.sh --skip-gradle
+
+# Run all host test suites (Rust + C++ host + Kotlin JVM + brand assets; no lint)
 make test
 ```
 
@@ -228,9 +232,10 @@ The GitHub Actions workflow (`.github/workflows/main.yml`) runs parallel quality
 3. `cpp-checks`: `clang-format --dry-run -Werror`, `./scripts/check-shaders.sh`, `ENABLE_ASAN=1 ./scripts/test-native-host.sh`.
 4. `android-checks`: `./gradlew ktlintCheck`, `./gradlew :app:lintDebug`, `./gradlew testDebugUnitTest` (includes `UiSourceGuardsTest`, `ThemeContrastTest` and `I18nParityTest`).
 5. `markdown-checks`: `markdownlint-cli2`.
-6. `ci-gate`: the single required check; fails if any job failed, treats path-filter skips as success.
+6. `brand-checks`: `./scripts/test-brand-transition.sh --skip-gradle` (regenerates the brand assets from `design/logo/` and checks the splash, intro and launcher icon; its Gradle-backed tests are skipped because `android-checks` already covers them).
+7. `ci-gate`: the single required check; fails if any job failed, treats path-filter skips as success.
 
-A gated job, `build-apk`, runs only on `BGLuis/tucaVR` (or the legacy `BGLuis/vr-multmidia` name), when the APK path filter matches and the checks above did not fail. It runs the full native C++ + Rust + Gradle build and uploads the Quest 3 APK. `release.yml` reuses that APK for the exact commit and falls back to a full build when no matching CI run is found.
+A gated job, `build-apk`, runs only on `BGLuis/tucaVR` (or the legacy `BGLuis/vr-multmidia` name), when the APK path filter matches and the first four checks above did not fail. It runs the full native C++ + Rust + Gradle build and uploads the Quest 3 APK. `release.yml` reuses that APK for the exact commit and falls back to a full build when no matching CI run is found.
 
 ---
 

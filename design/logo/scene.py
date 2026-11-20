@@ -23,6 +23,22 @@ EMERALD_GREEN = "#2ED3A2"
 VOID_BG = "#121212"
 PALE_CYAN_TEXT = "#F2FBFA"
 
+# "Sea floor" background shared by vr_splash.png and intro.json: an elliptical
+# radial gradient with the canvas' 2.5:1 aspect, centred on the 1400x560 canvas.
+# Its outer radius stops short of the canvas edges so the whole border is exactly
+# #000000, the colour Horizon OS draws around the splash; any other edge colour
+# shows up as a visible box (commit 577596a).
+SEA_FLOOR_CENTER = "#041C20"  # DEEP_TEAL at 40% so the #0B4650 symbol disk still stands out
+SEA_FLOOR_EDGE = "#000000"
+SEA_FLOOR_RADIUS_Y = 264.0
+SEA_FLOOR_ASPECT = 1400.0 / 560.0
+
+# Legacy-format keyframe easing: "o" is the outgoing handle of the keyframe that
+# carries it and "i" the incoming handle of the next one, i.e. the
+# cubic-bezier(o.x, o.y, i.x, i.y) of that segment.
+EASE_OUT = {"o": {"x": [0.33], "y": [1.0]}, "i": {"x": [0.68], "y": [1.0]}}
+EASE_STRIKE = {"o": {"x": [0.16], "y": [1.0]}, "i": {"x": [0.3], "y": [1.0]}}
+
 # --- Parametric Master Geometry (512x512 Coordinate Space) ---
 SYMBOL_ELEMENTS = [
     {'id': 'p_00', 'group': 'fundo', 'attrs': {'fill': '#0B4650'}, 'd_rest': 'M256 500C390.757 500 500 390.757 500 256C500 121.243 390.757 12 256 12C121.243 12 12 121.243 12 256C12 390.757 121.243 500 256 500Z'},
@@ -299,10 +315,18 @@ def build_splash_svg(letters_data: dict) -> str:
     lines = [
         "<svg width=\"1400\" height=\"560\" viewBox=\"0 0 1400 560\" fill=\"none\" xmlns=\"http://www.w3.org/2000/svg\">",
     ]
+    lines.append("<defs>")
+    lines.append(
+        f"<radialGradient id=\"seaFloor\" gradientUnits=\"userSpaceOnUse\" cx=\"0\" cy=\"0\" r=\"{SEA_FLOOR_RADIUS_Y:g}\" "
+        f"gradientTransform=\"matrix({SEA_FLOOR_ASPECT:g} 0 0 1 700 280)\">"
+    )
+    lines.append(f"<stop offset=\"0\" stop-color=\"{SEA_FLOOR_CENTER}\"/>")
+    lines.append(f"<stop offset=\"1\" stop-color=\"{SEA_FLOOR_EDGE}\"/>")
+    lines.append("</radialGradient>")
+    lines.append("</defs>")
+    lines.append("<rect width=\"1400\" height=\"560\" fill=\"url(#seaFloor)\"/>")
     # Center 778x300 horizontal logo in 1400x560 canvas
     # tx = (1400 - 778)/2 = 311, ty = (560 - 300)/2 = 130
-    # No background: the Horizon OS compositor shows an opaque #121212 plate as a
-    # grey box, and the intro that follows has a transparent background too.
     lines.append("<g transform=\"translate(311, 130)\">")
 
     scale = 220.0 / 512.0
@@ -368,9 +392,9 @@ def make_lottie_animated_shape_item(nm: str, contour_rest: dict, contour_strike:
     }
     keyframes = [
         {"t": 0, "s": [k_rest], "e": [k_rest]},
-        {"t": 54, "s": [k_rest], "e": [k_strike]},
+        {"t": 54, "s": [k_rest], "e": [k_strike], **EASE_STRIKE},
         {"t": 60, "s": [k_strike], "e": [k_strike]},
-        {"t": 62, "s": [k_strike], "e": [k_rest]},
+        {"t": 62, "s": [k_strike], "e": [k_rest], **EASE_OUT},
         {"t": 68, "s": [k_rest], "e": [k_rest]},
         {"t": 96, "s": [k_rest]},
     ]
@@ -430,10 +454,14 @@ def make_lottie_transform(anchor=[0, 0], pos=[0, 0], scale=[100, 100], rot=0, op
 def build_lottie_animation(letters_data: dict) -> dict:
     """
     Build the complete 96-frame (1.6s @ 60fps) Lottie animation JSON at 1400x560.
+    The sea floor background layer is static on every frame; at frame 0 nothing
+    else is visible.
     Choreography:
-    - 0-30 frames: Wave draw-in via trim path & bubble pop
-    - 30-54 frames: Mantis body slides in & compound eyes open
-    - 54-66 frames: The punch strike & cavitation shockwave
+    - 0-30 frames: Symbol disk fades in (0-15), all four wave arcs draw in via
+      trim paths, foam bubbles pop (24-30)
+    - 30-54 frames: Mantis body slides in from the lower left and fades in
+    - 54-68 frames: Claw strikes (54-60), cavitation bubble expands and fades
+      (60-66), claw recoils to rest (62-68)
     - 66-90 frames: Symbol slides to left anchor & wordmark tucaVR ascends/fades in
     - 90-96 frames: Static lock matching logo_final.svg and vr_splash.png
     """
@@ -466,14 +494,14 @@ def build_lottie_animation(letters_data: dict) -> dict:
     # Keyframes for Wordmark position: Y+30 -> Y during frames 66-90
     wm_pos_kf = [
         {"t": 0, "s": [311.0, 160.0, 0.0], "e": [311.0, 160.0, 0.0]},
-        {"t": 66, "s": [311.0, 160.0, 0.0], "e": [311.0, 130.0, 0.0]},
+        {"t": 66, "s": [311.0, 160.0, 0.0], "e": [311.0, 130.0, 0.0], **EASE_OUT},
         {"t": 90, "s": [311.0, 130.0, 0.0], "e": [311.0, 130.0, 0.0]},
         {"t": 96, "s": [311.0, 130.0, 0.0]},
     ]
     # Keyframes for Wordmark opacity: 0% -> 100% during frames 66-90
     wm_op_kf = [
         {"t": 0, "s": [0.0], "e": [0.0]},
-        {"t": 66, "s": [0.0], "e": [100.0]},
+        {"t": 66, "s": [0.0], "e": [100.0], **EASE_OUT},
         {"t": 90, "s": [100.0], "e": [100.0]},
         {"t": 96, "s": [100.0]},
     ]
@@ -500,11 +528,11 @@ def build_lottie_animation(letters_data: dict) -> dict:
 
     # Layer 2: Cavitation Shockwave Bubble at punch impact (frames 60-66)
     cav_kf_scale = [
-        {"t": 60, "s": [20.0, 20.0, 100.0], "e": [220.0, 220.0, 100.0]},
+        {"t": 60, "s": [20.0, 20.0, 100.0], "e": [220.0, 220.0, 100.0], **EASE_STRIKE},
         {"t": 66, "s": [220.0, 220.0, 100.0]},
     ]
     cav_kf_op = [
-        {"t": 60, "s": [100.0], "e": [0.0]},
+        {"t": 60, "s": [100.0], "e": [0.0], **EASE_OUT},
         {"t": 66, "s": [0.0]},
     ]
     # Impact point in 512 space: ~ (451, 293). When scaled by 220/512 and offset to center:
@@ -544,7 +572,7 @@ def build_lottie_animation(letters_data: dict) -> dict:
     # Slides from center anchor [700, 280] to left anchor [465, 280] during frames 66-90
     sym_pos_kf = [
         {"t": 0, "s": [700.0, 280.0, 0.0], "e": [700.0, 280.0, 0.0]},
-        {"t": 66, "s": [700.0, 280.0, 0.0], "e": [465.0, 280.0, 0.0]},
+        {"t": 66, "s": [700.0, 280.0, 0.0], "e": [465.0, 280.0, 0.0], **EASE_OUT},
         {"t": 90, "s": [465.0, 280.0, 0.0], "e": [465.0, 280.0, 0.0]},
         {"t": 96, "s": [465.0, 280.0, 0.0]},
     ]
@@ -560,7 +588,7 @@ def build_lottie_animation(letters_data: dict) -> dict:
     disk_items = [make_lottie_shape_item("Disk Path", disk_contours[0])]
     disk_items.append(make_lottie_fill("Disk Fill", disk_elem["attrs"]["fill"]))
     disk_op_kf = [
-        {"t": 0, "s": [0.0], "e": [100.0]},
+        {"t": 0, "s": [0.0], "e": [100.0], **EASE_OUT},
         {"t": 15, "s": [100.0], "e": [100.0]},
         {"t": 96, "s": [100.0]},
     ]
@@ -568,7 +596,7 @@ def build_lottie_animation(letters_data: dict) -> dict:
     sym_shapes.append({"ty": "gr", "nm": "fundo", "it": disk_items})
 
     # 2. Wave arcs (onda) with Trim Path
-    # Trim path 0% -> 100% on outer arc during frames 0-30
+    # Trim path 0% -> 100% on every arc during frames 0-30
     for idx in [1, 2, 3, 4]:
         elem = SYMBOL_ELEMENTS[idx]
         contours = parse_svg_path(elem["d_rest"])
@@ -586,29 +614,27 @@ def build_lottie_animation(letters_data: dict) -> dict:
                 attrs.get("stroke-linejoin", "round"),
             )
         )
-        if idx in [1, 2]:
-            # Trim path for outer arc & crest
-            trim_end_kf = [
-                {"t": 0, "s": [0.0], "e": [100.0]},
-                {"t": 30, "s": [100.0], "e": [100.0]},
-                {"t": 96, "s": [100.0]},
-            ]
-            wave_items.append({
-                "ty": "tm",
-                "nm": "Wave Trim Path",
-                "s": {"a": 0, "k": 0.0},
-                "e": {"a": 1, "k": trim_end_kf},
-                "o": {"a": 0, "k": 0.0},
-                "m": 1,
-            })
+        trim_end_kf = [
+            {"t": 0, "s": [0.0], "e": [100.0], **EASE_OUT},
+            {"t": 30, "s": [100.0], "e": [100.0]},
+            {"t": 96, "s": [100.0]},
+        ]
+        wave_items.append({
+            "ty": "tm",
+            "nm": "Wave Trim Path",
+            "s": {"a": 0, "k": 0.0},
+            "e": {"a": 1, "k": trim_end_kf},
+            "o": {"a": 0, "k": 0.0},
+            "m": 1,
+        })
         wave_items.append(make_lottie_transform())
         sym_shapes.append({"ty": "gr", "nm": f"onda_{idx}", "it": wave_items})
 
     # 3. Foam bubbles (espuma) popping at frames 25-30
     foam_scale_kf = [
         {"t": 0, "s": [0.0, 0.0, 100.0], "e": [0.0, 0.0, 100.0]},
-        {"t": 24, "s": [0.0, 0.0, 100.0], "e": [115.0, 115.0, 100.0]},
-        {"t": 28, "s": [115.0, 115.0, 100.0], "e": [100.0, 100.0, 100.0]},
+        {"t": 24, "s": [0.0, 0.0, 100.0], "e": [115.0, 115.0, 100.0], **EASE_OUT},
+        {"t": 28, "s": [115.0, 115.0, 100.0], "e": [100.0, 100.0, 100.0], **EASE_OUT},
         {"t": 30, "s": [100.0, 100.0, 100.0], "e": [100.0, 100.0, 100.0]},
         {"t": 96, "s": [100.0, 100.0, 100.0]},
     ]
@@ -624,13 +650,13 @@ def build_lottie_animation(letters_data: dict) -> dict:
     # 4. Mantis shrimp body (tamarutaca) - slides into view frames 30-54
     body_pos_kf = [
         {"t": 0, "s": [-30.0, 20.0, 0.0], "e": [-30.0, 20.0, 0.0]},
-        {"t": 30, "s": [-30.0, 20.0, 0.0], "e": [0.0, 0.0, 0.0]},
+        {"t": 30, "s": [-30.0, 20.0, 0.0], "e": [0.0, 0.0, 0.0], **EASE_OUT},
         {"t": 54, "s": [0.0, 0.0, 0.0], "e": [0.0, 0.0, 0.0]},
         {"t": 96, "s": [0.0, 0.0, 0.0]},
     ]
     body_op_kf = [
         {"t": 0, "s": [0.0], "e": [0.0]},
-        {"t": 30, "s": [0.0], "e": [100.0]},
+        {"t": 30, "s": [0.0], "e": [100.0], **EASE_OUT},
         {"t": 54, "s": [100.0], "e": [100.0]},
         {"t": 96, "s": [100.0]},
     ]
@@ -671,8 +697,12 @@ def build_lottie_animation(letters_data: dict) -> dict:
             p_items.append(make_lottie_transform())
             body_groups.append({"ty": "gr", "nm": f"elem_{idx}_{group_name}", "it": p_items})
 
+    # Groups are built in SVG paint order (bottom first), but Lottie draws a shape
+    # list from the last item to the first, so the first item ends up on top.
+    body_groups.reverse()
     body_groups.append(make_lottie_transform(pos_kf=body_pos_kf, op_kf=body_op_kf))
     sym_shapes.append({"ty": "gr", "nm": "tamarutaca", "it": body_groups})
+    sym_shapes.reverse()
 
     symbol_layer = {
         "ddd": 0,
@@ -693,6 +723,50 @@ def build_lottie_animation(letters_data: dict) -> dict:
         "shapes": sym_shapes,
     }
     layers.append(symbol_layer)
+
+    # Layer 4: Sea floor background, last in the list so it is drawn below everything.
+    # The layer's horizontal scale turns the circular radial gradient into the same
+    # ellipse build_splash_svg() draws.
+    center_rgb = hex_to_rgb(SEA_FLOOR_CENTER)[:3]
+    edge_rgb = hex_to_rgb(SEA_FLOOR_EDGE)[:3]
+    sea_floor_layer = {
+        "ddd": 0,
+        "ind": 5,
+        "ty": 4,
+        "nm": "Sea Floor",
+        "sr": 1,
+        "st": 0,
+        "ip": 0,
+        "op": 96,
+        "ks": {
+            "a": {"a": 0, "k": [0, 0, 0]},
+            "p": {"a": 0, "k": [700.0, 280.0, 0.0]},
+            "s": {"a": 0, "k": [SEA_FLOOR_ASPECT * 100.0, 100.0, 100.0]},
+            "r": {"a": 0, "k": 0},
+            "o": {"a": 0, "k": 100},
+        },
+        "shapes": [
+            {
+                "ty": "rc",
+                "nm": "Sea Floor Rect",
+                "p": {"a": 0, "k": [0.0, 0.0]},
+                "s": {"a": 0, "k": [1400.0 / SEA_FLOOR_ASPECT, 560.0]},
+                "r": {"a": 0, "k": 0},
+            },
+            {
+                "ty": "gf",
+                "nm": "Sea Floor Gradient",
+                "o": {"a": 0, "k": 100},
+                "r": 1,
+                "g": {"p": 2, "k": {"a": 0, "k": [0.0, *center_rgb, 1.0, *edge_rgb]}},
+                "t": 2,
+                "s": {"a": 0, "k": [0.0, 0.0]},
+                "e": {"a": 0, "k": [SEA_FLOOR_RADIUS_Y, 0.0]},
+            },
+            make_lottie_transform(),
+        ],
+    }
+    layers.append(sea_floor_layer)
 
     return {
         "v": "5.5.2",

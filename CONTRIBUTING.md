@@ -120,7 +120,7 @@ cd rust && cargo test -p media-logic sync::tests::some_test_name
 # Requires g++ and libopenxr-dev (installed via apt-get install libopenxr-dev)
 ./scripts/test-native-host.sh
 
-# Run all host test suites at once (Rust + C++ host + Kotlin JVM; no lint)
+# Run all host test suites at once (Rust + C++ host + Kotlin JVM + brand assets; no lint)
 make test
 ```
 

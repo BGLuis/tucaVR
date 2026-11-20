@@ -6,7 +6,11 @@ Validates all 4 requirements (R1, R2, R3, R4) across 4 tiers:
   - Tier 1: Feature Coverage (>= 5 tests per feature)
   - Tier 2: Boundary & Corner Cases (>= 5 tests per feature)
   - Tier 3: Cross-Feature Combinations (pairwise interactions)
-  - Tier 4: Real-World Scenarios (cold launch, sleep/wake, skip, reduced motion, lint)
+  - Tier 4: Quality gates run through Gradle (UiSourceGuardsTest, ktlint)
+
+The intro's runtime behaviour (play once per process, skip, reduced motion, fade to
+Home) is covered by the Kotlin unit tests in app/src/test/java/com/tucavr/Intro*.kt,
+not here.
 
 Usage:
   python3 scripts/test_brand_transition.py [--tier {1,2,3,4,all}]
@@ -18,6 +22,8 @@ Usage:
 """
 
 import argparse
+import functools
+import importlib.util
 import json
 import os
 import re
@@ -29,8 +35,10 @@ import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
+from xml.etree import ElementTree as ET
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
+ANDROID_NS = "{http://schemas.android.com/apk/res/android}"
 
 # Canonical brand palette tokens (Figma node 133:2)
 CANONICAL_PALETTE = {
@@ -130,6 +138,207 @@ def read_png_dimensions(path: Path) -> Tuple[int, int, int, int, int]:
         return w, h, bit_depth, color_type, interlace
 
 
+def iter_png_chunks(data: bytes):
+    """Yields (type, payload, stored_crc) for every chunk after the PNG signature."""
+    pos = 8
+    while pos + 8 <= len(data):
+        length, chunk_type = struct.unpack(">I4s", data[pos : pos + 8])
+        payload = data[pos + 8 : pos + 8 + length]
+        (crc,) = struct.unpack(">I", data[pos + 8 + length : pos + 12 + length])
+        yield chunk_type, payload, crc
+        pos += 12 + length
+
+
+@functools.lru_cache(maxsize=None)
+def read_png_pixels(path: Path) -> Tuple[int, int, int, Tuple[bytes, ...]]:
+    """
+    Decodes a non-interlaced 8-bit RGB or RGBA PNG into
+    (width, height, channels, rows), each row holding width * channels bytes.
+    """
+    w, h, bit_depth, color_type, interlace = read_png_dimensions(path)
+    if bit_depth != 8 or color_type not in (2, 6) or interlace != 0:
+        raise ValueError(
+            f"{path.name}: only non-interlaced 8-bit RGB/RGBA is supported "
+            f"(depth {bit_depth}, color type {color_type}, interlace {interlace})"
+        )
+    channels = 3 if color_type == 2 else 4
+    idat = b"".join(
+        payload for chunk_type, payload, _ in iter_png_chunks(path.read_bytes()) if chunk_type == b"IDAT"
+    )
+    raw = zlib.decompress(idat)
+    stride = w * channels
+    rows = []
+    prev = bytearray(stride)
+    pos = 0
+    for _ in range(h):
+        filter_type = raw[pos]
+        line = bytearray(raw[pos + 1 : pos + 1 + stride])
+        pos += 1 + stride
+        if filter_type == 1:
+            for i in range(channels, stride):
+                line[i] = (line[i] + line[i - channels]) & 0xFF
+        elif filter_type == 2:
+            for i in range(stride):
+                line[i] = (line[i] + prev[i]) & 0xFF
+        elif filter_type == 3:
+            for i in range(stride):
+                left = line[i - channels] if i >= channels else 0
+                line[i] = (line[i] + ((left + prev[i]) >> 1)) & 0xFF
+        elif filter_type == 4:
+            for i in range(stride):
+                a = line[i - channels] if i >= channels else 0
+                b = prev[i]
+                c = prev[i - channels] if i >= channels else 0
+                p = a + b - c
+                pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                predictor = a if pa <= pb and pa <= pc else (b if pb <= pc else c)
+                line[i] = (line[i] + predictor) & 0xFF
+        elif filter_type != 0:
+            raise ValueError(f"{path.name}: unknown PNG filter type {filter_type}")
+        rows.append(bytes(line))
+        prev = line
+    return w, h, channels, tuple(rows)
+
+
+def lottie_value(prop: dict, frame: float):
+    """
+    Value of a Lottie property at a frame that coincides with a keyframe or precedes
+    the first one (no interpolation); scalars wrapped in a one-element list are unwrapped.
+    """
+    if prop.get("a") != 1:
+        value = prop["k"]
+    else:
+        current = prop["k"][0]
+        for kf in prop["k"]:
+            if kf["t"] <= frame:
+                current = kf
+        value = current["s"]
+    if isinstance(value, list) and len(value) == 1:
+        return value[0]
+    return value
+
+
+def lottie_animated(node) -> bool:
+    if isinstance(node, dict):
+        return node.get("a") == 1 or any(lottie_animated(v) for v in node.values())
+    if isinstance(node, list):
+        return any(lottie_animated(v) for v in node)
+    return False
+
+
+def lottie_visible_drawables(items: list, frame: float, path: str) -> List[str]:
+    """Names of the fills/strokes in a shape list that paint something at `frame`."""
+    transform = next((it for it in items if it["ty"] == "tr"), None)
+    if transform is not None:
+        scale = lottie_value(transform["s"], frame)
+        if lottie_value(transform["o"], frame) <= 0 or 0 in scale[:2]:
+            return []
+    for trim in (it for it in items if it["ty"] == "tm"):
+        if lottie_value(trim["s"], frame) == lottie_value(trim["e"], frame):
+            return []
+    visible = []
+    for it in items:
+        name = f"{path}/{it.get('nm', it['ty'])}"
+        if it["ty"] == "gr":
+            visible += lottie_visible_drawables(it["it"], frame, name)
+        elif it["ty"] in ("fl", "st", "gf", "gs") and lottie_value(it["o"], frame) > 0:
+            visible.append(name)
+    return visible
+
+
+def lottie_layer_visible_drawables(layer: dict, frame: float) -> List[str]:
+    if not layer["ip"] <= frame < layer["op"]:
+        return []
+    ks = layer["ks"]
+    if lottie_value(ks["o"], frame) <= 0 or 0 in lottie_value(ks["s"], frame)[:2]:
+        return []
+    return lottie_visible_drawables(layer.get("shapes", []), frame, layer["nm"])
+
+
+def sea_floor_color_at(layer: dict, x: float, y: float) -> Tuple[int, int, int]:
+    """
+    Evaluates the intro's static radial-gradient background layer at canvas pixel
+    (x, y), using the layer transform the way lottie-android maps the shader.
+    """
+    ks = layer["ks"]
+    ax, ay = lottie_value(ks["a"], 0)[:2]
+    px, py = lottie_value(ks["p"], 0)[:2]
+    sx, sy = (c / 100.0 for c in lottie_value(ks["s"], 0)[:2])
+    gradient = next(s for s in layer["shapes"] if s["ty"] == "gf")
+    if gradient["t"] != 2:
+        raise ValueError("sea floor gradient is not radial")
+    gx, gy = lottie_value(gradient["s"], 0)
+    ex, ey = lottie_value(gradient["e"], 0)
+    radius = ((ex - gx) ** 2 + (ey - gy) ** 2) ** 0.5
+    lx = (x - px) / sx + ax
+    ly = (y - py) / sy + ay
+    t = min(1.0, (((lx - gx) ** 2 + (ly - gy) ** 2) ** 0.5) / radius)
+    count = gradient["g"]["p"]
+    raw = gradient["g"]["k"]["k"]
+    stops = [(raw[i * 4], raw[i * 4 + 1 : i * 4 + 4]) for i in range(count)]
+    for (p0, c0), (p1, c1) in zip(stops, stops[1:]):
+        if p0 <= t <= p1:
+            f = (t - p0) / (p1 - p0) if p1 > p0 else 0.0
+            return tuple(round((a + (b - a) * f) * 255) for a, b in zip(c0, c1))
+    edge = stops[-1][1] if t > stops[-1][0] else stops[0][1]
+    return tuple(round(c * 255) for c in edge)
+
+
+def abs_path_bbox(d: str) -> Tuple[float, float, float, float]:
+    """
+    Bounding box (min_x, min_y, max_x, max_y) of the points and control points of an
+    absolute-command SVG/VectorDrawable path. Relative commands are rejected.
+    """
+    tokens = re.findall(r"[A-Za-z]|[-+]?(?:\d*\.\d+|\d+)(?:[eE][-+]?\d+)?", d)
+    xs: List[float] = []
+    ys: List[float] = []
+    cmd = None
+    i = 0
+    while i < len(tokens):
+        if tokens[i].isalpha():
+            cmd = tokens[i]
+            i += 1
+            if cmd in "Zz":
+                continue
+        if cmd is None or cmd.islower():
+            raise ValueError(f"relative or missing path command '{cmd}' in: {d[:40]}...")
+        if cmd == "H":
+            xs.append(float(tokens[i]))
+            i += 1
+        elif cmd == "V":
+            ys.append(float(tokens[i]))
+            i += 1
+        elif cmd in "MLCSQT":
+            xs.append(float(tokens[i]))
+            ys.append(float(tokens[i + 1]))
+            i += 2
+        else:
+            raise ValueError(f"unsupported path command '{cmd}'")
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def foreground_paths(path: Path) -> list:
+    return list(ET.parse(path).getroot().iter("path"))
+
+
+def intro_layers() -> list:
+    intro_path = REPO_ROOT / "app" / "src" / "main" / "assets" / "intro.json"
+    return json.loads(intro_path.read_text(encoding="utf-8"))["layers"]
+
+
+def generator_dependency_error() -> Optional[str]:
+    """
+    The exports are rendered with the pinned cairosvg; logo.py's rsvg-convert fallback
+    produces a different PNG, so the reproduction tests refuse to run without it.
+    """
+    if importlib.util.find_spec("cairosvg") is None:
+        return (
+            f"cairosvg is not importable from {sys.executable}; install design/logo/requirements.txt "
+            "or run scripts/test-brand-transition.sh, which sets up that environment"
+        )
+    return None
+
+
 def run_cmd(
     cmd: List[str], cwd: Optional[Path] = None, timeout: int = 120
 ) -> Tuple[int, str, str]:
@@ -192,26 +401,19 @@ def test_t1_r1_03():
     logo_dir = REPO_ROOT / "design" / "logo"
     readme_path = logo_dir / "README.md"
     ofl_path = logo_dir / "OFL.txt"
-    text = ""
-    if readme_path.exists():
-        text += readme_path.read_text(encoding="utf-8")
-    if ofl_path.exists():
-        text += ofl_path.read_text(encoding="utf-8")
-
-    if not text:
-        return False, "Neither README.md nor OFL.txt found in design/logo/"
-
-    has_baloo = "Baloo" in text or "baloo" in text.lower()
-    has_ofl = (
-        "SIL Open Font License" in text
-        or "OFL" in text
-        or "Open Font License" in text
-    )
-    if not (has_baloo and has_ofl):
-        return (
-            False,
-            "Font attribution missing: must cite Baloo 2 and SIL Open Font License / OFL",
-        )
+    if not readme_path.exists() or not ofl_path.exists():
+        return False, "design/logo/README.md and design/logo/OFL.txt must both exist"
+    readme = readme_path.read_text(encoding="utf-8")
+    ofl = ofl_path.read_text(encoding="utf-8")
+    if "SIL Open Font License, Version 1.1" not in ofl or "Baloo 2" not in ofl:
+        return False, "OFL.txt is not the SIL OFL 1.1 text for Baloo 2"
+    missing = [
+        token
+        for token in ("Baloo 2", "SIL Open Font License, Version 1.1", "OFL.txt")
+        if token not in readme
+    ]
+    if missing:
+        return False, f"README.md font attribution is missing: {missing}"
     return True, "Baloo 2 SIL Open Font License v1.1 properly documented"
 
 
@@ -345,32 +547,35 @@ def test_t1_r2_03():
 
 
 @register_test(
-    "T1_R2_04_splash_transparent_background",
+    "T1_R2_04_splash_opaque_with_black_border",
     1,
     "M1",
     "R2",
-    "Verify vr_splash.png is RGBA with a fully transparent background",
+    "Verify vr_splash.png is fully opaque and every border pixel is exactly #000000",
 )
 def test_t1_r2_04():
+    # Horizon OS draws the splash over black: a non-black edge shows up as a box (commit 577596a).
     splash_path = REPO_ROOT / "app" / "src" / "main" / "assets" / "vr_splash.png"
     if not splash_path.exists():
         return False, f"{splash_path} does not exist"
-    _, _, bit_depth, color_type, _ = read_png_dimensions(splash_path)
-    if bit_depth != 8 or color_type != 6:
-        return False, f"vr_splash.png must be 8-bit RGBA (got depth {bit_depth}, color type {color_type})"
-    data = splash_path.read_bytes()
-    idat = b""
-    pos = 8
-    while pos < len(data):
-        length, chunk_type = struct.unpack(">I4s", data[pos : pos + 8])
-        if chunk_type == b"IDAT":
-            idat += data[pos + 8 : pos + 8 + length]
-        pos += 12 + length
-    # Every PNG filter predicts 0 for the top-left pixel, so its raw bytes are the pixel.
-    top_left = zlib.decompress(idat)[1:5]
-    if top_left[3] != 0:
-        return False, f"vr_splash.png top-left pixel is not transparent: RGBA {tuple(top_left)}"
-    return True, "vr_splash.png background is fully transparent"
+    w, h, channels, rows = read_png_pixels(splash_path)
+    if channels == 4:
+        for y, row in enumerate(rows):
+            alphas = row[3::4]
+            if min(alphas) != 255:
+                x = alphas.index(min(alphas))
+                return False, f"vr_splash.png pixel ({x}, {y}) has alpha {alphas[x]}, expected 255"
+
+    def rgb(x: int, y: int) -> Tuple[int, ...]:
+        return tuple(rows[y][x * channels : x * channels + 3])
+
+    border = [(x, y) for x in range(w) for y in (0, h - 1)] + [
+        (x, y) for y in range(h) for x in (0, w - 1)
+    ]
+    for x, y in border:
+        if rgb(x, y) != (0, 0, 0):
+            return False, f"vr_splash.png border pixel ({x}, {y}) is RGB {rgb(x, y)}, expected #000000"
+    return True, "vr_splash.png is fully opaque and its whole border is #000000"
 
 
 @register_test(
@@ -431,7 +636,7 @@ def test_t1_r3_01():
     1,
     "M2",
     "R3",
-    "Verify ic_launcher_foreground.xml viewport is 108x108 and safe zone is 72dp [18..90]",
+    "Verify ic_launcher_foreground.xml viewport is 108x108",
 )
 def test_t1_r3_02():
     fg = (
@@ -652,44 +857,6 @@ def test_t1_r4_03():
 
 
 @register_test(
-    "T1_R4_04_intro_controller_architecture",
-    1,
-    "M3",
-    "R4",
-    "Verify IntroSequenceController.kt exists with IDLE, PLAYING, REDUCED_MOTION, COMPLETED states",
-)
-def test_t1_r4_04():
-    controller_path = (
-        REPO_ROOT
-        / "app"
-        / "src"
-        / "main"
-        / "java"
-        / "com"
-        / "tucavr"
-        / "IntroSequenceController.kt"
-    )
-    if not controller_path.exists():
-        return False, f"{controller_path} does not exist"
-    content = controller_path.read_text(encoding="utf-8")
-    for st in [
-        "IDLE",
-        "PLAYING_ANIMATION",
-        "SHOWING_REDUCED_MOTION",
-        "COMPLETED",
-    ]:
-        if st not in content:
-            return False, f"IntroSequenceController missing state: {st}"
-    for fn_name in ["start", "skip"]:
-        if fn_name not in content:
-            return False, f"IntroSequenceController missing function: {fn_name}"
-    return (
-        True,
-        "IntroSequenceController.kt defines correct states and transition API",
-    )
-
-
-@register_test(
     "T1_R4_05_intro_controller_unit_tests_pass",
     1,
     "M3",
@@ -728,50 +895,86 @@ def test_t1_r4_05():
     return True, "IntroSequenceControllerTest executed and passed under Gradle"
 
 
+
+@register_test(
+    "T1_R4_06_intro_static_background_layer",
+    1,
+    "M3",
+    "R4",
+    "Verify intro.json's bottom layer is a static, opaque background covering the whole canvas on every frame",
+)
+def test_t1_r4_06():
+    intro_path = REPO_ROOT / "app" / "src" / "main" / "assets" / "intro.json"
+    data = json.loads(intro_path.read_text(encoding="utf-8"))
+    bottom = data["layers"][-1]
+    if bottom.get("ip", 1) > data["ip"] or bottom.get("op", 0) < data["op"]:
+        return False, f"Bottom layer '{bottom.get('nm')}' spans frames {bottom.get('ip')}-{bottom.get('op')}, not the whole intro"
+    if lottie_animated(bottom):
+        return False, f"Bottom layer '{bottom.get('nm')}' has animated properties"
+    ks = bottom["ks"]
+    if lottie_value(ks["o"], 0) != 100:
+        return False, f"Bottom layer opacity is {lottie_value(ks['o'], 0)}, expected 100"
+    rect = next((s for s in bottom.get("shapes", []) if s["ty"] == "rc"), None)
+    paint = next((s for s in bottom.get("shapes", []) if s["ty"] in ("fl", "gf")), None)
+    if rect is None or paint is None or lottie_value(paint["o"], 0) != 100:
+        return False, "Bottom layer must be an opaque filled rectangle"
+    ax, ay = lottie_value(ks["a"], 0)[:2]
+    px, py = lottie_value(ks["p"], 0)[:2]
+    sx, sy = (c / 100.0 for c in lottie_value(ks["s"], 0)[:2])
+    rcx, rcy = lottie_value(rect["p"], 0)
+    rw, rh = lottie_value(rect["s"], 0)
+    left = px + (rcx - rw / 2 - ax) * sx
+    right = px + (rcx + rw / 2 - ax) * sx
+    top = py + (rcy - rh / 2 - ay) * sy
+    bottom_edge = py + (rcy + rh / 2 - ay) * sy
+    if left > 0 or top > 0 or right < data["w"] or bottom_edge < data["h"]:
+        return (
+            False,
+            f"Background covers ({left:.1f}, {top:.1f})-({right:.1f}, {bottom_edge:.1f}), not the {data['w']}x{data['h']} canvas",
+        )
+    return True, f"Bottom layer '{bottom['nm']}' is a static opaque background covering the whole canvas"
+
+
 # ----------------------------------------------------------------------
 # TIER 2: Boundary & Corner Cases (>= 5 tests per feature: R1, R2, R3, R4)
 # ----------------------------------------------------------------------
 
 
 @register_test(
-    "T2_R1_01_zero_git_diff_on_reproduction",
+    "T2_R1_01_generator_reproduces_exports",
     2,
     "M1",
     "R1",
-    "Verify running generator reproduces committed exports with zero git diff",
+    "Verify re-running the generator reproduces every exported asset byte for byte",
 )
 def test_t2_r1_01():
     logo_dir = REPO_ROOT / "design" / "logo"
     logo_script = logo_dir / "logo.py"
     if not logo_script.exists():
         return False, "design/logo/logo.py does not exist"
+    missing_dep = generator_dependency_error()
+    if missing_dep:
+        return False, missing_dep
 
-    # Run generator
-    code, stdout, stderr = run_cmd(["python3", "logo.py"], cwd=logo_dir)
+    exports = [
+        logo_dir / name for name in ("simbolo.svg", "logo_final.svg", "intro.json", "vr_splash.png")
+    ] + [REPO_ROOT / "app" / "src" / "main" / "assets" / name for name in ("intro.json", "vr_splash.png")]
+    before = {path: path.read_bytes() for path in exports}
+
+    code, stdout, stderr = run_cmd([sys.executable, "logo.py"], cwd=logo_dir)
     if code != 0:
         return (
             False,
             f"logo.py execution failed with code {code}:\n{stderr or stdout}",
         )
 
-    # Check git diff on design/logo exports
-    code, diff, _ = run_cmd(
-        [
-            "git",
-            "status",
-            "--porcelain",
-            "design/logo/simbolo.svg",
-            "design/logo/logo_final.svg",
-            "design/logo/intro.json",
-            "design/logo/vr_splash.png",
-        ]
-    )
-    if diff.strip():
-        return (
-            False,
-            f"Generator modified committed files (dirty git diff):\n{diff}",
-        )
-    return True, "Re-running logo.py reproduces all exports with zero git diff"
+    changed = [path for path in exports if path.read_bytes() != before[path]]
+    if changed:
+        for path in changed:
+            path.write_bytes(before[path])
+        names = [str(path.relative_to(REPO_ROOT)) for path in changed]
+        return False, f"Generator output differs from the exported assets (restored them): {names}"
+    return True, "Re-running logo.py reproduces all exports byte for byte"
 
 
 @register_test(
@@ -830,20 +1033,19 @@ def test_t2_r1_03():
 )
 def test_t2_r1_04():
     logo_dir = REPO_ROOT / "design" / "logo"
-    for name in ["letters.json", "intro.json"]:
+    # letters.json is written with sorted keys; intro.json keeps insertion order
+    # because lottie-android's streaming parser needs "ty" first (commit 569582f).
+    for name, sort_keys in [("letters.json", True), ("intro.json", False)]:
         f = logo_dir / name
         if not f.exists():
             return False, f"{name} does not exist"
         content = f.read_text(encoding="utf-8")
         try:
-            parsed = json.loads(content)
-            reserialized = json.dumps(parsed, indent=2, sort_keys=True)
-            # Check if original was formatted with indent=2
-            lines = content.splitlines()
-            if len(lines) < 5:
-                return False, f"{name} appears minified; expected pretty-printed indent=2"
+            canonical = json.dumps(json.loads(content), indent=2, sort_keys=sort_keys) + "\n"
         except Exception as e:
-            return False, f"Failed validating JSON formatting in {name}: {e}"
+            return False, f"Failed parsing {name}: {e}"
+        if content != canonical:
+            return False, f"{name} is not serialized as json.dumps(indent=2, sort_keys={sort_keys}) + newline"
     return True, "JSON files follow deterministic indented formatting"
 
 
@@ -928,28 +1130,24 @@ def test_t2_r2_03():
 
 
 @register_test(
-    "T2_R2_04_srgb_color_space_conformity",
+    "T2_R2_04_png_chunk_integrity",
     2,
     "M1",
     "R2",
-    "Verify vr_splash.png chunk layout does not contain corrupted color profiles",
+    "Verify every vr_splash.png chunk has a valid CRC, IHDR comes first and IEND last",
 )
 def test_t2_r2_04():
     splash_path = REPO_ROOT / "app" / "src" / "main" / "assets" / "vr_splash.png"
     if not splash_path.exists():
         return False, f"{splash_path} does not exist"
-    with open(splash_path, "rb") as f:
-        data = f.read()
     chunks = []
-    offset = 8
-    while offset < len(data):
-        if offset + 8 > len(data):
-            break
-        c_len, c_type = struct.unpack(">I4s", data[offset : offset + 8])
-        chunks.append(c_type.decode("latin-1", errors="replace"))
-        offset += 8 + c_len + 4  # length + type + data + crc
-    if "IEND" not in chunks:
-        return False, "vr_splash.png missing terminating IEND chunk"
+    for chunk_type, payload, crc in iter_png_chunks(splash_path.read_bytes()):
+        name = chunk_type.decode("latin-1")
+        if zlib.crc32(chunk_type + payload) != crc:
+            return False, f"vr_splash.png chunk {name} has a bad CRC"
+        chunks.append(name)
+    if not chunks or chunks[0] != "IHDR" or chunks[-1] != "IEND":
+        return False, f"vr_splash.png chunk order is invalid: {chunks}"
     return True, f"PNG chunk sequence is valid: {chunks}"
 
 
@@ -958,21 +1156,32 @@ def test_t2_r2_04():
     2,
     "M1",
     "R2",
-    "Verify horizontal lockup geometry preserves minimum 40px outer margin on 1400x560 canvas",
+    "Verify the lockup drawn in vr_splash.png keeps at least a 40px margin to every canvas edge",
 )
 def test_t2_r2_05():
-    # In 1400x560 canvas, symbol (height ~360) and text must not touch edges
-    logo_final = REPO_ROOT / "design" / "logo" / "logo_final.svg"
-    if not logo_final.exists():
-        return False, "logo_final.svg does not exist"
-    content = logo_final.read_text(encoding="utf-8")
-    # Verify symbol and wordmark are offset from left and right boundaries
-    vb_match = re.search(
-        r'viewBox=["\']\s*0\s+0\s+([0-9.]+)\s+([0-9.]+)\s*["\']', content
-    )
-    if not vb_match:
-        return False, "viewBox not found in logo_final.svg"
-    return True, "Horizontal lockup preserves safe margins on canvas"
+    splash_path = REPO_ROOT / "app" / "src" / "main" / "assets" / "vr_splash.png"
+    w, h, channels, rows = read_png_pixels(splash_path)
+    # The sea floor never exceeds SEA_FLOOR_CENTER (max channel 32); the lockup's
+    # darkest colour, the #0B4650 disk, has a channel of 70.
+    threshold = 48
+    xs, ys = [], []
+    for y, row in enumerate(rows):
+        for x in range(w):
+            if max(row[x * channels : x * channels + 3]) > threshold:
+                xs.append(x)
+                ys.append(y)
+    if not xs:
+        return False, "No lockup pixels found in vr_splash.png"
+    margins = {
+        "left": min(xs),
+        "top": min(ys),
+        "right": w - 1 - max(xs),
+        "bottom": h - 1 - max(ys),
+    }
+    tight = {side: m for side, m in margins.items() if m < 40}
+    if tight:
+        return False, f"Lockup is closer than 40px to the canvas edge: {tight}"
+    return True, f"Lockup margins in vr_splash.png: {margins}"
 
 
 @register_test(
@@ -980,31 +1189,28 @@ def test_t2_r2_05():
     2,
     "M2",
     "R3",
-    "Verify ic_launcher_foreground.xml omits micro-antennae strokes and tiny spots that blur at 32px",
+    "Verify ic_launcher_foreground.xml omits the golden antennae strokes and the tiny spots that blur at 32px",
 )
 def test_t2_r3_01():
-    fg = (
-        REPO_ROOT
-        / "app"
-        / "src"
-        / "main"
-        / "res"
-        / "drawable"
-        / "ic_launcher_foreground.xml"
-    )
+    fg = REPO_ROOT / "app" / "src" / "main" / "res" / "drawable" / "ic_launcher_foreground.xml"
     if not fg.exists():
         return False, "ic_launcher_foreground.xml does not exist"
-    content = fg.read_text(encoding="utf-8")
-    # Antennae in master symbol have golden yellow fill/stroke and very thin strokes
-    # Simplified symbol must omit antennae and leopard spots
-    if 'android:strokeWidth="5.04"' in content:
-        return (
-            False,
-            "ic_launcher_foreground.xml contains raw unscaled 5.04px antenna strokes",
-        )
+    # At 32px the icon renders the 512-unit master at 32 / 108 * 0.125 px per unit, so
+    # the spots (at most ~8.4 units wide) would cover a third of a pixel.
+    tiny_spot_units = 9.0
+    for path in foreground_paths(fg):
+        stroke = path.get(ANDROID_NS + "strokeColor", "").upper()
+        if stroke == CANONICAL_PALETTE["GOLDEN_YELLOW"]:
+            return False, "ic_launcher_foreground.xml still draws a golden antenna stroke"
+        min_x, min_y, max_x, max_y = abs_path_bbox(path.get(ANDROID_NS + "pathData"))
+        if max(max_x - min_x, max_y - min_y) < tiny_spot_units:
+            return (
+                False,
+                f"ic_launcher_foreground.xml keeps a {max_x - min_x:.1f}x{max_y - min_y:.1f} unit spot",
+            )
     return (
         True,
-        "ic_launcher_foreground.xml is properly simplified for small display sizes",
+        "ic_launcher_foreground.xml has no antenna strokes and no detail under 9 master units",
     )
 
 
@@ -1016,25 +1222,29 @@ def test_t2_r3_01():
     "Verify foreground content stays within the 72dp safe zone [18..90] in the 108x108 viewport",
 )
 def test_t2_r3_02():
-    fg = (
-        REPO_ROOT
-        / "app"
-        / "src"
-        / "main"
-        / "res"
-        / "drawable"
-        / "ic_launcher_foreground.xml"
-    )
+    fg = REPO_ROOT / "app" / "src" / "main" / "res" / "drawable" / "ic_launcher_foreground.xml"
     if not fg.exists():
         return False, "ic_launcher_foreground.xml does not exist"
-    content = fg.read_text(encoding="utf-8")
-    # Check for group translation or coordinate range
-    has_group_transform = "android:translateX=" in content or "scaleX" in content
-    # Look for raw coordinates < 10 or > 98 outside groups
-    if not has_group_transform:
-        coords = [float(x) for x in re.findall(r"[-+]?\d*\.\d+|\d+", content)]
-        # Inspect pathData coordinates
-    return True, "Foreground content is enclosed within safe zone [18..90]"
+    root = ET.parse(fg).getroot()
+    groups = root.findall("group")
+    if len(groups) != 1 or root.findall("path") or groups[0].findall(".//group"):
+        return False, "Expected every path under a single top-level <group>; update this test for the new structure"
+    group = groups[0]
+    scale_x = float(group.get(ANDROID_NS + "scaleX", "1"))
+    scale_y = float(group.get(ANDROID_NS + "scaleY", "1"))
+    tx = float(group.get(ANDROID_NS + "translateX", "0"))
+    ty = float(group.get(ANDROID_NS + "translateY", "0"))
+    bounds = [float("inf"), float("inf"), float("-inf"), float("-inf")]
+    for path in foreground_paths(fg):
+        half_stroke = float(path.get(ANDROID_NS + "strokeWidth", "0")) / 2
+        min_x, min_y, max_x, max_y = abs_path_bbox(path.get(ANDROID_NS + "pathData"))
+        bounds[0] = min(bounds[0], (min_x - half_stroke) * scale_x + tx)
+        bounds[1] = min(bounds[1], (min_y - half_stroke) * scale_y + ty)
+        bounds[2] = max(bounds[2], (max_x + half_stroke) * scale_x + tx)
+        bounds[3] = max(bounds[3], (max_y + half_stroke) * scale_y + ty)
+    if bounds[0] < 18 or bounds[1] < 18 or bounds[2] > 90 or bounds[3] > 90:
+        return False, f"Foreground content spans {[round(b, 2) for b in bounds]}, outside the [18..90] safe zone"
+    return True, f"Foreground content spans {[round(b, 2) for b in bounds]}, inside the [18..90] safe zone"
 
 
 @register_test(
@@ -1103,21 +1313,28 @@ def test_t2_r3_04():
     2,
     "M2",
     "R3",
-    "Verify Android Lint produces zero IconLauncherShape or VectorPath warnings",
+    "Verify Android Lint reports no IconLauncherShape or VectorPath issue on the launcher icon resources",
     requires_gradle=True,
 )
 def test_t2_r3_05():
+    report = REPO_ROOT / "app" / "build" / "reports" / "lint-results-debug.xml"
     code, stdout, stderr = run_cmd(
-        ["./gradlew", ":app:lintDebug", "-PrustBuildMode=skip"]
+        ["./gradlew", ":app:lintDebug", "-PrustBuildMode=skip"], timeout=900
     )
-    combined = stdout + stderr
-    if "IconLauncherShape" in combined:
-        return False, "Android Lint reported IconLauncherShape warning"
-    if "VectorPath" in combined:
-        return False, "Android Lint reported VectorPath warning"
     if code != 0:
-        return False, f":app:lintDebug failed with code {code}"
-    return True, "Android Lint passed with zero launcher icon or vector path warnings"
+        return False, f":app:lintDebug failed with code {code}:\n{stderr or stdout}"
+    if not report.exists():
+        return False, f"{report} was not produced by :app:lintDebug"
+    findings = []
+    for issue in ET.parse(report).getroot().iter("issue"):
+        if issue.get("id") not in ("IconLauncherShape", "VectorPath"):
+            continue
+        for location in issue.iter("location"):
+            if Path(location.get("file", "")).name.startswith("ic_launcher"):
+                findings.append(f"{issue.get('id')} in {Path(location.get('file')).name}")
+    if findings:
+        return False, f"Android Lint flagged the launcher icon: {sorted(set(findings))}"
+    return True, "Android Lint reports no IconLauncherShape or VectorPath issue on ic_launcher* resources"
 
 
 @register_test(
@@ -1143,123 +1360,125 @@ def test_t2_r4_01():
     return True, f"intro.json duration is exactly {duration:.3f}s (96 frames @ 60 fps)"
 
 
+
 @register_test(
-    "T2_R4_02_reduced_motion_static_duration",
+    "T2_R4_02_nothing_but_background_visible_at_frame_0",
     2,
     "M3",
     "R4",
-    "Verify IntroSequenceController specifies 500 ms duration for reduced motion",
+    "Verify no symbol or wordmark element of intro.json paints anything at frame 0",
 )
 def test_t2_r4_02():
-    controller_path = (
-        REPO_ROOT
-        / "app"
-        / "src"
-        / "main"
-        / "java"
-        / "com"
-        / "tucavr"
-        / "IntroSequenceController.kt"
-    )
-    if not controller_path.exists():
-        return False, f"{controller_path} does not exist"
-    content = controller_path.read_text(encoding="utf-8")
-    if "500" not in content and "500L" not in content:
-        return (
-            False,
-            "IntroSequenceController does not declare 500ms reduced motion duration",
-        )
-    return True, "IntroSequenceController enforces 500ms reduced motion freeze"
+    layers = intro_layers()
+    # Only a static bottom layer counts as the background (T1_R4_06 checks its shape).
+    if not lottie_animated(layers[-1]):
+        layers = layers[:-1]
+    visible = []
+    for layer in layers:
+        visible += lottie_layer_visible_drawables(layer, 0)
+    if visible:
+        return False, f"Visible at frame 0 besides the background: {visible}"
+    return True, "Only the static background layer is visible at frame 0"
+
+
+def load_scene_module():
+    """Imports design/logo/scene.py without leaving bytecode in design/logo/."""
+    sys.dont_write_bytecode = True
+    logo_dir = str(REPO_ROOT / "design" / "logo")
+    if logo_dir not in sys.path:
+        sys.path.insert(0, logo_dir)
+    import scene
+
+    return scene
 
 
 @register_test(
-    "T2_R4_03_input_skip_boundary_zero_delay",
+    "T2_R4_04_symbol_stacking_matches_svg_paint_order",
     2,
     "M3",
     "R4",
-    "Verify skip() at frame 0 immediately transitions to COMPLETED state",
-)
-def test_t2_r4_03():
-    # Verified through IntroSequenceController unit test suite
-    test_file = (
-        REPO_ROOT
-        / "app"
-        / "src"
-        / "test"
-        / "java"
-        / "com"
-        / "tucavr"
-        / "IntroSequenceControllerTest.kt"
-    )
-    if not test_file.exists():
-        return False, f"{test_file} does not exist"
-    content = test_file.read_text(encoding="utf-8")
-    if "skip" not in content.lower():
-        return False, "IntroSequenceControllerTest does not cover skip() boundary"
-    return True, "Immediate skip boundary condition guarded in unit tests"
-
-
-@register_test(
-    "T2_R4_04_idempotent_multiple_skips",
-    2,
-    "M3",
-    "R4",
-    "Verify calling skip() multiple times is idempotent and does not fire duplicate callbacks",
+    "Verify the intro draws the symbol's groups bottom-to-top in simbolo.svg paint order",
 )
 def test_t2_r4_04():
-    test_file = (
-        REPO_ROOT
-        / "app"
-        / "src"
-        / "test"
-        / "java"
-        / "com"
-        / "tucavr"
-        / "IntroSequenceControllerTest.kt"
-    )
-    if not test_file.exists():
-        return False, f"{test_file} does not exist"
-    content = test_file.read_text(encoding="utf-8")
-    if "idempotent" not in content.lower() and "multiple" not in content.lower():
-        return (
-            False,
-            "IntroSequenceControllerTest does not verify idempotent multiple skips",
-        )
-    return True, "Idempotent skip behavior tested and guarded"
+    scene = load_scene_module()
+    svg = (REPO_ROOT / "design" / "logo" / "simbolo.svg").read_text(encoding="utf-8")
+    svg_index = {}
+    for index, d in enumerate(re.findall(r'<path d="([^"]+)"', svg)):
+        for contour in scene.parse_svg_path(d):
+            key = (json.dumps(contour["v"]), contour["c"])
+            if key in svg_index and svg_index[key] != index:
+                return False, f"simbolo.svg paths {svg_index[key]} and {index} share a contour; cannot map them"
+            svg_index[key] = index
+
+    def svg_indices(item) -> set:
+        if item["ty"] == "gr":
+            return set().union(*(svg_indices(child) for child in item["it"]))
+        if item["ty"] != "sh":
+            return set()
+        shape = item["ks"]["k"][0]["s"][0] if item["ks"]["a"] == 1 else item["ks"]["k"]
+        key = (json.dumps(shape["v"]), shape["c"])
+        if key not in svg_index:
+            raise ValueError(f"'{item['nm']}' matches no simbolo.svg path")
+        return {svg_index[key]}
+
+    def check(items: list, where: str) -> Optional[str]:
+        # lottie-android draws a group's items from the last to the first, so the
+        # first item ends up on top: draw order is the reverse of the array.
+        drawn = [it for it in reversed(items) if it["ty"] == "gr"]
+        previous_max, previous_name = -1, None
+        for group in drawn:
+            indices = svg_indices(group)
+            if min(indices) <= previous_max:
+                return (
+                    f"{where}: '{group['nm']}' (SVG paths {min(indices)}-{max(indices)}) is drawn above "
+                    f"'{previous_name}' (up to SVG path {previous_max})"
+                )
+            previous_max, previous_name = max(indices), group["nm"]
+        return None
+
+    symbol = next(layer for layer in intro_layers() if layer["nm"].startswith("Symbol"))
+    body = next(it for it in symbol["shapes"] if it.get("nm") == "tamarutaca")
+    for items, where in [(symbol["shapes"], "Symbol layer"), (body["it"], "tamarutaca group")]:
+        error = check(items, where)
+        if error:
+            return False, error
+    if body["it"][-1]["ty"] != "tr":
+        return False, "tamarutaca group's transform is not its last item"
+    return True, "Symbol layer and tamarutaca group stack in simbolo.svg paint order"
 
 
 @register_test(
-    "T2_R4_05_corrupt_asset_graceful_fallback",
+    "T2_R4_03_readme_states_authored_and_playback_duration",
     2,
     "M3",
     "R4",
-    "Verify defensive error handling in VRPresentation if intro asset fails to load",
+    "Verify design/logo/README.md states the authored length and the on-device playback length",
 )
-def test_t2_r4_05():
-    vr_pres = (
-        REPO_ROOT
-        / "app"
-        / "src"
-        / "main"
-        / "java"
-        / "com"
-        / "tucavr"
-        / "VRPresentation.kt"
+def test_t2_r4_03():
+    intro = json.loads(
+        (REPO_ROOT / "app" / "src" / "main" / "assets" / "intro.json").read_text(encoding="utf-8")
     )
-    if not vr_pres.exists():
-        return False, f"{vr_pres} does not exist"
-    content = vr_pres.read_text(encoding="utf-8")
-    # Verify fallback to Home / render() on intro failure
-    if "intro" in content.lower() and (
-        "failure" in content.lower()
-        or "error" in content.lower()
-        or "catch" in content.lower()
-    ):
-        return True, "VRPresentation includes fallback for intro load failure"
-    return (
-        True,
-        "Intro integration safely renders Home if intro sequence finishes or skips",
-    )
+    controller = (
+        REPO_ROOT / "app" / "src" / "main" / "java" / "com" / "tucavr" / "IntroSequenceController.kt"
+    ).read_text(encoding="utf-8")
+    speed_match = re.search(r"const val PLAYBACK_SPEED = ([0-9.]+)f", controller)
+    hold_match = re.search(r"const val HOLD_AFTER_END_MS = (\d+)L", controller)
+    if not speed_match or not hold_match:
+        return False, "IntroSequenceController must declare PLAYBACK_SPEED and HOLD_AFTER_END_MS"
+    speed = float(speed_match.group(1))
+    hold_s = int(hold_match.group(1)) / 1000
+    authored_s = (intro["op"] - intro["ip"]) / intro["fr"]
+    expected = [
+        f"{authored_s:.1f} s",
+        f"{speed:g}x",
+        f"{authored_s / speed:.1f} s",
+        f"{hold_s:g} s",
+    ]
+    readme = (REPO_ROOT / "design" / "logo" / "README.md").read_text(encoding="utf-8")
+    missing = [token for token in expected if token not in readme]
+    if missing:
+        return False, f"design/logo/README.md does not state {missing}"
+    return True, f"README states {expected[0]} authored, {expected[2]} at {expected[1]} plus a {expected[3]} hold"
 
 
 # ----------------------------------------------------------------------
@@ -1294,7 +1513,7 @@ def test_t3_pair_01():
     3,
     "M2",
     "R1+R3",
-    "Verify launcher icon foreground reflects canonical mantis shrimp wave geometry",
+    "Verify launcher icon foreground and simbolo.svg share the core brand colors",
 )
 def test_t3_pair_02():
     simbolo = REPO_ROOT / "design" / "logo" / "simbolo.svg"
@@ -1345,11 +1564,11 @@ def test_t3_pair_03():
 
 
 @register_test(
-    "T3_PAIR_04_r2_r4_splash_to_intro_visual_continuity",
+    "T3_PAIR_04_r2_r4_splash_and_intro_share_canvas_and_background",
     3,
     "M3",
     "R2+R4",
-    "Verify vr_splash.png and intro.json share an identical 1400x560 canvas",
+    "Verify vr_splash.png and intro.json share the 1400x560 canvas and the same background",
 )
 def test_t3_pair_04():
     splash_path = REPO_ROOT / "app" / "src" / "main" / "assets" / "vr_splash.png"
@@ -1359,18 +1578,35 @@ def test_t3_pair_04():
     if not intro_path.exists():
         return False, f"{intro_path} does not exist"
 
-    w, h, _, _, _ = read_png_dimensions(splash_path)
+    w, h, channels, rows = read_png_pixels(splash_path)
     intro_data = json.loads(intro_path.read_text(encoding="utf-8"))
     iw, ih = intro_data.get("w"), intro_data.get("h")
-
     if (w, h) != (iw, ih):
         return (
             False,
             f"Dimension mismatch between splash ({w}x{h}) and intro ({iw}x{ih})",
         )
+
+    background = intro_data["layers"][-1]
+    # Samples avoid the 778x300 lockup box centred on the canvas. lottie-android
+    # truncates colour channels and the rasterizers round differently, hence the tolerance.
+    tolerance = 2
+    worst = (0, None)
+    for y in range(0, h, 20):
+        for x in range(0, w, 20):
+            if 300 <= x <= 1100 and 120 <= y <= 440:
+                continue
+            expected = sea_floor_color_at(background, x, y)
+            actual = tuple(rows[y][x * channels : x * channels + 3])
+            delta = max(abs(a - e) for a, e in zip(actual, expected))
+            if delta > worst[0]:
+                worst = (delta, (x, y, actual, expected))
+    if worst[0] > tolerance:
+        x, y, actual, expected = worst[1]
+        return False, f"Splash background at ({x}, {y}) is {actual}, intro background is {expected}"
     return (
         True,
-        "vr_splash.png and intro.json match exact 1400x560 canvas for zero-flicker transition",
+        f"vr_splash.png and intro.json share the {w}x{h} canvas and background (max channel delta {worst[0]})",
     )
 
 
@@ -1398,11 +1634,25 @@ def test_t3_pair_05():
         return False, "intro.json does not exist"
 
     fg_text = fg.read_text(encoding="utf-8").lower()
-    intro_text = intro_path.read_text(encoding="utf-8")
-    # Verify flame orange and cyan turquoise exist in both
+    intro_colors = set()
+
+    def collect(node):
+        if isinstance(node, dict):
+            if node.get("ty") in ("fl", "st") and node["c"].get("a") == 0:
+                r, g, b = node["c"]["k"][:3]
+                intro_colors.add(f"#{round(r * 255):02x}{round(g * 255):02x}{round(b * 255):02x}")
+            for v in node.values():
+                collect(v)
+        elif isinstance(node, list):
+            for v in node:
+                collect(v)
+
+    collect(json.loads(intro_path.read_text(encoding="utf-8"))["layers"])
     for col in ["#ff6b00", "#16b3b0"]:
         if col not in fg_text:
             return False, f"Launcher foreground missing {col}"
+        if col not in intro_colors:
+            return False, f"intro.json fills/strokes missing {col}"
     return True, "Consistent brand palette shared across launcher icon and intro sequence"
 
 
@@ -1419,10 +1669,14 @@ def test_t3_pair_06():
     if not logo_script.exists():
         return False, "design/logo/logo.py does not exist"
 
+    missing_dep = generator_dependency_error()
+    if missing_dep:
+        return False, missing_dep
+
     code, diff_before, _ = run_cmd(["git", "diff", "--name-only"])
     files_before = set(diff_before.splitlines())
 
-    code, stdout, stderr = run_cmd(["python3", "logo.py"], cwd=logo_dir)
+    code, stdout, stderr = run_cmd([sys.executable, "logo.py"], cwd=logo_dir)
     if code != 0:
         return False, f"logo.py execution failed: {stderr or stdout}"
 
@@ -1444,144 +1698,8 @@ def test_t3_pair_06():
 
 
 # ----------------------------------------------------------------------
-# TIER 4: Real-World Scenarios (End-to-End lifecycle & UX journeys)
+# TIER 4: Quality gates run through Gradle
 # ----------------------------------------------------------------------
-
-
-@register_test(
-    "T4_SCENARIO_01_cold_launch_lifecycle_journey",
-    4,
-    "M4",
-    "Lifecycle",
-    "Verify cold launch flow: Horizon splash -> Presentation boot -> intro sequence -> Home screen",
-)
-def test_t4_scenario_01():
-    # 1. Manifest binds ossplash
-    manifest = (
-        REPO_ROOT / "app" / "src" / "main" / "AndroidManifest.xml"
-    ).read_text(encoding="utf-8")
-    if 'android:name="com.oculus.ossplash"' not in manifest:
-        return False, "System splash not enabled in AndroidManifest.xml"
-    # 2. Splash asset exists
-    if not (
-        REPO_ROOT / "app" / "src" / "main" / "assets" / "vr_splash.png"
-    ).exists():
-        return False, "Splash PNG missing in assets"
-    # 3. Intro asset exists
-    if not (
-        REPO_ROOT / "app" / "src" / "main" / "assets" / "intro.json"
-    ).exists():
-        return False, "Intro Lottie JSON missing in assets"
-    # 4. IntroSequenceController exists
-    if not (
-        REPO_ROOT
-        / "app"
-        / "src"
-        / "main"
-        / "java"
-        / "com"
-        / "tucavr"
-        / "IntroSequenceController.kt"
-    ).exists():
-        return False, "IntroSequenceController.kt missing"
-    return True, "Complete cold launch chain verified end-to-end"
-
-
-@register_test(
-    "T4_SCENARIO_02_headset_sleep_wake_no_replay",
-    4,
-    "M4",
-    "Lifecycle",
-    "Verify headset sleep/wake or menu resume (onResume) does not replay the intro sequence",
-)
-def test_t4_scenario_02():
-    ctrl_path = (
-        REPO_ROOT
-        / "app"
-        / "src"
-        / "main"
-        / "java"
-        / "com"
-        / "tucavr"
-        / "IntroSequenceController.kt"
-    )
-    if not ctrl_path.exists():
-        return False, "IntroSequenceController.kt does not exist"
-    content = ctrl_path.read_text(encoding="utf-8")
-    if (
-        "hasCompletedIntroOnce" not in content
-        and "hasPlayedOnce" not in content
-        and "hasCompleted" not in content
-    ):
-        return (
-            False,
-            "IntroSequenceController lacks process-level flag guarding against replay on resume",
-        )
-    return (
-        True,
-        "Process-level flag ensures intro sequence plays strictly once per cold launch",
-    )
-
-
-@register_test(
-    "T4_SCENARIO_03_rapid_user_skip_interaction",
-    4,
-    "M4",
-    "Input",
-    "Verify immediate skip on button/raycast trigger cleans up animator and transitions to Home",
-)
-def test_t4_scenario_03():
-    ctrl_path = (
-        REPO_ROOT
-        / "app"
-        / "src"
-        / "main"
-        / "java"
-        / "com"
-        / "tucavr"
-        / "IntroSequenceController.kt"
-    )
-    if not ctrl_path.exists():
-        return False, "IntroSequenceController.kt does not exist"
-    content = ctrl_path.read_text(encoding="utf-8")
-    if "skip" not in content:
-        return False, "IntroSequenceController does not provide skip() method"
-    return True, "Interactive skip handling verified in state controller"
-
-
-@register_test(
-    "T4_SCENARIO_04_reduced_motion_accessibility_journey",
-    4,
-    "M4",
-    "Accessibility",
-    "Verify system reduced motion displays static logo for 500ms and transitions to Home",
-)
-def test_t4_scenario_04():
-    ctrl_path = (
-        REPO_ROOT
-        / "app"
-        / "src"
-        / "main"
-        / "java"
-        / "com"
-        / "tucavr"
-        / "IntroSequenceController.kt"
-    )
-    if not ctrl_path.exists():
-        return False, "IntroSequenceController.kt does not exist"
-    content = ctrl_path.read_text(encoding="utf-8")
-    if (
-        "isReducedMotion" not in content
-        and "reducedMotion" not in content.lower()
-    ):
-        return (
-            False,
-            "IntroSequenceController does not handle reduced motion branch",
-        )
-    return (
-        True,
-        "Accessibility reduced motion branch verified in state machine",
-    )
 
 
 @register_test(
