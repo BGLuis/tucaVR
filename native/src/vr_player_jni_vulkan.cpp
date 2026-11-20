@@ -830,6 +830,13 @@ Java_com_tucavr_VRActivity_nativeGetScreenCurvature(JNIEnv*, jobject) {
     return g_screenCurvature.load();
 }
 
+extern std::atomic<bool> g_introActive;
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetIntroActive(JNIEnv*, jobject, jboolean active) {
+    g_introActive.store(active == JNI_TRUE);
+}
+
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetEnvironment(JNIEnv* env, jobject, jstring environmentId) {
     if (!environmentId) return;

@@ -843,4 +843,7 @@
     <string name="settings_telemetry_temp">Status Térmico: %1$s</string>
     <string name="settings_telemetry_refresh">Taxa de Atualização: %1$s</string>
 
+    <!-- Startup intro -->
+    <string name="intro_skip_hint">Aperte o gatilho ou faça pinça para pular</string>
+
 </resources>

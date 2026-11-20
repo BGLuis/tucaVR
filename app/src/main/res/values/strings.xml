@@ -855,4 +855,7 @@
     <string name="settings_telemetry_temp">Thermal Status: %1$s</string>
     <string name="settings_telemetry_refresh">Display Refresh: %1$s</string>
 
+    <!-- Startup intro -->
+    <string name="intro_skip_hint">Press the trigger or pinch to skip</string>
+
 </resources>

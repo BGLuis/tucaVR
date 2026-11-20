@@ -846,4 +846,7 @@
     <string name="settings_telemetry_temp">Estado Térmico: %1$s</string>
     <string name="settings_telemetry_refresh">Tasa de Refresco: %1$s</string>
 
+    <!-- Startup intro -->
+    <string name="intro_skip_hint">Pulsa el gatillo o pellizca para omitir</string>
+
 </resources>

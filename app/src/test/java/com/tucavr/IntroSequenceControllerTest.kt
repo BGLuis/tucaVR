@@ -289,4 +289,64 @@ class IntroSequenceControllerTest {
         assertEquals(1, playAnimationCount)
         assertEquals(IntroSequenceController.State.PLAYING_ANIMATION, controller.state)
     }
+
+    private fun recordingFades(
+        reducedMotion: Boolean,
+        fades: MutableList<Boolean>,
+    ) = IntroSequenceController(
+        isReducedMotion = { reducedMotion },
+        onPlayAnimation = { },
+        onShowStaticFinalFrame = { },
+        onTransitionToHome = { fadeOut -> fades += fadeOut },
+    )
+
+    @Test
+    fun `uninterrupted animation fades out to Home`() {
+        val fades = mutableListOf<Boolean>()
+        val controller = recordingFades(reducedMotion = false, fades = fades)
+
+        controller.start()
+        controller.onAnimationComplete()
+        controller.skip()
+
+        assertEquals(listOf(true), fades)
+    }
+
+    @Test
+    fun `skip cuts to Home without a fade`() {
+        val fades = mutableListOf<Boolean>()
+        val controller = recordingFades(reducedMotion = false, fades = fades)
+
+        controller.start()
+        controller.skip()
+        controller.onAnimationComplete()
+
+        assertEquals(listOf(false), fades)
+    }
+
+    @Test
+    fun `reduced motion never fades to Home`() {
+        val fades = mutableListOf<Boolean>()
+        recordingFades(reducedMotion = true, fades = fades).apply {
+            start()
+            onReducedMotionTimerComplete()
+        }
+        IntroSequenceController.hasCompletedIntroOnce = false
+        recordingFades(reducedMotion = true, fades = fades).apply {
+            start()
+            skip()
+        }
+
+        assertEquals(listOf(false, false), fades)
+    }
+
+    @Test
+    fun `resume after the intro already played goes to Home without a fade`() {
+        IntroSequenceController.hasCompletedIntroOnce = true
+        val fades = mutableListOf<Boolean>()
+
+        recordingFades(reducedMotion = false, fades = fades).start()
+
+        assertEquals(listOf(false), fades)
+    }
 }

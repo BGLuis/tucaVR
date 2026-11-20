@@ -8,12 +8,14 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.Display
+import android.view.Gravity
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.TextView
 import androidx.recyclerview.widget.RecyclerView
 import com.airbnb.lottie.LottieAnimationView
 import com.airbnb.lottie.LottieCompositionFactory
@@ -114,6 +116,7 @@ class VRPresentation(
 
     // ---- Intro sequence (Epic #102 / R4 / #106) ----
     private var introController: IntroSequenceController? = null
+    private var introOverlay: FrameLayout? = null
     private var introView: LottieAnimationView? = null
     private val introHandler = Handler(Looper.getMainLooper())
 
@@ -405,9 +408,7 @@ class VRPresentation(
                         )
                     setBackgroundColor(android.graphics.Color.TRANSPARENT)
                     background = null
-                    @Suppress("DEPRECATION")
-                    setIgnoreDisabledSystemAnimations(true)
-                    speed = 0.35f
+                    speed = IntroSequenceController.PLAYBACK_SPEED
                     repeatCount = 0
                     addAnimatorListener(
                         object : Animator.AnimatorListener {
@@ -419,7 +420,7 @@ class VRPresentation(
                                 Log.i("VRPresentation", "Intro Lottie animation ended, holding static lock before Home")
                                 introHandler.postDelayed({
                                     introController?.onAnimationComplete()
-                                }, 2000L)
+                                }, IntroSequenceController.HOLD_AFTER_END_MS)
                             }
 
                             override fun onAnimationCancel(animation: Animator) {}
@@ -431,14 +432,40 @@ class VRPresentation(
                         skipIntro()
                     }
                 }
+            val skipHint =
+                TextView(context).apply {
+                    text = context.getString(R.string.intro_skip_hint)
+                    typeface = VoidTheme.typefaceBody
+                    textSize = 12f
+                    setTextColor(VoidTheme.colorTextSecondary)
+                    layoutParams =
+                        FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL,
+                        ).apply { bottomMargin = VoidTheme.dpToPx(context, 24f) }
+                }
+            val overlay =
+                FrameLayout(context).apply {
+                    layoutParams =
+                        FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                        )
+                    // Fills the letterbox bands around the 2.5:1 composition with the
+                    // pure black its sea floor background fades to, so there is no seam.
+                    setBackgroundColor(android.graphics.Color.BLACK)
+                    addView(lottie)
+                    addView(skipHint)
+                }
             introView = lottie
-            rootContainer.addView(lottie)
+            introOverlay = overlay
+            rootContainer.addView(overlay)
 
             LottieCompositionFactory.fromAsset(context, "intro.json")
                 .addListener { composition ->
                     try {
                         lottie.setComposition(composition)
-                        lottie.speed = 0.35f
                         Log.i("VRPresentation", "Intro composition loaded: ${composition.duration}ms, state=${introController?.state}")
                         if (introController?.state == IntroSequenceController.State.PLAYING_ANIMATION) {
                             lottie.playAnimation()
@@ -470,8 +497,9 @@ class VRPresentation(
                             durationMs,
                         )
                     },
-                    onTransitionToHome = {
-                        disposeIntro()
+                    onTransitionToHome = { fadeOut ->
+                        activity.nativeSetIntroActive(false)
+                        if (fadeOut) fadeOutIntro() else disposeIntro()
                         canvasLayout.visibility = android.view.View.VISIBLE
                         render()
                     },
@@ -513,7 +541,20 @@ class VRPresentation(
         return false
     }
 
+    private fun fadeOutIntro() {
+        val overlay = introOverlay ?: return disposeIntro()
+        // A clickable intro view would swallow the first taps meant for Home.
+        introView?.isClickable = false
+        overlay
+            .animate()
+            .alpha(0f)
+            .setDuration(IntroSequenceController.FADE_TO_HOME_MS)
+            .withEndAction { disposeIntro() }
+            .start()
+    }
+
     private fun disposeIntro() {
+        activity.nativeSetIntroActive(false)
         introHandler.removeCallbacksAndMessages(null)
         introView?.let { view ->
             view.removeAllAnimatorListeners()
@@ -521,9 +562,13 @@ class VRPresentation(
             view.cancelAnimation()
             view.clearAnimation()
             view.setImageDrawable(null)
-            rootContainer.removeView(view)
+        }
+        introOverlay?.let { overlay ->
+            overlay.animate().cancel()
+            rootContainer.removeView(overlay)
         }
         introView = null
+        introOverlay = null
     }
 
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {

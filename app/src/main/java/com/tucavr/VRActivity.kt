@@ -522,6 +522,9 @@ class VRActivity : NativeActivity() {
         // Modo Ambiente: empurra o estado persistido do halo de luz ambiente
         nativeSetAmbientMode(FeatureFlags.isEnabled(this, FeatureFlags.Flag.AMBIENT_MODE))
 
+        // Set before the first XR frame so the environment never shows behind the intro; VRPresentation clears it.
+        nativeSetIntroActive(!IntroSequenceController.hasCompletedIntroOnce)
+
         // RF-ENV-007: Ajuste de Iluminação e Cor do Ambiente (Fase 0.5 §4)
         nativeSetEnvironmentBrightness(FeatureFlags.getEnvironmentBrightness(this))
         nativeSetScreenGlowIntensity(FeatureFlags.getScreenGlowIntensityFloat(this))
@@ -1851,6 +1854,8 @@ class VRActivity : NativeActivity() {
     external fun nativeSetHoverHapticsEnabled(enabled: Boolean)
 
     external fun nativeSetDirectVideoLayerEnabled(enabled: Boolean)
+
+    external fun nativeSetIntroActive(active: Boolean)
 
     external fun nativeRequestFrameCapture(path: String)
 

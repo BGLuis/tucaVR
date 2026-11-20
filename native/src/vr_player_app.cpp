@@ -432,6 +432,9 @@ extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeSetDirectVideoLayerEnabled(JNIEnv*, jobject, jboolean) {}
 
 extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetIntroActive(JNIEnv*, jobject, jboolean) {}
+
+extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeRequestFrameCapture(JNIEnv* env, jobject thiz, jstring path) {
     const char* pathStr = env->GetStringUTFChars(path, nullptr);
     {

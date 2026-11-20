@@ -385,6 +385,11 @@ std::atomic<bool> g_environmentChangeRequested{false};
 char g_requestedEnvironmentId[64] = "void";
 std::mutex g_environmentMutex;
 
+// The launch intro takes over the whole scene: while set, the eye buffer is plain black (see RecordIntroBackdrop)
+// and only the Home panel layer, which shows the intro, and the pointer are composited. Written by
+// nativeSetIntroActive in vr_player_jni_vulkan.cpp.
+std::atomic<bool> g_introActive{false};
+
 // Preview de arrasto no seekbar renderizado sobre o quad do video
 // (T-seek-ux) — escrito por nativeUpdateScrubOverlay/nativeSetScrubOverlayVisible
 // em vr_player_jni_vulkan.cpp (arquivo separado do render loop aqui neste
@@ -1190,6 +1195,7 @@ struct AppState {
     std::thread envWorkerThread;
     std::atomic<bool> envWorkerFinished{false};
     CpuEnvironmentData envLoadedData;
+    bool introBackdropShown = false;
 
     // Partículas cósmicas (Fase 0.5 §3 T3.3 / #54)
     bool envParticlesEnabled = false;
@@ -8710,6 +8716,24 @@ static void DestroyAmbientResources(AppState& state) {
     }
 }
 
+// Clears to the pure black the intro composition fades to, so the Home panel layer showing it has no visible edge.
+// Opaque even with passthrough active: the intro replaces the real world too.
+static void RecordIntroBackdrop(AppState& state, VkCommandBuffer cmd, VkFramebuffer framebuffer, VkExtent2D extent) {
+    std::array<VkClearValue, 2> clearValues{};
+    clearValues[0].color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+    clearValues[1].depthStencil = {1.0f, 0};
+
+    VkRenderPassBeginInfo renderPassBegin{VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO};
+    renderPassBegin.renderPass = state.renderPass;
+    renderPassBegin.framebuffer = framebuffer;
+    renderPassBegin.renderArea.offset = {0, 0};
+    renderPassBegin.renderArea.extent = extent;
+    renderPassBegin.clearValueCount = static_cast<uint32_t>(clearValues.size());
+    renderPassBegin.pClearValues = clearValues.data();
+    vkCmdBeginRenderPass(cmd, &renderPassBegin, VK_SUBPASS_CONTENTS_INLINE);
+    vkCmdEndRenderPass(cmd);
+}
+
 void RecordFallbackQuad(
     AppState& state, VkCommandBuffer cmd, VkFramebuffer framebuffer, VkExtent2D extent, const Mat4& mvp,
     const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
@@ -10112,6 +10136,17 @@ void RenderFrame(AppState& state) {
         const float kFadeDurationSec = 0.300f; // ~300 ms fade
         auto nowSteady = std::chrono::steady_clock::now();
 
+        const bool introActive = g_introActive.load();
+        if (state.introBackdropShown && !introActive &&
+            state.envTransitionPhase == EnvironmentTransitionPhase::IDLE) {
+            // Reveal the scene behind the intro through the environment fade rather than a hard cut. A transition
+            // already in progress is black or fading in on its own.
+            state.envTransitionPhase = EnvironmentTransitionPhase::FADING_IN;
+            state.envTransitionAlpha = 1.0f;
+            state.envTransitionStartTime = nowSteady;
+        }
+        state.introBackdropShown = introActive;
+
         if (g_environmentChangeRequested.exchange(false)) {
             std::string targetEnv;
             {
@@ -10536,7 +10571,9 @@ void RenderFrame(AppState& state) {
                 vkCmdWriteTimestamp(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, state.queryPool, queryStart);
             }
 
-            if (state.photoActive && state.photoTextureReady) {
+            if (introActive) {
+                RecordIntroBackdrop(state, cmd, fb, extent);
+            } else if (state.photoActive && state.photoTextureReady) {
                 const ScreenMode pMode = state.photoScreenMode;
                 const bool pSphere = IsSphereMode(pMode);
                 const StereoParams sp = GetStereoParams(pMode, eye);
@@ -10929,14 +10966,14 @@ void RenderFrame(AppState& state) {
 
         // Fase 0.3 Seção 2: passthrough é o PRIMEIRO layer (fundo), antes do
         // projection. Só entra quando a layer está efetivamente resumed.
-        if (state.passthroughActive && state.passthroughLayer != XR_NULL_HANDLE) {
+        if (!introActive && state.passthroughActive && state.passthroughLayer != XR_NULL_HANDLE) {
             passthroughLayerComp.flags = XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT;
             passthroughLayerComp.space = XR_NULL_HANDLE; // não usado p/ RECONSTRUCTION
             passthroughLayerComp.layerHandle = state.passthroughLayer;
             submitLayer(&passthroughLayerComp);
         }
 
-        if (useDirectVideo) {
+        if (useDirectVideo && !introActive) {
             for (uint32_t i = 0; i < state.videoLayer.chainCount; i++) {
                 if (equirectVideo) {
                     submitLayer(&videoEquirects[i]);
@@ -10953,17 +10990,17 @@ void RenderFrame(AppState& state) {
         if (state.uiHasFrame && state.uiAlpha > 0.05f) {
             submitLayer(&uiCylinder);
         }
-        if (state.browserHasFrame && state.browserActive) {
+        if (!introActive && state.browserHasFrame && state.browserActive) {
             if (g_browserCurvedGeometry.load()) {
                 submitLayer(&browserCylinder);
             } else {
                 submitLayer(&browserQuad);
             }
         }
-        if (state.controlsHasFrame && state.controlsAlpha > 0.05f) {
+        if (!introActive && state.controlsHasFrame && state.controlsAlpha > 0.05f) {
             submitLayer(&controlsCylinder);
         }
-        if (state.modalHasFrame && state.modalAlpha > 0.05f) {
+        if (!introActive && state.modalHasFrame && state.modalAlpha > 0.05f) {
             submitLayer(&modalQuad);
         }
         if (beamActive) {

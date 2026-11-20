@@ -12,7 +12,7 @@ class IntroSequenceController(
     private val isReducedMotion: () -> Boolean = { false },
     private val onPlayAnimation: () -> Unit,
     private val onShowStaticFinalFrame: (durationMs: Long) -> Unit,
-    private val onTransitionToHome: () -> Unit,
+    private val onTransitionToHome: (fadeOut: Boolean) -> Unit,
 ) {
     enum class State {
         IDLE,
@@ -30,8 +30,12 @@ class IntroSequenceController(
 
     companion object {
         const val REDUCED_MOTION_DURATION_MS = 500L
-        const val NORMAL_ANIMATION_FRAMES = 96
-        const val NORMAL_ANIMATION_FPS = 60
+
+        // intro.json is authored at 1.6 s; 0.35x stretches it to ~4.6 s on the headset.
+        // The slow pacing is deliberate (commit 029e7cc).
+        const val PLAYBACK_SPEED = 0.35f
+        const val HOLD_AFTER_END_MS = 2000L
+        const val FADE_TO_HOME_MS = 300L
 
         // Process-level execution flag ensuring one-time execution across cold launch
         @Volatile
@@ -64,7 +68,7 @@ class IntroSequenceController(
         if (isIntroActive) return
         if (hasCompletedIntroOnce && !forceReplay) {
             state = State.COMPLETED
-            onTransitionToHome()
+            onTransitionToHome(false)
             return
         }
 
@@ -80,29 +84,29 @@ class IntroSequenceController(
     @Synchronized
     fun skip() {
         if (!isIntroActive) return
-        finish()
+        finish(fadeOut = false)
     }
 
     @Synchronized
     fun onAnimationComplete() {
         if (state == State.PLAYING_ANIMATION) {
-            finish()
+            finish(fadeOut = true)
         }
     }
 
     @Synchronized
     fun onReducedMotionTimerComplete() {
         if (state == State.SHOWING_REDUCED_MOTION) {
-            finish()
+            finish(fadeOut = false)
         }
     }
 
     @Synchronized
-    private fun finish() {
+    private fun finish(fadeOut: Boolean) {
         if (!isIntroActive) return
         state = State.COMPLETED
         hasCompletedIntroOnce = true
-        onTransitionToHome()
+        onTransitionToHome(fadeOut)
     }
 
     @Synchronized
