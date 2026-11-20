@@ -2200,6 +2200,7 @@ class VRActivity : NativeActivity() {
         message: String,
         confirmText: String = getString(R.string.network_delete_server_confirm),
         cancelText: String = getString(R.string.network_delete_server_cancel),
+        onCancel: () -> Unit = {},
         onConfirm: () -> Unit,
     ) {
         runOnUiThread {
@@ -2209,6 +2210,7 @@ class VRActivity : NativeActivity() {
                 message = message,
                 confirmText = confirmText,
                 cancelText = cancelText,
+                onCancel = onCancel,
                 onConfirm = onConfirm,
             )
         }

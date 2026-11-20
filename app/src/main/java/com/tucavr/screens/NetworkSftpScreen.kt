@@ -11,6 +11,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.tucavr.R
 import com.tucavr.VRActivity
+import com.tucavr.debug.VRLog
 import com.tucavr.designsystem.FieldValidators
 import com.tucavr.designsystem.VoidButton
 import com.tucavr.designsystem.VoidButtonStyle
@@ -39,6 +40,7 @@ import com.tucavr.filebrowser.sortMediaEntries
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
 import com.tucavr.network.SftpCredentialStore
+import com.tucavr.network.SftpHostKeyStatus
 import com.tucavr.network.SftpServer
 import com.tucavr.screens.adapters.FileAdapter
 import com.tucavr.screens.components.MediaBrowserToolbar
@@ -196,6 +198,40 @@ class NetworkSftpScreen(
             }
 
         var currentFingerprint: String? = prefill?.hostKeyFingerprint
+        val savedServerId = prefill?.existingServerId
+        val serverLabel = { fieldName.getText().trim().ifEmpty { fieldHost.getText().trim() } }
+
+        val pinnedKeyRow =
+            if (savedServerId != null && currentFingerprint != null) {
+                LinearLayout(context).apply { orientation = LinearLayout.VERTICAL }
+            } else {
+                null
+            }
+        if (pinnedKeyRow != null && savedServerId != null) {
+            pinnedKeyRow.addView(
+                VoidText.body(
+                    context,
+                    context.getString(R.string.network_sftp_pinned_host_key_format, currentFingerprint),
+                    sizeSp = 14f,
+                    secondary = true,
+                ),
+            )
+            pinnedKeyRow.addView(
+                VoidButton(context, VoidButtonStyle.SECONDARY).apply {
+                    text = context.getString(R.string.network_sftp_forget_host_key)
+                    textSize = 15f
+                    minHeight = VoidTheme.dpToPx(context, 48f)
+                    setOnClickListener {
+                        scope.launch {
+                            withContext(Dispatchers.IO) { credentialStore.setHostKeyFingerprint(savedServerId, null) }
+                            currentFingerprint = null
+                            pinnedKeyRow.visibility = View.GONE
+                            statusText.text = context.getString(R.string.network_sftp_host_key_forgotten)
+                        }
+                    }
+                },
+            )
+        }
 
         val btnTest =
             VoidButton(context, VoidButtonStyle.SECONDARY).apply {
@@ -220,36 +256,41 @@ class NetworkSftpScreen(
                         fieldKey.setError(context.getString(R.string.network_sftp_form_status_auth_required))
                         return@setOnClickListener
                     }
+
+                    fun showResult(result: String) {
+                        statusText.text =
+                            if (result.startsWith("ERROR:")) {
+                                sftpErrorText(result)
+                            } else {
+                                context.getString(R.string.network_sftp_form_status_connected)
+                            }
+                    }
+
                     statusText.text = context.getString(R.string.network_sftp_form_status_connecting)
                     scope.launch {
-                        val result =
+                        val firstTry =
                             withContext(Dispatchers.IO) {
-                                val fp = currentFingerprint ?: ""
-                                val firstTry = activity.nativeSftpListDirectory(hostStr, port, user, pass, key, fp, "")
-                                if (firstTry.startsWith("ERROR:HOST_KEY_CONFIRM:")) {
-                                    val discovered =
-                                        firstTry.removePrefix("ERROR:HOST_KEY_CONFIRM:")
-                                            .trim()
-                                            .substringBefore(" ")
-                                            .trim()
-                                    if (discovered.isNotEmpty()) {
-                                        currentFingerprint = discovered
-                                        activity.nativeSftpListDirectory(hostStr, port, user, pass, key, discovered, "")
-                                    } else {
-                                        firstTry
-                                    }
-                                } else {
-                                    firstTry
-                                }
+                                activity.nativeSftpListDirectory(hostStr, port, user, pass, key, currentFingerprint ?: "", "")
                             }
-                        if (result.startsWith("ERROR:")) {
-                            statusText.text =
-                                context.getString(
-                                    R.string.network_sftp_form_status_error_format,
-                                    result.removePrefix("ERROR:"),
-                                )
-                        } else {
-                            statusText.text = context.getString(R.string.network_sftp_form_status_connected)
+                        val unknownKey = SftpHostKeyStatus.parse(firstTry) as? SftpHostKeyStatus.NeedsConfirmation
+                        if (unknownKey == null) {
+                            showResult(firstTry)
+                            return@launch
+                        }
+                        askToTrustHostKey(
+                            serverLabel(),
+                            unknownKey,
+                            onCancel = { statusText.text = context.getString(R.string.network_sftp_trust_canceled) },
+                        ) {
+                            currentFingerprint = unknownKey.fingerprint
+                            statusText.text = context.getString(R.string.network_sftp_form_status_connecting)
+                            scope.launch {
+                                val trusted =
+                                    withContext(Dispatchers.IO) {
+                                        activity.nativeSftpListDirectory(hostStr, port, user, pass, key, unknownKey.fingerprint, "")
+                                    }
+                                showResult(trusted)
+                            }
                         }
                     }
                 }
@@ -279,12 +320,9 @@ class NetworkSftpScreen(
                         return@setOnClickListener
                     }
 
-                    val serverId = prefill?.existingServerId ?: credentialStore.newId()
-                    scope.launch {
-                        val fpToSave =
-                            currentFingerprint ?: withContext(Dispatchers.IO) {
-                                activity.nativeSftpProbeHostKey(hostStr, port).takeIf { !it.startsWith("ERROR:") }
-                            }
+                    val serverId = savedServerId ?: credentialStore.newId()
+
+                    fun persist(fingerprint: String?) {
                         val server =
                             SftpServer(
                                 id = serverId,
@@ -294,13 +332,43 @@ class NetworkSftpScreen(
                                 username = user,
                                 password = pass,
                                 privateKey = if (useKey) key else null,
-                                hostKeyFingerprint = fpToSave,
+                                hostKeyFingerprint = fingerprint,
                             )
-                        withContext(Dispatchers.IO) {
-                            credentialStore.save(server)
+                        scope.launch {
+                            withContext(Dispatchers.IO) {
+                                credentialStore.save(server)
+                            }
+                            form.clearAll()
+                            onSaved()
                         }
-                        form.clearAll()
-                        onSaved()
+                    }
+
+                    val pinned = currentFingerprint
+                    if (pinned != null) {
+                        persist(pinned)
+                        return@setOnClickListener
+                    }
+                    statusText.text = context.getString(R.string.network_sftp_form_status_connecting)
+                    scope.launch {
+                        val firstTry =
+                            withContext(Dispatchers.IO) {
+                                activity.nativeSftpListDirectory(hostStr, port, user, pass, key, "", "")
+                            }
+                        val unknownKey = SftpHostKeyStatus.parse(firstTry) as? SftpHostKeyStatus.NeedsConfirmation
+                        if (unknownKey == null) {
+                            // The key exchange never happened (server unreachable): keep the server
+                            // unpinned, browsing it later asks to trust the key first.
+                            persist(null)
+                            return@launch
+                        }
+                        askToTrustHostKey(
+                            finalName,
+                            unknownKey,
+                            onCancel = { statusText.text = context.getString(R.string.network_sftp_trust_canceled) },
+                        ) {
+                            currentFingerprint = unknownKey.fingerprint
+                            persist(unknownKey.fingerprint)
+                        }
                     }
                 }
             }
@@ -318,10 +386,44 @@ class NetworkSftpScreen(
             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
         )
 
+        pinnedKeyRow?.let { form.addView(it) }
         form.addView(statusText)
         form.addView(buttonsRow)
 
         return form
+    }
+
+    /** Asks the user to trust an unknown host key (#223); nothing is pinned unless [onTrust] runs. */
+    private fun askToTrustHostKey(
+        serverLabel: String,
+        unknownKey: SftpHostKeyStatus.NeedsConfirmation,
+        onCancel: () -> Unit,
+        onTrust: () -> Unit,
+    ) {
+        activity.openConfirmDeleteModal(
+            title = context.getString(R.string.network_sftp_trust_title),
+            message =
+                context.getString(
+                    R.string.network_sftp_trust_message,
+                    serverLabel,
+                    unknownKey.fingerprint,
+                    unknownKey.keyType ?: "?",
+                ),
+            confirmText = context.getString(R.string.network_sftp_trust_confirm),
+            cancelText = context.getString(R.string.network_sftp_trust_cancel),
+            onCancel = onCancel,
+            onConfirm = onTrust,
+        )
+    }
+
+    /** Translated text for a failed SFTP call; the fingerprints of a changed key go to the log only. */
+    private fun sftpErrorText(error: String): String {
+        val changed = SftpHostKeyStatus.parse(error) as? SftpHostKeyStatus.IdentityChanged
+        if (changed != null) {
+            VRLog.w("SFTP host key changed: expected ${changed.expected}, server presented ${changed.presented}")
+            return context.getString(R.string.network_sftp_host_key_changed)
+        }
+        return context.getString(R.string.network_sftp_form_status_error_format, error.removePrefix("ERROR:"))
     }
 
     // ---- Navegação de diretório SFTP moderna ----
@@ -585,12 +687,24 @@ class NetworkSftpScreen(
             }
             is NetworkDirectoryState.Error -> {
                 cachedRawEntries = emptyList()
-                val msg = context.getString(R.string.network_sftp_form_status_error_format, state.message)
-                countLabel?.text = msg
-                emptyLabel?.text = msg
-                clearFiltersButton?.visibility = View.GONE
-                recyclerView?.visibility = View.GONE
-                emptyContainer?.visibility = View.VISIBLE
+                val unknownKey = SftpHostKeyStatus.parse(state.message) as? SftpHostKeyStatus.NeedsConfirmation
+                showBrowseError(
+                    if (unknownKey != null) context.getString(R.string.network_sftp_trust_title) else sftpErrorText(state.message),
+                )
+                val server = browsingServer
+                if (unknownKey != null && server != null) {
+                    askToTrustHostKey(
+                        server.name,
+                        unknownKey,
+                        onCancel = { showBrowseError(context.getString(R.string.network_sftp_trust_canceled)) },
+                    ) {
+                        val trusted = server.copy(hostKeyFingerprint = unknownKey.fingerprint)
+                        scope.launch {
+                            withContext(Dispatchers.IO) { credentialStore.setHostKeyFingerprint(trusted.id, unknownKey.fingerprint) }
+                            renderFiles(trusted)
+                        }
+                    }
+                }
             }
             is NetworkDirectoryState.Empty -> {
                 cachedRawEntries = emptyList()
@@ -601,6 +715,14 @@ class NetworkSftpScreen(
                 applyFiltersAndSort()
             }
         }
+    }
+
+    private fun showBrowseError(message: String) {
+        countLabel?.text = message
+        emptyLabel?.text = message
+        clearFiltersButton?.visibility = View.GONE
+        recyclerView?.visibility = View.GONE
+        emptyContainer?.visibility = View.VISIBLE
     }
 
     private fun applyFiltersAndSort() {
