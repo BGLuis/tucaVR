@@ -380,6 +380,14 @@ fn tofu_first_connection_without_fingerprint_returns_needs_confirmation() {
         err.contains("needs confirmation") || err.contains("HOST_KEY_CONFIRM:"),
         "erro esperado de confirmacao de chave, obteve: {err}"
     );
+    // #223: the trust prompt shows the key type next to the fingerprint.
+    assert!(
+        err.contains(&format!(
+            "HOST_KEY_CONFIRM:{} type=ssh-",
+            server_fingerprint()
+        )),
+        "erro de confirmacao sem o tipo da chave: {err}"
+    );
 }
 
 /// T6.2 / #57: Conexão com fingerprint diferente do esperado (ou container recriado com nova chave)

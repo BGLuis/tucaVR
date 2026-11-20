@@ -73,8 +73,8 @@ pub mod host_key;
 pub mod uri;
 
 pub use host_key::{
-    HostKeyError, compute_fingerprint, normalize_fingerprint, verify_host_key_fingerprint,
-    verify_server_public_key,
+    HostKeyError, compute_fingerprint, key_type, normalize_fingerprint,
+    verify_host_key_fingerprint, verify_server_public_key,
 };
 pub use uri::{SftpTarget, is_sftp_uri, redact};
 
@@ -153,7 +153,12 @@ const SFTP_CHUNK_RETRY_TIMEOUT: Duration = Duration::from_millis(2000);
 /// Realiza a verificacao da host key do servidor (T6.2 / #57 TOFU).
 struct SftpHandler {
     expected_fingerprint: Option<String>,
-    check_result: Arc<std::sync::Mutex<Option<Result<String, HostKeyError>>>>,
+    check_result: Arc<std::sync::Mutex<Option<HostKeyCheck>>>,
+}
+
+struct HostKeyCheck {
+    result: Result<String, HostKeyError>,
+    key_type: String,
 }
 
 impl Handler for SftpHandler {
@@ -163,10 +168,14 @@ impl Handler for SftpHandler {
         &mut self,
         server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        let res = verify_server_public_key(self.expected_fingerprint.as_deref(), server_public_key);
-        let ok = res.is_ok();
+        let result =
+            verify_server_public_key(self.expected_fingerprint.as_deref(), server_public_key);
+        let ok = result.is_ok();
         if let Ok(mut lock) = self.check_result.lock() {
-            *lock = Some(res);
+            *lock = Some(HostKeyCheck {
+                result,
+                key_type: key_type(server_public_key),
+            });
         }
         Ok(ok)
     }
@@ -205,13 +214,15 @@ async fn connect_nodelay(
         Ok(handle) => Ok(handle),
         Err(e) => {
             if let Ok(guard) = check_result.lock() {
-                match &*guard {
-                    Some(Err(HostKeyError::NeedsConfirmation { fingerprint })) => {
+                match guard.as_ref().map(|check| (&check.result, &check.key_type)) {
+                    Some((Err(HostKeyError::NeedsConfirmation { fingerprint }), key_type)) => {
+                        // The fingerprint stays the first token: `probe_server_fingerprint` and
+                        // the Kotlin parser (`SftpHostKeyStatus`) both read it that way.
                         return Err(format!(
-                            "HOST_KEY_CONFIRM:{fingerprint} needs confirmation: {fingerprint}"
+                            "HOST_KEY_CONFIRM:{fingerprint} type={key_type} needs confirmation: {fingerprint}"
                         ));
                     }
-                    Some(Err(HostKeyError::IdentityChanged { expected, actual })) => {
+                    Some((Err(HostKeyError::IdentityChanged { expected, actual }), _)) => {
                         return Err(format!(
                             "HOST_KEY_CHANGED:expected {expected}, server presented {actual} server identity changed: expected fingerprint {expected}, server presented {actual}"
                         ));
