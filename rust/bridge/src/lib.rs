@@ -506,6 +506,12 @@ pub extern "C" fn evaluate_upscaling_ffi(
 static QUALITY_CONTROLLER: Lazy<Mutex<media_logic::quality::QualityController>> =
     Lazy::new(|| Mutex::new(media_logic::quality::QualityController::new()));
 
+fn reset_quality_for_new_video() {
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        qc.reset_for_new_content();
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn quality_controller_set_enabled(enabled: u32) {
     if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
@@ -1323,6 +1329,8 @@ pub extern "C" fn start_smb_playback(
         }
 
         reset_3d_mode();
+
+        reset_quality_for_new_video();
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
@@ -1535,6 +1543,8 @@ pub extern "C" fn start_ftp_playback(
         }
 
         reset_3d_mode();
+
+        reset_quality_for_new_video();
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
@@ -1701,6 +1711,8 @@ pub extern "C" fn start_sftp_playback(
         }
 
         reset_3d_mode();
+
+        reset_quality_for_new_video();
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
@@ -1920,6 +1932,8 @@ pub extern "C" fn start_nfs_playback(
         }
 
         reset_3d_mode();
+
+        reset_quality_for_new_video();
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
@@ -2098,6 +2112,8 @@ pub extern "C" fn start_webdav_playback(
         }
 
         reset_3d_mode();
+
+        reset_quality_for_new_video();
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
@@ -2430,6 +2446,8 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
         }
 
         reset_3d_mode();
+
+        reset_quality_for_new_video();
         if path_str.starts_with("http://") || path_str.starts_with("https://") {
             DOWNLOAD_MANAGER.set_playback_active(true);
         }

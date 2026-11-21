@@ -296,6 +296,18 @@ impl QualityController {
         self.stable_healthy_samples = 0;
     }
 
+    /// Starts a new video from the default level. A degradation earned by the previous file
+    /// says nothing about the next one, which would otherwise spend ~30 s per level recovering.
+    /// With adaptive mode off the level is the user's choice and stays.
+    pub fn reset_for_new_content(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        self.current_level = QualityLevel::High;
+        self.last_reason = QualityTransitionReason::None;
+        self.reset_counters();
+    }
+
     /// Avalia a amostra de performance e atualiza o estado interno do controlador.
     pub fn evaluate(&mut self, sample: &QualitySample) -> QualityAction {
         if !self.enabled {
@@ -969,5 +981,39 @@ mod tests {
                 QualityTransitionReason::StableRecovery
             ))
         );
+    }
+
+    #[test]
+    fn test_reset_for_new_content_drops_previous_video_degradation() {
+        let mut controller = QualityController::new();
+        let gpu_overload = QualitySample {
+            thermal_level: 0,
+            smoothed_gpu_time_ms: 10.5,
+            frame_time_ms: 1000.0 / 90.0,
+            dropped_fps: 0.0,
+            target_fps: 90.0,
+        };
+        controller.evaluate(&gpu_overload);
+        controller.evaluate(&gpu_overload);
+        assert_eq!(controller.current_level(), QualityLevel::Medium);
+        // One stress sample pending: without a counter reset, the next one would degrade at once.
+        controller.evaluate(&gpu_overload);
+
+        controller.reset_for_new_content();
+
+        assert_eq!(controller.current_level(), QualityLevel::High);
+        assert_eq!(controller.last_reason(), QualityTransitionReason::None);
+        assert_eq!(controller.evaluate(&gpu_overload), QualityAction::Maintain);
+    }
+
+    #[test]
+    fn test_reset_for_new_content_keeps_level_when_adaptive_mode_is_off() {
+        let mut controller = QualityController::new();
+        controller.set_enabled(false);
+        controller.set_manual_level(QualityLevel::Low);
+
+        controller.reset_for_new_content();
+
+        assert_eq!(controller.current_level(), QualityLevel::Low);
     }
 }
