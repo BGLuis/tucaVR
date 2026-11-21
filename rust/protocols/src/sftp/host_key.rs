@@ -63,6 +63,17 @@ pub fn compute_fingerprint(key: &PublicKeyOrCertificate) -> String {
     }
 }
 
+/// SSH algorithm name of the key behind [`compute_fingerprint`] (e.g. `ssh-ed25519`), shown next
+/// to the fingerprint so the user can compare both against `ssh-keygen -lf` on the server.
+pub fn key_type(key: &PublicKeyOrCertificate) -> String {
+    match key {
+        PublicKeyOrCertificate::PublicKey { key, .. } => key.algorithm().as_str().to_string(),
+        PublicKeyOrCertificate::Certificate(cert) => {
+            cert.public_key().algorithm().as_str().to_string()
+        }
+    }
+}
+
 /// Compares the expected host key fingerprint (if any) against the actual fingerprint.
 ///
 /// - If `expected_fingerprint` matches `actual_fingerprint`, returns `Ok(())`.
@@ -116,6 +127,12 @@ mod tests {
         let public_key: PublicKeyOrCertificate = pk.into();
         let expected_fp = compute_fingerprint(&public_key);
         (public_key, expected_fp)
+    }
+
+    #[test]
+    fn key_type_names_the_ssh_algorithm() {
+        let (key, _) = test_key_and_fingerprint();
+        assert_eq!(key_type(&key), "ssh-ed25519");
     }
 
     #[test]

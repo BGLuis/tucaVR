@@ -202,6 +202,7 @@ class VRModalPresentation(
         message: String,
         confirmText: String = context.getString(R.string.network_delete_server_confirm),
         cancelText: String = context.getString(R.string.network_delete_server_cancel),
+        onCancel: () -> Unit = {},
         onConfirm: () -> Unit,
     ) {
         val modal =
@@ -215,7 +216,10 @@ class VRModalPresentation(
                     dismissModal()
                     onConfirm()
                 },
-                onDismiss = { dismissModal() },
+                onDismiss = {
+                    dismissModal()
+                    onCancel()
+                },
             )
         showModal(modal)
     }

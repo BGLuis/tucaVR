@@ -384,6 +384,15 @@
     <string name="network_sftp_form_status_connecting">Connecting…</string>
     <string name="network_sftp_form_status_error_format">Failed: %1$s</string>
     <string name="network_sftp_form_status_connected">Connected</string>
+    <string name="network_sftp_trust_title">Trust this server?</string>
+    <string name="network_sftp_trust_message">This is the first connection to %1$s. Compare this fingerprint with the server\'s own (ssh-keygen -lf on the server); once trusted, it is saved and checked on every connection.\n\n%2$s · %3$s</string>
+    <string name="network_sftp_trust_confirm">Trust and connect</string>
+    <string name="network_sftp_trust_cancel">Cancel</string>
+    <string name="network_sftp_trust_canceled">Server not trusted. Nothing was saved.</string>
+    <string name="network_sftp_host_key_changed">The server identity changed. If you expected it (reinstalled or recreated server), edit the server, forget its host key and connect again.</string>
+    <string name="network_sftp_pinned_host_key_format">Trusted host key: %1$s</string>
+    <string name="network_sftp_forget_host_key">Forget host key</string>
+    <string name="network_sftp_host_key_forgotten">Host key forgotten. The next connection will ask you to trust the server again.</string>
 
     <!-- T5.4: Network: NFS tab -->
     <string name="network_nfs_saved_servers_header">Saved servers</string>

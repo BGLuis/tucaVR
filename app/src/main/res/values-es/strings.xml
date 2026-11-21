@@ -375,6 +375,15 @@
     <string name="network_sftp_form_status_connecting">Conectando…</string>
     <string name="network_sftp_form_status_error_format">Error: %1$s</string>
     <string name="network_sftp_form_status_connected">Conectado</string>
+    <string name="network_sftp_trust_title">¿Confiar en este servidor?</string>
+    <string name="network_sftp_trust_message">Es la primera conexión con %1$s. Compara esta huella digital con la del servidor (ssh-keygen -lf en el servidor); una vez confiada, se guarda y se comprueba en cada conexión.\n\n%2$s · %3$s</string>
+    <string name="network_sftp_trust_confirm">Confiar y conectar</string>
+    <string name="network_sftp_trust_cancel">Cancelar</string>
+    <string name="network_sftp_trust_canceled">Servidor no confiado. No se guardó nada.</string>
+    <string name="network_sftp_host_key_changed">La identidad del servidor cambió. Si lo esperabas (servidor reinstalado o recreado), edita el servidor, olvida su clave y vuelve a conectar.</string>
+    <string name="network_sftp_pinned_host_key_format">Clave de confianza del servidor: %1$s</string>
+    <string name="network_sftp_forget_host_key">Olvidar clave del servidor</string>
+    <string name="network_sftp_host_key_forgotten">Clave olvidada. La próxima conexión te pedirá confiar en el servidor de nuevo.</string>
 
     <!-- T5.4: Rede: aba NFS -->
     <string name="network_nfs_saved_servers_header">Servidores guardados</string>

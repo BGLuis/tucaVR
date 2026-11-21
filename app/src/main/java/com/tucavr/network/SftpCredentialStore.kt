@@ -86,6 +86,22 @@ class SftpCredentialStore(
         }
     }
 
+    /**
+     * Pins [fingerprint] for a saved server, or forgets the pinned one when null so the next
+     * connection asks the user to trust the server again (#223). Password and key are kept.
+     */
+    fun setHostKeyFingerprint(
+        id: String,
+        fingerprint: String?,
+    ) {
+        credentials.saveCredentials(
+            id,
+            password = credentials.getPassword(id),
+            privateKey = credentials.getPrivateKey(id),
+            hostKeyFingerprint = fingerprint,
+        )
+    }
+
     fun remove(id: String) {
         runBlocking(Dispatchers.IO) {
             try {
