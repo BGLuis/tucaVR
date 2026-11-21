@@ -25,10 +25,11 @@
 //!    limitacao era o principal suspeito da degradacao de throughput
 //!    observada em SFTP sob 8K60 e foi corrigida aqui.
 //!
-//! Um seek para fora do bloco atual E do bloco em pre-busca invalida o
-//! prefetch em voo (o resultado e apenas descartado quando chega — nao ha
-//! cancelamento cooperativo real de uma leitura de rede ja em andamento, so
-//! do PROXIMO passo do worker). Ver `PrefetchReader::ensure_cache`.
+//! Besides the current block, the last `MAX_CACHED_BLOCKS - 1` blocks stay cached (LRU), so a
+//! demuxer alternating between distant regions (audio and video of a non-interleaved MP4) is
+//! served from memory instead of refetching. A seek outside every cached block waits for the
+//! in-flight prefetch (there is no cooperative cancellation of a network read already under way)
+//! and keeps its block in that LRU. See `PrefetchReader::ensure_cache`.
 //!
 //! O primeiro bloco pos-seek (miss nao-sequencial, sincrono) usa
 //! `seek_block_size` em vez do `block_size` cheio — blocos seguintes
@@ -45,6 +46,7 @@
 //! arrastando a barra) para de pagar por um prefetch que o proximo seek so
 //! ia descartar de qualquer forma.
 
+use std::collections::VecDeque;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -82,8 +84,9 @@ pub struct PrefetchStats {
     pub last_fetch_bytes: AtomicU64,
     /// Blocks fetched successfully; failures are counted in `fetch_failures`.
     pub blocks_fetched: AtomicU64,
-    /// Quantos prefetches em voo foram descartados por um seek real (ver
-    /// ensure_cache) — alto = padrao de acesso pouco sequencial.
+    /// In-flight prefetches that a non-sequential miss had to wait out without them covering the
+    /// requested offset (see ensure_cache); the block itself stays cached. High = little
+    /// sequential access.
     pub blocks_discarded: AtomicU64,
     /// F4: falhas de fetch
     /// (io::Error do RangeSource) — antes so logadas (log::warn!), nunca contadas.
@@ -191,10 +194,23 @@ const DEFAULT_BLOCK_SIZE: usize = 4 * 1024 * 1024;
 // 1MB: pequeno o bastante pro primeiro round-trip pos-seek nao travar perceptivelmente.
 const DEFAULT_SEEK_BLOCK_SIZE: usize = 1024 * 1024;
 
+// The demuxer alternates between regions that can sit hundreds of MB apart: an MP4 that is not
+// interleaved keeps all audio samples together and the video far away from them. With a single
+// cached block every audio<->video hop was a synchronous refetch of a block already read moments
+// before (~20x traffic amplification measured on an 8K60 SFTP file). Four blocks cover one region
+// per stream plus the moov/cues index; at the 12MB playback block size that is <= 48MB resident.
+const MAX_CACHED_BLOCKS: usize = 4;
+
 struct Block {
     start: u64,
     data: Vec<u8>,
     len: usize,
+}
+
+impl Block {
+    fn contains(&self, pos: u64) -> bool {
+        self.len > 0 && pos >= self.start && pos < self.start + self.len as u64
+    }
 }
 
 enum Command {
@@ -215,6 +231,8 @@ pub struct PrefetchReader<S: RangeSource> {
     cache: Vec<u8>,
     cache_start: u64,
     cache_len: usize,
+    /// Blocks used before the current one, most recent first; at most `MAX_CACHED_BLOCKS - 1`.
+    retained: VecDeque<Block>,
     cmd_tx: Sender<Command>,
     result_rx: Receiver<FetchResult>,
     /// Offset do bloco cuja busca em background foi disparada e ainda nao
@@ -307,6 +325,7 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
             cache: Vec::new(),
             cache_start: 0,
             cache_len: 0,
+            retained: VecDeque::new(),
             cmd_tx,
             result_rx,
             pending_start: None,
@@ -412,9 +431,27 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
     }
 
     fn install(&mut self, block: Block) {
+        let previous = Block {
+            start: self.cache_start,
+            data: std::mem::replace(&mut self.cache, block.data),
+            len: self.cache_len,
+        };
         self.cache_start = block.start;
         self.cache_len = block.len;
-        self.cache = block.data;
+        if previous.len > 0 {
+            self.retained.push_front(previous);
+            self.retained.truncate(MAX_CACHED_BLOCKS - 1);
+        }
+    }
+
+    fn activate_retained(&mut self, pos: u64) -> bool {
+        let Some(index) = self.retained.iter().position(|b| b.contains(pos)) else {
+            return false;
+        };
+        if let Some(block) = self.retained.remove(index) {
+            self.install(block);
+        }
+        true
     }
 
     /// Garante que o bloco contendo `pos` esta em `self.cache`, buscando-o
@@ -430,6 +467,12 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
             if self.pending_start.is_none() && self.cache_len > 0 {
                 self.kick_prefetch(self.cache_start + self.cache_len as u64);
             }
+            return Ok(());
+        }
+
+        // Jumping back to a region read moments ago (the other stream of a non-interleaved file)
+        // must neither refetch it nor cancel the read-ahead in flight for the region it left.
+        if self.activate_retained(pos) {
             return Ok(());
         }
 
@@ -451,8 +494,18 @@ impl<S: RangeSource + 'static> PrefetchReader<S> {
             // antes de pedir o bloco certo, para nao deixar uma resposta
             // orfa no canal.
             if self.pending_start.take().is_some() {
+                // The block already crossed the network; keep it, since a jump back to the region
+                // it continues is likely. A failed fetch is dropped: the sync fetch below retries.
+                let pending = self.result_rx.recv().map_err(|_| worker_gone_err())?;
+                if let Ok(block) = pending {
+                    let covers_pos = block.contains(pos);
+                    self.install(block);
+                    if covers_pos {
+                        self.kick_prefetch(self.cache_start + self.cache_len as u64);
+                        return Ok(());
+                    }
+                }
                 self.stats.blocks_discarded.fetch_add(1, Ordering::Relaxed);
-                let _ = self.result_rx.recv();
             }
             self.sequential_streak = 0;
             self.stats.sequential_streak.store(0, Ordering::Relaxed);
@@ -1143,5 +1196,60 @@ mod tests {
         let mut tail = Vec::new();
         reader.read_to_end(&mut tail).unwrap();
         assert_eq!(tail, &data[data.len() - 10..]);
+    }
+
+    // Non-interleaved MP4 (audio and video stored far apart): the demuxer alternates between the
+    // two regions packet by packet. Each region must be fetched once per block, not once per hop.
+    #[test]
+    fn alternating_between_two_regions_does_not_refetch_on_every_hop() {
+        let data: Vec<u8> = (0..251u8).cycle().take(4 * 1024 * 1024).collect();
+        let (source, reads) = instant_source(data.clone(), None);
+        let mut reader = PrefetchReader::with_block_sizes(source, 256 * 1024, 64 * 1024);
+        let video_region = 2 * 1024 * 1024;
+        let hops = 300;
+
+        for i in 0..hops {
+            let audio_at = i * 700;
+            let mut audio = [0u8; 700];
+            reader.seek(SeekFrom::Start(audio_at as u64)).unwrap();
+            reader.read_exact(&mut audio).unwrap();
+            assert_eq!(&audio[..], &data[audio_at..audio_at + 700]);
+
+            let video_at = video_region + i * 5000;
+            let mut video = [0u8; 5000];
+            reader.seek(SeekFrom::Start(video_at as u64)).unwrap();
+            reader.read_exact(&mut video).unwrap();
+            assert_eq!(&video[..], &data[video_at..video_at + 5000]);
+        }
+
+        // ~210KB of audio and ~1.5MB of video span a few dozen blocks at most; a single-block
+        // cache refetched on each of the 600 region switches.
+        let fetched = reads.load(Ordering::SeqCst);
+        assert!(fetched <= 40, "fetches for {} hops: {fetched}", hops * 2);
+    }
+
+    #[test]
+    fn prefetch_drained_by_a_seek_is_reused_when_reading_comes_back() {
+        let block = 64 * 1024;
+        let data: Vec<u8> = (0..251u8).cycle().take(2 * 1024 * 1024).collect();
+        let (source, reads) = instant_source(data.clone(), None);
+        let mut reader = PrefetchReader::with_block_size(source, block);
+
+        // The first read installs block 0 and starts the read-ahead of the next block.
+        reader.read_exact(&mut [0u8; 100]).unwrap();
+        // Seeking far away has to wait for that read-ahead before fetching the new offset.
+        reader.seek(SeekFrom::Start(1024 * 1024)).unwrap();
+        reader.read_exact(&mut [0u8; 100]).unwrap();
+        assert_eq!(reads.load(Ordering::SeqCst), 3);
+
+        reader.seek(SeekFrom::Start(block as u64)).unwrap();
+        let mut out = [0u8; 1000];
+        reader.read_exact(&mut out).unwrap();
+        assert_eq!(&out[..], &data[block..block + 1000]);
+        assert_eq!(
+            reads.load(Ordering::SeqCst),
+            3,
+            "the read-ahead block was already fetched and must not be fetched again"
+        );
     }
 }
