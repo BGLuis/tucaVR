@@ -155,11 +155,11 @@ pub fn parse_multistatus_xml<R: io::BufRead>(
                             current_content_length = Some(len);
                         }
                     } else if current_tag.eq_ignore_ascii_case(b"getlastmodified") && in_propstat {
-                        let trimmed = text.trim();
-                        if let Ok(dt) = chrono::DateTime::parse_from_rfc2822(trimmed)
-                            .or_else(|_| chrono::DateTime::parse_from_rfc3339(trimmed))
+                        if let Some(secs) = httpdate::parse_http_date(text.trim())
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                         {
-                            current_last_modified = dt.timestamp();
+                            current_last_modified = secs.as_secs() as i64;
                         }
                     } else if current_tag.eq_ignore_ascii_case(b"status") && in_propstat {
                         current_status = text.to_string();

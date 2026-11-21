@@ -2233,8 +2233,8 @@ name = "protocols"
 version = "0.1.0"
 dependencies = [
  "aes",
- "chrono",
  "futures-util",
+ "httpdate",
  "httpmock",
  "libc",
  "log",

@@ -3,6 +3,10 @@
 
 [advisories]
 yanked = "warn"
+# Unmaintained crates fail the check only when a workspace crate depends on them directly.
+# chrono (RUSTSEC-2026-0543) still arrives through russh, russh-sftp and suppaftp, which
+# we cannot swap out; vulnerability advisories keep failing regardless of this scope.
+unmaintained = "workspace"
 ignore = [
     { id = "RUSTSEC-2023-0071", reason = "rsa timing side channel (Marvin); pulled in by russh/ssh-key and no fixed release exists" },
     { id = "RUSTSEC-2026-0194", reason = "quick-xml 0.37 DoS; the fix needs 0.41, which moves entity handling to Event::GeneralRef and requires reworking the DASH/DLNA/WebDAV parsers (tracked as follow-up)" },

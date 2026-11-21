@@ -49,8 +49,8 @@ quick-xml = "0.42"
 aes = "0.9"
 # Codificação de paths para WebDAV (T3.1)
 percent-encoding = "2.3"
-# Parsing de RFC 2822 / getlastmodified para WebDAV (T3.1 / #142)
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# Parsing of the WebDAV getlastmodified HTTP-date (RFC 4918 section 15.7) (T3.1 / #142)
+httpdate = "1.0"
 # Backoff com jitter compartilhado entre demux (core) e retry por chunk
 # (SMB/HTTP/FTP aqui) — logica pura, zero dependencia de Android/rede, ver
 # rust/media-logic/src/retry_backoff.rs.
