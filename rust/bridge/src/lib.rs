@@ -506,6 +506,20 @@ pub extern "C" fn evaluate_upscaling_ffi(
 static QUALITY_CONTROLLER: Lazy<Mutex<media_logic::quality::QualityController>> =
     Lazy::new(|| Mutex::new(media_logic::quality::QualityController::new()));
 
+/// Lets the governor pick a display refresh rate that is a whole multiple of the video's
+/// frame rate; 0.0 means unknown.
+fn set_quality_content_fps(fps: f32) {
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        qc.set_content_fps(fps);
+    }
+}
+
+fn reset_quality_for_new_video() {
+    if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
+        qc.reset_for_new_content();
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn quality_controller_set_enabled(enabled: u32) {
     if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
@@ -1323,6 +1337,7 @@ pub extern "C" fn start_smb_playback(
         }
 
         reset_3d_mode();
+        reset_quality_for_new_video();
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
@@ -1332,8 +1347,10 @@ pub extern "C" fn start_smb_playback(
                     log(6, &format!("Error loading SMB video: {:?}", e));
                 }
                 set_last_playback_error(format!("{:?}", e));
+                set_quality_content_fps(0.0);
             } else {
                 apply_screen_mode_after_load(&controller);
+                set_quality_content_fps(controller.video_fps());
                 unsafe {
                     log(4, "SMB video loaded successfully!");
                 }
@@ -1535,6 +1552,7 @@ pub extern "C" fn start_ftp_playback(
         }
 
         reset_3d_mode();
+        reset_quality_for_new_video();
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
@@ -1544,8 +1562,10 @@ pub extern "C" fn start_ftp_playback(
                     log(6, &format!("Error loading FTP video: {:?}", e));
                 }
                 set_last_playback_error(format!("{:?}", e));
+                set_quality_content_fps(0.0);
             } else {
                 apply_screen_mode_after_load(&controller);
+                set_quality_content_fps(controller.video_fps());
                 unsafe {
                     log(4, "FTP video loaded successfully!");
                 }
@@ -1701,6 +1721,7 @@ pub extern "C" fn start_sftp_playback(
         }
 
         reset_3d_mode();
+        reset_quality_for_new_video();
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
@@ -1710,8 +1731,10 @@ pub extern "C" fn start_sftp_playback(
                     log(6, &format!("Error loading SFTP video: {:?}", e));
                 }
                 set_last_playback_error(format!("{:?}", e));
+                set_quality_content_fps(0.0);
             } else {
                 apply_screen_mode_after_load(&controller);
+                set_quality_content_fps(controller.video_fps());
                 unsafe {
                     log(4, "SFTP video loaded successfully!");
                 }
@@ -1920,6 +1943,7 @@ pub extern "C" fn start_nfs_playback(
         }
 
         reset_3d_mode();
+        reset_quality_for_new_video();
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
@@ -1929,8 +1953,10 @@ pub extern "C" fn start_nfs_playback(
                     log(6, &format!("Error loading NFS video: {:?}", e));
                 }
                 set_last_playback_error(format!("{:?}", e));
+                set_quality_content_fps(0.0);
             } else {
                 apply_screen_mode_after_load(&controller);
+                set_quality_content_fps(controller.video_fps());
                 unsafe {
                     log(4, "NFS video loaded successfully!");
                 }
@@ -2098,6 +2124,7 @@ pub extern "C" fn start_webdav_playback(
         }
 
         reset_3d_mode();
+        reset_quality_for_new_video();
         DOWNLOAD_MANAGER.set_playback_active(true);
         if let Ok(mut controller) = CONTROLLER.lock() {
             controller.stop();
@@ -2107,8 +2134,10 @@ pub extern "C" fn start_webdav_playback(
                     log(6, &format!("Error loading WebDAV video: {:?}", e));
                 }
                 set_last_playback_error(format!("{:?}", e));
+                set_quality_content_fps(0.0);
             } else {
                 apply_screen_mode_after_load(&controller);
+                set_quality_content_fps(controller.video_fps());
                 unsafe {
                     log(4, "WebDAV video loaded successfully!");
                 }
@@ -2430,6 +2459,7 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
         }
 
         reset_3d_mode();
+        reset_quality_for_new_video();
         if path_str.starts_with("http://") || path_str.starts_with("https://") {
             DOWNLOAD_MANAGER.set_playback_active(true);
         }
@@ -2441,14 +2471,10 @@ pub extern "C" fn start_video_playback(path: *const std::os::raw::c_char, start_
                     log(6, &format!("Error loading video: {:?}", e));
                 }
                 set_last_playback_error(format!("{:?}", e));
-                if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
-                    qc.set_content_fps(0.0);
-                }
+                set_quality_content_fps(0.0);
             } else {
                 apply_screen_mode_after_load(&controller);
-                if let Ok(mut qc) = QUALITY_CONTROLLER.lock() {
-                    qc.set_content_fps(controller.video_fps());
-                }
+                set_quality_content_fps(controller.video_fps());
                 unsafe {
                     log(4, "Video loaded successfully!");
                 }

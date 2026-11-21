@@ -296,6 +296,18 @@ impl QualityController {
         self.stable_healthy_samples = 0;
     }
 
+    /// Starts a new video from the default level. A degradation earned by the previous file
+    /// says nothing about the next one, which would otherwise spend ~30 s per level recovering.
+    /// With adaptive mode off the level is the user's choice and stays.
+    pub fn reset_for_new_content(&mut self) {
+        if !self.enabled {
+            return;
+        }
+        self.current_level = QualityLevel::High;
+        self.last_reason = QualityTransitionReason::None;
+        self.reset_counters();
+    }
+
     /// Avalia a amostra de performance e atualiza o estado interno do controlador.
     pub fn evaluate(&mut self, sample: &QualitySample) -> QualityAction {
         if !self.enabled {
@@ -341,8 +353,15 @@ impl QualityController {
             return QualityAction::Degrade(self.current_level, self.last_reason);
         }
 
+        // Video frames are also dropped when the hardware decoder cannot keep up with the
+        // stream's bitrate. With GPU time and compositor pacing both inside their healthy
+        // budgets the renderer is not the cause, and lowering render scale or refresh rate
+        // would only cost image quality, so drops count against rendering only otherwise.
+        let render_has_headroom = sample.frame_time_ms < pacing_healthy_ms
+            && sample.smoothed_gpu_time_ms < gpu_healthy_ms;
+
         // 2. Verificação de Descarte Severo de Frames:
-        if sample.dropped_fps >= Self::DROPPED_FPS_STRESS_THRESHOLD {
+        if sample.dropped_fps >= Self::DROPPED_FPS_STRESS_THRESHOLD && !render_has_headroom {
             self.dropped_fps_stress_count += 1;
             self.stable_healthy_samples = 0;
             if self.dropped_fps_stress_count >= Self::DROPPED_FPS_STRESS_THRESHOLD_SAMPLES
@@ -400,10 +419,7 @@ impl QualityController {
             QualityLevel::High | QualityLevel::Ultra => sample.thermal_level <= 1,
         };
 
-        let is_healthy = is_thermal_permitting_upgrade
-            && sample.dropped_fps < 0.5f32
-            && sample.frame_time_ms < pacing_healthy_ms
-            && sample.smoothed_gpu_time_ms < gpu_healthy_ms;
+        let is_healthy = is_thermal_permitting_upgrade && render_has_headroom;
 
         if is_healthy {
             self.stable_healthy_samples += 1;
@@ -416,10 +432,7 @@ impl QualityController {
                 self.reset_counters();
                 return QualityAction::Upgrade(self.current_level, self.last_reason);
             }
-        } else if sample.smoothed_gpu_time_ms > gpu_healthy_ms
-            || sample.frame_time_ms > pacing_healthy_ms
-            || sample.dropped_fps >= 0.5f32
-        {
+        } else if !render_has_headroom {
             // Condição marginal ou estresse: reinicia o acúmulo de estabilidade para evitar flapping
             self.stable_healthy_samples = 0;
         }
@@ -594,9 +607,10 @@ mod tests {
         let mut controller = QualityController::new();
         assert_eq!(controller.current_level(), QualityLevel::High);
 
+        // Marginal GPU (above gpu_healthy_ms, below gpu_budget_ms): drops count as render stress.
         let sample_drop = QualitySample {
             thermal_level: 0,
-            smoothed_gpu_time_ms: 6.0,
+            smoothed_gpu_time_ms: 8.0,
             frame_time_ms: 11.0,
             dropped_fps: 4.5,
             target_fps: 90.0,
@@ -633,6 +647,7 @@ mod tests {
             target_fps: 90.0,
         };
         let sample_spike = QualitySample {
+            smoothed_gpu_time_ms: 8.0,
             dropped_fps: 56.0,
             ..sample_healthy
         };
@@ -658,7 +673,7 @@ mod tests {
         let mut controller = QualityController::new();
         let sample_drop = QualitySample {
             thermal_level: 0,
-            smoothed_gpu_time_ms: 6.0,
+            smoothed_gpu_time_ms: 8.0,
             frame_time_ms: 11.0,
             dropped_fps: 5.0,
             target_fps: 90.0,
@@ -921,5 +936,84 @@ mod tests {
         // Low/Emergency ceiling is 72 -> 120 exceeds ceiling, falls back to target_fps (72)
         assert_eq!(qc.target_refresh_rate(QualityLevel::Low), 72.0);
         assert_eq!(qc.target_refresh_rate(QualityLevel::Emergency), 72.0);
+    }
+
+    // Telemetry of an 8192x4096 HEVC Main 10 file at ~122 Mbps on Quest 3: the hardware decoder
+    // delivered ~47 of 60 fps while the GPU took ~1.9 ms of an 11.1 ms frame. Lowering render
+    // scale or refresh rate cannot help a decoder-bound stream.
+    fn decode_bound_sample() -> QualitySample {
+        QualitySample {
+            thermal_level: 0,
+            smoothed_gpu_time_ms: 1.9,
+            frame_time_ms: 1000.0 / 90.0,
+            dropped_fps: 11.0,
+            target_fps: 90.0,
+        }
+    }
+
+    #[test]
+    fn test_dropped_frames_with_render_headroom_do_not_degrade() {
+        let mut controller = QualityController::new();
+
+        for i in 0..20 {
+            assert_eq!(
+                controller.evaluate(&decode_bound_sample()),
+                QualityAction::Maintain,
+                "sample {i}: decoder-bound drops must not lower render quality"
+            );
+        }
+        assert_eq!(controller.current_level(), QualityLevel::High);
+    }
+
+    #[test]
+    fn test_dropped_frames_with_render_headroom_do_not_block_recovery() {
+        let mut controller = QualityController::new();
+        controller.set_manual_level(QualityLevel::Medium);
+
+        let actions: Vec<_> = (0..QualityController::UPGRADE_STABILITY_REQUIRED_SAMPLES)
+            .map(|_| controller.evaluate(&decode_bound_sample()))
+            .collect();
+
+        assert_eq!(
+            actions.last(),
+            Some(&QualityAction::Upgrade(
+                QualityLevel::High,
+                QualityTransitionReason::StableRecovery
+            ))
+        );
+    }
+
+    #[test]
+    fn test_reset_for_new_content_drops_previous_video_degradation() {
+        let mut controller = QualityController::new();
+        let gpu_overload = QualitySample {
+            thermal_level: 0,
+            smoothed_gpu_time_ms: 10.5,
+            frame_time_ms: 1000.0 / 90.0,
+            dropped_fps: 0.0,
+            target_fps: 90.0,
+        };
+        controller.evaluate(&gpu_overload);
+        controller.evaluate(&gpu_overload);
+        assert_eq!(controller.current_level(), QualityLevel::Medium);
+        // One stress sample pending: without a counter reset, the next one would degrade at once.
+        controller.evaluate(&gpu_overload);
+
+        controller.reset_for_new_content();
+
+        assert_eq!(controller.current_level(), QualityLevel::High);
+        assert_eq!(controller.last_reason(), QualityTransitionReason::None);
+        assert_eq!(controller.evaluate(&gpu_overload), QualityAction::Maintain);
+    }
+
+    #[test]
+    fn test_reset_for_new_content_keeps_level_when_adaptive_mode_is_off() {
+        let mut controller = QualityController::new();
+        controller.set_enabled(false);
+        controller.set_manual_level(QualityLevel::Low);
+
+        controller.reset_for_new_content();
+
+        assert_eq!(controller.current_level(), QualityLevel::Low);
     }
 }
