@@ -647,6 +647,13 @@ impl PlaybackController {
         format.set_i32("max-input-size", max_input_size);
         // Prioridade de decodificação realtime (0 = realtime / baixa latência)
         format.set_i32("priority", 0);
+        // With realtime priority the codec sizes its clocks and bandwidth from the frame rate
+        // (MediaFormat KEY_FRAME_RATE / KEY_OPERATING_RATE). Without it, an 8192x4096 HEVC
+        // stream at ~122 Mbps decoded at ~47-57 of 60 fps on Quest 3.
+        if video_fps > 0.0 {
+            format.set_f32("frame-rate", video_fps);
+            format.set_f32("operating-rate", video_fps);
+        }
 
         // Repassa ao MediaCodec o espaco de cor declarado pelo container: o
         // dataspace do buffer decodificado vira o `suggestedYcbcrModel/Range`
