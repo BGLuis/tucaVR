@@ -1,6 +1,7 @@
 package com.tucavr
 
 import android.content.Context
+import android.content.SharedPreferences
 
 /**
  * Feature flags simples via `SharedPreferences` (mesmo padrao de
@@ -463,4 +464,49 @@ object FeatureFlags {
             .putString(KEY_PLAYBACK_RESUME_POLICY, policy.name)
             .apply()
     }
+
+    enum class DominantHandMode(val id: Int) {
+        AUTO(0),
+        RIGHT(1),
+        LEFT(2),
+        ;
+
+        companion object {
+            fun fromId(id: Int): DominantHandMode = entries.firstOrNull { it.id == id } ?: AUTO
+        }
+    }
+
+    const val KEY_DOMINANT_HAND_MODE = "dominant_hand_mode"
+
+    fun getDominantHandMode(prefs: SharedPreferences): DominantHandMode =
+        DominantHandMode.fromId(prefs.getInt(KEY_DOMINANT_HAND_MODE, DominantHandMode.AUTO.id))
+
+    fun getDominantHandMode(context: Context): DominantHandMode =
+        getDominantHandMode(context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE))
+
+    fun setDominantHandMode(
+        prefs: SharedPreferences,
+        mode: DominantHandMode,
+    ) {
+        prefs.edit().putInt(KEY_DOMINANT_HAND_MODE, mode.id).apply()
+    }
+
+    fun setDominantHandMode(
+        context: Context,
+        mode: DominantHandMode,
+    ) {
+        setDominantHandMode(context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE), mode)
+    }
+
+    /** Restores all FeatureFlags preferences to their built-in defaults. */
+    fun resetAll(prefs: SharedPreferences) {
+        prefs.edit().clear().apply()
+    }
+
+    /** Restores all FeatureFlags preferences to their built-in defaults. */
+    fun resetAll(context: Context) {
+        resetAll(context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE))
+    }
+
+    fun sharedPreferences(context: Context): SharedPreferences = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
 }

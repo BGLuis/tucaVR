@@ -885,4 +885,44 @@
     <!-- Startup intro -->
     <string name="intro_skip_hint">Pulsa el gatillo o pellizca para omitir</string>
 
+    <!-- Issue #67: Missing unified settings sections -->
+    <string name="settings_dominant_hand_label">Mano Dominante</string>
+    <string name="settings_dominant_hand_desc">Elige qué mando o mano rastreada dirige el rayo apuntador. Automático cambia a la mano que pulse el gatillo o haga pellizco.</string>
+    <string name="settings_dominant_hand_auto">Automático</string>
+    <string name="settings_dominant_hand_right">Derecha</string>
+    <string name="settings_dominant_hand_left">Izquierda</string>
+    <string name="settings_section_accessibility">Accesibilidad</string>
+    <string name="settings_accessibility_desc">Herramientas de confort, restablecimiento de posición de pantalla y guía de IPD.</string>
+    <string name="settings_reset_screen_label">Restablecer Posición de Pantalla</string>
+    <string name="settings_reset_screen_desc">Restaura la pantalla virtual a la posición y tamaño predeterminados del entorno activo.</string>
+    <string name="settings_reset_screen_button">Restablecer Posición</string>
+    <string name="settings_reset_screen_done">Posición de pantalla restaurada a los valores del entorno.</string>
+    <string name="settings_ipd_hint_label">IPD y Confort Visual</string>
+    <string name="settings_ipd_hint_desc">Para obtener la imagen 3D más nítida y menor fatiga visual, ajusta la rueda física de distancia entre lentes (IPD) en el borde inferior izquierdo de tu Quest 3 hasta que el texto se vea claro.</string>
+    <string name="settings_section_language">Idioma</string>
+    <string name="settings_language_desc">Anula el idioma de la interfaz y el idioma preferido de subtítulos independientemente del idioma del sistema.</string>
+    <string name="settings_language_label">Idioma de la Aplicación</string>
+    <string name="settings_language_auto">Automático</string>
+    <string name="settings_language_pt_br">Português (BR)</string>
+    <string name="settings_language_en">English</string>
+    <string name="settings_language_es">Español</string>
+    <string name="settings_language_preview_title">Vista Previa en Vivo</string>
+    <string name="settings_language_preview_sample_format">%1$s · %2$s · %3$s · %4$s · %5$s</string>
+    <string name="settings_section_network">Red</string>
+    <string name="settings_network_desc">Tiempo de espera predeterminado de conexión para fuentes remotas y servidores SFTP de confianza.</string>
+    <string name="settings_network_timeout_label">Tiempo de Espera de Conexión</string>
+    <string name="settings_network_timeout_desc">Tiempo máximo de espera al conectar con servidores SMB, SFTP, FTP, NFS, WebDAV y HTTP(S).</string>
+    <string name="settings_network_timeout_seconds_format">%1$ds</string>
+    <string name="settings_network_trusted_sftp_title">Servidores SFTP de Confianza</string>
+    <string name="settings_network_trusted_sftp_desc">Servidores cuya huella de clave SSH fue verificada y fijada en la primera conexión.</string>
+    <string name="settings_network_trusted_sftp_empty">Aún no hay servidores SFTP de confianza guardados.</string>
+    <string name="settings_network_trusted_sftp_host_format">%1$s:%2$d</string>
+    <string name="settings_network_trusted_sftp_forget">Olvidar</string>
+    <string name="settings_restore_defaults_title">Restablecer Ajustes</string>
+    <string name="settings_restore_defaults_desc">Restaura todas las preferencias de vídeo, iluminación, audio, controles, idioma y tiempo de espera de red a sus valores predeterminados. Los servidores guardados, credenciales, listas e historial se conservan.</string>
+    <string name="settings_restore_defaults_button">Restaurar Valores</string>
+    <string name="settings_restore_defaults_confirm_title">¿Restaurar valores predeterminados?</string>
+    <string name="settings_restore_defaults_confirm_message">Todas las preferencias (vídeo, iluminación, audio, controles, idioma y tiempo de espera de red) volverán a los valores de fábrica. Los servidores guardados, contraseñas e historial no se eliminarán.</string>
+    <string name="settings_restore_defaults_confirm_action">Restaurar</string>
+
 </resources>

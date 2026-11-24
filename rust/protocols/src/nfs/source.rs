@@ -4,9 +4,6 @@ use super::client::NfsClient;
 use super::uri::NfsTarget;
 use crate::prefetch::RangeSource;
 use std::io;
-use std::time::Duration;
-
-const NFS_TIMEOUT: Duration = Duration::from_secs(10);
 
 pub struct NfsFileSource {
     target: NfsTarget,
@@ -19,8 +16,12 @@ pub struct NfsFileSource {
 
 impl NfsFileSource {
     pub fn open(target: &NfsTarget) -> Result<Self, String> {
-        let (mut client, root_handle) =
-            NfsClient::open_export(&target.host, target.port, &target.export_path, NFS_TIMEOUT)?;
+        let (mut client, root_handle) = NfsClient::open_export(
+            &target.host,
+            target.port,
+            &target.export_path,
+            crate::connect_timeout(),
+        )?;
         let (file_handle, file_size, is_dir) =
             client.resolve_path(&root_handle, &target.file_path)?;
 
@@ -47,7 +48,7 @@ impl NfsFileSource {
             &self.target.host,
             self.target.port,
             &self.target.export_path,
-            NFS_TIMEOUT,
+            crate::connect_timeout(),
         )?;
         let (file_handle, file_size, _) =
             client.resolve_path(&root_handle, &self.target.file_path)?;

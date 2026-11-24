@@ -3943,3 +3943,19 @@ pub extern "C" fn copy_video_lut_rgba8(
         -1
     }
 }
+
+// ---------------------------------------------------------------------------
+// Network connection timeout configuration
+// ---------------------------------------------------------------------------
+
+/// Configures the global network connection/request timeout in seconds.
+#[no_mangle]
+pub extern "C" fn set_network_connect_timeout_secs(secs: u32) {
+    protocols::set_connect_timeout_secs(secs as u64);
+}
+
+/// Returns the configured global network connection/request timeout in seconds.
+#[no_mangle]
+pub extern "C" fn get_network_connect_timeout_secs() -> u32 {
+    protocols::get_connect_timeout_secs() as u32
+}

@@ -19,6 +19,7 @@
 #include <mutex>
 #include "vr_player_ambient.h"
 #include "color_grading.h"
+#include "dominant_hand.h"
 
 extern std::string g_sessionId;
 extern std::mutex g_sessionIdMutex;
@@ -256,6 +257,7 @@ extern "C" {
                                        const char* password, int32_t use_https,
                                        int32_t accept_invalid_certs);
     extern void set_desired_audio_track(uint32_t ordinal);
+    extern void set_network_connect_timeout_secs(uint32_t secs);
 }
 
 // Captura de frame no caminho Vulkan (coordenada com loop de render em vr_player_app_vulkan.cpp).
@@ -690,6 +692,7 @@ Java_com_tucavr_VRActivity_nativeGetFoveationMode(JNIEnv*, jobject) {
 
 extern std::atomic<bool> g_resetScreenPositionRequested;
 extern std::atomic<bool> g_bedModeEnabled;
+extern std::atomic<int32_t> g_dominantHandMode;
 extern std::atomic<bool> g_recenterRequested;
 extern std::atomic<float> g_screenCurvature;
 extern std::atomic<bool> g_screenCurvatureDirty;
@@ -801,6 +804,16 @@ Java_com_tucavr_VRActivity_nativeSetBedMode(JNIEnv*, jobject, jboolean enabled) 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_tucavr_VRActivity_nativeGetBedMode(JNIEnv*, jobject) {
     return g_bedModeEnabled.load() ? JNI_TRUE : JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetDominantHand(JNIEnv*, jobject, jint mode) {
+    g_dominantHandMode.store(static_cast<int32_t>(vrplayer::SanitizeDominantHandMode(static_cast<int32_t>(mode))));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetNetworkConnectTimeoutSecs(JNIEnv*, jobject, jint secs) {
+    set_network_connect_timeout_secs(static_cast<uint32_t>(secs < 0 ? 0 : secs));
 }
 
 extern "C" JNIEXPORT void JNICALL

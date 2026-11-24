@@ -52,8 +52,6 @@ use suppaftp::list::{File as FtpListFile, ListParser};
 use suppaftp::types::FileType;
 use suppaftp::{FtpStream, Mode};
 
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
-
 /// Paridade com `SFTP_CHUNK_RETRY_ATTEMPTS`/`SMB_CHUNK_RETRY_ATTEMPTS`/
 /// `HTTP_CHUNK_RETRY_ATTEMPTS` (ver `crate::sftp`/`crate::smb`/`crate::http`) —
 /// mas aqui vira "retry da leitura inteira apos reconectar", nao "retry de um
@@ -88,7 +86,7 @@ fn resolve(host: &str, port: u16) -> io::Result<std::net::SocketAddr> {
 fn connect_and_login(t: &FtpTarget) -> Result<FtpStream, String> {
     let addr = resolve(&t.host, t.port).map_err(|e| e.to_string())?;
     let mut stream =
-        FtpStream::connect_timeout(addr, CONNECT_TIMEOUT).map_err(|e| e.to_string())?;
+        FtpStream::connect_timeout(addr, crate::connect_timeout()).map_err(|e| e.to_string())?;
     // T6.1: modo passivo obrigatorio — ver comentario no topo do arquivo.
     stream.set_mode(Mode::Passive);
     if t.username.is_empty() {

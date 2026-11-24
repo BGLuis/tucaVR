@@ -74,7 +74,7 @@
             android:exported="true"
             android:excludeFromRecents="true"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
-            android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode"
+            android:configChanges="density|keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|uiMode|locale|layoutDirection"
             android:launchMode="singleTask"
             android:screenOrientation="landscape"
             android:resizeableActivity="false">

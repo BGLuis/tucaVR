@@ -134,9 +134,6 @@ const SFTP_WINDOW_CHUNKS: usize = 16;
 /// reabrir arquivo) so pra refazer os mesmos ~12MB do zero.
 const SFTP_CHUNK_RETRY_ATTEMPTS: usize = 2;
 
-/// Timeout maximo para handshake TCP e negociacao/autenticacao SSH.
-const SFTP_CONNECT_TIMEOUT: Duration = Duration::from_secs(6);
-
 /// Tempo maximo sem NENHUM chunk da janela concluir antes de tratar como stall
 /// de rede (o chamador reconecta). Mede progresso, nao a duracao de cada
 /// chunk: assim a vazao minima tolerada nao depende do tamanho da janela, e
@@ -242,7 +239,8 @@ async fn connect_and_auth(
     keepalive: bool,
 ) -> Result<client::Handle<SftpHandler>, String> {
     t.validate()?;
-    tokio::time::timeout(SFTP_CONNECT_TIMEOUT, async {
+    let timeout = crate::connect_timeout();
+    tokio::time::timeout(timeout, async {
         let mut session = match connect_nodelay(t, keepalive).await {
             Ok(session) => {
                 log::info!(
@@ -293,7 +291,7 @@ async fn connect_and_auth(
     .map_err(|_| {
         format!(
             "SFTP: timeout de conexao/autenticacao apos {}s",
-            SFTP_CONNECT_TIMEOUT.as_secs()
+            timeout.as_secs()
         )
     })?
 }
@@ -602,17 +600,18 @@ impl SftpFileSource {
     async fn connect_open(
         t: &SftpTarget,
     ) -> Result<(client::Handle<SftpHandler>, RawSftpSession, String, u64), String> {
+        let timeout = crate::connect_timeout();
         let session = connect_and_auth(t, true).await?;
-        let raw = tokio::time::timeout(SFTP_CONNECT_TIMEOUT, open_raw_sftp(&session))
+        let raw = tokio::time::timeout(timeout, open_raw_sftp(&session))
             .await
             .map_err(|_| {
                 format!(
                     "SFTP: timeout ao abrir subsistema SFTP apos {}s",
-                    SFTP_CONNECT_TIMEOUT.as_secs()
+                    timeout.as_secs()
                 )
             })??;
         let handle = tokio::time::timeout(
-            SFTP_CONNECT_TIMEOUT,
+            timeout,
             raw.open(t.path.as_str(), OpenFlags::READ, FileAttributes::empty()),
         )
         .await
@@ -620,7 +619,7 @@ impl SftpFileSource {
             format!(
                 "SFTP: timeout ao abrir arquivo {} apos {}s",
                 t.path,
-                SFTP_CONNECT_TIMEOUT.as_secs()
+                timeout.as_secs()
             )
         })?
         .map_err(|e| {
@@ -628,13 +627,13 @@ impl SftpFileSource {
             e.to_string()
         })?
         .handle;
-        let size = tokio::time::timeout(SFTP_CONNECT_TIMEOUT, raw.fstat(handle.as_str()))
+        let size = tokio::time::timeout(timeout, raw.fstat(handle.as_str()))
             .await
             .map_err(|_| {
                 format!(
                     "SFTP: timeout ao obter tamanho de {} apos {}s",
                     t.path,
-                    SFTP_CONNECT_TIMEOUT.as_secs()
+                    timeout.as_secs()
                 )
             })?
             .map_err(|e| {

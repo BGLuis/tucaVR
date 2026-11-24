@@ -1,7 +1,5 @@
 //! Cliente SOAP para ações UPnP ContentDirectory (T7.3).
 
-use std::time::Duration;
-
 /// Monta o payload XML do envelope SOAP para a ação `Browse`.
 pub fn build_browse_envelope(object_id: &str, start_index: u32, max_count: u32) -> String {
     format!(
@@ -78,7 +76,8 @@ pub fn execute_browse_soap(
     let envelope = build_browse_envelope(object_id, start_index, max_count);
 
     let client = crate::http::client_builder()
-        .timeout(Duration::from_secs(10))
+        .connect_timeout(crate::connect_timeout())
+        .timeout(crate::http::request_timeout())
         .build()
         .map_err(|e| e.to_string())?;
 

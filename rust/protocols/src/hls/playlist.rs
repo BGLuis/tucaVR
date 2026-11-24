@@ -58,7 +58,8 @@ pub enum HlsPlaylist {
 /// Faz o download da playlist Master HLS e extrai as variantes.
 pub fn fetch_and_probe_variants(url: &str) -> Result<Vec<HlsVariant>, String> {
     let client = crate::http::client_builder()
-        .timeout(std::time::Duration::from_secs(5))
+        .connect_timeout(crate::connect_timeout())
+        .timeout(crate::http::request_timeout())
         .build()
         .map_err(|e| format!("HTTP client error: {e}"))?;
 

@@ -95,6 +95,9 @@ class VRControlsPresentation(
 
     private var lastKnownBatteryPercent: Int = 100
     private var lastKnownIsCharging: Boolean = false
+    private var lastKnownTitle: String = ""
+    private var lastKnownIsLoading: Boolean = false
+    private var lastKnownIsPlaying: Boolean = false
     private var isDragging = false
     private var lastSeekTime = 0L
     private var totalDuration = 0f
@@ -445,7 +448,40 @@ class VRControlsPresentation(
         }
     }
 
+    data class ControlsUiSnapshot(
+        val title: String,
+        val currentSec: Float,
+        val totalSec: Float,
+        val speed: Float,
+        val volume: Float,
+        val isLoading: Boolean,
+        val isPlaying: Boolean,
+    )
+
+    fun snapshotUiState(): ControlsUiSnapshot =
+        ControlsUiSnapshot(
+            title = lastKnownTitle,
+            currentSec = lastKnownCurrentSec,
+            totalSec = totalDuration,
+            speed = currentSpeed,
+            volume = currentVolume,
+            isLoading = lastKnownIsLoading,
+            isPlaying = lastKnownIsPlaying,
+        )
+
+    fun restoreUiState(snapshot: ControlsUiSnapshot) {
+        currentSpeed = snapshot.speed
+        currentVolume = snapshot.volume
+        updateSpeedButtonLabel(snapshot.speed)
+        if (snapshot.title.isNotEmpty()) {
+            updateTitle(snapshot.title)
+        }
+        updateProgress(snapshot.currentSec, snapshot.totalSec)
+        updateMediaState(snapshot.isLoading, snapshot.isPlaying)
+    }
+
     fun updateTitle(title: String) {
+        lastKnownTitle = title
         if (::titleLabel.isInitialized) {
             titleLabel.setTextIfChanged(title)
         }
@@ -454,6 +490,9 @@ class VRControlsPresentation(
     fun resetPlaybackState() {
         stopScrubPreview()
         dismissOpenPopup()
+        lastKnownTitle = ""
+        lastKnownIsLoading = false
+        lastKnownIsPlaying = false
         if (::timeLabel.isInitialized) timeLabel.text = "00:00"
         if (::totalTimeLabel.isInitialized) totalTimeLabel.text = "00:00"
         if (::titleLabel.isInitialized) titleLabel.text = ""
@@ -584,6 +623,8 @@ class VRControlsPresentation(
         isLoading: Boolean,
         isPlaying: Boolean,
     ) {
+        lastKnownIsLoading = isLoading
+        lastKnownIsPlaying = isPlaying
         val targetLoadingVisibility = if (isLoading) View.VISIBLE else View.GONE
         if (::loadingSpinner.isInitialized && loadingSpinner.visibility != targetLoadingVisibility) {
             loadingSpinner.visibility = targetLoadingVisibility

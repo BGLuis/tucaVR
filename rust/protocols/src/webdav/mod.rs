@@ -16,7 +16,6 @@ use crate::xml_text;
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
 use std::io;
-use std::time::Duration;
 
 /// Tamanho de cada sub-leitura concorrente dentro de um `read_range` (2 MB).
 const WEBDAV_CONCURRENT_CHUNK_SIZE: u32 = 2 * 1024 * 1024;
@@ -47,7 +46,8 @@ pub struct WebdavDirEntry {
 pub fn create_client(target: &WebdavTarget) -> Result<reqwest::blocking::Client, String> {
     let mut builder = crate::http::client_builder()
         .user_agent("VRMultimediaPlayer/0.1")
-        .timeout(Duration::from_secs(10));
+        .connect_timeout(crate::connect_timeout())
+        .timeout(crate::http::request_timeout());
 
     if target.accept_invalid_certs {
         builder = builder.tls_danger_accept_invalid_certs(true);

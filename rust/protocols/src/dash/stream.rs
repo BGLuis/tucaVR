@@ -8,7 +8,7 @@ use crate::prefetch::RangeSource;
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 /// Tamanho de cada bloco de mídia baixado via Range para representações `SegmentBase` (R-02) — evita carregar o arquivo inteiro (GBs em
 /// 8K) de uma vez em memória; mesma ordem de grandeza do `REMOTE_PREFETCH_BLOCK_SIZE` usado
@@ -29,7 +29,8 @@ pub fn normalize_dash_url(url: &str) -> String {
 pub fn fetch_and_probe_representations(url: &str) -> Result<Vec<DashRepresentation>, String> {
     let normalized = normalize_dash_url(url);
     let client = crate::http::client_builder()
-        .timeout(Duration::from_secs(10))
+        .connect_timeout(crate::connect_timeout())
+        .timeout(crate::http::request_timeout())
         // R-01: sem redirect automático — um redirecionamento HTTP 3xx da mesma origem já
         // validada por `resolve_dash_url` poderia apontar para fora dela, contornando a
         // checagem de origem só por string.
@@ -87,7 +88,8 @@ impl DashStreamSource {
     pub fn open(url: &str) -> Result<Self, String> {
         let normalized = normalize_dash_url(url);
         let client = crate::http::client_builder()
-            .timeout(Duration::from_secs(10))
+            .connect_timeout(crate::connect_timeout())
+            .timeout(crate::http::request_timeout())
             // R-01: mesma razão do client de fetch_and_probe_representations acima.
             .redirect(reqwest::redirect::Policy::none())
             .build()

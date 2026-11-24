@@ -46,6 +46,7 @@ import com.tucavr.network.FisheyeFovPreferenceStore
 import com.tucavr.network.Format3DPreferenceStore
 import com.tucavr.network.FtpCredentialStore
 import com.tucavr.network.LegacyCredentialMigrator
+import com.tucavr.network.NetworkPreferenceStore
 import com.tucavr.network.ServerCredentialStore
 import com.tucavr.network.SftpCredentialStore
 import com.tucavr.network.SmbCredentialStore
@@ -142,6 +143,8 @@ class VRActivity : NativeActivity() {
     val screenTransformStore: ScreenTransformStore by lazy { ScreenTransformStore(this) }
     val environmentStore: EnvironmentStore by lazy { EnvironmentStore(this) }
     val lutStore: LutStore by lazy { LutStore(this) }
+    val languageStore: LanguagePreferenceStore by lazy { LanguagePreferenceStore(this) }
+    val networkPreferenceStore: NetworkPreferenceStore by lazy { NetworkPreferenceStore(this) }
 
     fun applySavedScreenTransform(environmentId: String = environmentStore.getActiveEnvironment()) {
         val t = screenTransformStore.get(environmentId)
@@ -234,6 +237,10 @@ class VRActivity : NativeActivity() {
         private set
     var lastMediaProgressTotal: Float = 0f
         private set
+    var lastKnownMediaIsLoading: Boolean = false
+        private set
+    var lastKnownMediaIsPlaying: Boolean = false
+        private set
 
     fun setDebugStatsEnabled(enabled: Boolean) {
         isDebugStatsEnabled = enabled
@@ -257,6 +264,8 @@ class VRActivity : NativeActivity() {
         currentPlaybackSource = source
         currentMediaMetadata = null
         currentAudioTrackOrdinal = 0
+        lastKnownMediaIsLoading = false
+        lastKnownMediaIsPlaying = source != null
         if (source != null) {
             CoroutineScope(Dispatchers.IO).launch {
                 currentMediaMetadata = com.tucavr.filebrowser.MediaMetadataReader.readCached(this@VRActivity, source)
@@ -428,6 +437,16 @@ class VRActivity : NativeActivity() {
         setTaskDescription(description)
     }
 
+    private var startupSystemLocale: java.util.Locale = java.util.Locale.getDefault()
+
+    override fun attachBaseContext(newBase: Context) {
+        val locales = newBase.resources.configuration.locales
+        startupSystemLocale = if (!locales.isEmpty) locales[0] else java.util.Locale.getDefault()
+        super.attachBaseContext(
+            LanguagePreferenceStore(newBase).createLocalizedContext(newBase, systemLocale = startupSystemLocale),
+        )
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         com.tucavr.designsystem.VoidTheme.init(this)
@@ -512,74 +531,10 @@ class VRActivity : NativeActivity() {
         (getSystemService(ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(memoryInfo)
         nativeSetDeviceTotalMemoryBytes(memoryInfo.totalMem)
 
-        // Fase 0.4 T5: empurra o modo persistido de Foveated Rendering pro Rust/C++
-        val fovMode = FeatureFlags.getFoveatedRenderingMode(this)
-        nativeSetFoveationMode(fovMode)
-
-        // Pausar ao sair: empurra preferência inicial de auto-pause para a camada nativa
-        nativeSetPauseOnExit(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PAUSE_ON_EXIT))
-
-        // Modo Ambiente: empurra o estado persistido do halo de luz ambiente
-        nativeSetAmbientMode(FeatureFlags.isEnabled(this, FeatureFlags.Flag.AMBIENT_MODE))
-
         // Set before the first XR frame so the environment never shows behind the intro; VRPresentation clears it.
         nativeSetIntroActive(!IntroSequenceController.hasCompletedIntroOnce)
 
-        // RF-ENV-007: Ajuste de Iluminação e Cor do Ambiente (Fase 0.5 §4)
-        nativeSetEnvironmentBrightness(FeatureFlags.getEnvironmentBrightness(this))
-        nativeSetScreenGlowIntensity(FeatureFlags.getScreenGlowIntensityFloat(this))
-        nativeSetColorTemperature(FeatureFlags.getColorTemperature(this))
-        nativeSetHdrLuminance(HdrLuminanceStore(this).get())
-        nativeSetNightMode(FeatureFlags.isNightModeEnabled(this))
-
-        // Fase 0.3 Seção 2: empurra o estado persistido do toggle de Passthrough.
-        // A capacidade real (extensão XR_FB_passthrough presente) só é conhecida
-        // depois que o C++ cria o XrInstance; o painel de controles consulta
-        // nativeIsPassthroughSupported() ao ser montado pra habilitar o botão.
-        nativeSetPassthroughEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PASSTHROUGH))
-        nativeSetPassthroughStyle(
-            FeatureFlags.getPassthroughOpacity(this),
-            FeatureFlags.getPassthroughEdgeRendering(this),
-        )
-        val initialMaskMode = FeatureFlags.getPassthroughMaskMode(this)
-        val safeInitialMode =
-            if (initialMaskMode == PassthroughMaskMode.PACKED_ALPHA.id) {
-                PassthroughMaskMode.OFF.id
-            } else {
-                initialMaskMode
-            }
-        nativeSetChromaKeyMode(safeInitialMode)
-        if (safeInitialMode == PassthroughMaskMode.CHROMA_KEY.id) {
-            nativeSetChromaKeyColor(FeatureFlags.getChromaKeyColor(this))
-            nativeSetChromaKeySimilarity(FeatureFlags.getChromaKeySimilarity(this))
-            nativeSetChromaKeySmoothness(FeatureFlags.getChromaKeySmoothness(this))
-        }
-
-        // Fase 0.3 Seção 3/4: empurra valores persistidos de Áudio Espacial e Head Tracking pro nativo
-        nativeSetSpatialAudioMode(FeatureFlags.getSpatialAudioMode(this))
-        nativeSetSpatialAudioHeadTracking(FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_HEAD_TRACKING))
-        // T4.4: inicializa o modo screen-locked a partir da preferência persistida
-        nativeSetAudioScreenLocked(FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_SCREEN_LOCKED))
-
-        // Fase 0.3 Seção 5: empurra valor persistido de Hand Tracking / Gestos pro nativo
-        nativeSetHandTrackingEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.HAND_TRACKING))
-
-        // Painel de Estatísticas Técnicas / Stats for Nerds (ver docs/DEBUGGING.md)
-        isDebugStatsEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.DEBUG_STATS_PANEL)
-        refreshNativeDebugStatsStream()
-
-        // Issue #100: Geometria dinâmica da superfície cilíndrica da UI e preferências de controle
-        val fovDeg = FeatureFlags.getUiPanelFov(this)
-        val distanceM = FeatureFlags.getUiPanelDistance(this)
-        nativeSetUiPanelGeometry(distanceM, fovDeg)
-        nativeSetByButtonAsBack(FeatureFlags.isEnabled(this, FeatureFlags.Flag.BY_BUTTON_AS_BACK))
-        nativeSetHoverHapticsEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.HOVER_HAPTICS))
-        nativeSetDirectVideoLayerEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.DIRECT_VIDEO_LAYER))
-        if (lutStore.hasActiveLut()) {
-            lutStore.getActiveLutBytes()?.let { bytes ->
-                nativeLoadVideoLut(bytes)
-            }
-        }
+        applyPersistedSettingsToNative()
 
         // F8: ANR e crash nativo (inclusive o abort do ART no teardown Vulkan)
         // não deixam rastro no handler de exceções da JVM abaixo — ApplicationExitInfo
@@ -619,9 +574,161 @@ class VRActivity : NativeActivity() {
             previousHandler?.uncaughtException(thread, throwable)
         }
 
-        // Upscaling de vídeo (Vulkan MQSR / SGSR1): empurra modo persistido pro nativo
+        // Handled in applyPersistedSettingsToNative()
+    }
+
+    private fun applyPersistedSettingsToNative() {
+        nativeSetFoveationMode(FeatureFlags.getFoveatedRenderingMode(this))
+        nativeSetPauseOnExit(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PAUSE_ON_EXIT))
+        nativeSetAmbientMode(FeatureFlags.isEnabled(this, FeatureFlags.Flag.AMBIENT_MODE))
+
+        nativeSetEnvironmentBrightness(FeatureFlags.getEnvironmentBrightness(this))
+        nativeSetScreenGlowIntensity(FeatureFlags.getScreenGlowIntensityFloat(this))
+        nativeSetColorTemperature(FeatureFlags.getColorTemperature(this))
+        nativeSetHdrLuminance(HdrLuminanceStore(this).get())
+        nativeSetNightMode(FeatureFlags.isNightModeEnabled(this))
+
+        nativeSetPassthroughEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PASSTHROUGH))
+        nativeSetPassthroughStyle(
+            FeatureFlags.getPassthroughOpacity(this),
+            FeatureFlags.getPassthroughEdgeRendering(this),
+        )
+        val initialMaskMode = FeatureFlags.getPassthroughMaskMode(this)
+        val safeInitialMode =
+            if (initialMaskMode == PassthroughMaskMode.PACKED_ALPHA.id) {
+                PassthroughMaskMode.OFF.id
+            } else {
+                initialMaskMode
+            }
+        nativeSetChromaKeyMode(safeInitialMode)
+        if (safeInitialMode == PassthroughMaskMode.CHROMA_KEY.id) {
+            nativeSetChromaKeyColor(FeatureFlags.getChromaKeyColor(this))
+            nativeSetChromaKeySimilarity(FeatureFlags.getChromaKeySimilarity(this))
+            nativeSetChromaKeySmoothness(FeatureFlags.getChromaKeySmoothness(this))
+        }
+
+        nativeSetSpatialAudioMode(FeatureFlags.getSpatialAudioMode(this))
+        nativeSetSpatialAudioHeadTracking(FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_HEAD_TRACKING))
+        nativeSetAudioScreenLocked(FeatureFlags.isEnabled(this, FeatureFlags.Flag.SPATIAL_SCREEN_LOCKED))
+
+        nativeSetHandTrackingEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.HAND_TRACKING))
+        nativeSetDominantHand(FeatureFlags.getDominantHandMode(this).id)
+
+        isDebugStatsEnabled = FeatureFlags.isEnabled(this, FeatureFlags.Flag.DEBUG_STATS_PANEL)
+        refreshNativeDebugStatsStream()
+
+        val fovDeg = FeatureFlags.getUiPanelFov(this)
+        val distanceM = FeatureFlags.getUiPanelDistance(this)
+        nativeSetUiPanelGeometry(distanceM, fovDeg)
+        nativeSetByButtonAsBack(FeatureFlags.isEnabled(this, FeatureFlags.Flag.BY_BUTTON_AS_BACK))
+        nativeSetHoverHapticsEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.HOVER_HAPTICS))
+        nativeSetDirectVideoLayerEnabled(FeatureFlags.isEnabled(this, FeatureFlags.Flag.DIRECT_VIDEO_LAYER))
+        if (lutStore.hasActiveLut()) {
+            lutStore.getActiveLutBytes()?.let { bytes ->
+                nativeLoadVideoLut(bytes)
+            }
+        } else {
+            nativeClearVideoLut()
+        }
+
         nativeSetUpscalingMode(upscalingStore.get().id)
         nativeSetMatchContentFrameRate(FeatureFlags.isEnabled(this, FeatureFlags.Flag.MATCH_CONTENT_FRAME_RATE))
+        nativeSetNetworkConnectTimeoutSecs(networkPreferenceStore.getConnectTimeoutSeconds())
+        nativeSetPreferredSubtitleLanguage(languageStore.toSubtitleLanguageTag(startupSystemLocale))
+    }
+
+    private fun localizedOuterContext(): Context =
+        languageStore.createLocalizedContext(
+            this,
+            systemLocale = startupSystemLocale,
+            forceOverride = true,
+        )
+
+    /**
+     * Switches the active UI and subtitle language live by rebuilding the VirtualDisplay Presentations
+     * without recreating the NativeActivity / OpenXR session.
+     */
+    fun setAppLanguage(language: LanguagePreferenceStore.AppLanguage) {
+        languageStore.set(language)
+        nativeSetPreferredSubtitleLanguage(languageStore.toSubtitleLanguageTag(startupSystemLocale))
+        runOnUiThread {
+            rebuildPresentationsOnSettings(com.tucavr.screens.SettingsScreen.Category.LANGUAGE)
+        }
+    }
+
+    /**
+     * Restores all configurable settings to factory defaults while keeping saved servers, credentials,
+     * playback history, playlists, and downloads untouched.
+     */
+    fun restoreAllSettingsDefaults() {
+        SettingsResetter.resetAll(this)
+        debugStatsMode = DebugStatsDisplayMode.CLOSED
+        nativeSetFullStatsActive(false)
+        nativeSetModalDocked(false, 0.0f)
+        nativeHideModalPanel()
+        presentation?.hideFullDebugStats()
+        ambientAudioManager.stopAmbient()
+        nativeSetEnvironment(EnvironmentStore.DEFAULT_ENV)
+        nativeResetScreenPosition()
+        applyPersistedSettingsToNative()
+        runOnUiThread {
+            rebuildPresentationsOnSettings(com.tucavr.screens.SettingsScreen.Category.ABOUT)
+        }
+    }
+
+    private fun rebuildPresentationsOnSettings(category: com.tucavr.screens.SettingsScreen.Category) {
+        val outer = localizedOuterContext()
+        val controlsSnapshot = controlsPresentation?.snapshotUiState()
+
+        virtualDisplay?.display?.let { display ->
+            try {
+                presentation?.dismiss()
+            } catch (_: Exception) {
+            }
+            presentation =
+                VRPresentation(
+                    outerContext = outer,
+                    display = display,
+                    activity = this,
+                    initialDestination = com.tucavr.navigation.Destination.Settings,
+                    initialSettingsCategory = category,
+                ).also { p ->
+                    p.show()
+                    if (xrSessionFocused) p.onXrSessionFocused()
+                    if (currentPlaybackSource != null) {
+                        p.updateMediaState(lastKnownMediaIsLoading, lastKnownMediaIsPlaying)
+                    }
+                }
+        }
+
+        controlsVirtualDisplay?.display?.let { display ->
+            try {
+                controlsPresentation?.dismiss()
+            } catch (_: Exception) {
+            }
+            controlsPresentation =
+                VRControlsPresentation(outer, display, this) {
+                    nativeTogglePlayPause()
+                }.also { cp ->
+                    cp.show()
+                    cp.updatePassthroughState(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PASSTHROUGH))
+                    cp.onDebugStatsFlagChanged(isDebugStatsEnabled)
+                    if (currentPlaybackSource != null && controlsSnapshot != null) {
+                        cp.restoreUiState(controlsSnapshot)
+                    }
+                }
+        }
+
+        modalVirtualDisplay?.display?.let { display ->
+            try {
+                modalPresentation?.dismiss()
+            } catch (_: Exception) {
+            }
+            modalPresentation =
+                VRModalPresentation(this, display, outer).also { mp ->
+                    mp.show()
+                }
+        }
     }
 
     override fun onDestroy() {
@@ -950,7 +1057,7 @@ class VRActivity : NativeActivity() {
                     )
 
                 activity.virtualDisplay?.display?.let { display ->
-                    activity.presentation = VRPresentation(activity, display, activity)
+                    activity.presentation = VRPresentation(activity.localizedOuterContext(), display, activity)
                     activity.presentation?.show()
                     if (activity.xrSessionFocused) activity.presentation?.onXrSessionFocused()
                 }
@@ -1040,7 +1147,7 @@ class VRActivity : NativeActivity() {
 
                 activity.controlsVirtualDisplay?.display?.let { display ->
                     activity.controlsPresentation =
-                        VRControlsPresentation(activity, display, activity) {
+                        VRControlsPresentation(activity.localizedOuterContext(), display, activity) {
                             activity.nativeTogglePlayPause()
                         }
                     activity.controlsPresentation?.show()
@@ -1108,7 +1215,7 @@ class VRActivity : NativeActivity() {
                     )
 
                 activity.modalVirtualDisplay?.display?.let { display ->
-                    activity.modalPresentation = VRModalPresentation(activity, display, activity)
+                    activity.modalPresentation = VRModalPresentation(activity, display, activity.localizedOuterContext())
                     activity.modalPresentation?.show()
                 }
             }
@@ -1348,6 +1455,8 @@ class VRActivity : NativeActivity() {
             isLoading: Boolean,
             isPlaying: Boolean,
         ) {
+            activity.lastKnownMediaIsLoading = isLoading
+            activity.lastKnownMediaIsPlaying = isPlaying
             activity.runOnUiThread {
                 activity.controlsPresentation?.updateMediaState(isLoading, isPlaying)
                 activity.presentation?.updateMediaState(isLoading, isPlaying)
@@ -1472,10 +1581,10 @@ class VRActivity : NativeActivity() {
         VRLog.i("Starting playback session $sessionId for $sourceType $sourceRedacted")
         nativeSetSessionId(sessionId)
         ambientAudioManager.setDucked(true)
-        // T7.6: informa o idioma do sistema para a auto-selecao de faixa de
+        // T7.6: informa o idioma ativo para a auto-selecao de faixa de
         // legenda embutida (aplicada no proximo load nativo, se o usuario nao
         // tiver escolhido uma faixa manualmente).
-        nativeSetPreferredSubtitleLanguage(java.util.Locale.getDefault().toLanguageTag())
+        nativeSetPreferredSubtitleLanguage(languageStore.toSubtitleLanguageTag(startupSystemLocale))
     }
 
     // T9.1-T9.3: os 3 entry points de playback (playFile/playUrl/playSmb) sao
@@ -2845,4 +2954,9 @@ class VRActivity : NativeActivity() {
     external fun nativeSetUpscalingMode(mode: Int)
 
     external fun nativeSetMatchContentFrameRate(enabled: Boolean)
+
+    // Issue #67: Dominant hand mode (0=Auto, 1=Right, 2=Left) and network connect timeout (seconds)
+    external fun nativeSetDominantHand(mode: Int)
+
+    external fun nativeSetNetworkConnectTimeoutSecs(seconds: Int)
 }

@@ -7,7 +7,6 @@ use crate::prefetch::RangeSource;
 use std::collections::HashMap;
 use std::io;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 /// Fonte de streaming HLS para alimentar o demuxer FFmpeg.
 pub struct HlsStreamSource {
@@ -29,7 +28,8 @@ pub struct HlsStreamSource {
 impl HlsStreamSource {
     pub fn open(url: &str) -> Result<Self, String> {
         let client = crate::http::client_builder()
-            .timeout(Duration::from_secs(10))
+            .connect_timeout(crate::connect_timeout())
+            .timeout(crate::http::request_timeout())
             .build()
             .map_err(|e| e.to_string())?;
 

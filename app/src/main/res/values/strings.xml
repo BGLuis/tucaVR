@@ -894,4 +894,44 @@
     <!-- Startup intro -->
     <string name="intro_skip_hint">Press the trigger or pinch to skip</string>
 
+    <!-- Issue #67: Missing unified settings sections -->
+    <string name="settings_dominant_hand_label">Dominant Hand</string>
+    <string name="settings_dominant_hand_desc">Choose which controller or tracked hand leads the pointer ray. Auto switches to whichever hand presses trigger or pinch.</string>
+    <string name="settings_dominant_hand_auto">Auto</string>
+    <string name="settings_dominant_hand_right">Right</string>
+    <string name="settings_dominant_hand_left">Left</string>
+    <string name="settings_section_accessibility">Accessibility</string>
+    <string name="settings_accessibility_desc">Comfort tools, virtual screen position reset and IPD guidance.</string>
+    <string name="settings_reset_screen_label">Reset Screen Position</string>
+    <string name="settings_reset_screen_desc">Restores the virtual cinema screen to the default position and size for the active environment.</string>
+    <string name="settings_reset_screen_button">Reset Position</string>
+    <string name="settings_reset_screen_done">Screen position restored to environment defaults.</string>
+    <string name="settings_ipd_hint_label">IPD &amp; Eye Comfort</string>
+    <string name="settings_ipd_hint_desc">For the sharpest 3D image and least eye strain, adjust the lens spacing (IPD) wheel on the bottom-left edge of your Quest 3 until text looks crisp.</string>
+    <string name="settings_section_language">Language</string>
+    <string name="settings_language_desc">Override the interface language and preferred subtitle language independently of the headset system language.</string>
+    <string name="settings_language_label">App Language</string>
+    <string name="settings_language_auto">Automatic</string>
+    <string name="settings_language_pt_br">Português (BR)</string>
+    <string name="settings_language_en">English</string>
+    <string name="settings_language_es">Español</string>
+    <string name="settings_language_preview_title">Live String Preview</string>
+    <string name="settings_language_preview_sample_format">%1$s · %2$s · %3$s · %4$s · %5$s</string>
+    <string name="settings_section_network">Network</string>
+    <string name="settings_network_desc">Default connection timeout for remote sources and trusted SFTP server fingerprints.</string>
+    <string name="settings_network_timeout_label">Connection Timeout</string>
+    <string name="settings_network_timeout_desc">Maximum wait time when connecting to SMB, SFTP, FTP, NFS, WebDAV and HTTP(S) servers.</string>
+    <string name="settings_network_timeout_seconds_format">%1$ds</string>
+    <string name="settings_network_trusted_sftp_title">Trusted SFTP Servers</string>
+    <string name="settings_network_trusted_sftp_desc">Servers whose SSH host key fingerprint was verified and pinned on first connection.</string>
+    <string name="settings_network_trusted_sftp_empty">No trusted SFTP servers pinned yet.</string>
+    <string name="settings_network_trusted_sftp_host_format">%1$s:%2$d</string>
+    <string name="settings_network_trusted_sftp_forget">Forget</string>
+    <string name="settings_restore_defaults_title">Reset Settings</string>
+    <string name="settings_restore_defaults_desc">Restore all player, video, audio, controls, language and network timeout settings to their defaults. Saved servers, credentials, playlists and history are kept.</string>
+    <string name="settings_restore_defaults_button">Restore Defaults</string>
+    <string name="settings_restore_defaults_confirm_title">Restore default settings?</string>
+    <string name="settings_restore_defaults_confirm_message">All preferences (video, lighting, audio, controls, language and network timeout) will return to factory defaults. Saved servers, passwords and playback history will not be deleted.</string>
+    <string name="settings_restore_defaults_confirm_action">Restore</string>
+
 </resources>

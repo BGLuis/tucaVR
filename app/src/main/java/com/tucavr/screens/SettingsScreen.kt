@@ -27,13 +27,17 @@ import com.tucavr.designsystem.VoidSegmentedSelector
 import com.tucavr.designsystem.VoidText
 import com.tucavr.designsystem.VoidTheme
 import com.tucavr.history.PlaybackResumePolicy
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
  * Tela de Configurações redesenhada em 3 colunas com Live Preview Rail e geometria dinâmica (Issue #100).
  *
- * - **Coluna 1 (Categorias, ~260 px):** Vídeo, Iluminação/Ambiente, Áudio, Legendas, Reprodução, Interface/Controles, Avançado.
+ * - **Coluna 1 (Categorias, ~260 px):** Vídeo, Iluminação/Ambiente, Áudio, Legendas, Reprodução, Controles, Acessibilidade, Idioma, Rede, Avançado, Sobre.
  * - **Coluna 2 (Opções da Categoria, ~940 px):** Opções interativas com switches e [VoidSegmentedSelector].
  * - **Coluna 3 (Live Preview & Telemetria, ~432 px via [ScreenHost.setContextContent]):** Explicação da categoria/opção e telemetria nativa ao vivo.
  */
@@ -42,6 +46,7 @@ class SettingsScreen(
     private val activity: VRActivity,
     private val host: ScreenHost,
     private val onBack: () -> Unit,
+    initialCategory: Category = Category.VIDEO,
 ) {
     enum class Category(val titleRes: Int, val descRes: Int) {
         VIDEO(R.string.settings_section_video, R.string.settings_upscaling_description),
@@ -50,11 +55,15 @@ class SettingsScreen(
         SUBTITLES(R.string.settings_section_subtitles, R.string.settings_subtitles_auto_load_description),
         PLAYBACK(R.string.settings_section_playback, R.string.settings_resume_policy_desc),
         CONTROLS(R.string.settings_section_controls, R.string.settings_panel_fov_desc),
+        ACCESSIBILITY(R.string.settings_section_accessibility, R.string.settings_accessibility_desc),
+        LANGUAGE(R.string.settings_section_language, R.string.settings_language_desc),
+        NETWORK(R.string.settings_section_network, R.string.settings_network_desc),
         ADVANCED(R.string.settings_section_advanced, R.string.settings_debug_stats_description),
         ABOUT(R.string.settings_section_about, R.string.settings_about_description),
     }
 
-    private var selectedCategory = Category.VIDEO
+    private var selectedCategory = initialCategory
+    private var scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var categoryViews: Map<Category, LinearLayout>
     private lateinit var optionsContainer: FrameLayout
 
@@ -100,6 +109,9 @@ class SettingsScreen(
     }
 
     fun render() {
+        if (scope.coroutineContext[kotlinx.coroutines.Job]?.isActive != true) {
+            scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+        }
         val root = VoidPanelChrome.newRoot(context)
         root.addView(
             VoidPanelChrome.buildHeader(
@@ -120,9 +132,21 @@ class SettingsScreen(
                     )
             }
 
-        // Coluna 1: Categorias (~260 px)
+        // Coluna 1: Categorias (~260 px, scrollável para acomodar todas as seções)
         val colCategories = buildCategoriesColumn()
-        columnsLayout.addView(colCategories)
+        val categoriesScroller =
+            ScrollView(context).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        VoidTheme.dpToPx(context, 260f),
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    ).apply {
+                        marginEnd = VoidTheme.dpToPx(context, 16f)
+                    }
+                isFillViewport = true
+                addView(colCategories)
+            }
+        columnsLayout.addView(categoriesScroller)
 
         // Divisor vertical
         val divider =
@@ -162,6 +186,7 @@ class SettingsScreen(
     }
 
     fun cleanup() {
+        scope.cancel()
         activity.statsTelemetryListeners.remove(telemetryListener)
         host.resetContextContent()
     }
@@ -176,12 +201,10 @@ class SettingsScreen(
             LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 layoutParams =
-                    LinearLayout.LayoutParams(
-                        VoidTheme.dpToPx(context, 260f),
+                    FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
-                    ).apply {
-                        marginEnd = VoidTheme.dpToPx(context, 16f)
-                    }
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    )
             }
 
         val map = mutableMapOf<Category, LinearLayout>()
@@ -572,6 +595,7 @@ class SettingsScreen(
                 content.addView(buildResumePolicyRow())
             }
             Category.CONTROLS -> {
+                content.addView(SettingsCategorySections.buildDominantHandRow(context, activity))
                 content.addView(buildPanelFovRow())
                 content.addView(buildPanelDistanceRow())
                 content.addView(
@@ -598,6 +622,15 @@ class SettingsScreen(
                         onChanged = { enabled -> activity.nativeSetHandTrackingEnabled(enabled) },
                     ),
                 )
+            }
+            Category.ACCESSIBILITY -> {
+                SettingsCategorySections.buildAccessibilityCategory(context, activity, content)
+            }
+            Category.LANGUAGE -> {
+                SettingsCategorySections.buildLanguageCategory(context, activity, content)
+            }
+            Category.NETWORK -> {
+                SettingsCategorySections.buildNetworkCategory(context, activity, scope, content)
             }
             Category.ADVANCED -> {
                 content.addView(
@@ -705,28 +738,10 @@ class SettingsScreen(
             }
         }
         content.addView(translatorsCard)
+        content.addView(SettingsCategorySections.buildRestoreDefaultsCard(context, activity))
     }
 
-    private fun buildAboutCard(): LinearLayout =
-        LinearLayout(context).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams =
-                LinearLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT,
-                    ViewGroup.LayoutParams.WRAP_CONTENT,
-                ).apply { bottomMargin = VoidTheme.dpToPx(context, 12f) }
-            background =
-                GradientDrawable().apply {
-                    setColor(VoidTheme.colorSurface)
-                    cornerRadius = VoidTheme.dp(context, 12f)
-                }
-            setPadding(
-                VoidTheme.dpToPx(context, 20f),
-                VoidTheme.dpToPx(context, 16f),
-                VoidTheme.dpToPx(context, 20f),
-                VoidTheme.dpToPx(context, 16f),
-            )
-        }
+    private fun buildAboutCard(): LinearLayout = SettingsCategorySections.buildCard(context)
 
     private fun buildAboutRow(
         label: String,

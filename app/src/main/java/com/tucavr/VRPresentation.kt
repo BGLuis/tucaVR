@@ -81,6 +81,8 @@ class VRPresentation(
     // ContextThemeWrapper derivado do display-context. Guardamos a Activity
     // de verdade para poder chamar nativeX()/playFile()/playUrl() etc.
     private val activity: VRActivity,
+    private val initialDestination: Destination? = null,
+    private val initialSettingsCategory: SettingsScreen.Category = SettingsScreen.Category.VIDEO,
 ) : Presentation(outerContext, display, android.R.style.Theme_Translucent_NoTitleBar_Fullscreen), ContextRailHost {
     companion object {
         const val ZONE_NAV_WIDTH_PX = 288
@@ -304,6 +306,9 @@ class VRPresentation(
 
         buildCanvasHierarchy()
         initScreens()
+        initialDestination?.let { dest ->
+            appNav.selectSection(dest)
+        }
 
         if (IntroSequenceController.hasCompletedIntroOnce) {
             canvasLayout.visibility = android.view.View.VISIBLE
@@ -389,6 +394,9 @@ class VRPresentation(
     }
 
     override fun dismiss() {
+        if (::settingsScreen.isInitialized) {
+            settingsScreen.cleanup()
+        }
         disposeIntro()
         scope.cancel()
         super.dismiss()
@@ -810,6 +818,7 @@ class VRPresentation(
                 activity = activity,
                 host = host,
                 onBack = { handleBack() },
+                initialCategory = initialSettingsCategory,
             )
 
         playlistsScreen =
