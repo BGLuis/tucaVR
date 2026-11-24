@@ -41,6 +41,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -67,6 +68,7 @@
 #include "vulkan_msaa.h"
 #include "screen_layout.h"
 #include "bed_mode.h"
+#include "dominant_hand.h"
 #include "video_layer.h"
 #include "ycbcr_format.h"
 

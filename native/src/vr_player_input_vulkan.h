@@ -1,20 +1,9 @@
 #pragma once
-#include <openxr/openxr.h>
-#include <jni.h>
-#include <android_native_app_glue.h>
-#include "vk_math.h"
-#include "cylinder_hit.h"
-#include "controls_pose.h"
-#include "hand_tracking.h"
-#include "vr_player_feedback_overlay.h"
-#include "vr_player_ambient.h"
-#include "screen_layout.h"
-#include "bed_mode.h"
-#include "dominant_hand.h"
-#include <math.h>
-#include <algorithm>
-#include <atomic>
-#include <cstdint>
+// Included inside the anonymous namespace of vr_player_app_vulkan.cpp.
+// Do NOT add #include directives here: any header that opens a namespace (such as
+// `namespace vrplayer`) would be nested under `(anonymous namespace)::vrplayer` and
+// shadow `::vrplayer` for the rest of the translation unit. Add all includes at
+// global scope at the top of vr_player_app_vulkan.cpp instead.
 
 extern std::atomic<bool> g_requestControlsPanelVisible;
 extern std::atomic<bool> g_resetScreenPositionRequested;
