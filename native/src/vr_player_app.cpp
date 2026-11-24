@@ -27,6 +27,7 @@
 #include <string>
 #include "debug_stats.h"
 #include "screen_mode.h"
+#include "dominant_hand.h"
 
 static char g_sessionId[32] = "--------";
 static std::mutex g_sessionIdMutex;
@@ -309,6 +310,7 @@ extern "C" {
     extern uint32_t get_audio_track_index();
     extern int32_t get_subtitle_track();
     extern int64_t get_subtitle_offset_ms();
+    extern void set_network_connect_timeout_secs(uint32_t secs);
 }
 
 // Debug: dump do olho esquerdo pra PPM sob demanda (ver nativeRequestFrameCapture)
@@ -376,6 +378,7 @@ static std::atomic<bool> g_stopVideoRequested{false};
 static std::atomic<bool> g_modalPanelActive{false};
 static std::atomic<bool> g_modalPanelShowRequested{false};
 static std::atomic<bool> g_modalPanelHideRequested{false};
+static std::atomic<int32_t> g_dominantHandMode{0};
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_tucavr_VRActivity_nativeStopVideo(JNIEnv* env, jobject thiz) {
@@ -738,6 +741,16 @@ Java_com_tucavr_VRActivity_nativeSetBedMode(JNIEnv* env, jobject thiz, jboolean 
 extern "C" JNIEXPORT jboolean JNICALL
 Java_com_tucavr_VRActivity_nativeGetBedMode(JNIEnv* env, jobject thiz) {
     return JNI_FALSE;
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetDominantHand(JNIEnv*, jobject, jint mode) {
+    g_dominantHandMode.store(static_cast<int32_t>(vrplayer::SanitizeDominantHandMode(static_cast<int32_t>(mode))));
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_com_tucavr_VRActivity_nativeSetNetworkConnectTimeoutSecs(JNIEnv*, jobject, jint secs) {
+    set_network_connect_timeout_secs(static_cast<uint32_t>(secs < 0 ? 0 : secs));
 }
 
 extern "C" JNIEXPORT void JNICALL
@@ -2379,7 +2392,9 @@ public:
         bool currTrigger = in.LeftRemoteIndexClick || in.RightRemoteIndexClick || (in.AllButtons & OVRFW::ovrApplFrameIn::kTrigger) != 0;
 
         // --- RAYCAST FOR UI TOUCH (T4.1) ---
-        bool useLeft = in.LeftRemoteTracked && (!in.RightRemoteTracked || in.LeftRemoteIndexTrigger > 0.1f || in.LeftRemoteIndexClick);
+        bool useLeft = vrplayer::ShouldUseLeftPointer(
+            vrplayer::SanitizeDominantHandMode(g_dominantHandMode.load()), in.LeftRemoteTracked, in.RightRemoteTracked,
+            in.LeftRemoteIndexTrigger > 0.1f || in.LeftRemoteIndexClick);
         OVR::Vector3f rayOrigin = useLeft ? in.LeftRemotePointPose.Translation : in.RightRemotePointPose.Translation;
         OVR::Vector3f rawRayDir = (useLeft ? in.LeftRemotePointPose.Rotation : in.RightRemotePointPose.Rotation) * OVR::Vector3f(0.0f, 0.0f, -1.0f);
 

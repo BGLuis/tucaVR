@@ -1,6 +1,7 @@
 package com.tucavr
 
 import android.content.Context
+import android.content.SharedPreferences
 
 /**
  * Persistência do modo de Upscaling de vídeo (Vulkan-only, MQSR & SGSR1).
@@ -10,8 +11,12 @@ import android.content.Context
  * 2 = PERFORMANCE (Modo Desempenho - Render Scale 0.8x + MQSR)
  * 3 = AUTO (Modo Automático - Heurística por formato/resolução)
  */
-class UpscalingModeStore(context: Context) {
-    private val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+class UpscalingModeStore(
+    private val prefs: SharedPreferences,
+) {
+    constructor(context: Context) : this(
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
+    )
 
     enum class Mode(val id: Int) {
         OFF(0),

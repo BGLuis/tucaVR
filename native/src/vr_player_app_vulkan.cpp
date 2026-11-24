@@ -372,6 +372,7 @@ extern "C" {
 
 std::atomic<bool> g_resetScreenPositionRequested{false};
 std::atomic<bool> g_bedModeEnabled{false};
+std::atomic<int32_t> g_dominantHandMode{0};
 std::atomic<bool> g_recenterRequested{false};
 std::atomic<float> g_screenCurvature{0.0f};
 std::atomic<bool> g_screenCurvatureDirty{false};

@@ -77,7 +77,7 @@ fn new_runtime() -> io::Result<Runtime> {
 fn client_config(t: &SmbTarget, auto_reconnect: bool) -> ClientConfig {
     ClientConfig {
         addr: format!("{}:{}", t.host, t.port),
-        timeout: Duration::from_secs(8),
+        timeout: crate::connect_timeout(),
         username: t.username.clone(),
         password: t.password.clone(),
         domain: t.domain.clone(),

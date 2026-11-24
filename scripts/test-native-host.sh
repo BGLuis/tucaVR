@@ -36,6 +36,7 @@ TESTS=(
     "test_video_layer"
     "test_frame_layer_bound"
     "test_ycbcr_format"
+    "test_dominant_hand"
 )
 
 EXTRA_FLAGS=()

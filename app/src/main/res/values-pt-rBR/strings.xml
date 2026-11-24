@@ -882,4 +882,44 @@
     <!-- Startup intro -->
     <string name="intro_skip_hint">Aperte o gatilho ou faça pinça para pular</string>
 
+    <!-- Issue #67: Missing unified settings sections -->
+    <string name="settings_dominant_hand_label">Mão Dominante</string>
+    <string name="settings_dominant_hand_desc">Escolha qual controle ou mão rastreada conduz o raio apontador. Automático alterna para a mão que apertar o gatilho ou fizer pinça.</string>
+    <string name="settings_dominant_hand_auto">Automático</string>
+    <string name="settings_dominant_hand_right">Direita</string>
+    <string name="settings_dominant_hand_left">Esquerda</string>
+    <string name="settings_section_accessibility">Acessibilidade</string>
+    <string name="settings_accessibility_desc">Opções de conforto, redefinição de posição da tela e orientação de IPD.</string>
+    <string name="settings_reset_screen_label">Redefinir Posição da Tela</string>
+    <string name="settings_reset_screen_desc">Restaura a tela virtual para a posição e o tamanho padrão do ambiente ativo.</string>
+    <string name="settings_reset_screen_button">Redefinir Posição</string>
+    <string name="settings_reset_screen_done">Posição da tela restaurada para o padrão do ambiente.</string>
+    <string name="settings_ipd_hint_label">IPD e Conforto Visual</string>
+    <string name="settings_ipd_hint_desc">Para maior nitidez em 3D e menor fadiga ocular, ajuste o seletor físico de distância entre as lentes (IPD) na borda inferior esquerda do Quest 3 até o texto ficar nítido.</string>
+    <string name="settings_section_language">Idioma</string>
+    <string name="settings_language_desc">Substitui o idioma da interface e o idioma preferido de legendas independentemente do idioma do sistema.</string>
+    <string name="settings_language_label">Idioma do Aplicativo</string>
+    <string name="settings_language_auto">Automático</string>
+    <string name="settings_language_pt_br">Português (BR)</string>
+    <string name="settings_language_en">English</string>
+    <string name="settings_language_es">Español</string>
+    <string name="settings_language_preview_title">Prévia ao Vivo dos Textos</string>
+    <string name="settings_language_preview_sample_format">%1$s · %2$s · %3$s · %4$s · %5$s</string>
+    <string name="settings_section_network">Rede</string>
+    <string name="settings_network_desc">Tempo limite padrão de conexão para fontes remotas e servidores SFTP confiáveis.</string>
+    <string name="settings_network_timeout_label">Tempo Limite de Conexão</string>
+    <string name="settings_network_timeout_desc">Tempo máximo de espera ao conectar em servidores SMB, SFTP, FTP, NFS, WebDAV e HTTP(S).</string>
+    <string name="settings_network_timeout_seconds_format">%1$ds</string>
+    <string name="settings_network_trusted_sftp_title">Servidores SFTP Confiáveis</string>
+    <string name="settings_network_trusted_sftp_desc">Servidores cuja impressão digital da chave SSH foi verificada e fixada na primeira conexão.</string>
+    <string name="settings_network_trusted_sftp_empty">Nenhum servidor SFTP confiável salvo ainda.</string>
+    <string name="settings_network_trusted_sftp_host_format">%1$s:%2$d</string>
+    <string name="settings_network_trusted_sftp_forget">Esquecer</string>
+    <string name="settings_restore_defaults_title">Redefinir Configurações</string>
+    <string name="settings_restore_defaults_desc">Restaura todas as preferências de vídeo, iluminação, áudio, controles, idioma e tempo limite de rede para os padrões. Servidores salvos, credenciais, playlists e histórico são preservados.</string>
+    <string name="settings_restore_defaults_button">Restaurar Padrões</string>
+    <string name="settings_restore_defaults_confirm_title">Restaurar configurações padrão?</string>
+    <string name="settings_restore_defaults_confirm_message">Todas as preferências (vídeo, iluminação, áudio, controles, idioma e tempo limite de rede) voltarão aos valores de fábrica. Servidores salvos, senhas e histórico não serão apagados.</string>
+    <string name="settings_restore_defaults_confirm_action">Restaurar</string>
+
 </resources>

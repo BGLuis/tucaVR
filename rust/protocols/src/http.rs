@@ -79,13 +79,15 @@ pub(crate) fn client_builder() -> reqwest::blocking::ClientBuilder {
 }
 
 fn base_client() -> Result<reqwest::blocking::Client, String> {
+    let timeout = crate::connect_timeout();
     #[allow(unused_mut)] // "mut" so e usado com a feature "integration-tests" habilitada
     let mut builder = client_builder()
         // T7.1 "custom headers": User-Agent fixo por enquanto — a API aqui
         // aceita headers arbitrarios (ver `HttpsRangeSource::new`), mas nao
         // ha UI para o usuario customizar User-Agent/Referer nesta sessao.
         .user_agent("VRMultimediaPlayer/0.1")
-        .timeout(Duration::from_secs(10));
+        .connect_timeout(timeout)
+        .timeout(timeout);
 
     // Feature de cargo, nunca habilitada no build de producao (app/build.gradle.kts
     // nao ativa "integration-tests" em nenhum profile): permite que os testes de

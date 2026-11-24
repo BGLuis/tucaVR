@@ -15,6 +15,7 @@ import android.widget.TextView
 import com.tucavr.BuildConfig
 import com.tucavr.FeatureFlags
 import com.tucavr.HdrLuminanceStore
+import com.tucavr.LanguagePreferenceStore
 import com.tucavr.R
 import com.tucavr.UpscalingModeStore
 import com.tucavr.VRActivity
@@ -27,13 +28,21 @@ import com.tucavr.designsystem.VoidSegmentedSelector
 import com.tucavr.designsystem.VoidText
 import com.tucavr.designsystem.VoidTheme
 import com.tucavr.history.PlaybackResumePolicy
+import com.tucavr.network.NetworkPreferenceStore
+import com.tucavr.network.SftpCredentialStore
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.Locale
 import kotlin.math.roundToInt
 
 /**
  * Tela de Configurações redesenhada em 3 colunas com Live Preview Rail e geometria dinâmica (Issue #100).
  *
- * - **Coluna 1 (Categorias, ~260 px):** Vídeo, Iluminação/Ambiente, Áudio, Legendas, Reprodução, Interface/Controles, Avançado.
+ * - **Coluna 1 (Categorias, ~260 px):** Vídeo, Iluminação/Ambiente, Áudio, Legendas, Reprodução, Controles, Acessibilidade, Idioma, Rede, Avançado, Sobre.
  * - **Coluna 2 (Opções da Categoria, ~940 px):** Opções interativas com switches e [VoidSegmentedSelector].
  * - **Coluna 3 (Live Preview & Telemetria, ~432 px via [ScreenHost.setContextContent]):** Explicação da categoria/opção e telemetria nativa ao vivo.
  */
@@ -42,6 +51,7 @@ class SettingsScreen(
     private val activity: VRActivity,
     private val host: ScreenHost,
     private val onBack: () -> Unit,
+    initialCategory: Category = Category.VIDEO,
 ) {
     enum class Category(val titleRes: Int, val descRes: Int) {
         VIDEO(R.string.settings_section_video, R.string.settings_upscaling_description),
@@ -50,11 +60,15 @@ class SettingsScreen(
         SUBTITLES(R.string.settings_section_subtitles, R.string.settings_subtitles_auto_load_description),
         PLAYBACK(R.string.settings_section_playback, R.string.settings_resume_policy_desc),
         CONTROLS(R.string.settings_section_controls, R.string.settings_panel_fov_desc),
+        ACCESSIBILITY(R.string.settings_section_accessibility, R.string.settings_accessibility_desc),
+        LANGUAGE(R.string.settings_section_language, R.string.settings_language_desc),
+        NETWORK(R.string.settings_section_network, R.string.settings_network_desc),
         ADVANCED(R.string.settings_section_advanced, R.string.settings_debug_stats_description),
         ABOUT(R.string.settings_section_about, R.string.settings_about_description),
     }
 
-    private var selectedCategory = Category.VIDEO
+    private var selectedCategory = initialCategory
+    private var scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private lateinit var categoryViews: Map<Category, LinearLayout>
     private lateinit var optionsContainer: FrameLayout
 
@@ -100,6 +114,9 @@ class SettingsScreen(
     }
 
     fun render() {
+        if (scope.coroutineContext[kotlinx.coroutines.Job]?.isActive != true) {
+            scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+        }
         val root = VoidPanelChrome.newRoot(context)
         root.addView(
             VoidPanelChrome.buildHeader(
@@ -120,9 +137,21 @@ class SettingsScreen(
                     )
             }
 
-        // Coluna 1: Categorias (~260 px)
+        // Coluna 1: Categorias (~260 px, scrollável para acomodar todas as seções)
         val colCategories = buildCategoriesColumn()
-        columnsLayout.addView(colCategories)
+        val categoriesScroller =
+            ScrollView(context).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        VoidTheme.dpToPx(context, 260f),
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    ).apply {
+                        marginEnd = VoidTheme.dpToPx(context, 16f)
+                    }
+                isFillViewport = true
+                addView(colCategories)
+            }
+        columnsLayout.addView(categoriesScroller)
 
         // Divisor vertical
         val divider =
@@ -162,6 +191,7 @@ class SettingsScreen(
     }
 
     fun cleanup() {
+        scope.cancel()
         activity.statsTelemetryListeners.remove(telemetryListener)
         host.resetContextContent()
     }
@@ -176,12 +206,10 @@ class SettingsScreen(
             LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 layoutParams =
-                    LinearLayout.LayoutParams(
-                        VoidTheme.dpToPx(context, 260f),
+                    FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
-                    ).apply {
-                        marginEnd = VoidTheme.dpToPx(context, 16f)
-                    }
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    )
             }
 
         val map = mutableMapOf<Category, LinearLayout>()
@@ -572,6 +600,7 @@ class SettingsScreen(
                 content.addView(buildResumePolicyRow())
             }
             Category.CONTROLS -> {
+                content.addView(buildDominantHandRow())
                 content.addView(buildPanelFovRow())
                 content.addView(buildPanelDistanceRow())
                 content.addView(
@@ -598,6 +627,15 @@ class SettingsScreen(
                         onChanged = { enabled -> activity.nativeSetHandTrackingEnabled(enabled) },
                     ),
                 )
+            }
+            Category.ACCESSIBILITY -> {
+                buildAccessibilityCategory(content)
+            }
+            Category.LANGUAGE -> {
+                buildLanguageCategory(content)
+            }
+            Category.NETWORK -> {
+                buildNetworkCategory(content)
             }
             Category.ADVANCED -> {
                 content.addView(
@@ -705,6 +743,366 @@ class SettingsScreen(
             }
         }
         content.addView(translatorsCard)
+
+        val resetCard = buildAboutCard()
+        resetCard.addView(
+            VoidText.body(context, context.getString(R.string.settings_restore_defaults_title), sizeSp = 18f).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+            },
+        )
+        resetCard.addView(
+            VoidText.body(context, context.getString(R.string.settings_restore_defaults_desc), sizeSp = 13f, secondary = true).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 12f))
+            },
+        )
+        resetCard.addView(
+            VoidButton(context, VoidButtonStyle.PRIMARY).apply {
+                text = context.getString(R.string.settings_restore_defaults_button)
+                textSize = 14f
+                minHeight = VoidTheme.dpToPx(context, 48f)
+                setOnClickListener {
+                    activity.openConfirmDeleteModal(
+                        title = context.getString(R.string.settings_restore_defaults_confirm_title),
+                        message = context.getString(R.string.settings_restore_defaults_confirm_message),
+                        confirmText = context.getString(R.string.settings_restore_defaults_confirm_action),
+                        cancelText = context.getString(R.string.network_delete_server_cancel),
+                        onConfirm = {
+                            activity.dismissModalPanel()
+                            activity.restoreAllSettingsDefaults()
+                        },
+                    )
+                }
+            },
+        )
+        content.addView(resetCard)
+    }
+
+    private fun buildDominantHandRow(): LinearLayout =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams =
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = VoidTheme.dpToPx(context, 16f) }
+
+            addView(
+                VoidText.title(context, context.getString(R.string.settings_dominant_hand_label), sizeSp = 16f).apply {
+                    setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+                },
+            )
+            addView(
+                VoidText.body(context, context.getString(R.string.settings_dominant_hand_desc), sizeSp = 13f, secondary = true).apply {
+                    setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
+                },
+            )
+
+            val currentMode = FeatureFlags.getDominantHandMode(context)
+            addView(
+                VoidSegmentedSelector(
+                    context = context,
+                    options =
+                        listOf(
+                            SegmentOption(
+                                FeatureFlags.DominantHandMode.AUTO,
+                                context.getString(R.string.settings_dominant_hand_auto),
+                            ),
+                            SegmentOption(
+                                FeatureFlags.DominantHandMode.RIGHT,
+                                context.getString(R.string.settings_dominant_hand_right),
+                            ),
+                            SegmentOption(
+                                FeatureFlags.DominantHandMode.LEFT,
+                                context.getString(R.string.settings_dominant_hand_left),
+                            ),
+                        ),
+                    initialSelectedValue = currentMode,
+                    onOptionSelected = { mode ->
+                        FeatureFlags.setDominantHandMode(context, mode)
+                        activity.nativeSetDominantHand(mode.id)
+                    },
+                ),
+            )
+        }
+
+    private fun buildAccessibilityCategory(content: LinearLayout) {
+        val resetCard = buildAboutCard()
+        resetCard.addView(
+            VoidText.title(context, context.getString(R.string.settings_reset_screen_label), sizeSp = 16f).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+            },
+        )
+        resetCard.addView(
+            VoidText.body(context, context.getString(R.string.settings_reset_screen_desc), sizeSp = 13f, secondary = true).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 12f))
+            },
+        )
+        val statusText =
+            VoidText.body(
+                context,
+                context.getString(R.string.settings_reset_screen_done),
+                sizeSp = 13f,
+                secondary = false,
+            ).apply {
+                setTextColor(VoidTheme.colorAccent)
+                setPadding(0, VoidTheme.dpToPx(context, 8f), 0, 0)
+                visibility = View.GONE
+            }
+        resetCard.addView(
+            VoidButton(context, VoidButtonStyle.SECONDARY, isCompact = true).apply {
+                text = context.getString(R.string.settings_reset_screen_button)
+                textSize = 14f
+                minHeight = VoidTheme.dpToPx(context, 48f)
+                setOnClickListener {
+                    activity.resetScreenPosition()
+                    statusText.visibility = View.VISIBLE
+                }
+            },
+        )
+        resetCard.addView(statusText)
+        content.addView(resetCard)
+
+        val ipdCard = buildAboutCard()
+        ipdCard.addView(
+            VoidText.title(context, context.getString(R.string.settings_ipd_hint_label), sizeSp = 16f).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+            },
+        )
+        ipdCard.addView(
+            VoidText.body(context, context.getString(R.string.settings_ipd_hint_desc), sizeSp = 14f, secondary = true),
+        )
+        content.addView(ipdCard)
+    }
+
+    private fun buildLanguageCategory(content: LinearLayout) {
+        content.addView(
+            VoidText.title(context, context.getString(R.string.settings_language_label), sizeSp = 16f).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+            },
+        )
+        content.addView(
+            VoidText.body(context, context.getString(R.string.settings_language_desc), sizeSp = 13f, secondary = true).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 10f))
+            },
+        )
+
+        val currentLanguage = activity.languageStore.get()
+        content.addView(
+            VoidSegmentedSelector(
+                context = context,
+                options =
+                    listOf(
+                        SegmentOption(
+                            LanguagePreferenceStore.AppLanguage.AUTO,
+                            context.getString(R.string.settings_language_auto),
+                        ),
+                        SegmentOption(
+                            LanguagePreferenceStore.AppLanguage.PT_BR,
+                            context.getString(R.string.settings_language_pt_br),
+                        ),
+                        SegmentOption(
+                            LanguagePreferenceStore.AppLanguage.EN,
+                            context.getString(R.string.settings_language_en),
+                        ),
+                        SegmentOption(
+                            LanguagePreferenceStore.AppLanguage.ES,
+                            context.getString(R.string.settings_language_es),
+                        ),
+                    ),
+                initialSelectedValue = currentLanguage,
+                onOptionSelected = { selected ->
+                    activity.setAppLanguage(selected)
+                },
+            ).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { bottomMargin = VoidTheme.dpToPx(context, 16f) }
+            },
+        )
+
+        val previewCard = buildAboutCard()
+        previewCard.addView(
+            VoidText.mono(
+                context,
+                context.getString(R.string.settings_language_preview_title),
+                sizeSp = 12f,
+                secondary = false,
+            ).apply {
+                setTextColor(VoidTheme.colorAccent)
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 6f))
+            },
+        )
+        val sample =
+            context.getString(
+                R.string.settings_language_preview_sample_format,
+                context.getString(R.string.sidebar_item_home),
+                context.getString(R.string.sidebar_item_files),
+                context.getString(R.string.sidebar_item_network),
+                context.getString(R.string.sidebar_item_settings),
+                context.getString(R.string.file_detail_btn_play),
+            )
+        previewCard.addView(VoidText.body(context, sample, sizeSp = 15f))
+        content.addView(previewCard)
+    }
+
+    private fun buildNetworkCategory(content: LinearLayout) {
+        content.addView(
+            VoidText.title(context, context.getString(R.string.settings_network_timeout_label), sizeSp = 16f).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+            },
+        )
+        content.addView(
+            VoidText.body(context, context.getString(R.string.settings_network_timeout_desc), sizeSp = 13f, secondary = true).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 8f))
+            },
+        )
+
+        val currentTimeout = activity.networkPreferenceStore.getConnectTimeoutSeconds()
+        content.addView(
+            VoidSegmentedSelector(
+                context = context,
+                options =
+                    NetworkPreferenceStore.VALID_TIMEOUT_SECONDS.map { secs ->
+                        SegmentOption(secs, context.getString(R.string.settings_network_timeout_seconds_format, secs))
+                    },
+                initialSelectedValue = currentTimeout,
+                onOptionSelected = { secs ->
+                    activity.networkPreferenceStore.setConnectTimeoutSeconds(secs)
+                    activity.nativeSetNetworkConnectTimeoutSecs(secs)
+                },
+            ).apply {
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ).apply { bottomMargin = VoidTheme.dpToPx(context, 16f) }
+            },
+        )
+
+        val trustedCard = buildAboutCard()
+        trustedCard.addView(
+            VoidText.title(context, context.getString(R.string.settings_network_trusted_sftp_title), sizeSp = 16f).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+            },
+        )
+        trustedCard.addView(
+            VoidText.body(context, context.getString(R.string.settings_network_trusted_sftp_desc), sizeSp = 13f, secondary = true).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 12f))
+            },
+        )
+
+        val listContainer =
+            LinearLayout(context).apply {
+                orientation = LinearLayout.VERTICAL
+                layoutParams =
+                    LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                    )
+            }
+        trustedCard.addView(listContainer)
+        content.addView(trustedCard)
+
+        val sftpStore = SftpCredentialStore(context)
+
+        fun reloadTrustedServers() {
+            scope.launch {
+                val trusted =
+                    withContext(Dispatchers.IO) {
+                        sftpStore.list().filter { !it.hostKeyFingerprint.isNullOrBlank() }
+                    }
+                listContainer.removeAllViews()
+                if (trusted.isEmpty()) {
+                    listContainer.addView(
+                        VoidText.body(
+                            context,
+                            context.getString(R.string.settings_network_trusted_sftp_empty),
+                            sizeSp = 14f,
+                            secondary = true,
+                        ),
+                    )
+                } else {
+                    trusted.forEachIndexed { index, server ->
+                        val row =
+                            LinearLayout(context).apply {
+                                orientation = LinearLayout.HORIZONTAL
+                                gravity = Gravity.CENTER_VERTICAL
+                                layoutParams =
+                                    LinearLayout.LayoutParams(
+                                        ViewGroup.LayoutParams.MATCH_PARENT,
+                                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                                    ).apply {
+                                        if (index < trusted.lastIndex) {
+                                            bottomMargin = VoidTheme.dpToPx(context, 8f)
+                                        }
+                                    }
+                                background =
+                                    GradientDrawable().apply {
+                                        setColor(VoidTheme.colorSurfaceAlt)
+                                        cornerRadius = VoidTheme.dp(context, 10f)
+                                    }
+                                setPadding(
+                                    VoidTheme.dpToPx(context, 14f),
+                                    VoidTheme.dpToPx(context, 10f),
+                                    VoidTheme.dpToPx(context, 14f),
+                                    VoidTheme.dpToPx(context, 10f),
+                                )
+                            }
+
+                        val infoCol =
+                            LinearLayout(context).apply {
+                                orientation = LinearLayout.VERTICAL
+                                layoutParams =
+                                    LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                                        marginEnd = VoidTheme.dpToPx(context, 12f)
+                                    }
+                                addView(VoidText.body(context, server.name, sizeSp = 15f))
+                                addView(
+                                    VoidText.mono(
+                                        context,
+                                        context.getString(
+                                            R.string.settings_network_trusted_sftp_host_format,
+                                            server.host,
+                                            server.port,
+                                        ),
+                                        sizeSp = 12f,
+                                        secondary = true,
+                                    ),
+                                )
+                                addView(
+                                    VoidText.mono(
+                                        context,
+                                        server.hostKeyFingerprint.orEmpty(),
+                                        sizeSp = 11f,
+                                        secondary = true,
+                                    ),
+                                )
+                            }
+                        row.addView(infoCol)
+
+                        row.addView(
+                            VoidButton(context, VoidButtonStyle.SECONDARY, isCompact = true).apply {
+                                text = context.getString(R.string.settings_network_trusted_sftp_forget)
+                                textSize = 13f
+                                minHeight = VoidTheme.dpToPx(context, 48f)
+                                setOnClickListener {
+                                    scope.launch {
+                                        withContext(Dispatchers.IO) {
+                                            sftpStore.setHostKeyFingerprint(server.id, null)
+                                        }
+                                        reloadTrustedServers()
+                                    }
+                                }
+                            },
+                        )
+                        listContainer.addView(row)
+                    }
+                }
+            }
+        }
+        reloadTrustedServers()
     }
 
     private fun buildAboutCard(): LinearLayout =

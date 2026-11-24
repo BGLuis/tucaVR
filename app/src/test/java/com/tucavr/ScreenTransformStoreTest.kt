@@ -126,6 +126,26 @@ class ScreenTransformStoreTest {
     }
 
     @Test
+    fun testResetDefaultEnvironmentRestoresBuiltInAndLegacyDefaults() {
+        val prefs = FakeSharedPreferences()
+        val store = ScreenTransformStore(prefs)
+
+        store.save(EnvironmentStore.DEFAULT_ENV, 1.1f, 2.2f, -3.3f, 4.4f, 2.475f)
+        assertTrue(store.get(EnvironmentStore.DEFAULT_ENV).isCustomized)
+
+        store.reset()
+
+        val restored = store.get(EnvironmentStore.DEFAULT_ENV)
+        val expected = ScreenTransformStore.getDefaultTransform(EnvironmentStore.DEFAULT_ENV)
+        assertFalse(restored.isCustomized)
+        assertEquals(expected.posX, restored.posX, 0.001f)
+        assertEquals(expected.posY, restored.posY, 0.001f)
+        assertEquals(expected.posZ, restored.posZ, 0.001f)
+        assertEquals(expected.scaleX, restored.scaleX, 0.001f)
+        assertEquals(expected.scaleY, restored.scaleY, 0.001f)
+    }
+
+    @Test
     fun testClampingLimitsOnSave() {
         val prefs = FakeSharedPreferences()
         val store = ScreenTransformStore(prefs)

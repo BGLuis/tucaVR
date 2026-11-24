@@ -10,6 +10,7 @@
 #include "vr_player_ambient.h"
 #include "screen_layout.h"
 #include "bed_mode.h"
+#include "dominant_hand.h"
 #include <math.h>
 #include <algorithm>
 #include <atomic>
@@ -19,6 +20,7 @@ extern std::atomic<bool> g_requestControlsPanelVisible;
 extern std::atomic<bool> g_resetScreenPositionRequested;
 extern std::atomic<bool> g_setScreenTransformRequested;
 extern std::atomic<bool> g_bedModeEnabled;
+extern std::atomic<int32_t> g_dominantHandMode;
 extern std::atomic<bool> g_recenterRequested;
 extern std::atomic<float> g_screenCurvature;
 extern std::atomic<bool> g_screenCurvatureDirty;
@@ -424,11 +426,9 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
     if (controllerActive) {
         state.handTrackingActive = false;
-        // Mesma preferencia do caminho GLES (vr_player_app.cpp): usa a
-        // esquerda se ela estiver rastreada e (a direita nao estiver rastreada
-        // OU o trigger esquerdo estiver pressionado) — deixa o usuario apontar
-        // com a mao que estiver usando ativamente.
-        useLeft = leftTracked && (!rightTracked || triggerL.currentState == XR_TRUE);
+        const auto dominantMode = vrplayer::SanitizeDominantHandMode(::g_dominantHandMode.load());
+        useLeft = vrplayer::ShouldUseLeftPointer(dominantMode, leftTracked, rightTracked,
+                                                 triggerL.currentState == XR_TRUE);
         const XrSpaceLocation& spaceLocation = useLeft ? locL : locR;
         currTrigger = (useLeft ? triggerL.currentState : triggerR.currentState) == XR_TRUE;
 
@@ -470,8 +470,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
         if (validL || validR) {
             state.handTrackingActive = true;
-            // Preferência pela mão direita, exceto se a esquerda estiver ativamente pinçando ou a direita não tiver raio
-            bool useLeftHand = validL && (!validR || handOutL.isPinching);
+            const auto dominantMode = vrplayer::SanitizeDominantHandMode(::g_dominantHandMode.load());
+            bool useLeftHand = vrplayer::ShouldUseLeftPointer(dominantMode, validL, validR, handOutL.isPinching);
             const auto& activeHandOut = useLeftHand ? handOutL : handOutR;
 
             state.hasRay = activeHandOut.hasRay;

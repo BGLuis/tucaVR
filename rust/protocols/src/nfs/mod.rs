@@ -10,17 +10,13 @@ pub use client::{NfsClient, NfsDirEntry};
 pub use source::NfsFileSource;
 pub use uri::{NfsTarget, is_nfs_uri, redact};
 
-use std::time::Duration;
-
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
-
 /// Lista os arquivos e pastas dentro de um diretorio NFS
 pub fn list_directory(target: &NfsTarget, dir_path: &str) -> Result<Vec<NfsDirEntry>, String> {
     let (mut client, root_handle) = NfsClient::open_export(
         &target.host,
         target.port,
         &target.export_path,
-        CONNECT_TIMEOUT,
+        crate::connect_timeout(),
     )?;
     let (target_handle, _, is_dir) = client.resolve_path(&root_handle, dir_path)?;
 
@@ -33,7 +29,7 @@ pub fn list_directory(target: &NfsTarget, dir_path: &str) -> Result<Vec<NfsDirEn
 
 /// Lista os exports disponiveis no servidor NFS
 pub fn list_exports(host: &str, port: u16) -> Result<Vec<String>, String> {
-    list_exports_on_server(host, port, CONNECT_TIMEOUT)
+    list_exports_on_server(host, port, crate::connect_timeout())
 }
 
 /// Varredura recursiva "esta pasta tem alguma midia reproduzivel?" -- ver
@@ -49,7 +45,7 @@ pub fn scan_has_media(
         &target.host,
         target.port,
         &target.export_path,
-        CONNECT_TIMEOUT,
+        crate::connect_timeout(),
     )?;
     let deadline = crate::folder_scan::deadline_from_now();
 
