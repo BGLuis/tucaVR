@@ -68,6 +68,7 @@ jobs:
               - '.github/workflows/main.yml'
               - 'native/**'
               - 'scripts/check-shaders.sh'
+              - 'scripts/check-native-android.sh'
               - 'scripts/test-native-host.sh'
               - '.clang-format'
             android:
@@ -264,12 +265,32 @@ jobs:
             native/include/vulkan_msaa.h \
             native/include/screen_layout.h \
             native/include/bed_mode.h \
+            native/include/dominant_hand.h \
             native/include/color_grading.h \
             native/include/video_layer.h \
             native/include/ycbcr_format.h
 
       - name: Validate Vulkan Shaders (glslc)
         run: ./scripts/check-shaders.sh
+
+      - name: Resolve OpenXR version
+        id: openxr-ver
+        run: |
+          OPENXR_VERSION="$(sed -nE 's/.*openxr_loader_for_android:([0-9.]+).*/\1/p' app/build.gradle.kts | head -n 1)"
+          if [ -z "$OPENXR_VERSION" ]; then
+            echo "::error::Could not resolve openxr_loader_for_android version from app/build.gradle.kts"
+            exit 1
+          fi
+          echo "version=$OPENXR_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Cache OpenXR headers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: build/openxr-headers
+          key: ${{ runner.os }}-openxr-headers-${{ steps.openxr-ver.outputs.version }}
+
+      - name: Check Android C++ compilation (NDK -fsyntax-only)
+        run: ./scripts/check-native-android.sh
 
       - name: Cache ccache (host C++ tests)
         uses: hendrikmuhs/ccache-action@dbeefd73e8e2ffc1bbc412570072735eb4db3607 # v1.2.25
