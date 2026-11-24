@@ -26,6 +26,7 @@ object SettingsResetter {
         screenTransformStore: ScreenTransformStore,
         languagePreferenceStore: LanguagePreferenceStore,
         networkPreferenceStore: NetworkPreferenceStore,
+        environmentStore: EnvironmentStore? = null,
         environmentIds: Collection<String> = BUILTIN_ENVIRONMENT_IDS,
     ) {
         FeatureFlags.resetAll(featureFlagsPrefs)
@@ -37,6 +38,7 @@ object SettingsResetter {
         }
         languagePreferenceStore.reset()
         networkPreferenceStore.reset()
+        environmentStore?.reset()
     }
 
     fun resetAll(context: Context) {
@@ -49,6 +51,7 @@ object SettingsResetter {
             screenTransformStore = ScreenTransformStore(context),
             languagePreferenceStore = LanguagePreferenceStore(context),
             networkPreferenceStore = NetworkPreferenceStore(context),
+            environmentStore = EnvironmentStore(context),
             environmentIds = envIds,
         )
     }

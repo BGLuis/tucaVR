@@ -18,6 +18,7 @@ class SettingsResetterTest {
         val transformPrefs = FakeSharedPreferences()
         val languagePrefs = FakeSharedPreferences()
         val networkPrefs = FakeSharedPreferences()
+        val envPrefs = FakeSharedPreferences()
         val externalUserDataPrefs = FakeSharedPreferences()
 
         // Mutate every setting away from defaults
@@ -38,6 +39,7 @@ class SettingsResetterTest {
             }
         val languageStore = LanguagePreferenceStore(languagePrefs).apply { set(LanguagePreferenceStore.AppLanguage.ES) }
         val networkStore = NetworkPreferenceStore(networkPrefs).apply { setConnectTimeoutSeconds(30) }
+        val environmentStore = EnvironmentStore(envPrefs).apply { setActiveEnvironment(EnvironmentStore.ENV_PASSTHROUGH) }
         externalUserDataPrefs.edit().putString("server_1", "fingerprint_xyz").apply()
 
         SettingsResetter.resetAll(
@@ -48,6 +50,7 @@ class SettingsResetterTest {
             screenTransformStore = screenTransformStore,
             languagePreferenceStore = languageStore,
             networkPreferenceStore = networkStore,
+            environmentStore = environmentStore,
         )
 
         assertTrue(featurePrefs.all.isEmpty())
@@ -60,6 +63,7 @@ class SettingsResetterTest {
         assertFalse(screenTransformStore.get(EnvironmentStore.ENV_CINEMA).isCustomized)
         assertEquals(LanguagePreferenceStore.AppLanguage.AUTO, languageStore.get())
         assertEquals(NetworkPreferenceStore.DEFAULT_TIMEOUT_SECONDS, networkStore.getConnectTimeoutSeconds())
+        assertEquals(EnvironmentStore.DEFAULT_ENV, environmentStore.getActiveEnvironment())
 
         // Unrelated user data stores remain untouched
         assertEquals("fingerprint_xyz", externalUserDataPrefs.getString("server_1", null))

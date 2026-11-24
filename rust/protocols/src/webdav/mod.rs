@@ -44,11 +44,10 @@ pub struct WebdavDirEntry {
 
 /// Cria um cliente HTTP `reqwest::blocking::Client` com as configurações do `WebdavTarget`.
 pub fn create_client(target: &WebdavTarget) -> Result<reqwest::blocking::Client, String> {
-    let timeout = crate::connect_timeout();
     let mut builder = crate::http::client_builder()
         .user_agent("VRMultimediaPlayer/0.1")
-        .connect_timeout(timeout)
-        .timeout(timeout);
+        .connect_timeout(crate::connect_timeout())
+        .timeout(crate::http::request_timeout());
 
     if target.accept_invalid_certs {
         builder = builder.tls_danger_accept_invalid_certs(true);

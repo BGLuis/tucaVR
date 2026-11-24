@@ -28,7 +28,8 @@ pub struct HlsStreamSource {
 impl HlsStreamSource {
     pub fn open(url: &str) -> Result<Self, String> {
         let client = crate::http::client_builder()
-            .timeout(crate::connect_timeout())
+            .connect_timeout(crate::connect_timeout())
+            .timeout(crate::http::request_timeout())
             .build()
             .map_err(|e| e.to_string())?;
 

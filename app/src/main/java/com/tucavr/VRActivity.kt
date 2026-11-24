@@ -1,7 +1,6 @@
 package com.tucavr
 
 import android.app.ActivityManager
-import android.app.LocaleManager
 import android.app.NativeActivity
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -17,7 +16,6 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Environment
-import android.os.LocaleList
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.Editable
@@ -239,6 +237,10 @@ class VRActivity : NativeActivity() {
         private set
     var lastMediaProgressTotal: Float = 0f
         private set
+    var lastKnownMediaIsLoading: Boolean = false
+        private set
+    var lastKnownMediaIsPlaying: Boolean = false
+        private set
 
     fun setDebugStatsEnabled(enabled: Boolean) {
         isDebugStatsEnabled = enabled
@@ -262,6 +264,8 @@ class VRActivity : NativeActivity() {
         currentPlaybackSource = source
         currentMediaMetadata = null
         currentAudioTrackOrdinal = 0
+        lastKnownMediaIsLoading = false
+        lastKnownMediaIsPlaying = source != null
         if (source != null) {
             CoroutineScope(Dispatchers.IO).launch {
                 currentMediaMetadata = com.tucavr.filebrowser.MediaMetadataReader.readCached(this@VRActivity, source)
@@ -433,8 +437,14 @@ class VRActivity : NativeActivity() {
         setTaskDescription(description)
     }
 
+    private var startupSystemLocale: java.util.Locale = java.util.Locale.getDefault()
+
     override fun attachBaseContext(newBase: Context) {
-        super.attachBaseContext(LanguagePreferenceStore(newBase).createLocalizedContext(newBase))
+        val locales = newBase.resources.configuration.locales
+        startupSystemLocale = if (!locales.isEmpty) locales[0] else java.util.Locale.getDefault()
+        super.attachBaseContext(
+            LanguagePreferenceStore(newBase).createLocalizedContext(newBase, systemLocale = startupSystemLocale),
+        )
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -624,26 +634,15 @@ class VRActivity : NativeActivity() {
         nativeSetUpscalingMode(upscalingStore.get().id)
         nativeSetMatchContentFrameRate(FeatureFlags.isEnabled(this, FeatureFlags.Flag.MATCH_CONTENT_FRAME_RATE))
         nativeSetNetworkConnectTimeoutSecs(networkPreferenceStore.getConnectTimeoutSeconds())
-        nativeSetPreferredSubtitleLanguage(languageStore.toSubtitleLanguageTag())
+        nativeSetPreferredSubtitleLanguage(languageStore.toSubtitleLanguageTag(startupSystemLocale))
     }
 
-    private fun localizedOuterContext(): Context = languageStore.createLocalizedContext(this)
-
-    private fun syncPlatformLocaleManager(language: LanguagePreferenceStore.AppLanguage) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            try {
-                val lm = getSystemService(LocaleManager::class.java)
-                lm?.applicationLocales =
-                    if (language == LanguagePreferenceStore.AppLanguage.AUTO) {
-                        LocaleList.getEmptyLocaleList()
-                    } else {
-                        LocaleList.forLanguageTags(language.tag)
-                    }
-            } catch (_: Exception) {
-                // Ignore on restricted environments
-            }
-        }
-    }
+    private fun localizedOuterContext(): Context =
+        languageStore.createLocalizedContext(
+            this,
+            systemLocale = startupSystemLocale,
+            forceOverride = true,
+        )
 
     /**
      * Switches the active UI and subtitle language live by rebuilding the VirtualDisplay Presentations
@@ -651,8 +650,7 @@ class VRActivity : NativeActivity() {
      */
     fun setAppLanguage(language: LanguagePreferenceStore.AppLanguage) {
         languageStore.set(language)
-        syncPlatformLocaleManager(language)
-        nativeSetPreferredSubtitleLanguage(languageStore.toSubtitleLanguageTag())
+        nativeSetPreferredSubtitleLanguage(languageStore.toSubtitleLanguageTag(startupSystemLocale))
         runOnUiThread {
             rebuildPresentationsOnSettings(com.tucavr.screens.SettingsScreen.Category.LANGUAGE)
         }
@@ -663,11 +661,14 @@ class VRActivity : NativeActivity() {
      * playback history, playlists, and downloads untouched.
      */
     fun restoreAllSettingsDefaults() {
-        val previousLanguage = languageStore.get()
         SettingsResetter.resetAll(this)
-        if (previousLanguage != LanguagePreferenceStore.AppLanguage.AUTO) {
-            syncPlatformLocaleManager(LanguagePreferenceStore.AppLanguage.AUTO)
-        }
+        debugStatsMode = DebugStatsDisplayMode.CLOSED
+        nativeSetFullStatsActive(false)
+        nativeSetModalDocked(false, 0.0f)
+        nativeHideModalPanel()
+        presentation?.hideFullDebugStats()
+        ambientAudioManager.stopAmbient()
+        nativeSetEnvironment(EnvironmentStore.DEFAULT_ENV)
         nativeResetScreenPosition()
         applyPersistedSettingsToNative()
         runOnUiThread {
@@ -677,6 +678,7 @@ class VRActivity : NativeActivity() {
 
     private fun rebuildPresentationsOnSettings(category: com.tucavr.screens.SettingsScreen.Category) {
         val outer = localizedOuterContext()
+        val controlsSnapshot = controlsPresentation?.snapshotUiState()
 
         virtualDisplay?.display?.let { display ->
             try {
@@ -694,7 +696,7 @@ class VRActivity : NativeActivity() {
                     p.show()
                     if (xrSessionFocused) p.onXrSessionFocused()
                     if (currentPlaybackSource != null) {
-                        p.updateMediaState(false, true)
+                        p.updateMediaState(lastKnownMediaIsLoading, lastKnownMediaIsPlaying)
                     }
                 }
         }
@@ -711,6 +713,9 @@ class VRActivity : NativeActivity() {
                     cp.show()
                     cp.updatePassthroughState(FeatureFlags.isEnabled(this, FeatureFlags.Flag.PASSTHROUGH))
                     cp.onDebugStatsFlagChanged(isDebugStatsEnabled)
+                    if (currentPlaybackSource != null && controlsSnapshot != null) {
+                        cp.restoreUiState(controlsSnapshot)
+                    }
                 }
         }
 
@@ -1450,6 +1455,8 @@ class VRActivity : NativeActivity() {
             isLoading: Boolean,
             isPlaying: Boolean,
         ) {
+            activity.lastKnownMediaIsLoading = isLoading
+            activity.lastKnownMediaIsPlaying = isPlaying
             activity.runOnUiThread {
                 activity.controlsPresentation?.updateMediaState(isLoading, isPlaying)
                 activity.presentation?.updateMediaState(isLoading, isPlaying)
@@ -1577,7 +1584,7 @@ class VRActivity : NativeActivity() {
         // T7.6: informa o idioma ativo para a auto-selecao de faixa de
         // legenda embutida (aplicada no proximo load nativo, se o usuario nao
         // tiver escolhido uma faixa manualmente).
-        nativeSetPreferredSubtitleLanguage(languageStore.toSubtitleLanguageTag())
+        nativeSetPreferredSubtitleLanguage(languageStore.toSubtitleLanguageTag(startupSystemLocale))
     }
 
     // T9.1-T9.3: os 3 entry points de playback (playFile/playUrl/playSmb) sao

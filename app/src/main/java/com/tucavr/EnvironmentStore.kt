@@ -6,16 +6,21 @@ import android.content.SharedPreferences
 /**
  * Persistência do identificador do ambiente virtual ativo.
  */
-class EnvironmentStore(context: Context) {
-    private val prefs: SharedPreferences =
-        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+class EnvironmentStore(
+    private val prefs: SharedPreferences,
+) {
+    constructor(context: Context) : this(
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE),
+    )
 
-    fun getActiveEnvironment(): String {
-        return prefs.getString(KEY_ACTIVE_ENV, DEFAULT_ENV) ?: DEFAULT_ENV
-    }
+    fun getActiveEnvironment(): String = prefs.getString(KEY_ACTIVE_ENV, DEFAULT_ENV) ?: DEFAULT_ENV
 
     fun setActiveEnvironment(environmentId: String) {
         prefs.edit().putString(KEY_ACTIVE_ENV, environmentId).apply()
+    }
+
+    fun reset() {
+        setActiveEnvironment(DEFAULT_ENV)
     }
 
     companion object {

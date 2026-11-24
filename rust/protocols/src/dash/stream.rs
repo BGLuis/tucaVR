@@ -29,7 +29,8 @@ pub fn normalize_dash_url(url: &str) -> String {
 pub fn fetch_and_probe_representations(url: &str) -> Result<Vec<DashRepresentation>, String> {
     let normalized = normalize_dash_url(url);
     let client = crate::http::client_builder()
-        .timeout(crate::connect_timeout())
+        .connect_timeout(crate::connect_timeout())
+        .timeout(crate::http::request_timeout())
         // R-01: sem redirect automático — um redirecionamento HTTP 3xx da mesma origem já
         // validada por `resolve_dash_url` poderia apontar para fora dela, contornando a
         // checagem de origem só por string.
@@ -87,7 +88,8 @@ impl DashStreamSource {
     pub fn open(url: &str) -> Result<Self, String> {
         let normalized = normalize_dash_url(url);
         let client = crate::http::client_builder()
-            .timeout(crate::connect_timeout())
+            .connect_timeout(crate::connect_timeout())
+            .timeout(crate::http::request_timeout())
             // R-01: mesma razão do client de fetch_and_probe_representations acima.
             .redirect(reqwest::redirect::Policy::none())
             .build()

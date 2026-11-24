@@ -135,7 +135,8 @@ pub fn parse_device_description(xml: &str, location: &str) -> Result<DlnaDevice,
 /// Baixa e faz parse do Device Description XML a partir da URL LOCATION.
 pub fn fetch_device_description(location_url: &str) -> Result<DlnaDevice, String> {
     let client = crate::http::client_builder()
-        .timeout(crate::connect_timeout())
+        .connect_timeout(crate::connect_timeout())
+        .timeout(crate::http::request_timeout())
         .build()
         .map_err(|e| e.to_string())?;
 

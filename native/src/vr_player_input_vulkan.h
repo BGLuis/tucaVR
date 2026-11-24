@@ -897,17 +897,16 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
     // O laser só é visível se estiver mirando em um painel interativo visível ou manipulando a tela via grab
     state.beamVisible = state.hasRay && ((dispatchHitPanel != 0 && state.lastHitDist > 0.0f) || state.isScreenGrabbed);
 
-    // Haptics (paridade com GLES: pulso leve no hover-enter, mais forte no
-    // click) — sempre na mao direita, igual ao FireHaptic(RightHandPath,...)
-    // do GLES (nao acompanha useLeft).
+    // Haptics follow the active pointer hand so left-dominant users feel hover/click pulses.
+    const XrPath activeHapticPath = useLeft ? leftPath : rightPath;
     if (dispatchHitPanel != 0 && dispatchHitPanel != state.lastHoverPanel) {
         if (state.hoverHapticsEnabled) {
-            FireHaptic(state, rightPath, 0.25f, XR_MIN_HAPTIC_DURATION);
+            FireHaptic(state, activeHapticPath, 0.25f, XR_MIN_HAPTIC_DURATION);
         }
     }
     state.lastHoverPanel = dispatchHitPanel;
     if (action == 0) {
-        FireHaptic(state, rightPath, 0.6f, 20000000 /* 20ms */);
+        FireHaptic(state, activeHapticPath, 0.6f, 20000000 /* 20ms */);
     }
 
     // --- A/X/B/Y/Menu (Estagio 6, paridade com GLES T4.4) ---

@@ -48,15 +48,19 @@ class LanguagePreferenceStore(
 
     fun toSubtitleLanguageTag(systemLocale: Locale = Locale.getDefault()): String = resolveLocale(systemLocale).toLanguageTag()
 
-    fun createLocalizedContext(base: Context): Context {
+    fun createLocalizedContext(
+        base: Context,
+        systemLocale: Locale = Locale.getDefault(),
+        forceOverride: Boolean = false,
+    ): Context {
         val target = get()
-        if (target == AppLanguage.AUTO) {
+        if (target == AppLanguage.AUTO && !forceOverride) {
             return base
         }
-        val locale = resolveLocale()
+        val locale = resolveLocale(systemLocale)
         val config = Configuration(base.resources.configuration)
         config.setLocale(locale)
-        return base.createConfigurationContext(config)
+        return base.createConfigurationContext(config) ?: base
     }
 
     companion object {

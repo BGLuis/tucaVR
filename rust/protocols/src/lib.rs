@@ -142,4 +142,16 @@ mod tests {
             Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS)
         );
     }
+
+    #[test]
+    fn http_request_timeout_preserves_20s_transfer_floor() {
+        let _guard = TimeoutGuard::new();
+        set_connect_timeout_secs(5);
+        assert_eq!(connect_timeout(), Duration::from_secs(5));
+        assert_eq!(crate::http::request_timeout(), Duration::from_secs(20));
+
+        set_connect_timeout_secs(30);
+        assert_eq!(connect_timeout(), Duration::from_secs(30));
+        assert_eq!(crate::http::request_timeout(), Duration::from_secs(30));
+    }
 }

@@ -394,6 +394,9 @@ class VRPresentation(
     }
 
     override fun dismiss() {
+        if (::settingsScreen.isInitialized) {
+            settingsScreen.cleanup()
+        }
         disposeIntro()
         scope.cancel()
         super.dismiss()
