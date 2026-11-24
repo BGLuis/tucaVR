@@ -12,6 +12,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
+import com.tucavr.BuildConfig
 import com.tucavr.FeatureFlags
 import com.tucavr.HdrLuminanceStore
 import com.tucavr.R
@@ -50,6 +51,7 @@ class SettingsScreen(
         PLAYBACK(R.string.settings_section_playback, R.string.settings_resume_policy_desc),
         CONTROLS(R.string.settings_section_controls, R.string.settings_panel_fov_desc),
         ADVANCED(R.string.settings_section_advanced, R.string.settings_debug_stats_description),
+        ABOUT(R.string.settings_section_about, R.string.settings_about_description),
     }
 
     private var selectedCategory = Category.VIDEO
@@ -57,6 +59,8 @@ class SettingsScreen(
     private lateinit var optionsContainer: FrameLayout
 
     // Live preview rail views
+    private var standardContextRail: LinearLayout? = null
+    private var privacyContextRail: LinearLayout? = null
     private var previewDescriptionView: TextView? = null
     private var telemetryGpuView: TextView? = null
     private var telemetryThermalView: TextView? = null
@@ -263,15 +267,27 @@ class SettingsScreen(
         optionsContainer.addView(scroller)
 
         // Atualiza coluna 3 (Preview & Contexto)
+        val isAbout = (cat == Category.ABOUT)
+        standardContextRail?.visibility = if (isAbout) View.GONE else View.VISIBLE
+        privacyContextRail?.visibility = if (isAbout) View.VISIBLE else View.GONE
         previewDescriptionView?.text = context.getString(cat.descRes)
     }
 
     private fun setupLivePreviewRail() {
+        val railContainer =
+            FrameLayout(context).apply {
+                layoutParams =
+                    ViewGroup.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                    )
+            }
+
         val rail =
             LinearLayout(context).apply {
                 orientation = LinearLayout.VERTICAL
                 layoutParams =
-                    ViewGroup.LayoutParams(
+                    FrameLayout.LayoutParams(
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT,
                     )
@@ -282,6 +298,7 @@ class SettingsScreen(
                     VoidTheme.dpToPx(context, 20f),
                 )
             }
+        standardContextRail = rail
 
         // Título Live Preview
         val previewTitle =
@@ -355,12 +372,98 @@ class SettingsScreen(
 
         rail.addView(telemetryCard)
 
-        host.setContextContent(rail)
+        val privacyRail = buildPrivacyContextRail()
+        privacyContextRail = privacyRail
+
+        railContainer.addView(rail)
+        railContainer.addView(privacyRail)
+        host.setContextContent(railContainer)
 
         // Registrar listener de telemetria
         activity.statsTelemetryListeners.remove(telemetryListener)
         activity.statsTelemetryListeners.add(telemetryListener)
     }
+
+    private fun buildPrivacyContextRail(): LinearLayout =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams =
+                FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                )
+            setPadding(
+                VoidTheme.dpToPx(context, 16f),
+                VoidTheme.dpToPx(context, 20f),
+                VoidTheme.dpToPx(context, 16f),
+                VoidTheme.dpToPx(context, 20f),
+            )
+            visibility = View.GONE
+
+            addView(
+                VoidText.mono(
+                    context,
+                    context.getString(R.string.settings_about_privacy_eyebrow),
+                    sizeSp = 13f,
+                    secondary = false,
+                ).apply {
+                    setTextColor(VoidTheme.colorAccent)
+                    setPadding(0, 0, 0, VoidTheme.dpToPx(context, 12f))
+                },
+            )
+
+            val buildMode =
+                context.getString(
+                    if (activity.isDebuggable) R.string.settings_about_build_debug else R.string.settings_about_build_release,
+                )
+            val versionBadge =
+                context.getString(
+                    R.string.settings_about_privacy_version_format,
+                    BuildConfig.VERSION_NAME,
+                    BuildConfig.VERSION_CODE,
+                    buildMode,
+                )
+
+            val card =
+                LinearLayout(context).apply {
+                    orientation = LinearLayout.VERTICAL
+                    layoutParams =
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ).apply { bottomMargin = VoidTheme.dpToPx(context, 14f) }
+                    background =
+                        GradientDrawable().apply {
+                            setColor(VoidTheme.colorSurfaceAlt)
+                            cornerRadius = VoidTheme.dp(context, 12f)
+                        }
+                    setPadding(
+                        VoidTheme.dpToPx(context, 16f),
+                        VoidTheme.dpToPx(context, 16f),
+                        VoidTheme.dpToPx(context, 16f),
+                        VoidTheme.dpToPx(context, 16f),
+                    )
+
+                    addView(VoidText.title(context, context.getString(R.string.app_name), sizeSp = 28f))
+                    addView(
+                        VoidText.mono(context, versionBadge, sizeSp = 12f, secondary = false).apply {
+                            setTextColor(VoidTheme.colorAccent)
+                            setPadding(0, VoidTheme.dpToPx(context, 4f), 0, VoidTheme.dpToPx(context, 6f))
+                        },
+                    )
+                    addView(VoidText.body(context, context.getString(R.string.settings_about_privacy_headline), sizeSp = 15f))
+                }
+            addView(card)
+
+            addView(
+                VoidText.body(
+                    context,
+                    context.getString(R.string.settings_about_privacy_details),
+                    sizeSp = 14f,
+                    secondary = true,
+                ),
+            )
+        }
 
     private fun buildOptionsForCategory(cat: Category): LinearLayout {
         val content =
@@ -516,10 +619,171 @@ class SettingsScreen(
                     ),
                 )
             }
+            Category.ABOUT -> {
+                buildAboutCategory(content)
+            }
         }
 
         return content
     }
+
+    private fun buildAboutCategory(content: LinearLayout) {
+        val versionCard = buildAboutCard()
+        val versionHeader =
+            context.getString(
+                R.string.settings_about_version_format,
+                context.getString(R.string.app_name),
+                BuildConfig.VERSION_NAME,
+                BuildConfig.VERSION_CODE,
+            )
+        versionCard.addView(
+            VoidText.body(context, versionHeader, sizeSp = 18f).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+            },
+        )
+        versionCard.addView(
+            VoidText.body(context, context.getString(R.string.settings_about_app_tagline), sizeSp = 13f, secondary = true),
+        )
+        content.addView(versionCard)
+
+        val licensesCard = buildAboutCard()
+        licensesCard.addView(
+            VoidText.body(context, context.getString(R.string.settings_about_licenses_title), sizeSp = 18f).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+            },
+        )
+        licensesCard.addView(
+            VoidText.body(context, context.getString(R.string.settings_about_licenses_subtitle), sizeSp = 13f, secondary = true).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 10f))
+            },
+        )
+        val licenseEntries =
+            listOf(
+                R.string.settings_about_component_ffmpeg to R.string.settings_about_license_ffmpeg,
+                R.string.settings_about_component_geckoview to R.string.settings_about_license_geckoview,
+                R.string.settings_about_component_meta_openxr to R.string.settings_about_license_meta_openxr,
+                R.string.settings_about_component_rust_crates to R.string.settings_about_license_rust,
+            )
+        licenseEntries.forEachIndexed { index, (componentRes, licenseRes) ->
+            licensesCard.addView(
+                buildAboutRow(
+                    label = context.getString(componentRes),
+                    value = context.getString(licenseRes),
+                    addBottomMargin = index < licenseEntries.lastIndex,
+                ),
+            )
+        }
+        content.addView(licensesCard)
+
+        val translatorsCard = buildAboutCard()
+        translatorsCard.addView(
+            VoidText.body(context, context.getString(R.string.settings_about_translators_title), sizeSp = 18f).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 4f))
+            },
+        )
+        translatorsCard.addView(
+            VoidText.body(context, context.getString(R.string.settings_about_translators_subtitle), sizeSp = 13f, secondary = true).apply {
+                setPadding(0, 0, 0, VoidTheme.dpToPx(context, 10f))
+            },
+        )
+        val credits = TranslatorsParser.loadFromAssets(context.assets)
+        if (credits.isEmpty()) {
+            translatorsCard.addView(
+                VoidText.body(context, context.getString(R.string.settings_about_translators_empty), sizeSp = 14f, secondary = true),
+            )
+        } else {
+            credits.forEachIndexed { index, credit ->
+                val reviewer = credit.reviewedBy ?: context.getString(R.string.settings_about_review_pending)
+                translatorsCard.addView(
+                    buildAboutRow(
+                        label = credit.language,
+                        value = credit.translators,
+                        subline = context.getString(R.string.settings_about_reviewed_by_format, reviewer),
+                        addBottomMargin = index < credits.lastIndex,
+                    ),
+                )
+            }
+        }
+        content.addView(translatorsCard)
+    }
+
+    private fun buildAboutCard(): LinearLayout =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams =
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply { bottomMargin = VoidTheme.dpToPx(context, 12f) }
+            background =
+                GradientDrawable().apply {
+                    setColor(VoidTheme.colorSurface)
+                    cornerRadius = VoidTheme.dp(context, 12f)
+                }
+            setPadding(
+                VoidTheme.dpToPx(context, 20f),
+                VoidTheme.dpToPx(context, 16f),
+                VoidTheme.dpToPx(context, 20f),
+                VoidTheme.dpToPx(context, 16f),
+            )
+        }
+
+    private fun buildAboutRow(
+        label: String,
+        value: String,
+        subline: String? = null,
+        addBottomMargin: Boolean = true,
+    ): LinearLayout =
+        LinearLayout(context).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams =
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                ).apply {
+                    if (addBottomMargin) bottomMargin = VoidTheme.dpToPx(context, 8f)
+                }
+            background =
+                GradientDrawable().apply {
+                    setColor(VoidTheme.colorSurfaceAlt)
+                    cornerRadius = VoidTheme.dp(context, 10f)
+                }
+            setPadding(
+                VoidTheme.dpToPx(context, 16f),
+                VoidTheme.dpToPx(context, 10f),
+                VoidTheme.dpToPx(context, 16f),
+                VoidTheme.dpToPx(context, 10f),
+            )
+
+            val topRow =
+                LinearLayout(context).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    layoutParams =
+                        LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                        )
+                    addView(
+                        VoidText.body(context, label, sizeSp = 16f).apply {
+                            layoutParams =
+                                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                                    marginEnd = VoidTheme.dpToPx(context, 12f)
+                                }
+                        },
+                    )
+                    addView(VoidText.mono(context, value, sizeSp = 13f, secondary = true))
+                }
+            addView(topRow)
+
+            if (subline != null) {
+                addView(
+                    VoidText.mono(context, subline, sizeSp = 12f, secondary = true).apply {
+                        setPadding(0, VoidTheme.dpToPx(context, 4f), 0, 0)
+                    },
+                )
+            }
+        }
 
     private fun buildResumePolicyRow(): LinearLayout =
         LinearLayout(context).apply {

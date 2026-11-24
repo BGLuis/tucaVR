@@ -603,6 +603,33 @@
     <string name="settings_telemetry_export_label">Export Debug Telemetry (CSV)</string>
     <string name="settings_telemetry_export_description">Periodically records performance time-series (FPS, jitter, queue, thermal) to session CSV files in debug storage.</string>
 
+    <!-- Settings: About (Phase 1.0 T2.4 / Issue #71) -->
+    <string name="settings_section_about">About</string>
+    <string name="settings_about_description">Application version, open-source component licences, translator credits and privacy information.</string>
+    <string name="settings_about_version_format">%1$s %2$s (%3$d)</string>
+    <string name="settings_about_app_tagline">2D, 3D and VR video player for Meta Quest 3. No telemetry or analytics.</string>
+    <string name="settings_about_licenses_title">Open-source licences</string>
+    <string name="settings_about_licenses_subtitle">Third-party components included in the app.</string>
+    <string name="settings_about_component_ffmpeg">FFmpeg</string>
+    <string name="settings_about_license_ffmpeg">LGPL 2.1 · without --enable-gpl</string>
+    <string name="settings_about_component_geckoview">GeckoView</string>
+    <string name="settings_about_license_geckoview">MPL 2.0</string>
+    <string name="settings_about_component_meta_openxr">Meta OpenXR SDK</string>
+    <string name="settings_about_license_meta_openxr">Oculus SDK License Agreement</string>
+    <string name="settings_about_component_rust_crates">Rust crates</string>
+    <string name="settings_about_license_rust">MIT / Apache-2.0 · cargo-deny</string>
+    <string name="settings_about_translators_title">Translators</string>
+    <string name="settings_about_translators_subtitle">Loaded from assets/TRANSLATORS.md: adding a contributor requires no code change.</string>
+    <string name="settings_about_translators_empty">No translator credits listed yet.</string>
+    <string name="settings_about_reviewed_by_format">Reviewed by: %1$s</string>
+    <string name="settings_about_review_pending">Pending review</string>
+    <string name="settings_about_privacy_eyebrow">PRIVACY</string>
+    <string name="settings_about_privacy_version_format">%1$s (%2$d) · %3$s</string>
+    <string name="settings_about_build_debug">Debug</string>
+    <string name="settings_about_build_release">Release</string>
+    <string name="settings_about_privacy_headline">No data leaves the Quest.</string>
+    <string name="settings_about_privacy_details">The debug exporter writes CSV only on device and is off by default. No password is ever written to logs.</string>
+
     <!-- Debug Stats Modal -->
     <string name="player_btn_debug_stats">Stats for Nerds</string>
     <string name="debug_stats_modal_title">Technical Statistics</string>
