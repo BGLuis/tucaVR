@@ -15,6 +15,7 @@ import com.tucavr.designsystem.VoidText
 import com.tucavr.designsystem.VoidTheme
 import com.tucavr.filebrowser.DlnaThumbnailFetcher
 import com.tucavr.filebrowser.DlnaThumbnailPolicy
+import com.tucavr.network.NetworkError
 import com.tucavr.network.SavedServer
 import com.tucavr.network.SavedServerDao
 import kotlinx.coroutines.CancellationException
@@ -145,7 +146,7 @@ class NetworkDlnaScreen(
 
             fileProgressBar?.visibility = View.GONE
             if (raw.startsWith("ERROR:")) {
-                fileStatusLabel?.text = context.getString(R.string.network_dlna_error_format, raw.removePrefix("ERROR:"))
+                fileStatusLabel?.text = context.getString(R.string.network_dlna_error_format, NetworkError.userMessage(context, raw))
                 currentItems = emptyList()
             } else {
                 fileStatusLabel?.text = ""

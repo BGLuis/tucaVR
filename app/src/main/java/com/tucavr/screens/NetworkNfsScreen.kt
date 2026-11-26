@@ -35,6 +35,7 @@ import com.tucavr.filebrowser.canReuseBrowser
 import com.tucavr.filebrowser.sortMediaEntries
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
+import com.tucavr.network.NetworkError
 import com.tucavr.network.SavedServer
 import com.tucavr.network.SavedServerDao
 import com.tucavr.network.ServerProtocol
@@ -167,7 +168,7 @@ class NetworkNfsScreen(
                             statusText.text =
                                 context.getString(
                                     R.string.network_nfs_form_status_error_format,
-                                    result.removePrefix("ERROR:"),
+                                    NetworkError.userMessage(context, result),
                                 )
                         } else {
                             val firstExport = result.lines().firstOrNull { it.isNotBlank() }
@@ -210,7 +211,7 @@ class NetworkNfsScreen(
                             statusText.text =
                                 context.getString(
                                     R.string.network_nfs_form_status_error_format,
-                                    result.removePrefix("ERROR:"),
+                                    NetworkError.userMessage(context, result),
                                 )
                         } else {
                             statusText.text = context.getString(R.string.network_nfs_form_status_connected)
@@ -511,7 +512,7 @@ class NetworkNfsScreen(
             }
             is NetworkDirectoryState.Error -> {
                 cachedRawEntries = emptyList()
-                val msg = context.getString(R.string.network_nfs_form_status_error_format, state.message)
+                val msg = context.getString(R.string.network_nfs_form_status_error_format, NetworkError.userMessage(context, state.message))
                 countLabel?.text = msg
                 emptyLabel?.text = msg
                 clearFiltersButton?.visibility = View.GONE

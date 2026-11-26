@@ -40,6 +40,7 @@ import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
 import com.tucavr.network.FtpCredentialStore
 import com.tucavr.network.FtpServer
+import com.tucavr.network.NetworkError
 import com.tucavr.screens.adapters.FileAdapter
 import com.tucavr.screens.components.MediaBrowserToolbar
 import kotlinx.coroutines.CoroutineScope
@@ -214,7 +215,7 @@ class NetworkFtpScreen(
                             statusText.text =
                                 context.getString(
                                     R.string.network_ftp_form_status_error_format,
-                                    result.removePrefix("ERROR:"),
+                                    NetworkError.userMessage(context, result),
                                 )
                         } else {
                             statusText.text = context.getString(R.string.network_ftp_form_status_connected)
@@ -529,7 +530,7 @@ class NetworkFtpScreen(
             }
             is NetworkDirectoryState.Error -> {
                 cachedRawEntries = emptyList()
-                val msg = context.getString(R.string.network_ftp_form_status_error_format, state.message)
+                val msg = context.getString(R.string.network_ftp_form_status_error_format, NetworkError.userMessage(context, state.message))
                 countLabel?.text = msg
                 emptyLabel?.text = msg
                 clearFiltersButton?.visibility = View.GONE
