@@ -1,5 +1,6 @@
 #pragma once
 
+#include "bed_mode.h"
 #include "vk_math.h"
 
 #include <cmath>
@@ -54,13 +55,7 @@ inline XrVector3f ComputeControlsCylinderCenter(const XrVector3f &controlsCenter
 // Pure function calculating world position of controls center with full 3DoF scene rotation
 inline XrVector3f ComputeControlsCenter3DoF(const XrVector3f &headCenter, const Mat4 &sceneRot,
                                             const XrVector3f &basePos = kBaseControlsPos) {
-    const XrVector3f rel = {basePos.x, basePos.y - 1.5f, basePos.z};
-    const XrVector3f rotRel = {
-        sceneRot.m[0] * rel.x + sceneRot.m[4] * rel.y + sceneRot.m[8] * rel.z,
-        sceneRot.m[1] * rel.x + sceneRot.m[5] * rel.y + sceneRot.m[9] * rel.z,
-        sceneRot.m[2] * rel.x + sceneRot.m[6] * rel.y + sceneRot.m[10] * rel.z,
-    };
-    return Vec3Add(headCenter, rotRel);
+    return BasePointToWorld(basePos, headCenter, sceneRot);
 }
 
 // Pure function calculating the rotation matrix for controls panel with full 3DoF scene rotation
