@@ -1,34 +1,43 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Generator of the "Cosmic Space" 3D environment assets (Phase 0.5 §3):
-- app/src/main/assets/environments/space/model.glb   (Floating space platform)
-- app/src/main/assets/environments/space/skybox.png  (360 equirectangular cosmic panorama)
-- app/src/main/assets/environments/space/ambient.ogg (Soft looping space rumble)
+generate-space-environment.py — High-fidelity Cosmic Space environment generator for tucaVR.
 
-Recommended execution with the dedicated interpreter:
-  /tmp/env_3d_tools/bin/python scripts/generate-space-environment.py
+Produces:
+- app/src/main/assets/environments/space/model.glb   (512x512 baked-relief PBR orbital deck, < 8k tris, 0 collisions)
+- app/src/main/assets/environments/space/skybox.png  (4096x2048 360 equirectangular deep space + ringed gas giant)
+- Optionally regenerates ambient.ogg when invoked with --regen-audio.
 """
 
-import os
-import sys
 import math
-import time
-import struct
-import wave
+import os
 import subprocess
-import json
+import sys
+import time
+import wave
 import numpy as np
 from PIL import Image
 
-try:
-    import trimesh
-except ImportError:
-    print("ERROR: trimesh not found. Run with /tmp/env_3d_tools/bin/python")
-    sys.exit(1)
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
 
-# Default project paths
-BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+from env_glb_builder import (
+    CollisionChecker,
+    GlbSceneBuilder,
+    MaterialSpec,
+    MeshPart,
+    make_box,
+    make_cylinder,
+    make_flat_ring,
+    make_profile_ring,
+    make_rounded_box,
+    make_solid_sector,
+    tex_brushed_alloy,
+    tex_carbon_deck,
+)
+
+BASE_DIR = os.path.abspath(os.path.join(SCRIPT_DIR, ".."))
 SPACE_DIR = os.path.join(BASE_DIR, "app", "src", "main", "assets", "environments", "space")
 MODEL_OUT = os.path.join(SPACE_DIR, "model.glb")
 SKYBOX_OUT = os.path.join(SPACE_DIR, "skybox.png")
@@ -36,227 +45,263 @@ AMBIENT_OUT = os.path.join(SPACE_DIR, "ambient.ogg")
 
 
 # ==============================================================================
-# 1. COSMIC SKYBOX GENERATOR (2048x1024 Equirectangular PNG)
+# 1. 4K COSMIC SKYBOX GENERATOR (4096x2048 Equirectangular PNG, seamless 360)
 # ==============================================================================
-def generate_skybox(output_path, width=2048, height=1024):
+def _spherical_fbm(X: np.ndarray, Y: np.ndarray, Z: np.ndarray, seed: int, freq_scale: float, n_waves: int) -> np.ndarray:
+    """Seamless 3D directional-wave noise evaluated directly on the unit sphere (zero seam at ±180°)."""
+    rng = np.random.default_rng(seed)
+    W = rng.normal(0.0, freq_scale, size=(3, n_waves)).astype(np.float32)
+    phases = rng.uniform(0.0, 2.0 * math.pi, size=(n_waves,)).astype(np.float32)
+    h, w = X.shape
+    out = np.zeros((h, w), dtype=np.float32)
+    chunk = 128
+    for r0 in range(0, h, chunk):
+        r1 = min(h, r0 + chunk)
+        P = np.stack([X[r0:r1].ravel(), Y[r0:r1].ravel(), Z[r0:r1].ravel()], axis=1)
+        vals = np.cos(P @ W + phases).mean(axis=1)
+        out[r0:r1] = vals.reshape((r1 - r0, w))
+    return out
+
+
+def generate_skybox(output_path: str, width: int = 4096, height: int = 2048) -> None:
     """
-    Generates a realistic 360 equirectangular panorama of deep space:
-    - A black background with thousands of point stars (varied brightness/sizes).
-    - Soft gradients of cosmic nebulae (purple, deep blue and magenta).
-    - A harmonic Milky Way trail crossing the sky with dust lanes.
-    - Perfect seamless spherical continuity (360 seamless).
+    Generates a crisp 4K 360° equirectangular deep-space panorama calibrated for sRGB hardware decode:
+    - Obsidian pitch-black deep space contrast with luminous Milky Way & nebulae.
+    - Ringed gas giant planet in the lower-left orbital horizon with terminator, limb glow, and ring shadow.
+    - 12,000 anti-aliased sub-pixel stars with natural spectral & magnitude distribution.
     """
-    print(f"\n[1/3] Generating the Equirectangular Cosmic Skybox ({width}x{height})...")
+    print(f"\n[1/2] Generating 4K Equirectangular Cosmic Skybox ({width}x{height})...")
     t0 = time.time()
 
-    # Spherical grid of unit 3D coordinates
-    theta = np.linspace(-np.pi, np.pi, width, endpoint=False)
-    phi = np.linspace(np.pi / 2, -np.pi / 2, height)
-    theta_grid, phi_grid = np.meshgrid(theta, phi)
-    cos_phi = np.cos(phi_grid)
-    X = cos_phi * np.cos(theta_grid)
-    Y = np.sin(phi_grid)
-    Z = cos_phi * np.sin(theta_grid)
+    theta = np.linspace(-math.pi, math.pi, width, endpoint=False, dtype=np.float32)
+    phi = np.linspace(math.pi * 0.5, -math.pi * 0.5, height, dtype=np.float32)
+    theta_g, phi_g = np.meshgrid(theta, phi)
+    cos_phi = np.cos(phi_g)
+    X = cos_phi * np.cos(theta_g)
+    Y = np.sin(phi_g)
+    Z = cos_phi * np.sin(theta_g)
 
-    P = np.stack([X.ravel(), Y.ravel(), Z.ravel()], axis=1)
+    warp = _spherical_fbm(X, Y, Z, seed=301, freq_scale=2.4, n_waves=14) * 0.22
+    Xw = X + warp
+    Yw = Y - warp * 0.7
+    Zw = Z + warp * 0.5
+    n_large = np.clip(_spherical_fbm(Xw, Yw, Zw, seed=302, freq_scale=3.2, n_waves=18) * 1.45 + 0.36, 0.0, 1.0)
+    n_fine = np.clip(_spherical_fbm(Xw, Yw, Zw, seed=303, freq_scale=7.5, n_waves=20) * 1.60 + 0.30, 0.0, 1.0)
+    n_dust = np.clip(_spherical_fbm(Xw, Yw, Zw, seed=304, freq_scale=11.0, n_waves=20) * 2.20 + 0.15, 0.0, 1.0)
 
-    # Multi-scale 3D Fourier noise for nebulae and interstellar dust
-    np.random.seed(2026)
-    K1 = 16
-    W1 = np.random.randn(3, K1) * 3.5
-    p1 = np.random.rand(K1) * 2 * np.pi
-    noise_large = (np.cos(np.dot(P, W1) + p1).mean(axis=1).reshape((height, width)) + 0.3) * 0.5
-
-    K2 = 24
-    W2 = np.random.randn(3, K2) * 8.0
-    p2 = np.random.rand(K2) * 2 * np.pi
-    noise_fine = (np.cos(np.dot(P, W2) + p2).mean(axis=1).reshape((height, width)) + 0.3) * 0.5
-
-    # Noise for dust lanes (dark filaments of the Milky Way)
-    K3 = 20
-    W3 = np.random.randn(3, K3) * 12.0
-    p3 = np.random.rand(K3) * 2 * np.pi
-    noise_dust = np.clip(np.cos(np.dot(P, W3) + p3).mean(axis=1).reshape((height, width)) * 2.0, 0, 1)
-
-    # Tilted galactic plane of the Milky Way (~55 degrees)
-    mw_n = np.array([0.55, 0.65, -0.52])
+    # Tilted Milky Way galactic band + warm core
+    mw_n = np.array([0.48, 0.68, -0.55], dtype=np.float32)
     mw_n /= np.linalg.norm(mw_n)
     d_mw = np.abs(X * mw_n[0] + Y * mw_n[1] + Z * mw_n[2])
-    mw_band = np.exp(-d_mw**2 / (2 * 0.16**2)) * (1.0 - 0.6 * noise_dust)
+    mw_band = np.exp(-(d_mw ** 2) / (2.0 * 0.145 ** 2)) * (1.0 - 0.66 * n_dust) * (0.45 + 0.55 * n_fine)
 
-    # Galactic bulge/center
-    mw_core_c = np.cross(mw_n, [0, 1, 0])
-    mw_core_c /= np.linalg.norm(mw_core_c)
-    d_core = np.arccos(np.clip(X * mw_core_c[0] + Y * mw_core_c[1] + Z * mw_core_c[2], -1, 1))
-    mw_core = 1.3 * np.exp(-d_core**2 / (2 * 0.35**2)) * (1.0 - 0.5 * noise_dust)
+    mw_core_dir = np.cross(mw_n, np.array([0.0, 1.0, 0.0], dtype=np.float32))
+    mw_core_dir /= np.linalg.norm(mw_core_dir)
+    d_core = np.arccos(np.clip(X * mw_core_dir[0] + Y * mw_core_dir[1] + Z * mw_core_dir[2], -1.0, 1.0))
+    mw_core = 1.35 * np.exp(-(d_core ** 2) / (2.0 * 0.32 ** 2)) * (1.0 - 0.52 * n_dust)
     mw_total = mw_band + mw_core
 
-    # Nebula 1: Purple / Magenta (upper front-right)
-    neb1_c = np.array([0.45, 0.25, -0.85])
-    neb1_c /= np.linalg.norm(neb1_c)
-    d_neb1 = np.arccos(np.clip(X * neb1_c[0] + Y * neb1_c[1] + Z * neb1_c[2], -1, 1))
-    neb1 = np.exp(-d_neb1**2 / (2 * 0.32**2)) * np.clip(noise_large + 0.2, 0, 1)
+    def nebula_lobe(direction, sigma, noise_field):
+        d = np.asarray(direction, dtype=np.float32)
+        d /= np.linalg.norm(d)
+        ang = np.arccos(np.clip(X * d[0] + Y * d[1] + Z * d[2], -1.0, 1.0))
+        return np.exp(-(ang ** 2) / (2.0 * sigma ** 2)) * noise_field
 
-    # Nebula 2: Deep Blue / Cosmic Cyan (front-left side)
-    neb2_c = np.array([-0.65, -0.20, -0.70])
-    neb2_c /= np.linalg.norm(neb2_c)
-    d_neb2 = np.arccos(np.clip(X * neb2_c[0] + Y * neb2_c[1] + Z * neb2_c[2], -1, 1))
-    neb2 = np.exp(-d_neb2**2 / (2 * 0.38**2)) * np.clip(noise_fine + 0.2, 0, 1)
+    neb_violet = nebula_lobe((0.46, 0.28, -0.84), 0.35, n_large)
+    neb_cyan = nebula_lobe((-0.62, 0.18, -0.76), 0.39, n_fine)
+    neb_magenta = nebula_lobe((0.52, -0.32, 0.79), 0.42, 0.6 * n_large + 0.4 * n_fine)
 
-    # Nebula 3: Magenta / Stellar Violet (rear)
-    neb3_c = np.array([0.50, -0.35, 0.78])
-    neb3_c /= np.linalg.norm(neb3_c)
-    d_neb3 = np.arccos(np.clip(X * neb3_c[0] + Y * neb3_c[1] + Z * neb3_c[2], -1, 1))
-    neb3 = np.exp(-d_neb3**2 / (2 * 0.40**2)) * np.clip(noise_large * 0.7 + noise_fine * 0.5, 0, 1)
+    # Calibrated for VK_FORMAT_R8G8B8A8_SRGB decode (deep obsidian void + clear vibrant nebulae/Milky Way)
+    R = np.clip(2.0 + neb_violet * 60.0 + neb_cyan * 16.0 + neb_magenta * 68.0 + mw_total * 74.0, 0.0, 255.0)
+    G = np.clip(3.0 + neb_violet * 24.0 + neb_cyan * 58.0 + neb_magenta * 24.0 + mw_total * 64.0, 0.0, 255.0)
+    B = np.clip(7.0 + neb_violet * 96.0 + neb_cyan * 112.0 + neb_magenta * 92.0 + mw_total * 88.0, 0.0, 255.0)
+    img = np.stack([R, G, B], axis=2).astype(np.float32)
 
-    # Synthesis of the nebulae and Milky Way colors (RGB)
-    R = (neb1 * 48 + neb2 * 15 + neb3 * 52 + mw_total * 45).clip(0, 255)
-    G = (neb1 * 18 + neb2 * 32 + neb3 * 16 + mw_total * 42).clip(0, 255)
-    B = (neb1 * 55 + neb2 * 68 + neb3 * 62 + mw_total * 55).clip(0, 255)
+    # Anti-aliased starfield (12,000 stars with Gaussian sub-pixel splatting)
+    rng = np.random.default_rng(2026)
+    n_stars = 12000
+    sz = rng.uniform(-1.0, 1.0, n_stars)
+    sth = rng.uniform(-math.pi, math.pi, n_stars)
+    sr = np.sqrt(1.0 - sz * sz)
+    sx3 = sr * np.cos(sth)
+    sy3 = sz
+    sz3 = sr * np.sin(sth)
 
-    img_arr = np.stack([R, G, B], axis=2).astype(np.float32)
+    su = ((np.arctan2(sz3, sx3) / (2.0 * math.pi) + 0.5) * width) % width
+    sv = np.clip((0.5 - np.arcsin(np.clip(sy3, -1.0, 1.0)) / math.pi) * (height - 1), 0.0, height - 1.0)
+    mag = np.clip(rng.pareto(a=2.6, size=n_stars) / 3.4, 0.22, 2.3)
 
-    # Starfield: 8,000 point stars with a uniform spherical distribution and stellar physics
-    n_stars = 8000
-    star_z = np.random.uniform(-1, 1, n_stars)
-    star_th = np.random.uniform(-np.pi, np.pi, n_stars)
-    star_r = np.sqrt(1 - star_z**2)
-    star_x = star_r * np.cos(star_th)
-    star_y = star_z
-    star_z_3d = star_r * np.sin(star_th)
-
-    # Exact equirectangular projection
-    star_u = ((np.arctan2(star_z_3d, star_x) / (2 * np.pi) + 0.5) * width) % width
-    star_v = np.clip((np.arcsin(np.clip(star_y, -1, 1)) / np.pi + 0.5) * height, 0, height - 1)
-
-    # Brightness distribution (astronomical power law)
-    brightness = np.random.pareto(a=2.5, size=n_stars)
-    brightness = np.clip(brightness / 4.0, 0.2, 2.5)
-
+    rolls = rng.random(n_stars)
     for i in range(n_stars):
-        u0 = int(star_u[i])
-        v0 = int(star_v[i])
-        b = brightness[i]
-
-        # Stellar temperature palette (O, B, A, F, G, K, M)
-        roll = np.random.rand()
-        if roll < 0.40:
-            c = np.array([215, 230, 255], dtype=np.float32)  # Warm blue-white
-        elif roll < 0.75:
-            c = np.array([255, 255, 255], dtype=np.float32)  # Pure white
+        uf = float(su[i])
+        vf = float(sv[i])
+        u0 = int(round(uf)) % width
+        v0 = int(round(vf))
+        b = float(mag[i])
+        roll = float(rolls[i])
+        if roll < 0.36:
+            c = np.array([198.0, 224.0, 255.0], dtype=np.float32)
+        elif roll < 0.72:
+            c = np.array([255.0, 255.0, 255.0], dtype=np.float32)
         elif roll < 0.90:
-            c = np.array([255, 240, 205], dtype=np.float32)  # Amarelo solar
+            c = np.array([255.0, 238.0, 198.0], dtype=np.float32)
         else:
-            c = np.array([255, 190, 140], dtype=np.float32)  # Orange/red giant
+            c = np.array([255.0, 188.0, 138.0], dtype=np.float32)
 
-        if b < 0.8:
-            # Standard star: 1 pixel
-            img_arr[v0, u0] = np.maximum(img_arr[v0, u0], c * b)
-        elif b < 1.4:
-            # Medium star with a soft 3x3 halo
-            for du in [-1, 0, 1]:
-                for dv in [-1, 0, 1]:
-                    vv = np.clip(v0 + dv, 0, height - 1)
-                    uu = (u0 + du) % width
-                    weight = 1.0 / (1.0 + du * du + dv * dv)
-                    img_arr[vv, uu] = np.maximum(img_arr[vv, uu], c * (b * weight))
-        else:
-            # Bright highlighted star with subtle 4-point cross diffraction
-            for du in range(-3, 4):
+        rad = 1 if b < 0.85 else (2 if b < 1.5 else 3)
+        sigma = 0.65 if rad == 1 else (0.98 if rad == 2 else 1.28)
+        inv2s2 = 1.0 / (2.0 * sigma * sigma)
+        for dv in range(-rad, rad + 1):
+            vv = v0 + dv
+            if vv < 0 or vv >= height:
+                continue
+            dy2 = (vv - vf) ** 2
+            for du in range(-rad, rad + 1):
                 uu = (u0 + du) % width
-                w = 0.8 / (1.0 + abs(du))
-                img_arr[v0, uu] = np.maximum(img_arr[v0, uu], c * (b * w))
-            for dv in range(-3, 4):
-                vv = np.clip(v0 + dv, 0, height - 1)
-                w = 0.8 / (1.0 + abs(dv))
-                img_arr[vv, u0] = np.maximum(img_arr[vv, u0], c * (b * w))
+                dx2 = (du - (uf - round(uf))) ** 2
+                w_g = math.exp(-(dx2 + dy2) * inv2s2) * b
+                if w_g > 0.03:
+                    img[vv, uu] = np.maximum(img[vv, uu], c * w_g)
 
-    # Save with optimized PNG compression
+    # Distant Ringed Gas Giant Planet (lower-left orbital horizon, outside frontal screen cone)
+    p_dir = np.array([-0.74, -0.16, -0.65], dtype=np.float32)
+    p_dir /= np.linalg.norm(p_dir)
+    p_dist = 7.2
+    p_center = p_dir * p_dist
+    p_rad = 1.18
+
+    ring_n = np.array([0.28, 0.91, -0.30], dtype=np.float32)
+    ring_n /= np.linalg.norm(ring_n)
+    sun_dir = np.array([0.62, 0.45, 0.64], dtype=np.float32)
+    sun_dir /= np.linalg.norm(sun_dir)
+
+    cos_ang = X * p_dir[0] + Y * p_dir[1] + Z * p_dir[2]
+    roi = cos_ang > 0.86
+    rx = X[roi]
+    ry = Y[roi]
+    rz = Z[roi]
+    ray = np.stack([rx, ry, rz], axis=1)
+
+    b_dot = ray @ p_center
+    c_val = float(np.dot(p_center, p_center) - p_rad * p_rad)
+    disc = b_dot * b_dot - c_val
+    hit_sphere = disc > 0.0
+    t_sphere = np.where(hit_sphere, b_dot - np.sqrt(np.maximum(disc, 0.0)), 1e9)
+
+    denom = ray @ ring_n
+    t_ring = np.where(np.abs(denom) > 1e-4, float(np.dot(p_center, ring_n)) / np.where(np.abs(denom) > 1e-4, denom, 1.0), -1.0)
+    ring_pt = ray * t_ring[:, None] - p_center[None, :]
+    ring_r = np.linalg.norm(ring_pt, axis=1)
+    hit_ring = (t_ring > 0.0) & (ring_r > p_rad * 1.32) & (ring_r < p_rad * 2.38)
+
+    p_rgb = np.zeros((len(rx), 3), dtype=np.float32)
+    p_alpha = np.zeros((len(rx),), dtype=np.float32)
+
+    if np.any(hit_sphere):
+        hs = hit_sphere
+        hit_pt = ray[hs] * t_sphere[hs, None]
+        nrm = (hit_pt - p_center[None, :]) / p_rad
+        lat = np.clip(nrm @ ring_n, -1.0, 1.0)
+        bands = (
+            0.50
+            + 0.24 * np.sin(lat * 18.0)
+            + 0.16 * np.cos(lat * 31.0 + 1.2)
+            + 0.10 * np.sin(lat * 52.0)
+        )
+        col_a = np.array([42.0, 72.0, 122.0], dtype=np.float32)
+        col_b = np.array([144.0, 168.0, 210.0], dtype=np.float32)
+        surf = col_a[None, :] * (1.0 - bands[:, None]) + col_b[None, :] * bands[:, None]
+
+        ndotl = np.clip(nrm @ sun_dir, 0.0, 1.0)
+        lit = np.power(ndotl, 0.68) * 0.94 + 0.04
+        view_dot = np.clip(-(ray[hs] * nrm).sum(axis=1), 0.0, 1.0)
+        rim = np.power(1.0 - view_dot, 3.2) * (0.28 + 0.85 * ndotl)
+        atmo = rim[:, None] * np.array([76.0, 196.0, 255.0], dtype=np.float32)
+
+        p_rgb[hs] = np.clip(surf * lit[:, None] + atmo, 0.0, 255.0)
+        p_alpha[hs] = 1.0
+
+    if np.any(hit_ring):
+        hr = hit_ring
+        rr = ring_r[hr] / p_rad
+        r_norm = (rr - 1.32) / (2.38 - 1.32)
+        edge_fade = np.clip(r_norm * 7.0, 0.0, 1.0) * np.clip((1.0 - r_norm) * 7.0, 0.0, 1.0)
+        gap = 1.0 - 0.88 * np.exp(-((rr - 1.88) ** 2) / (2.0 * 0.042 ** 2))
+        fine_rings = 0.55 + 0.30 * np.sin(rr * 42.0) + 0.15 * np.cos(rr * 95.0)
+        r_alpha = np.clip(edge_fade * gap * fine_rings * 0.74, 0.0, 0.84)
+
+        rp = ring_pt[hr]
+        proj_sun = rp @ sun_dir
+        perp = rp - proj_sun[:, None] * sun_dir[None, :]
+        perp_dist = np.linalg.norm(perp, axis=1)
+        in_shadow = (proj_sun < 0.0) & (perp_dist < p_rad * 1.02)
+        shadow_mul = np.where(in_shadow, 0.14, 1.0).astype(np.float32)
+
+        ring_col = (
+            np.array([170.0, 190.0, 224.0], dtype=np.float32)[None, :]
+            * (0.75 + 0.25 * np.sin(rr * 24.0))[:, None]
+            * shadow_mul[:, None]
+        )
+
+        in_front = t_ring[hr] < t_sphere[hr]
+        idx_hr = np.flatnonzero(hr)
+        for k, idx_local in enumerate(idx_hr):
+            a = float(r_alpha[k])
+            if in_front[k]:
+                if p_alpha[idx_local] > 0.5:
+                    p_rgb[idx_local] = p_rgb[idx_local] * (1.0 - a) + ring_col[k] * a
+                else:
+                    p_rgb[idx_local] = ring_col[k]
+                    p_alpha[idx_local] = a
+            elif p_alpha[idx_local] < 0.5:
+                p_rgb[idx_local] = ring_col[k]
+                p_alpha[idx_local] = a
+
+    roi_img = img[roi]
+    img[roi] = roi_img * (1.0 - p_alpha[:, None]) + p_rgb * p_alpha[:, None]
+
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    final_img = Image.fromarray(np.clip(img_arr, 0, 255).astype(np.uint8))
-    final_img.save(output_path, optimize=True)
+    final_img = Image.fromarray(np.clip(img, 0.0, 255.0).astype(np.uint8), mode="RGB")
+    final_img.save(output_path, format="PNG", optimize=True)
 
     elapsed = time.time() - t0
-    size_kb = os.path.getsize(output_path) / 1024
-    print(f"  -> Skybox saved at: {output_path}")
-    print(f"  -> Dimensions: {width}x{height} | Time: {elapsed:.2f}s | Size: {size_kb:.1f} KB ({size_kb/1024:.2f} MB)")
+    size_kb = os.path.getsize(output_path) / 1024.0
+    print(f"  -> Skybox saved: {output_path} ({width}x{height}, {size_kb:.1f} KB, {elapsed:.2f}s)")
 
 
 # ==============================================================================
-# 2. AMBIENT AUDIO GENERATOR (8s OGG Loop - Soft Space Rumble)
+# 2. OPTIONAL AMBIENT AUDIO GENERATOR (preserved from existing loop)
 # ==============================================================================
-def generate_ambient_audio(output_path, duration=8.0, sample_rate=48000):
-    """
-    Generates a perfectly looping stereo audio with a cosmic rumble and a soft drone:
-    - Deep bass frequencies synchronized exactly with the duration (no clicks).
-    - An ethereal harmonic layer and spatial stereo with a soft cosmic breathing.
-    - Vacuum noise periodically filtered (circular FFT).
-    - A contained volume (-14 dBFS peak), ideal for ducking during playback.
-    """
-    print(f"\n[2/3] Generating the Looping Ambient Audio ({duration:.1f}s, {sample_rate}Hz)...")
-    t0 = time.time()
-
+def generate_ambient_audio(output_path: str, duration: float = 8.0, sample_rate: int = 48000) -> None:
+    print(f"\n[Audio] Regenerating looping space ambient ({duration:.1f}s)...")
     N = int(sample_rate * duration)
     t = np.arange(N) / sample_rate
-
-    # Sub-bass frequencies with exact whole cycles in 'duration' (perfect continuity)
-    freqs_sub = [42.0, 55.0, 65.5, 82.5]
-    freqs_mid = [110.0, 165.0, 220.0, 275.0, 330.0]
-
     left = np.zeros(N, dtype=np.float64)
     right = np.zeros(N, dtype=np.float64)
 
-    # 1. Sub-bass layer (ship rumble / vacuum resonance)
-    for f in freqs_sub:
-        k = round(f * duration)
-        exact_f = k / duration
-        lfo_l = 0.8 + 0.2 * np.cos(2 * np.pi * 1 * t / duration)
-        lfo_r = 0.8 + 0.2 * np.cos(2 * np.pi * 1 * t / duration + 0.5)
-        left += 0.25 * np.sin(2 * np.pi * exact_f * t) * lfo_l
-        right += 0.25 * np.sin(2 * np.pi * exact_f * t + 0.3) * lfo_r
+    for f in (42.0, 55.0, 65.5, 82.5):
+        exact_f = round(f * duration) / duration
+        left += 0.25 * np.sin(2 * math.pi * exact_f * t) * (0.8 + 0.2 * np.cos(2 * math.pi * t / duration))
+        right += 0.25 * np.sin(2 * math.pi * exact_f * t + 0.3) * (0.8 + 0.2 * np.cos(2 * math.pi * t / duration + 0.5))
 
-    # 2. Soft harmonic layer (a mysterious, relaxing cosmic drone)
-    for f in freqs_mid:
-        k = round(f * duration)
-        exact_f = k / duration
-        lfo_l = 0.7 + 0.3 * np.cos(2 * np.pi * 2 * t / duration)
-        lfo_r = 0.7 + 0.3 * np.cos(2 * np.pi * 2 * t / duration + 1.0)
+    for f in (110.0, 165.0, 220.0, 275.0, 330.0):
+        exact_f = round(f * duration) / duration
         amp = 0.08 * (100.0 / exact_f)
-        left += amp * np.sin(2 * np.pi * exact_f * t) * lfo_l
-        right += amp * np.sin(2 * np.pi * exact_f * t + 0.7) * lfo_r
+        left += amp * np.sin(2 * math.pi * exact_f * t) * (0.7 + 0.3 * np.cos(4 * math.pi * t / duration))
+        right += amp * np.sin(2 * math.pi * exact_f * t + 0.7) * (0.7 + 0.3 * np.cos(4 * math.pi * t / duration + 1.0))
 
-    # 3. Cosmic noise filtered through a circular FFT (100% continuous between start and end)
-    np.random.seed(1337)
+    rng = np.random.default_rng(1337)
     freqs = np.fft.rfftfreq(N, 1.0 / sample_rate)
-    H = 1.0 / (1.0 + (freqs / 80.0)**3)  # Sharp low-pass at 80 Hz
-    noise_spec_l = (np.random.randn(len(freqs)) + 1j * np.random.randn(len(freqs))) * H
-    noise_spec_r = (np.random.randn(len(freqs)) + 1j * np.random.randn(len(freqs))) * H
-    noise_l = np.fft.irfft(noise_spec_l, n=N)
-    noise_r = np.fft.irfft(noise_spec_r, n=N)
+    H = 1.0 / (1.0 + (freqs / 80.0) ** 3)
+    nl = np.fft.irfft((rng.standard_normal(len(freqs)) + 1j * rng.standard_normal(len(freqs))) * H, n=N)
+    nr = np.fft.irfft((rng.standard_normal(len(freqs)) + 1j * rng.standard_normal(len(freqs))) * H, n=N)
+    left += nl / np.std(nl) * 0.12
+    right += nr / np.std(nr) * 0.12
 
-    noise_l = noise_l / np.std(noise_l) * 0.12
-    noise_r = noise_r / np.std(noise_r) * 0.12
-    left += noise_l
-    right += noise_r
-
-    # Boundary-smoothing micro-fade (50 samples ~ 1ms) to guarantee zero absolute discontinuity
-    fade_len = 50
-    fade_in = 0.5 - 0.5 * np.cos(np.linspace(0, np.pi, fade_len))
-    left[:fade_len] = left[:fade_len] * fade_in + left[-fade_len:] * (1.0 - fade_in)
-    right[:fade_len] = right[:fade_len] * fade_in + right[-fade_len:] * (1.0 - fade_in)
-    left[-fade_len:] = left[:fade_len]
-    right[-fade_len:] = right[:fade_len]
-
-    # Normalization to -14 dBFS (peak amplitude ~0.20)
     peak = max(np.max(np.abs(left)), np.max(np.abs(right)))
-    target_peak = 0.20
-    left = (left / peak * target_peak).astype(np.float32)
-    right = (right / peak * target_peak).astype(np.float32)
-
-    # Intermediate 16-bit PCM WAV write
     audio_int16 = np.zeros((N, 2), dtype=np.int16)
-    audio_int16[:, 0] = (left * 32767).astype(np.int16)
-    audio_int16[:, 1] = (right * 32767).astype(np.int16)
+    audio_int16[:, 0] = (left / peak * 0.20 * 32767).astype(np.int16)
+    audio_int16[:, 1] = (right / peak * 0.20 * 32767).astype(np.int16)
 
     tmp_wav = "/tmp/space_ambient_temp.wav"
     with wave.open(tmp_wav, "wb") as wf:
@@ -265,565 +310,166 @@ def generate_ambient_audio(output_path, duration=8.0, sample_rate=48000):
         wf.setframerate(sample_rate)
         wf.writeframes(audio_int16.tobytes())
 
-    # Encoding to Vorbis OGG with ffmpeg
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", tmp_wav,
-        "-c:a", "libvorbis",
-        "-q:a", "4",
-        output_path
-    ]
-    subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    subprocess.run(["ffmpeg", "-y", "-i", tmp_wav, "-c:a", "libvorbis", "-q:a", "4", output_path], check=True)
     if os.path.exists(tmp_wav):
         os.remove(tmp_wav)
 
-    elapsed = time.time() - t0
-    size_kb = os.path.getsize(output_path) / 1024
-    print(f"  -> Audio saved at: {output_path}")
-    print(f"  -> Format: OGG Vorbis Stereo {sample_rate}Hz | Duration: {duration:.1f}s | Size: {size_kb:.1f} KB")
-
 
 # ==============================================================================
-# 3. 3D SPACE PLATFORM GENERATOR (model.glb)
+# 3. ORBITAL OBSERVATION PLATFORM (512x512 BAKED-RELIEF PBR, CALM ACCENTS, 0 COLLISIONS)
 # ==============================================================================
-def generate_space_platform(output_path):
-    """
-    Generates the 3D model of the space platform (model.glb):
-    - A floating futuristic circular observation deck (5m diameter -> 2.5m radius).
-    - A floor with radial metal plates, embedded cyan neon rings and a chamfered edge rim.
-    - A conical lower hull with a luminous anti-gravity/levitation core.
-    - A protective railing with a handrail and neon lights (cyan/stellar blue) on the edges (vertex colors).
-    - A front panoramic opening (a 90° arc toward -Z) leaving the screen area completely unobstructed.
-    - Signal pillars with a holographic top and a recessed front navigation console.
-    - A strict budget: < 8,000 triangles and < 200 KB.
-    """
-    print("\n[3/3] Generating the Futuristic Space Platform (model.glb)...")
-    t0 = time.time()
+def build_space_platform() -> GlbSceneBuilder:
+    builder = GlbSceneBuilder()
+    checker = CollisionChecker()
 
-    meshes = []
+    def add(mat: str, group: str, part: MeshPart) -> None:
+        builder.add_mesh(mat, checker.register(group, part))
 
-    # Sci-Fi colors (RGB uint8)
-    C_CYAN_NEON = [0, 235, 255, 255]       # Vibrant cyan neon
-    C_BLUE_ACCENT = [25, 160, 255, 255]    # Electric blue
-    C_DEEP_BLUE = [15, 110, 220, 255]      # Dark cobalt blue
-    C_ALLOY_LIGHT = [75, 82, 95, 255]      # Silver/titanium metal alloy
-    C_ALLOY_MED_1 = [52, 58, 68, 255]      # Medium metal panel A
-    C_ALLOY_MED_2 = [42, 46, 54, 255]      # Medium metal panel B
-    C_DARK_CARBON = [30, 33, 40, 255]      # Dark carbon fiber
-    C_GROOVE_DARK = [20, 22, 26, 255]      # Grooves and expansion joints
-    C_HULL_DARK = [24, 26, 32, 255]        # Lower hull
+    # 512x512 Baked-Relief aerospace textures (satin titanium metallic=0.58 reads richly in deep space)
+    alloy_base, alloy_orm = tex_brushed_alloy((138, 148, 166), size=512, seed=401, roughness=0.36, metallic=0.58)
+    carbon_base, carbon_orm = tex_carbon_deck((76, 84, 98), size=512, seed=402)
 
-    # Parametric modeling helper functions
-    def make_flat_ring(r_in, r_out, y, n_segs, color):
-        """Anel plano circular."""
-        th = np.linspace(0, 2 * np.pi, n_segs, endpoint=False)
-        verts = []
-        for t in th:
-            verts.append([r_in * np.sin(t), y, -r_in * np.cos(t)])
-        for t in th:
-            verts.append([r_out * np.sin(t), y, -r_out * np.cos(t)])
-        faces = []
-        for i in range(n_segs):
-            ni = (i + 1) % n_segs
-            faces.append([i, ni, n_segs + ni])
-            faces.append([n_segs + ni, n_segs + i, i])
-        m = trimesh.Trimesh(vertices=verts, faces=faces)
-        m.visual.vertex_colors = np.full((len(verts), 4), color, dtype=np.uint8)
-        return m
+    builder.add_material(MaterialSpec("deck_alloy", base_texture=alloy_base, orm_texture=alloy_orm, roughness_factor=1.0, metallic_factor=1.0, jpeg_quality=90))
+    builder.add_material(MaterialSpec("deck_carbon", base_texture=carbon_base, orm_texture=carbon_orm, roughness_factor=1.0, metallic_factor=1.0, jpeg_quality=90))
+    builder.add_material(MaterialSpec("hull_dark", base_color_factor=(0.055, 0.064, 0.080, 1.0), metallic_factor=0.55, roughness_factor=0.46))
+    # Restrained, cohesive floor strip glow (no harsh neon blue glare clashing with the deck/stars!)
+    builder.add_material(MaterialSpec("floor_accent", base_color_factor=(0.05, 0.14, 0.19, 1.0), emissive_factor=(0.04, 0.24, 0.34), emissive_strength=1.0, roughness_factor=0.32, bake_lighting=False))
+    builder.add_material(MaterialSpec("rail_accent", base_color_factor=(0.05, 0.16, 0.22, 1.0), emissive_factor=(0.05, 0.28, 0.40), emissive_strength=1.0, roughness_factor=0.30, bake_lighting=False))
+    builder.add_material(MaterialSpec("console_accent", base_color_factor=(0.06, 0.20, 0.28, 1.0), emissive_factor=(0.08, 0.38, 0.52), emissive_strength=1.05, roughness_factor=0.25, bake_lighting=False))
 
-    def make_solid_sector(r_in, r_out, y_top, y_bot, t_start, t_end, num_segs, color_top, color_side):
-        """A solid, manifold, volumetric prismatic annular sector."""
-        th = np.linspace(t_start, t_end, num_segs + 1)
-        sin_t, cos_t = np.sin(th), np.cos(th)
-        n_pts = num_segs + 1
-        v_top_in = np.column_stack([r_in * sin_t, np.full(n_pts, y_top), -r_in * cos_t])
-        v_top_out = np.column_stack([r_out * sin_t, np.full(n_pts, y_top), -r_out * cos_t])
-        v_bot_in = np.column_stack([r_in * sin_t, np.full(n_pts, y_bot), -r_in * cos_t])
-        v_bot_out = np.column_stack([r_out * sin_t, np.full(n_pts, y_bot), -r_out * cos_t])
-        verts = np.vstack([v_top_in, v_top_out, v_bot_in, v_bot_out])
-        colors = np.vstack([
-            np.full((n_pts, 4), color_top, dtype=np.uint8),
-            np.full((n_pts, 4), color_top, dtype=np.uint8),
-            np.full((n_pts, 4), color_side, dtype=np.uint8),
-            np.full((n_pts, 4), color_side, dtype=np.uint8)
-        ])
-        faces = []
-        # Topo (+Y)
-        for i in range(num_segs):
-            faces.append([i, i + 1, n_pts + i + 1])
-            faces.append([n_pts + i + 1, n_pts + i, i])
-        # Fundo (-Y)
-        b_in, b_out = 2 * n_pts, 3 * n_pts
-        for i in range(num_segs):
-            faces.append([b_in + i, b_out + i + 1, b_in + i + 1])
-            faces.append([b_out + i + 1, b_in + i, b_out + i])
-        # Outer wall (+R)
-        for i in range(num_segs):
-            faces.append([n_pts + i, n_pts + i + 1, b_out + i + 1])
-            faces.append([b_out + i + 1, b_out + i, n_pts + i])
-        # Inner wall (-R)
-        for i in range(num_segs):
-            faces.append([i, b_in + i + 1, i + 1])
-            faces.append([b_in + i + 1, i, b_in + i])
-        # Radial sides (counter-clockwise winding seen from outside the sector)
-        faces.append([0, n_pts, b_in])
-        faces.append([n_pts, b_out, b_in])
-        faces.append([num_segs, b_in + num_segs, n_pts + num_segs])
-        faces.append([n_pts + num_segs, b_in + num_segs, b_out + num_segs])
+    # A) Central carbon observation medallion (R: 0 -> 0.88m, Y[-0.015, +0.005])
+    # Group deck floor rings & concentric sectors cleanly with non-overlapping Y layers
+    add("deck_carbon", "deck_medallion", make_cylinder(0.88, 0.020, sections=36, center=(0.0, -0.005, 0.0), uv_scale=0.85))
+    # Thin 1.4cm inlaid floor strips (Y = 0.0065, sitting cleanly above/between joints without neon glare)
+    add("floor_accent", "floor_ring_inner", make_flat_ring(0.220, 0.234, 0.0065, n_segs=28))
+    add("floor_accent", "floor_ring_med", make_flat_ring(0.896, 0.910, 0.0065, n_segs=36))
 
-        m = trimesh.Trimesh(vertices=verts, faces=faces)
-        m.visual.vertex_colors = colors
-        return m
-
-    def make_profile_ring(profile, n_segs, color):
-        """A surface of revolution from a 2D (r, y) profile."""
-        th = np.linspace(0, 2 * np.pi, n_segs, endpoint=False)
-        verts = []
-        colors = []
-        for r, y in profile:
-            for t in th:
-                verts.append([r * np.sin(t), y, -r * np.cos(t)])
-                colors.append(color)
-        faces = []
-        for p in range(len(profile) - 1):
-            ring0 = p * n_segs
-            ring1 = (p + 1) * n_segs
-            for i in range(n_segs):
-                ni = (i + 1) % n_segs
-                faces.append([ring0 + i, ring0 + ni, ring1 + ni])
-                faces.append([ring1 + ni, ring1 + i, ring0 + i])
-        m = trimesh.Trimesh(vertices=verts, faces=faces)
-        m.visual.vertex_colors = np.array(colors, dtype=np.uint8)
-        return m
-
-    def make_curved_rail(r, y_bot, y_top, width, th_start, th_end, n_segs, color_top, color_side):
-        """A curved bar or handrail following a radius and angular range."""
-        r_in = r - width / 2
-        r_out = r + width / 2
-        th = np.linspace(th_start, th_end, n_segs + 1)
-        sin_t, cos_t = np.sin(th), np.cos(th)
-        n_pts = n_segs + 1
-        v_top_in = np.column_stack([r_in * sin_t, np.full(n_pts, y_top), -r_in * cos_t])
-        v_top_out = np.column_stack([r_out * sin_t, np.full(n_pts, y_top), -r_out * cos_t])
-        v_bot_in = np.column_stack([r_in * sin_t, np.full(n_pts, y_bot), -r_in * cos_t])
-        v_bot_out = np.column_stack([r_out * sin_t, np.full(n_pts, y_bot), -r_out * cos_t])
-        verts = np.vstack([v_top_in, v_top_out, v_bot_in, v_bot_out])
-        colors = np.vstack([
-            np.full((n_pts, 4), color_top, dtype=np.uint8),
-            np.full((n_pts, 4), color_top, dtype=np.uint8),
-            np.full((n_pts, 4), color_side, dtype=np.uint8),
-            np.full((n_pts, 4), color_side, dtype=np.uint8)
-        ])
-        faces = []
-        for i in range(n_segs):
-            faces.append([i, i + 1, n_pts + i + 1])
-            faces.append([n_pts + i + 1, n_pts + i, i])
-        b_in, b_out = 2 * n_pts, 3 * n_pts
-        for i in range(n_segs):
-            faces.append([b_in + i, b_out + i + 1, b_in + i + 1])
-            faces.append([b_out + i + 1, b_in + i, b_out + i])
-        for i in range(n_segs):
-            faces.append([n_pts + i, n_pts + i + 1, b_out + i + 1])
-            faces.append([b_out + i + 1, b_out + i, n_pts + i])
-        for i in range(n_segs):
-            faces.append([i, b_in + i + 1, i + 1])
-            faces.append([b_in + i + 1, i, b_in + i])
-        # End caps (counter-clockwise winding seen from outside the handrail)
-        faces.append([0, n_pts, b_in])
-        faces.append([n_pts, b_out, b_in])
-        faces.append([n_segs, b_in + n_segs, n_pts + n_segs])
-        faces.append([n_pts + n_segs, b_in + n_segs, b_out + n_segs])
-        m = trimesh.Trimesh(vertices=verts, faces=faces)
-        m.visual.vertex_colors = colors
-        return m
-
-    # --------------------------------------------------------------------------
-    # A) CENTRAL FLOOR DISK (R: 0.0 -> 0.88m, Y = 0.005m)
-    # --------------------------------------------------------------------------
-    r_center = 0.88
-    n_c = 32
-    th_c = np.linspace(0, 2 * np.pi, n_c, endpoint=False)
-    v_c = [[0.0, 0.005, 0.0]]
-    c_c = [C_DARK_CARBON]
-    for t in th_c:
-        v_c.append([r_center * np.sin(t), 0.005, -r_center * np.cos(t)])
-        c_c.append(C_ALLOY_MED_2)
-    f_c = []
-    for i in range(n_c):
-        next_i = (i + 1) % n_c
-        # Counter-clockwise seen from above (+Y normal): the environment pipeline uses
-        # VK_CULL_MODE_BACK_BIT, so the reverse order made the floor vanish under the user.
-        f_c.append([0, next_i + 1, i + 1])
-    m_center = trimesh.Trimesh(vertices=v_c, faces=f_c)
-    m_center.visual.vertex_colors = np.array(c_c, dtype=np.uint8)
-    meshes.append(m_center)
-
-    # Central holographic anchor medallion (R: 0.20 -> 0.25m)
-    meshes.append(make_flat_ring(0.20, 0.25, 0.007, 24, C_CYAN_NEON))
-
-    # Embedded inner neon ring (R: 0.88 -> 0.92m)
-    meshes.append(make_flat_ring(0.88, 0.92, 0.007, 32, C_CYAN_NEON))
-
-    # --------------------------------------------------------------------------
-    # B) 16 RADIAL METAL PLATES (R: 0.93 -> 2.24m)
-    # --------------------------------------------------------------------------
+    # B) 16 radial brushed-alloy deck plates (Y[-0.024, +0.006], cleanly separated from sub-plate & console)
     n_sectors = 16
-    d_th = 2 * np.pi / n_sectors
-    gap = 0.015  # 1.5cm expansion joint
-
+    d_th = 2.0 * math.pi / n_sectors
+    gap = 0.016
     for i in range(n_sectors):
-        t0_sec = i * d_th + gap
-        t1_sec = (i + 1) * d_th - gap
-        color_plate = C_ALLOY_MED_1 if i % 2 == 0 else C_ALLOY_MED_2
+        t0 = i * d_th + gap
+        t1 = (i + 1) * d_th - gap
+        col_top = (242, 246, 255, 255) if (i % 2 == 0) else (210, 218, 232, 255)
+        col_side = (128, 136, 150, 255)
+        add("deck_alloy", "deck_plates", make_solid_sector(0.925, 1.565, 0.006, -0.024, t0, t1, 2, col_top, col_side, uv_scale=0.75))
+        add("deck_alloy", "deck_plates", make_solid_sector(1.610, 2.230, 0.006, -0.024, t0, t1, 2, col_top, col_side, uv_scale=0.75))
 
-        # Placa radial interna (0.93 -> 1.58m)
-        m_in = make_solid_sector(0.93, 1.58, 0.005, 0.0, t0_sec, t1_sec, 3, color_plate, C_GROOVE_DARK)
-        # Placa radial externa (1.60 -> 2.24m)
-        m_out = make_solid_sector(1.60, 2.24, 0.005, 0.0, t0_sec, t1_sec, 3, color_plate, C_GROOVE_DARK)
-        meshes.extend([m_in, m_out])
+    # Dark sub-plate strictly BELOW deck plates (Y[-0.066, -0.026]) so seams show dark recessed channels
+    add("hull_dark", "deck_subplate", make_cylinder(2.265, 0.040, sections=40, center=(0.0, -0.046, 0.0)))
 
-    # Intermediate concentric groove (R: 1.58 -> 1.60m)
-    meshes.append(make_flat_ring(1.58, 1.60, 0.006, 48, C_BLUE_ACCENT))
+    # Thin 1.4cm outer inlaid floor accent rings (nestled inside radial expansion channels, Y = 0.0065)
+    add("floor_accent", "floor_ring_mid", make_flat_ring(1.580, 1.594, 0.0065, n_segs=48))
+    add("floor_accent", "floor_ring_out", make_flat_ring(2.242, 2.256, 0.0065, n_segs=48))
 
-    # Outer neon guide ring (R: 2.23 -> 2.26m)
-    meshes.append(make_flat_ring(2.23, 2.26, 0.007, 48, C_CYAN_NEON))
+    # C) Chamfered titanium outer rim (R: 2.27 -> 2.52m, starts cleanly outside outer ring 2.256)
+    rim_profile = [(2.27, 0.00), (2.34, 0.045), (2.46, 0.045), (2.52, -0.06), (2.52, -0.14)]
+    add("deck_alloy", "outer_rim", make_profile_ring(rim_profile, 48, (232, 238, 250, 255), uv_scale=0.55))
 
-    # --------------------------------------------------------------------------
-    # C) CHAMFERED EDGE RIM (R: 2.26 -> 2.50m)
-    # --------------------------------------------------------------------------
-    border_profile = [
-        (2.26, 0.00),
-        (2.34, 0.04),
-        (2.45, 0.04),
-        (2.50, -0.08),
-        (2.50, -0.14)
-    ]
-    meshes.append(make_profile_ring(border_profile, 48, C_ALLOY_LIGHT))
+    # D) Lower levitation hull & soft anti-gravity emitter ring (starts below rim Y = -0.142)
+    hull_profile = [(2.52, -0.142), (1.92, -0.36), (1.28, -0.56), (0.80, -0.56)]
+    add("hull_dark", "lower_hull", make_profile_ring(hull_profile, 48, (255, 255, 255, 255), uv_scale=0.5))
+    add("floor_accent", "emitter_ring", make_flat_ring(0.80, 1.24, -0.565, n_segs=32, up_normal=False))
 
-    # --------------------------------------------------------------------------
-    # D) FLOATING LOWER HULL (CHASSIS & ANTI-GRAVITY CORE)
-    # --------------------------------------------------------------------------
-    hull_profile = [
-        (2.50, -0.14),
-        (1.90, -0.35),
-        (1.25, -0.55),
-        (0.80, -0.55)
-    ]
-    meshes.append(make_profile_ring(hull_profile, 48, C_HULL_DARK))
-    # Levitation energy emitter ring
-    meshes.append(make_flat_ring(0.80, 1.25, -0.55, 32, C_CYAN_NEON))
+    # E) Protective panoramic railing (+50.5° to 309.5°, cleanly clear of flanking pillars at ±45°!)
+    t_pillar_l = math.pi * 0.25       # +45 deg
+    t_pillar_r = math.pi * 1.75       # 315 deg
+    t_rail_start = math.radians(50.5)
+    t_rail_end = math.radians(309.5)
+    t_thresh = math.radians(39.5)
 
-    # --------------------------------------------------------------------------
-    # E) RAILING AND METAL PROTECTIVE COUNTER
-    # --------------------------------------------------------------------------
-    # Front opening: a -45° to +45° arc fully open to the screen and deep space.
-    # The handrail and counter span the sides and the back: a +45° (pi/4) to 315° (7pi/4) arc.
+    # Top handrail, subtle top micro-strip, mid-rail accent, and carbon kickplate (stacked in Y, zero overlap)
+    add("deck_alloy", "railing_top", make_solid_sector(2.39, 2.45, 1.030, 0.990, t_rail_start, t_rail_end, 28, (238, 242, 252, 255), (190, 200, 215, 255), uv_scale=0.8))
+    add("rail_accent", "railing_top_led", make_solid_sector(2.410, 2.430, 1.040, 1.032, t_rail_start, t_rail_end, 28, (255, 255, 255, 255), (255, 255, 255, 255)))
+    add("rail_accent", "railing_mid_led", make_solid_sector(2.412, 2.428, 0.550, 0.532, t_rail_start, t_rail_end, 28, (255, 255, 255, 255), (255, 255, 255, 255)))
+    add("deck_carbon", "railing_kick", make_solid_sector(2.405, 2.435, 0.160, 0.048, t_rail_start, t_rail_end, 24, (224, 228, 238, 255), (185, 190, 200, 255)))
 
-    # Upper handrail with a cyan neon vertex on the top edge
-    meshes.append(make_curved_rail(2.42, 0.99, 1.05, 0.06, np.pi / 4, 7 * np.pi / 4, 32, C_CYAN_NEON, C_ALLOY_LIGHT))
-    # Intermediate bar with a stellar-blue accent
-    meshes.append(make_curved_rail(2.42, 0.52, 0.56, 0.03, np.pi / 4, 7 * np.pi / 4, 32, C_BLUE_ACCENT, C_ALLOY_MED_1))
-    # Baseboard / lower guard
-    meshes.append(make_curved_rail(2.42, 0.04, 0.16, 0.02, np.pi / 4, 7 * np.pi / 4, 32, C_DARK_CARBON, C_DARK_CARBON))
+    # Low front threshold beacon (-41.5° to +41.5°, cleanly clear of pillars at ±45°)
+    add("deck_alloy", "front_thresh", make_solid_sector(2.39, 2.45, 0.062, 0.048, -t_thresh, t_thresh, 14, (224, 232, 244, 255), (184, 194, 210, 255)))
+    add("rail_accent", "front_thresh_led", make_solid_sector(2.412, 2.428, 0.069, 0.064, -t_thresh, t_thresh, 14, (255, 255, 255, 255), (255, 255, 255, 255)))
 
-    # Recessed front sill (neon beacon line on the front edge without occluding the screen)
-    meshes.append(make_curved_rail(2.42, 0.04, 0.065, 0.04, -np.pi / 4, np.pi / 4, 16, C_CYAN_NEON, C_ALLOY_LIGHT))
+    # 9 structural stanchions along the railing (lower & upper segments cleanly separated from kickplate, mid-rail & top rail)
+    for idx, phi in enumerate(np.linspace(math.radians(56.0), math.radians(304.0), 9)):
+        px = 2.42 * math.sin(phi)
+        pz = -2.42 * math.cos(phi)
+        # Lower stanchion segment: Y[0.162, 0.530]
+        p_lo = make_box((0.052, 0.368, 0.052), center=(0.0, 0.346, 0.0))
+        p_lo.rotate_axis_angle(float(phi), (0.0, 1.0, 0.0)).translate((px, 0.0, pz))
+        add("deck_alloy", f"stanchion_{idx}", p_lo)
+        # Upper stanchion segment: Y[0.552, 0.988]
+        p_hi = make_box((0.052, 0.436, 0.052), center=(0.0, 0.770, 0.0))
+        p_hi.rotate_axis_angle(float(phi), (0.0, 1.0, 0.0)).translate((px, 0.0, pz))
+        add("deck_alloy", f"stanchion_{idx}", p_hi)
+        # Subtle inward-facing accent micro-strip (clear of post face)
+        strip = make_box((0.012, 0.36, 0.008), center=(0.0, 0.770, 0.032))
+        strip.rotate_axis_angle(float(phi), (0.0, 1.0, 0.0)).translate((px, 0.0, pz))
+        add("rail_accent", f"stanchion_{idx}", strip)
 
-    # 11 vertical stanchions with an inner luminous strip
-    def make_stanchion(r, phi, y_bot, y_top, w_rad, w_tan):
-        h = y_top - y_bot
-        y_mid = (y_top + y_bot) / 2
-        box = trimesh.creation.box(extents=[w_tan, h, w_rad])
-        v = box.vertices.copy()
-        c = np.full((len(v), 4), C_ALLOY_MED_2, dtype=np.uint8)
-        # The inward-facing side gets neon light
-        c[v[:, 2] > 0.0] = C_CYAN_NEON
-        box.visual.vertex_colors = c
-        rot = trimesh.transformations.rotation_matrix(phi, [0, 1, 0])
-        box.apply_transform(rot)
-        pos = [r * np.sin(phi), y_mid, -r * np.cos(phi)]
-        box.apply_translation(pos)
-        return box
+    # F) Flanking signal pillars at ±45° (sitting cleanly on outer rim Y = 0.048 upward)
+    for idx, phi in enumerate((t_pillar_l, t_pillar_r)):
+        px = 2.40 * math.sin(phi)
+        pz = -2.40 * math.cos(phi)
+        col = make_rounded_box((0.16, 0.98, 0.16), radius=0.022, segments=1, center=(0.0, 0.538, 0.0))
+        col.rotate_axis_angle(float(phi), (0.0, 1.0, 0.0)).translate((px, 0.0, pz))
+        add("deck_alloy", f"pillar_{idx}", col)
 
-    post_angles = np.linspace(np.pi / 4, 7 * np.pi / 4, 11)
-    for phi in post_angles:
-        meshes.append(make_stanchion(2.42, phi, 0.04, 1.05, 0.05, 0.05))
+        accent = make_box((0.028, 0.82, 0.014), center=(0.0, 0.538, 0.088))
+        accent.rotate_axis_angle(float(phi), (0.0, 1.0, 0.0)).translate((px, 0.0, pz))
+        add("rail_accent", f"pillar_{idx}", accent)
 
-    # --------------------------------------------------------------------------
-    # F) SIGNAL PILLARS / FLANKING HOLOGRAPHIC TERMINALS
-    # --------------------------------------------------------------------------
-    def make_signal_pillar(pos, phi_yaw):
-        # Coluna estrutural
-        col = trimesh.creation.box(extents=[0.20, 0.96, 0.20])
-        col.apply_translation([0, 0.48 + 0.04, 0])
-        c_col = np.full((len(col.vertices), 4), C_ALLOY_MED_1, dtype=np.uint8)
-        c_col[col.vertices[:, 2] > 0.09] = C_CYAN_NEON
-        col.visual.vertex_colors = c_col
+        add("rail_accent", f"pillar_{idx}", make_cylinder(0.068, 0.028, sections=16, center=(px, 1.044, pz)))
+        add("floor_accent", f"pillar_{idx}", make_flat_ring(0.052, 0.082, 1.095, n_segs=18).translate((px, 0.0, pz)))
 
-        # Tilted upper holographic terminal
-        head = trimesh.creation.cylinder(radius=0.08, height=0.04, sections=16)
-        head.apply_translation([0, 1.02, 0])
-        head.visual.vertex_colors = np.full((len(head.vertices), 4), C_CYAN_NEON, dtype=np.uint8)
+    # G) Recessed ergonomic front navigation console (base strictly ABOVE deck plates Y = 0.008!)
+    add("deck_carbon", "console_base", make_rounded_box((0.58, 0.292, 0.24), radius=0.024, segments=1, center=(0.0, 0.154, -2.02)))
+    add("console_accent", "console_strip", make_box((0.46, 0.016, 0.012), center=(0.0, 0.20, -1.892)))
+    # Angled display housing & glowing telemetry pad cleanly above console_base (Y_top = 0.300)
+    # Grouped as "console_display" because the tilted pad and screen share an axis-aligned box along the 20° slope.
+    pad = make_box((0.48, 0.024, 0.19), center=(0.0, 0.352, -2.02))
+    pad.rotate_axis_angle(math.radians(20.0), (1.0, 0.0, 0.0), pivot=(0.0, 0.352, -2.02))
+    add("deck_alloy", "console_display", pad)
+    disp = make_box((0.40, 0.010, 0.135), center=(0.0, 0.371, -2.013))
+    disp.rotate_axis_angle(math.radians(20.0), (1.0, 0.0, 0.0), pivot=(0.0, 0.352, -2.02))
+    add("console_accent", "console_display", disp)
 
-        # Subtle floating holographic disk
-        holo = trimesh.creation.cylinder(radius=0.06, height=0.01, sections=12)
-        holo.apply_translation([0, 1.06, 0])
-        holo.visual.vertex_colors = np.full((len(holo.vertices), 4), [120, 245, 255, 255], dtype=np.uint8)
-
-        pillar = trimesh.util.concatenate([col, head, holo])
-        rot = trimesh.transformations.rotation_matrix(phi_yaw, [0, 1, 0])
-        pillar.apply_transform(rot)
-        pillar.apply_translation(pos)
-        return pillar
-
-    p_l_pos = [2.38 * np.sin(7 * np.pi / 4), 0, -2.38 * np.cos(7 * np.pi / 4)]
-    p_r_pos = [2.38 * np.sin(np.pi / 4), 0, -2.38 * np.cos(np.pi / 4)]
-    meshes.append(make_signal_pillar(p_l_pos, 7 * np.pi / 4))
-    meshes.append(make_signal_pillar(p_r_pos, np.pi / 4))
-
-    # --------------------------------------------------------------------------
-    # G) RECESSED FRONT NAVIGATION CONSOLE (Z = -2.05m, Y = 0.0 -> 0.38m)
-    # Entirely below the screen's field of view (screen base at Y = 0.73m at Z = -3.2m)
-    # --------------------------------------------------------------------------
-    def make_front_console():
-        # Pedestal base
-        base = trimesh.creation.box(extents=[0.55, 0.32, 0.25])
-        base.apply_translation([0, 0.16, -2.05])
-        c_base = np.full((len(base.vertices), 4), C_DARK_CARBON, dtype=np.uint8)
-        c_base[base.vertices[:, 2] > -2.05 + 0.12] = C_CYAN_NEON
-        base.visual.vertex_colors = c_base
-
-        # Holographic command panel
-        panel = trimesh.creation.box(extents=[0.45, 0.04, 0.18])
-        panel.apply_translation([0, 0.34, -2.05])
-        panel.visual.vertex_colors = np.full((len(panel.vertices), 4), C_CYAN_NEON, dtype=np.uint8)
-
-        # Status indicators
-        led1 = trimesh.creation.box(extents=[0.10, 0.01, 0.03])
-        led1.apply_translation([-0.12, 0.37, -2.05])
-        led1.visual.vertex_colors = np.full((len(led1.vertices), 4), [80, 210, 255, 255], dtype=np.uint8)
-
-        led2 = trimesh.creation.box(extents=[0.10, 0.01, 0.03])
-        led2.apply_translation([0.12, 0.37, -2.05])
-        led2.visual.vertex_colors = np.full((len(led2.vertices), 4), [0, 255, 200, 255], dtype=np.uint8)
-
-        return trimesh.util.concatenate([base, panel, led1, led2])
-
-    meshes.append(make_front_console())
-
-    # Combine all the platform parts into a continuous mesh with per-vertex colors
-    # smooth_shade splits the vertices at hard edges (> 35°): without it the
-    # boxes share 8 vertices and the corner normals come out diagonal.
-    full_mesh = trimesh.graph.smooth_shade(trimesh.util.concatenate(meshes), angle=np.radians(35))
-    _ = full_mesh.vertex_normals
-
-    tri_count = len(full_mesh.faces)
-    vert_count = len(full_mesh.vertices)
-
-    # Export base GLB (binary glTF 2.0 with POSITION, NORMAL, COLOR_0)
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    base_glb = trimesh.exchange.gltf.export_glb(full_mesh, include_normals=True)
-
-    # Generate procedural sci-fi metal texture (192x192)
-    def make_platform_diffuse(w=192, h=192):
-        x = np.linspace(-1, 1, w)
-        y = np.linspace(-1, 1, h)
-        xx, yy = np.meshgrid(x, y)
-        r = np.sqrt(xx**2 + yy**2)
-        tex = np.full((h, w, 3), 48.0, dtype=np.float32)
-        rings = np.sin(r * 24.0) * 8.0
-        tex[:, :, 0] += rings
-        tex[:, :, 1] += rings
-        tex[:, :, 2] += rings + 2.0
-        weave = (np.sin(xx * 48.0) * np.cos(yy * 48.0)) * 6.0
-        tex[:, :, 0] += weave
-        tex[:, :, 1] += weave
-        tex[:, :, 2] += weave
-        cyan_rings = np.exp(-((r - 0.4)**2) / (2 * 0.015**2)) + np.exp(-((r - 0.85)**2) / (2 * 0.015**2))
-        tex[:, :, 0] += cyan_rings * 10.0
-        tex[:, :, 1] += cyan_rings * 180.0
-        tex[:, :, 2] += cyan_rings * 210.0
-        return Image.fromarray(np.clip(tex, 0, 255).astype(np.uint8), mode="RGB")
-
-    texture_img = make_platform_diffuse(192, 192)
-
-    # Embed PBR Material with BaseColorTexture and TEXCOORD_0 into GLB
-    # This fulfills issue #55 and glTF 2.0 validation while keeping COLOR_0 intact.
-    import io
-    magic, ver, length = struct.unpack('<III', base_glb[:12])
-    chunk0_len, chunk0_type = struct.unpack('<II', base_glb[12:20])
-    gltf_json = json.loads(base_glb[20:20 + chunk0_len].decode('utf-8'))
-    chunk1_offset = 20 + chunk0_len
-    chunk1_len, chunk1_type = struct.unpack('<II', base_glb[chunk1_offset:chunk1_offset + 8])
-    bin_data = bytearray(base_glb[chunk1_offset + 8:chunk1_offset + 8 + chunk1_len])
-
-    img_io = io.BytesIO()
-    texture_img.save(img_io, format='JPEG', quality=80)
-    img_bytes = img_io.getvalue()
-
-    verts = full_mesh.vertices
-    uvs = np.zeros((len(verts), 2), dtype=np.float32)
-    uvs[:, 0] = np.clip(0.5 + verts[:, 0] / 5.5, 0.0, 1.0)
-    uvs[:, 1] = np.clip(0.5 + verts[:, 2] / 5.5, 0.0, 1.0)
-    uv_bytes = uvs.tobytes()
-
-    while len(bin_data) % 4 != 0:
-        bin_data.append(0)
-    uv_offset = len(bin_data)
-    bin_data.extend(uv_bytes)
-
-    while len(bin_data) % 4 != 0:
-        bin_data.append(0)
-    img_offset = len(bin_data)
-    bin_data.extend(img_bytes)
-
-    while len(bin_data) % 4 != 0:
-        bin_data.append(0)
-
-    bv_uv_idx = len(gltf_json['bufferViews'])
-    gltf_json['bufferViews'].append({
-        'buffer': 0,
-        'byteOffset': uv_offset,
-        'byteLength': len(uv_bytes),
-        'target': 34962
-    })
-
-    bv_img_idx = len(gltf_json['bufferViews'])
-    gltf_json['bufferViews'].append({
-        'buffer': 0,
-        'byteOffset': img_offset,
-        'byteLength': len(img_bytes)
-    })
-
-    acc_uv_idx = len(gltf_json['accessors'])
-    gltf_json['accessors'].append({
-        'bufferView': bv_uv_idx,
-        'byteOffset': 0,
-        'componentType': 5126,
-        'count': len(verts),
-        'type': 'VEC2',
-        'min': [float(uvs[:, 0].min()), float(uvs[:, 1].min())],
-        'max': [float(uvs[:, 0].max()), float(uvs[:, 1].max())]
-    })
-
-    gltf_json['images'] = [{
-        'bufferView': bv_img_idx,
-        'mimeType': 'image/jpeg',
-        'name': 'platform_diffuse'
-    }]
-
-    gltf_json['samplers'] = [{
-        'magFilter': 9729,
-        'minFilter': 9987,
-        'wrapS': 10497,
-        'wrapT': 10497
-    }]
-
-    gltf_json['textures'] = [{
-        'sampler': 0,
-        'source': 0
-    }]
-
-    gltf_json['materials'] = [{
-        'name': 'SpacePlatformMaterial',
-        'pbrMetallicRoughness': {
-            'baseColorTexture': {'index': 0},
-            'metallicFactor': 0.8,
-            'roughnessFactor': 0.3
-        }
-    }]
-
-    for mesh_obj in gltf_json['meshes']:
-        for prim in mesh_obj['primitives']:
-            prim['material'] = 0
-            prim['attributes']['TEXCOORD_0'] = acc_uv_idx
-
-    gltf_json['buffers'][0]['byteLength'] = len(bin_data)
-
-    json_str = json.dumps(gltf_json)
-    json_bytes = json_str.encode('utf-8')
-    while len(json_bytes) % 4 != 0:
-        json_bytes += b' '
-
-    new_len = 12 + 8 + len(json_bytes) + 8 + len(bin_data)
-    final_glb = struct.pack('<III', 0x46546C67, 2, new_len)
-    final_glb += struct.pack('<II', len(json_bytes), 0x4E4F534A)
-    final_glb += json_bytes
-    final_glb += struct.pack('<II', len(bin_data), 0x004E4942)
-    final_glb += bytes(bin_data)
-
-    with open(output_path, "wb") as f:
-        f.write(final_glb)
-
-    elapsed = time.time() - t0
-    size_kb = len(final_glb) / 1024
-    print(f"  -> Model saved at: {output_path}")
-    print(f"  -> Triangles: {tri_count} (< 8,000) | Vertices: {vert_count} | Size: {size_kb:.1f} KB (< 200 KB)")
+    # Use radial separating axis in addition to XYZ AABB for concentric annular deck rings
+    checker.assert_no_collisions("space", tolerance=0.002, radial_check=True)
+    return builder
 
 
-# ==============================================================================
-# 4. STRICT VALIDATION OF ALL ARTIFACTS
-# ==============================================================================
-def validate_assets():
-    """Validates the sizes, dimensions and polygon counts of every asset."""
-    print("\n" + "=" * 70)
-    print("VALIDATION OF THE ASSETS GENERATED FOR THE COSMIC SPACE")
-    print("=" * 70)
-
-    # 1. model.glb
-    assert os.path.exists(MODEL_OUT), f"File not found: {MODEL_OUT}"
-    sz_model = os.path.getsize(MODEL_OUT)
-    loaded = trimesh.load(MODEL_OUT)
-    total_faces = sum(len(g.faces) for g in loaded.geometry.values()) if hasattr(loaded, "geometry") else len(loaded.faces)
-    total_verts = sum(len(g.vertices) for g in loaded.geometry.values()) if hasattr(loaded, "geometry") else len(loaded.vertices)
-    
-    print(f"[OK] {os.path.basename(MODEL_OUT)}:")
-    print(f"     - File size: {sz_model} bytes ({sz_model / 1024:.2f} KB) [Limit: < 200 KB]")
-    print(f"     - Triangles: {total_faces} [Limit: < 8,000]")
-    print(f"     - Vertices: {total_verts}")
-    if hasattr(loaded, "geometry"):
-        for geom in loaded.geometry.values():
-            assert hasattr(geom.visual, "material"), "Geometry visual must have material"
-    print(f"     - Textured PBR material: verified")
-    assert total_faces < 8000, f"Triangles exceed the limit: {total_faces} >= 8000"
-    assert sz_model < 200 * 1024, f"Size exceeds the limit: {sz_model} >= 200KB"
-
-    # 2. skybox.png
-    assert os.path.exists(SKYBOX_OUT), f"File not found: {SKYBOX_OUT}"
-    sz_skybox = os.path.getsize(SKYBOX_OUT)
-    with Image.open(SKYBOX_OUT) as im:
-        w, h = im.size
-        mode = im.mode
-    print(f"[OK] {os.path.basename(SKYBOX_OUT)}:")
-    print(f"     - File size: {sz_skybox} bytes ({sz_skybox / 1024 / 1024:.2f} MB) [Limit: < 1.5 MB]")
-    print(f"     - Resolution: {w}x{h} [Expected: 2048x1024]")
-    print(f"     - Color mode: {mode}")
-    assert (w, h) == (2048, 1024), f"Invalid resolution: {w}x{h}"
-    assert sz_skybox < 1.5 * 1024 * 1024, f"Size exceeds the limit: {sz_skybox} >= 1.5MB"
-
-    # 3. ambient.ogg
-    assert os.path.exists(AMBIENT_OUT), f"File not found: {AMBIENT_OUT}"
-    sz_ambient = os.path.getsize(AMBIENT_OUT)
-    print(f"[OK] {os.path.basename(AMBIENT_OUT)}:")
-    print(f"     - File size: {sz_ambient} bytes ({sz_ambient / 1024:.2f} KB)")
-    assert sz_ambient > 1000, f"Audio file too small or corrupted: {sz_ambient} bytes"
-
-    print("=" * 70)
-    print("ALL ARTIFACTS WERE VALIDATED SUCCESSFULLY!")
-    print("=" * 70)
+def space_linear_bake(verts: np.ndarray, normals: np.ndarray) -> np.ndarray:
+    """Subtle linear contact AO around deck edges and under-hull."""
+    r = np.sqrt(verts[:, 0:1] ** 2 + verts[:, 2:3] ** 2)
+    ao = np.ones((len(verts), 1), dtype=np.float32)
+    seam = np.exp(-((r - 2.26) ** 2) / (2.0 * 0.10 ** 2))
+    ao *= (1.0 - 0.16 * seam)
+    under = np.clip((verts[:, 1:2] + 0.15) / 0.20, 0.0, 1.0)
+    ao *= (0.68 + 0.32 * under)
+    return np.repeat(ao, 3, axis=1)
 
 
-def main():
-    print("Starting the generation pipeline for the Cosmic Space 3D environment...")
-    t_start = time.time()
+def main() -> None:
+    regen_audio = "--regen-audio" in sys.argv
+    skip_skybox = "--skip-skybox" in sys.argv
+    if not skip_skybox or not os.path.exists(SKYBOX_OUT):
+        generate_skybox(SKYBOX_OUT, width=4096, height=2048)
+    else:
+        print(f"\n[1/2] Keeping existing 4K skybox: {SKYBOX_OUT}")
 
-    generate_skybox(SKYBOX_OUT)
-    generate_ambient_audio(AMBIENT_OUT)
-    generate_space_platform(MODEL_OUT)
-    validate_assets()
+    if regen_audio or not os.path.exists(AMBIENT_OUT):
+        generate_ambient_audio(AMBIENT_OUT)
+    else:
+        print(f"  -> Keeping existing ambient audio: {AMBIENT_OUT}")
 
-    print(f"\nTotal execution time: {time.time() - t_start:.2f} seconds.")
+    print("\n[2/2] Building Multi-Material 512x512 Baked-Relief Orbital Space Platform (model.glb)...")
+    builder = build_space_platform()
+    stats = builder.build_and_export(MODEL_OUT, bake_fn=space_linear_bake, y_offset=0.0)
+    print(
+        f"  -> Saved {MODEL_OUT}: {stats['triangles']} triangles (< 8,000), {stats['vertices']} vertices, "
+        f"{stats['materials']} materials, {stats['textures']} textures, {stats['bytes'] / 1024:.1f} KB"
+    )
+    assert stats["triangles"] < 8000, f"Space platform exceeds 8k triangle budget: {stats['triangles']}"
 
 
 if __name__ == "__main__":

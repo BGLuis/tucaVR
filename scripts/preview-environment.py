@@ -220,16 +220,17 @@ HTML_PAGE = """<!DOCTYPE html>
   <!-- Information Panel -->
   <div class="info-panel">
     <h3 id="env-title">Environment: IMAX Cinema</h3>
-    <div class="info-row"><span>Screen Position:</span> <span id="val-pos" class="info-value">0.0, 2.2, -7.5</span></div>
-    <div class="info-row"><span>Screen Scale:</span> <span id="val-scale" class="info-value">6.0 × 3.38m</span></div>
-    <div class="info-row"><span>Optical Distance:</span> <span id="val-dist" class="info-value">7.5m</span></div>
+    <div class="info-row"><span>Screen Position:</span> <span id="val-pos" class="info-value">0.0, 2.4, -6.2</span></div>
+    <div class="info-row"><span>Screen Scale:</span> <span id="val-scale" class="info-value">7.60 × 4.28m</span></div>
+    <div class="info-row"><span>Horizontal FOV:</span> <span id="val-fov" class="info-value">63.0°</span></div>
+    <div class="info-row"><span>Optical Distance:</span> <span id="val-dist" class="info-value">6.2m</span></div>
     <div class="info-row"><span>Scene Polygons:</span> <span id="val-poly" class="info-value">--</span></div>
     <div class="info-row"><span>Ambient Audio:</span> <span id="val-audio" class="info-value">--</span></div>
   </div>
 
   <!-- Controls Panel -->
   <div class="controls-panel">
-    <h3>Camera and View</h3>
+    <h3>Camera and Lighting</h3>
     <div class="btn-group">
       <button id="btn-pov" class="btn-action active">👁️ First Person</button>
       <button id="btn-orbit" class="btn-action">🌐 Free Orbit</button>
@@ -238,7 +239,13 @@ HTML_PAGE = """<!DOCTYPE html>
       <button id="btn-recenter" class="btn-action">🎯 Recenter (R)</button>
       <button id="btn-audio-toggle" class="btn-action">🔊 Ambience</button>
     </div>
-    <div style="margin-top: 10px; font-size: 11px; color: var(--text-muted); line-height: 1.4;">
+    <div style="margin-top: 10px; font-size: 12px; color: var(--text-muted);">
+      <div style="display:flex; justify-content:space-between;"><span>Room Brightness</span><span id="val-bright">100%</span></div>
+      <input id="slider-bright" type="range" min="0" max="100" value="100" style="width:100%; accent-color: var(--accent);">
+      <div style="display:flex; justify-content:space-between; margin-top:4px;"><span>Screen Glow</span><span id="val-glow">85%</span></div>
+      <input id="slider-glow" type="range" min="0" max="100" value="85" style="width:100%; accent-color: var(--accent);">
+    </div>
+    <div style="margin-top: 8px; font-size: 11px; color: var(--text-muted); line-height: 1.4;">
       <b>Shortcuts:</b> WASD to walk, Space/Shift to go up/down, R to recenter the view.
     </div>
   </div>
@@ -247,6 +254,8 @@ HTML_PAGE = """<!DOCTYPE html>
     let environments = [];
     let currentEnv = null;
     let scene, camera, renderer, orbitControls, fpControls;
+    let hemiLight, dirLight, screenGlowLight;
+    let roomBrightness = 1.0, screenGlowStrength = 0.85;
     let currentModel = null;
     let skyboxMesh = null;
     let screenMesh = null;
@@ -326,15 +335,21 @@ HTML_PAGE = """<!DOCTYPE html>
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.setPixelRatio(window.devicePixelRatio);
       renderer.outputEncoding = THREE.sRGBEncoding;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.05;
       container.appendChild(renderer.domElement);
 
-      // Soft general lighting
-      const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
-      scene.add(ambientLight);
+      // Hemisphere + key light + simulated reactive screen bounce light
+      hemiLight = new THREE.HemisphereLight(0xdbe8ff, 0x1a1a22, 0.75);
+      scene.add(hemiLight);
 
-      const dirLight = new THREE.DirectionalLight(0xffffff, 0.45);
-      dirLight.position.set(0, 5, 2);
+      dirLight = new THREE.DirectionalLight(0xffe8cc, 0.55);
+      dirLight.position.set(0.4, 4.5, 2.0);
       scene.add(dirLight);
+
+      screenGlowLight = new THREE.PointLight(0x5588ff, 2.0, 18.0, 1.4);
+      screenGlowLight.position.set(0, 2.0, -3.0);
+      scene.add(screenGlowLight);
 
       // Orbit controls
       orbitControls = new THREE.OrbitControls(camera, renderer.domElement);
@@ -401,6 +416,34 @@ HTML_PAGE = """<!DOCTYPE html>
       document.getElementById('btn-orbit').addEventListener('click', () => setCameraMode(false));
       document.getElementById('btn-recenter').addEventListener('click', recenterCamera);
       document.getElementById('btn-audio-toggle').addEventListener('click', toggleAudio);
+      document.getElementById('slider-bright').addEventListener('input', (e) => {
+        roomBrightness = Number(e.target.value) / 100.0;
+        document.getElementById('val-bright').textContent = `${e.target.value}%`;
+        applyPreviewLighting();
+      });
+      document.getElementById('slider-glow').addEventListener('input', (e) => {
+        screenGlowStrength = Number(e.target.value) / 100.0;
+        document.getElementById('val-glow').textContent = `${e.target.value}%`;
+        applyPreviewLighting();
+      });
+    }
+
+    function applyPreviewLighting() {
+      const lin = Math.pow(roomBrightness, 2.2);
+      if (hemiLight) hemiLight.intensity = 0.75 * lin;
+      if (dirLight) dirLight.intensity = 0.55 * lin;
+      if (screenGlowLight) screenGlowLight.intensity = 2.4 * screenGlowStrength;
+      if (skyboxMesh && skyboxMesh.material) {
+        skyboxMesh.material.color.setScalar(lin);
+      }
+      if (currentModel) {
+        const emScale = 0.22 + 0.78 * lin;
+        currentModel.traverse((child) => {
+          if (child.isMesh && child.material && child.material.emissive) {
+            child.material.emissiveIntensity = emScale;
+          }
+        });
+      }
     }
 
     function createVirtualScreen() {
@@ -428,8 +471,14 @@ HTML_PAGE = """<!DOCTYPE html>
 
       document.getElementById('val-pos').textContent = `${pos[0].toFixed(2)}, ${pos[1].toFixed(2)}, ${pos[2].toFixed(2)}`;
       document.getElementById('val-scale').textContent = `${scale[0].toFixed(2)} × ${scale[1].toFixed(2)}m`;
-      const dist = Math.sqrt(pos[0]*pos[0] + pos[1]*pos[1] + pos[2]*pos[2]).toFixed(2);
+      const zDist = Math.max(0.1, Math.abs(pos[2]));
+      const hFov = (2 * Math.atan((scale[0] * 0.5) / zDist) * 180 / Math.PI).toFixed(1);
+      document.getElementById('val-fov').textContent = `${hFov}°`;
+      const dist = Math.sqrt(pos[0]*pos[0] + (pos[1]-RUNTIME_EYE_Y)*(pos[1]-RUNTIME_EYE_Y) + pos[2]*pos[2]).toFixed(2);
       document.getElementById('val-dist').textContent = `${dist}m`;
+      if (screenGlowLight) {
+        screenGlowLight.position.set(pos[0], pos[1], pos[2] + 0.6);
+      }
     }
 
     function setCameraMode(fp) {
