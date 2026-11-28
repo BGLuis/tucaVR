@@ -96,6 +96,7 @@ static_assert(VK_SAMPLE_COUNT_1_BIT == vrplayer::kMsaaSampleCount1 &&
 #include "particles.vert.h"
 #include "particles.frag.h"
 #include "environment_config.h"
+#include "environment_lighting.h"
 #include "skybox.vert.h"
 #include "skybox.frag.h"
 #include "vr_player_ambient.h"
@@ -664,18 +665,30 @@ struct EnvironmentVertex {
     float uv[2];
 };
 
-// texture indexes the environment texture list; -1 draws with the white fallback.
+struct EnvironmentMaterial {
+    float baseColorFactor[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+    float emissiveFactor[3] = {0.0f, 0.0f, 0.0f};
+    float metallicFactor = 0.0f;
+    float roughnessFactor = 0.85f;
+    float occlusionStrength = 1.0f;
+    int32_t baseColorTexture = -1;
+    int32_t ormTexture = -1;
+    int32_t emissiveTexture = -1;
+    bool unlit = false;
+    bool doubleSided = false;
+    VkDescriptorSet set = VK_NULL_HANDLE;
+};
+
 struct EnvironmentDrawRange {
     uint32_t firstIndex = 0;
     uint32_t indexCount = 0;
-    int32_t texture = -1;
+    int32_t materialIndex = 0;
 };
 
 struct EnvironmentTexture {
     VkImage image = VK_NULL_HANDLE;
     VkDeviceMemory memory = VK_NULL_HANDLE;
     VkImageView view = VK_NULL_HANDLE;
-    VkDescriptorSet set = VK_NULL_HANDLE;
 };
 
 enum class EnvironmentTransitionPhase {
@@ -705,6 +718,7 @@ struct CpuEnvironmentData {
     bool hasMesh = false;
     std::vector<EnvironmentVertex> vertices;
     std::vector<uint32_t> indices;
+    std::vector<EnvironmentMaterial> materials;
     std::vector<EnvironmentDrawRange> drawRanges;
     std::vector<CpuEnvironmentTexture> textures;
 };
@@ -1174,6 +1188,7 @@ struct AppState {
 
     // Ambientes Virtuais 3D (Fase 0.3 §1 / Fase 0.5 §3)
     VkPipeline envPipeline = VK_NULL_HANDLE;
+    VkPipeline envPipelineDoubleSided = VK_NULL_HANDLE;
     VkPipelineLayout envPipelineLayout = VK_NULL_HANDLE;
     VkBuffer envVertexBuffer = VK_NULL_HANDLE;
     VkDeviceMemory envVertexMemory = VK_NULL_HANDLE;
@@ -1182,12 +1197,24 @@ struct AppState {
     uint32_t envIndexCount = 0;
     bool envMeshLoaded = false;
     VkSampler envTextureSampler = VK_NULL_HANDLE;
+    VkDescriptorSetLayout envSceneSetLayout = VK_NULL_HANDLE;
+    VkDescriptorPool envSceneDescriptorPool = VK_NULL_HANDLE;
+    std::array<VkDescriptorSet, 2> envSceneDescriptorSet = {VK_NULL_HANDLE, VK_NULL_HANDLE};
+    VkBuffer envSceneUboBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory envSceneUboMemory = VK_NULL_HANDLE;
+    void* envSceneUboMapped = nullptr;
+    uint32_t envSceneUboStride = 256;
+    VkImage envBlackImage = VK_NULL_HANDLE;
+    VkDeviceMemory envBlackMemory = VK_NULL_HANDLE;
+    VkImageView envBlackView = VK_NULL_HANDLE;
     VkDescriptorSetLayout envTextureSetLayout = VK_NULL_HANDLE;
     VkDescriptorPool envTexturePool = VK_NULL_HANDLE;
     std::vector<EnvironmentTexture> envTextures; // [0] is the 1x1 white fallback
+    std::vector<EnvironmentMaterial> envMaterials;
     std::vector<EnvironmentDrawRange> envDrawRanges;
     std::string currentEnvironmentId = "void";
     XrVector3f envSpawnOffset = {0.0f, 0.0f, 0.0f};
+    float roomScreenGlowIntensity = 0.0f;
 
     // Transição suave de ambiente virtual (Fase 0.5 §3 T3.5 / #53)
     EnvironmentTransitionPhase envTransitionPhase = EnvironmentTransitionPhase::IDLE;
@@ -1215,6 +1242,7 @@ struct AppState {
     double predictedDisplayTimeSeconds = 0.0;
 
     // Skybox Cósmico 360 (Fase 0.5 §3)
+    VkSampler skyboxSampler = VK_NULL_HANDLE;
     VkPipeline skyboxPipeline = VK_NULL_HANDLE;
     VkPipelineLayout skyboxPipelineLayout = VK_NULL_HANDLE;
     VkDescriptorSetLayout skyboxDescriptorSetLayout = VK_NULL_HANDLE;
@@ -1459,6 +1487,7 @@ struct AppState {
     // Fase 0.3 Seção 2: Grab & Drag da tela virtual (T2.5)
     bool isScreenGrabbed = false;
     float grabDistance = 2.0f;
+    XrVector3f screenGrabOffsetBase = {0.0f, 0.0f, 0.0f};
     bool isHoveringScreen = false;
 
     // Menu long-press = recenter manual (Etapa 6)
@@ -6809,15 +6838,106 @@ static inline float PassthroughEnvAlpha(const AppState& state) {
     return state.passthroughActive ? 0.0f : 1.0f;
 }
 
+// Helper: uploads static geometry (environment mesh, particles) into DEVICE_LOCAL GPU memory via a temporary staging buffer.
+static void UploadBufferToDeviceLocal(
+    AppState& state, const void* data, VkDeviceSize size, VkBufferUsageFlags usage,
+    VkBuffer& outBuffer, VkDeviceMemory& outMemory) {
+    VkBuffer stagingBuf = VK_NULL_HANDLE;
+    VkDeviceMemory stagingMem = VK_NULL_HANDLE;
+
+    VkBufferCreateInfo stagingInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    stagingInfo.size = size;
+    stagingInfo.usage = VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+    stagingInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VKR(vkCreateBuffer(state.vkDevice, &stagingInfo, nullptr, &stagingBuf));
+
+    VkMemoryRequirements smr{};
+    vkGetBufferMemoryRequirements(state.vkDevice, stagingBuf, &smr);
+    VkMemoryAllocateInfo sai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    sai.allocationSize = smr.size;
+    sai.memoryTypeIndex = FindMemoryType(
+        state, smr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VKR(vkAllocateMemory(state.vkDevice, &sai, nullptr, &stagingMem));
+    VKR(vkBindBufferMemory(state.vkDevice, stagingBuf, stagingMem, 0));
+
+    void* mapped = nullptr;
+    VKR(vkMapMemory(state.vkDevice, stagingMem, 0, size, 0, &mapped));
+    std::memcpy(mapped, data, static_cast<size_t>(size));
+    vkUnmapMemory(state.vkDevice, stagingMem);
+
+    VkBufferCreateInfo dstInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    dstInfo.size = size;
+    dstInfo.usage = usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    dstInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VKR(vkCreateBuffer(state.vkDevice, &dstInfo, nullptr, &outBuffer));
+
+    VkMemoryRequirements dmr{};
+    vkGetBufferMemoryRequirements(state.vkDevice, outBuffer, &dmr);
+    VkMemoryAllocateInfo dai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    dai.allocationSize = dmr.size;
+    dai.memoryTypeIndex = FindMemoryType(state, dmr.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+    VKR(vkAllocateMemory(state.vkDevice, &dai, nullptr, &outMemory));
+    VKR(vkBindBufferMemory(state.vkDevice, outBuffer, outMemory, 0));
+
+    VkCommandBufferAllocateInfo cbAlloc{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    cbAlloc.commandPool = state.vkCommandPool;
+    cbAlloc.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    cbAlloc.commandBufferCount = 1;
+    VkCommandBuffer cmd = VK_NULL_HANDLE;
+    VKR(vkAllocateCommandBuffers(state.vkDevice, &cbAlloc, &cmd));
+
+    VkCommandBufferBeginInfo beginInfo{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    VKR(vkBeginCommandBuffer(cmd, &beginInfo));
+
+    VkBufferCopy copyRegion{};
+    copyRegion.size = size;
+    vkCmdCopyBuffer(cmd, stagingBuf, outBuffer, 1, &copyRegion);
+
+    VKR(vkEndCommandBuffer(cmd));
+    VkSubmitInfo submitInfo{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &cmd;
+    VKR(vkQueueSubmit(state.vkQueue, 1, &submitInfo, VK_NULL_HANDLE));
+    VKR(vkQueueWaitIdle(state.vkQueue));
+
+    vkFreeCommandBuffers(state.vkDevice, state.vkCommandPool, 1, &cmd);
+    vkDestroyBuffer(state.vkDevice, stagingBuf, nullptr);
+    vkFreeMemory(state.vkDevice, stagingMem, nullptr);
+}
+
 // Ambientes Virtuais 3D (Fase 0.3 §1 / Fase 0.5 §3)
 struct EnvironmentPushConstants {
     Mat4 mvp;
-    XrVector4f tintColor;
-    XrVector4f glowParams; // x: screenGlowIntensity (0.0-1.0), y: environmentBrightness (0.0-1.0), z/w: reserved
-    XrVector4f screenPos;  // xyz: screenWorldPosition
+    XrVector4f baseColorFactor; // linear RGBA
+    XrVector4f emissiveFactor;  // linear RGB (* emissiveStrength), w: metallicFactor
+    XrVector4f materialParams;  // x: roughnessFactor, y: occlusionStrength, z: unlitFlag, w: hasEmissiveTex
 };
+static_assert(sizeof(EnvironmentPushConstants) == 112, "EnvironmentPushConstants must stay <= 128 bytes");
+
+struct EnvironmentSceneUbo {
+    XrVector4f cameraPosLocal;    // xyz: eye pos in env local space, w: timeSeconds
+    XrVector4f screenCenterLocal; // xyz: screen center in env local space, w: screenGlowIntensity
+    XrVector4f screenRightLocal;  // xyz: screen half-width axis in local space, w: envBrightnessLinear
+    XrVector4f screenUpLocal;     // xyz: screen half-height axis in local space, w: ambientHemiStrength
+    XrVector4f screenNormalLocal; // xyz: screen front normal in local space, w: emissiveScale
+    XrVector4f keyLightDirInt;    // xyz: normalized key light dir, w: keyIntensity
+    XrVector4f keyLightColor;     // rgb: linear key color, w: skyAmbientIntensity
+    XrVector4f hemiGroundColor;   // rgb: linear ground ambient color, w: reserved
+};
+static_assert(sizeof(EnvironmentSceneUbo) == 128, "EnvironmentSceneUbo must match std140 layout");
+
+struct ParticlesPushConstants {
+    Mat4 mvp;
+    XrVector4f tintColor;
+    XrVector4f glowParams; // x: screenGlow, y: brightnessLinear, z: timeSeconds, w: reserved
+    XrVector4f screenPos;
+};
+static_assert(sizeof(ParticlesPushConstants) == 112, "ParticlesPushConstants must stay <= 128 bytes");
 
 // glTF textures default to REPEAT wrapping, unlike the clamped UI sampler.
+// Material descriptor set (set = 1): binding 0 = baseColor, binding 1 = ORM (AO/Rough/Metal), binding 2 = emissive.
 static void CreateEnvironmentTextureLayout(AppState& state) {
     if (state.envTextureSetLayout != VK_NULL_HANDLE) return;
 
@@ -6833,17 +6953,127 @@ static void CreateEnvironmentTextureLayout(AppState& state) {
     samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
     VKR(vkCreateSampler(state.vkDevice, &samplerInfo, nullptr, &state.envTextureSampler));
 
-    VkDescriptorSetLayoutBinding binding{};
-    binding.binding = 0;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    binding.descriptorCount = 1;
-    binding.stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
-    binding.pImmutableSamplers = &state.envTextureSampler;
+    VkDescriptorSetLayoutBinding bindings[3]{};
+    for (uint32_t b = 0; b < 3; ++b) {
+        bindings[b].binding = b;
+        bindings[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        bindings[b].descriptorCount = 1;
+        bindings[b].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+        bindings[b].pImmutableSamplers = &state.envTextureSampler;
+    }
 
     VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
-    layoutInfo.bindingCount = 1;
-    layoutInfo.pBindings = &binding;
+    layoutInfo.bindingCount = 3;
+    layoutInfo.pBindings = bindings;
     VKR(vkCreateDescriptorSetLayout(state.vkDevice, &layoutInfo, nullptr, &state.envTextureSetLayout));
+}
+
+// Scene descriptor set (set = 0): binding 0 = screenAmbientTexture, binding 1 = dynamic EnvironmentSceneUbo.
+static void CreateEnvironmentSceneResources(AppState& state) {
+    if (state.envSceneSetLayout != VK_NULL_HANDLE) return;
+
+    VkPhysicalDeviceProperties devProps{};
+    vkGetPhysicalDeviceProperties(state.vkPhysicalDevice, &devProps);
+    const uint32_t align = std::max<uint32_t>(
+        256u, static_cast<uint32_t>(devProps.limits.minUniformBufferOffsetAlignment));
+    const uint32_t uboSize = static_cast<uint32_t>(sizeof(EnvironmentSceneUbo));
+    state.envSceneUboStride = ((uboSize + align - 1u) / align) * align;
+
+    const VkDeviceSize totalUboSize =
+        static_cast<VkDeviceSize>(state.envSceneUboStride) * AppState::kMaxFramesInFlight * kEyeCount;
+    VkBufferCreateInfo bufInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
+    bufInfo.size = totalUboSize;
+    bufInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    bufInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    VKR(vkCreateBuffer(state.vkDevice, &bufInfo, nullptr, &state.envSceneUboBuffer));
+
+    VkMemoryRequirements mr{};
+    vkGetBufferMemoryRequirements(state.vkDevice, state.envSceneUboBuffer, &mr);
+    VkMemoryAllocateInfo mai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
+    mai.allocationSize = mr.size;
+    mai.memoryTypeIndex = FindMemoryType(
+        state, mr.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    VKR(vkAllocateMemory(state.vkDevice, &mai, nullptr, &state.envSceneUboMemory));
+    VKR(vkBindBufferMemory(state.vkDevice, state.envSceneUboBuffer, state.envSceneUboMemory, 0));
+    VKR(vkMapMemory(state.vkDevice, state.envSceneUboMemory, 0, totalUboSize, 0, &state.envSceneUboMapped));
+    std::memset(state.envSceneUboMapped, 0, static_cast<size_t>(totalUboSize));
+
+    // 1x1 black fallback image for screenAmbientTexture if ambientRenderPass is unavailable.
+    const uint8_t blackPixel[4] = {0, 0, 0, 255};
+    CreateUiImage(state, 1, 1, state.envBlackImage, state.envBlackMemory, state.envBlackView,
+                  VK_FORMAT_R8G8B8A8_UNORM, 1);
+    UpdateUiImageFromBytes(state, blackPixel, 1, 1, state.envBlackImage, sizeof(blackPixel), 1);
+
+    VkDescriptorSetLayoutBinding bindings[2]{};
+    bindings[0].binding = 0;
+    bindings[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    bindings[0].descriptorCount = 1;
+    bindings[0].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+    bindings[0].pImmutableSamplers = &state.uiSampler;
+
+    bindings[1].binding = 1;
+    bindings[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+    bindings[1].descriptorCount = 1;
+    bindings[1].stageFlags = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    VkDescriptorSetLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
+    layoutInfo.bindingCount = 2;
+    layoutInfo.pBindings = bindings;
+    VKR(vkCreateDescriptorSetLayout(state.vkDevice, &layoutInfo, nullptr, &state.envSceneSetLayout));
+
+    VkDescriptorPoolSize poolSizes[2] = {
+        {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 2},
+        {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, 2},
+    };
+    VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
+    poolInfo.maxSets = 2;
+    poolInfo.poolSizeCount = 2;
+    poolInfo.pPoolSizes = poolSizes;
+    VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.envSceneDescriptorPool));
+
+    VkDescriptorSetLayout layouts[2] = {state.envSceneSetLayout, state.envSceneSetLayout};
+    VkDescriptorSetAllocateInfo allocInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+    allocInfo.descriptorPool = state.envSceneDescriptorPool;
+    allocInfo.descriptorSetCount = 2;
+    allocInfo.pSetLayouts = layouts;
+    VKR(vkAllocateDescriptorSets(state.vkDevice, &allocInfo, state.envSceneDescriptorSet.data()));
+}
+
+static void UpdateEnvironmentSceneDescriptors(AppState& state) {
+    if (state.envSceneDescriptorSet[0] == VK_NULL_HANDLE) return;
+
+    for (int i = 0; i < 2; ++i) {
+        VkImageView ambView = (state.ambientImageView[i] != VK_NULL_HANDLE)
+            ? state.ambientImageView[i]
+            : state.envBlackView;
+
+        VkDescriptorImageInfo imgInfo{};
+        imgInfo.imageView = ambView;
+        imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkDescriptorBufferInfo bufInfo{};
+        bufInfo.buffer = state.envSceneUboBuffer;
+        bufInfo.offset = 0;
+        bufInfo.range = sizeof(EnvironmentSceneUbo);
+
+        VkWriteDescriptorSet writes[2]{};
+        writes[0].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[0].dstSet = state.envSceneDescriptorSet[i];
+        writes[0].dstBinding = 0;
+        writes[0].descriptorCount = 1;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].pImageInfo = &imgInfo;
+
+        writes[1].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        writes[1].dstSet = state.envSceneDescriptorSet[i];
+        writes[1].dstBinding = 1;
+        writes[1].descriptorCount = 1;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC;
+        writes[1].pBufferInfo = &bufInfo;
+
+        vkUpdateDescriptorSets(state.vkDevice, 2, writes, 0, nullptr);
+    }
 }
 
 static void CreateEnvironmentPipeline(AppState& state) {
@@ -6928,9 +7158,10 @@ static void CreateEnvironmentPipeline(AppState& state) {
     pushConstantRange.offset = 0;
     pushConstantRange.size = sizeof(EnvironmentPushConstants);
 
-    // Set 0 = screen ambient texture, set 1 = the draw range's base color texture.
+    // Set 0 = scene ambient texture + EnvironmentSceneUbo, Set 1 = material textures (baseColor, ORM, emissive).
+    CreateEnvironmentSceneResources(state);
     CreateEnvironmentTextureLayout(state);
-    const VkDescriptorSetLayout setLayouts[2] = {state.uiDescriptorSetLayout, state.envTextureSetLayout};
+    const VkDescriptorSetLayout setLayouts[2] = {state.envSceneSetLayout, state.envTextureSetLayout};
     VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layoutInfo.setLayoutCount = 2;
     layoutInfo.pSetLayouts = setLayouts;
@@ -6961,10 +7192,15 @@ static void CreateEnvironmentPipeline(AppState& state) {
 
     VKR(vkCreateGraphicsPipelines(state.vkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &state.envPipeline));
 
+    rasterizer.cullMode = VK_CULL_MODE_NONE;
+    VKR(vkCreateGraphicsPipelines(
+        state.vkDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr, &state.envPipelineDoubleSided));
+
     vkDestroyShaderModule(state.vkDevice, fragModule, nullptr);
     vkDestroyShaderModule(state.vkDevice, vertModule, nullptr);
 
-    LOGI("Ambiente: pipeline Vulkan de ambiente 3D criado com sucesso");
+    UpdateEnvironmentSceneDescriptors(state);
+    LOGI("Ambiente: pipelines Vulkan PBR de ambiente 3D criados com sucesso (single + double-sided)");
 }
 
 // Skybox Cósmico 360 (Fase 0.5 §3)
@@ -6974,13 +7210,28 @@ struct SkyboxPushConstants {
 };
 
 static void CreateSkyboxPipeline(AppState& state) {
-    // 1. Descriptor Set Layout com sampler imutável uiSampler (RGBA)
+    // 1. Dedicated equirectangular skybox sampler: REPEAT horizontally to eliminate the 360-degree seam,
+    // CLAMP vertically to avoid pole bleeding, plus trilinear mipmaps + anisotropy.
+    if (state.skyboxSampler == VK_NULL_HANDLE) {
+        VkSamplerCreateInfo samplerInfo{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+        samplerInfo.magFilter = VK_FILTER_LINEAR;
+        samplerInfo.minFilter = VK_FILTER_LINEAR;
+        samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
+        samplerInfo.addressModeU = VK_SAMPLER_ADDRESS_MODE_REPEAT;
+        samplerInfo.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+        samplerInfo.anisotropyEnable = state.supportsAnisotropy ? VK_TRUE : VK_FALSE;
+        samplerInfo.maxAnisotropy = state.supportsAnisotropy ? 4.0f : 1.0f;
+        samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
+        VKR(vkCreateSampler(state.vkDevice, &samplerInfo, nullptr, &state.skyboxSampler));
+    }
+
     VkDescriptorSetLayoutBinding binding{};
     binding.binding         = 0;
     binding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
     binding.descriptorCount = 1;
     binding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
-    binding.pImmutableSamplers = &state.uiSampler;
+    binding.pImmutableSamplers = &state.skyboxSampler;
 
     VkDescriptorSetLayoutCreateInfo dsLayout{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO};
     dsLayout.bindingCount = 1;
@@ -7084,9 +7335,11 @@ static void CreateSkyboxPipeline(AppState& state) {
     dynamicState.dynamicStateCount = 2;
     dynamicState.pDynamicStates    = dynamicStates;
 
+    // Drawn AFTER opaque room + video geometry with gl_Position.xyww (z = 1.0): Early-Z rejects all occluded pixels.
     VkPipelineDepthStencilStateCreateInfo depthStencil{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
-    depthStencil.depthTestEnable = VK_FALSE;
+    depthStencil.depthTestEnable = VK_TRUE;
     depthStencil.depthWriteEnable = VK_FALSE;
+    depthStencil.depthCompareOp = VK_COMPARE_OP_LESS_OR_EQUAL;
 
     VkGraphicsPipelineCreateInfo pipelineInfo{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
     pipelineInfo.stageCount          = 2;
@@ -7108,7 +7361,7 @@ static void CreateSkyboxPipeline(AppState& state) {
     vkDestroyShaderModule(state.vkDevice, fragModule, nullptr);
     vkDestroyShaderModule(state.vkDevice, vertModule, nullptr);
 
-    LOGI("Skybox: pipeline Vulkan de Skybox 360 criado com sucesso");
+    LOGI("Skybox: pipeline Vulkan de Skybox 360 criado com sucesso (Early-Z + sRGB + REPEAT U)");
 }
 
 static void DestroyEnvironmentSkybox(AppState& state) {
@@ -7125,6 +7378,37 @@ static void DestroyEnvironmentSkybox(AppState& state) {
         state.skyboxImageMemory = VK_NULL_HANDLE;
     }
     state.skyboxLoaded = false;
+}
+
+static bool FormatSupportsLinearBlitMipmaps(AppState& state, VkFormat format) {
+    VkFormatProperties props{};
+    vkGetPhysicalDeviceFormatProperties(state.vkPhysicalDevice, format, &props);
+    const VkFormatFeatureFlags required =
+        VK_FORMAT_FEATURE_BLIT_SRC_BIT | VK_FORMAT_FEATURE_BLIT_DST_BIT |
+        VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT;
+    return (props.optimalTilingFeatures & required) == required;
+}
+
+static void UploadSkyboxFromPixels(AppState& state, const uint8_t* pixels, uint32_t width, uint32_t height) {
+    const uint32_t mipLevels = FormatSupportsLinearBlitMipmaps(state, VK_FORMAT_R8G8B8A8_SRGB)
+                                   ? ComputeEnvironmentTextureMipLevels(width, height, false)
+                                   : 1;
+    CreateUiImage(state, width, height, state.skyboxImage, state.skyboxImageMemory, state.skyboxImageView,
+                  VK_FORMAT_R8G8B8A8_SRGB, mipLevels);
+    UpdateUiImageFromBytes(state, pixels, width, height, state.skyboxImage, 0, mipLevels);
+
+    VkDescriptorImageInfo imgInfo{};
+    imgInfo.imageView   = state.skyboxImageView;
+    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+    write.dstSet          = state.skyboxDescriptorSet;
+    write.dstBinding      = 0;
+    write.descriptorCount = 1;
+    write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    write.pImageInfo      = &imgInfo;
+    vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
+    state.skyboxLoaded = true;
 }
 
 static bool LoadEnvironmentSkybox(AppState& state, const std::string& skyboxAssetPath) {
@@ -7166,28 +7450,9 @@ static bool LoadEnvironmentSkybox(AppState& state, const std::string& skyboxAsse
         return false;
     }
 
-    LOGI("Skybox: Decodificado '%s' (%dx%d, 4 canais)", fullPath.c_str(), width, height);
-
-    CreateUiImage(state, static_cast<uint32_t>(width), static_cast<uint32_t>(height),
-                  state.skyboxImage, state.skyboxImageMemory, state.skyboxImageView);
-
-    UpdateUiImageFromBytes(state, pixels, static_cast<uint32_t>(width), static_cast<uint32_t>(height), state.skyboxImage);
+    LOGI("Skybox: Decodificado '%s' (%dx%d, 4 canais, sRGB + mipmaps)", fullPath.c_str(), width, height);
+    UploadSkyboxFromPixels(state, pixels, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
     stbi_image_free(pixels);
-
-    VkDescriptorImageInfo imgInfo{};
-    imgInfo.sampler     = state.uiSampler;
-    imgInfo.imageView   = state.skyboxImageView;
-    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    write.dstSet          = state.skyboxDescriptorSet;
-    write.dstBinding      = 0;
-    write.descriptorCount = 1;
-    write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.pImageInfo      = &imgInfo;
-    vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
-
-    state.skyboxLoaded = true;
     LOGI("Skybox: '%s' carregado e vinculado com sucesso ao pipeline Vulkan", fullPath.c_str());
     return true;
 }
@@ -7215,10 +7480,10 @@ static void DrawSkyboxIfLoaded(
     viewNoTrans.m[13] = 0.0f;
     viewNoTrans.m[14] = 0.0f;
 
-    const float skyboxBrightness = get_environment_brightness();
+    const float skyboxGain = vrplayer::PerceptualBrightnessToLinear(get_environment_brightness());
     SkyboxPushConstants skyboxPc{};
     skyboxPc.mvp = Mat4Multiply(Mat4Multiply(proj, viewNoTrans), skyboxModel);
-    skyboxPc.tintColor = {skyboxBrightness, skyboxBrightness, skyboxBrightness, 1.0f};
+    skyboxPc.tintColor = {skyboxGain, skyboxGain, skyboxGain, 1.0f};
 
     vkCmdPushConstants(
         cmd, state.skyboxPipelineLayout,
@@ -7287,13 +7552,14 @@ static void CreateParticlesPipeline(AppState& state) {
     VkPipelineMultisampleStateCreateInfo multisampling{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
     multisampling.rasterizationSamples = state.msaaSamples;
 
+    // Additive stardust blending: zero darkening halos and no fragment discard required.
     VkPipelineColorBlendAttachmentState colorBlendAttachment{};
     colorBlendAttachment.blendEnable = VK_TRUE;
     colorBlendAttachment.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
-    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorBlendAttachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
     colorBlendAttachment.colorBlendOp = VK_BLEND_OP_ADD;
-    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
-    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    colorBlendAttachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    colorBlendAttachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
     colorBlendAttachment.alphaBlendOp = VK_BLEND_OP_ADD;
     colorBlendAttachment.colorWriteMask =
         VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
@@ -7311,7 +7577,7 @@ static void CreateParticlesPipeline(AppState& state) {
     VkPushConstantRange pushConstantRange{};
     pushConstantRange.stageFlags = VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT;
     pushConstantRange.offset = 0;
-    pushConstantRange.size = sizeof(EnvironmentPushConstants);
+    pushConstantRange.size = sizeof(ParticlesPushConstants);
 
     VkPipelineLayoutCreateInfo layoutInfo{VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO};
     layoutInfo.setLayoutCount = 0;
@@ -7346,7 +7612,7 @@ static void CreateParticlesPipeline(AppState& state) {
     vkDestroyShaderModule(state.vkDevice, fragModule, nullptr);
     vkDestroyShaderModule(state.vkDevice, vertModule, nullptr);
 
-    LOGI("Particles: pipeline Vulkan de starfield criado com sucesso");
+    LOGI("Particles: pipeline Vulkan de starfield criado com sucesso (additive, no-discard)");
 }
 
 static void DestroyParticlesResources(AppState& state) {
@@ -7381,7 +7647,7 @@ static void DestroyParticlesResources(AppState& state) {
 static void GenerateParticlesMesh(AppState& state) {
     if (state.particlesLoaded) return;
 
-    // ~200 deterministic billboard quads em raio 3.5m - 12.0m
+    // ~200 delicate stardust billboards in radius 4.2m - 13.0m, excluding the frontal video screen cone.
     const uint32_t kParticleCount = 200;
     std::vector<EnvironmentVertex> vertices;
     std::vector<uint32_t> indices;
@@ -7394,21 +7660,36 @@ static void GenerateParticlesMesh(AppState& state) {
         return static_cast<float>(seed & 0x00FFFFFF) / static_cast<float>(0x01000000);
     };
 
-    for (uint32_t i = 0; i < kParticleCount; ++i) {
+    uint32_t generated = 0;
+    uint32_t attempts = 0;
+    while (generated < kParticleCount && attempts < kParticleCount * 6) {
+        ++attempts;
         float u = lcgRand() * 2.0f - 1.0f;
         float phi = lcgRand() * 6.2831853f;
         float sinTheta = sqrtf(std::max(0.0f, 1.0f - u * u));
-        float radius = 3.5f + lcgRand() * 8.5f;
+        float radius = 4.2f + lcgRand() * 8.8f;
 
         XrVector3f center = {
             radius * sinTheta * cosf(phi),
-            radius * u + 1.0f,
+            radius * u + 1.5f,
             radius * sinTheta * sinf(phi)
         };
 
-        float len = Vec3Length(center);
+        // Keep stardust clear of the frontal viewing cone around the virtual screen so particles never
+        // distract near the video edges.
+        if (center.z < -1.5f) {
+            const float invDepth = 1.0f / fabsf(center.z);
+            const float hTan = fabsf(center.x) * invDepth;
+            const float vTan = fabsf(center.y - 1.8f) * invDepth;
+            if (hTan < 0.72f && vTan < 0.44f) {
+                continue;
+            }
+        }
+
+        const XrVector3f toEye = {0.0f - center.x, 1.5f - center.y, 0.0f - center.z};
+        const float len = Vec3Length(toEye);
         if (len < 0.001f) continue;
-        XrVector3f fwd = {-center.x / len, -center.y / len, -center.z / len};
+        const XrVector3f fwd = Vec3Scale(toEye, 1.0f / len);
 
         XrVector3f worldUp = {0.0f, 1.0f, 0.0f};
         if (fabsf(fwd.y) > 0.9f) {
@@ -7419,29 +7700,33 @@ static void GenerateParticlesMesh(AppState& state) {
             worldUp.z * fwd.x - worldUp.x * fwd.z,
             worldUp.x * fwd.y - worldUp.y * fwd.x
         };
-        float rLen = Vec3Length(right);
+        const float rLen = Vec3Length(right);
         if (rLen < 0.001f) continue;
         right = Vec3Scale(right, 1.0f / rLen);
 
-        XrVector3f up = {
+        const XrVector3f up = {
             fwd.y * right.z - fwd.z * right.y,
             fwd.z * right.x - fwd.x * right.z,
             fwd.x * right.y - fwd.y * right.x
         };
 
-        float pSize = 0.035f + lcgRand() * 0.045f;
-        float rX = right.x * pSize, rY = right.y * pSize, rZ = right.z * pSize;
-        float uX = up.x * pSize, uY = up.y * pSize, uZ = up.z * pSize;
+        // Distance-scaled subtle stardust (1.2cm to 3.4cm half-size) for consistent angular size.
+        const float pSize = (0.011f + lcgRand() * 0.014f) * (0.65f + radius * 0.07f);
+        const float rX = right.x * pSize, rY = right.y * pSize, rZ = right.z * pSize;
+        const float uX = up.x * pSize, uY = up.y * pSize, uZ = up.z * pSize;
 
-        float colorTint = lcgRand();
-        XrVector4f pColor = {1.0f, 1.0f, 1.0f, 0.85f};
-        if (colorTint < 0.35f) {
-            pColor = {0.8f, 0.92f, 1.0f, 0.9f};
-        } else if (colorTint < 0.6f) {
-            pColor = {1.0f, 0.95f, 0.82f, 0.85f};
+        const float colorTint = lcgRand();
+        const float jitter = (lcgRand() - 0.5f) * 0.016f; // Unique per-particle hash for drift/twinkle phase
+        XrVector4f pColor = {0.82f + jitter, 0.88f - jitter, 0.96f, 0.55f};
+        if (colorTint < 0.40f) {
+            pColor = {0.42f + jitter, 0.78f - jitter, 1.0f, 0.62f}; // Cool blue-cyan star
+        } else if (colorTint < 0.68f) {
+            pColor = {0.98f + jitter, 0.90f - jitter, 0.72f, 0.52f}; // Warm pale gold star
+        } else if (colorTint < 0.82f) {
+            pColor = {0.72f + jitter, 0.58f - jitter, 1.0f, 0.48f}; // Soft nebula violet speck
         }
 
-        uint32_t baseIdx = static_cast<uint32_t>(vertices.size());
+        const uint32_t baseIdx = static_cast<uint32_t>(vertices.size());
 
         EnvironmentVertex v0{};
         v0.pos[0] = center.x - rX - uX;
@@ -7453,7 +7738,7 @@ static void GenerateParticlesMesh(AppState& state) {
 
         EnvironmentVertex v1{};
         v1.pos[0] = center.x + rX - uX;
-        v1.pos[1] = center.y - rY - uY;
+        v1.pos[1] = center.y + rY - uY;
         v1.pos[2] = center.z + rZ - uZ;
         v1.normal[0] = 1.0f; v1.normal[1] = -1.0f; v1.normal[2] = 0.0f;
         v1.color[0] = pColor.x; v1.color[1] = pColor.y; v1.color[2] = pColor.z; v1.color[3] = pColor.w;
@@ -7469,8 +7754,8 @@ static void GenerateParticlesMesh(AppState& state) {
 
         EnvironmentVertex v3{};
         v3.pos[0] = center.x - rX + uX;
-        v3.pos[1] = center.y + rY + uY;
-        v3.pos[2] = center.z + rZ + uZ;
+        v3.pos[1] = center.y - rY + uY;
+        v3.pos[2] = center.z - rZ + uZ;
         v3.normal[0] = -1.0f; v3.normal[1] = 1.0f; v3.normal[2] = 0.0f;
         v3.color[0] = pColor.x; v3.color[1] = pColor.y; v3.color[2] = pColor.z; v3.color[3] = pColor.w;
         vertices.push_back(v3);
@@ -7481,53 +7766,56 @@ static void GenerateParticlesMesh(AppState& state) {
         indices.push_back(baseIdx + 0);
         indices.push_back(baseIdx + 2);
         indices.push_back(baseIdx + 3);
+        ++generated;
     }
 
-    VkBufferCreateInfo vbInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    vbInfo.size = vertices.size() * sizeof(EnvironmentVertex);
-    vbInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-    vbInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    VKR(vkCreateBuffer(state.vkDevice, &vbInfo, nullptr, &state.particlesVertexBuffer));
-
-    VkMemoryRequirements vmr{};
-    vkGetBufferMemoryRequirements(state.vkDevice, state.particlesVertexBuffer, &vmr);
-    VkMemoryAllocateInfo vai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    vai.allocationSize = vmr.size;
-    vai.memoryTypeIndex = FindMemoryType(
-        state, vmr.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    VKR(vkAllocateMemory(state.vkDevice, &vai, nullptr, &state.particlesVertexMemory));
-    VKR(vkBindBufferMemory(state.vkDevice, state.particlesVertexBuffer, state.particlesVertexMemory, 0));
-
-    void* mappedVerts = nullptr;
-    VKR(vkMapMemory(state.vkDevice, state.particlesVertexMemory, 0, vbInfo.size, 0, &mappedVerts));
-    std::memcpy(mappedVerts, vertices.data(), vbInfo.size);
-    vkUnmapMemory(state.vkDevice, state.particlesVertexMemory);
-
-    VkBufferCreateInfo ibInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-    ibInfo.size = indices.size() * sizeof(uint32_t);
-    ibInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-    ibInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    VKR(vkCreateBuffer(state.vkDevice, &ibInfo, nullptr, &state.particlesIndexBuffer));
-
-    VkMemoryRequirements imr{};
-    vkGetBufferMemoryRequirements(state.vkDevice, state.particlesIndexBuffer, &imr);
-    VkMemoryAllocateInfo iai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-    iai.allocationSize = imr.size;
-    iai.memoryTypeIndex = FindMemoryType(
-        state, imr.memoryTypeBits,
-        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    VKR(vkAllocateMemory(state.vkDevice, &iai, nullptr, &state.particlesIndexMemory));
-    VKR(vkBindBufferMemory(state.vkDevice, state.particlesIndexBuffer, state.particlesIndexMemory, 0));
-
-    void* mappedIndices = nullptr;
-    VKR(vkMapMemory(state.vkDevice, state.particlesIndexMemory, 0, ibInfo.size, 0, &mappedIndices));
-    std::memcpy(mappedIndices, indices.data(), ibInfo.size);
-    vkUnmapMemory(state.vkDevice, state.particlesIndexMemory);
+    UploadBufferToDeviceLocal(
+        state, vertices.data(), vertices.size() * sizeof(EnvironmentVertex),
+        VK_BUFFER_USAGE_VERTEX_BUFFER_BIT, state.particlesVertexBuffer, state.particlesVertexMemory);
+    UploadBufferToDeviceLocal(
+        state, indices.data(), indices.size() * sizeof(uint32_t),
+        VK_BUFFER_USAGE_INDEX_BUFFER_BIT, state.particlesIndexBuffer, state.particlesIndexMemory);
 
     state.particlesIndexCount = static_cast<uint32_t>(indices.size());
     state.particlesLoaded = true;
-    LOGI("Particles: Malha de starfield gerada (%zu vertices, %u indices)", vertices.size(), state.particlesIndexCount);
+    LOGI("Particles: Malha de starfield gerada em DEVICE_LOCAL (%u particulas, %zu vertices, %u indices)",
+         generated, vertices.size(), state.particlesIndexCount);
+}
+
+static void DrawParticlesIfEnabled(
+    AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
+    if (state.passthroughActive || !state.envParticlesEnabled || !state.particlesLoaded ||
+        state.particlesPipeline == VK_NULL_HANDLE || state.particlesVertexBuffer == VK_NULL_HANDLE ||
+        state.particlesIndexBuffer == VK_NULL_HANDLE) {
+        return;
+    }
+
+    const Mat4 envModel = vrplayer::ComputeEnvironmentModel(
+        state.bedModeEnabled, headCenter, state.sceneTranslationOffset, state.sceneOrientationMatrix,
+        state.envSpawnOffset);
+    const float brightnessLinear = vrplayer::PerceptualBrightnessToLinear(get_environment_brightness());
+
+    ParticlesPushConstants pc{};
+    pc.mvp = Mat4Multiply(Mat4Multiply(proj, view), envModel);
+    pc.tintColor = {1.0f, 1.0f, 1.0f, 1.0f};
+    pc.glowParams = {
+        state.roomScreenGlowIntensity,
+        brightnessLinear,
+        static_cast<float>(state.predictedDisplayTimeSeconds),
+        0.0f
+    };
+    pc.screenPos = {0.0f, 0.0f, 0.0f, 1.0f};
+
+    vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.particlesPipeline);
+    VkDeviceSize pOffset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &state.particlesVertexBuffer, &pOffset);
+    vkCmdBindIndexBuffer(cmd, state.particlesIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+    vkCmdPushConstants(
+        cmd, state.particlesPipelineLayout,
+        VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+        0, sizeof(pc), &pc);
+    vkCmdDrawIndexed(cmd, state.particlesIndexCount, 1, 0, 0, 0);
+    CountDrawCallIndexed(state.particlesIndexCount);
 }
 
 // Transição Suave de Ambientes Virtuais (Fase 0.5 §3 T3.5 / #53)
@@ -7648,7 +7936,42 @@ static void DrawEnvironmentFade(AppState& state, VkCommandBuffer cmd) {
 }
 
 // Carregamento de dados de CPU assíncrono (Fase 0.5 §3 T3.5 / #53)
-constexpr size_t kMaxEnvironmentTextures = 8;
+constexpr size_t kMaxEnvironmentTextures = 16;
+constexpr size_t kMaxEnvironmentMaterials = 32;
+
+// Computes cofactor matrix (det * M^-T) of the upper-left 3x3 of a column-major 4x4 matrix,
+// plus its determinant so negative-scale mirrored nodes flip triangle winding cleanly.
+static float ComputeNormalMatrix3x3(const cgltf_float m[16], float outN[9]) {
+    const float a00 = m[0], a01 = m[4], a02 = m[8];
+    const float a10 = m[1], a11 = m[5], a12 = m[9];
+    const float a20 = m[2], a21 = m[6], a22 = m[10];
+
+    const float c00 =  (a11 * a22 - a12 * a21);
+    const float c01 = -(a10 * a22 - a12 * a20);
+    const float c02 =  (a10 * a21 - a11 * a20);
+
+    const float c10 = -(a01 * a22 - a02 * a21);
+    const float c11 =  (a00 * a22 - a02 * a20);
+    const float c12 = -(a00 * a21 - a01 * a20);
+
+    const float c20 =  (a01 * a12 - a02 * a11);
+    const float c21 = -(a00 * a12 - a02 * a10);
+    const float c22 =  (a00 * a11 - a01 * a10);
+
+    // Column-major 3x3 storing cofactor matrix (inverse-transpose up to positive scale).
+    const float det = a00 * c00 + a01 * c01 + a02 * c02;
+    const float sign = (det < 0.0f) ? -1.0f : 1.0f;
+    outN[0] = c00 * sign; outN[3] = c01 * sign; outN[6] = c02 * sign;
+    outN[1] = c10 * sign; outN[4] = c11 * sign; outN[7] = c12 * sign;
+    outN[2] = c20 * sign; outN[5] = c21 * sign; outN[8] = c22 * sign;
+    return det;
+}
+
+static int32_t ResolveGltfImageIndex(const cgltf_data* data, const cgltf_texture_view& view, size_t maxTextures) {
+    if (!view.texture || !view.texture->image) return -1;
+    const size_t idx = static_cast<size_t>(view.texture->image - data->images);
+    return (idx < maxTextures) ? static_cast<int32_t>(idx) : -1;
+}
 
 static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, const std::string& envId, bool astcSupported) {
     CpuEnvironmentData data;
@@ -7797,8 +8120,92 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
             stbi_image_free(pixels);
         }
 
-        for (size_t m = 0; m < gltfData->meshes_count; ++m) {
-            const auto& mesh = gltfData->meshes[m];
+        // Material 0 is always the default fallback material for primitives without a glTF material.
+        data.materials.clear();
+        data.materials.push_back(EnvironmentMaterial{});
+        const size_t matLimit = std::min(gltfData->materials_count, kMaxEnvironmentMaterials - 1);
+        for (size_t mi = 0; mi < matLimit; ++mi) {
+            const cgltf_material& gm = gltfData->materials[mi];
+            EnvironmentMaterial mat{};
+            if (gm.has_pbr_metallic_roughness) {
+                for (int c = 0; c < 4; ++c) {
+                    mat.baseColorFactor[c] = gm.pbr_metallic_roughness.base_color_factor[c];
+                }
+                mat.metallicFactor = gm.pbr_metallic_roughness.metallic_factor;
+                mat.roughnessFactor = gm.pbr_metallic_roughness.roughness_factor;
+                const int32_t baseIdx = ResolveGltfImageIndex(
+                    gltfData, gm.pbr_metallic_roughness.base_color_texture, textureCount);
+                if (baseIdx >= 0 && !data.textures[static_cast<size_t>(baseIdx)].bytes.empty()) {
+                    mat.baseColorTexture = baseIdx;
+                }
+            }
+
+            const int32_t mrIdx = gm.has_pbr_metallic_roughness
+                ? ResolveGltfImageIndex(gltfData, gm.pbr_metallic_roughness.metallic_roughness_texture, textureCount)
+                : -1;
+            const int32_t occIdx = ResolveGltfImageIndex(gltfData, gm.occlusion_texture, textureCount);
+            mat.occlusionStrength = (occIdx >= 0) ? gm.occlusion_texture.scale : 0.0f;
+
+            if (mrIdx >= 0 && !data.textures[static_cast<size_t>(mrIdx)].bytes.empty()) {
+                if (occIdx == mrIdx) {
+                    // Shared packed ORM image (R=AO, G=Roughness, B=Metallic).
+                    mat.ormTexture = mrIdx;
+                } else if (occIdx >= 0 && !data.textures[static_cast<size_t>(occIdx)].bytes.empty() &&
+                           !data.textures[static_cast<size_t>(mrIdx)].astc &&
+                           !data.textures[static_cast<size_t>(occIdx)].astc &&
+                           data.textures[static_cast<size_t>(mrIdx)].width == data.textures[static_cast<size_t>(occIdx)].width &&
+                           data.textures[static_cast<size_t>(mrIdx)].height == data.textures[static_cast<size_t>(occIdx)].height &&
+                           data.textures.size() < kMaxEnvironmentTextures) {
+                    // Merge separate AO + MetallicRoughness maps into a single linear ORM texture.
+                    CpuEnvironmentTexture merged = data.textures[static_cast<size_t>(mrIdx)];
+                    const auto& occBytes = data.textures[static_cast<size_t>(occIdx)].bytes;
+                    for (size_t p = 0; p + 3 < merged.bytes.size(); p += 4) {
+                        merged.bytes[p] = occBytes[p];
+                    }
+                    merged.srgb = false;
+                    mat.ormTexture = static_cast<int32_t>(data.textures.size());
+                    data.textures.push_back(std::move(merged));
+                } else {
+                    mat.ormTexture = mrIdx;
+                    if (occIdx < 0) mat.occlusionStrength = 0.0f;
+                }
+            } else if (occIdx >= 0 && !data.textures[static_cast<size_t>(occIdx)].bytes.empty()) {
+                // Occlusion-only texture: keep R channel and force G=255, B=255 so roughness/metallic factors pass through.
+                if (!data.textures[static_cast<size_t>(occIdx)].astc && data.textures.size() < kMaxEnvironmentTextures) {
+                    CpuEnvironmentTexture occPacked = data.textures[static_cast<size_t>(occIdx)];
+                    for (size_t p = 0; p + 3 < occPacked.bytes.size(); p += 4) {
+                        occPacked.bytes[p + 1] = 255;
+                        occPacked.bytes[p + 2] = 255;
+                        occPacked.bytes[p + 3] = 255;
+                    }
+                    occPacked.srgb = false;
+                    mat.ormTexture = static_cast<int32_t>(data.textures.size());
+                    data.textures.push_back(std::move(occPacked));
+                }
+            }
+
+            const float emissiveStrength = gm.has_emissive_strength ? gm.emissive_strength.emissive_strength : 1.0f;
+            for (int c = 0; c < 3; ++c) {
+                mat.emissiveFactor[c] = gm.emissive_factor[c] * emissiveStrength;
+            }
+            const int32_t emIdx = ResolveGltfImageIndex(gltfData, gm.emissive_texture, textureCount);
+            if (emIdx >= 0 && !data.textures[static_cast<size_t>(emIdx)].bytes.empty()) {
+                mat.emissiveTexture = emIdx;
+            }
+
+            mat.unlit = (gm.unlit != 0);
+            mat.doubleSided = (gm.double_sided != 0);
+            data.materials.push_back(mat);
+        }
+
+        // Bucket triangle indices by material so multi-node glTF scenes batch into at most 1 draw call per material.
+        std::vector<std::vector<uint32_t>> indicesByMaterial(data.materials.size());
+
+        auto appendMesh = [&](const cgltf_mesh& mesh, const cgltf_float worldMat[16]) {
+            float normMat[9];
+            const float det = ComputeNormalMatrix3x3(worldMat, normMat);
+            const bool flipWinding = (det < 0.0f);
+
             for (size_t p = 0; p < mesh.primitives_count; ++p) {
                 const auto& prim = mesh.primitives[p];
                 if (prim.type != cgltf_primitive_type_triangles) continue;
@@ -7821,13 +8228,31 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
                 size_t count = posAcc->count;
                 for (size_t i = 0; i < count; ++i) {
                     EnvironmentVertex v{};
-                    v.pos[0] = v.pos[1] = v.pos[2] = 0.0f;
-                    v.normal[0] = 0.0f; v.normal[1] = 1.0f; v.normal[2] = 0.0f;
+                    float lp[3] = {0.0f, 0.0f, 0.0f};
+                    float ln[3] = {0.0f, 1.0f, 0.0f};
                     v.color[0] = v.color[1] = v.color[2] = v.color[3] = 1.0f;
 
-                    cgltf_accessor_read_float(posAcc, i, v.pos, 3);
+                    cgltf_accessor_read_float(posAcc, i, lp, 3);
+                    v.pos[0] = worldMat[0] * lp[0] + worldMat[4] * lp[1] + worldMat[8] * lp[2] + worldMat[12];
+                    v.pos[1] = worldMat[1] * lp[0] + worldMat[5] * lp[1] + worldMat[9] * lp[2] + worldMat[13];
+                    v.pos[2] = worldMat[2] * lp[0] + worldMat[6] * lp[1] + worldMat[10] * lp[2] + worldMat[14];
+
                     if (uvAcc) cgltf_accessor_read_float(uvAcc, i, v.uv, 2);
-                    if (normAcc) cgltf_accessor_read_float(normAcc, i, v.normal, 3);
+                    if (normAcc) cgltf_accessor_read_float(normAcc, i, ln, 3);
+                    float wn[3] = {
+                        normMat[0] * ln[0] + normMat[3] * ln[1] + normMat[6] * ln[2],
+                        normMat[1] * ln[0] + normMat[4] * ln[1] + normMat[7] * ln[2],
+                        normMat[2] * ln[0] + normMat[5] * ln[1] + normMat[8] * ln[2],
+                    };
+                    const float nLen = sqrtf(wn[0] * wn[0] + wn[1] * wn[1] + wn[2] * wn[2]);
+                    if (nLen > 1e-6f) {
+                        v.normal[0] = wn[0] / nLen;
+                        v.normal[1] = wn[1] / nLen;
+                        v.normal[2] = wn[2] / nLen;
+                    } else {
+                        v.normal[0] = 0.0f; v.normal[1] = 1.0f; v.normal[2] = 0.0f;
+                    }
+
                     if (colorAcc) {
                         float c[4] = {1.0f, 1.0f, 1.0f, 1.0f};
                         cgltf_accessor_read_float(colorAcc, i, c, colorAcc->type == cgltf_type_vec4 ? 4 : 3);
@@ -7836,37 +8261,76 @@ static CpuEnvironmentData LoadEnvironmentCpuData(AAssetManager* assetManager, co
                     data.vertices.push_back(v);
                 }
 
-                int32_t textureIndex = -1;
-                if (prim.material && uvAcc) {
-                    const cgltf_texture* base = prim.material->pbr_metallic_roughness.base_color_texture.texture;
-                    if (base && base->image) {
-                        const size_t imageIndex = static_cast<size_t>(base->image - gltfData->images);
-                        if (imageIndex < data.textures.size() && !data.textures[imageIndex].bytes.empty()) {
-                            textureIndex = static_cast<int32_t>(imageIndex);
-                        }
+                int32_t matIndex = 0;
+                if (prim.material) {
+                    const size_t gmIdx = static_cast<size_t>(prim.material - gltfData->materials);
+                    if (gmIdx + 1 < data.materials.size()) {
+                        matIndex = static_cast<int32_t>(gmIdx + 1);
                     }
                 }
-                const uint32_t firstIndex = static_cast<uint32_t>(data.indices.size());
+                auto& bucket = indicesByMaterial[static_cast<size_t>(matIndex)];
+
+                auto pushTri = [&](uint32_t i0, uint32_t i1, uint32_t i2) {
+                    bucket.push_back(vertexBase + i0);
+                    if (flipWinding) {
+                        bucket.push_back(vertexBase + i2);
+                        bucket.push_back(vertexBase + i1);
+                    } else {
+                        bucket.push_back(vertexBase + i1);
+                        bucket.push_back(vertexBase + i2);
+                    }
+                };
 
                 if (prim.indices) {
-                    size_t icount = prim.indices->count;
-                    for (size_t i = 0; i < icount; ++i) {
-                        data.indices.push_back(vertexBase + static_cast<uint32_t>(cgltf_accessor_read_index(prim.indices, i)));
+                    const size_t icount = prim.indices->count;
+                    for (size_t i = 0; i + 2 < icount; i += 3) {
+                        pushTri(static_cast<uint32_t>(cgltf_accessor_read_index(prim.indices, i)),
+                                static_cast<uint32_t>(cgltf_accessor_read_index(prim.indices, i + 1)),
+                                static_cast<uint32_t>(cgltf_accessor_read_index(prim.indices, i + 2)));
                     }
                 } else {
-                    for (size_t i = 0; i < count; ++i) {
-                        data.indices.push_back(vertexBase + static_cast<uint32_t>(i));
+                    for (size_t i = 0; i + 2 < count; i += 3) {
+                        pushTri(static_cast<uint32_t>(i), static_cast<uint32_t>(i + 1), static_cast<uint32_t>(i + 2));
                     }
-                }
-
-                const uint32_t indexCount = static_cast<uint32_t>(data.indices.size()) - firstIndex;
-                if (!data.drawRanges.empty() && data.drawRanges.back().texture == textureIndex) {
-                    data.drawRanges.back().indexCount += indexCount;
-                } else {
-                    data.drawRanges.push_back({firstIndex, indexCount, textureIndex});
                 }
             }
+        };
+
+        // Traverse scene node hierarchy with full world transforms; fall back to raw meshes if no nodes reference meshes.
+        bool anyMeshNode = false;
+        for (size_t n = 0; n < gltfData->nodes_count; ++n) {
+            const cgltf_node& node = gltfData->nodes[n];
+            if (!node.mesh) continue;
+            anyMeshNode = true;
+            cgltf_float worldMat[16];
+            cgltf_node_transform_world(&node, worldMat);
+            appendMesh(*node.mesh, worldMat);
         }
+        if (!anyMeshNode) {
+            const cgltf_float identity[16] = {
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                0, 0, 0, 1
+            };
+            for (size_t m = 0; m < gltfData->meshes_count; ++m) {
+                appendMesh(gltfData->meshes[m], identity);
+            }
+        }
+
+        // Emit single-sided materials first, then double-sided, minimizing pipeline switches.
+        for (int pass = 0; pass < 2; ++pass) {
+            const bool wantDoubleSided = (pass == 1);
+            for (size_t mi = 0; mi < data.materials.size(); ++mi) {
+                if (data.materials[mi].doubleSided != wantDoubleSided) continue;
+                const auto& bucket = indicesByMaterial[mi];
+                if (bucket.empty()) continue;
+                const uint32_t firstIndex = static_cast<uint32_t>(data.indices.size());
+                data.indices.insert(data.indices.end(), bucket.begin(), bucket.end());
+                data.drawRanges.push_back({firstIndex, static_cast<uint32_t>(bucket.size()), static_cast<int32_t>(mi)});
+            }
+        }
+
         if (!data.vertices.empty() && !data.indices.empty()) {
             data.hasMesh = true;
         }
@@ -7884,6 +8348,7 @@ static void DestroyEnvironmentTextures(AppState& state) {
         if (tex.memory != VK_NULL_HANDLE) vkFreeMemory(state.vkDevice, tex.memory, nullptr);
     }
     state.envTextures.clear();
+    state.envMaterials.clear();
     state.envDrawRanges.clear();
     if (state.envTexturePool != VK_NULL_HANDLE) {
         vkResetDescriptorPool(state.vkDevice, state.envTexturePool, 0);
@@ -7893,40 +8358,25 @@ static void DestroyEnvironmentTextures(AppState& state) {
 static void AddEnvironmentTexture(AppState& state, uint32_t width, uint32_t height, VkFormat format,
                                   const uint8_t* bytes, VkDeviceSize sizeBytes) {
     const bool isAstc = (format == VK_FORMAT_ASTC_6x6_SRGB_BLOCK || format == VK_FORMAT_ASTC_6x6_UNORM_BLOCK);
-    const uint32_t mipLevels = ComputeEnvironmentTextureMipLevels(width, height, isAstc);
+    const uint32_t mipLevels = (!isAstc && FormatSupportsLinearBlitMipmaps(state, format))
+                                   ? ComputeEnvironmentTextureMipLevels(width, height, false)
+                                   : 1;
 
     EnvironmentTexture tex;
     CreateUiImage(state, width, height, tex.image, tex.memory, tex.view, format, mipLevels);
     UpdateUiImageFromBytes(state, bytes, width, height, tex.image, sizeBytes, mipLevels);
-
-    VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
-    alloc.descriptorPool = state.envTexturePool;
-    alloc.descriptorSetCount = 1;
-    alloc.pSetLayouts = &state.envTextureSetLayout;
-    VKR(vkAllocateDescriptorSets(state.vkDevice, &alloc, &tex.set));
-
-    VkDescriptorImageInfo imgInfo{};
-    imgInfo.imageView = tex.view;
-    imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-    VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-    write.dstSet = tex.set;
-    write.dstBinding = 0;
-    write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    write.pImageInfo = &imgInfo;
-    vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
-
     state.envTextures.push_back(tex);
 }
 
-// envTextures[0] is the white fallback, so draw range texture N lives at envTextures[N + 1].
+// envTextures[0] is the 1x1 white fallback, so texture index N lives at envTextures[N + 1].
 static void UploadEnvironmentTextures(AppState& state, const CpuEnvironmentData& data) {
     CreateEnvironmentTextureLayout(state);
     if (state.envTexturePool == VK_NULL_HANDLE) {
-        VkDescriptorPoolSize poolSize{VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
-                                      static_cast<uint32_t>(kMaxEnvironmentTextures + 1)};
+        VkDescriptorPoolSize poolSize{
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            static_cast<uint32_t>(kMaxEnvironmentMaterials * 3)};
         VkDescriptorPoolCreateInfo poolInfo{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-        poolInfo.maxSets = static_cast<uint32_t>(kMaxEnvironmentTextures + 1);
+        poolInfo.maxSets = static_cast<uint32_t>(kMaxEnvironmentMaterials);
         poolInfo.poolSizeCount = 1;
         poolInfo.pPoolSizes = &poolSize;
         VKR(vkCreateDescriptorPool(state.vkDevice, &poolInfo, nullptr, &state.envTexturePool));
@@ -7942,9 +8392,51 @@ static void UploadEnvironmentTextures(AppState& state, const CpuEnvironmentData&
         VkFormat format = tex.srgb ? VK_FORMAT_R8G8B8A8_SRGB : VK_FORMAT_R8G8B8A8_UNORM;
         if (tex.astc) format = tex.srgb ? VK_FORMAT_ASTC_6x6_SRGB_BLOCK : VK_FORMAT_ASTC_6x6_UNORM_BLOCK;
         AddEnvironmentTexture(state, tex.width, tex.height, format, tex.bytes.data(), tex.bytes.size());
-        LOGI("Ambiente: textura %zu carregada (%ux%u, %s)", state.envTextures.size() - 2, tex.width, tex.height,
-             tex.astc ? "ASTC 6x6" : "RGBA8");
+        LOGI("Ambiente: textura %zu carregada (%ux%u, %s, %s)", state.envTextures.size() - 2, tex.width, tex.height,
+             tex.astc ? "ASTC 6x6" : "RGBA8", tex.srgb ? "sRGB" : "linear");
     }
+
+    auto resolveView = [&](int32_t texIdx) -> VkImageView {
+        if (texIdx >= 0) {
+            const size_t slot = static_cast<size_t>(texIdx + 1);
+            if (slot < state.envTextures.size() && state.envTextures[slot].view != VK_NULL_HANDLE) {
+                return state.envTextures[slot].view;
+            }
+        }
+        return state.envTextures[0].view;
+    };
+
+    state.envMaterials = data.materials;
+    if (state.envMaterials.empty()) {
+        state.envMaterials.push_back(EnvironmentMaterial{});
+    }
+    for (EnvironmentMaterial& mat : state.envMaterials) {
+        VkDescriptorSetAllocateInfo alloc{VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO};
+        alloc.descriptorPool = state.envTexturePool;
+        alloc.descriptorSetCount = 1;
+        alloc.pSetLayouts = &state.envTextureSetLayout;
+        VKR(vkAllocateDescriptorSets(state.vkDevice, &alloc, &mat.set));
+
+        VkDescriptorImageInfo infos[3]{};
+        infos[0].imageView = resolveView(mat.baseColorTexture);
+        infos[0].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        infos[1].imageView = resolveView(mat.ormTexture);
+        infos[1].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        infos[2].imageView = resolveView(mat.emissiveTexture);
+        infos[2].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+
+        VkWriteDescriptorSet writes[3]{};
+        for (uint32_t b = 0; b < 3; ++b) {
+            writes[b].sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            writes[b].dstSet = mat.set;
+            writes[b].dstBinding = b;
+            writes[b].descriptorCount = 1;
+            writes[b].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+            writes[b].pImageInfo = &infos[b];
+        }
+        vkUpdateDescriptorSets(state.vkDevice, 3, writes, 0, nullptr);
+    }
+
     state.envDrawRanges = data.drawRanges;
 }
 
@@ -8017,78 +8509,28 @@ static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& da
     }
 
     if (data.hasSkybox && !data.skyboxPixels.empty() && data.skyboxWidth > 0 && data.skyboxHeight > 0) {
-        CreateUiImage(state, static_cast<uint32_t>(data.skyboxWidth), static_cast<uint32_t>(data.skyboxHeight),
-                      state.skyboxImage, state.skyboxImageMemory, state.skyboxImageView);
-
-        UpdateUiImageFromBytes(state, data.skyboxPixels.data(),
-                               static_cast<uint32_t>(data.skyboxWidth), static_cast<uint32_t>(data.skyboxHeight),
-                               state.skyboxImage);
-
-        VkDescriptorImageInfo imgInfo{};
-        imgInfo.sampler     = state.uiSampler;
-        imgInfo.imageView   = state.skyboxImageView;
-        imgInfo.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
-
-        VkWriteDescriptorSet write{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        write.dstSet          = state.skyboxDescriptorSet;
-        write.dstBinding      = 0;
-        write.descriptorCount = 1;
-        write.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-        write.pImageInfo      = &imgInfo;
-        vkUpdateDescriptorSets(state.vkDevice, 1, &write, 0, nullptr);
-
-        state.skyboxLoaded = true;
-        LOGI("Skybox: '%s' carregado e vinculado com sucesso (%dx%d)", data.envId.c_str(), data.skyboxWidth, data.skyboxHeight);
+        UploadSkyboxFromPixels(state, data.skyboxPixels.data(),
+                               static_cast<uint32_t>(data.skyboxWidth),
+                               static_cast<uint32_t>(data.skyboxHeight));
+        LOGI("Skybox: '%s' carregado em sRGB + mipmaps (%dx%d)", data.envId.c_str(), data.skyboxWidth, data.skyboxHeight);
     }
 
     if (data.hasMesh && !data.vertices.empty() && !data.indices.empty()) {
-        VkBufferCreateInfo vbInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        vbInfo.size = data.vertices.size() * sizeof(EnvironmentVertex);
-        vbInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
-        vbInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        VKR(vkCreateBuffer(state.vkDevice, &vbInfo, nullptr, &state.envVertexBuffer));
-
-        VkMemoryRequirements vmr{};
-        vkGetBufferMemoryRequirements(state.vkDevice, state.envVertexBuffer, &vmr);
-        VkMemoryAllocateInfo vai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        vai.allocationSize = vmr.size;
-        vai.memoryTypeIndex = FindMemoryType(
-            state, vmr.memoryTypeBits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        VKR(vkAllocateMemory(state.vkDevice, &vai, nullptr, &state.envVertexMemory));
-        VKR(vkBindBufferMemory(state.vkDevice, state.envVertexBuffer, state.envVertexMemory, 0));
-
-        void* mappedVerts = nullptr;
-        VKR(vkMapMemory(state.vkDevice, state.envVertexMemory, 0, vbInfo.size, 0, &mappedVerts));
-        std::memcpy(mappedVerts, data.vertices.data(), vbInfo.size);
-        vkUnmapMemory(state.vkDevice, state.envVertexMemory);
-
-        VkBufferCreateInfo ibInfo{VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO};
-        ibInfo.size = data.indices.size() * sizeof(uint32_t);
-        ibInfo.usage = VK_BUFFER_USAGE_INDEX_BUFFER_BIT;
-        ibInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        VKR(vkCreateBuffer(state.vkDevice, &ibInfo, nullptr, &state.envIndexBuffer));
-
-        VkMemoryRequirements imr{};
-        vkGetBufferMemoryRequirements(state.vkDevice, state.envIndexBuffer, &imr);
-        VkMemoryAllocateInfo iai{VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO};
-        iai.allocationSize = imr.size;
-        iai.memoryTypeIndex = FindMemoryType(
-            state, imr.memoryTypeBits,
-            VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-        VKR(vkAllocateMemory(state.vkDevice, &iai, nullptr, &state.envIndexMemory));
-        VKR(vkBindBufferMemory(state.vkDevice, state.envIndexBuffer, state.envIndexMemory, 0));
-
-        void* mappedIndices = nullptr;
-        VKR(vkMapMemory(state.vkDevice, state.envIndexMemory, 0, ibInfo.size, 0, &mappedIndices));
-        std::memcpy(mappedIndices, data.indices.data(), ibInfo.size);
-        vkUnmapMemory(state.vkDevice, state.envIndexMemory);
+        const VkDeviceSize vbSize = data.vertices.size() * sizeof(EnvironmentVertex);
+        const VkDeviceSize ibSize = data.indices.size() * sizeof(uint32_t);
+        UploadBufferToDeviceLocal(
+            state, data.vertices.data(), vbSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+            state.envVertexBuffer, state.envVertexMemory);
+        UploadBufferToDeviceLocal(
+            state, data.indices.data(), ibSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+            state.envIndexBuffer, state.envIndexMemory);
 
         state.envIndexCount = static_cast<uint32_t>(data.indices.size());
         UploadEnvironmentTextures(state, data);
         state.envMeshLoaded = true;
-        LOGI("Ambiente: '%s' malha carregada com sucesso (%zu vertices, %u indices, %zu bytes)",
-             data.envId.c_str(), data.vertices.size(), state.envIndexCount, vbInfo.size + ibInfo.size);
+        LOGI("Ambiente: '%s' malha PBR carregada em DEVICE_LOCAL (%zu vertices, %u indices, %zu materiais, %zu draw calls)",
+             data.envId.c_str(), data.vertices.size(), state.envIndexCount,
+             state.envMaterials.size(), state.envDrawRanges.size());
     }
 }
 
@@ -8100,74 +8542,100 @@ static bool LoadEnvironmentMesh(AppState& state, const std::string& envId) {
 }
 
 static void DrawEnvironmentIfLoaded(
-    AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
-    if (state.passthroughActive) {
+    AppState& state, VkCommandBuffer cmd, const Mat4& proj, const Mat4& view,
+    XrVector3f headCenter, XrVector3f eyePosWorld, int eye) {
+    if (state.passthroughActive || !state.envMeshLoaded || state.envPipeline == VK_NULL_HANDLE ||
+        state.envVertexBuffer == VK_NULL_HANDLE || state.envIndexBuffer == VK_NULL_HANDLE ||
+        state.envSceneUboMapped == nullptr) {
         return;
     }
 
-    const float envBrightness = get_environment_brightness();
-    EnvironmentPushConstants envPc{};
     const Mat4 envModel = vrplayer::ComputeEnvironmentModel(
         state.bedModeEnabled, headCenter, state.sceneTranslationOffset, state.sceneOrientationMatrix,
         state.envSpawnOffset);
-    envPc.mvp = Mat4Multiply(Mat4Multiply(proj, view), envModel);
-    envPc.tintColor = {envBrightness, envBrightness, envBrightness, 1.0f};
+    const Mat4 mvp = Mat4Multiply(Mat4Multiply(proj, view), envModel);
 
-    // Screen Glow difuso nos ambientes 3D (Fase 0.5 §4 T4.1 / T4.2)
-    SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
-    const bool is3dRoom = (state.currentEnvironmentId == "cinema" || state.currentEnvironmentId == "living_room");
-    const float glowIntensity = (is3dRoom && state.thermalLevel < 2) ? state.ambientIntensity : 0.0f;
-    envPc.glowParams = {glowIntensity, envBrightness, static_cast<float>(state.predictedDisplayTimeSeconds), 0.0f};
-    envPc.screenPos = {scene.screenCenter.x, scene.screenCenter.y, scene.screenCenter.z, 1.0f};
+    const float rawBrightness = get_environment_brightness();
+    const float brightnessLinear = vrplayer::PerceptualBrightnessToLinear(rawBrightness);
+    const float emissiveScale = vrplayer::ComputeEmissiveScale(rawBrightness);
+    const SceneTransforms scene = ComputeSceneTransforms(state, headCenter);
+    const auto screenLocal = vrplayer::ComputeScreenInEnvironmentSpace(
+        envModel, scene.screenModelNoScale, state.screenScaleX, state.screenScaleY, eyePosWorld);
+    const auto preset = vrplayer::GetRoomLightingPreset(state.currentEnvironmentId);
 
-    if (state.envMeshLoaded && state.envPipeline != VK_NULL_HANDLE &&
-        state.envVertexBuffer != VK_NULL_HANDLE && state.envIndexBuffer != VK_NULL_HANDLE) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.envPipeline);
-        VkDeviceSize offset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &state.envVertexBuffer, &offset);
-        vkCmdBindIndexBuffer(cmd, state.envIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+    EnvironmentSceneUbo ubo{};
+    ubo.cameraPosLocal = {
+        screenLocal.cameraPosLocal.x, screenLocal.cameraPosLocal.y, screenLocal.cameraPosLocal.z,
+        static_cast<float>(state.predictedDisplayTimeSeconds)};
+    ubo.screenCenterLocal = {
+        screenLocal.centerLocal.x, screenLocal.centerLocal.y, screenLocal.centerLocal.z,
+        state.roomScreenGlowIntensity};
+    ubo.screenRightLocal = {
+        screenLocal.halfRightLocal.x, screenLocal.halfRightLocal.y, screenLocal.halfRightLocal.z,
+        brightnessLinear};
+    ubo.screenUpLocal = {
+        screenLocal.halfUpLocal.x, screenLocal.halfUpLocal.y, screenLocal.halfUpLocal.z,
+        preset.ambientHemiStrength};
+    ubo.screenNormalLocal = {
+        screenLocal.normalLocal.x, screenLocal.normalLocal.y, screenLocal.normalLocal.z,
+        emissiveScale};
+    ubo.keyLightDirInt = {preset.keyDir[0], preset.keyDir[1], preset.keyDir[2], preset.keyIntensity};
+    ubo.keyLightColor = {preset.keyColor[0], preset.keyColor[1], preset.keyColor[2], preset.skyAmbientIntensity};
+    ubo.hemiGroundColor = {preset.groundColor[0], preset.groundColor[1], preset.groundColor[2], 0.0f};
 
-        VkDescriptorSet envAmbientDs = (state.ambientDescriptorSet[state.ambientDisplayIndex] != VK_NULL_HANDLE)
-            ? state.ambientDescriptorSet[state.ambientDisplayIndex]
-            : state.uiDescriptorSet;
-        if (envAmbientDs != VK_NULL_HANDLE) {
+    const uint32_t uboSlot = state.currentFrameIndex * kEyeCount + static_cast<uint32_t>(std::clamp(eye, 0, kEyeCount - 1));
+    const uint32_t dynamicOffset = uboSlot * state.envSceneUboStride;
+    std::memcpy(static_cast<uint8_t*>(state.envSceneUboMapped) + dynamicOffset, &ubo, sizeof(ubo));
+
+    VkDeviceSize offset = 0;
+    vkCmdBindVertexBuffers(cmd, 0, 1, &state.envVertexBuffer, &offset);
+    vkCmdBindIndexBuffer(cmd, state.envIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
+
+    const VkDescriptorSet sceneDs = state.envSceneDescriptorSet[state.ambientDisplayIndex];
+    VkPipeline boundPipeline = VK_NULL_HANDLE;
+    bool sceneBound = false;
+
+    for (const EnvironmentDrawRange& range : state.envDrawRanges) {
+        const size_t matIdx = static_cast<size_t>(
+            std::clamp<int32_t>(range.materialIndex, 0, static_cast<int32_t>(state.envMaterials.size()) - 1));
+        const EnvironmentMaterial& mat = state.envMaterials[matIdx];
+        VkPipeline targetPipeline = (mat.doubleSided && state.envPipelineDoubleSided != VK_NULL_HANDLE)
+            ? state.envPipelineDoubleSided
+            : state.envPipeline;
+        if (targetPipeline != boundPipeline) {
+            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, targetPipeline);
+            boundPipeline = targetPipeline;
+        }
+        if (!sceneBound && sceneDs != VK_NULL_HANDLE) {
             vkCmdBindDescriptorSets(
                 cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.envPipelineLayout,
-                0, 1, &envAmbientDs, 0, nullptr);
+                0, 1, &sceneDs, 1, &dynamicOffset);
+            sceneBound = true;
+        }
+        if (mat.set != VK_NULL_HANDLE) {
+            vkCmdBindDescriptorSets(
+                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.envPipelineLayout,
+                1, 1, &mat.set, 0, nullptr);
         }
 
+        EnvironmentPushConstants pc{};
+        pc.mvp = mvp;
+        pc.baseColorFactor = {
+            mat.baseColorFactor[0], mat.baseColorFactor[1], mat.baseColorFactor[2], mat.baseColorFactor[3]};
+        pc.emissiveFactor = {
+            mat.emissiveFactor[0], mat.emissiveFactor[1], mat.emissiveFactor[2], mat.metallicFactor};
+        pc.materialParams = {
+            mat.roughnessFactor,
+            mat.occlusionStrength,
+            mat.unlit ? 1.0f : 0.0f,
+            (mat.emissiveTexture >= 0) ? 1.0f : 0.0f};
         vkCmdPushConstants(
             cmd, state.envPipelineLayout,
             VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(envPc), &envPc);
+            0, sizeof(pc), &pc);
 
-        for (const EnvironmentDrawRange& range : state.envDrawRanges) {
-            const size_t slot = static_cast<size_t>(range.texture + 1);
-            const bool hasTexture = slot < state.envTextures.size() && state.envTextures[slot].set != VK_NULL_HANDLE;
-            const VkDescriptorSet textureSet = state.envTextures[hasTexture ? slot : 0].set;
-            vkCmdBindDescriptorSets(
-                cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.envPipelineLayout,
-                1, 1, &textureSet, 0, nullptr);
-            vkCmdDrawIndexed(cmd, range.indexCount, 1, range.firstIndex, 0, 0);
-            CountDrawCallIndexed(range.indexCount);
-        }
-    }
-
-    // Partículas cósmicas (~200 billboards com twinkle sinusoidal) (Fase 0.5 §3 T3.3 / #54)
-    if (state.envParticlesEnabled && state.particlesLoaded && state.particlesPipeline != VK_NULL_HANDLE &&
-        state.particlesVertexBuffer != VK_NULL_HANDLE && state.particlesIndexBuffer != VK_NULL_HANDLE) {
-        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.particlesPipeline);
-        VkDeviceSize pOffset = 0;
-        vkCmdBindVertexBuffers(cmd, 0, 1, &state.particlesVertexBuffer, &pOffset);
-        vkCmdBindIndexBuffer(cmd, state.particlesIndexBuffer, 0, VK_INDEX_TYPE_UINT32);
-
-        vkCmdPushConstants(
-            cmd, state.particlesPipelineLayout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            0, sizeof(envPc), &envPc);
-
-        vkCmdDrawIndexed(cmd, state.particlesIndexCount, 1, 0, 0, 0);
-        CountDrawCallIndexed(state.particlesIndexCount);
+        vkCmdDrawIndexed(cmd, range.indexCount, 1, range.firstIndex, 0, 0);
+        CountDrawCallIndexed(range.indexCount);
     }
 }
 
@@ -8590,7 +9058,8 @@ static void CreateAmbientPipelines(AppState& state) {
 // ambiente e monoscopica, gravar isso por olho pagaria tudo em dobro
 // (armadilha 1 do relatorio).
 static void RecordAmbientDownsample(AppState& state, VkCommandBuffer cmd) {
-    if (state.ambientIntensity <= 0.001f || state.activeVideoFrame == nullptr ||
+    if ((state.ambientIntensity <= 0.001f && state.roomScreenGlowIntensity <= 0.001f) ||
+        state.activeVideoFrame == nullptr ||
         state.ambientDownsamplePipeline == VK_NULL_HANDLE) {
         return;
     }
@@ -8739,7 +9208,7 @@ static void RecordIntroBackdrop(AppState& state, VkCommandBuffer cmd, VkFramebuf
 
 void RecordFallbackQuad(
     AppState& state, VkCommandBuffer cmd, VkFramebuffer framebuffer, VkExtent2D extent, const Mat4& mvp,
-    const Mat4& proj, const Mat4& view, XrVector3f headCenter) {
+    const Mat4& proj, const Mat4& view, XrVector3f headCenter, XrVector3f eyePos, int eye) {
     std::array<VkClearValue, 2> clearValues{};
     // preto quase puro — ambiente escuro de cinema (alpha 0 quando passthrough ativo)
     clearValues[0].color = {{0.02f, 0.02f, 0.05f, PassthroughEnvAlpha(state)}};
@@ -8764,8 +9233,7 @@ void RecordFallbackQuad(
     VkRect2D scissor{{0, 0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    DrawSkyboxIfLoaded(state, cmd, proj, view);
-    DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
+    DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter, eyePos, eye);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.pipeline);
 
@@ -8784,6 +9252,10 @@ void RecordFallbackQuad(
 
     vkCmdDraw(cmd, 4, 1, 0, 0);
     CountDrawCall(4);
+
+    // Drawn after opaque geometry to maximize Early-Z / LRZ rejection on Adreno.
+    DrawSkyboxIfLoaded(state, cmd, proj, view);
+    DrawParticlesIfEnabled(state, cmd, proj, view, headCenter);
 
     DrawUiQuads(state, cmd, proj, view, headCenter);
     DrawEnvironmentFade(state, cmd);
@@ -9117,7 +9589,8 @@ VideoFrame* GetOrImportVideoFrame(AppState& state, AHardwareBuffer* buffer) {
 // textura YCbCr com suporte a upscaling SGSR1.
 void RecordVideoFlat(
     AppState& state, VkCommandBuffer cmd, VkFramebuffer framebuffer, VkExtent2D extent,
-    const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter, VideoFrame* videoFrame) {
+    const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter,
+    XrVector3f eyePos, int eye, VideoFrame* videoFrame) {
     // Transicionar a imagem de video para SHADER_READ_ONLY antes do render pass.
     // O AHardwareBuffer e preenchido pelo MediaCodec fora da fila Vulkan;
     // a barreira garante visibilidade para o fragment shader.
@@ -9162,8 +9635,7 @@ void RecordVideoFlat(
     VkRect2D scissor{{0, 0}, extent};
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    DrawSkyboxIfLoaded(state, cmd, proj, view);
-    DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
+    DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter, eyePos, eye);
     DrawAmbientHalo(state, cmd, proj, view, headCenter);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.videoPipeline);
@@ -9205,6 +9677,10 @@ void RecordVideoFlat(
     vkCmdDraw(cmd, vertexCount, 1, 0, 0);
     CountDrawCall(vertexCount);
 
+    // Drawn after opaque room + screen for Early-Z / LRZ savings on Adreno.
+    DrawSkyboxIfLoaded(state, cmd, proj, view);
+    DrawParticlesIfEnabled(state, cmd, proj, view, headCenter);
+
     // Preview de arrasto (T-seek-ux): mesmo transform do quad de video
     // (Flat2D), reaproveitando o pipeline de UI (RGBA8 simples, sem YCbCr).
     if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
@@ -9234,7 +9710,8 @@ void RecordVideoFlat(
 // environment, so the whole eye buffer is the hole and only the overlays remain.
 void RecordVideoHole(
     AppState& state, VkCommandBuffer cmd, VkFramebuffer framebuffer, VkExtent2D extent,
-    const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter, bool sphereMode) {
+    const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter,
+    XrVector3f eyePos, int eye, bool sphereMode) {
     std::array<VkClearValue, 2> clearValues{};
     clearValues[0].color = {{0.0f, 0.0f, 0.0f, sphereMode ? 0.0f : PassthroughEnvAlpha(state)}};
     clearValues[1].depthStencil = {1.0f, 0};
@@ -9259,8 +9736,7 @@ void RecordVideoHole(
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     if (!sphereMode) {
-        DrawSkyboxIfLoaded(state, cmd, proj, view);
-        DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
+        DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter, eyePos, eye);
         DrawAmbientHalo(state, cmd, proj, view, headCenter);
 
         const bool isCurved = (state.screenCurvature > 1e-4f);
@@ -9275,6 +9751,10 @@ void RecordVideoHole(
         vkCmdPushConstants(cmd, state.pipelineLayout, VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(holePush), &holePush);
         vkCmdDraw(cmd, vertexCount, 1, 0, 0);
         CountDrawCall(vertexCount);
+
+        // holePipeline writes depth (depthWriteEnable = VK_TRUE), so Early-Z preserves the video hole.
+        DrawSkyboxIfLoaded(state, cmd, proj, view);
+        DrawParticlesIfEnabled(state, cmd, proj, view, headCenter);
 
         // Scrub preview over the hole, same transform as the screen.
         if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
@@ -9303,7 +9783,7 @@ void RecordVideoHole(
 void RecordStereoFrame(
     AppState& state, VkCommandBuffer cmd, VkFramebuffer fb, VkExtent2D extent,
     const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter,
-    bool sphereMode, const Mat4& sphereMvp, int eye, const StereoParams& sp) {
+    XrVector3f eyePos, bool sphereMode, const Mat4& sphereMvp, int eye, const StereoParams& sp) {
     // Barreira de pipeline para o frame de video externo
     VkImageMemoryBarrier imgBarrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
     imgBarrier.srcAccessMask = VK_ACCESS_NONE;
@@ -9337,8 +9817,7 @@ void RecordStereoFrame(
 
     const bool cubemapMode = IsCubemapMode(state.screenMode);
     if (!sphereMode && !cubemapMode) {
-        DrawSkyboxIfLoaded(state, cmd, proj, view);
-        DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
+        DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter, eyePos, eye);
         DrawAmbientHalo(state, cmd, proj, view, headCenter);
     }
 
@@ -9413,6 +9892,11 @@ void RecordStereoFrame(
         vkCmdDraw(cmd, vertexCount, 1, 0, 0);
         CountDrawCall(vertexCount);
 
+        if (!cubemapMode) {
+            DrawSkyboxIfLoaded(state, cmd, proj, view);
+            DrawParticlesIfEnabled(state, cmd, proj, view, headCenter);
+        }
+
         if (g_scrubOverlayVisible.load() && state.scrubOverlayReady) {
             VkDeviceSize ovOffset = 0;
             vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, state.uiPipeline);
@@ -9439,7 +9923,7 @@ void RecordStereoFrame(
 void RecordPhotoFrame(
     AppState& state, VkCommandBuffer cmd, VkFramebuffer fb, VkExtent2D extent,
     const Mat4& mvp, const Mat4& proj, const Mat4& view, XrVector3f headCenter,
-    bool sphereMode, int eye, const StereoParams& sp) {
+    XrVector3f eyePos, bool sphereMode, int eye, const StereoParams& sp) {
 
     std::array<VkClearValue, 2> clearValues{};
     clearValues[0].color = {{0.0f, 0.0f, 0.0f, PassthroughEnvAlpha(state)}};
@@ -9460,8 +9944,7 @@ void RecordPhotoFrame(
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
     if (!sphereMode) {
-        DrawSkyboxIfLoaded(state, cmd, proj, view);
-        DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter);
+        DrawEnvironmentIfLoaded(state, cmd, proj, view, headCenter, eyePos, eye);
     }
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS,
@@ -9522,6 +10005,8 @@ void RecordPhotoFrame(
         vkCmdBindVertexBuffers(cmd, 0, 1, &state.videoVertexBuffer, &offset);
         vkCmdDraw(cmd, 4, 1, 0, 0);
         CountDrawCall(4);
+        DrawSkyboxIfLoaded(state, cmd, proj, view);
+        DrawParticlesIfEnabled(state, cmd, proj, view, headCenter);
     }
 
     DrawUiQuads(state, cmd, proj, view, headCenter);
@@ -10602,10 +11087,10 @@ void RenderFrame(AppState& state) {
                     );
                 }
                 const Mat4 photoMvp = Mat4Multiply(Mat4Multiply(proj, view), pScreenModel);
-                RecordPhotoFrame(state, cmd, fb, extent, photoMvp, proj, view, headCenter, pSphere, eye, sp);
+                RecordPhotoFrame(state, cmd, fb, extent, photoMvp, proj, view, headCenter, views[eye].pose.position, pSphere, eye, sp);
             } else if (state.activeVideoFrame != nullptr) {
                 if (useDirectVideo) {
-                    RecordVideoHole(state, cmd, fb, extent, mvp, proj, view, headCenter, sphereMode);
+                    RecordVideoHole(state, cmd, fb, extent, mvp, proj, view, headCenter, views[eye].pose.position, eye, sphereMode);
                 } else if (sphereMode || stereoFlat) {
                     const Mat4 sphereRot = state.bedModeEnabled ?
                         Mat4Multiply(state.sceneOrientationMatrix, Mat4RotationY(sphereMode ? state.videoSphereYawOffset : 0.0f)) :
@@ -10618,12 +11103,12 @@ void RenderFrame(AppState& state) {
                         : sphereModel;
                     const Mat4 sphereMvp = Mat4Multiply(Mat4Multiply(proj, view), effectiveSphereModel);
                     StereoParams sp = GetStereoParams(state.screenMode, eye);
-                    RecordStereoFrame(state, cmd, fb, extent, mvp, proj, view, headCenter, sphereMode, sphereMvp, eye, sp);
+                    RecordStereoFrame(state, cmd, fb, extent, mvp, proj, view, headCenter, views[eye].pose.position, sphereMode, sphereMvp, eye, sp);
                 } else {
-                    RecordVideoFlat(state, cmd, fb, extent, mvp, proj, view, headCenter, state.activeVideoFrame);
+                    RecordVideoFlat(state, cmd, fb, extent, mvp, proj, view, headCenter, views[eye].pose.position, eye, state.activeVideoFrame);
                 }
             } else {
-                RecordFallbackQuad(state, cmd, fb, extent, fallbackMvp, proj, view, headCenter);
+                RecordFallbackQuad(state, cmd, fb, extent, fallbackMvp, proj, view, headCenter, views[eye].pose.position, eye);
             }
 
             if (state.queryPool != VK_NULL_HANDLE) {
@@ -11529,6 +12014,42 @@ void DestroyAppResources(AppState& state) {
         vkDestroySampler(state.vkDevice, state.envTextureSampler, nullptr);
         state.envTextureSampler = VK_NULL_HANDLE;
     }
+    if (state.envSceneDescriptorPool != VK_NULL_HANDLE) {
+        vkDestroyDescriptorPool(state.vkDevice, state.envSceneDescriptorPool, nullptr);
+        state.envSceneDescriptorPool = VK_NULL_HANDLE;
+    }
+    if (state.envSceneSetLayout != VK_NULL_HANDLE) {
+        vkDestroyDescriptorSetLayout(state.vkDevice, state.envSceneSetLayout, nullptr);
+        state.envSceneSetLayout = VK_NULL_HANDLE;
+    }
+    if (state.envSceneUboMapped != nullptr && state.envSceneUboMemory != VK_NULL_HANDLE) {
+        vkUnmapMemory(state.vkDevice, state.envSceneUboMemory);
+        state.envSceneUboMapped = nullptr;
+    }
+    if (state.envSceneUboBuffer != VK_NULL_HANDLE) {
+        vkDestroyBuffer(state.vkDevice, state.envSceneUboBuffer, nullptr);
+        state.envSceneUboBuffer = VK_NULL_HANDLE;
+    }
+    if (state.envSceneUboMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.envSceneUboMemory, nullptr);
+        state.envSceneUboMemory = VK_NULL_HANDLE;
+    }
+    if (state.envBlackView != VK_NULL_HANDLE) {
+        vkDestroyImageView(state.vkDevice, state.envBlackView, nullptr);
+        state.envBlackView = VK_NULL_HANDLE;
+    }
+    if (state.envBlackImage != VK_NULL_HANDLE) {
+        vkDestroyImage(state.vkDevice, state.envBlackImage, nullptr);
+        state.envBlackImage = VK_NULL_HANDLE;
+    }
+    if (state.envBlackMemory != VK_NULL_HANDLE) {
+        vkFreeMemory(state.vkDevice, state.envBlackMemory, nullptr);
+        state.envBlackMemory = VK_NULL_HANDLE;
+    }
+    if (state.envPipelineDoubleSided != VK_NULL_HANDLE) {
+        vkDestroyPipeline(state.vkDevice, state.envPipelineDoubleSided, nullptr);
+        state.envPipelineDoubleSided = VK_NULL_HANDLE;
+    }
     if (state.envPipeline != VK_NULL_HANDLE) {
         vkDestroyPipeline(state.vkDevice, state.envPipeline, nullptr);
         state.envPipeline = VK_NULL_HANDLE;
@@ -11581,6 +12102,10 @@ void DestroyAppResources(AppState& state) {
     if (state.skyboxDescriptorSetLayout != VK_NULL_HANDLE) {
         vkDestroyDescriptorSetLayout(state.vkDevice, state.skyboxDescriptorSetLayout, nullptr);
         state.skyboxDescriptorSetLayout = VK_NULL_HANDLE;
+    }
+    if (state.skyboxSampler != VK_NULL_HANDLE) {
+        vkDestroySampler(state.vkDevice, state.skyboxSampler, nullptr);
+        state.skyboxSampler = VK_NULL_HANDLE;
     }
 
     if (state.queryPool != VK_NULL_HANDLE) {
@@ -11780,6 +12305,8 @@ void android_main(android_app* app) {
     // CreateUiPipeline de proposito — reusa uiSampler/uiDescriptorSetLayout.
     CreateAmbientTarget(state);
     CreateAmbientPipelines(state);
+    // Bind the newly created ambient ping-pong image views into the environment scene descriptor sets.
+    UpdateEnvironmentSceneDescriptors(state);
 
     // O video e iniciado via nativePlayVideo (JNI) quando o usuario seleciona
     // um arquivo no painel de UI — identico ao caminho GLES.

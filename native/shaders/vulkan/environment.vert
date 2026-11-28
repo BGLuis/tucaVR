@@ -7,20 +7,20 @@ layout(location = 3) in vec2 inUv;
 
 layout(push_constant) uniform PushConstants {
     mat4 mvp;
-    vec4 tintColor;
-    vec4 glowParams; // x: screenGlowIntensity (0.0-1.0), y: environmentBrightness (0.0-1.0), z/w: reserved
-    vec4 screenPos;  // xyz: screenWorldPosition
+    vec4 baseColorFactor; // linear RGBA
+    vec4 emissiveFactor;  // linear RGB (pre-multiplied by emissiveStrength), w: metallicFactor
+    vec4 materialParams;  // x: roughnessFactor, y: occlusionStrength, z: unlitFlag, w: hasEmissiveTex
 } pc;
 
-layout(location = 0) out vec3 vWorldPosition;
+layout(location = 0) out vec3 vLocalPosition;
 layout(location = 1) out vec3 vNormal;
 layout(location = 2) out vec4 vColor;
 layout(location = 3) out vec2 vUv;
 
 void main() {
     gl_Position = pc.mvp * vec4(inPosition, 1.0);
-    vWorldPosition = inPosition;
+    vLocalPosition = inPosition;
     vNormal = inNormal;
-    vColor = inColor * pc.tintColor;
+    vColor = inColor;
     vUv = inUv;
 }

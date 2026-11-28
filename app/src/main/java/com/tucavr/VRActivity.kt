@@ -949,6 +949,7 @@ class VRActivity : NativeActivity() {
         @JvmStatic
         fun onNativeScreenTransformChanged(
             activity: VRActivity,
+            envId: String?,
             posX: Float,
             posY: Float,
             posZ: Float,
@@ -956,8 +957,19 @@ class VRActivity : NativeActivity() {
             scaleY: Float,
         ) {
             activity.runOnUiThread {
-                val currentEnv = activity.environmentStore.getActiveEnvironment()
-                activity.screenTransformStore.save(currentEnv, posX, posY, posZ, scaleX, scaleY)
+                val targetEnv = envId?.takeIf { it.isNotBlank() } ?: activity.environmentStore.getActiveEnvironment()
+                activity.screenTransformStore.save(targetEnv, posX, posY, posZ, scaleX, scaleY)
+            }
+        }
+
+        @JvmStatic
+        fun onNativeScreenTransformReset(
+            activity: VRActivity,
+            envId: String?,
+        ) {
+            activity.runOnUiThread {
+                val targetEnv = envId?.takeIf { it.isNotBlank() } ?: activity.environmentStore.getActiveEnvironment()
+                activity.screenTransformStore.reset(targetEnv)
             }
         }
 
@@ -2179,6 +2191,13 @@ class VRActivity : NativeActivity() {
         val currentEnv = environmentStore.getActiveEnvironment()
         screenTransformStore.reset(currentEnv)
         nativeResetScreenPosition()
+    }
+
+    fun recenterAndResetScreen() {
+        val currentEnv = environmentStore.getActiveEnvironment()
+        screenTransformStore.reset(currentEnv)
+        nativeResetScreenPosition()
+        nativeRecenter()
     }
 
     /**

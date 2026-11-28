@@ -81,10 +81,10 @@ class ScreenTransformStoreTest {
         val cinema = store.get(EnvironmentStore.ENV_CINEMA)
         assertFalse("Cinema não foi customizado e deve retornar isCustomized=false", cinema.isCustomized)
         assertEquals(0.0f, cinema.posX, 0.001f)
-        assertEquals(2.5f, cinema.posY, 0.001f)
-        assertEquals(-7.5f, cinema.posZ, 0.001f)
-        assertEquals(6.0f, cinema.scaleX, 0.001f)
-        assertEquals(3.375f, cinema.scaleY, 0.001f)
+        assertEquals(3.05f, cinema.posY, 0.001f)
+        assertEquals(-7.8f, cinema.posZ, 0.001f)
+        assertEquals(8.0f, cinema.scaleX, 0.001f)
+        assertEquals(4.5f, cinema.scaleY, 0.001f)
 
         // 4. Usuário troca de volta para Space -> customização deve estar preservada!
         val preservedSpace = store.get(EnvironmentStore.ENV_SPACE)
