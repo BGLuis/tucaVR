@@ -7986,7 +7986,7 @@ static void ApplyLoadedEnvironment(AppState& state, const CpuEnvironmentData& da
         state.defaultScreenScaleY = fit.y;
         state.envSpawnOffset = {0.0f, 0.0f, 0.0f};
         state.envParticlesEnabled = false;
-        LOGI("Ambiente: Modo Void aplicado com sucesso (scale=%.2f,%.2f)", state.screenScaleX, state.screenScaleY);
+        LOGI("Environment: Void mode applied successfully (scale=%.2f,%.2f)", state.screenScaleX, state.screenScaleY);
         return;
     }
 
@@ -10379,8 +10379,7 @@ void RenderFrame(AppState& state) {
                     state.defaultScreenScaleX = fit.x;
                     state.defaultScreenScaleY = fit.y;
                 }
-                LOGI("Foto: textura descarregada (scale restaurada=%.2fx%.2f)",
-                     state.screenScaleX, state.screenScaleY);
+                LOGI("Photo: texture unloaded (scale restored=%.2fx%.2f)", state.screenScaleX, state.screenScaleY);
             }
         }
 
