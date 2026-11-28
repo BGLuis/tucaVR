@@ -381,6 +381,28 @@ static void TestComputeEnvironmentTextureMipLevels() {
     std::cout << "[PASS] TestComputeEnvironmentTextureMipLevels (texture mip levels calculation)\n";
 }
 
+static void TestBuiltInEnvironmentAssets() {
+    struct AssetSpec {
+        const char *path;
+        size_t maxTriangles;
+    };
+    const AssetSpec specs[] = {
+        {"app/src/main/assets/environments/cinema/model.glb", 22000},
+        {"app/src/main/assets/environments/living_room/model.glb", 15000},
+        {"app/src/main/assets/environments/space/model.glb", 8000},
+    };
+    for (const auto &spec : specs) {
+        EnvironmentValidationReport report;
+        EnvironmentValidationResult res = ValidateEnvironmentFile(spec.path, &report);
+        assert(res == EnvironmentValidationResult::Ok);
+        assert(report.totalTriangles > 0 && report.totalTriangles <= spec.maxTriangles);
+        assert(report.maxTextureWidth <= kMaxEnvironmentTextureDimension);
+        assert(report.maxTextureHeight <= kMaxEnvironmentTextureDimension);
+        std::cout << "[PASS] TestBuiltInEnvironmentAssets: " << spec.path << " (" << report.totalTriangles
+                  << " tris, maxTex=" << report.maxTextureWidth << "x" << report.maxTextureHeight << ")\n";
+    }
+}
+
 int main() {
     std::cout << "--- Executing unit tests for environment_validator.h ---\n";
     Test100kTrianglesAccepted();
@@ -394,6 +416,7 @@ int main() {
     TestNonIndexedTriangles();
     TestValidateEnvironmentFile();
     TestComputeEnvironmentTextureMipLevels();
+    TestBuiltInEnvironmentAssets();
     std::cout << "--- All environment_validator.h unit tests passed successfully! ---\n";
     return 0;
 }

@@ -310,11 +310,7 @@ class VRControlsPresentation(
                 activity.nativeSetBedMode(bedMode)
             },
             onRecenter = {
-                activity.screenTransformStore.reset(currentEnv)
-                val defaultT = ScreenTransformStore.getDefaultTransform(currentEnv)
-                activity.nativeSetScreenTransform(defaultT.posX, defaultT.posY, defaultT.posZ, defaultT.scaleX, defaultT.scaleY)
-                activity.nativeResetScreenPosition()
-                activity.nativeRecenter()
+                activity.recenterAndResetScreen()
                 dismissOpenPopup()
             },
             onDismiss = { dismissOpenPopup() },
@@ -331,8 +327,7 @@ class VRControlsPresentation(
                 dismissOpenPopup()
             },
             onResetAnchor = {
-                activity.nativeResetScreenPosition()
-                activity.nativeRecenter()
+                activity.recenterAndResetScreen()
             },
             onImportEnvironment = {
                 VRActivity.openEnvironmentFilePicker(activity)

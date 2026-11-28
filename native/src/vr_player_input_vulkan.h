@@ -45,8 +45,14 @@ inline vrplayer::ScreenScale ComputeScreenFit(const AppState& state, float aspec
 }
 
 // Persists the screen pose together with the bounding box width (never the aspect-fitted scale), so a
-// vertical video does not overwrite the saved size with a shrunken fit.
+// vertical video does not overwrite the saved size with a shrunken fit. Skips during environment
+// transitions and tags the payload with state.currentEnvironmentId so a previous room's scale/position
+// can never leak into Void or another room.
 inline void NotifyScreenTransformChanged(AppState& state, const XrVector3f& pos) {
+    if (::g_environmentChangeRequested.load() ||
+        state.envTransitionPhase != EnvironmentTransitionPhase::IDLE) {
+        return;
+    }
     const float scaleX = state.userCustomScreenScale ? state.userScreenBoundWidth : state.baseScaleX;
     const float scaleY = scaleX * (9.0f / 16.0f);
     if (!state.app || !state.app->activity || !state.app->activity->vm) return;
@@ -57,11 +63,38 @@ inline void NotifyScreenTransformChanged(AppState& state, const XrVector3f& pos)
     jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
     if (vrActivityClass) {
         jmethodID method = env->GetStaticMethodID(
-            vrActivityClass, "onNativeScreenTransformChanged", "(Lcom/tucavr/VRActivity;FFFFF)V");
+            vrActivityClass,
+            "onNativeScreenTransformChanged",
+            "(Lcom/tucavr/VRActivity;Ljava/lang/String;FFFFF)V");
         if (method) {
+            jstring jEnvId = env->NewStringUTF(state.currentEnvironmentId.c_str());
             env->CallStaticVoidMethod(
-                vrActivityClass, method, state.app->activity->clazz,
+                vrActivityClass, method, state.app->activity->clazz, jEnvId,
                 pos.x, pos.y, pos.z, scaleX, scaleY);
+            if (jEnvId) env->DeleteLocalRef(jEnvId);
+        }
+        env->DeleteLocalRef(vrActivityClass);
+    }
+}
+
+// Notifies Kotlin that C++ recentered/reset the current environment's screen transform so
+// ScreenTransformStore does not restore a stale custom offset on the next environment switch or launch.
+inline void NotifyScreenTransformReset(AppState& state) {
+    if (!state.app || !state.app->activity || !state.app->activity->vm) return;
+    JNIEnv* env = nullptr;
+    state.app->activity->vm->AttachCurrentThread(&env, nullptr);
+    if (!env) return;
+
+    jclass vrActivityClass = env->GetObjectClass(state.app->activity->clazz);
+    if (vrActivityClass) {
+        jmethodID method = env->GetStaticMethodID(
+            vrActivityClass,
+            "onNativeScreenTransformReset",
+            "(Lcom/tucavr/VRActivity;Ljava/lang/String;)V");
+        if (method) {
+            jstring jEnvId = env->NewStringUTF(state.currentEnvironmentId.c_str());
+            env->CallStaticVoidMethod(vrActivityClass, method, state.app->activity->clazz, jEnvId);
+            if (jEnvId) env->DeleteLocalRef(jEnvId);
         }
         env->DeleteLocalRef(vrActivityClass);
     }
@@ -789,28 +822,35 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         state.feedbackAlpha = MoveTowards(state.feedbackAlpha, feedbackTargetAlpha, fadeStep);
     }
 
-    // Modo Ambiente (halo de luz) — gates:
-    // Passthrough (um halo colorido flutuando no quarto real do usuario quebraria a
-    // ilusao de passthrough). Convergido por MoveTowards em vez de aplicado direto —
-    // evita um "pop" visivel quando o usuario liga/desliga o toggle ou entra/sai do ambiente Void.
+    // Modo Ambiente (halo no Void) e Reactive Screen Glow (salas 3D) — independentes e suavizados
+    // via MoveTowards para evitar pops em trocas de ambiente, toggles ou cortes.
     {
-        const float configuredIntensity = get_screen_glow_intensity();
-        const bool is3dRoom = (state.currentEnvironmentId == "cinema" || state.currentEnvironmentId == "living_room");
-        const bool ambientGatesPass =
-            get_ambient_mode_enabled() != 0 &&
-            !IsSphereMode(state.screenMode) &&
-            !IsCubemapMode(state.screenMode) &&
-            state.thermalLevel < 2 &&
-            state.activeVideoFrame != nullptr &&
-            (state.currentEnvironmentId == "void" || is3dRoom) &&
-            !state.passthroughActive;
-        const float maxTarget = (configuredIntensity > 0.001f) ? configuredIntensity : vrplayer::kAmbientMaxIntensity;
-        const float ambientTarget = ambientGatesPass ? maxTarget : 0.0f;
-        const float ambientFadeStep =
+        const bool isSphereOrCubemap = IsSphereMode(state.screenMode) || IsCubemapMode(state.screenMode);
+        const bool isVoidEnv = (state.currentEnvironmentId == "void" || state.currentEnvironmentId.empty());
+        const auto targets = vrplayer::ResolveAmbientAndGlowIntensities(
+            get_ambient_mode_enabled() != 0,
+            get_screen_glow_intensity(),
+            vrplayer::kAmbientMaxIntensity,
+            isSphereOrCubemap,
+            state.thermalLevel,
+            state.activeVideoFrame != nullptr,
+            state.passthroughActive,
+            isVoidEnv,
+            state.envMeshLoaded);
+
+        const float haloRef = std::max(targets.voidHaloTarget, vrplayer::kAmbientMaxIntensity);
+        const float haloFadeStep =
             (vrplayer::kAmbientColorSmoothSeconds > 0.0f)
-                ? (dt / vrplayer::kAmbientColorSmoothSeconds) * maxTarget
-                : maxTarget;
-        state.ambientIntensity = MoveTowards(state.ambientIntensity, ambientTarget, ambientFadeStep);
+                ? (dt / vrplayer::kAmbientColorSmoothSeconds) * haloRef
+                : haloRef;
+        state.ambientIntensity = MoveTowards(state.ambientIntensity, targets.voidHaloTarget, haloFadeStep);
+
+        const float glowRef = std::max(targets.roomGlowTarget, vrplayer::kAmbientMaxIntensity);
+        const float glowFadeStep =
+            (vrplayer::kAmbientColorSmoothSeconds > 0.0f)
+                ? (dt / vrplayer::kAmbientColorSmoothSeconds) * glowRef
+                : glowRef;
+        state.roomScreenGlowIntensity = MoveTowards(state.roomScreenGlowIntensity, targets.roomGlowTarget, glowFadeStep);
     }
 
     // So despacha toque/hover pra um painel de fato visivel (evita "clique
@@ -1035,6 +1075,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             state.userCustomScreenScale = false;
             ::g_resetScreenPositionRequested.store(true);
             state.isScreenGrabbed = false;
+            state.screenGrabOffsetBase = {0.0f, 0.0f, 0.0f};
+            NotifyScreenTransformReset(state);
             state.browserPosition = vrplayer::kBrowserSpawnLocalPosition;
             state.isBrowserGrabbed = false;
             state.recenterFiredThisHold = true;
@@ -1355,6 +1397,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
         state.screenScaleY = state.defaultScreenScaleY;
         state.userCustomScreenScale = false;
         state.isScreenGrabbed = false;
+        state.screenGrabOffsetBase = {0.0f, 0.0f, 0.0f};
+        NotifyScreenTransformReset(state);
         state.browserPosition = vrplayer::kBrowserSpawnLocalPosition;
         state.isBrowserGrabbed = false;
         LOGI("Recenter executed via JNI: bedMode=%d, yaw=%.2f deg, pitch=%.2f deg",
@@ -1407,10 +1451,18 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
             if (!state.isScreenGrabbed && pinchGrab && (tScreen > 0.0f)) {
                 state.isScreenGrabbed = true;
                 state.grabDistance = std::max(0.8f, std::min(tScreen, 8.0f));
+                if (state.hasRay) {
+                    const XrVector3f hitWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.grabDistance));
+                    const XrVector3f hitBase = vrplayer::WorldPointToBase(hitWorld, sceneAnchor, state.sceneOrientationMatrix);
+                    state.screenGrabOffsetBase = Vec3Sub(state.screenPosition, hitBase);
+                } else {
+                    state.screenGrabOffsetBase = {0.0f, 0.0f, 0.0f};
+                }
             } else if (state.isScreenGrabbed) {
                 if (currTrigger && state.hasRay) {
                     XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.grabDistance));
-                    state.screenPosition = vrplayer::WorldPointToBase(targetWorld, sceneAnchor, state.sceneOrientationMatrix);
+                    XrVector3f targetBase = vrplayer::WorldPointToBase(targetWorld, sceneAnchor, state.sceneOrientationMatrix);
+                    state.screenPosition = Vec3Add(targetBase, state.screenGrabOffsetBase);
                     state.screenPosition.z = std::min(-0.8f, std::max(state.screenPosition.z, -10.0f));
                     state.screenPosition.y = std::max(0.3f, std::min(state.screenPosition.y, 3.5f));
                     state.screenPosition.x = std::max(-4.0f, std::min(state.screenPosition.x, 4.0f));
@@ -1446,6 +1498,13 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
                 if (!state.isScreenGrabbed && isAimingScreen) {
                     state.isScreenGrabbed = true;
                     state.grabDistance = std::max(0.8f, std::min(tScreen, 8.0f));
+                    if (state.hasRay) {
+                        const XrVector3f hitWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.grabDistance));
+                        const XrVector3f hitBase = vrplayer::WorldPointToBase(hitWorld, sceneAnchor, state.sceneOrientationMatrix);
+                        state.screenGrabOffsetBase = Vec3Sub(state.screenPosition, hitBase);
+                    } else {
+                        state.screenGrabOffsetBase = {0.0f, 0.0f, 0.0f};
+                    }
                     FireHaptic(state, rightPath, 0.4f, 20000000 /* 20ms */);
                 }
 
@@ -1471,7 +1530,8 @@ inline void UpdateInteraction(AppState& state, XrTime predictedDisplayTime, XrVe
 
                     if (state.hasRay) {
                         XrVector3f targetWorld = Vec3Add(state.lastRayOrigin, Vec3Scale(state.lastRayDir, state.grabDistance));
-                        state.screenPosition = vrplayer::WorldPointToBase(targetWorld, sceneAnchor, state.sceneOrientationMatrix);
+                        XrVector3f targetBase = vrplayer::WorldPointToBase(targetWorld, sceneAnchor, state.sceneOrientationMatrix);
+                        state.screenPosition = Vec3Add(targetBase, state.screenGrabOffsetBase);
                         state.screenPosition.z = std::min(-0.8f, std::max(state.screenPosition.z, -10.0f));
                         state.screenPosition.y = std::max(0.3f, std::min(state.screenPosition.y, 3.5f));
                         state.screenPosition.x = std::max(-4.0f, std::min(state.screenPosition.x, 4.0f));

@@ -319,6 +319,30 @@ class UiSourceGuardsTest {
             "ambient.frag must linearize the halo in its final outColor write (Issue #248)",
             finalOutput.contains("SrgbEotf(color)"),
         )
+
+        val envFrag = File(rootDir, "native/shaders/vulkan/environment.frag").readText()
+        assertTrue(
+            "environment.frag must linearize screenAmbientTexture with exact SrgbEotf",
+            envFrag.contains("vec3 SrgbEotf(vec3 c)") && envFrag.contains("SrgbEotf(texture(screenAmbientTexture"),
+        )
+        assertTrue(
+            "skyboxImage must be created with VK_FORMAT_R8G8B8A8_SRGB so deep space is not double-gamma washed out",
+            Regex("""CreateUiImage\([^;]*state\.skyboxImage\b[^;]*VK_FORMAT_R8G8B8A8_SRGB""").containsMatchIn(renderer),
+        )
+        val particlesFrag = File(rootDir, "native/shaders/vulkan/particles.frag").readText()
+        assertFalse(
+            "particles.frag must avoid discard to keep Adreno Early-Z / LRZ active",
+            Regex("""\bdiscard\s*;""").containsMatchIn(particlesFrag),
+        )
+        val skyboxVert = File(rootDir, "native/shaders/vulkan/skybox.vert").readText()
+        assertFalse(
+            "skybox.vert must not output raw .xyww (z=1.0), which causes half-sphere clipping and MSAA z-fighting on Adreno",
+            skyboxVert.contains(".xyww"),
+        )
+        assertTrue(
+            "vr_player_app_vulkan.cpp must check blit format properties before generating sRGB skybox mipmaps",
+            renderer.contains("VK_FORMAT_FEATURE_BLIT_SRC_BIT") && renderer.contains("FormatSupportsLinearBlitMipmaps"),
+        )
     }
 
     @Test
