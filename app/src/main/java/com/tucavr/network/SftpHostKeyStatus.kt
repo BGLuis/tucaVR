@@ -12,22 +12,19 @@ sealed class SftpHostKeyStatus {
     data class IdentityChanged(val expected: String?, val presented: String?) : SftpHostKeyStatus()
 
     companion object {
-        private const val CONFIRM = "HOST_KEY_CONFIRM:"
-        private const val CHANGED = "HOST_KEY_CHANGED:"
         private val TYPE_TOKEN = Regex("""\btype=(\S+)""")
         private val EXPECTED = Regex("""^expected (\S+?),""")
         private val PRESENTED = Regex("""server presented (\S+)""")
 
         /**
-         * Parses a native SFTP result, with or without the `ERROR:` prefix
-         * ([com.tucavr.filebrowser.NetworkDirectoryLoader] strips it). Returns null for
-         * listings and for errors unrelated to the host key.
+         * Parses a native SFTP result (see [NetworkError]). Returns null for listings and
+         * for errors unrelated to the host key.
          */
         fun parse(result: String): SftpHostKeyStatus? {
-            val message = result.trim().removePrefix("ERROR:").trim()
-            return when {
-                message.startsWith(CONFIRM) -> {
-                    val rest = message.removePrefix(CONFIRM)
+            val error = NetworkError.parse(result) ?: return null
+            val rest = error.detail
+            return when (error.code) {
+                NetworkErrorCode.HOST_KEY_CONFIRM -> {
                     val fingerprint = rest.substringBefore(' ').trim()
                     if (fingerprint.isEmpty()) {
                         null
@@ -35,13 +32,11 @@ sealed class SftpHostKeyStatus {
                         NeedsConfirmation(fingerprint, TYPE_TOKEN.find(rest)?.groupValues?.get(1))
                     }
                 }
-                message.startsWith(CHANGED) -> {
-                    val rest = message.removePrefix(CHANGED)
+                NetworkErrorCode.HOST_KEY_CHANGED ->
                     IdentityChanged(
                         expected = EXPECTED.find(rest)?.groupValues?.get(1),
                         presented = PRESENTED.find(rest)?.groupValues?.get(1),
                     )
-                }
                 else -> null
             }
         }

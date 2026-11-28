@@ -38,6 +38,7 @@ import com.tucavr.filebrowser.canReuseBrowser
 import com.tucavr.filebrowser.sortMediaEntries
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
+import com.tucavr.network.NetworkError
 import com.tucavr.network.SavedServer
 import com.tucavr.network.SavedServerDao
 import com.tucavr.network.ServerCredentialStore
@@ -291,7 +292,7 @@ class NetworkWebdavScreen(
                             statusText.text =
                                 context.getString(
                                     R.string.network_webdav_form_status_error_format,
-                                    result.removePrefix("ERROR:"),
+                                    NetworkError.userMessage(context, result),
                                 )
                         } else {
                             statusText.text = context.getString(R.string.network_webdav_form_status_connected)
@@ -395,7 +396,11 @@ class NetworkWebdavScreen(
                 }
 
             if (result.startsWith("ERROR:")) {
-                statusView.text = context.getString(R.string.network_webdav_form_status_error_format, result.removePrefix("ERROR:"))
+                statusView.text =
+                    context.getString(
+                        R.string.network_webdav_form_status_error_format,
+                        NetworkError.userMessage(context, result),
+                    )
                 return@launch
             }
 
@@ -727,7 +732,11 @@ class NetworkWebdavScreen(
             }
             is NetworkDirectoryState.Error -> {
                 cachedRawEntries = emptyList()
-                val msg = context.getString(R.string.network_webdav_form_status_error_format, state.message)
+                val msg =
+                    context.getString(
+                        R.string.network_webdav_form_status_error_format,
+                        NetworkError.userMessage(context, state.message),
+                    )
                 countLabel?.text = msg
                 emptyLabel?.text = msg
                 clearFiltersButton?.visibility = View.GONE

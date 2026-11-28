@@ -24,13 +24,6 @@ class SftpHostKeyStatusTest {
     }
 
     @Test
-    fun directoryLoaderMessageWithoutErrorPrefixIsStillRecognised() {
-        val status = SftpHostKeyStatus.parse("HOST_KEY_CONFIRM:$fp type=rsa-sha2-512 needs confirmation: $fp")
-
-        assertEquals(SftpHostKeyStatus.NeedsConfirmation(fp, "rsa-sha2-512"), status)
-    }
-
-    @Test
     fun confirmationWithoutKeyTypeKeepsTheFingerprint() {
         val status = SftpHostKeyStatus.parse("ERROR:HOST_KEY_CONFIRM:$fp needs confirmation: $fp")
 

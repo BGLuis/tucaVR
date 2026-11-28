@@ -4,6 +4,8 @@ import android.content.Context
 import android.content.ContextWrapper
 import com.tucavr.history.HistorySourceType
 import com.tucavr.history.PlaybackHistory
+import com.tucavr.network.NetworkError
+import com.tucavr.network.NetworkErrorCode
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -131,7 +133,7 @@ class NetworkDirectoryLoaderTest {
 
             loader.loadDirectory(
                 path = "root",
-                fetchRaw = { "ERROR: Invalid credentials" },
+                fetchRaw = { "ERROR:AUTH:Invalid credentials" },
                 onStateChange = { states.add(it) },
             )
             advanceUntilIdle()
@@ -139,7 +141,10 @@ class NetworkDirectoryLoaderTest {
             assertEquals(2, states.size)
             assertEquals(NetworkDirectoryState.Loading, states[0])
             assertTrue(states[1] is NetworkDirectoryState.Error)
-            assertEquals("Invalid credentials", (states[1] as NetworkDirectoryState.Error).message)
+            // The screens map the code to a translated message, so it must survive the loader.
+            val error = NetworkError.parse((states[1] as NetworkDirectoryState.Error).message)
+            assertEquals(NetworkErrorCode.AUTH, error?.code)
+            assertEquals("Invalid credentials", error?.detail)
         }
 
     @Test
@@ -218,7 +223,9 @@ class NetworkDirectoryLoaderTest {
             assertEquals(2, states.size)
             assertEquals(NetworkDirectoryState.Loading, states[0])
             assertTrue(states[1] is NetworkDirectoryState.Error)
-            assertEquals("Connection timed out", (states[1] as NetworkDirectoryState.Error).message)
+            val error = NetworkError.parse((states[1] as NetworkDirectoryState.Error).message)
+            assertEquals(NetworkErrorCode.UNKNOWN, error?.code)
+            assertEquals("Connection timed out", error?.detail)
         }
 
     @Test(timeout = 10_000)

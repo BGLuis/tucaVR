@@ -13,6 +13,7 @@ import kotlinx.coroutines.withContext
 sealed interface NetworkDirectoryState {
     data object Loading : NetworkDirectoryState
 
+    /** [message] is the native `ERROR:<CODE>:<detail>` result; show it through [com.tucavr.network.NetworkError]. */
     data class Error(val message: String) : NetworkDirectoryState
 
     data object Empty : NetworkDirectoryState
@@ -62,7 +63,7 @@ internal fun canReuseBrowser(
  * Shared directory loader for network file browsers (SMB, FTP, SFTP, NFS, WebDAV).
  *
  * Responsibilities:
- * - Decodes TSV wire format: `name\tisDir\tsize[\tmtime]` per line (or `ERROR:<message>`).
+ * - Decodes TSV wire format: `name\tisDir\tsize[\tmtime]` per line (or `ERROR:<CODE>:<detail>`).
  * - Manages sequential request tokens, discarding stale responses when the user navigates away.
  * - Emits clean sealed UI states: [NetworkDirectoryState.Loading], [NetworkDirectoryState.Error],
  *   [NetworkDirectoryState.Empty], and [NetworkDirectoryState.Success].
@@ -88,14 +89,14 @@ class NetworkDirectoryLoader(
 
     /**
      * Parses a tab-separated listing string:
-     * Format: `name\tisDir\tsize[\tmtime]` per line (or `ERROR:<message>`).
+     * Format: `name\tisDir\tsize[\tmtime]` per line (or `ERROR:<CODE>:<detail>`).
      */
     fun parseTsv(
         raw: String,
         basePath: String,
     ): Result<List<MediaEntry>> {
         if (raw.startsWith("ERROR:")) {
-            return Result.failure(IllegalStateException(raw.removePrefix("ERROR:").trim()))
+            return Result.failure(IllegalStateException(raw.trim()))
         }
         val lines = raw.split("\n").filter { it.isNotBlank() }
         val entries =

@@ -261,6 +261,14 @@
     <string name="network_saved_servers_header">Servidores guardados</string>
     <string name="network_saved_servers_empty">(ningún servidor guardado)</string>
 
+    <!-- Network: error codes sent by the bridge as ERROR:<CODE>:<detail> (NetworkError) -->
+    <string name="network_error_auth">El servidor rechazó el usuario o la contraseña, o denegó el acceso.</string>
+    <string name="network_error_timeout">El servidor tardó demasiado en responder. Revisa la dirección y tu red.</string>
+    <string name="network_error_not_found">No se encontró el recurso compartido, la carpeta o el archivo en el servidor.</string>
+    <string name="network_error_tls">La conexión segura falló: el certificado del servidor no es de confianza.</string>
+    <string name="network_error_unreachable">No se pudo llegar al servidor. Revisa la dirección, el puerto y que esté en la misma red.</string>
+    <string name="network_error_unknown">No se pudo conectar con el servidor.</string>
+
     <!-- Rede: aba DLNA -->
     <string name="network_dlna_header">Servidores UPnP / DLNA</string>
     <string name="network_dlna_empty">(ningún servidor DLNA guardado o descubierto)</string>

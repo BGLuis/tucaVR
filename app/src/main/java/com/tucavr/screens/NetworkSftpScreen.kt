@@ -39,6 +39,7 @@ import com.tucavr.filebrowser.canReuseBrowser
 import com.tucavr.filebrowser.sortMediaEntries
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
+import com.tucavr.network.NetworkError
 import com.tucavr.network.SftpCredentialStore
 import com.tucavr.network.SftpHostKeyStatus
 import com.tucavr.network.SftpServer
@@ -423,7 +424,7 @@ class NetworkSftpScreen(
             VRLog.w("SFTP host key changed: expected ${changed.expected}, server presented ${changed.presented}")
             return context.getString(R.string.network_sftp_host_key_changed)
         }
-        return context.getString(R.string.network_sftp_form_status_error_format, error.removePrefix("ERROR:"))
+        return context.getString(R.string.network_sftp_form_status_error_format, NetworkError.userMessage(context, error))
     }
 
     // ---- Navegação de diretório SFTP moderna ----

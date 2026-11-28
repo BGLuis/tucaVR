@@ -270,6 +270,14 @@
     <string name="network_saved_servers_header">Saved servers</string>
     <string name="network_saved_servers_empty">(no server saved)</string>
 
+    <!-- Network: error codes sent by the bridge as ERROR:<CODE>:<detail> (NetworkError) -->
+    <string name="network_error_auth">The server rejected the username or password, or denied access.</string>
+    <string name="network_error_timeout">The server took too long to answer. Check the address and your network.</string>
+    <string name="network_error_not_found">The share, folder or file was not found on the server.</string>
+    <string name="network_error_tls">The secure connection failed: the server certificate is not trusted.</string>
+    <string name="network_error_unreachable">Could not reach the server. Check the address, the port and that it is on the same network.</string>
+    <string name="network_error_unknown">Could not connect to the server.</string>
+
     <!-- Network: DLNA tab -->
     <string name="network_dlna_header">UPnP / DLNA Servers</string>
     <string name="network_dlna_empty">(no DLNA server saved or discovered)</string>

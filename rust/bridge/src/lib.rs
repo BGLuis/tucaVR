@@ -1191,8 +1191,16 @@ fn string_to_c_char(s: String) -> *mut std::os::raw::c_char {
     // CString::new falharia nesse caso — troca por um placeholder em vez de
     // propagar o erro (essa funcao nao tem como retornar Result para o C ABI).
     std::ffi::CString::new(s)
-        .unwrap_or_else(|_| std::ffi::CString::new("ERROR:nome invalido (NUL embutido)").unwrap())
+        .unwrap_or_else(|_| {
+            std::ffi::CString::new("ERROR:UNKNOWN:nome invalido (NUL embutido)").unwrap()
+        })
         .into_raw()
+}
+
+/// Returns a failure as `ERROR:<CODE>:<detail>` (see `protocols::error_code`):
+/// Kotlin shows a translated message for `<CODE>` and logs `<detail>`.
+fn error_to_c_char(detail: impl std::fmt::Display) -> *mut std::os::raw::c_char {
+    string_to_c_char(protocols::error_code::to_wire(&detail.to_string()))
 }
 
 /// Libera uma string retornada por `smb_list_shares`, `smb_list_directory`,
@@ -1363,7 +1371,7 @@ pub extern "C" fn start_smb_playback(
 /// conexao"/"status de conexao" da UI — se isto tem sucesso, autenticacao e
 /// conectividade estao OK. Chamada BLOQUEANTE (I/O de rede sincrono) —
 /// Kotlin deve chamar isto de uma coroutine em `Dispatchers.IO`, nunca da UI
-/// thread. Retorna as shares separadas por `\n`, ou `"ERROR:<mensagem>"`.
+/// thread. Retorna as shares separadas por `\n`, ou `"ERROR:<CODE>:<mensagem>"`.
 #[no_mangle]
 pub extern "C" fn smb_list_shares(
     host: *const std::os::raw::c_char,
@@ -1375,7 +1383,7 @@ pub extern "C" fn smb_list_shares(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".into()),
+            None => return error_to_c_char("host invalido"),
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -1393,14 +1401,14 @@ pub extern "C" fn smb_list_shares(
 
     match protocols::smb::list_shares(&target) {
         Ok(shares) => string_to_c_char(shares.join("\n")),
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => error_to_c_char(e),
     }
 }
 
 /// T6.1/T6.4: lista um diretorio dentro de um share (navegacao do file
 /// browser SMB). `path` vazio = raiz do share. Chamada BLOQUEANTE, mesma
 /// ressalva de `smb_list_shares`. Cada linha do retorno e
-/// `nome\t{0|1}\ttamanho` (1 = diretorio), ou `"ERROR:<mensagem>"`.
+/// `nome\t{0|1}\ttamanho` (1 = diretorio), ou `"ERROR:<CODE>:<mensagem>"`.
 #[no_mangle]
 pub extern "C" fn smb_list_directory(
     host: *const std::os::raw::c_char,
@@ -1414,11 +1422,11 @@ pub extern "C" fn smb_list_directory(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".into()),
+            None => return error_to_c_char("host invalido"),
         };
         let share = match cstr_to_string(share) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:share invalido".into()),
+            None => return error_to_c_char("share invalido"),
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -1451,7 +1459,7 @@ pub extern "C" fn smb_list_directory(
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -1460,7 +1468,7 @@ pub extern "C" fn smb_list_directory(
 /// conexao para toda a subarvore, sem limite de profundidade fixo, com deadline de
 /// seguranca de 10s. Chamada BLOQUEANTE (pode levar ate o deadline inteiro numa
 /// arvore vazia grande) — Kotlin SEMPRE de `Dispatchers.IO`, nunca da UI thread.
-/// Retorna `"{0|1}\t{0|1}"` (has_media\tcompleted_fully) ou `"ERROR:<mensagem>"`.
+/// Retorna `"{0|1}\t{0|1}"` (has_media\tcompleted_fully) ou `"ERROR:<CODE>:<mensagem>"`.
 #[no_mangle]
 pub extern "C" fn smb_scan_folder_has_media(
     host: *const std::os::raw::c_char,
@@ -1474,11 +1482,11 @@ pub extern "C" fn smb_scan_folder_has_media(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".into()),
+            None => return error_to_c_char("host invalido"),
         };
         let share = match cstr_to_string(share) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:share invalido".into()),
+            None => return error_to_c_char("share invalido"),
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -1500,7 +1508,7 @@ pub extern "C" fn smb_scan_folder_has_media(
             "{}\t{}",
             result.has_media as i32, result.completed_fully as i32
         )),
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -1577,7 +1585,7 @@ pub extern "C" fn start_ftp_playback(
 /// T6.1/T6.4: lista um diretorio num servidor FTP (tambem serve de "testar
 /// conexao"). Chamada BLOQUEANTE, mesma ressalva de `smb_list_shares` —
 /// Kotlin SEMPRE de `Dispatchers.IO`. Cada linha do retorno e
-/// `nome\t{0|1}\ttamanho` (1 = diretorio), ou `"ERROR:<mensagem>"`.
+/// `nome\t{0|1}\ttamanho` (1 = diretorio), ou `"ERROR:<CODE>:<mensagem>"`.
 #[no_mangle]
 pub extern "C" fn ftp_list_directory(
     host: *const std::os::raw::c_char,
@@ -1589,7 +1597,7 @@ pub extern "C" fn ftp_list_directory(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".into()),
+            None => return error_to_c_char("host invalido"),
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -1619,7 +1627,7 @@ pub extern "C" fn ftp_list_directory(
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -1636,7 +1644,7 @@ pub extern "C" fn ftp_scan_folder_has_media(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".into()),
+            None => return error_to_c_char("host invalido"),
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -1655,7 +1663,7 @@ pub extern "C" fn ftp_scan_folder_has_media(
             "{}\t{}",
             result.has_media as i32, result.completed_fully as i32
         )),
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -1759,7 +1767,7 @@ pub extern "C" fn sftp_list_directory(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".into()),
+            None => return error_to_c_char("host invalido"),
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -1776,7 +1784,7 @@ pub extern "C" fn sftp_list_directory(
         }
     };
     if let Err(e) = target.validate() {
-        return string_to_c_char(format!("ERROR:{e}"));
+        return error_to_c_char(e);
     }
     let path = unsafe { cstr_to_string(path).unwrap_or_default() };
 
@@ -1796,13 +1804,7 @@ pub extern "C" fn sftp_list_directory(
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
-        Err(e) => {
-            if e.starts_with("ERROR:") {
-                string_to_c_char(e.replace('\n', " "))
-            } else {
-                string_to_c_char(format!("ERROR:{}", e.replace('\n', " ")))
-            }
-        }
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -1821,7 +1823,7 @@ pub extern "C" fn sftp_scan_folder_has_media(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".into()),
+            None => return error_to_c_char("host invalido"),
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -1838,7 +1840,7 @@ pub extern "C" fn sftp_scan_folder_has_media(
         }
     };
     if let Err(e) = target.validate() {
-        return string_to_c_char(format!("ERROR:{e}"));
+        return error_to_c_char(e);
     }
     let path = unsafe { cstr_to_string(path).unwrap_or_default() };
 
@@ -1847,13 +1849,7 @@ pub extern "C" fn sftp_scan_folder_has_media(
             "{}\t{}",
             result.has_media as i32, result.completed_fully as i32
         )),
-        Err(e) => {
-            if e.starts_with("ERROR:") {
-                string_to_c_char(e.replace('\n', " "))
-            } else {
-                string_to_c_char(format!("ERROR:{}", e.replace('\n', " ")))
-            }
-        }
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -1865,18 +1861,12 @@ pub extern "C" fn sftp_probe_host_key(
 ) -> *mut std::os::raw::c_char {
     let host = match unsafe { cstr_to_string(host) } {
         Some(s) => s,
-        None => return string_to_c_char("ERROR:host invalido".into()),
+        None => return error_to_c_char("host invalido"),
     };
     let port = port.clamp(1, u16::MAX as i32) as u16;
     match protocols::sftp::probe_host_key(&host, port) {
         Ok(fp) => string_to_c_char(fp),
-        Err(e) => {
-            if e.starts_with("ERROR:") {
-                string_to_c_char(e.replace('\n', " "))
-            } else {
-                string_to_c_char(format!("ERROR:{}", e.replace('\n', " ")))
-            }
-        }
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -1977,11 +1967,11 @@ pub extern "C" fn nfs_list_directory(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".into()),
+            None => return error_to_c_char("host invalido"),
         };
         let export_path = match cstr_to_string(export_path) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:export_path invalido".into()),
+            None => return error_to_c_char("export_path invalido"),
         };
         protocols::nfs::NfsTarget {
             host,
@@ -2009,7 +1999,7 @@ pub extern "C" fn nfs_list_directory(
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -2026,11 +2016,11 @@ pub extern "C" fn nfs_scan_folder_has_media(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".into()),
+            None => return error_to_c_char("host invalido"),
         };
         let export_path = match cstr_to_string(export_path) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:export_path invalido".into()),
+            None => return error_to_c_char("export_path invalido"),
         };
         protocols::nfs::NfsTarget {
             host,
@@ -2047,7 +2037,7 @@ pub extern "C" fn nfs_scan_folder_has_media(
             "{}\t{}",
             result.has_media as i32, result.completed_fully as i32
         )),
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -2059,13 +2049,13 @@ pub extern "C" fn nfs_list_exports(
 ) -> *mut std::os::raw::c_char {
     let host = match unsafe { cstr_to_string(host) } {
         Some(s) => s,
-        None => return string_to_c_char("ERROR:host invalido".into()),
+        None => return error_to_c_char("host invalido"),
     };
     let port = port.clamp(1, u16::MAX as i32) as u16;
 
     match protocols::nfs::list_exports(&host, port) {
         Ok(exports) => string_to_c_char(exports.join("\n")),
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -2161,11 +2151,11 @@ pub extern "C" fn webdav_list_directory(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".into()),
+            None => return error_to_c_char("host invalido"),
         };
         let base_path = match cstr_to_string(base_path) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:base_path invalido".into()),
+            None => return error_to_c_char("base_path invalido"),
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -2198,7 +2188,7 @@ pub extern "C" fn webdav_list_directory(
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -2218,11 +2208,11 @@ pub extern "C" fn webdav_scan_folder_has_media(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".into()),
+            None => return error_to_c_char("host invalido"),
         };
         let base_path = match cstr_to_string(base_path) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:base_path invalido".into()),
+            None => return error_to_c_char("base_path invalido"),
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -2244,7 +2234,7 @@ pub extern "C" fn webdav_scan_folder_has_media(
             "{}\t{}",
             result.has_media as i32, result.completed_fully as i32
         )),
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -2266,14 +2256,14 @@ pub extern "C" fn discovery_scan_network(timeout_ms: u32) -> *mut std::os::raw::
 }
 
 /// T7.2: Obtém o Device Description XML de um servidor DLNA e retorna detalhes (friendlyName, controlURL, icon).
-/// Chamada BLOQUEANTE. Retorna "OK\t{friendlyName}\t{controlURL}\t{iconUrl}" ou "ERROR:<msg>".
+/// Chamada BLOQUEANTE. Retorna "OK\t{friendlyName}\t{controlURL}\t{iconUrl}" ou "ERROR:<CODE>:<msg>".
 #[no_mangle]
 pub extern "C" fn dlna_get_device_description(
     location: *const std::os::raw::c_char,
 ) -> *mut std::os::raw::c_char {
     let location_str = match unsafe { cstr_to_string(location) } {
         Some(s) => s,
-        None => return string_to_c_char("ERROR:location invalida".into()),
+        None => return error_to_c_char("location invalida"),
     };
 
     match protocols::dlna::fetch_device_description(&location_str) {
@@ -2283,7 +2273,7 @@ pub extern "C" fn dlna_get_device_description(
             dev.control_url,
             dev.icon_url.unwrap_or_default()
         )),
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -2299,7 +2289,7 @@ pub extern "C" fn dlna_browse_directory(
 ) -> *mut std::os::raw::c_char {
     let control_url = match unsafe { cstr_to_string(control_url) } {
         Some(s) => s,
-        None => return string_to_c_char("ERROR:control_url invalida".into()),
+        None => return error_to_c_char("control_url invalida"),
     };
     let object_id = unsafe { cstr_to_string(object_id).unwrap_or_else(|| "0".to_string()) };
 
@@ -2325,7 +2315,7 @@ pub extern "C" fn dlna_browse_directory(
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace('\n', " "))),
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -2337,7 +2327,7 @@ pub extern "C" fn hls_probe_variants(
 ) -> *mut std::os::raw::c_char {
     let url_str = match unsafe { cstr_to_string(url) } {
         Some(s) => s,
-        None => return string_to_c_char("ERROR:URL invalida".into()),
+        None => return error_to_c_char("URL invalida"),
     };
 
     match protocols::hls::fetch_and_probe_variants(&url_str) {
@@ -2362,7 +2352,7 @@ pub extern "C" fn hls_probe_variants(
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
-        Err(e) => string_to_c_char(format!("ERROR:{e}")),
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -2374,7 +2364,7 @@ pub extern "C" fn dash_probe_representations(
 ) -> *mut std::os::raw::c_char {
     let url_str = match unsafe { cstr_to_string(url) } {
         Some(s) => s,
-        None => return string_to_c_char("ERROR:URL invalida".into()),
+        None => return error_to_c_char("URL invalida"),
     };
 
     match protocols::dash::fetch_and_probe_representations(&url_str) {
@@ -2399,7 +2389,7 @@ pub extern "C" fn dash_probe_representations(
                 .collect();
             string_to_c_char(lines.join("\n"))
         }
-        Err(e) => string_to_c_char(format!("ERROR:{e}")),
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -2408,21 +2398,19 @@ pub extern "C" fn dash_probe_representations(
 /// arquivo, para a UI poder avisar o usuario (doc, secao 7, aviso
 /// explicito). Chamada BLOQUEANTE (rede sincrona) — chamar de
 /// `Dispatchers.IO`. Retorno: `"OK\t{seekable 0|1}\t{content_length ou -1}"`
-/// ou `"ERROR:<mensagem>"`.
+/// ou `"ERROR:<CODE>:<mensagem>"`.
 #[no_mangle]
 pub extern "C" fn probe_http_url(url: *const std::os::raw::c_char) -> *mut std::os::raw::c_char {
     let url = match unsafe { cstr_to_string(url) } {
         Some(s) => s,
-        None => return string_to_c_char("ERROR:URL invalida".into()),
+        None => return error_to_c_char("URL invalida"),
     };
     let caps = protocols::http::probe(&url);
     if !caps.reachable {
-        return string_to_c_char(format!(
-            "ERROR:{}",
+        return error_to_c_char(
             caps.error
-                .unwrap_or_else(|| format!("HTTP {}", caps.status))
-                .replace('\n', " ")
-        ));
+                .unwrap_or_else(|| format!("HTTP {}", caps.status)),
+        );
     }
     string_to_c_char(format!(
         "OK\t{}\t{}",
@@ -3170,12 +3158,12 @@ pub extern "C" fn cancel_thumbnail_strip_generation() {
 }
 
 /// Runs `core::metadata::extract` and serializes the result into a wire string
-/// (freed with `free_rust_string`), or `"ERROR:<msg>"` on failure. Reused across
+/// (freed with `free_rust_string`), or `"ERROR:<CODE>:<msg>"` on failure. Reused across
 /// local and network metadata functions.
 fn metadata_to_c_char(internal_uri: &str) -> *mut std::os::raw::c_char {
     match core::metadata::extract(internal_uri) {
         Ok(meta) => string_to_c_char(media_logic::metadata_wire::encode(&meta)),
-        Err(e) => string_to_c_char(format!("ERROR:{}", e.replace(['\n', '\t'], " "))),
+        Err(e) => error_to_c_char(e),
     }
 }
 
@@ -3191,7 +3179,7 @@ pub extern "C" fn read_media_metadata(
 ) -> *mut std::os::raw::c_char {
     let path = match unsafe { cstr_to_string(path) } {
         Some(s) => s,
-        None => return string_to_c_char("ERROR:caminho invalido".to_string()),
+        None => return error_to_c_char("caminho invalido"),
     };
     metadata_to_c_char(&path)
 }
@@ -3210,15 +3198,15 @@ pub extern "C" fn smb_read_metadata(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".to_string()),
+            None => return error_to_c_char("host invalido"),
         };
         let share = match cstr_to_string(share) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:share invalido".to_string()),
+            None => return error_to_c_char("share invalido"),
         };
         let path = match cstr_to_string(path) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:caminho invalido".to_string()),
+            None => return error_to_c_char("caminho invalido"),
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -3248,11 +3236,11 @@ pub extern "C" fn ftp_read_metadata(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".to_string()),
+            None => return error_to_c_char("host invalido"),
         };
         let path = match cstr_to_string(path) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:caminho invalido".to_string()),
+            None => return error_to_c_char("caminho invalido"),
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -3282,11 +3270,11 @@ pub extern "C" fn sftp_read_metadata(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".to_string()),
+            None => return error_to_c_char("host invalido"),
         };
         let path = match cstr_to_string(path) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:caminho invalido".to_string()),
+            None => return error_to_c_char("caminho invalido"),
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();
@@ -3303,7 +3291,7 @@ pub extern "C" fn sftp_read_metadata(
         }
     };
     if target.validate().is_err() {
-        return string_to_c_char("ERROR:credenciais SFTP invalidas".to_string());
+        return error_to_c_char("credenciais SFTP invalidas");
     }
     metadata_to_c_char(&target.to_internal())
 }
@@ -3320,15 +3308,15 @@ pub extern "C" fn nfs_read_metadata(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".to_string()),
+            None => return error_to_c_char("host invalido"),
         };
         let export_path = match cstr_to_string(export_path) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:export invalido".to_string()),
+            None => return error_to_c_char("export invalido"),
         };
         let file_path = match cstr_to_string(file_path) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:caminho invalido".to_string()),
+            None => return error_to_c_char("caminho invalido"),
         };
         protocols::nfs::NfsTarget {
             host,
@@ -3356,15 +3344,15 @@ pub extern "C" fn webdav_read_metadata(
     let target = unsafe {
         let host = match cstr_to_string(host) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:host invalido".to_string()),
+            None => return error_to_c_char("host invalido"),
         };
         let base_path = match cstr_to_string(base_path) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:base_path invalido".to_string()),
+            None => return error_to_c_char("base_path invalido"),
         };
         let file_path = match cstr_to_string(file_path) {
             Some(s) => s,
-            None => return string_to_c_char("ERROR:caminho invalido".to_string()),
+            None => return error_to_c_char("caminho invalido"),
         };
         let username = cstr_to_string(username).unwrap_or_default();
         let password = cstr_to_string(password).unwrap_or_default();

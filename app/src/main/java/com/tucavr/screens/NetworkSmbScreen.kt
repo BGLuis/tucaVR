@@ -38,6 +38,7 @@ import com.tucavr.filebrowser.canReuseBrowser
 import com.tucavr.filebrowser.sortMediaEntries
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
+import com.tucavr.network.NetworkError
 import com.tucavr.network.SmbCredentialStore
 import com.tucavr.network.SmbServer
 import com.tucavr.screens.adapters.FileAdapter
@@ -227,7 +228,7 @@ class NetworkSmbScreen(
                             statusText.text =
                                 context.getString(
                                     R.string.network_smb_form_status_error_format,
-                                    result.removePrefix("ERROR:"),
+                                    NetworkError.userMessage(context, result),
                                 )
                         } else {
                             val shares = result.split("\n").filter { it.isNotBlank() }
@@ -569,7 +570,7 @@ class NetworkSmbScreen(
             }
             is NetworkDirectoryState.Error -> {
                 cachedRawEntries = emptyList()
-                val msg = context.getString(R.string.network_smb_form_status_error_format, state.message)
+                val msg = context.getString(R.string.network_smb_form_status_error_format, NetworkError.userMessage(context, state.message))
                 countLabel?.text = msg
                 emptyLabel?.text = msg
                 clearFiltersButton?.visibility = View.GONE

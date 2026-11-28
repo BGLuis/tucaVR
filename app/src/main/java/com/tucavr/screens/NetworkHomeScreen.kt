@@ -25,6 +25,7 @@ import com.tucavr.designsystem.VoidTheme
 import com.tucavr.navigation.Destination
 import com.tucavr.navigation.PlaybackSource
 import com.tucavr.network.MulticastLockManager
+import com.tucavr.network.NetworkError
 import com.tucavr.network.SavedServer
 import com.tucavr.network.SavedServerDao
 import com.tucavr.network.ServerCredentialStore
@@ -1060,7 +1061,7 @@ class NetworkHomeScreen(
 
     private fun describeProbe(result: String): String {
         if (result.startsWith("ERROR:")) {
-            return context.getString(R.string.common_warning_format, result.removePrefix("ERROR:"))
+            return context.getString(R.string.common_warning_format, NetworkError.userMessage(context, result))
         }
         val parts = result.split("\t")
         val seekable = parts.getOrNull(1) == "1"
